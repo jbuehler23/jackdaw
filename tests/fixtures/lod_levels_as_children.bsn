@@ -1,0 +1,49 @@
+// jackdaw 0.19.0 | bevy 0.19
+#Oak
+jackdaw_scene_types::node_id::SceneNodeId(4322259976870645516)
+bevy_transform::components::transform::Transform {
+    translation: glam::Vec3 {
+        x: 10.0,
+        y: 0.0,
+        z: 0.0,
+    },
+}
+jackdaw_scene_types::types::LodGroup {
+    levels: [
+        jackdaw_scene_types::types::LodLevel {
+            screen_height: 0.5,
+        },
+        jackdaw_scene_types::types::LodLevel {
+            screen_height: 0.25,
+        },
+        jackdaw_scene_types::types::LodLevel {
+            screen_height: 0.10000000149011612,
+        },
+    ],
+    size: 2.0,
+}
+bevy_ecs::hierarchy::Children [
+    #LOD0
+    jackdaw_scene_types::node_id::SceneNodeId(4322259976870645515)
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::GltfSource {
+        path: "models/tree.gltf",
+        scene_index: 0,
+    }
+    ,
+    #LOD1
+    jackdaw_scene_types::node_id::SceneNodeId(4322259976870645517)
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::GltfSource {
+        path: "models/tree_LOD1.gltf",
+        scene_index: 0,
+    }
+    ,
+    #LOD2
+    jackdaw_scene_types::node_id::SceneNodeId(4322259976870645518)
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::GltfSource {
+        path: "models/tree_LOD2.gltf",
+        scene_index: 0,
+    }
+]

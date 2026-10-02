@@ -24,7 +24,9 @@ use bevy::camera::visibility::{RenderLayers, VisibilityRange, VisibilitySystems}
 use bevy::gltf::{GltfAssetLabel, GltfMaterialName};
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
+use bevy::world_serialization::{
+    InstanceId, WorldAsset, WorldAssetRoot, WorldInstance, WorldInstanceSpawner,
+};
 use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path};
 use jackdaw_scene_types::{GltfSource, LodGroup};
 
@@ -161,9 +163,25 @@ impl LiveLevels {
         self.wanted & !self.ready() == 0
     }
 
-    /// The node of each level, in order.
+    /// The node of each level, in order. A group that names its levels' model
+    /// itself is the node of every level.
     pub fn nodes(&self) -> impl Iterator<Item = Entity> + '_ {
         self.levels.iter().map(|level| level.node)
+    }
+
+    /// The parts placed for level `index`.
+    pub fn parts(&self, index: usize) -> &[Entity] {
+        self.levels
+            .get(index)
+            .map_or(&[], |level| level.parts.as_slice())
+    }
+
+    /// The model level `index` draws, as [`ModelParts`] keys it.
+    pub fn model_path(&self, index: usize) -> Option<&str> {
+        match &self.levels.get(index)?.source {
+            LevelSource::Model { path, .. } => Some(path),
+            _ => None,
+        }
     }
 
     fn model_levels(&self) -> impl Iterator<Item = (usize, &str)> + '_ {
@@ -335,10 +353,11 @@ type ChangedGroups<'w, 's> = Query<
     (
         Entity,
         &'static LodGroup,
-        &'static Children,
+        Option<&'static Children>,
+        Option<&'static GltfSource>,
         Option<&'static mut LiveLevels>,
     ),
-    Or<(Changed<LodGroup>, Changed<Children>)>,
+    Or<(Changed<LodGroup>, Changed<Children>, Changed<GltfSource>)>,
 >;
 
 /// Read which of each changed group's levels are models to keep live, keeping
@@ -350,32 +369,60 @@ fn track_groups(
     mut groups: ChangedGroups,
     sources: Query<&GltfSource>,
     instanced: Query<(), With<WorldAssetRoot>>,
+    instances: Query<&WorldInstance>,
     mut models: ResMut<ModelParts>,
     mut queue: ResMut<LevelQueue>,
 ) {
-    for (group, lod, children, live) in &mut groups {
-        let levels: Vec<LiveLevel> = children
-            .iter()
-            .take(lod.levels.len())
-            .enumerate()
-            .map(|(index, node)| {
-                let source = match sources.get(node) {
-                    _ if !level_shows(lod, index) => LevelSource::Absent,
-                    Ok(_) if instanced.contains(node) => LevelSource::Fixed,
-                    Ok(source) => LevelSource::Model {
-                        path: source_path(source),
-                        scene_index: source.scene_index,
-                    },
-                    Err(_) => LevelSource::Fixed,
-                };
-                LiveLevel {
-                    node,
-                    source,
-                    parts: Vec::new(),
-                    placed_at: None,
+    for (group, lod, children, own, live) in &mut groups {
+        let levels: Vec<LiveLevel> = match own {
+            Some(own) => {
+                if let Ok(instance) = instances.get(group) {
+                    let instance = **instance;
+                    commands.queue(move |world: &mut World| {
+                        release_instance(world, group, instance);
+                    });
                 }
-            })
-            .collect();
+                let model = source_path(own);
+                (0..lod.levels.len())
+                    .map(|index| LiveLevel {
+                        node: group,
+                        source: if level_shows(lod, index) {
+                            LevelSource::Model {
+                                path: LodGroup::implied_level_path(&model, index),
+                                scene_index: own.scene_index,
+                            }
+                        } else {
+                            LevelSource::Absent
+                        },
+                        parts: Vec::new(),
+                        placed_at: None,
+                    })
+                    .collect()
+            }
+            None => children
+                .into_iter()
+                .flat_map(RelationshipTarget::iter)
+                .take(lod.levels.len())
+                .enumerate()
+                .map(|(index, node)| {
+                    let source = match sources.get(node) {
+                        _ if !level_shows(lod, index) => LevelSource::Absent,
+                        Ok(_) if instanced.contains(node) => LevelSource::Fixed,
+                        Ok(source) => LevelSource::Model {
+                            path: source_path(source),
+                            scene_index: source.scene_index,
+                        },
+                        Err(_) => LevelSource::Fixed,
+                    };
+                    LiveLevel {
+                        node,
+                        source,
+                        parts: Vec::new(),
+                        placed_at: None,
+                    }
+                })
+                .collect(),
+        };
         for node in std::iter::once(group).chain(levels.iter().map(|level| level.node)) {
             commands.entity(node).insert_if_new(Visibility::default());
         }
@@ -411,6 +458,19 @@ fn track_groups(
         }
         queue.dirty = true;
         queue.requested_all = false;
+    }
+}
+
+/// Take down the instance a model spawned before it became a LOD group that
+/// names its levels itself, whose first level the group now keeps live.
+fn release_instance(world: &mut World, group: Entity, instance: InstanceId) {
+    if world.contains_resource::<WorldInstanceSpawner>() {
+        world.resource_scope(|world, mut spawner: Mut<WorldInstanceSpawner>| {
+            spawner.despawn_instance_sync(world, &instance);
+        });
+    }
+    if let Ok(mut group) = world.get_entity_mut(group) {
+        group.remove::<(WorldAssetRoot, WorldInstance)>();
     }
 }
 
@@ -887,8 +947,12 @@ pub fn is_level_of(group: &LodGroup, children: &Children, child: Entity) -> bool
         .any(|level| level == child)
 }
 
-/// Whether `entity` is a level of a [`LodGroup`].
+/// Whether `entity` is a level of a [`LodGroup`], or a group that names its
+/// first level's model itself.
 pub fn is_lod_level(world: &World, entity: Entity) -> bool {
+    if world.get::<LodGroup>(entity).is_some() && world.get::<GltfSource>(entity).is_some() {
+        return true;
+    }
     let Some(group) = world.get::<ChildOf>(entity).map(ChildOf::parent) else {
         return false;
     };

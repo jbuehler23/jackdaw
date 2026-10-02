@@ -677,3 +677,30 @@ fn a_level_part_wears_its_override_from_the_frame_it_appears() {
         }
     }
 }
+
+#[test]
+fn a_group_that_names_its_model_itself_keeps_the_same_levels_live() {
+    let mut app = live_app(PLENTY);
+    camera_at(&mut app, 5.0);
+    let root = app
+        .world_mut()
+        .spawn((
+            group(2.0),
+            GltfSource {
+                path: "tree.gltf".into(),
+                scene_index: 0,
+            },
+            Transform::default(),
+        ))
+        .id();
+    settle(&mut app, 8);
+
+    let live = app
+        .world()
+        .get::<jackdaw_runtime::LiveLevels>(root)
+        .expect("the group keeps its levels live");
+    let placed: Vec<usize> = (0..3).map(|level| live.parts(level).len()).collect();
+    assert_eq!(placed, [0, 1, 0]);
+    assert_eq!(live.model_path(1), Some("tree_LOD1.gltf"));
+    assert!(app.world().get::<WorldAssetRoot>(root).is_none());
+}

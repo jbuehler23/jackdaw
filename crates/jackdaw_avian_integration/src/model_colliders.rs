@@ -104,7 +104,8 @@ type LodGroupModels<'w, 's> = Query<
         Entity,
         &'static AvianCollider,
         &'static LodGroup,
-        &'static Children,
+        Option<&'static Children>,
+        Option<&'static GltfSource>,
     ),
     (ModelFilter, With<AvianCollider>),
 >;
@@ -115,11 +116,19 @@ fn build_lod_group_colliders(
     mut commands: Commands,
     groups: LodGroupModels,
     changed: Query<
-        Entity,
         (
-            With<LodGroup>,
-            Or<(Changed<AvianCollider>, Changed<LodGroup>, Changed<Children>)>,
+            Entity,
+            Ref<AvianCollider>,
+            Ref<LodGroup>,
+            Option<Ref<Children>>,
+            Option<Ref<GltfSource>>,
         ),
+        Or<(
+            Changed<AvianCollider>,
+            Changed<LodGroup>,
+            Changed<Children>,
+            Changed<GltfSource>,
+        )>,
     >,
     levels: Query<(&GltfSource, &Transform)>,
     mut parts: ResMut<ModelParts>,
@@ -128,12 +137,23 @@ fn build_lod_group_colliders(
     built: BuiltColliders,
     mut waiting: Local<HashSet<Entity>>,
 ) {
-    let mut due: HashSet<Entity> = changed.iter().collect();
+    let mut due: HashSet<Entity> = changed
+        .iter()
+        .filter(|(_, collider, lod, children, own)| {
+            collider.is_changed()
+                || lod.is_changed()
+                || match own {
+                    Some(own) => own.is_changed(),
+                    None => children.as_ref().is_some_and(DetectChanges::is_changed),
+                }
+        })
+        .map(|(entity, ..)| entity)
+        .collect();
     if !parts.settled().is_empty() {
         due.extend(waiting.drain());
     }
     for group in due {
-        let Ok((group, collider, lod, children)) = groups.get(group) else {
+        let Ok((group, collider, lod, children, own)) = groups.get(group) else {
             continue;
         };
         clear_part_colliders(&mut commands, group, &descendants, &built);
@@ -145,11 +165,17 @@ fn build_lod_group_colliders(
             }
             continue;
         }
-        let Some((source, placed)) = children
-            .first()
-            .filter(|_| !lod.levels.is_empty())
-            .and_then(|first| levels.get(*first).ok())
-        else {
+        if lod.levels.is_empty() {
+            continue;
+        }
+        let first = match own {
+            Some(own) => Some((own, Transform::IDENTITY)),
+            None => children
+                .and_then(|children| children.first())
+                .and_then(|first| levels.get(*first).ok())
+                .map(|(source, placed)| (source, *placed)),
+        };
+        let Some((source, placed)) = first else {
             continue;
         };
         let path = source_path(source);
@@ -170,7 +196,7 @@ fn build_lod_group_colliders(
                 let mesh = meshes
                     .get(&part.mesh)?
                     .clone()
-                    .transformed_by(*placed * part.local);
+                    .transformed_by(placed * part.local);
                 Collider::try_from_constructor(collider.0.clone(), Some(&mesh))
             })
             .collect();

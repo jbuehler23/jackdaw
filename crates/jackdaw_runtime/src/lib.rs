@@ -919,6 +919,7 @@ fn attach_inserted_gltf_sources(
     existing: Query<&WorldAssetRoot>,
     parents: Query<&ChildOf>,
     groups: Query<(&jackdaw_scene_types::LodGroup, &Children)>,
+    own_groups: Query<(), With<jackdaw_scene_types::LodGroup>>,
     catalog_path: Option<Res<JackdawCatalogPath>>,
     asset_folder: Option<Res<AssetFolder>>,
     asset_server: Res<AssetServer>,
@@ -932,7 +933,8 @@ fn attach_inserted_gltf_sources(
         let lod_level = parents
             .get(entity)
             .and_then(|parent| groups.get(parent.parent()))
-            .is_ok_and(|(group, children)| live_levels::is_level_of(group, children, entity));
+            .is_ok_and(|(group, children)| live_levels::is_level_of(group, children, entity))
+            || own_groups.contains(entity);
         if lod_level {
             continue;
         }
@@ -969,8 +971,13 @@ fn attach_models_left_by_lod_groups(
         .flat_map(|(group, children)| children.iter().skip(group.levels.len()));
     let ungrouped: Vec<Entity> = removed
         .read()
-        .filter_map(|group| children_of.get(group).ok())
-        .flat_map(RelationshipTarget::iter)
+        .flat_map(|group| {
+            let levels = children_of
+                .get(group)
+                .into_iter()
+                .flat_map(RelationshipTarget::iter);
+            std::iter::once(group).chain(levels)
+        })
         .collect();
     let mut assets_dir = None;
     for model in past_last_level.chain(ungrouped) {

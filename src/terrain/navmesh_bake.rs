@@ -477,7 +477,7 @@ pub(crate) struct SceneGeometry<'w, 's> {
     assets: Res<'w, Assets<Mesh>>,
     /// LOD groups, which a bake reads by their first level whatever the
     /// camera has spawned.
-    lod_groups: Query<'w, 's, (&'static LodGroup, &'static Children)>,
+    lod_groups: Query<'w, 's, (Entity, &'static LodGroup, Option<&'static Children>)>,
     level_models: Query<'w, 's, (&'static GltfSource, &'static GlobalTransform)>,
     models: Option<Res<'w, ModelParts>>,
 }
@@ -521,12 +521,21 @@ impl SceneGeometry<'_, '_> {
     fn first_level_models(
         &self,
     ) -> impl Iterator<Item = (Entity, &GlobalTransform, &std::sync::Arc<FlatModel>)> + '_ {
-        self.lod_groups.iter().filter_map(|(group, children)| {
-            let level = *children.first().filter(|_| !group.levels.is_empty())?;
-            let (source, placed) = self.level_models.get(level).ok()?;
-            let model = self.models.as_ref()?.get(&source_path(source))?;
-            Some((level, placed, model))
-        })
+        self.lod_groups
+            .iter()
+            .filter_map(|(entity, group, children)| {
+                if group.levels.is_empty() {
+                    return None;
+                }
+                let level = if self.level_models.contains(entity) {
+                    entity
+                } else {
+                    *children?.first()?
+                };
+                let (source, placed) = self.level_models.get(level).ok()?;
+                let model = self.models.as_ref()?.get(&source_path(source))?;
+                Some((level, placed, model))
+            })
     }
 
     /// Whether `entity` sits in a level of a LOD group that the bake reads
@@ -536,11 +545,18 @@ impl SceneGeometry<'_, '_> {
         let mut at = entity;
         while let Ok((_, Some(parent))) = self.visibility.get(at) {
             let parent = parent.parent();
-            if let Ok((group, children)) = self.lod_groups.get(parent)
-                && let Some(index) = children.iter().position(|child| child == at)
-                && index < group.levels.len()
-            {
-                return index > 0 || self.level_models.contains(at);
+            if let Ok((_, group, children)) = self.lod_groups.get(parent) {
+                if self.level_models.contains(parent) {
+                    return true;
+                }
+                if let Some(index) = children
+                    .into_iter()
+                    .flat_map(RelationshipTarget::iter)
+                    .position(|child| child == at)
+                    && index < group.levels.len()
+                {
+                    return index > 0 || self.level_models.contains(at);
+                }
             }
             at = parent;
         }
@@ -552,11 +568,15 @@ impl SceneGeometry<'_, '_> {
         let Some(models) = self.models.as_ref() else {
             return false;
         };
-        self.lod_groups.iter().any(|(group, children)| {
-            children
-                .first()
+        self.lod_groups.iter().any(|(entity, group, children)| {
+            let level = if self.level_models.contains(entity) {
+                Some(entity)
+            } else {
+                children.and_then(|children| children.first().copied())
+            };
+            level
                 .filter(|_| !group.levels.is_empty())
-                .and_then(|level| self.level_models.get(*level).ok())
+                .and_then(|level| self.level_models.get(level).ok())
                 .is_some_and(|(source, _)| {
                     let path = source_path(source);
                     models.get(&path).is_none() && !models.failed(&path)

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bevy::prelude::*;
+use bevy::reflect::TypePath;
 use jackdaw_api::prelude::*;
 use jackdaw_scene_types::{GltfSource, LodGroup, LodLevel};
 
@@ -11,6 +12,7 @@ use crate::selection::Selection;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityLodGroupOp>();
+    ctx.register_operator::<SceneLodImplyLevelsOp>();
 }
 
 /// What placing live LOD levels may cost a frame while a scene opens. The load
@@ -105,12 +107,12 @@ pub fn default_screen_heights(count: usize) -> Vec<f32> {
         .collect()
 }
 
-/// Put a placed model under a new LOD group, with the level files beside its
-/// glTF as the group's further levels.
+/// Make a placed model a LOD group, with the level files beside its glTF as
+/// the group's further levels.
 #[operator(
     id = "entity.lod_group",
     label = "Make LOD Group",
-    description = "Put a placed model under a LOD group, with the <name>_LOD1, _LOD2 ... files \
+    description = "Make a placed model a LOD group, with the <name>_LOD1, _LOD2 ... files \
                    beside it as the further levels.",
     allows_undo = true,
     params(
@@ -151,10 +153,9 @@ pub(crate) fn entity_lod_group(
         warn!("entity.lod_group: {model} is not a placed model");
         return OperatorResult::Cancelled;
     };
-    let Some(project) = project else {
-        return OperatorResult::Cancelled;
-    };
-    let files = level_files(&project.assets_dir(), &source.path);
+    let files = project
+        .map(|project| level_files(&project.assets_dir(), &source.path))
+        .unwrap_or_default();
     let heights = match params.as_str("screen_heights") {
         Some(listed) => match listed
             .split(',')
@@ -177,48 +178,93 @@ pub(crate) fn entity_lod_group(
         size: params.as_float("size").unwrap_or(0.0) as f32,
         fade: params.as_float("fade").unwrap_or(0.0) as f32,
     };
-    commands.queue(move |world: &mut World| make_lod_group(world, model, group, &files));
+    commands.queue(move |world: &mut World| make_lod_group(world, model, group));
     OperatorResult::Finished
 }
 
-fn make_lod_group(world: &mut World, model: Entity, group: LodGroup, files: &[String]) {
-    let Some(transform) = world.get::<Transform>(model).copied() else {
+fn make_lod_group(world: &mut World, model: Entity, group: LodGroup) {
+    let Ok(mut entity) = world.get_entity_mut(model) else {
         return;
     };
-    let name = world
-        .get::<Name>(model)
-        .map_or_else(|| "LOD Group".to_string(), |name| name.as_str().to_string());
-    let parent = world.get::<ChildOf>(model).map(ChildOf::parent);
-    let mut root = world.spawn((Name::new(name), transform, group));
-    if let Some(parent) = parent {
-        root.insert(ChildOf(parent));
-    }
-    let root = root.id();
-    crate::scene_io::register_entity_in_ast(world, root);
+    entity.insert(group.clone());
+    crate::commands::sync_component_to_bsn_doc(world, model, &group);
+    crate::selection::select_only(world, model);
+}
 
-    crate::commands::set_parent(world, model, Some(root));
-    world.entity_mut(model).insert(Name::new("LOD0"));
-    let node = world.resource::<jackdaw_bsn::SceneBsnAst>().ast_for(model);
-    if let Some(node) = node {
-        let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
-        crate::commands::set_name_patch(&mut ast, node, Some("LOD0"));
-    }
+/// Turn LOD groups whose levels are a model and its `<name>_LOD1`, `<name>_LOD2`
+/// ... files into groups that name the model themselves, without level
+/// children. A group whose levels carry anything more is left as it is.
+#[operator(
+    id = "scene.lod.imply_levels",
+    label = "Imply LOD Levels",
+    description = "Turn LOD groups whose levels are a model and its <name>_LOD1, _LOD2 ... \
+                   files into groups that name the model themselves, without level children.",
+    allows_undo = true
+)]
+pub(crate) fn scene_lod_imply_levels(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(imply_levels);
+    OperatorResult::Finished
+}
 
-    for (index, file) in files.iter().enumerate() {
-        let level = world
-            .spawn((
-                Name::new(format!("LOD{}", index + 1)),
-                Transform::default(),
-                GltfSource {
-                    path: file.clone(),
-                    scene_index: 0,
-                },
-                ChildOf(root),
-            ))
-            .id();
-        crate::scene_io::register_entity_in_ast(world, level);
+fn imply_levels(world: &mut World) {
+    let mut groups = world.query_filtered::<(Entity, &LodGroup), Without<GltfSource>>();
+    let groups: Vec<(Entity, usize)> = groups
+        .iter(world)
+        .map(|(entity, group)| (entity, group.levels.len()))
+        .collect();
+    let convertible: Vec<(Entity, GltfSource, Vec<Entity>)> = groups
+        .into_iter()
+        .filter_map(|(group, count)| {
+            implied_form(world, group, count).map(|(source, levels)| (group, source, levels))
+        })
+        .collect();
+    for (group, source, levels) in convertible {
+        for level in levels {
+            crate::commands::despawn_scene_entity(world, level);
+        }
+        world.entity_mut(group).insert(source.clone());
+        crate::commands::sync_component_to_bsn_doc(world, group, &source);
     }
-    crate::selection::select_only(world, root);
+}
+
+/// The model a group would name itself and the level children it would drop,
+/// when every level child is that model or its `_LOD<n>` file and carries
+/// nothing else.
+fn implied_form(world: &World, group: Entity, count: usize) -> Option<(GltfSource, Vec<Entity>)> {
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(group)?;
+    let children = ast.get_children_ast(node);
+    if count == 0 || children.len() != count {
+        return None;
+    }
+    let levels: Vec<Entity> = world.get::<Children>(group)?.iter().take(count).collect();
+    let first = world.get::<GltfSource>(*levels.first()?)?.clone();
+    let allowed = [
+        Name::type_path(),
+        Transform::type_path(),
+        GltfSource::type_path(),
+        jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH,
+    ];
+    for (index, level) in levels.iter().enumerate() {
+        let level_node = ast.ast_for(*level)?;
+        let source = world.get::<GltfSource>(*level)?;
+        let plain = ast
+            .component_type_paths(level_node)
+            .iter()
+            .all(|path| allowed.contains(&path.as_str()));
+        if !plain
+            || !ast.get_children_ast(level_node).is_empty()
+            || world.get::<Transform>(*level) != Some(&Transform::IDENTITY)
+            || source.scene_index != first.scene_index
+            || source.path != LodGroup::implied_level_path(&first.path, index)
+        {
+            return None;
+        }
+    }
+    Some((first, levels))
 }
 
 #[cfg(test)]

@@ -825,8 +825,12 @@ pub struct GltfSource {
 }
 
 /// A model drawn at a level of detail chosen by how much of the screen it
-/// covers, like Unity's LOD Group. Each of the entity's children, in order, is
-/// one level; a child past the last level is left alone.
+/// covers, like Unity's LOD Group.
+///
+/// On an entity that names a model itself with a [`GltfSource`], that model is
+/// the first level and each further level is the `<name>_LOD1`, `<name>_LOD2`
+/// ... file beside it. Otherwise each of the entity's children, in order, is
+/// one level, and a child past the last level is left alone.
 #[derive(Component, Reflect, Clone, Debug, Default, PartialEq)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Rendering"))]
 pub struct LodGroup {
@@ -837,6 +841,23 @@ pub struct LodGroup {
     pub size: f32,
     /// How much of each switch cross-fades, as a share of its distance; 0 snaps.
     pub fade: f32,
+}
+
+impl LodGroup {
+    /// The model level `level` draws for a group that names `model` itself:
+    /// the model for the first level, and `<name>_LOD<level>` beside it, with
+    /// the model's own extension, for each one after.
+    pub fn implied_level_path(model: &str, level: usize) -> String {
+        if level == 0 {
+            return model.to_string();
+        }
+        match model.rsplit_once('.') {
+            Some((stem, extension)) if !extension.contains('/') => {
+                format!("{stem}_LOD{level}.{extension}")
+            }
+            _ => format!("{model}_LOD{level}"),
+        }
+    }
 }
 
 /// One level of a [`LodGroup`].

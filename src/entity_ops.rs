@@ -262,6 +262,7 @@ fn derive_world_asset_root(
     existing: Query<&WorldAssetRoot>,
     parents: Query<&ChildOf>,
     groups: Query<(&LodGroup, &Children)>,
+    own_groups: Query<(), With<LodGroup>>,
     asset_server: Res<AssetServer>,
     mut pending: ResMut<PendingModelRoots>,
 ) {
@@ -269,10 +270,11 @@ fn derive_world_asset_root(
     let Ok(source) = sources.get(entity) else {
         return;
     };
-    let lod_level = parents
-        .get(entity)
-        .and_then(|parent| groups.get(parent.parent()))
-        .is_ok_and(|(group, children)| jackdaw_runtime::is_level_of(group, children, entity));
+    let lod_level = own_groups.contains(entity)
+        || parents
+            .get(entity)
+            .and_then(|parent| groups.get(parent.parent()))
+            .is_ok_and(|(group, children)| jackdaw_runtime::is_level_of(group, children, entity));
     if lod_level {
         pending.forget(entity);
         return;
@@ -323,8 +325,8 @@ fn queue_models_past_last_level(
     }
 }
 
-/// Queue the models of every child of a LOD group that is going, which the
-/// group kept live as levels until now.
+/// Queue the models a LOD group that is going kept live as its levels: each
+/// child's, or its own where it names the model itself.
 fn queue_models_of_ungrouped_levels(
     remove: On<Remove, LodGroup>,
     children: Query<&Children>,
@@ -332,10 +334,12 @@ fn queue_models_of_ungrouped_levels(
     asset_server: Res<AssetServer>,
     mut pending: ResMut<PendingModelRoots>,
 ) {
-    let Ok(children) = children.get(remove.entity) else {
-        return;
-    };
-    for model in children.iter() {
+    let group = remove.entity;
+    let levels = children
+        .get(group)
+        .into_iter()
+        .flat_map(RelationshipTarget::iter);
+    for model in std::iter::once(group).chain(levels) {
         if let Ok(source) = unplaced.get(model) {
             pending.push(model, Some(model_scene(&asset_server, source)));
         }

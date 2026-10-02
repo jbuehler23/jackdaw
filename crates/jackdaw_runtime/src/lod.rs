@@ -220,49 +220,34 @@ fn place_lod_ranges(
         else {
             continue;
         };
-        let Some(children) = children else {
-            continue;
-        };
-        let size =
-            if group.size > 0.0 {
-                group.size * transform.compute_transform().scale.abs().max_element()
-            } else {
-                let Some(first) = children.first().copied() else {
-                    continue;
-                };
-                match sources.get(first) {
-                    Ok((source, placed)) => {
-                        let path = source_path(source);
-                        match parts.get(&path) {
-                            Some(model) => placed_extent(&model.bounds, placed),
-                            None => {
-                                for level in children.iter().take(group.levels.len()) {
-                                    let Ok((source, _)) = sources.get(level) else {
-                                        continue;
-                                    };
-                                    let path = source_path(source);
-                                    if !parts.failed(&path) {
-                                        unmeasured.entry(path).or_default().insert(entity);
-                                    }
-                                }
-                                let coarsest =
-                                    children.iter().take(group.levels.len()).rev().find_map(
-                                        |level| {
-                                            let (source, placed) = sources.get(level).ok()?;
-                                            let model = parts.get(&source_path(source))?;
-                                            Some(placed_extent(&model.bounds, placed))
-                                        },
-                                    );
-                                let Some(size) = coarsest else {
-                                    continue;
-                                };
-                                size
+        let models = level_models(entity, &group, children, &sources);
+        let size = if group.size > 0.0 {
+            group.size * transform.compute_transform().scale.abs().max_element()
+        } else {
+            match models.first() {
+                Some(Some((path, placed))) => match parts.get(path) {
+                    Some(model) => placed_extent(&model.bounds, placed),
+                    None => {
+                        for (path, _) in models.iter().flatten() {
+                            if !parts.failed(path) {
+                                unmeasured.entry(path.clone()).or_default().insert(entity);
                             }
                         }
+                        let coarsest = models.iter().rev().flatten().find_map(|(path, placed)| {
+                            Some(placed_extent(&parts.get(path)?.bounds, placed))
+                        });
+                        let Some(size) = coarsest else {
+                            continue;
+                        };
+                        size
                     }
-                    Err(_) => world_extent(first, &descendants, &meshes).unwrap_or(0.0),
-                }
-            };
+                },
+                _ => children
+                    .and_then(|children| children.first().copied())
+                    .and_then(|first| world_extent(first, &descendants, &meshes))
+                    .unwrap_or(0.0),
+            }
+        };
         if size <= 0.0 {
             continue;
         }
@@ -272,7 +257,7 @@ fn place_lod_ranges(
             ranges: ranges.clone(),
             size,
         };
-        let drawn: Vec<VisibilityRange> = match live {
+        let drawn: Vec<VisibilityRange> = match live.as_deref() {
             Some(live) => drawn_ranges(&ranges, live.wanted(), live.ready())
                 .into_iter()
                 .zip(ranges)
@@ -287,13 +272,33 @@ fn place_lod_ranges(
                 commands.entity(entity).try_insert(switches);
             }
         }
-        for (level, range) in children.iter().zip(drawn) {
-            for part in std::iter::once(level).chain(descendants.iter_descendants(level)) {
+        let roots: Vec<(Entity, &VisibilityRange)> = match live.as_deref() {
+            Some(live) => live
+                .nodes()
+                .zip(&drawn)
+                .enumerate()
+                .flat_map(|(index, (node, range))| {
+                    let roots: Vec<Entity> = if node == entity {
+                        live.parts(index).to_vec()
+                    } else {
+                        vec![node]
+                    };
+                    roots.into_iter().map(move |root| (root, range))
+                })
+                .collect(),
+            None => children
+                .into_iter()
+                .flat_map(RelationshipTarget::iter)
+                .zip(&drawn)
+                .collect(),
+        };
+        for (root, range) in roots {
+            for part in std::iter::once(root).chain(descendants.iter_descendants(root)) {
                 let Ok((_, _, held)) = meshes.get_mut(part) else {
                     continue;
                 };
                 match held {
-                    Some(mut held) if *held != range => *held = range.clone(),
+                    Some(mut held) if *held != *range => *held = range.clone(),
                     Some(_) => {}
                     None => {
                         commands.entity(part).try_insert(range.clone());
@@ -302,6 +307,32 @@ fn place_lod_ranges(
             }
         }
     }
+}
+
+/// The model each of a group's levels draws and where it stands, by level: the
+/// group's own model and the files named after it for a group that names one,
+/// otherwise each level child's model. `None` for a level that is not a model.
+fn level_models<'a>(
+    entity: Entity,
+    group: &LodGroup,
+    children: Option<&Children>,
+    sources: &'a Query<(&GltfSource, &GlobalTransform)>,
+) -> Vec<Option<(String, &'a GlobalTransform)>> {
+    if let Ok((own, placed)) = sources.get(entity) {
+        let model = source_path(own);
+        return (0..group.levels.len())
+            .map(|level| Some((LodGroup::implied_level_path(&model, level), placed)))
+            .collect();
+    }
+    children
+        .into_iter()
+        .flat_map(RelationshipTarget::iter)
+        .take(group.levels.len())
+        .map(|level| {
+            let (source, placed) = sources.get(level).ok()?;
+            Some((source_path(source), placed))
+        })
+        .collect()
 }
 
 /// The largest side of the world bounds of the meshes under `root`.
