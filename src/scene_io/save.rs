@@ -250,6 +250,8 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         }
         crate::prefab::operators::save_prefab_to_disk(world, &path)
             .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
+        crate::model_lod::write_unsaved_model_settings(world)
+            .map_err(|err| BevyError::from(format!("failed to write model settings: {err}")))?;
         // Clear dirty bit + sync history depth so the tab stops showing
         // as unsaved.
         let history_len = world
@@ -346,6 +348,9 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // A terrain bake writes its own artifact when it finishes; this covers a scene that has
     // moved since, keeping the two files named after each other.
     crate::terrain::navmesh_bake::export_beside_scene(world, &path);
+
+    crate::model_lod::write_unsaved_model_settings(world)
+        .map_err(|err| BevyError::from(format!("failed to write model settings: {err}")))?;
 
     // The authoritative scene and sidecars are now on disk. Only now clear
     // dirty state and retarget a redirected tab at its new `.bsn` path.

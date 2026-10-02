@@ -195,6 +195,16 @@ fn drop_a_file_the_selection_left(
     });
 }
 
+/// Draw the open file card again, for an edit that changes what it shows.
+pub fn refresh_file_card(world: &mut World) {
+    let Some(entity) = world.get_resource::<OpenFileCard>().and_then(|open| open.0) else {
+        return;
+    };
+    if let Ok(mut card) = world.get_entity_mut(entity) {
+        card.insert(super::InspectorDirty);
+    }
+}
+
 /// Stepping an array texture's layer changes what the card draws, so mark it
 /// for a rebuild.
 fn rebuild_on_preview_change(
@@ -305,7 +315,143 @@ fn fill_body(world: &mut World, body: Entity, path: &Path, kind: &AssetFileKind)
             &as_string,
         );
     }
+    if is_model_file(path) {
+        spawn_model_lod_rows(world, body, path);
+    }
     spawn_references(world, body, path);
+}
+
+fn is_model_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "gltf" | "glb"))
+}
+
+/// The model's levels of detail as its import settings hold them, and the
+/// buttons that find them again and write them.
+fn spawn_model_lod_rows(world: &mut World, body: Entity, path: &Path) {
+    use jackdaw_scene_types::model_import::{LevelShow, LodImportSource, ModelLodIndex};
+
+    let assets = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(crate::project::ProjectRoot::assets_dir);
+    let asset_path = assets
+        .as_deref()
+        .and_then(|assets| path.strip_prefix(assets).ok())
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let index = world.resource::<ModelLodIndex>();
+    let lod = if index.is_known(&asset_path) {
+        index.get(&asset_path).map(|lod| (**lod).clone())
+    } else {
+        crate::model_lod::levels_on_disk(path)
+    };
+    let unsaved = world
+        .resource::<crate::model_lod::UnsavedModelSettings>()
+        .0
+        .contains(&asset_path);
+
+    let Some(lod) = lod else {
+        spawn_row(world, body, "LOD", "None");
+        spawn_action(
+            world,
+            body,
+            "Import LOD Levels",
+            crate::model_lod::ModelLodImportOp::ID,
+            &asset_path,
+        );
+        return;
+    };
+    let source = match lod.source {
+        LodImportSource::Authored => "set by hand",
+        LodImportSource::SiblingFiles => "from files beside the model",
+        LodImportSource::NodeSuffixes => "from nodes in the model",
+    };
+    let summary = format!(
+        "{} levels, {source}{}",
+        lod.levels.len(),
+        if unsaved { ", not saved" } else { "" }
+    );
+    spawn_row(world, body, "LOD", &summary);
+    for (index, level) in lod.levels.iter().enumerate() {
+        let shows = match &level.show {
+            LevelShow::Model => "The model".to_string(),
+            LevelShow::File(file) => file.clone(),
+            LevelShow::Nodes(nodes) => nodes.join(", "),
+        };
+        let triangles = triangles_of(world, &asset_path, &level.show)
+            .map(|count| format!(", {count} triangles"))
+            .unwrap_or_default();
+        let value = format!("{shows}{triangles}, from {}", percent(level.screen_height));
+        spawn_row(world, body, &format!("LOD{index}"), &value);
+    }
+    if let Some(last) = lod.levels.last() {
+        spawn_row(
+            world,
+            body,
+            "Culled",
+            &format!("below {}", percent(last.screen_height)),
+        );
+    }
+    let fade = match lod.fade {
+        jackdaw_scene_types::LodFade::Snap => "Snap".to_string(),
+        jackdaw_scene_types::LodFade::CrossFade { width } => {
+            format!("Cross-fade over {}", percent(width))
+        }
+    };
+    spawn_row(world, body, "Fade", &fade);
+    spawn_row(world, body, "Size", &format!("{:.2}", lod.size));
+    spawn_action(
+        world,
+        body,
+        "Reimport LOD Levels",
+        crate::model_lod::ModelLodImportOp::ID,
+        &asset_path,
+    );
+    if unsaved {
+        spawn_action(
+            world,
+            body,
+            "Apply",
+            crate::model_lod::ModelLodApplyOp::ID,
+            &asset_path,
+        );
+    }
+}
+
+/// A share of the screen as a percentage, to one decimal where it needs one.
+fn percent(share: f32) -> String {
+    let value = share * 100.0;
+    if (value - value.round()).abs() < 0.05 {
+        format!("{value:.0}%")
+    } else {
+        format!("{value:.1}%")
+    }
+}
+
+/// The triangles a level draws, once its model has loaded.
+fn triangles_of(
+    world: &World,
+    model: &str,
+    show: &jackdaw_scene_types::model_import::LevelShow,
+) -> Option<usize> {
+    let key = jackdaw_scene_types::model_import::level_key(model, show);
+    let flat = world
+        .get_resource::<jackdaw_scene_types::model_parts::ModelParts>()?
+        .get(&key)?
+        .clone();
+    let meshes = world.get_resource::<Assets<Mesh>>()?;
+    Some(
+        flat.parts
+            .iter()
+            .filter_map(|part| meshes.get(&part.mesh))
+            .map(|mesh| match mesh.indices() {
+                Some(indices) => indices.len() / 3,
+                None => mesh.count_vertices() / 3,
+            })
+            .sum(),
+    )
 }
 
 fn fill_image_body(

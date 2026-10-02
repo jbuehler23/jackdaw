@@ -1,0 +1,33 @@
+(
+    meta_format_version: "1.0",
+    asset: Load(
+        loader: "jackdaw_scene_types::model_import::ModelLoader",
+        settings: (
+            gltf: (
+                load_meshes: ("MAIN_WORLD | RENDER_WORLD"),
+                load_materials: ("RENDER_WORLD"),
+                load_cameras: true,
+                load_lights: true,
+                load_animations: true,
+                include_source: false,
+                default_sampler: None,
+                override_sampler: false,
+                validate: true,
+                convert_coordinates: None,
+                skinned_mesh_bounds_policy: None,
+            ),
+            lod: Some((
+                version: 1,
+                source: SiblingFiles,
+                size: 6.4,
+                fade: CrossFade(width: 0.1),
+                levels: [
+                    (show: Model, screen_height: 0.25),
+                    (show: File("Maple1_LOD1.gltf"), screen_height: 0.125),
+                    (show: File("Maple1_LOD2.gltf"), screen_height: 0.01),
+                    (show: File("Maple1_LOD3.gltf"), screen_height: 0.01),
+                ],
+            )),
+        ),
+    ),
+)

@@ -97,6 +97,7 @@ pub mod mesh_quick_menu;
 pub mod migrate;
 pub mod modal_inputs;
 pub mod modal_transform;
+pub mod model_lod;
 pub mod modifier_ops;
 pub mod native_dialog;
 pub mod new_project;
@@ -447,7 +448,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(probe_bake::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
-        .add_plugins(lod_group::plugin)
+        .add_plugins((lod_group::plugin, model_lod::plugin))
         .add_plugins(file_ops::FileOpsPlugin)
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)

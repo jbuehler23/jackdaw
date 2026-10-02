@@ -450,3 +450,30 @@ fn a_model_with_a_meta_loads_the_same_scene_as_one_without() {
     assert_eq!(names(&imported), names(&plain));
     assert_eq!(gltfs.get(&imported).unwrap().scenes.len(), 1);
 }
+
+#[test]
+fn a_meta_written_by_an_import_script_reads_as_its_levels() {
+    let bytes = include_bytes!("fixtures/maple.gltf.meta");
+
+    let settings = read_model_meta(bytes).expect("the meta names the model loader");
+    let lod = settings.lod.expect("levels");
+
+    assert_eq!(lod.size, 6.4);
+    assert_eq!(lod.fade, LodFade::CrossFade { width: 0.1 });
+    assert_eq!(
+        lod.levels
+            .iter()
+            .map(|level| (level.show.clone(), level.screen_height))
+            .collect::<Vec<_>>(),
+        [
+            (LevelShow::Model, 0.25),
+            (LevelShow::File("Maple1_LOD1.gltf".into()), 0.125),
+            (LevelShow::File("Maple1_LOD2.gltf".into()), 0.01),
+            (LevelShow::File("Maple1_LOD3.gltf".into()), 0.01),
+        ]
+    );
+    assert_eq!(
+        settings.gltf.load_materials,
+        jackdaw_scene_types::render_assets::DRAWN_TEXTURE_USAGE
+    );
+}
