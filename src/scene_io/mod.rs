@@ -222,14 +222,15 @@ pub(crate) fn doc_skip_type_ids() -> HashSet<TypeId> {
 }
 
 /// Components [`resync_entity_from_ast`] must leave on the entity: document
-/// bookkeeping, identity, selection, and prefab override baselines. Everything
-/// else is torn down and rebuilt from the AST, including unreflected `#[require]`
-/// companions.
+/// bookkeeping, identity, selection, outliner rows, and prefab override
+/// baselines. Everything else is torn down and rebuilt from the AST, including
+/// unreflected `#[require]` companions.
 fn resync_keep_type_ids() -> HashSet<TypeId> {
     let mut ids = doc_skip_type_ids();
     ids.insert(TypeId::of::<jackdaw_scene_types::SceneNodeId>());
     ids.insert(TypeId::of::<jackdaw_scene_types::PrefabBaseline>());
     ids.insert(TypeId::of::<crate::selection::Selected>());
+    ids.insert(TypeId::of::<jackdaw_widgets::tree_view::TreeNodeSource>());
     ids
 }
 

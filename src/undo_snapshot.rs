@@ -378,6 +378,15 @@ impl DocumentEdit {
             editor_state.apply(world);
             return;
         }
+        match crate::undo_in_place::put_back(world, &self.changes, side) {
+            Ok(()) => {
+                crate::selection::clear_selection_in_world(world);
+                restore_selection(world, selection);
+                editor_state.apply(world);
+                return;
+            }
+            Err(reason) => debug!("{} respawns the scene: {reason}", self.label),
+        }
         let parent_path = world
             .get_resource::<crate::project::ProjectRoot>()
             .map(|r| r.root.clone())

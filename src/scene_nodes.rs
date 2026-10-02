@@ -5,6 +5,8 @@
 //! undo, a tab switch, a prefab reload) mints new entities for the same nodes.
 //! [`live_entity`] finds the entity that holds a recorded entity's node now.
 
+use std::collections::VecDeque;
+
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use jackdaw_bsn::{BsnPatch, BsnTupleStructData, BsnValue, SceneBsnAst};
@@ -27,6 +29,9 @@ pub struct SceneNodes {
     live: HashMap<SceneNodeId, Entity>,
     shared: HashMap<SceneNodeId, Vec<Entity>>,
     retired: HashMap<Entity, SceneNodeId>,
+    /// `retired` in the order entities died, so the oldest go first once it
+    /// outgrows [`Self::retired_cap`].
+    retired_order: VecDeque<Entity>,
 }
 
 impl SceneNodes {
@@ -36,6 +41,24 @@ impl SceneNodes {
             return None;
         }
         self.live.get(&node).copied()
+    }
+
+    /// How many despawned entities are remembered: a few times the live
+    /// nodes, so a history entry recorded a few respawns ago still finds its
+    /// node, with a floor for small scenes.
+    fn retired_cap(&self) -> usize {
+        (4 * self.live.len()).max(65_536)
+    }
+
+    fn retire(&mut self, node: SceneNodeId, entity: Entity) {
+        if self.retired.insert(entity, node).is_none() {
+            self.retired_order.push_back(entity);
+        }
+        while self.retired_order.len() > self.retired_cap() {
+            if let Some(oldest) = self.retired_order.pop_front() {
+                self.retired.remove(&oldest);
+            }
+        }
     }
 
     fn hold(&mut self, node: SceneNodeId, entity: Entity) {
@@ -89,7 +112,7 @@ fn retire_node(
         return;
     };
     nodes.release(node, entity);
-    nodes.retired.insert(entity, node);
+    nodes.retire(node, entity);
 }
 
 /// The entity that holds what `entity` held when it was recorded: `entity`
@@ -209,6 +232,20 @@ mod tests {
         assert_eq!(live_entity(&world, recorded), recorded);
         world.despawn(one);
         assert_eq!(live_entity(&world, recorded), other);
+    }
+
+    #[test]
+    fn the_oldest_despawned_entities_are_forgotten_first() {
+        let mut nodes = SceneNodes::default();
+        let cap = nodes.retired_cap();
+        let mut world = World::new();
+        let dead: Vec<Entity> = (0..=cap).map(|_| world.spawn_empty().id()).collect();
+        for &entity in &dead {
+            nodes.retire(SceneNodeId::next(), entity);
+        }
+        assert_eq!(nodes.retired.len(), cap);
+        assert!(!nodes.retired.contains_key(&dead[0]));
+        assert!(nodes.retired.contains_key(&dead[cap]));
     }
 
     #[test]

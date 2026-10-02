@@ -25,12 +25,12 @@ pub(crate) enum UnitKey {
 /// One unit as the document held it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Unit {
-    parent: Option<UnitKey>,
-    follows: Option<UnitKey>,
+    pub(crate) parent: Option<UnitKey>,
+    pub(crate) follows: Option<UnitKey>,
     /// Whether `text` holds the unit's whole subtree rather than the node's
     /// own patches.
-    whole: bool,
-    text: Box<str>,
+    pub(crate) whole: bool,
+    pub(crate) text: Box<str>,
 }
 
 /// Every unit of a document.
@@ -40,9 +40,9 @@ pub(crate) struct Units(HashMap<UnitKey, Unit>);
 /// A unit before and after an edit; `None` when it did not exist on that side.
 #[derive(Clone, Debug)]
 pub(crate) struct UnitChange {
-    key: UnitKey,
-    before: Option<Unit>,
-    after: Option<Unit>,
+    pub(crate) key: UnitKey,
+    pub(crate) before: Option<Unit>,
+    pub(crate) after: Option<Unit>,
 }
 
 /// Which side of a change to put back.
@@ -152,7 +152,7 @@ impl UnitChange {
             + self.after.as_ref().map_or(0, Unit::heap_bytes)
     }
 
-    fn side(&self, side: Side) -> Option<&Unit> {
+    pub(crate) fn side(&self, side: Side) -> Option<&Unit> {
         match side {
             Side::Before => self.before.as_ref(),
             Side::After => self.after.as_ref(),

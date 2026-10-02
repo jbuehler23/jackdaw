@@ -3,13 +3,16 @@
 //! changed. Ignored tests name behaviour the history does not have yet.
 
 use bevy::prelude::*;
+use jackdaw::hierarchy::HierarchyTreeContainer;
 use jackdaw::scenes::Scenes;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::SceneNodeId;
+use jackdaw_widgets::tree_view::TreeNode;
+use serde_json::json;
 
-use super::batch_undo::{depth, editor, history, menu, scene_text};
+use super::batch_undo::{batch, depth, editor, history, menu, scene_text};
 use crate::util::OperatorResultExt as _;
 
 /// Add a cube the way the menu does and return the document node it became.
@@ -775,4 +778,76 @@ fn an_undo_entry_holds_only_the_nodes_its_edit_changed() {
         entry * 4 < text,
         "one entry holds {entry} bytes for a {text}-byte scene"
     );
+}
+
+#[test]
+fn undoing_and_redoing_a_snapshot_entry_keeps_the_entities_it_did_not_touch() {
+    let (mut app, _dir) = editor();
+    let rock = cube(&mut app);
+    move_to(&mut app, rock, 2.0);
+    let kept = entity_of(&mut app, rock).expect("the rock is spawned");
+    let before = depth(&app);
+    let added = cube(&mut app);
+
+    while depth(&app) > before {
+        history(&mut app, "history.undo");
+    }
+    assert!(entity_of(&mut app, added).is_none());
+    assert_eq!(entity_of(&mut app, rock), Some(kept));
+    while redo_depth(&app) > 0 {
+        history(&mut app, "history.redo");
+    }
+    assert!(entity_of(&mut app, added).is_some());
+    assert_eq!(entity_of(&mut app, rock), Some(kept));
+    assert_eq!(x_of(&mut app, rock), Some(2.0));
+}
+
+/// The entity each top-level row of `panel` shows, in row order.
+fn top_rows(app: &App, panel: Entity) -> Vec<Entity> {
+    let world = app.world();
+    world
+        .get::<Children>(panel)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| world.get::<TreeNode>(row).map(|node| node.0))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn undoing_and_redoing_a_snapshot_entry_keeps_each_outliner_row_where_it_was() {
+    let (mut app, _dir) = editor();
+    let panel = app
+        .world_mut()
+        .spawn((
+            HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+    let cubes: Vec<SceneNodeId> = (0..3).map(|_| cube(&mut app)).collect();
+    let rows = top_rows(&app, panel);
+    let middle = entity_of(&mut app, cubes[1]).expect("the cube is spawned");
+    assert!(rows.contains(&middle));
+    batch(
+        &mut app,
+        vec![json!({
+            "id": "entity.set_transform",
+            "params": { "entity": middle.to_bits(), "x": 4.0 },
+        })],
+    );
+    app.update();
+
+    for id in [
+        "history.undo",
+        "history.redo",
+        "history.undo",
+        "history.redo",
+    ] {
+        history(&mut app, id);
+        app.update();
+        assert_eq!(top_rows(&app, panel), rows, "after {id}");
+    }
 }

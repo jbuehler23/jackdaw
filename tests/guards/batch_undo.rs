@@ -85,7 +85,7 @@ fn spawn_rock(x: f64) -> Value {
     })
 }
 
-fn batch(app: &mut App, calls: Vec<Value>) -> Value {
+pub(super) fn batch(app: &mut App, calls: Vec<Value>) -> Value {
     call(app, batch_handler, json!({ "calls": calls }))
 }
 

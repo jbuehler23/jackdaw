@@ -161,6 +161,7 @@ pub mod ui_layout_presets;
 pub mod ui_palette;
 pub mod ui_stage;
 pub mod ui_text_edit;
+pub(crate) mod undo_in_place;
 pub mod undo_snapshot;
 pub mod view_modes;
 pub mod view_ops;
