@@ -100,11 +100,17 @@ fn load_failed(state: Option<&RecursiveDependencyLoadState>) -> bool {
 }
 
 fn model_counts(world: &mut World) -> ModelCounts {
-    let mut models = world
-        .query_filtered::<(Option<&WorldAssetRoot>, Option<&WorldInstance>), With<GltfSource>>();
+    let mut models = world.query_filtered::<(
+        Entity,
+        Option<&WorldAssetRoot>,
+        Option<&WorldInstance>,
+    ), With<GltfSource>>();
     let rows: Vec<(Option<AssetId<WorldAsset>>, Option<_>)> = models
         .iter(world)
-        .map(|(root, instance)| {
+        .filter(|(entity, root, _)| {
+            root.is_some() || !jackdaw_runtime::is_level_never_shown(world, *entity)
+        })
+        .map(|(_, root, instance)| {
             (
                 root.map(|root| root.0.id()),
                 instance.map(|instance| **instance),

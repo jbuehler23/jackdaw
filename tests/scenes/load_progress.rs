@@ -289,3 +289,51 @@ fn an_open_dialog_keeps_the_pointer_and_the_card_moves_beside_it() {
         "the stage is still shown"
     );
 }
+
+const GROUP_WITH_A_LEVEL_THAT_NEVER_DRAWS: &str = r#"bevy_ecs::hierarchy::Children [
+    #Wall
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::LodGroup {
+        levels: [
+            jackdaw_scene_types::types::LodLevel { screen_height: 0.25 },
+            jackdaw_scene_types::types::LodLevel { screen_height: 0.25 },
+        ],
+    }
+    bevy_ecs::hierarchy::Children [
+        #LOD0
+        bevy_transform::components::transform::Transform
+        jackdaw_scene_types::types::GltfSource {
+            path: "models/dungeon.glb",
+            scene_index: 0,
+        }
+        ,
+        #LOD1
+        bevy_transform::components::transform::Transform
+        jackdaw_scene_types::types::GltfSource {
+            path: "models/dungeon.glb",
+            scene_index: 0,
+        }
+    ]
+]
+"#;
+
+/// A LOD level that never draws is never given a model, so the load cannot
+/// wait for one: it would hold the overlay up until the stall limit.
+#[test]
+fn opening_a_scene_does_not_wait_for_a_lod_level_that_never_draws() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene = dir.path().join("wall.bsn");
+    std::fs::write(&scene, GROUP_WITH_A_LEVEL_THAT_NEVER_DRAWS).expect("write the scene");
+    let mut app = util::editor_test_app();
+
+    let started = Instant::now();
+    open(&mut app, &scene);
+    settle_load(&mut app);
+
+    assert!(!loading(&app), "the load never finished");
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "the load waited {:?} for a level that never draws",
+        started.elapsed()
+    );
+}
