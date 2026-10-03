@@ -69,6 +69,7 @@ pub mod camera_settings;
 pub mod canvas_snap;
 pub mod core_extension;
 pub mod dock_ops;
+pub(crate) mod document_capture;
 pub mod document_ops;
 pub(crate) mod document_units;
 pub mod editor_grid_depth_patch;

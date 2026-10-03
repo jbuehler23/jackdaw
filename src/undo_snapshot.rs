@@ -20,6 +20,7 @@ use jackdaw_commands::EditorCommand;
 
 use crate::active_tool::ActiveTool;
 use crate::brush::EditMode;
+pub use crate::document_capture::DocumentCapture;
 use crate::document_units::{Located, Side, UnitChange, Units, apply_changes};
 use crate::gizmos::GizmoSpace;
 use crate::snapping::SnapSettings;
@@ -28,7 +29,8 @@ use crate::viewport_overlays::OverlaySettings;
 
 pub(super) fn plugin(app: &mut App) {
     app.insert_resource(ActiveSnapshotter(Box::new(BsnDocumentSnapshotter)))
-        .init_resource::<LastCapture>();
+        .init_resource::<LastCapture>()
+        .init_resource::<DocumentCapture>();
 }
 
 /// A scene document's text, compressed.
@@ -134,17 +136,15 @@ impl SceneSnapshotter for BsnDocumentSnapshotter {
             .get_resource::<crate::project::ProjectRoot>()
             .map(|r| r.root.clone())
             .unwrap_or_else(|| std::path::PathBuf::from(""));
-        let document = crate::scene_io::save::authored_document_for_history(world, &parent_path);
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let units = document
-            .as_ref()
-            .and_then(|document| Units::split(document, &registry.read()));
-        let document = match (units, document) {
-            (Some(units), _) => Document::Units(Arc::new(units)),
-            (None, Some(document)) => {
-                Document::Text(pack_shared(world, &jackdaw_bsn::emit_scene(&document)))
+        let document = match crate::document_capture::capture(world, &parent_path) {
+            Some(units) => Document::Units(units),
+            None => {
+                let text =
+                    crate::scene_io::save::authored_document_for_history(world, &parent_path)
+                        .map(|document| jackdaw_bsn::emit_scene(&document))
+                        .unwrap_or_default();
+                Document::Text(pack_shared(world, &text))
             }
-            (None, None) => Document::Text(pack_shared(world, "")),
         };
         Box::new(BsnDocumentSnapshot {
             document,

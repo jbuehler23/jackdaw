@@ -1027,10 +1027,43 @@ pub(crate) fn authored_document_for_history(
     world: &mut World,
     parent_path: &Path,
 ) -> Option<jackdaw_bsn::SceneBsnAst> {
+    authored_live_for_history(world, parent_path).map(|authored| authored.ast)
+}
+
+/// [`authored_document_for_history`] with what the read found on the way.
+pub(crate) fn authored_live_for_history(
+    world: &mut World,
+    parent_path: &Path,
+) -> Option<AuthoredDocument> {
+    let ast = world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()?
+        .deep_clone();
+    Some(author_for_history(world, ast, parent_path))
+}
+
+/// `ast`, a copy of some of the live document's nodes still linked to their
+/// entities, made the way [`authored_document_for_history`] makes the whole
+/// document.
+pub(crate) fn author_for_history(
+    world: &mut World,
+    ast: jackdaw_bsn::SceneBsnAst,
+    parent_path: &Path,
+) -> AuthoredDocument {
     let held = crate::preview_context::suspend_preview_writes(world);
-    let ast = authored_document(world, parent_path, SourceSpelling::AsHeld);
+    let authored = author(world, ast, parent_path, SourceSpelling::AsHeld);
     crate::preview_context::resume_preview_writes(world, held);
-    ast
+    authored
+}
+
+/// A document made the way a save writes it.
+pub(crate) struct AuthoredDocument {
+    pub(crate) ast: jackdaw_bsn::SceneBsnAst,
+    /// The entities and component types whose handle fields were written
+    /// from the live components rather than the document.
+    pub(crate) handles: Vec<(Entity, String)>,
+    /// Whether the document embeds runtime assets it named itself, numbered
+    /// in the order the whole document reached them.
+    pub(crate) names_new_assets: bool,
 }
 
 fn authored_document(
@@ -1038,9 +1071,18 @@ fn authored_document(
     parent_path: &Path,
     spelling: SourceSpelling,
 ) -> Option<jackdaw_bsn::SceneBsnAst> {
-    let live = world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
-    let mut ast = live.deep_clone();
+    let ast = world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()?
+        .deep_clone();
+    Some(author(world, ast, parent_path, spelling).ast)
+}
 
+fn author(
+    world: &mut World,
+    mut ast: jackdaw_bsn::SceneBsnAst,
+    parent_path: &Path,
+    spelling: SourceSpelling,
+) -> AuthoredDocument {
     let registry = world.resource::<AppTypeRegistry>().clone();
     normalize_derived_button_styles(world, &mut ast, &registry);
 
@@ -1073,7 +1115,11 @@ fn authored_document(
     // faithfully once sparsified.
     if pass.touched.is_empty() {
         normalize_runtime_derived_values(world, &mut ast);
-        return Some(ast);
+        return AuthoredDocument {
+            ast,
+            handles: Vec::new(),
+            names_new_assets: false,
+        };
     }
 
     if !pass.refs.is_empty() {
@@ -1085,7 +1131,11 @@ fn authored_document(
     rederive_handle_patches(world, &mut ast, &registry, parent_path, &pass);
     normalize_runtime_derived_values(world, &mut ast);
 
-    Some(ast)
+    AuthoredDocument {
+        ast,
+        names_new_assets: !pass.refs.is_empty(),
+        handles: pass.touched,
+    }
 }
 
 /// The emitted text, paired with the fields that still name a file by an

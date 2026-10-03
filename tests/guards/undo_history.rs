@@ -5,8 +5,10 @@
 use bevy::prelude::*;
 use jackdaw::hierarchy::HierarchyTreeContainer;
 use jackdaw::scenes::Scenes;
+use jackdaw::undo_snapshot::DocumentCapture;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
+use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot};
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::SceneNodeId;
 use jackdaw_widgets::tree_view::TreeNode;
@@ -850,4 +852,51 @@ fn undoing_and_redoing_a_snapshot_entry_keeps_each_outliner_row_where_it_was() {
         app.update();
         assert_eq!(top_rows(&app, panel), rows, "after {id}");
     }
+}
+
+fn capture(app: &mut App) -> Box<dyn SceneSnapshot> {
+    app.world_mut()
+        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world))
+}
+
+/// A capture that starts from the last one agrees with one that reads the
+/// whole document again.
+fn assert_capture_reads_the_whole_document(app: &mut App, after: &str) {
+    let kept = capture(app);
+    app.world_mut().resource_mut::<DocumentCapture>().forget();
+    let whole = capture(app);
+    assert!(
+        kept.equals(&*whole),
+        "after {after}, a capture that started from the last one read a different document"
+    );
+}
+
+#[test]
+fn a_capture_that_starts_from_the_last_one_reads_what_a_whole_read_does() {
+    let (mut app, _dir) = editor();
+    capture(&mut app);
+    spawn_rock(&mut app, 1.0);
+    assert_capture_reads_the_whole_document(&mut app, "spawning a prefab instance");
+    let rock = cube(&mut app);
+    let shed = cube(&mut app);
+    let well = cube(&mut app);
+    assert_capture_reads_the_whole_document(&mut app, "adding cubes");
+    move_to(&mut app, rock, 3.0);
+    assert_capture_reads_the_whole_document(&mut app, "a move");
+    set_node_field(&mut app, shed, "scale.x", "2.0");
+    assert_capture_reads_the_whole_document(&mut app, "a field edit");
+    reparent(&mut app, well, rock);
+    assert_capture_reads_the_whole_document(&mut app, "a reparent");
+    history(&mut app, "history.undo");
+    assert_capture_reads_the_whole_document(&mut app, "undoing the reparent");
+    history(&mut app, "history.redo");
+    assert_capture_reads_the_whole_document(&mut app, "redoing the reparent");
+    let instance = spawn_rock_found(&mut app);
+    set_field(&mut app, instance, "translation.z", "6.0");
+    assert_capture_reads_the_whole_document(&mut app, "moving the instance");
+    select(&mut app, &[shed]);
+    menu(&mut app, "entity.delete", true);
+    assert_capture_reads_the_whole_document(&mut app, "a delete");
+    history(&mut app, "history.undo");
+    assert_capture_reads_the_whole_document(&mut app, "undoing the delete");
 }

@@ -8,6 +8,8 @@
 //! sibling it follows, so a move or an insertion changes only the units next
 //! to it.
 
+use std::sync::Arc;
+
 use bevy::ecs::entity::Entity;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::reflect::TypeRegistry;
@@ -30,12 +32,12 @@ pub(crate) struct Unit {
     /// Whether `text` holds the unit's whole subtree rather than the node's
     /// own patches.
     pub(crate) whole: bool,
-    pub(crate) text: Box<str>,
+    pub(crate) text: Arc<str>,
 }
 
 /// Every unit of a document.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Units(HashMap<UnitKey, Unit>);
+pub(crate) struct Units(pub(crate) HashMap<UnitKey, Unit>);
 
 /// A unit before and after an edit; `None` when it did not exist on that side.
 #[derive(Clone, Debug)]
@@ -83,7 +85,7 @@ impl Units {
                 parent,
                 follows,
                 whole,
-                text: text.into_boxed_str(),
+                text: text.into(),
             };
             if units.insert(key, unit).is_some() {
                 return None;
@@ -175,7 +177,7 @@ fn push_siblings(
     Some(())
 }
 
-fn key_of(ast: &SceneBsnAst, assets: &HashSet<Entity>, node: Entity) -> Option<UnitKey> {
+pub(crate) fn key_of(ast: &SceneBsnAst, assets: &HashSet<Entity>, node: Entity) -> Option<UnitKey> {
     match assets.contains(&node) {
         true => ast
             .get_name(node)
@@ -184,7 +186,7 @@ fn key_of(ast: &SceneBsnAst, assets: &HashSet<Entity>, node: Entity) -> Option<U
     }
 }
 
-fn is_instance(ast: &SceneBsnAst, node: Entity) -> bool {
+pub(crate) fn is_instance(ast: &SceneBsnAst, node: Entity) -> bool {
     ast.find_patch_by_type_path(node, ISA_TYPE).is_some()
 }
 
