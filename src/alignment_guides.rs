@@ -505,4 +505,40 @@ mod measurable_geometry_tests {
             "and moving the camera must not change what is offered"
         );
     }
+
+    /// A mesh loaded for the render world only gives up its vertices once it
+    /// is uploaded, so the drag that caches snap targets has to pass it by.
+    #[test]
+    fn dragging_with_alignment_guides_on_beside_a_render_world_only_mesh_does_not_panic() {
+        let mut world = world();
+        let dragged = triangle(&mut world, Vec3::ZERO, false);
+        world.entity_mut(dragged).insert(Selected);
+        let uploaded = triangle(&mut world, Vec3::splat(4.0), false);
+        let handle = world.get::<Mesh3d>(uploaded).expect("a mesh").0.clone();
+        world
+            .resource_mut::<Assets<Mesh>>()
+            .get_mut(&handle)
+            .expect("the mesh is loaded")
+            .take_gpu_data()
+            .expect("the mesh gives up its data");
+        world.insert_resource(AlignmentGuideState::default());
+        world.insert_resource(OverlaySettings::default());
+        world.insert_resource(ActiveTool::Translate);
+        world.insert_resource(ModalTransformState::default());
+        world.insert_resource(ViewportDragState::default());
+        world.insert_resource(GizmoDragState {
+            active: true,
+            targets: vec![crate::gizmos::GizmoTarget {
+                entity: dragged,
+                start_transform: Transform::IDENTITY,
+            }],
+            ..default()
+        });
+
+        world
+            .run_system_cached(cache_reference_coords)
+            .expect("system runs");
+
+        assert!(world.resource::<AlignmentGuideState>().cache_valid);
+    }
 }

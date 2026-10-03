@@ -691,7 +691,8 @@ fn merge_primitives(
         }
         let mesh = meshes.get(&primitive.mesh)?;
         let Some(source) = mesh
-            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .try_attribute(Mesh::ATTRIBUTE_POSITION)
+            .ok()
             .and_then(|values| values.as_float3())
         else {
             continue;

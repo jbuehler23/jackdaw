@@ -322,7 +322,8 @@ pub(crate) fn collect_descendant_mesh_world_vertices(
     if let Ok((mesh3d, global_tf)) = mesh_query.get(entity)
         && let Some(mesh) = meshes.get(&mesh3d.0)
         && let Some(positions) = mesh
-            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .try_attribute(Mesh::ATTRIBUTE_POSITION)
+            .ok()
             .and_then(|attr| attr.as_float3())
     {
         for pos in positions {
