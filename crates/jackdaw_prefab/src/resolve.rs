@@ -342,6 +342,7 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
                 .map(move |child| (child, node))
         })
         .collect();
+    let mut entries: HashMap<PathBuf, HashMap<i128, Entity>> = HashMap::new();
 
     for node in nodes {
         // Instance roots sparsify against their own prefab's root entry: resolve
@@ -371,8 +372,10 @@ pub fn sparsify_inherited_descendants(ast: &mut SceneBsnAst, get_prefab: &Prefab
         let Some(prefab) = get_prefab(&source) else {
             continue;
         };
-        let Some(prefab_match) =
-            prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(peid))
+        let Some(&prefab_match) = entries
+            .entry(source)
+            .or_insert_with(|| prefab.nodes_by_component_int(PREFAB_ENTITY_ID_TYPE))
+            .get(&i128::from(peid))
         else {
             continue;
         };

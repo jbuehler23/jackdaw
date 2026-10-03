@@ -316,6 +316,28 @@ impl SceneBsnAst {
         }
         None
     }
+
+    /// Every AST node whose `type_path` component reads as a single integer,
+    /// by that integer, for many [`Self::find_node_by_component_int`] lookups
+    /// in one pass. Where nodes share a value, the first in pre-order wins, as
+    /// it does there.
+    pub fn nodes_by_component_int(
+        &self,
+        type_path: &str,
+    ) -> bevy::platform::collections::HashMap<i128, Entity> {
+        let mut found = bevy::platform::collections::HashMap::default();
+        for &root in &self.roots {
+            for node in std::iter::once(root).chain(self.descendants_of(root)) {
+                let Some(whole) = crate::apply::get_bsn_field(self, node, type_path, "") else {
+                    continue;
+                };
+                if let Some(value) = bsn_value_as_int(&whole) {
+                    found.entry(value).or_insert(node);
+                }
+            }
+        }
+        found
+    }
 }
 
 /// The integer a whole-component [`BsnValue`] represents, when it is either a
@@ -457,6 +479,18 @@ mod query_tests {
         );
         assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 0), Some(t.root));
         assert_eq!(t.ast.find_node_by_component_int(PREFAB_ID, 99), None);
+    }
+
+    #[test]
+    fn nodes_by_component_int_finds_what_each_lookup_finds() {
+        let t = build_tree();
+        let index = t.ast.nodes_by_component_int(PREFAB_ID);
+        for value in [0, 2, 99] {
+            assert_eq!(
+                index.get(&i128::from(value)).copied(),
+                t.ast.find_node_by_component_int(PREFAB_ID, value)
+            );
+        }
     }
 
     #[test]

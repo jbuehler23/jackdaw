@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
+use bevy::ecs::component::ComponentId;
 use bevy::reflect::{TypeInfo, TypeRegistry};
 use bevy::{ecs::reflect::AppTypeRegistry, prelude::*, tasks::AsyncComputeTaskPool};
 
@@ -619,27 +620,26 @@ fn collect_bsn_inline_assets(
     entities: &[Entity],
     mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
 ) -> BsnInlineAssetPass {
-    let skip_ids = doc_skip_type_ids();
+    let kept = KeptComponents::new(registry);
 
     let mut refs: Vec<jackdaw_bsn::CatalogAssetRef> = Vec::new();
     let mut touched: Vec<(Entity, String)> = Vec::new();
     let mut counters: HashMap<String, usize> = HashMap::new();
+    let mut slots: HashMap<ComponentId, Option<usize>> = HashMap::new();
 
     for &entity in entities {
         let Ok(entity_ref) = world.get_entity(entity) else {
             continue;
         };
-        for registration in registry.iter() {
-            if skip_ids.contains(&registration.type_id()) {
-                continue;
-            }
-            let type_path = registration.type_info().type_path_table().path();
-            if should_skip_component(type_path) {
-                continue;
-            }
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                continue;
-            };
+        let mut present: Vec<usize> = entity_ref
+            .archetype()
+            .components()
+            .iter()
+            .filter_map(|&id| *slots.entry(id).or_insert_with(|| kept.slot(world, id)))
+            .collect();
+        present.sort_unstable();
+        for slot in present {
+            let (reflect_component, type_path) = kept.components[slot];
             let Some(component) = reflect_component.reflect(entity_ref) else {
                 continue;
             };
@@ -660,6 +660,43 @@ fn collect_bsn_inline_assets(
         names,
         refs,
         touched,
+    }
+}
+
+/// The reflected components a saved document keeps, in type registry order,
+/// so a walk over one entity's own components visits them in the same order
+/// as a walk over the whole registry.
+struct KeptComponents<'a> {
+    components: Vec<(&'a ReflectComponent, &'a str)>,
+    slots: HashMap<std::any::TypeId, usize>,
+}
+
+impl<'a> KeptComponents<'a> {
+    fn new(registry: &'a TypeRegistry) -> Self {
+        let skip_ids = doc_skip_type_ids();
+        let mut components = Vec::new();
+        let mut slots = HashMap::new();
+        for registration in registry.iter() {
+            if skip_ids.contains(&registration.type_id()) {
+                continue;
+            }
+            let type_path = registration.type_info().type_path_table().path();
+            if should_skip_component(type_path) {
+                continue;
+            }
+            let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+                continue;
+            };
+            slots.insert(registration.type_id(), components.len());
+            components.push((reflect_component, type_path));
+        }
+        Self { components, slots }
+    }
+
+    /// Where the component `id` sits in [`Self::components`], if it is kept.
+    fn slot(&self, world: &World, id: ComponentId) -> Option<usize> {
+        let type_id = world.components().get_info(id)?.type_id()?;
+        self.slots.get(&type_id).copied()
     }
 }
 
