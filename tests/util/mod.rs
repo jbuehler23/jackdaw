@@ -22,6 +22,27 @@ pub fn skip_setup_check() {
     jackdaw_project_build::bootstrap::skip_setup_check();
 }
 
+/// Point the editor's per-user config directory at a scratch directory for
+/// this test process, unless one is chosen already, so no test reads or
+/// writes the keymap, keybinds, recent projects or extension list of whoever
+/// runs it. Runs once, before the first plugin is added, so no other thread
+/// reads the environment while it is set.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn isolate_config_dir() {
+    static ISOLATED: std::sync::Once = std::sync::Once::new();
+    ISOLATED.call_once(|| {
+        let chosen =
+            std::env::var_os(jackdaw_env::paths::CONFIG_DIR_VAR).is_some_and(|dir| !dir.is_empty());
+        if chosen {
+            return;
+        }
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("jackdaw-config-{}", std::process::id()));
+        unsafe { std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, dir) };
+    });
+}
+
 pub fn headless_app() -> App {
     let mut app = ambient_app();
     add_editor_plugins(&mut app);
@@ -36,6 +57,7 @@ pub fn headless_app() -> App {
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn ambient_app() -> App {
     skip_setup_check();
+    isolate_config_dir();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
