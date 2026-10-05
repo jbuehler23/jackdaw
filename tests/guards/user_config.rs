@@ -11,6 +11,7 @@ fn an_editor_test_app_reads_and_writes_a_scratch_config_directory() {
         jackdaw_env::paths::keymap_path(),
         jackdaw_env::paths::keybinds_path(),
         jackdaw_env::paths::recent_file_path(),
+        jackdaw_env::paths::viewport_settings_path(),
         jackdaw_env::paths::state_dir(),
     ] {
         let path = path.expect("a config path");

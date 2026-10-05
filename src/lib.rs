@@ -174,6 +174,7 @@ pub mod viewport_2d;
 pub mod viewport_host;
 pub mod viewport_overlays;
 pub mod viewport_select;
+pub mod viewport_settings;
 pub mod viewport_util;
 pub mod windowing;
 pub mod workspace_dropdown;
@@ -504,6 +505,7 @@ impl Plugin for EditorCorePlugin {
             remote::debug::RemoteDebugPlugin,
             camera_settings::plugin,
         ))
+        .add_plugins(viewport_settings::plugin)
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)
         .add_plugins(asset_index::plugin)
@@ -2374,7 +2376,7 @@ fn populate_menu(
                 viewport_lens_rows(&lens),
                 vec![
                     separator(),
-                    op_entry::<fps_overlay::ViewToggleFpsOverlayOp>("Toggle FPS Overlay"),
+                    op_entry::<viewport_settings::ViewportStatsToggleOp>("Toggle Stats"),
                     separator(),
                     op_entry::<view_ops::ViewUiZoomInOp>("Zoom UI In"),
                     op_entry::<view_ops::ViewUiZoomOutOp>("Zoom UI Out"),

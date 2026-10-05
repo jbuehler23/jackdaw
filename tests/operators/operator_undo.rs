@@ -216,28 +216,46 @@ fn assert_single_renderable_gltf(app: &mut App, path: &str, position: Vec3) -> E
     entity
 }
 
+/// How the viewport draws is a view setting, not an edit: none of these
+/// reach the undo stack, from a menu or a keybind alike.
 #[test]
-fn view_toggle_wireframe_round_trip() {
+fn view_settings_make_no_history_entry() {
     let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "view.toggle_wireframe");
-}
-
-#[test]
-fn view_toggle_bounding_boxes_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "view.toggle_bounding_boxes");
-}
-
-#[test]
-fn view_toggle_brush_outline_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "view.toggle_brush_outline");
-}
-
-#[test]
-fn view_toggle_face_grid_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "view.toggle_face_grid");
+    app.world_mut()
+        .resource_mut::<jackdaw::viewport_settings::ViewportSettingsFile>()
+        .path = None;
+    for (id, params) in [
+        ("view.toggle_wireframe", vec![]),
+        ("view.toggle_x_ray", vec![]),
+        ("view.toggle_bounding_boxes", vec![]),
+        ("view.cycle_bounding_box_mode", vec![]),
+        ("view.toggle_face_grid", vec![]),
+        ("view.toggle_brush_wireframe", vec![]),
+        ("view.toggle_brush_outline", vec![]),
+        ("view.toggle_alignment_guides", vec![]),
+        ("view.toggle_collider_gizmos", vec![]),
+        ("view.toggle_hierarchy_arrows", vec![]),
+        ("view.toggle_lod_colors", vec![]),
+        ("viewport.quality.preset", vec![("preset", "low")]),
+        ("viewport.quality.set", vec![("anti_aliasing", "taa")]),
+        ("viewport.show.toggle", vec![("flag", "fog")]),
+        ("viewport.realtime.toggle", vec![]),
+        ("viewport.stats.toggle", vec![]),
+    ] {
+        let mut call = app.world_mut().operator(id).settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: true,
+        });
+        for (name, value) in params {
+            call = call.param(name, value.to_string());
+        }
+        call.call()
+            .unwrap_or_else(|err| panic!("{id}: dispatch errored: {err}"))
+            .assert_finished_or_panic(id);
+        app.update();
+        let history = app.world().resource::<CommandHistory>();
+        assert!(history.undo_stack.is_empty(), "{id} pushed an undo entry");
+    }
 }
 
 #[test]
@@ -282,12 +300,6 @@ fn tool_scale_round_trip() {
 fn gizmo_space_toggle_round_trip() {
     let mut app = util::editor_test_app();
     assert_undo_redo_round_trip(&mut app, "gizmo.space.toggle");
-}
-
-#[test]
-fn view_cycle_bounding_box_mode_round_trip() {
-    let mut app = util::editor_test_app();
-    assert_undo_redo_round_trip(&mut app, "view.cycle_bounding_box_mode");
 }
 
 /// Hiding a node is an edit to the document like any other, so Ctrl+Z

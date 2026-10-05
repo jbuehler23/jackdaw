@@ -70,7 +70,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ]);
 }
 
-#[operator(id = "view.toggle_wireframe", label = "Toggle Wireframe")]
+#[operator(
+    id = "view.toggle_wireframe",
+    label = "Toggle Wireframe",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_wireframe(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::view_modes::ViewModeSettings>,
@@ -79,7 +83,7 @@ pub(crate) fn view_toggle_wireframe(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_x_ray", label = "Toggle X-Ray")]
+#[operator(id = "view.toggle_x_ray", label = "Toggle X-Ray", allows_undo = false)]
 pub(crate) fn view_toggle_xray(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::view_modes::ViewModeSettings>,
@@ -88,7 +92,11 @@ pub(crate) fn view_toggle_xray(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_bounding_boxes", label = "Toggle Bounding Boxes")]
+#[operator(
+    id = "view.toggle_bounding_boxes",
+    label = "Toggle Bounding Boxes",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_bounding_boxes(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
@@ -97,7 +105,11 @@ pub(crate) fn view_toggle_bounding_boxes(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.cycle_bounding_box_mode", label = "Cycle Bounding Box Mode")]
+#[operator(
+    id = "view.cycle_bounding_box_mode",
+    label = "Cycle Bounding Box Mode",
+    allows_undo = false
+)]
 pub(crate) fn view_cycle_bounding_box_mode(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
@@ -113,7 +125,11 @@ pub(crate) fn view_cycle_bounding_box_mode(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_face_grid", label = "Toggle Face Grid")]
+#[operator(
+    id = "view.toggle_face_grid",
+    label = "Toggle Face Grid",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_face_grid(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
@@ -122,7 +138,11 @@ pub(crate) fn view_toggle_face_grid(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_brush_wireframe", label = "Toggle Brush Wireframe")]
+#[operator(
+    id = "view.toggle_brush_wireframe",
+    label = "Toggle Brush Wireframe",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_brush_wireframe(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
@@ -131,7 +151,11 @@ pub(crate) fn view_toggle_brush_wireframe(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_brush_outline", label = "Toggle Brush Outline")]
+#[operator(
+    id = "view.toggle_brush_outline",
+    label = "Toggle Brush Outline",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_brush_outline(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
@@ -140,7 +164,11 @@ pub(crate) fn view_toggle_brush_outline(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_alignment_guides", label = "Toggle Alignment Guides")]
+#[operator(
+    id = "view.toggle_alignment_guides",
+    label = "Toggle Alignment Guides",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_alignment_guides(
     _: In<OperatorParameters>,
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
@@ -149,7 +177,11 @@ pub(crate) fn view_toggle_alignment_guides(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_collider_gizmos", label = "Toggle Collider Gizmos")]
+#[operator(
+    id = "view.toggle_collider_gizmos",
+    label = "Toggle Collider Gizmos",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_collider_gizmos(
     _: In<OperatorParameters>,
     mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
@@ -158,7 +190,11 @@ pub(crate) fn view_toggle_collider_gizmos(
     OperatorResult::Finished
 }
 
-#[operator(id = "view.toggle_hierarchy_arrows", label = "Toggle Hierarchy Arrows")]
+#[operator(
+    id = "view.toggle_hierarchy_arrows",
+    label = "Toggle Hierarchy Arrows",
+    allows_undo = false
+)]
 pub(crate) fn view_toggle_hierarchy_arrows(
     _: In<OperatorParameters>,
     mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,

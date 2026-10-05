@@ -45,6 +45,11 @@ pub fn keymap_path() -> Option<std::path::PathBuf> {
     config_dir().map(|d| d.join("keymap.json"))
 }
 
+/// Where the user's viewport quality and display settings live.
+pub fn viewport_settings_path() -> Option<std::path::PathBuf> {
+    config_dir().map(|d| d.join("viewport.json"))
+}
+
 /// Where state the editor keeps between runs but the user does not edit
 /// lives: the extension quarantine, and anything else of that kind.
 ///

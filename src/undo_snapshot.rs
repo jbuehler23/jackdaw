@@ -1,9 +1,10 @@
 //! BSN-document-backed implementation of the snapshotter traits.
 //!
 //! The snapshot captures both the scene document and a set of editor-state
-//! resources (edit mode, gizmo mode/space, grid, view overlays, physics
-//! overlay). That way Ctrl+Z also reverts "I toggled wireframe" or "I
-//! switched to Face mode", matching user expectations.
+//! resources (edit mode, active tool, gizmo space, snapping). That way Ctrl+Z
+//! also reverts "I switched to Face mode", matching user expectations. How the
+//! viewport draws (wireframe, overlays, quality) is a view setting and stays
+//! out of it.
 //!
 //! The selection rides along by scene node id rather than by entity, since the
 //! respawn re-mints every entity id. It is deliberately absent from `equals`: a
@@ -15,7 +16,6 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter};
-use jackdaw_avian_integration::PhysicsOverlayConfig;
 use jackdaw_commands::EditorCommand;
 
 use crate::active_tool::ActiveTool;
@@ -24,8 +24,6 @@ pub use crate::document_capture::DocumentCapture;
 use crate::document_units::{Located, Side, UnitChange, Units, apply_changes};
 use crate::gizmos::GizmoSpace;
 use crate::snapping::SnapSettings;
-use crate::view_modes::ViewModeSettings;
-use crate::viewport_overlays::OverlaySettings;
 
 pub(super) fn plugin(app: &mut App) {
     app.insert_resource(ActiveSnapshotter(Box::new(BsnDocumentSnapshotter)))
@@ -92,9 +90,6 @@ struct EditorStateSnapshot {
     active_tool: ActiveTool,
     gizmo_space: GizmoSpace,
     snap_settings: SnapSettings,
-    view_mode: ViewModeSettings,
-    overlays: OverlaySettings,
-    physics_overlays: PhysicsOverlayConfig,
 }
 
 impl EditorStateSnapshot {
@@ -104,9 +99,6 @@ impl EditorStateSnapshot {
             active_tool: *world.resource::<ActiveTool>(),
             gizmo_space: *world.resource::<GizmoSpace>(),
             snap_settings: world.resource::<SnapSettings>().clone(),
-            view_mode: world.resource::<ViewModeSettings>().clone(),
-            overlays: world.resource::<OverlaySettings>().clone(),
-            physics_overlays: world.resource::<PhysicsOverlayConfig>().clone(),
         }
     }
 
@@ -115,9 +107,6 @@ impl EditorStateSnapshot {
         *world.resource_mut::<ActiveTool>() = self.active_tool;
         *world.resource_mut::<GizmoSpace>() = self.gizmo_space;
         *world.resource_mut::<SnapSettings>() = self.snap_settings.clone();
-        *world.resource_mut::<ViewModeSettings>() = self.view_mode.clone();
-        *world.resource_mut::<OverlaySettings>() = self.overlays.clone();
-        *world.resource_mut::<PhysicsOverlayConfig>() = self.physics_overlays.clone();
     }
 }
 
@@ -483,9 +472,6 @@ mod tests {
         app.init_resource::<ActiveTool>();
         app.init_resource::<GizmoSpace>();
         app.init_resource::<SnapSettings>();
-        app.init_resource::<ViewModeSettings>();
-        app.init_resource::<OverlaySettings>();
-        app.init_resource::<PhysicsOverlayConfig>();
         app
     }
 
@@ -509,9 +495,6 @@ mod tests {
         app.init_resource::<ActiveTool>();
         app.init_resource::<GizmoSpace>();
         app.init_resource::<SnapSettings>();
-        app.init_resource::<ViewModeSettings>();
-        app.init_resource::<OverlaySettings>();
-        app.init_resource::<PhysicsOverlayConfig>();
         app
     }
 

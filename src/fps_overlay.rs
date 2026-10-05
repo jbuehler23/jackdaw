@@ -6,8 +6,8 @@
 //! `place_overlay` moves it to the bottom-right corner, clear of both
 //! the viewport toolbar and the tool palette.
 //!
-//! The text and the graph are toggled together by
-//! `view.toggle_fps_overlay`: upstream keeps two independent `enabled`
+//! The text and the graph follow the viewport's Stats setting together
+//! (`viewport.stats.toggle`, F3): upstream keeps two independent `enabled`
 //! flags, so leaving the graph's on would draw it over a hidden readout.
 //!
 //! Upstream's readout is a frame *rate*, an average in which a single
@@ -23,11 +23,9 @@ use bevy::dev_tools::fps_overlay::{
 use bevy::diagnostic::{Diagnostic, DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
-use jackdaw_api::prelude::*;
-use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::tokens;
 
-use crate::core_extension::CoreExtensionInputContext;
+use crate::viewport_settings::ViewportSettings;
 
 /// Gap between the readout and the window edges it sits against.
 const MARGIN: f32 = 8.0;
@@ -55,14 +53,11 @@ pub(crate) fn plugin(app: &mut App) {
         },
     })
     .add_systems(PostStartup, (place_overlay, append_frame_time))
+    .add_systems(
+        PreUpdate,
+        follow_stats_setting.run_if(resource_changed::<ViewportSettings>),
+    )
     .add_systems(Update, update_frame_time.run_if(on_timer(REFRESH)));
-}
-
-pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<ViewToggleFpsOverlayOp>();
-    ctx.bind_operator::<CoreExtensionInputContext, ViewToggleFpsOverlayOp>([PresetInput::key(
-        "F3",
-    )]);
 }
 
 /// Move the stock overlay off the menu bar.
@@ -124,21 +119,14 @@ fn update_frame_time(
     }
 }
 
-/// Show or hide the frame-rate readout.
-#[operator(
-    id = "view.toggle_fps_overlay",
-    label = "Toggle FPS Overlay",
-    description = "Show or hide the frame-rate readout.",
-    allows_undo = false
-)]
-pub(crate) fn view_toggle_fps_overlay(
-    _: In<OperatorParameters>,
-    mut config: ResMut<FpsOverlayConfig>,
-) -> OperatorResult {
-    let enabled = !config.enabled;
-    config.enabled = enabled;
-    config.frame_time_graph_config.enabled = enabled;
-    OperatorResult::Finished
+/// Show the readout and its graph while the viewport's Stats setting is on.
+fn follow_stats_setting(settings: Res<ViewportSettings>, mut config: ResMut<FpsOverlayConfig>) {
+    if config.enabled == settings.stats && config.frame_time_graph_config.enabled == settings.stats
+    {
+        return;
+    }
+    config.enabled = settings.stats;
+    config.frame_time_graph_config.enabled = settings.stats;
 }
 
 #[cfg(test)]
@@ -150,7 +138,7 @@ mod tests {
     /// Checked on the rendered `Node` rather than the config, since upstream's
     /// `toggle_display` decides whether anything is on screen.
     #[test]
-    fn the_operator_toggles_what_the_overlay_displays() {
+    fn the_stats_setting_toggles_what_the_overlay_displays() {
         let mut app = App::new();
         // The stock overlay pulls in a UI material for its frame-time graph, so this needs
         // the render plugins; no backend is required to hold the assets they register.
@@ -168,6 +156,7 @@ mod tests {
                 .disable::<bevy::audio::AudioPlugin>()
                 .disable::<bevy::winit::WinitPlugin>(),
         )
+        .init_resource::<ViewportSettings>()
         .add_plugins(plugin);
         app.finish();
         app.update();
@@ -178,14 +167,14 @@ mod tests {
         assert_eq!(
             displayed(&mut app),
             Some(Display::DEFAULT),
-            "the operator shows the readout"
+            "turning Stats on shows the readout"
         );
 
         toggle(&mut app);
         assert_eq!(
             displayed(&mut app),
             Some(Display::None),
-            "a second call hides it again"
+            "turning it off hides it again"
         );
     }
 
@@ -222,11 +211,8 @@ mod tests {
     }
 
     fn toggle(app: &mut App) {
-        let outcome = app
-            .world_mut()
-            .run_system_cached_with(view_toggle_fps_overlay, OperatorParameters::default())
-            .expect("the operator runs");
-        assert_eq!(outcome, OperatorResult::Finished);
+        let mut settings = app.world_mut().resource_mut::<ViewportSettings>();
+        settings.stats = !settings.stats;
         app.update();
     }
 
