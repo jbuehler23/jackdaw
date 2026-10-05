@@ -1,5 +1,6 @@
 //! Primary-window shell: chrome root, title bar, body slot, and resize overlay.
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::WindowChromeTheme;
@@ -26,8 +27,9 @@ pub struct WindowShellSlots {
 
 /// Spawns a UI camera, the window shell, and returns title bar/body slots for screen content.
 ///
-/// `screen` is a caller marker copied onto the UI camera and shell root (useful for despawning
-/// screen's chrome as a unit).
+/// The UI camera belongs to no render layer, so it draws only UI and never makes scene
+/// entities or lights visible. `screen` is a caller marker copied onto the UI camera and
+/// shell root (useful for despawning screen's chrome as a unit).
 pub fn spawn_window_shell<S: Component + Copy>(
     commands: &mut Commands,
     theme: &WindowChromeTheme,
@@ -49,6 +51,7 @@ pub fn spawn_window_shell<S: Component + Copy>(
             clear_color: ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
+        RenderLayers::none(),
         screen,
     ));
     let mut title_bar_slot = None::<Entity>;
@@ -155,6 +158,69 @@ mod tests {
                 .get::<bevy::ui::IsDefaultUiCamera>(camera)
                 .is_some(),
             "the shell camera carries IsDefaultUiCamera",
+        );
+    }
+
+    fn spawn_point_light(app: &mut App, z: f32) -> Entity {
+        app.world_mut()
+            .spawn((
+                PointLight {
+                    range: 5.0,
+                    shadow_maps_enabled: true,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, z),
+                bevy::camera::primitives::Sphere {
+                    center: Vec3A::new(0.0, 0.0, z),
+                    radius: 5.0,
+                },
+            ))
+            .id()
+    }
+
+    #[test]
+    fn shell_camera_leaves_lights_outside_the_scene_camera_unseen() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            bevy::camera::CameraPlugin,
+        ))
+        .init_asset::<Mesh>()
+        .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+        app.insert_resource(CaptionFont {
+            handle: Handle::default(),
+            #[cfg(target_os = "windows")]
+            use_segoe_glyphs: false,
+        });
+        app.world_mut()
+            .run_system_once(spawn_shell)
+            .expect("shell spawns");
+        app.world_mut().spawn((
+            Camera3d::default(),
+            Transform::default().looking_to(Vec3::NEG_Z, Vec3::Y),
+        ));
+        let behind = spawn_point_light(&mut app, 50.0);
+        let ahead = spawn_point_light(&mut app, -50.0);
+
+        app.update();
+        app.update();
+
+        let visible = |light| {
+            app.world()
+                .get::<ViewVisibility>(light)
+                .expect("lights have view visibility")
+                .get()
+        };
+        assert!(
+            visible(ahead),
+            "a light in front of the scene camera is visible"
+        );
+        assert!(
+            !visible(behind),
+            "a light behind the scene camera stays hidden and renders no shadow maps",
         );
     }
 }
