@@ -125,7 +125,7 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                drive_thumbnail_queue,
+                (drive_thumbnail_queue, activate_camera_while_working).chain(),
                 update_thumbnail_slots,
                 capture_pending_scene,
             )
@@ -467,6 +467,7 @@ fn setup_thumbnail_stage(
         Camera3d::default(),
         Camera {
             order: -1,
+            is_active: false,
             // Solid, not transparent. `write_png` drops alpha (under HDR it
             // carries brightness, not opacity), so a transparent clear would
             // encode as black. Clearing to the panel colour instead makes the
@@ -673,6 +674,19 @@ fn drive_thumbnail_queue(
         ) {
             thumbnails.job = Some(job);
             return;
+        }
+    }
+}
+
+/// Renders the stage only while a job is in flight; an idle stage costs a full 3D view each frame.
+fn activate_camera_while_working(
+    thumbnails: Res<Thumbnails>,
+    mut cameras: Query<&mut Camera, With<ThumbnailCamera>>,
+) {
+    let working = thumbnails.job.is_some();
+    for mut camera in &mut cameras {
+        if camera.is_active != working {
+            camera.is_active = working;
         }
     }
 }
@@ -1764,6 +1778,75 @@ bevy_transform::components::transform::Transform
         assert!(
             !build_prefab_subject(app.world_mut(), bare, &without),
             "a prefab with no models keeps its icon"
+        );
+    }
+
+    fn stage_app(cache_dir: &Path) -> App {
+        let mut app = prefab_app();
+        app.init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .add_systems(
+                Update,
+                (drive_thumbnail_queue, activate_camera_while_working).chain(),
+            );
+        let target = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .reserve_handle();
+        app.insert_resource(ThumbnailTarget(target));
+        app.insert_resource(Thumbnails {
+            cache_dir: Some(cache_dir.to_path_buf()),
+            ..default()
+        });
+        app.world_mut().spawn((
+            ThumbnailCamera,
+            Camera {
+                is_active: false,
+                ..default()
+            },
+            Projection::default(),
+            Transform::IDENTITY,
+        ));
+        app
+    }
+
+    fn camera_is_active(app: &mut App) -> bool {
+        app.world_mut()
+            .query_filtered::<&Camera, With<ThumbnailCamera>>()
+            .single(app.world())
+            .expect("one thumbnail camera")
+            .is_active
+    }
+
+    #[test]
+    fn the_thumbnail_camera_renders_only_while_a_thumbnail_is_in_flight() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let prefab = temp.path().join("marker.bsn");
+        std::fs::write(&prefab, PREFAB_WITHOUT_A_MODEL).expect("the prefab is written");
+        let mut app = stage_app(temp.path());
+
+        app.update();
+        assert!(!camera_is_active(&mut app), "an idle stage does not render");
+
+        app.world_mut()
+            .resource_mut::<Thumbnails>()
+            .request(&prefab, Subject::Prefab);
+        app.update();
+        assert!(
+            camera_is_active(&mut app),
+            "a requested thumbnail turns the stage on"
+        );
+
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            app.world().resource::<Thumbnails>().job.is_none(),
+            "the job is over"
+        );
+        assert!(
+            !camera_is_active(&mut app),
+            "the stage goes idle once the job is over"
         );
     }
 
