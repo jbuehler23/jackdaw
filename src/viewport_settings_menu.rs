@@ -10,6 +10,7 @@ use jackdaw_feathers::menu_bar::{
     OP_ACTION_PREFIX, SECTION_ACTION_PREFIX, SEPARATOR_ACTION, checked_row, menu_icon_button,
     radio_row, submenu_row,
 };
+use jackdaw_feathers::tokens;
 
 use crate::lod_bar::LodColorView;
 use crate::view_modes::{ViewMode, ViewModeSettings};
@@ -37,6 +38,66 @@ pub fn viewport_settings_menu() -> impl Bundle {
         ),
         jackdaw_feathers::tooltip::Tooltip::title(VIEWPORT_SETTINGS_MENU),
     )
+}
+
+/// On the toolbar's note that the viewport redraws only when something
+/// changes.
+#[derive(Component)]
+pub struct RealtimeOffIndicator;
+
+/// A pause mark and "Realtime off", shown on the toolbar while the Realtime
+/// setting is off.
+pub fn realtime_off_indicator(icon_font: Handle<Font>, text_font: Handle<Font>) -> impl Bundle {
+    (
+        RealtimeOffIndicator,
+        Node {
+            display: Display::None,
+            align_items: AlignItems::Center,
+            column_gap: px(tokens::SPACING_XS),
+            padding: UiRect::horizontal(px(tokens::SPACING_SM)),
+            ..default()
+        },
+        jackdaw_feathers::tooltip::Tooltip::title(
+            "Realtime is off: the viewport redraws only when something changes",
+        ),
+        children![
+            (
+                Text::new(String::from(Icon::Pause.unicode())),
+                TextFont {
+                    font: icon_font.into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+            (
+                Text::new("Realtime off"),
+                TextFont {
+                    font: text_font.into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+            ),
+        ],
+    )
+}
+
+/// Show the Realtime-off note on every toolbar while the setting is off.
+pub fn show_realtime_off_indicator(
+    settings: Res<ViewportSettings>,
+    mut indicators: Query<&mut Node, With<RealtimeOffIndicator>>,
+) {
+    let wanted = if settings.realtime {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for mut node in &mut indicators {
+        if node.display != wanted {
+            node.display = wanted;
+        }
+    }
 }
 
 /// The menu's rows for the world as it stands.

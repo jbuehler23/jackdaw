@@ -15,5 +15,6 @@ mod viewport_2d;
 mod viewport_chrome;
 mod viewport_mode;
 mod viewport_quality;
+mod viewport_redraw;
 mod viewport_settings;
 mod viewport_settings_menu;

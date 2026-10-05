@@ -565,7 +565,23 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
                     crate::viewport_settings_menu::viewport_settings_menu(),
                 ))
                 .id();
-            world.entity_mut(toolbar).add_child(settings_menu);
+            let icon_font = world
+                .get_resource::<jackdaw_feathers::icons::IconFont>()
+                .map(|font| font.0.clone())
+                .unwrap_or_default();
+            let text_font = world
+                .get_resource::<jackdaw_feathers::icons::EditorFont>()
+                .map(|font| font.0.clone())
+                .unwrap_or_default();
+            let paused = world
+                .spawn((
+                    crate::EditorEntity,
+                    crate::viewport_settings_menu::realtime_off_indicator(icon_font, text_font),
+                ))
+                .id();
+            world
+                .entity_mut(toolbar)
+                .add_children(&[paused, settings_menu]);
             // The toolbar's own spacer already pushes everything after it to
             // the right end, so the switch needs no second one.
             let mode_bar = world

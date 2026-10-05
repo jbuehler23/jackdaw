@@ -174,6 +174,7 @@ pub mod viewport_2d;
 pub mod viewport_host;
 pub mod viewport_overlays;
 pub mod viewport_quality;
+pub mod viewport_redraw;
 pub mod viewport_select;
 pub mod viewport_settings;
 pub mod viewport_settings_menu;
@@ -507,7 +508,11 @@ impl Plugin for EditorCorePlugin {
             remote::debug::RemoteDebugPlugin,
             camera_settings::plugin,
         ))
-        .add_plugins((viewport_settings::plugin, viewport_quality::plugin))
+        .add_plugins((
+            viewport_settings::plugin,
+            viewport_quality::plugin,
+            viewport_redraw::plugin,
+        ))
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)
         .add_plugins(asset_index::plugin)
