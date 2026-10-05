@@ -26,6 +26,7 @@
 
 pub mod environment;
 pub mod foliage;
+pub mod light_shadows;
 pub mod probe;
 pub mod shadow_views;
 pub mod water;
@@ -33,6 +34,7 @@ pub mod worn;
 
 pub use environment::{EnvironmentPlugin, SkyMaterial};
 pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
+pub use light_shadows::LightShadowsPlugin;
 pub use probe::ReflectionProbePlugin;
 pub use shadow_views::ShadowViewCleanupPlugin;
 pub use water::{Water, WaterMaterial, WaterPlugin};

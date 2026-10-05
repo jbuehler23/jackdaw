@@ -450,6 +450,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::EnvironmentPlugin)
         .add_plugins(jackdaw_surface::ReflectionProbePlugin)
         .add_plugins(jackdaw_surface::ShadowViewCleanupPlugin)
+        .add_plugins(jackdaw_surface::LightShadowsPlugin)
         .add_plugins(probe_bake::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)

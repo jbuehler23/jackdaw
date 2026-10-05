@@ -10,6 +10,7 @@ pub struct Environment {
     pub fog: Fog,
     pub ambient: Ambient,
     pub post: PostProcess,
+    pub shadows: LightShadows,
 }
 
 /// A gradient sky with a sun disc and an optional cloud layer, drawn behind everything.
@@ -324,6 +325,30 @@ impl Default for PostProcess {
             antialiasing: Antialiasing::Keep,
             msaa: Multisampling::Keep,
             shadow_filtering: ShadowFiltering::Keep,
+        }
+    }
+}
+
+/// Which point and spot lights render shadow maps; the rest light the scene unshadowed.
+///
+/// Every shadowed point light renders six views a frame, so each camera keeps only the lights
+/// nearest it. The default of four matches the per-object light limit of Unity's Universal
+/// Render Pipeline, and fifty metres its shadow distance.
+#[derive(Reflect, Clone, Debug, PartialEq)]
+#[reflect(Default)]
+pub struct LightShadows {
+    /// How many shadow-casting point and spot lights each camera keeps shadowed, nearest first.
+    pub max_lights: u32,
+    /// How close, in metres, a light's range has to reach to a camera for the light to keep its
+    /// shadows there.
+    pub distance: f32,
+}
+
+impl Default for LightShadows {
+    fn default() -> Self {
+        Self {
+            max_lights: 4,
+            distance: 50.0,
         }
     }
 }

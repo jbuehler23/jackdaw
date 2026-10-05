@@ -294,6 +294,7 @@ impl Plugin for JackdawPlugin {
             jackdaw_surface::EnvironmentPlugin,
             jackdaw_surface::ReflectionProbePlugin,
             jackdaw_surface::ShadowViewCleanupPlugin,
+            jackdaw_surface::LightShadowsPlugin,
             MaterialOverridesPlugin,
             LodPlugin,
         ));
