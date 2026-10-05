@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_timer;
 use jackdaw_feathers::status_bar::{StatusBarCenter, StatusBarLeft, StatusBarRight};
 
 use crate::{
@@ -167,7 +168,7 @@ impl Plugin for StatusBarPlugin {
                 tick_status_notice,
                 update_status_right,
                 align_status_right,
-                update_scene_stats,
+                update_scene_stats.run_if(on_timer(SCENE_STATS_REFRESH)),
                 update_build_bar,
             )
                 .chain()
@@ -505,6 +506,9 @@ fn update_status_right(
 
     text.0 = format!("{mode_str} ({space_str})");
 }
+
+/// How often the hierarchy footer counts the scene again.
+const SCENE_STATS_REFRESH: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// System to update the scene stats text in the hierarchy panel footer.
 pub fn update_scene_stats(

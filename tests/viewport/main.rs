@@ -18,3 +18,4 @@ mod viewport_quality;
 mod viewport_redraw;
 mod viewport_settings;
 mod viewport_settings_menu;
+mod viewport_stats;

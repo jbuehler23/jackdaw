@@ -55,6 +55,7 @@ pub fn realtime_off_indicator(icon_font: Handle<Font>, text_font: Handle<Font>) 
             align_items: AlignItems::Center,
             column_gap: px(tokens::SPACING_XS),
             padding: UiRect::horizontal(px(tokens::SPACING_SM)),
+            flex_shrink: 0.0,
             ..default()
         },
         jackdaw_feathers::tooltip::Tooltip::title(
@@ -72,6 +73,10 @@ pub fn realtime_off_indicator(icon_font: Handle<Font>, text_font: Handle<Font>) 
             ),
             (
                 Text::new("Realtime off"),
+                TextLayout {
+                    linebreak: bevy::text::LineBreak::NoWrap,
+                    ..default()
+                },
                 TextFont {
                     font: text_font.into(),
                     font_size: tokens::TEXT_SIZE_SM,
