@@ -1,6 +1,7 @@
 use bevy::feathers::constants::size::CHECKBOX_SIZE;
 use bevy::feathers::controls::{
-    ButtonVariant as FeathersButtonVariant, FeathersButton, FeathersCheckbox, FeathersToolButton,
+    ButtonVariant as FeathersButtonVariant, FeathersButton, FeathersCheckbox, FeathersRadio,
+    FeathersToolButton,
 };
 use bevy::feathers::theme::{ThemeBackgroundColor, ThemeToken, ThemedText, UiTheme};
 use bevy::input_focus::tab_navigation::TabIndex;
@@ -325,7 +326,7 @@ struct ButtonConfig {
     content: String,
     left_icon: Option<Icon>,
     left_icon_space: bool,
-    left_checkbox: Option<bool>,
+    left_mark: Option<LeadingMark>,
     right_icon: Option<Icon>,
     subtitle: Option<String>,
     call_operator: Option<Cow<'static, str>>,
@@ -341,6 +342,15 @@ struct ButtonConfig {
     initialized: bool,
 }
 
+/// The control drawn at the start of a button that shows a setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeadingMark {
+    /// A checkbox, ticked when `true`.
+    Checkbox(bool),
+    /// A radio mark, filled when `true`.
+    Radio(bool),
+}
+
 pub struct ButtonProps {
     pub content: String,
     pub variant: ButtonVariant,
@@ -352,8 +362,8 @@ pub struct ButtonProps {
     /// of buttons where only some carry an icon or a box still starts
     /// every caption in the same place.
     pub left_icon_space: bool,
-    /// Lead the button with a `FeathersCheckbox` in this state.
-    pub left_checkbox: Option<bool>,
+    /// Lead the button with a checkbox or radio mark in this state.
+    pub left_mark: Option<LeadingMark>,
     pub right_icon: Option<Icon>,
     pub direction: FlexDirection,
     pub subtitle: Option<String>,
@@ -393,9 +403,15 @@ impl ButtonProps {
         self
     }
     /// Lead the button with a checkbox showing `checked`, made inert so the
-    /// button itself takes the click. See [`ButtonProps::left_checkbox`].
+    /// button itself takes the click. See [`ButtonProps::left_mark`].
     pub fn with_left_checkbox(mut self, checked: bool) -> Self {
-        self.left_checkbox = Some(checked);
+        self.left_mark = Some(LeadingMark::Checkbox(checked));
+        self
+    }
+    /// Lead the button with a radio mark showing `selected`, made inert so the
+    /// button itself takes the click. See [`ButtonProps::left_mark`].
+    pub fn with_left_radio(mut self, selected: bool) -> Self {
+        self.left_mark = Some(LeadingMark::Radio(selected));
         self
     }
     pub fn with_right_icon(mut self, icon: Icon) -> Self {
@@ -531,7 +547,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
         align_left,
         left_icon,
         left_icon_space,
-        left_checkbox,
+        left_mark,
         right_icon,
         direction,
         subtitle,
@@ -549,7 +565,7 @@ pub fn button(props: ButtonProps) -> impl Bundle {
             content,
             left_icon,
             left_icon_space,
-            left_checkbox,
+            left_mark,
             right_icon,
             subtitle,
             call_operator,
@@ -593,7 +609,7 @@ fn setup_button(
         } else {
             let left = if config.left_icon.is_some()
                 || config.left_icon_space
-                || config.left_checkbox.is_some()
+                || config.left_mark.is_some()
                 || is_column
             {
                 px(6.0)
@@ -616,7 +632,7 @@ fn setup_button(
         // `add_related<ChildOf>` on a dead parent.
         let left_icon = config.left_icon;
         let left_icon_space = config.left_icon_space;
-        let left_checkbox = config.left_checkbox;
+        let left_mark = config.left_mark;
         let right_icon = config.right_icon;
         let content = config.content.clone();
         let subtitle = config.subtitle.clone();
@@ -635,8 +651,12 @@ fn setup_button(
                 return;
             }
             apply_feathers_button(world, entity, variant, tool);
-            if let Some(checked) = left_checkbox {
-                spawn_inert_checkbox(world, entity, checked);
+            match left_mark {
+                Some(LeadingMark::Checkbox(checked)) => {
+                    spawn_inert_checkbox(world, entity, checked);
+                }
+                Some(LeadingMark::Radio(selected)) => spawn_inert_radio(world, entity, selected),
+                None => {}
             }
             let Ok(mut ec) = world.get_entity_mut(entity) else {
                 return;
@@ -792,15 +812,32 @@ pub fn spawn_inert_checkbox(world: &mut World, entity: Entity, checked: bool) {
             return;
         }
     };
+    make_inert_mark(world, entity, box_entity, checked);
+}
 
-    let mut checkbox = world.entity_mut(box_entity);
-    checkbox.insert(ChildOf(entity));
-    checkbox.remove::<TabIndex>();
+/// Put a native feathers radio mark under `entity`, showing `selected`.
+pub fn spawn_inert_radio(world: &mut World, entity: Entity, selected: bool) {
+    let mark = match world.spawn_scene(bsn! { @FeathersRadio }) {
+        Ok(spawned) => spawned.id(),
+        Err(error) => {
+            error!("a button's leading radio mark did not spawn: {error}");
+            return;
+        }
+    };
+    make_inert_mark(world, entity, mark, selected);
+}
+
+/// Parent `mark` to `entity` as a mark the button's own click passes
+/// through.
+fn make_inert_mark(world: &mut World, entity: Entity, mark: Entity, checked: bool) {
+    let mut mark_entity = world.entity_mut(mark);
+    mark_entity.insert(ChildOf(entity));
+    mark_entity.remove::<TabIndex>();
     if checked {
-        checkbox.insert(Checked);
+        mark_entity.insert(Checked);
     }
 
-    let mut pending = vec![box_entity];
+    let mut pending = vec![mark];
     while let Some(next) = pending.pop() {
         if let Some(children) = world.get::<Children>(next) {
             pending.extend(children.iter());
@@ -897,7 +934,7 @@ pub fn icon_button(props: IconButtonProps, icon_font: &Handle<Font>) -> impl Bun
             content: String::new(),
             left_icon: Some(icon),
             left_icon_space: false,
-            left_checkbox: None,
+            left_mark: None,
             right_icon: None,
             subtitle: None,
             call_operator: None,
@@ -919,7 +956,7 @@ impl Default for ButtonProps {
             align_left: Default::default(),
             left_icon: Default::default(),
             left_icon_space: Default::default(),
-            left_checkbox: Default::default(),
+            left_mark: Default::default(),
             right_icon: Default::default(),
             direction: Default::default(),
             subtitle: Default::default(),

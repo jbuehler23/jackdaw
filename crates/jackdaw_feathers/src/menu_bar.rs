@@ -8,7 +8,9 @@ use jackdaw_widgets::menu_bar::{
     MenuAction, MenuBar, MenuBarDropdown, MenuBarDropdownItem, MenuBarItem, MenuBarState,
 };
 
-use crate::button::{ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, button};
+use crate::button::{
+    ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, LeadingMark, button,
+};
 use crate::icons::Icon;
 use crate::tokens;
 
@@ -40,6 +42,16 @@ pub const CHECKED_ACTION_PREFIX: &str = "[x]";
 /// row showing an empty box; the suffix is the action the row dispatches.
 pub const UNCHECKED_ACTION_PREFIX: &str = "[ ]";
 
+/// Action strings in menu entries that start with this prefix render as a
+/// row showing a filled radio mark; the suffix is the action the row
+/// dispatches.
+pub const RADIO_SELECTED_ACTION_PREFIX: &str = "(o)";
+
+/// Action strings in menu entries that start with this prefix render as a
+/// row showing an empty radio mark; the suffix is the action the row
+/// dispatches.
+pub const RADIO_UNSELECTED_ACTION_PREFIX: &str = "( )";
+
 /// One dropdown row that shows `checked` beside `label` and dispatches `action`
 /// when clicked. `action` is anything a plain row takes, an
 /// [`OP_ACTION_PREFIX`] call included.
@@ -54,6 +66,29 @@ pub fn checked_row(
         UNCHECKED_ACTION_PREFIX
     };
     (format!("{prefix}{}", action.into()), label.into())
+}
+
+/// One dropdown row of a set where one choice holds: a radio mark showing
+/// `selected` beside `label`, dispatching `action` when clicked. Like a
+/// [`checked_row`], clicking it keeps the menu open.
+pub fn radio_row(
+    selected: bool,
+    action: impl Into<String>,
+    label: impl Into<String>,
+) -> (String, String) {
+    let prefix = if selected {
+        RADIO_SELECTED_ACTION_PREFIX
+    } else {
+        RADIO_UNSELECTED_ACTION_PREFIX
+    };
+    (format!("{prefix}{}", action.into()), label.into())
+}
+
+/// On a dropdown row built by [`radio_row`], whether its choice holds.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuRadioRow {
+    /// Whether the row's mark is filled.
+    pub selected: bool,
 }
 
 /// On a dropdown row built by [`checked_row`], the state its box shows.
@@ -92,13 +127,35 @@ pub fn plugin(app: &mut App) {
                 advance_submenu_hover,
                 refresh_dynamic_menu_rows,
                 redraw_the_open_dropdown_on_new_rows.after(refresh_dynamic_menu_rows),
+                keep_dropdowns_inside_the_window,
             ),
         );
 }
 
+/// Slide a dropdown left when its laid-out width runs past the window's right
+/// edge, as a menu opened from a button near that edge does.
+fn keep_dropdowns_inside_the_window(
+    mut dropdowns: Query<(&mut Node, &ComputedNode), With<MenuBarDropdown>>,
+    windows: Query<&Window>,
+    ui_scale: Option<Res<UiScale>>,
+) {
+    let ui_scale = ui_scale.map_or(1.0, |scale| scale.0);
+    let right_edge = window_width(&windows) / ui_scale;
+    for (mut node, computed) in &mut dropdowns {
+        let Val::Px(left) = node.left else {
+            continue;
+        };
+        let width = computed.size().x * computed.inverse_scale_factor() / ui_scale;
+        let fitted = (right_edge - width).max(0.0);
+        if width > 0.0 && left > fitted {
+            node.left = Val::Px(fitted);
+        }
+    }
+}
+
 /// A row that has been clicked takes the menu down with it, unless it only
-/// flips a box: a box is a setting, so the dropdown stays up and redraws with
-/// the new state through [`redraw_the_open_dropdown_on_new_rows`].
+/// flips a box or picks a radio choice: either is a setting, so the dropdown
+/// stays up and redraws with the new state through [`redraw_the_open_dropdown_on_new_rows`].
 ///
 /// The press that started the click cannot close the menu -- the row activates
 /// on the release, and a menu taken down by the press would take the row with
@@ -107,7 +164,7 @@ pub fn plugin(app: &mut App) {
 fn close_the_menu_unless_the_row_was_a_box(
     event: On<ButtonClickEvent>,
     rows: Query<(), With<MenuBarDropdownItem>>,
-    boxes: Query<(), With<MenuCheckedRow>>,
+    boxes: Query<(), Or<(With<MenuCheckedRow>, With<MenuRadioRow>)>>,
     mut commands: Commands,
     mut state: ResMut<MenuBarState>,
     mut submenus: ResMut<SubmenuState>,
@@ -123,30 +180,72 @@ fn close_the_menu_unless_the_row_was_a_box(
     jackdaw_widgets::menu_bar::close_open_menu(&mut commands, &mut state);
 }
 
-/// Draw the open dropdown again whenever its item's rows change, so a
-/// menu held open by a checked row shows the state the click produced.
+/// Redraw the open dropdown and its open submenus in place whenever the
+/// item's rows change, so a menu held open by a checked or radio row shows
+/// the state the click produced, at whatever depth the row sits.
+///
+/// Each open dropdown is refilled only when its own rows changed, and keeps
+/// its place on screen. A submenu whose group is gone closes.
 fn redraw_the_open_dropdown_on_new_rows(
     mut commands: Commands,
-    mut state: ResMut<MenuBarState>,
-    items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform), Changed<MenuBarItem>>,
-    windows: Query<&Window>,
+    state: Res<MenuBarState>,
+    mut submenus: ResMut<SubmenuState>,
+    items: Query<&MenuBarItem, Changed<MenuBarItem>>,
+    drawn: Query<&DropdownRows>,
+    group_rows_query: Query<&SubmenuRow>,
 ) {
-    let Some(open) = state.open_menu else {
+    let (Some(open), Some(top)) = (state.open_menu, state.dropdown_entity) else {
         return;
     };
-    let Ok((item, computed, global_tf)) = items.get(open) else {
+    let Ok(item) = items.get(open) else {
         return;
     };
-    let window_height = window_height(&windows);
-    open_menu_dropdown(
-        &mut commands,
-        &mut state,
-        open,
-        item,
-        computed,
-        global_tf,
-        window_height,
-    );
+    let chain: Vec<Option<String>> = submenus
+        .open
+        .iter()
+        .map(|open| {
+            group_rows_query
+                .get(open.row)
+                .ok()
+                .map(|row| row.label.clone())
+        })
+        .collect();
+
+    let mut actions = item.actions.clone();
+    let mut dropdown = top;
+    for depth in 0..=chain.len() {
+        let refilled = drawn
+            .get(dropdown)
+            .is_ok_and(|rows| rows.0 != actions)
+            .then(|| {
+                commands.entity(dropdown).despawn_related::<Children>();
+                spawn_dropdown_rows(&mut commands, dropdown, &actions)
+            });
+        if refilled.is_some() && submenus.pending.is_some() {
+            submenus.pending = None;
+        }
+        let Some(label) = chain.get(depth) else {
+            break;
+        };
+        let next = label
+            .as_deref()
+            .and_then(|label| group_rows(&actions, label).map(|rows| (label, rows)));
+        let Some((label, rows)) = next else {
+            truncate_submenus(&mut submenus, depth, &mut commands);
+            break;
+        };
+        let child = &mut submenus.open[depth];
+        if let Some(groups) = refilled
+            && let Some((_, row)) = groups.iter().find(|(group, _)| group == label)
+        {
+            child.row = *row;
+            commands
+                .entity(child.dropdown)
+                .insert(SubmenuDropdown { row: *row });
+        }
+        actions = rows;
+        dropdown = child.dropdown;
+    }
 }
 
 /// When a dropdown item is clicked, fire the [`MenuAction`]; unless the item
@@ -875,6 +974,25 @@ pub type MenuRowsFn = Arc<dyn Fn(&World) -> Vec<(String, String)> + Send + Sync>
 #[derive(Component, Clone)]
 pub struct DynamicMenuRows(pub MenuRowsFn);
 
+/// A menu that opens from a button showing only `icon` and a dropdown arrow;
+/// `name` is the item's label for lookups and is not drawn. Otherwise as
+/// [`menu_button`].
+pub fn menu_icon_button(name: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> impl Bundle {
+    (
+        MenuBarItem {
+            label: name.into(),
+            actions: Vec::new(),
+        },
+        DynamicMenuRows(rows),
+        button(
+            ButtonProps::new("")
+                .with_variant(ButtonVariant::Ghost)
+                .with_left_icon(icon)
+                .with_right_icon(Icon::ChevronDown),
+        ),
+    )
+}
+
 /// A menu that opens from a button of its own rather than from a menu bar: a
 /// ghost button carrying `icon` and `label`, whose rows `rows` builds from the
 /// world.
@@ -983,12 +1101,31 @@ fn spawn_dropdown(
             ZIndex(1000),
         ))
         .id();
+    spawn_dropdown_rows(commands, dropdown, actions);
+    dropdown
+}
+
+/// The rows a dropdown was last drawn with.
+#[derive(Component)]
+struct DropdownRows(Vec<(String, String)>);
+
+/// Fill `dropdown` with `actions`. Returns each group row it spawned, by the
+/// group's label.
+fn spawn_dropdown_rows(
+    commands: &mut Commands,
+    dropdown: Entity,
+    actions: &[(String, String)],
+) -> Vec<(String, Entity)> {
+    commands
+        .entity(dropdown)
+        .insert(DropdownRows(actions.to_vec()));
+    let mut groups = Vec::new();
 
     // A dropdown showing any box gives every row the box's room, so the
     // captions of the rows without one do not start further left.
     let boxes = actions
         .iter()
-        .any(|(action, _)| checked_state(action).0.is_some());
+        .any(|(action, _)| leading_mark(action).0.is_some());
 
     let mut index = 0;
     while index < actions.len() {
@@ -1041,7 +1178,8 @@ fn spawn_dropdown(
                 arrow_props = arrow_props.reserving_left_icon();
             }
             let arrow = button(arrow_props);
-            commands.entity(dropdown).with_child((row, arrow));
+            let row = commands.spawn((row, arrow, ChildOf(dropdown))).id();
+            groups.push((group.to_string(), row));
             continue;
         }
 
@@ -1054,7 +1192,7 @@ fn spawn_dropdown(
             continue;
         }
 
-        let (checked, action) = checked_state(action);
+        let (mark, action) = leading_mark(action);
         let item = MenuBarDropdownItem {
             action: action.to_string(),
         };
@@ -1062,15 +1200,22 @@ fn spawn_dropdown(
             .with_variant(ButtonVariant::Ghost)
             // TODO: add keybind as subtitle
             .align_left();
-        match checked {
-            Some(checked) => props = props.with_left_checkbox(checked),
+        match mark {
+            Some(LeadingMark::Checkbox(checked)) => props = props.with_left_checkbox(checked),
+            Some(LeadingMark::Radio(selected)) => props = props.with_left_radio(selected),
             None if boxes => props = props.reserving_left_icon(),
             None => {}
         }
 
         let mut row = commands.spawn((item, button(props), ChildOf(dropdown)));
-        if let Some(checked) = checked {
-            row.insert(MenuCheckedRow { checked });
+        match mark {
+            Some(LeadingMark::Checkbox(checked)) => {
+                row.insert(MenuCheckedRow { checked });
+            }
+            Some(LeadingMark::Radio(selected)) => {
+                row.insert(MenuRadioRow { selected });
+            }
+            None => {}
         }
         // Operator-bound entries dispatch through the editor's
         // `ButtonOperatorCall` observer, which is also what the tooltip renderer
@@ -1081,19 +1226,41 @@ fn spawn_dropdown(
         }
     }
 
-    dropdown
+    groups
 }
 
-/// The box state a row's action asks for, and the action left once the
-/// prefix carrying it is off. `None` for a row that shows no box.
-fn checked_state(action: &str) -> (Option<bool>, &str) {
-    if let Some(rest) = action.strip_prefix(CHECKED_ACTION_PREFIX) {
-        (Some(true), rest)
-    } else if let Some(rest) = action.strip_prefix(UNCHECKED_ACTION_PREFIX) {
-        (Some(false), rest)
-    } else {
-        (None, action)
+/// The rows of the group labelled `label` among `actions`' own rows, not
+/// looking inside other groups.
+fn group_rows(actions: &[(String, String)], label: &str) -> Option<Vec<(String, String)>> {
+    let mut index = 0;
+    while index < actions.len() {
+        let action = &actions[index].0;
+        index += 1;
+        let Some(group) = action.strip_prefix(SUBMENU_ACTION_PREFIX) else {
+            continue;
+        };
+        let (rows, past_end) = submenu_group(group, actions, index);
+        if group == label {
+            return Some(rows);
+        }
+        index = past_end;
     }
+    None
+}
+
+/// The mark a row's action asks for, and the action left once the prefix
+/// carrying it is off. `None` for a row that shows no mark.
+fn leading_mark(action: &str) -> (Option<LeadingMark>, &str) {
+    let prefixes = [
+        (CHECKED_ACTION_PREFIX, LeadingMark::Checkbox(true)),
+        (UNCHECKED_ACTION_PREFIX, LeadingMark::Checkbox(false)),
+        (RADIO_SELECTED_ACTION_PREFIX, LeadingMark::Radio(true)),
+        (RADIO_UNSELECTED_ACTION_PREFIX, LeadingMark::Radio(false)),
+    ];
+    prefixes
+        .into_iter()
+        .find_map(|(prefix, mark)| action.strip_prefix(prefix).map(|rest| (Some(mark), rest)))
+        .unwrap_or((None, action))
 }
 
 /// The rows of the group opened just before `start`, and the index past
@@ -1131,7 +1298,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::feathers::constants::size::CHECKBOX_SIZE;
-    use bevy::feathers::controls::FeathersCheckbox;
+    use bevy::feathers::controls::{FeathersCheckbox, FeathersRadio};
     use bevy::picking::backend::HitData;
     use bevy::picking::events::{Out, Over, Pointer};
     use bevy::picking::pointer::PointerId;
@@ -1326,6 +1493,55 @@ mod tests {
             Some("op:canvas.snap?kind=pixel".to_string()),
             "the row's action is what is left once the prefix is off",
         );
+    }
+
+    #[test]
+    fn a_radio_row_shows_whether_its_choice_holds_and_dispatches_its_operator() {
+        let (app, rows) = dropdown_app(vec![
+            radio_row(true, "op:view.mode?mode=lit", "Lit"),
+            radio_row(false, "op:view.mode?mode=wireframe", "Wireframe"),
+        ]);
+        let world = app.world();
+        assert_eq!(
+            rows.iter()
+                .map(|row| world.get::<MenuRadioRow>(*row).map(|row| row.selected))
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false)],
+        );
+        let marks: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                let mark = world.get::<Children>(*row)?.iter().next()?;
+                world.get::<FeathersRadio>(mark)?;
+                Some(world.get::<Checked>(mark).is_some())
+            })
+            .collect();
+        assert_eq!(
+            marks,
+            vec![Some(true), Some(false)],
+            "each row leads with a feathers radio mark in that state",
+        );
+        assert_eq!(
+            world
+                .get::<ButtonOperatorCall>(rows[1])
+                .map(ToString::to_string),
+            Some("view.mode(mode: \"wireframe\")".to_string()),
+        );
+    }
+
+    #[test]
+    fn a_named_group_is_found_among_the_menus_own_rows() {
+        let mut rows = submenu_row("View", vec![radio_row(true, "op:a", "A")]);
+        rows.extend(submenu_row(
+            "Quality",
+            submenu_row("View", vec![radio_row(false, "op:b", "B")]),
+        ));
+        assert_eq!(
+            group_rows(&rows, "View"),
+            Some(vec![radio_row(true, "op:a", "A")])
+        );
+        assert_eq!(group_rows(&rows, "Quality").map(|rows| rows.len()), Some(3));
+        assert_eq!(group_rows(&rows, "Show"), None);
     }
 
     /// A dropdown that shows a box anywhere keeps the box's room on

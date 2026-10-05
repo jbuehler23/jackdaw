@@ -396,6 +396,34 @@ pub(crate) fn toolbar() -> impl Scene {
         BackgroundColor(tokens::PANEL_HEADER_BG)
         BorderColor::all(tokens::TOOLBAR_BORDER)
         Children [
+            toolbar_tools(),
+            // Spacer pushes the grid / snap widget to the right edge.
+            toolbar_spacer(),
+            // Grid-size stepper: current size between decrease / increase.
+            toolbar_op_button(GridDecreaseOp::ID, Icon::Minus),
+            grid_size_label(),
+            toolbar_op_button(GridIncreaseOp::ID, Icon::Plus),
+            toolbar_separator(),
+            // Grid-snap toggle; highlights while snapping is on.
+            toolbar_op_button(GridToggleSnapOp::ID, Icon::Magnet),
+        ]
+    }
+}
+
+/// The tool and mode buttons at the toolbar's left. In a viewport too narrow
+/// for the whole toolbar they are cut off at the right, rather than the grid,
+/// settings and mode controls past the spacer.
+fn toolbar_tools() -> impl Scene {
+    bsn! {
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: px(tokens::TOOLBAR_GAP),
+            flex_shrink: 1.0,
+            min_width: px(0.0),
+            overflow: Overflow::clip_x(),
+        }
+        Children [
             toolbar_op_button(ToolSelectOp::ID, Icon::MousePointer),
             toolbar_op_button(ToolTranslateOp::ID, Icon::Move3d),
             toolbar_op_button(ToolRotateOp::ID, Icon::Rotate3d),
@@ -413,15 +441,6 @@ pub(crate) fn toolbar() -> impl Scene {
             toolbar_op_button(EditModeClipOp::ID, Icon::ScissorsLineDashed),
             toolbar_separator(),
             toolbar_op_button(PhysicsActivateOp::ID, Icon::Zap),
-            // Spacer pushes the grid / snap widget to the right edge.
-            toolbar_spacer(),
-            // Grid-size stepper: current size between decrease / increase.
-            toolbar_op_button(GridDecreaseOp::ID, Icon::Minus),
-            grid_size_label(),
-            toolbar_op_button(GridIncreaseOp::ID, Icon::Plus),
-            toolbar_separator(),
-            // Grid-snap toggle; highlights while snapping is on.
-            toolbar_op_button(GridToggleSnapOp::ID, Icon::Magnet),
         ]
     }
 }

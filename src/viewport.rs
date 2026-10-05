@@ -559,6 +559,13 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
             toolbar.insert((crate::layout::Toolbar, crate::EditorEntity));
             let toolbar = toolbar.id();
             world.entity_mut(column).insert_children(0, &[toolbar]);
+            let settings_menu = world
+                .spawn((
+                    crate::EditorEntity,
+                    crate::viewport_settings_menu::viewport_settings_menu(),
+                ))
+                .id();
+            world.entity_mut(toolbar).add_child(settings_menu);
             // The toolbar's own spacer already pushes everything after it to
             // the right end, so the switch needs no second one.
             let mode_bar = world

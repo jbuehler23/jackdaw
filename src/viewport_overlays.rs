@@ -69,7 +69,39 @@ impl Plugin for ViewportOverlaysPlugin {
             .add_systems(
                 PostUpdate,
                 draw_coordinate_indicator.in_set(JackdawDrawSystems),
-            );
+            )
+            .add_systems(Update, (show_or_hide_grids, show_or_hide_icons));
+    }
+}
+
+/// Show each viewport's ground grid while the grid overlay is on.
+fn show_or_hide_grids(
+    settings: Res<OverlaySettings>,
+    viewports: Query<&crate::viewport::ViewportGrid>,
+    mut grids: Query<&mut Visibility>,
+) {
+    let wanted = if settings.show_grid {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for grid in &viewports {
+        if let Ok(mut visibility) = grids.get_mut(grid.0)
+            && *visibility != wanted
+        {
+            *visibility = wanted;
+        }
+    }
+}
+
+/// Draw the entity markers while the icon overlay is on.
+fn show_or_hide_icons(settings: Res<OverlaySettings>, mut store: ResMut<GizmoConfigStore>) {
+    if !settings.is_changed() {
+        return;
+    }
+    let (config, _) = store.config_mut::<EntityGizmoGroup>();
+    if config.enabled != settings.show_icons {
+        config.enabled = settings.show_icons;
     }
 }
 
@@ -95,6 +127,10 @@ pub struct OverlaySettings {
     /// setting.
     pub show_brush_outline: bool,
     pub show_alignment_guides: bool,
+    /// The ground grid under each viewport.
+    pub show_grid: bool,
+    /// Markers drawn for lights, cameras and other entities with no mesh.
+    pub show_icons: bool,
 }
 
 impl Default for OverlaySettings {
@@ -107,6 +143,8 @@ impl Default for OverlaySettings {
             show_brush_wireframe: false,
             show_brush_outline: true,
             show_alignment_guides: true,
+            show_grid: true,
+            show_icons: true,
         }
     }
 }

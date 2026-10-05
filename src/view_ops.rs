@@ -31,6 +31,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewToggleAlignmentGuidesOp>()
         .register_operator::<ViewToggleColliderGizmosOp>()
         .register_operator::<ViewToggleHierarchyArrowsOp>()
+        .register_operator::<ViewToggleGridOp>()
+        .register_operator::<ViewToggleIconsOp>()
+        .register_operator::<ViewModeOp>()
         .register_operator::<ViewSetAxisOp>()
         .register_operator::<ViewLookAtOp>()
         .register_operator::<ViewOrbitOp>()
@@ -200,6 +203,59 @@ pub(crate) fn view_toggle_hierarchy_arrows(
     mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
 ) -> OperatorResult {
     config.show_hierarchy_arrows = !config.show_hierarchy_arrows;
+    OperatorResult::Finished
+}
+
+#[operator(id = "view.toggle_grid", label = "Toggle Grid", allows_undo = false)]
+pub(crate) fn view_toggle_grid(
+    _: In<OperatorParameters>,
+    mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
+) -> OperatorResult {
+    settings.show_grid = !settings.show_grid;
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "view.toggle_icons",
+    label = "Toggle Light and Camera Icons",
+    allows_undo = false
+)]
+pub(crate) fn view_toggle_icons(
+    _: In<OperatorParameters>,
+    mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
+) -> OperatorResult {
+    settings.show_icons = !settings.show_icons;
+    OperatorResult::Finished
+}
+
+/// Shade the viewport one way: lit, lit with a wireframe, or tinted by level
+/// of detail.
+#[operator(
+    id = "view.mode",
+    label = "View Mode",
+    description = "Shade the viewport lit, lit with a wireframe over it, or tinted by level of \
+                   detail. A view setting: nothing is saved.",
+    allows_undo = false,
+    params(mode(String, doc = "`lit`, `wireframe` or `lod_colors`."))
+)]
+pub(crate) fn view_mode(
+    params: In<OperatorParameters>,
+    mut settings: ResMut<crate::view_modes::ViewModeSettings>,
+    mut lod_colors: ResMut<crate::lod_bar::LodColorView>,
+) -> OperatorResult {
+    use crate::view_modes::ViewMode;
+    let Some(mode) = params.as_str("mode").and_then(ViewMode::parse) else {
+        warn!("view.mode: 'mode' must be lit, wireframe or lod_colors");
+        return OperatorResult::Cancelled;
+    };
+    let wireframe = mode == ViewMode::Wireframe;
+    if settings.wireframe != wireframe {
+        settings.wireframe = wireframe;
+    }
+    let tinted = mode == ViewMode::LodColors;
+    if lod_colors.0 != tinted {
+        lod_colors.0 = tinted;
+    }
     OperatorResult::Finished
 }
 

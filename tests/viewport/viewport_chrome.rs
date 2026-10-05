@@ -102,7 +102,8 @@ fn a_viewport_panel_builds_one_terrain_palette_in(mode: ViewportMode) {
     }
 }
 
-/// The rest of the panel's chrome is single too, in either mode.
+/// The rest of the panel's chrome is single too, in either mode, the
+/// toolbar's viewport settings menu included.
 #[test]
 fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
     for mode in MODES {
@@ -112,6 +113,13 @@ fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
         assert_eq!(count::<TerrainOptionsBar>(&mut app), 1, "one options bar");
         assert_eq!(count::<Toolbar>(&mut app), 1, "one main toolbar");
         assert_eq!(count::<Viewport2dTitle>(&mut app), 1, "one canvas title");
+        let settings_menus = app
+            .world_mut()
+            .query::<&jackdaw_widgets::menu_bar::MenuBarItem>()
+            .iter(app.world())
+            .filter(|item| item.label == jackdaw::viewport_settings_menu::VIEWPORT_SETTINGS_MENU)
+            .count();
+        assert_eq!(settings_menus, 1, "one viewport settings menu");
     }
 }
 
