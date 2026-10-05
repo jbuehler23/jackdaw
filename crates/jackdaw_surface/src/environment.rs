@@ -118,6 +118,22 @@ pub struct SceneSky;
 #[derive(Component, Default)]
 pub struct LightBakeCamera;
 
+/// Parts of the scene's environment a camera leaves out, for a view that trades
+/// the scene's look for speed. A part left out keeps what the camera carried
+/// before the environment dressed it, and edge smoothing left out is the
+/// camera's own to set. Changing it dresses the camera again.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EnvironmentOptOut {
+    pub fog: bool,
+    /// The scene's ambient light and sky reflections.
+    pub ambient: bool,
+    /// Tone mapping, exposure, colour grading, vignette and bloom.
+    pub post_processing: bool,
+    pub bloom: bool,
+    /// Anti-aliasing and multisampling.
+    pub antialiasing: bool,
+}
+
 /// The entity whose sky cubemap is filtered by roughness for the cameras to reflect.
 #[derive(Component)]
 pub struct SkyReflection;
@@ -444,6 +460,7 @@ type CameraParts = (
         Option<&'static ShadowFilteringMethod>,
         Has<OrderIndependentTransparencySettings>,
         Has<LightBakeCamera>,
+        Option<Ref<'static, EnvironmentOptOut>>,
     ),
 );
 
@@ -480,21 +497,27 @@ fn dress_the_cameras(
         fog,
         light,
         hdr,
-        (fxaa, smaa, taa, msaa, filtering, draws_oit, bakes_light),
+        (fxaa, smaa, taa, msaa, filtering, draws_oit, bakes_light, opt_out),
     ) in &cameras
     {
         if !layers.is_none_or(|layers| layers.intersects(&RenderLayers::default())) {
             continue;
         }
         let mut camera = commands.entity(entity);
+        let left_out = opt_out.as_deref().copied().unwrap_or_default();
         let Some(env) = dressing else {
             if let Some(undressed) = undressed {
-                undressed.restore_all(&mut camera);
+                undressed.restore_all(&mut camera, left_out);
                 camera.remove::<UndressedCamera>();
             }
             continue;
         };
-        if undressed.is_some() && !scene.is_changed() && !sky_reflection.is_changed() {
+        let opt_out_changed = opt_out.is_some_and(|opt_out| opt_out.is_changed());
+        if undressed.is_some()
+            && !scene.is_changed()
+            && !sky_reflection.is_changed()
+            && !opt_out_changed
+        {
             continue;
         }
         let undressed = undressed.cloned().unwrap_or_else(|| UndressedCamera {
@@ -512,8 +535,12 @@ fn dress_the_cameras(
             msaa: msaa.copied(),
             shadow_filtering: filtering.copied(),
         });
-        dress_fog(&mut camera, &env.fog, &undressed);
-        match &ambient {
+        if left_out.fog {
+            restore(&mut camera, undressed.fog.clone());
+        } else {
+            dress_fog(&mut camera, &env.fog, &undressed);
+        }
+        match ambient.as_ref().filter(|_| !left_out.ambient) {
             Some(map) => {
                 let specular = match env.ambient.reflections {
                     Reflections::Sky => sky_reflection.0.clone(),
@@ -529,7 +556,7 @@ fn dress_the_cameras(
             None => restore(&mut camera, undressed.ambient.clone()),
         }
         if !bakes_light {
-            dress_post(&mut camera, &env.post, &undressed, draws_oit);
+            dress_post(&mut camera, &env.post, &undressed, draws_oit, left_out);
         }
         camera.insert(undressed);
     }
@@ -547,14 +574,16 @@ fn restore<T: Component>(camera: &mut EntityCommands, kept: Option<T>) {
 }
 
 impl UndressedCamera {
-    fn restore_all(&self, camera: &mut EntityCommands) {
+    fn restore_all(&self, camera: &mut EntityCommands, left_out: EnvironmentOptOut) {
         restore(camera, self.fog.clone());
         restore(camera, self.ambient.clone());
-        self.restore_post(camera);
+        self.restore_post(camera, left_out);
     }
 
-    fn restore_post(&self, camera: &mut EntityCommands) {
-        self.restore_antialiasing(camera);
+    fn restore_post(&self, camera: &mut EntityCommands, left_out: EnvironmentOptOut) {
+        if !left_out.antialiasing {
+            self.restore_antialiasing(camera);
+        }
         restore(camera, self.shadow_filtering);
         restore(camera, self.tonemapping);
         restore(camera, self.exposure);
@@ -651,9 +680,10 @@ fn dress_post(
     post: &PostProcess,
     undressed: &UndressedCamera,
     draws_oit: bool,
+    left_out: EnvironmentOptOut,
 ) {
-    if !post.enabled {
-        undressed.restore_post(camera);
+    if !post.enabled || left_out.post_processing {
+        undressed.restore_post(camera, left_out);
         return;
     }
     camera.insert((
@@ -663,7 +693,7 @@ fn dress_post(
         },
         color_grading(post),
     ));
-    if post.bloom_intensity > 0.0 {
+    if post.bloom_intensity > 0.0 && !left_out.bloom {
         let mut bloom = Bloom::NATURAL;
         bloom.intensity = post.bloom_intensity;
         bloom.prefilter.threshold = post.bloom_threshold;
@@ -680,13 +710,15 @@ fn dress_post(
     } else {
         restore(camera, undressed.vignette.clone());
     }
-    dress_antialiasing(camera, post.antialiasing, undressed);
-    if post.antialiasing != Antialiasing::Taa {
-        match msaa(post.msaa).filter(|_| !draws_oit) {
-            Some(samples) => {
-                camera.insert(samples);
+    if !left_out.antialiasing {
+        dress_antialiasing(camera, post.antialiasing, undressed);
+        if post.antialiasing != Antialiasing::Taa {
+            match msaa(post.msaa).filter(|_| !draws_oit) {
+                Some(samples) => {
+                    camera.insert(samples);
+                }
+                None => restore(camera, undressed.msaa),
             }
-            None => restore(camera, undressed.msaa),
         }
     }
     match shadow_filtering(post.shadow_filtering) {

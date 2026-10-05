@@ -31,7 +31,7 @@ pub mod shadow_views;
 pub mod water;
 pub mod worn;
 
-pub use environment::{EnvironmentPlugin, SkyMaterial};
+pub use environment::{EnvironmentOptOut, EnvironmentPlugin, SkyMaterial};
 pub use foliage::{Foliage, FoliageMaterial, FoliagePlugin};
 pub use probe::ReflectionProbePlugin;
 pub use shadow_views::ShadowViewCleanupPlugin;

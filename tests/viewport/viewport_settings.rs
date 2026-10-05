@@ -143,6 +143,16 @@ fn changing_viewport_settings_leaves_the_saved_scene_unchanged() {
     ] {
         run(&mut app, id, &[]);
     }
+    for clause in [
+        "entity.add.group name=Sky",
+        "component.add name=Sky type_path=jackdaw_scene_types::environment::Environment",
+        "environment.set fog.mode=Linear post.bloom_intensity=0.3",
+    ] {
+        let result = jackdaw::boot_ops::run_op_clause(app.world_mut(), clause)
+            .unwrap_or_else(|err| panic!("{clause}: {err}"));
+        assert_eq!(result, OperatorResult::Finished, "{clause}");
+        app.update();
+    }
     let scene = dir.path().join("scene.bsn");
     let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
     if scenes.tabs.is_empty() {

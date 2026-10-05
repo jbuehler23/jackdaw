@@ -14,5 +14,6 @@ mod preview_context;
 mod viewport_2d;
 mod viewport_chrome;
 mod viewport_mode;
+mod viewport_quality;
 mod viewport_settings;
 mod viewport_settings_menu;
