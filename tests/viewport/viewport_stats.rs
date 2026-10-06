@@ -58,3 +58,48 @@ fn stats_show_a_readout_that_counts_the_scene() {
     run(&mut app, "viewport.stats.toggle on=false");
     assert_eq!(readout(&mut app).0, Display::None);
 }
+
+fn graph_display(app: &mut App) -> Display {
+    let mut graphs = app.world_mut().query_filtered::<&Node, With<
+        MaterialNode<bevy::dev_tools::frame_time_graph::FrametimeGraphMaterial>,
+    >>();
+    graphs
+        .single(app.world())
+        .expect("the overlay carries one frame time graph")
+        .display
+}
+
+#[test]
+fn the_frame_time_graph_shows_only_when_asked_for_under_the_stats() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = util::editor_test_app();
+    app.world_mut().resource_mut::<ViewportSettingsFile>().path =
+        Some(dir.path().join("viewport.json"));
+    let root = app.world_mut().spawn(Node::default()).id();
+    jackdaw::viewport::build_viewport_panel(app.world_mut(), root);
+
+    run(&mut app, "viewport.stats.toggle on=true");
+    app.update();
+    assert_eq!(readout(&mut app).0, Display::Flex);
+    assert_eq!(
+        graph_display(&mut app),
+        Display::None,
+        "the stats start as text alone"
+    );
+
+    run(&mut app, "viewport.stats.graph.toggle on=true");
+    app.update();
+    assert_eq!(
+        graph_display(&mut app),
+        Display::Flex,
+        "the graph is opt-in"
+    );
+
+    run(&mut app, "viewport.stats.toggle on=false");
+    app.update();
+    assert_eq!(
+        graph_display(&mut app),
+        Display::None,
+        "and goes with the readout"
+    );
+}

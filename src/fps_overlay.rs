@@ -6,14 +6,16 @@
 //! `place_overlay` moves it to the bottom-right corner, clear of both
 //! the viewport toolbar and the tool palette.
 //!
-//! The text and the graph follow the viewport's Stats setting together
-//! (`viewport.stats.toggle`, F3): upstream keeps two independent `enabled`
-//! flags, so leaving the graph's on would draw it over a hidden readout.
+//! The text follows the viewport's Stats setting (`viewport.stats.toggle`,
+//! F3), and the graph is drawn under it only while the Frame Time Graph
+//! setting is on as well: upstream keeps two independent `enabled` flags,
+//! so leaving the graph's on would draw it over a hidden readout.
 //!
 //! Upstream's readout is a frame *rate*, an average in which a single
 //! long frame inside a vsync cap barely registers.
 //! `append_frame_time` adds the millisecond figure beside it, and the
-//! graph beneath both shows a hitch as a spike.
+//! graph beneath both shows a hitch as a spike, scaled from [`GRAPH_MIN_FPS`]
+//! to [`GRAPH_TARGET_FPS`].
 //!
 //! Beneath them a scene readout counts what the frame draws: meshes drawn
 //! against meshes held, lights and the shadow views they cost, and the parts
@@ -40,6 +42,12 @@ const MARGIN: f32 = 8.0;
 /// moment.
 const REFRESH: Duration = Duration::from_millis(100);
 
+/// The frame rate at and below which a graph bar is full height and red.
+pub const GRAPH_MIN_FPS: f32 = 10.0;
+
+/// The frame rate at and above which a graph bar is at its shortest and green.
+pub const GRAPH_TARGET_FPS: f32 = 60.0;
+
 /// Marks the span holding the millisecond figure.
 #[derive(Component)]
 struct FrameTimeText;
@@ -60,7 +68,8 @@ pub(crate) fn plugin(app: &mut App) {
             refresh_interval: REFRESH,
             frame_time_graph_config: FrameTimeGraphConfig {
                 enabled: false,
-                ..default()
+                min_fps: GRAPH_MIN_FPS,
+                target_fps: GRAPH_TARGET_FPS,
             },
         },
     })
@@ -342,14 +351,15 @@ fn update_frame_time(
     }
 }
 
-/// Show the readout and its graph while the viewport's Stats setting is on.
+/// Show the readout while the viewport's Stats setting is on, and its graph
+/// while Frame Time Graph is on too.
 fn follow_stats_setting(settings: Res<ViewportSettings>, mut config: ResMut<FpsOverlayConfig>) {
-    if config.enabled == settings.stats && config.frame_time_graph_config.enabled == settings.stats
-    {
+    let graph = settings.stats && settings.frame_graph;
+    if config.enabled == settings.stats && config.frame_time_graph_config.enabled == graph {
         return;
     }
     config.enabled = settings.stats;
-    config.frame_time_graph_config.enabled = settings.stats;
+    config.frame_time_graph_config.enabled = graph;
 }
 
 #[cfg(test)]

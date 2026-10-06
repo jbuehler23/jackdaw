@@ -324,6 +324,26 @@ fn a_click_outside_closes_the_menu_after_one_of_its_rows_flipped_a_box() {
 }
 
 #[test]
+fn the_frame_time_graph_row_appears_once_stats_are_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_panel(dir.path());
+    open_settings(&mut app);
+    let graph_row = |app: &mut App| {
+        app.world_mut()
+            .query::<&MenuBarDropdownItem>()
+            .iter(app.world())
+            .any(|row| row.action.starts_with("op:viewport.stats.graph.toggle"))
+    };
+    assert!(!graph_row(&mut app), "no graph row while the stats are off");
+
+    click_row(&mut app, "op:viewport.stats.toggle?on=true");
+    click_row(&mut app, "op:viewport.stats.graph.toggle?on=true");
+
+    assert!(settings(&app).frame_graph);
+    assert!(checked(&mut app, "op:viewport.stats.graph.toggle?on=false"));
+}
+
+#[test]
 fn the_menu_opened_from_the_toolbars_right_end_stays_inside_the_window() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app_with_panel(dir.path());

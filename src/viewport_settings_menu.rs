@@ -20,9 +20,9 @@ use crate::view_ops::{
 };
 use crate::viewport_overlays::OverlaySettings;
 use crate::viewport_settings::{
-    AntiAliasing, DetailDistance, QualityPreset, ShadowQuality, ViewportQualityPresetOp,
-    ViewportQualitySetOp, ViewportRealtimeToggleOp, ViewportSettings, ViewportShowToggleOp,
-    ViewportStatsToggleOp,
+    AntiAliasing, DetailDistance, QualityPreset, ShadowQuality, ViewportFrameGraphToggleOp,
+    ViewportQualityPresetOp, ViewportQualitySetOp, ViewportRealtimeToggleOp, ViewportSettings,
+    ViewportShowToggleOp, ViewportStatsToggleOp,
 };
 
 /// The name the settings menu's item carries, and its tooltip.
@@ -111,7 +111,7 @@ pub fn viewport_settings_rows(world: &World) -> Vec<(String, String)> {
         .get_resource::<ViewportSettings>()
         .cloned()
         .unwrap_or_default();
-    [
+    let mut rows = [
         submenu_row("View Mode", view_mode_rows(world)),
         submenu_row("Show", show_rows(world, &settings)),
         submenu_row("Quality", quality_rows(&settings)),
@@ -121,7 +121,14 @@ pub fn viewport_settings_rows(world: &World) -> Vec<(String, String)> {
             toggle_row::<ViewportStatsToggleOp>(settings.stats, "Stats"),
         ],
     ]
-    .concat()
+    .concat();
+    if settings.stats {
+        rows.push(toggle_row::<ViewportFrameGraphToggleOp>(
+            settings.frame_graph,
+            "Frame Time Graph",
+        ));
+    }
+    rows
 }
 
 fn view_mode_rows(world: &World) -> Vec<(String, String)> {

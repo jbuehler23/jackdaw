@@ -33,7 +33,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewportQualitySetOp>()
         .register_operator::<ViewportShowToggleOp>()
         .register_operator::<ViewportRealtimeToggleOp>()
-        .register_operator::<ViewportStatsToggleOp>();
+        .register_operator::<ViewportStatsToggleOp>()
+        .register_operator::<ViewportFrameGraphToggleOp>();
     ctx.bind_operator::<CoreExtensionInputContext, ViewportStatsToggleOp>([PresetInput::key("F3")]);
 }
 
@@ -215,6 +216,8 @@ pub struct ViewportSettings {
     /// Redraw every frame, rather than only when something changes.
     pub realtime: bool,
     pub stats: bool,
+    /// The frame time graph under the stats readout.
+    pub frame_graph: bool,
 }
 
 impl Default for ViewportSettings {
@@ -225,6 +228,7 @@ impl Default for ViewportSettings {
             terrain_detail: true,
             realtime: true,
             stats: false,
+            frame_graph: false,
         }
     }
 }
@@ -467,6 +471,25 @@ pub(crate) fn viewport_stats_toggle(
     let on = params.as_bool("on").unwrap_or(!settings.stats);
     if settings.stats != on {
         settings.stats = on;
+    }
+    OperatorResult::Finished
+}
+
+/// Show or hide the frame time graph under the stats readout.
+#[operator(
+    id = "viewport.stats.graph.toggle",
+    label = "Frame Time Graph",
+    description = "Show or hide the frame time graph under the stats readout.",
+    allows_undo = false,
+    params(on(bool, doc = "On or off. Omit to flip whichever way it currently is."))
+)]
+pub(crate) fn viewport_frame_graph_toggle(
+    params: In<OperatorParameters>,
+    mut settings: ResMut<ViewportSettings>,
+) -> OperatorResult {
+    let on = params.as_bool("on").unwrap_or(!settings.frame_graph);
+    if settings.frame_graph != on {
+        settings.frame_graph = on;
     }
     OperatorResult::Finished
 }
