@@ -3,6 +3,8 @@ name: Regression
 on:
   schedule:
     - cron: "0 6 * * *"
+    # Sundays: the install journey on Windows and macOS.
+    - cron: "0 8 * * 0"
   workflow_dispatch: {}
 
 concurrency:
@@ -15,10 +17,21 @@ env:
 jobs:
   # Release gates a tag on this same reusable workflow.
   heavy:
+    if: github.event.schedule != '0 8 * * 0'
     uses: ./.github/workflows/heavy-tier.yaml
 
   install:
+    if: github.event.schedule != '0 8 * * 0'
     uses: ./.github/workflows/install-contract.yaml
+    with:
+      journey: true
+
+  install-cross-platform:
+    if: github.event.schedule == '0 8 * * 0'
+    uses: ./.github/workflows/install-contract.yaml
+    with:
+      journey: true
+      platforms: '["windows-latest", "macos-latest"]'
 
   # The tiers that do not need the SDK, on the platforms we ship bundles for.
   # This is where platform-specific path handling gets covered. On demand only:

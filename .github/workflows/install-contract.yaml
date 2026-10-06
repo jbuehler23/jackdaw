@@ -1,38 +1,85 @@
 name: Cargo install contract
 
-# Reusable: called by ci.yaml on pushes to main and by regression.yaml
-# nightly. The command shown in the installation guide must keep selecting
-# one package and producing every public executable. A local path tests the
-# commit under test without a network race against main.
+# Reusable: called by ci.yaml on pushes to main, by regression.yaml nightly
+# (Linux) and weekly (Windows and macOS), and by release.yaml on
+# release-candidate tags; also runs on demand. The command shown in the installation guide must keep
+# selecting one package and producing every public executable. A local path
+# tests the commit under test without a network race against main.
+#
+# With `journey`, each install then goes the way a new user does: `jd setup`
+# builds the SDK, `jd new` scaffolds a game, and the game builds. It runs for
+# an install from this checkout and for one from the packaged crates, which is
+# what `cargo install jackdaw` from crates.io builds.
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      journey:
+        type: boolean
+        default: false
+      platforms:
+        description: "JSON list of runner images"
+        type: string
+        default: '["ubuntu-latest"]'
+  workflow_dispatch:
+    inputs:
+      journey:
+        type: boolean
+        default: true
+      platforms:
+        description: "JSON list of runner images"
+        type: string
+        default: '["ubuntu-latest"]'
 
 env:
   toolchain: nightly-2026-03-05
 
 jobs:
   cargo-install:
-    name: Cargo install contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    name: Cargo install (${{ matrix.source }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.journey && 300 || 90 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.platforms) }}
+        source: ${{ fromJSON(inputs.journey && '["checkout", "package"]' || '["checkout"]') }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Remove unused software
+      - name: Remove unused software (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
 
+      # Linking the editor crate in release takes more memory than the runner
+      # has; without room to swap the runner is shut down mid-build.
+      - name: Add swap (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.toolchain }}
 
-      - name: Install dependencies
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+      # The game answers the schema request from inside its App build, which
+      # needs a Vulkan adapter; the runner has no GPU, so lavapipe provides one.
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
         timeout-minutes: 10
 
       # The release profile links with thin LTO and one codegen unit, and the
@@ -42,24 +89,69 @@ jobs:
       - name: Activate CI cargo config
         run: |
           mv .cargo/config_ci.toml .cargo/config.toml
-          sed -i 's/"-Zthreads=0"/"-Zthreads=1"/' .cargo/config.toml
-          grep -q '"-Zthreads=1"' .cargo/config.toml
+          sed -i.orig 's/"-Zthreads=0"/"-Zthreads=1"/' .cargo/config.toml
+          rm .cargo/config.toml.orig
 
-      - name: Install cargo binstall
+      - name: Install cargo binstall (Linux)
+        if: runner.os == 'Linux'
         uses: cargo-bins/cargo-binstall@main
 
-      - name: Install Wild
+      - name: Install Wild (Linux)
+        if: runner.os == 'Linux'
         run: cargo binstall wild-linker --locked --force
 
-      - name: Install the public package
+      - name: Install from this checkout
+        if: matrix.source == 'checkout'
         run: cargo install --path . --locked --jobs 2 --root "$RUNNER_TEMP/jackdaw-install"
+
+      # Outside the checkout, so only the user's cargo configuration applies,
+      # as for `cargo install jackdaw`. The packaged crates stand in for
+      # crates.io through the cargo home configuration, which the SDK build
+      # and the game build below read too.
+      - name: Install from the packaged crates
+        if: matrix.source == 'package'
+        run: |
+          set -euo pipefail
+          cargo xtask package "$RUNNER_TEMP/packages"
+          cat "$RUNNER_TEMP/packages/.cargo/config.toml" >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          cd "$RUNNER_TEMP/packages/src"
+          editor="$PWD/$(ls -d jackdaw-[0-9]*)"
+          cd "$RUNNER_TEMP"
+          cargo install --path "$editor" --jobs 2 --root "$RUNNER_TEMP/jackdaw-install"
 
       - name: Verify installed commands
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-install/bin"
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           for command in jackdaw jd jackdaw-rustc-wrapper; do
-            test -x "$root/$command"
+            test -x "$root/$command$exe"
           done
-          "$root/jd" --version
-          "$root/jackdaw" --version
+          "$root/jd$exe" --version
+          "$root/jackdaw$exe" --version
+          echo "$root" >> "$GITHUB_PATH"
+
+      - name: Set up the SDK
+        if: inputs.journey
+        working-directory: ${{ runner.temp }}
+        run: jd setup
+
+      - name: Create a game
+        if: inputs.journey
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p projects
+          jd new journey-game --path projects --no-git
+
+      - name: Build the game
+        if: inputs.journey && runner.os == 'Linux'
+        working-directory: ${{ runner.temp }}/projects/journey-game
+        run: jd build
+
+      # These runners have no GPU adapter for the schema step, so the game is
+      # built with cargo alone.
+      - name: Build the game (Windows, macOS)
+        if: inputs.journey && runner.os != 'Linux'
+        working-directory: ${{ runner.temp }}/projects/journey-game
+        run: cargo build
