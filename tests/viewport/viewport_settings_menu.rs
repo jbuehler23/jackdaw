@@ -12,6 +12,7 @@ use bevy::{
 };
 use jackdaw::lod_bar::LodColorView;
 use jackdaw::test_input::SyntheticInput;
+use jackdaw::toolbar_overflow::ToolbarOverflow;
 use jackdaw::view_modes::ViewModeSettings;
 use jackdaw::viewport_settings::{QualityPreset, ViewportSettings, ViewportSettingsFile};
 use jackdaw::viewport_settings_menu::VIEWPORT_SETTINGS_MENU;
@@ -400,5 +401,86 @@ fn a_narrow_viewport_cuts_the_tools_and_keeps_the_settings_and_mode_controls() {
     assert!(
         right_edge(&app, last) <= bar_end + 0.5,
         "the 3D and 2D switch stays inside the toolbar"
+    );
+}
+
+fn overflow_button(app: &mut App) -> Entity {
+    app.world_mut()
+        .query_filtered::<Entity, With<ToolbarOverflow>>()
+        .single(app.world())
+        .expect("the toolbar carries one overflow menu")
+}
+
+fn displayed(app: &App, entity: Entity) -> Display {
+    app.world().get::<Node>(entity).expect("a node").display
+}
+
+#[test]
+fn a_wide_viewport_shows_every_tool_and_no_overflow_menu() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_panel(dir.path());
+    let button = overflow_button(&mut app);
+    assert_eq!(displayed(&app, button), Display::None);
+}
+
+/// Hold the toolbar to `width`, as a viewport docked that narrow holds it.
+fn narrow_the_toolbar(app: &mut App, width: f32) {
+    let mut toolbars = app
+        .world_mut()
+        .query_filtered::<&mut Node, With<jackdaw::layout::Toolbar>>();
+    toolbars
+        .single_mut(app.world_mut())
+        .expect("one toolbar")
+        .width = Val::Px(width);
+    settle(app);
+}
+
+#[test]
+fn a_narrow_viewport_lists_the_cut_tools_in_the_overflow_menu() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_panel(dir.path());
+    narrow_the_toolbar(&mut app, 520.0);
+    let button = overflow_button(&mut app);
+    assert_eq!(
+        displayed(&app, button),
+        Display::Flex,
+        "the overflow menu shows once a tool is cut"
+    );
+    let physics_button = app
+        .world_mut()
+        .query::<(&Visibility, &jackdaw_feathers::button::ButtonOperatorCall)>()
+        .iter(app.world())
+        .find(|(_, call)| call.id == "physics.activate")
+        .map(|(visibility, _)| *visibility);
+    assert_eq!(
+        physics_button,
+        Some(Visibility::Hidden),
+        "a cut tool is hidden rather than drawn half cut"
+    );
+
+    let at = centre_of(&app, button);
+    click(&mut app, at);
+    assert!(menu_is_open(&app), "a click on the button opens the menu");
+    let physics = "op:physics.activate".to_string();
+    let rows: Vec<String> = app
+        .world_mut()
+        .query::<&MenuBarDropdownItem>()
+        .iter(app.world())
+        .map(|row| row.action.clone())
+        .collect();
+    assert!(
+        rows.contains(&physics),
+        "the cut Physics tool is listed: {rows:?}"
+    );
+    assert!(
+        !rows.contains(&"op:tool.select".to_string()),
+        "a tool still on the toolbar is not: {rows:?}"
+    );
+
+    click_row(&mut app, &physics);
+    assert_eq!(
+        *app.world().resource::<jackdaw::brush::EditMode>(),
+        jackdaw::brush::EditMode::Physics,
+        "the row dispatches the tool's operator"
     );
 }

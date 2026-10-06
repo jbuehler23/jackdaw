@@ -412,9 +412,11 @@ pub(crate) fn toolbar() -> impl Scene {
 
 /// The tool and mode buttons at the toolbar's left. In a viewport too narrow
 /// for the whole toolbar they are cut off at the right, rather than the grid,
-/// settings and mode controls past the spacer.
+/// settings and mode controls past the spacer, and the ones cut off are
+/// listed in [`crate::toolbar_overflow`]'s menu.
 fn toolbar_tools() -> impl Scene {
     bsn! {
+        crate::toolbar_overflow::ToolbarTools
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,

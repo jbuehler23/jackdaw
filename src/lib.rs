@@ -155,6 +155,7 @@ pub mod texture_import;
 pub mod thumbnail;
 pub(crate) mod timestamps;
 pub mod tool_ops;
+pub mod toolbar_overflow;
 pub mod transform_ops;
 pub mod type_metadata;
 pub mod typed_values;
@@ -512,6 +513,7 @@ impl Plugin for EditorCorePlugin {
             viewport_settings::plugin,
             viewport_quality::plugin,
             viewport_redraw::plugin,
+            toolbar_overflow::plugin,
         ))
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)

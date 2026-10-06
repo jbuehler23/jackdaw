@@ -559,6 +559,7 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
             toolbar.insert((crate::layout::Toolbar, crate::EditorEntity));
             let toolbar = toolbar.id();
             world.entity_mut(column).insert_children(0, &[toolbar]);
+            crate::toolbar_overflow::spawn_toolbar_overflow(world, toolbar);
             let settings_menu = world
                 .spawn((
                     crate::EditorEntity,
