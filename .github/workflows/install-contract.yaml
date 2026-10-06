@@ -58,18 +58,6 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
 
-      # Linking the editor crate in release takes more memory than the runner
-      # has; without room to swap the runner is shut down mid-build.
-      - name: Add swap (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo swapoff -a
-          sudo fallocate -l 16G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -82,10 +70,9 @@ jobs:
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
         timeout-minutes: 10
 
-      # The release profile links with thin LTO and one codegen unit, and the
-      # CI config's parallel frontend multiplies each rustc's memory by the
-      # core count. One frontend thread and two jobs keep the build inside
-      # the runner's memory.
+      # The CI config's parallel frontend multiplies each rustc's memory by
+      # the core count; one frontend thread keeps the builds run from the
+      # checkout inside the runner's memory.
       - name: Activate CI cargo config
         run: |
           mv .cargo/config_ci.toml .cargo/config.toml
@@ -102,7 +89,7 @@ jobs:
 
       - name: Install from this checkout
         if: matrix.source == 'checkout'
-        run: cargo install --path . --locked --jobs 2 --root "$RUNNER_TEMP/jackdaw-install"
+        run: cargo install --path . --locked --root "$RUNNER_TEMP/jackdaw-install"
 
       # Outside the checkout, so only the user's cargo configuration applies,
       # as for `cargo install jackdaw`. The packaged crates stand in for
@@ -117,7 +104,7 @@ jobs:
           cd "$RUNNER_TEMP/packages/src"
           editor="$PWD/$(ls -d jackdaw-[0-9]*)"
           cd "$RUNNER_TEMP"
-          cargo install --path "$editor" --jobs 2 --root "$RUNNER_TEMP/jackdaw-install"
+          cargo install --path "$editor" --root "$RUNNER_TEMP/jackdaw-install"
 
       - name: Verify installed commands
         run: |

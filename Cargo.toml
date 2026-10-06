@@ -400,15 +400,10 @@ debug-assertions = false
 opt-level = 3
 codegen-units = 1
 
-[profile.release]
-codegen-units = 1
-lto = "thin"
-
-# Same rationale as `[profile.dev.package.jackdaw_sdk]`. `lto` isn't
-# a valid per-package option (it controls the final link), so we only
-# tighten codegen-units here; the workspace-wide `[profile.release]
-# lto = "thin"` covers the cross-crate dedup that actually helps the
-# PE export cap.
+# The release profile keeps Cargo's defaults so `cargo install` fits in a
+# 16 GB machine; release bundles pin one codegen unit and thin LTO in
+# release.yaml. The SDK facade keeps one codegen unit for the same reason as
+# `[profile.dev.package.jackdaw_sdk]`.
 [profile.release.package.jackdaw_sdk]
 codegen-units = 1
 

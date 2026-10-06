@@ -287,13 +287,15 @@ jobs:
           # it passed.
           cache-on-failure: true
 
-      # The per-platform profile override, for every cargo invocation in
-      # the job: the smoke test compiles at release too, and a step that
-      # resolved a different profile would rebuild the graph and mix
-      # artifact generations.
+      # Bundles build with one codegen unit and thin LTO, or the platform's
+      # LTO override, which take more memory than `cargo install` is given.
+      # Pinned for every cargo invocation in the job: the smoke test compiles
+      # at release too, and a step that resolved a different profile would
+      # rebuild the graph and mix artifact generations.
       - name: Pin the release profile for the whole job
-        if: matrix.lto != ''
-        run: echo "CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto }}" >> "$GITHUB_ENV"
+        run: |
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto || 'thin' }}" >> "$GITHUB_ENV"
 
       # Every cargo invocation in this job, not just the one that builds
       # the binaries: the later steps rebuild the same graph, and a

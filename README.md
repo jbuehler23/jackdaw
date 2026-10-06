@@ -56,7 +56,9 @@ cargo +nightly-2026-03-05 install --git https://github.com/jbuehler23/jackdaw ja
 
 The editor uses unstable compiler features, so it builds on nightly. A
 checkout gets that from its `rust-toolchain.toml`; `cargo install` builds
-outside any checkout, so name the channel on the command line.
+outside any checkout, so name the channel on the command line. The build
+needs about 10 GB of memory at Cargo's default parallelism; on a smaller
+machine add `--jobs 2`.
 
 Take the release bundle if you can. It ships the prebuilt SDK, so you can
 create a project straight away; `cargo install` builds that SDK first,

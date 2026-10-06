@@ -455,8 +455,8 @@ jobs:
       - name: Run cargo fmt
         run: cargo fmt --all -- --check
 
-  # A release build with thin LTO, too slow and memory-hungry for every pull
-  # request. It runs after merge here and nightly in regression.yaml.
+  # A release build, too slow for every pull request. It runs after merge
+  # here and nightly in regression.yaml.
   cargo-install:
     if: github.event_name == 'push'
     uses: ./.github/workflows/install-contract.yaml

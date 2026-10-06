@@ -73,6 +73,13 @@ install` builds outside any checkout and would otherwise use your default
 toolchain; on a stable one the build stops at a feature gate. `jd doctor`
 reports the channel under `editor toolchain`.
 
+The build needs about 10 GB of memory with Cargo's default of one job per
+CPU thread on a 12-thread machine, and about 7 GB with `--jobs 4` or fewer.
+Most of it goes to the `jackdaw` crate itself and to the C++ CSG library,
+which compiles all of its sources at once whatever the job count. With 8 GB
+of memory, close other programs and pass `--jobs 2`, or take the release
+archive.
+
 The install provides `jackdaw`, `jd`, and
 `jackdaw-rustc-wrapper`; do not install workspace packages individually.
 
@@ -93,6 +100,11 @@ git clone https://github.com/jbuehler23/jackdaw
 cd jackdaw
 cargo run --bin jackdaw
 ```
+
+A debug build of the editor needs more memory than an install: over 12 GB
+with 12 jobs and over 10 GB with 4, nearly all of it while the `jackdaw`
+crate compiles. On a 16 GB machine, build with `--jobs 4`, or set `jobs = 4`
+under `[build]` in `~/.cargo/config.toml`.
 
 The checkout uses the SDK under its own `target/`, in preference to any
 prepared one, because editor extensions must link the SDK co-built with
