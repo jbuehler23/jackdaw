@@ -7,8 +7,12 @@
 //! so shipping every crate's source keeps the manifest correct without per-crate
 //! dependency surgery.
 //!
-//! A no-op without the feature, and a no-op when compiled outside the workspace,
-//! which is what stops the extracted recipe recursing.
+//! Built from a published package there is no workspace to copy, so the recipe
+//! is instead a manifest asking crates.io for the SDK crates at exactly this
+//! version.
+//!
+//! A no-op without the feature, and a no-op when compiled in any other
+//! workspace, which is what stops the extracted recipe recursing.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -16,6 +20,9 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 use path_slash::PathExt as _;
+
+#[path = "src/registry_recipe.rs"]
+mod registry_recipe;
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -31,10 +38,15 @@ fn main() {
         .and_then(Path::parent)
         .map(Path::to_path_buf);
 
+    let packaged = is_packaged(&manifest_dir);
     let assembled = embed
+        && !packaged
         && workspace
             .as_deref()
             .is_some_and(|ws| is_main_workspace(ws) && assemble_recipe(ws, &recipe));
+    if embed && packaged {
+        write_registry_recipe(&recipe);
+    }
 
     let (data_rs, hash) = generate_data(&recipe);
     fs::write(out_dir.join("recipe_data.rs"), data_rs).unwrap();
@@ -48,7 +60,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.toml").display());
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.lock").display());
     }
-    emit_build_source(&manifest_dir, workspace.as_deref());
+    emit_build_source(&manifest_dir, workspace.as_deref(), packaged);
 
     println!("cargo:rerun-if-changed=build.rs");
     // The embed is toggled only through this feature env, which gates no
@@ -59,12 +71,14 @@ fn main() {
 /// Record where the jackdaw crates this build is made of can be fetched from, so
 /// a project it scaffolds can ask for the same ones.
 ///
-/// A published build says so through `JACKDAW_RELEASE_BUILD`: nothing readable
-/// from the source tree distinguishes the commit a release is cut from.
-/// Otherwise the revision, and failing that the workspace on this machine.
-fn emit_build_source(manifest_dir: &Path, workspace: Option<&Path>) {
+/// A build from a published package is a release. A release bundle, built from
+/// a checkout, says so through `JACKDAW_RELEASE_BUILD`: nothing readable from
+/// the source tree distinguishes the commit a release is cut from. Otherwise
+/// the revision, and failing that the workspace on this machine.
+fn emit_build_source(manifest_dir: &Path, workspace: Option<&Path>, packaged: bool) {
     println!("cargo:rerun-if-env-changed=JACKDAW_RELEASE_BUILD");
-    let source = if env::var_os("JACKDAW_RELEASE_BUILD").is_some_and(|flag| flag == "1") {
+    let source = if packaged || env::var_os("JACKDAW_RELEASE_BUILD").is_some_and(|flag| flag == "1")
+    {
         "release".to_string()
     } else if let Some(rev) = git_head(manifest_dir) {
         for file in head_files(manifest_dir) {
@@ -136,6 +150,41 @@ fn git_path(dir: &Path, name: &str) -> Option<PathBuf> {
     })
 }
 
+/// Whether this crate is built from a package (a registry download or an
+/// unpacked `.crate`) rather than a checkout. Cargo writes `Cargo.toml.orig`
+/// into every package it creates.
+fn is_packaged(manifest_dir: &Path) -> bool {
+    manifest_dir.join("Cargo.toml.orig").is_file()
+}
+
+/// Write the recipe for a build from a published package: a manifest that
+/// depends on the SDK crates at exactly this crate's version, which every
+/// jackdaw crate shares.
+fn write_registry_recipe(recipe: &Path) {
+    let version = env::var("CARGO_PKG_VERSION").unwrap();
+    fs::write(
+        recipe.join("Cargo.toml"),
+        registry_recipe::manifest(&version),
+    )
+    .unwrap();
+    fs::create_dir_all(recipe.join("src")).unwrap();
+    fs::write(recipe.join("src/lib.rs"), "").unwrap();
+    write_cargo_config(recipe);
+}
+
+/// The extracted first-run SDK has no checkout-level `.cargo/config.toml`.
+/// Preserve the Mach-O/PE dylib codegen rule there too, or a prepared macOS or
+/// Windows SDK can contain unresolved shared-generic instantiations.
+fn write_cargo_config(recipe: &Path) {
+    fs::create_dir_all(recipe.join(".cargo")).unwrap();
+    fs::write(
+        recipe.join(".cargo/config.toml"),
+        "[target.'cfg(any(target_os = \"macos\", target_os = \"windows\"))']\n\
+         rustflags = [\"-Zshare-generics=no\"]\n",
+    )
+    .unwrap();
+}
+
 /// True only for the jackdaw editor workspace with the crates present. False in
 /// an extracted recipe, so assembly is skipped and there is no recursion.
 fn is_main_workspace(ws: &Path) -> bool {
@@ -165,16 +214,7 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     if let Ok(lock) = fs::read(ws.join("Cargo.lock")) {
         fs::write(recipe.join("Cargo.lock"), lock).unwrap();
     }
-    // The extracted first-run SDK has no checkout-level `.cargo/config.toml`.
-    // Preserve the Mach-O/PE dylib codegen rule there too, or a prepared macOS or
-    // Windows SDK can contain unresolved shared-generic instantiations.
-    fs::create_dir_all(recipe.join(".cargo")).unwrap();
-    fs::write(
-        recipe.join(".cargo/config.toml"),
-        "[target.'cfg(any(target_os = \"macos\", target_os = \"windows\"))']\n\
-         rustflags = [\"-Zshare-generics=no\"]\n",
-    )
-    .unwrap();
+    write_cargo_config(recipe);
     true
 }
 

@@ -30,6 +30,8 @@ pub mod shim;
 
 mod binary;
 mod build;
+#[cfg(test)]
+mod registry_recipe;
 
 pub use binary::{
     BuildLoad, ProjectBinaryBuild, background_jobs, build_project_binary,
@@ -41,7 +43,7 @@ pub use build::{
 };
 
 // The embedded SDK-builder recipe (relative path + bytes), assembled by
-// `build.rs`. Empty when this crate was compiled outside the workspace.
+// `build.rs`. Empty without the `embed-recipe` feature or in another workspace.
 include!(concat!(env!("OUT_DIR"), "/recipe_data.rs"));
 
 /// A stable content hash of the embedded recipe. Part of the cache stamp

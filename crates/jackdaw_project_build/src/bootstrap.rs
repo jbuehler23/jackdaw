@@ -92,8 +92,10 @@ pub fn cache_resolves(cache: &Path, triple: &str) -> bool {
             .is_file()
 }
 
-/// Whether an SDK-builder recipe is baked into this binary. False when this crate
-/// was compiled outside the workspace, where there is nothing to bootstrap from.
+/// Whether an SDK-builder recipe is baked into this binary: the workspace's
+/// crates for a checkout build, or a manifest naming the published SDK crates
+/// for a build from a package. False without the `embed-recipe` feature, and
+/// in a workspace that is neither, such as an unpacked recipe.
 pub fn recipe_is_embedded() -> bool {
     !crate::RECIPE_FILES.is_empty()
 }
