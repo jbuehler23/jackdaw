@@ -3,8 +3,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  release:
-    types: [published]
   # Dry-run the bundle matrix from a branch. Every step that publishes
   # anything (crates.io, the archive upload, the attestation) is gated on
   # a tag ref, so a dispatch builds, stages, and smoke-tests the bundles
@@ -64,51 +62,98 @@ jobs:
     uses: ./.github/workflows/heavy-tier.yaml
 
   # A scaffolded project depends on the public jackdaw crates by version.
-  # If those are not on crates.io at the anchored version, every `jd new`
-  # from this release produces a project that cannot resolve, and the
-  # user hits it at their first `cargo run`. Nothing else catches this:
-  # the end-to-end scaffold test builds through the shim's path
-  # dependency, never through the version the template ships.
+  # Scaffold with an editor built as the bundles are, then resolve against the
+  # packaged crates, so a project from this release is known to resolve before
+  # anything is published. The projects are kept for `published-resolves`.
   scaffold-resolves:
     name: Scaffolded projects resolve
-    # After the publish, not before: on a first release the crates are
-    # not on the index until `publish` puts them there, so checking
-    # earlier would fail every time. Running it here turns the publish
-    # into something verified rather than assumed. `always()` so a
-    # publish that no-ops on an already-released version still gets
-    # checked rather than silently skipped.
-    needs: [publish]
-    # Skipped wherever `publish` is: on a pre-release tag and on a manual
-    # dispatch it would ask the index for a version nothing published.
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 90
+    env:
+      JACKDAW_RELEASE_BUILD: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check the anchored jackdaw crates are published
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Package the crates
+        run: cargo xtask package "$RUNNER_TEMP/packages"
+
+      # Copied out of the checkout, so it scaffolds as an installed editor
+      # does rather than pointing the project at this checkout.
+      - name: Build jd
+        run: |
+          cargo build --bin jd
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp target/debug/jd "$RUNNER_TEMP/bin/"
+
+      - name: Scaffold and resolve against the packaged crates
+        working-directory: ${{ runner.temp }}/packages
         run: |
           set -euo pipefail
-          version=$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml \
-            | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
-          minor=$(echo "$version" | cut -d. -f1,2)
-          echo "anchored version: $version (minor $minor)"
-          missing=0
-          for crate in jackdaw_runtime jackdaw_extension; do
-            body=$(curl -sSL -H 'User-Agent: jackdaw-release-check' \
-              "https://crates.io/api/v1/crates/$crate" || echo '{}')
-            if ! echo "$body" | jq -e --arg m "$minor" \
-              '.versions // [] | map(select(.num | startswith($m + "."))) | length > 0' \
-              >/dev/null; then
-              echo "::error::$crate has no $minor.x release on crates.io;"\
-                   "projects from \`jd new\` will fail to resolve"
-              missing=1
-            else
-              echo "ok: $crate has a $minor.x release"
-            fi
+          mkdir -p projects
+          "$RUNNER_TEMP/bin/jd" new release-game --path projects --no-git
+          "$RUNNER_TEMP/bin/jd" new release-extension --path projects --no-git --extension
+          for project in release-game:jackdaw_runtime release-extension:jackdaw_extension; do
+            dir="projects/${project%%:*}"
+            crate="${project##*:}"
+            grep -E "^$crate = \{ version = " "$dir/Cargo.toml"
+            manifest=$(cd "$dir" && cargo metadata --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .manifest_path')
+            case "$manifest" in
+              "$RUNNER_TEMP/packages/src/"*) echo "$dir resolves $crate from $manifest" ;;
+              *) echo "::error::$dir resolved $crate from '$manifest', not the packaged crate"; exit 1 ;;
+            esac
           done
-          exit $missing
+
+      - name: Keep the projects
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffolded-projects
+          path: ${{ runner.temp }}/packages/projects
+          retention-days: 7
+
+  # The same projects, resolved from crates.io once the crates are there.
+  published-resolves:
+    name: Scaffolded projects resolve from crates.io
+    needs: [publish]
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Download the projects
+        uses: actions/download-artifact@v4
+        with:
+          name: scaffolded-projects
+          path: projects
+
+      - name: Resolve
+        run: |
+          set -euo pipefail
+          for dir in projects/*/; do
+            rm -f "$dir/Cargo.lock"
+            (cd "$dir" && cargo metadata --format-version 1 > /dev/null)
+            echo "$dir resolves"
+          done
 
   # Every publishable crate builds from its packaged sources before anything
   # is uploaded.
@@ -122,7 +167,7 @@ jobs:
   # cut short is finished by re-running the job.
   publish:
     name: Publish to crates.io
-    needs: [heavy, packages]
+    needs: [heavy, packages, scaffold-resolves]
     # Final tags only. Crate versions come from `[workspace.package]`,
     # not from the tag, so a `v0.19.0-rc.1` tag would publish 0.19.0
     # itself, permanently and under the wrong name. crates.io has no
@@ -158,10 +203,6 @@ jobs:
   # checkout. Independent of the crates.io publish.
   binaries:
     name: Bundle - ${{ matrix.triple }}
-    # Only on the tests. The downloadable bundle is the primary install
-    # path, so it must still ship when the publish is a no-op or fails:
-    # re-running a release whose versions are already on crates.io would
-    # otherwise skip `scaffold-resolves` and upload nothing at all.
     needs: [heavy, plan]
     # `always()` so an iteration-mode dispatch that skipped the heavy
     # gate still builds; a real heavy failure still blocks, and every
@@ -180,10 +221,6 @@ jobs:
     # that ran past 120 minutes and was cut off mid-smoke-test, reported
     # as `cancelled` rather than as anything a reader could act on.
     timeout-minutes: 180
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -205,6 +242,15 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
         timeout-minutes: 10
+
+      # The tracked cargo config links Linux builds through clang and wild.
+      - name: Install cargo binstall (Linux)
+        if: runner.os == 'Linux'
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild (Linux)
+        if: runner.os == 'Linux'
+        run: cargo binstall wild-linker --locked --force
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -316,21 +362,6 @@ jobs:
             fi
           done
 
-      # The macOS smoke keeps failing on a proc-macro dylib that every
-      # model says should be staged; stop modelling and look. Which
-      # jackdaw_api_macros files exist at the source, what the recorded
-      # list says, and what actually landed in the staged host-deps.
-      - name: Audit staged host-deps
-        run: |
-          set -uo pipefail
-          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          echo "--- source host deps (target/release/deps), jackdaw+bevy macros:"
-          ls target/release/deps 2>/dev/null | grep -E "jackdaw_api_macros|bevy_reflect_derive" || echo "(none)"
-          echo "--- recorded list ($(wc -l < target/${{ matrix.triple }}/release/jackdaw_sdk_host_deps.txt 2>/dev/null || echo 0) entries), matching lines:"
-          grep -E "jackdaw_api_macros|bevy_reflect_derive" "target/${{ matrix.triple }}/release/jackdaw_sdk_host_deps.txt" 2>/dev/null || echo "(none)"
-          echo "--- staged host-deps ($(ls "$root/sdk/host-deps" 2>/dev/null | wc -l) files), matching:"
-          ls "$root/sdk/host-deps" 2>/dev/null | grep -E "jackdaw_api_macros|bevy_reflect_derive" || echo "(none)"
-
       # An archive that is missing a piece installs and then fails at the first
       # extension build, which is how a missing sdk/manifest.txt reached a user.
       - name: Verify the staged bundle
@@ -361,104 +392,10 @@ jobs:
           # crate-locator trace, so a rejected extern says why it was
           # rejected instead of a bare "can't find crate".
           JACKDAW_WRAPPER_EXPLAIN: "1"
-          # Trace bevy_image's FIRST attempt: on macOS it fails and its
-          # identical re-run passes, so only the original attempt's
-          # locator log can show what was rejected.
-          JACKDAW_WRAPPER_TRACE_CRATES: "bevy_image"
         # Match the already-built release SDK. The old debug invocation
         # rebuilt the entire graph and, on Windows, recreated the oversized
         # debug SDK that the release bundle had already avoided.
         run: cargo test --release --features dylib --target ${{ matrix.triple }} --test bundle_smoke -- --nocapture
-
-      # When the smoke fails, reduce it: compile a probe crate straight
-      # against the staged SDK with rustc alone, one flag variant at a
-      # time. The smoke failure only says a rewritten unit cannot load
-      # the SDK externs; this says which ingredient breaks the load,
-      # without cargo or the wrapper in the way.
-      - name: Reduce a failed smoke to a rustc probe
-        if: ${{ failure() }}
-        run: |
-          # The default shell is `bash -e -o pipefail`; a diagnostic step
-          # must not die on a SIGPIPE from `head` or on a failing probe
-          # compile, so both modes are explicitly off.
-          set +e +o pipefail
-          set -u
-          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          sdkd="$root/sdk/${{ matrix.triple }}/deps"
-          hostd="$root/sdk/host-deps"
-          api=$(ls "$sdkd"/libjackdaw_api-*.rlib 2>/dev/null | head -1 || true)
-          bei=$(ls "$sdkd"/libbevy_enhanced_input-*.rlib 2>/dev/null | head -1 || true)
-          if [ -z "$api" ]; then echo "no staged jackdaw_api rlib; nothing to probe"; exit 0; fi
-          echo 'pub use jackdaw_api::op;' > probe.rs
-          echo 'pub use bevy_enhanced_input::prelude::InputAction;' >> probe.rs
-          base=(--edition 2024 --crate-type lib --target ${{ matrix.triple }} probe.rs
-                --extern jackdaw_api="$api" --extern bevy_enhanced_input="$bei"
-                -L dependency="$sdkd" -L dependency="$hostd" -o probe_out)
-          run_variant() {
-            name="$1"; shift
-            echo "=== variant: $name"
-            if rustc "${base[@]}" "$@" 2>probe.err; then echo "PASS"; else
-              echo "FAIL:"; head -20 probe.err
-            fi
-          }
-          run_variant "bare"
-          run_variant "metadata-only" --emit=metadata
-          echo "=== staged vs build-tree originals (corrupted by staging?)"
-          for orig in target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib; do
-            [ -f "$orig" ] || continue
-            if cmp -s "$orig" "$api"; then echo "IDENTICAL to $orig"; else echo "differs from $orig"; fi
-          done
-          echo "=== can rustc enumerate the staged rlib's deps at all?"
-          rustc -Zls=root "$api" 2>&1 | head -12
-          echo "=== which generation does each extern accept? ==="
-          echo 'pub use jackdaw_api::op;' > only_api.rs
-          echo 'pub use bevy_enhanced_input::prelude::InputAction;' > only_bei.rs
-          single() {
-            name="$1"; src="$2"; shift 2
-            echo "--- $name"
-            if rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} "$src" \
-                 -L dependency="$sdkd" -L dependency="$hostd" -o single_out "$@" 2>single.err
-            then echo "PASS"; else echo "FAIL:"; head -6 single.err; fi
-          }
-          single "api staged (1712f-generation)" only_api.rs --extern jackdaw_api="$api"
-          other=$(ls target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib | grep -v "$(basename "$api")" | head -1 || true)
-          if [ -n "$other" ]; then
-            single "api OTHER build-tree generation" only_api.rs --extern jackdaw_api="$other"
-          fi
-          single "bei staged" only_bei.rs --extern bevy_enhanced_input="$bei"
-          echo "--- build-tree jackdaw_api generations by mtime:"
-          ls -la --time-style=+%m-%dT%H:%M target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib 2>/dev/null || ls -l target/${{ matrix.triple }}/release/deps/libjackdaw_api-*.rlib
-          echo "=== the staged rlib's recorded sysroot deps vs the runner's sysroot ==="
-          rustc -Zls=all "$api" 2>&1 | sed -n '/External Dependencies/,$p' | head -16
-          echo "--- runner sysroot:"
-          ls "$(rustc --print sysroot)/lib/rustlib/${{ matrix.triple }}/lib" | grep -E "^lib(std|core|alloc)-" | head -6
-          echo "--- probe rustc:"
-          rustc -vV | head -3
-          echo "=== sanity: fresh two-crate chain on this runner ==="
-          echo 'pub fn f() -> u8 { 7 }' > dep.rs
-          rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} dep.rs -o libprobedep.rlib 2>&1 | head -3
-          echo 'pub use probedep::f;' > usedep.rs
-          if rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} usedep.rs --extern probedep=libprobedep.rlib -o usedep_out 2>sanity.err; then echo "sanity PASS"; else echo "sanity FAIL:"; head -6 sanity.err; fi
-
-          echo "=== relocation split: staged rlibs + UNRELOCATED dylibs, and the inverse ==="
-          # The macOS relocation pass (install_name_tool + codesign) is
-          # the one transformation the two passing platforms never run,
-          # and the locator reads the rewritten dylibs for metadata.
-          bt="target/${{ matrix.triple }}/release/deps"
-          mkdir -p mixa mixb
-          cp "$sdkd"/*.rlib mixa/ 2>/dev/null
-          for d in "$bt"/*.dylib; do [ -f "$d" ] && cp "$d" mixa/; done
-          cp "$bt"/*.rlib mixb/ 2>/dev/null
-          for d in "$sdkd"/*.dylib; do [ -f "$d" ] && cp "$d" mixb/; done
-          mix() {
-            name="$1"; dir="$2"; extern="$3"
-            echo "--- $name"
-            if rustc --edition 2024 --crate-type lib --target ${{ matrix.triple }} only_api.rs \
-                 --extern jackdaw_api="$extern" -L dependency="$dir" -L dependency="$hostd" -o mix_out 2>mix.err
-            then echo "PASS"; else echo "FAIL:"; head -4 mix.err; fi
-          }
-          mix "staged rlibs + fresh dylibs" mixa "mixa/$(basename "$api")"
-          mix "fresh rlibs + RELOCATED dylibs" mixb "mixb/$(basename "$api")"
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'
@@ -472,20 +409,48 @@ jobs:
       - name: Generate checksum
         run: openssl dgst -sha256 "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}" > "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256"
 
-      - name: Attest release archive
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/attest-build-provenance@v2
+      - name: Keep the archive
+        uses: actions/upload-artifact@v4
         with:
-          subject-path: jackdaw-${{ matrix.triple }}.${{ matrix.archive }}
-
-      - name: Upload release asset
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          # A tag carrying a pre-release suffix publishes as a
-          # pre-release, so an `-rc` build never presents itself to users
-          # as the real thing.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
+          name: bundle-${{ matrix.triple }}
+          path: |
             jackdaw-${{ matrix.triple }}.${{ matrix.archive }}
             jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256
+          retention-days: 7
+          compression-level: 0
+
+  # One release per tag, created once every bundle is built and, for a final
+  # tag, once its crates are on crates.io. Pre-release tags never become the
+  # latest release.
+  github-release:
+    name: GitHub release
+    needs: [binaries, publish]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.binaries.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && contains(github.ref_name, '-'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attest the archives
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.zst
+            dist/*.zip
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: dist/*
