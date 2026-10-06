@@ -183,6 +183,10 @@ fn changing_viewport_settings_leaves_the_saved_scene_unchanged() {
     }
     run(&mut app, "viewport.realtime.toggle", &[]);
     run(&mut app, "viewport.stats.toggle", &[]);
+    for mode in ["lighting_only", "wireframe", "lod_colors", "unlit"] {
+        run(&mut app, "view.mode", &[("mode", mode)]);
+        app.update();
+    }
     for _ in 0..3 {
         app.update();
     }

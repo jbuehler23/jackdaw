@@ -4,8 +4,8 @@
 //! Realtime on, the window updates every frame. Off, it updates on input and
 //! otherwise once every [`IDLE_REDRAW`], and asks for frames while anything
 //! is still moving on its own: a fly, dolly or other move of the camera, a
-//! modal tool, a long task, assets or meshes arriving, or the short settle
-//! after the last input.
+//! modal tool, a long task, assets or meshes arriving, a scripted pointer or
+//! key gesture still playing, or the short settle after the last input.
 //! Shaders that animate with time stand still between those frames.
 
 use std::time::Duration;
@@ -80,6 +80,7 @@ pub(crate) struct Busy<'w, 's> {
         ),
     >,
     spawned: Query<'w, 's, (), Added<Mesh3d>>,
+    gestures: Option<Res<'w, crate::test_input::SyntheticInput>>,
 }
 
 impl Busy<'_, '_> {
@@ -93,6 +94,10 @@ impl Busy<'_, '_> {
             || self.dolly.is_some()
             || !self.moved.is_empty()
             || !self.spawned.is_empty()
+            || self
+                .gestures
+                .as_ref()
+                .is_some_and(|gestures| !gestures.is_idle())
     }
 }
 

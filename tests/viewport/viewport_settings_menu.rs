@@ -255,11 +255,17 @@ fn the_view_mode_rows_pick_one_mode_at_a_time() {
     expand(&mut app, "View Mode");
 
     click_row(&mut app, "op:view.mode?mode=wireframe");
-    assert!(app.world().resource::<ViewModeSettings>().wireframe);
+    assert_eq!(
+        app.world().resource::<ViewModeSettings>().shading,
+        jackdaw::view_modes::Shading::Wireframe
+    );
     assert!(selected(&mut app, "op:view.mode?mode=wireframe"));
 
     click_row(&mut app, "op:view.mode?mode=lod_colors");
-    assert!(!app.world().resource::<ViewModeSettings>().wireframe);
+    assert_eq!(
+        app.world().resource::<ViewModeSettings>().shading,
+        jackdaw::view_modes::Shading::Lit
+    );
     assert!(app.world().resource::<LodColorView>().0);
     assert!(selected(&mut app, "op:view.mode?mode=lod_colors"));
     assert!(!selected(&mut app, "op:view.mode?mode=wireframe"));

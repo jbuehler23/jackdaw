@@ -463,9 +463,10 @@ pub(super) fn sync_brush_preview(
 /// Every frame, ensure each brush mesh chunk has the correct material
 /// based on preview / selected state and the x-ray view mode. Uses
 /// direct mutation (no deferred commands) so swaps are visible
-/// immediately. X-ray overrides every chunk; otherwise default-palette
-/// chunks follow selection state and explicit-material chunks are
-/// restored to their rebuild-time material.
+/// immediately. X-ray overrides every chunk; a shading view mode leaves
+/// the chunks to [`crate::view_modes`]; otherwise default-palette chunks
+/// follow selection state and explicit-material chunks are restored to
+/// their rebuild-time material.
 pub fn ensure_brush_chunk_materials(
     palette: Res<BrushMaterialPalette>,
     view_modes: Res<crate::view_modes::ViewModeSettings>,
@@ -487,6 +488,10 @@ pub fn ensure_brush_chunk_materials(
             let Ok((chunk, mut mat)) = chunk_mats.get_mut(chunk_entity) else {
                 continue;
             };
+            let shaded = view_modes.shading != crate::view_modes::Shading::Lit;
+            if shaded && !view_modes.x_ray {
+                continue;
+            }
             let target = if view_modes.x_ray {
                 if highlighted {
                     &palette.x_ray_selected_material

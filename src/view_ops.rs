@@ -228,15 +228,19 @@ pub(crate) fn view_toggle_icons(
     OperatorResult::Finished
 }
 
-/// Shade the viewport one way: lit, lit with a wireframe, or tinted by level
-/// of detail.
+/// Shade the viewport one way: lit, unlit, lighting only, wireframe, lit with
+/// a wireframe over it, or tinted by level of detail.
 #[operator(
     id = "view.mode",
     label = "View Mode",
-    description = "Shade the viewport lit, lit with a wireframe over it, or tinted by level of \
-                   detail. A view setting: nothing is saved.",
+    description = "Shade the viewport lit, unlit, lighting only, as a wireframe, lit with a \
+                   wireframe over it, or tinted by level of detail. A view setting: nothing is \
+                   saved.",
     allows_undo = false,
-    params(mode(String, doc = "`lit`, `wireframe` or `lod_colors`."))
+    params(mode(
+        String,
+        doc = "`lit`, `unlit`, `wireframe`, `lit_wireframe`, `lighting_only` or `lod_colors`."
+    ))
 )]
 pub(crate) fn view_mode(
     params: In<OperatorParameters>,
@@ -245,12 +249,16 @@ pub(crate) fn view_mode(
 ) -> OperatorResult {
     use crate::view_modes::ViewMode;
     let Some(mode) = params.as_str("mode").and_then(ViewMode::parse) else {
-        warn!("view.mode: 'mode' must be lit, wireframe or lod_colors");
+        warn!(
+            "view.mode: 'mode' must be lit, unlit, wireframe, lit_wireframe, lighting_only or \
+             lod_colors"
+        );
         return OperatorResult::Cancelled;
     };
-    let wireframe = mode == ViewMode::Wireframe;
-    if settings.wireframe != wireframe {
+    let (shading, wireframe) = mode.shading();
+    if settings.wireframe != wireframe || settings.shading != shading {
         settings.wireframe = wireframe;
+        settings.shading = shading;
     }
     let tinted = mode == ViewMode::LodColors;
     if lod_colors.0 != tinted {

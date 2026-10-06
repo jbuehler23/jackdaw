@@ -178,3 +178,20 @@ fn meshes_arriving_keep_the_frames_coming() {
     app.update();
     assert!(app.world().resource::<Redraws>().0 > 0);
 }
+
+#[test]
+fn a_scripted_gesture_keeps_the_frames_coming_until_it_has_played() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_viewport(dir.path());
+    set_realtime(&mut app, false);
+    assert!(falls_quiet(&mut app));
+
+    jackdaw::boot_ops::run_op_clause(app.world_mut(), "input.pointer x=40 y=40 action=click")
+        .expect("the clause dispatches")
+        .assert_finished();
+    app.world_mut().resource_mut::<Redraws>().0 = 0;
+    app.update();
+    app.update();
+    assert!(app.world().resource::<Redraws>().0 > 0);
+    assert!(falls_quiet(&mut app), "and stop once it has played");
+}

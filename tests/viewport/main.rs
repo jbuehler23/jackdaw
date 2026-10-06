@@ -11,6 +11,7 @@ mod avian_picker_visibility;
 mod fly_cursor;
 mod multi_viewport;
 mod preview_context;
+mod view_modes;
 mod viewport_2d;
 mod viewport_chrome;
 mod viewport_mode;

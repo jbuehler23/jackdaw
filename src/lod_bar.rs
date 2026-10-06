@@ -892,7 +892,7 @@ pub struct LodColorView(pub bool);
 
 /// A part's own material while the LOD colour view tints it.
 #[derive(Component)]
-struct LodTint(Handle<StandardMaterial>);
+pub(crate) struct LodTint(Handle<StandardMaterial>);
 
 /// Tint each level's parts in its colour, or put their own materials back.
 #[operator(
@@ -920,7 +920,7 @@ fn tint_lod_parts(
             &jackdaw_runtime::LodPartLevel,
             &MeshMaterial3d<StandardMaterial>,
         ),
-        Without<LodTint>,
+        (Without<LodTint>, Without<crate::view_modes::ShadedBy>),
     >,
     tinted: Query<(Entity, &LodTint)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
