@@ -289,6 +289,40 @@ fn realtime_and_stats_flip_from_the_menus_own_rows() {
     assert!(checked(&mut app, "op:viewport.stats.toggle?on=false"));
 }
 
+/// A point in the viewport, well clear of the toolbar and its menus.
+const OUTSIDE: Vec2 = Vec2::new(300.0, 600.0);
+
+#[test]
+fn a_click_outside_closes_the_menu_with_realtime_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_panel(dir.path());
+    run(&mut app, "viewport.realtime.toggle on=false");
+    open_settings(&mut app);
+
+    click(&mut app, OUTSIDE);
+
+    assert!(!menu_is_open(&app), "the click outside closed the menu");
+}
+
+#[test]
+fn a_click_outside_closes_the_menu_after_one_of_its_rows_flipped_a_box() {
+    for realtime in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with_panel(dir.path());
+        run(&mut app, &format!("viewport.realtime.toggle on={realtime}"));
+        open_settings(&mut app);
+        click_row(&mut app, "op:viewport.stats.toggle?on=true");
+        assert!(menu_is_open(&app), "the box row leaves the menu up");
+
+        click(&mut app, OUTSIDE);
+
+        assert!(
+            !menu_is_open(&app),
+            "the first click outside closes it, realtime {realtime}"
+        );
+    }
+}
+
 #[test]
 fn the_menu_opened_from_the_toolbars_right_end_stays_inside_the_window() {
     let dir = tempfile::tempdir().unwrap();

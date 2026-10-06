@@ -116,6 +116,38 @@ fn an_idle_editor_stops_asking_for_frames_and_held_input_asks_again() {
 }
 
 #[test]
+fn a_click_pressed_and_released_within_one_frame_asks_for_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_viewport(dir.path());
+    set_realtime(&mut app, false);
+    assert!(falls_quiet(&mut app));
+
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+        .single(app.world())
+        .expect("a primary window");
+    for state in [
+        bevy::input::ButtonState::Pressed,
+        bevy::input::ButtonState::Released,
+    ] {
+        app.world_mut()
+            .write_message(bevy::input::mouse::MouseButtonInput {
+                button: MouseButton::Left,
+                state,
+                window,
+            });
+    }
+    app.world_mut().resource_mut::<Redraws>().0 = 0;
+    app.update();
+    app.update();
+    assert!(
+        app.world().resource::<Redraws>().0 > 0,
+        "a click over by the time the frame runs still counts as input"
+    );
+}
+
+#[test]
 fn realtime_on_never_asks_for_frames_it_already_draws() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app_with_viewport(dir.path());

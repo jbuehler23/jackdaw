@@ -59,9 +59,9 @@ pub struct MenuBarState {
     /// The dropdown entity, if spawned.
     pub dropdown_entity: Option<Entity>,
     /// Set by a click that belongs to the open menu and must not close
-    /// it, such as a row that only flips a box. Spent on the next close
-    /// pass and cleared by every close, so it holds for exactly the one
-    /// click and never survives to swallow a later one.
+    /// it, such as a row that only flips a box. Spent by the close pass of
+    /// the frame it was set in, whether or not a press came with it, so it
+    /// never survives to swallow a later click outside.
     pub hold_open: bool,
     /// Whether the press being handled this frame landed on the bar or on
     /// one of its dropdowns.
@@ -130,6 +130,11 @@ fn close_menu_on_click_outside(
     mut commands: Commands,
     mut state: ResMut<MenuBarState>,
 ) {
+    let kept = state.hold_open || state.press_inside;
+    if kept {
+        state.hold_open = false;
+        state.press_inside = false;
+    }
     if state.open_menu.is_none() || KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
@@ -137,20 +142,8 @@ fn close_menu_on_click_outside(
     // Escape closes wherever the pointer is; a left press closes only when
     // it landed outside the menu, because a press inside one is the first
     // half of a row's own click and the row has not fired yet.
-    if !keyboard.just_pressed(KeyCode::Escape) {
-        if !mouse.just_pressed(MouseButton::Left) {
-            state.press_inside = false;
-            return;
-        }
-        if state.hold_open {
-            state.hold_open = false;
-            state.press_inside = false;
-            return;
-        }
-        if state.press_inside {
-            state.press_inside = false;
-            return;
-        }
+    if !keyboard.just_pressed(KeyCode::Escape) && (!mouse.just_pressed(MouseButton::Left) || kept) {
+        return;
     }
     close_open_menu(&mut commands, &mut state);
 }
@@ -192,6 +185,43 @@ mod tests {
             app.world().resource::<MenuBarState>().open_menu,
             None,
             "and with nobody recording the same press closes it",
+        );
+    }
+
+    /// A box row's hold covers the click it came with and no later one, so
+    /// the next press outside the menu closes it.
+    #[test]
+    fn a_hold_left_by_a_row_is_spent_before_the_next_press() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.init_resource::<MenuBarState>();
+        let item = app.world_mut().spawn_empty().id();
+        {
+            let mut state = app.world_mut().resource_mut::<MenuBarState>();
+            state.open_menu = Some(item);
+            state.hold_open = true;
+        }
+
+        app.world_mut()
+            .run_system_cached(close_menu_on_click_outside)
+            .expect("the system runs");
+        assert_eq!(
+            app.world().resource::<MenuBarState>().open_menu,
+            Some(item),
+            "the row's own frame leaves the menu up",
+        );
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.world_mut()
+            .run_system_cached(close_menu_on_click_outside)
+            .expect("the system runs");
+        assert_eq!(
+            app.world().resource::<MenuBarState>().open_menu,
+            None,
+            "and the next press outside closes it",
         );
     }
 

@@ -115,7 +115,9 @@ fn keep_drawing_while_busy(
     mut redraw: MessageWriter<RequestRedraw>,
 ) {
     let input = keys.get_pressed().next().is_some()
+        || keys.get_just_released().next().is_some()
         || buttons.get_pressed().next().is_some()
+        || buttons.get_just_released().next().is_some()
         || cursor.read().count() > 0
         || wheel.read().count() > 0;
     let arriving = images.read().count() > 0 || meshes.read().count() > 0;
