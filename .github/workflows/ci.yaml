@@ -295,6 +295,34 @@ jobs:
       - name: A built game loads and plays its scene
         run: cargo nextest run --profile heavy --cargo-profile dev -p jackdaw --features dylib --target x86_64-unknown-linux-gnu --test bsn_game_run
 
+  # Packaging checks the whole graph from the packaged sources, so pull requests
+  # run it only when they touch a manifest or the release tooling.
+  package-paths:
+    name: Package manifests changed
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          pattern='(^|/)Cargo\.(toml|lock)$|^xtask/|^\.github/workflows/(ci|packages|release)\.yaml$'
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE "$pattern"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  packages:
+    needs: package-paths
+    if: ${{ !cancelled() && (github.event_name == 'push' || needs.package-paths.outputs.changed == 'true') }}
+    uses: ./.github/workflows/packages.yaml
+
   templates:
     name: Template - ${{ matrix.template }}
     runs-on: ubuntu-latest

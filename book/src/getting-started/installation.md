@@ -73,13 +73,6 @@ install` builds outside any checkout and would otherwise use your default
 toolchain; on a stable one the build stops at a feature gate. `jd doctor`
 reports the channel under `editor toolchain`.
 
-The editor is installed from git rather than crates.io because it depends on
-`bevy_rerecast` by git, which crates.io does not accept. That restriction is
-the editor's alone: the crates your own project depends on
-(`jackdaw_runtime`, `jackdaw_extension`, and everything under them) are
-published normally, so a scaffolded project resolves from the registry like
-any other Bevy project.
-
 The install provides `jackdaw`, `jd`, and
 `jackdaw-rustc-wrapper`; do not install workspace packages individually.
 

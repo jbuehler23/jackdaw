@@ -1,0 +1,46 @@
+name: Packages
+
+# Reusable: called by ci.yaml when a change can affect what gets published, and
+# by release.yaml before anything is uploaded. Packages every publishable crate
+# the way `cargo publish` would and type-checks them from the packaged sources,
+# so a missing version, an excluded file or a package over the size limit fails
+# here instead of halfway through a release.
+on:
+  workflow_call: {}
+
+env:
+  toolchain: nightly-2026-03-05
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  packages:
+    name: Packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Release tooling tests
+        run: cargo test --locked --manifest-path xtask/Cargo.toml
+
+      - name: Publish plan
+        run: cargo xtask publish --dry-run
+
+      - name: Package and check every publishable crate
+        run: cargo xtask package "$RUNNER_TEMP/packages" --check

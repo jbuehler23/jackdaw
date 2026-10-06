@@ -16,7 +16,7 @@ categories = ["game-development", "graphics"]
 # source-checkout development and stays out of the .crate so it fits
 # under crates.io's 10 MiB upload limit.
 include = [
-    "src/**/*.rs",
+    "src/**/*",
     "templates/**/*",
     "assets/environment_maps/**/*",
     "assets/logo/jackdaw_icon_small.png",
@@ -131,7 +131,7 @@ jackdaw_runtime.workspace = true
 # drives it over ipc-channel. The protocol's `ipc` transport is light
 # enough to be unconditional, so Play always works in the editor with
 # no per-build feature gate.
-jackdaw_pie_protocol = { path = "crates/jackdaw_pie_protocol", features = [
+jackdaw_pie_protocol = { version = "0.19.0", path = "crates/jackdaw_pie_protocol", features = [
     "ipc",
 ] }
 # Optional and activated only by the `dylib` feature. Nothing in

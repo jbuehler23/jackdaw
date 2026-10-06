@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2024"
 description = "Editor extension that surfaces Jackdaw's networking proxy components in the inspector. No networking runtime."
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy = { workspace = true }

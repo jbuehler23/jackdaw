@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2024"
 description = "Default lightyear backend for Jackdaw networking: translates proxy components into real lightyear replication at runtime."
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy = { workspace = true }

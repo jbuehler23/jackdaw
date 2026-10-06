@@ -397,6 +397,7 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "jackdaw_cli_internal",
+ "serde_json",
 ]
 
 [[package]]

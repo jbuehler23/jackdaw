@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 jackdaw_cli_internal = { path = "../crates/jackdaw_cli" }
+serde_json = "1"
