@@ -2093,21 +2093,21 @@ pub(crate) fn binding_add(
     params: In<OperatorParameters>,
     mut commands: Commands,
     bound: Query<(), With<Bindings>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let Some(kind) = params.as_str("kind").and_then(bind_kind_named) else {
         warn!(
             "binding.add: `kind` names none of field, text, visible, value, action (got {:?})",
             params.as_str("kind")
         );
-        return OperatorResult::Cancelled;
+        return None;
     };
     if !bound.contains(entity) {
         warn!(
             "binding.add: {entity} carries no Bindings; add it first with \
              `component.add type_path=jackdaw_bind::types::Bindings`"
         );
-        return OperatorResult::Cancelled;
+        return None;
     }
     let edit = BindingEdit::from_params(&params);
     commands.queue(move |world: &mut World| {
@@ -2119,7 +2119,7 @@ pub(crate) fn binding_add(
             true
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Edit one binding already on the list, addressed by index, top row first.
@@ -2158,7 +2158,7 @@ pub(crate) fn binding_set(
     params: In<OperatorParameters>,
     mut commands: Commands,
     bound: Query<&Bindings>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let index = match params.get("index") {
         None => 0,
@@ -2166,7 +2166,7 @@ pub(crate) fn binding_set(
         // Spelled but no position: better to edit nothing than binding zero.
         Some(other) => {
             warn!("binding.set: `index` is {other}, which is no binding position");
-            return OperatorResult::Cancelled;
+            return None;
         }
     };
     let Ok(bindings) = bound.get(entity) else {
@@ -2174,14 +2174,14 @@ pub(crate) fn binding_set(
             "binding.set: {entity} carries no Bindings; add it first with \
              `component.add type_path=jackdaw_bind::types::Bindings`"
         );
-        return OperatorResult::Cancelled;
+        return None;
     };
     let Some(kind) = bindings.0.get(index).map(BindKind::of) else {
         warn!(
             "binding.set: {entity} has no binding {index}; it holds {}",
             bindings.0.len()
         );
-        return OperatorResult::Cancelled;
+        return None;
     };
     let edit = BindingEdit::from_params(&params);
     commands.queue(move |world: &mut World| {
@@ -2194,7 +2194,7 @@ pub(crate) fn binding_set(
             true
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn bind_kind_named(name: &str) -> Option<BindKind> {

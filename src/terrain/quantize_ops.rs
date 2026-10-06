@@ -66,12 +66,12 @@ pub(crate) fn terrain_quantize_toggle(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
     commands.queue(move |world: &mut World| {
         commit_quantization(world, entity, |q| q.enabled = !q.enabled);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Snap the selected terrain's existing heights and pin its cell size.
@@ -94,10 +94,10 @@ pub(crate) fn terrain_quantize_apply(
     _: In<OperatorParameters>,
     selection: Res<Selection>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
     commands.queue(move |world: &mut World| apply_quantization(world, entity));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// One history entry covering both halves of the snap.

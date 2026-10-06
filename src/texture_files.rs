@@ -292,16 +292,16 @@ fn has_array_preview(preview: Res<AssetPreviewState>) -> bool {
 pub(crate) fn asset_cycle_array_layer(
     params: In<OperatorParameters>,
     mut preview: ResMut<AssetPreviewState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let info = preview.selected_info.as_ref()?;
     if info.layer_count == 0 {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let direction = params.as_int("direction").unwrap_or(1);
     let count = info.layer_count as i64;
     let next = ((preview.current_layer as i64) + direction).rem_euclid(count);
     preview.current_layer = next as u32;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Apply a texture material to the current face selection (in brush-edit face

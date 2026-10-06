@@ -25,9 +25,9 @@ pub(crate) fn brush_edge_slide(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_edges: Vec<(usize, usize)> = selection
@@ -35,11 +35,11 @@ pub(crate) fn brush_edge_slide(
         .map(|s| s.edges.clone())
         .unwrap_or_default();
     if sel_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
     for &(a, b) in &sel_edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
@@ -53,21 +53,22 @@ pub(crate) fn brush_edge_slide(
         }
     }
     if mesh_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Slide the edges and reconcile the brush's faces, topology, and binding.
     // `into_inner` reborrows the change-detected `Mut<Brush>` as `&mut Brush` so
     // the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
         &mut halfedge.0,
         |mesh| edge_slide(mesh, &mesh_edges, DEFAULT_SLIDE_T),
-    )?;
+    )
+    .ok()?;
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {

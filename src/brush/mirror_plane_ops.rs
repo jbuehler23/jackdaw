@@ -296,15 +296,15 @@ pub fn mirror_plane_drag(
     snap_settings: Res<SnapSettings>,
     mut drag_state: ResMut<MirrorPlaneDragState>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let modal_running = modal.is_some();
     if modal_running {
         if mouse.just_pressed(MouseButton::Right) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
             clear_drag_state(&mut drag_state);
-            return OperatorResult::Finished;
+            return Some(OperatorResult::Finished);
         }
     }
 
@@ -312,18 +312,12 @@ pub fn mirror_plane_drag(
 
     if !modal_running {
         // First invoke: grab the hovered handle and capture the baseline.
-        let Some((entity, axis)) = hover.target else {
-            return OperatorResult::Cancelled;
-        };
+        let (entity, axis) = hover.target?;
         let Ok((brush, global_tf, stack)) = brushes.get(entity) else {
-            return OperatorResult::Cancelled;
+            return None;
         };
-        let Some(mirror) = stack.first_enabled_mirror() else {
-            return OperatorResult::Cancelled;
-        };
-        let Some(anchor_world) = plane_handle_world(brush, global_tf, mirror, axis) else {
-            return OperatorResult::Cancelled;
-        };
+        let mirror = stack.first_enabled_mirror()?;
+        let anchor_world = plane_handle_world(brush, global_tf, mirror, axis)?;
         // Bind the drag to the hovered viewport, like the other modal drags, so
         // it keeps tracking even if the cursor strays into another panel.
         let camera_entity = vp.camera_entity()?;
@@ -339,7 +333,7 @@ pub fn mirror_plane_drag(
         drag_state.start_cursor = start_cursor;
         drag_state.camera_entity = Some(camera_entity);
         drag_state.viewport_entity = Some(viewport_entity);
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     let (Some(entity), Some(camera_entity), Some(viewport_entity)) = (
@@ -347,13 +341,13 @@ pub fn mirror_plane_drag(
         drag_state.camera_entity,
         drag_state.viewport_entity,
     ) else {
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     };
     let axis = drag_state.axis;
     let (camera, cam_tf) = vp.camera_for(camera_entity)?;
     let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
     let Ok((brush, brush_global, mut stack)) = brushes.get_mut(entity) else {
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     };
 
     let Some(local_delta) = compute_brush_drag_offset(
@@ -365,7 +359,7 @@ pub fn mirror_plane_drag(
         brush_global,
         drag_state.anchor_world,
     ) else {
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     };
     let tentative = drag_state.start_offset + local_delta[axis];
 
@@ -410,7 +404,7 @@ pub fn mirror_plane_drag(
         PlaneSnap::Vertex(v) | PlaneSnap::EdgeMidpoint(v) => Some(v),
         PlaneSnap::Grid | PlaneSnap::Free => None,
     };
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_mirror_plane_drag(

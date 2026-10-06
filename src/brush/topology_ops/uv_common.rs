@@ -27,9 +27,9 @@ pub(crate) fn for_each_selected_face(
     selection: &BrushSelection,
     brushes: &mut Query<&mut Brush>,
     mut apply: impl FnMut(usize, &BrushTopology, &mut BrushFaceData),
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_faces: Vec<usize> = selection
@@ -37,9 +37,9 @@ pub(crate) fn for_each_selected_face(
         .map(|s| s.faces.clone())
         .unwrap_or_default();
     if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
-    let mut brush = brushes.get_mut(brush_entity)?;
+    let mut brush = brushes.get_mut(brush_entity).ok()?;
     // Split the borrow so the closure can read topology while mutating a face.
     let Brush { faces, topology } = &mut *brush;
 
@@ -49,7 +49,7 @@ pub(crate) fn for_each_selected_face(
         }
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Availability predicate shared by every per-face UV operator: Face edit mode

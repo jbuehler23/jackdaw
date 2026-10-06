@@ -2993,7 +2993,7 @@ pub fn entity_add_prefab(_: In<OperatorParameters>, mut commands: Commands) -> O
 pub(crate) fn animation_set_state(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let state = params.as_str("state").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
@@ -3001,7 +3001,7 @@ pub(crate) fn animation_set_state(
             entity.insert(jackdaw_animation_runtime::AnimationState(state));
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[cfg(test)]

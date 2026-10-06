@@ -127,18 +127,18 @@ pub(crate) fn clip_place_point(
     brush_caches: Query<&BrushMeshCache>,
     snap_settings: Res<crate::snapping::SnapSettings>,
     mut clip_state: ResMut<ClipState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = brush_selection.active_brush?;
-    let brush_global = brush_transforms.get(brush_entity)?;
-    let brush = brushes.get(brush_entity)?;
-    let cache = brush_caches.get(brush_entity)?;
+    let brush_global = brush_transforms.get(brush_entity).ok()?;
+    let brush = brushes.get(brush_entity).ok()?;
+    let cache = brush_caches.get(brush_entity).ok()?;
     let cursor_pos = cursor.get()?;
     let camera_entity = active.camera?;
     let viewport_entity = active.ui_node?;
-    let (camera, cam_tf) = camera_query.get(camera_entity)?;
+    let (camera, cam_tf) = camera_query.get(camera_entity).ok()?;
     let viewport_cursor =
         window_to_viewport_cursor_for(cursor_pos, camera, viewport_entity, &viewport_query)?;
-    let ray = camera.viewport_to_world(cam_tf, viewport_cursor)?;
+    let ray = camera.viewport_to_world(cam_tf, viewport_cursor).ok()?;
 
     // Pick in brush-local space: unwrap the ray into the brush's local frame
     // (rotation + translation only, matching the brush's rigid placement), then
@@ -165,7 +165,7 @@ pub(crate) fn clip_place_point(
     let snapped = snap_settings.snap_translate_vec3_if(world_point, ctrl);
     let local_snapped = brush_rot.inverse() * (snapped - brush_trans);
     clip_state.points.push(local_snapped);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[operator(
@@ -222,11 +222,11 @@ pub(crate) fn clip_apply(
     brush_transforms: Query<&GlobalTransform>,
     mut clip_state: ResMut<ClipState>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = brush_selection.active_brush?;
-    let mut brush = brushes.get_mut(brush_entity)?;
+    let mut brush = brushes.get_mut(brush_entity).ok()?;
     let plane = clip_state.preview_plane.clone()?;
-    let brush_global = brush_transforms.get(brush_entity)?;
+    let brush_global = brush_transforms.get(brush_entity).ok()?;
 
     // Dispatch: brushes with populated topology (the common case after the
     // topology migration) take the HalfedgeMesh bisect_plane path. Brushes with
@@ -240,25 +240,25 @@ pub(crate) fn clip_apply(
             ClipMode::KeepFront => {
                 let Some(new_brush) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
                     warn!("Clip: bisect failed; aborting");
-                    return OperatorResult::Cancelled;
+                    return None;
                 };
                 apply_clip_geometry(&mut commands, brush_entity, &mut brush, new_brush);
             }
             ClipMode::KeepBack => {
                 let Some(new_brush) = bisect_brush(&brush, &plane, BisectKeep::Back) else {
                     warn!("Clip: bisect failed; aborting");
-                    return OperatorResult::Cancelled;
+                    return None;
                 };
                 apply_clip_geometry(&mut commands, brush_entity, &mut brush, new_brush);
             }
             ClipMode::Split => {
                 let Some(front) = bisect_brush(&brush, &plane, BisectKeep::Front) else {
                     warn!("Clip: split bisect (front) failed; aborting");
-                    return OperatorResult::Cancelled;
+                    return None;
                 };
                 let Some(back) = bisect_brush(&brush, &plane, BisectKeep::Back) else {
                     warn!("Clip: split bisect (back) failed; aborting");
-                    return OperatorResult::Cancelled;
+                    return None;
                 };
                 *brush = front.clone();
                 queue_split_spawn(&mut commands, brush_entity, brush_global, front, back);
@@ -292,7 +292,7 @@ pub(crate) fn clip_apply(
     }
 
     *clip_state = ClipState::default();
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Lift the brush's topology into an `HalfedgeMesh`, bisect it along `plane`,

@@ -23,9 +23,9 @@ pub(crate) fn brush_subdivide(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_edges: Vec<(usize, usize)> = selection
@@ -33,11 +33,11 @@ pub(crate) fn brush_subdivide(
         .map(|s| s.edges.clone())
         .unwrap_or_default();
     if sel_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
     for &(a, b) in &sel_edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
@@ -51,7 +51,7 @@ pub(crate) fn brush_subdivide(
         }
     }
     if mesh_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Subdivide the edges and reconcile, capturing the topology vertex index
@@ -61,7 +61,7 @@ pub(crate) fn brush_subdivide(
     // subdivide never removes verts, so the slot positions are stable here.
     // `into_inner` reborrows the change-detected `Mut<Brush>` as `&mut Brush` so
     // the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     let source = brush.faces.last().cloned().unwrap_or_default();
     let original_face_count = brush.faces.len();
     let new_edge_pairs: Vec<(usize, usize)> = apply_topology_edit(
@@ -95,7 +95,8 @@ pub(crate) fn brush_subdivide(
                 out
             })
         },
-    )?;
+    )
+    .ok()?;
 
     // Any face the subdivision created inherits the previous last face's appearance.
     for new_face in original_face_count..brush.faces.len() {
@@ -114,7 +115,7 @@ pub(crate) fn brush_subdivide(
         selection.sub_mut(brush_entity).edges = inbounds;
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {

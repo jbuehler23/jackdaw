@@ -80,7 +80,7 @@ pub(crate) fn grid_decrease(
 pub(crate) fn grid_set_increment(
     params: In<OperatorParameters>,
     mut snap: ResMut<SnapSettings>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let value = params.as_float("value")? as f32;
     snap.grid_increment = if value.is_finite() && value > 0.0 {
         value
@@ -88,7 +88,7 @@ pub(crate) fn grid_set_increment(
         0.0
     };
     snap.translate_increment = snap.grid_size();
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// The magnet of whichever canvas the pointer is over: over a 2D canvas panel

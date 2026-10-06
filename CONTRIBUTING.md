@@ -201,16 +201,16 @@ If your operator needs to know something when it runs (which entity to delete, w
 fn delete_entity(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     commands.entity(entity).despawn();
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 ```
 
 Each entry in `params(...)` is `name(Type, default = ..., doc = "...")`. `default` and `doc` are optional. Supported types: `bool`, `i64`, `f64`, `String`, `Vec2`, `Vec3`, `Color`, `Entity`. Defaults are supported on `bool` / `i64` / `f64` / `String` for now.
 
-The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("...")` / `as_str("...")` / `as_entity("...")` etc. inside the function body. `OperatorResult` implements `Try` (`FromResidual<Option<Infallible>>` and `FromResidual<Result<Infallible, E>>`), so `?` on an `Option`- or `Result`-returning call short-circuits to `OperatorResult::Cancelled` directly -- prefer it over the older `let Some(...) = ... else { return Cancelled }` form.
+The schema is informational; it does not change how parameters are extracted at call time. Continue reading values via `params.as_int("...")` / `as_str("...")` / `as_entity("...")` etc. inside the function body. An operator returns `OperatorResult`, `Option<OperatorResult>` or `Result<OperatorResult, E>`. Return an `Option` to use `?` on the values the operator reads: `None` cancels the operator, and `.ok()?` does the same for a `Result`. A `Result` return cancels on `Err` and logs the error at debug level. Prefer `?` over the `let Some(...) = ... else { return ... }` form.
 
 A `# Parameters` heading in the function's `///` doc comment is still welcome for longer prose, but the macro `params(...)` block is the primary record. Keep both in sync.
 

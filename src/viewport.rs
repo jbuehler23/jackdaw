@@ -1204,18 +1204,18 @@ pub(crate) fn viewport_focus_selected(
     selection: Res<Selection>,
     selected_transforms: Query<&GlobalTransform, With<Selected>>,
     mut camera_query: Query<&mut Transform, With<JackdawCameraSettings>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let primary = selection.primary()?;
-    let global_tf = selected_transforms.get(primary)?;
+    let global_tf = selected_transforms.get(primary).ok()?;
     let target = global_tf.translation();
     let scale = global_tf.compute_transform().scale;
     let dist = f32::max(scale.length() * 3.0, 5.0);
     let camera_entity = active.camera?;
-    let mut transform = camera_query.get_mut(camera_entity)?;
+    let mut transform = camera_query.get_mut(camera_entity).ok()?;
     let forward = transform.forward().as_vec3();
     transform.translation = target - forward * dist;
     *transform = transform.looking_at(target, Vec3::Y);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn slot_param(params: &OperatorParameters) -> Option<usize> {
@@ -1234,14 +1234,14 @@ pub(crate) fn viewport_bookmark_save(
     params: In<OperatorParameters>,
     active: Res<ActiveViewport>,
     mut cameras: Query<(&Transform, &mut ViewportConfig), With<JackdawCameraSettings>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let slot = slot_param(&params)?;
     let camera_entity = active.camera?;
-    let (transform, mut config) = cameras.get_mut(camera_entity)?;
+    let (transform, mut config) = cameras.get_mut(camera_entity).ok()?;
     config.bookmarks[slot] = Some(CameraBookmark {
         transform: *transform,
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Restore the camera to a previously-saved bookmark slot. Cancels if
@@ -1256,13 +1256,13 @@ pub(crate) fn viewport_bookmark_load(
     params: In<OperatorParameters>,
     active: Res<ActiveViewport>,
     mut cameras: Query<(&mut Transform, &ViewportConfig), With<JackdawCameraSettings>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let slot = slot_param(&params)?;
     let camera_entity = active.camera?;
-    let (mut transform, config) = cameras.get_mut(camera_entity)?;
+    let (mut transform, config) = cameras.get_mut(camera_entity).ok()?;
     let bookmark = config.bookmarks[slot]?;
     *transform = bookmark.transform;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[cfg(test)]

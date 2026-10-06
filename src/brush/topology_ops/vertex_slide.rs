@@ -24,9 +24,9 @@ pub(crate) fn brush_vertex_slide(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_verts: Vec<usize> = selection
@@ -34,11 +34,11 @@ pub(crate) fn brush_vertex_slide(
         .map(|s| s.vertices.clone())
         .unwrap_or_default();
     if sel_verts.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut vert_keys: Vec<VertKey> = Vec::with_capacity(sel_verts.len());
     for &vert_idx in &sel_verts {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
@@ -46,13 +46,13 @@ pub(crate) fn brush_vertex_slide(
         }
     }
     if vert_keys.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Slide the verts and reconcile the brush's faces, topology, and binding.
     // `into_inner` reborrows the change-detected `Mut<Brush>` as `&mut Brush` so
     // the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
@@ -62,7 +62,7 @@ pub(crate) fn brush_vertex_slide(
         },
     );
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_vertex_slide(

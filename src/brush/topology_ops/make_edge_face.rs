@@ -34,9 +34,9 @@ pub(crate) fn brush_make_edge_face(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_verts: Vec<usize> = selection
@@ -44,11 +44,11 @@ pub(crate) fn brush_make_edge_face(
         .map(|s| s.vertices.clone())
         .unwrap_or_default();
     if sel_verts.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut vert_keys: Vec<VertKey> = Vec::with_capacity(sel_verts.len());
     for &vert_idx in &sel_verts {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
@@ -56,14 +56,14 @@ pub(crate) fn brush_make_edge_face(
         }
     }
     if vert_keys.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Create the edge or face and reconcile, capturing the new element so the
     // post-commit selection can target it. The target is read from the mesh
     // before reconcile; topology vertex order matches the mesh slotmap order
     // (see `flatten_to_topology`) and `contextual_create` never removes verts.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     let source = brush.faces.last().cloned().unwrap_or_default();
     let original_face_count = brush.faces.len();
     let chain_target: Option<ChainTarget> = apply_topology_edit(
@@ -123,7 +123,7 @@ pub(crate) fn brush_make_edge_face(
         None => {}
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_make_edge_face(

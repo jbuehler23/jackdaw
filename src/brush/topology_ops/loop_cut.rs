@@ -85,26 +85,26 @@ pub(crate) fn brush_loop_cut(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     // --- Cursor position ---
     // Use raw UI-space cursor so dragging outside the viewport panel
     // doesn't cancel the modal.
-    let (camera, cam_tf) = camera_query.single()?;
+    let (camera, cam_tf) = camera_query.single().ok()?;
     let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         // Validate preconditions.
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let (a, b) = selection
             .sub(brush_entity)
             .and_then(|s| s.edges.first().copied())?;
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         // Resolve cache pair -> EdgeKey.
         let va: VertKey = *halfedge.vert_keys.get(a)?;
@@ -146,7 +146,7 @@ pub(crate) fn brush_loop_cut(
         // Draw the initial preview lines at t=0.5.
         update_preview_lines(&modal_state, &brush_transforms, &mut preview_lines);
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update t, preview, or commit ---
@@ -155,7 +155,7 @@ pub(crate) fn brush_loop_cut(
     let rmb = mouse.just_pressed(MouseButton::Right);
     if modal_inputs.cancel() || rmb {
         clear_modal(&mut modal_state, &mut preview_lines);
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Project the cursor directly onto the start edge in window space to get t.
@@ -184,25 +184,25 @@ pub(crate) fn brush_loop_cut(
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
             clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
+            return None;
         };
         let Some(edge_key) = modal_state.start_edge_key else {
             clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
+            return None;
         };
         let Some(edit) = modal_state.edit.as_ref() else {
             clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
+            return None;
         };
         let t = modal_state.current_t;
 
         let Ok(brush_mut) = brushes.get_mut(brush_entity) else {
             clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
+            return None;
         };
         let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
             clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
+            return None;
         };
         let brush = brush_mut.into_inner();
 
@@ -249,7 +249,7 @@ pub(crate) fn brush_loop_cut(
 
         let Some(new_loop_edge_pairs) = new_loop_edge_pairs else {
             clear_modal(&mut modal_state, &mut preview_lines);
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Each new split face inherits the source face's appearance.
@@ -271,10 +271,10 @@ pub(crate) fn brush_loop_cut(
         }
 
         clear_modal(&mut modal_state, &mut preview_lines);
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state and clear the preview.

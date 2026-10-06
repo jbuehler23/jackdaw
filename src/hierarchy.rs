@@ -2236,7 +2236,7 @@ pub(crate) fn hierarchy_open_context_menu(
     computed_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<TreeRowContent>>,
     extension_add_entries: Query<&jackdaw_api_internal::lifecycle::RegisteredMenuEntry>,
     q_isa: Query<(), With<crate::prefab::IsA>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let cursor_pos = cursor.get()?;
 
     // Close any existing context menu
@@ -2382,7 +2382,7 @@ pub(crate) fn hierarchy_open_context_menu(
     let menu = spawn_context_menu(&mut commands, cursor_pos, Some(target), &items);
     state.menu_entity = Some(menu);
     state.target_entity = Some(target);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Handle context menu actions for hierarchy operations.
@@ -2829,14 +2829,14 @@ pub(crate) fn entity_reparent(
     params: In<OperatorParameters>,
     parents: Query<&ChildOf>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let child = params.as_entity("child")?;
     let parent = params.as_entity("parent")?;
     if is_at_or_below(&parents, child, parent) {
         // An operator call can name a parent no drag can reach; adopting an
         // own ancestor is a cycle the document has no shape for.
         warn!("entity.reparent: {parent} is inside {child}, so it cannot adopt it");
-        return OperatorResult::Cancelled;
+        return None;
     }
     commands.queue(move |world: &mut World| {
         let old_parent = world.get::<ChildOf>(child).map(ChildOf::parent);
@@ -2851,7 +2851,7 @@ pub(crate) fn entity_reparent(
             .resource_mut::<CommandHistory>()
             .push_executed(Box::new(cmd));
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Whether `candidate` is `ancestor` itself or sits somewhere below it.
@@ -3025,12 +3025,12 @@ pub fn rename_begin(
     rename_inputs: Query<(), With<InlineRenameInput>>,
     active: ActiveModalQuery,
     selection: Res<Selection>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if active.is_modal_running() {
         return if rename_inputs.is_empty() {
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         } else {
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         };
     }
 
@@ -3079,7 +3079,7 @@ pub fn rename_begin(
     commands
         .entity(target.content)
         .insert_children(target.slot, &[entry]);
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_rename_begin(

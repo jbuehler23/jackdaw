@@ -304,16 +304,16 @@ pub(crate) fn terrain_navmesh_bake(
     scene_path: Res<SceneFilePath>,
     running: Option<Res<RunningBake>>,
     mut state: ResMut<TerrainNavmeshState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if running.is_some() {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let entity = selection.primary()?;
     let (terrain, transform) = terrains.get(entity).ok()?;
 
     let Some(document) = store.get(&terrain.data_path) else {
         state.status = BakeStatus::Failed("this terrain has no height data yet".to_string());
-        return OperatorResult::Cancelled;
+        return None;
     };
     // Refused rather than baked around: a scene mesh whose asset has not
     // arrived would leave a building-shaped hole of walkable ground in a bake
@@ -321,11 +321,11 @@ pub(crate) fn terrain_navmesh_bake(
     if geometry.still_loading() {
         state.status =
             BakeStatus::Failed("the scene's meshes are still loading -- bake again".to_string());
-        return OperatorResult::Cancelled;
+        return None;
     }
     if document.regions.region_count() == 0 {
         state.status = BakeStatus::Failed("this terrain has no regions to bake".to_string());
-        return OperatorResult::Cancelled;
+        return None;
     }
     // The options bar cannot author a negative agent, but a scene file can:
     // the agent is reflected component data and BSN text goes in unclamped.
@@ -338,7 +338,7 @@ pub(crate) fn terrain_navmesh_bake(
              radius, height, and slope"
                 .to_string(),
         );
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Extent and placement come from the cells the terrain holds, so the bake
@@ -401,7 +401,7 @@ pub(crate) fn terrain_navmesh_bake(
         destination,
     });
     state.status = BakeStatus::Baking;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Shows or hides the baked navmesh over the ground. View state, no history
@@ -2233,7 +2233,7 @@ mod tests {
         let started = world
             .run_system_cached_with(terrain_navmesh_bake, no_params())
             .expect("the bake operator runs");
-        assert_eq!(started, OperatorResult::Finished);
+        assert_eq!(started.into_operator_result(), OperatorResult::Finished);
         assert_eq!(
             world.resource::<TerrainNavmeshState>().status,
             BakeStatus::Baking
@@ -3128,7 +3128,11 @@ mod tests {
                 .run_system_cached_with(terrain_navmesh_bake, no_params())
                 .expect("the bake operator runs");
 
-            assert_eq!(result, OperatorResult::Cancelled, "{broken:?}");
+            assert_eq!(
+                result.into_operator_result(),
+                OperatorResult::Cancelled,
+                "{broken:?}"
+            );
             assert!(!world.contains_resource::<RunningBake>(), "{broken:?}");
             let summary = summary(world.resource::<TerrainNavmeshState>());
             assert!(
@@ -3454,7 +3458,7 @@ mod tests {
         let result = world
             .run_system_cached_with(terrain_navmesh_bake, no_params())
             .expect("the bake operator runs");
-        assert_eq!(result, OperatorResult::Cancelled);
+        assert_eq!(result.into_operator_result(), OperatorResult::Cancelled);
         let summary = summary(world.resource::<TerrainNavmeshState>());
         assert!(summary.contains("still loading"), "{summary}");
     }

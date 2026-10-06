@@ -462,7 +462,7 @@ pub fn gizmo_drag(
     snap_settings: Res<SnapSettings>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let modal_running = modal.is_some();
     if modal_running
         && (viewport_ctx.cursor.get().is_none() || mouse.just_released(MouseButton::Left))
@@ -473,7 +473,7 @@ pub fn gizmo_drag(
         // OS window commits the same way LMB release does.
         queue_sync_gizmo_transforms_to_ast(&drag_state, &transforms, &mut commands);
         clear_gizmo_drag_state(&mut drag_state, &mut cursor_query);
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
     let cursor_pos = viewport_ctx.cursor.get()?;
@@ -489,12 +489,12 @@ pub fn gizmo_drag(
         drag_state.viewport,
     ) else {
         return if modal_running {
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         } else {
-            OperatorResult::Cancelled
+            None
         };
     };
-    let (camera, cam_tf) = camera_query.get(camera_entity)?;
+    let (camera, cam_tf) = camera_query.get(camera_entity).ok()?;
     let viewport_cursor = window_to_viewport_cursor_for(
         cursor_pos,
         camera,
@@ -523,7 +523,7 @@ pub fn gizmo_drag(
             }
         }
         if targets.is_empty() {
-            return OperatorResult::Finished;
+            return Some(OperatorResult::Finished);
         }
         drag_state.active = true;
         drag_state.axis = Some(axis);
@@ -536,14 +536,14 @@ pub fn gizmo_drag(
         if let Ok(mut cursor_opts) = cursor_query.single_mut() {
             cursor_opts.grab_mode = CursorGrabMode::Confined;
         }
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     if drag_state.targets.is_empty() {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
     let Some(axis) = drag_state.axis else {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
 
     // Compute axis direction from the single target's frame (local/world),
@@ -591,7 +591,7 @@ pub fn gizmo_drag(
                 pivot,
                 axis_dir,
             ) else {
-                return OperatorResult::Running;
+                return Some(OperatorResult::Running);
             };
             let snapped = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
             for t in &drag_state.targets {
@@ -616,7 +616,7 @@ pub fn gizmo_drag(
         ActiveTool::Scale => {
             let Some(factor) = scale_factor(axis, mouse_delta, camera, cam_tf, pivot, axis_dir)
             else {
-                return OperatorResult::Running;
+                return Some(OperatorResult::Running);
             };
             for t in &drag_state.targets {
                 if let Ok((_, mut tf)) = transforms.get_mut(t.entity) {
@@ -629,9 +629,9 @@ pub fn gizmo_drag(
                 }
             }
         }
-        ActiveTool::Select => return OperatorResult::Finished,
+        ActiveTool::Select => return Some(OperatorResult::Finished),
     }
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Mirror each gizmo target's live ECS [`Transform`] into the scene document.
@@ -736,7 +736,7 @@ pub fn gizmo_drag_edit(
     snap_settings: Res<SnapSettings>,
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut override_cursor: ResMut<OverrideCursor>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let modal_running = modal.is_some();
     if modal_running
         && (viewport_ctx.cursor.get().is_none() || mouse.just_released(MouseButton::Left))
@@ -747,7 +747,7 @@ pub fn gizmo_drag_edit(
         // the same way LMB release does.
         clear_gizmo_edit_drag_state(&mut drag_state, &mut cursor_query);
         clear_gizmo_grab_cursor(&mut override_cursor);
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
     let cursor_pos = viewport_ctx.cursor.get()?;
@@ -763,12 +763,12 @@ pub fn gizmo_drag_edit(
         drag_state.viewport,
     ) else {
         return if modal_running {
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         } else {
-            OperatorResult::Cancelled
+            None
         };
     };
-    let (camera, cam_tf) = camera_query.get(camera_entity)?;
+    let (camera, cam_tf) = camera_query.get(camera_entity).ok()?;
     let viewport_cursor = window_to_viewport_cursor_for(
         cursor_pos,
         camera,
@@ -786,7 +786,7 @@ pub fn gizmo_drag_edit(
             selected_sub_vertices,
         );
         if captures.is_empty() {
-            return OperatorResult::Finished;
+            return Some(OperatorResult::Finished);
         }
         let all_start_world: Vec<Vec3> = captures
             .iter()
@@ -804,14 +804,14 @@ pub fn gizmo_drag_edit(
             cursor_opts.grab_mode = CursorGrabMode::Confined;
         }
         override_cursor.0 = Some(EntityCursor::System(SystemCursorIcon::Grabbing));
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     if drag_state.captures.is_empty() {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
     let Some(axis) = drag_state.axis else {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
 
     // Sub-elements are points with no per-target frame, so the gizmo always
@@ -846,7 +846,7 @@ pub fn gizmo_drag_edit(
                 pivot,
                 axis_dir,
             ) else {
-                return OperatorResult::Running;
+                return Some(OperatorResult::Running);
             };
             let world_delta = snap_settings.snap_translate_vec3_if(axis_dir * projected, ctrl);
             new_draw_pos = pivot + world_delta;
@@ -883,7 +883,7 @@ pub fn gizmo_drag_edit(
         ActiveTool::Scale => {
             let Some(factor) = scale_factor(axis, mouse_delta, camera, cam_tf, pivot, axis_dir)
             else {
-                return OperatorResult::Running;
+                return Some(OperatorResult::Running);
             };
             // When scale snapping is active (Ctrl flips it), land the
             // resulting vertex positions on the grid rather than snapping the
@@ -904,7 +904,7 @@ pub fn gizmo_drag_edit(
                 plan.push((capture.entity, new_local));
             }
         }
-        ActiveTool::Select => return OperatorResult::Finished,
+        ActiveTool::Select => return Some(OperatorResult::Finished),
     }
 
     drag_state.draw_pos = new_draw_pos;
@@ -932,7 +932,7 @@ pub fn gizmo_drag_edit(
             &new_local_positions,
         );
     }
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Restore every captured brush to its drag-start topology, then clear state.

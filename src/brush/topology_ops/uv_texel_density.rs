@@ -25,7 +25,7 @@ pub(crate) fn brush_uv_texel_density(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let scale = jackdaw_uv::texel_density_scale(DEFAULT_TEXEL_DENSITY, ASSUMED_TEXTURE_PIXELS);
 
     for_each_selected_face(

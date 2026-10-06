@@ -22,7 +22,7 @@ pub(crate) fn brush_uv_world_aligned(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     for_each_selected_face(
         &edit_mode,
         &selection,

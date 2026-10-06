@@ -140,7 +140,7 @@ pub(crate) fn terrain_material_add(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let named = params.as_str("material").unwrap_or("").trim();
 
@@ -148,7 +148,7 @@ pub(crate) fn terrain_material_add(
         Ok(reference) => reference,
         Err(refusal) => {
             picker.error = Some(refusal.to_string());
-            return OperatorResult::Cancelled;
+            return None;
         }
     };
 
@@ -169,7 +169,7 @@ pub(crate) fn terrain_material_add(
     if result == OperatorResult::Finished {
         picker.open = false;
     }
-    result
+    Some(result)
 }
 
 /// What a slot stores for the material a caller named: the path of the file
@@ -219,17 +219,17 @@ pub(crate) fn terrain_material_remove(
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
     mut paint: ResMut<TerrainPaintState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let index = params.as_int("index")? as usize;
     let mut materials = store.materials(&data_path).to_vec();
     if index >= materials.len() {
         picker.error = Some(TerrainMaterialError::NoSuchSlot(index).to_string());
-        return OperatorResult::Cancelled;
+        return None;
     }
     if materials[index].is_tombstone() {
         picker.error = None;
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
     materials[index] = TerrainMaterialSlot::tombstone();
     let refuge = first_material_id(&materials);
@@ -257,7 +257,7 @@ pub(crate) fn terrain_material_remove(
     if result == OperatorResult::Finished && paint.active_texture_id as usize == index {
         paint.active_texture_id = refuge;
     }
-    result
+    Some(result)
 }
 
 /// The lowest texture id that still has a material behind it, or 0 when
@@ -294,14 +294,14 @@ pub(crate) fn terrain_material_move(
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
     mut paint: ResMut<TerrainPaintState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let index = params.as_int("index")? as usize;
     let to = params.as_int("to")?;
     let mut materials = store.materials(&data_path).to_vec();
     if index >= materials.len() {
         picker.error = Some(TerrainMaterialError::NoSuchSlot(index).to_string());
-        return OperatorResult::Cancelled;
+        return None;
     }
     // Clamped rather than refused, so an Up on the first slot is a no-op.
     let to = to.clamp(0, materials.len() as i64 - 1) as usize;
@@ -321,7 +321,7 @@ pub(crate) fn terrain_material_move(
     if result == OperatorResult::Finished && paint.active_texture_id as usize == index {
         paint.active_texture_id = to as u8;
     }
-    result
+    Some(result)
 }
 
 /// Retile one slot: how many times its material repeats per world unit.
@@ -346,18 +346,18 @@ pub(crate) fn terrain_material_uv_scale(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let index = params.as_int("index")? as usize;
     let value = params.as_float("value")? as f32;
     let mut materials = store.materials(&data_path).to_vec();
     let Some(slot) = materials.get_mut(index) else {
         picker.error = Some(TerrainMaterialError::NoSuchSlot(index).to_string());
-        return OperatorResult::Cancelled;
+        return None;
     };
     if slot.is_tombstone() {
         picker.error = Some(TerrainMaterialError::EmptySlot(index).to_string());
-        return OperatorResult::Cancelled;
+        return None;
     }
     // Clamped rather than refused: the value arrives from a slider drag,
     // and one the array builder would reject must not reach the store.
@@ -367,7 +367,7 @@ pub(crate) fn terrain_material_uv_scale(
     } else {
         DEFAULT_UV_SCALE
     };
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
@@ -375,7 +375,7 @@ pub(crate) fn terrain_material_uv_scale(
         materials,
         None,
         "Terrain Material Tiling",
-    )
+    ))
 }
 
 /// Set how hard one slot's texture is broken out of its own tiling grid.
@@ -400,18 +400,18 @@ pub(crate) fn terrain_material_detile(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let index = params.as_int("index")? as usize;
     let value = params.as_float("value")? as f32;
     let mut materials = store.materials(&data_path).to_vec();
     let Some(slot) = materials.get_mut(index) else {
         picker.error = Some(TerrainMaterialError::NoSuchSlot(index).to_string());
-        return OperatorResult::Cancelled;
+        return None;
     };
     if slot.is_tombstone() {
         picker.error = Some(TerrainMaterialError::EmptySlot(index).to_string());
-        return OperatorResult::Cancelled;
+        return None;
     }
     // Clamped rather than refused: the value arrives from a slider drag,
     // and one the set validator would reject must not reach the store.
@@ -420,7 +420,7 @@ pub(crate) fn terrain_material_detile(
     } else {
         0.0
     };
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
@@ -428,7 +428,7 @@ pub(crate) fn terrain_material_detile(
         materials,
         None,
         "Terrain Material Detiling",
-    )
+    ))
 }
 
 /// Set or clear one slot's own perceptual roughness.
@@ -455,7 +455,7 @@ pub(crate) fn terrain_material_roughness(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let edit = slot_surface_edit(
         &params,
         &selection,
@@ -466,7 +466,7 @@ pub(crate) fn terrain_material_roughness(
     )?;
     let mut materials = edit.materials;
     materials[edit.index].perceptual_roughness = edit.value;
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
@@ -474,7 +474,7 @@ pub(crate) fn terrain_material_roughness(
         materials,
         None,
         "Terrain Material Roughness",
-    )
+    ))
 }
 
 /// Set or clear one slot's own specular reflectance.
@@ -497,11 +497,11 @@ pub(crate) fn terrain_material_reflectance(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let edit = slot_surface_edit(&params, &selection, &terrains, &store, &mut picker, 1.0)?;
     let mut materials = edit.materials;
     materials[edit.index].reflectance = edit.value;
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
@@ -509,7 +509,7 @@ pub(crate) fn terrain_material_reflectance(
         materials,
         None,
         "Terrain Material Reflectance",
-    )
+    ))
 }
 
 /// One slot's roughness or reflectance edit, checked and ready to write.
@@ -715,10 +715,10 @@ pub(crate) fn terrain_paint_restore(
 pub(crate) fn terrain_texture_select(
     params: In<OperatorParameters>,
     mut paint: ResMut<TerrainPaintState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let index = params.as_int("index")?;
     paint.active_texture_id = index.clamp(0, jackdaw_terrain::MAX_TEXTURE_ID as i64) as u8;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[cfg(test)]
@@ -801,7 +801,11 @@ mod tests {
             let result = world
                 .run_system_cached_with(terrain_material_add, params(&[("material", text(name))]))
                 .expect("system runs");
-            assert_eq!(result, OperatorResult::Finished, "adding {name}");
+            assert_eq!(
+                result.into_operator_result(),
+                OperatorResult::Finished,
+                "adding {name}"
+            );
         }
 
         fn remove(world: &mut World, index: i64) -> OperatorResult {
@@ -811,6 +815,7 @@ mod tests {
                     params(&[("index", PropertyValue::Int(index))]),
                 )
                 .expect("system runs")
+                .into_operator_result()
         }
 
         /// [`remove`] where the removal is setup rather than the subject.
@@ -1001,7 +1006,7 @@ mod tests {
                     ]),
                 )
                 .expect("system runs");
-            assert_eq!(result, OperatorResult::Finished);
+            assert_eq!(result.into_operator_result(), OperatorResult::Finished);
 
             assert_eq!(
                 control_words(&world),
@@ -1134,7 +1139,7 @@ mod tests {
                 )
                 .expect("system runs");
 
-            assert_eq!(result, OperatorResult::Cancelled);
+            assert_eq!(result.into_operator_result(), OperatorResult::Cancelled);
             assert!(
                 world
                     .resource::<TerrainMaterialPicker>()
@@ -1190,6 +1195,7 @@ mod tests {
         world
             .run_system_cached_with(terrain_material_add, params(&[("material", text(name))]))
             .expect("system runs")
+            .into_operator_result()
     }
 
     fn names(world: &World) -> Vec<String> {
@@ -1270,7 +1276,7 @@ mod tests {
                 params(&[("index", PropertyValue::Int(0))]),
             )
             .expect("system runs");
-        assert_eq!(result, OperatorResult::Finished);
+        assert_eq!(result.into_operator_result(), OperatorResult::Finished);
         assert_eq!(names(&world), vec!["", "rock"]);
     }
 
@@ -1283,7 +1289,7 @@ mod tests {
                 params(&[("index", PropertyValue::Int(3))]),
             )
             .expect("system runs");
-        assert_eq!(result, OperatorResult::Cancelled);
+        assert_eq!(result.into_operator_result(), OperatorResult::Cancelled);
         assert!(world.resource::<TerrainMaterialPicker>().error.is_some());
     }
 
@@ -1306,7 +1312,7 @@ mod tests {
             )
             .expect("system runs");
 
-        assert_eq!(result, OperatorResult::Finished);
+        assert_eq!(result.into_operator_result(), OperatorResult::Finished);
         assert_eq!(names(&world), vec!["rock", "grass"]);
         assert_eq!(world.resource::<TerrainPaintState>().active_texture_id, 0);
     }
@@ -1325,7 +1331,7 @@ mod tests {
                 ]),
             )
             .expect("system runs");
-        assert_eq!(result, OperatorResult::Finished);
+        assert_eq!(result.into_operator_result(), OperatorResult::Finished);
         assert_eq!(names(&world), vec!["grass", "rock"]);
         assert!(world.resource::<TerrainMaterialPicker>().error.is_none());
     }
@@ -1346,7 +1352,10 @@ mod tests {
                 .expect("system runs")
         };
 
-        assert_eq!(set(&mut world, 0.4), OperatorResult::Finished);
+        assert_eq!(
+            set(&mut world, 0.4).into_operator_result(),
+            OperatorResult::Finished
+        );
         let scale = |world: &World| {
             world
                 .resource::<TerrainDataStore>()
@@ -1386,7 +1395,10 @@ mod tests {
         };
 
         assert_eq!(detile(&world), 0.0, "a fresh slot is not detiled");
-        assert_eq!(set(&mut world, 0.7), OperatorResult::Finished);
+        assert_eq!(
+            set(&mut world, 0.7).into_operator_result(),
+            OperatorResult::Finished
+        );
         assert!((detile(&world) - 0.7).abs() < 1e-6);
 
         let _ = set(&mut world, -1.0);
@@ -1424,8 +1436,14 @@ mod tests {
         assert_eq!(slot(&world).perceptual_roughness, None);
         assert_eq!(slot(&world).reflectance, None);
 
-        assert_eq!(run(&mut world, false, Some(0.4)), OperatorResult::Finished);
-        assert_eq!(run(&mut world, true, Some(3.0)), OperatorResult::Finished);
+        assert_eq!(
+            run(&mut world, false, Some(0.4)).into_operator_result(),
+            OperatorResult::Finished
+        );
+        assert_eq!(
+            run(&mut world, true, Some(3.0)).into_operator_result(),
+            OperatorResult::Finished
+        );
         assert_eq!(slot(&world).perceptual_roughness, Some(0.4));
         assert_eq!(slot(&world).reflectance, Some(1.0));
 
@@ -1457,7 +1475,7 @@ mod tests {
                 ]),
             )
             .expect("system runs");
-        assert_eq!(result, OperatorResult::Cancelled);
+        assert_eq!(result.into_operator_result(), OperatorResult::Cancelled);
         assert!(
             world
                 .resource::<TerrainMaterialPicker>()
@@ -1612,7 +1630,7 @@ mod tests {
                 params(&[("index", PropertyValue::Int(250))]),
             )
             .expect("system runs");
-        assert_eq!(result, OperatorResult::Finished);
+        assert_eq!(result.into_operator_result(), OperatorResult::Finished);
         assert_eq!(
             world.resource::<TerrainPaintState>().active_texture_id,
             jackdaw_terrain::MAX_TEXTURE_ID,

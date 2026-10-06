@@ -195,7 +195,7 @@ fn component_id_for_path(
 pub(crate) fn component_add(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
@@ -280,7 +280,7 @@ pub(crate) fn component_add(
             ec.insert(super::InspectorDirty);
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Remove a component from the target entity.
@@ -297,7 +297,7 @@ pub(crate) fn component_add(
 pub(crate) fn component_remove(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
@@ -348,7 +348,7 @@ pub(crate) fn component_remove(
         cmd.execute(world);
         world.resource_mut::<CommandHistory>().push_executed(cmd);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Read a parameter as the JSON a field edit commits. A string is parsed as
@@ -387,7 +387,10 @@ fn param_json(params: &OperatorParameters, key: &str) -> Option<serde_json::Valu
         value(String, doc = "New value as JSON: 12, true, text, or {\"Px\": 12}."),
     ),
 )]
-pub(crate) fn field_set(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub(crate) fn field_set(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     let field_path = params.as_str("field").map(str::to_string)?;
@@ -402,7 +405,7 @@ pub(crate) fn field_set(params: In<OperatorParameters>, mut commands: Commands) 
             "Set field on multiple entities",
         );
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Restore an overridden component on a prefab instance to the prefab's
@@ -420,7 +423,7 @@ pub(crate) fn field_set(params: In<OperatorParameters>, mut commands: Commands) 
 pub(crate) fn component_revert_baseline(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
@@ -433,7 +436,7 @@ pub(crate) fn component_revert_baseline(
             error!("revert_component_to_baseline failed: {err}");
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Add a static `RigidBody` and an `AvianCollider` to the entity so it
@@ -449,7 +452,7 @@ pub(crate) fn component_revert_baseline(
 pub(crate) fn physics_enable(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     commands.queue(move |world: &mut World| {
         enable_physics(world, entity);
@@ -457,7 +460,7 @@ pub(crate) fn physics_enable(
             ec.insert(super::InspectorDirty);
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Remove physics components from the entity, capturing the pre-disable
@@ -472,7 +475,7 @@ pub(crate) fn physics_enable(
 pub(crate) fn physics_disable(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     commands.queue(move |world: &mut World| {
         // A running preview owns the components its evaluator writes.
@@ -490,7 +493,7 @@ pub(crate) fn physics_disable(
             ec.insert(super::InspectorDirty);
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Spawn (or replace) a keyframe at the current timeline cursor for one
@@ -510,7 +513,7 @@ pub(crate) fn physics_disable(
 pub(crate) fn animation_toggle_keyframe(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("component_type_path").map(str::to_string)?;
     let field_path = params.as_str("field_path").map(str::to_string)?;
@@ -522,5 +525,5 @@ pub(crate) fn animation_toggle_keyframe(
             )
             .ok();
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }

@@ -118,13 +118,13 @@ pub(crate) fn brush_inset(
     cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let modal_sel_faces: Vec<usize> = selection
@@ -132,11 +132,11 @@ pub(crate) fn brush_inset(
             .map(|s| s.faces.clone())
             .unwrap_or_default();
         if modal_sel_faces.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         // Collect FaceKeys for every selected face index.
         let mut face_keys: Vec<FaceKey> = Vec::with_capacity(modal_sel_faces.len());
@@ -146,7 +146,7 @@ pub(crate) fn brush_inset(
             }
         }
         if face_keys.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         // Compute geometric max inset: the minimum vertex-to-centroid distance
@@ -172,7 +172,7 @@ pub(crate) fn brush_inset(
         modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
         modal_state.max_inset = max_inset;
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update amount, mutate preview, or commit ---
@@ -183,7 +183,7 @@ pub(crate) fn brush_inset(
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = InsetModalState::default();
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Compute raw amount from total mouse displacement magnitude.
@@ -216,7 +216,7 @@ pub(crate) fn brush_inset(
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
             *modal_state = InsetModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Zero-amount commit: treat as cancel so we don't write a no-op undo.
@@ -225,12 +225,12 @@ pub(crate) fn brush_inset(
         if modal_state.current_amount < 1e-5 {
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = InsetModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let Ok(brush) = brushes.get(brush_entity).cloned() else {
             *modal_state = InsetModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Chain selection: write the newly created inner-ring face indices
@@ -250,10 +250,10 @@ pub(crate) fn brush_inset(
         }
 
         *modal_state = InsetModalState::default();
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state. Called when the

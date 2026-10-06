@@ -276,9 +276,9 @@ pub(crate) fn terrain_generate(
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
-    let (terrain, mut dirty) = terrains.get_mut(entity)?;
+    let (terrain, mut dirty) = terrains.get_mut(entity).ok()?;
 
     let mut data = store.entry_for(terrain)?;
     // An unsculpted terrain holds no regions and so has nothing to
@@ -297,7 +297,7 @@ pub(crate) fn terrain_generate(
         commands.queue(move |world: &mut World| {
             crate::terrain::toast_terrain_notice(world, &message);
         });
-        return OperatorResult::Cancelled;
+        return None;
     }
     let resolution = data.document().grid_resolution();
 
@@ -316,7 +316,7 @@ pub(crate) fn terrain_generate(
         new_heights,
         "Generate Terrain".to_string(),
     )));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Apply hydraulic erosion to the selected terrain.
@@ -341,9 +341,9 @@ pub(crate) fn terrain_erode(
     mut store: ResMut<TerrainDataStore>,
     gen_state: Res<TerrainGenerateState>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
-    let (terrain, mut dirty) = terrains.get_mut(entity)?;
+    let (terrain, mut dirty) = terrains.get_mut(entity).ok()?;
     let step = terrain.quantization.active_height_step();
     let mut data = store.entry_for(terrain)?;
     // Erosion strides the document's heights, so this is the grid those
@@ -367,7 +367,7 @@ pub(crate) fn terrain_erode(
         new_heights,
         "Erode Terrain".to_string(),
     )));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[cfg(test)]

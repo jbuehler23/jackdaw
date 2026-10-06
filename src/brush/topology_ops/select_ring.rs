@@ -20,9 +20,9 @@ pub(crate) fn brush_select_ring(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_edges: Vec<(usize, usize)> = selection
@@ -30,17 +30,17 @@ pub(crate) fn brush_select_ring(
         .map(|s| s.edges.clone())
         .unwrap_or_default();
     if sel_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
-    let halfedge = halfedge_q.get(brush_entity)?;
+    let halfedge = halfedge_q.get(brush_entity).ok()?;
 
     let new_edges = jackdaw_select::ring_edges(&halfedge.mesh, &halfedge.vert_keys, &sel_edges);
     if new_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     selection.sub_mut(brush_entity).edges = new_edges;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_select_ring(

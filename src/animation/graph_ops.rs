@@ -82,7 +82,7 @@ pub(crate) fn animation_graph_new(
 pub(crate) fn animation_graph_open(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let path = params.as_str("path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         if !open_graph(world, &path) {
@@ -90,7 +90,7 @@ pub(crate) fn animation_graph_open(
         }
         crate::open_window_in_default_area_if_absent(world, super::graph_window::GRAPH_WINDOW_ID);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Write the open graph back to its file.
@@ -196,7 +196,7 @@ pub(crate) fn animation_graph_add_state(
 pub(crate) fn animation_graph_set_state(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
     let rename = params
         .as_str("rename")
@@ -253,7 +253,7 @@ pub(crate) fn animation_graph_set_state(
             }
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Take a state off the open graph.
@@ -268,7 +268,7 @@ pub(crate) fn animation_graph_set_state(
 pub(crate) fn animation_graph_remove_state(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         commit_graph_edit(world, "Remove state", |def| {
@@ -284,7 +284,7 @@ pub(crate) fn animation_graph_remove_state(
             }
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Put a transition on the open graph.
@@ -315,7 +315,7 @@ pub(crate) fn animation_graph_remove_state(
 pub(crate) fn animation_graph_add_transition(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let from = params.as_str("from").unwrap_or_default().to_string();
     let to = params.as_str("to").map(str::to_string)?;
     let when = params.as_str("when").unwrap_or_default().to_string();
@@ -346,7 +346,7 @@ pub(crate) fn animation_graph_add_transition(
             });
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Take a transition off the open graph.
@@ -364,7 +364,7 @@ pub(crate) fn animation_graph_add_transition(
 pub(crate) fn animation_graph_remove_transition(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let from = params.as_str("from").unwrap_or_default().to_string();
     let to = params.as_str("to").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
@@ -378,7 +378,7 @@ pub(crate) fn animation_graph_remove_transition(
             }
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Say which state the graph starts in.
@@ -393,7 +393,7 @@ pub(crate) fn animation_graph_remove_transition(
 pub(crate) fn animation_graph_set_entry(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         if world.resource::<AnimationGraphDoc>().state(&name).is_none() {
@@ -402,7 +402,7 @@ pub(crate) fn animation_graph_set_entry(
         }
         commit_graph_edit(world, "Set entry state", |def| def.entry = name.clone());
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Declare a parameter the game writes.
@@ -479,7 +479,7 @@ pub(crate) fn animation_graph_add_param(
 pub(crate) fn animation_graph_set_param(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
     let value = params.as_float("value").unwrap_or(1.0) as f32;
     commands.queue(move |world: &mut World| {
@@ -506,7 +506,7 @@ pub(crate) fn animation_graph_set_param(
             AnimationParameterKind::Trigger => written.clear_trigger(&name),
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Point the selected entity at a graph file.
@@ -521,7 +521,7 @@ pub(crate) fn animation_graph_set_param(
 pub(crate) fn animation_graph_assign(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let path = params.as_str("path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
         let Some(entity) = world.resource::<crate::selection::Selection>().primary() else {
@@ -544,7 +544,7 @@ pub(crate) fn animation_graph_assign(
             );
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Write a selected animation set out as a graph and open it.

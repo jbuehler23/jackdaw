@@ -82,13 +82,13 @@ pub(crate) fn brush_vertex_bevel(
     cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let sel_verts: Vec<usize> = selection
@@ -96,11 +96,11 @@ pub(crate) fn brush_vertex_bevel(
             .map(|s| s.vertices.clone())
             .unwrap_or_default();
         if sel_verts.len() != 1 {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         let &vert_idx = sel_verts.first()?;
         let &vert_key = halfedge.vert_keys.get(vert_idx)?;
@@ -115,7 +115,7 @@ pub(crate) fn brush_vertex_bevel(
         modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
         modal_state.max_width = max_width;
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update width, mutate preview, or commit ---
@@ -126,7 +126,7 @@ pub(crate) fn brush_vertex_bevel(
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = VertexBevelModalState::default();
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Cursor distance from the initial position drives the width.
@@ -154,7 +154,7 @@ pub(crate) fn brush_vertex_bevel(
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
             *modal_state = VertexBevelModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Zero-width commit: treat as cancel so we don't write a no-op undo.
@@ -163,12 +163,12 @@ pub(crate) fn brush_vertex_bevel(
         if modal_state.current_width < 1e-5 {
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = VertexBevelModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let Ok(brush) = brushes.get(brush_entity).cloned() else {
             *modal_state = VertexBevelModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Chain selection: the new bevel face is the last face in the
@@ -179,10 +179,10 @@ pub(crate) fn brush_vertex_bevel(
         selection.sub_mut(brush_entity).faces = vec![new_face_idx];
 
         *modal_state = VertexBevelModalState::default();
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state. Called when the

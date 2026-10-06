@@ -282,9 +282,9 @@ pub(crate) fn terrain_channel_add(
     mut terrains: Query<&mut jackdaw_scene_types::Terrain>,
     mut paint: ResMut<TerrainPaintState>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
-    let mut terrain = terrains.get_mut(entity)?;
+    let mut terrain = terrains.get_mut(entity).ok()?;
 
     let index = terrain.channels.len();
     let name = mint_channel_name(&terrain.channels);
@@ -298,7 +298,7 @@ pub(crate) fn terrain_channel_add(
     paint.show_channel = true;
 
     commands.queue(move |world: &mut World| commit_channels(world, entity));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Remove a channel from the selected terrain.
@@ -326,13 +326,13 @@ pub(crate) fn terrain_channel_remove(
     store: Res<TerrainDataStore>,
     mut paint: ResMut<TerrainPaintState>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
-    let terrain = terrains.get(entity)?;
+    let terrain = terrains.get(entity).ok()?;
     let named = named_param(&params, "index")?;
     let Some(index) = channel_index(&terrain.channels, &named) else {
         no_such_mask(&mut commands, "terrain.channel.remove", &named, terrain);
-        return OperatorResult::Cancelled;
+        return None;
     };
     let descriptor = terrain.channels[index].clone();
     // The values live per region, so undo holds the plane gathered across
@@ -359,7 +359,7 @@ pub(crate) fn terrain_channel_remove(
             history.execute(Box::new(command), world);
         });
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Undo command for `terrain.channel.remove`.
@@ -581,18 +581,18 @@ pub(crate) fn terrain_channel_select(
     terrains: Query<&jackdaw_scene_types::Terrain>,
     mut paint: ResMut<TerrainPaintState>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let terrain = selection
         .primary()
         .and_then(|entity| terrains.get(entity).ok())?;
     let named = named_param(&params, "index")?;
     let Some(index) = channel_index(&terrain.channels, &named) else {
         no_such_mask(&mut commands, "terrain.channel.select", &named, terrain);
-        return OperatorResult::Cancelled;
+        return None;
     };
     paint.active_channel = index;
     paint.active_entry = 0;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Append a palette entry to the active channel.
@@ -608,10 +608,10 @@ pub(crate) fn terrain_channel_value_add(
     mut terrains: Query<&mut jackdaw_scene_types::Terrain>,
     mut paint: ResMut<TerrainPaintState>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
     let active = paint.active_channel;
-    let mut terrain = terrains.get_mut(entity)?;
+    let mut terrain = terrains.get_mut(entity).ok()?;
     let ceiling = terrain.channels.get(active)?.element.max_value();
     let channel = terrain.channels.get_mut(active)?;
 
@@ -628,7 +628,7 @@ pub(crate) fn terrain_channel_value_add(
     if channel.palette.iter().any(|entry| entry.value == next) {
         // The width is exhausted; another entry would alias an existing
         // value.
-        return OperatorResult::Cancelled;
+        return None;
     }
     let index = channel.palette.len();
     channel.palette.push(TerrainPaletteEntry {
@@ -639,7 +639,7 @@ pub(crate) fn terrain_channel_value_add(
     paint.active_entry = index;
 
     commands.queue(move |world: &mut World| commit_channels(world, entity));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Choose which palette value the brush writes.
@@ -656,7 +656,7 @@ pub(crate) fn terrain_channel_value_select(
     terrains: Query<&jackdaw_scene_types::Terrain>,
     mut paint: ResMut<TerrainPaintState>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let terrain = selection
         .primary()
         .and_then(|entity| terrains.get(entity).ok())?;
@@ -674,10 +674,10 @@ pub(crate) fn terrain_channel_value_select(
             channel.name
         );
         commands.queue(move |world: &mut World| warn_caller(world, message));
-        return OperatorResult::Cancelled;
+        return None;
     };
     paint.active_entry = index;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Toggle the viewport tint that shows what is painted.

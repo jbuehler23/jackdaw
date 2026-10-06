@@ -2435,7 +2435,7 @@ pub(crate) fn window_open(
     params: In<OperatorParameters>,
     registry: Res<jackdaw_panels::WindowRegistry>,
     mut commands: bevy::prelude::Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let window_id = params
         .as_str("window_id")
         .map(viewport::canonical_window_id)
@@ -2444,15 +2444,13 @@ pub(crate) fn window_open(
     // than a silent no-op + `Finished`. Lets the menu/tooltip pipeline
     // distinguish "user opened a window" from "user clicked a stale
     // menu entry whose extension unloaded."
-    if registry.get(&window_id).is_none() {
-        return OperatorResult::Cancelled;
-    }
+    registry.get(&window_id)?;
     // Focus the tab if this window already has one, rather than docking a
     // second tab for it.
     commands.queue(move |world: &mut World| {
         open_window_in_default_area_if_absent(world, &window_id);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Turn the Preview Context session on or off, and optionally scrub one
@@ -2520,7 +2518,7 @@ pub(crate) fn menu_open(
         (Entity, &mut BackgroundColor),
         With<jackdaw_widgets::menu_bar::MenuBarItem>,
     >,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
     if jackdaw_feathers::menu_bar::open_menu_named(
         &name,
@@ -2530,10 +2528,10 @@ pub(crate) fn menu_open(
         &windows,
         &mut backgrounds,
     ) {
-        OperatorResult::Finished
+        Some(OperatorResult::Finished)
     } else {
         warn!("menu.open: no menu labelled '{name}'");
-        OperatorResult::Cancelled
+        None
     }
 }
 
@@ -2565,7 +2563,7 @@ pub(crate) fn menu_hover(
         With<jackdaw_widgets::menu_bar::MenuBarDropdown>,
     >,
     windows: Query<&Window>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
     if jackdaw_feathers::menu_bar::open_submenu_named(
         &name,
@@ -2576,10 +2574,10 @@ pub(crate) fn menu_hover(
         &dropdowns,
         &windows,
     ) {
-        OperatorResult::Finished
+        Some(OperatorResult::Finished)
     } else {
         warn!("menu.hover: no open menu has a group labelled '{name}'");
-        OperatorResult::Cancelled
+        None
     }
 }
 
@@ -2594,7 +2592,7 @@ pub(crate) fn menu_hover(
 pub(crate) fn project_open_recent(
     params: In<OperatorParameters>,
     mut commands: bevy::prelude::Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let path = std::path::PathBuf::from(unescape_action_value(params.as_str("path")?));
     commands.insert_resource(project_select::PendingAutoOpen {
         path,
@@ -2605,7 +2603,7 @@ pub(crate) fn project_open_recent(
             .resource_mut::<NextState<AppState>>()
             .set(AppState::ProjectSelect);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Reset the dock layout to its default.

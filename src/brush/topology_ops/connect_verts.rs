@@ -22,9 +22,9 @@ pub(crate) fn brush_connect_verts(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_verts: Vec<usize> = selection
@@ -32,11 +32,11 @@ pub(crate) fn brush_connect_verts(
         .map(|s| s.vertices.clone())
         .unwrap_or_default();
     if sel_verts.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map cache vertex indices to HalfedgeMesh VertKeys via vert_keys parallel array.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut vert_keys: Vec<VertKey> = Vec::with_capacity(sel_verts.len());
     for &vert_idx in &sel_verts {
         if let Some(&vk) = halfedge.vert_keys.get(vert_idx) {
@@ -44,7 +44,7 @@ pub(crate) fn brush_connect_verts(
         }
     }
     if vert_keys.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Connect the verts and reconcile, capturing the topology vertex index pair
@@ -53,7 +53,7 @@ pub(crate) fn brush_connect_verts(
     // mesh slotmap order (see `flatten_to_topology`) and connect_verts never
     // removes verts. `into_inner` reborrows the change-detected `Mut<Brush>` as
     // `&mut Brush` so the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     let source = brush.faces.last().cloned().unwrap_or_default();
     let original_face_count = brush.faces.len();
     let new_edge_pairs: Vec<(usize, usize)> = apply_topology_edit(
@@ -106,7 +106,7 @@ pub(crate) fn brush_connect_verts(
         selection.sub_mut(brush_entity).edges = inbounds;
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_connect_verts(

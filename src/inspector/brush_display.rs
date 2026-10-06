@@ -816,13 +816,13 @@ pub(crate) fn brush_face_clear_material(
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = brush_selection.active_brush?;
     let faces: Vec<usize> = brush_selection
         .sub(brush_entity)
         .map(|s| s.faces.clone())
         .unwrap_or_default();
-    let mut brush = brushes.get_mut(brush_entity)?;
+    let mut brush = brushes.get_mut(brush_entity).ok()?;
 
     let old = brush.clone();
     for &face_idx in &faces {
@@ -839,7 +839,7 @@ pub(crate) fn brush_face_clear_material(
     };
     history.push_executed(Box::new(cmd));
     commands.entity(brush_entity).insert(super::InspectorDirty);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[operator(
@@ -854,14 +854,14 @@ pub(crate) fn brush_face_apply_texture_to_all(
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = brush_selection.active_brush?;
     let source_idx = brush_selection
         .sub(brush_entity)
         .and_then(|s| s.faces.first().copied())?;
-    let mut brush = brushes.get_mut(brush_entity)?;
+    let mut brush = brushes.get_mut(brush_entity).ok()?;
     if source_idx >= brush.faces.len() {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let source = brush.faces[source_idx].clone();
 
@@ -881,7 +881,7 @@ pub(crate) fn brush_face_apply_texture_to_all(
     };
     history.push_executed(Box::new(cmd));
     commands.entity(brush_entity).insert(super::InspectorDirty);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[operator(
@@ -896,14 +896,14 @@ pub(crate) fn brush_face_set_uv_scale_preset(
     brush_selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let scale_value = params.as_float("scale").unwrap_or(1.0) as f32;
     let brush_entity = brush_selection.active_brush?;
     let faces: Vec<usize> = brush_selection
         .sub(brush_entity)
         .map(|s| s.faces.clone())
         .unwrap_or_default();
-    let mut brush = brushes.get_mut(brush_entity)?;
+    let mut brush = brushes.get_mut(brush_entity).ok()?;
 
     let old = brush.clone();
     let scale = Vec2::splat(scale_value);
@@ -920,7 +920,7 @@ pub(crate) fn brush_face_set_uv_scale_preset(
         label: "Set UV scale preset".to_string(),
     };
     history.push_executed(Box::new(cmd));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[operator(

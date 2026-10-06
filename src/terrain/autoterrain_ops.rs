@@ -108,18 +108,18 @@ pub(crate) fn terrain_autoterrain_enable(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let mut settings = store.autoterrain(&data_path);
     settings.enabled = params.as_bool("enabled").unwrap_or(!settings.enabled);
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
         data_path,
         settings,
         "Autoterrain",
-    )
+    ))
 }
 
 /// Choose which texture id flat ground draws.
@@ -138,18 +138,18 @@ pub(crate) fn terrain_autoterrain_base(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let mut settings = store.autoterrain(&data_path);
     settings.base_slot = slot_id(params.as_int("index")?);
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
         data_path,
         settings,
         "Autoterrain Base Texture",
-    )
+    ))
 }
 
 /// Choose which texture id steep ground draws.
@@ -168,18 +168,18 @@ pub(crate) fn terrain_autoterrain_slope(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let mut settings = store.autoterrain(&data_path);
     settings.slope_slot = slot_id(params.as_int("index")?);
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
         data_path,
         settings,
         "Autoterrain Slope Texture",
-    )
+    ))
 }
 
 /// A texture id the control map can address. Clamped rather than refused:
@@ -212,12 +212,12 @@ pub(crate) fn terrain_autoterrain_range(
     mut store: ResMut<TerrainDataStore>,
     mut picker: ResMut<TerrainMaterialPicker>,
     mut history: ResMut<CommandHistory>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let data_path = selected_data_path(&selection, &terrains)?;
     let mut settings = store.autoterrain(&data_path);
     let (start, end) = (number(&params, "start"), number(&params, "end"));
     if start.is_none() && end.is_none() {
-        return OperatorResult::Cancelled;
+        return None;
     }
     // Clamped rather than refused: these arrive from a slider drag, and
     // the store sanitizes what it stores. Dragging one end past the other
@@ -234,14 +234,14 @@ pub(crate) fn terrain_autoterrain_range(
             .clamp(MIN_SLOPE_DEG, MAX_SLOPE_DEG)
             .max(settings.slope_start_deg + MIN_SLOPE_BAND_DEG);
     }
-    commit(
+    Some(commit(
         &mut store,
         &mut history,
         &mut picker,
         data_path,
         settings,
         "Autoterrain Slope Range",
-    )
+    ))
 }
 
 /// Undo command for every autoterrain operator. Writes straight into
@@ -322,12 +322,14 @@ mod tests {
         world
             .run_system_cached_with(terrain_autoterrain_enable, params(pairs))
             .expect("system runs")
+            .into_operator_result()
     }
 
     fn range(world: &mut World, pairs: &[(&str, PropertyValue)]) -> OperatorResult {
         world
             .run_system_cached_with(terrain_autoterrain_range, params(pairs))
             .expect("system runs")
+            .into_operator_result()
     }
 
     #[test]

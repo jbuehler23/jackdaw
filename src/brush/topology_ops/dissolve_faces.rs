@@ -22,9 +22,9 @@ pub(crate) fn brush_dissolve_faces(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_faces: Vec<usize> = selection
@@ -32,11 +32,11 @@ pub(crate) fn brush_dissolve_faces(
         .map(|s| s.faces.clone())
         .unwrap_or_default();
     if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(sel_faces.len());
     for &face_idx in &sel_faces {
         if let Some(&fk) = halfedge.face_keys.get(face_idx) {
@@ -44,21 +44,22 @@ pub(crate) fn brush_dissolve_faces(
         }
     }
     if mesh_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Apply the dissolve and reconcile the brush's faces, topology, and binding.
     // `into_inner` reborrows the change-detected `Mut<Brush>` as `&mut Brush` so
     // the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
         &mut halfedge.0,
         |mesh| dissolve_faces(mesh, &mesh_faces),
-    )?;
+    )
+    .ok()?;
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_dissolve_faces(

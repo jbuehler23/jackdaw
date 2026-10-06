@@ -106,7 +106,7 @@ pub(crate) fn brush_edge_slide_modal(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     // Ui-logical cursor; dragging outside the viewport panel should not
     // cancel the modal (matches inset / extrude / loop_cut behavior).
     let cursor_pos = cursor.get()?;
@@ -114,7 +114,7 @@ pub(crate) fn brush_edge_slide_modal(
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let sel_edges: Vec<(usize, usize)> = selection
@@ -122,11 +122,11 @@ pub(crate) fn brush_edge_slide_modal(
             .map(|s| s.edges.clone())
             .unwrap_or_default();
         if sel_edges.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         // Map cache edge pairs to HalfedgeMesh EdgeKeys via vert_keys.
         let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
@@ -142,7 +142,7 @@ pub(crate) fn brush_edge_slide_modal(
             }
         }
         if edge_keys.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let brush_xform = brush_transforms.get(brush_entity).ok();
@@ -168,7 +168,7 @@ pub(crate) fn brush_edge_slide_modal(
         modal_state.current_factor = 0.0;
         modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update factor, mutate preview, or commit ---
@@ -179,7 +179,7 @@ pub(crate) fn brush_edge_slide_modal(
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = EdgeSlideModalState::default();
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Cursor-tracks-edge: project cursor delta onto each adjacent face's screen
@@ -251,7 +251,7 @@ pub(crate) fn brush_edge_slide_modal(
         if modal_state.current_factor.abs() < 1e-4 {
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = EdgeSlideModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         // selection.edges intentionally untouched: edge_slide preserves edge
@@ -260,10 +260,10 @@ pub(crate) fn brush_edge_slide_modal(
         // verts are added or removed.
 
         *modal_state = EdgeSlideModalState::default();
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state. Called when the

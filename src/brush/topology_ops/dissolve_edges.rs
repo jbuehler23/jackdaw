@@ -22,9 +22,9 @@ pub(crate) fn brush_dissolve_edges(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_edges: Vec<(usize, usize)> = selection
@@ -32,11 +32,11 @@ pub(crate) fn brush_dissolve_edges(
         .map(|s| s.edges.clone())
         .unwrap_or_default();
     if sel_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
     for &(a, b) in &sel_edges {
         let Some(&va) = halfedge.vert_keys.get(a) else {
@@ -50,21 +50,22 @@ pub(crate) fn brush_dissolve_edges(
         }
     }
     if mesh_edges.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Apply the dissolve and reconcile the brush's faces, topology, and binding.
     // `into_inner` reborrows the change-detected `Mut<Brush>` as `&mut Brush` so
     // the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
         &mut halfedge.0,
         |mesh| dissolve_edges(mesh, &mesh_edges),
-    )?;
+    )
+    .ok()?;
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {

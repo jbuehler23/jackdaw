@@ -1127,19 +1127,19 @@ pub(crate) fn material_select(
     registry: Res<MaterialRegistry>,
     index: Option<Res<crate::asset_index::AssetIndex>>,
     mut preview_state: ResMut<MaterialPreviewState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let reference = params.as_str("material")?;
     let Some(handle) =
         crate::material_assets::material_of_reference(index.as_deref(), &registry, reference)
     else {
         warn!("material.select: no material at '{reference}'");
-        return OperatorResult::Cancelled;
+        return None;
     };
     preview_state.active_material = Some(handle);
     preview_state.orbit_yaw = 0.5;
     preview_state.orbit_pitch = -0.3;
     preview_state.zoom_distance = 3.0;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Apply a material to the selected faces, or to every face of the selected

@@ -25,28 +25,29 @@ pub(crate) fn brush_merge_by_distance(
     selection: Res<crate::brush::BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     // Check that we're in any brush edit mode.
     if !matches!(*edit_mode, EditMode::BrushEdit(_)) {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     let brush_entity = selection.active_brush?;
 
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
 
     // Weld coincident verts across the whole mesh and reconcile the brush's
     // faces, topology, and binding. `into_inner` reborrows the change-detected
     // `Mut<Brush>` as `&mut Brush` so the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
         &mut halfedge.0,
         |mesh| remove_doubles(mesh, DEFAULT_MERGE_DISTANCE),
-    )?;
+    )
+    .ok()?;
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_merge(edit_mode: Res<EditMode>) -> bool {

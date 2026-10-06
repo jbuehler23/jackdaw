@@ -27,9 +27,9 @@ pub(crate) fn brush_reconvexify(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = selection.active_brush?;
-    let brush_before = brushes.get(brush_entity).cloned()?;
+    let brush_before = brushes.get(brush_entity).cloned().ok()?;
 
     // Collect current vertex positions from the brush's topology.
     // The plane-intersection fallback is a safety net for malformed
@@ -46,7 +46,7 @@ pub(crate) fn brush_reconvexify(
         verts
     };
     if current_positions.len() < 4 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Build old face_polygons (parallel to faces) for UV-preservation
@@ -79,7 +79,7 @@ pub(crate) fn brush_reconvexify(
     new_brush.topology = compute_brush_topology(&new_brush.faces);
 
     // Apply the new brush.
-    let mut brush_mut = brushes.get_mut(brush_entity)?;
+    let mut brush_mut = brushes.get_mut(brush_entity).ok()?;
     *brush_mut = new_brush.clone();
 
     // If an HalfedgeMesh is present (brush is in vertex/edge/face edit mode),
@@ -99,7 +99,7 @@ pub(crate) fn brush_reconvexify(
         halfedge.face_keys = new_face_keys;
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_reconvexify(selection: Res<BrushSelection>, brushes: Query<&Brush>) -> bool {

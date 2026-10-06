@@ -104,14 +104,14 @@ pub(crate) fn measure_distance(
     vp: crate::viewport::ViewportCursor,
     mut ray_cast: MeshRayCast,
     editor_entities: Query<(), With<crate::EditorEntity>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if !state.initialized {
         // Viewport capture is deferred so the modal can start from a
         // toolbar button click where the cursor is over the toolbar.
         state.initialized = true;
         state.active = true;
         state.has_start = false;
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     if !state.active {
@@ -120,7 +120,7 @@ pub(crate) fn measure_distance(
         state.has_start = false;
         state.camera = None;
         state.viewport = None;
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
     // Capture the viewport the modal was started on; subsequent
@@ -128,7 +128,7 @@ pub(crate) fn measure_distance(
     let camera_entity = state.camera.or_else(|| vp.camera_entity());
     let viewport_entity = state.viewport.or_else(|| vp.viewport_entity());
     let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     };
     if state.camera.is_none() {
         state.camera = Some(camera_entity);
@@ -137,7 +137,7 @@ pub(crate) fn measure_distance(
         state.viewport = Some(viewport_entity);
     }
     let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     };
 
     // Try to get a world-space point under the cursor.
@@ -156,7 +156,7 @@ pub(crate) fn measure_distance(
         state.end_point = point;
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_measure_distance(mut state: ResMut<MeasureToolState>) {

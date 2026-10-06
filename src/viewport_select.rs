@@ -450,7 +450,7 @@ pub fn box_select(
     mut selection: ResMut<Selection>,
     mut commands: Commands,
     active: ActiveModalQuery,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let cursor_pos = vp.cursor()?;
 
     if !active.is_modal_running() {
@@ -463,26 +463,26 @@ pub fn box_select(
         // into a different viewport mid-drag.
         box_state.camera = vp.camera_entity();
         box_state.viewport = vp.viewport_entity();
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     box_state.current = cursor_pos;
     if !mouse.just_released(MouseButton::Left) {
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
     box_state.active = false;
 
     let Some(camera_entity) = box_state.camera else {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
     let Some(viewport_entity) = box_state.viewport else {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
     let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
     let Some((vp_computed, vp_tf)) = vp.viewport_for(viewport_entity) else {
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
     let (min, max) = crate::viewport_util::box_select_rect(
         camera,
@@ -509,7 +509,7 @@ pub fn box_select(
     if !selected.is_empty() {
         selection.select_multiple(&mut commands, &selected);
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn cancel_box_select(mut box_state: ResMut<BoxSelectState>) {

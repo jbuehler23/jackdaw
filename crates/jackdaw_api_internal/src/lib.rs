@@ -1,5 +1,3 @@
-#![feature(try_trait_v2)]
-#![feature(try_trait_v2_residual)]
 //! Public API for Jackdaw editor extensions.
 //!
 //! Extensions are entities. An extension entity holds an [`lifecycle::Extension`]
@@ -109,9 +107,9 @@ pub mod prelude {
         },
         macros::operator,
         operator::{
-            CallOperatorSettings, ExecutionContext, Operator, OperatorCommandsExt as _,
-            OperatorParameters, OperatorResult, OperatorSignature, OperatorSystemId,
-            OperatorWorldExt as _, ParamSpec,
+            CallOperatorSettings, ExecutionContext, IntoOperatorResult, Operator,
+            OperatorCommandsExt as _, OperatorParameters, OperatorResult, OperatorSignature,
+            OperatorSystemId, OperatorWorldExt as _, ParamSpec,
         },
         pie::PlayState,
         runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems},

@@ -21,10 +21,10 @@ pub mod prelude {
     pub use jackdaw_api::prelude::{
         ButtonProps, CallOperatorError, CallOperatorSettings, DefinitionAssetType,
         DefinitionAssetTypes, ExecutionContext, ExtensionInputContext, ExtensionKind,
-        ExtensionPoint, ExtensionRegistrar, Icon, JackdawExtension, MenuEntryDescriptor, Operator,
-        OperatorParameters, OperatorResult, OperatorSignature, OperatorSystemId, PanelContext,
-        ParamSpec, RefreshOperatorButtons, TopLevelMenu, WidgetDefinition,
-        WidgetInstantiateContext, WidgetRegistry, WindowDescriptor, button,
+        ExtensionPoint, ExtensionRegistrar, Icon, IntoOperatorResult, JackdawExtension,
+        MenuEntryDescriptor, Operator, OperatorParameters, OperatorResult, OperatorSignature,
+        OperatorSystemId, PanelContext, ParamSpec, RefreshOperatorButtons, TopLevelMenu,
+        WidgetDefinition, WidgetInstantiateContext, WidgetRegistry, WindowDescriptor, button,
     };
     pub use jackdaw_api::ui::ButtonPropsOpExt as _;
     pub use jackdaw_api_macros::extension_operator as operator;

@@ -154,13 +154,13 @@ pub(crate) fn terrain_shape_cell_size(
     params: In<OperatorParameters>,
     selection: Res<Selection>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
     let cell_size = clamp_cell_size(params.as_float("value")? as f32);
     commands.queue(move |world: &mut World| {
         commit_shape(world, entity, cell_size);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[cfg(test)]

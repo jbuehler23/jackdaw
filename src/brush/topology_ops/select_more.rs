@@ -19,9 +19,9 @@ pub(crate) fn brush_select_more(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = selection.active_brush?;
-    let halfedge = halfedge_q.get(brush_entity)?;
+    let halfedge = halfedge_q.get(brush_entity).ok()?;
     let mesh = &halfedge.mesh;
 
     match *edit_mode {
@@ -32,7 +32,7 @@ pub(crate) fn brush_select_more(
                 .unwrap_or_default();
             let result = jackdaw_select::grow_verts(mesh, &halfedge.vert_keys, &current);
             selection.sub_mut(brush_entity).vertices = result;
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
             let current: Vec<(usize, usize)> = selection
@@ -41,7 +41,7 @@ pub(crate) fn brush_select_more(
                 .unwrap_or_default();
             let result = jackdaw_select::grow_edges(mesh, &halfedge.vert_keys, &current);
             selection.sub_mut(brush_entity).edges = result;
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {
             let current: Vec<usize> = selection
@@ -50,9 +50,9 @@ pub(crate) fn brush_select_more(
                 .unwrap_or_default();
             let result = jackdaw_select::grow_faces(mesh, &halfedge.face_keys, &current);
             selection.sub_mut(brush_entity).faces = result;
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
-        _ => OperatorResult::Cancelled,
+        _ => None,
     }
 }
 

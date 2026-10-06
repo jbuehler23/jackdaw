@@ -302,14 +302,14 @@ pub(crate) fn terrain_scatter_clear(
 pub(crate) fn terrain_scatter_adopt(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let terrain = params.as_str("terrain").map(str::to_string);
     let key = params.as_str("key").map(str::to_string);
     commands.queue(move |world: &mut World| {
         adopt_group(world, entity, terrain.as_deref(), key.as_deref());
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Turn one stored placement back into an editable entity, the inverse of
@@ -331,14 +331,14 @@ pub(crate) fn terrain_scatter_adopt(
 pub(crate) fn terrain_scatter_promote(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let terrain = params.as_str("terrain").map(str::to_string);
     let key = params.as_str("key").map(str::to_string);
     let index = usize::try_from(params.as_int("index").unwrap_or(0)).ok()?;
     commands.queue(move |world: &mut World| {
         promote_placement(world, terrain.as_deref(), key.as_deref(), index);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Select a scatter group by its stamp key, so the outliner and the
@@ -403,13 +403,13 @@ pub(crate) fn terrain_scatter_group_select(
 pub(crate) fn terrain_scatter_asset_add(
     params: In<OperatorParameters>,
     mut state: ResMut<TerrainScatterState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let path = match params.as_str("path").filter(|p| !p.trim().is_empty()) {
         Some(path) => path.trim().to_string(),
         None => state.asset_draft.trim().to_string(),
     };
     if path.is_empty() || state.assets.iter().any(|asset| asset.path == path) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let materials = match params.as_str("materials") {
         Some(text) => parse_materials(text)?,
@@ -421,7 +421,7 @@ pub(crate) fn terrain_scatter_asset_add(
         materials,
     });
     state.asset_draft.clear();
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Remove a model from the scatter palette.
@@ -435,13 +435,13 @@ pub(crate) fn terrain_scatter_asset_add(
 pub(crate) fn terrain_scatter_asset_remove(
     params: In<OperatorParameters>,
     mut state: ResMut<TerrainScatterState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let index = usize::try_from(params.as_int("index")?).ok()?;
     if index >= state.assets.len() {
-        return OperatorResult::Cancelled;
+        return None;
     }
     state.assets.remove(index);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Set or clear one material override on a scatter palette entry.
@@ -460,11 +460,11 @@ pub(crate) fn terrain_scatter_asset_remove(
 pub(crate) fn terrain_scatter_asset_material(
     params: In<OperatorParameters>,
     mut state: ResMut<TerrainScatterState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let index = usize::try_from(params.as_int("index")?).ok()?;
     let name = params.as_str("name")?.trim().to_string();
     if name.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let asset = state.assets.get_mut(index)?;
     match params
@@ -479,7 +479,7 @@ pub(crate) fn terrain_scatter_asset_material(
             asset.materials.remove(&name);
         }
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Set or clear one material override on a model a terrain's stored scatter draws.
@@ -860,11 +860,11 @@ fn poll_layout_pick(world: &mut World) {
 pub(crate) fn terrain_scatter_asset_toggle(
     params: In<OperatorParameters>,
     mut state: ResMut<TerrainScatterState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let index = usize::try_from(params.as_int("index")?).ok()?;
     let asset = state.assets.get_mut(index)?;
     asset.active = !asset.active;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Include or exclude one mask palette value.
@@ -884,7 +884,7 @@ pub(crate) fn terrain_scatter_value_toggle(
     selection: Res<Selection>,
     terrains: Query<&jackdaw_scene_types::Terrain>,
     mut state: ResMut<TerrainScatterState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let row = usize::try_from(params.as_int("index")?).ok()?;
     let terrain = terrains.get(selection.primary()?).ok()?;
     let value = terrain
@@ -902,7 +902,7 @@ pub(crate) fn terrain_scatter_value_toggle(
             state.accept.sort_unstable();
         }
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Randomise rotation about Y, or stop doing so.

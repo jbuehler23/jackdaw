@@ -21,9 +21,9 @@ pub(crate) fn brush_select_invert(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let brush_entity = selection.active_brush?;
-    let halfedge = halfedge_q.get(brush_entity)?;
+    let halfedge = halfedge_q.get(brush_entity).ok()?;
 
     match *edit_mode {
         EditMode::BrushEdit(BrushEditMode::Vertex) => {
@@ -34,7 +34,7 @@ pub(crate) fn brush_select_invert(
                 .unwrap_or_default();
             selection.sub_mut(brush_entity).vertices =
                 (0..total).filter(|i| !current.contains(i)).collect();
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
         EditMode::BrushEdit(BrushEditMode::Edge) => {
             let mut all_edges: Vec<(usize, usize)> = Vec::with_capacity(halfedge.mesh.edges.len());
@@ -63,7 +63,7 @@ pub(crate) fn brush_select_invert(
                 .into_iter()
                 .filter(|p| !current.contains(p))
                 .collect();
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
         EditMode::BrushEdit(BrushEditMode::Face) => {
             let total = halfedge.face_keys.len();
@@ -73,9 +73,9 @@ pub(crate) fn brush_select_invert(
                 .unwrap_or_default();
             selection.sub_mut(brush_entity).faces =
                 (0..total).filter(|i| !current.contains(i)).collect();
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
-        _ => OperatorResult::Cancelled,
+        _ => None,
     }
 }
 

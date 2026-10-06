@@ -70,16 +70,16 @@ pub(crate) fn clip_loop_mode(
     params: In<OperatorParameters>,
     selected: Res<SelectedClip>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let Some(mode) = params.as_str("mode").and_then(LoopMode::from_name) else {
         warn!("clip.loop_mode: `mode` has to be `clamp` or `wrap`");
-        return OperatorResult::Cancelled;
+        return None;
     };
     let clip = selected.0?;
     commands.queue(move |world: &mut World| {
         set_field(world, clip, CLIP, "loop_mode", serde_json::json!(mode));
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Put a named moment on the clip.
@@ -102,7 +102,7 @@ pub(crate) fn clip_event_add(
     cursor: Res<TimelineCursor>,
     snap: Res<TimelineSnap>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let row = event_row(&selected, &imported, &preview)?;
     let time = params
         .as_float("time")
@@ -116,7 +116,7 @@ pub(crate) fn clip_event_add(
     commands.queue(move |world: &mut World| {
         run_event_edit(world, ClipEventEdit::adding(row, time, name));
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Take away the clip event nearest the playhead.
@@ -137,7 +137,7 @@ pub(crate) fn clip_event_remove(
     placed: Query<(), With<Transform>>,
     events: Query<&ClipEvent>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let row = event_row(&selected, &imported, &preview)?;
     let holder = match &row {
         EventRow::Authored(clip) => *clip,
@@ -173,7 +173,7 @@ pub(crate) fn clip_event_remove(
             },
         );
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Where an event placed now would go, which is nowhere while a library clip
@@ -218,14 +218,14 @@ pub(crate) fn clip_track_enable(
     chosen: Res<SelectedTrack>,
     tracks: Query<&AnimationTrack>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let track = params.as_entity("track").or(chosen.0)?;
     let held = tracks.get(track).ok()?;
     let enabled = params.as_bool("enabled").unwrap_or(!held.enabled);
     commands.queue(move |world: &mut World| {
         set_field(world, track, TRACK, "enabled", serde_json::json!(enabled));
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Say how a track reads between its keys.
@@ -248,7 +248,7 @@ pub(crate) fn clip_track_interpolation(
     chosen: Res<SelectedTrack>,
     tracks: Query<&AnimationTrack>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let track = params.as_entity("track").or(chosen.0)?;
     let held = tracks.get(track).ok()?;
     let mode = match params.as_str("mode") {
@@ -256,7 +256,7 @@ pub(crate) fn clip_track_interpolation(
             Some(mode) => mode,
             None => {
                 warn!("clip.track.interpolation: no mode is called `{name}`");
-                return OperatorResult::Cancelled;
+                return None;
             }
         },
         None => held.interpolation.next(),
@@ -270,7 +270,7 @@ pub(crate) fn clip_track_interpolation(
             serde_json::json!(mode),
         );
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Park the playhead at a time.
@@ -292,19 +292,19 @@ pub(crate) fn clip_seek(
     params: In<OperatorParameters>,
     snap: Res<TimelineSnap>,
     mut seek: MessageWriter<jackdaw_animation::AnimationSeek>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let wanted = match params.as_float("time") {
         Some(time) => time as f32,
         None => {
             let frame = params.as_float("frame")? as f32;
             if snap.rate <= 0.0 {
-                return OperatorResult::Cancelled;
+                return None;
             }
             frame / snap.rate
         }
     };
     seek.write(jackdaw_animation::AnimationSeek(wanted.max(0.0)));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Set the rate the sheet rounds a time to, and whether it rounds at all.
@@ -373,7 +373,7 @@ pub(crate) fn clip_select(
     children: Query<&Children>,
     clips: Query<(), With<Clip>>,
     names: Query<&Name>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity").or_else(|| selection.primary())?;
     let wanted = params.as_str("name").filter(|name| !name.is_empty());
     let clip = children
@@ -388,7 +388,7 @@ pub(crate) fn clip_select(
         })?;
     selected.0 = Some(clip);
     dirty.0 = true;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Turn the onion skin on or off.
@@ -420,10 +420,10 @@ pub(crate) fn clip_onion_skin(
 pub(crate) fn clip_zoom(
     params: In<OperatorParameters>,
     mut zoom: ResMut<TimelineZoom>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let factor = params.as_float("factor")?;
     zoom.0 = (factor as f32).clamp(1.0, MAX_ZOOM);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn a_clip_is_up(selected: Res<SelectedClip>) -> bool {

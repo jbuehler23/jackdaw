@@ -76,9 +76,9 @@ pub(crate) fn brush_extrude_region(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_faces: Vec<usize> = selection
@@ -86,11 +86,11 @@ pub(crate) fn brush_extrude_region(
         .map(|s| s.faces.clone())
         .unwrap_or_default();
     if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
     let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(sel_faces.len());
     for &face_idx in &sel_faces {
         if let Some(&fk) = halfedge.face_keys.get(face_idx) {
@@ -98,7 +98,7 @@ pub(crate) fn brush_extrude_region(
         }
     }
     if mesh_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Extrude each selected face and reconcile, capturing each new top face's
@@ -107,7 +107,7 @@ pub(crate) fn brush_extrude_region(
     // cap (so `result.top_face == fk`), and its side quads inherit that
     // `material_idx`; the top face therefore lands at the topology index
     // `count(faces with material_idx < M)` after flatten.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     let source = brush.faces.last().cloned().unwrap_or_default();
     let original_face_count = brush.faces.len();
     let top_material_idxs: Vec<u32> = apply_topology_edit(
@@ -151,7 +151,7 @@ pub(crate) fn brush_extrude_region(
         selection.sub_mut(brush_entity).faces = new_top_indices;
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_extrude_region(
@@ -197,7 +197,7 @@ pub(crate) fn brush_extrude(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     // Ui-logical cursor; dragging outside the viewport panel should not
     // cancel the modal (matches inset / loop_cut behavior).
     let cursor_pos = cursor.get()?;
@@ -205,7 +205,7 @@ pub(crate) fn brush_extrude(
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let modal_sel_faces: Vec<usize> = selection
@@ -213,11 +213,11 @@ pub(crate) fn brush_extrude(
             .map(|s| s.faces.clone())
             .unwrap_or_default();
         if modal_sel_faces.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         let mut face_keys: Vec<FaceKey> = Vec::with_capacity(modal_sel_faces.len());
         for &face_idx in &modal_sel_faces {
@@ -226,7 +226,7 @@ pub(crate) fn brush_extrude(
             }
         }
         if face_keys.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let brush_xform = brush_transforms.get(brush_entity).ok();
@@ -251,7 +251,7 @@ pub(crate) fn brush_extrude(
         modal_state.current_amount = 0.0;
         modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update amount, mutate preview, or commit ---
@@ -262,7 +262,7 @@ pub(crate) fn brush_extrude(
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = ExtrudeModalState::default();
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Signed projection of cursor motion onto the screen-normal direction.
@@ -291,7 +291,7 @@ pub(crate) fn brush_extrude(
     if mouse.just_pressed(MouseButton::Left) {
         let Some(brush_entity) = modal_state.brush_entity else {
             *modal_state = ExtrudeModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Degenerate zero-amount commit: treat as no-op cancel so we don't
@@ -300,12 +300,12 @@ pub(crate) fn brush_extrude(
         if modal_state.current_amount.abs() < 1e-4 {
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = ExtrudeModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let Ok(brush) = brushes.get(brush_entity).cloned() else {
             *modal_state = ExtrudeModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         // Chain selection: write the new top face indices into
@@ -322,10 +322,10 @@ pub(crate) fn brush_extrude(
         }
 
         *modal_state = ExtrudeModalState::default();
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state. Called when the

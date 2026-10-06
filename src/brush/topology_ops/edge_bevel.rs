@@ -81,13 +81,13 @@ pub(crate) fn brush_edge_bevel(
     cursor: crate::viewport::UiCursorPos,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let cursor_pos = cursor.get()?;
 
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let sel_edges: Vec<(usize, usize)> = selection
@@ -95,11 +95,11 @@ pub(crate) fn brush_edge_bevel(
             .map(|s| s.edges.clone())
             .unwrap_or_default();
         if sel_edges.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         // Resolve HalfedgeMesh EdgeKeys for every selected cache edge pair.
         let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
@@ -115,7 +115,7 @@ pub(crate) fn brush_edge_bevel(
             }
         }
         if edge_keys.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let max_width = compute_max_bevel_width(&halfedge.mesh, &edge_keys);
@@ -128,7 +128,7 @@ pub(crate) fn brush_edge_bevel(
         modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
         modal_state.max_width = max_width;
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update width, mutate preview, or commit ---
@@ -139,7 +139,7 @@ pub(crate) fn brush_edge_bevel(
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = EdgeBevelModalState::default();
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Cursor distance from the initial position drives the width. Any drag
@@ -173,14 +173,14 @@ pub(crate) fn brush_edge_bevel(
         if modal_state.current_width < 1e-5 {
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = EdgeBevelModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         *modal_state = EdgeBevelModalState::default();
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state. Called when the

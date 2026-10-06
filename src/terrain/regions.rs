@@ -448,12 +448,12 @@ pub(crate) fn terrain_region_select(
     selection: Res<Selection>,
     terrains: Query<(), With<jackdaw_scene_types::Terrain>>,
     mut view: ResMut<TerrainRegionView>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary().filter(|e| terrains.contains(*e))?;
     let x = i32::try_from(params.as_int("x")?).ok()?;
     let z = i32::try_from(params.as_int("z")?).ok()?;
     view.active = Some((entity, RegionCoord::new(x, z)));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Show or hide the region boundaries. View state, no history entry.
@@ -483,9 +483,9 @@ pub(crate) fn terrain_region_toggle_grid(
 pub(crate) fn terrain_region_visibility(
     params: In<OperatorParameters>,
     mut view: ResMut<TerrainRegionView>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     view.visibility = RegionVisibility::from_param(params.as_str("mode")?)?;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 #[cfg(test)]

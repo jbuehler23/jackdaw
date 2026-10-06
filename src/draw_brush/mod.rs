@@ -231,13 +231,13 @@ fn is_drawing_cut(keybind_focus: KeybindFocus, draw_state: Res<DrawBrushState>) 
 pub(crate) fn draw_brush_toggle_mode(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let active = draw_state.active.as_mut()?;
     active.mode = match active.mode {
         DrawMode::Add => DrawMode::Cut,
         DrawMode::Cut => DrawMode::Add,
     };
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Close the in-progress polygon and switch to extruding depth.
@@ -253,13 +253,13 @@ pub(crate) fn draw_brush_commit_polygon(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
     vp: ViewportCursor,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let active = draw_state.active.as_mut()?;
     if active.polygon_vertices.len() < 3 {
-        return OperatorResult::Cancelled;
+        return None;
     }
     if polygon_self_intersects_on_plane(&active.polygon_vertices, &active.plane) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let viewport_cursor = (|| {
         let cursor_pos = vp.cursor()?;
@@ -271,7 +271,7 @@ pub(crate) fn draw_brush_commit_polygon(
     active.phase = DrawPhase::ExtrudingDepth;
     active.extrude_start_cursor = viewport_cursor.unwrap_or(Vec2::ZERO);
     active.depth = 0.0;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Drop the last placed polygon vertex, falling back to first-corner
@@ -287,13 +287,13 @@ pub(crate) fn draw_brush_commit_polygon(
 pub(crate) fn draw_brush_remove_last_vertex(
     _: In<OperatorParameters>,
     mut draw_state: ResMut<DrawBrushState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let active = draw_state.active.as_mut()?;
     active.polygon_vertices.pop();
     if active.polygon_vertices.is_empty() {
         active.phase = DrawPhase::PlacingFirstCorner;
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Cancel an in-progress Cut-mode draw. (Add-mode cancels through
@@ -326,7 +326,7 @@ fn confirm_draw_brush(
     mut draw_state: ResMut<DrawBrushState>,
     vp: ViewportCursor,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let active = draw_state.active.as_mut()?;
 
     // Verify cursor is in viewport
@@ -334,7 +334,7 @@ fn confirm_draw_brush(
     let camera_entity = active.camera.or_else(|| vp.camera_entity());
     let viewport_entity = active.viewport.or_else(|| vp.viewport_entity());
     let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
-        return OperatorResult::Cancelled;
+        return None;
     };
     let (camera, _) = vp.camera_for(camera_entity)?;
     let viewport_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
@@ -351,13 +351,13 @@ fn confirm_draw_brush(
         }
         DrawPhase::DrawingFootprint => {
             if active.drag_footprint {
-                return OperatorResult::Cancelled;
+                return None;
             }
             let delta = active.corner2 - active.corner1;
             if delta.dot(active.plane.axis_u).abs() < MIN_FOOTPRINT_SIZE
                 || delta.dot(active.plane.axis_v).abs() < MIN_FOOTPRINT_SIZE
             {
-                return OperatorResult::Cancelled;
+                return None;
             }
             active.phase = DrawPhase::ExtrudingDepth;
             active.extrude_start_cursor = viewport_cursor;
@@ -392,7 +392,7 @@ fn confirm_draw_brush(
                 DrawMode::Add => active.depth.abs() >= MIN_EXTRUDE_DEPTH,
             };
             if !has_depth {
-                return OperatorResult::Cancelled; // No depth, keep extruding
+                return None; // No depth, keep extruding
             }
             let active = active.clone();
             draw_state.active = None;
@@ -410,7 +410,7 @@ fn confirm_draw_brush(
             }
         }
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn is_in_draw_brush_modal(active: ActiveModalQuery) -> bool {

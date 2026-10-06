@@ -2226,16 +2226,16 @@ pub(crate) fn viewport_2d_mode(
 pub(crate) fn viewport_2d_grid(
     params: In<OperatorParameters>,
     mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let size = params.as_float("size")? as f32;
     if !size.is_finite() || size <= 0.0 {
         warn!("viewport2d.grid: 'size' must be a positive number of authored pixels");
-        return OperatorResult::Cancelled;
+        return None;
     }
     let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
     if open.is_empty() {
         warn!("viewport2d.grid: no 2D viewport panel is open to set the grid on");
-        return OperatorResult::Cancelled;
+        return None;
     }
     let wanted = named_panels(&params, "viewport2d.grid", &open);
     let grid = size.clamp(MIN_UI_GRID, MAX_UI_GRID);
@@ -2246,7 +2246,7 @@ pub(crate) fn viewport_2d_grid(
         let view = Ui2dView { grid, ..host.view };
         host.set_view(view);
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Set the 2D viewport's zoom, in stage logical pixels per authored pixel, on
@@ -2268,18 +2268,18 @@ pub(crate) fn viewport_2d_grid(
 pub(crate) fn viewport_2d_zoom(
     params: In<OperatorParameters>,
     mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let zoom = params.as_float("zoom")? as f32;
     if !zoom.is_finite() || zoom <= 0.0 {
         warn!(
             "viewport2d.zoom: 'zoom' must be a positive number of stage pixels per authored pixel"
         );
-        return OperatorResult::Cancelled;
+        return None;
     }
     let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
     if open.is_empty() {
         warn!("viewport2d.zoom: no 2D viewport panel is open to zoom");
-        return OperatorResult::Cancelled;
+        return None;
     }
     let wanted = named_panels(&params, "viewport2d.zoom", &open);
     let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -2291,7 +2291,7 @@ pub(crate) fn viewport_2d_zoom(
         host.set_view(view);
         host.fit_pending = false;
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// The panels of `open` a `panel` parameter names. A value naming no open panel

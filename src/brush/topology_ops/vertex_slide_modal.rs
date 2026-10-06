@@ -114,7 +114,7 @@ pub(crate) fn brush_vertex_slide_modal(
     viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
     snap_settings: Res<SnapSettings>,
     modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     // Ui-logical cursor; dragging outside the viewport panel should not
     // cancel the modal (matches inset / extrude / edge_slide_modal behavior).
     let cursor_pos = cursor.get()?;
@@ -122,7 +122,7 @@ pub(crate) fn brush_vertex_slide_modal(
     // --- First invoke: snapshot and enter modal ---
     if modal_entity.is_none() {
         if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         let brush_entity = selection.active_brush?;
         let sel_verts: Vec<usize> = selection
@@ -130,11 +130,11 @@ pub(crate) fn brush_vertex_slide_modal(
             .map(|s| s.vertices.clone())
             .unwrap_or_default();
         if sel_verts.len() != 1 {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
-        let brush_before = brushes.get(brush_entity).cloned()?;
-        let halfedge = halfedge_q.get(brush_entity)?;
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
 
         let &vert_idx = sel_verts.first()?;
         let &vert_key = halfedge.vert_keys.get(vert_idx)?;
@@ -149,7 +149,7 @@ pub(crate) fn brush_vertex_slide_modal(
             &viewport_query,
         );
         if candidates.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         modal_state.active = true;
@@ -161,7 +161,7 @@ pub(crate) fn brush_vertex_slide_modal(
         modal_state.current_factor = 0.0;
         modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
 
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // --- Subsequent invokes: cancel, update factor, mutate preview, or commit ---
@@ -172,7 +172,7 @@ pub(crate) fn brush_vertex_slide_modal(
         // before clearing modal state.
         restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
         *modal_state = VertexSlideModalState::default();
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     let cursor_delta = cursor_pos - modal_state.start_cursor;
@@ -249,7 +249,7 @@ pub(crate) fn brush_vertex_slide_modal(
             // No chosen edge: treat as no-op cancel.
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = VertexSlideModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         // Degenerate zero-factor commit: treat as no-op cancel so we don't
@@ -258,7 +258,7 @@ pub(crate) fn brush_vertex_slide_modal(
         if modal_state.current_factor.abs() < 1e-4 {
             restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
             *modal_state = VertexSlideModalState::default();
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         // selection.vertices intentionally untouched: vertex_slide preserves
@@ -266,10 +266,10 @@ pub(crate) fn brush_vertex_slide_modal(
         // stable when no verts are added or removed.
 
         *modal_state = VertexSlideModalState::default();
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 /// Cancel handler: restore the brush to its pre-modal state. Called when the

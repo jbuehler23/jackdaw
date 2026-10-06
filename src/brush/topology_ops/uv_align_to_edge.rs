@@ -23,7 +23,7 @@ pub(crate) fn brush_uv_align_to_edge(
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let selected_edges: Vec<(usize, usize)> = selection
         .active_sub()
         .map(|s| s.edges.clone())

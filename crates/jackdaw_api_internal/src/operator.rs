@@ -1,9 +1,4 @@
-use std::{
-    borrow::Cow,
-    collections::BTreeMap,
-    convert::Infallible,
-    ops::{ControlFlow, FromResidual, Residual, Try},
-};
+use std::{borrow::Cow, collections::BTreeMap};
 
 use bevy::ecs::system::{SystemId, SystemState};
 use bevy::prelude::*;
@@ -284,51 +279,34 @@ impl OperatorResult {
     }
 }
 
-pub struct OperatorCancelled;
-
-/// `?`-operator support for operators.
+/// Return types an operator system may have.
 ///
-/// Inside a function returning `OperatorResult`, `?` works on:
-/// - `Option<T>`, `None` becomes [`OperatorResult::Cancelled`].
-/// - `Result<T, E>`, `Err(_)` becomes [`OperatorResult::Cancelled`].
-/// - `OperatorResult`, `Cancelled` propagates; `Finished` / `Running`
-///   continue (the value is discarded).
-impl Try for OperatorResult {
-    type Output = ();
-    type Residual = OperatorCancelled;
+/// Operators return [`OperatorResult`] directly, or `Option<OperatorResult>` /
+/// `Result<OperatorResult, E>` to use `?` on the values they read: `None` and
+/// `Err` cancel the operator.
+pub trait IntoOperatorResult {
+    fn into_operator_result(self) -> OperatorResult;
+}
 
-    fn from_output((): ()) -> Self {
-        OperatorResult::Finished
-    }
-
-    fn branch(self) -> ControlFlow<Self::Residual, ()> {
-        match self {
-            OperatorResult::Finished | OperatorResult::Running => ControlFlow::Continue(()),
-            OperatorResult::Cancelled => ControlFlow::Break(OperatorCancelled),
-        }
+impl IntoOperatorResult for OperatorResult {
+    fn into_operator_result(self) -> OperatorResult {
+        self
     }
 }
 
-impl FromResidual<OperatorCancelled> for OperatorResult {
-    fn from_residual(_: OperatorCancelled) -> Self {
-        OperatorResult::Cancelled
+impl IntoOperatorResult for Option<OperatorResult> {
+    fn into_operator_result(self) -> OperatorResult {
+        self.unwrap_or(OperatorResult::Cancelled)
     }
 }
 
-impl FromResidual<Option<Infallible>> for OperatorResult {
-    fn from_residual(_: Option<Infallible>) -> Self {
-        OperatorResult::Cancelled
+impl<E: std::fmt::Display> IntoOperatorResult for Result<OperatorResult, E> {
+    fn into_operator_result(self) -> OperatorResult {
+        self.unwrap_or_else(|error| {
+            debug!("operator cancelled: {error}");
+            OperatorResult::Cancelled
+        })
     }
-}
-
-impl<E> FromResidual<Result<Infallible, E>> for OperatorResult {
-    fn from_residual(_: Result<Infallible, E>) -> Self {
-        OperatorResult::Cancelled
-    }
-}
-
-impl Residual<()> for OperatorCancelled {
-    type TryType = OperatorResult;
 }
 
 /// Extension trait on [`World`] for calling operators by id.

@@ -275,7 +275,10 @@ fn expand_operator(
             fn register_execute(
                 commands: &mut ::bevy::ecs::system::Commands,
             ) -> #api_crate::prelude::OperatorSystemId {
-                commands.register_system(#fn_name)
+                commands.register_system(::bevy::ecs::system::IntoSystem::map(
+                    ::bevy::ecs::system::IntoSystem::into_system(#fn_name),
+                    #api_crate::prelude::IntoOperatorResult::into_operator_result,
+                ))
             }
 
             #availability_impl

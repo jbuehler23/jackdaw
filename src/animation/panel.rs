@@ -181,9 +181,9 @@ pub(crate) fn animation_panel_tab(
 pub(crate) fn animation_library_select(
     params: In<OperatorParameters>,
     mut state: ResMut<AnimationPanelState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     state.file = Some(params.as_str("file").map(str::to_string)?);
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Append the chosen clip to the selected entity's animation set.

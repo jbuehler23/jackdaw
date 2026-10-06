@@ -25,9 +25,9 @@ pub(crate) fn brush_bridge_edge_loops(
     mut selection: ResMut<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_edges: Vec<(usize, usize)> = selection
@@ -35,10 +35,10 @@ pub(crate) fn brush_bridge_edge_loops(
         .map(|s| s.edges.clone())
         .unwrap_or_default();
     if sel_edges.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
 
     // Map cache edge pairs (a, b) -> HalfedgeMesh EdgeKeys via vert_keys.
     let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
@@ -54,13 +54,13 @@ pub(crate) fn brush_bridge_edge_loops(
         }
     }
     if mesh_edges.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Partition into connected components (BFS over edge adjacency through verts).
     let components = partition_edges_by_connectivity(&halfedge.mesh, &mesh_edges);
     if components.len() != 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let edges_a = &components[0];
     let edges_b = &components[1];
@@ -74,7 +74,7 @@ pub(crate) fn brush_bridge_edge_loops(
     // therefore `count(faces with material_idx < M)`. `into_inner` reborrows the
     // change-detected `Mut<Brush>` as `&mut Brush` so the two fields can be
     // borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     let source = brush.faces.last().cloned().unwrap_or_default();
     let original_face_count = brush.faces.len();
     let new_face_material_idxs: Vec<u32> = apply_topology_edit(
@@ -90,7 +90,8 @@ pub(crate) fn brush_bridge_edge_loops(
                     .collect()
             })
         },
-    )?;
+    )
+    .ok()?;
 
     // Any face the bridge created inherits the previous last face's appearance.
     for new_face in original_face_count..brush.faces.len() {
@@ -117,7 +118,7 @@ pub(crate) fn brush_bridge_edge_loops(
     if !new_face_indices.is_empty() {
         selection.sub_mut(brush_entity).faces = new_face_indices;
     }
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {

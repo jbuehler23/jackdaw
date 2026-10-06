@@ -313,14 +313,14 @@ pub(crate) fn terrain_import_image_add(
     store: Res<TerrainDataStore>,
     mut state: ResMut<TerrainImportState>,
     mut commands: Commands,
-) -> OperatorResult {
-    let terrain = terrains.get(selection.primary()?)?;
+) -> Option<OperatorResult> {
+    let terrain = terrains.get(selection.primary()?).ok()?;
     let asked = params.as_str("kind").unwrap_or_default();
     let Some(kind) = ImportImageKind::parse(asked) else {
-        return refuse(
+        return Some(refuse(
             &mut commands,
             format!("\"{asked}\" is not an image kind; name weight, channel or detail"),
-        );
+        ));
     };
     let offered = import_targets(kind, terrain, store.materials(&terrain.data_path));
     let taken: Vec<&str> = state
@@ -337,23 +337,23 @@ pub(crate) fn terrain_import_image_add(
         (_, Some(target)) => target,
         (ImportImageKind::Channel, None) => "mask".to_string(),
         (ImportImageKind::Weight, None) => {
-            return refuse(
+            return Some(refuse(
                 &mut commands,
                 "add a material to this terrain before importing its weights".to_string(),
-            );
+            ));
         }
         (ImportImageKind::Detail, None) => {
-            return refuse(
+            return Some(refuse(
                 &mut commands,
                 "add a detail layer to this terrain before importing its cover".to_string(),
-            );
+            ));
         }
     };
     state.images_mut(kind).push(ImportImage {
         target,
         path: String::new(),
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Take a row out of one of the import's image lists.
@@ -526,9 +526,9 @@ pub(crate) fn terrain_import(
     state: Res<TerrainImportState>,
     project: Option<Res<ProjectRoot>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = selection.primary()?;
-    let terrain = terrains.get(entity)?.clone();
+    let terrain = terrains.get(entity).ok()?.clone();
 
     match read_images(
         &params.0,
@@ -539,14 +539,14 @@ pub(crate) fn terrain_import(
     ) {
         Ok(import) => {
             commands.queue(move |world: &mut World| apply(world, entity, terrain, import));
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         }
         Err(message) => {
             warn!("{message}");
             commands.queue(move |world: &mut World| {
                 crate::terrain::toast_terrain_notice(world, &message);
             });
-            OperatorResult::Cancelled
+            None
         }
     }
 }
@@ -1091,7 +1091,7 @@ mod tests {
                 .run_system_cached_with(terrain_import, params(pairs))
                 .expect("system runs");
             world.flush();
-            result
+            result.into_operator_result()
         }
 
         fn heights(world: &World) -> Vec<f32> {
@@ -1700,7 +1700,11 @@ mod tests {
                         params(&[("kind", text(kind))]),
                     )
                     .expect("system runs");
-                assert_eq!(added, OperatorResult::Finished, "a {kind} row is added");
+                assert_eq!(
+                    added.into_operator_result(),
+                    OperatorResult::Finished,
+                    "a {kind} row is added"
+                );
                 let aimed = panel
                     .run_system_cached_with(
                         terrain_import_image_target,
@@ -1762,7 +1766,7 @@ mod tests {
                     params(&[("kind", text("channel"))]),
                 )
                 .expect("system runs");
-            assert_eq!(added, OperatorResult::Finished);
+            assert_eq!(added.into_operator_result(), OperatorResult::Finished);
             let before = heights(&world);
 
             assert_eq!(import(&mut world, &[]), OperatorResult::Cancelled);

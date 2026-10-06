@@ -277,12 +277,12 @@ pub fn terrain_sculpt(
     mut history: ResMut<CommandHistory>,
     time: Res<Time>,
     active: ActiveModalQuery,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let TerrainEditMode::Sculpt(tool) = *edit_mode else {
-        return OperatorResult::Cancelled;
+        return None;
     };
     let target = sculpt_state.target?;
-    let (terrain, mut dirty, mut detail_dirty) = terrain_query.get_mut(target)?;
+    let (terrain, mut dirty, mut detail_dirty) = terrain_query.get_mut(target).ok()?;
     // The stroke lands on the cells the terrain holds, so the brush reaches
     // wherever ground has been allocated.
     let resolution = store.grid_shape(terrain).resolution;
@@ -313,7 +313,7 @@ pub fn terrain_sculpt(
                 format!("Terrain {tool:?}"),
             )));
         }
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
 
     if let Some(grid_pos) = sculpt_state.brush_position
@@ -351,7 +351,7 @@ pub fn terrain_sculpt(
             }
         }
     }
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_terrain_sculpt(

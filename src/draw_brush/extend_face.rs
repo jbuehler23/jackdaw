@@ -81,7 +81,7 @@ pub(crate) fn brush_extend_face_to_brush(
     brush_caches: Query<&BrushMeshCache>,
     brush_query: Query<(), With<Brush>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     // Resolve (primary, face_index, targets) depending on edit mode
     let (primary, face_index, targets) = if *edit_mode
         == crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
@@ -100,7 +100,7 @@ pub(crate) fn brush_extend_face_to_brush(
             .filter(|&e| e != primary && brush_query.contains(e))
             .collect();
         if targets.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
         (primary, face_index, targets)
     } else if *edit_mode == crate::brush::EditMode::Object {
@@ -112,7 +112,7 @@ pub(crate) fn brush_extend_face_to_brush(
             .filter(|&e| brush_query.contains(e))
             .collect();
         if selected_brushes.len() < 2 {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let primary = selection.primary().filter(|e| brush_query.contains(*e))?;
@@ -136,7 +136,7 @@ pub(crate) fn brush_extend_face_to_brush(
         let face_index = face_index?;
         (primary, face_index, targets)
     } else {
-        return OperatorResult::Cancelled;
+        return None;
     };
 
     // If we were in face mode, exit it (geometry is about to change, indices become invalid)
@@ -149,7 +149,7 @@ pub(crate) fn brush_extend_face_to_brush(
     commands.queue(move |world: &mut World| {
         extend_face_to_brush_impl(world, primary, &targets_clone, face_index);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Raycast from cursor to find a hovered brush face belonging to the given

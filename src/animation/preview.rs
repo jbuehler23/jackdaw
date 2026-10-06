@@ -137,13 +137,11 @@ pub(crate) fn animation_preview(
     selection: Res<crate::selection::Selection>,
     mut preview: ResMut<AnimationPreview>,
     mut panel: ResMut<AnimationPanelState>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let Some(spec) = params.as_str("clip").filter(|spec| !spec.is_empty()) else {
-        let Some(active) = preview.active.as_mut() else {
-            return OperatorResult::Cancelled;
-        };
+        let active = preview.active.as_mut()?;
         active.playing = true;
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     };
     let (file, clip) = spec.rsplit_once('#')?;
     panel.file = Some(file.to_string());
@@ -155,7 +153,7 @@ pub(crate) fn animation_preview(
         && active.clip == clip
     {
         active.playing = true;
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
     preview.wanted = Some(Request {
         file: file.to_string(),
@@ -166,7 +164,7 @@ pub(crate) fn animation_preview(
         set_owner: None,
         waited: 0,
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Hold the previewed clip on the frame it has reached.

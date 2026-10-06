@@ -26,9 +26,9 @@ pub(crate) fn brush_select_linked(
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
     halfedge_q: Query<&BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_faces: Vec<usize> = selection
@@ -36,9 +36,9 @@ pub(crate) fn brush_select_linked(
         .map(|s| s.faces.clone())
         .unwrap_or_default();
     if sel_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
-    let halfedge = halfedge_q.get(brush_entity)?;
+    let halfedge = halfedge_q.get(brush_entity).ok()?;
 
     // Map each selected cache face index to its HalfedgeMesh FaceKey.
     let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(sel_faces.len());
@@ -48,7 +48,7 @@ pub(crate) fn brush_select_linked(
         }
     }
     if mesh_faces.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // For each starting face, walk linked components. Union all.
@@ -59,7 +59,7 @@ pub(crate) fn brush_select_linked(
         }
     }
     if walked.is_empty() {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Convert FaceKeys back to cache face indices via face_keys.
@@ -71,7 +71,7 @@ pub(crate) fn brush_select_linked(
     }
 
     selection.sub_mut(brush_entity).faces = new_faces;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_select_linked(

@@ -625,15 +625,15 @@ pub fn terrain_paint(
     mut history: ResMut<CommandHistory>,
     time: Res<Time>,
     active: ActiveModalQuery,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != TerrainEditMode::Paint {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let target = paint_state.target?;
 
     match paint_state.domain {
         PaintDomain::Channels => {
-            let (terrain, mut dirty, _) = terrain_query.get_mut(target)?;
+            let (terrain, mut dirty, _) = terrain_query.get_mut(target).ok()?;
             let terrain = terrain.clone();
 
             let erase = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
@@ -675,7 +675,7 @@ pub fn terrain_paint(
                         label: format!("Paint {name}"),
                     }));
                 }
-                return OperatorResult::Finished;
+                return Some(OperatorResult::Finished);
             }
 
             if let Some(grid_pos) = paint_state.brush_position {
@@ -702,10 +702,10 @@ pub fn terrain_paint(
                     }
                 }
             }
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         }
         PaintDomain::Textures => {
-            let (terrain, _dirty, _) = terrain_query.get_mut(target)?;
+            let (terrain, _dirty, _) = terrain_query.get_mut(target).ok()?;
             let terrain = terrain.clone();
             // The stroke lands on the cells the terrain holds, so the brush
             // reaches wherever ground has been allocated.
@@ -742,7 +742,7 @@ pub fn terrain_paint(
                 ) {
                     history.push_executed(Box::new(entry));
                 }
-                return OperatorResult::Finished;
+                return Some(OperatorResult::Finished);
             }
 
             // `active_texture_id` can be stale against the live list, and
@@ -786,10 +786,10 @@ pub fn terrain_paint(
                     );
                 }
             }
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         }
         PaintDomain::Color => {
-            let (terrain, _dirty, _) = terrain_query.get_mut(target)?;
+            let (terrain, _dirty, _) = terrain_query.get_mut(target).ok()?;
             let terrain = terrain.clone();
             let resolution = store.grid_shape(&terrain).resolution;
             // Ctrl paints white, the layer's identity, so the eraser is
@@ -822,7 +822,7 @@ pub fn terrain_paint(
                 ) {
                     history.push_executed(Box::new(entry));
                 }
-                return OperatorResult::Finished;
+                return Some(OperatorResult::Finished);
             }
 
             if let Some(grid_pos) = paint_state.brush_position
@@ -841,10 +841,10 @@ pub fn terrain_paint(
                     tint,
                 );
             }
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         }
         PaintDomain::Detail => {
-            let (terrain, _dirty, detail_dirty) = terrain_query.get_mut(target)?;
+            let (terrain, _dirty, detail_dirty) = terrain_query.get_mut(target).ok()?;
             let terrain = terrain.clone();
             let index = super::detail::selected_detail_layer(&terrain, paint_state.detail_layer)?;
             let layer = terrain.detail[index].clone();
@@ -886,7 +886,7 @@ pub fn terrain_paint(
                         label: "Paint Detail".to_string(),
                     }));
                 }
-                return OperatorResult::Finished;
+                return Some(OperatorResult::Finished);
             }
 
             if let Some(grid_pos) = paint_state.brush_position
@@ -919,7 +919,7 @@ pub fn terrain_paint(
                     }
                 }
             }
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         }
     }
 }
@@ -1267,6 +1267,7 @@ mod tests {
                 OperatorParameters(std::collections::BTreeMap::new()),
             )
             .expect("system runs")
+            .into_operator_result()
     }
 
     /// An `active_texture_id` past the terrain's slot count does not

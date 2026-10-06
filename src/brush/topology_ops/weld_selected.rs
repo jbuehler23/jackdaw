@@ -26,9 +26,9 @@ pub(crate) fn brush_weld_selected(
     selection: Res<BrushSelection>,
     mut brushes: Query<&mut Brush>,
     mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let brush_entity = selection.active_brush?;
     let sel_verts: Vec<usize> = selection
@@ -36,10 +36,10 @@ pub(crate) fn brush_weld_selected(
         .map(|s| s.vertices.clone())
         .unwrap_or_default();
     if sel_verts.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
-    let mut halfedge = halfedge_q.get_mut(brush_entity)?;
+    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
 
     // Map cache vertex indices to HalfedgeMesh VertKeys.
     let mut vert_keys = Vec::with_capacity(sel_verts.len());
@@ -49,7 +49,7 @@ pub(crate) fn brush_weld_selected(
         }
     }
     if vert_keys.len() < 2 {
-        return OperatorResult::Cancelled;
+        return None;
     }
 
     // Compute centroid of selected verts.
@@ -70,7 +70,7 @@ pub(crate) fn brush_weld_selected(
 
     // Weld the coincident verts and reconcile. The tiny threshold merges only
     // the verts just moved together, not distant ones.
-    let brush = brushes.get_mut(brush_entity)?.into_inner();
+    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
     apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
@@ -80,7 +80,7 @@ pub(crate) fn brush_weld_selected(
         },
     );
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 pub(crate) fn can_run_weld(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {

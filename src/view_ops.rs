@@ -428,7 +428,7 @@ pub(crate) fn view_set_axis(
         With<MainViewportCamera>,
     >,
     mut grids: Query<&mut Transform, (With<InfiniteGrid>, Without<MainViewportCamera>)>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let axis = read_int_param(&params, "axis").unwrap_or(1);
     let sign_int = read_int_param(&params, "sign").unwrap_or(1);
     let sign = if sign_int < 0 { -1.0 } else { 1.0 };
@@ -437,7 +437,7 @@ pub(crate) fn view_set_axis(
         0 => Vec3::X,
         1 => Vec3::Y,
         2 => Vec3::Z,
-        _ => return OperatorResult::Cancelled,
+        _ => return None,
     } * sign;
 
     // For top/bottom views the camera's forward is parallel to world
@@ -446,7 +446,7 @@ pub(crate) fn view_set_axis(
     let up = if axis == 1 { Vec3::Z * -sign } else { Vec3::Y };
 
     let camera_entity = active.camera?;
-    let (mut transform, mut projection, grid_link) = cameras.get_mut(camera_entity)?;
+    let (mut transform, mut projection, grid_link) = cameras.get_mut(camera_entity).ok()?;
 
     transform.translation = dir * ORTHO_DISTANCE;
     *transform = transform.looking_at(Vec3::ZERO, up);
@@ -463,7 +463,7 @@ pub(crate) fn view_set_axis(
         grid_tf.rotation = grid_rotation_for_axis(axis);
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Orient a viewport grid so its plane faces the camera for axis-aligned ortho views.
@@ -493,9 +493,9 @@ pub(crate) fn view_toggle_persp_ortho(
     lens: Res<CameraPreferences>,
     mut cameras: Query<(&mut Projection, Option<&ViewportGrid>), With<MainViewportCamera>>,
     mut grids: Query<&mut Transform, (With<InfiniteGrid>, Without<MainViewportCamera>)>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let camera_entity = active.camera?;
-    let (mut projection, grid_link) = cameras.get_mut(camera_entity)?;
+    let (mut projection, grid_link) = cameras.get_mut(camera_entity).ok()?;
     let now_persp = matches!(projection.as_ref(), Projection::Orthographic(_));
     *projection = if now_persp {
         perspective(&lens)
@@ -513,7 +513,7 @@ pub(crate) fn view_toggle_persp_ortho(
         grid_tf.rotation = Quat::IDENTITY;
     }
 
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Center the active viewport's camera on the primary selection,
@@ -535,11 +535,11 @@ pub(crate) fn view_frame_selected(
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
     let primary = selection.primary()?;
-    let global_tf = selected_transforms.get(primary)?;
-    let mut transform = cameras.get_mut(camera_entity)?;
+    let global_tf = selected_transforms.get(primary).ok()?;
+    let mut transform = cameras.get_mut(camera_entity).ok()?;
 
     // The room the selection occupies when the renderer has bounds for it; otherwise its
     // transform, which is all a light or an empty has.
@@ -560,7 +560,7 @@ pub(crate) fn view_frame_selected(
     transform.translation = target - forward * dist;
     *transform = transform.looking_at(target, Vec3::Y);
     commands.entity(camera_entity).insert(ViewportFocus(target));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// The point an orbit turns around. A camera transform does not carry one, so
@@ -640,17 +640,17 @@ pub(crate) fn view_look_at(
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<MainViewportCamera>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
     let axis = |key: &str| params.as_float(key).unwrap_or(0.0) as f32;
     let eye = Vec3::new(axis("eye_x"), axis("eye_y"), axis("eye_z"));
     let target = Vec3::new(axis("target_x"), axis("target_y"), axis("target_z"));
     if eye == target {
         warn!("view.look_at: the eye and the target are the same point");
-        return OperatorResult::Cancelled;
+        return None;
     }
 
-    let (mut transform, mut projection) = cameras.get_mut(camera_entity)?;
+    let (mut transform, mut projection) = cameras.get_mut(camera_entity).ok()?;
     transform.translation = eye;
     // Straight down needs a hint that is not world up, or `looking_at` has no
     // way to spell the roll.
@@ -662,7 +662,7 @@ pub(crate) fn view_look_at(
     *transform = transform.looking_at(target, up);
     *projection = perspective(&lens);
     commands.entity(camera_entity).insert(ViewportFocus(target));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Turn the active viewport's camera around its focus point. Angles are in
@@ -693,9 +693,9 @@ pub(crate) fn view_orbit(
         With<MainViewportCamera>,
     >,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
-    let (mut transform, mut projection, focus) = cameras.get_mut(camera_entity)?;
+    let (mut transform, mut projection, focus) = cameras.get_mut(camera_entity).ok()?;
 
     let asked_distance = params.as_float("distance").map(|d| d as f32);
     let focus_point = orbit_focus(
@@ -725,7 +725,7 @@ pub(crate) fn view_orbit(
     commands
         .entity(camera_entity)
         .insert(ViewportFocus(focus_point));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// A dolly under way: how far is left and how far each frame travels.
@@ -787,11 +787,11 @@ pub(crate) fn view_dolly(
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
     let distance = params.as_float("distance").unwrap_or(0.0) as f32;
     if distance == 0.0 {
-        return OperatorResult::Cancelled;
+        return None;
     }
     let frames = params.as_int("frames").unwrap_or(1).max(1) as u32;
     if frames > 1 {
@@ -800,12 +800,12 @@ pub(crate) fn view_dolly(
             per_frame: distance / frames as f32,
             frames_left: frames,
         });
-        return OperatorResult::Finished;
+        return Some(OperatorResult::Finished);
     }
-    let mut transform = cameras.get_mut(camera_entity)?;
+    let mut transform = cameras.get_mut(camera_entity).ok()?;
     let forward = transform.forward().as_vec3();
     transform.translation += forward * distance;
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 fn dolly_available(
@@ -833,9 +833,9 @@ pub(crate) fn view_frame_all(
     camera_entities: Query<Entity, With<MainViewportCamera>>,
     mut cameras: Query<&mut Transform, With<MainViewportCamera>>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let camera_entity = resolve_frame_camera(&active, &camera_entities)?;
-    let mut transform = cameras.get_mut(camera_entity)?;
+    let mut transform = cameras.get_mut(camera_entity).ok()?;
 
     // The scene's extent, not just where its entities sit: a terrain is one entity at one
     // point that reaches for a kilometre, and framing it by that point puts the camera
@@ -869,7 +869,7 @@ pub(crate) fn view_frame_all(
     transform.translation = center - forward * dist;
     *transform = transform.looking_at(center, Vec3::Y);
     commands.entity(camera_entity).insert(ViewportFocus(center));
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// World-space bounds of `entity` and everything under it, from the `Aabb`s the
@@ -1033,7 +1033,7 @@ mod resolve_frame_camera_tests {
         let outcome = world
             .run_system_cached_with(view_dolly, params)
             .expect("the operator runs");
-        assert!(matches!(outcome, OperatorResult::Finished));
+        assert!(matches!(outcome, Some(OperatorResult::Finished)));
 
         let mut cameras = world.query_filtered::<&Transform, With<MainViewportCamera>>();
         let moved = cameras.single(&world).expect("the one camera");
@@ -1074,7 +1074,7 @@ mod resolve_frame_camera_tests {
         let outcome = world
             .run_system_cached_with(view_dolly, params)
             .expect("the operator runs");
-        assert!(matches!(outcome, OperatorResult::Finished));
+        assert!(matches!(outcome, Some(OperatorResult::Finished)));
 
         let travelled = |world: &mut World| {
             let mut cameras = world.query_filtered::<&Transform, With<MainViewportCamera>>();

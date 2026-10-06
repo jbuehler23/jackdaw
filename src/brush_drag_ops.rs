@@ -211,11 +211,11 @@ pub fn brush_face_drag(
     modal: Option<Single<Entity, With<ActiveModalOperator>>>,
     mut halfedge_q: Query<&mut crate::brush::BrushHalfedge>,
     mut override_cursor: ResMut<OverrideCursor>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let modal_running = modal.is_some();
     if modal_running {
         if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
             if drag_state.active {
@@ -240,7 +240,7 @@ pub fn brush_face_drag(
                 *edit_mode = EditMode::Object;
                 brush_selection.clear();
             }
-            return OperatorResult::Finished;
+            return Some(OperatorResult::Finished);
         }
     }
 
@@ -334,7 +334,7 @@ pub fn brush_face_drag(
                     brush_box_state.pending = Some(cursor_pos);
                     brush_box_state.shift = shift;
                 }
-                return OperatorResult::Cancelled;
+                return None;
             };
 
             brush_selection.active_brush = Some(brush_entity);
@@ -348,7 +348,7 @@ pub fn brush_face_drag(
                 } else {
                     sub.faces.push(face_idx);
                 }
-                return OperatorResult::Cancelled;
+                return None;
             }
 
             // Plain click: clear every brush's sub-selection, then select the clicked face.
@@ -360,15 +360,15 @@ pub fn brush_face_drag(
             });
             drag_state.drag_camera = Some(camera_entity);
             drag_state.drag_viewport = Some(viewport_entity);
-            return OperatorResult::Running;
+            return Some(OperatorResult::Running);
         }
 
         // Object-mode quick-action: single brush path (unchanged).
         let brush_entity = selection
             .primary()
             .filter(|&e| params.brushes.contains(e))?;
-        let cache = params.brush_caches.get(brush_entity)?;
-        let (_, brush_global) = params.brushes.get(brush_entity)?;
+        let cache = params.brush_caches.get(brush_entity).ok()?;
+        let (_, brush_global) = params.brushes.get(brush_entity).ok()?;
 
         let mut best_face = None;
         let mut best_depth = f32::MAX;
@@ -401,9 +401,7 @@ pub fn brush_face_drag(
             }
         }
 
-        let Some(face_idx) = best_face else {
-            return OperatorResult::Cancelled;
-        };
+        let face_idx = best_face?;
 
         *edit_mode = EditMode::BrushEdit(BrushEditMode::Face);
         brush_selection.active_brush = Some(brush_entity);
@@ -421,7 +419,7 @@ pub fn brush_face_drag(
         });
         drag_state.drag_camera = Some(camera_entity);
         drag_state.drag_viewport = Some(viewport_entity);
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // Subsequent invoke: pending -> active promotion, and per-frame drag math.
@@ -484,7 +482,7 @@ pub fn brush_face_drag(
             .unwrap_or_default();
         match drag_state.extrude_mode {
             FaceExtrudeMode::Merge => {
-                let (mut brush, brush_global) = params.brushes.get_mut(brush_entity)?;
+                let (mut brush, brush_global) = params.brushes.get_mut(brush_entity).ok()?;
                 let start = drag_state.start_brush.as_ref()?;
                 let (_, brush_rot, _) = brush_global.to_scale_rotation_translation();
                 let world_normal = (brush_rot * drag_state.drag_face_normal).normalize();
@@ -497,7 +495,7 @@ pub fn brush_face_drag(
                     world_normal,
                 )
                 .map(|amount| snap_translate(amount, &snap_settings, ctrl)) else {
-                    return OperatorResult::Running;
+                    return Some(OperatorResult::Running);
                 };
                 if let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) {
                     // HalfedgeMesh path: translate each selected face's ring vertices along the face normal.
@@ -576,7 +574,7 @@ pub fn brush_face_drag(
             }
             FaceExtrudeMode::Extend => {
                 if drag_state.extend_face_polygon.is_empty() {
-                    return OperatorResult::Cancelled;
+                    return None;
                 }
                 let face_centroid: Vec3 = drag_state.extend_face_polygon.iter().sum::<Vec3>()
                     / drag_state.extend_face_polygon.len() as f32;
@@ -589,14 +587,14 @@ pub fn brush_face_drag(
                     face_centroid,
                     world_normal,
                 ) else {
-                    return OperatorResult::Running;
+                    return Some(OperatorResult::Running);
                 };
                 drag_state.extend_depth = snap_translate(depth, &snap_settings, ctrl);
             }
         }
     }
 
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_face_drag(
@@ -810,16 +808,16 @@ pub fn brush_vertex_drag(
     mirror_q: Query<&jackdaw_geometry::ModifierStack>,
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let modal_running = modal.is_some();
     if modal_running {
         if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
             clear_vertex_drag_state(&mut drag_state);
             clear_grab_cursor(&mut override_cursor);
-            return OperatorResult::Finished;
+            return Some(OperatorResult::Finished);
         }
     }
 
@@ -848,14 +846,14 @@ pub fn brush_vertex_drag(
         // First invoke: pick vertex / split vertex across all edit brushes.
         let candidates: Vec<Entity> = brush_selection.edit_brushes().collect();
         if candidates.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         if shift && !ctrl {
             // Shift+click: pick edge midpoint or face center to split (active brush only).
             let brush_entity = brush_selection.active_brush?;
-            let cache = brush_caches.get(brush_entity)?;
-            let brush_global = brush_transforms.get(brush_entity)?;
+            let cache = brush_caches.get(brush_entity).ok()?;
+            let brush_global = brush_transforms.get(brush_entity).ok()?;
 
             // The scan covers evaluated geometry on purpose: shift-clicking
             // the mirrored half creates an authored vertex at the clicked
@@ -903,7 +901,7 @@ pub fn brush_vertex_drag(
             drag_state.pending = Some(PendingSubDrag {
                 click_pos: cursor_pos,
             });
-            return OperatorResult::Running;
+            return Some(OperatorResult::Running);
         }
 
         // Plain or Ctrl+click: find the nearest vertex across all edit brushes.
@@ -939,7 +937,7 @@ pub fn brush_vertex_drag(
                 brush_box_state.pending = Some(cursor_pos);
                 brush_box_state.shift = shift;
             }
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         brush_selection.active_brush = Some(brush_entity);
@@ -951,7 +949,7 @@ pub fn brush_vertex_drag(
             } else {
                 sub.vertices.push(vi);
             }
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         // Plain click on an already-selected vertex: keep the whole multi-brush
@@ -969,12 +967,12 @@ pub fn brush_vertex_drag(
         });
         drag_state.drag_camera = Some(camera_entity);
         drag_state.drag_viewport = Some(viewport_entity);
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // Subsequent invokes need the active brush.
     let brush_entity = brush_selection.active_brush?;
-    let brush_global = brush_transforms.get(brush_entity)?;
+    let brush_global = brush_transforms.get(brush_entity).ok()?;
 
     // Subsequent invokes: constraint cycling and drag math.
     if drag_state.active {
@@ -1071,7 +1069,7 @@ pub fn brush_vertex_drag(
             &mirror_q,
         );
     }
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_vertex_drag(
@@ -1179,16 +1177,16 @@ pub fn brush_edge_drag(
     mirror_q: Query<&jackdaw_geometry::ModifierStack>,
     snap_settings: Res<SnapSettings>,
     mut override_cursor: ResMut<OverrideCursor>,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let modal_running = modal.is_some();
     if modal_running {
         if drag_state.active && mouse.just_pressed(MouseButton::Right) {
-            return OperatorResult::Cancelled;
+            return None;
         }
         if vp.cursor().is_none() || mouse.just_released(MouseButton::Left) {
             clear_edge_drag_state(&mut drag_state);
             clear_grab_cursor(&mut override_cursor);
-            return OperatorResult::Finished;
+            return Some(OperatorResult::Finished);
         }
     }
 
@@ -1216,7 +1214,7 @@ pub fn brush_edge_drag(
         // First invoke: pick the nearest edge across all edit brushes.
         let candidates: Vec<Entity> = brush_selection.edit_brushes().collect();
         if candidates.is_empty() {
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         let mut best: Option<(Entity, (usize, usize))> = None;
@@ -1258,7 +1256,7 @@ pub fn brush_edge_drag(
                 brush_box_state.pending = Some(cursor_pos);
                 brush_box_state.shift = shift;
             }
-            return OperatorResult::Cancelled;
+            return None;
         };
 
         brush_selection.active_brush = Some(brush_entity);
@@ -1270,7 +1268,7 @@ pub fn brush_edge_drag(
             } else {
                 sub.edges.push(edge);
             }
-            return OperatorResult::Cancelled;
+            return None;
         }
 
         // Plain click on an already-selected edge: keep the whole multi-brush
@@ -1288,12 +1286,12 @@ pub fn brush_edge_drag(
         });
         drag_state.drag_camera = Some(camera_entity);
         drag_state.drag_viewport = Some(viewport_entity);
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     // Subsequent invokes need the active brush.
     let brush_entity = brush_selection.active_brush?;
-    let brush_global = brush_transforms.get(brush_entity)?;
+    let brush_global = brush_transforms.get(brush_entity).ok()?;
 
     if drag_state.active {
         if modal_inputs.axis_x() {
@@ -1387,7 +1385,7 @@ pub fn brush_edge_drag(
             &mirror_q,
         );
     }
-    OperatorResult::Running
+    Some(OperatorResult::Running)
 }
 
 fn cancel_edge_drag(

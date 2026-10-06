@@ -167,7 +167,7 @@ pub(crate) fn entity_add_group(
 pub(crate) fn entity_set_transform(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let params = params.0;
     commands.queue(move |world: &mut World| {
@@ -241,7 +241,7 @@ pub(crate) fn entity_set_transform(
         cmd.execute(world);
         world.resource_mut::<CommandHistory>().push_executed(cmd);
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// Set one field on one entity's component, by reflection path. Unlike
@@ -273,7 +273,7 @@ pub(crate) fn entity_set_transform(
 pub(crate) fn component_set(
     params: In<OperatorParameters>,
     mut commands: Commands,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     let field_path = params.as_str("field").unwrap_or_default().to_string();
@@ -286,7 +286,7 @@ pub(crate) fn component_set(
             );
         }
     });
-    OperatorResult::Finished
+    Some(OperatorResult::Finished)
 }
 
 /// A parameter as JSON. A string parses as JSON when it can and stands for

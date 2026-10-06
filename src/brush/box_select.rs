@@ -144,7 +144,7 @@ pub fn brush_box_select(
     brush_transforms: Query<&GlobalTransform>,
     brush_caches: Query<&BrushMeshCache>,
     active: ActiveModalQuery,
-) -> OperatorResult {
+) -> Option<OperatorResult> {
     let cursor_pos = vp.cursor()?;
 
     if !active.is_modal_running() {
@@ -152,7 +152,7 @@ pub fn brush_box_select(
         box_state.camera = vp.camera_entity();
         box_state.viewport = vp.viewport_entity();
         box_state.base = brush_selection.brushes.clone();
-        return OperatorResult::Running;
+        return Some(OperatorResult::Running);
     }
 
     box_state.current = cursor_pos;
@@ -170,9 +170,9 @@ pub fn brush_box_select(
             box_state.shift = false;
         }
         return if released {
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         } else {
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         };
     };
 
@@ -185,9 +185,9 @@ pub fn brush_box_select(
             box_state.shift = false;
         }
         return if released {
-            OperatorResult::Finished
+            Some(OperatorResult::Finished)
         } else {
-            OperatorResult::Running
+            Some(OperatorResult::Running)
         };
     };
 
@@ -298,9 +298,9 @@ pub fn brush_box_select(
     if released {
         box_state.active = false;
         box_state.shift = false;
-        OperatorResult::Finished
+        Some(OperatorResult::Finished)
     } else {
-        OperatorResult::Running
+        Some(OperatorResult::Running)
     }
 }
 
