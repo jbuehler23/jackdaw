@@ -368,59 +368,35 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           shared-key: template
 
+      # Scaffolded by a `jd` built as the release bundles are and copied out
+      # of the checkout, so the project states the registry versions a user
+      # gets. It sits under the packaged crates, whose cargo config resolves
+      # those versions to the packages built from this change.
       - name: Scaffold ${{ matrix.template }}
         run: |
           set -euxo pipefail
-          checkout="$GITHUB_WORKSPACE"
           template="${{ matrix.template }}"
-          # `jd new` normalises the name to a cargo-legal one, so use a
-          # form it will not rewrite or the destination path stops matching.
-          name="test-$template"
-          dest="$RUNNER_TEMP/$name"
-          rm -rf "$dest"
-          # Scaffold with the shipped binary rather than reimplementing
-          # it here. The hand-rolled copy substituted four placeholders
-          # and silently stopped matching the real one when version
-          # pinning added three more, leaving `bevy = "{{bevy_version}}"`
-          # in the manifest. Using `jd new` means this job tests what a
-          # user actually gets, and cannot drift again.
-          cargo build --bin jd
+          cargo xtask package "$RUNNER_TEMP/packages"
+          JACKDAW_RELEASE_BUILD=1 cargo build --bin jd
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/packages/projects"
+          cp target/debug/jd "$RUNNER_TEMP/bin/"
+          cp -r .cargo "$RUNNER_TEMP/"
           extra=""
           if [ "$template" = "extension" ]; then extra="--extension"; fi
-          "$checkout/target/debug/jd" new "$name" --path "$RUNNER_TEMP" --no-git $extra
-          cp -r "$checkout/.cargo" "$RUNNER_TEMP/"
-          # Pin the scaffolded project's jackdaw deps to THIS checkout
-          # so the template is tested against the PR under review.
-          cat >> "$dest/Cargo.toml" <<EOF
-
-          [patch.crates-io]
-          jackdaw_runtime = { path = "$checkout/crates/jackdaw_runtime" }
-          jackdaw_extension = { path = "$checkout/crates/jackdaw_extension" }
-          jackdaw_api = { path = "$checkout/crates/jackdaw_api" }
-          jackdaw_api_internal = { path = "$checkout/crates/jackdaw_api_internal" }
-          EOF
+          "$RUNNER_TEMP/bin/jd" new "test-$template" --path "$RUNNER_TEMP/packages/projects" --no-git $extra
+          echo "PROJECT=$RUNNER_TEMP/packages/projects/test-$template" >> "$GITHUB_ENV"
 
       - name: Run cargo fmt
-        run: |
-          set -euxo pipefail
-          name="test-${{ matrix.template }}"
-          cd "$RUNNER_TEMP/$name"
-          cargo fmt --all -- --check
+        working-directory: ${{ env.PROJECT }}
+        run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        # No `--locked`: cargo-generate doesn't ship a Cargo.lock,
-        # and the patched jackdaw deps would mismatch one anyway.
-        run: |
-          set -euxo pipefail
-          name="test-${{ matrix.template }}"
-          cd "$RUNNER_TEMP/$name"
-          cargo clippy --workspace --all-targets --target-dir "$GITHUB_WORKSPACE/target" --features bevy/dynamic_linking -- --deny warnings
+        working-directory: ${{ env.PROJECT }}
+        run: cargo clippy --workspace --all-targets --target-dir "$GITHUB_WORKSPACE/target" --features bevy/dynamic_linking -- --deny warnings
 
       - name: Run tests
+        working-directory: ${{ env.PROJECT }}
         run: |
-          set -euxo pipefail
-          name="test-${{ matrix.template }}"
-          cd "$RUNNER_TEMP/$name"
           if [[ -d tests ]]; then
             cargo nextest run --workspace --lib --bins --tests --no-fail-fast --no-tests warn --features bevy/dynamic_linking --target-dir "$GITHUB_WORKSPACE/target"
           else
