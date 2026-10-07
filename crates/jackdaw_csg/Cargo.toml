@@ -22,12 +22,12 @@ manifold-csg-sys = { version = "=3.4.107", default-features = false }
 jackdaw_scene_types.workspace = true
 
 [features]
-default = ["render", "parallel"]
+default = ["render"]
 render = ["jackdaw_geometry/render"]
-# Manifold's TBB-backed parallelism. Statically linking TBB is fine in a normal
-# executable (the editor), but TBB's static initializer crashes when this kernel
-# is loaded as a dlopen'd Godot GDExtension. The Godot addon builds this crate
-# with default-features off, so it gets Manifold's serial backend and no TBB.
+# Manifold's TBB-backed parallelism. Off by default: brush meshes are below
+# Manifold's parallel threshold, and building TBB roughly doubles the C++ build
+# time and peak memory. TBB's static initializer also crashes when the kernel
+# is loaded through dlopen.
 parallel = ["manifold-csg/parallel"]
 
 [lints]
