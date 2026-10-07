@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_dylib"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Shared dynamic library bundling jackdaw's extension-facing types. Mirrors `bevy_dylib`."
 license = "MIT OR Apache-2.0"

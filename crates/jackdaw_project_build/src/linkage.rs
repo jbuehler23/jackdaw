@@ -11,6 +11,10 @@
 //! for extension builds; a foreign compiler's artifact fails to parse
 //! outright (the metadata format is versioned), which is itself the
 //! toolchain-mismatch signal.
+//!
+//! `-Zls` has no stable equivalent, so the dump runs with
+//! `RUSTC_BOOTSTRAP=1`. It only reads metadata written by that same
+//! compiler; nothing it compiles depends on the flag.
 
 use std::path::Path;
 
@@ -50,9 +54,8 @@ impl std::error::Error for LinkageError {}
 
 /// Verify that `dylib` links the running SDK at `sdk_dylib`.
 ///
-/// `toolchain` is the SDK's pinned toolchain: the metadata dump needs a
-/// nightly rustc, and on a user machine the ambient default is usually
-/// stable, which rejects `-Z` outright.
+/// `toolchain` is the SDK's toolchain: only the compiler that wrote the
+/// metadata can read it, and the user's default may be another release.
 pub fn verify_linkage(
     dylib: &Path,
     sdk_dylib: &Path,
@@ -73,14 +76,15 @@ fn metadata_dump(artifact: &Path, toolchain: Option<&str>) -> Result<String, Lin
     if let Some(toolchain) = toolchain {
         cmd.env("RUSTUP_TOOLCHAIN", toolchain);
     }
-    let output =
-        cmd.arg("-Zls=root")
-            .arg(artifact)
-            .output()
-            .map_err(|e| LinkageError::Unreadable {
-                artifact: artifact.display().to_string(),
-                detail: e.to_string(),
-            })?;
+    let output = cmd
+        .env("RUSTC_BOOTSTRAP", "1")
+        .arg("-Zls=root")
+        .arg(artifact)
+        .output()
+        .map_err(|e| LinkageError::Unreadable {
+            artifact: artifact.display().to_string(),
+            detail: e.to_string(),
+        })?;
     if !output.status.success() {
         return Err(LinkageError::Unreadable {
             artifact: artifact.display().to_string(),

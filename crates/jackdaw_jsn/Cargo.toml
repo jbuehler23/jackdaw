@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_jsn"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Internal crate for the jackdaw editor"
 license = "MIT OR Apache-2.0"

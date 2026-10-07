@@ -522,7 +522,7 @@ pub fn flat_shaded(data: SurfaceMeshData) -> SurfaceMeshData {
         indices: Vec::with_capacity(data.indices.len()),
         grid: Vec::with_capacity(data.indices.len()),
     };
-    for triangle in data.indices.chunks_exact(3) {
+    for triangle in data.indices.as_chunks::<3>().0 {
         let [a, b, c] = [
             triangle[0] as usize,
             triangle[1] as usize,
@@ -1003,7 +1003,7 @@ mod tests {
         let mut overlaps = 0;
         for level in frame {
             let data = build_clipmap_mesh_data(map, level, everywhere);
-            for triangle in data.indices.chunks_exact(3) {
+            for triangle in data.indices.as_chunks::<3>().0 {
                 let corners: Vec<[u32; 2]> = triangle
                     .iter()
                     .map(|index| data.grid[*index as usize])

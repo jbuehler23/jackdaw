@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_hull"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Engine-agnostic convex-hull math (triangle merging, brush rebuild, planar hull) for the jackdaw editor"
 license = "MIT OR Apache-2.0"

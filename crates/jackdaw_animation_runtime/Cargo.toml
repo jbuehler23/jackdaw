@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_animation_runtime"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Binds authored animation sets to their glTF skeletons and plays the state they ask for"
 license = "MIT OR Apache-2.0"

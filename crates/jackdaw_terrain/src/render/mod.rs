@@ -471,7 +471,7 @@ fn stack(
             Some(image) => {
                 let mut texels = converted(image, format)?;
                 if flip_green.get(index).copied().unwrap_or(false) {
-                    for texel in texels.chunks_exact_mut(4) {
+                    for texel in texels.as_chunks_mut::<4>().0 {
                         texel[1] = 255 - texel[1];
                     }
                 }
@@ -526,17 +526,23 @@ fn narrowed_to_rgba8(data: &[u8], from: TextureFormat, to: TextureFormat) -> Opt
     }
     match from {
         TextureFormat::Rgba16Unorm | TextureFormat::Rgba16Uint => Some(
-            data.chunks_exact(8)
+            data.as_chunks::<8>()
+                .0
+                .iter()
                 .flat_map(|t| [t[1], t[3], t[5], t[7]])
                 .collect(),
         ),
         TextureFormat::Rg16Unorm | TextureFormat::Rg16Uint => Some(
-            data.chunks_exact(4)
+            data.as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|t| [t[1], t[1], t[1], t[3]])
                 .collect(),
         ),
         TextureFormat::R16Unorm | TextureFormat::R16Uint => Some(
-            data.chunks_exact(2)
+            data.as_chunks::<2>()
+                .0
+                .iter()
                 .flat_map(|t| [t[1], t[1], t[1], 255])
                 .collect(),
         ),
@@ -1527,9 +1533,9 @@ mod tests {
             chain * (layer as usize) + (0..level).map(|l| level_texels(size, l) * 4).sum::<usize>();
         let end = start + level_texels(size, level) * 4;
         image.data.as_ref().expect("built arrays carry data")[start..end]
-            .chunks_exact(4)
-            .map(|t| [t[0], t[1], t[2], t[3]])
-            .collect()
+            .as_chunks::<4>()
+            .0
+            .to_vec()
     }
 
     /// A 2x2-checkered layer of `a` and `b`, so mip 1 is one texel and

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_loader"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Dynamic-library extension loader for Jackdaw"
 license = "MIT OR Apache-2.0"

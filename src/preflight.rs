@@ -7,6 +7,8 @@
 //! thread and report results as they complete for live reporting in the
 //! launcher. `run_all_checks` batches them for the setup UI.
 
+use std::process::Command;
+
 use jackdaw_env::rust_env_command;
 
 /// Outcome of a single check.
@@ -54,18 +56,48 @@ pub fn run_all_checks() -> Vec<CheckResult> {
     out
 }
 
-/// `rustc` present, and ideally a nightly channel (jackdaw targets nightly).
+/// `rustc` present. Extensions build with the toolchain that built this
+/// editor, which jackdaw installs through rustup on first use.
 pub fn check_rust_toolchain() -> CheckResult {
-    match first_line("rustc", &["--version"]) {
-        Some(version) => {
-            let (status, fix) = classify_rustc(&version);
-            CheckResult::new("Rust toolchain", status, version, fix)
-        }
-        None => CheckResult::new(
-            "Rust toolchain",
+    let editor = first_line("rustc", &["--version"]);
+    let ambient = Command::new("rustc")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .map(|l| l.trim().to_string())
+        });
+    let (status, detail, fix) =
+        rust_toolchain_status(editor, ambient, jackdaw_env::RUSTUP_TOOLCHAIN);
+    CheckResult::new("Rust toolchain", status, detail, fix.as_deref())
+}
+
+/// Pure logic for [`check_rust_toolchain`]: `editor` is `rustc --version`
+/// under the editor's toolchain, `ambient` under the user's default.
+fn rust_toolchain_status(
+    editor: Option<String>,
+    ambient: Option<String>,
+    toolchain: &str,
+) -> (CheckStatus, String, Option<String>) {
+    match (editor, ambient) {
+        (Some(version), _) => (CheckStatus::Ok, version, None),
+        (None, Some(version)) => (
+            CheckStatus::Warn,
+            format!("{version}; extensions need {toolchain}, which is not installed yet"),
+            Some(format!(
+                "jackdaw installs {toolchain} when an extension first builds, or run \
+                 `rustup toolchain install {toolchain} --profile minimal`"
+            )),
+        ),
+        (None, None) => (
             CheckStatus::Fail,
-            "rustc not found",
-            Some("Install Rust via https://rustup.rs"),
+            "rustc not found".to_string(),
+            Some("Install Rust via https://rustup.rs".to_string()),
         ),
     }
 }
@@ -93,20 +125,6 @@ pub fn check_windows_linker() -> CheckResult {
     let generator = std::env::var("CMAKE_GENERATOR").ok();
     let (status, detail, fix) = windows_linker_status(gcc_found, generator.as_deref());
     CheckResult::new("Windows C++ toolchain", status, detail, fix.as_deref())
-}
-
-/// Classify a `rustc --version` line. Nightly is the supported channel.
-fn classify_rustc(version: &str) -> (CheckStatus, Option<&'static str>) {
-    if version.contains("nightly") {
-        (CheckStatus::Ok, None)
-    } else {
-        (
-            CheckStatus::Warn,
-            Some(
-                "jackdaw targets a nightly toolchain. Ensure Rust commands on path (rustc, cargo) are managed by rustup!",
-            ),
-        )
-    }
 }
 
 /// Pure logic for the Windows linker check, split out for testing. Compiled on
@@ -162,12 +180,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nightly_rustc_is_ok_stable_warns() {
-        let (status, _) = classify_rustc("rustc 1.90.0-nightly (abcdef 2026-03-05)");
-        assert_eq!(status, CheckStatus::Ok);
-        let (status, fix) = classify_rustc("rustc 1.89.0 (stable)");
-        assert_eq!(status, CheckStatus::Warn);
-        assert!(fix.is_some());
+    fn missing_editor_toolchain_warns_until_installed() {
+        let installed = rust_toolchain_status(Some("rustc 1.99.0".into()), None, "1.99.0");
+        assert_eq!(installed.0, CheckStatus::Ok);
+        let pending = rust_toolchain_status(None, Some("rustc 1.100.0".into()), "1.99.0");
+        assert_eq!(pending.0, CheckStatus::Warn);
+        assert!(pending.2.is_some_and(|fix| fix.contains("1.99.0")));
+        let absent = rust_toolchain_status(None, None, "1.99.0");
+        assert_eq!(absent.0, CheckStatus::Fail);
     }
 
     #[test]

@@ -806,7 +806,6 @@ impl Plugin for ExtensionLoaderPlugin {
 
 #[cfg(test)]
 mod tests {
-    use bevy::prelude::*;
     use bevy_enhanced_input::prelude::*;
 
     use super::*;

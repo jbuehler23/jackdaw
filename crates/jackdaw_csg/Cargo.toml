@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_csg"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Mesh-CSG glue between jackdaw brushes and the manifold3d kernel"
 license = "MIT OR Apache-2.0"

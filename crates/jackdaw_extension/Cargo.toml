@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_extension"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Focused authoring interface for Jackdaw editor extensions"
 license = "MIT OR Apache-2.0"

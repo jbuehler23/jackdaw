@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_multiplayer_lightyear"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Default lightyear backend for Jackdaw networking: translates proxy components into real lightyear replication at runtime."
 license = "MIT OR Apache-2.0"

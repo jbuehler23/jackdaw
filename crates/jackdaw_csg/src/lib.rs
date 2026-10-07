@@ -325,7 +325,7 @@ fn manifold_to_brush(
         plane: BrushPlane,
     }
     let mut tri_recs: Vec<TriRec> = Vec::with_capacity(tris.len() / 3);
-    for tc in tris.chunks_exact(3) {
+    for tc in tris.as_chunks::<3>().0 {
         let a = remap[tc[0] as usize];
         let b = remap[tc[1] as usize];
         let c = remap[tc[2] as usize];

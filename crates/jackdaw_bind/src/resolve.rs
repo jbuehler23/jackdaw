@@ -34,10 +34,7 @@ pub fn resolve_context(world: &World, entity: Entity) -> Option<Entity> {
         if let Some(ctx) = world.get::<crate::BindContext>(current) {
             return Some(ctx.0);
         }
-        match world.get::<ChildOf>(current) {
-            Some(parent) => current = parent.parent(),
-            None => return None,
-        }
+        current = world.get::<ChildOf>(current)?.parent();
     }
     warn!(
         "binding on {entity}: gave up looking for a BindContext after {MAX_CONTEXT_WALK} entities \

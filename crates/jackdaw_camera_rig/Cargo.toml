@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_camera_rig"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Authorable third/first-person camera-rig components + runtime driver for Jackdaw scenes."
 license = "MIT OR Apache-2.0"

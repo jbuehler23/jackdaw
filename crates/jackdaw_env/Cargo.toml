@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_env"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Development environment functionality for Jackdaw"
 license = "MIT OR Apache-2.0"

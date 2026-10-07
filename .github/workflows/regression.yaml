@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  toolchain: nightly-2026-03-05
+  toolchain: 1.99.0
 
 jobs:
   # Release gates a tag on this same reusable workflow.

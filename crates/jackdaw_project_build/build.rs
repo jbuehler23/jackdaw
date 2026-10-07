@@ -169,20 +169,6 @@ fn write_registry_recipe(recipe: &Path) {
     .unwrap();
     fs::create_dir_all(recipe.join("src")).unwrap();
     fs::write(recipe.join("src/lib.rs"), "").unwrap();
-    write_cargo_config(recipe);
-}
-
-/// The extracted first-run SDK has no checkout-level `.cargo/config.toml`.
-/// Preserve the Mach-O/PE dylib codegen rule there too, or a prepared macOS or
-/// Windows SDK can contain unresolved shared-generic instantiations.
-fn write_cargo_config(recipe: &Path) {
-    fs::create_dir_all(recipe.join(".cargo")).unwrap();
-    fs::write(
-        recipe.join(".cargo/config.toml"),
-        "[target.'cfg(any(target_os = \"macos\", target_os = \"windows\"))']\n\
-         rustflags = [\"-Zshare-generics=no\"]\n",
-    )
-    .unwrap();
 }
 
 /// True only for the jackdaw editor workspace with the crates present. False in
@@ -214,7 +200,6 @@ fn assemble_recipe(ws: &Path, recipe: &Path) -> bool {
     if let Ok(lock) = fs::read(ws.join("Cargo.lock")) {
         fs::write(recipe.join("Cargo.lock"), lock).unwrap();
     }
-    write_cargo_config(recipe);
     true
 }
 

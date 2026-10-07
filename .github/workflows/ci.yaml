@@ -19,8 +19,8 @@ concurrency:
 
 env:
   # Use the same Rust toolchain across jobs so they can share a cache.
-  # Keep this in sync with https://github.com/TheBevyFlock/bevy_cli/blob/main/rust-toolchain.toml
-  toolchain: nightly-2026-03-05
+  # Keep this in sync with rust-toolchain.toml.
+  toolchain: 1.99.0
   CARGO_INCREMENTAL: "0"
 
 jobs:
@@ -499,6 +499,10 @@ jobs:
     name: Bevy linter
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # bevy_lint builds against rustc internals, so it runs on the nightly
+    # its pinned revision requires rather than the workspace toolchain.
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-03-05
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -507,7 +511,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           components: rustc-dev, llvm-tools-preview
-          toolchain: ${{ env.toolchain }}
+          toolchain: nightly-2026-03-05
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev

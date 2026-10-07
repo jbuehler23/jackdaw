@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_node_graph"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Generic node-graph editor widget for the Jackdaw editor"
 license = "MIT OR Apache-2.0"

@@ -76,7 +76,7 @@ mod tests {
 
         let mut live = brush.clone();
         let mut live_he = halfedge.clone();
-        live.faces.truncate(0);
+        live.faces.clear();
 
         modal.restore(&mut live, &mut live_he);
         assert_eq!(

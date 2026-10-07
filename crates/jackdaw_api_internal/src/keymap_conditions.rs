@@ -171,8 +171,6 @@ mod tests {
     use core::time::Duration;
 
     use bevy::ecs::system::SystemState;
-    use bevy::prelude::*;
-    use bevy_enhanced_input::prelude::*;
 
     use super::*;
 

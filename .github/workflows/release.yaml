@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 env:
-  toolchain: nightly-2026-03-05
+  toolchain: 1.99.0
 
 jobs:
   # Which bundle legs to run: all of them on tags and default dispatches,
@@ -45,7 +45,7 @@ jobs:
       - id: pick
         run: |
           linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","archive":"tar.zst"}'
-          macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path -Zshare-generics=no","archive":"tar.zst"}'
+          macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"tar.zst"}'
           windows='{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}'
           case "${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}" in
             linux)   list="[$linux]" ;;
@@ -266,7 +266,7 @@ jobs:
         with:
           save-if: false
           # The cargo config is in the key because it carries rustflags
-          # (-Zshare-generics and the linker choice): a cache built under
+          # (the linker choice and its flags): a cache built under
           # different flags restores artifacts whose crate disambiguators
           # no longer match what a fresh build produces, and the mix
           # surfaces as undefined `type_info::CELL` symbols at link time.

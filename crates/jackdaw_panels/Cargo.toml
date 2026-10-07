@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_panels"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Generic docking and panel management system for Bevy editors"
 license = "MIT OR Apache-2.0"

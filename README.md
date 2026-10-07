@@ -51,14 +51,13 @@ Download a signed release bundle, or install all required executables from
 source:
 
 ```sh
-cargo +nightly-2026-03-05 install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
+cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
 ```
 
-The editor uses unstable compiler features, so it builds on nightly. A
-checkout gets that from its `rust-toolchain.toml`; `cargo install` builds
-outside any checkout, so name the channel on the command line. The build
-needs about 10 GB of memory at Cargo's default parallelism; on a smaller
-machine add `--jobs 2`.
+Any stable Rust from 1.95 on builds the editor. Extensions build with the
+same release that built the editor, which Jackdaw installs through rustup
+when it first needs it. The build needs about 10 GB of memory at Cargo's
+default parallelism; on a smaller machine add `--jobs 2`.
 
 Take the release bundle if you can. It ships the prebuilt SDK, so you can
 create a project straight away; `cargo install` builds that SDK first,

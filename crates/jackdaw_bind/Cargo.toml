@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_bind"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Declarative UI bindings on Bevy reflection"
 license = "MIT OR Apache-2.0"

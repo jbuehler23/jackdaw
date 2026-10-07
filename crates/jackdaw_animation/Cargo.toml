@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_animation"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Animation authoring and playback for the Jackdaw editor; thin UI over Bevy's AnimationClip / AnimationGraph / AnimationPlayer."
 license = "MIT OR Apache-2.0"

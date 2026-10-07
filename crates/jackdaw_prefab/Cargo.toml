@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_prefab"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Prefab instancing for jackdaw scenes: the IsA vocabulary and its resolver"
 license = "MIT OR Apache-2.0"

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_fuzzy"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Internal crate for the jackdaw editor"
 repository = "https://github.com/jbuehler23/jackdaw"

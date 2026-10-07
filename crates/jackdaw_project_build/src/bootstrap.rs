@@ -285,18 +285,12 @@ pub fn check_prerequisites() -> Vec<Prereq> {
         });
     }
 
-    // The editor's own crates use unstable compiler features, so
-    // building jackdaw from source needs the same channel the SDK does.
-    // A checkout gets it from `rust-toolchain.toml`; `cargo install`
-    // builds outside any checkout and so outside that pin, and picks up
-    // whatever the default toolchain is. Say so here, because the
-    // failure it produces names a feature gate rather than a toolchain.
+    // Extensions and the SDK build with the compiler that built this editor.
     out.push(Prereq {
         name: "editor toolchain",
         ok: true,
         detail: format!(
-            "jackdaw is built with {SDK_TOOLCHAIN_CHANNEL}; install from source with \
-             `cargo +{SDK_TOOLCHAIN_CHANNEL} install`"
+            "jackdaw is built with {SDK_TOOLCHAIN_CHANNEL}; extensions build with the same release"
         ),
         fix: None,
     });
@@ -723,7 +717,7 @@ mod tests {
     /// with an error that names neither. The environment report is where
     /// that is said.
     #[test]
-    fn the_prerequisite_report_names_the_toolchain_an_install_needs() {
+    fn the_prerequisite_report_names_the_editor_toolchain() {
         let report = check_prerequisites();
         let toolchain = report
             .iter()
@@ -731,11 +725,8 @@ mod tests {
             .expect("the report covers the toolchain jackdaw itself is built with");
         assert!(toolchain.ok, "it is a note, not a gate");
         assert!(
-            toolchain.detail.contains(SDK_TOOLCHAIN_CHANNEL)
-                && toolchain
-                    .detail
-                    .contains(&format!("cargo +{SDK_TOOLCHAIN_CHANNEL} install")),
-            "it names the channel and the command that uses it: {}",
+            toolchain.detail.contains(SDK_TOOLCHAIN_CHANNEL),
+            "it names the toolchain: {}",
             toolchain.detail
         );
     }

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_localization"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Internal crate for Jackdaw localization"
 license = "MIT OR Apache-2.0"

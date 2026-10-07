@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_widgets_runtime"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Load-time defaults and value behaviour for authored Bevy UI widgets"
 license = "MIT OR Apache-2.0"

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_multiplayer"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Backend-agnostic networking proxy components for Jackdaw scenes. Authored in the editor; translated to a concrete backend (e.g. lightyear) at runtime."
 license = "MIT OR Apache-2.0"

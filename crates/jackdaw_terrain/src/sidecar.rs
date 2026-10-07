@@ -961,7 +961,9 @@ fn decode_channels(
         let values = match element {
             ChannelElement::U8 => value_bytes.iter().map(|b| u16::from(*b)).collect(),
             ChannelElement::U16 => value_bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect(),
         };
@@ -1027,7 +1029,7 @@ pub fn decode(bytes: &[u8]) -> Result<TerrainData, SidecarError> {
     // truncated file cannot make this allocate its claimed size.
     let heights_bytes = r.take(cells.checked_mul(4).ok_or(SidecarError::TooLarge)?)?;
     let mut heights = Vec::with_capacity(cells);
-    for chunk in heights_bytes.chunks_exact(4) {
+    for chunk in heights_bytes.as_chunks::<4>().0 {
         heights.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
 
@@ -2037,13 +2039,15 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
 
         let heights_bytes = r.take(cells.checked_mul(4).ok_or(SidecarError::TooLarge)?)?;
         let heights: Vec<f32> = heights_bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
 
         let control_bytes = r.take(cells.checked_mul(4).ok_or(SidecarError::TooLarge)?)?;
         let mut control = Vec::with_capacity(cells);
-        for chunk in control_bytes.chunks_exact(4) {
+        for chunk in control_bytes.as_chunks::<4>().0 {
             let raw = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let word = Control::from_raw(raw);
             if word.reserved() != 0 {
@@ -2056,7 +2060,9 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
             let color_bytes = r.take(cells.checked_mul(4).ok_or(SidecarError::TooLarge)?)?;
             Some(
                 color_bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| [c[0], c[1], c[2], c[3]])
                     .collect(),
             )
@@ -2076,7 +2082,9 @@ pub fn decode_regions(bytes: &[u8]) -> Result<RegionTerrainData, SidecarError> {
                 let plane: Vec<u16> = match channel.element {
                     ChannelElement::U8 => plane_bytes.iter().map(|b| u16::from(*b)).collect(),
                     ChannelElement::U16 => plane_bytes
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|c| u16::from_le_bytes([c[0], c[1]]))
                         .collect(),
                 };

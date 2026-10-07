@@ -50,7 +50,7 @@ pub fn triangulate_polygon(vertices: &[Vec3], ring: &[u32], normal: Vec3) -> Vec
 
     // Convert earcut indices back to ring indices
     let mut out = Vec::with_capacity(triangles.len() / 3);
-    for chunk in triangles.chunks_exact(3) {
+    for chunk in triangles.as_chunks::<3>().0 {
         out.push([ring[chunk[0]], ring[chunk[1]], ring[chunk[2]]]);
     }
     out
@@ -133,7 +133,7 @@ pub fn triangulate_polygon_with_holes(
     };
 
     let mut out = Vec::with_capacity(triangles.len() / 3);
-    for chunk in triangles.chunks_exact(3) {
+    for chunk in triangles.as_chunks::<3>().0 {
         out.push([
             all_indices[chunk[0]],
             all_indices[chunk[1]],

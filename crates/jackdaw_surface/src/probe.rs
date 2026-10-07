@@ -62,7 +62,9 @@ pub fn cubemap_from_stacked_faces(stacked: &Image) -> Option<Image> {
     let data = stacked.data.as_ref()?;
     let halves: Vec<u8> = match stacked.texture_descriptor.format {
         TextureFormat::Rgba32Float => data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|bytes| {
                 let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                 half::f16::from_f32(value).to_le_bytes()

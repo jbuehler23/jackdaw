@@ -6,11 +6,7 @@ How to get set up, what to check before a PR, and how editor behaviour is struct
 
 ### Prerequisites
 
-- **Rust nightly toolchain** - Jackdaw uses edition 2024 features
-  ```sh
-  rustup toolchain install nightly
-  rustup default nightly
-  ```
+- **Rust via rustup** - the checkout's `rust-toolchain.toml` selects the pinned stable release
 - **cargo-nextest** - required for `cargo xtask` test tiers (`cargo install cargo-nextest --locked`)
 - **System dependencies** - GPU drivers with Vulkan support (or Metal on macOS)
 - **Linux extras** - `libudev-dev`, `libasound2-dev`, `libwayland-dev` (or equivalent for your distro)
@@ -68,10 +64,6 @@ bevy = { version = "0.19", features = [
     "reflect_documentation",
 ] }
 ```
-
-#### `.cargo/config.toml`
-
-You can comment out the lines specifying `-Zshare-generics=no` to allow the compiler to do less work.
 
 ## Checks
 

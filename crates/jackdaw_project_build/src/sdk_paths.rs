@@ -457,7 +457,7 @@ mod tests {
         std::fs::write(root.join("sdk").join("manifest.txt"), b"").unwrap();
         std::fs::write(root.join(wrapper_name()), b"wrapper").unwrap();
         std::fs::write(root.join("Cargo.lock"), b"").unwrap();
-        std::fs::write(root.join("toolchain.txt"), b"nightly-2026-03-05\n").unwrap();
+        std::fs::write(root.join("toolchain.txt"), b"1.99.0\n").unwrap();
         root
     }
 
@@ -474,7 +474,7 @@ mod tests {
         assert!(sdk.wrapper.is_file());
         assert!(sdk.manifest.is_file());
         assert!(sdk.lockfile.is_file());
-        assert_eq!(sdk.toolchain.as_deref(), Some("nightly-2026-03-05"));
+        assert_eq!(sdk.toolchain.as_deref(), Some("1.99.0"));
         assert!(
             sdk.problems().is_empty(),
             "a freshly staged bundle is clean: {:?}",

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_api_macros"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Proc macros for jackdaw_api"
 license = "MIT OR Apache-2.0"

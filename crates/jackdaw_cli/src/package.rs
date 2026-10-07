@@ -313,7 +313,9 @@ fn copy_rust_dependency_dylib(sdk: &SdkPaths, to: &Path, crate_name: &str) -> Re
     if let Some(channel) = &sdk.toolchain {
         cmd.arg(format!("+{channel}"));
     }
+    // `-Zls` has no stable equivalent; see `jackdaw_project_build::linkage`.
     let output = cmd
+        .env("RUSTC_BOOTSTRAP", "1")
         .arg("-Zls=root")
         .arg(&sdk.dylib)
         .output()

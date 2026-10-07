@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_runtime"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Runtime scene loader for the Jackdaw editor"
 license = "MIT OR Apache-2.0"

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_project_build"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Editor-independent project build pipeline for the Jackdaw 3D level editor: game binaries with schema extraction, plus SDK-linked extension dylibs"
 license = "MIT OR Apache-2.0"

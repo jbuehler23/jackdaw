@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_pie_protocol"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Transport-agnostic play-in-editor protocol for the Jackdaw 3D level editor"
 license = "MIT OR Apache-2.0"

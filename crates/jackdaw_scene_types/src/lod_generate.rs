@@ -156,7 +156,9 @@ pub fn encode(primitives: &[(String, SimplifiedPrimitive)]) -> Vec<u8> {
 /// Read cached primitives back, or `None` for bytes that are not a cache.
 pub fn decode(bytes: &[u8]) -> Option<Vec<(String, SimplifiedPrimitive)>> {
     let mut words = bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     let mut take = |count: u32| -> Option<Vec<u32>> { (0..count).map(|_| words.next()).collect() };
     let count = take(1)?[0];
@@ -256,7 +258,7 @@ mod tests {
             positions.push(positions[original as usize]);
             seam.push((original, copy));
         }
-        for triangle in indices.chunks_exact_mut(3) {
+        for triangle in indices.as_chunks_mut::<3>().0 {
             let right_of_seam = triangle.iter().all(|index| index % side >= seam_column);
             if right_of_seam {
                 for index in triangle.iter_mut() {

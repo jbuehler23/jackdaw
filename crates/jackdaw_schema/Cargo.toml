@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_schema"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Project type schema wire format shared by the Jackdaw editor and the games it builds"
 license = "MIT OR Apache-2.0"

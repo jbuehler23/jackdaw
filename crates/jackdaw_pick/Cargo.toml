@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_pick"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Engine-agnostic picking queries (ray-vs-face, point-in-polygon) for the jackdaw editor"
 license = "MIT OR Apache-2.0"

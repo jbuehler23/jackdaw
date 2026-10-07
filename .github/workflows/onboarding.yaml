@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  toolchain: nightly-2026-03-05
+  toolchain: 1.99.0
   # Incremental codegen and dylib linking do not mix: incremental
   # reuse leaves references to hidden anon constants inside the SDK
   # dylib, failing the link with undefined hidden symbols.

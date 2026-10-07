@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_api_internal"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Internal implementation crate for jackdaw_api. Depend on jackdaw_api instead."
 license = "MIT OR Apache-2.0"

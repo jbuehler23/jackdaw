@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_material"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Engine-agnostic PBR texture-set detection (filename grouping into material roles) for the jackdaw editor"
 license = "MIT OR Apache-2.0"

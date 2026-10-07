@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_cli_internal"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Internal command implementations shared by jd and Jackdaw release tooling"
 license = "MIT OR Apache-2.0"

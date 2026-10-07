@@ -31,7 +31,7 @@ on:
         default: '["ubuntu-latest"]'
 
 env:
-  toolchain: nightly-2026-03-05
+  toolchain: 1.99.0
 
 jobs:
   cargo-install:
@@ -76,8 +76,6 @@ jobs:
       - name: Activate CI cargo config
         run: |
           mv .cargo/config_ci.toml .cargo/config.toml
-          sed -i.orig 's/"-Zthreads=0"/"-Zthreads=1"/' .cargo/config.toml
-          rm .cargo/config.toml.orig
 
       - name: Install cargo binstall (Linux)
         if: runner.os == 'Linux'

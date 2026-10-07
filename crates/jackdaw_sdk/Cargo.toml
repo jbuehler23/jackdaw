@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_sdk"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "SDK facade shipped with Jackdaw. Extensions compile through it and import the shared Bevy and Jackdaw runtime libraries used by the editor."
 license = "MIT OR Apache-2.0"

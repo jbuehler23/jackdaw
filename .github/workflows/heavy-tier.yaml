@@ -7,7 +7,7 @@ on:
   workflow_call: {}
 
 env:
-  toolchain: nightly-2026-03-05
+  toolchain: 1.99.0
   CARGO_INCREMENTAL: "0"
 
 jobs:

@@ -1,6 +1,7 @@
 [package]
 name = "jackdaw_api"
 version.workspace = true
+rust-version.workspace = true
 edition = "2024"
 description = "Public API for Jackdaw editor extensions"
 license = "MIT OR Apache-2.0"
