@@ -382,6 +382,7 @@ workspace = true
 opt-level = 1
 lto = "off"
 incremental = false
+debug = "line-tables-only"
 
 # Only the editor crate builds incrementally; the crates in the SDK dylib do not.
 [profile.dev.package.jackdaw]
