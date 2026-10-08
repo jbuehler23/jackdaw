@@ -282,22 +282,29 @@ fn stream_state(world: &mut World) {
 
 /// Apply control commands from the editor.
 ///
-/// `Stop` writes `AppExit::Success` to tear down the game loop. `Pause` /
-/// `Resume` toggle the virtual clock, freezing gameplay systems keyed on
-/// `Time<Virtual>`. `SetComponent`, `AddComponent`, `RemoveComponent`
-/// apply reflected edits to live entities. Unknown frames are skipped.
+/// `Stop`, or the editor hanging up, writes `AppExit::Success` to tear down
+/// the game loop. `Pause` / `Resume` toggle the virtual clock, freezing
+/// gameplay systems keyed on `Time<Virtual>`. `SetComponent`,
+/// `AddComponent`, `RemoveComponent` apply reflected edits to live entities.
+/// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;
     }
 
-    let frames: Vec<Vec<u8>> = world
-        .non_send_mut::<PieTransportRes>()
+    let mut transport = world.non_send_mut::<PieTransportRes>();
+    let frames: Vec<Vec<u8>> = transport
         .0
         .drain_received()
         .into_iter()
         .map(|(_, bytes)| bytes)
         .collect();
+    // The editor's end closes when it exits by any means, a crash included,
+    // and a game left running without it has no one to stop it.
+    if transport.0.peer_gone() {
+        info!("PIE: the editor closed the link, exiting");
+        world.write_message(AppExit::Success);
+    }
 
     for bytes in frames {
         let Ok(event) = jackdaw_pie_protocol::event::from_bytes::<ControlEvent>(&bytes) else {
@@ -959,6 +966,35 @@ mod tests {
             exited,
             "app should write AppExit after the editor sends Stop"
         );
+    }
+
+    /// An editor that goes away without sending `Stop`, as a crash does,
+    /// still takes the game down.
+    #[test]
+    fn exits_when_the_editor_hangs_up() {
+        let (handle, name) = serve().expect("serve");
+        let editor = std::thread::spawn(move || handle.accept().expect("accept"));
+        let transport = connect(&name).expect("connect");
+        let (mut app, _) = headless_pie_app(transport);
+        let editor = editor.join().expect("editor thread");
+
+        app.update();
+        assert!(
+            app.world().resource::<Messages<AppExit>>().is_empty(),
+            "a connected editor keeps the game running"
+        );
+
+        drop(editor);
+        let mut exited = false;
+        for _ in 0..200 {
+            app.update();
+            if !app.world().resource::<Messages<AppExit>>().is_empty() {
+                exited = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(exited, "app should write AppExit once the editor is gone");
     }
 
     /// After the initial `EntitySpawned`, mutating `Name` (a non-`Transform`

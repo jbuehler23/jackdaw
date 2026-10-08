@@ -533,7 +533,8 @@ fn the_entity_view_reports_a_terrains_mask_palettes() {
 fn a_screenshot_resolves_once_the_capture_log_has_the_file() {
     let (mut app, _project) = editor_with_a_project();
     let project = app.world().resource::<ProjectRoot>().root.clone();
-    let path = project.join("shot.png");
+    // The handler resolves the project folder, as the capture it queues does.
+    let path = dunce::canonicalize(&project).unwrap().join("shot.png");
     // A window capture is the one kind that cannot fail up front: it targets the
     // primary window by reference. The log entry below stands in for the frame a
     // GPU readback would have landed.

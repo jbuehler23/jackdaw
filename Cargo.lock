@@ -5103,9 +5103,11 @@ name = "jackdaw_env"
 version = "0.19.0"
 dependencies = [
  "dirs",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -125,8 +125,31 @@ impl ProjectRoot {
     pub fn to_relative(&self, path: impl AsRef<Path>) -> PathBuf {
         let path = dunce::simplified(path.as_ref());
         let root = dunce::simplified(&self.root);
-        path.strip_prefix(root).unwrap_or(path).to_path_buf()
+        if let Ok(relative) = path.strip_prefix(root) {
+            return relative.to_path_buf();
+        }
+        resolve_existing(path)
+            .strip_prefix(resolve_existing(root))
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| path.to_path_buf())
     }
+}
+
+/// `path` with its deepest existing ancestor canonicalized and the rest
+/// appended, so a file that does not exist yet still compares equal to its
+/// canonical spelling once it does (a temp dir under `/var` on macOS resolves
+/// to `/private/var`).
+pub fn resolve_existing(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(canonical) = dunce::canonicalize(ancestor) {
+            return match path.strip_prefix(ancestor) {
+                Ok(rest) if rest.as_os_str().is_empty() => canonical,
+                Ok(rest) => canonical.join(rest),
+                Err(_) => path.to_path_buf(),
+            };
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Resolve `candidate` under `root`, refusing anything that would land outside
@@ -348,4 +371,45 @@ pub fn touch_recent(root: &Path, name: &str) {
     recent.projects.truncate(10);
 
     save_recent_projects(&recent);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A project opened through a symlinked folder, the way a macOS temp dir
+    /// under `/var` resolves to `/private/var`.
+    fn linked_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("assets")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let real = dunce::canonicalize(&real).unwrap();
+        (tmp, real, link)
+    }
+
+    #[test]
+    fn a_missing_file_resolves_through_its_existing_folder() {
+        let (_tmp, real, link) = linked_project();
+        assert_eq!(
+            resolve_existing(&link.join("assets/new.bsn")),
+            real.join("assets/new.bsn")
+        );
+        assert_eq!(resolve_existing(&link), real);
+    }
+
+    #[test]
+    fn a_canonical_path_is_relative_to_a_symlinked_root() {
+        let (_tmp, real, link) = linked_project();
+        let project = ProjectRoot::new(link.clone(), ProjectConfig::default());
+        assert_eq!(
+            project.to_relative(real.join("assets/level.bsn")),
+            Path::new("assets/level.bsn")
+        );
+        assert_eq!(
+            project.to_relative(link.join("assets/level.bsn")),
+            Path::new("assets/level.bsn")
+        );
+    }
 }

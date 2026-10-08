@@ -10,6 +10,10 @@ pub trait PieTransport {
     fn send(&mut self, channel: PieChannel, bytes: &[u8]);
     /// Take all messages received since the last call.
     fn drain_received(&mut self) -> Vec<(PieChannel, Vec<u8>)>;
+    /// Whether the peer has hung up, so nothing more will arrive.
+    fn peer_gone(&self) -> bool {
+        false
+    }
 }
 
 /// In-process transport pair for tests: whatever one end sends the other

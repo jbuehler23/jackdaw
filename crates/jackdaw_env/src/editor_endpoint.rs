@@ -50,53 +50,174 @@ impl EditorEndpoint {
     /// Whether the editor that wrote this file is still the process
     /// holding that pid.
     ///
-    /// Answered from `/proc` on Linux: the pid has to exist and its `comm` has to
-    /// be the executable that wrote the file. Elsewhere there is no
-    /// dependency-free way to ask, and reporting "gone" for a live editor is the
-    /// worse mistake, so the endpoint is taken at its word.
+    /// The pid has to name a live process, and when the platform can say what
+    /// that process runs, it has to be the executable that wrote the file.
     pub fn is_running(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        {
-            let Ok(comm) = std::fs::read_to_string(format!("/proc/{}/comm", self.pid)) else {
-                return false;
-            };
-            let Some(process) = self.process.as_deref() else {
-                // Written before the name was recorded; the pid is all
-                // there is to go on.
-                return true;
-            };
-            comm.trim() == truncated_comm(process)
+        if !process::is_alive(self.pid) {
+            return false;
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            true
-        }
+        let Some(expected) = self.process.as_deref() else {
+            // Written before the name was recorded; the pid is all there is
+            // to go on.
+            return true;
+        };
+        process::runs(self.pid, expected).unwrap_or(true)
     }
 }
 
-/// The executable name as `/proc/<pid>/comm` spells it.
-///
-/// The kernel stores 15 bytes plus a terminator, so a longer name comes
-/// back cut short and a comparison against the full name never matches.
-#[cfg(target_os = "linux")]
-fn truncated_comm(process: &str) -> &str {
-    const COMM_LEN: usize = 15;
-    if process.len() <= COMM_LEN {
-        return process;
+/// Asking the OS about another process by pid.
+mod process {
+    /// Whether `pid` names a live process.
+    #[cfg(target_os = "linux")]
+    pub fn is_alive(pid: u32) -> bool {
+        pid != 0 && std::path::Path::new(&format!("/proc/{pid}")).exists()
     }
-    // Bytes, as the kernel counts them, backed off to the nearest
-    // character boundary so the slice is still a `str`.
-    let mut at = COMM_LEN;
-    while at > 0 && !process.is_char_boundary(at) {
-        at -= 1;
+
+    /// Whether `pid` names a live process. A pid owned by another user still
+    /// answers, with a permission error rather than "no such process".
+    #[cfg(all(unix, not(target_os = "linux")))]
+    pub fn is_alive(pid: u32) -> bool {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        if pid <= 0 {
+            return false;
+        }
+        // SAFETY: signal 0 performs only the existence and permission checks.
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    &process[..at]
+
+    /// Whether `pid` names a live process.
+    #[cfg(windows)]
+    pub fn is_alive(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_ACCESS_DENIED, GetLastError, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        if pid == 0 {
+            return false;
+        }
+        // SAFETY: the handle is checked before use and closed once read.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            let mut code = 0u32;
+            let read = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            read == 0 || code != STILL_ACTIVE as u32
+        }
+    }
+
+    /// Whether `pid` names a live process. No way to ask here, and reporting
+    /// "gone" for a live editor is the worse mistake.
+    #[cfg(not(any(unix, windows)))]
+    pub fn is_alive(_pid: u32) -> bool {
+        true
+    }
+
+    /// Whether `pid` runs the executable named `expected`, or `None` when
+    /// that cannot be read.
+    ///
+    /// `/proc/<pid>/comm` holds the name the kernel stored, cut short at 15
+    /// bytes.
+    #[cfg(target_os = "linux")]
+    pub fn runs(pid: u32, expected: &str) -> Option<bool> {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        Some(comm.trim() == truncated_comm(expected))
+    }
+
+    /// Whether `pid` runs the executable named `expected`, or `None` when
+    /// that cannot be read.
+    #[cfg(target_os = "macos")]
+    pub fn runs(pid: u32, expected: &str) -> Option<bool> {
+        let pid = libc::c_int::try_from(pid).ok()?;
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: the buffer is as long as the size passed with it.
+        let len =
+            unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        let len = usize::try_from(len).ok().filter(|&len| len > 0)?;
+        let path = std::path::Path::new(std::str::from_utf8(&buffer[..len]).ok()?);
+        Some(path.file_name()? == expected)
+    }
+
+    /// Whether `pid` runs the executable named `expected`, or `None` when
+    /// that cannot be read.
+    #[cfg(windows)]
+    pub fn runs(pid: u32, expected: &str) -> Option<bool> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
+        };
+
+        let mut buffer = vec![0u16; 32_768];
+        let mut len = buffer.len() as u32;
+        // SAFETY: the handle is checked before use and closed once read, and
+        // `len` carries the buffer's length in and the written length out.
+        let read = unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+            let read = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                buffer.as_mut_ptr(),
+                &mut len,
+            );
+            CloseHandle(handle);
+            read
+        };
+        if read == 0 {
+            return None;
+        }
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..len as usize]));
+        let name = path.file_name()?.to_str()?;
+        Some(name.eq_ignore_ascii_case(expected))
+    }
+
+    /// Whether `pid` runs the executable named `expected`; never readable here.
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    pub fn runs(_pid: u32, _expected: &str) -> Option<bool> {
+        None
+    }
+
+    /// The executable name as `/proc/<pid>/comm` spells it.
+    ///
+    /// The kernel stores 15 bytes plus a terminator, so a longer name comes
+    /// back cut short and a comparison against the full name never matches.
+    #[cfg(target_os = "linux")]
+    pub fn truncated_comm(process: &str) -> &str {
+        const COMM_LEN: usize = 15;
+        if process.len() <= COMM_LEN {
+            return process;
+        }
+        // Bytes, as the kernel counts them, backed off to the nearest
+        // character boundary so the slice is still a `str`.
+        let mut at = COMM_LEN;
+        while at > 0 && !process.is_char_boundary(at) {
+            at -= 1;
+        }
+        &process[..at]
+    }
 }
 
 /// This process's executable name, for [`EditorEndpoint::process`].
 pub fn current_process_name() -> Option<String> {
-    std::env::current_exe()
-        .ok()?
+    // Resolved, so a launch through a symlink records the name the OS reports
+    // for the running image.
+    let exe = std::env::current_exe().ok()?;
+    std::fs::canonicalize(&exe)
+        .unwrap_or(exe)
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
 }
@@ -165,40 +286,61 @@ mod tests {
         assert_eq!(read_endpoint(dir.path()), None);
     }
 
+    /// A pid that named a process which has since exited.
+    fn a_reaped_pid() -> u32 {
+        #[cfg(windows)]
+        let mut command = std::process::Command::new("cmd");
+        #[cfg(windows)]
+        command.args(["/C", "exit"]);
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new("true");
+        let mut child = command.spawn().expect("spawn a short-lived process");
+        let pid = child.id();
+        child.wait().expect("reap it");
+        pid
+    }
+
+    fn endpoint_for(pid: u32, process: Option<String>, root: &Path) -> EditorEndpoint {
+        EditorEndpoint {
+            pid,
+            process,
+            port: 15703,
+            project: root.to_path_buf(),
+            scene: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn this_process_reads_as_running() {
+        let here = Path::new(".");
+        assert!(endpoint_for(std::process::id(), current_process_name(), here).is_running());
+        assert!(endpoint_for(std::process::id(), None, here).is_running());
+    }
+
     /// A file left behind by a crashed editor reads as no editor at all,
     /// so a client does not try to connect to a port nothing holds.
-    #[cfg(target_os = "linux")]
     #[test]
     fn an_endpoint_whose_process_is_gone_reads_as_absent() {
         let dir = tempfile::tempdir().expect("temp dir");
-        // Pid 0 is not a process on Linux, so /proc/0 never exists.
-        let endpoint = EditorEndpoint {
-            pid: 0,
-            process: Some("jackdaw".to_string()),
-            port: 15703,
-            project: dir.path().to_path_buf(),
-            scene: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-        };
+        let endpoint = endpoint_for(a_reaped_pid(), Some("jackdaw".to_string()), dir.path());
         write_endpoint(dir.path(), &endpoint).expect("write the endpoint");
         assert_eq!(read_endpoint(dir.path()), None);
+        assert!(!endpoint_for(0, None, dir.path()).is_running());
     }
 
     /// Pids wrap. An endpoint naming this live pid but another program
     /// reads as absent, so a client does not send BRP at whatever now
     /// holds the number a crashed editor had.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn an_endpoint_whose_pid_belongs_to_another_program_reads_as_absent() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let endpoint = EditorEndpoint {
-            pid: std::process::id(),
-            process: Some("definitely-not-this-test".to_string()),
-            port: 15703,
-            project: dir.path().to_path_buf(),
-            scene: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-        };
+        let endpoint = endpoint_for(
+            std::process::id(),
+            Some("definitely-not-this-test".to_string()),
+            dir.path(),
+        );
         write_endpoint(dir.path(), &endpoint).expect("write the endpoint");
         assert_eq!(read_endpoint(dir.path()), None);
     }
@@ -209,6 +351,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_long_executable_name_is_compared_as_the_kernel_truncates_it() {
+        use super::process::truncated_comm;
         assert_eq!(truncated_comm("jackdaw"), "jackdaw");
         assert_eq!(
             truncated_comm("jackdaw-editor-with-a-long-name"),

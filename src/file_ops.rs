@@ -586,11 +586,11 @@ fn convert_document(
 
 /// Whether a tab holds the document at `path`, whose file a conversion moves.
 fn is_open_in_a_tab(scenes: &crate::scenes::Scenes, path: &Path) -> bool {
-    let held = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let held = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     scenes.tabs.iter().any(|tab| {
         tab.path
             .as_ref()
-            .map(|open| open.canonicalize().unwrap_or_else(|_| open.clone()))
+            .map(|open| dunce::canonicalize(open).unwrap_or_else(|_| open.clone()))
             .is_some_and(|open| open == held)
     })
 }

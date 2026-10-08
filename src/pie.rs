@@ -141,7 +141,8 @@ impl Drop for PieSession {
     /// A clean editor shutdown (window close) drops the `World` and so this
     /// resource; take the running games down with it. Hard kills that skip
     /// destructors (Ctrl+C calls `process::exit`, SIGKILL skips everything) are
-    /// covered by the `PR_SET_PDEATHSIG` hook set on each child at spawn.
+    /// covered by the game itself, which exits once its link to the editor
+    /// closes, and on Linux and Windows by the kernel as well.
     fn drop(&mut self) {
         for (_key, mut stage) in self.children.drain() {
             match &mut stage {

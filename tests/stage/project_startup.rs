@@ -118,7 +118,7 @@ fn the_footer_names_the_scene_it_is_opening_before_it_opens_it() {
 
     assert_eq!(
         open_scene(&app),
-        Some(tmp.path().join("assets/scene.bsn")),
+        Some(dunce::canonicalize(tmp.path().join("assets/scene.bsn")).unwrap()),
         "the frame after the one that named it opens it"
     );
 }

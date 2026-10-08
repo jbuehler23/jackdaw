@@ -29,11 +29,11 @@ impl AsRef<Path> for CanonicalPrefabPath {
 }
 
 /// Produce a `CanonicalPrefabPath` from any path-like input. Runs
-/// `dunce::canonicalize` when the file exists; falls back to a
-/// best-effort normalization (absolutize + remove `.` / `..`) when
-/// it does not. The fallback path matters because callers (e.g.
-/// `spawn_instance` issued before the prefab is on disk) need stable
-/// keys before the file lands.
+/// `dunce::canonicalize` when the file exists; when it does not, the
+/// path is absolutized, `.` / `..` removed, and its deepest existing
+/// folder canonicalized. The fallback matters because callers (e.g.
+/// `spawn_instance` issued before the prefab is on disk) need keys
+/// that stay the same once the file lands.
 pub fn canonical_prefab_path(path: impl AsRef<Path>) -> CanonicalPrefabPath {
     let p = path.as_ref();
     if let Ok(canon) = dunce::canonicalize(p) {
@@ -46,7 +46,7 @@ pub fn canonical_prefab_path(path: impl AsRef<Path>) -> CanonicalPrefabPath {
             .map(|cwd| cwd.join(p))
             .unwrap_or_else(|_| p.to_path_buf())
     };
-    CanonicalPrefabPath(normalize(&absolute))
+    CanonicalPrefabPath(crate::project::resolve_existing(&normalize(&absolute)))
 }
 
 fn normalize(p: &Path) -> PathBuf {

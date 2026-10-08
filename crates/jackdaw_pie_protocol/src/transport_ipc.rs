@@ -38,6 +38,8 @@ struct Bootstrap {
 pub struct IpcChannelTransport {
     tx: IpcSender<Frame>,
     rx: IpcReceiver<Frame>,
+    /// Set once a receive reports the peer's ends closed.
+    hung_up: bool,
 }
 
 /// Editor-side rendezvous waiting for the game to connect. Created by
@@ -54,6 +56,7 @@ impl IpcServerHandle {
         Ok(IpcChannelTransport {
             tx: bootstrap.parent_tx,
             rx: bootstrap.parent_rx,
+            hung_up: false,
         })
     }
 }
@@ -84,6 +87,7 @@ pub fn connect(name: &str) -> std::io::Result<IpcChannelTransport> {
     Ok(IpcChannelTransport {
         tx: child_to_parent_tx,
         rx: parent_to_child_rx,
+        hung_up: false,
     })
 }
 
@@ -103,8 +107,9 @@ impl PieTransport for IpcChannelTransport {
         loop {
             match self.rx.try_recv() {
                 Ok(frame) => out.push((frame.channel, frame.bytes)),
-                // Nothing more queued, or the peer hung up: stop draining.
-                Err(TryRecvError::Empty) | Err(TryRecvError::IpcError(IpcError::Disconnected)) => {
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::IpcError(IpcError::Disconnected)) => {
+                    self.hung_up = true;
                     break;
                 }
                 Err(TryRecvError::IpcError(err)) => {
@@ -114,6 +119,10 @@ impl PieTransport for IpcChannelTransport {
             }
         }
         out
+    }
+
+    fn peer_gone(&self) -> bool {
+        self.hung_up
     }
 }
 
@@ -228,5 +237,27 @@ mod tests {
         }
         child.join().unwrap();
         assert_eq!(got, Some((PieChannel::Frames, vec![1, 2, 3])));
+    }
+
+    #[test]
+    fn a_closed_peer_reads_as_gone() {
+        let (handle, name) = serve().unwrap();
+        let child = std::thread::spawn(move || connect(&name).unwrap());
+        let server = handle.accept().unwrap();
+        let mut game = child.join().unwrap();
+        game.drain_received();
+        assert!(!game.peer_gone(), "a live editor end is not gone");
+
+        drop(server);
+        let mut gone = false;
+        for _ in 0..1000 {
+            game.drain_received();
+            if game.peer_gone() {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(gone, "the game end sees the editor end close");
     }
 }
