@@ -12,7 +12,9 @@
 //!   `GamePlugin::build`, with gameplay `Update`-family systems gated behind
 //!   `play_gate::is_playing` so they don't run while editing,
 //! - `main.rs` keeps `DefaultPlugins`, ambient plugins, and `run()`, and gains
-//!   one `add_plugins(<crate>::GamePlugin)`.
+//!   one `add_plugins(<crate>::GamePlugin)`,
+//! - with the runtime available, `GamePlugin` adds `JackdawPlugin` and
+//!   `DefaultPlugins` pass through `maybe_windowless`.
 //!
 //! It is a best-effort transform over the common Bevy `main` shapes (a single
 //! `App::new()....run()` chain, or `let mut app = App::new(); ...; app.run();`).
@@ -69,46 +71,34 @@ impl std::fmt::Display for MigrationError {
     }
 }
 
-/// The exact steps that make an imported project load the levels
-/// authored in the editor.
-///
-/// Import never edits the manifest, so this is the one part of the
-/// round trip the user has to do. Naming the version, the feature, and
-/// the two lines of code is the difference between a five-minute step
-/// and an unanswered question: "add `jackdaw_runtime`" alone leaves
-/// them to guess all three.
+/// The code that wires the runtime into a game by hand, for when import
+/// cannot find a plugin `build` it can safely edit.
 pub fn runtime_wiring_note() -> String {
-    format!(
-        "to load your authored .bsn scenes in the game, add the runtime:\n\
-         \x20   cargo add jackdaw_runtime@{version} --features physics,pie\n\
-         then in your GamePlugin's build():\n\
-         \x20   app.add_plugins(jackdaw_runtime::JackdawPlugin);\n\
-         \x20   // in a startup system:\n\
-         \x20   commands.spawn(jackdaw_runtime::prelude::JackdawSceneRoot(\n\
-         \x20       asset_server.load(\"scene.bsn\"),\n\
-         \x20   ));\n\
-         the `pie` feature is what lets the editor's Play button drive your\n\
-         game: Play builds and runs your own binary, and the two talk over\n\
-         a link that feature installs.",
-        version = jackdaw_project_build::BEVY_VERSION
-    )
+    "so the editor can read your components and run Play, add the runtime \
+     plugin in your GamePlugin's build():\n\
+     \x20   app.add_plugins(jackdaw_runtime::JackdawPlugin);\n\
+     and load an authored scene from a startup system:\n\
+     \x20   commands.spawn(jackdaw_runtime::prelude::JackdawSceneRoot(\n\
+     \x20       asset_server.load(\"scene.bsn\"),\n\
+     \x20   ));"
+        .to_string()
 }
 
-/// Whether the project already depends on `jackdaw_runtime`. Import
-/// never edits the manifest, so this decides whether the generated code
-/// may name that crate.
-fn depends_on_runtime(root: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(root.join("Cargo.toml")) else {
-        return false;
-    };
-    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
-        return false;
-    };
-    ["dependencies", "dev-dependencies"].iter().any(|table| {
-        doc.get(table)
-            .and_then(|deps| deps.get("jackdaw_runtime"))
-            .is_some()
-    })
+/// The `main.rs` change embedded Play needs, for when import cannot make it.
+pub fn windowless_note() -> String {
+    "so Play can show the game inside the editor, pass DefaultPlugins through \
+     the runtime in main.rs:\n\
+     \x20   let default_plugins = jackdaw_runtime::maybe_windowless(DefaultPlugins);\n\
+     \x20   App::new().add_plugins(default_plugins)"
+        .to_string()
+}
+
+/// The dependency line a project without `jackdaw_runtime` needs.
+fn runtime_dependency_note() -> String {
+    format!(
+        "add the runtime: cargo add jackdaw_runtime@{} --features physics,pie",
+        jackdaw_project_build::BEVY_VERSION
+    )
 }
 
 /// The moved items that derive `Component` (or `Resource`) but not
@@ -191,8 +181,14 @@ pub fn crate_name_of(root: &Path) -> Result<String, MigrationError> {
 }
 
 /// Build a migration plan for the project at `root` without touching any files.
-/// `crate_name` is the library crate name (`snake_case`) the editor links.
-pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, MigrationError> {
+/// `crate_name` is the library crate name (`snake_case`) the editor links, and
+/// `has_runtime_dep` says whether the generated code may name `jackdaw_runtime`
+/// with its `pie` feature.
+pub fn plan_migration(
+    root: &Path,
+    crate_name: &str,
+    has_runtime_dep: bool,
+) -> Result<MigrationPlan, MigrationError> {
     let main_path = root.join("src/main.rs");
     if !main_path.is_file() {
         return Err(MigrationError::NoMainRs);
@@ -248,11 +244,6 @@ pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, Mi
         }
     }
 
-    // Import never edits the manifest, so anything the generated code
-    // names has to already be a dependency. `jackdaw_runtime` supplies
-    // the scene loader and the embedded-Play window wrapper; without it
-    // the migration emits plain Bevy and says what to add.
-    let has_runtime_dep = depends_on_runtime(root);
     // A crate that already declares `GamePlugin` is the common case, not
     // an exotic one: it is the name this project's own docs teach. Adding
     // a second definition of it produces a library that cannot compile
@@ -321,13 +312,12 @@ pub fn plan_migration(root: &Path, crate_name: &str) -> Result<MigrationPlan, Mi
         notes.push("no game systems/resources found to move; only definitions relocated".into());
     }
     if !has_runtime_dep {
+        notes.push(runtime_dependency_note());
         notes.push(runtime_wiring_note());
     } else if classified.default_plugins.is_some() {
         notes.push("wrapped DefaultPlugins with maybe_windowless so embedded Play works".into());
     } else {
-        notes.push(
-            "no DefaultPlugins call found; add `maybe_windowless` by hand for embedded Play".into(),
-        );
+        notes.push(windowless_note());
     }
 
     Ok(MigrationPlan {
@@ -381,6 +371,152 @@ pub fn apply_migration(root: &Path, plan: &MigrationPlan) -> Result<(), Migratio
     Ok(())
 }
 
+/// The `let` lines that bind a `DefaultPlugins` expression and pass it
+/// through `maybe_windowless`, as the new-project template does.
+fn windowless_binding(indent: &str, plugins: &str) -> String {
+    format!(
+        "{indent}let default_plugins = {plugins};\n\
+         {indent}let default_plugins = jackdaw_runtime::maybe_windowless(default_plugins);\n\n",
+    )
+}
+
+/// `main.rs` source with its `DefaultPlugins` passed through
+/// `jackdaw_runtime::maybe_windowless`. `None` when `fn main` has no
+/// `App::new()...run()` builder adding `DefaultPlugins` on its own.
+pub(crate) fn wrap_default_plugins(source: &str) -> Option<String> {
+    let file = syn::parse_file(source).ok()?;
+    let main_fn = file.items.iter().find_map(|item| match item {
+        syn::Item::Fn(f) if f.sig.ident == "main" => Some(f),
+        _ => None,
+    })?;
+    let offsets = LineOffsets::new(source);
+    let (builder, anchor) = find_builder(&main_fn.block).ok()?;
+    let classified = classify_builder(&builder, anchor, &offsets).ok()?;
+    let (start, end, plugins) = classified.default_plugins.as_ref()?;
+    let insert_at = classified.windowless_at;
+    if insert_at > *start {
+        return None;
+    }
+    let mut out = source.to_string();
+    out.replace_range(*start..*end, "default_plugins");
+    out.insert_str(
+        insert_at,
+        &windowless_binding(&indent_at(source, insert_at), plugins),
+    );
+    syn::parse_file(&out).ok()?;
+    Some(out)
+}
+
+/// How many `impl Plugin for <plugin>` blocks `source` declares, inline
+/// modules included.
+pub(crate) fn plugin_impl_count(source: &str, plugin: &str) -> usize {
+    syn::parse_file(source).map_or(0, |file| {
+        let mut found = Vec::new();
+        collect_plugin_impls(&file.items, plugin, &mut found);
+        found.len()
+    })
+}
+
+fn collect_plugin_impls<'a>(
+    items: &'a [syn::Item],
+    plugin: &str,
+    out: &mut Vec<&'a syn::ItemImpl>,
+) {
+    for item in items {
+        match item {
+            syn::Item::Impl(imp) => {
+                let is_plugin_trait = imp
+                    .trait_
+                    .as_ref()
+                    .and_then(|(_, path, _)| path.segments.last())
+                    .is_some_and(|segment| segment.ident == "Plugin");
+                let is_target = matches!(&*imp.self_ty, syn::Type::Path(ty)
+                    if ty.path.segments.last().is_some_and(|segment| segment.ident == plugin));
+                if is_plugin_trait && is_target {
+                    out.push(imp);
+                }
+            }
+            syn::Item::Mod(module) => {
+                if let Some((_, items)) = &module.content {
+                    collect_plugin_impls(items, plugin, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `source` with `app.add_plugins(jackdaw_runtime::JackdawPlugin);` as the
+/// first statement of the one `impl Plugin for <plugin>` block's `build`.
+///
+/// An unused `_app` (or `_`) parameter is renamed to `app`. `None` when the
+/// file has no such impl or more than one, when `build` is missing, or when
+/// the parameter cannot be renamed without changing what the body refers to.
+pub(crate) fn add_runtime_plugin(source: &str, plugin: &str) -> Option<String> {
+    use jackdaw_project_build::runtime_wiring::mentions_ident;
+
+    let file = syn::parse_file(source).ok()?;
+    let mut impls = Vec::new();
+    collect_plugin_impls(&file.items, plugin, &mut impls);
+    let [imp] = impls.as_slice() else {
+        return None;
+    };
+    let build = imp.items.iter().find_map(|item| match item {
+        syn::ImplItem::Fn(f) if f.sig.ident == "build" => Some(f),
+        _ => None,
+    })?;
+    let syn::FnArg::Typed(arg) = build.sig.inputs.iter().nth(1)? else {
+        return None;
+    };
+    let offsets = LineOffsets::new(source);
+    let body = offsets.slice_span(build.block.span());
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let (param, param_span) = match &*arg.pat {
+        syn::Pat::Ident(pat) if pat.by_ref.is_none() && pat.subpat.is_none() => {
+            (pat.ident.to_string(), pat.ident.span())
+        }
+        syn::Pat::Wild(wild) => ("_".to_string(), wild.underscore_token.span),
+        _ => return None,
+    };
+    let app = match param.strip_prefix('_') {
+        Some(_) => {
+            if mentions_ident(body, "app") || (param != "_" && mentions_ident(body, &param)) {
+                return None;
+            }
+            edits.push((
+                offsets.to_byte(param_span.start()),
+                offsets.to_byte(param_span.end()),
+                "app".to_string(),
+            ));
+            "app".to_string()
+        }
+        None => param,
+    };
+
+    let fn_indent = indent_at(source, offsets.to_byte(build.sig.fn_token.span.start()));
+    let step = if fn_indent.contains('\t') {
+        "\t"
+    } else {
+        "    "
+    };
+    let statement = format!("{fn_indent}{step}{app}.add_plugins(jackdaw_runtime::JackdawPlugin);");
+    let open = offsets.to_byte(build.block.brace_token.span.open().end());
+    let close = offsets.to_byte(build.block.brace_token.span.close().start());
+    if source.get(open..close)?.trim().is_empty() {
+        edits.push((open, close, format!("\n{statement}\n{fn_indent}")));
+    } else {
+        edits.push((open, open, format!("\n{statement}")));
+    }
+
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
+    let mut out = source.to_string();
+    for (start, end, text) in edits {
+        out.replace_range(start..end, &text);
+    }
+    syn::parse_file(&out).ok()?;
+    Some(out)
+}
+
 /// One relocated `App` builder call, e.g. `add_systems(Update, move_player)`.
 struct MovedCall {
     /// The `app.<...>;` line emitted into `GamePlugin::build`.
@@ -401,9 +537,11 @@ struct Classified {
     let_form: bool,
     /// `add_plugins(..)` left in main (`DefaultPlugins` / ambient), for the notes.
     kept_plugins: Vec<String>,
-    /// Line-start byte of the builder statement (`App::new()` / `let mut app`),
-    /// where the `let default_plugins = ...` pie-wrap is inserted.
-    builder_stmt_start: usize,
+    /// Where the `let default_plugins = ...` bindings are inserted: the line
+    /// start of the builder statement (`App::new()...`), or for the let form
+    /// of the `app.add_plugins(DefaultPlugins..)` statement itself, so locals
+    /// declared between `App::new()` and that call stay in scope.
+    windowless_at: usize,
     /// The kept `add_plugins(DefaultPlugins...)` argument: its `[start, end)`
     /// byte range and verbatim text, used to wrap it with `maybe_windowless` so
     /// embedded Play works without hand-editing. `None` if no `DefaultPlugins`
@@ -539,6 +677,7 @@ fn classify_builder(
     let mut delete_ranges = Vec::new();
     let mut kept_plugins = Vec::new();
     let mut default_plugins = None;
+    let mut default_call_start = 0;
 
     let mut handle = |mc: &syn::ExprMethodCall| -> Result<(), MigrationError> {
         let method = mc.method.to_string();
@@ -554,6 +693,7 @@ fn classify_builder(
                     let start = offsets.to_byte(first.span().start());
                     let end = offsets.to_byte(first.span().end());
                     default_plugins = Some((start, end, arg.clone()));
+                    default_call_start = offsets.to_byte(mc.span().start());
                 }
                 kept_plugins.push(arg);
             }
@@ -598,11 +738,15 @@ fn classify_builder(
     // behind), the line start is outside the function body, so anchor to
     // the statement itself instead: the bindings must land inside the
     // block or the file no longer parses.
-    let anchor_start = offsets.to_byte(anchor.start());
-    let builder_stmt_start = if starts_its_line(offsets.src, anchor_start) {
-        line_start_of(offsets.src, anchor_start)
+    let statement_start = if let_form && default_plugins.is_some() {
+        default_call_start
     } else {
-        anchor_start
+        offsets.to_byte(anchor.start())
+    };
+    let windowless_at = if starts_its_line(offsets.src, statement_start) {
+        line_start_of(offsets.src, statement_start)
+    } else {
+        statement_start
     };
 
     Ok(Classified {
@@ -611,7 +755,7 @@ fn classify_builder(
         inject_at,
         let_form,
         kept_plugins,
-        builder_stmt_start,
+        windowless_at,
         default_plugins,
     })
 }
@@ -720,9 +864,9 @@ fn render_lib(
     );
 
     // Imports: bevy's prelude, then whatever main imported. The runtime
-    // prelude is only emitted when the project actually depends on
-    // `jackdaw_runtime`; import never edits the manifest, so referencing
-    // an undeclared crate here would leave the project uncompilable.
+    // prelude is only emitted when the project depends on
+    // `jackdaw_runtime`; referencing an undeclared crate here would leave
+    // the project uncompilable.
     out.push_str("use bevy::prelude::*;\n");
     if has_runtime_dep {
         out.push_str("use jackdaw_runtime::prelude::*;\n");
@@ -745,7 +889,14 @@ fn render_lib(
     // GamePlugin. With nothing to relocate the parameter goes unused, so
     // name it `_app`: a freshly imported project must not greet the user
     // with a compiler warning.
-    let app_param = if moved_calls.is_empty() {
+    let add_runtime_plugin = has_runtime_dep
+        && !moved_calls.iter().any(|call| {
+            jackdaw_project_build::runtime_wiring::mentions_ident(
+                &call.rendered,
+                jackdaw_project_build::runtime_wiring::RUNTIME_PLUGIN,
+            )
+        });
+    let app_param = if moved_calls.is_empty() && !add_runtime_plugin {
         "_app"
     } else {
         "app"
@@ -766,6 +917,9 @@ fn render_lib(
          impl Plugin for {plugin_name} {{\n\
          \x20   fn build(&self, {app_param}: &mut App) {{\n"
     ));
+    if add_runtime_plugin {
+        out.push_str("        app.add_plugins(JackdawPlugin);\n");
+    }
     if moved_calls.is_empty() {
         out.push_str("        // Add your systems and resources here.\n");
     } else {
@@ -870,7 +1024,7 @@ fn render_main(
     };
     edits.push((inject_at, inject_at, inject));
 
-    // Wrap DefaultPlugins with `maybe_windowless` (under the `pie` feature) so
+    // Wrap DefaultPlugins with `maybe_windowless` (from the runtime's `pie` feature) so
     // the game runs inside the editor's Game panel during Play. Replace the
     // add_plugins argument with `default_plugins` and bind it just before the
     // builder, mirroring the new-project template.
@@ -878,13 +1032,8 @@ fn render_main(
         c.default_plugins.as_ref().filter(|_| has_runtime_dep)
     {
         edits.push((*arg_start, *arg_end, "default_plugins".to_string()));
-        let bi = indent_at(source, c.builder_stmt_start);
-        let wrap = format!(
-            "{bi}let default_plugins = {arg_text};\n\
-             {bi}#[cfg(feature = \"pie\")]\n\
-             {bi}let default_plugins = jackdaw_runtime::maybe_windowless(default_plugins);\n\n",
-        );
-        edits.push((c.builder_stmt_start, c.builder_stmt_start, wrap));
+        let wrap = windowless_binding(&indent_at(source, c.windowless_at), arg_text);
+        edits.push((c.windowless_at, c.windowless_at, wrap));
     }
 
     // Apply edits right-to-left so earlier offsets stay valid.
@@ -1131,6 +1280,11 @@ impl<'a> LineOffsets<'a> {
 mod tests {
     use super::*;
 
+    fn depends_on_runtime(root: &Path) -> bool {
+        std::fs::read_to_string(root.join("Cargo.toml"))
+            .is_ok_and(|text| text.contains("jackdaw_runtime"))
+    }
+
     /// A bin-only Bevy project whose only dependency is bevy: what a
     /// user importing an existing game usually has.
     fn project(main_rs: &str) -> std::path::PathBuf {
@@ -1230,7 +1384,7 @@ fn main() {
 }
 "#;
         let dir = project_with_runtime(OWN_PLUGIN);
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
 
         assert_eq!(plan.plugin, "JackdawGamePlugin");
         assert_eq!(
@@ -1268,7 +1422,7 @@ fn main() {
     #[test]
     fn migrates_chained_builder() {
         let dir = project_with_runtime(CHAINED);
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
 
         // Definitions moved and made public.
         assert!(plan.lib_rs.contains("pub struct Player"));
@@ -1309,12 +1463,12 @@ fn main() {
         );
 
         // Embedded Play is wired without hand-editing: DefaultPlugins is bound,
-        // wrapped with maybe_windowless under the pie feature, and added.
+        // wrapped with maybe_windowless, and added.
         assert!(
             plan.main_rs
                 .contains("let default_plugins = DefaultPlugins;")
         );
-        assert!(plan.main_rs.contains("#[cfg(feature = \"pie\")]"));
+        assert!(!plan.main_rs.contains("cfg(feature"));
         assert!(
             plan.main_rs
                 .contains("jackdaw_runtime::maybe_windowless(default_plugins)")
@@ -1350,7 +1504,7 @@ fn main() {
     #[test]
     fn migrates_let_form_builder() {
         let dir = project_with_runtime(LET_FORM);
-        let plan = plan_migration(&dir, "scorer").expect("plan");
+        let plan = plan_migration(&dir, "scorer", depends_on_runtime(&dir)).expect("plan");
 
         assert!(plan.lib_rs.contains("pub struct Score"));
         assert!(plan.lib_rs.contains("pub fn tick"));
@@ -1393,7 +1547,7 @@ fn main() {
     #[test]
     fn apply_writes_files_and_backup() {
         let dir = project(CHAINED);
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
         apply_migration(&dir, &plan).expect("apply");
 
         let main_rs = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
@@ -1416,7 +1570,8 @@ fn main() {
         let dir = project(
             "use bevy::prelude::*;\nfn main() { App::new().add_plugins(DefaultPlugins).run(); }\n",
         );
-        let plan = plan_migration(&dir, "my_game").expect("single-line main should migrate");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir))
+            .expect("single-line main should migrate");
         assert!(plan.main_rs.contains("add_plugins(my_game::GamePlugin)"));
         assert!(plan.main_rs.contains(".run()"));
         syn::parse_file(&plan.main_rs)
@@ -1426,7 +1581,7 @@ fn main() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Import never edits the manifest, so a migration must not emit
+    /// Without the runtime dependency a migration must not emit
     /// code naming a crate the project does not depend on: that would
     /// leave a project that was building before import unable to
     /// compile after it.
@@ -1449,7 +1604,7 @@ fn main() {
              \x20       .run();\n\
              }\n",
         );
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
         for expected in [
             "app.init_resource::<Score>();",
             "app.add_event::<Hit>();",
@@ -1478,7 +1633,7 @@ fn main() {
              \x20       .run();\n\
              }\n",
         );
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
         assert!(
             plan.lib_rs.contains("app.add_systems::<_, ()>(Update,"),
             "got:\n{}",
@@ -1490,7 +1645,7 @@ fn main() {
     #[test]
     fn migration_names_no_undeclared_crates() {
         let dir = project(CHAINED);
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
         // `project()` writes a manifest with bevy only.
         assert!(
             !plan.lib_rs.contains("use jackdaw_runtime"),
@@ -1517,8 +1672,9 @@ fn main() {
     #[test]
     fn migration_uses_the_runtime_when_it_is_a_dependency() {
         let dir = project_with_runtime(CHAINED);
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
         assert!(plan.lib_rs.contains("use jackdaw_runtime::prelude::*;"));
+        assert!(plan.lib_rs.contains("app.add_plugins(JackdawPlugin);"));
         assert!(
             plan.main_rs
                 .contains("jackdaw_runtime::maybe_windowless(default_plugins)")
@@ -1533,7 +1689,7 @@ fn main() {
         let dir = project(
             "use bevy::prelude::*;\nfn main() { App::new().add_plugins(DefaultPlugins).run(); }\n",
         );
-        let plan = plan_migration(&dir, "my_game").expect("plan");
+        let plan = plan_migration(&dir, "my_game", depends_on_runtime(&dir)).expect("plan");
         assert!(
             plan.lib_rs.contains("fn build(&self, _app: &mut App)"),
             "got:\n{}",
@@ -1544,11 +1700,44 @@ fn main() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    const LET_FORM_WITH_LOCAL: &str = "use bevy::prelude::*;
+
+fn main() {
+    let mut app = App::new();
+    let dir = std::env::var(\"A\").unwrap();
+    app.add_plugins(DefaultPlugins.set(AssetPlugin {
+        file_path: dir,
+        ..default()
+    }));
+    app.run();
+}
+";
+
+    fn binding_follows_local(main_rs: &str) {
+        let local = main_rs.find("let dir").expect("local kept");
+        let binding = main_rs
+            .find("let default_plugins = DefaultPlugins")
+            .unwrap_or_else(|| panic!("binding added:\n{main_rs}"));
+        assert!(local < binding, "binding must follow the local:\n{main_rs}");
+        assert!(main_rs.contains("app.add_plugins(default_plugins);"));
+        assert!(syn::parse_file(main_rs).is_ok());
+    }
+
+    #[test]
+    fn the_windowless_binding_follows_locals_the_plugins_use() {
+        binding_follows_local(&wrap_default_plugins(LET_FORM_WITH_LOCAL).expect("wrapped"));
+
+        let dir = project_with_runtime(LET_FORM_WITH_LOCAL);
+        let plan = plan_migration(&dir, "my_game", true).expect("plan");
+        binding_follows_local(&plan.main_rs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn declines_unsupported_shape() {
         // No App::new() at all.
         let dir = project("fn main() {\n    println!(\"hi\");\n}\n");
-        let err = plan_migration(&dir, "weird").unwrap_err();
+        let err = plan_migration(&dir, "weird", depends_on_runtime(&dir)).unwrap_err();
         assert!(matches!(err, MigrationError::Unsupported(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1560,7 +1749,7 @@ fn main() {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(matches!(
-            plan_migration(&dir, "x"),
+            plan_migration(&dir, "x", depends_on_runtime(&dir)),
             Err(MigrationError::NoMainRs)
         ));
         let _ = std::fs::remove_dir_all(&dir);

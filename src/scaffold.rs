@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use bevy::app::AppExit;
 use include_dir::{Dir, include_dir};
 use jackdaw_env::rust_env_command;
+use jackdaw_project_build::runtime_wiring::{
+    PIE_FEATURE, RUNTIME_CRATE, RUNTIME_FEATURES, RuntimeDependency, RuntimeWiring,
+};
 use path_slash::PathExt as _;
 use toml_edit::DocumentMut;
 
@@ -424,6 +427,11 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
     match plan_import_with(&root, plugin, package.as_deref(), allow_mismatch) {
         Ok(plan) if plan.is_empty() => {
             println!("jd import: {} is already set up", root.display());
+            if !RuntimeWiring::inspect(&plan.package_dir).complete() {
+                for note in &plan.notes {
+                    println!("  note: {note}");
+                }
+            }
             println!("\nNext: `jd open {}`", root.display());
             AppExit::Success
         }
@@ -1012,9 +1020,11 @@ pub fn plan_import_with(
     // every later check report health and silently disable the warning
     // the user chose to defer, which is the opposite of deferring it.
     let mut pinned_bevy = None;
+    let mut bevy_mismatch = false;
     match check_bevy_version(&doc, workspace_doc.as_ref()) {
         Ok(()) => {}
         Err(error) if allow_bevy_mismatch => {
+            bevy_mismatch = true;
             if let ScaffoldError::BevyVersion { found } = &error {
                 pinned_bevy = bevy_minor_of(found);
             }
@@ -1036,6 +1046,42 @@ pub fn plan_import_with(
         ));
     }
 
+    // A runtime built for this editor's Bevy cannot join a project on
+    // another one, so a mismatched import only reports what is missing. A
+    // declaration import cannot safely extend is left to the user, and no
+    // source may name the crate until it is a plain dependency.
+    let wiring = RuntimeWiring::inspect(&package_dir);
+    let declared_plain = wiring.dependency == RuntimeDependency::Plain;
+    let wire_runtime = !bevy_mismatch
+        && matches!(
+            wiring.dependency,
+            RuntimeDependency::Missing | RuntimeDependency::Plain
+        );
+    let plugin_ready = wire_runtime || declared_plain;
+    let pie_always = wiring.pie_feature || (wire_runtime && !wiring.pie_via_feature);
+    let windowless_ready = plugin_ready && pie_always;
+    if let RuntimeDependency::Unsupported(form) = wiring.dependency {
+        notes.push(format!(
+            "Cargo.toml declares jackdaw_runtime as {form}, so import leaves it and your \
+             sources alone; make it a plain [dependencies] entry with the `pie` feature and \
+             re-run `jd import`"
+        ));
+    }
+    if wire_runtime && let Some(updated) = runtime_dependency_edit(&manifest_text, &wiring) {
+        changes.push(ImportChange::WriteFile {
+            path: package_manifest.clone(),
+            contents: updated,
+            replace: true,
+        });
+        notes.push(if declared_plain {
+            "Cargo.toml: enables the `pie` feature of jackdaw_runtime, which Play needs".to_string()
+        } else {
+            "Cargo.toml: adds jackdaw_runtime (features physics, pie), which component \
+             discovery and Play need"
+                .to_string()
+        });
+    }
+
     // Lib target: an explicit [lib] or the conventional src/lib.rs.
     let has_lib = doc.get("lib").is_some() || package_dir.join("src/lib.rs").is_file();
     // The plugin the migration will declare. Not always `GamePlugin`: a
@@ -1044,7 +1090,7 @@ pub fn plan_import_with(
     // that will not exist.
     let mut migrated_plugin: Option<String> = None;
     if !has_lib {
-        match crate::migrate::plan_migration(&package_dir, &package.crate_name) {
+        match crate::migrate::plan_migration(&package_dir, &package.crate_name, windowless_ready) {
             Ok(migration) => {
                 let main_path = package_dir.join("src/main.rs");
                 let original_main = std::fs::read_to_string(&main_path)
@@ -1071,7 +1117,7 @@ pub fn plan_import_with(
             Err(error) => {
                 changes.push(ImportChange::WriteFile {
                     path: package_dir.join("src/lib.rs"),
-                    contents: lib_stub_source().to_string(),
+                    contents: lib_stub_source(plugin_ready),
                     replace: false,
                 });
                 notes.push(format!(
@@ -1160,15 +1206,56 @@ pub fn plan_import_with(
         }
     }
 
-    // Authoring levels is only half the loop; the game has to load them.
-    // Import never edits the manifest, so say exactly what to add. A
-    // migration emits this itself, so avoid saying it twice.
-    let has_runtime_dep = doc
-        .get("dependencies")
-        .and_then(|deps| deps.get("jackdaw_runtime"))
-        .is_some();
-    if !has_runtime_dep && !migrated_bin_target {
-        notes.push(crate::migrate::runtime_wiring_note());
+    // A migration and the library stub wire the runtime themselves.
+    if !migrated_bin_target {
+        if bevy_mismatch && wiring.dependency == RuntimeDependency::Missing {
+            notes.push(format!(
+                "add the runtime once the project is on bevy {}: cargo add jackdaw_runtime@{} \
+                 --features physics,pie",
+                jackdaw_project_build::BEVY_VERSION,
+                jackdaw_project_build::BEVY_VERSION
+            ));
+        }
+        if !wiring.plugin && (has_lib || !plugin_ready) {
+            let edit = plugin_ready
+                .then_some(plugin.as_deref())
+                .flatten()
+                .and_then(|name| runtime_plugin_edit(&package_dir, name));
+            match edit {
+                Some((path, contents)) => {
+                    changes.push(ImportChange::WriteFile {
+                        path,
+                        contents,
+                        replace: true,
+                    });
+                    if let Some(name) = plugin.as_deref().and_then(|p| p.rsplit("::").next())
+                        && let Ok(main) = std::fs::read_to_string(package_dir.join("src/main.rs"))
+                        && !jackdaw_project_build::runtime_wiring::mentions_ident(&main, name)
+                    {
+                        notes.push(format!(
+                            "src/main.rs does not add `{name}`; add it to your App so Play and \
+                             component discovery reach the runtime plugin"
+                        ));
+                    }
+                }
+                None => notes.push(crate::migrate::runtime_wiring_note()),
+            }
+        }
+        if !wiring.windowless {
+            let main_path = package_dir.join("src/main.rs");
+            let wrapped = windowless_ready
+                .then(|| std::fs::read_to_string(&main_path).ok())
+                .flatten()
+                .and_then(|source| crate::migrate::wrap_default_plugins(&source));
+            match wrapped {
+                Some(contents) => changes.push(ImportChange::WriteFile {
+                    path: main_path,
+                    contents,
+                    replace: true,
+                }),
+                None => notes.push(crate::migrate::windowless_note()),
+            }
+        }
     }
 
     let jackdaw_toml = root.join("jackdaw.toml");
@@ -1342,14 +1429,114 @@ fn version_req_of(item: &toml_edit::Item) -> Option<String> {
         .filter(|req| !req.is_empty())
 }
 
+/// `manifest` with `jackdaw_runtime` declared, or with `pie` added to an
+/// existing plain declaration that lacks it. `None` when nothing is missing
+/// or the declaration is one this edit does not touch. A member of a
+/// workspace that declares the runtime inherits it from there.
+///
+/// Edited in place so the user's formatting, comments and key order
+/// survive. A `{ workspace = true }` entry gets the feature on the member's
+/// side, which cargo unions with whatever the workspace declares.
+fn runtime_dependency_edit(manifest: &str, wiring: &RuntimeWiring) -> Option<String> {
+    let declared = match wiring.dependency {
+        RuntimeDependency::Missing => false,
+        RuntimeDependency::Plain if !wiring.pie_available() => true,
+        _ => return None,
+    };
+    let mut doc: DocumentMut = manifest.parse().ok()?;
+    let deps = doc
+        .entry("dependencies")
+        .or_insert_with(toml_edit::table)
+        .as_table_like_mut()?;
+    if !declared {
+        let features = RUNTIME_FEATURES
+            .iter()
+            .map(|feature| format!("\"{feature}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = if wiring.workspace_declares {
+            "workspace = true".to_string()
+        } else {
+            jackdaw_dep_requirement(RUNTIME_CRATE)
+        };
+        let entry: DocumentMut = format!("entry = {{ {source}, features = [{features}] }}")
+            .parse()
+            .ok()?;
+        let mut value = entry.get("entry")?.as_value()?.clone();
+        value.decor_mut().clear();
+        deps.insert(RUNTIME_CRATE, toml_edit::Item::Value(value));
+        return Some(doc.to_string());
+    }
+    let entry = deps.get_mut(RUNTIME_CRATE)?;
+    if let Some(value) = entry.as_value()
+        && let Some(version) = value.as_str()
+    {
+        let decor = value.decor().clone();
+        let mut table = toml_edit::InlineTable::new();
+        table.insert("version", version.into());
+        let mut replacement = toml_edit::Value::from(table);
+        *replacement.decor_mut() = decor;
+        *entry = toml_edit::Item::Value(replacement);
+    }
+    let table = entry.as_table_like_mut()?;
+    match table
+        .get_mut("features")
+        .and_then(toml_edit::Item::as_array_mut)
+    {
+        Some(features) => features.push(PIE_FEATURE),
+        None => {
+            let mut features = toml_edit::Array::new();
+            features.push(PIE_FEATURE);
+            table.insert("features", toml_edit::value(features));
+        }
+    }
+    if let Some(inline) = entry.as_inline_table_mut() {
+        inline.fmt();
+    }
+    Some(doc.to_string())
+}
+
+/// The library file declaring `impl Plugin for <plugin>`, rewritten so its
+/// `build` adds `JackdawPlugin`. `None` unless exactly one library file
+/// declares exactly one such impl with a `build` that can be edited.
+fn runtime_plugin_edit(package_dir: &Path, plugin: &str) -> Option<(PathBuf, String)> {
+    let name = plugin.rsplit("::").next()?;
+    let src = package_dir.join("src");
+    let mut declaring = jackdaw_project_build::runtime_wiring::source_files(&src)
+        .into_iter()
+        .filter(|path| path != &src.join("main.rs") && !path.starts_with(src.join("bin")))
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let count = crate::migrate::plugin_impl_count(&text, name);
+            (count > 0).then_some((path, text, count))
+        });
+    let (path, text, count) = declaring.next()?;
+    if count != 1 || declaring.next().is_some() {
+        return None;
+    }
+    let contents = crate::migrate::add_runtime_plugin(&text, name)?;
+    Some((path, contents))
+}
+
 fn has_jackdaw_gitignore(contents: &str) -> bool {
     contents
         .lines()
         .any(|l| l.trim() == "/.jackdaw" || l.trim() == ".jackdaw" || l.trim() == ".jackdaw/")
 }
 
-fn lib_stub_source() -> &'static str {
-    r#"//! Game library: put gameplay here and add [`GamePlugin`] from
+/// The library stub for a bin-only project. `with_runtime` adds
+/// `JackdawPlugin` from the plugin, for a project that depends on the
+/// runtime.
+fn lib_stub_source(with_runtime: bool) -> String {
+    let build = if with_runtime {
+        "fn build(&self, app: &mut App) {\n        app.add_plugins(jackdaw_runtime::JackdawPlugin);\n    }"
+    } else {
+        "fn build(&self, _app: &mut App) {}"
+    };
+    LIB_STUB.replace("{build}", build)
+}
+
+const LIB_STUB: &str = r#"//! Game library: put gameplay here and add [`GamePlugin`] from
 //! `main.rs` so `cargo run` and the editor's Play button share it.
 //! Move your game setup (systems, resources, observers) in here
 //! from main.rs.
@@ -1369,7 +1556,7 @@ use bevy::prelude::*;
 pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
-    fn build(&self, _app: &mut App) {}
+    {build}
 }
 
 // Example: an editable component. Uncomment, save, and Rebuild to see
@@ -1381,8 +1568,7 @@ impl Plugin for GamePlugin {
 //     pub max: f32,
 //     pub current: f32,
 // }
-"#
-}
+"#;
 
 /// The `major.minor` a version requirement names, for reporting and for
 /// recording what a project targets. `None` when the requirement states
@@ -1669,7 +1855,7 @@ mod tests {
     }
 
     #[test]
-    fn import_writes_additive_files_only() {
+    fn import_adds_the_runtime_alongside_its_own_files() {
         let root = temp_dir("import");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
@@ -1682,14 +1868,11 @@ mod tests {
             "pub struct TheirPlugin;\nimpl Plugin for TheirPlugin {}\n",
         )
         .unwrap();
-        let before = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-
         let report = import_project(&root, None).unwrap();
         assert!(!report.created_lib_stub);
-        assert_eq!(
-            before,
-            std::fs::read_to_string(root.join("Cargo.toml")).unwrap()
-        );
+        let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("bevy = \"0.19\""));
+        assert!(cargo.contains("jackdaw_runtime"));
         let toml = std::fs::read_to_string(root.join("jackdaw.toml")).unwrap();
         assert!(toml.contains("plugin = \"TheirPlugin\""));
         assert!(root.join(".jackdaw").is_dir());
@@ -1958,6 +2141,13 @@ mod tests {
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
 
         let plan = plan_import_with(&root, None, None, true).unwrap();
+        assert!(
+            !plan.changes.iter().any(|change| matches!(
+                change,
+                ImportChange::WriteFile { path, .. } if path.ends_with("Cargo.toml")
+            )),
+            "a runtime for another bevy must not be added"
+        );
         apply_import_plan(&plan).unwrap();
 
         let manifest = jackdaw_project_build::project_manifest::ProjectManifest::read(&root);
@@ -2297,6 +2487,314 @@ mod tests {
                 "`{bad}` should be rejected"
             );
         }
+    }
+
+    fn bevy_game(name: &str, deps: &str) -> PathBuf {
+        let root = temp_dir(name);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                 [dependencies]\n{deps}"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "use bevy::prelude::*;\n\npub struct GamePlugin;\n\n\
+             impl Plugin for GamePlugin {\n    fn build(&self, _app: &mut App) {}\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            "use bevy::prelude::*;\n\nfn main() {\n    App::new()\n        \
+             .add_plugins(DefaultPlugins)\n        .add_plugins(my_game::GamePlugin)\n        \
+             .run();\n}\n",
+        )
+        .unwrap();
+        root
+    }
+
+    fn planned_contents(plan: &ImportPlan, path: &Path) -> Option<String> {
+        plan.changes.iter().find_map(|change| match change {
+            ImportChange::WriteFile {
+                path: written,
+                contents,
+                ..
+            } if written == path => Some(contents.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn import_wires_the_runtime_into_a_plain_bevy_game() {
+        let root = bevy_game("wire-runtime", "bevy = \"0.19\"\n");
+
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).expect("Cargo.toml edit");
+        assert!(
+            cargo.contains(&format!(
+                "jackdaw_runtime = {{ {}, features = [\"physics\", \"pie\"] }}",
+                jackdaw_dep_requirement("jackdaw_runtime")
+            )),
+            "got:\n{cargo}"
+        );
+        let lib = planned_contents(&plan, &root.join("src/lib.rs")).expect("lib.rs edit");
+        assert!(
+            lib.contains(
+                "fn build(&self, app: &mut App) {\n        \
+                 app.add_plugins(jackdaw_runtime::JackdawPlugin);\n    }"
+            ),
+            "got:\n{lib}"
+        );
+        let main = planned_contents(&plan, &root.join("src/main.rs")).expect("main.rs edit");
+        assert!(
+            main.contains(
+                "let default_plugins = jackdaw_runtime::maybe_windowless(default_plugins);"
+            ),
+            "got:\n{main}"
+        );
+        assert!(main.contains(".add_plugins(default_plugins)"));
+        assert!(
+            plan.changes
+                .iter()
+                .any(|change| change.summary().starts_with("modify ")
+                    && change.summary().ends_with("Cargo.toml")),
+            "the preview lists the manifest edit"
+        );
+        assert!(
+            !plan
+                .notes
+                .iter()
+                .any(|note| note.contains("add_plugins(jackdaw_runtime")),
+            "no manual step is left once the edit is made: {:?}",
+            plan.notes
+        );
+    }
+
+    #[test]
+    fn a_second_import_has_nothing_to_do() {
+        let root = bevy_game("reimport", "bevy = \"0.19\"\n");
+        apply_import_plan(&plan_import_project(&root, None).unwrap()).unwrap();
+
+        let again = plan_import_project(&root, None).unwrap();
+        assert!(again.is_empty(), "second run planned {:?}", again.changes);
+    }
+
+    #[test]
+    fn import_enables_pie_on_an_existing_runtime_dependency() {
+        let root = bevy_game("add-pie", "bevy = \"0.19\"\njackdaw_runtime = \"0.19\"\n");
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("jackdaw_runtime = { version = \"0.19\", features = [\"pie\"] }"),
+            "got:\n{cargo}"
+        );
+
+        let root = bevy_game(
+            "extend-features",
+            "bevy = \"0.19\"\njackdaw_runtime = { version = \"0.19\", features = [\"physics\"] }\n",
+        );
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("features = [\"physics\", \"pie\"]"),
+            "got:\n{cargo}"
+        );
+    }
+
+    #[test]
+    fn import_adds_pie_to_a_workspace_inherited_runtime() {
+        let root = temp_dir("ws-runtime");
+        let workspace = "[workspace]\nresolver = \"3\"\nmembers = [\"game\"]\n\n\
+                         [workspace.dependencies]\njackdaw_runtime = \"0.19\"\n";
+        std::fs::write(root.join("Cargo.toml"), workspace).unwrap();
+        let member = root.join("game");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\nbevy = \"0.19\"\njackdaw_runtime = { workspace = true }\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
+
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &member.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("jackdaw_runtime = { workspace = true, features = [\"pie\"] }"),
+            "got:\n{cargo}"
+        );
+        assert!(planned_contents(&plan, &root.join("Cargo.toml")).is_none());
+
+        std::fs::write(
+            root.join("Cargo.toml"),
+            workspace.replace(
+                "jackdaw_runtime = \"0.19\"",
+                "jackdaw_runtime = { version = \"0.19\", features = [\"pie\"] }",
+            ),
+        )
+        .unwrap();
+        let plan = plan_import_project(&root, None).unwrap();
+        assert!(
+            planned_contents(&plan, &member.join("Cargo.toml")).is_none(),
+            "pie already comes from the workspace"
+        );
+    }
+
+    #[test]
+    fn the_runtime_edit_keeps_manifest_comments_and_order() {
+        let root = bevy_game(
+            "keep-comments",
+            "# Engine.\nbevy = \"0.19\" # pinned to the minor\n\n# Utilities.\nrand = \"0.9\"\n",
+        );
+        let before = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
+        assert!(cargo.starts_with(&before), "got:\n{cargo}");
+        assert!(cargo[before.len()..].starts_with("jackdaw_runtime = {"));
+    }
+
+    #[test]
+    fn enabling_pie_keeps_a_trailing_comment() {
+        let root = bevy_game(
+            "pie-comment",
+            "bevy = \"0.19\"\njackdaw_runtime = \"0.19\" # scene loading\nrand = \"0.9\"\n",
+        );
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains(
+                "jackdaw_runtime = { version = \"0.19\", features = [\"pie\"] } # scene loading\n"
+            ),
+            "got:\n{cargo}"
+        );
+    }
+
+    fn assert_leaves_sources_alone(plan: &ImportPlan, root: &Path) {
+        for file in ["Cargo.toml", "src/lib.rs", "src/main.rs"] {
+            assert!(
+                planned_contents(plan, &root.join(file)).is_none(),
+                "{file} must not be edited: {:?}",
+                plan.notes
+            );
+        }
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("declares jackdaw_runtime as")),
+            "the plan says why: {:?}",
+            plan.notes
+        );
+    }
+
+    #[test]
+    fn an_optional_runtime_gets_notes_not_edits() {
+        let root = bevy_game(
+            "optional-runtime",
+            "bevy = \"0.19\"\njackdaw_runtime = { version = \"0.19\", optional = true }\n",
+        );
+        assert_leaves_sources_alone(&plan_import_project(&root, None).unwrap(), &root);
+    }
+
+    #[test]
+    fn a_renamed_runtime_is_not_declared_twice() {
+        let root = bevy_game(
+            "renamed-runtime",
+            "bevy = \"0.19\"\nruntime = { package = \"jackdaw_runtime\", version = \"0.19\" }\n",
+        );
+        assert_leaves_sources_alone(&plan_import_project(&root, None).unwrap(), &root);
+    }
+
+    #[test]
+    fn a_target_specific_runtime_is_not_declared_again() {
+        let root = bevy_game("target-runtime", "bevy = \"0.19\"\n");
+        let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!("{cargo}\n[target.'cfg(unix)'.dependencies]\njackdaw_runtime = \"0.19\"\n"),
+        )
+        .unwrap();
+        assert_leaves_sources_alone(&plan_import_project(&root, None).unwrap(), &root);
+    }
+
+    #[test]
+    fn pie_from_a_package_feature_is_not_forced_on() {
+        let root = bevy_game(
+            "feature-pie",
+            "bevy = \"0.19\"\njackdaw_runtime = \"0.19\"\n",
+        );
+        let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!("{cargo}\n[features]\neditor = [\"jackdaw_runtime/pie\"]\n"),
+        )
+        .unwrap();
+        let plan = plan_import_project(&root, None).unwrap();
+        assert!(planned_contents(&plan, &root.join("Cargo.toml")).is_none());
+        assert!(
+            planned_contents(&plan, &root.join("src/lib.rs"))
+                .is_some_and(|lib| lib.contains("jackdaw_runtime::JackdawPlugin")),
+            "the plugin needs no feature"
+        );
+        assert!(
+            planned_contents(&plan, &root.join("src/main.rs")).is_none(),
+            "maybe_windowless only exists with pie, which a default build may lack"
+        );
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("maybe_windowless"))
+        );
+    }
+
+    #[test]
+    fn a_member_inherits_the_runtime_its_workspace_declares() {
+        let root = temp_dir("ws-declares-runtime");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"game\"]\n\n\
+             [workspace.dependencies]\njackdaw_runtime = \"0.19\"\n",
+        )
+        .unwrap();
+        let member = root.join("game");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [dependencies]\nbevy = \"0.19\"\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
+
+        let plan = plan_import_project(&root, None).unwrap();
+        let cargo = planned_contents(&plan, &member.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains(
+                "jackdaw_runtime = { workspace = true, features = [\"physics\", \"pie\"] }"
+            ),
+            "got:\n{cargo}"
+        );
+    }
+
+    #[test]
+    fn an_uneditable_plugin_keeps_the_manual_note() {
+        let root = bevy_game("manual-plugin", "bevy = \"0.19\"\n");
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub struct GamePlugin;\nimpl Plugin for GamePlugin {}\n",
+        )
+        .unwrap();
+        let plan = plan_import_project(&root, None).unwrap();
+        assert!(planned_contents(&plan, &root.join("src/lib.rs")).is_none());
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("app.add_plugins(jackdaw_runtime::JackdawPlugin)")),
+            "got: {:?}",
+            plan.notes
+        );
     }
 
     #[test]

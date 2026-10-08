@@ -25,6 +25,7 @@ pub mod detect;
 pub mod linkage;
 pub mod plan;
 pub mod project_manifest;
+pub mod runtime_wiring;
 pub mod sdk_paths;
 pub mod shim;
 

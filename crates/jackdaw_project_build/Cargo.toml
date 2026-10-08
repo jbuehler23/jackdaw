@@ -25,6 +25,7 @@ serde_json.workspace = true
 # cannot be made correct: comments, string literals, and nested modules
 # all defeat it, and a wrong answer here is pasted into generated code.
 syn = { version = "2", features = ["full", "parsing"] }
+proc-macro2 = "1"
 toml = "0.8"
 tracing = { workspace = true }
 jackdaw_schema.workspace = true

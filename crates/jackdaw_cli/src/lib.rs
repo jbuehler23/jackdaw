@@ -247,6 +247,9 @@ fn report_project(root: &Path) -> bool {
             let detected =
                 jackdaw_project_build::detect::detect_plugin(&package.dir, &package.crate_name)
                     .and_then(|path| path.split_once("::").map(|(_, name)| name.to_string()));
+            if extension.is_none() {
+                ok &= report_runtime_wiring(root, &package.dir);
+            }
             match (&extension, configured, &resolved) {
                 (Some((_, name)), ..) => pass(format!("editor extension: {name}")),
                 (None, Some(name), None) => {
@@ -368,6 +371,76 @@ fn report_project(root: &Path) -> bool {
         }
     }
 
+    ok
+}
+
+/// Report the four pieces of runtime wiring component discovery and Play
+/// depend on. Returns whether nothing that blocks them is missing.
+fn report_runtime_wiring(root: &Path, package_dir: &Path) -> bool {
+    use jackdaw_project_build::runtime_wiring::{RuntimeDependency, RuntimeWiring};
+
+    let wiring = RuntimeWiring::inspect(package_dir);
+    let import_fix = format!("jd import --apply {}", root.display());
+    let fail = |problem: &str, fix: &str| {
+        println!("  [fail] {problem}");
+        println!("         fix: {fix}");
+    };
+    let mut ok = true;
+    match wiring.dependency {
+        RuntimeDependency::Plain => println!("  [ ok ] runtime dependency: jackdaw_runtime"),
+        RuntimeDependency::Missing => {
+            ok = false;
+            fail(
+                "runtime dependency: Cargo.toml does not depend on jackdaw_runtime, so the \
+                 editor cannot read this game's components",
+                &import_fix,
+            );
+        }
+        RuntimeDependency::Unsupported(form) => {
+            ok = false;
+            fail(
+                &format!(
+                    "runtime dependency: jackdaw_runtime is declared as {form}, so a default \
+                     build may not link it"
+                ),
+                "make it a plain [dependencies] entry, then run `jd import --apply`",
+            );
+        }
+    }
+    if wiring.pie_available() {
+        println!("  [ ok ] runtime feature: pie enabled");
+    } else {
+        ok = false;
+        fail(
+            "runtime feature: jackdaw_runtime is missing the `pie` feature, so Play cannot \
+             reach the game",
+            &import_fix,
+        );
+    }
+    if wiring.plugin {
+        println!("  [ ok ] runtime plugin: JackdawPlugin added");
+    } else {
+        ok = false;
+        fail(
+            "runtime plugin: nothing adds JackdawPlugin, so component discovery and Play time out",
+            &import_fix,
+        );
+    }
+    if wiring.windowless {
+        println!("  [ ok ] embedded Play: DefaultPlugins pass through maybe_windowless");
+    } else if !wiring.has_main {
+        println!(
+            "  [warn] embedded Play: not checked, no src/main.rs in this package; pass \
+             DefaultPlugins through jackdaw_runtime::maybe_windowless where the game builds its App"
+        );
+    } else {
+        ok = false;
+        fail(
+            "embedded Play: main.rs does not pass DefaultPlugins through maybe_windowless, so \
+             Play cannot show the game in the editor",
+            &import_fix,
+        );
+    }
     ok
 }
 

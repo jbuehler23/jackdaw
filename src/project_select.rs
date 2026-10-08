@@ -1588,8 +1588,9 @@ fn show_setup_jackdaw_card_with_recovery(
             ),
             (
                 Icon::Check,
-                "Leaves your Cargo manifest, lockfile, toolchain, and `target/` alone. \
-                 `cargo run` keeps working exactly as it does now.",
+                "Adds `jackdaw_runtime` to your Cargo manifest and wires its plugin in, \
+                 so the editor can read your components and run Play. `cargo run` still \
+                 runs your game.",
             ),
             (
                 Icon::CircleAlert,
@@ -2464,14 +2465,14 @@ fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan
     let intro = if plan.migrated_bin_target {
         format!(
             "Jackdaw will rewrite `src/main.rs` in `{}`, keeping the original as \
-             `src/main.rs.bak`, and make the changes below. Your Cargo manifest, lockfile, \
-             and `target/` are not touched.",
+             `src/main.rs.bak`, and make the changes below. Your lockfile and `target/` are \
+             not touched.",
             plan.root.display()
         )
     } else {
         format!(
-            "Jackdaw will make these changes to `{}`. Your Cargo manifest, lockfile, and \
-             `target/` are not touched.",
+            "Jackdaw will make these changes to `{}`. Your lockfile and `target/` are not \
+             touched.",
             plan.root.display()
         )
     };
@@ -3394,8 +3395,9 @@ mod tests {
         let text = rendered_text(&mut world);
         assert!(text.iter().any(|t| t.contains("their-game")));
         assert!(
-            text.iter().any(|t| t.contains("cargo run")),
-            "the untouched-manifest guarantee is one of the claims: {text:?}"
+            text.iter()
+                .any(|t| t.contains("jackdaw_runtime") && t.contains("cargo run")),
+            "the manifest change and what it leaves working are one of the claims: {text:?}"
         );
         assert!(
             text.iter().any(|t| t.contains("lists every file first")),

@@ -21,11 +21,17 @@ library plugin. A common bin-only `App::new()` program is converted into
 `src/main.rs.bak`. Unsupported source shapes receive a library stub and a
 clear manual-move note.
 
-Jackdaw never edits the project's Cargo manifest, lockfile, toolchain, or
-ordinary `target/`. `cargo run` therefore behaves exactly as it did before.
-For the same reason, migrated code never references a crate the project does
-not already depend on: add `jackdaw_runtime` yourself to load authored `.bsn`
-scenes in the game.
+The same preview wires in the runtime the editor talks to: it adds
+`jackdaw_runtime` with the `physics` and `pie` features to the game package's
+`Cargo.toml` (or adds `pie` to an existing declaration), adds
+`jackdaw_runtime::JackdawPlugin` in the game plugin's `build`, and passes
+`DefaultPlugins` through `jackdaw_runtime::maybe_windowless` in `main.rs`.
+Component discovery and Play need all four. The manifest is edited in place,
+keeping its comments and layout. When a source edit is ambiguous, the preview
+names the exact lines to add instead, and `jd doctor` reports any piece that
+is still missing. Running the import again finds nothing to do.
+
+Jackdaw never edits the lockfile, toolchain, or ordinary `target/`.
 
 ## Cargo workspaces
 
