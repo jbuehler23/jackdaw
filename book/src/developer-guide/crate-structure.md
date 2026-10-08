@@ -87,7 +87,7 @@ else in the workspace. The interesting layers:
 
 - `jackdaw_project_build`: the build pipeline. Binary builds for
   games, SDK/shim dylib builds for extensions, schema persistence,
-  SDK path resolution, and first-run SDK bootstrap. Deliberately
+  SDK path resolution, and on-demand SDK bootstrap. Deliberately
   bevy-light so the CLI can link it without dragging in a renderer.
 - `jackdaw_schema`: the project type-schema wire format shared by
   games (which produce it) and the editor (which consumes it).

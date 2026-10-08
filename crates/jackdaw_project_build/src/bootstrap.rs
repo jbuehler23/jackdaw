@@ -104,8 +104,8 @@ pub fn recipe_is_embedded() -> bool {
 /// cache holds.
 ///
 /// The validity stamp carries the hash of the embedded recipe, so any edit to the
-/// workspace makes the cache stale and the editor opens on the first-run setup
-/// screen. That is right for a downloaded build and wrong for a driven session
+/// workspace makes the cache stale and the editor waits on an SDK build before
+/// opening an extension project. That is right for a downloaded build and wrong for a driven session
 /// against a checkout.
 ///
 /// Read once, on the first call, so a value that changed mid-run cannot leave one
@@ -138,8 +138,8 @@ pub fn skip_setup_check() {
 /// Whether a first-use SDK build is still owed: this binary carries a
 /// recipe but no matching, resolvable cache exists yet. False in a dev
 /// checkout (no embedded recipe; the dev SDK is used), once setup has
-/// run, and under [`ENV_SKIP_SETUP_CHECK`]. Drives the editor's first-run
-/// setup screen and the CLI's auto-`ensure_sdk`.
+/// run, and under [`ENV_SKIP_SETUP_CHECK`]. Only editor extensions need the
+/// SDK; see [`project_needs_sdk`].
 pub fn needs_setup() -> bool {
     setup_owed(setup_check_skipped(), recipe_is_embedded, sdk_is_stale)
 }
@@ -153,6 +153,66 @@ fn setup_owed(
     sdk_is_stale: impl Fn() -> bool,
 ) -> bool {
     !skipped && recipe_embedded() && sdk_is_stale()
+}
+
+/// Where the extension SDK stands for this install.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SdkState {
+    /// A usable SDK is in place.
+    Ready,
+    /// This install can build the SDK and has not built it yet.
+    NotBuilt,
+    /// No usable SDK, and no recipe in this binary to build one from.
+    Unavailable,
+}
+
+/// The current [`SdkState`]: a stamp read and a few file checks, cheap enough
+/// to ask whenever the launcher opens.
+pub fn sdk_state() -> SdkState {
+    classify_sdk(needs_setup(), recipe_is_embedded, || {
+        crate::sdk_paths::SdkPaths::compute().dylib_exists()
+    })
+}
+
+fn classify_sdk(
+    owed: bool,
+    recipe_embedded: impl Fn() -> bool,
+    resolves: impl Fn() -> bool,
+) -> SdkState {
+    if owed {
+        SdkState::NotBuilt
+    } else if recipe_embedded() || resolves() {
+        SdkState::Ready
+    } else {
+        SdkState::Unavailable
+    }
+}
+
+/// Whether the project at `root` builds against the SDK. Only an editor
+/// extension does: a game builds as its own cargo binary, against its own
+/// Bevy and the `jackdaw_runtime` it depends on.
+pub fn project_needs_sdk(root: &Path) -> bool {
+    if crate::detect::detect_extension(root).is_some() {
+        return true;
+    }
+    // A workspace root has no library of its own; ask cargo which member
+    // jackdaw builds.
+    !root.join("src").join("lib.rs").is_file()
+        && crate::shim_spec_for_project(root).is_ok_and(|spec| spec.extension_type.is_some())
+}
+
+/// Whether opening a project has to wait for an SDK build first: an
+/// extension on an install that can build the SDK and has not.
+pub fn opening_waits_for_sdk(project_is_extension: bool, state: SdkState) -> bool {
+    project_is_extension && state == SdkState::NotBuilt
+}
+
+/// How long an SDK build takes, for the places that warn about it.
+pub const SDK_BUILD_ESTIMATE: &str = "20-30 minutes on a typical machine";
+
+/// Where an SDK build run from the editor writes its log.
+pub fn setup_log_path() -> Option<PathBuf> {
+    cache_dir().map(|cache| cache.join("setup.log"))
 }
 
 /// Whether the SDK this binary would use is missing or built from a recipe
@@ -317,7 +377,7 @@ fn tool_version(cmd: &str, arg: &str) -> Option<String> {
 
 /// Structured progress from [`ensure_sdk`], consumed by the CLI (which
 /// prints phase lines and lets cargo's inherited stderr show its own
-/// progress) and the editor's first-run screen (which drives a progress
+/// progress) and the editor's launcher (which drives a progress
 /// bar from the per-crate counts). Phase strings are static literals.
 pub enum SetupProgress {
     /// A high-level step began (toolchain, unpack, build, manifest).
@@ -399,7 +459,7 @@ pub fn gc_other_versions() {
 /// Build the SDK into the cache if it is missing or stale, and return the
 /// cache dir, which [`SdkPaths::compute`](crate::sdk_paths::SdkPaths::compute)
 /// then resolves with no env var. The first call is slow: it installs the
-/// pinned toolchain via rustup and compiles the SDK (~10-15 min); later
+/// pinned toolchain via rustup and compiles the SDK ([`SDK_BUILD_ESTIMATE`]); later
 /// calls with a matching stamp return at once. `progress` receives phase
 /// strings for the setup UI.
 ///
@@ -453,9 +513,7 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     )
     .map_err(|e| format!("write rust-toolchain.toml: {e}"))?;
 
-    report(SetupProgress::Phase(
-        "Building the SDK (one-time; this can take several minutes)",
-    ));
+    report(SetupProgress::Phase("Building the SDK"));
     build_recipe(&build_dir, &triple, &mut report)?;
 
     report(SetupProgress::Phase("Writing the SDK manifest"));
@@ -728,6 +786,59 @@ mod tests {
             toolchain.detail.contains(SDK_TOOLCHAIN_CHANNEL),
             "it names the toolchain: {}",
             toolchain.detail
+        );
+    }
+
+    fn fixture(name: &str, lib: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("jackdaw-sdk-need-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n"),
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), lib).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_game_project_needs_no_sdk() {
+        let root = fixture(
+            "sdk-game",
+            "use bevy::prelude::*;\npub struct GamePlugin;\nimpl Plugin for GamePlugin {\n    fn build(&self, _app: &mut App) {}\n}\n",
+        );
+        assert!(!project_needs_sdk(&root));
+        assert!(!opening_waits_for_sdk(false, SdkState::NotBuilt));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_extension_project_needs_the_sdk() {
+        let root = fixture(
+            "sdk-extension",
+            "use jackdaw_extension::prelude::*;\n#[derive(Default)]\npub struct MyExtension;\nimpl JackdawExtension for MyExtension {}\n",
+        );
+        assert!(project_needs_sdk(&root));
+        assert!(opening_waits_for_sdk(true, SdkState::NotBuilt));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_extension_opens_at_once_when_the_sdk_is_built_or_cannot_be() {
+        assert!(!opening_waits_for_sdk(true, SdkState::Ready));
+        assert!(!opening_waits_for_sdk(true, SdkState::Unavailable));
+    }
+
+    #[test]
+    fn an_owed_build_reports_not_built_and_a_resolvable_sdk_reports_ready() {
+        assert_eq!(classify_sdk(true, || true, || false), SdkState::NotBuilt);
+        assert_eq!(classify_sdk(false, || true, || false), SdkState::Ready);
+        assert_eq!(classify_sdk(false, || false, || true), SdkState::Ready);
+        assert_eq!(
+            classify_sdk(false, || false, || false),
+            SdkState::Unavailable
         );
     }
 

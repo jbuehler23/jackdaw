@@ -63,6 +63,12 @@ pub fn run_args(args: &[String]) -> ExitCode {
 /// work without a jackdaw source checkout. Requires a binary built with
 /// the `embed-recipe` feature (packaged releases).
 fn cmd_setup() -> ExitCode {
+    if bootstrap::needs_setup() {
+        println!(
+            "jd setup: building the extension SDK once; this usually takes {}",
+            bootstrap::SDK_BUILD_ESTIMATE
+        );
+    }
     // Print phase headers; cargo's own progress reaches the terminal on
     // inherited stderr, so per-crate events are left for the editor's bar.
     let report = |event: SetupProgress| {
@@ -82,24 +88,56 @@ fn cmd_setup() -> ExitCode {
     }
 }
 
+/// How `jd doctor` grades the SDK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SdkGrade {
+    Ok,
+    /// Missing or unusable, which matters only to an extension.
+    Info,
+    Fail,
+}
+
+fn grade_sdk(usable: bool, project_is_extension: bool) -> SdkGrade {
+    match (usable, project_is_extension) {
+        (true, _) => SdkGrade::Ok,
+        (false, false) => SdkGrade::Info,
+        (false, true) => SdkGrade::Fail,
+    }
+}
+
 /// Report which of the three install paths supplied the SDK, and
-/// whether it is usable. Returns false only for a genuinely broken one.
-fn report_sdk() -> bool {
+/// whether it is usable. Only editor extensions build against it, so a
+/// missing or broken one fails the report only for an extension project.
+fn report_sdk(project_is_extension: bool) -> bool {
     let sdk = resolve_sdk(dev_workspace().as_deref());
     let problems = sdk.problems();
-    if problems.is_empty() && (sdk.manifest.is_file() || bootstrap::needs_setup()) {
+    let usable = problems.is_empty() && sdk.manifest.is_file();
+    let grade = grade_sdk(usable, project_is_extension);
+    let tag = match grade {
+        SdkGrade::Ok => "[ ok ]",
+        SdkGrade::Info => "[info]",
+        SdkGrade::Fail => "[fail]",
+    };
+    if usable {
         println!(
-            "  [ ok ] SDK: {} ({})",
+            "  {tag} SDK: {} ({})",
             sdk.origin.describe(),
             sdk.dylib.display()
         );
     } else if problems.is_empty() {
-        println!("  [fail] SDK: not found at {}", sdk.manifest.display());
-        println!("         fix: jd setup");
-        return false;
+        let scope = if project_is_extension {
+            "this extension builds against it"
+        } else {
+            "only editor extensions need it"
+        };
+        println!("  {tag} SDK: not built; {scope}");
+        println!(
+            "         build it with: jd setup (usually {})",
+            bootstrap::SDK_BUILD_ESTIMATE
+        );
     } else {
         println!(
-            "  [fail] SDK: {} at {} is not usable",
+            "  {tag} SDK: {} at {} is not usable",
             sdk.origin.describe(),
             sdk.dylib.display()
         );
@@ -107,9 +145,8 @@ fn report_sdk() -> bool {
             println!("         {problem}");
         }
         println!("         fix: {}", jackdaw_project_build::sdk_remedy(&sdk));
-        return false;
     }
-    true
+    grade != SdkGrade::Fail
 }
 
 /// `jd doctor [--project <path>]`: report the tools an SDK build needs,
@@ -132,14 +169,6 @@ fn cmd_doctor(args: &[String]) -> ExitCode {
         }
     }
 
-    // The SDK belongs in the environment section, not the project one:
-    // it is a property of the install, it is the same for every project,
-    // and `jd doctor` with no project is exactly how the book tells
-    // people to verify an install. Reporting it only when a project
-    // happened to be in scope let a bare run say "all checks passed"
-    // with no usable SDK at all.
-    ok &= report_sdk();
-
     // A project is in scope when asked for explicitly, or when the
     // working directory is one. Running `jd doctor` anywhere else stays
     // a pure environment report.
@@ -149,6 +178,10 @@ fn cmd_doctor(args: &[String]) -> ExitCode {
         .or_else(|| std::env::current_dir().ok())
         .and_then(|dir| dunce::canonicalize(dir).ok())
         .filter(|dir| explicit || dir.join("Cargo.toml").is_file());
+    // The SDK belongs in the environment section, not the project one:
+    // it is a property of the install and the same for every project.
+    // Whether its absence is a failure depends on the project in scope.
+    ok &= report_sdk(root.as_deref().is_some_and(bootstrap::project_needs_sdk));
     match root {
         Some(root) => {
             println!("\nproject: {}", root.display());
@@ -602,4 +635,21 @@ fn parse_project_arg(args: &[String]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SdkGrade, grade_sdk};
+
+    #[test]
+    fn a_missing_sdk_is_information_for_a_game_and_a_failure_for_an_extension() {
+        assert_eq!(grade_sdk(false, false), SdkGrade::Info);
+        assert_eq!(grade_sdk(false, true), SdkGrade::Fail);
+    }
+
+    #[test]
+    fn a_usable_sdk_passes_for_every_project() {
+        assert_eq!(grade_sdk(true, false), SdkGrade::Ok);
+        assert_eq!(grade_sdk(true, true), SdkGrade::Ok);
+    }
 }

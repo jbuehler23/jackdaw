@@ -1,524 +1,673 @@
-//! First-run SDK setup screen.
+//! The extension SDK: where it stands, and the build that makes it.
 //!
-//! A packaged jackdaw ships without a prebuilt SDK; the first launch
-//! builds it once into `~/.jackdaw/sdk/...`. This module gates the
-//! project launcher behind a progress screen while that build runs, so
-//! the user sees live progress instead of a frozen window and cannot
-//! start a project build concurrently (which would fight the SDK build
-//! for memory). In a dev checkout there is no embedded recipe, so
-//! [`bootstrap::needs_setup`] is false and none of this runs.
+//! Games build as their own cargo binaries and never touch the SDK; only
+//! editor extensions compile against it. So nothing builds it up front. The
+//! launcher shows its state with a Build SDK action, and opening an extension
+//! project on an install without one starts the build in the background and
+//! opens the project once it finishes. In a release bundle the SDK ships
+//! prebuilt and none of this runs.
 
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
+    ui_widgets::observe,
 };
-use jackdaw_feathers::{icons::EditorFont, progress, tokens};
-use jackdaw_project_build::bootstrap::{self, SetupProgress};
+use jackdaw_feathers::{
+    button::{ButtonProps, button},
+    icons::{EditorFont, Icon, IconFont},
+    progress, tokens,
+};
+use jackdaw_project_build::bootstrap::{self, SdkState, SetupProgress};
 
 use crate::AppState;
+use crate::progress::{
+    EditorProgress, ProgressCancelRequested, allow_cancel, begin_progress, fail_progress,
+    finish_progress, progress_count, progress_stage,
+};
 
-/// How long the finished "ready" state lingers before the overlay is
-/// removed and the launcher becomes usable.
-const READY_LINGER: Duration = Duration::from_millis(1600);
+/// The owner the SDK build reports its progress under.
+const SDK_BUILD: &str = "extension sdk";
 
-/// Cap on the retained log tail.
-const LOG_TAIL: usize = 40;
+const GREEN: Color = Color::srgb(0.45, 0.80, 0.55);
+const RED: Color = Color::srgb(0.92, 0.45, 0.45);
 
 pub struct SdkSetupPlugin;
 
 impl Plugin for SdkSetupPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SdkSetup>()
-            .add_systems(OnEnter(AppState::ProjectSelect), start_sdk_setup)
+            .add_observer(on_cancel_requested)
+            .add_systems(OnEnter(AppState::ProjectSelect), refresh_sdk_state)
             .add_systems(
                 Update,
-                (poll_sdk_setup, refresh_sdk_setup_ui)
-                    .chain()
-                    .run_if(in_state(AppState::ProjectSelect)),
+                (
+                    poll_sdk_build,
+                    refresh_sdk_row.run_if(in_state(AppState::ProjectSelect)),
+                )
+                    .chain(),
             );
     }
 }
 
-/// Progress shared between the background `ensure_sdk` thread (writer)
-/// and the UI refresh (reader).
-#[derive(Default, Clone)]
+/// Where the SDK stands, as the launcher shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SdkStatus {
+    Ready,
+    NotBuilt,
+    Unavailable,
+    Building,
+    Failed { error: String, log: Option<PathBuf> },
+}
+
+impl From<SdkState> for SdkStatus {
+    fn from(state: SdkState) -> Self {
+        match state {
+            SdkState::Ready => Self::Ready,
+            SdkState::NotBuilt => Self::NotBuilt,
+            SdkState::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// Progress shared between the background build (writer) and the UI (reader).
+#[derive(Default, Clone, PartialEq, Eq)]
 struct SetupShared {
     phase: String,
     current_crate: Option<String>,
     done: u32,
     total: Option<u32>,
-    log: VecDeque<String>,
 }
 
-impl SetupShared {
-    fn push_log(&mut self, line: String) {
-        if self.log.len() >= LOG_TAIL {
-            self.log.pop_front();
-        }
-        self.log.push_back(line);
-    }
-}
-
+/// The SDK's state and the build in flight, if any.
 #[derive(Resource, Default)]
-struct SdkSetup {
-    /// Live progress, written by the background build thread.
+pub struct SdkSetup {
+    status: Option<SdkStatus>,
     shared: Option<Arc<Mutex<SetupShared>>>,
-    /// The in-flight `ensure_sdk` build.
     task: Option<Task<Result<PathBuf, String>>>,
-    /// Copy of `shared` taken each frame, off the writer's lock.
-    snapshot: Option<SetupShared>,
-    /// Set when the build finishes. `Err` keeps the overlay up with a
-    /// retry; `Ok` lingers, then tears the overlay down.
-    outcome: Option<Result<(), String>>,
-    /// When a successful build completed, for the linger timer.
-    done_at: Option<Instant>,
-    /// Raised by the retry button; consumed by `poll_sdk_setup`.
-    retry: bool,
+    snapshot: SetupShared,
+    log: Option<PathBuf>,
+    /// The extension project to open once the build finishes.
+    waiting: Option<PathBuf>,
+    /// Raised by the launcher's Build SDK and Retry buttons.
+    start_requested: bool,
 }
 
-#[derive(Component)]
-struct SetupOverlay;
-#[derive(Component)]
-struct SetupPhaseLabel;
-#[derive(Component)]
-struct SetupCrateLabel;
-#[derive(Component)]
-struct SetupBarSlot;
-#[derive(Component)]
-struct SetupLogText;
-#[derive(Component)]
-struct SetupErrorRow;
-#[derive(Component)]
-struct SetupErrorText;
-
-/// On entering the launcher, kick off the SDK build if one is owed.
-/// A running task (a re-enter) or an auto-open handoff (no launcher
-/// shell) is left alone.
-fn start_sdk_setup(
-    mut commands: Commands,
-    mut setup: ResMut<SdkSetup>,
-    editor_font: Res<EditorFont>,
-    pending: Option<Res<crate::project_select::PendingAutoOpen>>,
-) {
-    if !setup_screen_owed(
-        pending.is_some(),
-        setup.task.is_some(),
-        setup.outcome.is_some(),
-        bootstrap::needs_setup,
-    ) {
-        return;
+impl SdkSetup {
+    /// The SDK's state, read from disk the first time it is asked for.
+    pub fn status(&mut self) -> &SdkStatus {
+        self.status
+            .get_or_insert_with(|| bootstrap::sdk_state().into())
     }
-    kick_off(&mut commands, &mut setup, &editor_font.0);
-}
 
-/// Whether entering the launcher owes a setup run.
-///
-/// Setup is a once-per-process affair: the screen belongs to the first
-/// launch, not to every visit to the launcher. Once a run has settled -
-/// built the SDK, or failed and left its retry standing - going back to
-/// the launcher from an open project must not start a second one, which
-/// would stack another overlay over the first and put a project the user
-/// has already been editing back behind the first-run screen.
-fn setup_screen_owed(
-    auto_open_pending: bool,
-    running: bool,
-    settled: bool,
-    owed: impl Fn() -> bool,
-) -> bool {
-    !auto_open_pending && !running && !settled && owed()
-}
-
-/// Spawn the build task and the gating overlay.
-fn kick_off(commands: &mut Commands, setup: &mut SdkSetup, font: &Handle<Font>) {
-    let shared = Arc::new(Mutex::new(SetupShared {
-        phase: "Preparing setup...".to_string(),
-        ..Default::default()
-    }));
-    let writer = Arc::clone(&shared);
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        bootstrap::ensure_sdk(move |event| {
-            let Ok(mut g) = writer.lock() else {
-                return;
-            };
-            match event {
-                SetupProgress::Phase(phase) => {
-                    g.phase = phase.to_string();
-                    g.push_log(format!("== {phase}"));
-                }
-                SetupProgress::Total(total) => g.total = Some(total),
-                SetupProgress::Compiled { crate_name, done } => {
-                    g.current_crate = Some(crate_name);
-                    g.done = done;
-                }
-                SetupProgress::Log(line) => g.push_log(line),
+    fn start(&mut self) {
+        let shared = Arc::new(Mutex::new(SetupShared {
+            phase: "Preparing".to_string(),
+            ..Default::default()
+        }));
+        let writer = Arc::clone(&shared);
+        let log_path = bootstrap::setup_log_path();
+        let task_log = log_path.clone();
+        self.task = Some(AsyncComputeTaskPool::get().spawn(async move {
+            let mut log = task_log.as_deref().and_then(open_log);
+            let result = bootstrap::ensure_sdk(|event| record(&writer, log.as_mut(), event));
+            if let (Err(error), Some(file)) = (&result, log.as_mut()) {
+                let _ = writeln!(file, "error: {error}");
             }
-        })
-    });
-
-    setup.shared = Some(shared);
-    setup.task = Some(task);
-    setup.snapshot = None;
-    setup.outcome = None;
-    setup.done_at = None;
-    spawn_overlay(commands, font);
-}
-
-/// Copy the latest progress, drain the finished task, and tear the
-/// overlay down once a successful build has lingered.
-fn poll_sdk_setup(
-    mut commands: Commands,
-    mut setup: ResMut<SdkSetup>,
-    overlays: Query<Entity, With<SetupOverlay>>,
-    editor_font: Res<EditorFont>,
-) {
-    // A retry after a failure: clear the old overlay and start again.
-    if setup.retry && setup.task.is_none() {
-        setup.retry = false;
-        for entity in overlays.iter() {
-            commands.entity(entity).despawn();
-        }
-        let font = editor_font.0.clone();
-        kick_off(&mut commands, &mut setup, &font);
-        return;
-    }
-
-    if let Some(shared) = setup.shared.clone()
-        && let Ok(guard) = shared.lock()
-    {
-        setup.snapshot = Some(guard.clone());
-    }
-
-    if let Some(task) = setup.task.as_mut()
-        && let Some(result) = future::block_on(future::poll_once(task))
-    {
-        setup.task = None;
-        match result {
-            Ok(cache) => {
-                info!("SDK setup complete: {}", cache.display());
-                // Nothing further in this process is owed a setup run,
-                // whatever the stamp on disk goes on to say.
-                bootstrap::skip_setup_check();
-                setup.outcome = Some(Ok(()));
-                setup.done_at = Some(Instant::now());
-                if let Some(shared) = &setup.shared
-                    && let Ok(mut guard) = shared.lock()
-                {
-                    guard.phase = "jackdaw is ready".to_string();
-                    guard.current_crate = None;
-                }
-            }
-            Err(err) => {
-                warn!("SDK setup failed: {err}");
-                setup.outcome = Some(Err(err));
-            }
-        }
-    }
-
-    if matches!(setup.outcome, Some(Ok(())))
-        && setup.done_at.is_some_and(|at| at.elapsed() >= READY_LINGER)
-    {
-        for entity in overlays.iter() {
-            commands.entity(entity).despawn();
-        }
-        setup.shared = None;
-        setup.snapshot = None;
-        setup.done_at = None;
+            result
+        }));
+        self.shared = Some(shared);
+        self.snapshot = SetupShared::default();
+        self.log = log_path;
+        self.status = Some(SdkStatus::Building);
     }
 }
 
-/// Reflect the snapshot into the overlay: phase, "compiling X (n/total)",
-/// the progress bar, the log tail, and the error row.
-fn refresh_sdk_setup_ui(
-    setup: Res<SdkSetup>,
-    mut texts: Query<(
-        &mut Text,
-        Option<&SetupPhaseLabel>,
-        Option<&SetupCrateLabel>,
-        Option<&SetupLogText>,
-        Option<&SetupErrorText>,
-    )>,
-    bar_slots: Query<&Children, With<SetupBarSlot>>,
-    children_q: Query<&Children>,
-    mut fill_q: Query<&mut Node, (With<progress::ProgressBarFill>, Without<SetupErrorRow>)>,
-    mut error_rows: Query<&mut Node, (With<SetupErrorRow>, Without<progress::ProgressBarFill>)>,
-) {
-    let Some(snap) = setup.snapshot.as_ref() else {
-        return;
-    };
-    let ready = matches!(setup.outcome, Some(Ok(())));
-    let error = match &setup.outcome {
-        Some(Err(err)) => Some(err.clone()),
+fn open_log(path: &Path) -> Option<File> {
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    File::create(path).ok()
+}
+
+fn record(shared: &Mutex<SetupShared>, log: Option<&mut File>, event: SetupProgress) {
+    let line = match &event {
+        SetupProgress::Phase(phase) => Some(format!("== {phase}")),
+        SetupProgress::Log(line) => Some(line.clone()),
         _ => None,
     };
-
-    let phase_line = snap.phase.clone();
-    let crate_line = match (&snap.current_crate, snap.total) {
-        (Some(name), Some(total)) => {
-            // The estimate can undershoot the real unit count; clamp so
-            // the counter never reads past the total.
-            let total = total.max(snap.done);
-            format!("Compiling {name}  ({}/{total})", snap.done)
-        }
-        (Some(name), None) => format!("Compiling {name}  ({} so far)", snap.done),
-        (None, Some(total)) => format!("0 / {total}"),
-        (None, None) => String::new(),
+    if let (Some(line), Some(file)) = (line, log) {
+        let _ = writeln!(file, "{line}");
+    }
+    let Ok(mut progress) = shared.lock() else {
+        return;
     };
-    let log_line = snap.log.iter().cloned().collect::<Vec<_>>().join("\n");
-    let error_line = error.clone().unwrap_or_default();
+    match event {
+        SetupProgress::Phase(phase) => {
+            progress.phase = phase.to_string();
+            progress.current_crate = None;
+        }
+        SetupProgress::Total(total) => progress.total = Some(total),
+        SetupProgress::Compiled { crate_name, done } => {
+            progress.current_crate = Some(crate_name);
+            progress.done = done;
+        }
+        SetupProgress::Log(_) => {}
+    }
+}
 
-    for (mut text, is_phase, is_crate, is_log, is_error) in texts.iter_mut() {
-        let target = if is_phase.is_some() {
-            &phase_line
-        } else if is_crate.is_some() {
-            &crate_line
-        } else if is_log.is_some() {
-            &log_line
-        } else if is_error.is_some() {
-            &error_line
-        } else {
-            continue;
-        };
-        if &text.0 != target {
-            text.0 = target.clone();
+/// Re-read the SDK's state each time the launcher opens, unless a build is
+/// running or a failure is waiting for a retry.
+fn refresh_sdk_state(mut setup: ResMut<SdkSetup>) {
+    if setup.task.is_none() && !matches!(setup.status, Some(SdkStatus::Failed { .. })) {
+        setup.status = None;
+        setup.status();
+    }
+}
+
+/// Hold an open of `root` until the SDK is built, when `root` is an
+/// extension and this install has no SDK yet. Starts the build if it is not
+/// already running, shows its progress, and opens the project when it
+/// finishes. Returns whether the open was held; a game never is.
+pub fn wait_for_sdk(world: &mut World, root: &Path) -> bool {
+    let Some(mut setup) = world.get_resource_mut::<SdkSetup>() else {
+        return false;
+    };
+    let state = match setup.status() {
+        SdkStatus::Ready => SdkState::Ready,
+        SdkStatus::Unavailable => SdkState::Unavailable,
+        SdkStatus::NotBuilt | SdkStatus::Building | SdkStatus::Failed { .. } => SdkState::NotBuilt,
+    };
+    if state != SdkState::NotBuilt
+        || !bootstrap::opening_waits_for_sdk(bootstrap::project_needs_sdk(root), state)
+    {
+        return false;
+    }
+    setup.waiting = Some(root.to_path_buf());
+    if setup.task.is_none() {
+        setup.start();
+    }
+    begin_progress(world, SDK_BUILD, "Building the extension SDK", true);
+    allow_cancel(world, SDK_BUILD);
+    progress_stage(
+        world,
+        SDK_BUILD,
+        waiting_stage(&project_name(root), "Preparing"),
+        None,
+    );
+    true
+}
+
+fn project_name(root: &Path) -> String {
+    root.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.display().to_string())
+}
+
+/// The overlay's stage line while an open waits on the build.
+fn waiting_stage(project: &str, phase: &str) -> String {
+    format!(
+        "{phase}. {project} opens when it finishes, usually in {}.",
+        bootstrap::SDK_BUILD_ESTIMATE
+    )
+}
+
+/// Copy the build's progress, hand it to a waiting open's overlay, and settle
+/// the build when it ends: open the waiting project, or report the failure.
+fn poll_sdk_build(world: &mut World) {
+    let (finished, snapshot, waiting) = {
+        let mut setup = world.resource_mut::<SdkSetup>();
+        if std::mem::take(&mut setup.start_requested) && setup.task.is_none() {
+            setup.start();
+        }
+        if let Some(shared) = setup.shared.clone()
+            && let Ok(latest) = shared.lock()
+            && setup.snapshot != *latest
+        {
+            setup.snapshot = latest.clone();
+        }
+        let finished = setup
+            .task
+            .as_mut()
+            .and_then(|task| future::block_on(future::poll_once(task)));
+        if finished.is_some() {
+            setup.task = None;
+            setup.shared = None;
+        }
+        (finished, setup.snapshot.clone(), setup.waiting.clone())
+    };
+
+    match finished {
+        None => {
+            if let Some(root) = waiting {
+                forward_progress(world, &project_name(&root), &snapshot);
+            }
+        }
+        Some(Ok(cache)) => {
+            info!("Extension SDK ready: {}", cache.display());
+            // Nothing further in this process is owed a build, whatever the
+            // stamp on disk goes on to say.
+            bootstrap::skip_setup_check();
+            let mut setup = world.resource_mut::<SdkSetup>();
+            setup.status = Some(SdkStatus::Ready);
+            if let Some(root) = setup.waiting.take() {
+                finish_progress(world, SDK_BUILD);
+                crate::project_select::enter_project(world, root);
+            }
+        }
+        Some(Err(error)) => {
+            warn!("Extension SDK build failed: {error}");
+            let mut setup = world.resource_mut::<SdkSetup>();
+            let log = setup.log.clone();
+            setup.status = Some(SdkStatus::Failed {
+                error: error.clone(),
+                log: log.clone(),
+            });
+            if setup.waiting.take().is_some() {
+                let mut message = format!("The extension SDK did not build: {error}");
+                if let Some(log) = log {
+                    message.push_str(&format!(" (log: {})", log.display()));
+                }
+                fail_progress(world, SDK_BUILD, message);
+            }
         }
     }
+}
 
-    let fraction = if ready {
-        1.0
-    } else {
-        match (snap.total, snap.done) {
-            (Some(total), done) if total > 0 => (done as f32 / total as f32).clamp(0.0, 1.0),
-            _ => 0.0,
-        }
+fn forward_progress(world: &mut World, project: &str, snapshot: &SetupShared) {
+    let stage = waiting_stage(project, &snapshot.phase);
+    let current = world
+        .get_resource::<EditorProgress>()
+        .and_then(|progress| progress.get(SDK_BUILD))
+        .map(|task| task.stage.clone());
+    if current.as_deref() != Some(stage.as_str()) {
+        progress_stage(world, SDK_BUILD, stage, None);
+    }
+    if let Some(total) = snapshot.total {
+        let done = snapshot.done as usize;
+        progress_count(world, SDK_BUILD, done, Some((total as usize).max(done)));
+    }
+}
+
+/// Cancelling the wait keeps the build running; the launcher row goes on
+/// showing it, and the project stays closed.
+fn on_cancel_requested(
+    cancel: On<ProgressCancelRequested>,
+    mut setup: ResMut<SdkSetup>,
+    mut commands: Commands,
+) {
+    if cancel.event().owner != SDK_BUILD {
+        return;
+    }
+    setup.waiting = None;
+    commands.queue(|world: &mut World| finish_progress(world, SDK_BUILD));
+}
+
+/// The launcher row the SDK's state is drawn into, under the environment
+/// checks.
+#[derive(Component)]
+pub struct SdkStatusRow;
+
+#[derive(Component)]
+struct SdkProgressText;
+
+#[derive(Component)]
+struct SdkProgressBar;
+
+/// What the launcher row says for one state.
+#[derive(Clone, Debug)]
+struct RowContent {
+    icon: Icon,
+    color: Color,
+    headline: String,
+    details: Vec<String>,
+    action: Option<&'static str>,
+    building: bool,
+}
+
+impl PartialEq for RowContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.icon.unicode() == other.icon.unicode()
+            && self.color == other.color
+            && self.headline == other.headline
+            && self.details == other.details
+            && self.action == other.action
+            && self.building == other.building
+    }
+}
+
+fn row_content(status: &SdkStatus, waiting: Option<&Path>) -> RowContent {
+    match status {
+        SdkStatus::Ready => RowContent {
+            icon: Icon::CircleCheck,
+            color: GREEN,
+            headline: "Extension SDK ready".to_string(),
+            details: Vec::new(),
+            action: None,
+            building: false,
+        },
+        SdkStatus::NotBuilt => RowContent {
+            icon: Icon::Info,
+            color: tokens::TEXT_SECONDARY,
+            headline: "Extension SDK not built".to_string(),
+            details: vec![format!(
+                "Only extension projects need it, and opening one builds it. \
+                 Building takes {}.",
+                bootstrap::SDK_BUILD_ESTIMATE
+            )],
+            action: Some("Build SDK"),
+            building: false,
+        },
+        SdkStatus::Unavailable => RowContent {
+            icon: Icon::Info,
+            color: tokens::TEXT_SECONDARY,
+            headline: "Extension SDK not available".to_string(),
+            details: vec![
+                "Only extension projects need it. This build of jackdaw cannot make one; \
+                 jd doctor says why."
+                    .to_string(),
+            ],
+            action: None,
+            building: false,
+        },
+        SdkStatus::Building => RowContent {
+            icon: Icon::Loader,
+            color: tokens::TEXT_SECONDARY,
+            headline: match waiting {
+                Some(root) => format!(
+                    "Building the extension SDK; {} opens when it finishes",
+                    project_name(root)
+                ),
+                None => "Building the extension SDK".to_string(),
+            },
+            details: Vec::new(),
+            action: None,
+            building: true,
+        },
+        SdkStatus::Failed { error, log } => RowContent {
+            icon: Icon::CircleAlert,
+            color: RED,
+            headline: "Extension SDK build failed".to_string(),
+            details: std::iter::once(error.clone())
+                .chain(log.as_ref().map(|log| format!("Log: {}", log.display())))
+                .collect(),
+            action: Some("Retry"),
+            building: false,
+        },
+    }
+}
+
+/// The running build's progress, one line.
+fn progress_line(snapshot: &SetupShared) -> String {
+    match (&snapshot.current_crate, snapshot.total) {
+        (Some(name), Some(total)) => format!(
+            "{}: compiling {name} ({}/{})",
+            snapshot.phase,
+            snapshot.done,
+            total.max(snapshot.done)
+        ),
+        (Some(name), None) => format!("{}: compiling {name}", snapshot.phase),
+        (None, _) => snapshot.phase.clone(),
+    }
+}
+
+fn progress_fraction(snapshot: &SetupShared) -> f32 {
+    match snapshot.total {
+        Some(total) if total > 0 => (snapshot.done as f32 / total as f32).clamp(0.0, 1.0),
+        _ => 0.0,
+    }
+}
+
+/// Redraw the row when what it says changes, and move its progress text and
+/// bar along while a build runs.
+fn refresh_sdk_row(
+    mut commands: Commands,
+    mut setup: ResMut<SdkSetup>,
+    rows: Query<(Entity, Option<&Children>), With<SdkStatusRow>>,
+    added: Query<(), Added<SdkStatusRow>>,
+    mut shown: Local<Option<RowContent>>,
+    editor_font: Res<EditorFont>,
+    icon_font: Res<IconFont>,
+    mut texts: Query<&mut Text, With<SdkProgressText>>,
+    bars: Query<&Children, With<SdkProgressBar>>,
+    children_q: Query<&Children>,
+    mut fills: Query<&mut Node, With<progress::ProgressBarFill>>,
+) {
+    let Ok((row, children)) = rows.single() else {
+        return;
     };
-    let desired_width = Val::Percent(fraction * 100.0);
-    for slot_children in bar_slots.iter() {
-        for bar in slot_children.iter() {
+    let waiting = setup.waiting.clone();
+    let content = row_content(setup.status(), waiting.as_deref());
+    if added.contains(row) || shown.as_ref() != Some(&content) {
+        if let Some(children) = children {
+            for child in children.iter() {
+                commands.entity(child).despawn();
+            }
+        }
+        spawn_row(&mut commands, row, &content, &editor_font.0, &icon_font.0);
+        *shown = Some(content.clone());
+    }
+    if !content.building {
+        return;
+    }
+    let line = progress_line(&setup.snapshot);
+    for mut text in &mut texts {
+        if text.0 != line {
+            text.0.clone_from(&line);
+        }
+    }
+    let width = Val::Percent(progress_fraction(&setup.snapshot) * 100.0);
+    for bar_children in &bars {
+        for bar in bar_children.iter() {
             let Ok(inner) = children_q.get(bar) else {
                 continue;
             };
             for fill in inner.iter() {
-                if let Ok(mut node) = fill_q.get_mut(fill)
-                    && node.width != desired_width
+                if let Ok(mut node) = fills.get_mut(fill)
+                    && node.width != width
                 {
-                    node.width = desired_width;
+                    node.width = width;
                 }
             }
         }
     }
+}
 
-    let desired = if error.is_some() {
-        Display::Flex
-    } else {
-        Display::None
-    };
-    for mut node in error_rows.iter_mut() {
-        if node.display != desired {
-            node.display = desired;
-        }
+fn spawn_row(
+    commands: &mut Commands,
+    row: Entity,
+    content: &RowContent,
+    font: &Handle<Font>,
+    icon_font: &Handle<Font>,
+) {
+    let line = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(tokens::SPACING_SM),
+                ..Default::default()
+            },
+            ChildOf(row),
+        ))
+        .id();
+    commands.spawn((
+        Text::new(String::from(content.icon.unicode())),
+        TextFont {
+            font: icon_font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(content.color),
+        ChildOf(line),
+    ));
+    commands.spawn((
+        Text::new(content.headline.clone()),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(content.color),
+        ChildOf(line),
+    ));
+    if let Some(label) = content.action {
+        commands.spawn((
+            button(ButtonProps::new(label)),
+            observe(|click: On<Pointer<Click>>, mut setup: ResMut<SdkSetup>| {
+                if click.event().button == PointerButton::Primary {
+                    setup.start_requested = true;
+                }
+            }),
+            ChildOf(line),
+        ));
+    }
+    for detail in &content.details {
+        spawn_detail(commands, row, Text::new(detail.clone()), font);
+    }
+    if content.building {
+        spawn_detail(
+            commands,
+            row,
+            (SdkProgressText, Text::new(String::new())),
+            font,
+        );
+        let slot = commands
+            .spawn((
+                SdkProgressBar,
+                Node {
+                    width: Val::Px(320.0),
+                    margin: UiRect::left(Val::Px(22.0)),
+                    ..Default::default()
+                },
+                ChildOf(row),
+            ))
+            .id();
+        commands.spawn((progress::progress_bar(0.0), ChildOf(slot)));
     }
 }
 
-/// Spawn the full-window gating overlay: a scrim plus a card with the
-/// heading, phase, per-crate counter, progress bar, log tail, and a
-/// hidden error row with a retry button.
-fn spawn_overlay(commands: &mut Commands, font: &Handle<Font>) {
-    let scrim = commands
-        .spawn((
-            SetupOverlay,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(tokens::DIALOG_BACKDROP),
-            GlobalZIndex(200),
-        ))
-        .id();
-
-    let card = commands
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::all(Val::Px(28.0)),
-                min_width: Val::Px(520.0),
-                max_width: Val::Px(640.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..default()
-            },
-            BackgroundColor(tokens::PANEL_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(scrim),
-        ))
-        .id();
-
+/// An indented secondary line under the row's headline.
+fn spawn_detail(commands: &mut Commands, row: Entity, text: impl Bundle, font: &Handle<Font>) {
     commands.spawn((
-        Text::new("Setting up jackdaw"),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_LG,
-            ..default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        ChildOf(card),
-    ));
-    commands.spawn((
-        Text::new(
-            "First-time setup builds the editor SDK once, into your home directory. \
-             This can take 10-15 minutes and happens only on the first launch; \
-             later launches skip straight to your projects.",
-        ),
+        text,
         TextFont {
             font: font.clone().into(),
             font_size: tokens::TEXT_SIZE_SM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(card),
-    ));
-
-    commands.spawn((
-        SetupPhaseLabel,
-        Text::new("Preparing setup..."),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE,
-            ..default()
-        },
-        TextColor(tokens::TEXT_PRIMARY),
-        Node {
-            margin: UiRect::top(Val::Px(6.0)),
-            ..default()
-        },
-        ChildOf(card),
-    ));
-    commands.spawn((
-        SetupCrateLabel,
-        Text::new(String::new()),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_SECONDARY),
-        ChildOf(card),
-    ));
-
-    let bar_slot = commands
-        .spawn((
-            SetupBarSlot,
-            Node {
-                width: Val::Percent(100.0),
-                ..default()
-            },
-            ChildOf(card),
-        ))
-        .id();
-    commands.spawn((progress::progress_bar(0.0), ChildOf(bar_slot)));
-
-    commands.spawn((
-        SetupLogText,
-        Text::new(String::new()),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_XS,
-            ..default()
+            ..Default::default()
         },
         TextColor(tokens::TEXT_SECONDARY),
         Node {
-            max_height: Val::Px(180.0),
-            overflow: Overflow::clip(),
-            ..default()
+            margin: UiRect::left(Val::Px(22.0)),
+            ..Default::default()
         },
-        ChildOf(card),
+        ChildOf(row),
     ));
-
-    // Error row: hidden until the build fails, then shows the reason and
-    // a retry button.
-    let error_row = commands
-        .spawn((
-            SetupErrorRow,
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                margin: UiRect::top(Val::Px(6.0)),
-                display: Display::None,
-                ..default()
-            },
-            ChildOf(card),
-        ))
-        .id();
-    commands.spawn((
-        SetupErrorText,
-        Text::new(String::new()),
-        TextFont {
-            font: font.clone().into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..default()
-        },
-        TextColor(tokens::TEXT_ERROR),
-        ChildOf(error_row),
-    ));
-    let retry = commands
-        .spawn((
-            Node {
-                align_self: AlignSelf::FlexStart,
-                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                ..default()
-            },
-            BackgroundColor(tokens::SELECTED_BG),
-            children![(
-                Text::new("Retry"),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: tokens::TEXT_SIZE,
-                    ..default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-            )],
-            ChildOf(error_row),
-        ))
-        .id();
-    commands
-        .entity(retry)
-        .observe(|_: On<Pointer<Click>>, mut setup: ResMut<SdkSetup>| {
-            setup.retry = true;
-        });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::setup_screen_owed;
+    use super::*;
 
     #[test]
-    fn a_first_launch_that_owes_an_sdk_build_shows_the_screen() {
-        assert!(setup_screen_owed(false, false, false, || true));
-        assert!(!setup_screen_owed(false, false, false, || false));
+    fn an_unbuilt_sdk_offers_a_build_and_says_only_extensions_need_it() {
+        let content = row_content(&SdkStatus::NotBuilt, None);
+        assert_eq!(content.action, Some("Build SDK"));
+        let details = content.details.join(" ");
+        assert!(details.contains("Only extension projects need it"));
+        assert!(details.contains(bootstrap::SDK_BUILD_ESTIMATE));
     }
 
     #[test]
-    fn returning_to_the_launcher_after_a_settled_run_shows_nothing() {
-        // Both outcomes settle it: a built SDK owes nothing, and a
-        // failure keeps the retry it already put on screen.
-        assert!(!setup_screen_owed(false, false, true, || true));
-        assert!(!setup_screen_owed(false, true, false, || true));
+    fn a_ready_sdk_offers_nothing() {
+        let content = row_content(&SdkStatus::Ready, None);
+        assert_eq!(content.headline, "Extension SDK ready");
+        assert_eq!(content.action, None);
+        assert!(content.details.is_empty());
     }
 
     #[test]
-    fn an_auto_open_handoff_never_shows_the_screen() {
-        assert!(!setup_screen_owed(true, false, false, || true));
+    fn a_failed_build_names_its_log_and_offers_a_retry() {
+        let status = SdkStatus::Failed {
+            error: "missing prerequisites: cmake".to_string(),
+            log: Some(PathBuf::from("/data/jackdaw/sdk/setup.log")),
+        };
+        let content = row_content(&status, None);
+        assert_eq!(content.action, Some("Retry"));
+        assert!(content.details.iter().any(|line| line.contains("cmake")));
+        assert!(
+            content
+                .details
+                .iter()
+                .any(|line| line == "Log: /data/jackdaw/sdk/setup.log")
+        );
+    }
+
+    #[test]
+    fn a_running_build_names_the_project_waiting_on_it() {
+        let content = row_content(&SdkStatus::Building, Some(Path::new("/p/my_tool")));
+        assert!(content.building);
+        assert!(content.headline.contains("my_tool opens when it finishes"));
+    }
+
+    #[test]
+    fn build_progress_reads_as_phase_crate_and_count() {
+        let snapshot = SetupShared {
+            phase: "Building the SDK".to_string(),
+            current_crate: Some("bevy_render".to_string()),
+            done: 120,
+            total: Some(100),
+        };
+        assert_eq!(
+            progress_line(&snapshot),
+            "Building the SDK: compiling bevy_render (120/120)"
+        );
+        assert_eq!(progress_fraction(&snapshot), 1.0);
+    }
+
+    #[test]
+    fn opening_a_game_with_no_sdk_proceeds() {
+        let root =
+            std::env::temp_dir().join(format!("jackdaw-sdk-game-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"sdk-game-open\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+             [workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "use bevy::prelude::*;\npub struct GamePlugin;\n\
+             impl Plugin for GamePlugin {\n    fn build(&self, _app: &mut App) {}\n}\n",
+        )
+        .unwrap();
+
+        let mut world = World::new();
+        world.insert_resource(SdkSetup {
+            status: Some(SdkStatus::NotBuilt),
+            ..Default::default()
+        });
+        assert!(!wait_for_sdk(&mut world, &root));
+        let setup = world.resource::<SdkSetup>();
+        assert!(setup.task.is_none(), "no build starts for a game");
+        assert!(setup.waiting.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn opening_anything_with_a_ready_sdk_proceeds() {
+        let mut world = World::new();
+        world.insert_resource(SdkSetup {
+            status: Some(SdkStatus::Ready),
+            ..Default::default()
+        });
+        assert!(!wait_for_sdk(
+            &mut world,
+            Path::new("/nonexistent/extension")
+        ));
     }
 }

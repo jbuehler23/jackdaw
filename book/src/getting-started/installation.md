@@ -29,14 +29,13 @@ editor extensions) is already built.
 |                         | Extension SDK                     | First game build   |
 | ----------------------- | --------------------------------- | ------------------ |
 | **Precompiled release** | already built, nothing to do      | ~9 min             |
-| `cargo install`         | ~30 min, once per Jackdaw version | ~9 min             |
+| `cargo install`         | 20-30 min, only for extensions    | ~9 min             |
 | Source checkout         | build the editor, then its SDK    | ~9 min             |
 
 The extension SDK is a full compilation of Bevy and the Jackdaw API that
 native editor extensions link against. A release archive ships it
 prebuilt. The other two compile it on your machine, once per Jackdaw
-version. That is a real half hour, so take the release archive unless you
-have a reason not to.
+version, when you first work on an extension. Games never wait for it.
 
 Your game still compiles its own copy of Bevy the first time you build
 it, around nine minutes, and every project pays that separately. The
@@ -83,11 +82,12 @@ archive.
 The install provides `jackdaw`, `jd`, and
 `jackdaw-rustc-wrapper`; do not install workspace packages individually.
 
-This path has no prebuilt extension SDK, so it prepares one on first use:
-roughly half an hour of compiling Bevy, once per Jackdaw version, before
-native extensions can load. The editor shows a progress screen while it
-runs; `jd setup` does the same thing from a terminal if you would rather
-get it out of the way first. Cargo installs are self-contained; use a
+This path has no prebuilt extension SDK. Games do not need one; only
+extension projects build against it. The editor builds it in the
+background the first time you open an extension project, or when you press
+**Build SDK** on the launcher. That takes 20-30 minutes on a typical
+machine, once per Jackdaw version. `jd setup` does the same from a
+terminal. Cargo installs are self-contained; use a
 precompiled release to load signed native extensions.
 
 Jackdaw versions track Bevy minors: Jackdaw 0.19 targets Bevy 0.19, and so do

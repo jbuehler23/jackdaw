@@ -98,13 +98,15 @@ order, and the first hit wins:
    is what a downloaded bundle uses, with no env var.
 4. The bootstrap cache at `~/.jackdaw/sdk/<version>-<toolchain>/`
    (or under `$XDG_DATA_HOME` when that is set to an absolute
-   path). Written by first-run setup and keyed by jackdaw version
-   and toolchain, so an upgrade lands in a fresh directory and the
-   old one is reclaimed.
+   path). Written by `jd setup` or the editor's on-demand SDK build,
+   with the editor's build log in `setup.log`. Keyed by jackdaw
+   version and toolchain, so an upgrade lands in a fresh directory
+   and the old one is reclaimed.
 
 `jd doctor` reports which of these won, whether the prerequisites for
 building it are in place, and whether the resolved SDK is actually
-usable; `jd setup` builds it.
+usable; `jd setup` builds it. A missing SDK fails the report only for
+an extension project, since games never build against it.
 
 A missing library or rustc wrapper stops a build before it compiles
 anything, rather than minutes in, and names what to do about it:

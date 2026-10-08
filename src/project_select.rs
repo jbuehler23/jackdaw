@@ -601,6 +601,16 @@ fn fill_project_selector(
                 ..Default::default()
             },
         ));
+        body_parent.spawn((
+            crate::sdk_setup::SdkStatusRow,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(4.0)),
+                ..Default::default()
+            },
+        ));
         body_parent
             .spawn(Node {
                 width: Val::Percent(100.0),
@@ -1165,6 +1175,13 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
             show_upgrade_card(world, root, pinned.clone(), running.clone(), plan);
             return;
         }
+    }
+
+    // An extension builds against the SDK; on an install without one, the
+    // open waits for its build instead of failing later.
+    if crate::sdk_setup::wait_for_sdk(world, &root) {
+        close_new_project_modal(world);
+        return;
     }
 
     // Project code is compiled by the editor's own pipeline once the

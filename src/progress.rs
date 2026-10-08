@@ -5,11 +5,14 @@
 //! [`progress_count`] and [`finish_progress`] or [`fail_progress`]. The task's
 //! title is its editor phase; the footer shows the title and the stage with its
 //! count, the remote reports both, and a modal overlay draws them with a bar
-//! while the task runs.
+//! while the task runs. A task that can be stopped calls [`allow_cancel`], and
+//! the overlay offers a Cancel button for it.
 
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
+use bevy::ui_widgets::observe;
+use jackdaw_feathers::button::{ButtonProps, button};
 use jackdaw_feathers::status_bar::StatusBarLeft;
 use jackdaw_feathers::tokens;
 use jackdaw_localization::LocalizedText;
@@ -57,6 +60,8 @@ struct RunningTask {
     /// Draw the overlay from the first frame rather than after
     /// [`OVERLAY_DELAY`].
     immediate: bool,
+    /// Offer the overlay's Cancel button; see [`allow_cancel`].
+    cancellable: bool,
 }
 
 /// The long tasks running now, in the order they began.
@@ -82,6 +87,14 @@ impl EditorProgress {
 
     fn task(&self, owner: &str) -> Option<&RunningTask> {
         self.running.iter().find(|task| task.owner == owner)
+    }
+
+    /// The owner of the current task, when that task can be cancelled.
+    fn cancellable_owner(&self) -> Option<&'static str> {
+        self.running
+            .last()
+            .filter(|task| task.cancellable)
+            .map(|task| task.owner)
     }
 
     fn task_mut(&mut self, owner: &str) -> Option<&mut RunningTask> {
@@ -114,6 +127,12 @@ pub struct ProgressEnded {
     pub error: Option<String>,
 }
 
+/// Sent when the user presses Cancel on a task offered through [`allow_cancel`].
+#[derive(Event, Clone, Debug, PartialEq, Eq)]
+pub struct ProgressCancelRequested {
+    pub owner: &'static str,
+}
+
 /// Start a task titled `title` for `owner`, replacing any task it was running.
 /// An `immediate` task draws the overlay from its first frame, for a caller
 /// that is about to hold the frame itself.
@@ -137,7 +156,19 @@ pub fn begin_progress(
         },
         began: Instant::now(),
         immediate,
+        cancellable: false,
     });
+}
+
+/// Offer a Cancel button on `owner`'s task. A press sends
+/// [`ProgressCancelRequested`]; what stopping means is up to the owner, which
+/// ends the task itself.
+pub fn allow_cancel(world: &mut World, owner: &'static str) {
+    if let Some(mut progress) = world.get_resource_mut::<EditorProgress>()
+        && let Some(task) = progress.task_mut(owner)
+    {
+        task.cancellable = true;
+    }
 }
 
 /// Move `owner`'s task on to `stage`, counting from zero towards `total`.
@@ -223,6 +254,10 @@ struct ProgressCountText;
 #[derive(Component, Default, Clone)]
 struct ProgressFill;
 
+/// Holds the Cancel button, shown only for a task that can be cancelled.
+#[derive(Component, Default, Clone)]
+struct ProgressActions;
+
 /// Dims the editor behind the overlay.
 const BACKDROP: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
@@ -306,6 +341,13 @@ fn progress_overlay() -> impl Scene {
                         TextFont { font_size: tokens::TEXT_SIZE_SM }
                         TextColor(tokens::TEXT_SECONDARY)
                     ),
+                    (
+                        ProgressActions
+                        Node {
+                            display: Display::None,
+                            justify_content: JustifyContent::FlexEnd,
+                        }
+                    ),
                 ]
             )
         ]
@@ -332,6 +374,27 @@ fn sync_progress_overlay(world: &mut World) {
         && let Err(err) = world.spawn_scene(progress_overlay())
     {
         error!("progress overlay failed to spawn: {err}");
+    }
+    let mut empty_slots =
+        world.query_filtered::<Entity, (With<ProgressActions>, Without<Children>)>();
+    let slots: Vec<Entity> = empty_slots.iter(world).collect();
+    for slot in slots {
+        world.spawn((cancel_button(), ChildOf(slot)));
+    }
+    let cancellable = world
+        .get_resource::<EditorProgress>()
+        .and_then(EditorProgress::cancellable_owner)
+        .is_some();
+    let display = if cancellable {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    let mut actions = world.query_filtered::<&mut Node, With<ProgressActions>>();
+    for mut node in actions.iter_mut(world) {
+        if node.display != display {
+            node.display = display;
+        }
     }
 
     let dialog_open = world
@@ -368,6 +431,23 @@ fn sync_progress_overlay(world: &mut World) {
         node.left = percent(left * 100.0);
         node.width = percent(width * 100.0);
     }
+}
+
+/// The overlay's Cancel button, which asks the current task's owner to stop.
+fn cancel_button() -> impl Bundle {
+    (
+        button(ButtonProps::new("Cancel")),
+        observe(
+            |click: On<Pointer<Click>>, progress: Res<EditorProgress>, mut commands: Commands| {
+                if click.event().button != PointerButton::Primary {
+                    return;
+                }
+                if let Some(owner) = progress.cancellable_owner() {
+                    commands.trigger(ProgressCancelRequested { owner });
+                }
+            },
+        ),
+    )
 }
 
 /// Name the running task where the footer otherwise says the editor is ready,
