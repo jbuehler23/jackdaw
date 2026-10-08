@@ -205,8 +205,8 @@ fn default_projects_dir() -> PathBuf {
 }
 
 /// Environment preflight results for the launcher. Populated asynchronously on
-/// entering the project selector so a missing toolchain / cmake / a Windows
-/// linker misconfiguration is reported before the user starts a long build.
+/// entering the project selector so a missing toolchain or native build tool
+/// is reported before the user starts a long build.
 #[derive(Resource, Default)]
 pub struct PreflightState {
     task: Option<Task<Vec<crate::preflight::CheckResult>>>,

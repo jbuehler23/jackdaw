@@ -25,6 +25,7 @@ use std::process::ExitCode;
 
 use jackdaw_env::rust_env_command;
 use jackdaw_project_build::bootstrap::{self, SetupProgress};
+use jackdaw_project_build::build_tools::CheckStatus;
 use jackdaw_project_build::{BuildEvent, build_project_binary, sdk_paths};
 use jackdaw_schema::{read_schema, schema_path};
 
@@ -158,14 +159,15 @@ fn cmd_doctor(args: &[String]) -> ExitCode {
 
     println!("environment");
     for check in &bootstrap::check_prerequisites() {
-        if check.ok {
-            println!("  [ ok ] {}: {}", check.name, check.detail);
-        } else {
-            ok = false;
-            println!("  [fail] {}: {}", check.name, check.detail);
-            if let Some(fix) = &check.fix {
-                println!("         fix: {fix}");
-            }
+        let tag = match check.status {
+            CheckStatus::Ok => "[ ok ]",
+            CheckStatus::Warn => "[warn]",
+            CheckStatus::Fail => "[fail]",
+        };
+        ok &= check.status != CheckStatus::Fail;
+        println!("  {tag} {}: {}", check.name, check.detail);
+        if let Some(fix) = &check.fix {
+            println!("         fix: {fix}");
         }
     }
 

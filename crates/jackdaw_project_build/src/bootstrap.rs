@@ -13,6 +13,8 @@ use jackdaw_env::paths::data_dir;
 use jackdaw_env::rust_env_command;
 use serde::{Deserialize, Serialize};
 
+use crate::build_tools::{self, CheckStatus};
+
 /// The rustup toolchain the SDK is pinned to. Must match the embedded
 /// recipe's `rust-toolchain.toml`: the rmeta trick requires project
 /// builds and the SDK to share an exact rustc.
@@ -241,29 +243,29 @@ fn sdk_is_stale() -> bool {
 /// One prerequisite [`ensure_sdk`] needs, for `doctor`-style reporting.
 pub struct Prereq {
     pub name: &'static str,
-    pub ok: bool,
+    pub status: CheckStatus,
     pub detail: String,
     pub fix: Option<String>,
 }
 
 /// Check the tools an SDK build needs before committing to a long
-/// compile: cargo and rustup (hard requirements) plus the pinned
-/// toolchain (informational; setup installs it). Fast and side-effect
-/// free. Used by `jd doctor` and as an early gate in
-/// [`ensure_sdk`].
+/// compile: cargo, rustup and the native build tools (see
+/// [`build_tools`]) plus the pinned toolchain (informational; setup
+/// installs it). Fast and side-effect free. Used by `jd doctor` and as
+/// an early gate in [`ensure_sdk`].
 pub fn check_prerequisites() -> Vec<Prereq> {
     let mut out = Vec::new();
 
     out.push(match tool_version("cargo", "--version") {
         Some(version) => Prereq {
             name: "cargo",
-            ok: true,
+            status: CheckStatus::Ok,
             detail: version,
             fix: None,
         },
         None => Prereq {
             name: "cargo",
-            ok: false,
+            status: CheckStatus::Fail,
             detail: "not found on PATH".to_string(),
             fix: Some("install Rust from https://rustup.rs".to_string()),
         },
@@ -273,13 +275,13 @@ pub fn check_prerequisites() -> Vec<Prereq> {
     out.push(match &rustup {
         Some(version) => Prereq {
             name: "rustup",
-            ok: true,
+            status: CheckStatus::Ok,
             detail: version.clone(),
             fix: None,
         },
         None => Prereq {
             name: "rustup",
-            ok: false,
+            status: CheckStatus::Fail,
             detail: "not found on PATH".to_string(),
             fix: Some(
                 "install rustup from https://rustup.rs (jackdaw manages the SDK toolchain with it)"
@@ -288,42 +290,18 @@ pub fn check_prerequisites() -> Vec<Prereq> {
         },
     });
 
-    // The SDK build compiles jackdaw's CSG kernel (`manifold-csg-sys`), a C++
-    // library built with cmake. Without this check the failure lands minutes into
-    // a compile.
-    out.push(match tool_version("cmake", "--version") {
-        Some(version) => Prereq {
-            name: "cmake",
-            ok: true,
-            detail: version,
-            fix: None,
-        },
-        None => Prereq {
-            name: "cmake",
-            ok: false,
-            detail: "not found on PATH".to_string(),
-            fix: Some(
-                "install cmake from https://cmake.org/download (the CSG kernel is built with it)"
-                    .to_string(),
-            ),
-        },
-    });
-
-    // On Windows a MinGW `gcc` on PATH makes cmake pick it over MSVC,
-    // and the resulting objects fail to link (LNK1143).
-    #[cfg(windows)]
-    if tool_version("gcc", "--version").is_some()
-        && !std::env::var("CMAKE_GENERATOR")
-            .is_ok_and(|generator| generator.contains("Visual Studio"))
-    {
-        out.push(Prereq {
-            name: "Windows C++ toolchain",
-            ok: false,
-            detail: "MinGW gcc is on PATH; cmake may pick it over MSVC and fail to link"
-                .to_string(),
-            fix: Some("set CMAKE_GENERATOR=\"Visual Studio 17 2022\" before building".to_string()),
-        });
-    }
+    // The SDK build compiles C++ (jackdaw's CSG kernel) with cmake and links
+    // with the platform's native toolchain.
+    out.extend(
+        build_tools::check_build_tools()
+            .into_iter()
+            .map(|check| Prereq {
+                name: check.name,
+                status: check.status,
+                detail: check.detail,
+                fix: check.fix,
+            }),
+    );
 
     // The pinned toolchain is not a hard failure: setup installs it on demand.
     // Report its state so `doctor` can preview a toolchain download.
@@ -335,7 +313,7 @@ pub fn check_prerequisites() -> Vec<Prereq> {
             .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains(SDK_TOOLCHAIN_CHANNEL));
         out.push(Prereq {
             name: "SDK toolchain",
-            ok: true,
+            status: CheckStatus::Ok,
             detail: if installed {
                 format!("{SDK_TOOLCHAIN_CHANNEL} installed")
             } else {
@@ -348,7 +326,7 @@ pub fn check_prerequisites() -> Vec<Prereq> {
     // Extensions and the SDK build with the compiler that built this editor.
     out.push(Prereq {
         name: "editor toolchain",
-        ok: true,
+        status: CheckStatus::Ok,
         detail: format!(
             "jackdaw is built with {SDK_TOOLCHAIN_CHANNEL}; extensions build with the same release"
         ),
@@ -486,7 +464,7 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     // an actionable message instead of a cryptic mid-compile error.
     let missing: Vec<String> = check_prerequisites()
         .into_iter()
-        .filter(|p| !p.ok)
+        .filter(|p| p.status == CheckStatus::Fail)
         .map(|p| match p.fix {
             Some(fix) => format!("{} ({}) - {fix}", p.name, p.detail),
             None => format!("{} ({})", p.name, p.detail),
@@ -781,7 +759,11 @@ mod tests {
             .iter()
             .find(|check| check.name == "editor toolchain")
             .expect("the report covers the toolchain jackdaw itself is built with");
-        assert!(toolchain.ok, "it is a note, not a gate");
+        assert_eq!(
+            toolchain.status,
+            CheckStatus::Ok,
+            "it is a note, not a gate"
+        );
         assert!(
             toolchain.detail.contains(SDK_TOOLCHAIN_CHANNEL),
             "it names the toolchain: {}",

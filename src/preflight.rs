@@ -1,26 +1,17 @@
 //! Environment preflight checks.
 //!
-//! Run before building a user project so a missing toolchain, a missing cmake,
-//! or a Windows linker misconfiguration surfaces in seconds (with a fix) instead
-//! of failing a multi-minute build at the end. The individual `check_*`
-//! functions each shell out or read the environment, so run them off the main
-//! thread and report results as they complete for live reporting in the
-//! launcher. `run_all_checks` batches them for the setup UI.
+//! Run before building a user project so a missing toolchain or native build
+//! tool (cmake, a C/C++ compiler, MSVC, the Xcode Command Line Tools, Bevy's
+//! Linux libraries) surfaces in seconds (with a fix) instead of failing a
+//! multi-minute build at the end. The checks shell out or read the
+//! environment, so run them off the main thread. `run_all_checks` batches
+//! them for the launcher.
 
 use std::process::Command;
 
 use jackdaw_env::rust_env_command;
 
-/// Outcome of a single check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckStatus {
-    /// Good to go.
-    Ok,
-    /// Build can proceed but may misbehave; the fix is advisory.
-    Warn,
-    /// The build will fail until the fix is applied.
-    Fail,
-}
+pub use jackdaw_project_build::build_tools::CheckStatus;
 
 /// A single preflight check result.
 #[derive(Debug, Clone)]
@@ -44,21 +35,24 @@ impl CheckResult {
 
 /// Every check that applies on this platform. Call off the main thread.
 pub fn run_all_checks() -> Vec<CheckResult> {
-    let out = vec![check_rust_toolchain(), check_cmake()];
-    // The Windows linker check is the only platform-specific entry; shadow with
-    // a mutable binding there so non-Windows builds keep an immutable `out`.
-    #[cfg(windows)]
-    let out = {
-        let mut out = out;
-        out.push(check_windows_linker());
-        out
-    };
+    let mut out = vec![check_rust_toolchain()];
+    out.extend(
+        jackdaw_project_build::build_tools::check_build_tools()
+            .into_iter()
+            .map(|check| CheckResult {
+                label: check.name.to_string(),
+                status: check.status,
+                detail: check.detail,
+                fix: check.fix,
+            }),
+    );
     out
 }
 
-/// `rustc` present. Extensions build with the toolchain that built this
-/// editor, which jackdaw installs through rustup on first use.
+/// `rustup` and `rustc` present. Extensions build with the toolchain that
+/// built this editor, which jackdaw installs through rustup on first use.
 pub fn check_rust_toolchain() -> CheckResult {
+    let rustup = first_line("rustup", &["--version"]).is_some();
     let editor = first_line("rustc", &["--version"]);
     let ambient = Command::new("rustc")
         .env_remove("RUSTUP_TOOLCHAIN")
@@ -73,25 +67,31 @@ pub fn check_rust_toolchain() -> CheckResult {
                 .map(|l| l.trim().to_string())
         });
     let (status, detail, fix) =
-        rust_toolchain_status(editor, ambient, jackdaw_env::RUSTUP_TOOLCHAIN);
+        rust_toolchain_status(rustup, editor, ambient, jackdaw_env::RUSTUP_TOOLCHAIN);
     CheckResult::new("Rust toolchain", status, detail, fix.as_deref())
 }
 
 /// Pure logic for [`check_rust_toolchain`]: `editor` is `rustc --version`
 /// under the editor's toolchain, `ambient` under the user's default.
 fn rust_toolchain_status(
+    rustup: bool,
     editor: Option<String>,
     ambient: Option<String>,
     toolchain: &str,
 ) -> (CheckStatus, String, Option<String>) {
     match (editor, ambient) {
+        (Some(version), _) | (None, Some(version)) if !rustup => (
+            CheckStatus::Fail,
+            format!("{version} without rustup; jackdaw installs {toolchain} through rustup"),
+            Some("Install rustup from https://rustup.rs".to_string()),
+        ),
         (Some(version), _) => (CheckStatus::Ok, version, None),
         (None, Some(version)) => (
             CheckStatus::Warn,
             format!("{version}; extensions need {toolchain}, which is not installed yet"),
             Some(format!(
                 "jackdaw installs {toolchain} when an extension first builds, or run \
-                 `rustup toolchain install {toolchain} --profile minimal`"
+                 rustup toolchain install {toolchain} --profile minimal"
             )),
         ),
         (None, None) => (
@@ -99,66 +99,6 @@ fn rust_toolchain_status(
             "rustc not found".to_string(),
             Some("Install Rust via https://rustup.rs".to_string()),
         ),
-    }
-}
-
-/// `cmake` present. Building the editor compiles jackdaw's CSG kernel
-/// (`manifold-csg-sys`), which builds a C++ library with cmake.
-pub fn check_cmake() -> CheckResult {
-    match first_line("cmake", &["--version"]) {
-        Some(version) => CheckResult::new("cmake", CheckStatus::Ok, version, None),
-        None => CheckResult::new(
-            "cmake",
-            CheckStatus::Fail,
-            "cmake not found",
-            Some("Install cmake (https://cmake.org/download) and ensure it is on PATH"),
-        ),
-    }
-}
-
-/// On Windows, warn if a MinGW `gcc` is on PATH without `CMAKE_GENERATOR`
-/// forcing MSVC: cmake then builds `manifold-csg-sys` with MinGW and the object
-/// files fail to link (`LNK1143`).
-#[cfg(windows)]
-pub fn check_windows_linker() -> CheckResult {
-    let gcc_found = first_line("gcc", &["--version"]).is_some();
-    let generator = std::env::var("CMAKE_GENERATOR").ok();
-    let (status, detail, fix) = windows_linker_status(gcc_found, generator.as_deref());
-    CheckResult::new("Windows C++ toolchain", status, detail, fix.as_deref())
-}
-
-/// Pure logic for the Windows linker check, split out for testing. Compiled on
-/// Windows (where the check runs) and under `test` (where it is unit-tested).
-#[cfg(any(windows, test))]
-fn windows_linker_status(
-    gcc_found: bool,
-    cmake_generator: Option<&str>,
-) -> (CheckStatus, String, Option<String>) {
-    let forces_msvc = cmake_generator
-        .map(|g| g.contains("Visual Studio"))
-        .unwrap_or(false);
-    if !gcc_found {
-        (
-            CheckStatus::Ok,
-            "No MinGW gcc on PATH; cmake will use MSVC".to_string(),
-            None,
-        )
-    } else if forces_msvc {
-        (
-            CheckStatus::Ok,
-            "MinGW gcc is on PATH but CMAKE_GENERATOR forces Visual Studio".to_string(),
-            None,
-        )
-    } else {
-        (
-            CheckStatus::Warn,
-            "MinGW gcc is on PATH; cmake may pick it over MSVC and fail to link (LNK1143)"
-                .to_string(),
-            Some(
-                "Set CMAKE_GENERATOR=\"Visual Studio 17 2022\" before building (see the install guide)"
-                    .to_string(),
-            ),
-        )
     }
 }
 
@@ -181,27 +121,19 @@ mod tests {
 
     #[test]
     fn missing_editor_toolchain_warns_until_installed() {
-        let installed = rust_toolchain_status(Some("rustc 1.99.0".into()), None, "1.99.0");
+        let installed = rust_toolchain_status(true, Some("rustc 1.99.0".into()), None, "1.99.0");
         assert_eq!(installed.0, CheckStatus::Ok);
-        let pending = rust_toolchain_status(None, Some("rustc 1.100.0".into()), "1.99.0");
+        let pending = rust_toolchain_status(true, None, Some("rustc 1.100.0".into()), "1.99.0");
         assert_eq!(pending.0, CheckStatus::Warn);
         assert!(pending.2.is_some_and(|fix| fix.contains("1.99.0")));
-        let absent = rust_toolchain_status(None, None, "1.99.0");
+        let absent = rust_toolchain_status(true, None, None, "1.99.0");
         assert_eq!(absent.0, CheckStatus::Fail);
     }
 
     #[test]
-    fn windows_linker_warns_only_on_unguarded_mingw() {
-        // No gcc -> fine.
-        assert_eq!(windows_linker_status(false, None).0, CheckStatus::Ok);
-        // gcc present, no generator forcing MSVC -> warn with a fix.
-        let (status, _, fix) = windows_linker_status(true, None);
-        assert_eq!(status, CheckStatus::Warn);
-        assert!(fix.is_some());
-        // gcc present but generator forces Visual Studio -> fine.
-        assert_eq!(
-            windows_linker_status(true, Some("Visual Studio 17 2022")).0,
-            CheckStatus::Ok
-        );
+    fn rustc_without_rustup_fails() {
+        let distro = rust_toolchain_status(false, None, Some("rustc 1.98.0".into()), "1.99.0");
+        assert_eq!(distro.0, CheckStatus::Fail);
+        assert!(distro.2.is_some_and(|fix| fix.contains("rustup.rs")));
     }
 }

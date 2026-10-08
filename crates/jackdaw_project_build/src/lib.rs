@@ -20,6 +20,7 @@
 
 pub mod bootstrap;
 pub mod build_source;
+pub mod build_tools;
 pub mod cargo_meta;
 pub mod detect;
 pub mod linkage;
