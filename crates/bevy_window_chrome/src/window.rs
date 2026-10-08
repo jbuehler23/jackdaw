@@ -15,7 +15,8 @@ use bevy::winit::WINIT_WINDOWS;
 /// driver stacks render a transparent `PreMultiplied` surface black or
 /// not at all, so X11 sessions get an opaque window and square
 /// corners. `JACKDAW_OPAQUE_WINDOW=1` forces the opaque path anywhere
-/// as an escape hatch.
+/// as an escape hatch. A surface that cannot composite alpha still
+/// falls back to an opaque window once the renderer probes it.
 pub fn surface_supports_alpha() -> bool {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {

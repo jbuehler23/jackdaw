@@ -5,7 +5,7 @@
 //!
 //! - **Windows**: borderless client-side chrome; DWM rounds the HWND corner.
 //! - **Linux / FreeBSD**: borderless client-side chrome; Bevy UI rounds the shell with a
-//!   transparent window background.
+//!   transparent window background, and squares it when the surface cannot composite alpha.
 //! - **macOS**: native traffic lights with a transparent integrated title bar.
 //!
 //! Colors and metrics come from a [`WindowChromeTheme`] you supply to [`WindowChromePlugin`].
@@ -24,6 +24,8 @@ pub use resize::resize_edge_overlay;
 mod macos_titlebar;
 mod plugin;
 mod shell;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod surface_alpha;
 mod title_bar;
 mod window;
 

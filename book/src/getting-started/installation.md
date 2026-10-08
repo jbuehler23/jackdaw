@@ -55,6 +55,9 @@ Tagged releases provide checksummed, provenance-attested archives for
 x86-64 Linux, x86-64 Windows, and Apple Silicon macOS. Extract the archive
 and run `jackdaw`. Intel macOS users currently build from source.
 
+The Linux archive is built on Ubuntu 24.04 and needs glibc 2.39 or newer.
+On older distributions, use `cargo install` or a source checkout instead.
+
 The archive includes its pinned SDK, so nothing of Jackdaw is compiled on
 your machine. Extract it and you can create a project immediately. That
 project's first build still takes around nine minutes, since it compiles

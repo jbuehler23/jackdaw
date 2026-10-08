@@ -102,6 +102,8 @@ impl Plugin for WindowChromePlugin {
                 app.add_observer(crate::resize::on_resize_edge_press);
                 app.add_systems(Last, crate::resize::sync_resize_overlay_pickability);
             }
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            crate::surface_alpha::build(app);
             #[cfg(target_os = "windows")]
             {
                 app.add_systems(PostUpdate, crate::window::apply_windows_corner_round);
