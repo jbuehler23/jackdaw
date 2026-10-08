@@ -240,6 +240,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "ipc-channel on Windows keeps a copy of a transferred sender in the receiving \
+                  process, so the editor end closes only when that process exits"
+    )]
     fn a_closed_peer_reads_as_gone() {
         let (handle, name) = serve().unwrap();
         let child = std::thread::spawn(move || connect(&name).unwrap());

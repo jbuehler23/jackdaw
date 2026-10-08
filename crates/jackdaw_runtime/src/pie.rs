@@ -971,6 +971,11 @@ mod tests {
     /// An editor that goes away without sending `Stop`, as a crash does,
     /// still takes the game down.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "ipc-channel on Windows keeps a copy of a transferred sender in the receiving \
+                  process, so the editor end closes only when that process exits"
+    )]
     fn exits_when_the_editor_hangs_up() {
         let (handle, name) = serve().expect("serve");
         let editor = std::thread::spawn(move || handle.accept().expect("accept"));

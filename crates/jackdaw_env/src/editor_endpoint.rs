@@ -112,7 +112,8 @@ mod process {
             let mut code = 0u32;
             let read = GetExitCodeProcess(handle, &mut code);
             CloseHandle(handle);
-            read == 0 || code != STILL_ACTIVE as u32
+            // An exit code that cannot be read is not proof the process is gone.
+            read == 0 || code == STILL_ACTIVE as u32
         }
     }
 
