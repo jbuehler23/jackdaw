@@ -48,6 +48,10 @@ Disable, update, and uninstall remove those registrations immediately.
 Superseded native libraries remain safely mapped but unreachable until the
 process exits.
 
+While developing, open the extension project in Jackdaw. The editor builds it
+against the extension SDK, building the SDK first if this install has none, and
+loads it. **Rebuild Project** builds and loads it again after a change.
+
 Runtime extensions deliberately cannot install extension-owned Bevy component
 metadata or reflected Rust types. Use a custom editor build when that level of
 access is required.

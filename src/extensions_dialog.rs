@@ -573,15 +573,12 @@ fn handle_install(
                 if let Some(message) = rollback_message {
                     message
                 } else if err.is_symbol_mismatch() {
-                    // Soft-fail: caller will detect this and run the
-                    // auto-clean-and-retry recovery path. Don't update
-                    // the install-status message; the retry UI owns it.
-                    "SDK mismatch detected; cleaning project cache...".to_string()
-                } else {
                     format!(
-                        "Installed to {}, but live activation failed: {err}.",
+                        "The build at {} was compiled against a different editor SDK: {err}.",
                         library.display()
                     )
+                } else {
+                    format!("Could not load the build at {}: {err}.", library.display())
                 }
             }
         };

@@ -300,7 +300,7 @@ pub fn build_project_dylib(
     let salt = build_salt(&plan_path, &sdk.wrapper)?;
     let target_root = jackdaw_dir.join("target");
     let target_dir = target_root.join(&salt);
-    retain_recent_target_dirs(&target_root, &salt);
+    retain_recent_target_dirs(&target_root, &salt, &crate::game_target_dir(jackdaw_dir));
 
     let mut cmd = rust_env_command("cargo");
     cmd.args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
@@ -376,6 +376,10 @@ pub fn build_project_dylib(
     // it. The facade in turn imports the shipped Bevy and Jackdaw runtimes.
     linkage::verify_linkage(&dylib, &sdk.dylib, sdk.toolchain.as_deref())
         .map_err(ProjectBuildError::Linkage)?;
+    std::fs::write(
+        jackdaw_dir.join(LAST_BUILD_RECORD),
+        dylib.to_string_lossy().as_bytes(),
+    )?;
 
     Ok(ProjectBuild { dylib, edges })
 }
@@ -449,11 +453,25 @@ pub fn shim_spec_for_project(root: &Path) -> Result<ShimSpec, crate::cargo_meta:
     })
 }
 
-/// The most recently built extension dylib under `<jackdaw_dir>/target`,
-/// if there is one. The build keys its target directory by a salt that
-/// only the build knows, so consumers that just want "whatever was built
-/// last" (packaging, tooling) search rather than recompute it.
+/// The file under `.jackdaw/` naming the library the last extension build
+/// produced.
+const LAST_BUILD_RECORD: &str = "last-extension-build";
+
+/// The extension dylib the last build produced, if there is one.
+///
+/// The build records its output's path, since the target directory is
+/// keyed by a salt only the build knows and older keyed directories are
+/// kept. Without a record, the newest library under `<jackdaw_dir>/target`
+/// is taken.
 pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
+    let recorded = std::fs::read_to_string(jackdaw_dir.join(LAST_BUILD_RECORD))
+        .ok()
+        .map(|path| PathBuf::from(path.trim()))
+        .filter(|path| path.is_file());
+    recorded.or_else(|| newest_built_dylib(jackdaw_dir))
+}
+
+fn newest_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
     let wanted = dylib_file_name("jackdaw_shim");
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
     // <jackdaw_dir>/target/<salt>/<triple>/debug/<dylib>
@@ -543,7 +561,8 @@ fn unresolved_crate_name(line: &str) -> Option<String> {
 const TARGET_DIRS_KEPT: usize = 2;
 
 /// Drop old keyed target directories, keeping the current one and the
-/// most recently created others.
+/// most recently created others. `game` is the game build's directory,
+/// which shares the root and is never dropped.
 ///
 /// Ordering is by directory mtime, which is creation time here: cargo
 /// writes nested files, which does not touch the salt directory itself.
@@ -557,13 +576,13 @@ const TARGET_DIRS_KEPT: usize = 2;
 /// each flip threw away a cache that was about to be wanted again.
 /// Keeping the previous one makes that flip nearly free while still
 /// bounding growth.
-fn retain_recent_target_dirs(target_root: &Path, current: &str) {
+fn retain_recent_target_dirs(target_root: &Path, current: &str, game: &Path) {
     let Ok(entries) = std::fs::read_dir(target_root) else {
         return;
     };
     let mut others: Vec<(std::time::SystemTime, PathBuf)> = entries
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy() != current)
+        .filter(|entry| entry.file_name().to_string_lossy() != current && entry.path() != game)
         .filter_map(|entry| {
             let used = entry.metadata().and_then(|meta| meta.modified()).ok()?;
             Some((used, entry.path()))
@@ -747,23 +766,61 @@ mod tests {
     fn the_previous_target_dir_survives_a_configuration_flip() {
         let root = std::env::temp_dir().join(format!("jackdaw-retain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        for salt in ["aaa", "bbb", "ccc"] {
+        let game = root.join("game");
+        for salt in ["game", "aaa", "bbb", "ccc"] {
             std::fs::create_dir_all(root.join(salt)).unwrap();
             // Distinct mtimes so "most recent" is well defined.
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
         // Building under `ccc` keeps it plus the newest other (`bbb`).
-        retain_recent_target_dirs(&root, "ccc");
+        retain_recent_target_dirs(&root, "ccc", &game);
         assert!(root.join("ccc").is_dir(), "the current dir is untouched");
         assert!(root.join("bbb").is_dir(), "the previous one is kept");
         assert!(!root.join("aaa").exists(), "older ones are dropped");
+        assert!(
+            game.is_dir(),
+            "the game build's directory is not a keyed one"
+        );
 
         // Flipping back to `bbb` finds its cache still there.
-        retain_recent_target_dirs(&root, "bbb");
+        retain_recent_target_dirs(&root, "bbb", &game);
         assert!(root.join("bbb").is_dir());
         assert!(root.join("ccc").is_dir(), "and can flip again for free");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A configuration flip keeps the previous keyed directory, whose
+    /// library can be newer on disk than the one the last build produced.
+    #[test]
+    fn the_last_build_is_the_one_recorded_not_the_newest_on_disk() {
+        let root = std::env::temp_dir().join(format!("jackdaw-last-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let library = |salt: &str| {
+            let dir = root.join("target").join(salt).join("triple").join("debug");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(dylib_file_name("jackdaw_shim"));
+            std::fs::write(&path, salt).unwrap();
+            path
+        };
+        let built = library("aaa");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let stale = library("bbb");
+
+        assert_eq!(last_built_dylib(&root), Some(stale));
+        std::fs::write(
+            root.join(LAST_BUILD_RECORD),
+            built.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(last_built_dylib(&root), Some(built.clone()));
+
+        std::fs::remove_file(&built).unwrap();
+        assert!(
+            last_built_dylib(&root).is_some_and(|path| path != built),
+            "a record naming a removed library falls back to the search"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

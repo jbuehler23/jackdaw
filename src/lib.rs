@@ -74,6 +74,7 @@ pub mod document_ops;
 pub(crate) mod document_units;
 pub mod editor_grid_depth_patch;
 pub mod ext_build;
+pub mod extension_build;
 mod extension_lifecycle;
 pub mod extension_resolution;
 pub mod extensions_dialog;
@@ -543,6 +544,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_api_internal::ExtensionLoaderPlugin)
         .add_plugins(extensions_dialog::ExtensionsDialogPlugin)
         .add_plugins(hot_reload::HotReloadPlugin)
+        .add_plugins(extension_build::ExtensionBuildPlugin)
         .add_plugins(pie::PiePlugin)
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(live_input::LiveInputPlugin)

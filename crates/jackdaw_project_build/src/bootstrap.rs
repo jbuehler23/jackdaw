@@ -191,16 +191,34 @@ fn classify_sdk(
 }
 
 /// Whether the project at `root` builds against the SDK. Only an editor
-/// extension does: a game builds as its own cargo binary, against its own
-/// Bevy and the `jackdaw_runtime` it depends on.
+/// extension with no game in it does: a game builds as its own cargo
+/// binary, against its own Bevy and the `jackdaw_runtime` it depends on,
+/// and a game that also declares an extension keeps building that way.
 pub fn project_needs_sdk(root: &Path) -> bool {
-    if crate::detect::detect_extension(root).is_some() {
-        return true;
-    }
-    // A workspace root has no library of its own; ask cargo which member
-    // jackdaw builds.
-    !root.join("src").join("lib.rs").is_file()
-        && crate::shim_spec_for_project(root).is_ok_and(|spec| spec.extension_type.is_some())
+    let package_dir = if crate::detect::detect_extension(root).is_some() {
+        root.to_path_buf()
+    } else if root.join("src").join("lib.rs").is_file() {
+        return false;
+    } else {
+        // A workspace root has no library of its own; ask cargo which
+        // member jackdaw builds.
+        match crate::shim_spec_for_project(root) {
+            Ok(spec) if spec.extension_type.is_some() => spec.project_root,
+            _ => return false,
+        }
+    };
+    !project_has_game(root, &package_dir)
+}
+
+/// Whether the package at `package_dir` is a game: it has a binary target,
+/// a Bevy plugin, or a game plugin named in the project's `jackdaw.toml`.
+fn project_has_game(root: &Path, package_dir: &Path) -> bool {
+    package_dir.join("src").join("main.rs").is_file()
+        || package_dir.join("src").join("bin").is_dir()
+        || !crate::detect::plugin_paths(package_dir).is_empty()
+        || crate::project_manifest::ProjectManifest::read(root)
+            .plugin
+            .is_some()
 }
 
 /// Whether opening a project has to wait for an SDK build first: an
@@ -804,6 +822,27 @@ mod tests {
         );
         assert!(project_needs_sdk(&root));
         assert!(opening_waits_for_sdk(true, SdkState::NotBuilt));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_game_that_also_declares_an_extension_builds_as_a_game() {
+        let root = fixture(
+            "sdk-game-and-extension",
+            "use bevy::prelude::*;\nuse jackdaw_extension::prelude::*;\npub struct GamePlugin;\nimpl Plugin for GamePlugin {\n    fn build(&self, _app: &mut App) {}\n}\n#[derive(Default)]\npub struct Tools;\nimpl JackdawExtension for Tools {}\n",
+        );
+        assert!(!project_needs_sdk(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_extension_with_a_binary_target_builds_as_a_game() {
+        let root = fixture(
+            "sdk-extension-with-main",
+            "use jackdaw_extension::prelude::*;\n#[derive(Default)]\npub struct Tools;\nimpl JackdawExtension for Tools {}\n",
+        );
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        assert!(!project_needs_sdk(&root));
         let _ = std::fs::remove_dir_all(&root);
     }
 

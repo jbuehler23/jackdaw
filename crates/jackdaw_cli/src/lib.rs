@@ -26,7 +26,7 @@ use std::process::ExitCode;
 use jackdaw_env::rust_env_command;
 use jackdaw_project_build::bootstrap::{self, SetupProgress};
 use jackdaw_project_build::build_tools::CheckStatus;
-use jackdaw_project_build::{BuildEvent, build_project_binary, sdk_paths};
+use jackdaw_project_build::{BuildEvent, build_project_binary, build_project_dylib, sdk_paths};
 use jackdaw_schema::{read_schema, schema_path};
 
 pub mod package;
@@ -501,9 +501,11 @@ fn resolve_dependencies(root: &Path) -> Result<(), String> {
         .to_string())
 }
 
-/// `jd build [--project <path>]`: run the same pipeline the
-/// editor runs and persist `.jackdaw/schema.json`, which a running editor
-/// watches and reloads. Defaults to the current directory.
+/// `jd build [--project <path>]`: run the same pipeline the editor runs.
+/// A game persists `.jackdaw/schema.json`, which a running editor watches
+/// and reloads; a project that is only an extension builds its library
+/// against the SDK for `jd extension pack`. Defaults to the current
+/// directory.
 fn cmd_build(args: &[String]) -> ExitCode {
     let root = match resolve_root(args) {
         Ok(root) => root,
@@ -550,7 +552,8 @@ fn resolve_root(args: &[String]) -> Result<PathBuf, ExitCode> {
     })
 }
 
-/// Build the game for `root` and persist its schema.
+/// Build the project at `root`: a game as its own binary with its schema
+/// persisted, a project that is only an extension against the SDK.
 fn build_project(root: &Path) -> ExitCode {
     let spec = match jackdaw_project_build::shim_spec_for_project(root) {
         Ok(spec) => spec,
@@ -561,6 +564,9 @@ fn build_project(root: &Path) -> ExitCode {
     };
 
     let jackdaw_dir = root.join(".jackdaw");
+    if bootstrap::project_needs_sdk(root) {
+        return build_extension(root, &spec, &jackdaw_dir);
+    }
 
     println!("jackdaw build: building {}", root.display());
     // Both accounts of the build reach the reporter: rustc's diagnostics
@@ -581,6 +587,58 @@ fn build_project(root: &Path) -> ExitCode {
                 "jackdaw build: ok ({components} components); binary at {}, schema at {}",
                 build.binary.display(),
                 schema_path(&jackdaw_dir).display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("jackdaw build: failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Build an extension's library against the SDK, building the SDK first
+/// when this install has not yet.
+fn build_extension(
+    root: &Path,
+    spec: &jackdaw_project_build::shim::ShimSpec,
+    jackdaw_dir: &Path,
+) -> ExitCode {
+    if bootstrap::needs_setup() {
+        println!(
+            "jackdaw build: building the extension SDK first; this usually takes {}",
+            bootstrap::SDK_BUILD_ESTIMATE
+        );
+        let report = |event: SetupProgress| {
+            if let SetupProgress::Phase(phase) = event {
+                println!("jackdaw build: {phase}");
+            }
+        };
+        if let Err(err) = bootstrap::ensure_sdk(report) {
+            eprintln!("jackdaw build: SDK setup failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let dev_workspace = dev_workspace();
+    let sdk = resolve_sdk(dev_workspace.as_deref());
+
+    println!("jackdaw build: building extension {}", root.display());
+    let mut report = |event: BuildEvent| {
+        if let BuildEvent::Log(line) = event {
+            eprintln!("{line}");
+        }
+    };
+    match build_project_dylib(
+        spec,
+        jackdaw_dir,
+        &sdk,
+        dev_workspace.as_deref(),
+        &mut report,
+    ) {
+        Ok(build) => {
+            println!(
+                "jackdaw build: ok; extension library at {}",
+                build.dylib.display()
             );
             ExitCode::SUCCESS
         }

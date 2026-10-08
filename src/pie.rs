@@ -373,19 +373,23 @@ pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> O
     OperatorResult::Finished
 }
 
-/// Rebuild the game now so new or changed game code (added
-/// components, edited fields) is picked up by the editor. This is the
-/// manual counterpart to auto-build: it runs the same pipeline as an
-/// out-of-editor `jackdaw build`, persisting the schema the editor then
-/// reloads.
+/// Rebuild the project now so new or changed code is picked up by the
+/// editor. This is the manual counterpart to auto-build and runs the same
+/// pipeline as an out-of-editor `jackdaw build`: a game persists the schema
+/// the editor then reloads, and an extension is loaded into the editor.
 #[operator(
     id = "project.build",
     label = "Rebuild Project",
-    description = "Rebuild the project so new or changed components appear in the editor."
+    description = "Rebuild the project so new or changed components and extensions appear in the editor."
 )]
 pub(crate) fn project_build(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        if let Some(root) = project_root(world) {
+        let Some(root) = project_root(world) else {
+            return;
+        };
+        if crate::extension_build::is_extension_project(world, &root, true) {
+            crate::extension_build::start_extension_build(world, &root);
+        } else {
             spawn_project_build(world, &root, BuildLoad::Foreground);
         }
     });
@@ -638,9 +642,14 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
 /// `Cargo.toml` and everything under `src/` are checked; a missing
 /// binary counts as stale.
 fn source_is_current(root: &Path, binary: &Path) -> bool {
-    let Ok(binary_mtime) = std::fs::metadata(binary).and_then(|m| m.modified()) else {
-        return false;
-    };
+    std::fs::metadata(binary)
+        .and_then(|m| m.modified())
+        .is_ok_and(|binary_mtime| source_unchanged_since(root, binary_mtime))
+}
+
+/// Whether nothing under `src/` and no `Cargo.toml` change is newer than
+/// `built`.
+fn source_unchanged_since(root: &Path, built: std::time::SystemTime) -> bool {
     let newest_source = newest_mtime(&root.join("src"))
         .into_iter()
         .chain(
@@ -650,7 +659,7 @@ fn source_is_current(root: &Path, binary: &Path) -> bool {
         )
         .max();
     match newest_source {
-        Some(src_mtime) => src_mtime <= binary_mtime,
+        Some(src_mtime) => src_mtime <= built,
         None => true,
     }
 }
@@ -1211,6 +1220,11 @@ fn prebuild_play_target(world: &mut World) {
     let Some(root) = project_root(world) else {
         return;
     };
+    if crate::extension_build::is_extension_project(world, &root, false) {
+        info!("PIE: building the extension in the background to load it");
+        crate::extension_build::start_extension_build(world, &root);
+        return;
+    }
     let spec = match crate::project_build::shim_spec_for_project(&root) {
         Ok(spec) => spec,
         Err(error) => {
@@ -1360,6 +1374,20 @@ fn watch_project_source_for_edit(world: &mut World) {
     let Some(root) = project_root(world) else {
         return;
     };
+    if crate::extension_build::is_extension_project(world, &root, false) {
+        // Measured from when the build finished, not from the library's
+        // mtime: a change that compiles to nothing new leaves the library
+        // untouched and would otherwise rebuild on every tick.
+        let finished = world
+            .get_resource::<crate::extension_build::ExtensionBuild>()
+            .and_then(crate::extension_build::ExtensionBuild::finished_at);
+        if let Some(finished) = finished
+            && !source_unchanged_since(&root, finished)
+        {
+            crate::extension_build::start_extension_build(world, &root);
+        }
+        return;
+    }
     // Only rebuild once the project has been built and loaded at least
     // once; the initial build is driven by `prebuild_play_target`.
     let built_path = match world.non_send::<PieSession>().builds.get(&root) {
@@ -1464,8 +1492,9 @@ fn watch_project_schema(world: &mut World) {
     info!("PIE: refreshed project types from schema ({component_count} project components)");
 }
 
-/// Mirror the active game build into the editor's `BuildStatus` so the
-/// footer shows what is compiling, and clear it once no build remains.
+/// Mirror the active game or extension build into the editor's
+/// `BuildStatus` so the footer shows what is compiling, and clear it once
+/// no build remains.
 fn reconcile_build_status(world: &mut World) {
     let building = world
         .non_send::<PieSession>()
@@ -1474,6 +1503,11 @@ fn reconcile_build_status(world: &mut World) {
         .find_map(|build| match build {
             BuildState::Running { progress, .. } => Some(Arc::clone(progress)),
             _ => None,
+        })
+        .or_else(|| {
+            world
+                .get_resource::<crate::extension_build::ExtensionBuild>()
+                .and_then(crate::extension_build::ExtensionBuild::progress)
         });
     let project = world
         .get_resource::<crate::project::ProjectRoot>()
@@ -2455,6 +2489,30 @@ mod enter_live_tests {
         assert_eq!(mode, PieWindowMode::Windowed);
         toggle_window_mode(&mut mode);
         assert_eq!(mode, PieWindowMode::Embedded);
+    }
+}
+
+#[cfg(test)]
+mod source_change_tests {
+    use super::*;
+
+    /// A rebuild that compiles to nothing new leaves the library's mtime
+    /// alone, so staleness is measured from when the build finished.
+    #[test]
+    fn source_older_than_the_finished_build_is_current() {
+        let root =
+            std::env::temp_dir().join(format!("jackdaw-source-since-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "").unwrap();
+        let finished = std::time::SystemTime::now() + Duration::from_secs(1);
+
+        assert!(source_unchanged_since(&root, finished));
+        assert!(!source_unchanged_since(
+            &root,
+            finished - Duration::from_secs(60)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

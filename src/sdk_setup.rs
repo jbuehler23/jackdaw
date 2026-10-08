@@ -104,6 +104,30 @@ impl SdkSetup {
             .get_or_insert_with(|| bootstrap::sdk_state().into())
     }
 
+    /// Ask for a build, started on the next update unless one is running.
+    pub fn request_build(&mut self) {
+        self.start_requested = true;
+    }
+
+    /// Whether a build is running or about to start.
+    pub fn build_pending(&self) -> bool {
+        self.start_requested || self.task.is_some()
+    }
+
+    /// The crate the running build last compiled and how many units it has
+    /// finished.
+    pub fn compiling(&self) -> (Option<&str>, u32) {
+        (self.snapshot.current_crate.as_deref(), self.snapshot.done)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_status(status: SdkStatus) -> Self {
+        Self {
+            status: Some(status),
+            ..Default::default()
+        }
+    }
+
     fn start(&mut self) {
         let shared = Arc::new(Mutex::new(SetupShared {
             phase: "Preparing".to_string(),
