@@ -276,11 +276,7 @@ fn the_add_menu_offers_every_kind_and_creates_where_the_browser_is() {
 fn creating_where_nothing_can_be_written_leaves_no_entry_behind() {
     let (mut app, tmp) = editor_with_kinds();
     let dir = folder(&tmp, "content/locked");
-    let mut locked = std::fs::metadata(&dir)
-        .expect("the folder is there")
-        .permissions();
-    locked.set_readonly(true);
-    std::fs::set_permissions(&dir, locked).expect("the folder locks");
+    lock_folder(&dir, true);
 
     call(
         &mut app,
@@ -305,15 +301,34 @@ fn creating_where_nothing_can_be_written_leaves_no_entry_behind() {
         "and no card stands for it"
     );
 
-    let mut open = std::fs::metadata(&dir)
-        .expect("the folder is there")
-        .permissions();
-    #[expect(
-        clippy::permissions_set_readonly_false,
-        reason = "the folder is torn down next"
-    )]
-    open.set_readonly(false);
-    std::fs::set_permissions(&dir, open).expect("the folder unlocks");
+    lock_folder(&dir, false);
+}
+
+/// Make `dir` refuse new files, or take that back. Windows ignores the
+/// read-only attribute on a folder, so there its access list denies adding
+/// files and folders instead.
+fn lock_folder(dir: &Path, locked: bool) {
+    #[cfg(windows)]
+    {
+        let change = if locked { "/deny" } else { "/remove:d" };
+        let mut icacls = std::process::Command::new("icacls");
+        icacls.arg(dir).arg(change);
+        if locked {
+            icacls.arg("*S-1-1-0:(WD,AD)");
+        } else {
+            icacls.arg("*S-1-1-0");
+        }
+        let status = icacls.status().expect("icacls runs");
+        assert!(status.success(), "the folder's access list changes");
+    }
+    #[cfg(not(windows))]
+    {
+        let mut permissions = std::fs::metadata(dir)
+            .expect("the folder is there")
+            .permissions();
+        permissions.set_readonly(locked);
+        std::fs::set_permissions(dir, permissions).expect("the folder's permissions change");
+    }
 }
 
 #[test]
