@@ -1,0 +1,4 @@
+# Scenes and asset metadata are compared byte for byte across platforms.
+*.bsn text eol=lf
+*.jsn text eol=lf
+*.meta text eol=lf

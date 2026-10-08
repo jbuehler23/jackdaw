@@ -40,9 +40,35 @@ pub fn to_asset_path(path: &str, assets_dir: Option<&Path>) -> String {
     path.to_slash_lossy().into_owned()
 }
 
+/// `spelled` with `/` between its folders, as asset paths are written on
+/// every platform. A path Bevy or `std` joined on Windows separates with `\`;
+/// elsewhere a backslash is part of a name and is kept.
+pub fn slash_separated(spelled: &str) -> String {
+    if cfg!(windows) {
+        spelled.replace('\\', "/")
+    } else {
+        spelled.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_joined_path_is_spelled_with_forward_slashes() {
+        let joined = Path::new("models").join("tree_LOD1.gltf");
+        assert_eq!(
+            slash_separated(&joined.to_string_lossy()),
+            "models/tree_LOD1.gltf"
+        );
+        let backslashed = slash_separated("models\\tree.gltf");
+        if cfg!(windows) {
+            assert_eq!(backslashed, "models/tree.gltf");
+        } else {
+            assert_eq!(backslashed, "models\\tree.gltf");
+        }
+    }
 
     #[test]
     fn a_relative_path_is_read_from_the_assets_root_whatever_named_it() {

@@ -315,9 +315,10 @@ pub fn generated_label(level: usize, primitive: &str) -> String {
 
 /// `file`, relative to the folder of the model at `model`, as an asset path.
 pub fn sibling_path(model: &str, file: &str) -> String {
-    AssetPath::parse(model)
-        .resolve_embed_str(file)
-        .map_or_else(|_| file.to_string(), |path| path.to_string())
+    AssetPath::parse(model).resolve_embed_str(file).map_or_else(
+        |_| file.to_string(),
+        |path| crate::asset_path::slash_separated(&path.to_string()),
+    )
 }
 
 /// The levels of detail a placed model draws: its model's settings with the
@@ -691,5 +692,22 @@ fn resolve_model_levels(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sibling_tests {
+    use super::*;
+
+    #[test]
+    fn a_sibling_level_is_an_asset_path_beside_its_model() {
+        assert_eq!(
+            sibling_path("models/tree.gltf", "tree_LOD1.gltf"),
+            "models/tree_LOD1.gltf"
+        );
+        assert_eq!(
+            sibling_path("models/trees/oak.gltf", "../shared/oak_LOD2.gltf"),
+            "models/shared/oak_LOD2.gltf"
+        );
     }
 }
