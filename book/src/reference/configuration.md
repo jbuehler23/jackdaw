@@ -96,9 +96,11 @@ order, and the first hit wins:
    and a release cache are not link-compatible.
 3. The same installed layout next to the running executable. This
    is what a downloaded bundle uses, with no env var.
-4. The bootstrap cache at `~/.jackdaw/sdk/<version>-<toolchain>/`
-   (or under `$XDG_DATA_HOME` when that is set to an absolute
-   path). Written by `jd setup` or the editor's on-demand SDK build,
+4. The bootstrap cache at `jackdaw/sdk/<version>-<toolchain>/` in
+   the local data directory: `~/.local/share` on Linux (or
+   `$XDG_DATA_HOME` when that is set to an absolute path),
+   `~/Library/Application Support` on macOS, and `%LOCALAPPDATA%`
+   on Windows. Written by `jd setup` or the editor's on-demand SDK build,
    with the editor's build log in `setup.log`. Keyed by jackdaw
    version and toolchain, so an upgrade lands in a fresh directory
    and the old one is reclaimed.
@@ -163,6 +165,10 @@ Signed `.jdext` payloads live in the platform data directory under
 `jackdaw/extensions/<id>/<version>/`. `active.json` selects one version and
 `garbage.json` queues retired mappings for deletion on the next launch.
 Loose dylib search directories and their environment variables are unsupported.
+
+A release editor on Windows runs without a console window and writes its log,
+panics included, to `%LOCALAPPDATA%\jackdaw\logs\editor.log`. The previous
+run's log is kept beside it as `editor.previous.log`.
 
 ## Project file
 

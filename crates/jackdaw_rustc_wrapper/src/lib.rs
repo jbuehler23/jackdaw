@@ -24,6 +24,8 @@
 //!   transitive rlib metadata when resolving re-exported types.
 //! * `-C prefer-dynamic` is appended so rustc links through the SDK
 //!   dylib rather than statically embedding its rlib form.
+//! * A rewritten command line too long for Windows to spawn reaches
+//!   rustc through an `@file` holding the arguments.
 //!
 //! Host-side invocations (no `--target`: build scripts, proc-macro
 //! crates and their deps) and compiles of plan-replaced packages pass
@@ -60,6 +62,8 @@ use std::env;
 use std::ffi::OsString;
 use std::process::{Command, ExitCode};
 use tracing::{error, warn};
+
+mod argfile;
 
 const ENV_SDK_DYLIB: &str = "JACKDAW_SDK_DYLIB";
 const ENV_SDK_DEPS: &str = "JACKDAW_SDK_DEPS";
@@ -115,13 +119,21 @@ pub fn run() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    let (forwarded, _argfile) = match argfile::forwarded(&rustc, &rustc_args, &env::temp_dir()) {
+        Ok(forwarded) => forwarded,
+        Err(e) => {
+            warn!("jackdaw-rustc-wrapper: could not write an argument file: {e}");
+            (rustc_args.clone(), None)
+        }
+    };
+
     // Trace the FIRST attempt for crates named in the comma-separated
     // list. The failure re-run above only explains deterministic
     // failures: a unit that fails once and re-runs clean needs its
     // original attempt traced, and only the caller knows which unit
     // that is.
     let mut cmd = Command::new(&rustc);
-    cmd.args(&rustc_args);
+    cmd.args(&forwarded);
     if let (Ok(traced), Ok(pkg)) = (
         env::var("JACKDAW_WRAPPER_TRACE_CRATES"),
         env::var("CARGO_PKG_NAME"),
@@ -143,7 +155,7 @@ pub fn run() -> ExitCode {
                 "jackdaw-rustc-wrapper: rustc failed for {}; retrying the unit once",
                 env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "<unknown>".into()),
             );
-            let retry = Command::new(&rustc).args(&rustc_args).status();
+            let retry = Command::new(&rustc).args(&forwarded).status();
             if let Ok(r) = &retry
                 && r.success()
             {
@@ -185,7 +197,7 @@ pub fn run() -> ExitCode {
             if env::var_os("JACKDAW_WRAPPER_EXPLAIN").is_some_and(|v| v == "1") {
                 error!("jackdaw-rustc-wrapper: re-running with the crate locator trace");
                 let rerun = Command::new(&rustc)
-                    .args(&rustc_args)
+                    .args(&forwarded)
                     .env("RUSTC_LOG", "rustc_metadata::locator=debug")
                     .status();
                 match rerun {

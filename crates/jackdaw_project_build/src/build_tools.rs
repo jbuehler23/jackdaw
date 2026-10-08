@@ -101,7 +101,10 @@ pub struct SystemProbe;
 
 impl ToolProbe for SystemProbe {
     fn run(&self, cmd: &str, args: &[&str]) -> Option<String> {
-        let out = Command::new(cmd).args(args).output().ok()?;
+        let out = jackdaw_env::without_console_window(&mut Command::new(cmd))
+            .args(args)
+            .output()
+            .ok()?;
         if !out.status.success() {
             return None;
         }

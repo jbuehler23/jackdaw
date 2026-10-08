@@ -197,7 +197,7 @@ jackdaw_env.workspace = true
 webbrowser.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_System_JobObjects"] }
+windows = { workspace = true, features = ["Win32_System_Console", "Win32_System_JobObjects"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down

@@ -185,14 +185,14 @@ impl Plugin for StatusBarPlugin {
 }
 
 fn read_git_info() -> String {
-    let branch = std::process::Command::new("git")
+    let branch = jackdaw_env::without_console_window(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let hash = std::process::Command::new("git")
+    let hash = jackdaw_env::without_console_window(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--short", "HEAD"])
         .output()
         .ok()

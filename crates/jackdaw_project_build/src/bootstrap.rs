@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use jackdaw_env::paths::data_dir;
+use jackdaw_env::paths::{data_dir, local_data_dir};
 use jackdaw_env::rust_env_command;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,12 @@ pub const SDK_TOOLCHAIN_CHANNEL: &str = jackdaw_env::RUSTUP_TOOLCHAIN;
 /// so a version or toolchain change lands in a fresh dir and old ones can
 /// be reclaimed.
 pub fn cache_dir() -> Option<PathBuf> {
-    Some(data_dir()?.join("sdk").join(cache_key()))
+    Some(sdk_root()?.join(cache_key()))
+}
+
+/// The directory holding every cached SDK build, one per cache key.
+fn sdk_root() -> Option<PathBuf> {
+    Some(local_data_dir()?.join("sdk"))
 }
 
 fn cache_key() -> String {
@@ -436,11 +441,17 @@ fn prune_removed_crates(dst: &Path) -> std::io::Result<()> {
 }
 
 /// Remove cache dirs for other (version, toolchain) keys, keeping the
-/// current one. Best-effort; called after a successful build.
+/// current one, and the cache earlier versions kept in the roaming data
+/// dir on Windows. Best-effort; called after a successful build.
 pub fn gc_other_versions() {
-    let Some(sdk_root) = data_dir().map(|d| d.join("sdk")) else {
+    let Some(sdk_root) = sdk_root() else {
         return;
     };
+    if let Some(roaming) = data_dir().map(|d| d.join("sdk"))
+        && roaming != sdk_root
+    {
+        let _ = std::fs::remove_dir_all(roaming);
+    }
     let keep = cache_key();
     let Ok(entries) = std::fs::read_dir(&sdk_root) else {
         return;
@@ -537,7 +548,7 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
 }
 
 fn install_toolchain() -> Result<(), String> {
-    let status = Command::new("rustup")
+    let status = jackdaw_env::without_console_window(&mut Command::new("rustup"))
         .args([
             "toolchain",
             "install",
@@ -867,9 +878,16 @@ mod tests {
     fn data_dir_ends_in_a_jackdaw_component() {
         // `~/.jackdaw` or `<xdg>/jackdaw`; only checked when a home or XDG
         // resolves in the test env.
-        if let Some(dir) = data_dir() {
+        if let Some(dir) = local_data_dir() {
             let last = dir.file_name().unwrap().to_string_lossy().into_owned();
             assert!(last == "jackdaw" || last == ".jackdaw", "got {last}");
+        }
+    }
+
+    #[test]
+    fn the_sdk_cache_lives_in_the_local_data_dir() {
+        if let (Some(cache), Some(local)) = (cache_dir(), local_data_dir()) {
+            assert_eq!(cache, local.join("sdk").join(cache_key()));
         }
     }
 }

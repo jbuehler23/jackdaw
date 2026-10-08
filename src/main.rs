@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use bevy::{
     asset::AssetPlugin,
     ecs::error::ErrorContext,
@@ -9,6 +11,8 @@ use jackdaw::prelude::*;
 fn main() -> AppExit {
     let args: Vec<String> = std::env::args().collect();
     if let Some("--version" | "-V") = args.get(1).map(String::as_str) {
+        #[cfg(all(windows, not(debug_assertions)))]
+        attach_parent_console();
         #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
         {
             println!(
@@ -126,6 +130,19 @@ fn main() -> AppExit {
     if let Some(render_plugin) = render_plugin {
         default_plugins = default_plugins.set(render_plugin);
     }
+    // Without a console nothing reads stderr, so the log goes to a file.
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        default_plugins = default_plugins.set(bevy::log::LogPlugin {
+            fmt_layer: |_| {
+                let path = jackdaw::editor_log::log_file()?;
+                let layer = jackdaw::editor_log::file_layer(&path).ok()?;
+                Some(Box::new(layer))
+            },
+            ..default()
+        });
+        jackdaw::editor_log::log_panics();
+    }
 
     let mut app = App::new();
     app.register_asset_source(
@@ -170,6 +187,21 @@ fn main() -> AppExit {
     }
 
     exit
+}
+
+/// Gives a console-less build the console it was started from, if any, so
+/// `--version` prints there. Output already redirected is left alone.
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_parent_console() {
+    use windows::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: both calls only query or attach the process's console.
+    unsafe {
+        if GetStdHandle(STD_OUTPUT_HANDLE).is_err() {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
 }
 
 /// Build the editor plugin for the prebuilt `jackdaw` binary.

@@ -9,6 +9,17 @@ pub fn data_dir() -> Option<PathBuf> {
         .or_else(data_dir_fallback)
 }
 
+/// Where regenerable per-user data lives, such as the SDK build cache.
+///
+/// The same directory as [`data_dir`] on Linux and macOS. On Windows it is
+/// the local rather than the roaming application data, so gigabytes of build
+/// output are not synced with a roaming profile.
+pub fn local_data_dir() -> Option<PathBuf> {
+    dirs::data_local_dir()
+        .map(|p| p.join(DATA_DIR_NAME))
+        .or_else(data_dir_fallback)
+}
+
 /// Environment variable naming the directory the editor keeps its own
 /// configuration in.
 ///
@@ -68,4 +79,22 @@ pub fn state_dir() -> Option<PathBuf> {
 
 fn data_dir_fallback() -> Option<PathBuf> {
     std::env::home_dir().map(|p| p.join(DATA_DIR_FALLBACK_NAME))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regenerable_data_stays_off_the_roaming_profile() {
+        let local = local_data_dir().expect("a local data directory");
+        if cfg!(windows) {
+            let roaming = data_dir().expect("a data directory");
+            assert_ne!(local, roaming);
+            let appdata = std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA is set");
+            assert_eq!(local, PathBuf::from(appdata).join(DATA_DIR_NAME));
+        } else {
+            assert_eq!(Some(local), data_dir());
+        }
+    }
 }

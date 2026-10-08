@@ -211,10 +211,7 @@ fn bake_file(
             0 => folder.join(format!("{stem}.probe.hdr")),
             n => folder.join(format!("{stem}_{n}.probe.hdr")),
         })
-        .find(|candidate| {
-            let spelled = candidate.to_string_lossy();
-            !taken.iter().any(|path| spelled.ends_with(path.as_str()))
-        })
+        .find(|candidate| !taken.iter().any(|path| candidate.ends_with(path)))
         .expect("the candidates are unbounded")
 }
 

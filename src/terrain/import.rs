@@ -212,10 +212,7 @@ pub(crate) fn terrain_import_pick(
         return OperatorResult::Finished;
     };
     let named = Path::new(path);
-    if path.is_empty()
-        || named.is_absolute()
-        || named.components().any(|part| part.as_os_str() == "..")
-    {
+    if path.is_empty() || leaves_the_assets(named) {
         return refuse(
             &mut commands,
             format!("\"{path}\" is outside this project's assets"),
@@ -941,12 +938,24 @@ fn resolve_details(
     Ok(pairs)
 }
 
+/// Whether `named` reaches outside the directory it is joined to: absolute,
+/// rooted (`/etc` is not absolute on Windows, yet a join replaces the whole
+/// path with it), or climbing with `..`.
+fn leaves_the_assets(named: &Path) -> bool {
+    named.components().any(|part| {
+        !matches!(
+            part,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    })
+}
+
 /// An asset path as the file it names, refusing one that walks out of the
 /// project.
 fn project_file(assets: Option<&Path>, named: &str) -> Result<PathBuf, String> {
     let outside = || format!("\"{named}\" is outside this project's assets");
     let path = Path::new(named);
-    if path.is_absolute() || path.components().any(|part| part.as_os_str() == "..") {
+    if leaves_the_assets(path) {
         return Err(outside());
     }
     let assets = assets.ok_or_else(outside)?;

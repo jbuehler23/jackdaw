@@ -54,7 +54,7 @@ pub fn run_all_checks() -> Vec<CheckResult> {
 pub fn check_rust_toolchain() -> CheckResult {
     let rustup = first_line("rustup", &["--version"]).is_some();
     let editor = first_line("rustc", &["--version"]);
-    let ambient = Command::new("rustc")
+    let ambient = jackdaw_env::without_console_window(&mut Command::new("rustc"))
         .env_remove("RUSTUP_TOOLCHAIN")
         .arg("--version")
         .output()

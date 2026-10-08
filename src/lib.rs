@@ -73,6 +73,7 @@ pub(crate) mod document_capture;
 pub mod document_ops;
 pub(crate) mod document_units;
 pub mod editor_grid_depth_patch;
+pub mod editor_log;
 pub mod ext_build;
 pub mod extension_build;
 mod extension_lifecycle;

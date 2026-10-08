@@ -514,7 +514,7 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 /// when git is unavailable. Best effort: a failure is not worth
 /// aborting a successful scaffold over.
 pub(crate) fn init_git_repository(dest: &Path) {
-    let inside_repo = std::process::Command::new("git")
+    let inside_repo = jackdaw_env::without_console_window(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(dest)
         .output()
@@ -522,7 +522,7 @@ pub(crate) fn init_git_repository(dest: &Path) {
     if inside_repo {
         return;
     }
-    let _ = std::process::Command::new("git")
+    let _ = jackdaw_env::without_console_window(&mut std::process::Command::new("git"))
         .arg("init")
         .arg("--quiet")
         .current_dir(dest)
@@ -1826,7 +1826,7 @@ fn title_case(name: &str) -> String {
 /// `name <email>` from git config, or an empty string when unavailable.
 fn git_authors() -> String {
     let field = |key: &str| {
-        std::process::Command::new("git")
+        jackdaw_env::without_console_window(&mut std::process::Command::new("git"))
             .args(["config", key])
             .output()
             .ok()

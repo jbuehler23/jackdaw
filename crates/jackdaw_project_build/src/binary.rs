@@ -383,10 +383,12 @@ fn is_host_build_var(name: &str) -> bool {
 
 /// Prepare a command that runs a built game: Play, and the schema extractor.
 ///
-/// Detaches from the editor's build environment, then puts the build's `deps/`
+/// Keeps it from opening a console window of its own, detaches it from the
+/// editor's build environment, then puts the build's `deps/`
 /// on the dynamic library search path. One function rather than two calls at
 /// each site, because the detach clears the library-path variables.
 pub fn prepare_game_command(command: &mut Command, binary: &Path) {
+    jackdaw_env::without_console_window(command);
     detach_from_host_build(command);
     apply_dynamic_library_path(command, binary);
 }
