@@ -302,7 +302,29 @@ pub fn resolve_project_package(
     root: &Path,
     preferred: Option<&str>,
 ) -> Result<PackageInfo, ResolveError> {
-    CargoMeta::load_or_error(root)?.resolve_package(preferred)
+    let mut package = CargoMeta::load_or_error(root)?.resolve_package(preferred)?;
+    package.dir = spelled_under(root, package.dir);
+    Ok(package)
+}
+
+/// `dir` spelled under `root` the way the caller spelled `root`.
+///
+/// Cargo reports resolved paths, so under a symlinked root (a macOS temp dir
+/// under `/var` is one) the package folder would never compare equal to
+/// paths the caller builds from `root`, and a single package would read as a
+/// member of a workspace elsewhere.
+fn spelled_under(root: &Path, dir: PathBuf) -> PathBuf {
+    if dir.starts_with(root) {
+        return dir;
+    }
+    let Ok(resolved_root) = dunce::canonicalize(root) else {
+        return dir;
+    };
+    match dir.strip_prefix(&resolved_root) {
+        Ok(rest) if rest.as_os_str().is_empty() => root.to_path_buf(),
+        Ok(rest) => root.join(rest),
+        Err(_) => dir,
+    }
 }
 
 /// Condense a cargo error block into the line worth showing. Cargo
@@ -328,6 +350,23 @@ fn first_error_line(stderr: &str) -> String {
 mod tests {
     use super::*;
     use path_slash::PathExt as _;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_under_a_symlinked_root_keeps_the_callers_spelling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("game")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let real = dunce::canonicalize(&real).unwrap();
+
+        assert_eq!(spelled_under(&link, real.clone()), link);
+        assert_eq!(spelled_under(&link, real.join("game")), link.join("game"));
+        assert_eq!(spelled_under(&link, link.join("game")), link.join("game"));
+        let elsewhere = tmp.path().join("elsewhere");
+        assert_eq!(spelled_under(&link, elsewhere.clone()), elsewhere);
+    }
 
     fn meta(json: &str) -> CargoMeta {
         CargoMeta::parse(json).expect("metadata parses")

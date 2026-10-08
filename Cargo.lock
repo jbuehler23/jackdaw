@@ -5320,6 +5320,7 @@ dependencies = [
 name = "jackdaw_project_build"
 version = "0.19.0"
 dependencies = [
+ "dunce",
  "jackdaw_env",
  "jackdaw_schema",
  "libc",
@@ -5328,6 +5329,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
+ "tempfile",
  "toml",
  "tracing",
 ]

@@ -21,6 +21,7 @@ embed-recipe = []
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+dunce = "1.0.5"
 # Plugin detection parses the project's sources. Scanning them as text
 # cannot be made correct: comments, string literals, and nested modules
 # all defeat it, and a wrong answer here is pasted into generated code.
@@ -35,6 +36,9 @@ path-slash.workspace = true
 # `setpriority` for background builds; nothing in std reaches it.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [build-dependencies]
 # The build script assembles the embedded SDK-builder recipe: it parses
