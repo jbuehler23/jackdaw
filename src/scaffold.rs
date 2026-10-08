@@ -234,35 +234,10 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
             if !args.iter().any(|a| a == "--no-git") {
                 init_git_repository(&dest);
             }
-            // Creating a project inside an existing repo is normal, and
-            // a workspace whose `members` is a glob will adopt it. The
-            // scaffold's own `[workspace]` then makes two roots, which
-            // breaks every cargo command in the PARENT: a directory the
-            // user did not ask us to touch.
-            if let Some(parent) = enclosing_workspace(&dest)
-                && let Err(detail) = resolves(&parent)
-            {
-                eprintln!(
-                    "\nwarning: `{}` is inside the cargo workspace at {}, which now reports:\n  \
-                     {detail}\n\
-                     The new project declares its own `[workspace]` so it builds standalone. To \
-                     keep the outer workspace working too, either add this line to {}:\n  \
-                     exclude = [\"{}\"]\n\
-                     or delete the `[workspace]` table from the new project's Cargo.toml to make \
-                     it a member.",
-                    project_name,
-                    parent.display(),
-                    parent.join("Cargo.toml").display(),
-                    dest.strip_prefix(&parent).unwrap_or(&dest).display(),
-                );
-            }
-
-            let resolution = {
-                // Announce it: on a cold registry this updates the
-                // index, which is slow enough to look like a hang.
-                println!("  checking dependencies resolve...");
-                resolves(&dest)
-            };
+            // Announce it: on a cold registry the resolve updates the
+            // index, which is slow enough to look like a hang.
+            println!("  checking dependencies resolve...");
+            let warnings = check_new_project(&dest);
             // The dev-checkout rewrite logs through `warn!`, which the
             // CLI has no subscriber for, so without this the user ships
             // a manifest full of absolute local paths and only finds
@@ -275,18 +250,8 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
                     checkout.display()
                 );
             }
-            // A version that is not on the index yet would otherwise
-            // surface as a baffling failure at the user's first `cargo
-            // run`, with nothing connecting it to the tool that wrote
-            // the file.
-            if let Err(detail) = resolution {
-                eprintln!(
-                    "\nwarning: this project's dependencies do not resolve yet:\n  {detail}\n\
-                     The scaffold is written and correct; the jackdaw crates it asks for are \
-                     not on crates.io at this version. Run `jd doctor --project {}` after the \
-                     matching release is published.",
-                    dest.display()
-                );
+            for warning in &warnings {
+                eprintln!("\nwarning: {warning}");
             }
             match kind {
                 // An extension is a library: there is nothing to run.
@@ -308,6 +273,168 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
             AppExit::error()
         }
     }
+}
+
+/// A problem with a freshly created project that its first build would
+/// otherwise be the first to report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewProjectWarning {
+    /// The project sits inside a cargo workspace that no longer resolves.
+    EnclosingWorkspaceBroken {
+        /// The new project's directory.
+        project: PathBuf,
+        /// The root of the enclosing workspace.
+        workspace: PathBuf,
+        /// Cargo's first error line for the workspace.
+        detail: String,
+    },
+    /// The project's own dependencies do not resolve.
+    DependenciesUnresolved {
+        /// The new project's directory.
+        project: PathBuf,
+        /// Where this editor's jackdaw crates come from, as a phrase.
+        source: String,
+        /// Cargo's first error line for the project.
+        detail: String,
+    },
+}
+
+impl NewProjectWarning {
+    /// One line naming the problem.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::EnclosingWorkspaceBroken { workspace, .. } => format!(
+                "This folder is inside another cargo workspace ({})",
+                workspace.display()
+            ),
+            Self::DependenciesUnresolved { source, .. } => {
+                format!("The jackdaw crates could not be resolved from {source}")
+            }
+        }
+    }
+
+    /// One line saying what to do about it.
+    pub fn fix(&self) -> String {
+        match self {
+            Self::EnclosingWorkspaceBroken {
+                project, workspace, ..
+            } => format!(
+                "Add exclude = [\"{}\"] to {}, or remove [workspace] from the new project's \
+                 Cargo.toml to make it a member",
+                exclude_entry(project, workspace),
+                workspace.join("Cargo.toml").display()
+            ),
+            Self::DependenciesUnresolved { project, .. } => format!(
+                "Once that source is reachable, run jd doctor --project {} to check again",
+                project.display()
+            ),
+        }
+    }
+
+    /// Cargo's own error line.
+    pub fn cargo_error(&self) -> &str {
+        match self {
+            Self::EnclosingWorkspaceBroken { detail, .. }
+            | Self::DependenciesUnresolved { detail, .. } => detail,
+        }
+    }
+}
+
+/// Where a project scaffolded by this editor fetches the jackdaw crates
+/// from: the checkout it runs from when the scaffold was rewritten to path
+/// dependencies on it, otherwise the source this build was made from.
+fn jackdaw_source_description() -> String {
+    match crate::new_project::jackdaw_dev_checkout() {
+        Some(checkout) => format!("the checkout at {}", checkout.display()),
+        None => jackdaw_project_build::build_source::build_source().describe(),
+    }
+}
+
+/// The project's path relative to the workspace root, as written in that
+/// workspace's `exclude` list.
+fn exclude_entry(project: &Path, workspace: &Path) -> String {
+    project
+        .strip_prefix(workspace)
+        .unwrap_or(project)
+        .to_slash_lossy()
+        .into_owned()
+}
+
+impl std::fmt::Display for NewProjectWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EnclosingWorkspaceBroken {
+                project,
+                workspace,
+                detail,
+            } => write!(
+                f,
+                "`{}` is inside the cargo workspace at {}, which now reports:\n  {detail}\n\
+                 The new project declares its own `[workspace]` so it builds standalone. To \
+                 keep the outer workspace working too, either add this line to {}:\n  \
+                 exclude = [\"{}\"]\n\
+                 or delete the `[workspace]` table from the new project's Cargo.toml to make \
+                 it a member.",
+                project
+                    .file_name()
+                    .unwrap_or(project.as_os_str())
+                    .to_string_lossy(),
+                workspace.display(),
+                workspace.join("Cargo.toml").display(),
+                exclude_entry(project, workspace),
+            ),
+            Self::DependenciesUnresolved {
+                project,
+                source,
+                detail,
+            } => write!(
+                f,
+                "this project's dependencies do not resolve yet:\n  {detail}\n\
+                 The jackdaw crates could not be resolved from {source}. Run \
+                 `jd doctor --project {}` once that source is reachable.",
+                project.display()
+            ),
+        }
+    }
+}
+
+/// Check a freshly scaffolded project at `dest` for problems its first
+/// build would hit. Runs cargo's resolver, which updates the registry
+/// index first on a cold cache, so call it off the UI thread.
+pub fn check_new_project(dest: &Path) -> Vec<NewProjectWarning> {
+    check_new_project_with(dest, resolves)
+}
+
+/// [`check_new_project`] with the resolver supplied by the caller.
+fn check_new_project_with(
+    dest: &Path,
+    resolves: impl Fn(&Path) -> Result<(), String>,
+) -> Vec<NewProjectWarning> {
+    let mut warnings = Vec::new();
+    // Creating a project inside an existing repo is normal, and a
+    // workspace whose `members` is a glob will adopt it. The scaffold's
+    // own `[workspace]` then makes two roots, which breaks every cargo
+    // command in the PARENT: a directory the user did not ask us to touch.
+    if let Some(workspace) = enclosing_workspace(dest)
+        && let Err(detail) = resolves(&workspace)
+    {
+        warnings.push(NewProjectWarning::EnclosingWorkspaceBroken {
+            project: dest.to_path_buf(),
+            workspace,
+            detail,
+        });
+    }
+    // A version that is not on the index yet would otherwise surface as
+    // a baffling failure at the first build, with nothing connecting it
+    // to the tool that wrote the file.
+    if let Err(detail) = resolves(dest) {
+        warnings.push(NewProjectWarning::DependenciesUnresolved {
+            project: dest.to_path_buf(),
+            source: jackdaw_source_description(),
+            detail,
+        });
+    }
+    warnings
 }
 
 /// The nearest ancestor directory whose `Cargo.toml` declares a
@@ -584,10 +711,11 @@ pub fn plan_upgrade_project(root: &Path) -> Result<ImportPlan, ScaffoldError> {
                 .to_string(),
         );
     }
+    let requirement = jackdaw_project_build::jackdaw_requirement();
     for manifest_path in manifests {
         let cargo = std::fs::read_to_string(&manifest_path)
             .map_err(|e| ScaffoldError::Io(format!("{}: {e}", manifest_path.display())))?;
-        if let Some(updated) = bump_jackdaw_requirements(&cargo) {
+        if let Some(updated) = bump_jackdaw_requirements(&cargo, &requirement) {
             changes.push(ImportChange::WriteFile {
                 path: manifest_path,
                 contents: updated,
@@ -597,7 +725,7 @@ pub fn plan_upgrade_project(root: &Path) -> Result<ImportPlan, ScaffoldError> {
         }
     }
     if bumped_any {
-        notes.push(format!("requests the jackdaw crates at {JACKDAW_DEP_REQ}"));
+        notes.push(format!("requests the jackdaw crates at {requirement}"));
     }
 
     Ok(ImportPlan {
@@ -666,17 +794,17 @@ fn rewrite_pins(settings: &str, project_bevy: Option<&str>) -> Option<String> {
     Some(doc.to_string())
 }
 
-/// Point every `jackdaw_*` dependency at the anchored version. `None`
-/// when nothing needed changing (already current, or path/git deps,
-/// which state no version to bump).
-fn bump_jackdaw_requirements(cargo: &str) -> Option<String> {
+/// Point every `jackdaw_*` dependency at `requirement`. `None` when
+/// nothing needed changing (already current, or path/git deps, which
+/// state no version to bump).
+fn bump_jackdaw_requirements(cargo: &str, requirement: &str) -> Option<String> {
     const TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
     let mut doc: DocumentMut = cargo.parse().ok()?;
     let mut changed = false;
 
     for table in TABLES {
         if let Some(deps) = doc.get_mut(table).and_then(|item| item.as_table_like_mut()) {
-            changed |= bump_jackdaw_deps(deps);
+            changed |= bump_jackdaw_deps(deps, requirement);
         }
     }
     // A platform-gated jackdaw dependency is still a jackdaw
@@ -692,7 +820,7 @@ fn bump_jackdaw_requirements(cargo: &str) -> Option<String> {
             };
             for table in TABLES {
                 if let Some(deps) = cfg.get_mut(table).and_then(|item| item.as_table_like_mut()) {
-                    changed |= bump_jackdaw_deps(deps);
+                    changed |= bump_jackdaw_deps(deps, requirement);
                 }
             }
         }
@@ -707,14 +835,14 @@ fn bump_jackdaw_requirements(cargo: &str) -> Option<String> {
             .get_mut("dependencies")
             .and_then(|item| item.as_table_like_mut())
     {
-        changed |= bump_jackdaw_deps(deps);
+        changed |= bump_jackdaw_deps(deps, requirement);
     }
     changed.then(|| doc.to_string())
 }
 
-/// Move every `jackdaw_*` entry in one dependency table to the anchored
-/// version. Returns whether anything changed.
-fn bump_jackdaw_deps(deps: &mut dyn toml_edit::TableLike) -> bool {
+/// Move every `jackdaw_*` entry in one dependency table to
+/// `requirement`. Returns whether anything changed.
+fn bump_jackdaw_deps(deps: &mut dyn toml_edit::TableLike, requirement: &str) -> bool {
     let mut changed = false;
     let names: Vec<String> = deps
         .iter()
@@ -726,8 +854,8 @@ fn bump_jackdaw_deps(deps: &mut dyn toml_edit::TableLike) -> bool {
             continue;
         };
         if let Some(existing) = entry.as_str() {
-            if existing != JACKDAW_DEP_REQ {
-                *entry = toml_edit::value(JACKDAW_DEP_REQ);
+            if existing != requirement {
+                *entry = toml_edit::value(requirement);
                 changed = true;
             }
         } else if let Some(table) = entry.as_table_like_mut() {
@@ -737,8 +865,8 @@ fn bump_jackdaw_deps(deps: &mut dyn toml_edit::TableLike) -> bool {
                 continue;
             }
             let current = table.get("version").and_then(|v| v.as_str());
-            if current.is_some() && current != Some(JACKDAW_DEP_REQ) {
-                table.insert("version", toml_edit::value(JACKDAW_DEP_REQ));
+            if current.is_some() && current != Some(requirement) {
+                table.insert("version", toml_edit::value(requirement));
                 changed = true;
             }
         }
@@ -1658,7 +1786,10 @@ fn substitute_placeholders(
             jackdaw_project_build::project_manifest::pins_toml().trim_end(),
         )
         .replace("{{bevy_version}}", jackdaw_project_build::BEVY_VERSION)
-        .replace("{{jackdaw_version}}", JACKDAW_DEP_REQ)
+        .replace(
+            "{{jackdaw_version}}",
+            &jackdaw_project_build::jackdaw_requirement(),
+        )
         .replace(
             "{{jackdaw_runtime_dep}}",
             &jackdaw_dep_requirement("jackdaw_runtime"),
@@ -1668,12 +1799,6 @@ fn substitute_placeholders(
             &jackdaw_dep_requirement("jackdaw_extension"),
         )
 }
-
-/// The version requirement scaffolded projects request for the public
-/// jackdaw crates. Jackdaw's version is anchored to the Bevy minor, so
-/// a project set up by this editor asks for exactly the line of
-/// releases that targets the same engine.
-const JACKDAW_DEP_REQ: &str = jackdaw_project_build::BEVY_VERSION;
 
 /// How a scaffolded project asks for one of the public jackdaw crates: the
 /// registry line for a released editor, the exact revision for one built from
@@ -1791,6 +1916,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_project_inside_a_workspace_that_stops_resolving_is_warned_about() {
+        let outer = temp_dir("broken_workspace");
+        std::fs::write(outer.join("Cargo.toml"), "[workspace]\nmembers = [\"*\"]\n").unwrap();
+        let dest = outer.join("games").join("my-game");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let warnings = check_new_project_with(&dest, |root| {
+            if root == outer {
+                Err("error: multiple workspace roots found".to_string())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(
+            warnings,
+            vec![NewProjectWarning::EnclosingWorkspaceBroken {
+                project: dest.clone(),
+                workspace: outer.clone(),
+                detail: "error: multiple workspace roots found".to_string(),
+            }]
+        );
+        let fix = warnings[0].fix();
+        assert!(fix.contains("exclude = [\"games/my-game\"]"), "got:\n{fix}");
+        assert!(!warnings[0].summary().contains('`'));
+        let _ = std::fs::remove_dir_all(&outer);
+    }
+
+    #[test]
+    fn a_project_in_a_clean_location_has_no_warnings() {
+        let location = temp_dir("clean_location");
+        let dest = location.join("my-game");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        assert!(enclosing_workspace(&dest).is_none());
+        assert!(check_new_project_with(&dest, |_| Ok(())).is_empty());
+        let _ = std::fs::remove_dir_all(&location);
+    }
+
+    #[test]
+    fn a_project_whose_dependencies_do_not_resolve_is_warned_about() {
+        let location = temp_dir("unresolved");
+        let dest = location.join("my-game");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let warnings = check_new_project_with(&dest, |_| {
+            Err("error: failed to select a version for `jackdaw_runtime`".to_string())
+        });
+
+        assert!(
+            matches!(
+                warnings.as_slice(),
+                [NewProjectWarning::DependenciesUnresolved { project, .. }] if *project == dest
+            ),
+            "got: {warnings:?}"
+        );
+        assert!(
+            warnings[0]
+                .summary()
+                .contains(&jackdaw_source_description()),
+            "the summary names where the crates were looked for: {}",
+            warnings[0].summary()
+        );
+        assert_eq!(
+            warnings[0].cargo_error(),
+            "error: failed to select a version for `jackdaw_runtime`"
+        );
+        let _ = std::fs::remove_dir_all(&location);
+    }
+
+    #[test]
+    fn upgrade_pins_a_prerelease_editor_to_its_exact_version() {
+        let requirement = jackdaw_project_build::jackdaw_requirement_for("0.19.0-rc.1");
+        let cargo = "[dependencies]\njackdaw_runtime = \"0.19\"\n\
+                     jackdaw_extension = { version = \"0.19\", features = [\"physics\"] }\n";
+        let out = bump_jackdaw_requirements(cargo, &requirement).expect("changed");
+        assert!(
+            out.contains("jackdaw_runtime = \"=0.19.0-rc.1\""),
+            "got:\n{out}"
+        );
+        assert!(out.contains("version = \"=0.19.0-rc.1\""), "got:\n{out}");
+
+        let stable = jackdaw_project_build::jackdaw_requirement_for("0.19.0");
+        let back = bump_jackdaw_requirements(&out, &stable).expect("changed");
+        assert_eq!(back.matches("\"0.19\"").count(), 2, "got:\n{back}");
     }
 
     #[test]
@@ -2116,7 +2329,10 @@ mod tests {
 
         let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains(&format!("version = \"{JACKDAW_DEP_REQ}\"")),
+            cargo.contains(&format!(
+                "version = \"{}\"",
+                jackdaw_project_build::jackdaw_requirement()
+            )),
             "got:\n{cargo}"
         );
         // The bump must not drop the features the project asked for.
@@ -2211,9 +2427,14 @@ mod tests {
         let cargo = "[dependencies]\njackdaw_runtime = \"0.14\"\n\n\
                      [target.'cfg(target_arch = \"wasm32\")'.dependencies]\n\
                      jackdaw_web = \"0.14\"\n";
-        let out = bump_jackdaw_requirements(cargo).expect("changed");
+        let out = bump_jackdaw_requirements(cargo, &jackdaw_project_build::jackdaw_requirement())
+            .expect("changed");
         assert_eq!(
-            out.matches(&format!("\"{JACKDAW_DEP_REQ}\"")).count(),
+            out.matches(&format!(
+                "\"{}\"",
+                jackdaw_project_build::jackdaw_requirement()
+            ))
+            .count(),
             2,
             "both entries should move:\n{out}"
         );
@@ -2269,9 +2490,13 @@ mod tests {
     fn upgrade_reaches_workspace_dependencies() {
         let cargo = "[workspace]\nmembers = [\"game\"]\n\n\
                      [workspace.dependencies]\njackdaw_runtime = \"0.14\"\n";
-        let out = bump_jackdaw_requirements(cargo).expect("changed");
+        let out = bump_jackdaw_requirements(cargo, &jackdaw_project_build::jackdaw_requirement())
+            .expect("changed");
         assert!(
-            out.contains(&format!("jackdaw_runtime = \"{JACKDAW_DEP_REQ}\"")),
+            out.contains(&format!(
+                "jackdaw_runtime = \"{}\"",
+                jackdaw_project_build::jackdaw_requirement()
+            )),
             "got:\n{out}"
         );
     }
@@ -2323,7 +2548,10 @@ mod tests {
     fn upgrade_leaves_path_dependencies_alone() {
         let cargo =
             "[dependencies]\njackdaw_runtime = { path = '/checkout/crates/jackdaw_runtime' }\n";
-        assert!(bump_jackdaw_requirements(cargo).is_none());
+        assert!(
+            bump_jackdaw_requirements(cargo, &jackdaw_project_build::jackdaw_requirement())
+                .is_none()
+        );
     }
 
     #[test]

@@ -65,3 +65,46 @@ pub const BEVY_VERSION: &str = concat!(
     ".",
     env!("CARGO_PKG_VERSION_MINOR")
 );
+
+/// The version requirement a project states for this build's jackdaw crates.
+pub fn jackdaw_requirement() -> String {
+    jackdaw_requirement_for(VERSION)
+}
+
+/// The version requirement a project states for the jackdaw crates of release
+/// `version`: the minor line for a stable release, or the exact version for a
+/// prerelease, which a minor-line requirement never matches.
+pub fn jackdaw_requirement_for(version: &str) -> String {
+    let release = version
+        .split_once('+')
+        .map_or(version, |(release, _)| release);
+    if release.contains('-') {
+        return format!("={release}");
+    }
+    let mut parts = release.splitn(3, '.');
+    match (parts.next(), parts.next()) {
+        (Some(major), Some(minor)) => format!("{major}.{minor}"),
+        _ => release.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jackdaw_requirement_for;
+
+    #[test]
+    fn a_stable_release_requests_its_minor_line() {
+        assert_eq!(jackdaw_requirement_for("0.19.0"), "0.19");
+        assert_eq!(jackdaw_requirement_for("0.19.3"), "0.19");
+        assert_eq!(jackdaw_requirement_for("0.19.3+build.5"), "0.19");
+    }
+
+    #[test]
+    fn a_prerelease_requests_its_exact_version() {
+        assert_eq!(jackdaw_requirement_for("0.19.0-rc.1"), "=0.19.0-rc.1");
+        assert_eq!(
+            jackdaw_requirement_for("0.20.0-alpha.2+build.5"),
+            "=0.20.0-alpha.2"
+        );
+    }
+}

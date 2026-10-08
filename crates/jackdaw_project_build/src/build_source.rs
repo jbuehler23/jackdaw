@@ -60,13 +60,23 @@ impl BuildSource {
     /// TOML escape.
     pub fn dep_requirement(&self, crate_name: &str) -> String {
         match self {
-            Self::Release => format!("version = \"{}\"", crate::BEVY_VERSION),
+            Self::Release => format!("version = \"{}\"", crate::jackdaw_requirement()),
             Self::Git { repository, rev } => {
                 format!("git = \"{repository}\", rev = \"{rev}\"")
             }
             Self::Path(root) => {
                 format!("path = '{}'", crate_path(root, crate_name).to_slash_lossy())
             }
+        }
+    }
+
+    /// Where a project's jackdaw crates are fetched from, for a message:
+    /// the registry version, the git revision, or the checkout path.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Release => format!("crates.io at version {}", crate::jackdaw_requirement()),
+            Self::Git { repository, rev } => format!("{repository} at revision {rev}"),
+            Self::Path(root) => format!("the checkout at {}", root.display()),
         }
     }
 
@@ -108,9 +118,26 @@ mod tests {
         assert_eq!(source, BuildSource::Release);
         assert_eq!(
             source.dep_requirement("jackdaw_runtime"),
-            format!("version = \"{}\"", crate::BEVY_VERSION)
+            format!("version = \"{}\"", crate::jackdaw_requirement())
         );
         assert!(source.resolution_note().is_none());
+    }
+
+    #[test]
+    fn each_source_is_described_by_where_it_fetches_from() {
+        assert_eq!(
+            BuildSource::parse("release", REPO).describe(),
+            format!("crates.io at version {}", crate::jackdaw_requirement())
+        );
+        assert_eq!(
+            BuildSource::parse(&format!("git:{REV}"), REPO).describe(),
+            format!("{REPO} at revision {REV}")
+        );
+        assert!(
+            BuildSource::parse("path:/home/dev/jackdaw", REPO)
+                .describe()
+                .contains("/home/dev/jackdaw")
+        );
     }
 
     #[test]

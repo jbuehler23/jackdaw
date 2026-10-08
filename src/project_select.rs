@@ -20,7 +20,7 @@ use crate::{
     AppState, EditorEntity,
     new_project::scaffold_project,
     project::{self, ProjectRoot},
-    scaffold::{ImportChange, ScaffoldError, TemplateKind},
+    scaffold::{ImportChange, NewProjectWarning, ScaffoldError, TemplateKind},
     windowing::{JackdawIcon, title_bar_repo_link},
 };
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
@@ -191,8 +191,9 @@ struct NewProjectState {
     location: PathBuf,
     /// In-flight folder picker (rfd).
     folder_task: Option<Task<Option<FileHandle>>>,
-    /// In-flight scaffold from the embedded templates.
-    scaffold_task: Option<Task<Result<PathBuf, ScaffoldError>>>,
+    /// In-flight scaffold from the embedded templates, followed by the
+    /// checks `jd new` runs on the result.
+    scaffold_task: Option<Task<Result<(PathBuf, Vec<NewProjectWarning>), ScaffoldError>>>,
     /// Last user-visible message (used for both progress and errors).
     status: Option<String>,
 }
@@ -2207,6 +2208,132 @@ fn show_cannot_reopen_card(world: &mut World, root: PathBuf) {
         });
 }
 
+/// Shown after New Project when the checks `jd new` runs found problems
+/// the first build would hit, before that build starts. Opening anyway
+/// is allowed; the project is already on disk either way.
+fn show_new_project_warnings_card(
+    world: &mut World,
+    root: PathBuf,
+    warnings: Vec<NewProjectWarning>,
+) {
+    let (_, card, font) = spawn_modal_card(world, 480.0, 640.0);
+    spawn_card_title(world, card, "The new project may not build yet", &font);
+    spawn_card_body(
+        world,
+        card,
+        format!(
+            "\"{}\" was created at {}, but its first build would run into these problems:",
+            root.file_name().unwrap_or_default().to_string_lossy(),
+            root.display()
+        ),
+        &font,
+    );
+    spawn_warning_list(world, card, &warnings, &font);
+
+    let row = spawn_card_button_row(world, card);
+    let back = spawn_card_button(world, row, "Back", &font, false);
+    let open_anyway = spawn_card_button(world, row, "Open anyway", &font, true);
+    world
+        .entity_mut(back)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            commands.queue(close_new_project_modal);
+        });
+    world
+        .entity_mut(open_anyway)
+        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            let root = root.clone();
+            commands.queue(move |world: &mut World| {
+                close_new_project_modal(world);
+                enter_project(world, root);
+            });
+        });
+}
+
+/// One row per warning: the problem, the fix on its own line, and cargo's
+/// error in smaller muted text beneath, so the prose stays readable.
+fn spawn_warning_list(
+    world: &mut World,
+    card: Entity,
+    warnings: &[NewProjectWarning],
+    font: &Handle<Font>,
+) {
+    let icon_font = world
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(12.0),
+                ..Default::default()
+            },
+            ChildOf(card),
+        ))
+        .id();
+    for warning in warnings {
+        let row = world
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Start,
+                    ..Default::default()
+                },
+                ChildOf(list),
+                children![(
+                    Text::new(String::from(Icon::TriangleAlert.unicode())),
+                    TextFont {
+                        font: icon_font.clone().into(),
+                        font_size: tokens::ICON_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_WARNING),
+                )],
+            ))
+            .id();
+        world.spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                flex_shrink: 1.0,
+                min_width: Val::Px(0.0),
+                ..Default::default()
+            },
+            ChildOf(row),
+            children![
+                (
+                    Text::new(warning.summary()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_PRIMARY),
+                ),
+                (
+                    Text::new(warning.fix()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+                (
+                    Text::new(warning.cargo_error().to_string()),
+                    TextFont {
+                        font: font.clone().into(),
+                        font_size: tokens::TEXT_SIZE_XS,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                ),
+            ],
+        ));
+    }
+}
+
 /// Shown when a project's recorded pins say it targets a different Bevy
 /// minor than this editor. Opening anyway is allowed (scenes and assets
 /// still load), but project code will not build, so the card says so
@@ -3178,9 +3305,15 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
         }
     };
 
-    world.resource_mut::<NewProjectState>().status = Some(format!("Creating `{name}`..."));
-    let task =
-        AsyncComputeTaskPool::get().spawn(async move { scaffold_project(&name, &location, kind) });
+    world.resource_mut::<NewProjectState>().status = Some(format!(
+        "Creating `{name}` and checking its dependencies resolve..."
+    ));
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        scaffold_project(&name, &location, kind).map(|dest| {
+            let warnings = crate::scaffold::check_new_project(&dest);
+            (dest, warnings)
+        })
+    });
     world.resource_mut::<NewProjectState>().scaffold_task = Some(task);
 }
 
@@ -3222,7 +3355,7 @@ fn poll_new_project_tasks(
     if let Some(result) = scaffold_result {
         state.scaffold_task = None;
         match result {
-            Ok(project_path) => {
+            Ok((project_path, warnings)) => {
                 info!("Scaffolded project at {}", project_path.display());
                 project::save_last_new_project_location(&state.location);
                 state.status = None;
@@ -3230,8 +3363,15 @@ fn poll_new_project_tasks(
                 // closed first so the open path spawns its own
                 // progress modal if the project needs a build.
                 commands.queue(move |world: &mut World| {
-                    close_new_project_modal(world);
-                    enter_project(world, project_path);
+                    if warnings.is_empty() {
+                        close_new_project_modal(world);
+                        enter_project(world, project_path);
+                    } else {
+                        for warning in &warnings {
+                            warn!("{warning}");
+                        }
+                        show_new_project_warnings_card(world, project_path, warnings);
+                    }
                 });
             }
             Err(err) => {
@@ -3460,6 +3600,36 @@ mod tests {
             text.iter()
                 .any(|t| t.contains("could not follow the builder")),
             "the real reason is shown: {text:?}"
+        );
+    }
+
+    #[test]
+    fn new_project_warnings_are_shown_before_the_project_opens() {
+        let mut world = card_world();
+        show_new_project_warnings_card(
+            &mut world,
+            PathBuf::from("/games/my-game"),
+            vec![NewProjectWarning::DependenciesUnresolved {
+                project: PathBuf::from("/games/my-game"),
+                source: "crates.io at version 0.19".into(),
+                detail: "error: failed to select a version for `jackdaw_runtime`".into(),
+            }],
+        );
+        let text = rendered_text(&mut world);
+        assert!(
+            text.iter()
+                .any(|t| t == "error: failed to select a version for `jackdaw_runtime`"),
+            "cargo's error is shown on its own line: {text:?}"
+        );
+        assert!(
+            text.iter()
+                .any(|t| t
+                    == "The jackdaw crates could not be resolved from crates.io at version 0.19"),
+            "the problem is summarised: {text:?}"
+        );
+        assert!(
+            text.iter().any(|t| t == "Open anyway"),
+            "opening stays possible: {text:?}"
         );
     }
 
