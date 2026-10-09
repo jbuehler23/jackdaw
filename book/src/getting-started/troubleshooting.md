@@ -48,9 +48,9 @@ input crates will not find the system libraries they link. Install Bevy's
 
 ### glibc too old for the Linux archive
 
-The Linux archive needs glibc 2.39 or newer. On an older system the editor
+The Linux archive needs glibc 2.31 or newer. On an older system the editor
 fails to start with an error such as
-``version `GLIBC_2.39' not found``. Install with `cargo install` instead.
+``version `GLIBC_2.31' not found``. Install with `cargo install` instead.
 
 ### macOS says the app cannot be opened
 

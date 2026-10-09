@@ -44,7 +44,7 @@ jobs:
     steps:
       - id: pick
         run: |
-          linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","archive":"tar.zst"}'
+          linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","glibc_target":"x86_64-unknown-linux-gnu.2.31","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","link":"-C link-arg=-Wl,--allow-shlib-undefined","archive":"tar.zst"}'
           macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"zip"}'
           windows='{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}'
           case "${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}" in
@@ -223,8 +223,15 @@ jobs:
     # registry. Without the flag the build reads as a git build, and
     # every project it set up would be pinned to the release commit
     # rather than to the release.
+    #
+    # Linux links against glibc 2.31 rather than the runner's own, so the
+    # bundle starts on older distributions. cargo-zigbuild drives every
+    # cargo invocation that compiles the shipped graph, with zig as the C
+    # compiler and linker for that target. zig is a tool of this job only.
     env:
       JACKDAW_RELEASE_BUILD: "1"
+      CARGO_FRONTEND: ${{ matrix.glibc_target && 'cargo-zigbuild' || 'cargo' }}
+      BUILD_TARGET: ${{ matrix.glibc_target || matrix.triple }}
     # This job builds the editor twice over: once for the binaries, then
     # an extension against the staged SDK. On Windows, with a cold cache,
     # that ran past 120 minutes and was cut off mid-smoke-test, reported
@@ -261,6 +268,35 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo binstall wild-linker --locked --force
 
+      - name: Install zig (Linux)
+        if: matrix.glibc_target
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+          use-cache: false
+
+      - name: Install cargo-zigbuild (Linux)
+        if: matrix.glibc_target
+        run: cargo binstall cargo-zigbuild@0.23.4 --locked --force
+
+      # cargo-zigbuild covers target units and `cc`-built C. Two things sit
+      # outside it: proc macros are host units, which the bundle ships for a
+      # user's rustc to load, so cargo's host config links them through zig
+      # too; and manifold-csg-sys runs cmake itself, which picks its
+      # compilers from CC and CXX rather than cargo-zigbuild's toolchain file.
+      - name: Point host links and cmake at zig (Linux)
+        if: matrix.glibc_target
+        run: |
+          floor="${{ matrix.glibc_target }}"
+          for tool in cc c++; do
+            printf '#!/bin/sh\nexec cargo-zigbuild zig %s -- -g -fno-sanitize=all -target x86_64-linux-gnu.%s "$@"\n' "$tool" "${floor##*gnu.}" > "$RUNNER_TEMP/zig-$tool"
+            chmod +x "$RUNNER_TEMP/zig-$tool"
+          done
+          echo "CC=$RUNNER_TEMP/zig-cc" >> "$GITHUB_ENV"
+          echo "CXX=$RUNNER_TEMP/zig-c++" >> "$GITHUB_ENV"
+          echo "CARGO_UNSTABLE_HOST_CONFIG=true" >> "$GITHUB_ENV"
+          echo "CARGO_HOST_LINKER=$RUNNER_TEMP/zig-cc" >> "$GITHUB_ENV"
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -270,7 +306,7 @@ jobs:
           # different flags restores artifacts whose crate disambiguators
           # no longer match what a fresh build produces, and the mix
           # surfaces as undefined `type_info::CELL` symbols at link time.
-          key: bundle-${{ matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
+          key: bundle-${{ matrix.glibc_target || matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
           # xtask is a detached workspace with its own target dir, which
           # the default cache paths do not cover: the bundler rebuilt
           # cold on every run, which was most of the staging step's
@@ -308,19 +344,34 @@ jobs:
       # flag to an empty string and every shipped Linux binary loses its
       # runpath: the dylibs sit beside it and the loader still reports
       # them "not found".
+      #
+      # The glibc-target leg also allows undefined symbols inside the shared
+      # libraries it links against: the runner's libasound and libudev were
+      # built against its newer glibc, and on the user's machine their own
+      # copies, built against that machine's glibc, are what load.
       - name: Pin the runtime search path for the whole job
         if: matrix.rpath != ''
-        run: echo 'RUSTFLAGS=${{ matrix.rpath }}' >> "$GITHUB_ENV"
+        run: echo 'RUSTFLAGS=${{ matrix.rpath }} ${{ matrix.link }}' >> "$GITHUB_ENV"
 
       # The rustc wrapper is a HOST tool (cargo runs it as RUSTC_WRAPPER);
       # built without --target so it lands in target/release, where the
       # bundler's SdkPaths looks for it.
       - name: Build rustc wrapper (host)
+        if: '!matrix.glibc_target'
         run: cargo build --release -p jackdaw_rustc_wrapper
 
       # The root package owns the editor, jd, and installed wrapper.
       - name: Build installed binaries (target)
-        run: cargo build --release --target ${{ matrix.triple }} -p jackdaw --features dylib --bins
+        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jackdaw --features dylib --bins
+
+      # Under the glibc target the shipped wrapper is the root package's
+      # own, built above against the same glibc, placed where the bundler
+      # looks for the host one.
+      - name: Place the rustc wrapper (Linux)
+        if: matrix.glibc_target
+        run: |
+          mkdir -p target/release
+          cp "target/${{ matrix.triple }}/release/jackdaw-rustc-wrapper" target/release/
 
       # A PE export table addresses its entries with a 16-bit ordinal, so
       # 65,535 is the format's ceiling and no linker escapes it.
@@ -354,7 +405,38 @@ jobs:
         # RUNNER_TEMP is outside the source checkout. Running `jd` from here
         # therefore exercises installed behavior and cannot accidentally
         # rewrite scaffolded manifests to local path dependencies.
-        run: cargo xtask bundle --out "$RUNNER_TEMP/jackdaw-${{ matrix.triple }}" --workspace .
+        #
+        # The bundler reruns the editor build to read its artifact list. Run
+        # through cargo-zigbuild, that nested build inherits the zig
+        # environment and finds the graph fresh instead of relinking the
+        # editor against the runner's glibc.
+        run: |
+          out="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          if [ -n "${{ matrix.glibc_target }}" ]; then
+            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle --out "$out" --workspace .
+          else
+            cargo xtask bundle --out "$out" --workspace .
+          fi
+
+      # A binary that needs a newer glibc than the target names fails at the
+      # loader on an older distribution, which the runner itself never shows.
+      - name: Verify the staged binaries' glibc floor (Linux)
+        if: matrix.glibc_target
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          floor="${{ matrix.glibc_target }}"
+          floor="${floor##*gnu.}"
+          fail=0
+          while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^ELF' || continue
+            need=$(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+            echo "${f#$root/}: glibc ${need:-none}"
+            if [ -n "$need" ] && [ "$(printf '%s\n%s\n' "$need" "$floor" | sort -V | tail -1)" != "$floor" ]; then
+              echo "::error::${f#$root/} needs glibc $need, above $floor"; fail=1
+            fi
+          done < <(find "$root" -type f \( -perm -u+x -o -name '*.so' \) -print0)
+          exit "$fail"
 
       # A binary that links the runtime dylibs but carries no `$ORIGIN`
       # runpath extracts fine and dies at the loader on the user's
@@ -406,7 +488,7 @@ jobs:
         # Match the already-built release SDK. The old debug invocation
         # rebuilt the entire graph and, on Windows, recreated the oversized
         # debug SDK that the release bundle had already avoided.
-        run: cargo test --release --features dylib --target ${{ matrix.triple }} --test bundle_smoke -- --nocapture
+        run: $CARGO_FRONTEND test --release --features dylib --target "$BUILD_TARGET" --test bundle_smoke -- --nocapture
 
       - name: Archive (tar.zst)
         if: matrix.archive == 'tar.zst'

@@ -96,8 +96,8 @@ tar -xf jackdaw-x86_64-unknown-linux-gnu.tar.zst
 Extracting a `.tar.zst` needs the `zstd` tool, which most distributions ship;
 install it from your package manager if `tar` reports it missing.
 
-The archive is built on Ubuntu 24.04 and needs glibc 2.39 or newer. On older
-distributions, use `cargo install` or a source checkout instead.
+The archive needs glibc 2.31 or newer, as on Ubuntu 20.04 or Debian 11. On
+older distributions, use `cargo install` or a source checkout instead.
 
 ### Windows
 
