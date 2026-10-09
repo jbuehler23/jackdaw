@@ -229,10 +229,10 @@ impl JackdawExtension for JackdawCoreExtension {
             PresetInput::key("End"),
         ]);
         ctx.bind_operator::<CoreExtensionInputContext, crate::ClipCopyKeyframesOp>([
-            PresetInput::key("KeyC").ctrl(),
+            PresetInput::key("KeyC").ctrl_or_super(),
         ]);
         ctx.bind_operator::<CoreExtensionInputContext, crate::ClipPasteKeyframesOp>([
-            PresetInput::key("KeyV").ctrl(),
+            PresetInput::key("KeyV").ctrl_or_super(),
         ]);
         crate::draw_brush::add_to_extension(ctx);
         crate::measure_tool::add_to_extension(ctx);

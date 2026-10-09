@@ -67,15 +67,15 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
     ctx.bind_operator::<CoreExtensionInputContext, BrushJoinOp>([PresetInput::key("KeyJ")]);
     ctx.bind_operator::<CoreExtensionInputContext, BrushCsgSubtractOp>([
-        PresetInput::key("KeyK").ctrl()
+        PresetInput::key("KeyK").ctrl_or_super()
     ]);
     ctx.bind_operator::<CoreExtensionInputContext, BrushCsgIntersectOp>([PresetInput::key("KeyK")
-        .ctrl()
+        .ctrl_or_super()
         .shift()]);
     ctx.bind_operator::<CoreExtensionInputContext, BrushExtendFaceToBrushOp>([PresetInput::key(
         "KeyE",
     )
-    .ctrl()]);
+    .ctrl_or_super()]);
     ctx.bind_operator::<CoreExtensionInputContext, DrawBrushToggleModeOp>([PresetInput::key(
         "Tab",
     )]);
@@ -490,7 +490,7 @@ pub struct StartDrawBrushCutAction;
 /// the same: the drag reads it as the constrain key, so holding it is part
 /// of the gesture rather than a different chord.
 pub(crate) const BRUSH_CHORD: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
-    ctrl: false,
+    primary: false,
     alt: false,
     shift: true,
 };

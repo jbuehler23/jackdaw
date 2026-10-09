@@ -50,7 +50,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushVertexBevelOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, BrushVertexBevelOp>([
-        PresetInput::key("KeyB").ctrl()
+        PresetInput::key("KeyB").ctrl_or_super()
     ]);
 }
 

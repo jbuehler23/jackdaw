@@ -10,7 +10,10 @@ pub use jackdaw_commands::keybinds::{EditorAction, Keybind, KeybindRegistry};
 /// not named here holds the chord back; see [`unwanted_modifier`].
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ChordModifiers {
-    pub ctrl: bool,
+    /// The shortcut modifier, Ctrl or Cmd. Either one satisfies it: the
+    /// default names the platform's own and a rebinding may name the other,
+    /// and no two chords differ only between the two.
+    pub primary: bool,
     pub alt: bool,
     pub shift: bool,
 }
@@ -24,8 +27,8 @@ pub(crate) struct ChordModifiers {
 /// with a longer one asks this before acting.
 pub(crate) fn unwanted_modifier(keyboard: &ButtonInput<KeyCode>, named: ChordModifiers) -> bool {
     let held = |wanted: bool, keys: [KeyCode; 2]| !wanted && keyboard.any_pressed(keys);
-    held(named.ctrl, [KeyCode::ControlLeft, KeyCode::ControlRight])
-        || held(named.ctrl, [KeyCode::SuperLeft, KeyCode::SuperRight])
+    held(named.primary, [KeyCode::ControlLeft, KeyCode::ControlRight])
+        || held(named.primary, [KeyCode::SuperLeft, KeyCode::SuperRight])
         || held(named.alt, [KeyCode::AltLeft, KeyCode::AltRight])
         || held(named.shift, [KeyCode::ShiftLeft, KeyCode::ShiftRight])
 }
@@ -130,5 +133,45 @@ pub fn save_keybinds(registry: &KeybindRegistry) {
         Err(e) => {
             warn!("Failed to serialize keybinds: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const UNDO: ChordModifiers = ChordModifiers {
+        primary: true,
+        alt: false,
+        shift: false,
+    };
+
+    #[test]
+    fn cmd_and_ctrl_both_satisfy_a_primary_chord() {
+        for key in [KeyCode::SuperLeft, KeyCode::ControlRight] {
+            let mut keyboard = ButtonInput::<KeyCode>::default();
+            keyboard.press(key);
+            assert!(!unwanted_modifier(&keyboard, UNDO), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn cmd_and_ctrl_both_hold_back_a_bare_chord() {
+        for key in [KeyCode::SuperRight, KeyCode::ControlLeft] {
+            let mut keyboard = ButtonInput::<KeyCode>::default();
+            keyboard.press(key);
+            assert!(
+                unwanted_modifier(&keyboard, ChordModifiers::default()),
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_holds_back_a_chord_that_does_not_name_it() {
+        let mut keyboard = ButtonInput::<KeyCode>::default();
+        keyboard.press(KeyCode::SuperLeft);
+        keyboard.press(KeyCode::ShiftLeft);
+        assert!(unwanted_modifier(&keyboard, UNDO));
     }
 }

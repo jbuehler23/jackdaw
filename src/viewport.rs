@@ -1134,7 +1134,7 @@ fn camera_bookmark_keys(
     if modal.active.is_some() || focus.keyboard_is_spoken_for() || !viewport.is_three_d() {
         return;
     }
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let save = jackdaw_commands::ShortcutPlatform::host().primary_pressed(&keyboard);
     let alt = keyboard.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let in_object_mode = *edit_mode == crate::brush::EditMode::Object;
     // Don't shadow the edit-mode digit shortcuts a selected brush claims in
@@ -1159,7 +1159,7 @@ fn camera_bookmark_keys(
         if alt {
             continue;
         }
-        if ctrl {
+        if save {
             commands
                 .operator(ViewportBookmarkSaveOp::ID)
                 .param("slot", slot as i64)

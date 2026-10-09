@@ -49,7 +49,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushEdgeBevelOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, BrushEdgeBevelOp>([
-        PresetInput::key("KeyB").ctrl()
+        PresetInput::key("KeyB").ctrl_or_super()
     ]);
 }
 

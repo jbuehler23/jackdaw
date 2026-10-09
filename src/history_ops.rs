@@ -21,18 +21,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<HistoryUndoOp>()
         .register_operator::<HistoryRedoOp>();
 
-    ctx.bind_operator::<CoreExtensionInputContext, HistoryUndoOp>(
-        [PresetInput::key("KeyZ").ctrl()],
-    );
+    ctx.bind_operator::<CoreExtensionInputContext, HistoryUndoOp>([
+        PresetInput::key("KeyZ").ctrl_or_super()
+    ]);
     ctx.bind_operator::<CoreExtensionInputContext, HistoryRedoOp>([PresetInput::key("KeyZ")
-        .ctrl()
+        .ctrl_or_super()
         .shift()]);
 }
 
-/// Undo names Ctrl. Shift on top of it is Redo's chord, and Alt on top of
-/// it is neither.
+/// Undo names the shortcut modifier. Shift on top of it is Redo's chord, and
+/// Alt on top of it is neither.
 const UNDO_CHORD: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifiers {
-    ctrl: true,
+    primary: true,
     alt: false,
     shift: false,
 };

@@ -1,6 +1,7 @@
 //! Serde/preset data types and name<->code helpers.
 
 use bevy::prelude::*;
+use jackdaw_commands::ShortcutPlatform;
 use serde::{Deserialize, Serialize};
 
 /// One input trigger: a keyboard key chord, a mouse button chord, or a
@@ -106,9 +107,19 @@ impl PresetInput {
         self
     }
 
-    /// Set the Ctrl modifier, Super on macOS.
+    /// Set the host's primary shortcut modifier: Cmd (Super) on macOS, Ctrl
+    /// elsewhere.
+    ///
+    /// For defaults declared in code, so one declaration reads as each
+    /// platform expects. The modifier is resolved here, so a saved row still
+    /// names the key it was recorded with.
     pub fn ctrl_or_super(self) -> Self {
-        if cfg!(target_os = "macos") {
+        self.ctrl_or_super_on(ShortcutPlatform::host())
+    }
+
+    /// Set `platform`'s primary shortcut modifier.
+    pub fn ctrl_or_super_on(self, platform: ShortcutPlatform) -> Self {
+        if platform.primary_is_super() {
             self.super_()
         } else {
             self.ctrl()

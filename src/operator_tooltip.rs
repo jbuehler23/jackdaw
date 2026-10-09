@@ -19,8 +19,8 @@
 //! counterpart.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Binding, Bindings};
-use jackdaw_api_internal::keymap::{PresetInput, key_code_from_name};
+use bevy_enhanced_input::prelude::{Binding, Bindings, ModKeys};
+use jackdaw_api_internal::keymap::{PresetInput, ShortcutPlatform, key_code_from_name};
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_commands::keybinds::key_display_name;
 use jackdaw_feathers::button::ButtonOperatorCall;
@@ -121,15 +121,23 @@ pub fn display_keybind(
 /// tooltip deliberately skips (mouse motion, mouse wheel, gamepad
 /// axes; nothing useful to surface as a single key glyph).
 pub(crate) fn format_binding(binding: Binding) -> Option<String> {
+    format_binding_on(binding, ShortcutPlatform::host())
+}
+
+/// [`format_binding`] with the modifiers named as `platform` names them.
+fn format_binding_on(binding: Binding, platform: ShortcutPlatform) -> Option<String> {
+    let chord = |mod_keys: ModKeys, tail: &str| {
+        let mut parts = platform.modifier_labels(
+            mod_keys.contains(ModKeys::CONTROL),
+            mod_keys.contains(ModKeys::SHIFT),
+            mod_keys.contains(ModKeys::ALT),
+            mod_keys.contains(ModKeys::SUPER),
+        );
+        parts.push(tail);
+        parts.join(" + ")
+    };
     match binding {
-        Binding::Keyboard { key, mod_keys } => {
-            let key_name = key_display_name(key);
-            if mod_keys.is_empty() {
-                Some(key_name.to_string())
-            } else {
-                Some(format!("{mod_keys} + {key_name}"))
-            }
-        }
+        Binding::Keyboard { key, mod_keys } => Some(chord(mod_keys, key_display_name(key))),
         Binding::MouseButton { button, mod_keys } => {
             let button_name = match button {
                 MouseButton::Left => "Mouse Left",
@@ -139,11 +147,7 @@ pub(crate) fn format_binding(binding: Binding) -> Option<String> {
                 MouseButton::Forward => "Mouse Forward",
                 MouseButton::Other(_) => return None,
             };
-            if mod_keys.is_empty() {
-                Some(button_name.to_string())
-            } else {
-                Some(format!("{mod_keys} + {button_name}"))
-            }
+            Some(chord(mod_keys, button_name))
         }
         // MouseMotion / MouseWheel / GamepadButton / GamepadAxis /
         // AnyKey / None: not usefully expressible as a static label
@@ -159,6 +163,11 @@ pub(crate) fn format_binding(binding: Binding) -> Option<String> {
 /// string from the preset form, and the two must agree or a pending row
 /// and a live one would read differently side by side.
 pub(crate) fn format_preset_input(input: &PresetInput) -> String {
+    format_preset_input_on(input, ShortcutPlatform::host())
+}
+
+/// [`format_preset_input`] with the modifiers named as `platform` names them.
+fn format_preset_input_on(input: &PresetInput, platform: ShortcutPlatform) -> String {
     let (ctrl, shift, alt, super_, tail) = match input {
         PresetInput::Key {
             key,
@@ -192,17 +201,7 @@ pub(crate) fn format_preset_input(input: &PresetInput) -> String {
             format!("Scroll {}", if *up { "Up" } else { "Down" }),
         ),
     };
-    let mut parts: Vec<&str> = Vec::new();
-    for (held, name) in [
-        (ctrl, "Ctrl"),
-        (shift, "Shift"),
-        (alt, "Alt"),
-        (super_, "Super"),
-    ] {
-        if held {
-            parts.push(name);
-        }
-    }
+    let mut parts = platform.modifier_labels(ctrl, shift, alt, super_);
     parts.push(&tail);
     parts.join(" + ")
 }
@@ -210,7 +209,6 @@ pub(crate) fn format_preset_input(input: &PresetInput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_enhanced_input::prelude::ModKeys;
     use jackdaw_api_internal::keymap::PresetPhase;
 
     #[test]
@@ -323,5 +321,40 @@ mod tests {
         // The phase import is what the dialog's row model carries alongside
         // the input; naming it here keeps this module's view of a row whole.
         assert!(PresetPhase::Press.is_press());
+    }
+
+    #[test]
+    fn macos_names_super_cmd_in_both_forms() {
+        let mac = ShortcutPlatform::MacOs;
+        let input = PresetInput::key("KeyS").ctrl_or_super_on(mac).shift();
+        let binding = Binding::Keyboard {
+            key: KeyCode::KeyS,
+            mod_keys: ModKeys::SUPER | ModKeys::SHIFT,
+        };
+        assert_eq!(format_preset_input_on(&input, mac), "Shift + Cmd + S");
+        assert_eq!(
+            format_binding_on(binding, mac).as_deref(),
+            Some("Shift + Cmd + S")
+        );
+        assert_eq!(
+            format_binding_on(binding, ShortcutPlatform::Standard).as_deref(),
+            Some("Shift + Super + S")
+        );
+    }
+
+    #[test]
+    fn a_ctrl_chord_reads_ctrl_on_macos() {
+        let mac = ShortcutPlatform::MacOs;
+        assert_eq!(
+            format_preset_input_on(&PresetInput::key("Tab").ctrl(), mac),
+            "Ctrl + Tab"
+        );
+        assert_eq!(
+            format_preset_input_on(
+                &PresetInput::key("KeyZ").ctrl_or_super_on(ShortcutPlatform::Standard),
+                ShortcutPlatform::Standard
+            ),
+            "Ctrl + Z"
+        );
     }
 }

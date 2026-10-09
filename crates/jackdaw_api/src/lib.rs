@@ -85,7 +85,8 @@ pub mod op {
 pub mod keymap {
     pub use jackdaw_api_internal::keymap::{
         DefaultKeymap, KeymapApplyReport, KeymapPreset, PresetBinding, PresetInput, PresetPhase,
-        PresetSpawnedBinding, apply_keymap_preset, key_code_from_name, key_code_name,
+        PresetSpawnedBinding, ShortcutPlatform, apply_keymap_preset, key_code_from_name,
+        key_code_name,
     };
 }
 

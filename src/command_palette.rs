@@ -21,6 +21,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_menu_entry::<ToggleCommandPaletteOp>(TopLevelMenu::Tools);
 
     // Deferred: condition is not bare Press::default() (modifier chord + key).
+    // Ctrl on every platform: macOS keeps Cmd+Space for Spotlight.
     ctx.entity_mut()
         .with_related::<ActionOf<CoreExtensionInputContext>>((
             Action::<ToggleCommandPaletteOp>::new(),

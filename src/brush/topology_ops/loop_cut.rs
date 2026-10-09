@@ -28,7 +28,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushLoopCutOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, BrushLoopCutOp>([
-        PresetInput::key("KeyR").ctrl()
+        PresetInput::key("KeyR").ctrl_or_super()
     ]);
 }
 

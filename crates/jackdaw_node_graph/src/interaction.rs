@@ -18,7 +18,7 @@ use bevy::ecs::relationship::Relationship;
 use bevy::picking::events::{Click, Drag, DragEnd, DragStart, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use jackdaw_commands::{CommandHistory, KeymapCapture};
+use jackdaw_commands::{CommandHistory, KeymapCapture, ShortcutPlatform};
 use std::collections::HashMap;
 
 use crate::commands::{
@@ -456,7 +456,7 @@ pub fn handle_delete_key(
 }
 
 /// Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) drive undo/redo against the shared
-/// `CommandHistory`.
+/// `CommandHistory`, with Cmd in place of Ctrl on macOS.
 pub fn handle_undo_redo_keys(
     keys: Res<ButtonInput<KeyCode>>,
     capture: Option<Res<KeymapCapture>>,
@@ -465,8 +465,7 @@ pub fn handle_undo_redo_keys(
     if KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
-    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    if !ctrl {
+    if !ShortcutPlatform::host().primary_pressed(&keys) {
         return;
     }
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);

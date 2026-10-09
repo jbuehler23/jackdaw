@@ -2321,37 +2321,42 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
     ctx.bind_operator::<CoreExtensionInputContext, EntityDeleteOp>([PresetInput::key("Delete")]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityDuplicateOp>([
-        PresetInput::key("KeyD").ctrl()
+        PresetInput::key("KeyD").ctrl_or_super()
     ]);
     // The timeline claims the same chords for keyframes; the two availability
     // checks are disjoint on it being focused, so one press answers once.
-    ctx.bind_operator::<CoreExtensionInputContext, EntityCopyOp>([PresetInput::key("KeyC").ctrl()]);
-    ctx.bind_operator::<CoreExtensionInputContext, EntityCutOp>([PresetInput::key("KeyX").ctrl()]);
-    ctx.bind_operator::<CoreExtensionInputContext, EntityPasteOp>(
-        [PresetInput::key("KeyV").ctrl()],
-    );
+    ctx.bind_operator::<CoreExtensionInputContext, EntityCopyOp>([
+        PresetInput::key("KeyC").ctrl_or_super()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityCutOp>([
+        PresetInput::key("KeyX").ctrl_or_super()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, EntityPasteOp>([
+        PresetInput::key("KeyV").ctrl_or_super()
+    ]);
     // Ctrl+Shift is the whole-component clipboard, which pastes at the scene
     // root rather than beside the selection.
     ctx.bind_operator::<CoreExtensionInputContext, EntityCopyComponentsOp>([PresetInput::key(
         "KeyC",
     )
-    .ctrl()
+    .ctrl_or_super()
     .shift()]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityPasteComponentsOp>([PresetInput::key(
         "KeyV",
     )
-    .ctrl()
+    .ctrl_or_super()
     .shift()]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityMoveUpOp>([
-        PresetInput::key("ArrowUp").ctrl()
+        PresetInput::key("ArrowUp").ctrl_or_super()
     ]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityMoveDownOp>([PresetInput::key(
         "ArrowDown",
     )
-    .ctrl()]);
+    .ctrl_or_super()]);
     ctx.bind_operator::<CoreExtensionInputContext, EntityToggleVisibilityOp>([PresetInput::key(
         "KeyH",
     )]);
+    // Ctrl on every platform: macOS keeps Cmd+H for hiding the application.
     ctx.bind_operator::<CoreExtensionInputContext, EntityUnhideAllOp>([
         PresetInput::key("KeyH").ctrl()
     ]);
@@ -2360,7 +2365,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     )
     .alt()]);
     ctx.bind_operator::<CoreExtensionInputContext, crate::add_entity_picker::EntityAddPickerOp>([
-        PresetInput::key("KeyA").ctrl(),
+        PresetInput::key("KeyA").ctrl_or_super(),
     ]);
 }
 

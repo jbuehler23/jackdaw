@@ -48,7 +48,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<CoreExtensionInputContext, ViewToggleWireframeOp>([PresetInput::key(
         "KeyW",
     )
-    .ctrl()
+    .ctrl_or_super()
     .shift()]);
     ctx.bind_operator::<CoreExtensionInputContext, ViewToggleXrayOp>([
         PresetInput::key("KeyZ").alt()
@@ -61,15 +61,15 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     )]);
     ctx.bind_operator::<CoreExtensionInputContext, ViewFrameAllOp>([PresetInput::key("Home")]);
     ctx.bind_operator::<CoreExtensionInputContext, ViewUiZoomInOp>([
-        PresetInput::key("Equal").ctrl(),
-        PresetInput::key("NumpadAdd").ctrl(),
+        PresetInput::key("Equal").ctrl_or_super(),
+        PresetInput::key("NumpadAdd").ctrl_or_super(),
     ]);
     ctx.bind_operator::<CoreExtensionInputContext, ViewUiZoomOutOp>([
-        PresetInput::key("Minus").ctrl(),
-        PresetInput::key("NumpadSubtract").ctrl(),
+        PresetInput::key("Minus").ctrl_or_super(),
+        PresetInput::key("NumpadSubtract").ctrl_or_super(),
     ]);
     ctx.bind_operator::<CoreExtensionInputContext, ViewUiZoomResetOp>([
-        PresetInput::key("Digit0").ctrl()
+        PresetInput::key("Digit0").ctrl_or_super()
     ]);
 }
 
@@ -925,8 +925,9 @@ fn expand_world_aabb(transform: &GlobalTransform, aabb: &Aabb, min: &mut Vec3, m
     }
 }
 
-/// Sidecar system that fans Numpad 1/3/7 (with optional Ctrl) into
-/// `view.set_axis` calls with the right `axis`/`sign` parameters.
+/// Sidecar system that fans Numpad 1/3/7 (with optional Ctrl, Cmd on
+/// macOS) into `view.set_axis` calls with the right `axis`/`sign`
+/// parameters.
 /// Necessary because BEI key bindings can't carry payloads.
 ///
 /// Works in any edit mode (Numpad keys don't collide with the Digit
@@ -942,8 +943,8 @@ pub(crate) fn axis_view_keys(
         return;
     }
 
-    let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    let sign = if ctrl { -1i64 } else { 1i64 };
+    let opposite = jackdaw_commands::ShortcutPlatform::host().primary_pressed(&keyboard);
+    let sign = if opposite { -1i64 } else { 1i64 };
 
     let axis = if keyboard.just_pressed(KeyCode::Numpad7) {
         Some(1i64)

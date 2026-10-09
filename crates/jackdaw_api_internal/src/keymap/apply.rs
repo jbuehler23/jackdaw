@@ -426,7 +426,9 @@ mod tests {
     use bevy_enhanced_input::prelude::{Binding, TriggerState};
 
     use super::*;
-    use crate::keymap::{KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase};
+    use crate::keymap::{
+        KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase, ShortcutPlatform,
+    };
     use crate::lifecycle::OperatorAction;
 
     // Helpers shared by the applier tests.
@@ -504,6 +506,73 @@ mod tests {
         let resolved = resolve_keymap(&defaults, &user);
         assert_eq!(resolved.bindings.len(), 2);
         assert!(resolved.bindings.contains(&user_row("never.bound", "KeyN")));
+    }
+
+    fn applied_mod_keys(world: &mut World) -> Vec<ModKeys> {
+        world
+            .query_filtered::<&Binding, With<PresetSpawnedBinding>>()
+            .iter(world)
+            .map(|binding| match binding {
+                Binding::Keyboard { mod_keys, .. } => *mod_keys,
+                other => panic!("expected a keyboard binding, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_primary_default_binds_cmd_on_macos_and_ctrl_elsewhere() {
+        for (platform, expected) in [
+            (ShortcutPlatform::MacOs, ModKeys::SUPER),
+            (ShortcutPlatform::Standard, ModKeys::CONTROL),
+        ] {
+            let mut world = World::new();
+            spawn_action(&mut world, "history.undo");
+            let preset = KeymapPreset {
+                name: "classic".into(),
+                bindings: vec![PresetBinding {
+                    input: PresetInput::key("KeyZ").ctrl_or_super_on(platform),
+                    ..user_row("history.undo", "KeyZ")
+                }],
+            };
+            apply_keymap_preset(&mut world, &preset);
+            assert_eq!(applied_mod_keys(&mut world), [expected], "{platform:?}");
+        }
+    }
+
+    /// A keymap saved before shortcuts followed the platform names Ctrl, and
+    /// must keep meaning Ctrl when the default it replaces is Cmd.
+    #[test]
+    fn a_saved_ctrl_row_stays_ctrl_over_a_cmd_default() {
+        let saved = r#"{
+  "bindings": [
+    {
+      "operator": "history.undo",
+      "input": {
+        "type": "Key",
+        "key": "KeyY",
+        "ctrl": true
+      }
+    }
+  ]
+}"#;
+        let user: UserKeymap = serde_json::from_str(saved).expect("saved keymap parses");
+        assert_eq!(
+            serde_json::to_string_pretty(&user).expect("serialize"),
+            saved,
+            "loading and saving must not rewrite the row"
+        );
+
+        let defaults = KeymapPreset {
+            name: "classic".into(),
+            bindings: vec![PresetBinding {
+                input: PresetInput::key("KeyZ").ctrl_or_super_on(ShortcutPlatform::MacOs),
+                ..user_row("history.undo", "KeyZ")
+            }],
+        };
+        let mut world = World::new();
+        spawn_action(&mut world, "history.undo");
+        apply_keymap_preset(&mut world, &resolve_keymap(&defaults, &user));
+        assert_eq!(applied_mod_keys(&mut world), [ModKeys::CONTROL]);
     }
 
     #[test]

@@ -648,11 +648,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<UiGroupIntoOp>()
         .register_operator::<UiUngroupOp>();
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, UiGroupIntoOp>([
-        jackdaw_api_internal::keymap::PresetInput::key("KeyG").ctrl(),
+        jackdaw_api_internal::keymap::PresetInput::key("KeyG").ctrl_or_super(),
     ]);
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, UiUngroupOp>([
         jackdaw_api_internal::keymap::PresetInput::key("KeyG")
-            .ctrl()
+            .ctrl_or_super()
             .shift(),
     ]);
 }

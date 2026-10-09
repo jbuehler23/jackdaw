@@ -2292,6 +2292,7 @@ pub(crate) fn hierarchy_open_context_menu(
     // Built-in context menu items. The "Add Child ..." entries are the
     // parent-aware variant: they spawn the entity and reparent it under
     // the right-clicked target.
+    let primary = jackdaw_api_internal::keymap::ShortcutPlatform::host().primary_label();
     let mut owned_items: Vec<(String, String)> = vec![
         (
             "hierarchy.focus".into(),
@@ -2300,16 +2301,16 @@ pub(crate) fn hierarchy_open_context_menu(
         ("hierarchy.rename".into(), "Rename              F2".into()),
         (
             "hierarchy.duplicate".into(),
-            "Duplicate        Ctrl+D".into(),
+            format!("Duplicate        {primary}+D"),
         ),
         ("hierarchy.delete".into(), "Delete             Del".into()),
         (
             format!("{OP_PREFIX}ui.group_into"),
-            "Group Into Container   Ctrl+G".into(),
+            format!("Group Into Container   {primary}+G"),
         ),
         (
             format!("{OP_PREFIX}ui.ungroup"),
-            "Ungroup    Ctrl+Shift+G".into(),
+            format!("Ungroup    {primary}+Shift+G"),
         ),
         (
             "hierarchy.save_prefab".into(),

@@ -32,14 +32,16 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     });
 
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneNewOp>([
-        PresetInput::key("KeyT").ctrl(),
+        PresetInput::key("KeyT").ctrl_or_super(),
     ]);
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneOpenOp>([
         PresetInput::key("KeyO").ctrl_or_super(),
     ]);
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCloseOp>([
-        PresetInput::key("KeyW").ctrl(),
+        PresetInput::key("KeyW").ctrl_or_super(),
     ]);
+    // Ctrl on every platform, as in browsers: macOS keeps Cmd+Tab for
+    // switching applications.
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, SceneCycleNextOp>([
         PresetInput::key("Tab").ctrl(),
     ]);

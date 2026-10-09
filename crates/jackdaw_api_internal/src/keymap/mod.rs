@@ -14,7 +14,7 @@ pub use apply::{
 // Defined in `jackdaw_commands` so the panels that read the keyboard
 // directly can stand down for a recording too; re-exported here because
 // this is where the keymap is otherwise reached from.
-pub use jackdaw_commands::KeymapCapture;
+pub use jackdaw_commands::{KeymapCapture, ShortcutPlatform};
 pub use persist::{
     KeymapLoadProblem, UserKeymap, load_active_keymap_preset, load_user_keymap,
     load_user_keymap_reporting, save_active_keymap_preset, save_user_keymap,

@@ -1,4 +1,7 @@
 pub mod keybinds;
+mod shortcut_platform;
+
+pub use shortcut_platform::ShortcutPlatform;
 
 use bevy::prelude::*;
 
