@@ -17,6 +17,10 @@ opens and plays.
 # In a cargo workspace, the member jackdaw builds as the game.
 # package = "my-game"
 
+# The asset folder, when the game's AssetPlugin reads from somewhere
+# other than `assets`.
+# assets_dir = "content"
+
 [[run]]
 name = "Play"
 # instances = 2
@@ -33,6 +37,13 @@ Top-level keys:
   type. Recorded by import/setup and checked by `jd doctor`;
   Play launches your cargo binary, which must add the plugin
   itself in `main.rs`.
+- `assets_dir`: the asset folder, relative to the project root.
+  Defaults to `assets`. The editor reads, writes and serves assets
+  from this folder; set it to the same folder your game's
+  `AssetPlugin { file_path, .. }` names, since the editor cannot
+  read that setting out of your code. The path must stay inside the
+  project; an absolute path or one starting with `..` is ignored. A
+  change takes effect the next time the editor starts.
 
 Each `[[run]]` entry is one item in the Play dropdown. Every run
 launches the same already-built game binary; entries differ only
@@ -185,7 +196,7 @@ holds project-scoped editor settings:
   launcher.
 - `default_scene`: reserved. The field is read and written, but
   nothing currently opens a scene from it; tab restore plus the
-  `assets/scene.bsn` fallback decide what opens.
+  fallback to `scene.bsn` in the asset folder decide what opens.
 
 ## Custom editor composition
 

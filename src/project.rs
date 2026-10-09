@@ -6,6 +6,7 @@ use std::{
 
 use bevy::prelude::*;
 use jackdaw_env::paths::{last_new_project_location_path, recent_file_path};
+use jackdaw_project_build::project_manifest::{DEFAULT_ASSETS_DIR, ProjectManifest};
 use serde::{Deserialize, Serialize};
 
 /// Resource holding the active project root directory and its config.
@@ -15,13 +16,13 @@ pub struct ProjectRoot {
     pub config: ProjectConfig,
 }
 
-/// The open project's `assets/` directory, mirrored out of [`ProjectRoot`] so
+/// The open project's asset folder, mirrored out of [`ProjectRoot`] so
 /// the plain path helpers -- called from observers, asset loaders and scene
 /// readers that hold no `World` -- need not go to disk for it.
 static OPEN_PROJECT_ASSETS: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
 
 /// The open project's assets directory, or `None` when no project is
-/// open or its `assets/` does not exist.
+/// open or its asset folder does not exist.
 pub fn open_project_assets_dir() -> Option<PathBuf> {
     OPEN_PROJECT_ASSETS.read().ok()?.clone()
 }
@@ -47,6 +48,16 @@ pub(crate) fn mirror_open_project(
     }
     set_open_project_assets_dir(current.clone());
     *mirrored = current;
+}
+
+/// The asset folder of the project at `root`: `assets_dir` from its
+/// `jackdaw.toml`, or `assets`.
+pub fn project_assets_dir(root: &Path) -> PathBuf {
+    root.join(configured_assets_dir(root))
+}
+
+fn configured_assets_dir(root: &Path) -> PathBuf {
+    ProjectManifest::read(root).assets_dir().to_path_buf()
 }
 
 /// Native editor project configuration persisted to `.jackdaw/project.json`.
@@ -77,6 +88,10 @@ pub struct ProjectConfig {
     /// purpose, so a dialog reopens where the user left it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dialog_directories: BTreeMap<String, PathBuf>,
+    /// The asset folder relative to the project root, read from
+    /// `jackdaw.toml` when the project opens rather than stored here.
+    #[serde(skip)]
+    pub assets_dir: Option<PathBuf>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -104,8 +119,9 @@ fn parse_project_config(data: &str) -> Option<ProjectConfig> {
 }
 
 impl ProjectRoot {
-    pub fn new(root: impl Into<PathBuf>, config: ProjectConfig) -> Self {
+    pub fn new(root: impl Into<PathBuf>, mut config: ProjectConfig) -> Self {
         let root = root.into();
+        config.assets_dir = Some(configured_assets_dir(&root));
         Self {
             root: dunce::simplified(&root).to_path_buf(),
             config,
@@ -119,8 +135,16 @@ impl ProjectRoot {
     pub fn jackdaw_dir(&self) -> PathBuf {
         self.root.join(".jackdaw")
     }
+    /// The project's asset folder, the one the editor's asset server reads.
     pub fn assets_dir(&self) -> PathBuf {
-        self.root.join("assets")
+        self.root.join(self.assets_folder())
+    }
+    /// [`ProjectRoot::assets_dir`] relative to the project root.
+    pub fn assets_folder(&self) -> &Path {
+        self.config
+            .assets_dir
+            .as_deref()
+            .unwrap_or(Path::new(DEFAULT_ASSETS_DIR))
     }
     pub fn to_relative(&self, path: impl AsRef<Path>) -> PathBuf {
         let path = dunce::simplified(path.as_ref());
@@ -411,5 +435,20 @@ mod tests {
             project.to_relative(link.join("assets/level.bsn")),
             Path::new("assets/level.bsn")
         );
+    }
+
+    #[test]
+    fn the_asset_folder_follows_the_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        assert_eq!(
+            ProjectRoot::new(root, ProjectConfig::default()).assets_dir(),
+            root.join("assets")
+        );
+
+        std::fs::write(root.join("jackdaw.toml"), "assets_dir = \"content\"\n").unwrap();
+        let project = ProjectRoot::new(root, ProjectConfig::default());
+        assert_eq!(project.assets_dir(), root.join("content"));
+        assert_eq!(project_assets_dir(root), root.join("content"));
     }
 }

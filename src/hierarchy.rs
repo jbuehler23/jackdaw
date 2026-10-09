@@ -3315,7 +3315,10 @@ pub fn prefab_save_as_prefab(
             return;
         }
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            Some(root) => root
+                .assets_dir()
+                .join("prefabs")
+                .join(format!("{name}.bsn")),
             None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         info!(
@@ -3358,7 +3361,10 @@ pub fn prefab_save_scene_as_prefab(
 
     commands.queue(move |world: &mut World| {
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(root) => root.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            Some(root) => root
+                .assets_dir()
+                .join("prefabs")
+                .join(format!("{name}.bsn")),
             None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         crate::prefab::operators::save_scene_as_prefab(world, &target);
@@ -3395,7 +3401,7 @@ pub fn prefab_save_as_variant(
             return;
         };
         let target = match world.get_resource::<crate::project::ProjectRoot>() {
-            Some(p) => p.root.join("assets/prefabs").join(format!("{name}.bsn")),
+            Some(p) => p.assets_dir().join("prefabs").join(format!("{name}.bsn")),
             None => std::path::PathBuf::from(format!("{name}.bsn")),
         };
         crate::prefab::operators::save_as_variant(world, root, &target);

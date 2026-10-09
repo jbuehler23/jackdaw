@@ -1197,13 +1197,13 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 ///
 /// The scenes the project was last left on are queued rather than opened here;
 /// [`open_pending_scenes`] takes them one a frame, and falls back to
-/// `<root>/assets/scene.bsn` when the project remembers none, so the user
-/// lands in a populated editor rather than an empty one. That is the
+/// `scene.bsn` in the asset folder when the project remembers none, so the
+/// user lands in a populated editor rather than an empty one. That is the
 /// convention the game template ships with.
 ///
 /// Every open funnels through here, so the asset-root check lives here: no
-/// other path can install a [`ProjectRoot`] whose `assets/` the asset server is
-/// not reading from.
+/// other path can install a [`ProjectRoot`] whose asset folder the asset
+/// server is not reading from.
 fn transition_to_editor(world: &mut World, root: PathBuf) {
     let plan = world
         .get_resource::<crate::restart::AssetProjectRoot>()
@@ -1328,9 +1328,9 @@ fn open_pending_scenes(world: &mut World) {
 /// scene of some kind when nothing opened.
 ///
 /// A project with no persisted tabs, or whose every persisted entry has gone
-/// from disk, falls back to `assets/scene.bsn` (the legacy `.jsn` sibling if
-/// that is all there is) or an empty untitled scene, so the user never lands
-/// in the editor with no scene at all.
+/// from disk, falls back to `scene.bsn` in its asset folder (the legacy `.jsn`
+/// sibling if that is all there is) or an empty untitled scene, so the user
+/// never lands in the editor with no scene at all.
 fn finish_pending_scene_opens(world: &mut World) {
     let Some(pending) = world.remove_resource::<PendingSceneOpens>() else {
         return;
@@ -1339,7 +1339,7 @@ fn finish_pending_scene_opens(world: &mut World) {
     if tab_count > 0 {
         crate::scenes::swap::swap_active_tab(world, pending.active.min(tab_count - 1));
     } else {
-        let assets = pending.root.join("assets");
+        let assets = crate::project::project_assets_dir(&pending.root);
         let bsn = assets.join("scene.bsn");
         let jsn = assets.join("scene.jsn");
         let scene_path = if bsn.is_file() {

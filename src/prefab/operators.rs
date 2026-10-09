@@ -647,21 +647,21 @@ fn target_group(world: &World, entity: Option<Entity>, op_id: &str) -> Option<En
 ///
 /// `path` reaches these operators from a remote caller, so the confinement
 /// is enforced by [`crate::project::path_within`]. A path that already names
-/// `assets/` is taken from the project root, so both spellings reach the
-/// same file.
+/// the asset folder is taken from the project root, so both spellings reach
+/// the same file.
 fn resolve_asset_path(world: &mut World, path: &str, op_id: &str) -> Option<PathBuf> {
-    let Some(root) = world
+    let Some((root, folder)) = world
         .get_resource::<crate::project::ProjectRoot>()
-        .map(|project| project.root.clone())
+        .map(|project| (project.root.clone(), project.assets_folder().to_path_buf()))
     else {
         warn_caller(world, format!("{op_id}: no project is open"));
         return None;
     };
     let path = Path::new(path);
-    let candidate = if path.starts_with("assets") {
+    let candidate = if path.starts_with(&folder) {
         path.to_path_buf()
     } else {
-        Path::new("assets").join(path)
+        folder.join(path)
     };
     match crate::project::path_within(&root, &candidate) {
         Ok(resolved) => Some(resolved),

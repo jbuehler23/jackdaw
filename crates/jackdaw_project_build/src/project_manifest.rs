@@ -1,7 +1,7 @@
 //! The build pipeline's view of `jackdaw.toml`.
 //!
-//! Only the keys a build needs: which package to build, and the
-//! version pins written when the project was set up. Run
+//! Only the keys a build needs: which package to build, the version
+//! pins written when the project was set up, and the asset folder. Run
 //! configurations live in the same file but are the editor's concern
 //! and are parsed there (`jackdaw_pie_protocol`); unknown keys are
 //! ignored on both sides, so the two readers coexist.
@@ -12,6 +12,10 @@ use serde::Deserialize;
 
 /// File name at the project root.
 pub const FILE_NAME: &str = "jackdaw.toml";
+
+/// The asset folder a project uses when its manifest names none, which is
+/// also where Bevy's `AssetPlugin` looks by default.
+pub const DEFAULT_ASSETS_DIR: &str = "assets";
 
 /// The versions a project was set up against. Written once, then
 /// compared on every open so a jackdaw or Bevy upgrade is reported
@@ -40,6 +44,11 @@ pub struct ProjectManifest {
     pub package: Option<String>,
     #[serde(default)]
     pub jackdaw: VersionPins,
+    /// The asset folder, relative to the project root. Absent means
+    /// [`DEFAULT_ASSETS_DIR`]; set it when the game's `AssetPlugin` reads
+    /// from somewhere else.
+    #[serde(default)]
+    pub assets_dir: Option<PathBuf>,
 }
 
 impl ProjectManifest {
@@ -66,6 +75,16 @@ impl ProjectManifest {
         toml::from_str(&text).map_err(|error| error.to_string())
     }
 
+    /// The asset folder relative to the project root. A configured path
+    /// that is absolute or climbs out of the project falls back to
+    /// [`DEFAULT_ASSETS_DIR`].
+    pub fn assets_dir(&self) -> &Path {
+        match self.assets_dir.as_deref() {
+            Some(dir) if is_inside_root(dir) => dir,
+            _ => Path::new(DEFAULT_ASSETS_DIR),
+        }
+    }
+
     /// Whether this project has been set up for jackdaw at all.
     pub fn exists(root: &Path) -> bool {
         path(root).is_file()
@@ -74,6 +93,13 @@ impl ProjectManifest {
 
 pub fn path(root: &Path) -> PathBuf {
     root.join(FILE_NAME)
+}
+
+fn is_inside_root(dir: &Path) -> bool {
+    use std::path::Component;
+    let mut components = dir.components().peekable();
+    components.peek().is_some()
+        && components.all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 /// How a project's pins compare to the running jackdaw.
@@ -271,6 +297,25 @@ instances = 2
         assert_eq!(manifest.package.as_deref(), Some("game"));
         assert_eq!(manifest.jackdaw.version.as_deref(), Some("0.19.0"));
         assert_eq!(manifest.jackdaw.bevy.as_deref(), Some("0.19"));
+    }
+
+    #[test]
+    fn the_asset_folder_is_assets_unless_the_manifest_names_one_inside_the_project() {
+        let parse = |text: &str| toml::from_str::<ProjectManifest>(text).unwrap();
+        assert_eq!(parse("").assets_dir(), Path::new("assets"));
+        assert_eq!(
+            parse("assets_dir = \"content/data\"").assets_dir(),
+            Path::new("content/data")
+        );
+        assert_eq!(
+            parse("assets_dir = \"../shared\"").assets_dir(),
+            Path::new("assets")
+        );
+        assert_eq!(
+            parse("assets_dir = \"/srv/assets\"").assets_dir(),
+            Path::new("assets")
+        );
+        assert_eq!(parse("assets_dir = \"\"").assets_dir(), Path::new("assets"));
     }
 
     #[test]

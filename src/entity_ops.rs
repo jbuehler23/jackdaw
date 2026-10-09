@@ -2233,16 +2233,17 @@ pub fn to_asset_path(path: &str) -> String {
 
 /// Get the absolute path of Bevy's assets directory.
 ///
-/// The open project's `assets/` comes from the resident `ProjectRoot` mirror
-/// rather than from disk, because this runs once per model per frame; with no
-/// project open it falls back to the recents file and `FileAssetReader`.
+/// The open project's asset folder comes from the resident `ProjectRoot`
+/// mirror rather than from disk, because this runs once per model per frame;
+/// with no project open it falls back to the recents file and
+/// `FileAssetReader`.
 pub fn get_assets_base_dir() -> Option<std::path::PathBuf> {
     if let Some(assets) = crate::project::open_project_assets_dir() {
         return Some(dunce::simplified(assets.as_path()).to_path_buf());
     }
 
     if let Some(project_dir) = crate::project::read_last_project() {
-        let assets = dunce::simplified(project_dir.as_path()).join("assets");
+        let assets = crate::project::project_assets_dir(dunce::simplified(project_dir.as_path()));
         if assets.is_dir() {
             return Some(assets);
         }

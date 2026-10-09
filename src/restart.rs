@@ -69,7 +69,7 @@ use bevy::prelude::Resource;
 pub const ENV_SKIP_INITIAL_BUILD: &str = "JACKDAW_SKIP_INITIAL_BUILD";
 
 /// The project directory this process's asset root was built from.
-/// Bevy resolves every relative asset load under `<0>/assets`, and
+/// Bevy resolves every relative asset load under `<0>`'s asset folder, and
 /// `AssetPlugin` fixes that path when the app is built, so nothing
 /// running afterwards can move it.
 #[derive(Resource, Clone, Debug)]

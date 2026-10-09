@@ -50,11 +50,11 @@ fn main() -> AppExit {
     // project this process will actually open. `jd open <path>` names
     // one explicitly; without this, opening anything other than the
     // most recent project would root the asset server at a different
-    // project's `assets/`.
+    // project's asset folder.
     let project_root = jackdaw::project::requested_project()
         .or_else(jackdaw::project::read_last_project)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let assets_dir = project_root.join("assets");
+    let assets_dir = jackdaw::project::project_assets_dir(&project_root);
 
     // Picker is the default landing screen on every launch. The
     // user clicks the project they want from recents (or scaffolds
