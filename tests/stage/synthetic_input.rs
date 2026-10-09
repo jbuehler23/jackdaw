@@ -479,8 +479,8 @@ fn a_key_reaches_the_editors_own_chords() {
 }
 
 /// The entry is Bevy's own text input rather than the editor's field wrapper,
-/// so the keyboard guard asks after that input: a Ctrl+D pressed while renaming
-/// a label must not duplicate the node under it.
+/// so the keyboard guard asks after that input: the duplicate chord pressed
+/// while renaming a label must not duplicate the node under it.
 #[test]
 fn a_chord_typed_into_the_canvas_entry_runs_no_operator() {
     let (mut app, _panel) = canvas_app();
@@ -501,12 +501,15 @@ fn a_chord_typed_into_the_canvas_entry_runs_no_operator() {
         "input.pointer space=canvas x=600 y=300 action=dblclick",
     );
     run(&mut app, "input.text text=PlayButton");
-    run(&mut app, "input.key key=KeyD mods=ctrl");
+    run(
+        &mut app,
+        &format!("input.key key=KeyD mods={}", util::primary_mod()),
+    );
 
     assert_eq!(
         children_of(&app, root),
         before,
-        "Ctrl+D typed into the entry duplicated nothing",
+        "the duplicate chord typed into the entry duplicated nothing",
     );
     run(&mut app, "input.key key=Enter");
     assert_eq!(
@@ -537,20 +540,26 @@ fn a_chord_typed_into_the_add_entity_search_runs_no_operator() {
 
     run(&mut app, "entity.add_picker");
     run(&mut app, "input.text text=Play");
-    run(&mut app, "input.key key=KeyD mods=ctrl");
-    run(&mut app, "input.key key=KeyC mods=ctrl");
+    run(
+        &mut app,
+        &format!("input.key key=KeyD mods={}", util::primary_mod()),
+    );
+    run(
+        &mut app,
+        &format!("input.key key=KeyC mods={}", util::primary_mod()),
+    );
 
     assert_eq!(
         children_of(&app, root),
         before,
-        "Ctrl+D typed into the search duplicated nothing",
+        "the duplicate chord typed into the search duplicated nothing",
     );
     assert!(
         app.world()
             .resource::<jackdaw::entity_ops::EntityClipboard>()
             .text
             .is_empty(),
-        "and Ctrl+C copied the search text rather than the selection",
+        "and the copy chord copied the search text rather than the selection",
     );
 }
 
@@ -776,10 +785,11 @@ fn the_same_letter_still_arms_the_axis_away_from_the_canvas() {
 }
 
 /// The draw brush's cut gesture is bound to a bare C and `bevy_enhanced_input`
-/// ignores modifiers a binding does not name, so Ctrl+C must not start a brush,
-/// whose modal every entity operator refuses to run behind.
+/// ignores modifiers a binding does not name, so the copy chord (Ctrl+C, Cmd+C
+/// on macOS) must not start a brush, whose modal every entity operator refuses
+/// to run behind.
 #[test]
-fn ctrl_c_copies_and_ctrl_v_pastes_from_the_keyboard() {
+fn copy_and_paste_chords_work_from_the_keyboard() {
     let (mut app, _panel) = canvas_app();
     let node = authored_panel(&mut app);
     let root = app
@@ -795,29 +805,35 @@ fn ctrl_c_copies_and_ctrl_v_pastes_from_the_keyboard() {
         .get::<Children>(root)
         .map_or(0, bevy::prelude::Children::len);
 
-    run(&mut app, "input.key key=KeyC mods=ctrl");
+    run(
+        &mut app,
+        &format!("input.key key=KeyC mods={}", util::primary_mod()),
+    );
     assert!(
         !app.world()
             .resource::<jackdaw::entity_ops::EntityClipboard>()
             .text
             .is_empty(),
-        "Ctrl+C filled the clipboard",
+        "the copy chord filled the clipboard",
     );
 
-    run(&mut app, "input.key key=KeyV mods=ctrl");
+    run(
+        &mut app,
+        &format!("input.key key=KeyV mods={}", util::primary_mod()),
+    );
     assert_eq!(
         app.world()
             .get::<Children>(root)
             .map_or(0, bevy::prelude::Children::len),
         before + 1,
-        "Ctrl+V landed a copy beside it",
+        "the paste chord landed a copy beside it",
     );
 }
 
 /// This looked like a tool switch in the walkthrough, but it was the standing
-/// brush modal from the Ctrl+C two clauses earlier becoming visible.
+/// brush modal from the copy chord two clauses earlier becoming visible.
 #[test]
-fn ctrl_arrow_up_reorders_from_the_keyboard() {
+fn primary_arrow_up_reorders_from_the_keyboard() {
     let (mut app, _panel) = canvas_app();
     let first = authored_panel(&mut app);
     let root = app
@@ -852,11 +868,14 @@ fn ctrl_arrow_up_reorders_from_the_keyboard() {
     };
     assert_eq!(order(&app), vec![first, second], "the order to move");
 
-    run(&mut app, "input.key key=ArrowUp mods=ctrl");
+    run(
+        &mut app,
+        &format!("input.key key=ArrowUp mods={}", util::primary_mod()),
+    );
     assert_eq!(
         order(&app),
         vec![second, first],
-        "Ctrl+ArrowUp moved the selection up among its siblings",
+        "the reorder chord moved the selection up among its siblings",
     );
 }
 

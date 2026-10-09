@@ -6,6 +6,7 @@
 use crate::util;
 
 use bevy::prelude::*;
+use jackdaw_api_internal::keymap::ShortcutPlatform;
 use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::tooltip::Tooltip;
@@ -60,14 +61,20 @@ fn action_entities_carry_operator_action_marker() {
     );
 }
 
-/// `view.toggle_wireframe` is bound to `Ctrl + Shift + W` via the classic
-/// keymap preset, which the startup applier applies before the first frame.
+/// `view.toggle_wireframe` is bound to `Ctrl + Shift + W` (`Shift + Cmd + W`
+/// on macOS) via the classic keymap preset, which the startup applier applies
+/// before the first frame.
 #[test]
 fn tooltip_picks_up_keyboard_modifier_binding() {
     let mut app = util::editor_test_app();
     let keybind = keybind_for(&mut app, "view.toggle_wireframe");
+    let expected = if ShortcutPlatform::host().primary_is_super() {
+        "Shift + Cmd + W"
+    } else {
+        "Ctrl + Shift + W"
+    };
     assert_eq!(
-        keybind, "Ctrl + Shift + W",
+        keybind, expected,
         "wireframe toggle should display its modifier binding",
     );
 }

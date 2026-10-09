@@ -145,43 +145,44 @@ fn classic(app: &mut App) -> KeymapPreset {
         .to_classic_preset()
 }
 
-/// Ctrl+C and Ctrl+V are claimed by both the timeline's keyframes and the entity
-/// clipboard, and their availability checks are disjoint on the timeline being
-/// the focused window. The whole-component clipboard sits on Ctrl+Shift.
+/// Copy and paste (Ctrl, Cmd on macOS) are claimed by both the timeline's
+/// keyframes and the entity clipboard, and their availability checks are
+/// disjoint on the timeline being the focused window. The whole-component
+/// clipboard adds Shift.
 #[test]
 fn the_clipboard_chord_is_shared_by_the_entity_and_keyframe_operators() {
     let mut app = crate::headless_app();
     let defaults = classic(&mut app);
 
     assert_eq!(
-        operators_on(&defaults, &PresetInput::key("KeyC").ctrl()),
+        operators_on(&defaults, &PresetInput::key("KeyC").ctrl_or_super()),
         vec!["clip.copy_keyframes".to_string(), "entity.copy".to_string()],
     );
     assert_eq!(
-        operators_on(&defaults, &PresetInput::key("KeyV").ctrl()),
+        operators_on(&defaults, &PresetInput::key("KeyV").ctrl_or_super()),
         vec![
             "clip.paste_keyframes".to_string(),
             "entity.paste".to_string()
         ],
     );
     assert_eq!(
-        operators_on(&defaults, &PresetInput::key("KeyC").ctrl().shift()),
+        operators_on(&defaults, &PresetInput::key("KeyC").ctrl_or_super().shift()),
         vec!["entity.copy_components".to_string()],
     );
     assert_eq!(
-        operators_on(&defaults, &PresetInput::key("KeyV").ctrl().shift()),
+        operators_on(&defaults, &PresetInput::key("KeyV").ctrl_or_super().shift()),
         vec!["entity.paste_components".to_string()],
     );
 }
 
-/// Ctrl+A is a preset entry, so the keymap can report it, rebind it and
-/// save it like every other binding.
+/// The add-entity picker's chord (Ctrl+A, Cmd+A on macOS) is a preset entry,
+/// so the keymap can report it, rebind it and save it like every other binding.
 #[test]
-fn ctrl_a_is_a_preset_entry_for_the_add_entity_picker() {
+fn the_add_entity_picker_chord_is_a_preset_entry() {
     let mut app = crate::headless_app();
     let defaults = classic(&mut app);
     assert!(
-        operators_on(&defaults, &PresetInput::key("KeyA").ctrl())
+        operators_on(&defaults, &PresetInput::key("KeyA").ctrl_or_super())
             .contains(&"entity.add_picker".to_string()),
     );
 }
@@ -264,11 +265,20 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
     let defaults = classic(&mut app);
 
     for (input, operator) in [
-        (PresetInput::key("KeyX").ctrl(), "entity.cut"),
-        (PresetInput::key("ArrowUp").ctrl(), "entity.move_up"),
-        (PresetInput::key("ArrowDown").ctrl(), "entity.move_down"),
-        (PresetInput::key("KeyG").ctrl(), "ui.group_into"),
-        (PresetInput::key("KeyG").ctrl().shift(), "ui.ungroup"),
+        (PresetInput::key("KeyX").ctrl_or_super(), "entity.cut"),
+        (
+            PresetInput::key("ArrowUp").ctrl_or_super(),
+            "entity.move_up",
+        ),
+        (
+            PresetInput::key("ArrowDown").ctrl_or_super(),
+            "entity.move_down",
+        ),
+        (PresetInput::key("KeyG").ctrl_or_super(), "ui.group_into"),
+        (
+            PresetInput::key("KeyG").ctrl_or_super().shift(),
+            "ui.ungroup",
+        ),
     ] {
         assert_eq!(
             operators_on(&defaults, &input),
@@ -278,28 +288,28 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
     }
 
     let conflicts = find_conflicts(&defaults);
-    for chord in [
-        "Ctrl+KeyX",
-        "Ctrl+ArrowUp",
-        "Ctrl+ArrowDown",
-        "Ctrl+KeyG",
-        "Ctrl+Shift+KeyG",
+    for operator in [
+        "entity.cut",
+        "entity.move_up",
+        "entity.move_down",
+        "ui.group_into",
+        "ui.ungroup",
     ] {
         assert!(
-            !conflicts.iter().any(|line| line.starts_with(chord)),
-            "{chord} collided with something already bound: {conflicts:?}",
+            !conflicts.iter().any(|line| line.contains(operator)),
+            "{operator} collided with something already bound: {conflicts:?}",
         );
     }
     assert!(
         conflicts
             .iter()
-            .any(|line| line.starts_with("Ctrl+KeyC") && line.contains("entity.copy")),
+            .any(|line| line.contains("entity.copy") && line.contains("clip.copy_keyframes")),
         "the shared copy chord should be reported, advisory: {conflicts:?}",
     );
     assert!(
         conflicts
             .iter()
-            .any(|line| line.starts_with("Ctrl+KeyV") && line.contains("entity.paste")),
+            .any(|line| line.contains("entity.paste") && line.contains("clip.paste_keyframes")),
         "the shared paste chord should be reported, advisory: {conflicts:?}",
     );
 }

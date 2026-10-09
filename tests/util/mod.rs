@@ -27,6 +27,18 @@ pub fn skip_setup_check() {
 /// writes the keymap, keybinds, recent projects or extension list of whoever
 /// runs it. Runs once, before the first plugin is added, so no other thread
 /// reads the environment while it is set.
+/// The `mods=` name of the host's shortcut modifier, for a synthetic key
+/// clause: `super` (Cmd) on macOS, `ctrl` elsewhere.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn primary_mod() -> &'static str {
+    if jackdaw_api_internal::keymap::ShortcutPlatform::host().primary_is_super() {
+        "super"
+    } else {
+        "ctrl"
+    }
+}
+
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn isolate_config_dir() {

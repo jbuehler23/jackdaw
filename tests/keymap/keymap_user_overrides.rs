@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use jackdaw_api_internal::keymap::{
     DefaultKeymap, KeymapPreset, PresetBinding, PresetContext, PresetInput, PresetPhase,
-    UserKeymap, apply_keymap_preset, resolve_keymap,
+    ShortcutPlatform, UserKeymap, apply_keymap_preset, resolve_keymap,
 };
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 
@@ -606,6 +606,7 @@ fn a_shipped_co_fire_marks_its_rows_and_stays_out_of_the_paragraph() {
     let pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
 
     let shared = pending.conflicts_of("entity.copy");
+    let primary = ShortcutPlatform::host().primary_label();
     assert!(
         shared.iter().any(|line| line.contains("Copy Keyframes")),
         "the row names the other command in the words the rows are named in: {shared:?}",
@@ -613,7 +614,7 @@ fn a_shipped_co_fire_marks_its_rows_and_stays_out_of_the_paragraph() {
     assert!(
         shared
             .iter()
-            .all(|line| line.contains("Ctrl") && line.contains("C -")),
+            .all(|line| line.contains(primary) && line.contains("C -")),
         "and names the chord it is about: {shared:?}",
     );
 
@@ -644,7 +645,8 @@ fn a_conflict_this_session_made_is_named_in_the_paragraph() {
     app.finish();
     app.update();
     let mut pending = jackdaw::keybind_settings::pending_from_world(app.world_mut());
-    pending.rebind("history.redo", PresetInput::key("KeyZ").ctrl());
+    pending.rebind("history.redo", PresetInput::key("KeyZ").ctrl_or_super());
+    let primary = ShortcutPlatform::host().primary_label();
 
     let text = jackdaw::keybind_settings::advisory_text(
         &pending,
@@ -653,7 +655,7 @@ fn a_conflict_this_session_made_is_named_in_the_paragraph() {
     );
     assert!(text.contains("you have just bound"), "{text}");
     assert!(
-        text.contains("Ctrl + Z") && !text.contains("KeyZ"),
+        text.contains(&format!("{primary} + Z")) && !text.contains("KeyZ"),
         "the chord is written the way a row writes it: {text}",
     );
     assert!(
