@@ -5,8 +5,10 @@
 //! Add [`DylibLoaderPlugin`] to the editor `App`. During `build` it
 //! reads the versioned `.jdext` installation index, opens each verified
 //! dynamic library with `libloading`, and looks up `jackdaw_extension_ctor`
-//! symbol (see [`EXTENSION_CTOR_SYMBOL`]), and registers the
-//! extension through
+//! symbol (see [`EXTENSION_CTOR_SYMBOL`]), hands the library's reflect
+//! types to the editor's `AppTypeRegistry` through its
+//! `jackdaw_register_types` symbol (see [`register_library_types`]), and
+//! registers the extension through
 //! [`jackdaw_api_internal::lifecycle::register_dylib_extension`].
 //!
 //! Loaded libraries live in [`LoadedDylibs`] as long as the `App`
@@ -32,6 +34,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::Path;
 
 use bevy::prelude::*;
+use bevy::reflect::TypeRegistry;
 use jackdaw_api_internal::JackdawExtension;
 
 /// Symbol every extension dylib exports: a plain-Rust
@@ -44,6 +47,58 @@ pub const EXTENSION_CTOR_SYMBOL: &[u8] = b"jackdaw_extension_ctor\0";
 /// because host and dylib share one compilation of
 /// `JackdawExtension` through the SDK dylib.
 type ExtensionCtor = fn() -> Box<dyn JackdawExtension>;
+
+/// Symbol every extension dylib exports to register its derived reflect
+/// types: a plain-Rust `fn(&mut TypeRegistry)`, emitted by the generated
+/// shim. Includes the trailing NUL, like [`EXTENSION_CTOR_SYMBOL`].
+pub const REGISTER_TYPES_SYMBOL: &[u8] = b"jackdaw_register_types\0";
+
+/// Signature of [`REGISTER_TYPES_SYMBOL`]. Sound for the same reason as
+/// [`ExtensionCtor`]: both sides share one compilation of `TypeRegistry`.
+type RegisterTypes = fn(&mut TypeRegistry);
+
+/// How a loaded library's reflect types reached the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeHandoff {
+    /// The library's own `jackdaw_register_types` entry registered them.
+    Entry,
+    /// The library predates the entry; the process-wide auto-registration
+    /// list was drained instead.
+    ProcessList,
+}
+
+/// Register the reflect types `lib` derived into `registry`.
+///
+/// The library walks its own view of the auto-registration list, so its
+/// types arrive even where the platform's linker gives a loaded library a
+/// separate copy of that list. A library without the entry was built by an
+/// older jackdaw; it gets a warning and the old process-wide drain, which
+/// only sees its types where the list is shared.
+pub fn register_library_types(
+    lib: &libloading::Library,
+    path: &Path,
+    registry: &mut TypeRegistry,
+) -> TypeHandoff {
+    // SAFETY: the symbol's signature is fixed by the shim contract, and
+    // both sides compile it against the one `TypeRegistry` inside the
+    // shared SDK dylib.
+    match unsafe { lib.get::<RegisterTypes>(REGISTER_TYPES_SYMBOL) } {
+        Ok(entry) => {
+            entry(registry);
+            TypeHandoff::Entry
+        }
+        Err(_) => {
+            warn!(
+                "{} exports no `jackdaw_register_types`; it was built by an older \
+                 jackdaw. Rebuild it so its reflected types reach the editor on \
+                 every platform.",
+                path.display()
+            );
+            registry.register_derived_types();
+            TypeHandoff::ProcessList
+        }
+    }
+}
 
 /// Keeps `libloading::Library` handles alive for the lifetime of the
 /// `App`. The resource is inserted by [`DylibLoaderPlugin::build`]
@@ -302,6 +357,9 @@ fn open_and_construct(
         }
     };
 
+    if let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() {
+        register_library_types(&lib, path, &mut registry.write());
+    }
     world.resource_mut::<LoadedDylibs>().libs.push(lib);
 
     #[expect(
@@ -397,5 +455,31 @@ pub fn load_installed_from_path(world: &mut World, path: &Path) -> Result<String
             }
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn this_process() -> libloading::Library {
+        #[cfg(unix)]
+        let lib = libloading::os::unix::Library::this().into();
+        #[cfg(windows)]
+        let lib = libloading::os::windows::Library::this()
+            .expect("open the running process")
+            .into();
+        lib
+    }
+
+    #[derive(Reflect)]
+    struct LocalProbe;
+
+    #[test]
+    fn a_library_without_the_entry_falls_back_to_the_process_list() {
+        let mut registry = TypeRegistry::empty();
+        let handoff = register_library_types(&this_process(), Path::new("old"), &mut registry);
+        assert_eq!(handoff, TypeHandoff::ProcessList);
+        assert!(registry.contains(std::any::TypeId::of::<LocalProbe>()));
     }
 }

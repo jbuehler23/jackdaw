@@ -1,11 +1,11 @@
 #![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
 //! `reflect_auto_register` across `dlopen` with the shared SDK.
 //!
-//! Builds `tests/fixtures/reflect_game` (a plain Bevy
-//! cdylib deriving `Reflect` on one component, with NO registration code,
-//! NO export macro, and NO build script) through the SDK pipeline, dlopens
-//! it, and checks whether the component appears when a fresh registry
-//! drains the shared inventory list.
+//! Builds `tests/fixtures/reflect_game` (a plain Bevy library deriving
+//! `Reflect` on one component, with NO registration code of its own)
+//! through the SDK pipeline, with the shim's generated
+//! `jackdaw_register_types` entry appended, dlopens it, and checks that the
+//! loader's handoff puts the component into a registry the host owns.
 //!
 //! Requires the `dylib` feature and an explicit `--target` (the host
 //! triple): the test binary must link the same triple-dir
@@ -22,7 +22,9 @@ use std::process::Command;
 
 use bevy::reflect::TypeRegistry;
 use jackdaw::project_build::plan::{SdkManifest, write_plan};
+use jackdaw::project_build::shim::register_types_source;
 use jackdaw::sdk_paths::SdkPaths;
+use jackdaw_loader::{TypeHandoff, register_library_types};
 
 mod util;
 
@@ -51,6 +53,12 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
     let fixture_dir = util::stage_fixture("reflect_game");
     let fixture_target = fixture_dir.join("target-fixture");
     let map_path = fixture_dir.join("extern_map.txt");
+
+    // The editor's shim adds this entry to every library it builds.
+    let lib_rs = fixture_dir.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&lib_rs).expect("read the fixture source");
+    source.push_str(register_types_source());
+    std::fs::write(&lib_rs, source).expect("append the register-types entry");
 
     std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed the fixture lock");
     let manifest =
@@ -107,20 +115,23 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
         "fixture type visible before dlopen; the probe is not isolating"
     );
 
-    // dlopen runs the fixture dylib's constructors, which push inventory
-    // submissions into the shared bevy_reflect inside libjackdaw_sdk.
     let lib =
         unsafe { libloading::Library::new(&fixture_dylib) }.expect("dlopen the fixture dylib");
+
+    let mut after = TypeRegistry::empty();
+    let handoff = register_library_types(&lib, &fixture_dylib, &mut after);
     // Never unloaded; leak deliberately, mirroring the loader's rule.
     std::mem::forget(lib);
-
-    let mut after = TypeRegistry::default();
-    after.register_derived_types();
+    assert_eq!(
+        handoff,
+        TypeHandoff::Entry,
+        "the fixture dylib does not export `jackdaw_register_types`"
+    );
     let registration = after.get_with_type_path(COMPONENT_TYPE_PATH);
     assert!(
         registration.is_some(),
-        "{COMPONENT_TYPE_PATH} not in the registry after dlopen + \
-         register_derived_types; auto-register did not cross the boundary"
+        "{COMPONENT_TYPE_PATH} not in the registry after the library's \
+         register-types entry ran"
     );
 
     // The registration must be usable, not just present: reflect data intact.
@@ -138,5 +149,5 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
         "registration lacks ReflectDefault data (component picker filters on it)"
     );
 
-    println!("{COMPONENT_TYPE_PATH} auto-registered across dlopen");
+    println!("{COMPONENT_TYPE_PATH} registered through the library entry");
 }
