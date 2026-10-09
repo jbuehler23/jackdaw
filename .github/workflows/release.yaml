@@ -430,7 +430,7 @@ jobs:
           fail=0
           while IFS= read -r -d '' f; do
             file -b "$f" | grep -q '^ELF' || continue
-            need=$(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+            need=$(objdump -T "$f" | { grep -o 'GLIBC_[0-9.]*' || true; } | sed 's/GLIBC_//' | sort -V | tail -1)
             echo "${f#$root/}: glibc ${need:-none}"
             if [ -n "$need" ] && [ "$(printf '%s\n%s\n' "$need" "$floor" | sort -V | tail -1)" != "$floor" ]; then
               echo "::error::${f#$root/} needs glibc $need, above $floor"; fail=1
