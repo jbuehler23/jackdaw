@@ -45,7 +45,7 @@ jobs:
       - id: pick
         run: |
           linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","archive":"tar.zst"}'
-          macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"tar.zst"}'
+          macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"zip"}'
           windows='{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}'
           case "${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}" in
             linux)   list="[$linux]" ;;
@@ -413,9 +413,15 @@ jobs:
         run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C "$RUNNER_TEMP" "jackdaw-${{ matrix.triple }}"
 
       - name: Archive (zip)
-        if: matrix.archive == 'zip'
+        if: matrix.archive == 'zip' && runner.os == 'Windows'
         working-directory: ${{ runner.temp }}
         run: 7z a "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip" "./jackdaw-${{ matrix.triple }}"
+
+      # ditto keeps the symlinks and executable bits Finder and unzip restore.
+      - name: Archive (zip, macOS)
+        if: matrix.archive == 'zip' && runner.os == 'macOS'
+        working-directory: ${{ runner.temp }}
+        run: ditto -c -k --keepParent "jackdaw-${{ matrix.triple }}" "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip"
 
       - name: Generate checksum
         run: openssl dgst -sha256 "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}" > "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256"
