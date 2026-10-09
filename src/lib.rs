@@ -2923,6 +2923,14 @@ fn cleanup_editor(world: &mut World) {
     world.insert_resource(asset_files::AssetKindCache::default());
     world.insert_resource(asset_index::AssetIndex::default());
     world.insert_resource(definition_assets::OpenDefinition::default());
+    // The open tabs, and the per-tab state the active one keeps in the world,
+    // all belong to the project being closed; the next project opens its own.
+    world.insert_resource(scenes::Scenes::default());
+    world.insert_resource(scenes::confirm_dialog::PendingTabClose::default());
+    world.remove_resource::<project_select::PendingSceneOpens>();
+    world.insert_resource(terrain::TerrainDataStore::default());
+    terrain::navmesh_bake::forget_scene_navmesh(world);
+    world.insert_resource(brush::BrushSelection::default());
 
     // 6. Remove project root
     world.remove_resource::<project::ProjectRoot>();

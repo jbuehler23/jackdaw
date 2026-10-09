@@ -1284,7 +1284,7 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
 /// and one to read and spawn it. The window draws in between, so the user sees
 /// what the long frame is doing.
 #[derive(Resource)]
-struct PendingSceneOpens {
+pub(crate) struct PendingSceneOpens {
     paths: std::collections::VecDeque<PathBuf>,
     /// The tab the project was last left on.
     active: usize,

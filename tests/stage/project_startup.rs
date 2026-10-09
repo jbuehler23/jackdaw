@@ -342,3 +342,105 @@ fn opening_a_project_spawns_the_prefab_instances_its_scene_holds_and_indexes_its
         "the project's material was indexed"
     );
 }
+
+/// A project whose remembered tabs are one scene per name in `scenes`.
+fn project_with_tabs(scenes: &[&str]) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    for name in scenes {
+        write(&root.join(format!("assets/{name}.bsn")), SCENE);
+    }
+    let tabs: Vec<String> = scenes
+        .iter()
+        .map(|name| format!("\"assets/{name}.bsn\""))
+        .collect();
+    write(
+        &root.join(".jackdaw/project.json"),
+        &format!(
+            r#"{{"name":"fixture","last_open_tabs":[{}],"last_active_tab":0}}"#,
+            tabs.join(",")
+        ),
+    );
+    tmp
+}
+
+fn open_tabs(app: &App) -> Vec<PathBuf> {
+    app.world()
+        .resource::<jackdaw::scenes::Scenes>()
+        .tabs
+        .iter()
+        .filter_map(|tab| tab.path.clone())
+        .collect()
+}
+
+#[test]
+fn opening_another_project_leaves_the_first_projects_tabs_behind() {
+    let first = project_with_tabs(&["a", "b"]);
+    let second = project_with_tabs(&["c"]);
+    let mut app = editor_opening(first.path());
+    for _ in 0..16 {
+        app.update();
+    }
+    assert_eq!(
+        open_tabs(&app).len(),
+        2,
+        "the first project opens both tabs"
+    );
+
+    // What File > Open Recent does: queue the project, then leave for the
+    // launcher, which opens it.
+    app.world_mut()
+        .insert_resource(jackdaw::project_select::PendingAutoOpen {
+            path: second.path().to_path_buf(),
+            skip_build: true,
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::ProjectSelect);
+    for _ in 0..16 {
+        app.update();
+    }
+
+    assert_eq!(
+        open_tabs(&app),
+        vec![dunce::canonicalize(second.path().join("assets/c.bsn")).unwrap()],
+        "only the second project's tab is open"
+    );
+    let remembered = std::fs::read_to_string(second.path().join(".jackdaw/project.json"))
+        .expect("the second project's config");
+    assert!(
+        !remembered.contains("a.bsn") && !remembered.contains("b.bsn"),
+        "and the first project's tabs were not written into the second's config: {remembered}"
+    );
+}
+
+#[test]
+fn going_home_closes_the_projects_tabs() {
+    let project = project_with_tabs(&["a", "b"]);
+    let mut app = editor_opening(project.path());
+    for _ in 0..16 {
+        app.update();
+    }
+    assert_eq!(open_tabs(&app).len(), 2);
+
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::ProjectSelect);
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert!(
+        app.world()
+            .resource::<jackdaw::scenes::Scenes>()
+            .tabs
+            .is_empty(),
+        "the launcher holds no tabs"
+    );
+    let remembered = std::fs::read_to_string(project.path().join(".jackdaw/project.json"))
+        .expect("the project's config");
+    assert!(
+        remembered.contains("a.bsn") && remembered.contains("b.bsn"),
+        "and the project still remembers them for next time: {remembered}"
+    );
+}
