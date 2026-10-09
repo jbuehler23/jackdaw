@@ -93,6 +93,9 @@ tar -xf jackdaw-x86_64-unknown-linux-gnu.tar.zst
 ./jackdaw-x86_64-unknown-linux-gnu/jackdaw
 ```
 
+Extracting a `.tar.zst` needs the `zstd` tool, which most distributions ship;
+install it from your package manager if `tar` reports it missing.
+
 The archive is built on Ubuntu 24.04 and needs glibc 2.39 or newer. On older
 distributions, use `cargo install` or a source checkout instead.
 
@@ -104,12 +107,13 @@ your PC" the first time: choose **More info**, then **Run anyway**.
 
 ### macOS
 
-Download `jackdaw-aarch64-apple-darwin.tar.zst`, extract it, and clear the
-quarantine flag macOS puts on downloaded files, which otherwise blocks the
-unsigned binaries and their libraries:
+Download `jackdaw-aarch64-apple-darwin.zip` and extract it (double-click it
+in Finder, or use `unzip`). Then clear the quarantine flag macOS puts on
+downloaded files, which otherwise blocks the unsigned binaries and their
+libraries:
 
 ```bash
-tar -xf jackdaw-aarch64-apple-darwin.tar.zst
+unzip jackdaw-aarch64-apple-darwin.zip
 xattr -dr com.apple.quarantine jackdaw-aarch64-apple-darwin
 ./jackdaw-aarch64-apple-darwin/jackdaw
 ```
