@@ -49,6 +49,7 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
         sdk.wrapper.display()
     );
 
+    util::ensure_sdk_metadata(&sdk);
     let fixture_dir = util::stage_fixture("reflect_game");
     let fixture_target = fixture_dir.join("target-fixture");
     let map_path = fixture_dir.join("extern_map.txt");
@@ -60,26 +61,8 @@ fn auto_registered_types_cross_the_dlopen_boundary() {
     std::fs::write(&lib_rs, source).expect("append the register-types entry");
 
     std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed the fixture lock");
-    // Redirect against the compilation this test binary links, which is the
-    // one the editor's own build produces in production. A plain
-    // `-p jackdaw` selection leaves out dev-dependencies, and where those
-    // add features to a shared crate (`tempfile` turns on `rustix/default`
-    // on macOS) it resolves a second Bevy whose type ids differ from ours.
-    let manifest = SdkManifest::generate(
-        &workspace_root(),
-        &sdk,
-        &[
-            "-p",
-            "jackdaw",
-            "--features",
-            "dylib",
-            "--profile",
-            "dev",
-            "--test",
-            env!("CARGO_CRATE_NAME"),
-        ],
-    )
-    .expect("generate the SDK manifest");
+    let manifest =
+        SdkManifest::generate_dev(&workspace_root(), &sdk).expect("generate the SDK manifest");
     write_plan(&fixture_dir, &manifest, &sdk.deps, &map_path).expect("write the redirect plan");
 
     // Wrapper behavior is not part of cargo's fingerprint; build from

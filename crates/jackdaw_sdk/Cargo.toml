@@ -48,5 +48,12 @@ jackdaw_runtime = { workspace = true, features = [
 # `rand` dependency enables, so the SDK build already carries them.
 rand = { version = "0.10", features = ["std_rng", "thread_rng"] }
 
+# `rustix` reaches Bevy through `async-io` without its default feature on
+# macOS, and anything depending on `tempfile` turns that feature on, which
+# resolves a second Bevy with different type ids. Enable it here so the SDK
+# already matches.
+[target.'cfg(unix)'.dependencies]
+rustix = "1"
+
 [lints]
 workspace = true
