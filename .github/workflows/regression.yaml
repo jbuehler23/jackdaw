@@ -5,6 +5,8 @@ on:
     - cron: "0 6 * * *"
     # Sundays: the install journey on Windows and macOS.
     - cron: "0 8 * * 0"
+  push:
+    tags: ["v*-rc.*"]
   workflow_dispatch: {}
 
 concurrency:
@@ -34,11 +36,11 @@ jobs:
       platforms: '["windows-latest", "macos-latest"]'
 
   # The tiers that do not need the SDK, on the platforms we ship bundles for.
-  # This is where platform-specific path handling gets covered. On demand only:
-  # a cold Windows or macOS graph outlasts a scheduled run.
+  # This is where platform-specific path handling gets covered. On demand and
+  # on release-candidate tags, not on a schedule: each leg takes about two hours.
   cross-platform:
     name: Fast + integration (${{ matrix.os }})
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
