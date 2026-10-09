@@ -45,30 +45,23 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 
 ## Usage
 
-Install cmake, via package manager, or VisualStudio on Windows
-
-Download a signed release bundle, or install all required executables from
-source:
+Download an archive for your platform from
+[Releases](https://github.com/jbuehler23/jackdaw/releases), or install with
+Cargo:
 
 ```sh
-cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
+cargo install jackdaw --locked
 ```
 
-Any stable Rust from 1.95 on builds the editor. Extensions build with the
-same release that built the editor, which Jackdaw installs through rustup
-when it first needs it. The build needs about 10 GB of memory at Cargo's
-default parallelism; on a smaller machine add `--jobs 2`.
+Either way you need rustup, cmake, and a C/C++ toolchain; `jd doctor` checks
+them. The [installation guide](https://jbuehler23.github.io/jackdaw/getting-started/installation.html)
+covers each OS, and
+[Troubleshooting](https://jbuehler23.github.io/jackdaw/getting-started/troubleshooting.html)
+covers common problems.
 
-Take the release bundle if you can. It ships the prebuilt SDK, so you can
-create a project straight away; `cargo install` builds that SDK first,
-which is about half an hour, once per Jackdaw version. Either way your
-project's own first build is around nine minutes, because it compiles Bevy
-like any other Bevy project. Rebuilds after that are 1 to 4 seconds.
-
-This installs `jackdaw`, `jd`, and
-`jackdaw-rustc-wrapper`. Open Jackdaw and use **New Game** or **Import Bevy
-Project**; the import preview shows every proposed change before applying it.
-The same flows are available from the terminal:
+Open Jackdaw and use **New Game** or **Import Bevy Project**; the import
+preview shows every proposed change before applying it. The same flows are
+available from the terminal:
 
 ```sh
 jd new my-game && jd open my-game   # create
@@ -78,8 +71,9 @@ jd doctor --project /path/to/game   # why isn't this working?
 jd upgrade /path/to/game --apply    # after a Jackdaw update
 ```
 
-Import never edits your Cargo manifest, lockfile, toolchain, or `target/`, so
-`cargo run` keeps behaving exactly as it did.
+Import adds `jackdaw_runtime` to your manifest and wires its plugin in, and
+never edits your lockfile, toolchain, or `target/`.
+
 <img width="943" height="1018" alt="image" src="https://github.com/user-attachments/assets/3bda18cc-9cad-4d2c-b976-ca2e6e454314" />
 
 Jackdaw is a standalone editor. Game applications depend only on

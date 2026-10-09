@@ -21,17 +21,61 @@ library plugin. A common bin-only `App::new()` program is converted into
 `src/main.rs.bak`. Unsupported source shapes receive a library stub and a
 clear manual-move note.
 
-The same preview wires in the runtime the editor talks to: it adds
-`jackdaw_runtime` with the `physics` and `pie` features to the game package's
-`Cargo.toml` (or adds `pie` to an existing declaration), adds
-`jackdaw_runtime::JackdawPlugin` in the game plugin's `build`, and passes
-`DefaultPlugins` through `jackdaw_runtime::maybe_windowless` in `main.rs`.
-Component discovery and Play need all four. The manifest is edited in place,
-keeping its comments and layout. When a source edit is ambiguous, the preview
-names the exact lines to add instead, and `jd doctor` reports any piece that
-is still missing. Running the import again finds nothing to do.
-
 Jackdaw never edits the lockfile, toolchain, or ordinary `target/`.
+
+## Runtime wiring
+
+The same preview wires in the runtime the editor talks to. Component
+discovery and Play need all three pieces:
+
+1. `jackdaw_runtime` in the game package's `[dependencies]`, with the
+   `physics` and `pie` features. An existing plain declaration only gains
+   `pie`. The manifest is edited in place, keeping its comments and layout.
+2. `app.add_plugins(jackdaw_runtime::JackdawPlugin)` in the game plugin's
+   `build`.
+3. `DefaultPlugins` passed through `jackdaw_runtime::maybe_windowless` in
+   `src/main.rs`, so Play can show the game inside the editor.
+
+Each piece already present is left alone, so running the import again finds
+nothing to do.
+
+### When import leaves it to you
+
+Import does not edit anything it cannot change safely. It lists the step as a
+`note:` in the preview instead, and `jd doctor --project` reports it as
+`[fail]` until it is done:
+
+- `jackdaw_runtime` declared as an optional, renamed, or target-specific
+  dependency. Import leaves the manifest and your sources alone. Make it a
+  plain `[dependencies]` entry and run `jd import` again.
+- No single plugin to edit: more than one `impl Plugin` for the game plugin,
+  or a `build` it cannot edit.
+- A `main.rs` without an `App::new()...run()` chain that adds `DefaultPlugins`
+  itself.
+- A project on another Bevy minor, imported with `--allow-bevy-mismatch`.
+
+The manual steps:
+
+```bash
+cargo add jackdaw_runtime@0.19 --features physics,pie
+```
+
+```rust
+// in your game plugin
+fn build(&self, app: &mut App) {
+    app.add_plugins(jackdaw_runtime::JackdawPlugin);
+}
+```
+
+```rust
+// in src/main.rs
+let default_plugins = jackdaw_runtime::maybe_windowless(DefaultPlugins);
+App::new().add_plugins(default_plugins)
+```
+
+If the game builds its `App` somewhere other than `src/main.rs`, pass
+`DefaultPlugins` through `maybe_windowless` there; `jd doctor` then reports
+embedded Play as `[warn] not checked`.
 
 ## Cargo workspaces
 

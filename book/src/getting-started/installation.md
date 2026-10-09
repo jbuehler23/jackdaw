@@ -1,100 +1,134 @@
 # Installation
 
-Jackdaw supports a signed precompiled release, a source checkout, and Cargo
-installation. All three provide the GUI, `jd`, the rustc wrapper, project
+Jackdaw supports a precompiled release, a Cargo installation, and a source
+checkout. All three provide the GUI, `jd`, the rustc wrapper, project
 scaffolding, and import.
+
+Jackdaw versions track Bevy minors: Jackdaw 0.19 targets Bevy 0.19, and so do
+the `jackdaw_*` crates your project depends on.
+
+## Which one to use
+
+|                         | Extension SDK                           |
+| ----------------------- | --------------------------------------- |
+| **Precompiled release** | ships prebuilt                          |
+| `cargo install`         | built on demand, only for extensions    |
+| Source checkout         | built from the checkout, for extensions |
+
+Take the release archive if one exists for your platform. Games never need
+the SDK; see [The extension SDK](#the-extension-sdk).
 
 ## Prerequisites
 
-Install rustup and Cargo. On Linux, install Bevy's system dependencies:
+Every install path needs these, because your game compiles on your machine.
+`jd doctor` checks each one and prints the fix for anything missing.
+
+### Linux
+
+- rustup and Cargo, from <https://rustup.rs>.
+- cmake.
+- A C and C++ compiler: `build-essential` (Debian, Ubuntu), `base-devel`
+  (Arch) or `gcc-c++` (Fedora).
+- pkg-config and Bevy's system libraries: the alsa, udev, wayland and x11
+  development packages. See Bevy's
+  [Linux dependencies](https://github.com/bevyengine/bevy/blob/main/docs/linux_dependencies.md)
+  for your distribution. On Debian or Ubuntu:
 
 ```bash
-sudo apt install libasound2-dev libudev-dev libwayland-dev
+sudo apt install build-essential cmake pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev
 ```
 
-Check an installation with:
+### Windows
+
+- rustup and Cargo, from <https://rustup.rs>.
+- Visual Studio Build Tools with the **Desktop development with C++**
+  workload, which provides the linker Rust needs:
+  <https://visualstudio.microsoft.com/visual-cpp-build-tools/>.
+- cmake, from <https://cmake.org/download>. Choose the option that adds it to
+  PATH.
+
+If a MinGW `gcc` is also on PATH, cmake may pick it over MSVC and fail to link
+(LNK1143). Set `CMAKE_GENERATOR="Visual Studio 17 2022"` before building.
+
+### macOS
+
+- rustup and Cargo, from <https://rustup.rs>.
+- The Xcode Command Line Tools: `xcode-select --install`.
+- cmake: `brew install cmake`, or from <https://cmake.org/download>.
+
+### Check
 
 ```bash
 jd doctor
 ```
 
-## Which one to use
-
-All three give you the editor, `jd`, and project scaffolding. Games build
-as ordinary cargo binaries against their own Bevy dependencies; the
-editor asks that binary for its type schema and launches it for Play.
-They differ mainly in whether the **extension SDK** (used for in-process
-editor extensions) is already built.
-
-|                         | Extension SDK                     | First game build   |
-| ----------------------- | --------------------------------- | ------------------ |
-| **Precompiled release** | already built, nothing to do      | ~9 min             |
-| `cargo install`         | 20-30 min, only for extensions    | ~9 min             |
-| Source checkout         | build the editor, then its SDK    | ~9 min             |
-
-The extension SDK is a full compilation of Bevy and the Jackdaw API that
-native editor extensions link against. A release archive ships it
-prebuilt. The other two compile it on your machine, once per Jackdaw
-version, when you first work on an extension. Games never wait for it.
-
-Your game still compiles its own copy of Bevy the first time you build
-it, around nine minutes, and every project pays that separately. The
-editor learns your component types from that binary's schema extract, not
-by linking the game into the editor process. After the first build,
-rebuilds are 1 to 4 seconds, which is the number you actually live with.
-
-Whichever you use, `jd doctor` reports which SDK is in play:
-
-```
-[ ok ] SDK: release bundle (/opt/jackdaw/sdk/x86_64-unknown-linux-gnu/libjackdaw_sdk.so)
-```
+See [Troubleshooting](troubleshooting.md) for how to read the report.
 
 ## Precompiled release
 
-Tagged releases provide checksummed, provenance-attested archives for
-x86-64 Linux, x86-64 Windows, and Apple Silicon macOS. Extract the archive
-and run `jackdaw`. Intel macOS users currently build from source.
+[Tagged releases](https://github.com/jbuehler23/jackdaw/releases) provide
+archives for x86-64 Linux, x86-64 Windows, and Apple Silicon macOS, each with
+a `.sha256` checksum and a build provenance attestation. Intel macOS users
+install with Cargo or from source.
 
-The Linux archive is built on Ubuntu 24.04 and needs glibc 2.39 or newer.
-On older distributions, use `cargo install` or a source checkout instead.
+Each archive holds one folder with `jackdaw`, `jd`, `jackdaw-rustc-wrapper`,
+their runtime libraries, and the prebuilt SDK. Keep the folder together, and
+add it to your `PATH` to use `jd` from a terminal.
 
-The archive includes its pinned SDK, so nothing of Jackdaw is compiled on
-your machine. Extract it and you can create a project immediately. That
-project's first build still takes around nine minutes, since it compiles
-its own Bevy; see [Which one to use](#which-one-to-use).
+To check an archive's provenance:
+
+```bash
+gh attestation verify <archive> -R jbuehler23/jackdaw
+```
+
+The binaries are not code-signed yet, so Windows and macOS ask before running
+them.
+
+### Linux
+
+Download `jackdaw-x86_64-unknown-linux-gnu.tar.zst`, then:
+
+```bash
+tar -xf jackdaw-x86_64-unknown-linux-gnu.tar.zst
+./jackdaw-x86_64-unknown-linux-gnu/jackdaw
+```
+
+The archive is built on Ubuntu 24.04 and needs glibc 2.39 or newer. On older
+distributions, use `cargo install` or a source checkout instead.
+
+### Windows
+
+Download `jackdaw-x86_64-pc-windows-msvc.zip`, extract it, and run
+`jackdaw.exe` from the extracted folder. SmartScreen shows "Windows protected
+your PC" the first time: choose **More info**, then **Run anyway**.
+
+### macOS
+
+Download `jackdaw-aarch64-apple-darwin.tar.zst`, extract it, and clear the
+quarantine flag macOS puts on downloaded files, which otherwise blocks the
+unsigned binaries and their libraries:
+
+```bash
+tar -xf jackdaw-aarch64-apple-darwin.tar.zst
+xattr -dr com.apple.quarantine jackdaw-aarch64-apple-darwin
+./jackdaw-aarch64-apple-darwin/jackdaw
+```
 
 ## Cargo install
 
 ```bash
-cargo install --git https://github.com/jbuehler23/jackdaw jackdaw --locked
+cargo install jackdaw --locked
 ```
 
-Any stable Rust from 1.95 on builds the editor. The editor remembers the
-release that built it: extensions and the SDK build with that same release,
-and Jackdaw installs it through rustup, without changing your default, the
-first time an extension needs it. `jd doctor` reports it under
-`editor toolchain`.
+Any stable Rust from 1.95 on builds the editor. The install provides
+`jackdaw`, `jd`, and `jackdaw-rustc-wrapper`; do not install workspace
+packages individually.
 
-The build needs about 10 GB of memory with Cargo's default of one job per
-CPU thread on a 12-thread machine, and about 7 GB with `--jobs 4` or fewer.
-Most of it goes to the `jackdaw` crate itself and to the C++ CSG library,
-which compiles all of its sources at once whatever the job count. With 8 GB
-of memory, close other programs and pass `--jobs 2`, or take the release
-archive.
+The build needs about 10 GB of memory at Cargo's default parallelism. With
+8 GB, close other programs and add `--jobs 2`, or take the release archive.
 
-The install provides `jackdaw`, `jd`, and
-`jackdaw-rustc-wrapper`; do not install workspace packages individually.
-
-This path has no prebuilt extension SDK. Games do not need one; only
-extension projects build against it. The editor builds it in the
-background the first time you open an extension project, or when you press
-**Build SDK** on the launcher. That takes 20-30 minutes on a typical
-machine, once per Jackdaw version. `jd setup` does the same from a
-terminal. Cargo installs are self-contained; use a
-precompiled release to load signed native extensions.
-
-Jackdaw versions track Bevy minors: Jackdaw 0.19 targets Bevy 0.19, and so do
-the `jackdaw_*` crates your project depends on.
+Cargo installs are self-contained; use a precompiled release to load signed
+native extensions.
 
 ## Source checkout
 
@@ -104,22 +138,50 @@ cd jackdaw
 cargo run --bin jackdaw
 ```
 
-A debug build of the editor needs more memory than an install: over 12 GB
-with 12 jobs and over 10 GB with 4, nearly all of it while the `jackdaw`
-crate compiles. On a 16 GB machine, build with `--jobs 4`, or set `jobs = 4`
-under `[build]` in `~/.cargo/config.toml`.
+The checkout pins its compiler in `rust-toolchain.toml`. A debug build of the
+editor needs more memory than an install; on a 16 GB machine, build with
+`--jobs 4`, or set `jobs = 4` under `[build]` in `~/.cargo/config.toml`.
 
 The checkout uses the SDK under its own `target/`, in preference to any
-prepared one, because editor extensions must link the SDK co-built with
-the editor running them. That also means `cargo clean` throws the SDK
-away. `jd doctor` reports which SDK is in play, so it is clear when a
-checkout's is the one being used.
+prepared one, because editor extensions must link the SDK co-built with the
+editor running them. That also means `cargo clean` throws the SDK away.
 
 To build an editor with live native extension loading, use the same
 shared-SDK mode as releases:
 
 ```bash
 cargo run --bin jackdaw --features dylib --target "$(rustc -vV | sed -n 's/host: //p')"
+```
+
+## The extension SDK
+
+The extension SDK is a full compilation of Bevy and the Jackdaw API that
+native editor extensions link against. Games do not use it: a game builds as
+an ordinary cargo binary against its own Bevy, and the editor reads its
+component types from that binary. A game's first build compiles Bevy, like
+any Bevy project.
+
+A release archive ships the SDK prebuilt. A Cargo install builds it the first
+time you open an extension project, or when you press **Build SDK** on the
+launcher. That takes 20-30 minutes on a typical machine, once per Jackdaw
+version. To do it from a terminal instead:
+
+```bash
+jd setup
+```
+
+The SDK builds with the same Rust release that built the editor. Jackdaw
+installs that release through rustup the first time it is needed, without
+changing your default; `jd doctor` names it under `editor toolchain`.
+
+A built SDK is cached in `jackdaw/sdk/` under the local data directory:
+`~/.local/share` on Linux, `~/Library/Application Support` on macOS, and
+`%LOCALAPPDATA%` on Windows. See
+[Where the SDK lives](../reference/configuration.md#where-the-sdk-lives).
+`jd doctor` reports which SDK is in play:
+
+```
+[ ok ] SDK: release bundle (/opt/jackdaw/sdk/x86_64-unknown-linux-gnu/libjackdaw_sdk.so)
 ```
 
 ## Create or import a project
@@ -136,16 +198,14 @@ jd import /path/to/existing-game --apply
 ```
 
 `jd import` previews exact file operations and changes nothing without
-`--apply`. Jackdaw keeps editor state and the extracted type schema in the
-project's gitignored `.jackdaw/` directory. Ordinary `cargo run` remains a
-normal game build and does not invoke Jackdaw.
+`--apply`; see [Migrating an Existing Project](migrating-an-existing-project.md).
+Jackdaw keeps editor state and the extracted type schema in the project's
+gitignored `.jackdaw/` directory. Ordinary `cargo run` remains a normal game
+build and does not invoke Jackdaw.
 
 `jd new` initialises a git repository, the way `cargo new` does, unless the
 destination already sits inside one or you pass `--no-git`.
 
-If anything looks wrong, `jd doctor` reports the build prerequisites, and
 `jd doctor --project <path>` adds the project's own setup state, including
-whether its dependencies resolve.
-
-After a Jackdaw update, `jd upgrade <path>` moves a project onto the new
-version.
+whether its dependencies resolve. After a Jackdaw update, `jd upgrade <path>`
+moves a project onto the new version.
