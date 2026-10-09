@@ -650,7 +650,7 @@ fn source_is_current(root: &Path, binary: &Path) -> bool {
 
 /// Whether nothing under `src/` and no `Cargo.toml` change is newer than
 /// `built`.
-fn source_unchanged_since(root: &Path, built: std::time::SystemTime) -> bool {
+pub(crate) fn source_unchanged_since(root: &Path, built: std::time::SystemTime) -> bool {
     let newest_source = newest_mtime(&root.join("src"))
         .into_iter()
         .chain(
@@ -1214,13 +1214,19 @@ fn prebuild_play_target(world: &mut World) {
     }
     // Run configs are loaded; this is the one-shot attempt regardless of outcome.
     world.resource_mut::<PiePrebuildState>().attempted = true;
+    let Some(root) = project_root(world) else {
+        return;
+    };
+    // Loading an extension built in an earlier session compiles nothing, so
+    // it does not wait on the pre-build setting.
+    if crate::extension_build::load_recorded_build(world, &root) {
+        info!("PIE: loading the extension's last build, which is up to date");
+        return;
+    }
     if !prebuild_wanted(world) {
         info!("PIE: pre-build disabled; the first Play will compile the game");
         return;
     }
-    let Some(root) = project_root(world) else {
-        return;
-    };
     if crate::extension_build::is_extension_project(world, &root, false) {
         info!("PIE: building the extension in the background to load it");
         crate::extension_build::start_extension_build(world, &root);

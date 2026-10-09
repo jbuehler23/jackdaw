@@ -77,12 +77,14 @@ enum Stage {
     Built { job: Job, dylib: PathBuf },
 }
 
-/// What a build is for: the project it builds, and whether it is the one
-/// retry after a library failed to load against the running SDK.
+/// What a build is for: the project it builds, whether it is the one
+/// retry after a library failed to load against the running SDK, and
+/// whether its library is an earlier session's build rather than a new one.
 #[derive(Clone)]
 struct Job {
     root: PathBuf,
     retry: bool,
+    recorded: bool,
 }
 
 /// Identifies one build's library by what a rebuild would change.
@@ -165,8 +167,41 @@ pub(crate) fn start_extension_build(world: &mut World, root: &Path) {
         Job {
             root: root.to_path_buf(),
             retry: false,
+            recorded: false,
         },
     );
+}
+
+/// Load the library the last build of the extension at `root` produced, when
+/// nothing in its source is newer, instead of building it again. Returns
+/// whether that library was queued for loading.
+pub(crate) fn load_recorded_build(world: &mut World, root: &Path) -> bool {
+    let Some(dylib) = jackdaw_project_build::last_built_dylib(&root.join(".jackdaw")) else {
+        return false;
+    };
+    let Ok(built) = std::fs::metadata(&dylib).and_then(|metadata| metadata.modified()) else {
+        return false;
+    };
+    if !crate::pie::source_unchanged_since(root, built) || !is_extension_project(world, root, false)
+    {
+        return false;
+    }
+    let Some(mut build) = world.get_resource_mut::<ExtensionBuild>() else {
+        return false;
+    };
+    if build.stage.job().is_some() {
+        return false;
+    }
+    build.finished_at = Some(built);
+    build.stage = Stage::Built {
+        job: Job {
+            root: root.to_path_buf(),
+            retry: false,
+            recorded: true,
+        },
+        dylib,
+    };
+    true
 }
 
 fn begin(world: &mut World, job: Job) {
@@ -396,6 +431,17 @@ fn load_built_extension(world: &mut World) {
             world.resource_mut::<ExtensionBuild>().loaded = stamp;
             report_ready(world);
         }
+        Err(error) if job.recorded => {
+            info!("The last extension build did not load, building it again: {error}");
+            begin(
+                world,
+                Job {
+                    root: job.root,
+                    retry: false,
+                    recorded: false,
+                },
+            );
+        }
         Err(error) if error.is_symbol_mismatch() && !job.retry => {
             warn!("Extension does not match the running SDK, rebuilding it clean: {error}");
             if let Some(cache) = build_cache_of(&job.root, &dylib) {
@@ -406,6 +452,7 @@ fn load_built_extension(world: &mut World) {
                 Job {
                     root: job.root,
                     retry: true,
+                    recorded: false,
                 },
             );
         }
@@ -477,6 +524,7 @@ mod tests {
         Job {
             root: root.to_path_buf(),
             retry: false,
+            recorded: false,
         }
     }
 
@@ -624,6 +672,64 @@ mod tests {
             world.resource::<BuildStatus>().state,
             BuildState::Ready { .. }
         ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An extension project at `dir` whose recorded build is a library written
+    /// after its source.
+    fn built_extension(dir: &Path) -> World {
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "").unwrap();
+        let source_time = SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.join("src/lib.rs"))
+            .unwrap()
+            .set_modified(source_time)
+            .unwrap();
+        let dylib = dir.join("libjackdaw_shim.so");
+        std::fs::write(&dylib, b"library").unwrap();
+        std::fs::create_dir_all(dir.join(".jackdaw")).unwrap();
+        std::fs::write(
+            dir.join(".jackdaw/last-extension-build"),
+            dylib.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        let mut world = editor_world(dir);
+        world.resource_mut::<ExtensionBuild>().kind = Some((dir.to_path_buf(), true));
+        world
+    }
+
+    #[test]
+    fn reopening_an_extension_loads_its_up_to_date_build_without_building() {
+        let dir = scratch("recorded");
+        let mut world = built_extension(&dir);
+
+        assert!(load_recorded_build(&mut world, &dir));
+
+        let build = world.resource::<ExtensionBuild>();
+        assert!(matches!(
+            &build.stage,
+            Stage::Built { job, dylib } if job.recorded && *dylib == dir.join("libjackdaw_shim.so")
+        ));
+        assert!(build.finished_at().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recorded_build_older_than_its_source_is_not_loaded() {
+        let dir = scratch("stale-record");
+        let mut world = built_extension(&dir);
+        std::fs::write(dir.join("src/lib.rs"), "pub struct Changed;\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(dir.join("src/lib.rs"))
+            .unwrap()
+            .set_modified(SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+
+        assert!(!load_recorded_build(&mut world, &dir));
+        assert!(world.resource::<ExtensionBuild>().stage.job().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
