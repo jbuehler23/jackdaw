@@ -15,7 +15,8 @@ the `jackdaw_*` crates your project depends on.
 | `cargo install`         | built on demand, only for extensions    |
 | Source checkout         | built from the checkout, for extensions |
 
-Take the release archive if one exists for your platform. Games never need
+Take a precompiled release if one exists for your platform; the
+[installer](#install-script) is the quickest way to get one. Games never need
 the SDK; see [The extension SDK](#the-extension-sdk).
 
 ## Prerequisites
@@ -64,6 +65,86 @@ jd doctor
 
 See [Troubleshooting](troubleshooting.md) for how to read the report.
 
+## Install script
+
+The install script downloads the release archive for your platform, checks
+it against its `.sha256`, and installs it for your user, without admin
+rights. It supports x86-64 Linux, Apple Silicon macOS and x86-64 Windows.
+
+Linux and macOS:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jbuehler23/jackdaw/releases/latest/download/install.sh | sh
+```
+
+Windows (PowerShell 5.1 or 7):
+
+```powershell
+irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1 | iex
+```
+
+Then open a new terminal and run `jackdaw`, or `jd doctor` to check the
+[prerequisites](#prerequisites).
+
+### What it changes
+
+|                  | Linux, macOS                                         | Windows                                     |
+| ---------------- | ---------------------------------------------------- | ------------------------------------------- |
+| Release folders  | `~/.local/share/jackdaw/install/<version>/`          | `%LOCALAPPDATA%\jackdaw\install\<version>\` |
+| Active version   | `current` symlink beside them                        | `current` directory junction beside them    |
+| Commands         | `jackdaw` and `jd` in `~/.local/bin`                 | `...\install\current` on the user `PATH`     |
+| `PATH`           | a line in `~/.profile`, `~/.bashrc`, `~/.zshenv` and a fish `conf.d` file, if `~/.local/bin` is not already on `PATH` | the user `PATH` in the registry |
+
+Each release folder is a complete archive folder, kept whole: the editor
+finds its runtime libraries and SDK next to its own executable. On Linux
+`~/.local/bin` holds symlinks. On macOS it holds small scripts that start
+the real binary, because macOS reports a program started through a symlink
+by the link's path, where there is no SDK.
+
+`XDG_DATA_HOME` moves the Linux and macOS install along with it. The
+installer does not touch your projects, settings, extensions or SDK cache.
+
+### Options
+
+Pass options to the piped script after `sh -s --`, for example:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jbuehler23/jackdaw/releases/latest/download/install.sh | sh -s -- --no-modify-path
+```
+
+| `install.sh`        | `install.ps1`    | Environment                  | Effect                                       |
+| ------------------- | ---------------- | ---------------------------- | -------------------------------------------- |
+| `--version <v>`     | `-Version <v>`   | `JACKDAW_VERSION`            | Install release `v<v>`, such as `0.19.0-rc.9` |
+| `--prefix <dir>`    | `-Prefix <dir>`  | `JACKDAW_INSTALL_DIR`        | Keep release folders in `<dir>`              |
+| `--bin-dir <dir>`   |                  | `JACKDAW_BIN_DIR`            | Put the commands in `<dir>`                   |
+| `--no-modify-path`  | `-NoModifyPath`  | `JACKDAW_NO_MODIFY_PATH=1`   | Leave shell files and `PATH` alone           |
+| `--yes`             |                  |                              | Do not ask before installing                 |
+| `--uninstall`       | `-Uninstall`     |                              | Remove what the installer added              |
+
+`install.sh` asks for confirmation only when run from a file in a terminal;
+piped, it does not ask. `iex` cannot pass parameters, so on Windows run the
+script as a script block instead:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1))) -Version 0.19.0-rc.9
+```
+
+`releases/latest` is the newest final release. Release candidates carry the
+installers too: take them from the release's own tag, for example
+`https://github.com/jbuehler23/jackdaw/releases/download/v0.19.0-rc.9/install.sh`,
+and pass `--version`.
+
+### Upgrade, roll back and uninstall
+
+Run the installer again to upgrade. It installs the new version beside the
+old one, switches `current` to it, and keeps the version it replaced for
+rollback; older versions are removed. To roll back, run it with
+`--version <previous>`. On Windows, close Jackdaw before upgrading.
+
+To uninstall, run it with `--uninstall` (`-Uninstall` on Windows), with the
+same `--prefix` if you set one. It removes the release folders, the commands
+and the `PATH` lines it added.
+
 ## Precompiled release
 
 [Tagged releases](https://github.com/jbuehler23/jackdaw/releases) provide
@@ -71,7 +152,8 @@ archives for x86-64 Linux, x86-64 Windows, and Apple Silicon macOS, each with
 a `.sha256` checksum and a build provenance attestation. Intel macOS users
 install with Cargo or from source.
 
-Each archive holds one folder with `jackdaw`, `jd`, `jackdaw-rustc-wrapper`,
+To install an archive by hand instead of with the
+[install script](#install-script), read on. Each archive holds one folder with `jackdaw`, `jd`, `jackdaw-rustc-wrapper`,
 their runtime libraries, and the prebuilt SDK. Keep the folder together, and
 add it to your `PATH` to use `jd` from a terminal.
 

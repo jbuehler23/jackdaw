@@ -590,6 +590,172 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  # The one-line installers, run against the archives this run built, served
+  # from a local web server in place of the release: a piped install
+  # configured by environment, an upgrade, a re-run and an uninstall, with
+  # the commands checked from a new shell. Nothing waits for it.
+  installers:
+    name: Installer - ${{ matrix.triple }}
+    needs: [plan, binaries]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.warm != 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
+    steps:
+      - name: Checkout the installers
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Download the archive
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-${{ matrix.triple }}
+          path: ${{ runner.temp }}/dist
+
+      - name: Install, upgrade and uninstall (install.sh)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ASSET: jackdaw-${{ matrix.triple }}.${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/dist"
+          cp scripts/install.sh "$dist/"
+          mkdir "$dist/tampered"
+          cp "$dist/$ASSET" "$dist/tampered/"
+          printf 'SHA2-256(%s)= %064d\n' "$ASSET" 0 > "$dist/tampered/$ASSET.sha256"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$dist" > "$RUNNER_TEMP/http.log" 2>&1 &
+          for _ in $(seq 30); do curl -fs -o /dev/null http://127.0.0.1:8765/ && break; sleep 1; done
+          base=http://127.0.0.1:8765
+          home="$RUNNER_TEMP/home dir"
+          mkdir -p "$home"
+          prefix="$home/.local/share/jackdaw/install"
+          shell=bash
+          if [ "$RUNNER_OS" = macOS ]; then shell=zsh; fi
+          clean() { env -i HOME="$home" PATH=/usr/bin:/bin:/usr/sbin:/sbin "$@"; }
+          # jd doctor needs a Rust toolchain before it reports the SDK, so it
+          # gets the runner's rustup install alongside the clean home.
+          toolchain="${CARGO_HOME:-$HOME/.cargo}"
+          with_rust() { env -i HOME="$home" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="$toolchain" PATH="$toolchain/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$@"; }
+          fail() { echo "::error::$*"; exit 1; }
+
+          echo "--- piped install, configured by environment"
+          curl -LsSf "$base/install.sh" | clean JACKDAW_VERSION=0.0.0-ci.1 JACKDAW_DOWNLOAD_BASE="$base" sh
+          clean "$shell" -lc 'jackdaw --version && jd --version'
+          doctor=$(with_rust "$shell" -lc 'jd doctor' 2>&1 || true)
+          echo "$doctor"
+          echo "$doctor" | grep -F "SDK: release bundle ($prefix/0.0.0-ci.1/sdk/" || fail "jd did not find the installed SDK"
+
+          echo "--- upgrade"
+          clean sh scripts/install.sh --version 0.0.0-ci.2 --base-url "$base" --yes
+          [ "$(readlink "$prefix/current")" = 0.0.0-ci.2 ] || fail "current is not the upgrade"
+          [ "$(readlink "$prefix/previous")" = 0.0.0-ci.1 ] || fail "the previous version was not kept"
+
+          echo "--- re-run"
+          clean sh scripts/install.sh --version 0.0.0-ci.2 --base-url "$base"
+          [ "$(readlink "$prefix/previous")" = 0.0.0-ci.1 ] || fail "a re-run dropped the previous version"
+          for f in jackdaw jd jackdaw-rustc-wrapper toolchain.txt Cargo.lock sdk/manifest.txt "sdk/${{ matrix.triple }}"; do
+            [ -e "$prefix/current/$f" ] || fail "installed folder is missing $f"
+          done
+          for f in "$home/.profile" "$home/.zshenv"; do
+            if [ -f "$f" ] && [ "$(grep -c jackdaw-installer "$f")" -ne 1 ]; then fail "$f has a duplicate PATH line"; fi
+          done
+          clean "$shell" -lc 'jd --version'
+
+          echo "--- uninstall"
+          clean sh scripts/install.sh --uninstall
+          [ ! -e "$prefix" ] || fail "$prefix is still there"
+          [ ! -e "$home/.local/bin/jd" ] || fail "the jd launcher is still there"
+          ! grep -rs jackdaw-installer "$home/.profile" "$home/.zshenv" "$home/.bashrc" || fail "a PATH line is still there"
+          ! clean "$shell" -lc 'command -v jd' || fail "jd still resolves"
+
+          echo "--- checksum mismatch"
+          if clean sh scripts/install.sh --version 0.0.0-ci.3 --base-url "$base/tampered"; then fail "a tampered archive installed"; fi
+          [ ! -e "$prefix" ] || fail "a failed install left $prefix behind"
+
+      - name: Install, upgrade and uninstall (install.ps1)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ASSET: jackdaw-${{ matrix.triple }}.${{ matrix.archive }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $env:RUNNER_TEMP 'dist'
+          Copy-Item scripts/install.ps1 $dist
+          New-Item -ItemType Directory (Join-Path $dist 'tampered') | Out-Null
+          Copy-Item (Join-Path $dist $env:ASSET) (Join-Path $dist 'tampered')
+          Set-Content (Join-Path $dist "tampered\$env:ASSET.sha256") "SHA2-256($env:ASSET)= $('0' * 64)"
+          Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', "`"$dist`"" -NoNewWindow
+          foreach ($i in 1..30) { try { Invoke-WebRequest http://127.0.0.1:8765/ -UseBasicParsing | Out-Null; break } catch { Start-Sleep 1 } }
+          $base = 'http://127.0.0.1:8765'
+          $prefix = Join-Path $env:LOCALAPPDATA 'jackdaw\install'
+          $current = Join-Path $prefix 'current'
+          function Fail([string]$Message) { throw $Message }
+          function Get-RawUserPath {
+            (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          }
+          function Invoke-Fresh([string]$Command) {
+            $saved = $env:Path
+            $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+            try { cmd /c "$Command 2>&1" } finally { $env:Path = $saved }
+          }
+
+          # An existing unexpanded entry must survive every edit untouched.
+          $sentinel = '%USERPROFILE%\jackdaw-ci-sentinel'
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+          $key.SetValue('Path', ((@($sentinel) + @((Get-RawUserPath) -split ';' | Where-Object { $_ })) -join ';'), 'ExpandString')
+          $key.Close()
+
+          Write-Host '--- Windows PowerShell, piped through iex, configured by environment'
+          $env:JACKDAW_VERSION = '0.0.0-ci.1'
+          $env:JACKDAW_DOWNLOAD_BASE = $base
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "irm $base/install.ps1 | iex"
+          if ($LASTEXITCODE -ne 0) { Fail 'the piped install failed' }
+          Remove-Item Env:JACKDAW_VERSION, Env:JACKDAW_DOWNLOAD_BASE
+          Invoke-Fresh 'where jackdaw && jd --version'
+          if ($LASTEXITCODE -ne 0) { Fail 'jackdaw is not on PATH in a new shell' }
+          # The editor is a GUI-subsystem program, so wait on it explicitly.
+          $editor = Start-Process (Join-Path $current 'jackdaw.exe') -ArgumentList '--version' -Wait -PassThru -NoNewWindow
+          if ($editor.ExitCode -ne 0) { Fail "jackdaw --version exited with $($editor.ExitCode)" }
+          $doctor = Invoke-Fresh 'jd doctor' | Out-String
+          Write-Host $doctor
+          if ($doctor -notmatch 'SDK: release bundle \(.*\\jackdaw\\install\\current\\sdk\\') { Fail 'jd did not find the installed SDK' }
+
+          Write-Host '--- upgrade (PowerShell 7, parameters)'
+          pwsh -NoProfile -File scripts/install.ps1 -Version 0.0.0-ci.2 -BaseUrl $base
+          if ($LASTEXITCODE -ne 0) { Fail 'the upgrade failed' }
+          if ((Split-Path -Leaf @((Get-Item $current).Target)[0]) -ne '0.0.0-ci.2') { Fail 'current is not the upgrade' }
+          if ((Get-Content (Join-Path $prefix 'previous') -Raw).Trim() -ne '0.0.0-ci.1') { Fail 'the previous version was not kept' }
+
+          Write-Host '--- re-run (Windows PowerShell)'
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 -Version 0.0.0-ci.2 -BaseUrl $base
+          if ($LASTEXITCODE -ne 0) { Fail 'the re-run failed' }
+          foreach ($f in 'jackdaw.exe', 'jd.exe', 'jackdaw-rustc-wrapper.exe', 'toolchain.txt', 'Cargo.lock', 'sdk\manifest.txt', 'sdk\${{ matrix.triple }}') {
+            if (-not (Test-Path (Join-Path $current $f))) { Fail "installed folder is missing $f" }
+          }
+          $entries = @((Get-RawUserPath) -split ';' | Where-Object { $_ -ieq $current })
+          if ($entries.Count -ne 1) { Fail "the user PATH holds $($entries.Count) copies of $current" }
+          if ((Get-RawUserPath) -notlike "*$sentinel*") { Fail 'an existing PATH entry was changed' }
+          Invoke-Fresh 'jd --version'
+
+          Write-Host '--- uninstall'
+          pwsh -NoProfile -File scripts/install.ps1 -Uninstall
+          if ($LASTEXITCODE -ne 0) { Fail 'the uninstall failed' }
+          if (Test-Path $prefix) { Fail "$prefix is still there" }
+          if ((Get-RawUserPath) -like "*$current*") { Fail 'the PATH entry is still there' }
+          if ((Get-RawUserPath) -notlike "*$sentinel*") { Fail 'an existing PATH entry was removed' }
+          if ((Get-Item HKCU:\Environment).GetValueKind('Path') -ne 'ExpandString') { Fail 'the PATH value changed type' }
+
+          Write-Host '--- checksum mismatch'
+          pwsh -NoProfile -File scripts/install.ps1 -Version 0.0.0-ci.3 -BaseUrl "$base/tampered"
+          if ($LASTEXITCODE -eq 0) { Fail 'a tampered archive installed' }
+          if (Test-Path $prefix) { Fail "a failed install left $prefix behind" }
+          $global:LASTEXITCODE = 0
+
   # One release per tag, created once every bundle is built and, for a final
   # tag, once its crates are on crates.io. Pre-release tags never become the
   # latest release.
@@ -604,6 +770,11 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - name: Checkout the installers
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
       - name: Download the archives
         uses: actions/download-artifact@v4
         with:
@@ -611,12 +782,19 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Attached to every release, so /releases/latest/download/install.sh
+      # names the newest final release's installer.
+      - name: Add the installers
+        run: cp scripts/install.sh scripts/install.ps1 dist/
+
       - name: Attest the archives
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             dist/*.tar.zst
             dist/*.zip
+            dist/install.sh
+            dist/install.ps1
 
       - name: Create the release
         uses: softprops/action-gh-release@v2
