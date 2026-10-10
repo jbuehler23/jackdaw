@@ -131,17 +131,37 @@ fn manifest_predates_sdk(sdk: &SdkPaths) -> bool {
 /// A warning when a source checkout's SDK predates the editor using it.
 ///
 /// Only for that origin: a bundle ships both together, and a prepared
-/// cache is rebuilt whenever the recipe changes. In a checkout they are
-/// separate build commands, and `cargo run` does not touch the triple
+/// cache is rebuilt whenever the recipe changes. In a checkout they can
+/// be separate build commands, and `cargo run` does not touch the triple
 /// dir the SDK lives in, so rebuilding the editor alone leaves the two
 /// describing different code.
 fn sdk_older_than_editor(sdk: &SdkPaths) -> Option<String> {
+    sdk_older_than(sdk, &std::env::current_exe().ok()?)
+}
+
+/// [`sdk_older_than_editor`] for the editor executable at `editor`.
+///
+/// An editor in the SDK's own directory came from the same `--target`
+/// invocation, which links the editor last, so it is newer by seconds
+/// with nothing wrong and the two timestamps say nothing.
+fn sdk_older_than(sdk: &SdkPaths, editor: &Path) -> Option<String> {
     if sdk.origin != crate::sdk_paths::SdkOrigin::DevCheckout {
+        return None;
+    }
+    let same_dir = |a: &Path, b: &Path| {
+        a.canonicalize()
+            .ok()
+            .zip(b.canonicalize().ok())
+            .map_or(a == b, |(a, b)| a == b)
+    };
+    if let (Some(sdk_dir), Some(editor_dir)) = (sdk.dylib.parent(), editor.parent())
+        && same_dir(sdk_dir, editor_dir)
+    {
         return None;
     }
     let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
     let sdk_built = modified(&sdk.dylib)?;
-    let editor_built = modified(&std::env::current_exe().ok()?)?;
+    let editor_built = modified(editor)?;
     if sdk_built >= editor_built {
         return None;
     }
@@ -198,7 +218,7 @@ pub fn build_project_dylib(
         return Err(ProjectBuildError::UnusableSdk { problems });
     }
 
-    // A checkout builds the editor and its SDK with separate commands
+    // A checkout can build the editor and its SDK with separate commands
     // (`cargo run` writes neither into the triple dir), so they drift
     // apart silently. The extension links the SDK, so an SDK older than
     // the editor running it fails linkage verification after a full
@@ -657,6 +677,50 @@ mod tests {
         let spec = shim_spec_for_project(&dir).expect("spec");
         assert!(spec.extension_type.is_none());
         assert!(!shim::lib_source_for_test(&spec).contains("jackdaw_extension_ctor"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Write an SDK library and an editor executable an hour newer, the
+    /// editor under `editor_dir` relative to the workspace's `target/`.
+    fn sdk_and_newer_editor(name: &str, editor_dir: &[&str]) -> (PathBuf, SdkPaths, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("jackdaw_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sdk = SdkPaths::for_workspace(&dir);
+        std::fs::create_dir_all(sdk.dylib.parent().unwrap()).unwrap();
+        std::fs::write(&sdk.dylib, b"sdk").unwrap();
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&sdk.dylib)
+            .unwrap()
+            .set_modified(hour_ago)
+            .unwrap();
+        let editor_dir = editor_dir
+            .iter()
+            .fold(dir.join("target"), |path, part| path.join(part));
+        std::fs::create_dir_all(&editor_dir).unwrap();
+        let editor = editor_dir.join("jackdaw");
+        std::fs::write(&editor, b"editor").unwrap();
+        (dir, sdk, editor)
+    }
+
+    /// `cargo run` rebuilds the editor into `target/debug` and leaves the
+    /// SDK in the triple dir as it was, so an older SDK there is stale.
+    #[test]
+    fn an_sdk_older_than_a_separately_built_editor_warns() {
+        let (dir, sdk, editor) = sdk_and_newer_editor("sdk_age_separate", &["debug"]);
+        assert!(sdk_older_than(&sdk, &editor).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One `--target` build links the editor seconds after the SDK beside
+    /// it, which is not staleness.
+    #[test]
+    fn an_sdk_built_with_the_editor_does_not_warn() {
+        let triple = host_triple();
+        let (dir, sdk, editor) = sdk_and_newer_editor("sdk_age_cobuilt", &[triple, "debug"]);
+        assert_eq!(sdk.dylib.parent(), editor.parent());
+        assert!(sdk_older_than(&sdk, &editor).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
