@@ -2,11 +2,8 @@
 //! entries, and reach the model's `.meta` only on Save or Apply.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
-use jackdaw::progress::EditorProgress;
-use jackdaw::scenes::load_progress::SCENE_LOAD;
 use jackdaw_api::prelude::*;
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::model_import::{
@@ -72,15 +69,7 @@ fn project() -> (App, tempfile::TempDir) {
         .call()
         .expect("scene.open dispatches")
         .assert_finished();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while app
-        .world()
-        .resource::<EditorProgress>()
-        .is_running(SCENE_LOAD)
-        && Instant::now() < deadline
-    {
-        app.update();
-    }
+    util::settle_scene_load(&mut app);
     (app, tmp)
 }
 

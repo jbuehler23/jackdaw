@@ -4,7 +4,7 @@ use crate::util;
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bevy::camera::RenderTarget;
 use bevy::picking::{
@@ -85,11 +85,12 @@ fn create_button(app: &mut App) -> Entity {
 }
 
 fn open_after(app: &mut App, project: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while open_project(app).as_deref() != Some(project) && Instant::now() < deadline {
-        app.update();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    util::update_until(
+        app,
+        "the new project to open",
+        Duration::from_secs(60),
+        |app| open_project(app).as_deref() == Some(project),
+    );
 }
 
 #[test]

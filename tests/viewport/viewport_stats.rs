@@ -42,11 +42,12 @@ fn stats_show_a_readout_that_counts_the_scene() {
     assert_eq!(readout(&mut app).0, Display::None, "hidden until asked for");
 
     run(&mut app, "viewport.stats.toggle on=true");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while readout(&mut app).1.is_empty() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        app.update();
-    }
+    util::update_until(
+        &mut app,
+        "the stats readout",
+        std::time::Duration::from_secs(10),
+        |app| !readout(app).1.is_empty(),
+    );
     let (display, text) = readout(&mut app);
     assert_eq!(display, Display::Flex);
     assert!(

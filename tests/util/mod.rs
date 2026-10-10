@@ -155,6 +155,45 @@ pub fn editor_test_app_reading(assets: &std::path::Path) -> App {
     app
 }
 
+/// Run frames until `done` holds, failing the test once `limit` has passed
+/// without it. `what` names the awaited state in the failure.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn update_until(
+    app: &mut App,
+    what: &str,
+    limit: std::time::Duration,
+    mut done: impl FnMut(&mut App) -> bool,
+) {
+    let started = std::time::Instant::now();
+    while !done(app) {
+        assert!(
+            started.elapsed() < limit,
+            "gave up after {limit:?} waiting for {what}"
+        );
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Run frames until the scene load the last open began is over. The limit is
+/// under the load's own stall limit, so a model that never comes in fails the
+/// test instead of ending the load quietly.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn settle_scene_load(app: &mut App) {
+    update_until(
+        app,
+        "the scene load to finish",
+        std::time::Duration::from_secs(45),
+        |app| {
+            !app.world()
+                .resource::<jackdaw::progress::EditorProgress>()
+                .is_running(jackdaw::scenes::load_progress::SCENE_LOAD)
+        },
+    );
+}
+
 /// Advance the app's clock by a fixed step per frame, so gestures measured
 /// in seconds (double clicks, spring loads) read the same on a loaded
 /// runner as on a fast machine.

@@ -75,11 +75,7 @@ fn loading(app: &App) -> bool {
 }
 
 fn settle_load(app: &mut App) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while loading(app) && Instant::now() < deadline {
-        app.update();
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    util::settle_scene_load(app);
     app.update();
 }
 

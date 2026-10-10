@@ -326,11 +326,12 @@ fn a_placed_model_loads_its_meshes_with_the_textures_its_materials_name() {
     let mut app = util::editor_test_app();
     place(&mut app, "jan/jan.gltf");
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while loaded_base_colour(&app).is_none() && std::time::Instant::now() < deadline {
-        app.update();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    util::update_until(
+        &mut app,
+        "the model's base colour image to load",
+        std::time::Duration::from_secs(30),
+        |app| loaded_base_colour(app).is_some(),
+    );
 
     let texture = loaded_base_colour(&app)
         .expect("the model's meshes wear a material whose base colour image loaded");
@@ -362,13 +363,14 @@ fn mesh_count(app: &mut App) -> usize {
     app.world_mut().query::<&Mesh3d>().iter(app.world()).count()
 }
 
-/// Run frames until the scene holds `expected` meshes, or a deadline passes.
+/// Run frames until the scene holds `expected` meshes.
 fn settle_meshes(app: &mut App, expected: usize) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while mesh_count(app) < expected && std::time::Instant::now() < deadline {
-        app.update();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    util::update_until(
+        app,
+        &format!("{expected} meshes"),
+        std::time::Duration::from_secs(30),
+        |app| mesh_count(app) >= expected,
+    );
     for _ in 0..4 {
         app.update();
     }

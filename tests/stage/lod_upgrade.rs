@@ -4,11 +4,8 @@
 //! disk only once saved.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
-use jackdaw::progress::EditorProgress;
-use jackdaw::scenes::load_progress::SCENE_LOAD;
 use jackdaw::viewport::MainViewportCamera;
 use jackdaw_api::prelude::*;
 use jackdaw_commands::CommandHistory;
@@ -150,15 +147,7 @@ fn open(app: &mut App, scene: &Path) {
         .call()
         .expect("scene.open dispatches")
         .assert_finished();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while app
-        .world()
-        .resource::<EditorProgress>()
-        .is_running(SCENE_LOAD)
-        && Instant::now() < deadline
-    {
-        app.update();
-    }
+    util::settle_scene_load(app);
     for _ in 0..4 {
         app.update();
     }
