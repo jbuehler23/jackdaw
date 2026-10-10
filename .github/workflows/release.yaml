@@ -281,11 +281,9 @@ jobs:
       JACKDAW_RELEASE_BUILD: "1"
       CARGO_FRONTEND: ${{ matrix.glibc_target && 'cargo-zigbuild' || 'cargo' }}
       BUILD_TARGET: ${{ matrix.glibc_target || matrix.triple }}
-    # This job builds the editor twice over: once for the binaries, then
-    # an extension against the staged SDK. With a cold cache that ran past
-    # 120 minutes on Windows and past 180 on the macOS runner, both cut off
-    # mid-smoke-test and reported as `cancelled` rather than as anything a
-    # reader could act on.
+    # This job builds the editor once for the binaries, then an extension
+    # against the staged SDK. A cold macOS or Windows runner can still take
+    # hours, and a job cut off by its limit reports only `cancelled`.
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -379,9 +377,9 @@ jobs:
 
       # Final bundles build with one codegen unit and thin LTO, or the
       # platform's LTO override, which take more memory than `cargo install`
-      # is given. Pinned for every cargo invocation in the job: the smoke test
-      # compiles at release too, and a step that resolved a different profile
-      # would rebuild the graph and mix artifact generations.
+      # is given. Pinned for every cargo invocation in the job: the smoke
+      # check builds its extension at release too, and a step that resolved a
+      # different profile would rebuild the graph and mix artifact generations.
       - name: Pin the release profile for the whole job
         if: needs.plan.outputs.profile == 'full'
         run: |
