@@ -98,36 +98,33 @@ jobs:
           cargo build -j 4 -p jackdaw --features dylib --target "$TRIPLE" --bins
           cargo build -p jackdaw_rustc_wrapper
 
-      - name: Auto-registration across dlopen
-        # Extension builds generate the dev SDK manifest on demand. The test
-        # harness must use that same Cargo profile: dylibs from `test` and
-        # `dev` have different symbol identities but share one output name.
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test reflect_auto_register -- --nocapture
-
-      - name: Linkage identity
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test dylib_linkage_identity -- --nocapture
-
-      # macOS runs only the SDK build and the two probes above, and Windows
-      # skips scaffold_e2e: each platform runs its platform-specific probes,
-      # and Linux runs every probe.
-      - name: Ecosystem extern redirect
-        if: runner.os != 'macOS'
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test extern_redirect_ecosystem -- --nocapture
-
-      - name: Component shape refresh
-        if: runner.os != 'macOS'
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test component_shape_refresh -- --nocapture
-
-      - name: Dylib reload memory
-        if: runner.os != 'macOS'
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test stress_reload -- --nocapture
-
+      # The extension loader's own test builds no project, so it runs while
+      # the graph from the SDK build is still fresh.
       - name: Extension loading
         if: runner.os != 'macOS'
         run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test sdk_layout -- dylib_loading --nocapture
 
-      - name: Scaffold end-to-end (scaffold -> build -> schema)
-        # The user's first-run loop headlessly: scaffold a game, build its
-        # binary, and confirm the template component reaches the schema.
-        if: runner.os == 'Linux'
-        run: cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --test scaffold_e2e -- --nocapture
+      # One cargo invocation for every probe. Each probe's nested project
+      # build and the next probe's own `cargo test` find the editor stale
+      # for each other, so separate steps recompiled it about five minutes
+      # per probe; here only the first nested build should.
+      #
+      # Linux runs every probe. macOS runs the two linkage probes, and
+      # Windows all but scaffold_e2e (scaffold, build the game, confirm the
+      # template component reaches the schema).
+      - name: SDK pipeline probes
+        # Extension builds generate the dev SDK manifest on demand. The test
+        # harness must use that same Cargo profile: dylibs from `test` and
+        # `dev` have different symbol identities but share one output name.
+        run: |
+          set -euo pipefail
+          probes="reflect_auto_register dylib_linkage_identity"
+          if [ "${{ runner.os }}" != macOS ]; then
+            probes="$probes extern_redirect_ecosystem component_shape_refresh stress_reload"
+          fi
+          if [ "${{ runner.os }}" = Linux ]; then
+            probes="$probes scaffold_e2e"
+          fi
+          args=()
+          for probe in $probes; do args+=(--test "$probe"); done
+          cargo test -j 4 --profile dev --features dylib --target "$TRIPLE" --no-fail-fast "${args[@]}" -- --nocapture

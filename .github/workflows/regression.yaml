@@ -57,7 +57,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustfmt, clippy
+          components: clippy
           toolchain: ${{ env.toolchain }}
 
       # Dependencies at opt-level 1 on the 3-core macOS runner: the tests run
@@ -69,8 +69,12 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Fast tier (fmt, clippy, lib tests)
-        run: cargo xtask fast
+      # Formatting does not vary by platform, and the integration tier runs
+      # the library tests too, so of `xtask fast` only clippy is kept: it
+      # lints the cfg(windows) and cfg(target_os = "macos") code that the
+      # Linux Clippy job never compiles.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --features dylib -- --deny warnings
 
-      - name: Integration tier
+      - name: Library and integration tests
         run: cargo xtask integration
