@@ -637,12 +637,16 @@ jobs:
           shell=bash
           if [ "$RUNNER_OS" = macOS ]; then shell=zsh; fi
           clean() { env -i HOME="$home" PATH=/usr/bin:/bin:/usr/sbin:/sbin "$@"; }
+          # jd doctor needs a Rust toolchain before it reports the SDK, so it
+          # gets the runner's rustup install alongside the clean home.
+          toolchain="${CARGO_HOME:-$HOME/.cargo}"
+          with_rust() { env -i HOME="$home" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="$toolchain" PATH="$toolchain/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$@"; }
           fail() { echo "::error::$*"; exit 1; }
 
           echo "--- piped install, configured by environment"
           curl -LsSf "$base/install.sh" | clean JACKDAW_VERSION=0.0.0-ci.1 JACKDAW_DOWNLOAD_BASE="$base" sh
           clean "$shell" -lc 'jackdaw --version && jd --version'
-          doctor=$(clean "$shell" -lc 'jd doctor' 2>&1 || true)
+          doctor=$(with_rust "$shell" -lc 'jd doctor' 2>&1 || true)
           echo "$doctor"
           echo "$doctor" | grep -F "SDK: release bundle ($prefix/0.0.0-ci.1/sdk/" || fail "jd did not find the installed SDK"
 
