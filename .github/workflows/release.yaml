@@ -41,7 +41,33 @@ jobs:
     timeout-minutes: 5
     outputs:
       include: ${{ steps.pick.outputs.include }}
+      publishes: ${{ steps.version.outputs.publishes }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Crates publish under the workspace version, never the tag, so a tag
+      # publishes only when it names that version exactly: `v0.19.0` for
+      # 0.19.0, `v0.19.0-rc.8` for 0.19.0-rc.8. A final tag that does not
+      # match is a mistake and stops the release; a release candidate that
+      # does not match ships bundles without publishing.
+      - id: version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          tag="${{ github.ref_name }}"
+          publishes=false
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = true ]; then
+            if [ "$tag" = "v$version" ]; then
+              publishes=true
+            elif [ "${tag#*-}" = "$tag" ]; then
+              echo "::error::tag $tag does not match the workspace version $version"
+              exit 1
+            else
+              echo "::notice::tag $tag is not the workspace version $version; crates will not be published"
+            fi
+          fi
+          echo "publishes=$publishes" >> "$GITHUB_OUTPUT"
+
       - id: pick
         run: |
           linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","glibc_target":"x86_64-unknown-linux-gnu.2.31","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","link":"-C link-arg=-Wl,--allow-shlib-undefined","archive":"tar.zst"}'
@@ -130,8 +156,8 @@ jobs:
   # The same projects, resolved from crates.io once the crates are there.
   published-resolves:
     name: Scaffolded projects resolve from crates.io
-    needs: [publish]
-    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+    needs: [plan, publish]
+    if: ${{ needs.plan.outputs.publishes == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -176,12 +202,11 @@ jobs:
   # cut short is finished by re-running the job.
   publish:
     name: Publish to crates.io
-    needs: [heavy, packages, scaffold-resolves]
-    # Final tags only. Crate versions come from `[workspace.package]`,
-    # not from the tag, so a `v0.19.0-rc.1` tag would publish 0.19.0
-    # itself, permanently and under the wrong name. crates.io has no
-    # unpublish.
-    if: ${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+    needs: [plan, heavy, packages, scaffold-resolves]
+    # Only a tag naming the workspace version exactly, so a release
+    # candidate publishes as its prerelease version and never as the final
+    # one. crates.io has no unpublish.
+    if: ${{ needs.plan.outputs.publishes == 'true' }}
     runs-on: ubuntu-latest
     # New crates are rate limited to a few at a time, then one every ten
     # minutes.

@@ -76,7 +76,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jackdaw_cli_internal"
-version = "0.19.0"
+version = "0.19.0-rc.8"
 dependencies = [
  "dunce",
  "jackdaw_env",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_env"
-version = "0.19.0"
+version = "0.19.0-rc.8"
 dependencies = [
  "dirs",
  "libc",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_project_build"
-version = "0.19.0"
+version = "0.19.0-rc.8"
 dependencies = [
  "dunce",
  "jackdaw_env",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_schema"
-version = "0.19.0"
+version = "0.19.0-rc.8"
 dependencies = [
  "serde",
  "serde_json",

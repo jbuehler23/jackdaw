@@ -9,8 +9,8 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 bevy.workspace = true
-jackdaw_bsn = { version = "0.19.0", path = "../jackdaw_bsn" }
-jackdaw_pie_protocol = { version = "0.19.0", path = "../jackdaw_pie_protocol" }
+jackdaw_bsn = { version = "0.19.0-rc.8", path = "../jackdaw_bsn" }
+jackdaw_pie_protocol = { version = "0.19.0-rc.8", path = "../jackdaw_pie_protocol" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
