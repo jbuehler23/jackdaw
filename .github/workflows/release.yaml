@@ -258,10 +258,11 @@ jobs:
       CARGO_FRONTEND: ${{ matrix.glibc_target && 'cargo-zigbuild' || 'cargo' }}
       BUILD_TARGET: ${{ matrix.glibc_target || matrix.triple }}
     # This job builds the editor twice over: once for the binaries, then
-    # an extension against the staged SDK. On Windows, with a cold cache,
-    # that ran past 120 minutes and was cut off mid-smoke-test, reported
-    # as `cancelled` rather than as anything a reader could act on.
-    timeout-minutes: 180
+    # an extension against the staged SDK. With a cold cache that ran past
+    # 120 minutes on Windows and past 180 on the macOS runner, both cut off
+    # mid-smoke-test and reported as `cancelled` rather than as anything a
+    # reader could act on.
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
