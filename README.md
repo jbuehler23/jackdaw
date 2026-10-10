@@ -45,7 +45,19 @@ https://github.com/user-attachments/assets/56834720-599e-4461-b712-fff7b85fb128
 
 ## Usage
 
-Download an archive for your platform from
+Install the latest release on Linux (x86-64) or macOS (Apple Silicon):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jbuehler23/jackdaw/releases/latest/download/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1 | iex
+```
+
+Or download an archive from
 [Releases](https://github.com/jbuehler23/jackdaw/releases), or install with
 Cargo:
 
@@ -53,7 +65,7 @@ Cargo:
 cargo install jackdaw --locked
 ```
 
-Either way you need rustup, cmake, and a C/C++ toolchain; `jd doctor` checks
+Every way you need rustup, cmake, and a C/C++ toolchain; `jd doctor` checks
 them. The [installation guide](https://jbuehler23.github.io/jackdaw/getting-started/installation.html)
 covers each OS, and
 [Troubleshooting](https://jbuehler23.github.io/jackdaw/getting-started/troubleshooting.html)
