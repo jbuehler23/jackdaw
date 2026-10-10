@@ -7,9 +7,10 @@ on:
     branches: [main]
   # Pull requests only restore caches. This daily run on main saves any that
   # were pushed out. Only the jobs on a pull request's longest path keep a
-  # cache, so the saved keys fit the repository's 10 GB together.
+  # cache, so the saved keys fit the repository's 10 GB together. Off the
+  # hour, where scheduled runs start hours late.
   schedule:
-    - cron: "30 9 * * *"
+    - cron: "17 2 * * *"
 
 # A new push to a pull request replaces its run; runs on main each finish, so
 # the post-merge checks report on every merge.
@@ -48,11 +49,14 @@ jobs:
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
+      # Restores the archive job's cache rather than keeping a 4 GB one of
+      # its own, which pushed the saved keys past the 10 GB limit. Most of
+      # the dependency graph builds the same without the `dylib` feature.
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          shared-key: tests
+          save-if: false
+          shared-key: build-tests
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev

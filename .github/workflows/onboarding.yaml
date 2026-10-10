@@ -12,7 +12,7 @@ on:
   push:
     tags: ["v*"]
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "52 4 * * *"
   workflow_dispatch:
     inputs:
       platforms:

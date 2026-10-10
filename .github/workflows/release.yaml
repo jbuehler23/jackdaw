@@ -3,6 +3,10 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Warms the macOS release-dependency cache on main, which tags restore:
+  # a tag can read the default branch's caches but never another tag's.
+  schedule:
+    - cron: "23 3 * * 1,4"
   # Dry-run the bundle matrix from a branch. Every step that publishes
   # anything (crates.io, the archive upload, the attestation) is gated on
   # a tag ref, so a dispatch builds, stages, and smoke-tests the bundles
@@ -18,6 +22,10 @@ on:
         options: [all, linux, windows, macos]
       skip_heavy:
         description: "Skip the heavy tier (iteration mode; uploads stay tag-gated)"
+        type: boolean
+        default: false
+      save_cache:
+        description: "Save the release-dependency cache (from main only)"
         type: boolean
         default: false
 
@@ -42,6 +50,8 @@ jobs:
     outputs:
       include: ${{ steps.pick.outputs.include }}
       publishes: ${{ steps.version.outputs.publishes }}
+      profile: ${{ steps.version.outputs.profile }}
+      warm: ${{ steps.version.outputs.warm }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -51,6 +61,10 @@ jobs:
       # 0.19.0, `v0.19.0-rc.8` for 0.19.0-rc.8. A final tag that does not
       # match is a mistake and stops the release; a release candidate that
       # does not match ships bundles without publishing.
+      #
+      # A final tag (no `-`) builds its bundles with one codegen unit and LTO;
+      # everything else uses Cargo's default release profile, as `cargo
+      # install` does. A scheduled run only warms the dependency cache.
       - id: version
         run: |
           version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
@@ -66,14 +80,20 @@ jobs:
               echo "::notice::tag $tag is not the workspace version $version; crates will not be published"
             fi
           fi
+          profile=default
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = true ] && [ "${tag#*-}" = "$tag" ]; then
+            profile=full
+          fi
           echo "publishes=$publishes" >> "$GITHUB_OUTPUT"
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "warm=${{ github.event_name == 'schedule' }}" >> "$GITHUB_OUTPUT"
 
       - id: pick
         run: |
           linux='{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","glibc_target":"x86_64-unknown-linux-gnu.2.31","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","link":"-C link-arg=-Wl,--allow-shlib-undefined","archive":"tar.zst"}'
           macos='{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"zip"}'
           windows='{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}'
-          case "${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}" in
+          case "${{ github.event_name == 'schedule' && 'macos' || github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}" in
             linux)   list="[$linux]" ;;
             macos)   list="[$macos]" ;;
             windows) list="[$windows]" ;;
@@ -85,7 +105,7 @@ jobs:
   # binary builds and loads an authored scene over PIE. It runs beside the
   # bundles; publish and the GitHub release wait for it.
   heavy:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_heavy }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_heavy) }}
     uses: ./.github/workflows/heavy-tier.yaml
 
   # A scaffolded project depends on the public jackdaw crates by version.
@@ -94,6 +114,7 @@ jobs:
   # anything is published. The projects are kept for `published-resolves`.
   scaffold-resolves:
     name: Scaffolded projects resolve
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -196,6 +217,7 @@ jobs:
   # Every publishable crate builds from its packaged sources before anything
   # is uploaded.
   packages:
+    if: github.event_name != 'schedule'
     uses: ./.github/workflows/packages.yaml
 
   # Publishes every crate that is not `publish = false`: the editor and
@@ -322,16 +344,20 @@ jobs:
           echo "CARGO_UNSTABLE_HOST_CONFIG=true" >> "$GITHUB_ENV"
           echo "CARGO_HOST_LINKER=$RUNNER_TEMP/zig-cc" >> "$GITHUB_ENV"
 
+      # Saved only from main (the schedule, or a dispatch asking for it), so
+      # tags restore it. rust-cache adds the lockfile and the env to the
+      # key; the profile is named here because it is pinned after this step.
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.save_cache == true) }}
+          shared-key: bundle-${{ runner.os }}-${{ needs.plan.outputs.profile }}
           # The cargo config is in the key because it carries rustflags
           # (the linker choice and its flags): a cache built under
           # different flags restores artifacts whose crate disambiguators
           # no longer match what a fresh build produces, and the mix
           # surfaces as undefined `type_info::CELL` symbols at link time.
-          key: bundle-${{ matrix.glibc_target || matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
+          key: ${{ matrix.glibc_target || matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
           # xtask is a detached workspace with its own target dir, which
           # the default cache paths do not cover: the bundler rebuilt
           # cold on every run, which was most of the staging step's
@@ -348,12 +374,13 @@ jobs:
           # it passed.
           cache-on-failure: true
 
-      # Bundles build with one codegen unit and thin LTO, or the platform's
-      # LTO override, which take more memory than `cargo install` is given.
-      # Pinned for every cargo invocation in the job: the smoke test compiles
-      # at release too, and a step that resolved a different profile would
-      # rebuild the graph and mix artifact generations.
+      # Final bundles build with one codegen unit and thin LTO, or the
+      # platform's LTO override, which take more memory than `cargo install`
+      # is given. Pinned for every cargo invocation in the job: the smoke test
+      # compiles at release too, and a step that resolved a different profile
+      # would rebuild the graph and mix artifact generations.
       - name: Pin the release profile for the whole job
+        if: needs.plan.outputs.profile == 'full'
         run: |
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1" >> "$GITHUB_ENV"
           echo "CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto || 'thin' }}" >> "$GITHUB_ENV"
@@ -426,7 +453,18 @@ jobs:
             fi
           done
 
+      # Built ahead of staging so a cache-warming run stores it too.
+      - name: Build the bundler
+        run: |
+          if [ -n "${{ matrix.glibc_target }}" ]; then
+            cargo-zigbuild build --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET"
+          else
+            cargo build --quiet --package xtask --manifest-path xtask/Cargo.toml
+          fi
+
+      # A cache-warming run stops here.
       - name: Stage the bundle
+        if: needs.plan.outputs.warm != 'true'
         # RUNNER_TEMP is outside the source checkout. Running `jd` from here
         # therefore exercises installed behavior and cannot accidentally
         # rewrite scaffolded manifests to local path dependencies.
@@ -446,7 +484,7 @@ jobs:
       # A binary that needs a newer glibc than the target names fails at the
       # loader on an older distribution, which the runner itself never shows.
       - name: Verify the staged binaries' glibc floor (Linux)
-        if: matrix.glibc_target
+        if: needs.plan.outputs.warm != 'true' && matrix.glibc_target
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
@@ -468,7 +506,7 @@ jobs:
       # machine; CI never notices because `cargo test` puts the build
       # tree on LD_LIBRARY_PATH.
       - name: Verify the staged binaries carry their runpath
-        if: runner.os == 'Linux'
+        if: needs.plan.outputs.warm != 'true' && runner.os == 'Linux'
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
@@ -483,6 +521,7 @@ jobs:
       # An archive that is missing a piece installs and then fails at the first
       # extension build, which is how a missing sdk/manifest.txt reached a user.
       - name: Verify the staged bundle
+        if: needs.plan.outputs.warm != 'true'
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
@@ -503,6 +542,7 @@ jobs:
       # installed user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's
       # local-only skip into a hard failure so a broken bundle cannot pass silently.
       - name: Bundle smoke (extension builds against the release SDK)
+        if: needs.plan.outputs.warm != 'true'
         env:
           JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
           JACKDAW_BUNDLE_ROOT: ${{ runner.temp }}/jackdaw-${{ matrix.triple }}
@@ -516,24 +556,26 @@ jobs:
         run: $CARGO_FRONTEND test --release --features dylib --target "$BUILD_TARGET" --test bundle_smoke -- --nocapture
 
       - name: Archive (tar.zst)
-        if: matrix.archive == 'tar.zst'
+        if: needs.plan.outputs.warm != 'true' && matrix.archive == 'tar.zst'
         run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C "$RUNNER_TEMP" "jackdaw-${{ matrix.triple }}"
 
       - name: Archive (zip)
-        if: matrix.archive == 'zip' && runner.os == 'Windows'
+        if: needs.plan.outputs.warm != 'true' && matrix.archive == 'zip' && runner.os == 'Windows'
         working-directory: ${{ runner.temp }}
         run: 7z a "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip" "./jackdaw-${{ matrix.triple }}"
 
       # ditto keeps the symlinks and executable bits Finder and unzip restore.
       - name: Archive (zip, macOS)
-        if: matrix.archive == 'zip' && runner.os == 'macOS'
+        if: needs.plan.outputs.warm != 'true' && matrix.archive == 'zip' && runner.os == 'macOS'
         working-directory: ${{ runner.temp }}
         run: ditto -c -k --keepParent "jackdaw-${{ matrix.triple }}" "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip"
 
       - name: Generate checksum
+        if: needs.plan.outputs.warm != 'true'
         run: openssl dgst -sha256 "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}" > "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256"
 
       - name: Keep the archive
+        if: needs.plan.outputs.warm != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.triple }}
