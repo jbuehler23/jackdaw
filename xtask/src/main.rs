@@ -1,6 +1,7 @@
 //! Test-harness orchestrator. `cargo xtask <tier>` runs a tier through nextest.
 use std::process::{Command, ExitCode};
 
+mod bundle_smoke;
 mod release;
 
 /// Target triple for the heavy tier's SDK build. Reads the host from
@@ -61,7 +62,7 @@ fn fast() -> bool {
 
 /// Integration binaries that need a built SDK or a game build; they run in
 /// `heavy()` or the onboarding workflow instead.
-const SDK_BINARIES: &str = "binary(bsn_game_run) | binary(editor_journey) | binary(bundle_smoke) \
+const SDK_BINARIES: &str = "binary(bsn_game_run) | binary(editor_journey) \
     | binary(stress_reload) | binary(scaffold_e2e) \
     | binary(reflect_auto_register) \
     | binary(component_shape_refresh) | binary(dylib_linkage_identity) \
@@ -212,10 +213,6 @@ fn heavy() -> bool {
                 // `--test` rather than an `-E` filter: `-E` selects what runs but
                 // cargo still builds every test target in the package.
                 //
-                // bundle_smoke is deliberately absent: it needs a release SDK,
-                // which this tier does not build, so it would only self-skip
-                // here. It runs on the real release artifacts in release.yaml.
-                //
                 // mcp_smoke belongs here rather than in `integration`: it
                 // launches a windowed editor process and waits minutes on it,
                 // which is what this tier's deadlines and thread budget are
@@ -256,6 +253,7 @@ fn main() -> ExitCode {
         "bundle" => {
             return jackdaw_cli_internal::package::cmd_bundle(&args[1..]);
         }
+        "bundle-smoke" => bundle_smoke::cmd(&args[1..]),
         "package" => match args.get(1) {
             Some(out) => release::package(
                 std::path::Path::new(out),
@@ -270,7 +268,7 @@ fn main() -> ExitCode {
         other => {
             eprintln!(
                 "usage: cargo xtask <fast|archive [FILE]|integration [N/M] [--archive FILE]|heavy|\
-                 release-gate|package-sdk|bundle|package DIR [--check]|publish [--dry-run]> \
+                 release-gate|package-sdk|bundle|bundle-smoke|package DIR [--check]|publish [--dry-run]> \
                  (got {other:?})"
             );
             false

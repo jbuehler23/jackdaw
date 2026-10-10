@@ -543,22 +543,24 @@ jobs:
           if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
           echo "bundle layout verified"
 
-      # Build an extension against the just-built release SDK, the way an
-      # installed user does. JACKDAW_BUNDLE_SMOKE_REQUIRED turns the test's
-      # local-only skip into a hard failure so a broken bundle cannot pass silently.
+      # Build an extension against the staged release SDK, the way an
+      # installed user does. It runs from xtask, so the editor is not
+      # compiled again for a test target. Under cargo-zigbuild the extension
+      # build inherits the zig toolchain the staged SDK was linked with.
       - name: Bundle smoke (extension builds against the release SDK)
         if: needs.plan.outputs.warm != 'true'
         env:
-          JACKDAW_BUNDLE_SMOKE_REQUIRED: "1"
-          JACKDAW_BUNDLE_ROOT: ${{ runner.temp }}/jackdaw-${{ matrix.triple }}
           # On failure, the wrapper re-runs the failed unit with rustc's
           # crate-locator trace, so a rejected extern says why it was
           # rejected instead of a bare "can't find crate".
           JACKDAW_WRAPPER_EXPLAIN: "1"
-        # Match the already-built release SDK. The old debug invocation
-        # rebuilt the entire graph and, on Windows, recreated the oversized
-        # debug SDK that the release bundle had already avoided.
-        run: $CARGO_FRONTEND test --release --features dylib --target "$BUILD_TARGET" --test bundle_smoke -- --nocapture
+        run: |
+          bundle="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          if [ -n "${{ matrix.glibc_target }}" ]; then
+            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle-smoke --bundle "$bundle" --workspace .
+          else
+            cargo xtask bundle-smoke --bundle "$bundle" --workspace .
+          fi
 
       - name: Archive (tar.zst)
         if: needs.plan.outputs.warm != 'true' && matrix.archive == 'tar.zst'
