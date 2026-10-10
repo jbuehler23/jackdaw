@@ -126,8 +126,6 @@ impl SdkManifest {
         sdk: &SdkPaths,
         build_args: &[&str],
     ) -> Result<Self, PlanError> {
-        let closure = sdk_runtime_closure(workspace_root, &sdk.triple)?;
-
         // Capture stdout (the JSON artifact stream) but let cargo's own
         // progress reach the terminal, so this step never looks hung on a
         // cold cache.
@@ -146,6 +144,23 @@ impl SdkManifest {
                 "SDK build for manifest generation failed".into(),
             ));
         }
+        Self::from_build_messages(
+            workspace_root,
+            sdk,
+            &String::from_utf8_lossy(&output.stdout),
+        )
+    }
+
+    /// Enumerate the SDK's runtime-closure artifacts from the JSON messages
+    /// (`--message-format=json`) of a build that already ran, without
+    /// building again. `messages` must come from a build of the same
+    /// package set and target that produced `sdk`.
+    pub fn from_build_messages(
+        workspace_root: &Path,
+        sdk: &SdkPaths,
+        messages: &str,
+    ) -> Result<Self, PlanError> {
+        let closure = sdk_runtime_closure(workspace_root, &sdk.triple)?;
 
         // Cargo reports artifact paths with the platform's separator,
         // so matching only on `/` discarded every artifact on Windows
@@ -160,7 +175,7 @@ impl SdkManifest {
         let mut artifacts = BTreeMap::new();
         let mut link_paths: BTreeSet<String> = BTreeSet::new();
         let mut host_deps: BTreeSet<String> = BTreeSet::new();
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
+        for line in messages.lines() {
             let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };

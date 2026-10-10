@@ -31,7 +31,7 @@ use jackdaw_env::rust_env_command;
 use jackdaw_project_build::plan::SdkManifest;
 use jackdaw_project_build::sdk_paths::SdkPaths;
 
-/// `cargo xtask package-sdk --out <dir> [--workspace <path>]`.
+/// `cargo xtask package-sdk --out <dir> [--workspace <path>] [--artifacts <file>]`.
 pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
     let Some(out) = flag_value(args, "--out") else {
         eprintln!("jackdaw package-sdk: --out <dir> is required");
@@ -48,7 +48,8 @@ pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    match package(&workspace, &out) {
+    let artifacts = flag_value(args, "--artifacts").map(PathBuf::from);
+    match package(&workspace, &out, artifacts.as_deref()) {
         Ok(summary) => {
             println!("jackdaw package-sdk: staged {summary} at {}", out.display());
             ExitCode::SUCCESS
@@ -60,12 +61,16 @@ pub fn cmd_package_sdk(args: &[String]) -> ExitCode {
     }
 }
 
-/// `cargo xtask bundle --out <dir> [--workspace <path>]`: the full
-/// downloadable release layout - the SDK layout (`package-sdk`) plus the
-/// editor, the CLI, and the runtime dylibs the editor and extensions
-/// load, staged at the bundle root beside the binaries. Combined with a
-/// `rpath=$ORIGIN` link (set via RUSTFLAGS in the release build), the
-/// archive runs offline with no bootstrap: extract and launch.
+/// `cargo xtask bundle --out <dir> [--workspace <path>] [--artifacts <file>]`:
+/// the full downloadable release layout - the SDK layout (`package-sdk`)
+/// plus the editor, the CLI, and the runtime dylibs the editor and
+/// extensions load, staged at the bundle root beside the binaries. Combined
+/// with a `rpath=$ORIGIN` link (set via RUSTFLAGS in the release build),
+/// the archive runs offline with no bootstrap: extract and launch.
+///
+/// `--artifacts` names the saved `--message-format=json` output of the
+/// release build being staged. The SDK manifest is then read from it
+/// instead of from a second `cargo build`.
 pub fn cmd_bundle(args: &[String]) -> ExitCode {
     let Some(out) = flag_value(args, "--out") else {
         eprintln!("jackdaw bundle: --out <dir> is required");
@@ -79,7 +84,8 @@ pub fn cmd_bundle(args: &[String]) -> ExitCode {
         eprintln!("jackdaw bundle: could not locate a jackdaw workspace; pass --workspace <path>");
         return ExitCode::FAILURE;
     };
-    match bundle(&workspace, &out) {
+    let artifacts = flag_value(args, "--artifacts").map(PathBuf::from);
+    match bundle(&workspace, &out, artifacts.as_deref()) {
         Ok(summary) => {
             println!("jackdaw bundle: staged {summary} at {}", out.display());
             ExitCode::SUCCESS
@@ -91,9 +97,9 @@ pub fn cmd_bundle(args: &[String]) -> ExitCode {
     }
 }
 
-fn bundle(workspace: &Path, out: &Path) -> Result<String, String> {
+fn bundle(workspace: &Path, out: &Path, artifacts: Option<&Path>) -> Result<String, String> {
     // The SDK layout first (sdk/, wrapper, Cargo.lock, toolchain).
-    let sdk_summary = package(workspace, out)?;
+    let sdk_summary = package(workspace, out, artifacts)?;
     let sdk = SdkPaths::for_workspace_profile(workspace, "release");
     let profile_dir = sdk
         .dylib
@@ -379,7 +385,7 @@ fn copy_matching(from: &Path, to: &Path, prefixes: &[&str]) -> Result<usize, Str
     Ok(count)
 }
 
-fn package(workspace: &Path, out: &Path) -> Result<String, String> {
+fn package(workspace: &Path, out: &Path, artifacts: Option<&Path>) -> Result<String, String> {
     let sdk = SdkPaths::for_workspace_profile(workspace, "release");
     if !sdk.dylib_exists() {
         return Err(format!(
@@ -389,7 +395,22 @@ fn package(workspace: &Path, out: &Path) -> Result<String, String> {
             sdk.triple
         ));
     }
-    ensure_manifest(workspace, &sdk)?;
+    match artifacts {
+        Some(messages) => {
+            let manifest = SdkManifest::from_build_messages(workspace, &sdk, &read(messages)?)
+                .map_err(|e| {
+                    format!("reading the SDK manifest from {}: {e}", messages.display())
+                })?;
+            if manifest.is_empty() {
+                return Err(format!(
+                    "{} names no SDK artifacts; save the release build's \
+                     `--message-format=json` output there",
+                    messages.display()
+                ));
+            }
+        }
+        None => ensure_manifest(workspace, &sdk)?,
+    }
 
     let sdk_out = out.join("sdk");
     let triple_out = sdk_out.join(&sdk.triple);

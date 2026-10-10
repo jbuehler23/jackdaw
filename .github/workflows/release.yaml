@@ -415,9 +415,11 @@ jobs:
         if: '!matrix.glibc_target'
         run: cargo build --release -p jackdaw_rustc_wrapper
 
-      # The root package owns the editor, jd, and installed wrapper.
+      # The root package owns the editor, jd, and installed wrapper. The
+      # artifact list is kept for the bundler, which would otherwise build
+      # again to learn it.
       - name: Build installed binaries (target)
-        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jackdaw --features dylib --bins
+        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jackdaw --features dylib --bins --message-format=json-render-diagnostics > "$RUNNER_TEMP/bundle-build.json"
 
       # Under the glibc target the shipped wrapper is the root package's
       # own, built above against the same glibc, placed where the bundler
@@ -472,16 +474,16 @@ jobs:
         # therefore exercises installed behavior and cannot accidentally
         # rewrite scaffolded manifests to local path dependencies.
         #
-        # The bundler reruns the editor build to read its artifact list. Run
-        # through cargo-zigbuild, that nested build inherits the zig
-        # environment and finds the graph fresh instead of relinking the
-        # editor against the runner's glibc.
+        # The bundler reads the SDK's artifacts from the build step's saved
+        # JSON instead of building again. A second build compiled the editor
+        # again whenever its environment differed from the first.
         run: |
           out="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          artifacts="$RUNNER_TEMP/bundle-build.json"
           if [ -n "${{ matrix.glibc_target }}" ]; then
-            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle --out "$out" --workspace .
+            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle --out "$out" --workspace . --artifacts "$artifacts"
           else
-            cargo xtask bundle --out "$out" --workspace .
+            cargo xtask bundle --out "$out" --workspace . --artifacts "$artifacts"
           fi
 
       # A binary that needs a newer glibc than the target names fails at the
