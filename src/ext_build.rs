@@ -8,7 +8,6 @@
 //! render.
 
 use std::collections::VecDeque;
-use std::path::Path;
 
 /// Capacity of the rolling log-tail buffer surfaced in progress UI.
 const LOG_TAIL_CAPACITY: usize = 20;
@@ -61,42 +60,6 @@ impl BuildProgress {
     }
 }
 
-/// Derive the platform dylib filename for a project's package name.
-/// Falls back to `libunnamed.<ext>` if the manifest declares no name
-/// (which cargo would have rejected anyway, but it keeps this helper
-/// infallible).
-pub(crate) fn artifact_file_name(project_dir: &Path) -> String {
-    let package_name = package_name_from_manifest(project_dir);
-
-    if cfg!(target_os = "windows") {
-        format!("{package_name}.dll")
-    } else if cfg!(target_os = "macos") {
-        format!("lib{package_name}.dylib")
-    } else {
-        format!("lib{package_name}.so")
-    }
-}
-
-/// The `[package] name` from a project's manifest, underscored so it
-/// matches the artifact cargo emits.
-fn package_name_from_manifest(project_dir: &Path) -> String {
-    let Ok(contents) = std::fs::read_to_string(project_dir.join("Cargo.toml")) else {
-        return "unnamed".to_string();
-    };
-    contents
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            let rest = trimmed
-                .strip_prefix("name")?
-                .trim_start()
-                .strip_prefix('=')?;
-            let value = rest.trim().trim_matches(['"', '\'']);
-            (!value.is_empty()).then(|| value.replace('-', "_"))
-        })
-        .unwrap_or_else(|| "unnamed".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,19 +89,5 @@ mod tests {
                 .full_log
                 .contains(&format!("line {}", LOG_TAIL_CAPACITY + 4))
         );
-    }
-
-    #[test]
-    fn the_artifact_name_comes_from_the_package_name() {
-        let dir = std::env::temp_dir().join(format!("jackdaw_artifact_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\n",
-        )
-        .unwrap();
-        assert!(artifact_file_name(&dir).contains("my_game"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

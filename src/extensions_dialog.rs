@@ -64,8 +64,7 @@ struct ExtensionsDialogContent;
 
 /// Holds the in-flight file-picker task, if any. Populated when the
 /// user clicks the install button; drained by `poll_install_task`
-/// once the user picks (or cancels). `pub` so hot-reload can surface
-/// its own status messages through the same UI slot.
+/// once the user picks (or cancels).
 #[derive(Resource, Default)]
 pub struct InstallStatus {
     pub task: Option<Task<Option<FileHandle>>>,

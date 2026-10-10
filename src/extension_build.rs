@@ -57,6 +57,11 @@ pub struct ExtensionBuild {
     finished_at: Option<SystemTime>,
     /// The library last loaded, so an unchanged rebuild is not loaded again.
     loaded: Option<LibraryStamp>,
+    /// The library last handed to the loader, whether or not it loaded.
+    attempted: Option<LibraryStamp>,
+    /// The recorded library as [`load_changed_recorded_build`] last saw it;
+    /// `None` until it first looks.
+    record_seen: Option<Option<LibraryStamp>>,
 }
 
 #[derive(Default)]
@@ -198,6 +203,39 @@ pub(crate) fn load_recorded_build(world: &mut World, root: &Path) -> bool {
             root: root.to_path_buf(),
             retry: false,
             recorded: true,
+        },
+        dylib,
+    };
+    true
+}
+
+/// Load the library the build record of the extension at `root` names when
+/// it changed since the last look, as it does when `jd build` rebuilds the
+/// extension outside the editor. The first look only notes the library,
+/// since opening the project loads or builds it. Returns whether a library
+/// was queued for loading.
+pub(crate) fn load_changed_recorded_build(world: &mut World, root: &Path) -> bool {
+    let dylib = jackdaw_project_build::last_built_dylib(&root.join(".jackdaw"));
+    let stamp = dylib.as_deref().and_then(LibraryStamp::read);
+    let Some(mut build) = world.get_resource_mut::<ExtensionBuild>() else {
+        return false;
+    };
+    let previous = build.record_seen.replace(stamp.clone());
+    let (Some(previous), Some(dylib), Some(stamp)) = (previous, dylib, stamp) else {
+        return false;
+    };
+    if previous.as_ref() == Some(&stamp)
+        || build.attempted.as_ref() == Some(&stamp)
+        || build.stage.job().is_some()
+    {
+        return false;
+    }
+    build.finished_at = Some(stamp.modified);
+    build.stage = Stage::Built {
+        job: Job {
+            root: root.to_path_buf(),
+            retry: false,
+            recorded: false,
         },
         dylib,
     };
@@ -408,6 +446,7 @@ fn load_built_extension(world: &mut World) {
         return;
     }
     let stamp = LibraryStamp::read(&dylib);
+    world.resource_mut::<ExtensionBuild>().attempted = stamp.clone();
     if stamp.is_some() && world.resource::<ExtensionBuild>().loaded == stamp {
         info!("Extension unchanged since it was loaded; not loading it again");
         report_ready(world);
@@ -729,6 +768,39 @@ mod tests {
             .unwrap();
 
         assert!(!load_recorded_build(&mut world, &dir));
+        assert!(world.resource::<ExtensionBuild>().stage.job().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_library_rebuilt_outside_the_editor_is_loaded() {
+        let dir = scratch("external");
+        let mut world = built_extension(&dir);
+
+        assert!(!load_changed_recorded_build(&mut world, &dir));
+        assert!(!load_changed_recorded_build(&mut world, &dir));
+        assert!(world.resource::<ExtensionBuild>().stage.job().is_none());
+
+        std::fs::write(dir.join("libjackdaw_shim.so"), b"rebuilt library").unwrap();
+        assert!(load_changed_recorded_build(&mut world, &dir));
+        assert!(matches!(
+            &world.resource::<ExtensionBuild>().stage,
+            Stage::Built { job, dylib } if !job.recorded && *dylib == dir.join("libjackdaw_shim.so")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_library_the_editor_already_tried_is_not_loaded_again() {
+        let dir = scratch("external-tried");
+        let mut world = built_extension(&dir);
+        assert!(!load_changed_recorded_build(&mut world, &dir));
+
+        let dylib = dir.join("libjackdaw_shim.so");
+        std::fs::write(&dylib, b"rebuilt library").unwrap();
+        world.resource_mut::<ExtensionBuild>().attempted = LibraryStamp::read(&dylib);
+
+        assert!(!load_changed_recorded_build(&mut world, &dir));
         assert!(world.resource::<ExtensionBuild>().stage.job().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }

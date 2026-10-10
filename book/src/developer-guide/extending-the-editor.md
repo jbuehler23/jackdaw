@@ -50,7 +50,9 @@ process exits.
 
 While developing, open the extension project in Jackdaw. The editor builds it
 against the extension SDK, building the SDK first if this install has none, and
-loads it. **Rebuild Project** builds and loads it again after a change.
+loads it. **Rebuild Project** builds and loads it again after a change, and so
+does `jd build` in a terminal while the project is open, unless **Hot Reload** is
+turned off in the File menu.
 
 Runtime extensions deliberately cannot install extension-owned Bevy component
 metadata or reflected Rust types. Use a custom editor build when that level of

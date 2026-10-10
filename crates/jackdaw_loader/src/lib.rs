@@ -280,7 +280,7 @@ impl LoadError {
     /// couldn't be found, because the SDK was rebuilt after the
     /// dylib was last compiled.
     ///
-    /// Callers (`project_select`, `hot_reload`) use this to trigger
+    /// Callers (`project_select`, `extension_build`) use this to trigger
     /// an auto-`cargo clean -p <crate>` + rebuild recovery path
     /// transparently, so the user never has to manually nuke their
     /// project target dir after an editor rebuild.
