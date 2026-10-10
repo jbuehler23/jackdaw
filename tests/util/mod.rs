@@ -68,11 +68,18 @@ pub fn headless_app() -> App {
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn ambient_app() -> App {
+    ambient_app_reading(bevy::asset::AssetPlugin::default())
+}
+
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
     skip_setup_check();
     isolate_config_dir();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
+            .set(assets)
             .set(RenderPlugin {
                 render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
                     backends: None,
@@ -129,6 +136,21 @@ pub fn editor_test_app() -> App {
     app.finish();
     // First tick runs Startup + extension auto-enable so every
     // built-in's operator entities are spawned.
+    app.update();
+    app
+}
+
+/// Like [`editor_test_app`], with the asset server reading `assets`, as the
+/// editor does for a project it was launched on.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn editor_test_app_reading(assets: &std::path::Path) -> App {
+    let mut app = ambient_app_reading(bevy::asset::AssetPlugin {
+        file_path: assets.to_string_lossy().into_owned(),
+        ..default()
+    });
+    add_editor_plugins(&mut app);
+    app.finish();
     app.update();
     app
 }

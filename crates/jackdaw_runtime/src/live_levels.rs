@@ -144,6 +144,16 @@ impl LiveLevel {
     fn is_ready(&self) -> bool {
         self.source == LevelSource::Fixed || self.placed_at.is_some()
     }
+
+    /// Whether the level can ever draw: it shows, and its model, if it has
+    /// one, has not failed to load.
+    fn can_draw(&self, models: &ModelParts) -> bool {
+        match &self.source {
+            LevelSource::Absent => false,
+            LevelSource::Fixed => true,
+            LevelSource::Model { path, .. } => !models.failed(path),
+        }
+    }
 }
 
 /// Which of a [`LodGroup`]'s levels are live. Derived, never saved.
@@ -205,10 +215,12 @@ impl LiveLevels {
             })
     }
 
-    /// The least detailed level placed from a model: what a group that draws
-    /// nothing gets first.
-    fn coarsest_model(&self) -> Option<(usize, &str)> {
-        self.model_levels().last()
+    /// The least detailed level placed from a model that has not failed to
+    /// load: what a group that draws nothing gets first.
+    fn coarsest_model(&self, models: &ModelParts) -> Option<(usize, &str)> {
+        self.model_levels()
+            .filter(|(_, path)| !models.failed(path))
+            .last()
     }
 }
 
@@ -521,12 +533,12 @@ fn keep_levels(
                 _ => despawn_parts(commands, &old.parts),
             }
         }
-        if let Some((_, path)) = fresh.coarsest_model() {
+        if let Some((_, path)) = fresh.coarsest_model(models) {
             models.request(path);
         }
         *live = fresh;
     } else {
-        if let Some((_, path)) = fresh.coarsest_model() {
+        if let Some((_, path)) = fresh.coarsest_model(models) {
             models.request(path);
         }
         commands.entity(group).insert(fresh);
@@ -719,7 +731,7 @@ fn select_live_levels(
             continue;
         }
         if ready == 0 && settings.stand_ins {
-            if let Some((level, path)) = live.coarsest_model() {
+            if let Some((level, path)) = live.coarsest_model(&models) {
                 match models.get(path) {
                     Some(_) => jobs.push(Job {
                         group,
@@ -1032,8 +1044,11 @@ fn recount(world: &mut World, loading: usize) {
         counts.groups += 1;
         let settled =
             viewless || measured || live.model_levels().all(|(_, path)| models.failed(path));
-        counts.drawn += usize::from(settled && live.is_drawn());
-        counts.refined += usize::from(settled && live.is_refined());
+        // A wanted level whose model failed to load never comes in, so it is
+        // not waited for.
+        let wanted = live.wanted & bits(live.levels.iter().map(|level| level.can_draw(models)));
+        counts.drawn += usize::from(settled && (wanted == 0 || live.ready() != 0));
+        counts.refined += usize::from(settled && wanted & !live.ready() == 0);
     }
     let mut progress = world.resource_mut::<LiveLevelProgress>();
     if *progress != counts {

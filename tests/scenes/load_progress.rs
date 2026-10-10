@@ -337,3 +337,84 @@ fn opening_a_scene_does_not_wait_for_a_lod_level_that_never_draws() {
         started.elapsed()
     );
 }
+
+const GROUP_WHOSE_COARSEST_MODEL_IS_MISSING: &str = r#"bevy_ecs::hierarchy::Children [
+    #Wall
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::LodGroup {
+        levels: [
+            jackdaw_scene_types::types::LodLevel { screen_height: 0.5 },
+            jackdaw_scene_types::types::LodLevel { screen_height: 0.1 },
+        ],
+        size: 2.0,
+    }
+    bevy_ecs::hierarchy::Children [
+        #LOD0
+        bevy_transform::components::transform::Transform
+        jackdaw_scene_types::types::GltfSource {
+            path: "models/dungeon.glb",
+            scene_index: 0,
+        }
+        ,
+        #LOD1
+        bevy_transform::components::transform::Transform
+        jackdaw_scene_types::types::GltfSource {
+            path: "models/missing.glb",
+            scene_index: 0,
+        }
+    ]
+]
+"#;
+
+/// The level a group stands in with while it draws nothing is the coarsest
+/// one whose model loads, so a missing file neither leaves the group empty nor
+/// holds the overlay up until the stall limit.
+#[test]
+fn a_lod_group_whose_coarsest_model_is_missing_draws_its_other_level_and_the_load_finishes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene = dir.path().join("wall.bsn");
+    std::fs::write(&scene, GROUP_WHOSE_COARSEST_MODEL_IS_MISSING).expect("write the scene");
+    let mut app = viewed_editor();
+
+    open(&mut app, &scene);
+    settle_load(&mut app);
+
+    let progress = *app.world().resource::<jackdaw_runtime::LiveLevelProgress>();
+    assert_eq!(progress.groups, 1);
+    assert_eq!(progress.drawn, 1, "the group draws its loaded level");
+    let mut parts = app
+        .world_mut()
+        .query_filtered::<&jackdaw_runtime::LodPartLevel, With<jackdaw_runtime::LodPart>>();
+    assert!(
+        parts.iter(app.world()).any(|level| level.0 == 0),
+        "the most detailed level is placed"
+    );
+}
+
+/// A wanted level whose model never loads is not waited for.
+#[test]
+fn a_lod_group_whose_models_are_all_missing_does_not_hold_the_load_up() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene = dir.path().join("wall.bsn");
+    let text = GROUP_WHOSE_COARSEST_MODEL_IS_MISSING.replace("dungeon.glb", "gone.glb");
+    std::fs::write(&scene, text).expect("write the scene");
+    let mut app = viewed_editor();
+
+    open(&mut app, &scene);
+    settle_load(&mut app);
+
+    let progress = *app.world().resource::<jackdaw_runtime::LiveLevelProgress>();
+    assert_eq!(progress.groups, 1);
+    assert!(progress.is_drawn() && progress.is_refined(), "{progress:?}");
+}
+
+/// An editor with a viewport camera, so LOD groups want levels.
+fn viewed_editor() -> App {
+    let mut app = util::editor_test_app();
+    app.world_mut().spawn((
+        Camera3d::default(),
+        jackdaw::viewport::MainViewportCamera,
+        Transform::from_xyz(0.0, 0.0, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    app
+}
