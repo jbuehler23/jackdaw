@@ -131,7 +131,8 @@ impl SdkManifest {
         // Capture stdout (the JSON artifact stream) but let cargo's own
         // progress reach the terminal, so this step never looks hung on a
         // cold cache.
-        let child = rust_env_command("cargo")
+        let mut cargo = rust_env_command("cargo");
+        let child = without_package_env(&mut cargo)
             .arg("build")
             .args(build_args)
             .args(["--target", &sdk.triple, "--message-format=json"])
@@ -593,6 +594,31 @@ fn shadow_names(metadata: &serde_json::Value, manifest: &SdkManifest) -> BTreeSe
         pending.extend(linked.into_iter().flatten().cloned());
     }
     names
+}
+
+/// Clear the variables cargo sets for the package running this process
+/// (`cargo run`, `cargo test`, a build script). A nested cargo reads them as
+/// its own environment, and a build script that tracks one with
+/// `rerun-if-env-changed` reruns: `ring` tracks `CARGO_PKG_NAME` and
+/// `CARGO_MANIFEST_DIR`, so a build that was fresh at the top level
+/// rebuilt `ring` and every crate above it, the editor included.
+fn without_package_env(command: &mut std::process::Command) -> &mut std::process::Command {
+    for (key, _) in std::env::vars_os() {
+        let Some(name) = key.to_str() else {
+            continue;
+        };
+        let set_by_cargo = ["CARGO_PKG_", "CARGO_MANIFEST_", "CARGO_BIN_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            || matches!(
+                name,
+                "CARGO_CRATE_NAME" | "CARGO_PRIMARY_PACKAGE" | "CARGO_TARGET_TMPDIR" | "OUT_DIR"
+            );
+        if set_by_cargo {
+            command.env_remove(&key);
+        }
+    }
+    command
 }
 
 /// The SDK dylib's runtime dependency closure: `(name, version)`
