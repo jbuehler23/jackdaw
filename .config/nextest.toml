@@ -1,6 +1,8 @@
 [profile.default]
 # Local runs: no retries, show output on failure.
 failure-output = "immediate-final"
+# Name any test still running after 30 s, so a slow one shows up in the log.
+slow-timeout = "30s"
 # The extension `sdk_layout` loads with dlopen, and the Rust dylibs the test
 # binaries link, which `cargo xtask archive` gathers.
 archive.include = [
@@ -27,7 +29,12 @@ retries = 2
 fail-fast = false
 failure-output = "immediate-final"
 final-status-level = "flaky"
-slow-timeout = { period = "60s", terminate-after = 3 }
+# Report a test as slow every 30 s and stop it after 3 minutes.
+slow-timeout = { period = "30s", terminate-after = 6 }
+
+[profile.ci.junit]
+# Per-test outcomes and durations, at target/nextest/ci/junit.xml.
+path = "junit.xml"
 
 [profile.heavy]
 # The end-to-end tests each build a game and launch it. Run them one at a
@@ -38,3 +45,4 @@ fail-fast = false
 failure-output = "immediate-final"
 final-status-level = "flaky"
 test-threads = 1
+slow-timeout = "60s"
