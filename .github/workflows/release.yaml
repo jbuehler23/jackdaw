@@ -17,7 +17,7 @@ on:
         default: all
         options: [all, linux, windows, macos]
       skip_heavy:
-        description: "Skip the heavy gate (iteration mode; uploads stay tag-gated)"
+        description: "Skip the heavy tier (iteration mode; uploads stay tag-gated)"
         type: boolean
         default: false
 
@@ -82,7 +82,8 @@ jobs:
           echo "include=$list" >> "$GITHUB_OUTPUT"
 
   # Nothing ships unless the end-to-end tier is green: the SDK builds, a game
-  # binary builds and loads an authored scene over PIE.
+  # binary builds and loads an authored scene over PIE. It runs beside the
+  # bundles; publish and the GitHub release wait for it.
   heavy:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_heavy }}
     uses: ./.github/workflows/heavy-tier.yaml
@@ -182,8 +183,10 @@ jobs:
           done
 
   # A release candidate installs and sets up as a new user's machine would, on
-  # every platform a bundle ships for.
+  # every platform a bundle ships for. Nothing waits for it. It starts after
+  # heavy so the bundles take their macOS runners first.
   install:
+    needs: [heavy]
     if: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
     uses: ./.github/workflows/install-contract.yaml
     with:
@@ -237,11 +240,7 @@ jobs:
   # checkout. Independent of the crates.io publish.
   binaries:
     name: Bundle - ${{ matrix.triple }}
-    needs: [heavy, plan]
-    # `always()` so an iteration-mode dispatch that skipped the heavy
-    # gate still builds; a real heavy failure still blocks, and every
-    # publishing step below is tag-gated regardless.
-    if: ${{ always() && needs.plan.result == 'success' && (needs.heavy.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_heavy)) }}
+    needs: [plan]
     runs-on: ${{ matrix.os }}
     # The bundled editor is the one whose scaffolds ship, and this job is
     # the only place that knows its crates are on their way to the
@@ -549,8 +548,8 @@ jobs:
   # latest release.
   github-release:
     name: GitHub release
-    needs: [binaries, publish]
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.binaries.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && contains(github.ref_name, '-'))) }}
+    needs: [binaries, heavy, publish]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.binaries.result == 'success' && needs.heavy.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && contains(github.ref_name, '-'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

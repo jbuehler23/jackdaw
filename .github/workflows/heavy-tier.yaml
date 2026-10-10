@@ -1,6 +1,6 @@
 name: Heavy tier
 
-# Reusable: called by regression.yaml (nightly, tags) and by release.yaml,
+# Reusable: called by regression.yaml (nightly, on demand) and by release.yaml,
 # which gates publishing on it. Kept in its own file so the release gate and
 # the nightly run the same definition.
 on:

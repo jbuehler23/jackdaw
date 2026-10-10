@@ -17,13 +17,14 @@ env:
   toolchain: 1.99.0
 
 jobs:
-  # Release gates a tag on this same reusable workflow.
+  # Release gates a tag on this same reusable workflow and runs the install
+  # journeys itself, so a tag here runs only the cross-platform tiers.
   heavy:
-    if: github.event.schedule != '0 8 * * 0'
+    if: github.event_name != 'push' && github.event.schedule != '0 8 * * 0'
     uses: ./.github/workflows/heavy-tier.yaml
 
   install:
-    if: github.event.schedule != '0 8 * * 0'
+    if: github.event_name != 'push' && github.event.schedule != '0 8 * * 0'
     uses: ./.github/workflows/install-contract.yaml
     with:
       journey: true
