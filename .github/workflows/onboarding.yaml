@@ -5,8 +5,8 @@ name: Onboarding pipeline
 # dlopen, and a scaffolded game's schema). Game binary Play runs in the
 # heavy tier and on pull requests that touch it. They build the whole
 # editor with the dylib feature, so they are kept off the per-PR and
-# post-merge paths: Linux runs nightly and on release tags, and every
-# platform runs on demand.
+# post-merge paths: Linux runs nightly, every platform runs on release
+# tags and on demand.
 
 on:
   push:
@@ -36,14 +36,14 @@ jobs:
   sdk-pipeline:
     name: SDK pipeline - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # Linux runs every probe in about two hours and ten minutes with no cache.
-    timeout-minutes: 160
+    # A cold run takes up to about two and a half hours (Windows).
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
-        # Windows and macOS run on demand only: a cold build of their probes
-        # outlasts a scheduled run.
-        os: ${{ fromJSON(inputs.platforms == 'all' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+        # Windows and macOS stay off the nightly schedule, where a cold build
+        # of their probes is too slow, and run on release tags and on demand.
+        os: ${{ fromJSON((inputs.platforms == 'all' || startsWith(github.ref, 'refs/tags/')) && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
     defaults:
       run:
         shell: bash
