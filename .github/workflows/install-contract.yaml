@@ -1,7 +1,7 @@
 name: Cargo install contract
 
 # Reusable: called by regression.yaml nightly (Linux) and weekly (Windows and
-# macOS), and by release.yaml on release-candidate tags; also runs on demand.
+# macOS), and by release.yaml on release tags; also runs on demand.
 # The command shown in the installation guide must keep selecting one package
 # and producing every public executable. A local path tests the commit under
 # test without a network race against main.

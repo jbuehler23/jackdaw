@@ -6,7 +6,7 @@ on:
     # Sundays: the install journey on Windows and macOS.
     - cron: "37 6 * * 0"
   push:
-    tags: ["v*-rc.*"]
+    tags: ["v*-*"]
   workflow_dispatch: {}
 
 concurrency:
