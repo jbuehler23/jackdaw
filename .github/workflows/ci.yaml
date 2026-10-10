@@ -230,6 +230,16 @@ jobs:
       - name: Integration tier
         run: cargo xtask integration ${{ matrix.shard }}/6 --archive "$RUNNER_TEMP/tests.tar.zst"
 
+      # Per-test timings, so slow tests stay visible.
+      - name: Keep test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-integration-${{ matrix.shard }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Play builds a game with cargo and runs it, which is the heavy tier's cost,
   # so pull requests run it only when they touch the Play pipeline.
   play-paths:
