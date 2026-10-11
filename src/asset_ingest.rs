@@ -290,26 +290,28 @@ fn viewport_center_placement(
 /// image was handled (so the caller skips the entity paste), false otherwise
 /// (no clipboard image -> fall through to the normal paste).
 pub(crate) fn paste_clipboard_image(world: &mut World) -> bool {
+    if !world.contains_resource::<crate::entity_ops::SystemClipboard>() {
+        return false;
+    }
     let image = {
-        let Some(mut cb) = world.get_resource_mut::<crate::entity_ops::SystemClipboard>() else {
+        let Some(mut clipboard) = world.get_resource_mut::<Clipboard>() else {
             return false;
         };
-        match cb.get_image() {
+        match clipboard.fetch_image() {
             Ok(image) => image,
             Err(_) => return false,
         }
     };
 
     let mut png: Vec<u8> = Vec::new();
-    let encoded = image::RgbaImage::from_raw(
-        image.width as u32,
-        image.height as u32,
-        image.bytes.into_owned(),
-    )
-    .and_then(|img| {
-        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .ok()
-    });
+    let (width, height) = (image.width(), image.height());
+    let encoded = image
+        .data
+        .and_then(|bytes| image::RgbaImage::from_raw(width, height, bytes))
+        .and_then(|img| {
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .ok()
+        });
     // Each of these three is a paste that produced nothing. Saying so in the
     // status bar is what keeps the press from looking like a dead key.
     if encoded.is_none() {

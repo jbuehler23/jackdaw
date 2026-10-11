@@ -20,22 +20,13 @@ use crate::{
     selection::{Selected, Selection},
 };
 
-/// System clipboard for copy/paste of entities as scene text. On X11 the
-/// clipboard is ownership-based, so the `Clipboard` has to stay alive.
-#[derive(Resource)]
+/// Routes entity copy and paste through the OS clipboard, Bevy's [`Clipboard`].
+/// Without it they use the [`EntityClipboard`] mirror alone.
+#[derive(Resource, Default)]
 pub struct SystemClipboard {
-    clipboard: arboard::Clipboard,
     /// The text this editor last put on the OS clipboard, so a paste can tell
     /// its own emission from a stranger's.
     last_emitted: String,
-}
-
-impl SystemClipboard {
-    /// The OS clipboard image as owned RGBA8, or an error when the clipboard
-    /// holds no image.
-    pub(crate) fn get_image(&mut self) -> Result<arboard::ImageData<'static>, arboard::Error> {
-        self.clipboard.get_image()
-    }
 }
 
 /// The last entity subtree copied in this editor, as BSN text. It mirrors every
@@ -55,18 +46,8 @@ pub struct EntityOpsPlugin;
 impl Plugin for EntityOpsPlugin {
     fn build(&self, app: &mut App) {
         // Note: GltfSource type registration is handled by SceneTypesPlugin
-        match arboard::Clipboard::new() {
-            Ok(clipboard) => {
-                app.insert_resource(SystemClipboard {
-                    clipboard,
-                    last_emitted: String::new(),
-                });
-            }
-            Err(e) => {
-                warn!("Failed to initialize system clipboard: {e}");
-            }
-        }
-        app.init_resource::<EntityClipboard>()
+        app.init_resource::<SystemClipboard>()
+            .init_resource::<EntityClipboard>()
             .init_resource::<PendingModelRoots>()
             .add_systems(Update, hand_out_model_roots)
             .add_systems(PostUpdate, ask_for_waiting_models)
@@ -1530,13 +1511,26 @@ fn selection_as_bsn(world: &mut World) -> Option<String> {
 /// Put `text` on the OS clipboard, and on the editor's own [`EntityClipboard`]
 /// either way, so a run with no OS clipboard still copies and pastes.
 fn write_clipboard(world: &mut World, text: String) {
-    if let Some(mut clipboard) = world.get_resource_mut::<SystemClipboard>() {
-        clipboard.last_emitted = text.clone();
-        if let Err(error) = clipboard.clipboard.set_text(&text) {
+    if let Some(mut system) = world.get_resource_mut::<SystemClipboard>() {
+        system.last_emitted.clone_from(&text);
+        if let Some(mut clipboard) = world.get_resource_mut::<Clipboard>()
+            && let Err(error) = clipboard.set_text(text.as_str())
+        {
             warn!("Copy: system clipboard failed ({error}), keeping the editor's own copy");
         }
     }
     world.resource_mut::<EntityClipboard>().text = text;
+}
+
+/// The OS clipboard's text, or `None` when entity paste does not use the OS
+/// clipboard or it holds no text.
+fn os_clipboard_text(world: &mut World) -> Option<String> {
+    world.get_resource::<SystemClipboard>()?;
+    world
+        .get_resource_mut::<Clipboard>()?
+        .fetch_text()
+        .poll_result()?
+        .ok()
 }
 
 /// The largest clipboard payload a paste will read. Anything past it is refused
@@ -1592,12 +1586,9 @@ fn clipboard_entities(world: &mut World) -> Option<String> {
         .map(|clipboard| clipboard.text.clone())
         .filter(|text| !text.trim().is_empty());
 
-    let os_text = world
-        .get_resource_mut::<SystemClipboard>()
-        .and_then(|mut clipboard| {
-            let text = clipboard.clipboard.get_text().ok()?;
-            Some((text, clipboard.last_emitted.clone()))
-        })
+    let os_text = os_clipboard_text(world)
+        .zip(world.get_resource::<SystemClipboard>())
+        .map(|(text, system)| (text, system.last_emitted.clone()))
         .filter(|(text, _)| !text.trim().is_empty());
 
     choose_clipboard_text(world, own, os_text)
@@ -2057,9 +2048,7 @@ fn paste_clipboard(world: &mut World, target: PasteTarget) {
         return;
     }
     // The size cap refuses before the parse, so say which of the two it was.
-    let oversized = world
-        .get_resource_mut::<SystemClipboard>()
-        .and_then(|mut clipboard| clipboard.clipboard.get_text().ok())
+    let oversized = os_clipboard_text(world)
         .map(|text| text.len())
         .filter(|&bytes| bytes > MAX_CLIPBOARD_BYTES);
     match oversized {

@@ -786,12 +786,15 @@ checksum = "d0a9792c7f2e8b5b71b9572a6d98fca4ee88ed186c8a02e164540c461ae3a92e"
 dependencies = [
  "arboard",
  "bevy_app",
+ "bevy_asset",
  "bevy_ecs",
+ "bevy_image",
  "bevy_log",
  "bevy_platform",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wgpu-types 29.0.4",
 ]
 
 [[package]]
@@ -4392,7 +4395,6 @@ name = "jackdaw"
 version = "0.19.0-rc.10"
 dependencies = [
  "anyhow",
- "arboard",
  "avian3d",
  "base64 0.22.1",
  "bevy",

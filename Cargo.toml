@@ -72,7 +72,11 @@ members = [
 ]
 
 [dependencies]
-bevy = { workspace = true, features = ["system_font_discovery"] }
+bevy = { workspace = true, features = [
+    "system_font_discovery",
+    "system_clipboard",
+    "clipboard_image",
+] }
 jackdaw_jsn.workspace = true
 jackdaw_bsn.workspace = true
 jackdaw_prefab.workspace = true
@@ -161,7 +165,6 @@ bevy_rerecast.workspace = true
 ehttp.workspace = true
 base64.workspace = true
 anyhow.workspace = true
-arboard = { version = "3", features = ["wayland-data-control"] }
 dirs.workspace = true
 regex.workspace = true
 pathdiff.workspace = true
