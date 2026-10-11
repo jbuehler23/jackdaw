@@ -170,7 +170,10 @@ fn sync_build_panel(
             (label, tokens::TEXT_SECONDARY, Some(log), true)
         }
         BuildState::Ready { components, .. } => (
-            format!("Build succeeded - {components} components"),
+            match &build_status.outcome {
+                Some(outcome) => format!("Build succeeded - {outcome}"),
+                None => format!("Build succeeded - {components} components"),
+            },
             tokens::TEXT_SUCCESS,
             None,
             false,
@@ -188,7 +191,10 @@ fn sync_build_panel(
             false,
         ),
         BuildState::Idle => (
-            "No build running".to_string(),
+            build_status
+                .outcome
+                .clone()
+                .unwrap_or_else(|| "No build running".to_string()),
             tokens::TEXT_SECONDARY,
             None,
             false,
@@ -208,6 +214,18 @@ fn sync_build_panel(
         && log.content != content
     {
         log.content = content;
+    }
+    // The compiler output ends before the library is loaded; finish the log
+    // with what came of it.
+    if !building
+        && let Some(outcome) = &build_status.outcome
+        && let Ok(mut log) = logs.single_mut()
+        && !log.content.ends_with(outcome.as_str())
+    {
+        if !log.content.is_empty() && !log.content.ends_with('\n') {
+            log.content.push('\n');
+        }
+        log.content.push_str(outcome);
     }
     if let Ok(mut visibility) = track.single_mut() {
         let desired = if building {
@@ -241,9 +259,13 @@ fn animate_build_bar(
     }
 }
 
-/// Reset the once-per-open focus flag when a project opens.
-fn reset_build_focus(mut focus: ResMut<BuildPanelFocus>) {
+/// Reset the once-per-open focus flag and the last project's build outcome
+/// when a project opens.
+fn reset_build_focus(mut focus: ResMut<BuildPanelFocus>, status: Option<ResMut<BuildStatus>>) {
     focus.first_build_shown = false;
+    if let Some(mut status) = status {
+        status.outcome = None;
+    }
 }
 
 /// Bring the Build panel to the front on the first build after opening a

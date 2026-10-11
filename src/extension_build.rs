@@ -407,11 +407,16 @@ fn fail(world: &mut World, progress: &Mutex<BuildProgress>, message: String) {
 }
 
 fn report_failure(world: &mut World, message: String) {
-    world.resource_mut::<BuildStatus>().state = BuildState::Failed { at: Instant::now() };
+    {
+        let mut status = world.resource_mut::<BuildStatus>();
+        status.state = BuildState::Failed { at: Instant::now() };
+        status.outcome = Some(message.clone());
+    }
     crate::status_bar::notify_error(world, message);
 }
 
-fn report_ready(world: &mut World) {
+fn report_ready(world: &mut World, outcome: String) {
+    world.resource_mut::<BuildStatus>().outcome = Some(outcome);
     let components = world
         .get_resource::<crate::project_types::ProjectTypes>()
         .map_or(0, |types| types.components().count());
@@ -449,7 +454,7 @@ fn load_built_extension(world: &mut World) {
     world.resource_mut::<ExtensionBuild>().attempted = stamp.clone();
     if stamp.is_some() && world.resource::<ExtensionBuild>().loaded == stamp {
         info!("Extension unchanged since it was loaded; not loading it again");
-        report_ready(world);
+        report_ready(world, "Extension unchanged, already loaded".to_string());
         return;
     }
 
@@ -468,7 +473,9 @@ fn load_built_extension(world: &mut World) {
         Ok(id) => {
             info!("Loaded extension `{id}` from {}", dylib.display());
             world.resource_mut::<ExtensionBuild>().loaded = stamp;
-            report_ready(world);
+            let outcome = format!("Loaded extension {id}");
+            crate::status_bar::notify_info(world, outcome.clone());
+            report_ready(world, outcome);
         }
         Err(error) if job.recorded => {
             info!("The last extension build did not load, building it again: {error}");
@@ -668,6 +675,14 @@ mod tests {
             world.resource::<BuildStatus>().state,
             BuildState::Failed { .. }
         ));
+        assert!(
+            world
+                .resource::<BuildStatus>()
+                .outcome
+                .as_deref()
+                .is_some_and(|outcome| outcome.contains("linker missing")),
+            "the failure is what the build log ends on"
+        );
     }
 
     #[test]
@@ -711,6 +726,11 @@ mod tests {
             world.resource::<BuildStatus>().state,
             BuildState::Ready { .. }
         ));
+        assert_eq!(
+            world.resource::<BuildStatus>().outcome.as_deref(),
+            Some("Extension unchanged, already loaded"),
+            "the build log says what came of the build"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

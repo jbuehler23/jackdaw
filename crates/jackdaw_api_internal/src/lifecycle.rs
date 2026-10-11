@@ -479,6 +479,92 @@ pub fn disable_extension(world: &mut World, id: &str) -> bool {
     true
 }
 
+/// The dock layout before an extension is reloaded, so the reload can put
+/// back the tabs its unload closed.
+pub struct DockLayoutSnapshot {
+    live: Option<jackdaw_panels::tree::DockTree>,
+    workspaces: Vec<(String, jackdaw_panels::tree::DockTree)>,
+}
+
+impl DockLayoutSnapshot {
+    /// Record the live dock tree and every workspace's tree.
+    pub fn capture(world: &World) -> Self {
+        Self {
+            live: world
+                .get_resource::<jackdaw_panels::tree::DockTree>()
+                .cloned(),
+            workspaces: world
+                .get_resource::<jackdaw_panels::WorkspaceRegistry>()
+                .map(|registry| {
+                    registry
+                        .workspaces
+                        .iter()
+                        .map(|workspace| (workspace.id.clone(), workspace.tree.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Put back each recorded tree that has lost tabs since the capture,
+    /// leaving out the tabs of windows that are no longer registered.
+    pub fn restore(self, world: &mut World) {
+        let Some(registry) = world.get_resource::<jackdaw_panels::WindowRegistry>() else {
+            return;
+        };
+        let live = self.live.and_then(|snapshot| {
+            let current = world.get_resource::<jackdaw_panels::tree::DockTree>()?;
+            restored_tree(snapshot, current, registry)
+        });
+        let workspaces: Vec<(String, jackdaw_panels::tree::DockTree)> = world
+            .get_resource::<jackdaw_panels::WorkspaceRegistry>()
+            .map(|workspaces| {
+                self.workspaces
+                    .into_iter()
+                    .filter_map(|(id, snapshot)| {
+                        let current = &workspaces.workspaces.iter().find(|w| w.id == id)?.tree;
+                        Some((id, restored_tree(snapshot, current, registry)?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(tree) = live {
+            *world.resource_mut::<jackdaw_panels::tree::DockTree>() = tree;
+        }
+        if let Some(mut registry) = world.get_resource_mut::<jackdaw_panels::WorkspaceRegistry>() {
+            for (id, tree) in workspaces {
+                if let Some(workspace) = registry.workspaces.iter_mut().find(|w| w.id == id) {
+                    workspace.tree = tree;
+                }
+            }
+        }
+    }
+}
+
+/// `snapshot` without the tabs of unregistered windows, when `current` has
+/// lost a tab `snapshot` holds. `None` when nothing was lost.
+fn restored_tree(
+    mut snapshot: jackdaw_panels::tree::DockTree,
+    current: &jackdaw_panels::tree::DockTree,
+    registry: &jackdaw_panels::WindowRegistry,
+) -> Option<jackdaw_panels::tree::DockTree> {
+    let lost = snapshot
+        .tabs()
+        .any(|(_, tab)| !current.has_window_kind(&tab.window_id));
+    if !lost {
+        return None;
+    }
+    let unregistered: Vec<String> = snapshot
+        .tabs()
+        .filter(|(_, tab)| registry.get(&tab.window_id).is_none())
+        .map(|(_, tab)| tab.window_id.clone())
+        .collect();
+    for window in unregistered {
+        snapshot.remove_window_kind(&window);
+    }
+    Some(snapshot)
+}
+
 /// Internal component holding the extension trait object for the duration
 /// of its lifetime. Used by [`unload_extension`] to invoke the optional
 /// `unregister` hook before despawning. Not part of the public API.

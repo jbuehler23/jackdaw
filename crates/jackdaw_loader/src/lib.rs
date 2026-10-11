@@ -404,7 +404,10 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<String, LoadErro
     let id = ext.id();
 
     // Logical unload is immediate. Every host-owned registration is removed,
-    // while LoadedDylibs deliberately retains the superseded mapping.
+    // while LoadedDylibs deliberately retains the superseded mapping. The
+    // unload closes the extension's dock tabs; the layout is put back once the
+    // new copy has registered its windows again.
+    let layout = jackdaw_api_internal::lifecycle::DockLayoutSnapshot::capture(world);
     if world
         .resource::<jackdaw_api_internal::ExtensionCatalog>()
         .contains(&id)
@@ -426,6 +429,7 @@ pub fn load_from_path(world: &mut World, path: &Path) -> Result<String, LoadErro
         jackdaw_api_internal::lifecycle::unregister_dylib_extension(world, &id);
         return Err(LoadError::EntryPanicked);
     }
+    layout.restore(world);
 
     Ok(id)
 }

@@ -16,6 +16,7 @@ mod brush_ops;
 mod canvas_guides;
 mod canvas_snap;
 mod definition_assets;
+mod extension_reload;
 mod foliage;
 mod gltf_authoring;
 mod layered_surface;

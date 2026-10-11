@@ -1525,6 +1525,7 @@ fn reconcile_build_status(world: &mut World) {
     };
     match building {
         Some(progress) => {
+            status.outcome = None;
             status.state = crate::build_status::BuildState::Building {
                 project,
                 started: Instant::now(),

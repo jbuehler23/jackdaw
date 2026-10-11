@@ -17,6 +17,9 @@ use crate::ext_build::BuildProgress;
 #[derive(Resource, Default)]
 pub struct BuildStatus {
     pub state: BuildState,
+    /// What the last finished build led to, such as the extension it
+    /// loaded or why loading failed. Cleared when the next build starts.
+    pub outcome: Option<String>,
 }
 
 /// The states the status bar's right region renders. The `Idle`

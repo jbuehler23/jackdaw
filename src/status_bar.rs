@@ -414,7 +414,9 @@ fn update_status_right(
             return;
         }
         BuildState::Ready { components, .. } => {
-            text.0 = if *components == 0 {
+            text.0 = if let Some(outcome) = &build_status.outcome {
+                outcome.clone()
+            } else if *components == 0 {
                 "Project built".to_string()
             } else {
                 format!("Project built - {components} components")
