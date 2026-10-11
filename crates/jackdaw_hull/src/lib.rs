@@ -17,6 +17,14 @@ use jackdaw_geometry::{
     compute_face_tangent_axes, sort_face_vertices_by_winding,
 };
 
+pub use parry3d::transformation::ConvexHullError;
+
+/// The 3D convex hull of `points` as vertices and triangle indices, or why it
+/// could not be built (too few or degenerate points) instead of panicking.
+pub fn convex_hull(points: &[Vec3]) -> Result<(Vec<Vec3>, Vec<[u32; 3]>), ConvexHullError> {
+    parry3d::transformation::try_convex_hull(points)
+}
+
 /// A coplanar polygon face recovered from a set of convex-hull triangles.
 pub struct HullFace {
     pub normal: Vec3,
@@ -122,8 +130,7 @@ pub fn rebuild_brush_from_vertices(
         return None;
     }
 
-    // parry 0.26 takes / returns plain `Vec3` for vertex inputs.
-    let (hull_positions, hull_tris) = parry3d::transformation::convex_hull(new_vertices);
+    let (hull_positions, hull_tris) = convex_hull(new_vertices).ok()?;
 
     if hull_positions.len() < 4 || hull_tris.is_empty() {
         return None;
@@ -260,7 +267,7 @@ pub fn build_hull_faces_matching(
     if all_local_verts.len() < 4 {
         return None;
     }
-    let (hull_positions, hull_tris) = parry3d::transformation::convex_hull(all_local_verts);
+    let (hull_positions, hull_tris) = convex_hull(all_local_verts).ok()?;
     if hull_positions.len() < 4 || hull_tris.is_empty() {
         return None;
     }

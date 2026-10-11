@@ -6,7 +6,6 @@ use crate::gizmos::gizmo_world_scale;
 use crate::selection::Selected;
 use crate::viewport::{AxisIndicator, MainViewportCamera, SceneViewport};
 use crate::{JackdawDrawSystems, default_style};
-use avian3d::parry::transformation::convex_hull;
 use bevy::light::{FogVolume, VolumetricFog};
 use bevy::picking::prelude::Pickable;
 use bevy::prelude::*;
@@ -230,8 +229,10 @@ fn draw_selection_bounding_boxes(
                 draw_aabb_wireframe(&mut gizmos, min, max, color);
             }
             BoundingBoxMode::ConvexHull => {
-                // parry 0.26 (avian 0.6) takes / returns plain `Vec3`.
-                let (hull_positions, hull_tris) = convex_hull(&world_verts);
+                let Ok((hull_positions, hull_tris)) = jackdaw_hull::convex_hull(&world_verts)
+                else {
+                    continue;
+                };
                 if hull_positions.is_empty() || hull_tris.is_empty() {
                     continue;
                 }
