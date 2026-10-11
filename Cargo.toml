@@ -162,6 +162,8 @@ avian3d.workspace = true
 rfd.workspace = true
 rerecast.workspace = true
 ehttp.workspace = true
+# Hands the BRP client thread's reply back to the task polling it.
+async-channel = "2"
 base64.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
