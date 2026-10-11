@@ -2756,6 +2756,52 @@ mod tests {
     }
 
     #[test]
+    fn import_wraps_default_plugins_in_the_common_main_shapes() {
+        let shapes = [
+            "fn main() {\n    App::new()\n        .add_plugins(DefaultPlugins)\n        \
+             .add_plugins(my_game::GamePlugin)\n        .run();\n}\n",
+            "fn main() { App::new().add_plugins(DefaultPlugins)\
+             .add_plugins(my_game::GamePlugin).run(); }\n",
+            "fn main() {\n    App::new()\n        .add_plugins((DefaultPlugins, my_game::GamePlugin))\n        \
+             .run();\n}\n",
+            "fn main() {\n    App::new()\n        .add_plugins(bevy::DefaultPlugins)\n        \
+             .add_plugins(my_game::GamePlugin)\n        .run();\n}\n",
+            "fn main() {\n    App::new()\n        .add_plugins((\n            \
+             DefaultPlugins.set(WindowPlugin::default()),\n            my_game::GamePlugin,\n        \
+             ))\n        .run();\n}\n",
+            "fn main() -> AppExit {\n    App::new()\n        .add_plugins(DefaultPlugins)\n        \
+             .add_plugins(my_game::GamePlugin)\n        .run()\n}\n",
+            "fn main() {\n    let mut app = App::new();\n    app.add_plugins(DefaultPlugins);\n    \
+             app.add_plugins(my_game::GamePlugin);\n    app.run();\n}\n",
+        ];
+        for (index, shape) in shapes.iter().enumerate() {
+            let root = bevy_game(&format!("wrap-shape-{index}"), "bevy = \"0.19\"\n");
+            std::fs::write(
+                root.join("src/main.rs"),
+                format!("use bevy::prelude::*;\n\n{shape}"),
+            )
+            .unwrap();
+
+            let plan = plan_import_project(&root, None).unwrap();
+            let main = planned_contents(&plan, &root.join("src/main.rs"))
+                .unwrap_or_else(|| panic!("main.rs is not wrapped for:\n{shape}"));
+            assert!(
+                main.contains("jackdaw_runtime::maybe_windowless(default_plugins)"),
+                "got:\n{main}"
+            );
+            assert!(syn::parse_file(&main).is_ok(), "still parses:\n{main}");
+            assert!(
+                !plan
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("pass DefaultPlugins through")),
+                "no manual step is left for:\n{shape}\n{:?}",
+                plan.notes
+            );
+        }
+    }
+
+    #[test]
     fn import_wires_the_runtime_into_a_plain_bevy_game() {
         let root = bevy_game("wire-runtime", "bevy = \"0.19\"\n");
 

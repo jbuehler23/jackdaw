@@ -687,12 +687,12 @@ fn classify_builder(
                 // Capture the DefaultPlugins argument so it can be wrapped with
                 // `maybe_windowless` for embedded Play. First one wins.
                 if default_plugins.is_none()
-                    && arg.trim_start().starts_with("DefaultPlugins")
-                    && let Some(first) = mc.args.first()
+                    && let Some(found) = mc.args.first().and_then(default_plugins_expr)
                 {
-                    let start = offsets.to_byte(first.span().start());
-                    let end = offsets.to_byte(first.span().end());
-                    default_plugins = Some((start, end, arg.clone()));
+                    let start = offsets.to_byte(found.span().start());
+                    let end = offsets.to_byte(found.span().end());
+                    let text = offsets.slice_span(found.span()).to_string();
+                    default_plugins = Some((start, end, text));
                     default_call_start = offsets.to_byte(mc.span().start());
                 }
                 kept_plugins.push(arg);
@@ -836,6 +836,29 @@ fn is_gated_schedule(expr: &syn::Expr) -> bool {
 
 /// Verbatim source text of a call's first argument, for summaries and the
 /// ambient-plugin check.
+/// The `DefaultPlugins` expression an `add_plugins` argument adds, with any
+/// `.set(..)`/`.disable::<..>()` calls on it: the argument itself, or one
+/// element of a plugin tuple. The path may be qualified, as in
+/// `bevy::DefaultPlugins`.
+fn default_plugins_expr(arg: &syn::Expr) -> Option<&syn::Expr> {
+    fn rooted_at_default_plugins(expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::MethodCall(mc) => rooted_at_default_plugins(&mc.receiver),
+            syn::Expr::Path(path) => path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "DefaultPlugins"),
+            _ => false,
+        }
+    }
+    match arg {
+        syn::Expr::Tuple(tuple) => tuple.elems.iter().find_map(default_plugins_expr),
+        syn::Expr::Paren(paren) => default_plugins_expr(&paren.expr),
+        expr => rooted_at_default_plugins(expr).then_some(expr),
+    }
+}
+
 fn first_arg_text(mc: &syn::ExprMethodCall, offsets: &LineOffsets<'_>) -> String {
     mc.args
         .first()

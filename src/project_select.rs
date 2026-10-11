@@ -2650,6 +2650,21 @@ fn package_candidate_row(name: String, root: PathBuf, allow_bevy_mismatch: bool)
     }
 }
 
+/// What happens to the lockfile: import leaves it alone, but a manifest edit
+/// means the first build resolves the new dependency into it.
+fn lockfile_note(plan: &crate::scaffold::ImportPlan) -> &'static str {
+    let edits_manifest = plan.changes.iter().any(|change| {
+        matches!(change, ImportChange::WriteFile { path, .. }
+            if path.file_name().is_some_and(|name| name == "Cargo.toml"))
+    });
+    if edits_manifest {
+        "Import does not edit Cargo.lock or target/; the first build updates Cargo.lock for \
+         the Cargo.toml change."
+    } else {
+        "Import does not edit Cargo.lock or target/."
+    }
+}
+
 fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan) {
     let (_, card, font) = spawn_modal_card(world, 560.0, 760.0);
     spawn_card_title(world, card, "Review project integration", &font);
@@ -2658,16 +2673,16 @@ fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan
     // no reassurance: the user reads the summary, not the bullets.
     let intro = if plan.migrated_bin_target {
         format!(
-            "Jackdaw will rewrite `src/main.rs` in `{}`, keeping the original as \
-             `src/main.rs.bak`, and make the changes below. Your lockfile and `target/` are \
-             not touched.",
-            plan.root.display()
+            "Jackdaw will rewrite src/main.rs in {}, keeping the original as \
+             src/main.rs.bak, and make the changes below. {}",
+            plan.root.display(),
+            lockfile_note(&plan)
         )
     } else {
         format!(
-            "Jackdaw will make these changes to `{}`. Your lockfile and `target/` are not \
-             touched.",
-            plan.root.display()
+            "Jackdaw will make these changes to {}. {}",
+            plan.root.display(),
+            lockfile_note(&plan)
         )
     };
     spawn_card_body(world, card, intro, &font);
