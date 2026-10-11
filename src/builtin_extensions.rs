@@ -382,53 +382,6 @@ impl JackdawExtension for AnimationGraphExtension {
     }
 }
 
-/// Terminal placeholder in the bottom dock.
-#[derive(Default)]
-pub struct TerminalExtension;
-
-impl JackdawExtension for TerminalExtension {
-    fn id(&self) -> String {
-        "jackdaw.terminal".to_string()
-    }
-
-    fn label(&self) -> String {
-        "Terminal".to_string()
-    }
-
-    fn kind(&self) -> ExtensionKind {
-        ExtensionKind::Builtin
-    }
-
-    fn register(&self, ctx: &mut ExtensionContext) {
-        ctx.register_window(
-            WindowDescriptor::new("jackdaw.terminal")
-                .with_name("Terminal")
-                .with_icon(Icon::Terminal.unicode())
-                .with_default_area(DefaultArea::BottomDock)
-                .with_priority(2)
-                .with_build(|window| {
-                    window.spawn((
-                        Node {
-                            flex_grow: 1.0,
-                            width: Val::Percent(100.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                        children![(
-                            Text::new("Terminal window (not implemented yet)"),
-                            TextFont {
-                                font_size: tokens::TEXT_SIZE_SM,
-                                ..default()
-                            },
-                            TextColor(tokens::TEXT_DISABLED),
-                        )],
-                    ));
-                }),
-        );
-    }
-}
-
 /// Right-sidebar stack: Components, Terrain, Materials, Resources, Systems.
 #[derive(Default)]
 pub struct InspectorExtension;

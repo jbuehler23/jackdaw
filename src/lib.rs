@@ -715,7 +715,6 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<builtin_extensions::TimelineExtension>()
                 .register_extension::<builtin_extensions::AnimationGraphExtension>()
-                .register_extension::<builtin_extensions::TerminalExtension>()
                 .register_extension::<build_panel::BuildPanelExtension>()
                 .register_extension::<builtin_extensions::InspectorExtension>()
                 .add_plugins(test_input::plugin)
@@ -3259,7 +3258,7 @@ fn build_debug_tree() -> jackdaw_panels::tree::DockTree {
 /// Quad-view workspace: one perspective viewport + three orthographic
 /// viewports (the user toggles each to top / front / right via Numpad
 /// 7 / 1 / 3 once activated). Inspector on the right, hierarchy +
-/// the outliner on the left, project/timeline/terminal on the bottom.
+/// the outliner on the left, project/build/timeline on the bottom.
 fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
     use jackdaw_panels::DockAreaStyle;
     use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
@@ -3318,7 +3317,6 @@ fn build_level_design_tree() -> jackdaw_panels::tree::DockTree {
                 crate::project_window::PROJECT_WINDOW_ID.into(),
                 "jackdaw.build".into(),
                 "jackdaw.timeline".into(),
-                "jackdaw.terminal".into(),
             ])
             .persistent(),
     ));
@@ -3565,7 +3563,14 @@ fn canonicalise_persisted_windows(tree: &mut jackdaw_panels::tree::DockTree) {
         tree.alias_window_kind(retired, project_window::PROJECT_WINDOW_ID);
         claimed = tree.has_window_kind(project_window::PROJECT_WINDOW_ID);
     }
+    for withdrawn in WITHDRAWN_WINDOW_IDS {
+        tree.remove_window_kind(withdrawn);
+    }
 }
+
+/// Windows the editor no longer offers. A saved layout's tabs on them are
+/// dropped rather than left empty.
+const WITHDRAWN_WINDOW_IDS: [&str; 1] = ["jackdaw.terminal"];
 
 /// Open `window_id` in its registered `default_area` leaf. If the
 /// window already lives in a different leaf, move it there (no dupes).
@@ -3749,7 +3754,7 @@ fn sync_active_workspace_from_live_tree(world: &mut World) {
 ///   `- H-split 0.85
 ///       |- V-split 0.8
 ///       |   |- center        (viewport host, headless)
-///       |   `- bottom_dock   (the Project window, the timeline, the terminal)
+///       |   `- bottom_dock   (the Project window, the build log, the timeline)
 ///       `- right_sidebar     (inspector + friends)
 /// ```
 ///
@@ -3862,6 +3867,7 @@ mod retired_window_tests {
         let bottom = tree.insert(DockNode::Leaf(
             DockLeaf::new("bottom_dock", DockAreaStyle::IconSidebar).with_windows(vec![
                 "jackdaw.assets".to_string(),
+                "jackdaw.timeline".to_string(),
                 "jackdaw.terminal".to_string(),
             ]),
         ));
@@ -3895,9 +3901,20 @@ mod retired_window_tests {
             );
         }
         assert!(
-            tree.has_window_kind("jackdaw.terminal"),
+            tree.has_window_kind("jackdaw.timeline"),
             "the rest of the layout is untouched"
         );
+    }
+
+    /// A saved layout with a tab on a window the editor no longer offers
+    /// loads without that tab.
+    #[test]
+    fn a_layout_naming_a_withdrawn_window_loads_without_its_tab() {
+        let mut tree = tree_naming_the_retired_windows();
+
+        canonicalise_persisted_windows(&mut tree);
+
+        assert!(!tree.has_window_kind("jackdaw.terminal"));
     }
 }
 
