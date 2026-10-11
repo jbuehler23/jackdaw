@@ -251,6 +251,7 @@ fn add_window_to_area(world: &mut World, window_id: &str, area_entity: Entity) {
                 display: Display::None,
                 ..default()
             },
+            crate::reconcile::DockTabBuild(build.clone()),
             ChildOf(area_entity),
         ))
         .id();

@@ -9,7 +9,7 @@ use jackdaw_api_internal::lifecycle::{
     load_static_extension,
 };
 use jackdaw_panels::{
-    DockAreaStyle,
+    DockAreaStyle, DockTabContent,
     tree::{DockLeaf, DockTree, NodeId},
 };
 
@@ -33,6 +33,48 @@ impl JackdawExtension for PanelExtension {
                 }),
         );
     }
+}
+
+/// The same extension after a rebuild that changed what its panel shows.
+struct RebuiltPanelExtension;
+
+impl JackdawExtension for RebuiltPanelExtension {
+    fn id(&self) -> String {
+        "reload_sample".to_string()
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_window(
+            WindowDescriptor::new(PANEL)
+                .with_name("Sample Panel")
+                .with_default_area(DefaultArea::BottomDock)
+                .with_build(|window| {
+                    window.spawn(Text::new("Rebuilt panel"));
+                }),
+        );
+    }
+}
+
+/// The text shown inside the panel's tab content.
+fn panel_texts(app: &mut App) -> Vec<String> {
+    let world = app.world_mut();
+    let contents: Vec<Entity> = world
+        .query::<(Entity, &DockTabContent)>()
+        .iter(world)
+        .filter(|(_, content)| content.window_id == PANEL)
+        .map(|(entity, _)| entity)
+        .collect();
+    let mut texts = Vec::new();
+    let mut stack = contents;
+    while let Some(entity) = stack.pop() {
+        if let Some(text) = world.get::<Text>(entity) {
+            texts.push(text.0.clone());
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    texts
 }
 
 /// The windows of `leaf`'s tabs in order, and the one in front.
@@ -116,4 +158,34 @@ fn a_panel_the_reloaded_extension_no_longer_offers_stays_closed() {
     app.update();
 
     assert_eq!(tabs(&app, leaf).0, vec!["jackdaw.build".to_string()]);
+}
+
+#[test]
+fn a_reloaded_panel_shows_what_the_new_build_registers() {
+    let mut app = util::editor_test_app();
+    app.register_extension::<PanelExtension>();
+    enable_extension(app.world_mut(), "reload_sample");
+    app.update();
+    app.world_mut().spawn((
+        jackdaw_panels::reconcile::DockTreeHost::default(),
+        Node::default(),
+    ));
+    app.world_mut().resource_mut::<DockTree>().set_root_leaf(
+        DockLeaf::new("bottom_dock", DockAreaStyle::default())
+            .with_windows(vec![PANEL.to_string(), "jackdaw.build".to_string()]),
+    );
+    app.update();
+    assert_eq!(panel_texts(&mut app), vec!["Sample panel".to_string()]);
+
+    let layout = DockLayoutSnapshot::capture(app.world());
+    disable_extension(app.world_mut(), "reload_sample");
+    load_static_extension(app.world_mut(), Box::new(RebuiltPanelExtension));
+    layout.restore(app.world_mut());
+    app.update();
+
+    assert_eq!(
+        panel_texts(&mut app),
+        vec!["Rebuilt panel".to_string()],
+        "the open panel is built again from the new registration"
+    );
 }

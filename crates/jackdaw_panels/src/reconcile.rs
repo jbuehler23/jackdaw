@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use jackdaw_feathers::tokens;
 
 use crate::area::{ActiveDockWindow, DockArea, DockAreaStyle, DockTab, DockTabContent, DockWindow};
-use crate::registry::WindowRegistry;
+use crate::registry::{DockWindowBuildFn, WindowRegistry};
 use crate::sidebar::{self, DockSidebarIcon};
 use crate::split::{Panel, PanelGroup, PanelHandle};
 use crate::tabs;
@@ -47,6 +47,11 @@ impl Default for DockTreeHost {
 /// (`DockArea`) and split wrapper entities (`PanelGroup`).
 #[derive(Component, Copy, Clone, Debug)]
 pub struct NodeBinding(pub NodeId);
+
+/// The registration a tab's content was built from, so a window registered
+/// again (as when an extension reloads) is built again from the new one.
+#[derive(Component, Clone)]
+pub(crate) struct DockTabBuild(pub(crate) DockWindowBuildFn);
 
 pub struct ReconcilePlugin;
 
@@ -159,6 +164,8 @@ fn reconcile_leaf(world: &mut World, entity: Entity, node_id: NodeId, leaf: &Doc
         }
 
         spawn_leaf_ui(world, entity, leaf);
+    } else {
+        rebuild_reregistered_tabs(world, entity);
     }
 
     world
@@ -341,10 +348,47 @@ fn spawn_leaf_ui(world: &mut World, entity: Entity, leaf: &DockLeaf) {
                     },
                     ..default()
                 },
+                DockTabBuild(build.clone()),
                 ChildOf(entity),
             ))
             .id();
         (build)(&mut ChildSpawner::new(world, content_entity));
+    }
+}
+
+/// Build again the content of `entity`'s tabs whose window has been
+/// registered again since the content was built, in place, so each tab
+/// keeps its position and focus.
+fn rebuild_reregistered_tabs(world: &mut World, entity: Entity) {
+    let children: Vec<Entity> = world
+        .entity(entity)
+        .get::<Children>()
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    for child in children {
+        let Some(built) = world.entity(child).get::<DockTabBuild>().cloned() else {
+            continue;
+        };
+        let Some(window_id) = world
+            .entity(child)
+            .get::<DockTabContent>()
+            .map(|content| content.window_id.clone())
+        else {
+            continue;
+        };
+        let Some(build) = world
+            .resource::<WindowRegistry>()
+            .get(&window_id)
+            .map(|desc| desc.build.clone())
+        else {
+            continue;
+        };
+        if std::sync::Arc::ptr_eq(&built.0, &build) {
+            continue;
+        }
+        despawn_children(world, child);
+        world.entity_mut(child).insert(DockTabBuild(build.clone()));
+        (build)(&mut ChildSpawner::new(world, child));
     }
 }
 
