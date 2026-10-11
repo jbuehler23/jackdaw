@@ -118,6 +118,7 @@ fn changed_shape_is_adoptable_without_restart() {
         "SDK dylib missing; build with --features dylib --target {}",
         sdk.triple
     );
+    util::ensure_sdk_metadata(&sdk);
 
     // v1: original shape, loaded the way the editor loads a project.
     let v1 = build_variant(&sdk, LIB_V1, "v1");
