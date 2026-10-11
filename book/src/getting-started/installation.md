@@ -203,12 +203,12 @@ xattr -dr com.apple.quarantine jackdaw-aarch64-apple-darwin
 ## Cargo install
 
 ```bash
-cargo install jackdaw --locked
+cargo install jackdaw jd --locked
 ```
 
-Any stable Rust from 1.95 on builds the editor. The install provides
-`jackdaw`, `jd`, and `jackdaw-rustc-wrapper`; do not install workspace
-packages individually.
+Any stable Rust from 1.95 on builds the editor. The `jackdaw` package
+provides the editor and `jackdaw-rustc-wrapper`, and the `jd` package
+provides `jd`; install both, and no other workspace packages individually.
 
 The build needs about 10 GB of memory at Cargo's default parallelism. With
 8 GB, close other programs and add `--jobs 2`, or take the release archive.

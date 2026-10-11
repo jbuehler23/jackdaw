@@ -69,7 +69,7 @@ bin_dir=$(absolute "${bin_dir%/}")
 os=$(uname -s)
 arch=$(uname -m)
 unsupported() {
-    err "no prebuilt jackdaw for $os $arch. Install with 'cargo install jackdaw --locked' instead; see https://jbuehler23.github.io/jackdaw/getting-started/installation.html"
+    err "no prebuilt jackdaw for $os $arch. Install with 'cargo install jackdaw jd --locked' instead; see https://jbuehler23.github.io/jackdaw/getting-started/installation.html"
 }
 case "$os" in
     Linux)
@@ -77,7 +77,7 @@ case "$os" in
         if (ldd --version 2>&1 || true) | grep -qi musl; then unsupported; fi
         glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null | sed -n 's/^glibc //p')
         if [ -n "$glibc" ] && [ "$(printf '%s\n2.31\n' "$glibc" | sort -t . -k 1,1n -k 2,2n | head -n 1)" != 2.31 ]; then
-            err "the prebuilt jackdaw needs glibc 2.31 or newer and this system has $glibc. Install with 'cargo install jackdaw --locked' instead"
+            err "the prebuilt jackdaw needs glibc 2.31 or newer and this system has $glibc. Install with 'cargo install jackdaw jd --locked' instead"
         fi
         triple=x86_64-unknown-linux-gnu
         ext=tar.zst

@@ -62,7 +62,7 @@ Or download an archive from
 Cargo:
 
 ```sh
-cargo install jackdaw --locked
+cargo install jackdaw jd --locked
 ```
 
 Every way you need rustup, cmake, and a C/C++ toolchain; `jd doctor` checks

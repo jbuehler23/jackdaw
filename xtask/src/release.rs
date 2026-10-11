@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-/// Crates that must be published: the editor and MCP server users install, and
-/// the crates the project templates depend on.
-const REQUIRED: [&str; 4] = [
+/// Crates that must be published: the editor, `jd` and MCP server users
+/// install, and the crates the project templates depend on.
+const REQUIRED: [&str; 5] = [
     "jackdaw",
+    "jd",
     "jackdaw_mcp",
     "jackdaw_runtime",
     "jackdaw_extension",

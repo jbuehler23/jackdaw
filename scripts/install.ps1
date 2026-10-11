@@ -159,7 +159,7 @@ Environment: JACKDAW_VERSION, JACKDAW_INSTALL_DIR, JACKDAW_NO_MODIFY_PATH=1.
     $arch = $env:PROCESSOR_ARCHITEW6432
     if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
     if ($arch -ne 'AMD64') {
-        throw "no prebuilt jackdaw for Windows $arch. Install with 'cargo install jackdaw --locked' instead; see https://jbuehler23.github.io/jackdaw/getting-started/installation.html"
+        throw "no prebuilt jackdaw for Windows $arch. Install with 'cargo install jackdaw jd --locked' instead; see https://jbuehler23.github.io/jackdaw/getting-started/installation.html"
     }
 
     if ($PSVersionTable.PSEdition -ne 'Core') {

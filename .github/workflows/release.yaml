@@ -148,7 +148,7 @@ jobs:
       # does rather than pointing the project at this checkout.
       - name: Build jd
         run: |
-          cargo build --bin jd
+          cargo build -p jd --bin jd
           mkdir -p "$RUNNER_TEMP/bin"
           cp target/debug/jd "$RUNNER_TEMP/bin/"
 
@@ -223,8 +223,8 @@ jobs:
     if: github.event_name != 'schedule'
     uses: ./.github/workflows/packages.yaml
 
-  # Publishes every crate that is not `publish = false`: the editor and
-  # `jd-mcp` for `cargo install`, and everything a scaffolded project or an
+  # Publishes every crate that is not `publish = false`: the editor, `jd`
+  # and `jd-mcp` for `cargo install`, and everything a scaffolded project or an
   # extension depends on. `cargo xtask publish` orders them by dependency,
   # skips versions already on crates.io and waits out rate limits, so a run
   # cut short is finished by re-running the job.
@@ -413,11 +413,16 @@ jobs:
         if: '!matrix.glibc_target'
         run: cargo build --release -p jackdaw_rustc_wrapper
 
-      # The root package owns the editor, jd, and installed wrapper. The
+      # The root package owns the editor and installed wrapper. The
       # artifact list is kept for the bundler, which would otherwise build
       # again to learn it.
       - name: Build installed binaries (target)
         run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jackdaw --features dylib --bins --message-format=json-render-diagnostics > "$RUNNER_TEMP/bundle-build.json"
+
+      # `jd` on its own: built with the editor's `dylib` features it would
+      # link the Bevy runtime through the schema crate's reflection.
+      - name: Build jd (target)
+        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jd --bin jd
 
       # Under the glibc target the shipped wrapper is the root package's
       # own, built above against the same glibc, placed where the bundler

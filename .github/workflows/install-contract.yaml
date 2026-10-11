@@ -2,14 +2,15 @@ name: Cargo install contract
 
 # Reusable: called by regression.yaml nightly (Linux) and weekly (Windows and
 # macOS), and by release.yaml on release tags; also runs on demand.
-# The command shown in the installation guide must keep selecting one package
-# and producing every public executable. A local path tests the commit under
+# The command shown in the installation guide must keep producing every
+# public executable: the editor and its rustc wrapper from the `jackdaw`
+# package, and `jd` from the `jd` package. A local path tests the commit under
 # test without a network race against main.
 #
 # With `journey`, each install then goes the way a new user does: `jd setup`
 # builds the SDK, `jd new` scaffolds a game, and the game builds. It runs for
 # an install from this checkout and for one from the packaged crates, which is
-# what `cargo install jackdaw` from crates.io builds.
+# what `cargo install jackdaw jd` from crates.io builds.
 on:
   workflow_call:
     inputs:
@@ -87,10 +88,13 @@ jobs:
 
       - name: Install from this checkout
         if: matrix.source == 'checkout'
-        run: cargo install --path . --locked --root "$RUNNER_TEMP/jackdaw-install"
+        run: |
+          set -euo pipefail
+          cargo install --path . --locked --root "$RUNNER_TEMP/jackdaw-install"
+          cargo install --path crates/jd --locked --root "$RUNNER_TEMP/jackdaw-install"
 
       # Outside the checkout, so only the user's cargo configuration applies,
-      # as for `cargo install jackdaw`. The packaged crates stand in for
+      # as for `cargo install jackdaw jd`. The packaged crates stand in for
       # crates.io through the cargo home configuration, which the SDK build
       # and the game build below read too.
       - name: Install from the packaged crates
@@ -101,8 +105,10 @@ jobs:
           cat "$RUNNER_TEMP/packages/.cargo/config.toml" >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
           cd "$RUNNER_TEMP/packages/src"
           editor="$PWD/$(ls -d jackdaw-[0-9]*)"
+          jd="$PWD/$(ls -d jd-[0-9]*)"
           cd "$RUNNER_TEMP"
           cargo install --path "$editor" --root "$RUNNER_TEMP/jackdaw-install"
+          cargo install --path "$jd" --root "$RUNNER_TEMP/jackdaw-install"
 
       - name: Verify installed commands
         run: |

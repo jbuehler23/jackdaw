@@ -391,7 +391,7 @@ jobs:
           set -euxo pipefail
           template="${{ matrix.template }}"
           cargo xtask package "$RUNNER_TEMP/packages"
-          JACKDAW_RELEASE_BUILD=1 cargo build --bin jd
+          JACKDAW_RELEASE_BUILD=1 cargo build -p jd --bin jd
           mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/packages/projects"
           cp target/debug/jd "$RUNNER_TEMP/bin/"
           cp -r .cargo "$RUNNER_TEMP/"
