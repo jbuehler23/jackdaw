@@ -10,7 +10,6 @@ include = ["Cargo.toml", "LICENSE*", "fonts/**/*", "src/**/*"]
 
 [dependencies]
 bevy.workspace = true
-bevy_monitors.workspace = true
 jackdaw_fuzzy.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_widgets.workspace = true

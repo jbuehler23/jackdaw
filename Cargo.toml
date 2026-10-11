@@ -89,7 +89,6 @@ jackdaw_scene_types.workspace = true
 jackdaw_schema.workspace = true
 jackdaw_project_build.workspace = true
 jackdaw_csg.workspace = true
-bevy_monitors.workspace = true
 bevy_window_chrome.workspace = true
 jackdaw_camera.workspace = true
 jackdaw_feathers.workspace = true
@@ -238,7 +237,6 @@ jackdaw_project_build = { version = "0.19.0-rc.10", path = "crates/jackdaw_proje
 jackdaw_bsn = { version = "0.19.0-rc.10", path = "crates/jackdaw_bsn" }
 jackdaw_bind = { version = "0.19.0-rc.10", path = "crates/jackdaw_bind" }
 jackdaw_csg = { version = "0.19.0-rc.10", path = "crates/jackdaw_csg" }
-bevy_monitors = "0.3"
 bevy_window_chrome = { version = "0.19.0-rc.10", path = "crates/bevy_window_chrome" }
 jackdaw_camera = { version = "0.19.0-rc.10", path = "crates/jackdaw_camera" }
 jackdaw_camera_rig = { version = "0.19.0-rc.10", path = "crates/jackdaw_camera_rig" }

@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use bevy::{prelude::*, tasks::Task, tasks::futures_lite::future};
-use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_feathers::{
     tokens,
     tree_view::{TreeRowStyle, set_row_expand_toggle, tree_row},
 };
 use jackdaw_remote::scene_snapshot::RemoteEntity;
+use jackdaw_widgets::monitors::{Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeNode, TreeNodeExpanded, TreeRowChildren,
     TreeRowClicked, TreeRowContent, TreeRowLabel, TreeRowSelected,
@@ -21,7 +21,7 @@ pub struct RemoteEntityProxy {
 }
 
 /// Display name extracted from snapshot, stored on proxy entities.
-/// `bevy_monitors` watches this for Mutation events.
+/// The monitors watch this for Mutation events.
 #[derive(Component, Default)]
 pub struct RemoteEntityName(pub Option<String>);
 

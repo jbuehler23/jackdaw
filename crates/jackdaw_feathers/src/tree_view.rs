@@ -5,7 +5,7 @@ use bevy::{
     ui::Checked,
     ui_widgets::{ValueChange, observe},
 };
-use bevy_monitors::prelude::{Mutation, NotifyChanged};
+use jackdaw_widgets::monitors::{Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeDragCancelled, TreeDropLine, TreeFocused, TreeNode,
     TreeNodeExpandToggle, TreeNodeExpanded, TreeRoot, TreeRowChildren, TreeRowClicked,

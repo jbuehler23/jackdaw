@@ -3,7 +3,8 @@ use bevy::{
     prelude::*,
     window::SystemCursorIcon,
 };
-use bevy_monitors::prelude::{Mutation, NotifyChanged};
+
+use crate::monitors::{Mutation, NotifyChanged};
 
 #[derive(Component)]
 pub struct PanelGroup {

@@ -1434,17 +1434,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
-name = "bevy_monitors"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8749206cc67a567f0d3296a690f6ba317c6ec3f943156e515f0559d01a619db"
-dependencies = [
- "bevy_app",
- "bevy_ecs",
- "bevy_reflect",
-]
-
-[[package]]
 name = "bevy_pbr"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4399,7 +4388,6 @@ dependencies = [
  "base64 0.22.1",
  "bevy",
  "bevy_enhanced_input",
- "bevy_monitors",
  "bevy_rerecast",
  "bevy_window_chrome",
  "ctrlc",
@@ -4666,7 +4654,6 @@ version = "0.19.0-rc.10"
 dependencies = [
  "bevy",
  "bevy_enhanced_input",
- "bevy_monitors",
  "jackdaw_commands",
  "jackdaw_fuzzy",
  "jackdaw_localization",
@@ -4794,7 +4781,6 @@ version = "0.19.0-rc.10"
 dependencies = [
  "bevy",
  "bevy_enhanced_input",
- "bevy_monitors",
  "jackdaw_commands",
  "jackdaw_feathers",
  "jackdaw_localization",
@@ -4999,7 +4985,6 @@ version = "0.19.0-rc.10"
 dependencies = [
  "bevy",
  "bevy_enhanced_input",
- "bevy_monitors",
  "jackdaw_commands",
  "lucide-icons",
 ]

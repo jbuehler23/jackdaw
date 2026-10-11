@@ -30,7 +30,7 @@ use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, Collapsib
 use jackdaw_feathers::text_edit::TextEditValue;
 use std::collections::HashSet;
 
-use bevy_monitors::prelude::{Addition, Monitor, NotifyAdded};
+use jackdaw_widgets::monitors::{Addition, Monitor, NotifyAdded};
 
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_geometry::is_convex_topology;

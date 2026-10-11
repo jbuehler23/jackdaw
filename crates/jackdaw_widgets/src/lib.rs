@@ -2,6 +2,7 @@ pub mod collapsible;
 pub mod context_menu;
 pub mod file_browser;
 pub mod menu_bar;
+pub mod monitors;
 pub mod radial_menu;
 pub mod split_panel;
 pub mod tree_view;

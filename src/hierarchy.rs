@@ -6,7 +6,6 @@ use bevy::{
     ui::ui_transform::UiGlobalTransform,
 };
 use bevy_enhanced_input::prelude::{Press, *};
-use bevy_monitors::prelude::{Mutation, NotifyChanged};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 use jackdaw_api_internal::keymap::PresetInput;
@@ -18,6 +17,7 @@ use jackdaw_feathers::{
     tree_view::{ROW_BG, set_row_expand_toggle, tree_row_frame},
 };
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
+use jackdaw_widgets::monitors::{Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
     EntityCategory, TreeChildrenPopulated, TreeFocused, TreeIndex, TreeNode, TreeNodeExpanded,
     TreeRowChildren, TreeRowClicked, TreeRowContent, TreeRowDot, TreeRowDropped,
