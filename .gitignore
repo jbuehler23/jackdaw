@@ -20,3 +20,5 @@ tests/fixtures/**/Cargo.lock
 # web explorer app
 web/explorer/node_modules
 /.jsn
+# the lightyear integration is a separate workspace
+integrations/*/target

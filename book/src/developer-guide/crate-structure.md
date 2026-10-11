@@ -76,10 +76,12 @@ else in the workspace. The interesting layers:
   traversal, UV projection, ray and point queries, convex
   hulls, PBR texture-set detection). No bevy dependency; the
   editor is a thin adapter over them.
-- `jackdaw_multiplayer`, `jackdaw_multiplayer_editor`,
-  `jackdaw_multiplayer_lightyear`: networking authoring. The
-  editor writes replication metadata only; the lightyear
-  backend lives game-side.
+- `jackdaw_multiplayer`, `jackdaw_multiplayer_editor`: networking
+  authoring. The editor writes replication metadata only.
+- `integrations/jackdaw_multiplayer_lightyear`: the game-side
+  lightyear backend. It is its own workspace with its own
+  lockfile, so the editor workspace never resolves lightyear;
+  build it with `--manifest-path`.
 - `jackdaw_localization`: editor string catalogue.
 - `bevy_window_chrome`: custom title bar window chrome for Bevy.
 

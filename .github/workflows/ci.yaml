@@ -451,6 +451,52 @@ jobs:
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
 
+  # The lightyear backend is its own workspace so the editor never resolves
+  # lightyear; it is linted and tested here instead.
+  lightyear:
+    name: Lightyear integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MANIFEST: integrations/jackdaw_multiplayer_lightyear/Cargo.toml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: clippy, rustfmt
+          toolchain: ${{ env.toolchain }}
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: integrations/jackdaw_multiplayer_lightyear
+
+      - name: Run cargo fmt
+        run: cargo fmt --manifest-path "$MANIFEST" --all -- --check
+
+      - name: Run clippy lints
+        run: cargo clippy --locked --manifest-path "$MANIFEST" --all-targets -- --deny warnings
+
+      - name: Run tests
+        run: cargo test --locked --manifest-path "$MANIFEST"
+
   # Check formatting.
   format:
     name: Format
