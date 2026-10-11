@@ -7,6 +7,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+mod add_component;
 mod animation_graph;
 mod animation_library;
 mod animation_markers;

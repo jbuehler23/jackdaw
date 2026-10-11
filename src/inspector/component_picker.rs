@@ -19,9 +19,9 @@ use super::ComponentPicker;
 use crate::project_types::ProjectTypes;
 use crate::type_metadata::TypeMetadata;
 
-/// Marker on the "Add Component" button inside the Components add-header.
-/// `on_add_component_button_click` guards on this to avoid reacting to
-/// unrelated button clicks.
+/// Marker on the "Add Component" button in the add-header of every category
+/// without an add action of its own. `on_add_component_button_click` guards on
+/// this to avoid reacting to unrelated button clicks.
 #[derive(Component)]
 pub struct InspectorAddComponentButton;
 
@@ -193,8 +193,8 @@ impl Matchable for ComponentInfo {
     }
 }
 
-/// Handle click on the Components-category "Add Component" button in the
-/// per-category add-header. Opens the unscoped component picker listing all
+/// Handle click on an "Add Component" button in the per-category
+/// add-header. Opens the unscoped component picker listing all
 /// addable components for the selected entity.
 pub(crate) fn on_add_component_button_click(
     event: On<jackdaw_feathers::button::ButtonClickEvent>,
@@ -304,10 +304,19 @@ pub(crate) fn on_add_component_button_click(
 fn on_select(
     input: In<SelectInput>,
     items: Query<(&ComponentPicker, &PickerItems<ComponentInfo>)>,
+    categories: Res<jackdaw_api_internal::inspector::InspectorRegistry>,
+    mut active: ResMut<super::category_strip::ActiveInspectorCategory>,
     mut commands: Commands,
 ) -> Result {
     let (picker, items) = items.get(input.entities.picker)?;
     let info = items.at(input.index)?;
+
+    // Show the category the new card lands in, so adding from another
+    // category's view does not leave the user looking at no change.
+    let category = categories.category_for(&info.type_path_full);
+    if active.0 != category {
+        active.0 = std::borrow::Cow::Owned(category.to_string());
+    }
 
     commands
         .operator(crate::inspector::ops::ComponentAddOp::ID)

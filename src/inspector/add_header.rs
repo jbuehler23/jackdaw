@@ -105,13 +105,6 @@ fn build_add_header_children(
     has_collider: bool,
 ) {
     match category {
-        "components" => {
-            commands.spawn((
-                button(ButtonProps::new("Add Component").align_left()),
-                InspectorAddComponentButton,
-                ChildOf(host),
-            ));
-        }
         "modifiers" => {
             commands.spawn((
                 button(ButtonProps::new("Add Modifier").align_left()),
@@ -157,7 +150,13 @@ fn build_add_header_children(
                 spawn_material_header(world, host_captured);
             });
         }
-        _ => {}
+        _ => {
+            commands.spawn((
+                button(ButtonProps::new("Add Component").align_left()),
+                InspectorAddComponentButton,
+                ChildOf(host),
+            ));
+        }
     }
 }
 

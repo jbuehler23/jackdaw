@@ -33,9 +33,9 @@ pub(crate) fn applicable_categories<'a>(
 /// Category ids (in strip order) that are SHOWN for the current selection.
 ///
 /// "object" and "components" are always shown: every entity can receive a
-/// component, so the Components tab (which hosts the Add Component button) must
-/// stay reachable even before the entity has any generic component. "mesh" is
-/// shown only when a Brush card is present. "modifiers", "material", and
+/// component, so the Components tab must stay reachable even before the entity
+/// has any generic component. "mesh" is shown only when a Brush card is
+/// present. "modifiers", "material", and
 /// "physics" are shown when a Brush is present OR when the category already has
 /// a card. Extension ids are shown only when they have a card.
 ///
