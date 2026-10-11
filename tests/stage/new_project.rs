@@ -13,10 +13,12 @@ use bevy::picking::{
     pointer::{Location, PointerButton, PointerId},
 };
 use bevy::prelude::*;
+use bevy::text::EditableText;
+use bevy::ui::InteractionDisabled;
 use bevy::window::{PrimaryWindow, WindowRef};
 use jackdaw::project_select::NewProjectCreateButton;
 use jackdaw::scaffold::TemplateKind;
-use jackdaw_feathers::text_edit::TextEditValue;
+use jackdaw_feathers::text_edit::{EditorTextEdit, TextEditValue, set_text_input_value};
 
 /// A config directory of this process's own, with the background game build
 /// switched off. Creating a project remembers where it was made, and opening
@@ -171,4 +173,83 @@ fn a_name_the_command_line_would_refuse_is_refused_by_the_dialog_too() {
         "nothing was scaffolded for a refused name"
     );
     assert!(open_project(&app).is_none(), "and no project was opened");
+}
+
+/// The text input inside the dialog's name field.
+fn name_field(app: &mut App) -> Entity {
+    let wrapper = app
+        .world_mut()
+        .query::<(Entity, &TextEditValue)>()
+        .iter(app.world())
+        .find_map(|(entity, value)| (value.0 == "my_game").then_some(entity))
+        .expect("the name field");
+    let mut pending = vec![wrapper];
+    while let Some(entity) = pending.pop() {
+        if app.world().get::<EditorTextEdit>(entity).is_some() {
+            return entity;
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            pending.extend(children.iter());
+        }
+    }
+    panic!("the name field has a text input");
+}
+
+#[test]
+fn while_a_create_runs_the_dialog_is_locked_and_quiet_about_its_own_folder() {
+    let projects = tempfile::tempdir().expect("tempdir");
+    remember_location(projects.path());
+    let mut app = util::editor_test_app();
+
+    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    for _ in 0..4 {
+        app.update();
+    }
+    let field = name_field(&mut app);
+    set_text_input_value(
+        &mut app
+            .world_mut()
+            .get_mut::<EditableText>(field)
+            .expect("an editable name"),
+        "Locked Dialog".to_string(),
+    );
+    for _ in 0..2 {
+        app.update();
+    }
+    let create = create_button(&mut app);
+    click(&mut app, create);
+
+    let project = projects.path().join("locked-dialog");
+    util::update_until(
+        &mut app,
+        "the create to fill the project folder",
+        Duration::from_secs(60),
+        |_| project.join("Cargo.toml").is_file(),
+    );
+    app.update();
+
+    let texts: Vec<String> = app
+        .world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .map(|text| text.0.clone())
+        .collect();
+    assert!(
+        texts.iter().any(|text| text.starts_with("Creating ")),
+        "the create is still running: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("already exists")),
+        "the folder being created is not reported as in the way: {texts:?}"
+    );
+    assert!(
+        app.world().get::<InteractionDisabled>(create).is_some(),
+        "Create cannot be pressed again"
+    );
+    assert!(
+        app.world().get::<InteractionDisabled>(field).is_some(),
+        "the name field is locked"
+    );
+
+    open_after(&mut app, &project);
 }

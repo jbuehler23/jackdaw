@@ -2,14 +2,16 @@ use std::path::{Path, PathBuf};
 
 use bevy::text::{FontSize, FontSourceTemplate};
 use bevy::{
+    input_focus::InputFocus,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures_lite::future},
+    ui::InteractionDisabled,
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use jackdaw_feathers::{
     button::{ButtonVariant, IconButtonProps, icon_button},
     icons::{EditorFont, Icon, font_paths},
-    text_edit::{TextEditProps, TextEditValue, text_edit},
+    text_edit::{EditorTextEdit, TextEditProps, TextEditValue, text_edit},
     tokens,
 };
 use jackdaw_project_build::project_manifest;
@@ -56,7 +58,11 @@ impl Plugin for ProjectSelectPlugin {
             // Both are cheap no-ops when the modal is closed.
             .add_systems(
                 Update,
-                (poll_new_project_tasks, refresh_new_project_validation),
+                (
+                    poll_new_project_tasks,
+                    refresh_new_project_validation,
+                    lock_new_project_dialog_while_creating,
+                ),
             )
             .add_systems(
                 Update,
@@ -3279,7 +3285,10 @@ fn refresh_new_project_validation(
         return;
     };
     let raw = value.0.trim();
-    let (message, valid) = if raw.is_empty() {
+    // While a create runs its target fills up, and checking the name against
+    // it would report the project being made as already in the way.
+    let creating = state.scaffold_task.is_some();
+    let (message, valid) = if creating || raw.is_empty() {
         (String::new(), false)
     } else {
         match crate::scaffold::validated_project_name(raw) {
@@ -3303,7 +3312,7 @@ fn refresh_new_project_validation(
         }
     }
     // Dim rather than remove: the button still answers when pressed.
-    let fill = if valid {
+    let fill = if valid && !creating {
         tokens::SELECTED_BG
     } else {
         tokens::TOOLBAR_BG
@@ -3311,6 +3320,86 @@ fn refresh_new_project_validation(
     for mut background in create_buttons.iter_mut() {
         if background.0 != fill {
             background.0 = fill;
+        }
+    }
+}
+
+/// Lock the dialog's name, location and Create controls while a create
+/// runs, so nothing the create was started with changes under it and it
+/// cannot be started twice.
+fn lock_new_project_dialog_while_creating(
+    mut commands: Commands,
+    state: Res<NewProjectState>,
+    buttons: Query<
+        (
+            Entity,
+            Has<InteractionDisabled>,
+            Has<NewProjectResetLocationButton>,
+            Option<&Children>,
+        ),
+        Or<(
+            With<NewProjectCreateButton>,
+            With<NewProjectBrowseButton>,
+            With<NewProjectResetLocationButton>,
+        )>,
+    >,
+    name_inputs: Query<Entity, With<NewProjectNameInput>>,
+    descendants: Query<&Children>,
+    text_edits: Query<Has<InteractionDisabled>, With<EditorTextEdit>>,
+    mut label_colors: Query<&mut TextColor>,
+    mut focus: ResMut<InputFocus>,
+) {
+    let creating = state.scaffold_task.is_some();
+    for (button, disabled, reset, children) in &buttons {
+        if disabled == creating {
+            continue;
+        }
+        if creating {
+            commands
+                .entity(button)
+                .insert((InteractionDisabled, Pickable::IGNORE));
+        } else {
+            commands
+                .entity(button)
+                .remove::<(InteractionDisabled, Pickable)>();
+        }
+        for child in children.into_iter().flatten() {
+            if let Ok(mut color) = label_colors.get_mut(*child) {
+                color.0 = match (creating, reset) {
+                    (true, _) => tokens::TEXT_DISABLED,
+                    (false, true) => tokens::TEXT_SECONDARY,
+                    (false, false) => tokens::TEXT_PRIMARY,
+                };
+            }
+        }
+    }
+    for input in &name_inputs {
+        for field in descendants.iter_descendants(input) {
+            let Ok(disabled) = text_edits.get(field) else {
+                continue;
+            };
+            if disabled == creating {
+                continue;
+            }
+            if creating {
+                commands
+                    .entity(field)
+                    .insert((InteractionDisabled, Pickable::IGNORE));
+                if focus.get() == Some(field) {
+                    focus.clear();
+                }
+            } else {
+                commands
+                    .entity(field)
+                    .remove::<(InteractionDisabled, Pickable)>();
+            }
+            if let Ok(mut color) = label_colors.get_mut(field) {
+                color.0 = if creating {
+                    tokens::TEXT_DISABLED
+                } else {
+                    tokens::TEXT_BODY_COLOR.into()
+                };
+            }
         }
     }
 }
@@ -3367,7 +3456,7 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
     };
 
     world.resource_mut::<NewProjectState>().status = Some(format!(
-        "Creating `{name}` and checking its dependencies resolve..."
+        "Creating {name} and checking its dependencies resolve..."
     ));
     let task = AsyncComputeTaskPool::get().spawn(async move {
         scaffold_project(&name, &location, kind).map(|dest| {
