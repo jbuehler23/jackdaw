@@ -11,7 +11,7 @@ use super::{Monitor, MonitorSelf};
 
 /// The [`Update`] set whose systems trigger [`Mutation`].
 #[derive(SystemSet, Hash, PartialEq, Eq, Clone, Debug, Default)]
-pub struct MutationSet;
+pub struct MutationSystems;
 
 /// Marks that component `C` already has a system watching it for changes.
 #[derive(Resource)]
@@ -30,7 +30,7 @@ pub struct Mutation<C: Component> {
 /// Makes this entity react to changes of component `C` with [`Mutation`].
 ///
 /// Without [`Monitor`] or [`MonitorSelf`] it reacts to every entity. The first
-/// instance adds one system for `C` to [`Update`] in [`MutationSet`], which
+/// instance adds one system for `C` to [`Update`] in [`MutationSystems`], which
 /// stays for the life of the world.
 #[derive(Component, Reflect, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[component(on_add = NotifyChanged::<C>::register_component_change_system)]
@@ -49,8 +49,8 @@ impl<C: Component> NotifyChanged<C> {
         }
         world.commands().queue(|world: &mut World| {
             world.schedule_scope(Update, |_, schedule| {
-                schedule.configure_sets(MutationSet);
-                schedule.add_systems(watch_for_change::<C>.in_set(MutationSet));
+                schedule.configure_sets(MutationSystems);
+                schedule.add_systems(watch_for_change::<C>.in_set(MutationSystems));
             });
             world.insert_resource(DetectingChanges::<C>(PhantomData));
         });

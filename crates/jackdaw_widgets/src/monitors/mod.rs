@@ -9,7 +9,7 @@ mod addition;
 mod mutation;
 
 pub use addition::{Addition, NotifyAdded};
-pub use mutation::{Mutation, MutationSet, NotifyChanged};
+pub use mutation::{Mutation, MutationSystems, NotifyChanged};
 
 use bevy::prelude::*;
 

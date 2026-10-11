@@ -16,8 +16,7 @@ fn manifest(relative: &str) -> toml::Value {
     let path = workspace_root().join(relative);
     let text =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    text.parse()
-        .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    toml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
 /// Every feature a crate declares, minus `default` (implied) and the
