@@ -15,7 +15,7 @@ shows a generic file tile.
 
 What you do here:
 
-- Click an image to select it; the inspector shows its card,
+- Click an image to select it; the Components panel shows its card,
   with the picture, what the header says it holds, an Apply
   button, and layer steps for a KTX2 array.
 - Narrow the grid with the kind menu (scenes, prefabs,

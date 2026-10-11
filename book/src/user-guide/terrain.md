@@ -9,10 +9,10 @@ entry points are `Heightmap`, `apply_brush`, and
 
 ## Add a terrain
 
-`Add > Terrain` in the hierarchy. You get a flat heightmap
+In the Outliner, click **Add Entity** and pick `Terrain`. You get a flat heightmap
 component on a new entity, rendered as clipmap LOD levels
 around the camera. Resolution and physical size are properties
-on the `Terrain` component, editable in the inspector.
+on the `Terrain` component, editable in the Components panel.
 
 ## Sculpt
 

@@ -18,7 +18,7 @@ Two starting paths:
 A new project opens immediately. The editor builds the project's
 cargo binary in the background (same as `cargo build` in the
 project root) and asks it for its reflected type schema. Your
-own components show up in the inspector once that finishes.
+own components show up in the Components panel once that finishes.
 Placing brushes and saving scenes works right away, so you do
 not have to wait for it.
 
@@ -31,10 +31,10 @@ is the only time you will sit through it.
 
 Once the editor is open:
 
-1. In the **Hierarchy** panel, right-click and pick
-   `Add > Cube`.
+1. In the **Outliner** panel, click **Add Entity** and pick
+   `Cube`.
 2. The cube appears at the origin. Click it in the viewport
-   or in the hierarchy to select.
+   or in the Outliner to select.
 3. With the cube selected, drag a translation arrow on the
    gizmo. The default mode is translate; press `R` for
    rotate, `T` for scale, `Esc` to return to translate.
@@ -71,7 +71,7 @@ This launches the standalone binary. `main.rs` adds
 loader for `.bsn` files, and the template's `GamePlugin`
 spawns a `JackdawSceneRoot` pointing at `scene.bsn`. No editor
 in the loop. The cube sits where you placed it, and any
-components you attached in the inspector are alive on the
+components you attached in the Components panel are alive on the
 entity.
 
 Bevy cannot load `.bsn` on its own; the loader ships in

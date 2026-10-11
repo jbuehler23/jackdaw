@@ -8,8 +8,9 @@
 //! # Try it
 //!
 //! 1. Open this project in jackdaw.
-//! 2. Hierarchy: right-click, `Add > Cube`.
-//! 3. Inspector: `Add Component > SpinningCube`. Set `speed` to `1.5`.
+//! 2. Outliner: click `Add Entity` and pick `Cube`.
+//! 3. Components panel: click `Add Component` and pick `SpinningCube`.
+//!    Set `speed` to `1.5`.
 //! 4. `File > Save`, then click Play. The cube spins.
 //! 5. `cargo run` launches the same game without the editor.
 //!
@@ -42,7 +43,7 @@ fn spawn_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(JackdawSceneRoot(asset_server.load("scene.bsn")));
 }
 
-/// Spin-rate in radians per second. Attach it in the inspector; the
+/// Spin-rate in radians per second. Attach it in the Components panel; the
 /// editor sees this component with no registration code because Bevy's
 /// `reflect_auto_register` picks up the `Reflect` derive. `Default` +
 /// `#[reflect(Default)]` let the editor add it and the game reconstruct

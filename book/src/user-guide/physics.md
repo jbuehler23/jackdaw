@@ -21,7 +21,7 @@ A physics-enabled entity needs two things:
 Workflow:
 
 1. Select the brush (or any entity with a mesh).
-2. Inspector panel: click `+ Add Component`.
+2. Components panel: click **Add Component**.
 3. Search "AvianCollider" and pick it (it lives under the
    **Avian3d** category).
 4. A collider with no `RigidBody` on its entity or above it
@@ -41,7 +41,7 @@ silently; check the brush has finite volume.
 ### Switching collider shape
 
 `AvianCollider` is a single-field tuple struct holding a
-`ColliderConstructor`. The inspector renders it as an enum
+`ColliderConstructor`. The Components panel renders it as an enum
 dropdown. Common picks:
 
 - `Cuboid` / `Sphere` / `Capsule` / `Cylinder` / `Cone`:

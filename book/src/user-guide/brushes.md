@@ -10,7 +10,7 @@ files.
 
 ### Quick add
 
-Hierarchy panel, right-click, `Add > Cube` or `Add > Sphere`.
+Outliner panel, click **Add Entity** and pick `Cube` or `Sphere`.
 You get a unit primitive at the origin, selected and ready
 to move. This is the fastest path when you just need a
 block.
@@ -81,7 +81,7 @@ picks which is the minuend in subtract.
 ## Faces, materials, and UVs
 
 Selecting a face in face mode (`3`) shows its material and
-UV controls in the inspector. You can:
+UV controls in the Components panel. You can:
 
 - Set a texture or material from the material browser.
 - Tweak UV offset, scale, and rotation per face.
@@ -97,7 +97,7 @@ material picker exposes.
   consumed subtractor). Undo and try a different overlap.
 - **Faces look inside-out.** Brushes assume outward normals.
   If you authored vertices in clockwise order while drawing,
-  flip the brush via the inspector or redraw.
+  flip the brush via the Components panel or redraw.
 - **Snap is "wrong"**. Snap follows the grid size shown in
   the status bar, not a fixed unit. Step the grid with `[`
   and `]`.

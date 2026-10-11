@@ -9,5 +9,5 @@ A Bevy game, editable in the [jackdaw](https://github.com/jbuehler23/jackdaw) ed
   never modifies your manifest or lockfile.
 - Gameplay lives in `src/lib.rs` (`GamePlugin`); authored scenes live
   in `assets/*.bsn`.
-- Components you derive `Reflect` on appear in the editor's inspector
-  automatically; no registration code is needed.
+- Components you derive `Reflect` on appear in the editor's Components
+  panel automatically; no registration code is needed.

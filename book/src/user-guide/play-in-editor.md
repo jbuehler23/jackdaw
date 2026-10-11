@@ -108,7 +108,7 @@ Switch the mode bar to **Select**. Game input stops, and the cursor becomes
 a picker over the streamed frame.
 
 - Click an object in the frame to select it. The selection appears in the
-  outliner's **Live** tab and the inspector shows its live values.
+  outliner's **Live** tab and the Components panel shows its live values.
 - Picking reads the real frame through the game's own camera, so it needs
   no alignment and reaches runtime-only entities (the player character,
   spawned props) that have no authored counterpart.

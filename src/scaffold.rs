@@ -1688,7 +1688,7 @@ impl Plugin for GamePlugin {
 }
 
 // Example: an editable component. Uncomment, save, and Rebuild to see
-// `Health` in the inspector's Add Component list.
+// `Health` in the Components panel's Add Component list.
 //
 // #[derive(Component, Reflect, Default)]
 // #[reflect(Component, Default)]
