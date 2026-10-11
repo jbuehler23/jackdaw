@@ -7,6 +7,5 @@ ready = Ready
 no-animation-clip-on-selection = No animation clip on selection. Pick a named entity and create one.
 new-workspace = New Workspace
 preparing-build = Preparing build...
-source-checkout = Source checkout
 read-only = (read-only)
 material-not-loaded = (material not loaded)

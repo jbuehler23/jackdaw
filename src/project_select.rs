@@ -12,7 +12,6 @@ use jackdaw_feathers::{
     text_edit::{TextEditProps, TextEditValue, text_edit},
     tokens,
 };
-use jackdaw_localization::LocalizedText;
 use jackdaw_project_build::project_manifest;
 use rfd::FileHandle;
 
@@ -528,6 +527,50 @@ fn spawn_project_selector(
     );
 }
 
+/// What the launcher footer says this editor is: a source checkout it runs
+/// from, or an installed build, with the folder that holds it.
+fn build_origin() -> (String, PathBuf) {
+    describe_build_origin(
+        crate::new_project::jackdaw_dev_checkout(),
+        &jackdaw_project_build::build_source::build_source(),
+        std::env::current_exe().ok().as_deref(),
+    )
+}
+
+/// [`build_origin`] from its inputs: the checkout the editor runs from, what
+/// it was built from, and where its executable is.
+fn describe_build_origin(
+    dev_checkout: Option<PathBuf>,
+    source: &jackdaw_project_build::build_source::BuildSource,
+    exe: Option<&Path>,
+) -> (String, PathBuf) {
+    use jackdaw_project_build::build_source::BuildSource;
+
+    if let Some(checkout) = dev_checkout {
+        return ("Source checkout".to_string(), checkout);
+    }
+    let install_dir = exe
+        .and_then(Path::parent)
+        .map(|dir| match dir.file_name() {
+            Some(name) if name == "bin" => dir.parent().unwrap_or(dir),
+            _ => dir,
+        })
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let version = env!("CARGO_PKG_VERSION");
+    match source {
+        BuildSource::Release => (format!("Release {version}"), install_dir),
+        BuildSource::Git { rev, .. } => (
+            format!(
+                "Version {version}, git {}",
+                rev.get(..10).unwrap_or(rev.as_str())
+            ),
+            install_dir,
+        ),
+        BuildSource::Path(root) => (format!("Version {version}, built from"), root.clone()),
+    }
+}
+
 fn fill_project_selector(
     commands: &mut Commands,
     title_bar: Entity,
@@ -697,8 +740,9 @@ fn fill_project_selector(
                             Pickable::IGNORE,
                         ));
 
+                        let (origin_label, origin_path) = build_origin();
                         sidebar.spawn((
-                            LocalizedText::new("source-checkout"),
+                            Text::new(origin_label),
                             TextFont {
                                 font: font.clone().into(),
                                 font_size: tokens::TEXT_SIZE_SM,
@@ -707,7 +751,7 @@ fn fill_project_selector(
                             TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
                         ));
                         sidebar.spawn((
-                            Text::new(cwd.to_string_lossy().to_string()),
+                            Text::new(origin_path.to_string_lossy().into_owned()),
                             TextFont {
                                 font: font.clone().into(),
                                 font_size: tokens::TEXT_SIZE_XS,
@@ -3710,6 +3754,36 @@ mod tests {
         assert!(text.iter().any(|t| t.contains("no Cargo.toml")));
         // Nothing to forget: this folder was never in the list.
         assert!(!text.iter().any(|t| t == "Remove from list"));
+    }
+
+    #[test]
+    fn the_launcher_footer_names_a_checkout_only_when_running_from_one() {
+        use jackdaw_project_build::build_source::BuildSource;
+
+        let exe = Path::new("/opt/jackdaw/bin/jackdaw");
+        let (label, path) = super::describe_build_origin(
+            Some(PathBuf::from("/work/jackdaw")),
+            &BuildSource::Release,
+            Some(exe),
+        );
+        assert_eq!(label, "Source checkout");
+        assert_eq!(path, Path::new("/work/jackdaw"));
+
+        let (label, path) = super::describe_build_origin(None, &BuildSource::Release, Some(exe));
+        assert_eq!(label, format!("Release {}", env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            path,
+            Path::new("/opt/jackdaw"),
+            "the install folder, not bin"
+        );
+
+        let git = BuildSource::Git {
+            repository: "https://example.com/jackdaw".to_string(),
+            rev: "0123456789abcdef".to_string(),
+        };
+        let (label, path) = super::describe_build_origin(None, &git, Some(exe));
+        assert!(label.ends_with("git 0123456789"), "{label}");
+        assert_eq!(path, Path::new("/opt/jackdaw"));
     }
 
     /// A legal name is only half of what makes a destination usable.
