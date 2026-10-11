@@ -16,16 +16,16 @@ use std::time::Instant;
 use bevy::camera::primitives::{Aabb, MeshAabb as _};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::Affine3A;
+use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
-use bevy_rerecast::TriMeshFromBevyMesh as _;
-use bevy_rerecast::rerecast::{
-    Aabb3d, AreaType, ConfigBuilder, DetailNavmesh, HeightfieldBuilder, PolygonNavmesh, TriMesh,
-};
 use jackdaw_api::prelude::*;
 use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path};
 use jackdaw_scene_types::{GltfSource, LodGroup};
 use jackdaw_terrain::navmesh::{self, BakeParams, NavPolygon, NavmeshArtifact};
+use rerecast::{
+    Aabb3d, AreaType, ConfigBuilder, DetailNavmesh, HeightfieldBuilder, PolygonNavmesh, TriMesh,
+};
 
 use super::{TerrainDataStore, TerrainSurface};
 use crate::EditorEntity;
@@ -809,13 +809,41 @@ fn placed_extent(mesh: &Mesh, placement: Affine3A) -> Option<Vec3> {
     Some(max - min)
 }
 
+// Adapted from bevy_rerecast_core 0.5.0 (https://github.com/janhohenheim/rerecast),
+// src/mesh.rs. Copyright (c) Jan Hohenheim. Licensed under MIT or Apache-2.0,
+// used here under Apache-2.0, whose text is LICENSE-APACHE at the repository
+// root.
+/// A triangle-list mesh as the baker's input, every triangle unwalkable until
+/// the bake marks it, or `None` for any other topology.
+fn trimesh_from_mesh(mesh: &Mesh) -> Option<TriMesh> {
+    if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
+        return None;
+    }
+
+    let mut trimesh = TriMesh::default();
+    let position = mesh.attribute(Mesh::ATTRIBUTE_POSITION)?;
+    let float = position.as_float3()?;
+    trimesh.vertices = float.iter().map(|v| Vec3A::from(*v)).collect();
+
+    let indices: Vec<_> = mesh.indices()?.iter().collect();
+    if !indices.len().is_multiple_of(3) {
+        return None;
+    }
+    trimesh.indices = indices
+        .chunks(3)
+        .map(|indices| UVec3::from_array([indices[0] as u32, indices[1] as u32, indices[2] as u32]))
+        .collect();
+    trimesh.area_types = vec![AreaType::NOT_WALKABLE; trimesh.indices.len()];
+    Some(trimesh)
+}
+
 /// One mesh in world space, or `None` if the baker cannot read it.
 ///
 /// The affine is applied to the vertices directly rather than through a
 /// `Transform`: a `GlobalTransform` under a non-uniform parent scale carries
 /// shear that no translation-rotation-scale can express.
 fn placed_trimesh(mesh: &Mesh, placement: Affine3A) -> Option<TriMesh> {
-    let mut tri = TriMesh::from_mesh(mesh)?;
+    let mut tri = trimesh_from_mesh(mesh)?;
     for vertex in &mut tri.vertices {
         *vertex = placement.transform_point3a(*vertex);
     }
@@ -1215,7 +1243,7 @@ fn bake_once(
 /// An agent wider than the ground is caught here too, where it can be
 /// named.
 fn refuse_unbakeable_config(
-    config: &bevy_rerecast::rerecast::Config,
+    config: &rerecast::Config,
     params: BakeParams,
     span: UVec2,
 ) -> Result<(), String> {
