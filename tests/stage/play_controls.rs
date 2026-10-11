@@ -69,3 +69,72 @@ fn with_no_game_running_pause_and_stop_are_refused_and_the_editor_settles_on_sto
     );
     call(&mut app, "pie.pause").assert_cancelled();
 }
+
+/// The window whose tab is in front of `leaf`.
+fn front_window(app: &App, leaf: jackdaw_panels::tree::NodeId) -> Option<String> {
+    let tree = app.world().resource::<jackdaw_panels::tree::DockTree>();
+    let leaf = tree.get(leaf)?.as_leaf()?;
+    let active = leaf.active?;
+    leaf.tabs()
+        .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
+}
+
+/// A bottom dock holding the Build and Game panels, Build in front.
+fn bottom_dock(app: &mut App) -> jackdaw_panels::tree::NodeId {
+    use jackdaw_panels::{
+        DockAreaStyle,
+        tree::{DockLeaf, DockTree},
+    };
+
+    let leaf = app.world_mut().resource_mut::<DockTree>().set_root_leaf(
+        DockLeaf::new("bottom_dock", DockAreaStyle::default()).with_windows(vec![
+            "jackdaw.build".to_string(),
+            jackdaw::game_panel::GAME_WINDOW_ID.to_string(),
+        ]),
+    );
+    app.update();
+    assert_eq!(front_window(app, leaf).as_deref(), Some("jackdaw.build"));
+    leaf
+}
+
+#[test]
+fn the_game_panel_comes_forward_when_play_starts_and_steps_back_when_it_ends() {
+    let mut app = util::editor_test_app();
+    let leaf = bottom_dock(&mut app);
+
+    app.world_mut()
+        .resource_mut::<NextState<PlayState>>()
+        .set(PlayState::Playing);
+    app.update();
+    assert_eq!(
+        front_window(&app, leaf).as_deref(),
+        Some(jackdaw::game_panel::GAME_WINDOW_ID),
+        "the running game is in front, so it is laid out and streams"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<PlayState>>()
+        .set(PlayState::Stopped);
+    app.update();
+    assert_eq!(
+        front_window(&app, leaf).as_deref(),
+        Some("jackdaw.build"),
+        "and the panel that was in front before Play is back after it"
+    );
+}
+
+#[test]
+fn a_game_in_its_own_window_leaves_the_dock_alone() {
+    let mut app = util::editor_test_app();
+    let leaf = bottom_dock(&mut app);
+    *app.world_mut()
+        .resource_mut::<jackdaw::pie::PieWindowMode>() = jackdaw::pie::PieWindowMode::Windowed;
+
+    app.world_mut()
+        .resource_mut::<NextState<PlayState>>()
+        .set(PlayState::Playing);
+    app.update();
+
+    assert_eq!(play_state(&app), PlayState::Playing);
+    assert_eq!(front_window(&app, leaf).as_deref(), Some("jackdaw.build"));
+}

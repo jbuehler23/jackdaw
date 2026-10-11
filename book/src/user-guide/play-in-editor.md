@@ -58,8 +58,9 @@ or logs their values anywhere else. To set them without the dialog:
 
 Either parameter replaces what is held; naming neither opens the dialog.
 
-Open the **Game** panel before you start. It docks in the bottom dock area
-next to Assets.
+The **Game** panel docks in the bottom dock area next to Assets. An embedded
+Play brings it to the front, since the game only streams while the panel is
+showing.
 
 ## Launching
 
@@ -137,7 +138,8 @@ Scene tab at any time without disturbing the running game's frame.
 
 ## Stopping and reloading
 
-- **Stop** ends the game process. The Game panel returns to its idle state
-  and the **LIVE** badge clears.
+- **Stop** ends the game process. The Game panel returns to its idle state,
+  the panel that was in front before Play comes back, and the **LIVE** badge
+  clears.
 - **Reload** relaunches with the current window-mode setting, which is how
   you apply a change to the **Embedded** / **Windowed** button.

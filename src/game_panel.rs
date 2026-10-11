@@ -9,12 +9,16 @@ use bevy::{
     ui::Checked,
     ui_widgets::{ValueChange, observe},
 };
+use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::button::{ButtonProps, button};
 use jackdaw_feathers::segmented;
 use jackdaw_feathers::tokens;
 
+use jackdaw_panels::tree::{DockTree, NodeId, TabId};
+
 use crate::live_frame::LiveFrameStream;
+use crate::pie::PieWindowMode;
 
 /// Dock window id, used for registration and presence checks.
 pub const GAME_WINDOW_ID: &str = "jackdaw.game";
@@ -67,6 +71,14 @@ pub struct GamePlayingChip;
 /// running game.
 #[derive(Component)]
 pub struct GamePlayInputButton;
+
+/// Whether Play brought the Game panel forward, and the tab its dock showed
+/// before, so the end of the session can put that tab back.
+#[derive(Resource, Default, Debug)]
+struct GamePanelSurfaced {
+    shown: bool,
+    previous: Option<(NodeId, TabId)>,
+}
 
 /// Letterboxed (contain-fit) display size and top-left offset for a stream
 /// inside a panel.
@@ -207,7 +219,7 @@ pub fn game_panel_content() -> impl Bundle {
                     ),
                     (
                         GamePanelIdleLabel,
-                        Text::new("not playing"),
+                        Text::new(IDLE_STOPPED),
                         TextFont {
                             font_size: tokens::TEXT_SIZE_SM,
                             ..Default::default()
@@ -386,6 +398,87 @@ fn sync_game_panel_image(
     }
 }
 
+const IDLE_STOPPED: &str = "Press Play to run the game here";
+const IDLE_WINDOWED: &str = "The game is running in its own window";
+const IDLE_WAITING: &str = "Waiting for the game's first frame. A game whose main.rs does not pass \
+     DefaultPlugins through jackdaw_runtime::maybe_windowless opens its own window instead.";
+
+/// Say where the game is while the panel has no frame to show.
+fn update_game_panel_idle_label(
+    play_state: Option<Res<State<PlayState>>>,
+    window_mode: Option<Res<PieWindowMode>>,
+    mut labels: Query<&mut Text, With<GamePanelIdleLabel>>,
+) {
+    let running = play_state.is_some_and(|state| *state.get() != PlayState::Stopped);
+    let windowed = window_mode.is_some_and(|mode| *mode == PieWindowMode::Windowed);
+    let message = match (running, windowed) {
+        (false, _) => IDLE_STOPPED,
+        (true, true) => IDLE_WINDOWED,
+        (true, false) => IDLE_WAITING,
+    };
+    for mut text in &mut labels {
+        if text.0 != message {
+            text.0 = message.to_string();
+        }
+    }
+}
+
+/// Bring the Game panel to the front when an embedded Play session starts,
+/// and put back the tab its dock showed before once play stops, if the Game
+/// panel is still the one in front. The game only streams frames while the
+/// panel is laid out, so a hidden panel would leave the game unseen.
+fn surface_game_panel_on_play(world: &mut World) {
+    let running = world
+        .get_resource::<State<PlayState>>()
+        .is_some_and(|state| *state.get() != PlayState::Stopped);
+    let embedded = world
+        .get_resource::<PieWindowMode>()
+        .is_none_or(|mode| *mode == PieWindowMode::Embedded);
+    let Some(shown) = world
+        .get_resource::<GamePanelSurfaced>()
+        .map(|surfaced| surfaced.shown)
+    else {
+        return;
+    };
+    if !world.contains_resource::<DockTree>() {
+        return;
+    }
+    if running && embedded && !shown {
+        let previous = front_tab_beside_game(world.resource::<DockTree>());
+        crate::open_window_in_default_area_if_absent(world, GAME_WINDOW_ID);
+        let mut surfaced = world.resource_mut::<GamePanelSurfaced>();
+        surfaced.shown = true;
+        surfaced.previous = previous;
+    } else if !running && shown {
+        let previous = std::mem::take(&mut *world.resource_mut::<GamePanelSurfaced>()).previous;
+        let mut tree = world.resource_mut::<DockTree>();
+        if let Some((leaf, tab)) = previous
+            && front_window(&tree, leaf).as_deref() == Some(GAME_WINDOW_ID)
+        {
+            tree.set_active(leaf, tab);
+        }
+    }
+}
+
+/// The dock leaf holding the Game panel and the tab in front of it, when
+/// that tab is another window's.
+fn front_tab_beside_game(tree: &DockTree) -> Option<(NodeId, TabId)> {
+    let leaf_id = tree.find_leaf_with_window(GAME_WINDOW_ID)?;
+    let leaf = tree.get(leaf_id)?.as_leaf()?;
+    let active = leaf.active?;
+    leaf.tabs()
+        .any(|(window, tab)| tab == active && window != GAME_WINDOW_ID)
+        .then_some((leaf_id, active))
+}
+
+/// The window whose tab is in front of `leaf`.
+fn front_window(tree: &DockTree, leaf: NodeId) -> Option<String> {
+    let leaf = tree.get(leaf)?.as_leaf()?;
+    let active = leaf.active?;
+    leaf.tabs()
+        .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
+}
+
 /// Letterbox the frame image inside the surface.
 fn layout_game_panel_image(
     stream: Res<LiveFrameStream>,
@@ -517,16 +610,20 @@ pub struct GamePanelPlugin;
 
 impl Plugin for GamePanelPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GamePanelMode>().add_systems(
-            Update,
-            (
-                sync_game_panel_image,
-                layout_game_panel_image,
-                update_game_mode_bar,
-                update_game_panel_chips,
-                forward_select_hover,
-            ),
-        );
+        app.init_resource::<GamePanelMode>()
+            .init_resource::<GamePanelSurfaced>()
+            .add_systems(Update, surface_game_panel_on_play)
+            .add_systems(
+                Update,
+                (
+                    sync_game_panel_image,
+                    update_game_panel_idle_label,
+                    layout_game_panel_image,
+                    update_game_mode_bar,
+                    update_game_panel_chips,
+                    forward_select_hover,
+                ),
+            );
     }
 }
 
