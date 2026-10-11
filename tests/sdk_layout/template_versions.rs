@@ -30,9 +30,12 @@ fn template(path: &str) -> String {
 #[test]
 fn templates_state_versions_as_placeholders() {
     for (path, dep) in [
-        ("templates/game/Cargo.toml.template", "jackdaw_runtime"),
         (
-            "templates/extension/Cargo.toml.template",
+            "crates/jackdaw_scaffold/templates/game/Cargo.toml.template",
+            "jackdaw_runtime",
+        ),
+        (
+            "crates/jackdaw_scaffold/templates/extension/Cargo.toml.template",
             "jackdaw_extension",
         ),
     ] {
@@ -78,7 +81,7 @@ fn the_game_template_tracks_the_workspace_avian() {
             rest.split('"').next()
         })
         .expect("[workspace.dependencies] avian3d version");
-    let template = template("templates/game/Cargo.toml.template");
+    let template = template("crates/jackdaw_scaffold/templates/game/Cargo.toml.template");
     assert!(
         template.contains(&format!("avian3d = \"{req}\"")),
         "template must request avian3d \"{req}\":\n{template}"
@@ -132,6 +135,6 @@ fn scaffolded_extensions_expose_their_type_to_detection() {
 
 #[test]
 fn the_settings_template_records_version_pins() {
-    let text = template("templates/game/jackdaw.toml.template");
+    let text = template("crates/jackdaw_scaffold/templates/game/jackdaw.toml.template");
     assert!(text.contains("{{jackdaw_pins}}"));
 }

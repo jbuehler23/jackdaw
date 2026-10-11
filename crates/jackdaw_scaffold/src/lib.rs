@@ -8,8 +8,8 @@
 //! plan is the single interface shared by `jd import` and the launcher.
 
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
-use bevy::app::AppExit;
 use include_dir::{Dir, include_dir};
 use jackdaw_env::rust_env_command;
 use jackdaw_project_build::runtime_wiring::{
@@ -17,6 +17,9 @@ use jackdaw_project_build::runtime_wiring::{
 };
 use path_slash::PathExt as _;
 use toml_edit::DocumentMut;
+
+pub mod dev_checkout;
+pub mod migrate;
 
 /// The one Bevy minor this editor release supports.
 const SUPPORTED_BEVY_MINOR: &str = "0.19";
@@ -193,7 +196,7 @@ impl std::fmt::Display for ScaffoldError {
     clippy::print_stderr,
     reason = "CLI subcommand writes its results and errors to the terminal"
 )]
-pub fn run_new_cli(args: &[String]) -> AppExit {
+pub fn run_new_cli(args: &[String]) -> ExitCode {
     let kind = if args.iter().any(|a| a == "--extension") {
         TemplateKind::Extension
     } else {
@@ -201,13 +204,13 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
     };
     let Some(raw_name) = first_positional(args, &["--path"]) else {
         eprintln!("jd new: usage: jd new <name> [--extension] [--path <dir>] [--no-git]");
-        return AppExit::error();
+        return ExitCode::FAILURE;
     };
     let project_name = match validated_project_name(raw_name) {
         Ok(name) => name,
         Err(e) => {
             eprintln!("jd new: {e}");
-            return AppExit::error();
+            return ExitCode::FAILURE;
         }
     };
     let location = match flag_value(args, "--path") {
@@ -216,13 +219,13 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("jd new: {e}");
-                return AppExit::error();
+                return ExitCode::FAILURE;
             }
         },
     };
     if !location.is_dir() {
         eprintln!("jd new: {} is not a directory", location.display());
-        return AppExit::error();
+        return ExitCode::FAILURE;
     }
     let dest = location.join(&project_name);
     match scaffold_new_project(&dest, &project_name, kind) {
@@ -242,7 +245,7 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
             // CLI has no subscriber for, so without this the user ships
             // a manifest full of absolute local paths and only finds
             // out from a collaborator's failing build.
-            if let Some(checkout) = crate::new_project::jackdaw_dev_checkout() {
+            if let Some(checkout) = crate::dev_checkout::jackdaw_dev_checkout() {
                 println!(
                     "\nnote: this jackdaw runs from the checkout at {}, so the new project \
                      depends on its crates by path. That Cargo.toml is local to this machine; \
@@ -266,11 +269,11 @@ pub fn run_new_cli(args: &[String]) -> AppExit {
                     dest.display()
                 ),
             }
-            AppExit::Success
+            ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("jd new: {e}");
-            AppExit::error()
+            ExitCode::FAILURE
         }
     }
 }
@@ -344,7 +347,7 @@ impl NewProjectWarning {
 /// from: the checkout it runs from when the scaffold was rewritten to path
 /// dependencies on it, otherwise the source this build was made from.
 fn jackdaw_source_description() -> String {
-    match crate::new_project::jackdaw_dev_checkout() {
+    match crate::dev_checkout::jackdaw_dev_checkout() {
         Some(checkout) => format!("the checkout at {}", checkout.display()),
         None => jackdaw_project_build::build_source::build_source().describe(),
     }
@@ -513,7 +516,7 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 /// (so scaffolding into an existing checkout does not nest one) and
 /// when git is unavailable. Best effort: a failure is not worth
 /// aborting a successful scaffold over.
-pub(crate) fn init_git_repository(dest: &Path) {
+pub fn init_git_repository(dest: &Path) {
     let inside_repo = jackdaw_env::without_console_window(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(dest)
@@ -535,7 +538,7 @@ pub(crate) fn init_git_repository(dest: &Path) {
     clippy::print_stderr,
     reason = "CLI subcommand writes its results and errors to the terminal"
 )]
-pub fn run_import_cli(args: &[String]) -> AppExit {
+pub fn run_import_cli(args: &[String]) -> ExitCode {
     let plugin = parse_plugin_arg(args);
     let package = flag_value(args, "--package");
     let requested_root = first_positional(args, &["--plugin", "--package"]).map(PathBuf::from);
@@ -547,7 +550,7 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
         Ok(d) => d,
         Err(e) => {
             eprintln!("jd import: {e}");
-            return AppExit::error();
+            return ExitCode::FAILURE;
         }
     };
     let allow_mismatch = args.iter().any(|arg| arg == "--allow-bevy-mismatch");
@@ -560,7 +563,7 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
                 }
             }
             println!("\nNext: `jd open {}`", root.display());
-            AppExit::Success
+            ExitCode::SUCCESS
         }
         Ok(plan) => {
             println!("jd import preview: {}", root.display());
@@ -578,7 +581,7 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
                     "\nNo files changed. Run `jd import --apply {}` to apply.",
                     root.display()
                 );
-                return AppExit::Success;
+                return ExitCode::SUCCESS;
             }
             match apply_import_plan(&plan) {
                 Ok(report) => {
@@ -591,17 +594,17 @@ pub fn run_import_cli(args: &[String]) -> AppExit {
                         );
                     }
                     println!("\nNext: `jd open {}`", root.display());
-                    AppExit::Success
+                    ExitCode::SUCCESS
                 }
                 Err(e) => {
                     eprintln!("jd import: {e}");
-                    AppExit::error()
+                    ExitCode::FAILURE
                 }
             }
         }
         Err(e) => {
             eprintln!("jd import: {e}");
-            AppExit::error()
+            ExitCode::FAILURE
         }
     }
 }
@@ -880,7 +883,7 @@ fn bump_jackdaw_deps(deps: &mut dyn toml_edit::TableLike, requirement: &str) -> 
     clippy::print_stderr,
     reason = "CLI subcommand writes its results and errors to the terminal"
 )]
-pub fn run_upgrade_cli(args: &[String]) -> AppExit {
+pub fn run_upgrade_cli(args: &[String]) -> ExitCode {
     let requested = first_positional(args, &[]).map(PathBuf::from);
     let root = match requested
         .clone()
@@ -894,7 +897,7 @@ pub fn run_upgrade_cli(args: &[String]) -> AppExit {
                 Some(path) => eprintln!("jd upgrade: {}: {error}", path.display()),
                 None => eprintln!("jd upgrade: {error}"),
             }
-            return AppExit::error();
+            return ExitCode::FAILURE;
         }
     };
     match plan_upgrade_project(&root) {
@@ -911,7 +914,7 @@ pub fn run_upgrade_cli(args: &[String]) -> AppExit {
             for note in &plan.notes {
                 println!("  note: {note}");
             }
-            AppExit::Success
+            ExitCode::SUCCESS
         }
         Ok(plan) => {
             println!("jd upgrade preview: {}", root.display());
@@ -926,30 +929,30 @@ pub fn run_upgrade_cli(args: &[String]) -> AppExit {
                     "\nNo files changed. Run `jd upgrade --apply {}` to apply.",
                     root.display()
                 );
-                return AppExit::Success;
+                return ExitCode::SUCCESS;
             }
             match apply_import_plan(&plan) {
                 Ok(report) => {
                     println!("\nApplied {} change(s).", report.actions.len());
                     println!("\nNext: `jd build {}`", root.display());
-                    AppExit::Success
+                    ExitCode::SUCCESS
                 }
                 Err(error) => {
                     eprintln!("jd upgrade: {error}");
-                    AppExit::error()
+                    ExitCode::FAILURE
                 }
             }
         }
         Err(error) => {
             eprintln!("jd upgrade: {error}");
-            AppExit::error()
+            ExitCode::FAILURE
         }
     }
 }
 
 /// Launch the GUI with a selected project.
 #[expect(clippy::print_stderr, reason = "CLI errors are written to stderr")]
-pub fn run_open_cli(args: &[String]) -> AppExit {
+pub fn run_open_cli(args: &[String]) -> ExitCode {
     let root = args
         .iter()
         .find(|arg| !arg.starts_with('-'))
@@ -959,34 +962,40 @@ pub fn run_open_cli(args: &[String]) -> AppExit {
         Ok(root) => root,
         Err(error) => {
             eprintln!("jd open: {}: {error}", root.display());
-            return AppExit::error();
+            return ExitCode::FAILURE;
         }
     };
     if !root.is_dir() {
         eprintln!("jd open: {} is not a directory", root.display());
-        return AppExit::error();
+        return ExitCode::FAILURE;
     }
-    let editor = std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.parent()
-                .map(|parent| parent.join(editor_executable_name()))
-        })
-        .unwrap_or_else(|| PathBuf::from(editor_executable_name()));
+    let editor = editor_executable();
     // Pass the project directly. Reordering the user's global recents
     // file to smuggle the argument through would leave that edit behind
     // even when the launch fails, and would race with any other jackdaw
     // process.
     match std::process::Command::new(editor)
-        .env(crate::project::ENV_OPEN_PROJECT, &root)
+        .env(jackdaw_env::ENV_OPEN_PROJECT, &root)
         .spawn()
     {
-        Ok(_) => AppExit::Success,
+        Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("jd open: could not launch jackdaw: {error}");
-            AppExit::error()
+            ExitCode::FAILURE
         }
     }
+}
+
+/// The editor binary installed beside the running executable, or
+/// `jackdaw` from `PATH` when the location is unknown.
+pub fn editor_executable() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join(editor_executable_name()))
+        })
+        .unwrap_or_else(|| PathBuf::from(editor_executable_name()))
 }
 
 fn editor_executable_name() -> &'static str {
@@ -1061,7 +1070,7 @@ pub fn scaffold_new_project(
     // In a jackdaw source checkout, repoint the new project's jackdaw
     // deps at the local workspace so it builds against the code being
     // worked on rather than the last release.
-    crate::new_project::rewrite_jackdaw_dep_for_dev_checkout(dest);
+    crate::dev_checkout::rewrite_jackdaw_dep_for_dev_checkout(dest);
 
     Ok(ScaffoldReport {
         actions: vec![format!("scaffolded {written} files")],
@@ -2769,7 +2778,7 @@ mod tests {
             "fn main() {\n    App::new()\n        .add_plugins((\n            \
              DefaultPlugins.set(WindowPlugin::default()),\n            my_game::GamePlugin,\n        \
              ))\n        .run();\n}\n",
-            "fn main() -> AppExit {\n    App::new()\n        .add_plugins(DefaultPlugins)\n        \
+            "fn main() -> ExitCode {\n    App::new()\n        .add_plugins(DefaultPlugins)\n        \
              .add_plugins(my_game::GamePlugin)\n        .run()\n}\n",
             "fn main() {\n    let mut app = App::new();\n    app.add_plugins(DefaultPlugins);\n    \
              app.add_plugins(my_game::GamePlugin);\n    app.run();\n}\n",

@@ -21,10 +21,10 @@ fn main() -> ExitCode {
         }
     }
     match command {
-        Some("new") => exit(jackdaw::scaffold::run_new_cli(&args[1..])),
-        Some("import") => exit(jackdaw::scaffold::run_import_cli(&args[1..])),
-        Some("open") => exit(jackdaw::scaffold::run_open_cli(&args[1..])),
-        Some("upgrade") => exit(jackdaw::scaffold::run_upgrade_cli(&args[1..])),
+        Some("new") => jackdaw::scaffold::run_new_cli(&args[1..]),
+        Some("import") => jackdaw::scaffold::run_import_cli(&args[1..]),
+        Some("open") => jackdaw::scaffold::run_open_cli(&args[1..]),
+        Some("upgrade") => jackdaw::scaffold::run_upgrade_cli(&args[1..]),
         Some("export-terrain") => jackdaw::terrain::export::run_export_terrain_cli(&args[1..]),
         Some("extension") => extension_command(&args[1..]),
         Some("mcp") => mcp_command(&args[1..]),
@@ -168,13 +168,6 @@ fn report_option_error(spec: &CommandSpec, message: &str) {
 fn unknown_command(name: &str) {
     eprintln!("jd: unknown command `{name}`\n");
     print_usage();
-}
-
-fn exit(value: bevy::app::AppExit) -> ExitCode {
-    match value {
-        bevy::app::AppExit::Success => ExitCode::SUCCESS,
-        bevy::app::AppExit::Error(code) => ExitCode::from(code.get()),
-    }
 }
 
 /// Run `jd-mcp`, which serves the Model Context Protocol over stdio and drives
@@ -397,7 +390,7 @@ fn extension_command(args: &[String]) -> ExitCode {
                 eprintln!("usage: jd extension {} <id>", args[0]);
                 return ExitCode::FAILURE;
             };
-            jackdaw_api_internal::extensions_config::set_extension_enabled(id, enabled);
+            jackdaw_env::extensions_config::set_extension_enabled(id, enabled);
             println!("{} {}", if enabled { "enabled" } else { "disabled" }, id);
             ExitCode::SUCCESS
         }

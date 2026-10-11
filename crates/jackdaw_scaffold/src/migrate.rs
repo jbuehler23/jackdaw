@@ -818,8 +818,6 @@ fn render_moved_call(mc: &syn::ExprMethodCall, offsets: &LineOffsets<'_>) -> Mov
 
 /// Gameplay schedules whose systems should only run during Play.
 fn is_gated_schedule(expr: &syn::Expr) -> bool {
-    use quote::ToTokens;
-    let text = expr.to_token_stream().to_string();
     const GATED: &[&str] = &[
         "Update",
         "FixedUpdate",
@@ -830,8 +828,13 @@ fn is_gated_schedule(expr: &syn::Expr) -> bool {
         "FixedFirst",
         "FixedLast",
     ];
-    let last = text.rsplit("::").next().unwrap_or(&text).trim();
-    GATED.contains(&last)
+    let syn::Expr::Path(path) = expr else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| GATED.iter().any(|name| segment.ident == name))
 }
 
 /// Verbatim source text of a call's first argument, for summaries and the

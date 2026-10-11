@@ -1,0 +1,33 @@
+[package]
+name = "jackdaw_scaffold"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Jackdaw project templates, import planning and upgrades, shared by the editor and jd"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+jackdaw_env.workspace = true
+jackdaw_project_build.workspace = true
+dunce = "1.0.5"
+path-slash.workspace = true
+tracing.workspace = true
+# Format-preserving TOML edits for `jd import` (existing-project integration).
+toml_edit = "0.25"
+# Compare a project's declared bevy requirement against the supported
+# minor properly: a textual prefix test both accepts `0.190` and rejects
+# a compatible range like `>=0.19, <0.21`.
+semver = "1"
+# Embed the project templates into the binary so `jd new` scaffolds
+# offline with no cargo-generate dependency.
+include_dir = "0.7"
+# Parse a project's `main.rs` when migrating a bin-only project into a
+# `GamePlugin` library (`src/migrate.rs`). `span-locations` gives byte spans
+# so moved item definitions are sliced verbatim (comments preserved); the
+# rewritten files are formatted by `rustfmt`.
+syn = { version = "2", features = ["full"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+
+[lints]
+workspace = true

@@ -97,7 +97,10 @@ fn template_revision() -> String {
 
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    collect_files(&workspace.join("templates/game"), &mut files);
+    collect_files(
+        &workspace.join("crates/jackdaw_scaffold/templates/game"),
+        &mut files,
+    );
     files.sort();
     files.push(workspace.join("Cargo.lock"));
 

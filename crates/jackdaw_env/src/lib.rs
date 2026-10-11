@@ -4,6 +4,10 @@ pub mod editor_endpoint;
 pub mod extensions_config;
 pub mod paths;
 
+/// Environment variable naming the project the editor should open,
+/// set by `jd open <path>` on the process it spawns.
+pub const ENV_OPEN_PROJECT: &str = "JACKDAW_OPEN_PROJECT";
+
 /// The rustup toolchain that built this crate. The SDK and extensions build with
 /// it, because a Rust dylib only loads into a process built by the same compiler.
 pub const RUSTUP_TOOLCHAIN: &str = env!("JACKDAW_TOOLCHAIN");

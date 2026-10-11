@@ -11,14 +11,13 @@ keywords = ["bevy", "editor", "3d", "level-editor"]
 categories = ["game-development", "graphics"]
 # Ship only what the published crate needs: library source, the
 # assets referenced by `embedded_asset!` (env maps + grid texture),
-# manifest, license, README, templates, and small logos. Everything else
+# manifest, license, README, and small logos. Everything else
 # in the repo (book/, docs/,
 # demo assets in `assets/jan/`, `assets/models/`, etc.) is for
 # source-checkout development and stays out of the .crate so it fits
 # under crates.io's 10 MiB upload limit.
 include = [
     "src/**/*",
-    "templates/**/*",
     "assets/environment_maps/**/*",
     "assets/logo/jackdaw_icon_small.png",
     "assets/logo/jackdaw_icon_pride_small.png",
@@ -88,6 +87,7 @@ jackdaw_geometry.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_schema.workspace = true
 jackdaw_project_build.workspace = true
+jackdaw_scaffold.workspace = true
 jackdaw_csg.workspace = true
 bevy_window_chrome.workspace = true
 jackdaw_camera.workspace = true
@@ -171,27 +171,12 @@ regex.workspace = true
 pathdiff.workspace = true
 path-slash.workspace = true
 dunce = "1.0.5"
+# Reads extension manifests for `jd extension pack`.
+toml_edit = "0.25"
 flate2 = "1"
 notify = "8"
 ctrlc = "3"
 toml = "1"
-# Format-preserving TOML edits for `jd import` (existing-project integration).
-toml_edit = "0.25"
-# Compare a project's declared bevy requirement against the supported
-# minor properly: a textual prefix test both accepts `0.190` and rejects
-# a compatible range like `>=0.19, <0.21`.
-semver = "1"
-# Embed the project templates into the binary so `jd new` scaffolds
-# offline with no cargo-generate dependency.
-include_dir = "0.7"
-# Parse + rewrite a project's `main.rs` when migrating a bin-only project into a
-# `GamePlugin` library (`src/migrate.rs`). `span-locations` gives byte spans so
-# moved item definitions are sliced verbatim (comments preserved); prettyplease
-# formats only the synthetic `GamePlugin` impl we generate.
-syn = { version = "2", features = ["full", "extra-traits"] }
-quote = "1"
-proc-macro2 = { version = "1", features = ["span-locations"] }
-prettyplease = "0.2"
 winit.workspace = true
 image.workspace = true
 half = "2"
@@ -296,6 +281,7 @@ jackdaw_api_macros = { version = "0.19.0-rc.10", path = "crates/jackdaw_api_macr
 jackdaw_dylib = { version = "0.19.0-rc.10", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.19.0-rc.10", path = "crates/jackdaw_loader" }
 jackdaw_package = { version = "0.19.0-rc.10", path = "crates/jackdaw_package" }
+jackdaw_scaffold = { version = "0.19.0-rc.10", path = "crates/jackdaw_scaffold" }
 jackdaw_sdk = { version = "0.19.0-rc.10", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.19.0-rc.10", path = "crates/jackdaw_rustc_wrapper" }
 jackdaw_cli_internal = { version = "0.19.0-rc.10", path = "crates/jackdaw_cli" }

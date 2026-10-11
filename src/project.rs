@@ -281,9 +281,7 @@ pub fn save_last_new_project_location(location: &Path) {
     let _ = std::fs::write(&path, location.to_string_lossy().as_bytes());
 }
 
-/// Environment variable naming the project the editor should open,
-/// set by `jd open <path>` on the process it spawns.
-pub const ENV_OPEN_PROJECT: &str = "JACKDAW_OPEN_PROJECT";
+pub use jackdaw_env::ENV_OPEN_PROJECT;
 
 /// The project a `jd open` invocation asked this process to open.
 pub fn requested_project() -> Option<PathBuf> {
