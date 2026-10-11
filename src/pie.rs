@@ -1834,23 +1834,16 @@ fn reconcile_play_state(world: &mut World) {
 #[cfg(target_os = "windows")]
 mod pie_windows {
     use std::{
-        os::{
-            raw::c_void,
-            windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
-        },
+        os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
         process::Child,
         sync::LazyLock,
     };
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::JobObjects::*;
-    use windows::core::PCWSTR;
+    use windows_sys::Win32::System::JobObjects::*;
 
     pub static PIE_JOB: LazyLock<Job> = LazyLock::new(|| unsafe {
-        let handle = OwnedHandle::from_raw_handle(
-            CreateJobObjectW(None, PCWSTR::null())
-                .expect("Failed to create job object for PIE")
-                .0,
-        );
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        assert!(!job.is_null(), "Failed to create job object for PIE");
+        let handle = OwnedHandle::from_raw_handle(job);
 
         let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
             BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
@@ -1862,13 +1855,13 @@ mod pie_windows {
             ..Default::default()
         };
 
-        SetInformationJobObject(
-            HANDLE(handle.as_raw_handle()),
+        let set = SetInformationJobObject(
+            handle.as_raw_handle(),
             JobObjectExtendedLimitInformation,
-            (&raw const info).cast::<c_void>(),
+            (&raw const info).cast(),
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        )
-        .expect("Failed to set job object info for PIE");
+        );
+        assert!(set != 0, "Failed to set job object info for PIE");
 
         Job(handle)
     });
@@ -1877,11 +1870,10 @@ mod pie_windows {
 
     impl Job {
         pub fn assign_to_process(&self, process: &Child) {
-            let handle = process.as_raw_handle();
-            unsafe {
-                AssignProcessToJobObject(HANDLE(self.0.as_raw_handle()), HANDLE(handle))
-                    .expect("Failed to assign process to job for PIE");
-            }
+            let assigned = unsafe {
+                AssignProcessToJobObject(self.0.as_raw_handle(), process.as_raw_handle())
+            };
+            assert!(assigned != 0, "Failed to assign process to job for PIE");
         }
     }
 }

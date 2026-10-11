@@ -193,13 +193,15 @@ fn main() -> AppExit {
 /// `--version` prints there. Output already redirected is left alone.
 #[cfg(all(windows, not(debug_assertions)))]
 fn attach_parent_console() {
-    use windows::Win32::System::Console::{
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
         ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE,
     };
     // SAFETY: both calls only query or attach the process's console.
     unsafe {
-        if GetStdHandle(STD_OUTPUT_HANDLE).is_err() {
-            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        if stdout.is_null() || stdout == INVALID_HANDLE_VALUE {
+            AttachConsole(ATTACH_PARENT_PROCESS);
         }
     }
 }

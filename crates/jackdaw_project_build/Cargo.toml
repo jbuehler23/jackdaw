@@ -27,7 +27,7 @@ dunce = "1.0.5"
 # all defeat it, and a wrong answer here is pasted into generated code.
 syn = { version = "2", features = ["full", "parsing"] }
 proc-macro2 = "1"
-toml = "0.8"
+toml = "1"
 tracing = { workspace = true }
 jackdaw_schema.workspace = true
 jackdaw_env.workspace = true
@@ -43,7 +43,7 @@ tempfile = "3"
 [build-dependencies]
 # The build script assembles the embedded SDK-builder recipe: it parses
 # the workspace manifest to generate the recipe's `[workspace.dependencies]`.
-toml = "0.8"
+toml = "1"
 path-slash.workspace = true
 
 [lints]
