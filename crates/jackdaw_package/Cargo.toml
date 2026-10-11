@@ -12,7 +12,9 @@ jackdaw_env.workspace = true
 base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-ring = "0.17"
+# Pure Rust, so the editor builds no C or assembly for bundle checks.
+ed25519-dalek = "2"
+getrandom = "0.3"
 sha2 = "0.10"
 
 [lints]
