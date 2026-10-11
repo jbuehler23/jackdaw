@@ -1,6 +1,7 @@
 //! Test-harness orchestrator. `cargo xtask <tier>` runs a tier through nextest.
 use std::process::{Command, ExitCode};
 
+mod bsn_parser;
 mod bundle_smoke;
 mod release;
 
@@ -254,6 +255,7 @@ fn main() -> ExitCode {
             return jackdaw_cli_internal::package::cmd_bundle(&args[1..]);
         }
         "bundle-smoke" => bundle_smoke::cmd(&args[1..]),
+        "bsn-parser" => bsn_parser::cmd(args[1..].iter().any(|arg| arg == "--check")),
         "package" => match args.get(1) {
             Some(out) => release::package(
                 std::path::Path::new(out),
@@ -268,7 +270,8 @@ fn main() -> ExitCode {
         other => {
             eprintln!(
                 "usage: cargo xtask <fast|archive [FILE]|integration [N/M] [--archive FILE]|heavy|\
-                 release-gate|package-sdk|bundle|bundle-smoke|package DIR [--check]|publish [--dry-run]> \
+                 release-gate|package-sdk|bundle|bundle-smoke|bsn-parser [--check]|\
+                 package DIR [--check]|publish [--dry-run]> \
                  (got {other:?})"
             );
             false

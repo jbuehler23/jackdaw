@@ -451,6 +451,9 @@ jobs:
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
 
+      - name: Check the BSN parser matches its grammar
+        run: cargo xtask bsn-parser --check
+
   # The lightyear backend is its own workspace so the editor never resolves
   # lightyear; it is linted and tested here instead.
   lightyear:

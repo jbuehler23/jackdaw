@@ -31,8 +31,5 @@ jackdaw_bind.workspace = true
 # A definition type's files are round-tripped through a real directory.
 tempfile = "3"
 
-[build-dependencies]
-lalrpop = "0.23"
-
 [lints]
 workspace = true
