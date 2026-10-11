@@ -20,6 +20,9 @@ pub struct BuildStatus {
     /// What the last finished build led to, such as the extension it
     /// loaded or why loading failed. Cleared when the next build starts.
     pub outcome: Option<String>,
+    /// The whole output of the last build that failed, kept for the Build
+    /// panel once the build is over. Cleared when the next build starts.
+    pub failed_log: Option<String>,
 }
 
 /// The states the status bar's right region renders. The `Idle`

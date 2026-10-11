@@ -303,17 +303,20 @@ pub struct SceneStatsText;
 pub struct StatusBarRightBox;
 
 /// Pin the right-hand slot's text to the edge worth keeping: a build line ends
-/// in the crate count, so it is pinned right; a notice or a phase opens by
-/// naming its subject, so it is pinned left and loses its end instead.
+/// in the crate count, so it is pinned right; a notice, a phase or a failed
+/// build opens by naming its subject, so it is pinned left and loses its end
+/// instead.
 fn align_status_right(
     notice: Res<StatusNotice>,
     phase: Res<EditorPhase>,
     progress: Option<Res<crate::progress::EditorProgress>>,
+    build_status: Res<BuildStatus>,
     mut boxes: Query<&mut Node, With<StatusBarRightBox>>,
 ) {
     let busy =
         phase.current().is_some() || progress.is_some_and(|progress| progress.current().is_some());
-    let wanted = if notice.is_active() || busy {
+    let failed = matches!(build_status.state, BuildState::Failed { .. });
+    let wanted = if notice.is_active() || busy || failed {
         JustifyContent::FlexStart
     } else {
         JustifyContent::FlexEnd
@@ -425,7 +428,10 @@ fn update_status_right(
             return;
         }
         BuildState::Failed { .. } => {
-            text.0 = "Build failed - click for log".to_string();
+            text.0 = match &build_status.outcome {
+                Some(outcome) => format!("Build failed - {outcome}"),
+                None => "Build failed - click for log".to_string(),
+            };
             color.0 = jackdaw_feathers::tokens::TEXT_ERROR;
             return;
         }

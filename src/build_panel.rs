@@ -179,9 +179,20 @@ fn sync_build_panel(
             false,
         ),
         BuildState::Failed { .. } => (
-            "Build failed - see the log below".to_string(),
+            match &build_status.outcome {
+                Some(outcome) => format!("Build failed - {outcome}"),
+                None => "Build failed - see the log below".to_string(),
+            },
             tokens::TEXT_ERROR,
-            None,
+            // The build can end between two frames, so the panel may never
+            // have seen its last lines; show the whole output it kept.
+            build_status
+                .failed_log
+                .as_ref()
+                .map(|log| match &build_status.outcome {
+                    Some(outcome) => format!("{log}\n{outcome}"),
+                    None => log.clone(),
+                }),
             false,
         ),
         BuildState::Blocked { reason } => (
@@ -260,11 +271,14 @@ fn animate_build_bar(
 }
 
 /// Reset the once-per-open focus flag and the last project's build outcome
-/// when a project opens.
+/// and failure when a project opens.
 fn reset_build_focus(mut focus: ResMut<BuildPanelFocus>, status: Option<ResMut<BuildStatus>>) {
     focus.first_build_shown = false;
     if let Some(mut status) = status {
         status.outcome = None;
+        if matches!(status.state, BuildState::Failed { .. }) {
+            status.state = BuildState::Idle;
+        }
     }
 }
 

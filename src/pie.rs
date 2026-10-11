@@ -748,18 +748,16 @@ fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
 }
 
 /// One line naming what actually went wrong, for the status bar: the first
-/// real diagnostic in the log rather than `Display`'s summary line.
+/// real diagnostic in the log and where it points, rather than `Display`'s
+/// summary line.
 pub(crate) fn failure_summary(
     error: &crate::project_build::ProjectBuildError,
     detail: &str,
 ) -> String {
     /// Long enough for a rustc error line, short enough for the footer.
     const MAX: usize = 140;
-    let Some(line) = detail
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("error"))
-    else {
+    let mut lines = detail.lines().map(str::trim);
+    let Some(line) = lines.find(|line| line.starts_with("error")) else {
         return error.to_string();
     };
     let summary = if line.chars().count() > MAX {
@@ -768,7 +766,13 @@ pub(crate) fn failure_summary(
     } else {
         line.to_string()
     };
-    format!("{error}: {summary}")
+    let location = lines
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| line.strip_prefix("--> "));
+    match location {
+        Some(location) => format!("{summary} ({location})"),
+        None => summary,
+    }
 }
 
 /// Start the project's game build on the compute pool, returning the
@@ -839,18 +843,20 @@ fn spawn_game_build(
             }
             Err(err) => {
                 // Diagnostics already streamed into the log via the build
-                // reporter, so just note the failure and surface the error.
+                // reporter, so just note the failure and surface the error,
+                // adding the detail only when it was not streamed.
                 let detail = match &err {
                     crate::project_build::ProjectBuildError::Compile { log } => log.clone(),
                     other => other.to_string(),
                 };
+                let summary = failure_summary(&err, &detail);
                 if let Ok(mut p) = sink.lock() {
                     p.push_log(format!("build failed: {err}"));
-                    if detail != err.to_string() {
+                    if detail != err.to_string() && !p.full_log.contains(detail.trim()) {
                         p.push_log(detail.clone());
                     }
                 }
-                Err(io::Error::other(failure_summary(&err, &detail)))
+                Err(io::Error::other(summary))
             }
         }
     });
@@ -1592,6 +1598,7 @@ fn reconcile_build_status(world: &mut World) {
     match building {
         Some(progress) => {
             status.outcome = None;
+            status.failed_log = None;
             status.state = crate::build_status::BuildState::Building {
                 project,
                 started: Instant::now(),
@@ -1605,15 +1612,16 @@ fn reconcile_build_status(world: &mut World) {
             crate::build_status::BuildState::Building { .. } => {
                 status.state = crate::build_status::BuildState::Idle;
             }
-            // Keep a recent outcome on screen, then let it fade to Idle.
-            crate::build_status::BuildState::Ready { at, .. }
-            | crate::build_status::BuildState::Failed { at } => {
+            // Keep a recent success on screen, then let it fade to Idle.
+            crate::build_status::BuildState::Ready { at, .. } => {
                 if at.elapsed() > Duration::from_secs(6) {
                     status.state = crate::build_status::BuildState::Idle;
                 }
             }
-            // Sticky: only the user fixing their project clears it.
-            crate::build_status::BuildState::Blocked { .. }
+            // Sticky: a failure stays until the next build starts, and only
+            // the user fixing their project clears a block.
+            crate::build_status::BuildState::Failed { .. }
+            | crate::build_status::BuildState::Blocked { .. }
             | crate::build_status::BuildState::Idle => {}
         },
     }
@@ -1627,8 +1635,13 @@ fn poll_builds(world: &mut World) {
     let mut builds = std::mem::take(&mut world.non_send_mut::<PieSession>().builds);
     let mut spawned: Vec<(InstanceKey, ChildStage)> = Vec::new();
 
-    for state in builds.values_mut() {
-        let BuildState::Running { task, pending, .. } = state else {
+    for (root, state) in builds.iter_mut() {
+        let BuildState::Running {
+            task,
+            pending,
+            progress,
+        } = state
+        else {
             continue;
         };
         match future::block_on(future::poll_once(task)) {
@@ -1652,14 +1665,29 @@ fn poll_builds(world: &mut World) {
                 *state = BuildState::Done(result.binary);
             }
             Some(Err(err)) => {
+                let output = progress.lock().ok().map(|p| p.full_log.clone());
+                let project = root.file_name().map_or_else(
+                    || root.display().to_string(),
+                    |name| name.display().to_string(),
+                );
                 let keys: Vec<String> = pending.iter().map(|p| p.key.to_string()).collect();
-                error!("PIE: game build failed for {}: {err}", keys.join(", "));
+                if keys.is_empty() {
+                    error!("PIE: game build of {project} failed: {err}");
+                } else {
+                    error!(
+                        "PIE: game build of {project} failed, not launching {}: {err}",
+                        keys.join(", ")
+                    );
+                }
                 *state = BuildState::Failed {
                     launch: !pending.is_empty(),
                 };
-                world
-                    .resource_mut::<crate::build_status::BuildStatus>()
-                    .state = crate::build_status::BuildState::Failed { at: Instant::now() };
+                {
+                    let mut status = world.resource_mut::<crate::build_status::BuildStatus>();
+                    status.state = crate::build_status::BuildState::Failed { at: Instant::now() };
+                    status.outcome = Some(err.to_string());
+                    status.failed_log = output;
+                }
                 crate::status_bar::notify_error(world, err.to_string());
             }
         }
@@ -2658,6 +2686,92 @@ mod prebuild_tests {
         let summary = failure_summary(&error, &log);
 
         assert!(summary.contains("E0432"), "{summary}");
+    }
+
+    #[test]
+    fn a_compile_failure_says_where_its_first_diagnostic_points() {
+        let log = "error[E0560]: struct `PointLight` has no field named `shadows_enabled`\n  \
+                   --> src/lib.rs:40:13\n   |\n\nerror: could not compile `game`\n"
+            .to_string();
+        let error = crate::project_build::ProjectBuildError::Compile { log: log.clone() };
+
+        assert_eq!(
+            failure_summary(&error, &log),
+            "error[E0560]: struct `PointLight` has no field named `shadows_enabled` \
+             (src/lib.rs:40:13)"
+        );
+    }
+
+    #[test]
+    fn a_failed_build_stays_on_screen_naming_its_error_until_the_next_build() {
+        let mut world = World::new();
+        world.init_resource::<BuildStatus>();
+        let task = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default).spawn(async {
+            Err(io::Error::other(
+                "error[E0560]: no field (src/lib.rs:40:13)",
+            ))
+        });
+        while !task.is_finished() {
+            std::thread::yield_now();
+        }
+        let mut output = BuildProgress::default();
+        output.push_log("  --> src/lib.rs:40:13".to_string());
+        let mut session = PieSession::default();
+        session.builds.insert(
+            PathBuf::from("my-game"),
+            BuildState::Running {
+                task,
+                pending: Vec::new(),
+                progress: Arc::new(Mutex::new(output)),
+            },
+        );
+        world.insert_non_send(session);
+
+        poll_builds(&mut world);
+        world.resource_mut::<BuildStatus>().state = crate::build_status::BuildState::Failed {
+            at: Instant::now() - Duration::from_secs(60),
+        };
+        reconcile_build_status(&mut world);
+
+        let status = world.resource::<BuildStatus>();
+        assert!(
+            matches!(status.state, crate::build_status::BuildState::Failed { .. }),
+            "the failure has not faded"
+        );
+        assert!(
+            status
+                .outcome
+                .as_deref()
+                .is_some_and(|o| o.contains("E0560")),
+            "and it names the error: {:?}",
+            status.outcome
+        );
+        assert!(
+            status
+                .failed_log
+                .as_deref()
+                .is_some_and(|log| log.contains("src/lib.rs:40:13")),
+            "with the compiler output kept for the Build panel"
+        );
+
+        world.non_send_mut::<PieSession>().builds.insert(
+            PathBuf::from("my-game"),
+            BuildState::Running {
+                task: AsyncComputeTaskPool::get().spawn(std::future::pending()),
+                pending: Vec::new(),
+                progress: Arc::default(),
+            },
+        );
+        reconcile_build_status(&mut world);
+        let status = world.resource::<BuildStatus>();
+        assert!(
+            matches!(
+                status.state,
+                crate::build_status::BuildState::Building { .. }
+            ) && status.outcome.is_none()
+                && status.failed_log.is_none(),
+            "the next build replaces it"
+        );
     }
 
     #[test]

@@ -156,7 +156,7 @@ pub fn build_project_binary_with_load(
         let stderr = stderr
             .and_then(|handle| handle.join().ok())
             .unwrap_or_default();
-        let stderr = String::from_utf8_lossy(&stderr);
+        let stderr = failure_stderr(&String::from_utf8_lossy(&stderr));
         // Cargo's own account of the failure never goes through the JSON stream.
         // `Display` for `Compile` is one line, so the detail has to reach the
         // panel line by line the way rustc's diagnostics do.
@@ -194,6 +194,26 @@ pub fn build_project_binary_with_load(
     }
 
     Ok(ProjectBinaryBuild { binary, schema })
+}
+
+/// Cargo's stderr without its per-crate progress notes, which say nothing
+/// about why a build failed and would bury the lines that do.
+fn failure_stderr(stderr: &str) -> String {
+    const PROGRESS: [&str; 5] = [
+        "Compiling ",
+        "Checking ",
+        "Downloading ",
+        "Downloaded ",
+        "Fresh ",
+    ];
+    stderr
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !PROGRESS.iter().any(|verb| line.starts_with(verb))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// What a failed build reports: rustc's diagnostics, then cargo's own stderr.
@@ -660,6 +680,17 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failure_leaves_out_cargos_progress_notes() {
+        let stderr = "   Compiling bevy v0.19.1\n   Compiling my-game v0.1.0 (/p)\n\
+                      error: could not compile `my-game` (lib) due to 1 previous error\n";
+
+        assert_eq!(
+            failure_stderr(stderr),
+            "error: could not compile `my-game` (lib) due to 1 previous error"
+        );
     }
 
     #[test]
