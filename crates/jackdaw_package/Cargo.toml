@@ -1,0 +1,19 @@
+[package]
+name = "jackdaw_package"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Signed .jdext extension bundles for Jackdaw: format, verification and installation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+jackdaw_env.workspace = true
+base64.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+ring = "0.17"
+sha2 = "0.10"
+
+[lints]
+workspace = true

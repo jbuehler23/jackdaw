@@ -1,4 +1,7 @@
 //! Signed `.jdext` bundle validation and versioned installation.
+//!
+//! Free of Bevy so `jd` can install, list and verify extensions without
+//! building the editor. Creating and signing bundles lives in `jd`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -198,6 +201,12 @@ pub fn verify_bytes(bytes: &[u8]) -> Result<VerifiedBundle, PackageError> {
             found: bundle.manifest.target,
         });
     }
+    check_signature(bundle)
+}
+
+/// Check a bundle's library checksum and publisher signature, leaving
+/// host compatibility to the caller.
+fn check_signature(bundle: ExtensionBundle) -> Result<VerifiedBundle, PackageError> {
     let decode = |value: &str| {
         base64::engine::general_purpose::STANDARD
             .decode(value)
@@ -302,7 +311,7 @@ pub fn install_bytes(
         write_json_atomic(&root.join("garbage.json"), &garbage)?;
     }
     write_json_atomic(&root.join("active.json"), &active)?;
-    jackdaw_api_internal::extensions_config::set_extension_enabled(&verified.manifest.id, true);
+    jackdaw_env::extensions_config::set_extension_enabled(&verified.manifest.id, true);
 
     Ok(InstalledExtension {
         library_path: version_root.join(&verified.manifest.library),
@@ -620,6 +629,39 @@ mod tests {
         decoded.manifest.label = "Tampered".into();
         std::fs::write(&path, serde_json::to_vec(&decoded).unwrap()).unwrap();
         assert!(matches!(verify_bundle(&path), Err(PackageError::Signature)));
+    }
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name))
+            .unwrap()
+    }
+
+    #[test]
+    fn previously_signed_bundle_still_verifies() {
+        let bundle: ExtensionBundle = serde_json::from_slice(&fixture("signed.jdext")).unwrap();
+        let verified = check_signature(bundle).unwrap();
+        assert_eq!(verified.library, fixture("library.bin"));
+        assert_eq!(fingerprint(&verified.publisher_key), "15acdb1a64f5688e");
+    }
+
+    #[test]
+    fn previously_signed_bundle_rejects_tampering() {
+        let mut bundle: ExtensionBundle =
+            serde_json::from_slice(&fixture("signed.jdext")).unwrap();
+        bundle.manifest.version = "1.2.4".into();
+        assert!(matches!(
+            check_signature(bundle),
+            Err(PackageError::Signature)
+        ));
+    }
+
+    #[test]
+    fn existing_publisher_key_reproduces_its_signature() {
+        let original: ExtensionBundle = serde_json::from_slice(&fixture("signed.jdext")).unwrap();
+        let resigned =
+            create_bundle(original.manifest.clone(), &fixture("library.bin"), &fixture("publisher.pk8"))
+                .unwrap();
+        assert_eq!(resigned, fixture("signed.jdext"));
     }
 
     #[test]

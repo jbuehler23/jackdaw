@@ -1,6 +1,7 @@
 use std::{ffi::OsStr, process::Command};
 
 pub mod editor_endpoint;
+pub mod extensions_config;
 pub mod paths;
 
 /// The rustup toolchain that built this crate. The SDK and extensions build with

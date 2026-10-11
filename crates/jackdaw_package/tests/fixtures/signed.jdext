@@ -1,0 +1,18 @@
+{
+  "manifest": {
+    "schema_version": 1,
+    "id": "fixture.signed",
+    "label": "Signed Fixture",
+    "version": "1.2.3",
+    "publisher": "Fixture Publisher",
+    "license": "MIT OR Apache-2.0",
+    "homepage": "https://example.invalid/fixture",
+    "sdk_abi": "jackdaw-fixture-bevy-0.19-rustc",
+    "target": "fixture-target",
+    "library": "libfixture.so",
+    "library_sha256": "6f51185d53fcd12989d08ff552b4eaf73f34fbe143be66ca7678d7af398ab61b"
+  },
+  "publisher_key": "SRMkTDuYBb3xdV5HN97Ri1mMHo7mgWWXWzQHjiPAliY=",
+  "library_base64": "Zml4dHVyZSBuYXRpdmUgbGlicmFyeQABAg==",
+  "signature": "OymgYTe1pDhWhbPRYg2vom8HWQ/PHeoYkVczCAipcubzmZbfqLmCGXS7yfgqWBm0qWE45YlOAj2hoIqS9TmqDQ=="
+}

@@ -27,7 +27,7 @@
 //! `catch_unwind`, but a segfault in extension code takes the
 //! process down.
 
-pub mod package;
+pub use jackdaw_package as package;
 pub mod quarantine;
 
 use std::panic::AssertUnwindSafe;
