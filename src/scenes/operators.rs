@@ -667,20 +667,65 @@ pub fn scene_save_all(_: In<OperatorParameters>, mut commands: Commands) -> Oper
 /// any authoritative write failure makes the result `false` and leaves that
 /// tab dirty, allowing callers such as quit confirmation to refuse to exit.
 pub fn scene_save_all_system(world: &mut World) -> bool {
-    let original_active = world.resource::<Scenes>().active;
-    let count = world.resource::<Scenes>().tabs.len();
     let mut all_saved = true;
+    let mut with_path = Vec::new();
+    for (i, tab) in world.resource::<Scenes>().tabs.iter().enumerate() {
+        if tab.path.is_some() {
+            with_path.push(i);
+        } else if tab.dirty {
+            warn!("scene.save_all: cannot save dirty untitled tab {i} without a path");
+            all_saved = false;
+        }
+    }
+    save_tabs(world, &with_path).is_empty() && all_saved
+}
 
-    for i in 0..count {
-        let (path, dirty) = {
-            let scenes = world.resource::<Scenes>();
-            (scenes.tabs[i].path.clone(), scenes.tabs[i].dirty)
+/// Save every tab that has a file and unsaved changes, leaving clean and
+/// untitled tabs alone. Returns a message for each tab that did not save.
+pub fn save_modified_scenes(world: &mut World) -> Vec<String> {
+    let active_modified = active_tab_modified(world);
+    let scenes = world.resource::<Scenes>();
+    let modified: Vec<usize> = scenes
+        .tabs
+        .iter()
+        .enumerate()
+        .filter(|(i, tab)| {
+            tab.path.is_some()
+                && !tab.is_refused()
+                && (tab.dirty || (*i == scenes.active && active_modified))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    save_tabs(world, &modified)
+}
+
+/// Whether the active tab has changes no save has written, counting an edit
+/// made this frame that the dirty tracking has not seen yet.
+pub fn active_tab_modified(world: &World) -> bool {
+    let Some(scenes) = world.get_resource::<Scenes>() else {
+        return false;
+    };
+    let Some(tab) = scenes.tabs.get(scenes.active) else {
+        return false;
+    };
+    let depth = world
+        .get_resource::<jackdaw_commands::CommandHistory>()
+        .map_or(0, |history| history.undo_stack.len());
+    tab.dirty || depth > tab.history_depth_at_last_check
+}
+
+/// Save the tabs at `indices`, switching to each in turn, then return to the
+/// tab that was active. Returns a message for each tab that did not save.
+fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
+    let original_active = world.resource::<Scenes>().active;
+    let mut failures = Vec::new();
+
+    for &i in indices {
+        let (path, name) = {
+            let tab = &world.resource::<Scenes>().tabs[i];
+            (tab.path.clone(), tab.display_name.clone())
         };
         let Some(path) = path else {
-            if dirty {
-                warn!("scene.save_all: cannot save dirty untitled tab {i} without a path");
-                all_saved = false;
-            }
             continue;
         };
 
@@ -697,8 +742,8 @@ pub fn scene_save_all_system(world: &mut World) -> bool {
         }
 
         if let Err(err) = crate::scene_io::save_scene_inner(world) {
-            warn!("scene.save_all: failed to save {path:?}: {err}");
-            all_saved = false;
+            warn!("failed to save {path:?}: {err}");
+            failures.push(format!("{name} ({err})"));
         }
     }
 
@@ -707,15 +752,17 @@ pub fn scene_save_all_system(world: &mut World) -> bool {
     if original_active != world.resource::<Scenes>().active {
         swap_active_tab(world, original_active);
     }
-    let active_path = world.resource::<Scenes>().tabs[original_active]
-        .path
-        .as_ref()
+    let active_path = world
+        .resource::<Scenes>()
+        .tabs
+        .get(original_active)
+        .and_then(|tab| tab.path.as_ref())
         .map(|p| p.to_string_lossy().into_owned());
     if let Some(mut sfp) = world.get_resource_mut::<SceneFilePath>() {
         sfp.path = active_path;
     }
 
-    all_saved
+    failures
 }
 
 #[operator(id = "scene.cycle_next", label = "Next Scene Tab", allows_undo = false)]

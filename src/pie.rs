@@ -305,6 +305,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ProjectBuildOp>()
         .register_operator::<ProjectToggleAutoBuildOp>()
         .register_operator::<ProjectTogglePrebuildOp>()
+        .register_operator::<ProjectToggleSaveBeforePlayOp>()
         .register_operator::<PieWindowModeToggleOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>()
         .register_operator::<crate::live_edits::PieLiveEditSaveOp>()
@@ -445,6 +446,32 @@ pub(crate) fn project_toggle_prebuild(
         persist_project_build_settings(world);
         info!(
             "PIE: pre-build on open {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+    });
+    OperatorResult::Finished
+}
+
+/// Turn saving the modified scenes before Play starts the game on or off.
+/// On by default, so the game loads what the editor shows.
+#[operator(
+    id = "project.toggle_save_before_play",
+    label = "Toggle Save Before Play",
+    description = "Turn saving modified scenes before Play starts the game on or off."
+)]
+pub(crate) fn project_toggle_save_before_play(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let enabled = {
+            let mut settings = world.resource_mut::<EditorBuildSettings>();
+            settings.save_before_play = !settings.save_before_play;
+            settings.save_before_play
+        };
+        persist_project_build_settings(world);
+        info!(
+            "PIE: save before play {}",
             if enabled { "enabled" } else { "disabled" }
         );
     });
@@ -592,6 +619,12 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         return;
     };
 
+    if let Err(reason) = save_before_play(world) {
+        warn!("PIE: not playing: {reason}");
+        crate::status_bar::notify_error(world, reason);
+        return;
+    }
+
     // If the game binary is built AND still current, spawn from it
     // immediately. A source edit since the last build invalidates the
     // cache so Play runs the new code: each Play is a fresh process, so
@@ -635,6 +668,34 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
                 },
             );
         }
+    }
+}
+
+/// Save the modified scenes the game may load, unless the project turned
+/// that off. Refuses when the scene in front has never been saved, since the
+/// game cannot load it.
+fn save_before_play(world: &mut World) -> Result<(), String> {
+    if !world
+        .get_resource::<EditorBuildSettings>()
+        .is_none_or(|settings| settings.save_before_play)
+    {
+        return Ok(());
+    }
+    let untitled_in_front = world
+        .get_resource::<crate::scenes::Scenes>()
+        .and_then(|scenes| scenes.tabs.get(scenes.active))
+        .is_some_and(|tab| tab.path.is_none());
+    if untitled_in_front && crate::scenes::operators::active_tab_modified(world) {
+        return Err("Save the scene before playing".to_string());
+    }
+    let failures = crate::scenes::operators::save_modified_scenes(world);
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Not playing: could not save {}",
+            failures.join("; ")
+        ))
     }
 }
 
@@ -1290,6 +1351,10 @@ struct EditorBuildSettings {
     /// When true, the editor compiles the game once in the background as
     /// the project opens, so the first Play is instant. On by default.
     prebuild: bool,
+    /// When true, Play saves every modified scene that has a file before it
+    /// starts the game, so the game loads what the editor shows. On by
+    /// default.
+    save_before_play: bool,
 }
 
 impl Default for EditorBuildSettings {
@@ -1297,6 +1362,7 @@ impl Default for EditorBuildSettings {
         Self {
             auto_build: false,
             prebuild: true,
+            save_before_play: true,
         }
     }
 }
@@ -2538,6 +2604,7 @@ mod prebuild_tests {
         world.insert_resource(EditorBuildSettings {
             auto_build: false,
             prebuild,
+            save_before_play: true,
         });
         world.insert_resource(crate::project::ProjectRoot {
             root: std::env::temp_dir().join("jackdaw-prebuild-test-no-such-project"),

@@ -38,6 +38,7 @@ mod project_startup;
 mod project_window;
 mod reflection_probe;
 mod remote_placement;
+mod save_before_play;
 mod scene_environment;
 mod scene_wind;
 mod selection_undo;
