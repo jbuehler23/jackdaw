@@ -154,14 +154,12 @@ jackdaw_sdk = { workspace = true, optional = true }
 # wrapper crate's `[[bin]]` is also available; either path works at
 # runtime.
 jackdaw_rustc_wrapper.workspace = true
-jackdaw_cli_internal.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 avian3d.workspace = true
 rfd.workspace = true
 rerecast.workspace = true
-ehttp.workspace = true
 # Hands the BRP client thread's reply back to the task polling it.
 async-channel = "2"
 base64.workspace = true
@@ -171,8 +169,6 @@ regex.workspace = true
 pathdiff.workspace = true
 path-slash.workspace = true
 dunce = "1.0.5"
-# Reads extension manifests for `jd extension pack`.
-toml_edit = "0.25"
 flate2 = "1"
 notify = "8"
 ctrlc = "3"
@@ -282,6 +278,7 @@ jackdaw_dylib = { version = "0.19.0-rc.10", path = "crates/jackdaw_dylib" }
 jackdaw_loader = { version = "0.19.0-rc.10", path = "crates/jackdaw_loader" }
 jackdaw_package = { version = "0.19.0-rc.10", path = "crates/jackdaw_package" }
 jackdaw_scaffold = { version = "0.19.0-rc.10", path = "crates/jackdaw_scaffold" }
+jd = { version = "0.19.0-rc.10", path = "crates/jd" }
 jackdaw_sdk = { version = "0.19.0-rc.10", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.19.0-rc.10", path = "crates/jackdaw_rustc_wrapper" }
 jackdaw_cli_internal = { version = "0.19.0-rc.10", path = "crates/jackdaw_cli" }
@@ -289,10 +286,6 @@ jackdaw_env = { version = "0.19.0-rc.10", path = "crates/jackdaw_env" }
 bevy_enhanced_input = "0.26"
 rfd = "0.15"
 rerecast = { version = "0.4", default-features = false, features = ["std"] }
-ehttp = { version = "0.5", default-features = false, features = [
-    "native-async",
-    "json",
-] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
 dirs = "6"
@@ -413,9 +406,4 @@ codegen-units = 1
 [[bin]]
 name = "jackdaw-rustc-wrapper"
 path = "src/bin/jackdaw-rustc-wrapper.rs"
-doc = false
-
-[[bin]]
-name = "jd"
-path = "src/bin/jd.rs"
 doc = false

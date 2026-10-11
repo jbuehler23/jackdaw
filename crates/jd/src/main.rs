@@ -21,11 +21,11 @@ fn main() -> ExitCode {
         }
     }
     match command {
-        Some("new") => jackdaw::scaffold::run_new_cli(&args[1..]),
-        Some("import") => jackdaw::scaffold::run_import_cli(&args[1..]),
-        Some("open") => jackdaw::scaffold::run_open_cli(&args[1..]),
-        Some("upgrade") => jackdaw::scaffold::run_upgrade_cli(&args[1..]),
-        Some("export-terrain") => jackdaw::terrain::export::run_export_terrain_cli(&args[1..]),
+        Some("new") => jackdaw_scaffold::run_new_cli(&args[1..]),
+        Some("import") => jackdaw_scaffold::run_import_cli(&args[1..]),
+        Some("open") => jackdaw_scaffold::run_open_cli(&args[1..]),
+        Some("upgrade") => jackdaw_scaffold::run_upgrade_cli(&args[1..]),
+        Some("export-terrain") => export_terrain(&args[1..]),
         Some("extension") => extension_command(&args[1..]),
         Some("mcp") => mcp_command(&args[1..]),
         Some("--help" | "-h" | "help") | None => {
@@ -170,6 +170,29 @@ fn unknown_command(name: &str) {
     print_usage();
 }
 
+/// Run `jackdaw export-terrain`. Reading a scene needs the editor's Bevy
+/// types, which `jd` does not link, so the editor installed beside it does
+/// the export.
+#[expect(clippy::print_stderr, reason = "CLI errors are written to stderr")]
+fn export_terrain(args: &[String]) -> ExitCode {
+    let editor = jackdaw_scaffold::editor_executable();
+    match std::process::Command::new(&editor)
+        .arg("export-terrain")
+        .args(args)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!(
+                "jd export-terrain: cannot run {}: {error}",
+                editor.display()
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Run `jd-mcp`, which serves the Model Context Protocol over stdio and drives
 /// the editor that has this project open. A separate process so the MCP stack
 /// stays out of the editor's dependency graph; the binary is looked for beside
@@ -268,7 +291,7 @@ fn extension_command(args: &[String]) -> ExitCode {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match jackdaw_loader::package::generate_signing_key()
+            match jd::sign::generate_signing_key()
                 .and_then(|bytes| write_private_key(&path, &bytes))
             {
                 Ok(()) => {
@@ -291,9 +314,9 @@ fn extension_command(args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             };
             let decision = if args.iter().any(|arg| arg == "--trust-publisher") {
-                jackdaw_loader::package::TrustDecision::TrustPublisher
+                jackdaw_package::TrustDecision::TrustPublisher
             } else {
-                jackdaw_loader::package::TrustDecision::RequireTrusted
+                jackdaw_package::TrustDecision::RequireTrusted
             };
             // A URL installs the same way a file does: fetch, then hand
             // the bytes to the same signature/ABI/trust gate. Without
@@ -306,7 +329,7 @@ fn extension_command(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match jackdaw_loader::package::install_bytes(&bytes, decision) {
+            match jackdaw_package::install_bytes(&bytes, decision) {
                 Ok(installed) => {
                     println!(
                         "installed {} {} at {}",
@@ -328,14 +351,14 @@ fn extension_command(args: &[String]) -> ExitCode {
             if args.iter().any(|arg| arg == "--json") {
                 println!(
                     "{{\"sdk_abi\":{},\"target\":{},\"jackdaw\":{},\"bevy\":{}}}",
-                    json_string(&jackdaw_loader::package::host_sdk_abi()),
-                    json_string(jackdaw_loader::package::host_target()),
+                    json_string(&jackdaw_package::host_sdk_abi()),
+                    json_string(jackdaw_package::host_target()),
                     json_string(jackdaw_project_build::VERSION),
                     json_string(jackdaw_project_build::BEVY_VERSION),
                 );
             } else {
-                println!("sdk_abi: {}", jackdaw_loader::package::host_sdk_abi());
-                println!("target:  {}", jackdaw_loader::package::host_target());
+                println!("sdk_abi: {}", jackdaw_package::host_sdk_abi());
+                println!("target:  {}", jackdaw_package::host_target());
                 println!(
                     "jackdaw: {} (bevy {})",
                     jackdaw_project_build::VERSION,
@@ -344,7 +367,7 @@ fn extension_command(args: &[String]) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Some("list") => match jackdaw_loader::package::list_installed() {
+        Some("list") => match jackdaw_package::list_installed() {
             Ok(installed) => {
                 for extension in installed {
                     println!(
@@ -367,7 +390,7 @@ fn extension_command(args: &[String]) -> ExitCode {
                 eprintln!("usage: jd extension verify <bundle.jdext>");
                 return ExitCode::FAILURE;
             };
-            match jackdaw_loader::package::verify_bundle(std::path::Path::new(path)) {
+            match jackdaw_package::verify_bundle(std::path::Path::new(path)) {
                 Ok(bundle) => {
                     println!(
                         "verified {} {} from {} for {}",
@@ -399,7 +422,7 @@ fn extension_command(args: &[String]) -> ExitCode {
                 eprintln!("usage: jd extension uninstall <id>");
                 return ExitCode::FAILURE;
             };
-            match jackdaw_loader::package::uninstall(id) {
+            match jackdaw_package::uninstall(id) {
                 Ok(true) => {
                     println!("uninstalled {id}; retired files will be removed next launch");
                     ExitCode::SUCCESS
@@ -507,12 +530,8 @@ fn pack_extension(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     };
-    let out_path = flag_value(args, "--out").unwrap_or_else(|| {
-        format!(
-            "{id}-{version}-{}.jdext",
-            jackdaw_loader::package::host_target()
-        )
-    });
+    let out_path = flag_value(args, "--out")
+        .unwrap_or_else(|| format!("{id}-{version}-{}.jdext", jackdaw_package::host_target()));
 
     let library_name = library_path
         .file_name()
@@ -520,15 +539,12 @@ fn pack_extension(args: &[String]) -> ExitCode {
         .unwrap_or_default();
     let result = (|| {
         let library = std::fs::read(&library_path).map_err(|error| {
-            jackdaw_loader::package::PackageError::Io(format!(
-                "{}: {error}",
-                library_path.display()
-            ))
+            jackdaw_package::PackageError::Io(format!("{}: {error}", library_path.display()))
         })?;
         let key = std::fs::read(&key_path).map_err(|error| {
-            jackdaw_loader::package::PackageError::Io(format!("{}: {error}", key_path.display()))
+            jackdaw_package::PackageError::Io(format!("{}: {error}", key_path.display()))
         })?;
-        let mut manifest = jackdaw_loader::package::ExtensionManifest::new(
+        let mut manifest = jackdaw_package::ExtensionManifest::new(
             &id,
             label,
             &version,
@@ -538,10 +554,9 @@ fn pack_extension(args: &[String]) -> ExitCode {
             &library,
         );
         manifest.homepage = flag_value(args, "--homepage").or(project.homepage.clone());
-        let bundle = jackdaw_loader::package::create_bundle(manifest, &library, &key)?;
-        std::fs::write(&out_path, bundle).map_err(|error| {
-            jackdaw_loader::package::PackageError::Io(format!("{out_path}: {error}"))
-        })
+        let bundle = jd::sign::create_bundle(manifest, &library, &key)?;
+        std::fs::write(&out_path, bundle)
+            .map_err(|error| jackdaw_package::PackageError::Io(format!("{out_path}: {error}")))
     })();
 
     match result {
@@ -550,8 +565,8 @@ fn pack_extension(args: &[String]) -> ExitCode {
             println!("  library: {}", library_path.display());
             println!(
                 "  built for: {} / {}",
-                jackdaw_loader::package::host_target(),
-                jackdaw_loader::package::host_sdk_abi()
+                jackdaw_package::host_target(),
+                jackdaw_package::host_sdk_abi()
             );
             println!(
                 "\nA bundle only installs into a jackdaw with the same ABI string, so publish \
@@ -699,15 +714,7 @@ fn read_bundle_source(source: &str) -> Result<Vec<u8>, String> {
             "{source}: refusing to fetch a bundle over plain http; use https"
         ));
     }
-    let response = ehttp::fetch_blocking(&ehttp::Request::get(source))
-        .map_err(|error| format!("{source}: {error}"))?;
-    if !response.ok {
-        return Err(format!(
-            "{source}: server returned {} {}",
-            response.status, response.status_text
-        ));
-    }
-    Ok(response.bytes)
+    jd::fetch::fetch_https(source)
 }
 
 /// Minimal JSON string escaping, for the handful of fields `abi --json`
@@ -734,29 +741,27 @@ fn missing_pack_flag(flag: &str) -> ExitCode {
 fn write_private_key(
     path: &std::path::Path,
     bytes: &[u8],
-) -> Result<(), jackdaw_loader::package::PackageError> {
+) -> Result<(), jackdaw_package::PackageError> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true).mode(0o600);
     let mut file = options.open(path).map_err(|error| {
-        jackdaw_loader::package::PackageError::Io(format!("{}: {error}", path.display()))
+        jackdaw_package::PackageError::Io(format!("{}: {error}", path.display()))
     })?;
-    std::io::Write::write_all(&mut file, bytes).map_err(|error| {
-        jackdaw_loader::package::PackageError::Io(format!("{}: {error}", path.display()))
-    })
+    std::io::Write::write_all(&mut file, bytes)
+        .map_err(|error| jackdaw_package::PackageError::Io(format!("{}: {error}", path.display())))
 }
 
 #[cfg(not(unix))]
 fn write_private_key(
     path: &std::path::Path,
     bytes: &[u8],
-) -> Result<(), jackdaw_loader::package::PackageError> {
+) -> Result<(), jackdaw_package::PackageError> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     let mut file = options.open(path).map_err(|error| {
-        jackdaw_loader::package::PackageError::Io(format!("{}: {error}", path.display()))
+        jackdaw_package::PackageError::Io(format!("{}: {error}", path.display()))
     })?;
-    std::io::Write::write_all(&mut file, bytes).map_err(|error| {
-        jackdaw_loader::package::PackageError::Io(format!("{}: {error}", path.display()))
-    })
+    std::io::Write::write_all(&mut file, bytes)
+        .map_err(|error| jackdaw_package::PackageError::Io(format!("{}: {error}", path.display())))
 }

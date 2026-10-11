@@ -25,13 +25,17 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Whether the MCP server binary sits beside `jd`, which is where `jd mcp` looks
-/// for it. `jd-mcp` belongs to another package, so no `CARGO_BIN_EXE_` names it;
-/// what both share is the workspace target directory.
-fn mcp_binary_built() -> bool {
-    Path::new(env!("CARGO_BIN_EXE_jd"))
-        .parent()
-        .is_some_and(|dir| dir.join("jd-mcp").is_file())
+/// `jd` and `jd-mcp` belong to other packages, so no `CARGO_BIN_EXE_` names
+/// them; they share the editor's target directory.
+fn sibling_binary(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_jackdaw"))
+        .with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Whether `jd` and the MCP server binary beside it, which is where
+/// `jd mcp` looks for it, are built.
+fn mcp_binaries_built() -> bool {
+    sibling_binary("jd").is_file() && sibling_binary("jd-mcp").is_file()
 }
 
 /// Whether anything can put a window on screen.
@@ -151,12 +155,12 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
     // Through `jd mcp`, not `jd-mcp` directly, so the exec wiring is
     // covered too. It is a separate binary, so a run that did not build
     // it has nothing to test rather than something to fail.
-    if !mcp_binary_built() {
+    if !mcp_binaries_built() {
         let _ = editor.kill();
         let _ = editor.wait();
-        skip_unless_required!("jd-mcp is not built; run `cargo build --bin jd-mcp`");
+        skip_unless_required!("jd or jd-mcp is not built; run `cargo build -p jd -p jackdaw_mcp`");
     }
-    let mut mcp = Command::new(env!("CARGO_BIN_EXE_jd"))
+    let mut mcp = Command::new(sibling_binary("jd"))
         .arg("mcp")
         .arg("--project")
         .arg(project.path())

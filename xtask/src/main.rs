@@ -176,17 +176,19 @@ fn heavy() -> bool {
             triple,
         ],
     ) && sh("cargo", &["build", "-p", "jackdaw_rustc_wrapper"])
-        // `jd mcp` executes `jd-mcp` from beside `jd`, and it lives in
-        // another package, so nothing else in this tier builds it. Without
-        // it `mcp_smoke` has no binary to drive and skips.
+        // `mcp_smoke` runs `jd mcp`, which executes `jd-mcp` from beside
+        // `jd`. Both live in other packages, so nothing else in this tier
+        // builds them. Without them `mcp_smoke` has no binary to drive and
+        // skips.
         && sh(
             "cargo",
             &[
                 "build",
                 "-p",
+                "jd",
+                "-p",
                 "jackdaw_mcp",
-                "--bin",
-                "jd-mcp",
+                "--bins",
                 "--target",
                 triple,
             ],

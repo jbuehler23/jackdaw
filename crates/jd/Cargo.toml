@@ -1,0 +1,40 @@
+[package]
+name = "jd"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "jd, the Jackdaw command-line tool: projects, builds, extension publishing and downloads"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+keywords = ["bevy", "jackdaw", "cli"]
+categories = ["game-development", "command-line-utilities"]
+
+[[bin]]
+name = "jd"
+path = "src/main.rs"
+doc = false
+
+[features]
+# Bake the SDK-builder recipe in so `jd setup` can bootstrap the SDK on a
+# machine without the jackdaw source.
+default = ["embed-recipe"]
+embed-recipe = ["jackdaw_cli_internal/embed-recipe"]
+
+[dependencies]
+jackdaw_cli_internal.workspace = true
+jackdaw_env.workspace = true
+jackdaw_package.workspace = true
+jackdaw_project_build.workspace = true
+jackdaw_scaffold.workspace = true
+dunce = "1.0.5"
+toml_edit = "0.25"
+ed25519-dalek = "2"
+getrandom = "0.3"
+# https downloads. The editor never links this; it asks `jd` instead.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

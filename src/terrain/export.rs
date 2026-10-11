@@ -15,9 +15,8 @@
 use std::cmp::Ordering;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
-use bevy::app::App;
+use bevy::app::{App, AppExit};
 use bevy::ecs::query::{With, Without};
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::ecs::world::World;
@@ -510,15 +509,15 @@ struct PlacementEntry {
     clippy::print_stderr,
     reason = "CLI results are written to stdout and errors to stderr"
 )]
-pub fn run_export_terrain_cli(args: &[String]) -> ExitCode {
+pub fn run_export_terrain_cli(args: &[String]) -> AppExit {
     match run(args) {
         Ok(summary) => {
             println!("{summary}");
-            ExitCode::SUCCESS
+            AppExit::Success
         }
         Err(message) => {
             eprintln!("jd export-terrain: {message}");
-            ExitCode::FAILURE
+            AppExit::error()
         }
     }
 }

@@ -3,7 +3,7 @@
 //! A separate binary from `jd` on purpose. The MCP stack (rmcp, tokio,
 //! reqwest) is a dependency of this crate alone, so the editor -- which
 //! needs none of it -- does not carry it. `jd mcp` finds and executes
-//! this binary; see `src/bin/jd.rs`.
+//! this binary; see `crates/jd/src/main.rs`.
 //!
 //! Nothing may reach stdout but the protocol: stdout is the channel.
 

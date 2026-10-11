@@ -13,9 +13,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Where scratch copies live: a debug `jd` is ~500 MB, and the default
-/// temp dir is often a tmpfs with far less room than that. Prefer a
-/// disk-backed location when one is obvious.
+/// Where scratch copies live: the default temp dir is often a small
+/// tmpfs. Prefer a disk-backed location when one is obvious.
 fn temp_root() -> PathBuf {
     let disk_backed = PathBuf::from("/var/tmp");
     if cfg!(unix) && disk_backed.is_dir() {
@@ -35,8 +34,8 @@ fn temp_root() -> PathBuf {
 fn standalone_jd() -> Option<&'static PathBuf> {
     static JD: OnceLock<Option<PathBuf>> = OnceLock::new();
     JD.get_or_init(|| {
-        // A fixed destination, so repeated runs overwrite one ~500 MB
-        // file instead of accumulating one per run. Tests here run in
+        // A fixed destination, so repeated runs overwrite one file
+        // instead of accumulating one per run. Tests here run in
         // parallel and share it, so nothing deletes it mid-run; write
         // to a unique name and rename, which is atomic, rather than
         // truncating a binary another process may be executing.

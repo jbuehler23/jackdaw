@@ -23,6 +23,13 @@ fn main() -> AppExit {
         }
         return AppExit::Success;
     }
+    // `jd export-terrain` runs here: reading a scene needs this binary's
+    // Bevy types, which `jd` does not link.
+    if let Some("export-terrain") = args.get(1).map(String::as_str) {
+        #[cfg(all(windows, not(debug_assertions)))]
+        attach_parent_console();
+        return jackdaw::terrain::export::run_export_terrain_cli(&args[2..]);
+    }
 
     // Install a SIGINT/SIGTERM handler before anything else gets a
     // chance to. Something in the dep tree (wgpu, gilrs, or one of

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
-use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -140,68 +140,25 @@ pub const fn host_target() -> &'static str {
     env!("JACKDAW_COMPILED_TARGET")
 }
 
-/// Generate a new Ed25519 signing key in PKCS#8 form.
+/// Assemble a signed bundle: fill in the manifest's schema and checksum,
+/// then sign the message [`verify_bytes`] checks with `sign`.
 ///
-/// Publishers should create this once, keep it private, and use the same key
-/// for updates so users only make one trust decision.
-pub fn generate_signing_key() -> Result<Vec<u8>, PackageError> {
-    let mut seed = [0; 32];
-    getrandom::fill(&mut seed)
-        .map_err(|_| PackageError::Invalid("could not generate an Ed25519 signing key".into()))?;
-    Ok(encode_pkcs8(&SigningKey::from_bytes(&seed)))
-}
-
-/// DER prefix of a PKCS#8 v1 Ed25519 private key, up to the 32-byte seed.
-const PKCS8_V1_PREFIX: [u8; 16] = [
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-];
-/// DER prefix of a PKCS#8 v2 Ed25519 key, which also carries the public key.
-const PKCS8_V2_PREFIX: [u8; 16] = [
-    0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-];
-/// DER header between the seed and the public key in a v2 document.
-const PKCS8_V2_PUBLIC_KEY_TAG: [u8; 3] = [0x81, 0x21, 0x00];
-
-/// Encode a key as the PKCS#8 v2 document earlier `jd` releases wrote.
-fn encode_pkcs8(key: &SigningKey) -> Vec<u8> {
-    let mut document = PKCS8_V2_PREFIX.to_vec();
-    document.extend_from_slice(key.as_bytes());
-    document.extend_from_slice(&PKCS8_V2_PUBLIC_KEY_TAG);
-    document.extend_from_slice(key.verifying_key().as_bytes());
-    document
-}
-
-/// Read an Ed25519 key from a PKCS#8 v1 or v2 document.
-fn decode_pkcs8(document: &[u8]) -> Option<SigningKey> {
-    let seed_key = |rest: &[u8]| -> Option<SigningKey> {
-        Some(SigningKey::from_bytes(rest.get(..32)?.try_into().ok()?))
-    };
-    if let Some(rest) = document.strip_prefix(&PKCS8_V1_PREFIX) {
-        return if rest.len() == 32 { seed_key(rest) } else { None };
-    }
-    let rest = document.strip_prefix(&PKCS8_V2_PREFIX)?;
-    let key = seed_key(rest)?;
-    let public = rest[32..].strip_prefix(&PKCS8_V2_PUBLIC_KEY_TAG)?;
-    (public == key.verifying_key().as_bytes()).then_some(key)
-}
-
-/// Build a signed bundle from a native library and an Ed25519 PKCS#8 key.
-pub fn create_bundle(
+/// Signing keys stay with the caller, so this crate only ever verifies.
+pub fn encode_bundle(
     mut manifest: ExtensionManifest,
     library: &[u8],
-    private_key_pkcs8: &[u8],
+    public_key: &[u8; 32],
+    sign: impl FnOnce(&[u8]) -> [u8; 64],
 ) -> Result<Vec<u8>, PackageError> {
     validate_manifest_shape(&manifest)?;
     manifest.schema_version = SCHEMA_VERSION;
     manifest.library_sha256 = hex_digest(library);
-    let key = decode_pkcs8(private_key_pkcs8)
-        .ok_or_else(|| PackageError::Invalid("invalid Ed25519 PKCS#8 key".into()))?;
     let message = signing_message(&manifest, library)?;
     let bundle = ExtensionBundle {
         manifest,
-        publisher_key: base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes()),
+        publisher_key: base64::engine::general_purpose::STANDARD.encode(public_key),
         library_base64: base64::engine::general_purpose::STANDARD.encode(library),
-        signature: base64::engine::general_purpose::STANDARD.encode(key.sign(&message).to_bytes()),
+        signature: base64::engine::general_purpose::STANDARD.encode(sign(&message)),
     };
     serde_json::to_vec_pretty(&bundle)
         .map_err(|error| PackageError::Invalid(format!("encoding bundle: {error}")))
@@ -647,7 +604,9 @@ mod tests {
 
     #[test]
     fn signed_bundle_round_trips_and_detects_tampering() {
-        let key = generate_signing_key().unwrap();
+        use ed25519_dalek::Signer as _;
+
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
         let manifest = ExtensionManifest::new(
             "example.ext",
             "Example",
@@ -657,7 +616,13 @@ mod tests {
             format!("ext.{}", std::env::consts::DLL_EXTENSION),
             b"native library",
         );
-        let bundle = create_bundle(manifest, b"native library", &key).unwrap();
+        let bundle = encode_bundle(
+            manifest,
+            b"native library",
+            key.verifying_key().as_bytes(),
+            |message| key.sign(message).to_bytes(),
+        )
+        .unwrap();
         let root =
             std::env::temp_dir().join(format!("jackdaw-signed-bundle-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -672,8 +637,12 @@ mod tests {
     }
 
     fn fixture(name: &str) -> Vec<u8> {
-        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name))
-            .unwrap()
+        std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -686,42 +655,12 @@ mod tests {
 
     #[test]
     fn previously_signed_bundle_rejects_tampering() {
-        let mut bundle: ExtensionBundle =
-            serde_json::from_slice(&fixture("signed.jdext")).unwrap();
+        let mut bundle: ExtensionBundle = serde_json::from_slice(&fixture("signed.jdext")).unwrap();
         bundle.manifest.version = "1.2.4".into();
         assert!(matches!(
             check_signature(bundle),
             Err(PackageError::Signature)
         ));
-    }
-
-    #[test]
-    fn existing_publisher_key_reproduces_its_signature() {
-        let original: ExtensionBundle = serde_json::from_slice(&fixture("signed.jdext")).unwrap();
-        let resigned =
-            create_bundle(original.manifest.clone(), &fixture("library.bin"), &fixture("publisher.pk8"))
-                .unwrap();
-        assert_eq!(resigned, fixture("signed.jdext"));
-
-        let key = decode_pkcs8(&fixture("publisher.pk8")).unwrap();
-        assert_eq!(encode_pkcs8(&key), fixture("publisher.pk8"));
-    }
-
-    #[test]
-    fn generated_keys_round_trip_through_pkcs8() {
-        let document = generate_signing_key().unwrap();
-        assert_eq!(document.len(), 83);
-        let key = decode_pkcs8(&document).unwrap();
-        assert_eq!(encode_pkcs8(&key), document);
-
-        let mut v1 = PKCS8_V1_PREFIX.to_vec();
-        v1.extend_from_slice(key.as_bytes());
-        assert_eq!(decode_pkcs8(&v1).unwrap().as_bytes(), key.as_bytes());
-
-        let mut mismatched = document.clone();
-        *mismatched.last_mut().unwrap() ^= 1;
-        assert!(decode_pkcs8(&mismatched).is_none());
-        assert!(decode_pkcs8(&document[..40]).is_none());
     }
 
     #[test]

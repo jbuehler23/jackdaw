@@ -81,7 +81,7 @@ jobs:
       - name: Standalone scaffold and import
         env:
           JACKDAW_STANDALONE_REQUIRED: "1"
-        run: cargo test --locked --test standalone_scaffold
+        run: cargo test --locked -p jd --test standalone_scaffold
 
       # The recipe is only unpacked on a user's machine at first run, so
       # a malformed one passes every other check and then leaves them

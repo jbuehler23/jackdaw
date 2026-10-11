@@ -3046,23 +3046,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ehttp"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59a81c221a1e4dad06cb9c9deb19aea1193a5eea084e8cd42d869068132bf876"
-dependencies = [
- "async-channel",
- "document-features",
- "js-sys",
- "serde",
- "serde_json",
- "ureq",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4374,7 +4357,6 @@ dependencies = [
  "ctrlc",
  "dirs",
  "dunce",
- "ehttp",
  "flate2",
  "fontique",
  "half",
@@ -4388,7 +4370,6 @@ dependencies = [
  "jackdaw_bsn",
  "jackdaw_camera",
  "jackdaw_camera_rig",
- "jackdaw_cli_internal",
  "jackdaw_commands",
  "jackdaw_csg",
  "jackdaw_env",
@@ -4435,7 +4416,6 @@ dependencies = [
  "test_fixture_extension",
  "time",
  "toml",
- "toml_edit",
  "webbrowser",
  "windows-sys 0.61.2",
  "winit",
@@ -4767,7 +4747,6 @@ version = "0.19.0-rc.10"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
- "getrandom 0.3.4",
  "jackdaw_env",
  "serde",
  "serde_json",
@@ -4995,6 +4974,23 @@ name = "jackdaw_widgets_runtime"
 version = "0.19.0-rc.10"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "jd"
+version = "0.19.0-rc.10"
+dependencies = [
+ "dunce",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "jackdaw_cli_internal",
+ "jackdaw_env",
+ "jackdaw_package",
+ "jackdaw_project_build",
+ "jackdaw_scaffold",
+ "serde_json",
+ "toml_edit",
+ "ureq",
 ]
 
 [[package]]
@@ -8239,7 +8235,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
 dependencies = [
  "base64 0.22.1",
- "flate2",
  "log",
  "once_cell",
  "rustls",
