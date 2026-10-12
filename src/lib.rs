@@ -197,6 +197,7 @@ use bevy::{
     platform::collections::HashMap,
     prelude::*,
 };
+use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::{
     ToAnchorId as _,

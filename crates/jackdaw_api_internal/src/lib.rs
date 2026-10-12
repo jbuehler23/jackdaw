@@ -116,8 +116,12 @@ pub mod prelude {
         snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter},
         widgets::{WidgetDefinition, WidgetInstantiateContext, WidgetRegistry},
     };
-    // BEI types extension authors need for `actions!` / `bindings!` / observers.
-    pub use bevy_enhanced_input::prelude::*;
+    // The BEI items extension authors need for `actions!` / `bindings!` / observers.
+    pub use bevy_enhanced_input::prelude::{
+        Action, ActionOf, Actions, Binding, Bindings, BlockBy, Cancel, Chord, Complete, Fire, Hold,
+        InputAction, InputModKeys, ModKeys, Ongoing, Press, Release, Start, Tap, TriggerState,
+        actions, bindings,
+    };
     // Re-export Bevy's SystemId here so Operator impls don't need to import it.
     pub use bevy::ecs::system::SystemId;
 }

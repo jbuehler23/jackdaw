@@ -58,6 +58,18 @@ Runtime extensions deliberately cannot install extension-owned Bevy component
 metadata or reflected Rust types. Use a custom editor build when that level of
 access is required.
 
+### Input types
+
+`jackdaw_api::prelude` re-exports only the `bevy_enhanced_input` items an
+extension needs to declare, bind and observe actions: `InputAction`, `Action`,
+`ActionOf`, `Actions`, `actions!`, `bindings!`, `Binding`, `Bindings`,
+`ModKeys`, `InputModKeys`, the `Press`, `Release`, `Hold`, `Tap`, `Chord` and
+`BlockBy` conditions, the `Start`, `Ongoing`, `Fire`, `Complete` and `Cancel`
+events, and `TriggerState`. Before 0.20 it re-exported the whole
+`bevy_enhanced_input` prelude. If an extension used anything else from it, such
+as an input modifier or a preset, add `bevy_enhanced_input` to its
+dependencies and import the item from `bevy_enhanced_input::prelude`.
+
 ## Signed bundles
 
 Create one publisher key, once:

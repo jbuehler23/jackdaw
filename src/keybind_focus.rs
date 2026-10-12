@@ -20,7 +20,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::EditableText;
-use jackdaw_api::prelude::ActionSources;
+use bevy_enhanced_input::prelude::ActionSources;
 use jackdaw_commands::KeymapCapture;
 
 /// `SystemParam` that returns whether keybinds and operator dispatches
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn capture_active_suppresses_action_keybinds() {
         use bevy::input_focus::InputFocus;
-        use jackdaw_api::prelude::ActionSources;
+        use bevy_enhanced_input::prelude::ActionSources;
         let mut app = bevy::app::App::new();
         app.init_resource::<InputFocus>();
         app.init_resource::<crate::numeric_transform::NumericTransformState>();

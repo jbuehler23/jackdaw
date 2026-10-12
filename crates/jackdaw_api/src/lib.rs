@@ -200,9 +200,14 @@ pub mod prelude {
         RadialMenuItem, RadialMenuSelect, cancel_radial_menu, confirm_radial_menu, open_radial_menu,
     };
 
-    /// BEI types extension authors need for `actions!` / `bindings!`
-    /// and observer callbacks.
-    pub use bevy_enhanced_input::prelude::*;
+    /// The `bevy_enhanced_input` items an extension needs to declare
+    /// actions, bind them, and observe them. Anything else comes from
+    /// `bevy_enhanced_input` directly.
+    pub use bevy_enhanced_input::prelude::{
+        Action, ActionOf, Actions, Binding, Bindings, BlockBy, Cancel, Chord, Complete, Fire, Hold,
+        InputAction, InputModKeys, ModKeys, Ongoing, Press, Release, Start, Tap, TriggerState,
+        actions, bindings,
+    };
 
     /// Re-exported so manual [`Operator`] impls don't need an extra
     /// bevy import.
