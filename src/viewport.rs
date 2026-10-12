@@ -480,7 +480,11 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
             MainViewportCamera,
             crate::EditorEntity,
             jackdaw_terrain::render::DetailViewer,
-            Camera3d::default(),
+            // Bevy 0.20 made screen-space transmission opt-in per camera.
+            (
+                Camera3d::default(),
+                bevy::pbr::ScreenSpaceTransmission::default(),
+            ),
             EnvironmentMapLight {
                 diffuse_map: env_diffuse,
                 specular_map: env_specular,

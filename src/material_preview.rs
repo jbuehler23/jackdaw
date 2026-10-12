@@ -163,6 +163,7 @@ fn setup_material_preview_scene(
         PreviewCamera,
         crate::EditorEntity,
         Camera3d::default(),
+        bevy::pbr::ScreenSpaceTransmission::default(),
         Camera {
             order: -1,
             is_active: false,

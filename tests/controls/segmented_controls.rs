@@ -32,7 +32,7 @@ fn click(app: &mut App, entity: Entity) {
         .normalize(Some(window))
         .expect("the primary window normalizes");
     app.world_mut().trigger(PointerClick {
-        entity: entity,
+        entity,
         pointer: Pointer::new(
             PointerId::Mouse,
             Location {
