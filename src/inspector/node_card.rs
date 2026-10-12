@@ -162,6 +162,11 @@ const ALIGN_ITEMS: NodeEnumField = NodeEnumField {
         "Center",
         "Baseline",
         "Stretch",
+        "StartSafe",
+        "EndSafe",
+        "FlexStartSafe",
+        "FlexEndSafe",
+        "CenterSafe",
     ],
     current: |node| match node.align_items {
         AlignItems::Default => 0,
@@ -172,6 +177,11 @@ const ALIGN_ITEMS: NodeEnumField = NodeEnumField {
         AlignItems::Center => 5,
         AlignItems::Baseline => 6,
         AlignItems::Stretch => 7,
+        AlignItems::StartSafe => 8,
+        AlignItems::EndSafe => 9,
+        AlignItems::FlexStartSafe => 10,
+        AlignItems::FlexEndSafe => 11,
+        AlignItems::CenterSafe => 12,
     },
 };
 
@@ -187,6 +197,11 @@ const ALIGN_SELF: NodeEnumField = NodeEnumField {
         "Center",
         "Baseline",
         "Stretch",
+        "StartSafe",
+        "EndSafe",
+        "FlexStartSafe",
+        "FlexEndSafe",
+        "CenterSafe",
     ],
     current: |node| match node.align_self {
         AlignSelf::Auto => 0,
@@ -197,6 +212,11 @@ const ALIGN_SELF: NodeEnumField = NodeEnumField {
         AlignSelf::Center => 5,
         AlignSelf::Baseline => 6,
         AlignSelf::Stretch => 7,
+        AlignSelf::StartSafe => 8,
+        AlignSelf::EndSafe => 9,
+        AlignSelf::FlexStartSafe => 10,
+        AlignSelf::FlexEndSafe => 11,
+        AlignSelf::CenterSafe => 12,
     },
 };
 
@@ -214,6 +234,11 @@ const ALIGN_CONTENT: NodeEnumField = NodeEnumField {
         "SpaceBetween",
         "SpaceEvenly",
         "SpaceAround",
+        "StartSafe",
+        "EndSafe",
+        "FlexStartSafe",
+        "FlexEndSafe",
+        "CenterSafe",
     ],
     current: |node| match node.align_content {
         AlignContent::Default => 0,
@@ -226,13 +251,28 @@ const ALIGN_CONTENT: NodeEnumField = NodeEnumField {
         AlignContent::SpaceBetween => 7,
         AlignContent::SpaceEvenly => 8,
         AlignContent::SpaceAround => 9,
+        AlignContent::StartSafe => 10,
+        AlignContent::EndSafe => 11,
+        AlignContent::FlexStartSafe => 12,
+        AlignContent::FlexEndSafe => 13,
+        AlignContent::CenterSafe => 14,
     },
 };
 
 const JUSTIFY_ITEMS: NodeEnumField = NodeEnumField {
     label: "items",
     path: "justify_items",
-    variants: &["Default", "Start", "End", "Center", "Baseline", "Stretch"],
+    variants: &[
+        "Default",
+        "Start",
+        "End",
+        "Center",
+        "Baseline",
+        "Stretch",
+        "StartSafe",
+        "EndSafe",
+        "CenterSafe",
+    ],
     current: |node| match node.justify_items {
         JustifyItems::Default => 0,
         JustifyItems::Start => 1,
@@ -240,13 +280,26 @@ const JUSTIFY_ITEMS: NodeEnumField = NodeEnumField {
         JustifyItems::Center => 3,
         JustifyItems::Baseline => 4,
         JustifyItems::Stretch => 5,
+        JustifyItems::StartSafe => 6,
+        JustifyItems::EndSafe => 7,
+        JustifyItems::CenterSafe => 8,
     },
 };
 
 const JUSTIFY_SELF: NodeEnumField = NodeEnumField {
     label: "self",
     path: "justify_self",
-    variants: &["Auto", "Start", "End", "Center", "Baseline", "Stretch"],
+    variants: &[
+        "Auto",
+        "Start",
+        "End",
+        "Center",
+        "Baseline",
+        "Stretch",
+        "StartSafe",
+        "EndSafe",
+        "CenterSafe",
+    ],
     current: |node| match node.justify_self {
         JustifySelf::Auto => 0,
         JustifySelf::Start => 1,
@@ -254,6 +307,9 @@ const JUSTIFY_SELF: NodeEnumField = NodeEnumField {
         JustifySelf::Center => 3,
         JustifySelf::Baseline => 4,
         JustifySelf::Stretch => 5,
+        JustifySelf::StartSafe => 6,
+        JustifySelf::EndSafe => 7,
+        JustifySelf::CenterSafe => 8,
     },
 };
 
@@ -271,6 +327,11 @@ const JUSTIFY_CONTENT: NodeEnumField = NodeEnumField {
         "SpaceBetween",
         "SpaceEvenly",
         "SpaceAround",
+        "StartSafe",
+        "EndSafe",
+        "FlexStartSafe",
+        "FlexEndSafe",
+        "CenterSafe",
     ],
     current: |node| match node.justify_content {
         JustifyContent::Default => 0,
@@ -283,6 +344,11 @@ const JUSTIFY_CONTENT: NodeEnumField = NodeEnumField {
         JustifyContent::SpaceBetween => 7,
         JustifyContent::SpaceEvenly => 8,
         JustifyContent::SpaceAround => 9,
+        JustifyContent::StartSafe => 10,
+        JustifyContent::EndSafe => 11,
+        JustifyContent::FlexStartSafe => 12,
+        JustifyContent::FlexEndSafe => 13,
+        JustifyContent::CenterSafe => 14,
     },
 };
 
@@ -628,23 +694,23 @@ fn build_node_card(
         ("column gap", "column_gap", node.column_gap),
         (
             "radius top left",
-            "border_radius.top_left",
-            node.border_radius.top_left,
+            "border_radius.top_left.x",
+            node.border_radius.top_left.x,
         ),
         (
             "radius top right",
-            "border_radius.top_right",
-            node.border_radius.top_right,
+            "border_radius.top_right.x",
+            node.border_radius.top_right.x,
         ),
         (
             "radius bottom right",
-            "border_radius.bottom_right",
-            node.border_radius.bottom_right,
+            "border_radius.bottom_right.x",
+            node.border_radius.bottom_right.x,
         ),
         (
             "radius bottom left",
-            "border_radius.bottom_left",
-            node.border_radius.bottom_left,
+            "border_radius.bottom_left.x",
+            node.border_radius.bottom_left.x,
         ),
     ] {
         spawn_val_field(

@@ -386,7 +386,8 @@ fn pixel_rounding(kinds: &CanvasSnap) -> PixelRounding {
 }
 
 /// The unit half of an authored [`Val`], for the values a gesture writes
-/// back. `Val::Auto` has no unit and is absent instead.
+/// back. `Val::Auto` has no unit and is absent instead, as are the font-relative
+/// `Val::Em` and `Val::Rem`, which a gesture has no font size to resolve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AnchorUnit {
     Px,
@@ -398,11 +399,12 @@ pub enum AnchorUnit {
 }
 
 impl AnchorUnit {
-    /// The unit `value` is stated in, or `None` for `Val::Auto`, which
-    /// is not a length the gesture can put a number back into.
+    /// The unit `value` is stated in, or `None` for `Val::Auto`, `Val::Em`
+    /// and `Val::Rem`, which are not lengths the gesture can put a number
+    /// back into.
     pub fn of(value: Val) -> Option<Self> {
         match value {
-            Val::Auto => None,
+            Val::Auto | Val::Em(_) | Val::Rem(_) => None,
             Val::Px(_) => Some(Self::Px),
             Val::Percent(_) => Some(Self::Percent),
             Val::Vw(_) => Some(Self::Vw),

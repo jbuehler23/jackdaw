@@ -48,9 +48,11 @@ enum ValUnit {
     Vh,
     VMin,
     VMax,
+    Em,
+    Rem,
 }
 
-const VAL_UNITS: [ValUnit; 7] = [
+const VAL_UNITS: [ValUnit; 9] = [
     ValUnit::Px,
     ValUnit::Percent,
     ValUnit::Auto,
@@ -58,6 +60,8 @@ const VAL_UNITS: [ValUnit; 7] = [
     ValUnit::Vh,
     ValUnit::VMin,
     ValUnit::VMax,
+    ValUnit::Em,
+    ValUnit::Rem,
 ];
 
 impl ValUnit {
@@ -70,6 +74,8 @@ impl ValUnit {
             ValUnit::Vh => "vh",
             ValUnit::VMin => "vmin",
             ValUnit::VMax => "vmax",
+            ValUnit::Em => "em",
+            ValUnit::Rem => "rem",
         }
     }
 
@@ -86,6 +92,8 @@ impl ValUnit {
             Val::Vh(_) => ValUnit::Vh,
             Val::VMin(_) => ValUnit::VMin,
             Val::VMax(_) => ValUnit::VMax,
+            Val::Em(_) => ValUnit::Em,
+            Val::Rem(_) => ValUnit::Rem,
         }
     }
 
@@ -98,6 +106,8 @@ impl ValUnit {
             ValUnit::Vh => Val::Vh(magnitude),
             ValUnit::VMin => Val::VMin(magnitude),
             ValUnit::VMax => Val::VMax(magnitude),
+            ValUnit::Em => Val::Em(magnitude),
+            ValUnit::Rem => Val::Rem(magnitude),
         }
     }
 }
@@ -105,7 +115,14 @@ impl ValUnit {
 fn val_magnitude(value: Val) -> f32 {
     match value {
         Val::Auto => 0.0,
-        Val::Px(v) | Val::Percent(v) | Val::Vw(v) | Val::Vh(v) | Val::VMin(v) | Val::VMax(v) => v,
+        Val::Px(v)
+        | Val::Percent(v)
+        | Val::Vw(v)
+        | Val::Vh(v)
+        | Val::VMin(v)
+        | Val::VMax(v)
+        | Val::Em(v)
+        | Val::Rem(v) => v,
     }
 }
 
@@ -391,6 +408,8 @@ fn val_to_json(value: Val) -> serde_json::Value {
         Val::Vh(v) => serde_json::json!({ "Vh": v }),
         Val::VMin(v) => serde_json::json!({ "VMin": v }),
         Val::VMax(v) => serde_json::json!({ "VMax": v }),
+        Val::Em(v) => serde_json::json!({ "Em": v }),
+        Val::Rem(v) => serde_json::json!({ "Rem": v }),
     }
 }
 

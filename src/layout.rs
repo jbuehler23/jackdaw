@@ -384,12 +384,7 @@ pub(crate) fn toolbar() -> impl Scene {
             width: percent(100),
             height: px(tokens::TOOLBAR_HEIGHT),
             border: UiRect::all(px(1.0)),
-            border_radius: BorderRadius {
-                top_left: px(tokens::TOOLBAR_RADIUS),
-                top_right: px(tokens::TOOLBAR_RADIUS),
-                bottom_left: px(0.0),
-                bottom_right: px(0.0),
-            },
+            border_radius: BorderRadius::top(px(tokens::TOOLBAR_RADIUS)),
             flex_shrink: 0.0,
         }
         BackgroundColor(tokens::PANEL_HEADER_BG)
@@ -573,7 +568,7 @@ fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
     let glyph = String::from(icon.unicode());
     bsn! {
         @FeathersToolButton {
-            @caption: bsn! { icon_scene(glyph, TOOLBAR_ICON_PX) },
+            @caption: bsn! { @icon_scene(glyph, TOOLBAR_ICON_PX) },
             @variant: {ButtonVariant::Plain}
         }
         ButtonOperatorCall::new(op_id)
