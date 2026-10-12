@@ -57,10 +57,6 @@ fn a_list_is_a_list_box_and_its_rows_are_list_items() {
         app.world().get::<ListItem>(row).is_some(),
         "so the row is a list item the widget knows",
     );
-    assert!(
-        app.world().get::<Interaction>(row).is_none(),
-        "and not a hand-rolled interaction control",
-    );
 }
 
 /// A row keeps the layout it was spawned with. The scene writes a row

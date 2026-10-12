@@ -117,7 +117,6 @@ mod tests {
 
         assert!(world.get::<RadioGroup>(bar).is_some());
         assert!(world.get::<RadioButton>(one).is_some());
-        assert!(world.get::<Interaction>(one).is_none());
     }
 
     #[test]

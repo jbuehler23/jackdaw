@@ -73,10 +73,6 @@ fn a_combobox_opens_a_feathers_menu_popup_of_menu_items() {
             app.world().get::<MenuItem>(*row).is_some(),
             "each row is a menu item the widget knows",
         );
-        assert!(
-            app.world().get::<Interaction>(*row).is_none(),
-            "and not a hand-rolled interaction control",
-        );
     }
     let anchor = app
         .world()

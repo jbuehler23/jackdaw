@@ -49,18 +49,10 @@ fn a_text_field_is_a_feathers_text_input() {
     app.update();
     app.update();
 
-    let (frame, input) = field(&mut app, root);
+    let (_, input) = field(&mut app, root);
     assert!(
         app.world().get::<EditableText>(input).is_some(),
         "the input carries the editing model",
-    );
-    assert!(
-        app.world().get::<Interaction>(frame).is_none(),
-        "the frame is not a hand-rolled control",
-    );
-    assert!(
-        app.world().get::<Interaction>(input).is_none(),
-        "and neither is the input",
     );
 }
 

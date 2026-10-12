@@ -21,14 +21,8 @@ pub fn plugin(app: &mut App) {
         .add_observer(on_cancel_button_click)
         .add_observer(on_close_button_click)
         .add_observer(on_close_dialog)
-        .add_systems(
-            Update,
-            (
-                sync_children_slot_visibility,
-                handle_backdrop_click,
-                handle_esc_key,
-            ),
-        );
+        .add_observer(handle_backdrop_click)
+        .add_systems(Update, (sync_children_slot_visibility, handle_esc_key));
 }
 
 #[derive(Component)]
@@ -370,7 +364,6 @@ fn spawn_dialog(
     let backdrop_id = commands
         .spawn((
             DialogBackdrop,
-            Interaction::None,
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -481,7 +474,6 @@ fn spawn_dialog(
 
     let mut panel = commands.spawn((
         DialogPanel,
-        Interaction::None,
         Node {
             width: percent(100),
             max_width: event.max_width.unwrap_or(px(448)),
@@ -585,29 +577,24 @@ fn sync_children_slot_visibility(
     }
 }
 
+/// A primary press on the backdrop itself, not on the panel above it, cancels
+/// a dialog that closes on a click outside.
 fn handle_backdrop_click(
-    interactions: Query<(&Interaction, &ChildOf), (Changed<Interaction>, With<DialogBackdrop>)>,
-    panels: Query<&Interaction, With<DialogPanel>>,
+    press: On<PointerPress>,
+    backdrops: Query<&ChildOf, With<DialogBackdrop>>,
     dialogs: Query<&DialogConfig, With<EditorDialog>>,
     mut commands: Commands,
 ) {
-    for (interaction, child_of) in &interactions {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-
-        let Ok(config) = dialogs.get(child_of.parent()) else {
-            continue;
-        };
-
-        if !config.close_on_click_outside {
-            continue;
-        }
-
-        if panels.iter().any(|i| *i == Interaction::Pressed) {
-            continue;
-        }
-
+    if press.button != PointerButton::Primary || press.original_event_target() != press.entity {
+        return;
+    }
+    let Ok(child_of) = backdrops.get(press.entity) else {
+        return;
+    };
+    let Ok(config) = dialogs.get(child_of.parent()) else {
+        return;
+    };
+    if config.close_on_click_outside {
         cancel_dialog(&mut commands, child_of.parent());
     }
 }

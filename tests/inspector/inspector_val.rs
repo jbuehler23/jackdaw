@@ -953,10 +953,6 @@ fn the_card_segments_are_a_radio_group() {
             app.world().get::<RadioButton>(segment).is_some(),
             "a segment is a radio button",
         );
-        assert!(
-            app.world().get::<Interaction>(segment).is_none(),
-            "and not a hand-rolled interaction control",
-        );
     }
     let bar = app
         .world()

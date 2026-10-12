@@ -1,3 +1,4 @@
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use jackdaw_feathers::{icons::IconFont, tokens};
 use lucide_icons::Icon;
@@ -21,7 +22,8 @@ pub struct DockTabPlugin;
 
 impl Plugin for DockTabPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (handle_dock_tab_clicks, show_close_on_hover));
+        app.add_observer(handle_dock_tab_clicks)
+            .add_systems(Update, show_close_on_hover);
     }
 }
 
@@ -104,7 +106,6 @@ pub fn spawn_tab_bar_world(
     if let Some(ref font_handle) = icon_font {
         world.spawn((
             DockTabAddButton { area_entity },
-            Interaction::default(),
             Node {
                 width: Val::Px(15.0),
                 height: Val::Px(15.0),
@@ -126,7 +127,6 @@ pub fn spawn_tab_bar_world(
 
         world.spawn((
             DockTabGrip,
-            Interaction::default(),
             Node {
                 width: Val::Px(15.0),
                 height: Val::Px(15.0),
@@ -190,7 +190,7 @@ fn spawn_tab(
                 window_id: window_id.to_string(),
                 tab_id,
             },
-            Interaction::default(),
+            Hovered::default(),
             Node {
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::Center,
@@ -234,7 +234,6 @@ fn spawn_tab(
                 window_id: window_id.to_string(),
                 tab_id,
             },
-            Interaction::default(),
             Node {
                 width: Val::Px(14.0),
                 height: Val::Px(14.0),
@@ -264,46 +263,47 @@ fn spawn_tab(
 pub struct DockTabCloseIcon;
 
 fn handle_dock_tab_clicks(
-    tab_query: Query<(&DockTab, &Interaction, &ChildOf), Changed<Interaction>>,
+    press: On<PointerPress>,
+    tab_query: Query<(&DockTab, &ChildOf)>,
     parent_query: Query<&ChildOf>,
     bindings: Query<&LeafBinding>,
     mut tree: ResMut<DockTree>,
 ) {
-    for (tab, interaction, tab_child_of) in tab_query.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-
-        // Walk: tab -> tab_row -> tab_bar -> area
-        let tab_row = tab_child_of.parent();
-        let Ok(row_parent) = parent_query.get(tab_row) else {
-            continue;
-        };
-        let tab_bar = row_parent.parent();
-        let Ok(bar_parent) = parent_query.get(tab_bar) else {
-            continue;
-        };
-        let area_entity = bar_parent.parent();
-
-        let Ok(binding) = bindings.get(area_entity) else {
-            continue;
-        };
-
-        tree.set_active(binding.0, tab.tab_id);
+    if press.button != PointerButton::Primary {
+        return;
     }
+    let Ok((tab, tab_child_of)) = tab_query.get(press.entity) else {
+        return;
+    };
+
+    // Walk: tab -> tab_row -> tab_bar -> area
+    let tab_row = tab_child_of.parent();
+    let Ok(row_parent) = parent_query.get(tab_row) else {
+        return;
+    };
+    let tab_bar = row_parent.parent();
+    let Ok(bar_parent) = parent_query.get(tab_bar) else {
+        return;
+    };
+    let area_entity = bar_parent.parent();
+
+    let Ok(binding) = bindings.get(area_entity) else {
+        return;
+    };
+
+    tree.set_active(binding.0, tab.tab_id);
 }
 
 fn show_close_on_hover(
-    tabs: Query<(Entity, &Interaction, &Children), (Changed<Interaction>, With<DockTab>)>,
+    tabs: Query<(&Hovered, &Children), (Changed<Hovered>, With<DockTab>)>,
     drag_state: Option<Res<crate::drag::DockDragState>>,
     close_buttons: Query<&Children, With<crate::area::DockTabCloseButton>>,
     mut icon_colors: Query<&mut TextColor, With<DockTabCloseIcon>>,
 ) {
     let hide = drag_state.is_none_or(|s| matches!(*s, crate::drag::DockDragState::Dragging { .. }));
 
-    for (_tab_entity, interaction, children) in tabs.iter() {
-        let show =
-            (*interaction == Interaction::Hovered || *interaction == Interaction::Pressed) && !hide;
+    for (hovered, children) in tabs.iter() {
+        let show = hovered.get() && !hide;
         let alpha = if show { 1.0 } else { 0.0 };
         for child in children.iter() {
             let Ok(close_children) = close_buttons.get(child) else {

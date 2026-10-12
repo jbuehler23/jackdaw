@@ -67,7 +67,6 @@ pub fn spawn_icon_sidebar_world(
                     window_id: window_id.clone(),
                     tab_id: *tab_id,
                 },
-                Interaction::default(),
                 Node {
                     width: Val::Px(29.0),
                     height: Val::Px(30.0),
@@ -110,33 +109,35 @@ pub fn spawn_icon_sidebar_world(
 }
 
 pub fn handle_sidebar_icon_clicks(
-    icon_query: Query<(&DockSidebarIcon, &Interaction, &ChildOf), Changed<Interaction>>,
+    press: On<PointerPress>,
+    icon_query: Query<(&DockSidebarIcon, &ChildOf)>,
     parent_query: Query<&ChildOf>,
     bindings: Query<&LeafBinding>,
     mut tree: ResMut<DockTree>,
 ) {
-    for (icon, interaction, icon_parent) in icon_query.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-
-        // Walk: icon -> icon_group -> sidebar -> area
-        let icon_group = icon_parent.parent();
-        let Ok(group_parent) = parent_query.get(icon_group) else {
-            continue;
-        };
-        let sidebar = group_parent.parent();
-        let Ok(sidebar_parent) = parent_query.get(sidebar) else {
-            continue;
-        };
-        let area_entity = sidebar_parent.parent();
-
-        let Ok(binding) = bindings.get(area_entity) else {
-            continue;
-        };
-
-        tree.set_active(binding.0, icon.tab_id);
+    if press.button != PointerButton::Primary {
+        return;
     }
+    let Ok((icon, icon_parent)) = icon_query.get(press.entity) else {
+        return;
+    };
+
+    // Walk: icon -> icon_group -> sidebar -> area
+    let icon_group = icon_parent.parent();
+    let Ok(group_parent) = parent_query.get(icon_group) else {
+        return;
+    };
+    let sidebar = group_parent.parent();
+    let Ok(sidebar_parent) = parent_query.get(sidebar) else {
+        return;
+    };
+    let area_entity = sidebar_parent.parent();
+
+    let Ok(binding) = bindings.get(area_entity) else {
+        return;
+    };
+
+    tree.set_active(binding.0, icon.tab_id);
 }
 
 /// Right-click on a sidebar icon closes (removes) that tab from its

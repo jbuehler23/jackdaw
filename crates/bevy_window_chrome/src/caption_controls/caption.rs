@@ -188,7 +188,6 @@ fn caption_button_bundle(
     (
         kind,
         WindowChromeEntity,
-        Interaction::default(),
         Hovered::default(),
         Node {
             width: px(button_width),
@@ -217,13 +216,7 @@ pub(crate) fn sync_caption_chrome(
     caption_font: Res<CaptionFont>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
     mut buttons: Query<
-        (
-            &CaptionButton,
-            &Interaction,
-            &Hovered,
-            &mut BackgroundColor,
-            &Children,
-        ),
+        (&CaptionButton, &Hovered, &mut BackgroundColor, &Children),
         With<CaptionButton>,
     >,
     mut texts: Query<&mut Text>,
@@ -234,11 +227,8 @@ pub(crate) fn sync_caption_chrome(
         .ok()
         .is_some_and(crate::primary_window_is_maximized);
 
-    for (kind, interaction, hovered, mut background, children) in buttons.iter_mut() {
-        let highlighted =
-            hovered.0 || matches!(*interaction, Interaction::Hovered | Interaction::Pressed);
-        let (background_color, foreground_color) =
-            caption_colors(*kind, highlighted, &theme.caption);
+    for (kind, hovered, mut background, children) in buttons.iter_mut() {
+        let (background_color, foreground_color) = caption_colors(*kind, hovered.0, &theme.caption);
         background.0 = background_color;
 
         let icon_label = caption_font.glyph(*kind, is_maximized);

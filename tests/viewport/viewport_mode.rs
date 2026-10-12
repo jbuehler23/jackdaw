@@ -198,10 +198,6 @@ fn the_switch_is_a_radio_group_and_checks_the_current_mode() {
             app.world().get::<RadioButton>(entity).is_some(),
             "a segment is a radio button",
         );
-        assert!(
-            app.world().get::<Interaction>(entity).is_none(),
-            "and not a hand-rolled interaction control",
-        );
         let bar = app
             .world()
             .get::<ChildOf>(entity)

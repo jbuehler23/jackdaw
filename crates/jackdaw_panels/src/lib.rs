@@ -44,7 +44,6 @@ impl Plugin for DockPlugin {
         .add_systems(
             Update,
             (
-                sidebar::handle_sidebar_icon_clicks,
                 workspace_tabs::populate_workspace_tabs,
                 workspace_tabs::show_workspace_close_on_hover,
                 workspace_tabs::auto_focus_workspace_rename,
@@ -54,6 +53,7 @@ impl Plugin for DockPlugin {
         .add_observer(workspace_tabs::on_workspace_tab_chosen)
         .add_observer(workspace_tabs::on_add_workspace_activated)
         .add_observer(sidebar::on_sidebar_icon_right_click)
+        .add_observer(sidebar::handle_sidebar_icon_clicks)
         .add_observer(workspace_tabs::on_workspace_changed_swap_tree)
         .add_observer(workspace_tabs::on_workspace_close_click)
         .add_observer(workspace_tabs::detect_workspace_double_click)

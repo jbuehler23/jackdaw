@@ -65,10 +65,6 @@ fn assert_is_a_segment(app: &App, segment: Entity) {
         app.world().get::<RadioButton>(segment).is_some(),
         "a segment is a radio button",
     );
-    assert!(
-        app.world().get::<Interaction>(segment).is_none(),
-        "and not a hand-rolled interaction control",
-    );
     let bar = app
         .world()
         .get::<ChildOf>(segment)

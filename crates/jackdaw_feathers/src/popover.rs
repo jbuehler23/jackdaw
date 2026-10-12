@@ -210,7 +210,6 @@ pub fn popover(props: PopoverProps) -> impl Bundle {
 
     (
         shell,
-        Interaction::None,
         Node {
             position_type: PositionType::Absolute,
             padding: UiRect::all(px(padding)),

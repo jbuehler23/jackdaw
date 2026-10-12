@@ -58,7 +58,6 @@ pub fn toast(
     (
         EditorToast,
         variant,
-        Interaction::None,
         ToastDuration(Timer::new(duration, TimerMode::Once)),
         Node {
             position_type: PositionType::Absolute,
