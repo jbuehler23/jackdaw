@@ -1,6 +1,6 @@
 use bevy::feathers::controls::{FeathersTextInput, FeathersTextInputContainer};
-use bevy::feathers::cursor::{EntityCursor, OverrideCursor};
 use bevy::input_focus::{FocusCause, InputFocus};
+use bevy::picking::cursor::{EntityCursor, OverrideCursor};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{

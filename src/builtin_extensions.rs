@@ -6,7 +6,6 @@
 use bevy::{
     feathers::{
         controls::ButtonVariant,
-        cursor::EntityCursor,
         focus::FocusIndicator,
         theme::{
             InheritableThemeTextColor, ThemeBackgroundColor, ThemeBorderColor, ThemeTextColor,
@@ -15,6 +14,7 @@ use bevy::{
         tokens as feathers_tokens,
     },
     input_focus::tab_navigation::TabIndex,
+    picking::cursor::EntityCursor,
     prelude::*,
     window::SystemCursorIcon,
 };

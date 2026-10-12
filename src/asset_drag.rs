@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use bevy::{
-    feathers::cursor::{EntityCursor, OverrideCursor},
+    picking::cursor::{EntityCursor, OverrideCursor},
     prelude::*,
     window::{PrimaryWindow, SystemCursorIcon},
 };

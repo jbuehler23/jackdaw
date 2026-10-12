@@ -1,4 +1,4 @@
-use bevy::feathers::cursor::CursorIconPlugin;
+use bevy::picking::cursor::CursorIconPlugin;
 use bevy::prelude::*;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]

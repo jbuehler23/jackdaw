@@ -1,6 +1,6 @@
 use bevy::{
     ecs::system::SystemParam,
-    feathers::cursor::{EntityCursor, OverrideCursor},
+    picking::cursor::{EntityCursor, OverrideCursor},
     prelude::*,
     ui::UiGlobalTransform,
     window::{CursorGrabMode, CursorOptions, SystemCursorIcon},

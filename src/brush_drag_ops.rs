@@ -8,7 +8,7 @@
 //! `modal.cancel` chain.
 
 use bevy::ecs::system::SystemParam;
-use bevy::feathers::cursor::{EntityCursor, OverrideCursor};
+use bevy::picking::cursor::{EntityCursor, OverrideCursor};
 use bevy::prelude::*;
 use bevy::window::SystemCursorIcon;
 use jackdaw_api::prelude::*;

@@ -9,7 +9,7 @@
 use avian3d::prelude::*;
 use bevy::{
     ecs::reflect::AppTypeRegistry,
-    feathers::cursor::{EntityCursor, OverrideCursor},
+    picking::cursor::{EntityCursor, OverrideCursor},
     picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
     prelude::*,
     window::SystemCursorIcon,

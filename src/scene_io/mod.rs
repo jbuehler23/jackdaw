@@ -145,7 +145,7 @@ const ALWAYS_SAVE_PATHS: &[&str] = &[
     "bevy_feathers::theme::ThemedText",
     "bevy_feathers::controls::button::ButtonVariant",
     "bevy_feathers::focus::FocusIndicator",
-    "bevy_feathers::cursor::EntityCursor",
+    "bevy_picking::cursor::EntityCursor",
 ];
 
 pub fn should_skip_component(type_path: &str) -> bool {

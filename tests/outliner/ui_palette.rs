@@ -791,11 +791,11 @@ fn a_new_widget_is_revealed_in_the_scene_tree() {
 
 use bevy::feathers::{
     controls::ButtonVariant,
-    cursor::EntityCursor,
     focus::FocusIndicator,
     theme::{InheritableThemeTextColor, ThemeBackgroundColor, ThemeBorderColor, UiTheme},
     tokens,
 };
+use bevy::picking::cursor::EntityCursor;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Slider, SliderValue, ToggleChecked, ValueChange};
 
@@ -835,7 +835,7 @@ fn the_allowlisted_feathers_paths_are_the_real_type_paths() {
             FocusIndicator::type_path(),
         ),
         (
-            "bevy_feathers::cursor::EntityCursor",
+            "bevy_picking::cursor::EntityCursor",
             EntityCursor::type_path(),
         ),
     ] {

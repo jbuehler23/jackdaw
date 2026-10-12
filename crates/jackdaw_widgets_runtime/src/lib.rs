@@ -277,7 +277,7 @@ impl Plugin for AuthoredWidgetPlugin {
         if app
             .world()
             .get_resource::<UiTheme>()
-            .is_none_or(|theme| theme.0.color.is_empty())
+            .is_none_or(|theme| theme.0.token_assignments.is_empty())
         {
             app.insert_resource(UiTheme(create_dark_theme()));
         }
@@ -325,8 +325,8 @@ pub fn register_widget_defaults(app: &mut App) {
 
     #[cfg(feature = "feathers")]
     {
-        use bevy::feathers::cursor::EntityCursor;
         use bevy::feathers::theme::ThemedText;
+        use bevy::picking::cursor::EntityCursor;
 
         app.register_type::<ThemedText>()
             .register_type_data::<ThemedText, ReflectDefault>();
@@ -478,7 +478,7 @@ fn authored_radio_self_update(
         return;
     };
     let chosen = change.value;
-    let members: Vec<Entity> = radios.iter_many(children).collect();
+    let members: Vec<Entity> = radios.iter_many(children).flatten().collect();
     commands.queue(move |world: &mut World| {
         for radio in members {
             set_checked(world, radio, radio == chosen);
@@ -1359,8 +1359,11 @@ mod tests {
         use bevy::feathers::theme::{ThemeProps, UiTheme};
         use bevy::feathers::tokens;
 
-        let mut theirs = ThemeProps::default();
-        theirs.color.insert(tokens::BUTTON_BG, Color::WHITE);
+        let theirs =
+            ThemeProps::new_non_contextual(bevy::platform::collections::HashMap::from([(
+                tokens::BUTTON_BG,
+                Color::WHITE,
+            )]));
 
         let mut app = App::new();
         app.insert_resource(UiTheme(theirs));

@@ -1,8 +1,8 @@
 //! Invisible edge strips for borderless window resize.
 
-use bevy::feathers::cursor::EntityCursor;
 use bevy::math::CompassOctant;
 use bevy::picking::Pickable;
+use bevy::picking::cursor::EntityCursor;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, SystemCursorIcon, Window, WindowMode};
