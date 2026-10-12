@@ -65,7 +65,7 @@ Cargo:
 cargo install jackdaw jd --locked
 ```
 
-Every way you need rustup, cmake, and a C/C++ toolchain; `jd doctor` checks
+Every way you need rustup and a C/C++ toolchain; `jd doctor` checks
 them. The [installation guide](https://jbuehler23.github.io/jackdaw/getting-started/installation.html)
 covers each OS, and
 [Troubleshooting](https://jbuehler23.github.io/jackdaw/getting-started/troubleshooting.html)

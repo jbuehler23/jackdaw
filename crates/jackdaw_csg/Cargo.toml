@@ -3,21 +3,14 @@ name = "jackdaw_csg"
 version.workspace = true
 rust-version.workspace = true
 edition = "2024"
-description = "Mesh-CSG glue between jackdaw brushes and the manifold3d kernel"
+description = "Mesh-CSG glue between jackdaw brushes and the manifold-rust boolean kernel"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 glam.workspace = true
 jackdaw_geometry = { version = "0.19.0-rc.10", path = "../jackdaw_geometry", default-features = false }
-# manifold-csg pulls in manifold3d (C++ via cmake). Build prereqs:
-# cmake, a C++ compiler, git. See the crate README for details.
-manifold-csg = { version = "0.1", default-features = false }
-# Pin the FFI crate: `manifold-csg 0.1.8` has a too-loose constraint on
-# `manifold-csg-sys` and resolves against 3.5.x, which renamed several
-# FFI symbols and breaks the build. Constrain transitively to the last
-# compatible sys version. Drop once `manifold-csg` upgrades.
-manifold-csg-sys = { version = "=3.4.107", default-features = false }
+manifold-rust = "0.16"
 
 [dev-dependencies]
 jackdaw_scene_types.workspace = true
@@ -25,11 +18,6 @@ jackdaw_scene_types.workspace = true
 [features]
 default = ["render"]
 render = ["jackdaw_geometry/render"]
-# Manifold's TBB-backed parallelism. Off by default: brush meshes are below
-# Manifold's parallel threshold, and building TBB roughly doubles the C++ build
-# time and peak memory. TBB's static initializer also crashes when the kernel
-# is loaded through dlopen.
-parallel = ["manifold-csg/parallel"]
 
 [lints]
 workspace = true

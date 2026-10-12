@@ -68,7 +68,7 @@ else in the workspace. The interesting layers:
 - `jackdaw_camera_rig`: authorable first/third-person camera
   rig components plus the runtime driver that moves them.
   Optional, behind the default-on `camera_rig` feature.
-- `jackdaw_csg`: the glue between brushes and the manifold3d
+- `jackdaw_csg`: the glue between brushes and the `manifold-rust`
   mesh-boolean kernel.
 - `jackdaw_snap`, `jackdaw_select`, `jackdaw_uv`,
   `jackdaw_pick`, `jackdaw_hull`, `jackdaw_material`:

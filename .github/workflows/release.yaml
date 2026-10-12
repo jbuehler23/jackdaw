@@ -330,9 +330,9 @@ jobs:
       # cargo-zigbuild covers target units and `cc`-built C. Two things sit
       # outside it: proc macros are host units, which the bundle ships for a
       # user's rustc to load, so cargo's host config links them through zig
-      # too; and manifold-csg-sys runs cmake itself, which picks its
-      # compilers from CC and CXX rather than cargo-zigbuild's toolchain file.
-      - name: Point host links and cmake at zig (Linux)
+      # too, and CC and CXX send any C a host unit compiles to the same zig
+      # toolchain.
+      - name: Point host links and compilers at zig (Linux)
         if: matrix.glibc_target
         run: |
           floor="${{ matrix.glibc_target }}"

@@ -1,8 +1,8 @@
 //! Native build tools a Bevy game build needs beyond Rust itself.
 //!
-//! Sys crates in a typical game compile C and C++ sources (jackdaw's CSG
-//! kernel `manifold-csg-sys` with cmake), link against the platform's native
-//! toolchain, and on Linux find Bevy's audio and input libraries through
+//! Sys crates in a typical game compile C and C++ sources (texture and mesh
+//! tools such as `basis-universal-sys` and `meshopt`), link against the
+//! platform's native toolchain, and on Linux find Bevy's audio and input libraries through
 //! pkg-config. Each gap otherwise surfaces minutes into a compile as a linker
 //! or build-script error. [`check_build_tools`] reports them up front with a
 //! fix per platform; the decision logic reads the machine only through a
@@ -135,14 +135,9 @@ const VS_BUILD_TOOLS: &str = "https://visualstudio.microsoft.com/visual-cpp-buil
 
 /// The checks for `platform`, answered by `probe`.
 pub fn build_tool_checks(platform: Platform, probe: &dyn ToolProbe) -> Vec<ToolCheck> {
-    let mut out = vec![cmake(platform, probe)];
+    let mut out = Vec::new();
     match platform {
-        Platform::Windows => {
-            out.push(msvc(probe));
-            if let Some(check) = mingw_shadowing_msvc(probe) {
-                out.push(check);
-            }
-        }
+        Platform::Windows => out.push(msvc(probe)),
         Platform::MacOs => out.push(xcode_command_line_tools(probe)),
         Platform::Linux => {
             out.push(unix_compilers(platform, probe));
@@ -151,27 +146,6 @@ pub fn build_tool_checks(platform: Platform, probe: &dyn ToolProbe) -> Vec<ToolC
         Platform::OtherUnix => out.push(unix_compilers(platform, probe)),
     }
     out
-}
-
-fn cmake(platform: Platform, probe: &dyn ToolProbe) -> ToolCheck {
-    if let Some(version) = probe.run("cmake", &["--version"]) {
-        return ToolCheck::ok("cmake", version);
-    }
-    let fix = match platform {
-        Platform::Windows => {
-            "Install cmake from https://cmake.org/download and choose the option that adds it to PATH"
-        }
-        Platform::MacOs => "Run brew install cmake, or install it from https://cmake.org/download",
-        Platform::Linux | Platform::OtherUnix => {
-            "Install cmake with your package manager, or from https://cmake.org/download"
-        }
-    };
-    ToolCheck::issue(
-        "cmake",
-        CheckStatus::Fail,
-        "cmake not found on PATH; jackdaw's CSG kernel is built with it",
-        fix,
-    )
 }
 
 /// The `--version` line of the first of `candidates` that answers it.
@@ -260,25 +234,6 @@ fn msvc(probe: &dyn ToolProbe) -> ToolCheck {
             ),
         ),
     }
-}
-
-/// A MinGW `gcc` on PATH makes cmake pick it over MSVC unless
-/// `CMAKE_GENERATOR` names Visual Studio, and the objects then fail to link
-/// (LNK1143).
-fn mingw_shadowing_msvc(probe: &dyn ToolProbe) -> Option<ToolCheck> {
-    probe.run("gcc", &["--version"])?;
-    if probe
-        .env("CMAKE_GENERATOR")
-        .is_some_and(|generator| generator.contains("Visual Studio"))
-    {
-        return None;
-    }
-    Some(ToolCheck::issue(
-        "MinGW gcc",
-        CheckStatus::Warn,
-        "MinGW gcc is on PATH; cmake may pick it over MSVC and fail to link (LNK1143)",
-        "Set CMAKE_GENERATOR=\"Visual Studio 17 2022\" before building",
-    ))
 }
 
 fn linux_system_libraries(probe: &dyn ToolProbe) -> Vec<ToolCheck> {
@@ -372,7 +327,6 @@ mod tests {
 
     fn healthy_linux() -> FakeProbe {
         FakeProbe::default()
-            .with("cmake", "cmake version 3.30.0")
             .with("cc", "cc (GCC) 15.1")
             .with("c++", "c++ (GCC) 15.1")
             .with("pkg-config --version", "2.3.0")
@@ -389,23 +343,8 @@ mod tests {
         );
         assert_eq!(
             names(&checks),
-            HashSet::from([
-                "cmake",
-                "C/C++ compiler",
-                "pkg-config",
-                "Bevy system libraries"
-            ])
+            HashSet::from(["C/C++ compiler", "pkg-config", "Bevy system libraries"])
         );
-    }
-
-    #[test]
-    fn missing_cmake_fails_on_every_platform() {
-        for platform in [Platform::Windows, Platform::MacOs, Platform::Linux] {
-            let checks = build_tool_checks(platform, &FakeProbe::default());
-            let cmake = checks.iter().find(|check| check.name == "cmake").unwrap();
-            assert_eq!(cmake.status, CheckStatus::Fail);
-            assert!(cmake.fix.as_deref().unwrap().contains("cmake.org"));
-        }
     }
 
     #[test]
@@ -448,7 +387,6 @@ mod tests {
     #[test]
     fn missing_linux_dev_packages_only_warn() {
         let probe = FakeProbe::default()
-            .with("cmake", "cmake version 3.30.0")
             .with("cc", "cc 15")
             .with("c++", "c++ 15")
             .with("pkg-config --version", "2.3.0")
@@ -469,8 +407,7 @@ mod tests {
 
     #[test]
     fn missing_pkg_config_warns_and_skips_library_probes() {
-        let probe = FakeProbe::default().with("cmake", "cmake version 3.30.0");
-        let checks = build_tool_checks(Platform::Linux, &probe);
+        let checks = build_tool_checks(Platform::Linux, &FakeProbe::default());
         assert_eq!(status(&checks, "pkg-config"), Some(CheckStatus::Warn));
         assert_eq!(status(&checks, "Bevy system libraries"), None);
     }
@@ -535,21 +472,5 @@ mod tests {
         let fix = msvc.fix.as_deref().unwrap();
         assert!(fix.contains("Desktop development with C++") && fix.contains(VS_BUILD_TOOLS));
         assert_eq!(status(&checks, "C/C++ compiler"), None);
-    }
-
-    #[test]
-    fn windows_warns_only_on_unguarded_mingw() {
-        let without_gcc = build_tool_checks(Platform::Windows, &FakeProbe::default());
-        assert_eq!(status(&without_gcc, "MinGW gcc"), None);
-
-        let gcc = FakeProbe::default().with("gcc", "gcc 14");
-        let checks = build_tool_checks(Platform::Windows, &gcc);
-        assert_eq!(status(&checks, "MinGW gcc"), Some(CheckStatus::Warn));
-
-        let guarded = FakeProbe::default()
-            .with("gcc", "gcc 14")
-            .with_env("CMAKE_GENERATOR", "Visual Studio 17 2022");
-        let checks = build_tool_checks(Platform::Windows, &guarded);
-        assert_eq!(status(&checks, "MinGW gcc"), None);
     }
 }

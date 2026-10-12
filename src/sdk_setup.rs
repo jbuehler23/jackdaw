@@ -615,12 +615,17 @@ mod tests {
     #[test]
     fn a_failed_build_names_its_log_and_offers_a_retry() {
         let status = SdkStatus::Failed {
-            error: "missing prerequisites: cmake".to_string(),
+            error: "missing prerequisites: pkg-config".to_string(),
             log: Some(PathBuf::from("/data/jackdaw/sdk/setup.log")),
         };
         let content = row_content(&status, None);
         assert_eq!(content.action, Some("Retry"));
-        assert!(content.details.iter().any(|line| line.contains("cmake")));
+        assert!(
+            content
+                .details
+                .iter()
+                .any(|line| line.contains("pkg-config"))
+        );
         assert!(
             content
                 .details

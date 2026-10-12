@@ -2,15 +2,15 @@
 //! leave a single connected L-shape, not multiple fragments.
 //!
 //! The user-facing bug ("concave angles seeping through the cut plane,
-//! removal deleting more than expected") was traced to Manifold's
+//! removal deleting more than expected") was traced to the kernel's
 //! bounds-relative coincidence epsilon being tighter than the f32-to-f64
 //! plane noise present in editor-saved brushes. The fix lives in
-//! `crates/jackdaw_csg/src/lib.rs::brush_to_manifold`, which calls
-//! `set_tolerance(MANIFOLD_TOLERANCE)` on every input manifold.
+//! `crates/jackdaw_csg/src/lib.rs::brush_to_solid`, which
+//! sets `KERNEL_TOLERANCE` on every input solid.
 //!
 //! This test mimics the geometry in `assets/pre_cut.jsn`: brush-shaped
 //! sizes (a few units across), at non-trivial world translations
-//! (so the manifold's automatic bbox-tolerance is computed in the same
+//! (so the kernel's automatic bbox-tolerance is computed in the same
 //! ballpark as in the editor), with the cutter overlapping a single
 //! corner of the target. The expected result is one solid L-shape.
 
@@ -134,7 +134,7 @@ fn corner_bite_subtract_with_editor_scale_brushes() {
 /// brushes after a round-trip through JSN serialization. The .jsn dump
 /// in `assets/pre_cut.jsn` shows two vertices that should lie on the
 /// same Z=-2.5357... plane but actually differ by ~2e-7 in z. Without an
-/// explicit Manifold tolerance, that f32-jitter at the cut boundary
+/// explicit kernel tolerance, that f32-jitter at the cut boundary
 /// produces sliver triangles which the boundary walker then groups into
 /// extra "faces" (the user-visible "concave angles seeping through").
 fn jittered_world_cuboid(half_x: f32, half_y: f32, half_z: f32, center: Vec3) -> Brush {
@@ -186,9 +186,9 @@ fn corner_bite_with_vertex_jitter_yields_single_fragment() {
 #[test]
 fn chained_corner_bite_stays_single_fragment() {
     // Cut a corner off, then cut another corner off the result. The
-    // intermediate brush has been rebuilt through the manifold ->
+    // intermediate brush has been rebuilt through the kernel ->
     // boundary -> topology pipeline, so its vertices and planes carry
-    // both Manifold's bbox-relative epsilon and the ring-walker's
+    // both the kernel's bbox-relative epsilon and the ring-walker's
     // dedup epsilon. A second cut into it is the case most likely to
     // produce sliver fragments if the tolerance isn't set.
     let target = world_cuboid(2.0, 2.0, 2.0, Vec3::ZERO);
@@ -230,7 +230,7 @@ fn coplanar_face_cut_yields_clean_lshape() {
     // Cutter whose -X face is **coplanar** with the target's +X face,
     // mid-height bite. This is a classic precision trap: the kernel
     // has to decide whether the coincident faces are merged or not.
-    // Without a deliberate tolerance, Manifold's bbox-relative epsilon
+    // Without a deliberate tolerance, the kernel's bbox-relative epsilon
     // can either fail to merge them (leaving a zero-width sliver face)
     // or merge them too aggressively (deleting more geometry than
     // expected, the user's reported bug).

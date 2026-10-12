@@ -313,8 +313,8 @@ pub fn check_prerequisites() -> Vec<Prereq> {
         },
     });
 
-    // The SDK build compiles C++ (jackdaw's CSG kernel) with cmake and links
-    // with the platform's native toolchain.
+    // The SDK build compiles C and C++ sources in sys crates and links with
+    // the platform's native toolchain.
     out.extend(
         build_tools::check_build_tools()
             .into_iter()

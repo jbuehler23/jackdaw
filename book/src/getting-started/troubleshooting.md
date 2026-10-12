@@ -22,16 +22,13 @@ command exits non-zero on any `[fail]`.
 
 ## Installing
 
-### cmake, a compiler, MSVC, or the Xcode Command Line Tools
+### A compiler, MSVC, or the Xcode Command Line Tools
 
-`[fail] cmake`, `[fail] C/C++ compiler`, `[fail] MSVC build tools` or
+`[fail] C/C++ compiler`, `[fail] MSVC build tools` or
 `[fail] Xcode Command Line Tools` means a native build tool is missing, and
 every game build will fail. Install it as described under
 [Prerequisites](installation.md#prerequisites), open a new terminal so PATH
 is refreshed, and run `jd doctor` again.
-
-On Windows, `[warn] MinGW gcc` means cmake may pick MinGW over MSVC and fail
-to link with LNK1143. Set `CMAKE_GENERATOR="Visual Studio 17 2022"`.
 
 ### Rust without rustup
 

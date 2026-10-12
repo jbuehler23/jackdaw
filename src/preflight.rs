@@ -1,7 +1,7 @@
 //! Environment preflight checks.
 //!
 //! Run before building a user project so a missing toolchain or native build
-//! tool (cmake, a C/C++ compiler, MSVC, the Xcode Command Line Tools, Bevy's
+//! tool (a C/C++ compiler, MSVC, the Xcode Command Line Tools, Bevy's
 //! Linux libraries) surfaces in seconds (with a fix) instead of failing a
 //! multi-minute build at the end. The checks shell out or read the
 //! environment, so run them off the main thread. `run_all_checks` batches

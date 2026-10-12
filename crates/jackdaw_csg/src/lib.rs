@@ -1,32 +1,19 @@
 //! Mesh-CSG glue for jackdaw brushes.
 //!
-//! Wraps the
-//! [`manifold-csg`](https://crates.io/crates/manifold-csg) Rust bindings to
-//! [`manifold3d`](https://github.com/elalish/manifold) so brush boolean
-//! operations (union, difference, intersection) work on arbitrary brush
-//! topologies, not just convex half-space sets.
-//!
-//! ## Build prerequisites
-//!
-//! `manifold-csg` builds `manifold3d` from source on first compile. That
-//! pulls in:
-//!
-//! - **cmake** (any recent version; pacman: `cmake`, apt: `cmake`)
-//! - **a C++ compiler** (g++ or clang++)
-//! - **git** (the build script clones manifold3d)
-//!
-//! Subsequent builds are cached. The C++ build takes around a minute on
-//! a workstation; CI should cache `target/` accordingly.
+//! Runs brush boolean operations (union, difference, intersection) on
+//! [`manifold-rust`](https://crates.io/crates/manifold-rust), a pure-Rust
+//! port of [`manifold3d`](https://github.com/elalish/manifold), so they work
+//! on arbitrary brush topologies, not just convex half-space sets.
 //!
 //! ## Conversion approach
 //!
-//! 1. **Brush -> Manifold:** triangulate each polygon face into a flat
-//!    `(positions, triangles)` pair, then build a `Manifold` from those
-//!    via `Manifold::from_mesh_f64`. No property channels are used; face
-//!    identity is recovered on the way out by matching triangle planes
-//!    to the union of the two source brushes' face planes.
-//! 2. **Boolean op:** call `Manifold::{union,difference,intersection}`.
-//! 3. **Manifold -> Brush:** read back the result mesh, group triangles
+//! 1. **Brush -> solid:** triangulate each polygon face into a flat
+//!    `(positions, triangles)` pair and build a kernel solid from it. No
+//!    property channels are used; face identity is recovered on the way
+//!    out by matching triangle planes to the union of the two source
+//!    brushes' face planes.
+//! 2. **Boolean op:** union, difference or intersection in the kernel.
+//! 3. **Solid -> brush:** read back the result mesh, group triangles
 //!    by coplanar plane, match each plane to whichever source face it
 //!    came from, then rebuild topology via
 //!    `jackdaw_geometry::build_topology_from_face_polygons` so the result
@@ -44,7 +31,8 @@ use jackdaw_geometry::{
     BrushFaceData, BrushPlane, BrushTopology, EPSILON, FaceMaterial, compute_face_tangent_axes,
     newell_normal, triangulate_face_polygon, triangulate_polygon_with_holes,
 };
-use manifold_csg::manifold::Manifold;
+
+mod kernel;
 
 /// Which boolean op to apply.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,14 +42,14 @@ pub enum BooleanOp {
     Intersection,
 }
 
-/// Failure modes for the brush <-> manifold round-trip.
+/// Failure modes for the brush <-> kernel round-trip.
 #[derive(Debug, Clone)]
 pub enum CsgError {
     /// Brush had fewer than 4 vertices or 4 faces. Not a closed 3D solid.
     DegenerateBrush,
-    /// The manifold3d kernel rejected the input. Wrapped string is its
+    /// The boolean kernel rejected the input. Wrapped string is its
     /// debug-display.
-    ManifoldRejected(String),
+    KernelRejected(String),
     /// Boolean result was empty (no overlap, or full cancellation).
     /// Caller decides whether that's an error or expected.
     EmptyResult,
@@ -73,7 +61,7 @@ impl std::fmt::Display for CsgError {
             CsgError::DegenerateBrush => {
                 write!(f, "brush is degenerate (need >= 4 verts and faces)")
             }
-            CsgError::ManifoldRejected(s) => write!(f, "manifold3d rejected input: {s}"),
+            CsgError::KernelRejected(s) => write!(f, "CSG kernel rejected input: {s}"),
             CsgError::EmptyResult => write!(f, "boolean produced empty result"),
         }
     }
@@ -82,7 +70,7 @@ impl std::fmt::Display for CsgError {
 impl std::error::Error for CsgError {}
 
 /// Subset of a face's per-face state that must round-trip through the
-/// manifold kernel. Owned copy of the source `BrushFaceData` so we can
+/// boolean kernel. Owned copy of the source `BrushFaceData` so we can
 /// reproject UVs and reattach materials after the boolean.
 #[derive(Clone, Debug)]
 struct FaceSlot {
@@ -127,7 +115,7 @@ impl FaceSlot {
     }
 }
 
-/// A complete brush (faces + topology), the form `manifold_to_brush` produces.
+/// A complete brush (faces + topology), the form `solid_to_brush` produces.
 #[derive(Clone, Debug, Default)]
 pub struct CsgBrush {
     pub faces: Vec<BrushFaceData>,
@@ -149,10 +137,10 @@ impl<'a> CsgInput<'a> {
     }
 }
 
-/// Output of `brush_to_manifold`: the kernel handle plus the source slot
+/// Output of `brush_to_solid`: the kernel solid plus the source slot
 /// table.
 struct ConvertedInput {
-    manifold: Manifold,
+    solid: kernel::Solid,
     /// Per-input-face slot data. After a boolean we use the plane of
     /// each output triangle to look up the matching `FaceSlot` from this
     /// vec (or the partner brush's vec).
@@ -160,7 +148,7 @@ struct ConvertedInput {
 }
 
 /// Tolerance for matching an output triangle's plane to a source face's
-/// plane. Manifold's coplanar epsilon is relative to the bounding box;
+/// plane. The kernel's coplanar epsilon is relative to the bounding box;
 /// we allow a slightly looser fixed tolerance since we operate in
 /// editor-space (usually meters / units, not microns).
 const PLANE_NORMAL_EPS: f32 = 1e-3;
@@ -169,28 +157,28 @@ const COPLANAR_NORMAL_EPS: f32 = 1e-3;
 const COPLANAR_DISTANCE_EPS: f32 = 1e-2;
 /// Snap-radius for welding output vertices that share a position.
 const POS_DEDUP_EPS: f32 = 1e-4;
-/// Tolerance applied to every manifold before a boolean op. Manifold uses
+/// Tolerance applied to every solid before a boolean op. The kernel uses
 /// this distance (in world-space units) as the merge / coincidence radius
 /// for vertices and edges at the cut boundary. Without setting it the
 /// kernel falls back to a bounds-relative epsilon that, for a brush a
-/// few units across, lands around 1e-7. That is far below `from_mesh_f64`
+/// few units across, lands around 1e-7. That is far below mesh import
 /// rounding noise (planes saved as f32 round into f64 with ~1e-7 slop),
 /// which lets near-coincident verts produce sliver fragments and concave
 /// "seep-through" artifacts at the cut plane. 1e-4 (0.1mm at meter scale)
 /// is well below visible level-editor precision and well above f64 noise.
-const MANIFOLD_TOLERANCE: f64 = 1e-4;
+const KERNEL_TOLERANCE: f64 = 1e-4;
 
-/// Convert one brush (faces + topology) into a manifold3d `Manifold`.
+/// Convert one brush (faces + topology) into a kernel solid.
 /// Face identity is preserved by recording each input face's plane in
 /// `face_slots`; the reverse mapping is done by matching output triangle
 /// planes to those slots.
-fn brush_to_manifold(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
+fn brush_to_solid(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
     if input.topology.vertices.len() < 4 || input.faces.is_empty() {
         return Err(CsgError::DegenerateBrush);
     }
 
     // Flat vertex property buffer: just x, y, z (3 props per vert).
-    // manifold-csg requires f64.
+    // The kernel takes f64.
     let mut vert_props: Vec<f64> = Vec::with_capacity(input.topology.vertices.len() * 3);
     for v in &input.topology.vertices {
         vert_props.push(v.position.x as f64);
@@ -201,7 +189,7 @@ fn brush_to_manifold(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
     let positions: Vec<Vec3> = input.topology.vertices.iter().map(|v| v.position).collect();
 
     // Triangulate every face. We do not pack per-vertex property data
-    // for face id (manifold merges vertices across faces, which makes
+    // for face id (the kernel merges vertices across faces, which makes
     // a per-vert slot lookup unreliable). Instead we match each output
     // triangle back to a source face by plane equation.
     let mut tri_indices: Vec<u64> = Vec::new();
@@ -243,19 +231,14 @@ fn brush_to_manifold(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
         return Err(CsgError::DegenerateBrush);
     }
 
-    let manifold = Manifold::from_mesh_f64(&vert_props, 3, &tri_indices)
-        .map_err(|e| CsgError::ManifoldRejected(format!("{e:?}")))?;
-
     // Set a fixed merge/coincidence tolerance before any boolean. See
-    // `MANIFOLD_TOLERANCE` for the rationale. The kernel's bounds-relative
+    // `KERNEL_TOLERANCE` for the rationale. The kernel's bounds-relative
     // default is too tight for brush-scale geometry once f32 plane
     // distances have been round-tripped through f64.
-    let manifold = manifold.set_tolerance(MANIFOLD_TOLERANCE);
+    let solid = kernel::from_mesh(&vert_props, &tri_indices, KERNEL_TOLERANCE)
+        .map_err(CsgError::KernelRejected)?;
 
-    Ok(ConvertedInput {
-        manifold,
-        face_slots,
-    })
+    Ok(ConvertedInput { solid, face_slots })
 }
 
 /// Match the plane of an output triangle to a source `FaceSlot`. Both
@@ -264,7 +247,7 @@ fn brush_to_manifold(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
 fn match_plane_to_slot<'a>(plane: &BrushPlane, runs: &[&'a [FaceSlot]]) -> Option<&'a FaceSlot> {
     for run in runs {
         for slot in run.iter() {
-            // Manifold preserves orientation, so we expect normals to
+            // The kernel preserves orientation, so we expect normals to
             // match in sign as well as direction. But for a difference,
             // the cutter's faces become inward-facing surfaces of the
             // target; their normal flips. So accept both signs.
@@ -285,33 +268,28 @@ fn match_plane_to_slot<'a>(plane: &BrushPlane, runs: &[&'a [FaceSlot]]) -> Optio
     None
 }
 
-/// Recover a `CsgBrush` from a manifold3d result, using the source
+/// Recover a `CsgBrush` from a kernel result, using the source
 /// brushes' face slots to reproject UVs.
-fn manifold_to_brush(
-    manifold: &Manifold,
+fn solid_to_brush(
+    solid: &kernel::Solid,
     source_face_slot_runs: &[&[FaceSlot]],
 ) -> Result<CsgBrush, CsgError> {
-    if manifold.is_empty() {
+    if kernel::is_empty(solid) {
         return Err(CsgError::EmptyResult);
     }
-    let (props, nprops, tris) = manifold.to_mesh_f64();
+    let (props, tris) = kernel::to_mesh(solid);
     if tris.len() < 3 {
         return Err(CsgError::EmptyResult);
     }
 
-    let nverts = props.len() / nprops;
-    let raw_positions: Vec<Vec3> = (0..nverts)
-        .map(|vi| {
-            let base = vi * nprops;
-            Vec3::new(
-                props[base] as f32,
-                props[base + 1] as f32,
-                props[base + 2] as f32,
-            )
-        })
+    let raw_positions: Vec<Vec3> = props
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32))
         .collect();
 
-    // Weld coincident verts. manifold can hand back duplicate positions
+    // Weld coincident verts. The kernel can hand back duplicate positions
     // for verts that lie on a cut boundary; merging them on the way out
     // keeps the rebuilt topology clean enough to feed back through the
     // kernel on the next op.
@@ -783,17 +761,13 @@ pub fn brush_boolean(
     b: &CsgInput<'_>,
     op: BooleanOp,
 ) -> Result<CsgBrush, CsgError> {
-    let a_conv = brush_to_manifold(a)?;
-    let b_conv = brush_to_manifold(b)?;
+    let a_conv = brush_to_solid(a)?;
+    let b_conv = brush_to_solid(b)?;
 
-    let result = match op {
-        BooleanOp::Union => a_conv.manifold.union(&b_conv.manifold),
-        BooleanOp::Difference => a_conv.manifold.difference(&b_conv.manifold),
-        BooleanOp::Intersection => a_conv.manifold.intersection(&b_conv.manifold),
-    };
+    let result = kernel::boolean(&a_conv.solid, &b_conv.solid, op);
 
     let runs: Vec<&[FaceSlot]> = vec![&a_conv.face_slots, &b_conv.face_slots];
-    manifold_to_brush(&result, &runs)
+    solid_to_brush(&result, &runs)
 }
 
 /// Difference variant that returns the (potentially multiple) connected
@@ -804,22 +778,22 @@ pub fn brush_difference_split(
     target: &CsgInput<'_>,
     cutter: &CsgInput<'_>,
 ) -> Result<Vec<CsgBrush>, CsgError> {
-    let t_conv = brush_to_manifold(target)?;
-    let c_conv = brush_to_manifold(cutter)?;
+    let t_conv = brush_to_solid(target)?;
+    let c_conv = brush_to_solid(cutter)?;
 
-    let result = t_conv.manifold.difference(&c_conv.manifold);
-    if result.is_empty() {
+    let result = kernel::boolean(&t_conv.solid, &c_conv.solid, BooleanOp::Difference);
+    if kernel::is_empty(&result) {
         return Err(CsgError::EmptyResult);
     }
     let runs: Vec<&[FaceSlot]> = vec![&t_conv.face_slots, &c_conv.face_slots];
-    let components = result.decompose();
+    let components = kernel::decompose(&result);
     if components.is_empty() {
         // No disconnected components. Treat the whole thing as one.
-        return Ok(vec![manifold_to_brush(&result, &runs)?]);
+        return Ok(vec![solid_to_brush(&result, &runs)?]);
     }
     let mut out: Vec<CsgBrush> = Vec::with_capacity(components.len());
     for comp in &components {
-        match manifold_to_brush(comp, &runs) {
+        match solid_to_brush(comp, &runs) {
             Ok(brush) => out.push(brush),
             Err(CsgError::EmptyResult) => continue,
             Err(e) => return Err(e),
@@ -838,19 +812,19 @@ pub fn brush_batch_union(inputs: &[CsgInput<'_>]) -> Result<CsgBrush, CsgError> 
         return Err(CsgError::DegenerateBrush);
     }
     if inputs.len() == 1 {
-        // Trivial: just round-trip through manifold to canonicalise.
-        let conv = brush_to_manifold(&inputs[0])?;
+        // Trivial: just round-trip through the kernel to canonicalise.
+        let conv = brush_to_solid(&inputs[0])?;
         let runs: Vec<&[FaceSlot]> = vec![&conv.face_slots];
-        return manifold_to_brush(&conv.manifold, &runs);
+        return solid_to_brush(&conv.solid, &runs);
     }
     let mut converted: Vec<ConvertedInput> = Vec::with_capacity(inputs.len());
     for input in inputs {
-        converted.push(brush_to_manifold(input)?);
+        converted.push(brush_to_solid(input)?);
     }
-    let manifolds: Vec<Manifold> = converted.iter().map(|c| c.manifold.clone()).collect();
-    let result = Manifold::batch_union(&manifolds);
+    let solids: Vec<kernel::Solid> = converted.iter().map(|c| c.solid.clone()).collect();
+    let result = kernel::batch_union(&solids);
     let runs: Vec<&[FaceSlot]> = converted.iter().map(|c| c.face_slots.as_slice()).collect();
-    manifold_to_brush(&result, &runs)
+    solid_to_brush(&result, &runs)
 }
 
 /// Transform a brush's topology positions and face planes by an affine
@@ -1109,7 +1083,7 @@ mod tests {
         // The cutter pokes a notch through the +X face. That face becomes
         // an annulus (rectangle-with-rectangular-hole), which our pipeline splits into simply-connected triangles, so the
         // total face count is higher than a pure n-gon scheme. The exact
-        // count varies with manifold3d's triangulation; just bound it.
+        // count varies with the kernel's triangulation; just bound it.
         assert!(
             result.faces.len() >= 4 && result.faces.len() <= 32,
             "expected reasonable face count, got {}",
@@ -1220,9 +1194,9 @@ mod tests {
         .expect("first subtract should succeed");
 
         let input = CsgInput::new(&l_shape.faces, &l_shape.topology);
-        let conv = brush_to_manifold(&input);
+        let conv = brush_to_solid(&input);
         if let Err(e) = conv {
-            panic!("L-shape should round-trip into manifold: {e:?}");
+            panic!("L-shape should round-trip into the kernel: {e:?}");
         }
     }
 }

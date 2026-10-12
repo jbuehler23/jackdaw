@@ -27,7 +27,6 @@ Every install path needs these, because your game compiles on your machine.
 ### Linux
 
 - rustup and Cargo, from <https://rustup.rs>.
-- cmake.
 - A C and C++ compiler: `build-essential` (Debian, Ubuntu), `base-devel`
   (Arch) or `gcc-c++` (Fedora).
 - pkg-config and Bevy's system libraries: the alsa, udev, wayland and x11
@@ -36,7 +35,7 @@ Every install path needs these, because your game compiles on your machine.
   for your distribution. On Debian or Ubuntu:
 
 ```bash
-sudo apt install build-essential cmake pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev
+sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev
 ```
 
 ### Windows
@@ -45,17 +44,11 @@ sudo apt install build-essential cmake pkg-config libasound2-dev libudev-dev lib
 - Visual Studio Build Tools with the **Desktop development with C++**
   workload, which provides the linker Rust needs:
   <https://visualstudio.microsoft.com/visual-cpp-build-tools/>.
-- cmake, from <https://cmake.org/download>. Choose the option that adds it to
-  PATH.
-
-If a MinGW `gcc` is also on PATH, cmake may pick it over MSVC and fail to link
-(LNK1143). Set `CMAKE_GENERATOR="Visual Studio 17 2022"` before building.
 
 ### macOS
 
 - rustup and Cargo, from <https://rustup.rs>.
 - The Xcode Command Line Tools: `xcode-select --install`.
-- cmake: `brew install cmake`, or from <https://cmake.org/download>.
 
 ### Check
 
