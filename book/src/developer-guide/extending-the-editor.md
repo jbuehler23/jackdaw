@@ -54,9 +54,54 @@ loads it. **Rebuild Project** builds and loads it again after a change, and so
 does `jd build` in a terminal while the project is open, unless **Hot Reload** is
 turned off in the File menu.
 
-Runtime extensions deliberately cannot install extension-owned Bevy component
-metadata or reflected Rust types. Use a custom editor build when that level of
-access is required.
+### Adding Bevy plugins at launch
+
+`register` runs against a live world, so it cannot add plugin groups,
+schedules or system sets. An extension that needs them returns a Bevy plugin
+from `app_plugin`, and the editor adds it to its `App` before the app runs:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_extension::prelude::*;
+
+#[derive(Default)]
+pub struct VehicleTools;
+
+impl JackdawExtension for VehicleTools {
+    fn id(&self) -> String { "example.vehicle-tools".into() }
+
+    fn app_plugin(&self) -> Option<Box<dyn Plugin>> {
+        Some(Box::new(|app: &mut App| {
+            app.add_systems(FixedUpdate, simulate_suspension);
+        }))
+    }
+
+    fn register(&self, registrar: &mut ExtensionRegistrar<'_>) {
+        // windows, operators and menus that use what the plugin added
+    }
+}
+```
+
+The plugin is added only for extensions enabled when the editor starts, both
+built-in ones and installed bundles. A plugin cannot be removed again, so:
+
+- Installing or enabling such an extension while the editor runs marks it
+  **Restart required** in the Extensions dialog. It activates on the next
+  launch.
+- Disabling it removes its windows and operators at once; its plugin keeps
+  running until the editor restarts.
+- Loading a new build of it reloads live when its plugin keeps the same
+  `Plugin::name`. The plugin added at launch stays in place; a renamed or newly
+  added plugin waits for a restart. A closure plugin is named after the
+  function that contains it.
+- An editor build of the open project cannot add a plugin at launch. Install
+  the extension as a bundle once, restart, and later builds that keep the
+  plugin reload live.
+
+Guard plugins the editor may already have, such as physics, with
+`app.is_plugin_added::<T>()`. `jd extension pack` records `requires_restart`
+in the bundle manifest when the extension defines `app_plugin`, so tools can
+show the restart without loading the library.
 
 ### Input types
 

@@ -18,7 +18,7 @@ use bevy::{
 use jackdaw_api::prelude::ExtensionKind;
 use jackdaw_api_internal::{
     extensions_config::persist_current_enabled,
-    lifecycle::{Extension, ExtensionCatalog},
+    lifecycle::{Extension, ExtensionAppPlugins, ExtensionCatalog},
 };
 use jackdaw_feathers::{
     dialog::{CloseDialogEvent, DialogChildrenSlot, OpenDialogEvent},
@@ -91,6 +91,7 @@ pub fn open_extensions_dialog(world: &mut World) {
 fn populate_extensions_dialog(
     mut commands: Commands,
     catalog: Res<ExtensionCatalog>,
+    app_plugins: Res<ExtensionAppPlugins>,
     open: Res<ExtensionsDialogOpen>,
     slots: Query<Entity, With<DialogChildrenSlot>>,
     loaded: Query<&Extension>,
@@ -116,8 +117,8 @@ fn populate_extensions_dialog(
             .into_iter()
             .map(|extension| extension.manifest.id)
             .collect();
-    let mut builtin_rows: Vec<(String, String, bool)> = Vec::new();
-    let mut custom_rows: Vec<(String, String, bool)> = Vec::new();
+    let mut builtin_rows: Vec<ExtensionRow> = Vec::new();
+    let mut custom_rows: Vec<ExtensionRow> = Vec::new();
     for (id, label, _description, kind) in catalog.iter_with_content() {
         // Required extensions are load-bearing (the editor panics
         // without them), so they're not user-toggleable. Omit them
@@ -127,18 +128,22 @@ fn populate_extensions_dialog(
         if extension_resolution::is_required(&id) {
             continue;
         }
-        let row = (
-            id.to_string(),
-            label.to_string(),
-            enabled_names.contains(&id),
-        );
+        let row = ExtensionRow {
+            checked: app_plugins
+                .pending_state(&id)
+                .unwrap_or_else(|| enabled_names.contains(&id)),
+            restart_required: app_plugins.restart_required(&id),
+            removable: installed_names.contains(&id),
+            id,
+            label,
+        };
         match kind {
             ExtensionKind::Builtin => builtin_rows.push(row),
             ExtensionKind::Regular => custom_rows.push(row),
         }
     }
-    builtin_rows.sort_by(|a, b| a.0.cmp(&b.0));
-    custom_rows.sort_by(|a, b| a.0.cmp(&b.0));
+    builtin_rows.sort_by(|a, b| a.id.cmp(&b.id));
+    custom_rows.sort_by(|a, b| a.id.cmp(&b.id));
 
     let list = commands
         .spawn_scene(extensions_list_container())
@@ -148,8 +153,8 @@ fn populate_extensions_dialog(
     commands
         .spawn_scene(section_header("Built-in"))
         .insert(ChildOf(list));
-    for (id, label, checked) in builtin_rows {
-        spawn_extension_row(&mut commands, list, id, label, checked, false);
+    for row in builtin_rows {
+        spawn_extension_row(&mut commands, list, row);
     }
 
     commands
@@ -160,27 +165,37 @@ fn populate_extensions_dialog(
             .spawn_scene(empty_regular_notice())
             .insert(ChildOf(list));
     } else {
-        for (id, label, checked) in custom_rows {
-            let removable = installed_names.contains(&id);
-            spawn_extension_row(&mut commands, list, id, label, checked, removable);
+        for row in custom_rows {
+            spawn_extension_row(&mut commands, list, row);
         }
     }
 
     spawn_install_row(&mut commands, list);
 }
 
+/// One catalog entry as the dialog lists it.
+struct ExtensionRow {
+    id: String,
+    label: String,
+    checked: bool,
+    /// The entry's state changes only after the editor restarts.
+    restart_required: bool,
+    /// Installed from a bundle, so it can be uninstalled.
+    removable: bool,
+}
+
 /// Spawn one extension checkbox under `list`, seeding its initial
 /// `Checked` state. The checkbox carries its own `ValueChange<bool>`
 /// observer (see [`extension_checkbox`]) which toggles the extension
 /// and persists the enabled set.
-fn spawn_extension_row(
-    commands: &mut Commands,
-    list: Entity,
-    id: String,
-    label: String,
-    checked: bool,
-    removable: bool,
-) {
+fn spawn_extension_row(commands: &mut Commands, list: Entity, row_data: ExtensionRow) {
+    let ExtensionRow {
+        id,
+        label,
+        checked,
+        restart_required,
+        removable,
+    } = row_data;
     let row = commands
         .spawn((
             Node {
@@ -199,6 +214,15 @@ fn spawn_extension_row(
         checkbox.insert(Checked);
     }
     checkbox.insert(ChildOf(row));
+    if restart_required {
+        commands.spawn_scene(label_dim("Restart required")).insert((
+            ChildOf(row),
+            Tooltip::title("Restart required").with_description(
+                "This extension adds a plugin to the editor at launch. \
+                 The change applies the next time the editor starts.",
+            ),
+        ));
+    }
     if removable {
         commands
             .spawn_scene(extension_remove_button(id))
@@ -288,6 +312,7 @@ fn extension_checkbox(id: String, label: String) -> impl Scene {
 
             let name = id.clone();
             commands.queue(move |world: &mut World| {
+                let was_pending = world.resource::<ExtensionAppPlugins>().restart_required(&name);
                 if checked {
                     enable_extension(world, &name);
                     // Re-apply the keymap so newly registered operator
@@ -295,10 +320,32 @@ fn extension_checkbox(id: String, label: String) -> impl Scene {
                     crate::extension_lifecycle::apply_active_keymap(world);
                 } else {
                     disable_extension(world, &name);
+                    let mut app_plugins = world.resource_mut::<ExtensionAppPlugins>();
+                    if app_plugins.plugin_of(&name).is_some() {
+                        // Its plugin keeps running until the editor restarts.
+                        app_plugins.require_restart(name.clone(), false);
+                    } else {
+                        app_plugins.clear_restart(&name);
+                    }
                 }
                 persist_current_enabled(world);
+                if world.resource::<ExtensionAppPlugins>().restart_required(&name) != was_pending {
+                    refresh_dialog(world);
+                }
             });
         })
+    }
+}
+
+/// Despawn the listed rows so `populate_extensions_dialog` rebuilds them from
+/// the current catalog and restart state.
+fn refresh_dialog(world: &mut World) {
+    let mut query = world.query_filtered::<Entity, With<ExtensionsDialogContent>>();
+    let roots: Vec<Entity> = query.iter(world).collect();
+    for root in roots {
+        if let Ok(entity) = world.get_entity_mut(root) {
+            entity.despawn();
+        }
     }
 }
 
@@ -463,11 +510,10 @@ pub fn handle_install_from_path(
 fn handle_install(
     In(src): In<PathBuf>,
     world: &mut World,
-    extension_dialogs: &mut QueryState<Entity, With<ExtensionsDialogContent>>,
 ) -> Result<String, jackdaw_loader::LoadError> {
     #[cfg(not(feature = "dylib"))]
     {
-        let _ = (src, extension_dialogs);
+        let _ = src;
         let message = "This self-contained Jackdaw build cannot safely load native extensions. \
             Install a precompiled Jackdaw release, or rebuild with `--features dylib`."
             .to_string();
@@ -533,6 +579,10 @@ fn handle_install(
                 info!("Live-loaded extension `{name}` from {}", library.display());
                 format!("Loaded extension `{name}`.")
             }
+            Err(jackdaw_loader::LoadError::RestartRequired(name)) => {
+                info!("Installed extension `{name}`; it activates after a restart");
+                format!("Installed `{name}`. Restart the editor to activate it.")
+            }
             Err(err) => {
                 warn!("Live-load failed for {}: {err}", library.display());
                 let rollback_message = if let Some(id) = installed_id.as_deref() {
@@ -583,14 +633,7 @@ fn handle_install(
         };
         world.resource_mut::<InstallStatus>().message = Some(msg);
 
-        // Despawn the existing list so `populate_extensions_dialog`
-        // rebuilds it from the now-updated catalog.
-        let targets: Vec<Entity> = extension_dialogs.iter(world).collect();
-        for entity in targets {
-            if let Ok(ec) = world.get_entity_mut(entity) {
-                ec.despawn();
-            }
-        }
+        refresh_dialog(world);
 
         result
     }

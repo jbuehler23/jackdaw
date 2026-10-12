@@ -34,6 +34,15 @@ pub fn detect_extension(root: &Path) -> Option<(String, String)> {
     Some((lib_name, name))
 }
 
+/// Whether the project's `JackdawExtension` impl declares an App plugin
+/// (`fn app_plugin`), which the editor only adds at launch.
+pub fn extension_declares_app_plugin(root: &Path) -> bool {
+    scan(root, "JackdawExtension")
+        .into_iter()
+        .next()
+        .is_some_and(|found| found.methods.iter().any(|name| name == "app_plugin"))
+}
+
 /// Find the game plugin type in the project's sources, as
 /// `lib_name::path::TypeName`.
 ///
@@ -77,6 +86,8 @@ pub struct FoundPlugin {
     /// the crate (a private module with no re-export), which the caller
     /// must not paste into generated code.
     pub crate_path: Option<String>,
+    /// The functions the impl block defines.
+    pub methods: Vec<String>,
 }
 
 /// Every plugin impl in the crate, in module-tree order from `lib.rs`.
@@ -100,6 +111,7 @@ struct Found {
     /// Whether every module between the crate root and this item is
     /// `pub`, i.e. whether the qualified path is nameable outside.
     module_is_public: bool,
+    methods: Vec<String>,
 }
 
 /// One `pub use` target: where it appears and what module it points at.
@@ -173,6 +185,7 @@ fn scan(root: &Path, trait_name: &str) -> Vec<FoundPlugin> {
                 // crate's author intended callers to use.
                 crate_path: reexported.or(qualified),
                 type_name: item.type_name,
+                methods: item.methods,
             }
         })
         .collect()
@@ -218,6 +231,14 @@ fn walk(
                         type_name,
                         module: module.to_vec(),
                         module_is_public: public_so_far,
+                        methods: imp
+                            .items
+                            .iter()
+                            .filter_map(|item| match item {
+                                syn::ImplItem::Fn(function) => Some(function.sig.ident.to_string()),
+                                _ => None,
+                            })
+                            .collect(),
                     });
                 }
             }
@@ -459,6 +480,26 @@ mod tests {
     /// doc comment says ``assets/*.bsn``, whose `/*` made a text
     /// scanner discard the rest of the file, so a freshly scaffolded
     /// project had no findable plugin and its Play button did nothing.
+    #[test]
+    fn an_extension_with_an_app_plugin_is_told_apart_from_one_without() {
+        let with = project(&[(
+            "lib.rs",
+            "pub struct Tool;\n\
+             impl JackdawExtension for Tool {\n\
+             fn id(&self) -> String { String::new() }\n\
+             fn app_plugin(&self) -> Option<Box<dyn Plugin>> { None }\n}\n",
+        )]);
+        let without = project(&[(
+            "lib.rs",
+            "pub struct Tool;\n\
+             impl JackdawExtension for Tool {\n    fn id(&self) -> String { String::new() }\n}\n",
+        )]);
+        assert!(extension_declares_app_plugin(&with));
+        assert!(!extension_declares_app_plugin(&without));
+        let _ = std::fs::remove_dir_all(&with);
+        let _ = std::fs::remove_dir_all(&without);
+    }
+
     #[test]
     fn a_doc_comment_containing_a_glob_does_not_hide_the_plugin() {
         let dir = project(&[(

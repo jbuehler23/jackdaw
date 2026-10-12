@@ -101,6 +101,7 @@ fn load_installed_extensions_on_open(world: &mut World) {
     for library in pending {
         match jackdaw_loader::load_installed_from_path(world, &library) {
             Ok(id) => info!("Loaded extension `{id}` from {}", library.display()),
+            Err(error @ jackdaw_loader::LoadError::RestartRequired(_)) => info!("{error}"),
             Err(error) => warn!("Failed to load {}: {error}", library.display()),
         }
     }

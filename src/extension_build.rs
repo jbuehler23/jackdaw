@@ -477,6 +477,15 @@ fn load_built_extension(world: &mut World) {
             crate::status_bar::notify_info(world, outcome.clone());
             report_ready(world, outcome);
         }
+        Err(jackdaw_loader::LoadError::RestartRequired(id)) => {
+            world.resource_mut::<ExtensionBuild>().loaded = stamp;
+            let outcome = format!(
+                "Built {id}, not loaded: its App plugin is only added at launch. Install it \
+                 as a .jdext bundle and restart; builds that keep the plugin then reload live"
+            );
+            crate::status_bar::notify_info(world, outcome.clone());
+            report_ready(world, outcome);
+        }
         Err(error) if job.recorded => {
             info!("The last extension build did not load, building it again: {error}");
             begin(

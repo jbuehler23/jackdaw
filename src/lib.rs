@@ -722,7 +722,6 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::AnimationGraphExtension>()
                 .register_extension::<build_panel::BuildPanelExtension>()
                 .register_extension::<builtin_extensions::InspectorExtension>()
-                .add_plugins(test_input::plugin)
                 .register_extension::<test_input::TestInputExtension>();
         }
 

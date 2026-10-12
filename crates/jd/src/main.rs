@@ -537,6 +537,10 @@ fn pack_extension(args: &[String]) -> ExitCode {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
+    let requires_restart = project
+        .root
+        .as_deref()
+        .is_some_and(jackdaw_project_build::detect::extension_declares_app_plugin);
     let result = (|| {
         let library = std::fs::read(&library_path).map_err(|error| {
             jackdaw_package::PackageError::Io(format!("{}: {error}", library_path.display()))
@@ -554,6 +558,7 @@ fn pack_extension(args: &[String]) -> ExitCode {
             &library,
         );
         manifest.homepage = flag_value(args, "--homepage").or(project.homepage.clone());
+        manifest.requires_restart = requires_restart;
         let bundle = jd::sign::create_bundle(manifest, &library, &key)?;
         std::fs::write(&out_path, bundle)
             .map_err(|error| jackdaw_package::PackageError::Io(format!("{out_path}: {error}")))
@@ -568,6 +573,9 @@ fn pack_extension(args: &[String]) -> ExitCode {
                 jackdaw_package::host_target(),
                 jackdaw_package::host_sdk_abi()
             );
+            if requires_restart {
+                println!("  adds an App plugin: it activates when the editor next starts");
+            }
             println!(
                 "\nA bundle only installs into a jackdaw with the same ABI string, so publish \
                  one per target and jackdaw release."

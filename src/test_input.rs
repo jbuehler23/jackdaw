@@ -54,6 +54,10 @@ impl JackdawExtension for TestInputExtension {
         ExtensionKind::Builtin
     }
 
+    fn app_plugin(&self) -> Option<Box<dyn Plugin>> {
+        Some(Box::new(plugin))
+    }
+
     fn register(&self, ctx: &mut ExtensionContext) {
         ctx.register_operator::<InputPointerOp>()
             .register_operator::<InputKeyOp>()
@@ -61,7 +65,7 @@ impl JackdawExtension for TestInputExtension {
     }
 }
 
-pub(crate) fn plugin(app: &mut App) {
+fn plugin(app: &mut App) {
     app.init_resource::<SyntheticInput>().add_systems(
         First,
         // Ahead of the pass that turns window events into `PointerInput`, so a

@@ -27,6 +27,11 @@ pub struct ExtensionManifest {
     pub target: String,
     pub library: String,
     pub library_sha256: String,
+    /// The extension adds a plugin to the editor at launch, so installing or
+    /// enabling it takes effect after a restart. Readable without loading the
+    /// library, and absent from manifests that leave it false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_restart: bool,
 }
 
 impl ExtensionManifest {
@@ -51,6 +56,7 @@ impl ExtensionManifest {
             target: host_target().to_string(),
             library: library.into(),
             library_sha256: hex_digest(library_bytes),
+            requires_restart: false,
         }
     }
 }
@@ -585,6 +591,25 @@ mod tests {
             b"x",
         );
         assert!(validate_manifest_shape(&manifest).is_err());
+    }
+
+    #[test]
+    fn restart_flag_is_omitted_when_false_and_read_back_when_set() {
+        let mut manifest = ExtensionManifest::new(
+            "example.ext",
+            "Example",
+            "1.0.0",
+            "Acme",
+            "MIT",
+            "ext.so",
+            b"x",
+        );
+        let plain = serde_json::to_string(&manifest).expect("encode");
+        assert!(!plain.contains("requires_restart"));
+        manifest.requires_restart = true;
+        let flagged = serde_json::to_string(&manifest).expect("encode");
+        let read: ExtensionManifest = serde_json::from_str(&flagged).expect("decode");
+        assert!(read.requires_restart);
     }
 
     #[test]

@@ -30,4 +30,14 @@ impl JackdawExtension for MyExtension {
     fn register(&self, _registrar: &mut ExtensionRegistrar<'_>) {
         info!("{{project-name}} registered");
     }
+
+    // To add Bevy plugins, schedules or systems to the editor App at launch,
+    // return them from `app_plugin`. Such an extension activates after a
+    // restart rather than live:
+    //
+    // fn app_plugin(&self) -> Option<Box<dyn Plugin>> {
+    //     Some(Box::new(|app: &mut App| {
+    //         app.add_systems(Update, my_system);
+    //     }))
+    // }
 }

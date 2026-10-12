@@ -22,6 +22,7 @@ use bevy::prelude::*;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<ExtensionCatalog>()
+        .init_resource::<ExtensionAppPlugins>()
         .init_resource::<OperatorIndex>()
         .add_observer(index_operator_on_add)
         .add_observer(deindex_and_cleanup_operator_on_remove)
@@ -400,7 +401,9 @@ impl ExtensionAppExt for App {
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,
     ) -> &mut Self {
-        let id = ctor().id();
+        let extension = ctor();
+        let id = extension.id();
+        add_app_plugin(self, extension.as_ref());
         self.world_mut()
             .resource_mut::<ExtensionCatalog>()
             .register_extension_internal(ctor);
@@ -408,6 +411,105 @@ impl ExtensionAppExt for App {
         init_extension(id);
         self
     }
+}
+
+/// The App plugins extensions added while the editor `App` was built, and
+/// the extensions waiting on a restart because of them.
+///
+/// See [`crate::JackdawExtension::app_plugin`].
+#[derive(Resource, Default)]
+pub struct ExtensionAppPlugins {
+    /// Plugin name by extension id, for each plugin added at launch.
+    added: HashMap<String, String>,
+    /// Extensions whose requested state takes effect after a restart, with
+    /// whether that state is enabled.
+    pub(crate) pending: HashMap<String, bool>,
+}
+
+impl ExtensionAppPlugins {
+    /// The name of the plugin `id` added at launch, if it added one.
+    pub fn plugin_of(&self, id: &str) -> Option<&str> {
+        self.added.get(id).map(String::as_str)
+    }
+
+    /// Whether `extension` can activate in this session: it declares the
+    /// same App plugin it added at launch, or none and added none.
+    pub fn can_activate(&self, extension: &dyn crate::JackdawExtension) -> bool {
+        let declared = extension
+            .app_plugin()
+            .map(|plugin| plugin.name().to_string());
+        declared.as_deref() == self.plugin_of(&extension.id())
+    }
+
+    /// Whether `id` waits on a restart.
+    pub fn restart_required(&self, id: &str) -> bool {
+        self.pending.contains_key(id)
+    }
+
+    /// The state `id` takes after a restart, if it waits on one.
+    pub fn pending_state(&self, id: &str) -> Option<bool> {
+        self.pending.get(id).copied()
+    }
+
+    /// Record that `id` takes the given enabled state after a restart.
+    pub fn require_restart(&mut self, id: impl Into<String>, enabled: bool) {
+        self.pending.insert(id.into(), enabled);
+    }
+
+    /// Forget a pending restart for `id`, once the session already matches it.
+    pub fn clear_restart(&mut self, id: &str) {
+        self.pending.remove(id);
+    }
+}
+
+/// Wraps an extension's boxed plugin so `App::add_plugins` accepts it.
+struct ExtensionAppPlugin(Box<dyn Plugin>);
+
+impl Plugin for ExtensionAppPlugin {
+    fn build(&self, app: &mut App) {
+        self.0.build(app);
+    }
+
+    fn ready(&self, app: &App) -> bool {
+        self.0.ready(app)
+    }
+
+    fn finish(&self, app: &mut App) {
+        self.0.finish(app);
+    }
+
+    fn cleanup(&self, app: &mut App) {
+        self.0.cleanup(app);
+    }
+
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn is_unique(&self) -> bool {
+        self.0.is_unique()
+    }
+}
+
+/// Add `extension`'s App plugin to `app` when the user has not turned the
+/// extension off. Call while the `App` is being built; built-in extensions
+/// get this through [`ExtensionAppExt::register_extension`] and installed
+/// ones through the dylib loader.
+pub fn add_app_plugin(app: &mut App, extension: &dyn crate::JackdawExtension) {
+    let Some(plugin) = extension.app_plugin() else {
+        return;
+    };
+    let id = extension.id();
+    if !crate::extensions_config::is_extension_enabled(&id) {
+        return;
+    }
+    let name = plugin.name().to_string();
+    info!("Adding the App plugin `{name}` of extension `{id}`");
+    app.add_plugins(ExtensionAppPlugin(plugin));
+    app.world_mut()
+        .get_resource_or_init::<ExtensionAppPlugins>()
+        .added
+        .insert(id, name);
 }
 
 /// Unload an extension. Despawns the root entity; the cascade and
@@ -438,6 +540,13 @@ pub fn enable_extension(world: &mut World, id: &str) -> Option<Entity> {
     }
 
     let extension = world.resource::<ExtensionCatalog>().construct(id)?;
+    let mut app_plugins = world.get_resource_or_init::<ExtensionAppPlugins>();
+    if !app_plugins.can_activate(extension.as_ref()) {
+        info!("Extension `{id}` adds an App plugin; it is enabled after a restart");
+        app_plugins.require_restart(id, true);
+        return None;
+    }
+    app_plugins.clear_restart(id);
     Some(load_static_extension(world, extension))
 }
 

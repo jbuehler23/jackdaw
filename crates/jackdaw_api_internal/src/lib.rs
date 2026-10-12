@@ -157,6 +157,22 @@ pub trait JackdawExtension: Send + Sync + 'static {
     /// other owned state here.
     fn register(&self, registrar: &mut ExtensionRegistrar<'_>);
 
+    /// A Bevy [`Plugin`] added to the editor `App` before it runs.
+    ///
+    /// Use it for what [`ExtensionRegistrar`] cannot do on a running
+    /// world: plugin groups, schedules, system sets, and systems that must
+    /// run whether or not a window is open. The editor adds it only for
+    /// extensions enabled at launch, before [`Self::register`] runs.
+    /// Plugins cannot be removed, so enabling such an extension later, or
+    /// loading a build whose plugin has a different [`Plugin::name`], asks
+    /// for a restart instead of activating it. A reload whose plugin keeps
+    /// its name activates live and keeps the plugin added at launch.
+    ///
+    /// A closure `|app: &mut App| { ... }` is a plugin too.
+    fn app_plugin(&self) -> Option<Box<dyn Plugin>> {
+        None
+    }
+
     /// Optional hook called before the extension entity despawns.
     ///
     /// Child-entity cleanup handles registered windows, operators, BEI

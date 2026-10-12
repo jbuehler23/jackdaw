@@ -11,7 +11,18 @@ pub use jackdaw_env::extensions_config::*;
 /// and write it to disk.
 pub fn persist_current_enabled(world: &mut World) {
     let mut query = world.query::<&crate::lifecycle::Extension>();
-    let enabled: HashSet<String> = query.iter(world).map(|e| e.id.clone()).collect();
+    let mut enabled: HashSet<String> = query.iter(world).map(|e| e.id.clone()).collect();
+    // An extension waiting on a restart is recorded as the user asked, so the
+    // restart applies it.
+    if let Some(app_plugins) = world.get_resource::<crate::lifecycle::ExtensionAppPlugins>() {
+        for (id, wanted) in &app_plugins.pending {
+            if *wanted {
+                enabled.insert(id.clone());
+            } else {
+                enabled.remove(id);
+            }
+        }
+    }
     let mut config = read_extension_config().unwrap_or_default();
     for (id, ext_config) in config.iter_mut() {
         if !enabled.contains(id) {

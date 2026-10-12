@@ -265,6 +265,9 @@ pub enum LoadError {
     /// extension.
     NoExtensionEntry,
     EntryPanicked,
+    /// The extension adds an App plugin this session did not add at launch,
+    /// so it activates after a restart. Holds the extension id.
+    RestartRequired(String),
     /// Non-dlopen failure, e.g., the install step's filesystem
     /// rename failed. Doesn't reach the library-loader itself but
     /// is surfaced through the same Result so call sites have a
@@ -311,6 +314,10 @@ impl std::fmt::Display for LoadError {
                  (`jackdaw_extension_ctor` symbol not found)"
             ),
             Self::EntryPanicked => write!(f, "extension constructor panicked"),
+            Self::RestartRequired(id) => write!(
+                f,
+                "`{id}` adds an App plugin, so it activates after the editor restarts"
+            ),
             Self::InstallIo(msg) => write!(f, "install io: {msg}"),
             Self::Other(e) => write!(f, "other: {e}"),
         }
@@ -372,12 +379,12 @@ fn open_and_construct(
     Ok((ctor, ext))
 }
 
-/// Startup load: construct once to harvest the extension id, then store the
-/// constructor in the catalog. Marketplace extensions use host-owned keymap
-/// registrations and do not mutate startup-only Bevy type registries.
+/// Startup load: construct once to harvest the extension id and add its App
+/// plugin, then store the constructor in the catalog.
 fn try_load(app: &mut App, path: &Path) -> Result<String, LoadError> {
     let (ctor, ext) = open_and_construct(app.world_mut(), path)?;
     let id = ext.id();
+    jackdaw_api_internal::lifecycle::add_app_plugin(app, ext.as_ref());
     drop(ext);
 
     jackdaw_api_internal::lifecycle::register_dylib_extension(app.world_mut(), ctor);
@@ -398,10 +405,27 @@ fn try_load(app: &mut App, path: &Path) -> Result<String, LoadError> {
 /// the `Library` handle is moved into [`LoadedDylibs`] so the entry
 /// point stays valid for the rest of the app's life.
 ///
+/// An extension whose App plugin differs from the one added at launch is not
+/// activated: a copy already running stays as it is, a new one is listed in
+/// the catalog, and [`LoadError::RestartRequired`] is returned.
+///
 /// Returns the extension id on success.
 pub fn load_from_path(world: &mut World, path: &Path) -> Result<String, LoadError> {
     let (ctor, ext) = open_and_construct(world, path)?;
     let id = ext.id();
+
+    let mut app_plugins =
+        world.get_resource_or_init::<jackdaw_api_internal::lifecycle::ExtensionAppPlugins>();
+    if !app_plugins.can_activate(ext.as_ref()) {
+        app_plugins.require_restart(id.clone(), true);
+        if !world
+            .resource::<jackdaw_api_internal::ExtensionCatalog>()
+            .contains(&id)
+        {
+            jackdaw_api_internal::lifecycle::register_dylib_extension(world, ctor);
+        }
+        return Err(LoadError::RestartRequired(id));
+    }
 
     // Logical unload is immediate. Every host-owned registration is removed,
     // while LoadedDylibs deliberately retains the superseded mapping. The

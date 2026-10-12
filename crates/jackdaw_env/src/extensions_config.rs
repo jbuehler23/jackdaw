@@ -59,12 +59,22 @@ pub fn read_extension_config() -> Option<ExtensionsConfig> {
 }
 
 /// Add the extension with the given ID to the enabled list if it is not already present.
-// TODO: this will always enable it, since the enabled list doesn't list disabled extensions
 pub fn init_extension(id: impl Into<String>) {
     let id = id.into();
     let mut config = read_extension_config().unwrap_or_default();
-    config.entry(id).or_default().enabled = true;
+    if config.contains_key(&id) {
+        return;
+    }
+    config.insert(id, ExtensionConfig::default());
     write_enabled_list(&config);
+}
+
+/// Whether the user has left the extension on. An extension the file does not
+/// name counts as on, as it does at startup.
+pub fn is_extension_enabled(id: &str) -> bool {
+    read_extension_config()
+        .and_then(|config| config.get(id).map(|entry| entry.enabled))
+        .unwrap_or(true)
 }
 
 /// Persist one extension's desired state without requiring a running editor.

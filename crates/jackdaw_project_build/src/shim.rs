@@ -12,7 +12,8 @@
 //!
 //! * `jackdaw_extension_ctor()`: constructs the extension for the
 //!   editor's in-process loader. Emitted when an extension type is
-//!   configured.
+//!   configured. The extension's App plugin, if it has one, is reached
+//!   through the constructed value, so it needs no entry of its own.
 //! * `jackdaw_register_types(&mut TypeRegistry)`: hands the library's
 //!   derived reflect types to the editor's registry. Emitted beside the
 //!   ctor. The walk over the auto-registration list is compiled into the

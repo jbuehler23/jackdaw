@@ -6,5 +6,7 @@ A [jackdaw](https://github.com/jbuehler23/jackdaw) editor extension.
 - The extension surface (operators, panels, menus, keybindings) lives
   behind `jackdaw_extension`; see the `examples/extension/` directory in the
   jackdaw repository for working samples of each.
+- An extension that returns a Bevy plugin from `app_plugin` gets it added
+  when the editor starts, so installing or enabling it needs a restart.
 - `cargo check` works standalone for IDE support; the editor performs
   the real builds into `.jackdaw/` (gitignored).
