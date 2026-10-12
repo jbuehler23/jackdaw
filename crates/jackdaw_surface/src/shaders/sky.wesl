@@ -1,8 +1,6 @@
-#import bevy_pbr::mesh_view_bindings::{view, lights, globals}
-#import bevy_pbr::utils::coords_to_viewport_uv
-#ifdef TONEMAP_IN_SHADER
-#import bevy_core_pipeline::tonemapping::tone_mapping
-#endif
+import bevy_pbr::render::mesh_view_bindings::{view, lights, globals};
+import bevy_pbr::render::utils::coords_to_viewport_uv;
+@if(TONEMAP_IN_SHADER) import bevy_core_pipeline::tonemapping::tone_mapping;
 
 struct SkyUniform {
     zenith: vec4<f32>,
@@ -18,7 +16,7 @@ struct SkyUniform {
     cloud_scale: f32,
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> sky: SkyUniform;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -106,8 +104,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     color = mix(color, sky.cloud_color.rgb * scale, cover);
 
     var out = vec4<f32>(color, 1.0);
-#ifdef TONEMAP_IN_SHADER
+    @if(TONEMAP_IN_SHADER)
     out = tone_mapping(out, view.color_grading);
-#endif
     return out;
 }

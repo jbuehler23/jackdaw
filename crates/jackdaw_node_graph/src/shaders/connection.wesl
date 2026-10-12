@@ -1,5 +1,4 @@
-// Cubic Bezier wire renderer for the debugger's graph panels. Adapted from
-// jackdaw_node_graph's connection.wgsl (cubic Bezier SDF stroke).
+// Cubic Bezier wire renderer for the node graph.
 //
 // The cubic (p0, p1, p2, p3) is split at t = 0.5 into two quadratic Beziers
 // and the signed distance field for each quadratic is computed using Inigo
@@ -8,9 +7,9 @@
 //
 // Reference: https://iquilezles.org/articles/distfunctions2d/
 
-#import bevy_ui::ui_vertex_output::UiVertexOutput
+import bevy_ui_render::ui_vertex_output::UiVertexOutput;
 
-struct GraphEdgeUniforms {
+struct ConnectionUniforms {
     p0: vec2<f32>,
     p1: vec2<f32>,
     p2: vec2<f32>,
@@ -21,7 +20,7 @@ struct GraphEdgeUniforms {
 };
 
 @group(1) @binding(0)
-var<uniform> u: GraphEdgeUniforms;
+var<uniform> u: ConnectionUniforms;
 
 // Inigo Quilez: signed distance from point `pos` to quadratic Bezier (A, B, C).
 // Solves the cubic `dot(pos - bezier(t), bezier'(t)) = 0` for the closest t.

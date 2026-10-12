@@ -16,13 +16,13 @@
 // uniform control flow at the top of `fragment`: the per-layer branches below
 // make implicit-derivative sampling illegal.
 
-#import bevy_pbr::{
+import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     mesh_bindings::mesh,
     mesh_view_bindings::view,
     pbr_functions,
     pbr_types,
-}
+};
 
 // The remap of a 0..1 authoring dial onto a power exponent. 4 is a wide,
 // soft cross-fade; 64 is a near-binary height cutout.
@@ -86,17 +86,17 @@ struct SplatUniform {
     roughness_slots: u32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> splat: SplatUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var albedo_array: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var layer_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var normal_array: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var height_array: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(5) var control_map: texture_2d<u32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(6) var slope_map: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(7) var tint_map: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(8) var tint_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(9) var occlusion_array: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(10) var roughness_array: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> splat: SplatUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var albedo_array: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var layer_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var normal_array: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var height_array: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var control_map: texture_2d<u32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var slope_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(7) var tint_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(8) var tint_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(9) var occlusion_array: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(10) var roughness_array: texture_2d_array<f32>;
 
 // The last id this material can address: one short of the bound set's
 // layer count, and never past the UV-scale array. Every id is clamped

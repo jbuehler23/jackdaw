@@ -47,7 +47,7 @@ use bevy::render::render_resource::{AsBindGroup, AsBindGroupShaderType, ShaderTy
 use bevy::render::texture::GpuImage;
 use bevy::shader::ShaderRef;
 
-const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/layered_surface.wgsl";
+const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/layered_surface.wesl";
 
 /// The material an entity wears to carry a layer over its base surface.
 pub type LayeredSurfaceMaterial = ExtendedMaterial<StandardMaterial, LayeredSurface>;
@@ -286,7 +286,7 @@ pub struct LayeredSurfacePlugin;
 
 impl Plugin for LayeredSurfacePlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/layered_surface.wgsl");
+        embedded_asset!(app, "shaders/layered_surface.wesl");
         app.add_plugins(MaterialPlugin::<LayeredSurfaceMaterial>::default())
             .register_type::<LayeredSurface>()
             .register_type::<LayerBlend>()
@@ -303,10 +303,10 @@ mod tests {
 
     /// The shader source, for the binding checks below.
     ///
-    /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
+    /// It cannot be compiled here: it is WESL with shader flags, not WGSL. The checks
     /// are textual, and catch binding numbers drifting between the
     /// `AsBindGroup` derive and the shader that reads them.
-    const SHADER_SOURCE: &str = include_str!("shaders/layered_surface.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/layered_surface.wesl");
 
     #[test]
     fn every_material_binding_is_declared_in_the_shader_at_its_derive_index() {
@@ -321,8 +321,9 @@ mod tests {
             (107, "var detail_normal_texture: texture_2d<f32>"),
             (108, "var detail_orm_texture: texture_2d<f32>"),
         ] {
-            let expected =
-                format!("@group(#{{MATERIAL_BIND_GROUP}}) @binding({binding}) {declaration};");
+            let expected = format!(
+                "@group(constants::MATERIAL_BIND_GROUP) @binding({binding}) {declaration};"
+            );
             assert!(
                 SHADER_SOURCE.contains(&expected),
                 "the AsBindGroup derive binds {binding} as `{declaration}`, \

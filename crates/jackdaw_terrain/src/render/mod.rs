@@ -11,7 +11,7 @@
 //!
 //! The blend is height-weighted rather than a cross-fade: a layer's weight is
 //! `pow(corner_weight + layer_weight + height, sharpness)`, normalized across
-//! every contributing layer. See `shaders/terrain_splat.wgsl`.
+//! every contributing layer. See `shaders/terrain_splat.wesl`.
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
@@ -49,7 +49,7 @@ use crate::texture_set::{
     check_layer_sizes,
 };
 
-const SHADER_PATH: &str = "embedded://jackdaw_terrain/render/shaders/terrain_splat.wgsl";
+const SHADER_PATH: &str = "embedded://jackdaw_terrain/render/shaders/terrain_splat.wesl";
 
 pub use crate::sidecar::DEFAULT_BLEND_SHARPNESS;
 
@@ -1118,7 +1118,7 @@ pub struct TerrainRenderPlugin;
 
 impl Plugin for TerrainRenderPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/terrain_splat.wgsl");
+        embedded_asset!(app, "shaders/terrain_splat.wesl");
         app.add_plugins(MaterialPlugin::<TerrainSplatMaterial>::default())
             .init_resource::<LayerTexels>()
             .add_systems(PreUpdate, texels::follow_layer_reads);
@@ -2408,10 +2408,10 @@ mod tests {
 
     /// The shader source, for the binding checks below.
     ///
-    /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
+    /// It cannot be compiled here: it is WESL with shader flags, not WGSL. The checks
     /// are textual, and catch binding numbers drifting between the
     /// `AsBindGroup` derive and the shader that reads them.
-    const SHADER_SOURCE: &str = include_str!("shaders/terrain_splat.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/terrain_splat.wesl");
 
     #[test]
     fn every_material_binding_is_declared_in_the_shader_at_its_derive_index() {
@@ -2426,8 +2426,9 @@ mod tests {
             (9, "var occlusion_array: texture_2d_array<f32>"),
             (10, "var roughness_array: texture_2d_array<f32>"),
         ] {
-            let expected =
-                format!("@group(#{{MATERIAL_BIND_GROUP}}) @binding({binding}) {declaration};");
+            let expected = format!(
+                "@group(constants::MATERIAL_BIND_GROUP) @binding({binding}) {declaration};"
+            );
             assert!(
                 SHADER_SOURCE.contains(&expected),
                 "the AsBindGroup derive binds {binding} as `{declaration}`, \

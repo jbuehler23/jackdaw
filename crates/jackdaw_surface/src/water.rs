@@ -35,7 +35,7 @@ use bevy::render::texture::GpuImage;
 use bevy::shader::ShaderRef;
 use jackdaw_scene_types::{SceneWind, Wind};
 
-const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/water.wgsl";
+const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/water.wesl";
 
 /// The material an entity wears to draw as water.
 pub type WaterMaterial = ExtendedMaterial<StandardMaterial, Water>;
@@ -299,7 +299,7 @@ pub struct WaterPlugin;
 
 impl Plugin for WaterPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/water.wgsl");
+        embedded_asset!(app, "shaders/water.wesl");
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .init_resource::<SceneWind>()
             .register_type::<Water>()
@@ -358,10 +358,10 @@ mod tests {
 
     /// The shader source, for the binding checks below.
     ///
-    /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
+    /// It cannot be compiled here: it is WESL with shader flags, not WGSL. The checks
     /// are textual, and catch binding numbers drifting between the
     /// `AsBindGroup` derive and the shader that reads them.
-    const SHADER_SOURCE: &str = include_str!("shaders/water.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/water.wesl");
 
     #[test]
     fn every_material_binding_is_declared_in_the_shader_at_its_derive_index() {
@@ -371,8 +371,9 @@ mod tests {
             (102, "var water_sampler: sampler"),
             (103, "var foam_mask: texture_2d<f32>"),
         ] {
-            let expected =
-                format!("@group(#{{MATERIAL_BIND_GROUP}}) @binding({binding}) {declaration};");
+            let expected = format!(
+                "@group(constants::MATERIAL_BIND_GROUP) @binding({binding}) {declaration};"
+            );
             assert!(
                 SHADER_SOURCE.contains(&expected),
                 "the AsBindGroup derive binds {binding} as `{declaration}`, \

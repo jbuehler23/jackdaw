@@ -35,8 +35,8 @@ use bevy::render::texture::GpuImage;
 use bevy::shader::{Shader, ShaderRef};
 use jackdaw_scene_types::{SceneWind, Wind};
 
-const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/foliage.wgsl";
-const PREPASS_SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/foliage_prepass.wgsl";
+const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/foliage.wesl";
+const PREPASS_SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/foliage_prepass.wesl";
 
 /// The material an entity wears to blow with the wind and pass light.
 pub type FoliageMaterial = ExtendedMaterial<StandardMaterial, Foliage>;
@@ -336,11 +336,11 @@ pub struct FoliagePlugin;
 
 impl Plugin for FoliagePlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/foliage.wgsl");
-        embedded_asset!(app, "shaders/foliage_prepass.wgsl");
-        embedded_asset!(app, "shaders/foliage_wind.wgsl");
+        embedded_asset!(app, "shaders/foliage.wesl");
+        embedded_asset!(app, "shaders/foliage_prepass.wesl");
+        embedded_asset!(app, "shaders/foliage_wind.wesl");
         if app.world().contains_resource::<Assets<Shader>>() {
-            let library = bevy::asset::load_embedded_asset!(app, "shaders/foliage_wind.wgsl");
+            let library = bevy::asset::load_embedded_asset!(app, "shaders/foliage_wind.wesl");
             app.insert_resource(FoliageShaderLibrary(library));
         }
         app.add_plugins(MaterialPlugin::<FoliageMaterial>::default())
@@ -376,12 +376,12 @@ mod tests {
 
     /// The shader source, for the binding checks below.
     ///
-    /// It cannot be compiled here: it is naga-oil input, not WGSL. The checks
+    /// It cannot be compiled here: it is WESL with shader flags, not WGSL. The checks
     /// are textual, and catch binding numbers drifting between the
     /// `AsBindGroup` derive and the shader that reads them.
-    const SHADER_SOURCE: &str = include_str!("shaders/foliage_wind.wgsl");
-    const PREPASS_SOURCE: &str = include_str!("shaders/foliage_prepass.wgsl");
-    const MAIN_SOURCE: &str = include_str!("shaders/foliage.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/foliage_wind.wesl");
+    const PREPASS_SOURCE: &str = include_str!("shaders/foliage_prepass.wesl");
+    const MAIN_SOURCE: &str = include_str!("shaders/foliage.wesl");
 
     #[test]
     fn only_a_cutout_in_a_multisampled_view_covers_its_edges() {
@@ -434,8 +434,7 @@ mod tests {
 
     #[test]
     fn every_material_binding_is_declared_in_the_shader_at_its_derive_index() {
-        let expected =
-            "@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> foliage: FoliageUniform;";
+        let expected = "@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> foliage: FoliageUniform;";
         assert!(
             SHADER_SOURCE.contains(expected),
             "the AsBindGroup derive binds 100 as the foliage uniform, \

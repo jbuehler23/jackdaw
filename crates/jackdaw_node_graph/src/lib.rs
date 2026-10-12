@@ -54,7 +54,7 @@ pub struct NodeGraphPlugin;
 impl Plugin for NodeGraphPlugin {
     fn build(&self, app: &mut App) {
         // Embed the connection SDF shader.
-        embedded_asset!(app, "shaders/connection.wgsl");
+        embedded_asset!(app, "shaders/connection.wesl");
 
         // Reflect types so they round-trip through the JSN AST.
         app.register_type::<NodeGraph>()

@@ -24,8 +24,8 @@ pub struct RemoteDebugPlugin;
 
 impl Plugin for RemoteDebugPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/sparkline.wgsl");
-        embedded_asset!(app, "shaders/graph_edge.wgsl");
+        embedded_asset!(app, "shaders/sparkline.wesl");
+        embedded_asset!(app, "shaders/graph_edge.wesl");
 
         app.add_plugins(UiMaterialPlugin::<sparkline::SparklineMaterial>::default());
         app.add_plugins(UiMaterialPlugin::<graph::GraphEdgeMaterial>::default());

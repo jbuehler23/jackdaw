@@ -27,7 +27,7 @@ use jackdaw_scene_types::{
     NavmeshExclude, PostProcess, Reflections, SceneWind, ShadowFiltering, Sky, Tonemapper,
 };
 
-const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/sky.wgsl";
+const SHADER_PATH: &str = "embedded://jackdaw_surface/shaders/sky.wesl";
 
 /// Texels along one face of the generated ambient cubemap.
 const AMBIENT_FACE_SIZE: u32 = 16;
@@ -62,7 +62,7 @@ pub struct EnvironmentPlugin;
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/sky.wgsl");
+        embedded_asset!(app, "shaders/sky.wesl");
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default());
         add_environment_systems(app);
     }
@@ -861,7 +861,7 @@ fn screen_triangle() -> Mesh {
 mod tests {
     use super::*;
 
-    const SHADER_SOURCE: &str = include_str!("shaders/sky.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/sky.wesl");
 
     #[test]
     fn the_uniform_struct_matches_the_rust_field_order() {
@@ -889,11 +889,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("`{field}` is missing or out of order"));
             at += found + field.len();
         }
-        assert!(
-            SHADER_SOURCE.contains(
-                "@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyUniform;"
-            )
-        );
+        assert!(SHADER_SOURCE.contains(
+            "@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> sky: SkyUniform;"
+        ));
     }
 
     fn environment_app() -> App {

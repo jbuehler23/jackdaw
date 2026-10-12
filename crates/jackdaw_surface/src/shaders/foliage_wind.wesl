@@ -1,8 +1,6 @@
 // The foliage material's uniform and the lean, gradient and variation its
 // vertex, prepass and fragment stages share.
 
-#define_import_path jackdaw_surface::foliage_wind
-
 const TAU: f32 = 6.2831855;
 const PI: f32 = 3.1415927;
 // How far a wind of strength 1 leans a part responding at 1, in world units.
@@ -44,7 +42,7 @@ struct FoliageUniform {
     hide_power: f32,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> foliage: FoliageUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> foliage: FoliageUniform;
 
 // How far the wind carries a vertex, in world units. `up_the_mesh` is how far
 // above its own root the vertex sits and `world` where it stands, which is

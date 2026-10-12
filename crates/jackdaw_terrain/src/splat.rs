@@ -47,7 +47,7 @@ pub fn control_cell(uv: f32, resolution: u32) -> u32 {
 
 /// The shader's bilinear base corner and the fraction into its cell.
 ///
-/// The CPU mirror of `control_corner` in `terrain_splat.wgsl`: the four
+/// The CPU mirror of `control_corner` in `terrain_splat.wesl`: the four
 /// texels a fragment mixes are this corner and its `+1` neighbours, so
 /// the corner clamps to `resolution - 2` rather than `resolution - 1`.
 /// The returned fraction is the bilinear `f`, in `0..=1`.
@@ -85,7 +85,7 @@ pub fn grid_uv(g: u32, resolution: u32) -> f32 {
 /// Which of a control word's two layers the shader accumulates.
 ///
 /// The CPU mirror of `accumulate_control`'s two guards in
-/// `terrain_splat.wgsl`. Between them they must cover every word: a word
+/// `terrain_splat.wesl`. Between them they must cover every word: a word
 /// neither guard admits accumulates nothing, and the fragment normalizes
 /// zero by zero into a black texel and an indeterminate normal. Skipping
 /// the overlay when it names the base's own id is an optimization,

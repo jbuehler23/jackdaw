@@ -12,7 +12,7 @@ use bevy::reflect::TypePath;
 use bevy::render::render_resource::*;
 use bevy::shader::ShaderRef;
 
-const SHADER_CONNECTION_PATH: &str = "embedded://jackdaw_node_graph/shaders/connection.wgsl";
+const SHADER_CONNECTION_PATH: &str = "embedded://jackdaw_node_graph/shaders/connection.wesl";
 
 /// GPU material for a single connection wire.
 ///

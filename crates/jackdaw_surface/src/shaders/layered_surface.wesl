@@ -10,11 +10,11 @@
 // blend below decides how much of each read reaches the surface, never whether
 // the read happens.
 
-#import bevy_pbr::{
+import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions,
-}
+};
 
 // The narrowest exponent the threshold dial reaches, so a mask raised to zero
 // is never flattened to one.
@@ -46,15 +46,15 @@ struct LayeredSurfaceUniform {
 const LAYER_NORMAL_MAP_BOUND: u32 = 1u;
 const DETAIL_NORMAL_MAP_BOUND: u32 = 2u;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> layered: LayeredSurfaceUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var layer_base_color_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var layer_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var layer_normal_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var layer_orm_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(105) var detail_base_color_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(106) var detail_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(107) var detail_normal_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(108) var detail_orm_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> layered: LayeredSurfaceUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var layer_base_color_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var layer_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var layer_normal_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var layer_orm_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var detail_base_color_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var detail_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var detail_normal_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(108) var detail_orm_texture: texture_2d<f32>;
 
 // How much each of the three world planes contributes at a surface normal.
 fn projection_weights(normal: vec3<f32>) -> vec3<f32> {
@@ -154,9 +154,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 
     var vertex_color = vec4<f32>(1.0);
-#ifdef VERTEX_COLORS
+    @if(VERTEX_COLORS)
     vertex_color = in.color;
-#endif
     let blend = layer_weight(vertex_color, facing.y);
 
     let under = pbr_input.material.base_color.rgb
@@ -193,7 +192,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         detailed, layer_normal, blend * layered.layer_normal_strength));
 
     pbr_input.material.base_color = pbr_functions::alpha_discard(
-        pbr_input.material, pbr_input.material.base_color);
+        pbr_input.material.flags,
+        pbr_input.material.alpha_cutoff,
+        pbr_input.material.base_color,
+    );
 
     var out: FragmentOutput;
     out.color = pbr_functions::apply_pbr_lighting(pbr_input);

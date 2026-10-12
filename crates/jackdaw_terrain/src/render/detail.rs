@@ -62,7 +62,7 @@ use crate::sidecar::{GridShape, RegionTerrainData};
 
 use super::scatter::{ScatterAssets, ScatterPrimitive, ScatterSystems};
 
-const SHADER_PATH: &str = "embedded://jackdaw_terrain/render/shaders/detail.wgsl";
+const SHADER_PATH: &str = "embedded://jackdaw_terrain/render/shaders/detail.wesl";
 
 /// How far a blade's shading normal is bent onto the ground's normal; the shader's `NORMAL_BEND`.
 pub const DETAIL_NORMAL_BEND: f32 = 0.8;
@@ -540,7 +540,7 @@ pub enum DetailSystems {
 
 impl Plugin for DetailRenderPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/detail.wgsl");
+        embedded_asset!(app, "shaders/detail.wesl");
         super::scatter::add_asset_plugin(app);
         if !app.world().contains_resource::<Assets<Mesh>>() {
             app.init_asset::<Mesh>();
@@ -2330,9 +2330,9 @@ mod tests {
         assert_eq!(bindings.wind_strength, 0.0);
     }
 
-    /// The shader source, for the binding checks below. naga-oil input rather
+    /// The shader source, for the binding checks below. WESL with shader flags rather
     /// than plain WGSL, so the checks are textual.
-    const SHADER_SOURCE: &str = include_str!("shaders/detail.wgsl");
+    const SHADER_SOURCE: &str = include_str!("shaders/detail.wesl");
 
     #[test]
     fn every_detail_binding_is_declared_in_the_shader_at_its_derive_index() {

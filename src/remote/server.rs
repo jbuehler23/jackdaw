@@ -1264,7 +1264,7 @@ fn asset_kind(path: &str) -> &'static str {
         "ogg" | "wav" | "flac" | "mp3" => "audio",
         "bsn" | "bsb" | "jsn" | "scn" | "ron" => "scene",
         "ttf" | "otf" => "font",
-        "wgsl" | "glsl" | "spv" => "shader",
+        "wgsl" | "wesl" | "glsl" | "spv" => "shader",
         _ => "file",
     }
 }

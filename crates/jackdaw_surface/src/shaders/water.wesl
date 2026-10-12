@@ -9,15 +9,15 @@
 // `Water` on the Rust side computes the same wave, depth blend and foam
 // weight, and its tests hold the two together.
 
-#import bevy_pbr::{
-    forward_io::{Vertex, VertexOutput, FragmentOutput},
+import bevy_pbr::render::{
+    forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
     mesh_functions,
     mesh_view_bindings::{globals, view},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions,
-    prepass_utils,
     view_transformations::{depth_ndc_to_view_z, position_world_to_clip},
-}
+};
+@if(DEPTH_PREPASS) import bevy_pbr::prepass::utils::prepass_depth;
 
 const TAU: f32 = 6.2831855;
 // How much of the wave the long octave carries, the short one taking the rest.
@@ -69,10 +69,10 @@ struct WaterUniform {
 const NORMAL_MAP_BOUND: u32 = 1u;
 const FOAM_MASK_BOUND: u32 = 2u;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: WaterUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var normal_map_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var water_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var foam_mask: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> water: WaterUniform;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var normal_map_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var water_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var foam_mask: texture_2d<f32>;
 
 // How far the wave lifts a point standing at `world`, in world units.
 fn wave_offset(world: vec3<f32>, time: f32) -> f32 {
@@ -171,47 +171,42 @@ fn caustics_pattern(world: vec3<f32>, time: f32) -> f32 {
 }
 
 @vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
+fn vertex(packed: Vertex) -> VertexOutput {
     var out: VertexOutput;
-    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let vertex = decompress_vertex(packed, packed.instance_index);
+    let world_from_local = mesh_functions::get_world_from_local(packed.instance_index);
     var slope = vec2<f32>(0.0);
 
-#ifdef VERTEX_POSITIONS
-    let flat_position = mesh_functions::mesh_position_local_to_world(
-        world_from_local, vec4<f32>(vertex.position, 1.0));
-    let lifted = flat_position.xyz
-        + vec3<f32>(0.0, wave_offset(flat_position.xyz, globals.time), 0.0);
-    slope = wave_slope(flat_position.xyz, globals.time);
-    out.world_position = vec4<f32>(lifted, 1.0);
-    out.position = position_world_to_clip(lifted);
-#endif
+    @if(VERTEX_POSITIONS) {
+        let flat_position = mesh_functions::mesh_position_local_to_world(
+            world_from_local, vec4<f32>(vertex.position, 1.0));
+        let lifted = flat_position.xyz
+            + vec3<f32>(0.0, wave_offset(flat_position.xyz, globals.time), 0.0);
+        slope = wave_slope(flat_position.xyz, globals.time);
+        out.world_position = vec4<f32>(lifted, 1.0);
+        out.position = position_world_to_clip(lifted);
+    }
 
-#ifdef VERTEX_NORMALS
-    let resting = mesh_functions::mesh_normal_local_to_world(
-        vertex.normal, vertex.instance_index);
-    out.world_normal = normalize(resting + vec3<f32>(-slope.x, 0.0, -slope.y));
-#endif
+    @if(VERTEX_NORMALS) {
+        let resting = mesh_functions::mesh_normal_local_to_world(
+            vertex.normal, packed.instance_index);
+        out.world_normal = normalize(resting + vec3<f32>(-slope.x, 0.0, -slope.y));
+    }
 
-#ifdef VERTEX_UVS_A
+    @if(VERTEX_UVS_A)
     out.uv = vertex.uv;
-#endif
-#ifdef VERTEX_UVS_B
+    @if(VERTEX_UVS_B)
     out.uv_b = vertex.uv_b;
-#endif
-#ifdef VERTEX_TANGENTS
+    @if(VERTEX_TANGENTS)
     out.world_tangent = mesh_functions::mesh_tangent_local_to_world(
-        world_from_local, vertex.tangent, vertex.instance_index);
-#endif
-#ifdef VERTEX_COLORS
+        world_from_local, vertex.tangent, packed.instance_index);
+    @if(VERTEX_COLORS)
     out.color = vertex.color;
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = vertex.instance_index;
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
+    @if(VERTEX_OUTPUT_INSTANCE_INDEX)
+    out.instance_index = packed.instance_index;
+    @if(VISIBILITY_RANGE_DITHER)
     out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
-        vertex.instance_index, world_from_local[3]);
-#endif
+        packed.instance_index, world_from_local[3]);
 
     return out;
 }
@@ -220,14 +215,14 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 // pixel the depth is read at, which is what makes the shallows and the foam
 // wobble with the ripples.
 fn depth_behind(frag_coord: vec4<f32>, bent: vec2<f32>) -> f32 {
-#ifdef DEPTH_PREPASS
-    let at = vec4<f32>(frag_coord.xy + bent, frag_coord.z, frag_coord.w);
-    let behind = depth_ndc_to_view_z(prepass_utils::prepass_depth(at, 0u));
-    let here = depth_ndc_to_view_z(frag_coord.z);
-    return max(here - behind, 0.0);
-#else
-    return water.depth_distance;
-#endif
+    @if(DEPTH_PREPASS) {
+        let at = vec4<f32>(frag_coord.xy + bent, frag_coord.z, frag_coord.w);
+        let behind = depth_ndc_to_view_z(prepass_depth(at, 0u));
+        let here = depth_ndc_to_view_z(frag_coord.z);
+        return max(here - behind, 0.0);
+    } @else {
+        return water.depth_distance;
+    }
 }
 
 @fragment

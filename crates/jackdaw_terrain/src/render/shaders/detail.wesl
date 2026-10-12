@@ -1,12 +1,12 @@
 // Instanced ground detail with wind, bend and pressers.
 
-#import bevy_pbr::{
+import bevy_pbr::render::{
     forward_io::FragmentOutput,
     mesh_types,
     mesh_view_bindings::{view, globals},
     pbr_functions,
     pbr_types,
-}
+};
 
 const MAX_PRESSERS: u32 = 16u;
 /// Darkest the tint byte takes an instance, as a fraction of its own colour.
@@ -197,14 +197,14 @@ fn fragment(in: DetailOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let half_span = 1.0 - in.uv.y * in.uv.y;
         inside = min(inside, half_span - abs(in.uv.x - 0.5) * 2.0);
     }
-#ifdef ALPHA_TO_COVERAGE
+    @if(ALPHA_TO_COVERAGE)
     let coverage = inside / max(fwidth(inside), 0.0001) + 0.5;
-#else
+    @else
+    let coverage = 1.0;
+    @if(!ALPHA_TO_COVERAGE)
     if inside < 0.0 {
         discard;
     }
-    let coverage = 1.0;
-#endif
 
     let double_sided = true;
     let facing = pbr_functions::prepare_world_normal(in.world_normal, double_sided, is_front);

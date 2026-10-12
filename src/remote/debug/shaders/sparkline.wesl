@@ -5,7 +5,7 @@
 // samples are packed four per vec4 (std140-friendly): sample `i` lives at
 // `samples[i / 4][i % 4]`.
 
-#import bevy_ui::ui_vertex_output::UiVertexOutput
+import bevy_ui_render::ui_vertex_output::UiVertexOutput;
 
 struct SparklineUniforms {
     samples: array<vec4<f32>, 16>,

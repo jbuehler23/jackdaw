@@ -1,5 +1,5 @@
 //! Manual visual verification for the grid depth yield
-//! (`src/editor_grid_depth_patch.wgsl`'s `GRID_DEPTH_YIELD_WORLD`).
+//! (`src/editor_grid_depth_patch.wesl`'s `GRID_DEPTH_YIELD_WORLD`).
 //!
 //! Not part of the test suite: needs a real GPU and a display, and opens an
 //! actual window (winit requires its event loop on the process's main thread,
@@ -57,7 +57,7 @@ const PLANE_SIZE: f32 = 200.0;
 /// Two things change at this scale that are not visible at two hundred metres.
 /// The depth the grid has to lose a tie against is a thousand times the near
 /// plane out here, so the fixed centimetre
-/// [`GRID_DEPTH_YIELD_WORLD`](../src/editor_grid_depth_patch.wgsl) yields by is
+/// [`GRID_DEPTH_YIELD_WORLD`](../src/editor_grid_depth_patch.wesl) yields by is
 /// a far smaller share of it; and the grid's fadeout keeps it drawing only
 /// within [`FADEOUT`] of the eye, so a band can appear only in the near ground
 /// while the far ground supplies the depth range. The pair below approaches
@@ -104,12 +104,12 @@ fn patch_grid_shader(app: &mut App) {
         "bevy_dev_tools",
         Path::new("src"),
         Path::new("src/infinite_grid.rs"),
-        Path::new("infinite_grid.wgsl"),
+        Path::new("infinite_grid.wesl"),
     );
     registry.insert_asset(
-        PathBuf::from("src/editor_grid_depth_patch.wgsl"),
+        PathBuf::from("src/editor_grid_depth_patch.wesl"),
         &asset_path,
-        include_bytes!("../src/editor_grid_depth_patch.wgsl").as_slice(),
+        include_bytes!("../src/editor_grid_depth_patch.wesl").as_slice(),
     );
 }
 

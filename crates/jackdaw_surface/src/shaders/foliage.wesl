@@ -10,11 +10,11 @@
 // `Foliage` on the Rust side computes the same lean, gradient and variation,
 // and its tests hold the two together.
 
-#import jackdaw_surface::foliage_wind::{
+import jackdaw_surface::shaders::foliage_wind::{
     foliage, gradient_weight, side_hidden, variation_weight, wind_offset, MIN_EXPONENT, PI,
-}
-#import bevy_pbr::{
-    forward_io::{Vertex, VertexOutput, FragmentOutput},
+};
+import bevy_pbr::render::{
+    forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
     mesh_functions,
     mesh_view_bindings::{globals, lights, view},
     mesh_view_types,
@@ -23,7 +23,7 @@
     pbr_types,
     shadows,
     view_transformations::position_world_to_clip,
-}
+};
 
 // Where a mesh's own origin stands, which is the root the height above is
 // measured from.
@@ -32,44 +32,38 @@ fn root_of(instance_index: u32) -> vec3<f32> {
 }
 
 @vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
+fn vertex(packed: Vertex) -> VertexOutput {
     var out: VertexOutput;
-    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let vertex = decompress_vertex(packed, packed.instance_index);
+    let world_from_local = mesh_functions::get_world_from_local(packed.instance_index);
 
-#ifdef VERTEX_NORMALS
+    @if(VERTEX_NORMALS)
     out.world_normal = mesh_functions::mesh_normal_local_to_world(
-        vertex.normal, vertex.instance_index);
-#endif
+        vertex.normal, packed.instance_index);
 
-#ifdef VERTEX_POSITIONS
-    let planted = mesh_functions::mesh_position_local_to_world(
-        world_from_local, vec4<f32>(vertex.position, 1.0));
-    let up_the_mesh = planted.y - world_from_local[3].y;
-    let leaned = planted.xyz + wind_offset(up_the_mesh, planted.xyz, globals.time);
-    out.world_position = vec4<f32>(leaned, 1.0);
-    out.position = position_world_to_clip(leaned);
-#endif
+    @if(VERTEX_POSITIONS) {
+        let planted = mesh_functions::mesh_position_local_to_world(
+            world_from_local, vec4<f32>(vertex.position, 1.0));
+        let up_the_mesh = planted.y - world_from_local[3].y;
+        let leaned = planted.xyz + wind_offset(up_the_mesh, planted.xyz, globals.time);
+        out.world_position = vec4<f32>(leaned, 1.0);
+        out.position = position_world_to_clip(leaned);
+    }
 
-#ifdef VERTEX_UVS_A
+    @if(VERTEX_UVS_A)
     out.uv = vertex.uv;
-#endif
-#ifdef VERTEX_UVS_B
+    @if(VERTEX_UVS_B)
     out.uv_b = vertex.uv_b;
-#endif
-#ifdef VERTEX_TANGENTS
+    @if(VERTEX_TANGENTS)
     out.world_tangent = mesh_functions::mesh_tangent_local_to_world(
-        world_from_local, vertex.tangent, vertex.instance_index);
-#endif
-#ifdef VERTEX_COLORS
+        world_from_local, vertex.tangent, packed.instance_index);
+    @if(VERTEX_COLORS)
     out.color = vertex.color;
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-    out.instance_index = vertex.instance_index;
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
+    @if(VERTEX_OUTPUT_INSTANCE_INDEX)
+    out.instance_index = packed.instance_index;
+    @if(VISIBILITY_RANGE_DITHER)
     out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
-        vertex.instance_index, world_from_local[3]);
-#endif
+        packed.instance_index, world_from_local[3]);
 
     return out;
 }
@@ -126,23 +120,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-#ifdef FOLIAGE_ALPHA_TO_COVERAGE
-    let alpha = pbr_input.material.base_color.a;
-    pbr_input.material.base_color.a =
-        (alpha - foliage.alpha_cutoff) / max(fwidth(alpha), 0.0001) + 0.5;
-#else
-#ifndef ALPHA_TO_COVERAGE
-    if pbr_input.material.base_color.a < foliage.alpha_cutoff {
-        discard;
+    @if(FOLIAGE_ALPHA_TO_COVERAGE) {
+        let alpha = pbr_input.material.base_color.a;
+        pbr_input.material.base_color.a =
+            (alpha - foliage.alpha_cutoff) / max(fwidth(alpha), 0.0001) + 0.5;
+    } @elif(!ALPHA_TO_COVERAGE) {
+        if pbr_input.material.base_color.a < foliage.alpha_cutoff {
+            discard;
+        }
     }
-#endif
-#endif
 
     let world_position = in.world_position.xyz;
     var up_the_mesh = world_position.y;
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    @if(VERTEX_OUTPUT_INSTANCE_INDEX)
     up_the_mesh = world_position.y - root_of(in.instance_index).y;
-#endif
     let risen = gradient_weight(up_the_mesh);
     let varied = variation_weight(world_position);
     let tinted = pbr_input.material.base_color.rgb
