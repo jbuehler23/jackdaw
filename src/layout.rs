@@ -33,7 +33,6 @@ use crate::{
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
     measure_tool::MeasureDistanceOp,
-    physics_tool::PhysicsActivateOp,
     pie::PieWindowModeToggleOp,
     pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
     snapping::SnapSettings,
@@ -441,11 +440,23 @@ fn toolbar_tools() -> impl Scene {
             toolbar_op_button(EditModeEdgeOp::ID, Icon::GitCommitHorizontal),
             toolbar_op_button(EditModeFaceOp::ID, Icon::Hexagon),
             toolbar_op_button(EditModeClipOp::ID, Icon::ScissorsLineDashed),
-            toolbar_separator(),
-            toolbar_op_button(PhysicsActivateOp::ID, Icon::Zap),
+            {physics_tool_buttons()}
         ]
     }
 }
+
+/// The physics tool's toolbar group.
+#[cfg(feature = "physics")]
+fn physics_tool_buttons() -> impl SceneList {
+    bsn_list![
+        toolbar_separator(),
+        toolbar_op_button(crate::physics_tool::PhysicsActivateOp::ID, Icon::Zap),
+    ]
+}
+
+/// Nothing: the editor was built without physics.
+#[cfg(not(feature = "physics"))]
+fn physics_tool_buttons() -> impl SceneList {}
 
 /// Font size for the toolbar's icon glyphs.
 const TOOLBAR_ICON_PX: f32 = 16.0;
@@ -689,6 +700,16 @@ fn scene_view() -> impl Bundle {
     )
 }
 
+#[cfg(feature = "physics")]
+fn is_physics_tool_op(id: &str) -> bool {
+    id == crate::physics_tool::PhysicsActivateOp::ID
+}
+
+#[cfg(not(feature = "physics"))]
+fn is_physics_tool_op(_id: &str) -> bool {
+    false
+}
+
 /// Operator ids the main viewport toolbar owns. The terrain contextual
 /// toolbar spawns the same `ButtonOperatorCall` and `ButtonVariant`
 /// component pair and drives its own highlighter, so
@@ -708,7 +729,7 @@ fn is_main_toolbar_op(id: &str) -> bool {
         || id == EditModeFaceOp::ID
         || id == EditModeClipOp::ID
         || id == EditModeKnifeOp::ID
-        || id == PhysicsActivateOp::ID
+        || is_physics_tool_op(id)
         || id == GridToggleSnapOp::ID
 }
 
@@ -770,7 +791,7 @@ pub fn update_toolbar_button_variants(
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
         } else if id == EditModeKnifeOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Knife)
-        } else if id == PhysicsActivateOp::ID {
+        } else if is_physics_tool_op(id) {
             *edit_mode == EditMode::Physics
         } else if id == GridToggleSnapOp::ID {
             snap.translate_snap

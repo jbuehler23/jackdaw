@@ -1,17 +1,81 @@
-//! Command + helper backing for the `physics.enable` / `physics.disable`
-//! operators. The dedicated Physics inspector section was removed in
+//! The `physics.enable` / `physics.disable` operators and the commands
+//! backing them. The dedicated Physics inspector section was removed in
 //! favour of letting users add `RigidBody`, `AvianCollider`, and friends
 //! through the standard component picker; the operators stay so the
 //! command palette can still toggle the canonical bundle in one shot.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use jackdaw_api::prelude::*;
 use jackdaw_avian_integration::AvianCollider;
 
+use super::ops::has_primary_selection;
 use crate::commands::{AddComponent, CommandGroup, CommandHistory, EditorCommand};
 
 pub(crate) const RIGID_BODY_TYPE_PATH: &str = "avian3d::dynamics::rigid_body::RigidBody";
 pub(crate) const AVIAN_COLLIDER_TYPE_PATH: &str = "jackdaw_avian_integration::AvianCollider";
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<PhysicsEnableOp>()
+        .register_operator::<PhysicsDisableOp>();
+}
+
+/// Add a static `RigidBody` and an `AvianCollider` to the entity so it
+/// participates in the physics simulation. No-op if those components are
+/// already present.
+#[operator(
+    id = "physics.enable",
+    label = "Enable Physics",
+    description = "Make the selected entity participate in the physics simulation.",
+    is_available = has_primary_selection,
+    params(entity(Entity, doc = "Entity to make physical.")),
+)]
+pub(crate) fn physics_enable(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> Option<OperatorResult> {
+    let entity = params.as_entity("entity")?;
+    commands.queue(move |world: &mut World| {
+        enable_physics(world, entity);
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(super::InspectorDirty);
+        }
+    });
+    Some(OperatorResult::Finished)
+}
+
+/// Remove physics components from the entity, capturing the pre-disable
+/// state so undo restores them.
+#[operator(
+    id = "physics.disable",
+    label = "Disable Physics",
+    description = "Stop the selected entity from participating in the physics simulation.",
+    is_available = has_primary_selection,
+    params(entity(Entity, doc = "Entity to make non-physical.")),
+)]
+pub(crate) fn physics_disable(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> Option<OperatorResult> {
+    let entity = params.as_entity("entity")?;
+    commands.queue(move |world: &mut World| {
+        // A running preview owns the components its evaluator writes.
+        if let Some(owned) = preview_owned_physics(world, entity) {
+            warn!(
+                "{}: `{owned}` on {entity}",
+                crate::preview_context::PREVIEW_EDIT_REFUSED
+            );
+            return;
+        }
+        let mut cmd: Box<dyn EditorCommand> = Box::new(DisablePhysics::from_world(world, entity));
+        cmd.execute(world);
+        world.resource_mut::<CommandHistory>().push_executed(cmd);
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(super::InspectorDirty);
+        }
+    });
+    Some(OperatorResult::Finished)
+}
 
 /// Command that disables physics on an entity. Captures authored physics
 /// patches (`RigidBody`, `AvianCollider`, and any other avian overrides the

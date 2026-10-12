@@ -1,13 +1,12 @@
 //! Inspector operators: per-component buttons (add / remove / revert)
-//! and the small set of typed actions (`physics.enable` / `physics.disable`,
-//! `animation.toggle_keyframe`).
+//! and the small set of typed actions such as `animation.toggle_keyframe`.
+//! The physics actions live in `physics_display`.
 
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 
-use super::physics_display::{DisablePhysics, enable_physics};
 use super::prefab_field_dots::revert_component_to_baseline;
 use crate::commands::{
     AddComponent, AddProjectComponent, CommandHistory, EditorCommand, RemoveComponent,
@@ -20,8 +19,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ComponentAddOp>()
         .register_operator::<ComponentRemoveOp>()
         .register_operator::<ComponentRevertBaselineOp>()
-        .register_operator::<PhysicsEnableOp>()
-        .register_operator::<PhysicsDisableOp>()
         .register_operator::<AnimationToggleKeyframeOp>()
         .register_operator::<FieldSetOp>()
         .register_operator::<super::bindings_card::BindingAddOp>()
@@ -434,63 +431,6 @@ pub(crate) fn component_revert_baseline(
             world.run_system_cached_with(revert_component_to_baseline, (entity, component_id))
         {
             error!("revert_component_to_baseline failed: {err}");
-        }
-    });
-    Some(OperatorResult::Finished)
-}
-
-/// Add a static `RigidBody` and an `AvianCollider` to the entity so it
-/// participates in the physics simulation. No-op if those components are
-/// already present.
-#[operator(
-    id = "physics.enable",
-    label = "Enable Physics",
-    description = "Make the selected entity participate in the physics simulation.",
-    is_available = has_primary_selection,
-    params(entity(Entity, doc = "Entity to make physical.")),
-)]
-pub(crate) fn physics_enable(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> Option<OperatorResult> {
-    let entity = params.as_entity("entity")?;
-    commands.queue(move |world: &mut World| {
-        enable_physics(world, entity);
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.insert(super::InspectorDirty);
-        }
-    });
-    Some(OperatorResult::Finished)
-}
-
-/// Remove physics components from the entity, capturing the pre-disable
-/// state so undo restores them.
-#[operator(
-    id = "physics.disable",
-    label = "Disable Physics",
-    description = "Stop the selected entity from participating in the physics simulation.",
-    is_available = has_primary_selection,
-    params(entity(Entity, doc = "Entity to make non-physical.")),
-)]
-pub(crate) fn physics_disable(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> Option<OperatorResult> {
-    let entity = params.as_entity("entity")?;
-    commands.queue(move |world: &mut World| {
-        // A running preview owns the components its evaluator writes.
-        if let Some(owned) = super::physics_display::preview_owned_physics(world, entity) {
-            warn!(
-                "{}: `{owned}` on {entity}",
-                crate::preview_context::PREVIEW_EDIT_REFUSED
-            );
-            return;
-        }
-        let mut cmd: Box<dyn EditorCommand> = Box::new(DisablePhysics::from_world(world, entity));
-        cmd.execute(world);
-        world.resource_mut::<CommandHistory>().push_executed(cmd);
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.insert(super::InspectorDirty);
         }
     });
     Some(OperatorResult::Finished)

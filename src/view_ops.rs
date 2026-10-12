@@ -29,8 +29,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewToggleBrushWireframeOp>()
         .register_operator::<ViewToggleBrushOutlineOp>()
         .register_operator::<ViewToggleAlignmentGuidesOp>()
-        .register_operator::<ViewToggleColliderGizmosOp>()
-        .register_operator::<ViewToggleHierarchyArrowsOp>()
         .register_operator::<ViewToggleGridOp>()
         .register_operator::<ViewToggleIconsOp>()
         .register_operator::<ViewModeOp>()
@@ -44,6 +42,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewUiZoomInOp>()
         .register_operator::<ViewUiZoomOutOp>()
         .register_operator::<ViewUiZoomResetOp>();
+    #[cfg(feature = "physics")]
+    ctx.register_operator::<ViewToggleColliderGizmosOp>()
+        .register_operator::<ViewToggleHierarchyArrowsOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, ViewToggleWireframeOp>([PresetInput::key(
         "KeyW",
@@ -180,6 +181,7 @@ pub(crate) fn view_toggle_alignment_guides(
     OperatorResult::Finished
 }
 
+#[cfg(feature = "physics")]
 #[operator(
     id = "view.toggle_collider_gizmos",
     label = "Toggle Collider Gizmos",
@@ -193,6 +195,7 @@ pub(crate) fn view_toggle_collider_gizmos(
     OperatorResult::Finished
 }
 
+#[cfg(feature = "physics")]
 #[operator(
     id = "view.toggle_hierarchy_arrows",
     label = "Toggle Hierarchy Arrows",

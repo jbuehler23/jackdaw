@@ -1,8 +1,12 @@
+#[cfg(feature = "physics")]
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+#[cfg(feature = "physics")]
 use jackdaw_avian_integration::AvianCollider;
+#[cfg(feature = "physics")]
+use jackdaw_feathers::button::ButtonVariant;
 use jackdaw_feathers::{
-    button::{ButtonOperatorCall, ButtonProps, ButtonSize, ButtonVariant, button},
+    button::{ButtonOperatorCall, ButtonProps, ButtonSize, button},
     combobox::{ComboBoxChangeEvent, ComboBoxOptionData, combobox_with_selected},
     tokens,
 };
@@ -48,8 +52,8 @@ pub(crate) fn rebuild_add_header(
     material_registry: Option<Res<MaterialRegistry>>,
     mounts: Query<(Entity, Option<&Children>), With<InspectorAddHeaderMount>>,
     added_mounts: Query<(), Added<InspectorAddHeaderMount>>,
-    has_rb: Query<Has<RigidBody>>,
-    has_ac: Query<Has<AvianCollider>>,
+    #[cfg(feature = "physics")] has_rb: Query<Has<RigidBody>>,
+    #[cfg(feature = "physics")] has_ac: Query<Has<AvianCollider>>,
     added_cards: Query<(), Added<super::ComponentDisplay>>,
     mut removed_cards: RemovedComponents<super::ComponentDisplay>,
     mut commands: Commands,
@@ -65,7 +69,10 @@ pub(crate) fn rebuild_add_header(
         return;
     }
 
+    #[cfg(feature = "physics")]
     let (rb, ac) = physics_presence(&selection, &has_rb, &has_ac);
+    #[cfg(not(feature = "physics"))]
+    let (rb, ac) = (false, false);
 
     for (host, children) in &mounts {
         if let Some(children) = children {
@@ -83,6 +90,7 @@ pub(crate) fn rebuild_add_header(
 }
 
 /// Return `(has_rigid_body, has_avian_collider)` for the primary selected entity.
+#[cfg(feature = "physics")]
 fn physics_presence(
     selection: &Selection,
     has_rb: &Query<Has<RigidBody>>,
@@ -97,6 +105,10 @@ fn physics_presence(
 }
 
 /// Spawn the appropriate add-UI children under `host` for `category`.
+#[cfg_attr(
+    not(feature = "physics"),
+    expect(unused_variables, reason = "only the physics header reads presence")
+)]
 fn build_add_header_children(
     commands: &mut Commands,
     host: Entity,
@@ -112,6 +124,7 @@ fn build_add_header_children(
                 ChildOf(host),
             ));
         }
+        #[cfg(feature = "physics")]
         "physics" => {
             // A two-button row: Rigid Body and Collider.
             // Each button shows its active/remove state when the component is
@@ -166,6 +179,7 @@ fn build_add_header_children(
 /// a trailing X label; clicking dispatches `component.remove`. When `present`
 /// is false it renders as a plain default button and clicking dispatches
 /// `component.add`.
+#[cfg(feature = "physics")]
 fn spawn_physics_chip(
     commands: &mut Commands,
     row: Entity,
@@ -205,6 +219,7 @@ fn spawn_physics_chip(
 /// Marker on a physics chip button. Carries the `type_path` and presence flag
 /// so the click observer can forward the right operator without holding a
 /// stale entity capture.
+#[cfg(feature = "physics")]
 #[derive(Component)]
 pub(crate) struct PhysicsChipButton {
     pub(crate) type_path: &'static str,
@@ -214,6 +229,7 @@ pub(crate) struct PhysicsChipButton {
 /// Observer wired by `InspectorPlugin`: intercepts `ButtonClickEvent` on any
 /// `PhysicsChipButton` and dispatches `component.add` or `component.remove`
 /// against the current primary selection.
+#[cfg(feature = "physics")]
 pub(crate) fn on_physics_chip_click(
     event: On<jackdaw_feathers::button::ButtonClickEvent>,
     chips: Query<&PhysicsChipButton>,

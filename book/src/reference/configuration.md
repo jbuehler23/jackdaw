@@ -137,7 +137,14 @@ These are features of the `jackdaw` crate itself, relevant if you
 build the editor from source. Projects have no jackdaw-related
 features.
 
-- `default = ["multiplayer", "camera_rig", "embed-recipe"]`.
+- `default = ["multiplayer", "camera_rig", "embed-recipe", "physics", "navmesh"]`.
+- `physics`. Avian physics authoring: the physics tool, brush
+  colliders, the physics inspector, collider overlays and the
+  simulation preview. Without it, a scene's physics components are
+  kept and saved as they are.
+- `navmesh`. The terrain navmesh bake. Implies `physics`. Without
+  it, a navmesh already baked beside a scene is still loaded, drawn
+  and saved with the scene.
 - `multiplayer`. Bundles the editor-only networking authoring
   extension. The editor writes replication metadata; no lightyear
   is compiled into it.

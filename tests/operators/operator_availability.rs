@@ -17,7 +17,9 @@ const HAS_PRIMARY_SELECTION_OPS: &[&str] = &[
     "component.add",
     "component.remove",
     "component.revert_baseline",
+    #[cfg(feature = "physics")]
     "physics.enable",
+    #[cfg(feature = "physics")]
     "physics.disable",
     "animation.toggle_keyframe",
     "field.set",

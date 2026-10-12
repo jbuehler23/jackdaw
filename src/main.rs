@@ -172,6 +172,7 @@ fn main() -> AppExit {
         // assert presence, so user `MyGamePlugin`s can add the
         // same plugins without conflict.
         .add_plugins(bevy_enhanced_input::prelude::EnhancedInputPlugin);
+    #[cfg(feature = "physics")]
     if std::env::var_os("JD_PERF_NO_PHYSICS").is_none() {
         app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     }

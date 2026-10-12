@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use jackdaw::preview_context;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
+#[cfg(feature = "physics")]
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_bind::{BindPath, Binding, Bindings};
 use jackdaw_scene_types::UiSceneRoot;
@@ -103,6 +104,7 @@ fn a_previewed_component_cannot_be_removed_until_the_session_ends() {
 
 /// A widget in the same scene whose binding drives its collider, carrying
 /// the physics pair `physics.disable` would take off. Returns that entity.
+#[cfg(feature = "physics")]
 fn scene_with_a_bound_collider() -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.register_type::<Vitals>();
@@ -133,6 +135,7 @@ fn scene_with_a_bound_collider() -> (App, Entity) {
     (app, solid)
 }
 
+#[cfg(feature = "physics")]
 fn disable_physics(app: &mut App, entity: Entity) {
     let outcome = app
         .world_mut()
@@ -152,6 +155,7 @@ fn disable_physics(app: &mut App, entity: Entity) {
 }
 
 /// Both halves again, for the disable.
+#[cfg(feature = "physics")]
 #[test]
 fn previewed_physics_cannot_be_disabled_until_the_session_ends() {
     let (mut app, solid) = scene_with_a_bound_collider();

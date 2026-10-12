@@ -108,7 +108,9 @@ pub mod new_project;
 pub mod numeric_transform;
 pub mod operator_tooltip;
 pub mod perf_probe;
+#[cfg(feature = "physics")]
 pub mod physics_brush_bridge;
+#[cfg(feature = "physics")]
 pub mod physics_tool;
 pub mod pie;
 pub mod pie_menu;
@@ -223,6 +225,7 @@ pub mod prelude {
     // without direct deps on avian3d / bevy_enhanced_input.
     // Editor plugins assert presence rather than adding, so user
     // code can add the same plugins without conflict.
+    #[cfg(feature = "physics")]
     pub use avian3d::prelude::PhysicsPlugins;
     pub use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 }
@@ -527,12 +530,6 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(perf_probe::plugin)
         .add_systems(Update, view_ops::drive_dolly)
         .add_systems(Last, view_ops::track_pointer_focus)
-        .add_plugins(jackdaw_avian_integration::PhysicsOverlaysPlugin::<
-            selection::Selected,
-        >::new())
-        .add_plugins(jackdaw_avian_integration::simulation::PhysicsSimulationPlugin)
-        .add_plugins(physics_brush_bridge::PhysicsBrushBridgePlugin)
-        .add_plugins(physics_tool::PhysicsToolPlugin)
         .add_plugins(operator_tooltip::OperatorTooltipPlugin)
         .add_plugins(jackdaw_node_graph::NodeGraphPlugin)
         .add_plugins(jackdaw_animation::AnimationPlugin)
@@ -656,6 +653,13 @@ impl Plugin for EditorCorePlugin {
         .add_observer(on_duration_input_commit)
         .add_observer(on_timeline_keyframe_click);
 
+        #[cfg(feature = "physics")]
+        app.add_plugins((
+            jackdaw_avian_integration::PhysicsOverlaysPlugin::<selection::Selected>::new(),
+            jackdaw_avian_integration::simulation::PhysicsSimulationPlugin,
+            physics_brush_bridge::PhysicsBrushBridgePlugin,
+            physics_tool::PhysicsToolPlugin,
+        ));
         app.add_plugins(extension_lifecycle::plugin);
     }
 }
@@ -2166,6 +2170,21 @@ fn drop_imported_clip_entities(
 }
 
 /// The View menu's viewport camera rows: field of view and far clip presets, and looking through a scene camera.
+/// The View menu's physics overlay toggles.
+#[cfg(feature = "physics")]
+fn physics_view_rows() -> Vec<(String, String)> {
+    vec![
+        op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
+        op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
+    ]
+}
+
+/// No physics overlays: the editor was built without physics.
+#[cfg(not(feature = "physics"))]
+fn physics_view_rows() -> Vec<(String, String)> {
+    Vec::new()
+}
+
 fn viewport_lens_rows(lens: &camera_settings::CameraPreferences) -> Vec<(String, String)> {
     let id = camera_settings::ViewportCameraOp::ID;
     let fov = [30.0_f32, 45.0, 60.0, 75.0, 90.0].map(|degrees| {
@@ -2372,8 +2391,9 @@ fn populate_menu(
                     op_entry::<view_ops::ViewToggleBrushWireframeOp>("Toggle Brush Wireframe"),
                     op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
                     op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
-                    op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
-                    op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
+                ],
+                physics_view_rows(),
+                vec![
                     op_entry::<lod_group::ViewCycleForcedLodOp>("Cycle Forced LOD"),
                     op_entry::<lod_bar::ViewToggleLodColorsOp>("Toggle LOD Colors"),
                     op_entry::<view_ops::ViewTogglePerspOrthoOp>(

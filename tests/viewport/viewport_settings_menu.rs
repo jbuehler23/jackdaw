@@ -424,6 +424,7 @@ fn a_wide_viewport_shows_every_tool_and_no_overflow_menu() {
 }
 
 /// Hold the toolbar to `width`, as a viewport docked that narrow holds it.
+#[cfg(feature = "physics")]
 fn narrow_the_toolbar(app: &mut App, width: f32) {
     let mut toolbars = app
         .world_mut()
@@ -435,6 +436,7 @@ fn narrow_the_toolbar(app: &mut App, width: f32) {
     settle(app);
 }
 
+#[cfg(feature = "physics")]
 #[test]
 fn a_narrow_viewport_lists_the_cut_tools_in_the_overflow_menu() {
     let dir = tempfile::tempdir().unwrap();

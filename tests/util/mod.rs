@@ -99,10 +99,9 @@ fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
     // `editor.rs.template`). Mirror that here so the editor's
     // internal `debug_assert!`s for `PhysicsSchedulePlugin` and
     // `EnhancedInputPlugin` find what they expect.
-    .add_plugins((
-        avian3d::prelude::PhysicsPlugins::default(),
-        bevy_enhanced_input::prelude::EnhancedInputPlugin,
-    ));
+    .add_plugins(bevy_enhanced_input::prelude::EnhancedInputPlugin);
+    #[cfg(feature = "physics")]
+    app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app
 }
 

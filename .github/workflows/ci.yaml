@@ -451,6 +451,11 @@ jobs:
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
 
+      # The default features minus `physics` and `navmesh`, so the gate on
+      # those features keeps compiling.
+      - name: Run clippy lints without physics
+        run: cargo clippy --locked -p jackdaw --no-default-features --features multiplayer,camera_rig,embed-recipe --lib --bins -- --deny warnings
+
       - name: Check the BSN parser matches its grammar
         run: cargo xtask bsn-parser --check
 

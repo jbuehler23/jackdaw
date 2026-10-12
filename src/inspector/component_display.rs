@@ -32,7 +32,9 @@ use std::collections::HashSet;
 
 use jackdaw_widgets::monitors::{Addition, Monitor, NotifyAdded};
 
+#[cfg(feature = "physics")]
 use jackdaw_avian_integration::AvianCollider;
+#[cfg(feature = "physics")]
 use jackdaw_geometry::is_convex_topology;
 
 use super::{
@@ -706,6 +708,7 @@ pub(crate) fn build_inspector_displays(
                     // forces TriMesh regardless of the user's AvianCollider setting. Show a
                     // read-only note so the change is visible in the inspector.
                     // CONVEX_FUNCTIONAL: different behavior is intentional (mirrors collider-type choice in physics_brush_bridge)
+                    #[cfg(feature = "physics")]
                     if entity_ref.contains::<AvianCollider>()
                         && let Some(brush) = entity_ref.get::<crate::brush::Brush>()
                         && !is_convex_topology(&brush.topology)

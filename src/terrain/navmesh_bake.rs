@@ -9,28 +9,45 @@
 //!
 //! The artifact records a hash of the world it was baked from, and the
 //! options bar reports when the two disagree.
+//!
+//! The bake itself is the `navmesh` feature. Without it a baked artifact is
+//! still read, drawn and carried along with its scene, but not rebaked.
 
 use std::path::PathBuf;
+#[cfg(feature = "navmesh")]
 use std::time::Instant;
 
+#[cfg(feature = "navmesh")]
 use bevy::camera::primitives::{Aabb, MeshAabb as _};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+#[cfg(feature = "navmesh")]
 use bevy::math::Affine3A;
+#[cfg(feature = "navmesh")]
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
+#[cfg(feature = "navmesh")]
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use jackdaw_api::prelude::*;
+#[cfg(feature = "navmesh")]
 use jackdaw_scene_types::model_parts::{FlatModel, ModelParts, source_path};
+#[cfg(feature = "navmesh")]
 use jackdaw_scene_types::{GltfSource, LodGroup};
-use jackdaw_terrain::navmesh::{self, BakeParams, NavPolygon, NavmeshArtifact};
+use jackdaw_terrain::navmesh::{self, NavmeshArtifact};
+#[cfg(feature = "navmesh")]
+use jackdaw_terrain::navmesh::{BakeParams, NavPolygon};
+#[cfg(feature = "navmesh")]
 use rerecast::{
     Aabb3d, AreaType, ConfigBuilder, DetailNavmesh, HeightfieldBuilder, PolygonNavmesh, TriMesh,
 };
 
-use super::{TerrainDataStore, TerrainSurface};
+use super::TerrainDataStore;
+#[cfg(feature = "navmesh")]
+use super::TerrainSurface;
 use crate::EditorEntity;
 use crate::default_style;
+#[cfg(feature = "navmesh")]
 use crate::scene_io::SceneFilePath;
+#[cfg(feature = "navmesh")]
 use crate::selection::Selection;
 
 pub(super) fn plugin(app: &mut App) {
@@ -38,7 +55,9 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
+                #[cfg(feature = "navmesh")]
                 poll_running_bake.run_if(resource_exists::<RunningBake>),
+                #[cfg(feature = "navmesh")]
                 refresh_staleness,
                 sync_navmesh_overlay,
             )
@@ -49,8 +68,9 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<TerrainNavmeshBakeOp>()
-        .register_operator::<TerrainNavmeshToggleOverlayOp>();
+    ctx.register_operator::<TerrainNavmeshToggleOverlayOp>();
+    #[cfg(feature = "navmesh")]
+    ctx.register_operator::<TerrainNavmeshBakeOp>();
 }
 
 // --- State ---
@@ -118,6 +138,7 @@ impl Default for TerrainNavmeshState {
 ///
 /// The voxel is derived from the terrain's own cell, then coarsened inside
 /// the bake to fit the grid budget.
+#[cfg(feature = "navmesh")]
 pub(crate) fn bake_params(terrain: &jackdaw_scene_types::Terrain) -> BakeParams {
     BakeParams {
         agent_radius: terrain.navmesh.agent_radius,
@@ -160,6 +181,7 @@ pub(crate) fn commit_navmesh(
 #[derive(Default)]
 pub struct TabNavmesh {
     pub state: TerrainNavmeshState,
+    #[cfg(feature = "navmesh")]
     running: Option<RunningBake>,
 }
 
@@ -167,8 +189,15 @@ pub struct TabNavmesh {
 ///
 /// The bake is a background task, so an operator that starts one returns
 /// before there is a navmesh.
+#[cfg(feature = "navmesh")]
 pub(crate) fn bake_in_flight(world: &World) -> bool {
     world.contains_resource::<RunningBake>()
+}
+
+/// No bake runs in an editor built without the navmesh bake.
+#[cfg(not(feature = "navmesh"))]
+pub(crate) fn bake_in_flight(_world: &World) -> bool {
+    false
 }
 
 /// Moves the active tab's navmesh out of the world and onto its tab.
@@ -177,8 +206,11 @@ pub(crate) fn take_from_world(world: &mut World) -> Option<TabNavmesh> {
     // one coming in; `sync_navmesh_overlay` rebuilds it next frame.
     despawn_overlay(world);
     let state = std::mem::take(&mut *world.get_resource_mut::<TerrainNavmeshState>()?);
-    let running = world.remove_resource::<RunningBake>();
-    Some(TabNavmesh { state, running })
+    Some(TabNavmesh {
+        state,
+        #[cfg(feature = "navmesh")]
+        running: world.remove_resource::<RunningBake>(),
+    })
 }
 
 /// Installs a tab's navmesh as the live one. The counterpart of
@@ -188,6 +220,7 @@ pub(crate) fn install_in_world(world: &mut World, tab: TabNavmesh) {
         return;
     }
     *world.resource_mut::<TerrainNavmeshState>() = tab.state;
+    #[cfg(feature = "navmesh")]
     match tab.running {
         Some(running) => world.insert_resource(running),
         None => {
@@ -214,6 +247,7 @@ pub(crate) fn forget_scene_navmesh(world: &mut World) {
             ..TerrainNavmeshState::default()
         };
     }
+    #[cfg(feature = "navmesh")]
     world.remove_resource::<RunningBake>();
 }
 
@@ -255,6 +289,7 @@ pub enum BakeStatus {
 
 /// The running bake. Its presence makes a second Bake click a no-op rather than
 /// a second bake of the same ground.
+#[cfg(feature = "navmesh")]
 #[derive(Resource)]
 struct RunningBake {
     handle: Task<Result<NavmeshArtifact, String>>,
@@ -271,7 +306,11 @@ struct RunningBake {
 /// The poll only runs in `Editor`, so a bake left running across the exit
 /// would keep the resource alive and every later Bake click would be
 /// cancelled as a duplicate.
-fn drop_running_bake(mut commands: Commands, mut state: ResMut<TerrainNavmeshState>) {
+fn drop_running_bake(
+    #[cfg(feature = "navmesh")] mut commands: Commands,
+    mut state: ResMut<TerrainNavmeshState>,
+) {
+    #[cfg(feature = "navmesh")]
     commands.remove_resource::<RunningBake>();
     if state.status == BakeStatus::Baking {
         state.status = BakeStatus::Idle;
@@ -285,6 +324,7 @@ fn drop_running_bake(mut commands: Commands, mut state: ResMut<TerrainNavmeshSta
 ///
 /// `allows_undo = false`: the result is a file beside the scene and a viewport
 /// overlay, neither of which is scene state an undo could restore.
+#[cfg(feature = "navmesh")]
 #[operator(
     id = "terrain.navmesh.bake",
     label = "Bake Navmesh",
@@ -429,6 +469,7 @@ pub(crate) fn terrain_navmesh_toggle_overlay(
 /// obstacles: they are rasterized into the same heightfield the ground is.
 /// Left out are a body the simulation moves, a mesh hidden in the viewport,
 /// and a trigger volume nothing collides with.
+#[cfg(feature = "navmesh")]
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneGeometry<'w, 's> {
     meshes: Query<
@@ -493,6 +534,7 @@ pub(crate) struct SceneGeometry<'w, 's> {
     models: Option<Res<'w, ModelParts>>,
 }
 
+#[cfg(feature = "navmesh")]
 impl SceneGeometry<'_, '_> {
     /// Every mesh a bake could rasterize, before anything the author has
     /// excluded is dropped.
@@ -755,6 +797,7 @@ impl SceneGeometry<'_, '_> {
 /// What the scene contributed to a bake, and what it did not.
 ///
 /// Travels with the input so a bake that fails can say what it was over.
+#[cfg(feature = "navmesh")]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct GeometryTally {
     included: usize,
@@ -767,6 +810,7 @@ struct GeometryTally {
     threshold: f32,
 }
 
+#[cfg(feature = "navmesh")]
 impl GeometryTally {
     /// A refusal from the baker, named against the geometry behind it.
     fn explain(&self, reason: String) -> String {
@@ -794,6 +838,7 @@ impl GeometryTally {
 /// The box is transformed by its corners rather than by its extents: a rotated
 /// placement turns a thin plank into a box no axis-aligned scaling of the
 /// original describes.
+#[cfg(feature = "navmesh")]
 fn placed_extent(mesh: &Mesh, placement: Affine3A) -> Option<Vec3> {
     let aabb = mesh.compute_aabb()?;
     let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
@@ -815,6 +860,7 @@ fn placed_extent(mesh: &Mesh, placement: Affine3A) -> Option<Vec3> {
 // root.
 /// A triangle-list mesh as the baker's input, every triangle unwalkable until
 /// the bake marks it, or `None` for any other topology.
+#[cfg(feature = "navmesh")]
 fn trimesh_from_mesh(mesh: &Mesh) -> Option<TriMesh> {
     if mesh.primitive_topology() != PrimitiveTopology::TriangleList {
         return None;
@@ -842,6 +888,7 @@ fn trimesh_from_mesh(mesh: &Mesh) -> Option<TriMesh> {
 /// The affine is applied to the vertices directly rather than through a
 /// `Transform`: a `GlobalTransform` under a non-uniform parent scale carries
 /// shear that no translation-rotation-scale can express.
+#[cfg(feature = "navmesh")]
 fn placed_trimesh(mesh: &Mesh, placement: Affine3A) -> Option<TriMesh> {
     let mut tri = trimesh_from_mesh(mesh)?;
     for vertex in &mut tri.vertices {
@@ -861,6 +908,7 @@ fn placed_trimesh(mesh: &Mesh, placement: Affine3A) -> Option<TriMesh> {
 ///
 /// Split from `world_source_hash` because this half needs the world and the
 /// other walks megabytes of heights inside the bake.
+#[cfg(feature = "navmesh")]
 fn geometry_hashes(placements: impl Iterator<Item = (Affine3A, u32, u32)>) -> Vec<u64> {
     placements
         .map(|(placement, vertices, triangles)| {
@@ -878,6 +926,7 @@ fn geometry_hashes(placements: impl Iterator<Item = (Affine3A, u32, u32)>) -> Ve
 /// stood. The shape it eats is the cell size and the cells the terrain
 /// stores, not a declared rectangle. The stored scatter goes in too, a
 /// placement being an obstacle the bake routes round.
+#[cfg(feature = "navmesh")]
 fn world_source_hash(
     cell: Vec2,
     extent: (u32, u32),
@@ -899,6 +948,7 @@ fn world_source_hash(
 ///
 /// The voxel is not compared: it is derived from the terrain's own cell and its
 /// extent, both of which the source hash covers.
+#[cfg(feature = "navmesh")]
 fn params_match(baked: BakeParams, now: BakeParams) -> bool {
     baked.agent_radius == now.agent_radius
         && baked.agent_height == now.agent_height
@@ -909,6 +959,7 @@ fn params_match(baked: BakeParams, now: BakeParams) -> bool {
 /// A body that moves is not ground: baking it would freeze one frame of a
 /// simulation into the navmesh. A collider with no body is static, like an
 /// unsimulated scene mesh.
+#[cfg(feature = "navmesh")]
 fn moves(body: Option<&avian3d::prelude::RigidBody>) -> bool {
     matches!(
         body,
@@ -923,6 +974,7 @@ fn moves(body: Option<&avian3d::prelude::RigidBody>) -> bool {
 /// Zero means filter nothing, which is what a scene saved before the field
 /// existed elides to; a number that is not a size reads as zero too.
 /// as zero too.
+#[cfg(feature = "navmesh")]
 fn min_obstacle(terrain: &jackdaw_scene_types::Terrain, params: BakeParams) -> f32 {
     let authored = terrain.navmesh.min_obstacle_size;
     if authored.is_finite() && authored > 0.0 {
@@ -937,6 +989,7 @@ fn min_obstacle(terrain: &jackdaw_scene_types::Terrain, params: BakeParams) -> f
 ///
 /// Deliberately a blocking guess. The alternative is a navmesh that walks
 /// straight through a forest and says nothing about it.
+#[cfg(feature = "navmesh")]
 const UNRESOLVED_OBSTACLE: Vec3 = Vec3::new(0.5, 2.0, 0.5);
 
 /// Box colliders for the stored placements a bake has to route round.
@@ -949,6 +1002,7 @@ const UNRESOLVED_OBSTACLE: Vec3 = Vec3::new(0.5, 2.0, 0.5);
 /// Two things keep a placement out: a palette entry that says it does not
 /// block agents, and an asset too small to rasterize. Returns the boxes, how
 /// many were skipped as too small, and how many were guessed at.
+#[cfg(feature = "navmesh")]
 fn scatter_obstacles(
     document: &jackdaw_terrain::RegionTerrainData,
     bounds_of: impl Fn(&jackdaw_terrain::ScatterPaletteEntry) -> Option<Aabb>,
@@ -996,6 +1050,7 @@ fn scatter_obstacles(
 }
 
 /// An axis-aligned box as a triangle list, placed by `world_from_local`.
+#[cfg(feature = "navmesh")]
 fn box_trimesh(world_from_local: Affine3A, centre: Vec3, half: Vec3) -> TriMesh {
     let vertices = (0..8u32)
         .map(|corner| {
@@ -1033,10 +1088,12 @@ fn box_trimesh(world_from_local: Affine3A, centre: Vec3, half: Vec3) -> TriMesh 
 
 /// World size of one of this terrain's cells: the authored cell size, not one
 /// derived from a rectangle.
+#[cfg(feature = "navmesh")]
 fn terrain_cell(terrain: &jackdaw_scene_types::Terrain) -> Vec2 {
     Vec2::splat(terrain.cell_size)
 }
 
+#[cfg(feature = "navmesh")]
 fn to_trimesh(surface: &jackdaw_terrain::SurfaceMesh, placement: Affine3A) -> TriMesh {
     TriMesh {
         vertices: surface
@@ -1059,6 +1116,7 @@ fn to_trimesh(surface: &jackdaw_terrain::SurfaceMesh, placement: Affine3A) -> Tr
 /// it happens inside the bake task. Gathered here is only what cannot leave
 /// the main thread: the stored ground, the terrain's shape, and the scene's
 /// meshes as the baker reads them.
+#[cfg(feature = "navmesh")]
 struct BakeInput {
     /// Local-space position of the grid's first vertex.
     origin: Vec2,
@@ -1085,6 +1143,7 @@ struct BakeInput {
 /// The voxel is sized against the assembled bounds, not the terrain's: with
 /// a prop past its edge or a scale on its transform the terrain's footprint
 /// is the smaller box, and the baker rasterizes the box it is handed.
+#[cfg(feature = "navmesh")]
 fn bake(input: BakeInput) -> Result<NavmeshArtifact, String> {
     let BakeInput {
         regions,
@@ -1116,6 +1175,7 @@ fn bake(input: BakeInput) -> Result<NavmeshArtifact, String> {
 }
 
 /// The whole rasterize-to-polygons pipeline over an assembled input.
+#[cfg(feature = "navmesh")]
 fn rasterize(
     mut input: TriMesh,
     params: BakeParams,
@@ -1143,6 +1203,7 @@ fn rasterize(
         .map_err(|second| format!("{first} A finer bake failed too: {second}"))
 }
 
+#[cfg(feature = "navmesh")]
 fn bake_once(
     input: &mut TriMesh,
     aabb: Aabb3d,
@@ -1242,6 +1303,7 @@ fn bake_once(
 /// own: an edge limit past 255 overflows when squared for the length test.
 /// An agent wider than the ground is caught here too, where it can be
 /// named.
+#[cfg(feature = "navmesh")]
 fn refuse_unbakeable_config(
     config: &rerecast::Config,
     params: BakeParams,
@@ -1268,6 +1330,7 @@ fn refuse_unbakeable_config(
 
 /// Turns the baker's types into the plain vertices and indices the artifact
 /// carries, so nothing downstream has to link the baker.
+#[cfg(feature = "navmesh")]
 fn to_artifact(
     polygons: &PolygonNavmesh,
     detail: &DetailNavmesh,
@@ -1366,6 +1429,7 @@ fn to_artifact(
     }
 }
 
+#[cfg(feature = "navmesh")]
 fn poll_running_bake(
     mut commands: Commands,
     mut running: ResMut<RunningBake>,
@@ -1429,6 +1493,7 @@ fn poll_running_bake(
 /// compare against. So does a scene whose meshes have not all arrived:
 /// geometry still loading hashes as geometry that is not there. The question
 /// is asked again `STALENESS_INTERVAL` later.
+#[cfg(feature = "navmesh")]
 fn staleness_against_world(
     artifact: &NavmeshArtifact,
     terrains: &Query<(&jackdaw_scene_types::Terrain, &GlobalTransform)>,
@@ -1469,8 +1534,10 @@ fn staleness_against_world(
 /// How often the world is re-hashed to see whether a bake still matches it. A
 /// sculpt stroke writes the store every frame it moves, and hashing megabytes
 /// of heights at that rate costs more than the answer is worth.
+#[cfg(feature = "navmesh")]
 const STALENESS_INTERVAL: f32 = 0.25;
 
+#[cfg(feature = "navmesh")]
 fn refresh_staleness(
     time: Res<Time>,
     mut since: Local<f32>,
@@ -1808,9 +1875,14 @@ pub(crate) fn import_beside_scene(world: &mut World, scene_path: &str) {
         }
     };
 
+    // An editor that cannot bake cannot tell what a bake would read either,
+    // so a loaded artifact is taken as it is.
+    #[cfg(feature = "navmesh")]
     let staleness = world
         .run_system_cached_with(staleness_of_loaded_world, artifact.clone())
         .unwrap_or(Staleness::Fresh);
+    #[cfg(not(feature = "navmesh"))]
+    let staleness = Staleness::Fresh;
     let mut state = world.resource_mut::<TerrainNavmeshState>();
     state.staleness = staleness;
     state.status = BakeStatus::Done;
@@ -1824,6 +1896,7 @@ pub(crate) fn import_beside_scene(world: &mut World, scene_path: &str) {
 
 /// [`staleness_against_world`] as a one-shot system, so the loader can ask it
 /// from an exclusive context.
+#[cfg(feature = "navmesh")]
 fn staleness_of_loaded_world(
     artifact: In<NavmeshArtifact>,
     terrains: Query<(&jackdaw_scene_types::Terrain, &GlobalTransform)>,
@@ -1833,7 +1906,7 @@ fn staleness_of_loaded_world(
     staleness_against_world(&artifact, &terrains, &store, &geometry)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "navmesh"))]
 mod tests {
     use super::*;
 

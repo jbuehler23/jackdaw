@@ -94,6 +94,7 @@ pub(crate) fn spawn_drawn_brush(active: &ActiveDraw, commands: &mut Commands) {
             .id();
 
         crate::scene_io::register_entity_in_ast(world, entity);
+        #[cfg(feature = "physics")]
         crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
 
         let selection = world.resource::<Selection>();

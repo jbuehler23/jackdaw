@@ -37,7 +37,8 @@ pub(crate) fn applicable_categories<'a>(
 /// has any generic component. "mesh" is shown only when a Brush card is
 /// present. "modifiers", "material", and
 /// "physics" are shown when a Brush is present OR when the category already has
-/// a card. Extension ids are shown only when they have a card.
+/// a card; an editor built without physics shows "physics" only for a card.
+/// Extension ids are shown only when they have a card.
 ///
 /// This is the canonical visibility rule shared by both the strip paint system
 /// and the sticky-category resolver so the two cannot drift apart.
@@ -53,6 +54,7 @@ pub(super) fn shown_categories<'a>(
         .filter(|id| match *id {
             "object" | "components" => true,
             "mesh" => brush_present,
+            "physics" if !cfg!(feature = "physics") => applicable.contains(id),
             "modifiers" | "material" | "physics" => brush_present || applicable.contains(id),
             _ => applicable.contains(id),
         })

@@ -3152,6 +3152,7 @@ mod bsn_doc_coherence_tests {
         app.init_resource::<crate::snapping::SnapSettings>();
         app.init_resource::<crate::view_modes::ViewModeSettings>();
         app.init_resource::<crate::viewport_overlays::OverlaySettings>();
+        #[cfg(feature = "physics")]
         app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
         app.register_type::<Name>();
         app.register_type::<Transform>();

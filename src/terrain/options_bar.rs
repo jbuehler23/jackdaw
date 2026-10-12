@@ -944,7 +944,8 @@ fn spawn_quantize_fields(
 }
 
 /// The Navmesh bar: what the agent is, the Bake action, whether the result
-/// draws, and what the last bake produced.
+/// draws, and what the last bake produced. An editor built without the
+/// `navmesh` feature has no Bake action.
 ///
 /// The agent chips are scene data on the terrain, so they commit like the
 /// quantization chips do: on release, through the document, undoable. The
@@ -1014,6 +1015,7 @@ fn spawn_navmesh_fields(
         FieldKind::Continuous,
         NavmeshField::MinObstacle,
     );
+    #[cfg(feature = "navmesh")]
     commands.spawn((
         button::button(
             ButtonProps::new("Bake Navmesh")

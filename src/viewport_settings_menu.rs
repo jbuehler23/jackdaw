@@ -15,8 +15,8 @@ use jackdaw_feathers::tokens;
 use crate::lod_bar::LodColorView;
 use crate::view_modes::{ViewMode, ViewModeSettings};
 use crate::view_ops::{
-    ViewModeOp, ViewToggleAlignmentGuidesOp, ViewToggleBoundingBoxesOp, ViewToggleColliderGizmosOp,
-    ViewToggleGridOp, ViewToggleIconsOp, ViewToggleXrayOp,
+    ViewModeOp, ViewToggleAlignmentGuidesOp, ViewToggleBoundingBoxesOp, ViewToggleGridOp,
+    ViewToggleIconsOp, ViewToggleXrayOp,
 };
 use crate::viewport_overlays::OverlaySettings;
 use crate::viewport_settings::{
@@ -164,9 +164,6 @@ fn show_rows(world: &World, settings: &ViewportSettings) -> Vec<(String, String)
         .get_resource::<OverlaySettings>()
         .cloned()
         .unwrap_or_default();
-    let colliders = world
-        .get_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>()
-        .is_some_and(|config| config.show_colliders);
     let quality = settings.quality;
     let flag = |on: bool, name: &str, label: &str| {
         checked_row(
@@ -179,7 +176,7 @@ fn show_rows(world: &World, settings: &ViewportSettings) -> Vec<(String, String)
         )
     };
     let overlay = |on: bool, id: &str, label: &str| checked_row(on, call(id, &[]), label);
-    vec![
+    let mut rows = vec![
         section("Lighting"),
         flag(quality.sun_shadows, "sun_shadows", "Sun Shadows"),
         flag(
@@ -219,13 +216,24 @@ fn show_rows(world: &World, settings: &ViewportSettings) -> Vec<(String, String)
             ViewToggleAlignmentGuidesOp::ID,
             "Alignment Guides",
         ),
-        overlay(colliders, ViewToggleColliderGizmosOp::ID, "Colliders"),
-        overlay(
-            overlays.show_icons,
-            ViewToggleIconsOp::ID,
-            "Light and Camera Icons",
-        ),
-    ]
+    ];
+    #[cfg(feature = "physics")]
+    {
+        let colliders = world
+            .get_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>()
+            .is_some_and(|config| config.show_colliders);
+        rows.push(overlay(
+            colliders,
+            crate::view_ops::ViewToggleColliderGizmosOp::ID,
+            "Colliders",
+        ));
+    }
+    rows.push(overlay(
+        overlays.show_icons,
+        ViewToggleIconsOp::ID,
+        "Light and Camera Icons",
+    ));
+    rows
 }
 
 fn quality_rows(settings: &ViewportSettings) -> Vec<(String, String)> {

@@ -41,7 +41,7 @@ default-run = "jackdaw"
 # feature here would leave the installed editor without its required
 # SDK dylib. Release builds explicitly enable `dylib` after staging the
 # matching SDK beside the editor.
-default = ["multiplayer", "camera_rig", "embed-recipe"]
+default = ["multiplayer", "camera_rig", "embed-recipe", "physics", "navmesh"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
@@ -50,6 +50,13 @@ default = ["multiplayer", "camera_rig", "embed-recipe"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
+# Avian physics authoring: the physics tool, brush colliders, the physics
+# inspector, collider overlays and the in-editor simulation preview. Scenes
+# keep their physics components without it; the editor just cannot edit them.
+physics = ["dep:avian3d", "dep:jackdaw_avian_integration"]
+# The terrain navmesh bake. Needs `physics`: the bake leaves out what the
+# simulation moves, which only avian's `RigidBody` tells it.
+navmesh = ["physics", "dep:rerecast"]
 # The SDK-backed extension flow: builds the SDK facade plus separate Bevy
 # and Jackdaw runtime dylibs. The editor and every loaded extension import
 # those same libraries so TypeIds and process-wide registries cross
@@ -107,7 +114,7 @@ jackdaw_surface.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
 jackdaw_animation_runtime.workspace = true
-jackdaw_avian_integration.workspace = true
+jackdaw_avian_integration = { workspace = true, optional = true }
 # Optional, activated by the default-on `multiplayer` feature. Together
 # these bundle the editor-only networking authoring extension (proxy
 # reflection types + the toggleable networking extension) into the
@@ -157,9 +164,9 @@ jackdaw_rustc_wrapper.workspace = true
 bevy_enhanced_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-avian3d.workspace = true
+avian3d = { workspace = true, optional = true }
 rfd.workspace = true
-rerecast.workspace = true
+rerecast = { workspace = true, optional = true }
 # Hands the BRP client thread's reply back to the task polling it.
 async-channel = "2"
 base64.workspace = true
@@ -403,6 +410,11 @@ codegen-units = 1
 # `jackdaw_rustc_wrapper` lib crate's docs (cargo translates dashes
 # to underscores), and the shim has nothing user-facing to document
 # anyway.
+# Stands a physics body on the loaded ground.
+[[example]]
+name = "load_terrain_world"
+required-features = ["physics"]
+
 [[bin]]
 name = "jackdaw-rustc-wrapper"
 path = "src/bin/jackdaw-rustc-wrapper.rs"

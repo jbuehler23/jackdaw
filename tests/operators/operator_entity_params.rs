@@ -9,8 +9,11 @@ use crate::util;
 
 use bevy::prelude::*;
 use jackdaw::commands::CommandHistory;
-use jackdaw::selection::{Selected, Selection};
+#[cfg(feature = "physics")]
+use jackdaw::selection::Selected;
+use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
+#[cfg(feature = "physics")]
 use jackdaw_avian_integration::AvianCollider;
 use jackdaw_scene_types::PropertyValue;
 
@@ -232,6 +235,7 @@ fn component_remove_with_entity_param_removes_component() {
     );
 }
 
+#[cfg(feature = "physics")]
 #[test]
 fn physics_enable_with_entity_param_attaches_components() {
     use avian3d::prelude::RigidBody;
@@ -259,6 +263,7 @@ fn physics_enable_with_entity_param_attaches_components() {
     );
 }
 
+#[cfg(feature = "physics")]
 #[test]
 fn physics_disable_with_entity_param_detaches_components() {
     use avian3d::prelude::ColliderConstructor;
@@ -298,6 +303,7 @@ fn physics_disable_with_entity_param_detaches_components() {
     );
 }
 
+#[cfg(feature = "physics")]
 #[test]
 fn add_cube_authors_static_physics_by_default() {
     use avian3d::prelude::RigidBody;
@@ -353,6 +359,7 @@ fn add_cube_authors_static_physics_by_default() {
     );
 }
 
+#[cfg(feature = "physics")]
 #[test]
 fn component_remove_drops_authored_physics_from_the_document() {
     use avian3d::prelude::RigidBody;
@@ -437,6 +444,7 @@ fn component_remove_drops_authored_physics_from_the_document() {
     );
 }
 
+#[cfg(feature = "physics")]
 #[test]
 fn component_remove_keeps_entity_identity_and_undo_restores_requires() {
     use avian3d::prelude::{Position, RigidBody};
@@ -550,7 +558,9 @@ fn entity_param_rejects_int_across_inspector_and_hierarchy_ops() {
             "component.revert_baseline",
             &[("type_path", type_path_factory)],
         ),
+        #[cfg(feature = "physics")]
         ("physics.enable", &[]),
+        #[cfg(feature = "physics")]
         ("physics.disable", &[]),
         (
             "animation.toggle_keyframe",

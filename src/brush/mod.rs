@@ -536,10 +536,12 @@ impl Plugin for BrushPlugin {
                     ApplyDeferred,
                     mesh::mark_brushes_changed_on_modifier_removal,
                     mesh::recenter_brush_origins,
+                    #[cfg(feature = "physics")]
                     crate::physics_brush_bridge::sync_avian_position_from_brush_transform,
                     ApplyDeferred,
                     mesh::regenerate_brush_meshes,
                     ApplyDeferred,
+                    #[cfg(feature = "physics")]
                     crate::physics_brush_bridge::sync_editor_collider_config,
                     mesh::ensure_brush_chunk_materials,
                 )
