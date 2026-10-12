@@ -28,6 +28,8 @@ dunce = "1.0.5"
 syn = { version = "2", features = ["full", "parsing"] }
 proc-macro2 = "1"
 toml = "1"
+# Sets `[modules]` in an existing jackdaw.toml without disturbing the rest.
+toml_edit = "0.25"
 tracing = { workspace = true }
 jackdaw_schema.workspace = true
 jackdaw_env.workspace = true

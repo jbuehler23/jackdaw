@@ -24,6 +24,7 @@ pub mod build_tools;
 pub mod cargo_meta;
 pub mod detect;
 pub mod linkage;
+pub mod modules;
 pub mod plan;
 pub mod project_manifest;
 pub mod runtime_wiring;

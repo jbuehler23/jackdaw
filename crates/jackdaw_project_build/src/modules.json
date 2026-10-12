@@ -1,0 +1,37 @@
+[
+  {
+    "id": "physics",
+    "name": "Physics",
+    "description": "Colliders, rigid bodies and joints with avian, edited in the editor and simulated in the game.",
+    "default": true,
+    "runtime_features": ["physics"],
+    "crates": [
+      {
+        "name": "avian3d",
+        "version": "0.7",
+        "plugin": "avian3d::prelude::PhysicsPlugins::default()"
+      }
+    ],
+    "provides": ["avian3d", "jackdaw_avian_integration"]
+  },
+  {
+    "id": "navmesh",
+    "name": "Navmesh",
+    "description": "Bake a navigation mesh from the terrain and load it with the scene in the game.",
+    "runtime_features": ["navmesh"],
+    "provides": ["rerecast", "bevy_rerecast"],
+    "requires": ["physics"]
+  },
+  {
+    "id": "multiplayer",
+    "name": "Multiplayer",
+    "description": "Mark entities for replication and lay out network rooms; the game adds a networking backend.",
+    "crates": [
+      {
+        "name": "jackdaw_multiplayer",
+        "plugin": "jackdaw_multiplayer::JackdawMultiplayerTypesPlugin"
+      }
+    ],
+    "provides": ["jackdaw_multiplayer", "lightyear"]
+  }
+]

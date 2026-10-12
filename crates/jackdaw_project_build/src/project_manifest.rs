@@ -6,9 +6,12 @@
 //! and are parsed there (`jackdaw_pie_protocol`); unknown keys are
 //! ignored on both sides, so the two readers coexist.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use crate::modules::{GameDependencies, ModuleCatalog, ModuleSet};
 
 /// File name at the project root.
 pub const FILE_NAME: &str = "jackdaw.toml";
@@ -49,6 +52,10 @@ pub struct ProjectManifest {
     /// from somewhere else.
     #[serde(default)]
     pub assets_dir: Option<PathBuf>,
+    /// The `[modules]` table: which optional modules the project uses.
+    /// Absent in a project set up before modules were recorded.
+    #[serde(default)]
+    pub modules: Option<BTreeMap<String, bool>>,
 }
 
 impl ProjectManifest {
@@ -82,6 +89,24 @@ impl ProjectManifest {
         match self.assets_dir.as_deref() {
             Some(dir) if is_inside_root(dir) => dir,
             _ => Path::new(DEFAULT_ASSETS_DIR),
+        }
+    }
+
+    /// The modules the project at `root` uses: its `[modules]` table, or
+    /// for a project with none, what its Cargo manifest already declares.
+    /// Requirements are included either way.
+    pub fn modules(&self, root: &Path) -> ModuleSet {
+        match &self.modules {
+            Some(table) => crate::modules::enabled_in(table),
+            None => {
+                let package_dir = self
+                    .package
+                    .as_deref()
+                    .map(|name| root.join(name))
+                    .filter(|dir| dir.join("Cargo.toml").is_file())
+                    .unwrap_or_else(|| root.to_path_buf());
+                ModuleCatalog::builtin().detect(&GameDependencies::read(&package_dir, root))
+            }
         }
     }
 
@@ -399,6 +424,40 @@ instances = 2
             compare_project(&dir, &ProjectManifest::default()),
             PinStatus::Unpinned
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_modules_table_reads_back_as_written() {
+        let text = format!(
+            "{}\n{}",
+            pins_toml(),
+            crate::modules::modules_toml(&["navmesh".to_string()].into())
+        );
+        let manifest: ProjectManifest = toml::from_str(&text).unwrap();
+        let modules = manifest.modules.as_ref().expect("a modules table");
+        assert_eq!(modules.get("navmesh"), Some(&true));
+        assert_eq!(modules.get("multiplayer"), Some(&false));
+        let enabled: Vec<String> = manifest
+            .modules(Path::new("/nowhere"))
+            .into_iter()
+            .collect();
+        assert_eq!(enabled, ["navmesh", "physics"]);
+    }
+
+    /// A project set up before `[modules]` existed keeps working: what its
+    /// Cargo manifest already enables is what it uses.
+    #[test]
+    fn without_a_modules_table_the_runtime_features_decide() {
+        let dir = project(
+            "modules",
+            "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+             jackdaw_runtime = { version = \"0.19\", features = [\"physics\", \"terrain\", \"pie\"] }\n",
+        );
+        let manifest: ProjectManifest = toml::from_str(&pins_toml()).unwrap();
+        assert!(manifest.modules.is_none());
+        let enabled: Vec<String> = manifest.modules(&dir).into_iter().collect();
+        assert_eq!(enabled, ["physics"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
