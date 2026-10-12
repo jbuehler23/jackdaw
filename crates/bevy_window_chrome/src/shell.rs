@@ -62,8 +62,11 @@ pub fn spawn_window_shell<S: Component + Copy>(
             WindowShellRoot,
             BackgroundColor(theme.window_background),
             Node {
-                width: percent(100),
-                height: percent(100),
+                // Viewport units, not percentages: Bevy 0.20 resolves a root's
+                // percentages against its grid area, which grows with content
+                // taller than the window.
+                width: vw(100),
+                height: vh(100),
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::clip(),
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
