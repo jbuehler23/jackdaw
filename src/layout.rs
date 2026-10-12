@@ -395,16 +395,22 @@ pub(crate) fn toolbar() -> impl Scene {
         BackgroundColor(tokens::PANEL_HEADER_BG)
         BorderColor::all(tokens::TOOLBAR_BORDER)
         Children [
-            toolbar_tools(),
+            @toolbar_tools()
+            --
             // Spacer pushes the grid / snap widget to the right edge.
-            toolbar_spacer(),
+            @toolbar_spacer()
+            --
             // Grid-size stepper: current size between decrease / increase.
-            toolbar_op_button(GridDecreaseOp::ID, Icon::Minus),
-            grid_size_label(),
-            toolbar_op_button(GridIncreaseOp::ID, Icon::Plus),
-            toolbar_separator(),
+            @toolbar_op_button(GridDecreaseOp::ID, Icon::Minus)
+            --
+            @grid_size_label()
+            --
+            @toolbar_op_button(GridIncreaseOp::ID, Icon::Plus)
+            --
+            @toolbar_separator()
+            --
             // Grid-snap toggle; highlights while snapping is on.
-            toolbar_op_button(GridToggleSnapOp::ID, Icon::Magnet),
+            @toolbar_op_button(GridToggleSnapOp::ID, Icon::Magnet)
         ]
     }
 }
@@ -425,21 +431,34 @@ fn toolbar_tools() -> impl Scene {
             overflow: Overflow::clip_x(),
         }
         Children [
-            toolbar_op_button(ToolSelectOp::ID, Icon::MousePointer),
-            toolbar_op_button(ToolTranslateOp::ID, Icon::Move3d),
-            toolbar_op_button(ToolRotateOp::ID, Icon::Rotate3d),
-            toolbar_op_button(ToolScaleOp::ID, Icon::Scale3d),
-            toolbar_separator(),
+            @toolbar_op_button(ToolSelectOp::ID, Icon::MousePointer)
+            --
+            @toolbar_op_button(ToolTranslateOp::ID, Icon::Move3d)
+            --
+            @toolbar_op_button(ToolRotateOp::ID, Icon::Rotate3d)
+            --
+            @toolbar_op_button(ToolScaleOp::ID, Icon::Scale3d)
+            --
+            @toolbar_separator()
+            --
             // Gizmo space toggle. Active highlight = `Local`; default
             // = `World`. Tooltip is the discoverability path.
-            toolbar_op_button(GizmoSpaceToggleOp::ID, Icon::Globe),
-            toolbar_separator(),
-            toolbar_op_button(ActivateDrawBrushModalOp::ID, Icon::Box),
-            toolbar_op_button(MeasureDistanceOp::ID, Icon::RulerDimensionLine),
-            toolbar_op_button(EditModeVertexOp::ID, Icon::CircleDot),
-            toolbar_op_button(EditModeEdgeOp::ID, Icon::GitCommitHorizontal),
-            toolbar_op_button(EditModeFaceOp::ID, Icon::Hexagon),
-            toolbar_op_button(EditModeClipOp::ID, Icon::ScissorsLineDashed),
+            @toolbar_op_button(GizmoSpaceToggleOp::ID, Icon::Globe)
+            --
+            @toolbar_separator()
+            --
+            @toolbar_op_button(ActivateDrawBrushModalOp::ID, Icon::Box)
+            --
+            @toolbar_op_button(MeasureDistanceOp::ID, Icon::RulerDimensionLine)
+            --
+            @toolbar_op_button(EditModeVertexOp::ID, Icon::CircleDot)
+            --
+            @toolbar_op_button(EditModeEdgeOp::ID, Icon::GitCommitHorizontal)
+            --
+            @toolbar_op_button(EditModeFaceOp::ID, Icon::Hexagon)
+            --
+            @toolbar_op_button(EditModeClipOp::ID, Icon::ScissorsLineDashed)
+            --
             {physics_tool_buttons()}
         ]
     }
@@ -448,10 +467,11 @@ fn toolbar_tools() -> impl Scene {
 /// The physics tool's toolbar group.
 #[cfg(feature = "physics")]
 fn physics_tool_buttons() -> impl SceneList {
-    bsn_list![
-        toolbar_separator(),
-        toolbar_op_button(crate::physics_tool::PhysicsActivateOp::ID, Icon::Zap),
-    ]
+    bsn_list! {
+        @toolbar_separator()
+        --
+        @toolbar_op_button(crate::physics_tool::PhysicsActivateOp::ID, Icon::Zap)
+    }
 }
 
 /// Nothing: the editor was built without physics.

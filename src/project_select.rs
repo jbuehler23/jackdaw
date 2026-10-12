@@ -2675,35 +2675,30 @@ fn package_candidate_row(name: String, root: PathBuf, allow_bevy_mismatch: bool)
         BackgroundColor(tokens::PANEL_BG)
         BorderColor::all(tokens::BORDER_SUBTLE)
         Children [
-            (
-                Node {
-                    width: px(26.0),
-                    height: px(26.0),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
-                }
-                BackgroundColor(tokens::DOC_TAB_ACTIVE_BG)
-                Pickable::IGNORE
-                Children [
-                    (
-                        Text(glyph)
-                        TextFont {
-                            font: FontSourceTemplate::Handle(font_paths::LUCIDE),
-                            font_size: FontSize::Px(tokens::ICON_SM_PX),
-                        }
-                        TextColor(tokens::DIR_ICON_COLOR)
-                    ),
-                ]
-            ),
-            (
-                Text(label)
+            Node {
+                width: px(26.0),
+                height: px(26.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_MD)),
+            }
+            BackgroundColor(tokens::DOC_TAB_ACTIVE_BG)
+            Pickable::IGNORE
+            Children [
+                Text(glyph)
                 TextFont {
-                    font_size: tokens::TEXT_SIZE,
+                    font: FontSourceTemplate::Handle(font_paths::LUCIDE),
+                    font_size: FontSize::Px(tokens::ICON_SM_PX),
                 }
-                TextColor(tokens::TEXT_PRIMARY)
-                Pickable::IGNORE
-            ),
+                TextColor(tokens::DIR_ICON_COLOR)
+            ]
+            --
+            Text(label)
+            TextFont {
+                font_size: tokens::TEXT_SIZE,
+            }
+            TextColor(tokens::TEXT_PRIMARY)
+            Pickable::IGNORE
         ]
         on(|hover: On<PointerOver>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {

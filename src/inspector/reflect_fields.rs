@@ -1622,14 +1622,12 @@ fn hex_input_scene() -> impl Scene {
         Node { flex_grow: 0.0 }
         on(seed_string_field)
         Children [
-            (
-                @FeathersTextInput {
-                    @visible_width: 10f32,
-                    @max_characters: 9usize,
-                }
-                on(hex_input_on_enter_key)
-                on(hex_input_on_focus_lost)
-            )
+            @FeathersTextInput {
+                @visible_width: 10f32,
+                @max_characters: 9usize,
+            }
+            on(hex_input_on_enter_key)
+            on(hex_input_on_focus_lost)
         ]
     }
 }

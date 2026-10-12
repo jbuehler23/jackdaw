@@ -99,15 +99,23 @@ pub fn terrain_palette() -> impl Scene {
         BackgroundColor({tokens::TOOLBAR_BG.with_alpha(0.92)})
         TerrainDefaultFontRoot
         Children [
-            palette_button(TerrainToolRaiseOp::ID, Icon::Mountain),
-            palette_button(TerrainToolLowerOp::ID, Icon::MoveDown),
-            palette_button(TerrainToolFlattenOp::ID, Icon::Minus),
-            palette_button(TerrainToolSmoothOp::ID, Icon::Waves),
-            palette_button(TerrainToolNoiseOp::ID, Icon::Sparkles),
-            palette_button(TerrainToolPaintOp::ID, Icon::Paintbrush),
-            palette_button(TerrainToolQuantizeOp::ID, Icon::Grid3x3),
-            palette_button(TerrainToolNavmeshOp::ID, Icon::Waypoints),
-            palette_button(TerrainToolRegionsOp::ID, Icon::Grid2x2),
+            @palette_button(TerrainToolRaiseOp::ID, Icon::Mountain)
+            --
+            @palette_button(TerrainToolLowerOp::ID, Icon::MoveDown)
+            --
+            @palette_button(TerrainToolFlattenOp::ID, Icon::Minus)
+            --
+            @palette_button(TerrainToolSmoothOp::ID, Icon::Waves)
+            --
+            @palette_button(TerrainToolNoiseOp::ID, Icon::Sparkles)
+            --
+            @palette_button(TerrainToolPaintOp::ID, Icon::Paintbrush)
+            --
+            @palette_button(TerrainToolQuantizeOp::ID, Icon::Grid3x3)
+            --
+            @palette_button(TerrainToolNavmeshOp::ID, Icon::Waypoints)
+            --
+            @palette_button(TerrainToolRegionsOp::ID, Icon::Grid2x2)
         ]
     }
 }

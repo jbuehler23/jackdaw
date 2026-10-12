@@ -290,66 +290,56 @@ fn progress_overlay() -> impl Scene {
         BackgroundColor(BACKDROP)
         GlobalZIndex(OVERLAY_Z)
         Children [
-            (
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(10),
+                padding: UiRect::all(px(20)),
+                width: px(440),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(tokens::CORNER_RADIUS_LG),
+            }
+            BackgroundColor(tokens::PANEL_BG)
+            BorderColor::all(tokens::BORDER_SUBTLE)
+            Children [
+                ProgressTitle
+                Text("")
+                TextFont { font_size: tokens::TEXT_SIZE_LG }
+                TextColor(tokens::TEXT_PRIMARY)
+                --
+                ProgressStageText
+                Text("")
+                TextFont { font_size: tokens::TEXT_SIZE }
+                TextColor(tokens::TEXT_SECONDARY)
+                --
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(10),
-                    padding: UiRect::all(px(20)),
-                    width: px(440),
+                    width: percent(100),
+                    height: px(6),
                     border: UiRect::all(px(1)),
-                    border_radius: BorderRadius::all(tokens::CORNER_RADIUS_LG),
+                    overflow: Overflow::clip(),
                 }
-                BackgroundColor(tokens::PANEL_BG)
+                BackgroundColor(tokens::INPUT_BG)
                 BorderColor::all(tokens::BORDER_SUBTLE)
                 Children [
-                    (
-                        ProgressTitle
-                        Text("")
-                        TextFont { font_size: tokens::TEXT_SIZE_LG }
-                        TextColor(tokens::TEXT_PRIMARY)
-                    ),
-                    (
-                        ProgressStageText
-                        Text("")
-                        TextFont { font_size: tokens::TEXT_SIZE }
-                        TextColor(tokens::TEXT_SECONDARY)
-                    ),
-                    (
-                        Node {
-                            width: percent(100),
-                            height: px(6),
-                            border: UiRect::all(px(1)),
-                            overflow: Overflow::clip(),
-                        }
-                        BackgroundColor(tokens::INPUT_BG)
-                        BorderColor::all(tokens::BORDER_SUBTLE)
-                        Children [
-                            (
-                                ProgressFill
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    height: percent(100),
-                                    width: percent(0),
-                                }
-                                BackgroundColor(tokens::ACCENT_BLUE)
-                            )
-                        ]
-                    ),
-                    (
-                        ProgressCountText
-                        Text("")
-                        TextFont { font_size: tokens::TEXT_SIZE_SM }
-                        TextColor(tokens::TEXT_SECONDARY)
-                    ),
-                    (
-                        ProgressActions
-                        Node {
-                            display: Display::None,
-                            justify_content: JustifyContent::FlexEnd,
-                        }
-                    ),
+                    ProgressFill
+                    Node {
+                        position_type: PositionType::Absolute,
+                        height: percent(100),
+                        width: percent(0),
+                    }
+                    BackgroundColor(tokens::ACCENT_BLUE)
                 ]
-            )
+                --
+                ProgressCountText
+                Text("")
+                TextFont { font_size: tokens::TEXT_SIZE_SM }
+                TextColor(tokens::TEXT_SECONDARY)
+                --
+                ProgressActions
+                Node {
+                    display: Display::None,
+                    justify_content: JustifyContent::FlexEnd,
+                }
+            ]
         ]
     }
 }
