@@ -67,7 +67,7 @@ pub(crate) fn sync_avian_position_from_brush_transform(
 /// or undo of enable-physics), also remove the runtime `Collider` we built
 /// from it. Without this, the collider gizmo keeps being drawn after undo.
 fn remove_collider_when_avian_collider_removed(
-    trigger: On<Remove, AvianCollider>,
+    trigger: On<Remove<AvianCollider>>,
     mut commands: Commands,
 ) {
     let entity = trigger.event_target();

@@ -57,7 +57,7 @@ fn add_root_entity_spawns_one_row_per_container() {
 
     let entity = world.spawn((Name::new("Brush"), Transform::default())).id();
 
-    // Flush the queued `commands` from the `On<Add, ...>` observers.
+    // Flush the queued `commands` from the `On<Add<...>>` observers.
     app.update();
     let world = app.world_mut();
 

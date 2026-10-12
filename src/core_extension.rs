@@ -132,7 +132,7 @@ fn update_operator_button_availability(
 /// the new one settles alongside the rest. The trigger is queued, so it
 /// runs after the spawn flushes and the button's `ButtonVariant` is in
 /// place.
-fn seed_operator_button_on_add(_: On<Add, ButtonOperatorCall>, mut commands: Commands) {
+fn seed_operator_button_on_add(_: On<Add<ButtonOperatorCall>>, mut commands: Commands) {
     commands.trigger(RefreshOperatorButtons);
 }
 

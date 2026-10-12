@@ -60,7 +60,7 @@ fn spawn_brush_face_text(
 /// Write the staged text into the editable buffer once it is inserted on the
 /// container, then clear it so a later refresh does not re-seed it.
 fn seed_brush_face_text(
-    inserted: On<Insert, PendingBrushFaceText>,
+    inserted: On<Insert<PendingBrushFaceText>>,
     q_children: Query<&Children>,
     q_pending: Query<&PendingBrushFaceText>,
     mut q_text: Query<&mut EditableText>,

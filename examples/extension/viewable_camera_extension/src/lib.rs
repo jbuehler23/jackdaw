@@ -39,7 +39,7 @@ impl JackdawExtension for ViewableCameraExtension {
         // user undoes the placement while preview is active), so the
         // viewport falls back to the editor camera.
         ctx.add_observer(
-            move |trigger: On<Remove, ViewableCamera>,
+            move |trigger: On<Remove<ViewableCamera>>,
                   mut state: ResMut<CameraPreviewState>,
                   mut commands: Commands| {
                 if state.active == Some(trigger.event_target()) {

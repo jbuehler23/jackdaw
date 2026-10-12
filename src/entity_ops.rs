@@ -215,7 +215,7 @@ impl PendingModelRoots {
 /// A queued model holds the glTF it names, and the footer and the wait for an
 /// idle editor both count what is queued; an entry nothing will use any more
 /// would hold an asset nothing renders and a wait nothing can end.
-fn forget_model_root(remove: On<Remove, GltfSource>, mut pending: ResMut<PendingModelRoots>) {
+fn forget_model_root(remove: On<Remove<GltfSource>>, mut pending: ResMut<PendingModelRoots>) {
     pending.forget(remove.entity);
 }
 
@@ -244,7 +244,7 @@ pub(crate) fn forget_model_roots<'a>(
 /// document, so deriving it here is what brings the model back on each of
 /// those paths without the handle ever being written to the document.
 fn derive_world_asset_root(
-    insert: On<Insert, GltfSource>,
+    insert: On<Insert<GltfSource>>,
     sources: Query<&GltfSource>,
     existing: Query<&WorldAssetRoot>,
     parents: Query<&ChildOf>,
@@ -302,7 +302,7 @@ fn model_scene(
 /// Queue the models of children a LOD group no longer keeps as levels: those
 /// past its last level after a change.
 fn queue_models_past_last_level(
-    insert: On<Insert, LodGroup>,
+    insert: On<Insert<LodGroup>>,
     groups: Query<(&LodGroup, &Children)>,
     unplaced: Query<&GltfSource, Without<WorldAssetRoot>>,
     asset_server: Res<AssetServer>,
@@ -325,7 +325,7 @@ fn queue_models_past_last_level(
 /// Queue the models a LOD group that is going kept live as its levels: each
 /// child's, or its own where it names the model itself.
 fn queue_models_of_ungrouped_levels(
-    remove: On<Remove, LodGroup>,
+    remove: On<Remove<LodGroup>>,
     children: Query<&Children>,
     unplaced: Query<&GltfSource, Without<WorldAssetRoot>>,
     asset_server: Res<AssetServer>,
@@ -350,7 +350,7 @@ fn queue_models_of_ungrouped_levels(
 /// Queue the model of a placement that no longer draws the levels its import
 /// settings gave it, once it is told apart from a LOD level.
 fn queue_models_left_by_settings(
-    remove: On<Remove, ModelLevels>,
+    remove: On<Remove<ModelLevels>>,
     unplaced: Query<(), (With<GltfSource>, Without<WorldAssetRoot>)>,
     mut pending: ResMut<PendingModelRoots>,
 ) {

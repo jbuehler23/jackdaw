@@ -159,7 +159,7 @@ pub fn clear_selection_in_world(world: &mut World) {
 
 /// Clean up the Selection resource when a Selected component is removed
 /// (e.g., entity despawned).
-fn on_selected_removed(trigger: On<Remove, Selected>, mut selection: ResMut<Selection>) {
+fn on_selected_removed(trigger: On<Remove<Selected>>, mut selection: ResMut<Selection>) {
     let entity = trigger.event_target();
     selection.entities.retain(|&e| e != entity);
 }

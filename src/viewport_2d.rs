@@ -2514,7 +2514,7 @@ fn update_viewport_2d_mode_bar(
 /// entity goes away. The stage node is a descendant of the panel, so it is torn
 /// down with it.
 pub(crate) fn on_viewport_2d_panel_despawn(
-    trigger: On<Despawn, Viewport2dPanelHost>,
+    trigger: On<Despawn<Viewport2dPanelHost>>,
     hosts: Query<&Viewport2dPanelHost>,
     mut commands: Commands,
 ) {

@@ -666,7 +666,7 @@ fn find_descendant_with<T: Component>(world: &mut World, root: Entity) -> Option
 /// leaf rebuilt by reconciler, workspace switch), tear down the
 /// camera that was spawned for it.
 pub(crate) fn on_viewport_panel_despawn(
-    trigger: On<Despawn, ViewportPanelHost>,
+    trigger: On<Despawn<ViewportPanelHost>>,
     hosts: Query<&ViewportPanelHost>,
     mut commands: Commands,
 ) {

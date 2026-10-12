@@ -75,7 +75,7 @@ impl Default for ResourceId {
 /// Child of an [`Extension`]; represents a single operator.
 ///
 /// Holds the `SystemId`s that the dispatcher runs. An observer on
-/// `On<Remove, OperatorEntity>` unregisters those systems when this entity
+/// `On<Remove<OperatorEntity>>` unregisters those systems when this entity
 /// despawns, and keeps the `OperatorIndex` in sync.
 #[derive(Component, Debug, Clone)]
 pub struct OperatorEntity {
@@ -146,7 +146,7 @@ impl OperatorEntity {
 
 /// Marker on a BEI action entity associating it with an operator id.
 /// Auto-inserted by [`crate::ExtensionContext::register_operator`] via
-/// an `On<Add, Action<Op>>` observer, so call sites that spawn
+/// an `On<Add<Action<Op>>>` observer, so call sites that spawn
 /// `Action::<Op>::new()` don't need to do anything extra.
 ///
 /// Lets systems (notably the tooltip pipeline) walk from operator id
@@ -223,7 +223,7 @@ impl<'w, 's> ActiveModalQuery<'w, 's> {
 /// Marks an entity as tracking a dock window registration.
 ///
 /// Spawned as a child of the [`Extension`] entity when `register_window` is
-/// called. An observer on `On<Remove, RegisteredWindow>` calls
+/// called. An observer on `On<Remove<RegisteredWindow>>` calls
 /// `WindowRegistry::unregister(id)` so the window disappears from the
 /// add-window popup when the extension unloads.
 #[derive(Component, Clone, Debug)]
@@ -700,7 +700,7 @@ pub fn unregister_dylib_extension(world: &mut World, id: &str) -> bool {
 
 /// Keep `OperatorIndex` in sync when an operator entity is spawned.
 pub(crate) fn index_operator_on_add(
-    trigger: On<Add, OperatorEntity>,
+    trigger: On<Add<OperatorEntity>>,
     operators: Query<&OperatorEntity>,
     mut index: ResMut<OperatorIndex>,
 ) {
@@ -713,7 +713,7 @@ pub(crate) fn index_operator_on_add(
 /// when its entity is removed, so they don't leak across enable /
 /// disable cycles.
 pub(crate) fn deindex_and_cleanup_operator_on_remove(
-    trigger: On<Remove, OperatorEntity>,
+    trigger: On<Remove<OperatorEntity>>,
     operators: Query<&OperatorEntity>,
     mut index: ResMut<OperatorIndex>,
     mut commands: Commands,
@@ -740,7 +740,7 @@ pub(crate) fn deindex_and_cleanup_operator_on_remove(
 /// its marker entity despawns, so disabling an extension visibly removes
 /// its windows.
 pub(crate) fn cleanup_window_on_remove(
-    trigger: On<Remove, RegisteredWindow>,
+    trigger: On<Remove<RegisteredWindow>>,
     windows: Query<&RegisteredWindow>,
     mut registry: ResMut<jackdaw_panels::WindowRegistry>,
     mut dock_tree: ResMut<jackdaw_panels::tree::DockTree>,
@@ -759,7 +759,7 @@ pub(crate) fn cleanup_window_on_remove(
 
 /// Unregister a workspace when its marker entity despawns.
 pub(crate) fn cleanup_workspace_on_remove(
-    trigger: On<Remove, RegisteredWorkspace>,
+    trigger: On<Remove<RegisteredWorkspace>>,
     workspaces: Query<&RegisteredWorkspace>,
     mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>,
 ) {
@@ -771,7 +771,7 @@ pub(crate) fn cleanup_workspace_on_remove(
 /// Remove a panel extension section from the registry when its marker
 /// entity despawns.
 pub(crate) fn cleanup_window_extension_on_remove(
-    trigger: On<Remove, RegisteredWindowExtension>,
+    trigger: On<Remove<RegisteredWindowExtension>>,
     registrations: Query<&RegisteredWindowExtension>,
     mut registry: ResMut<crate::WindowExtensionRegistry>,
 ) {
@@ -781,7 +781,7 @@ pub(crate) fn cleanup_window_extension_on_remove(
 }
 
 pub(crate) fn cleanup_widget_on_remove(
-    trigger: On<Remove, RegisteredWidgetDefinition>,
+    trigger: On<Remove<RegisteredWidgetDefinition>>,
     registrations: Query<&RegisteredWidgetDefinition>,
     mut registry: ResMut<crate::widgets::WidgetRegistry>,
 ) {
@@ -791,7 +791,7 @@ pub(crate) fn cleanup_widget_on_remove(
 }
 
 fn cleanup_resource_on_remove(
-    trigger: On<Remove, ExtensionResourceOf>,
+    trigger: On<Remove<ExtensionResourceOf>>,
     resource_id: Query<&ExtensionResourceOf>,
     mut commands: Commands,
 ) {

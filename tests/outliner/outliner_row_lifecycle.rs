@@ -238,7 +238,7 @@ fn the_keyboard_walk_resumes_on_the_row_that_was_closed() {
 #[derive(Resource, Default)]
 struct RowsBuilt(Vec<Entity>);
 
-fn note_row_built(add: On<Add, TreeNode>, nodes: Query<&TreeNode>, mut built: ResMut<RowsBuilt>) {
+fn note_row_built(add: On<Add<TreeNode>>, nodes: Query<&TreeNode>, mut built: ResMut<RowsBuilt>) {
     if let Ok(node) = nodes.get(add.entity) {
         built.0.push(node.0);
     }

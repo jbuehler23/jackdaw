@@ -92,7 +92,7 @@ impl SceneNodes {
 }
 
 fn index_node(
-    added: On<Insert, SceneNodeId>,
+    added: On<Insert<SceneNodeId>>,
     ids: Query<&SceneNodeId>,
     mut nodes: ResMut<SceneNodes>,
 ) {
@@ -103,7 +103,7 @@ fn index_node(
 }
 
 fn retire_node(
-    discarded: On<Discard, SceneNodeId>,
+    discarded: On<Discard<SceneNodeId>>,
     ids: Query<&SceneNodeId>,
     mut nodes: ResMut<SceneNodes>,
 ) {

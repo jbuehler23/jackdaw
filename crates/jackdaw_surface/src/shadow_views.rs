@@ -20,7 +20,7 @@ impl Plugin for ShadowViewCleanupPlugin {
 }
 
 fn despawn_shadow_views(
-    remove: On<Remove, ExtractedPointLight>,
+    remove: On<Remove<ExtractedPointLight>>,
     views: Query<&PointAndSpotLightViewEntities>,
     mut commands: Commands,
 ) {

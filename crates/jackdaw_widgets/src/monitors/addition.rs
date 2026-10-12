@@ -50,7 +50,7 @@ impl<C: Component> NotifyAdded<C> {
 }
 
 fn notify_on_add<C: Component>(
-    add: On<Add, C>,
+    add: On<Add<C>>,
     mut commands: Commands,
     local_monitors: Query<Entity, (With<NotifyAdded<C>>, With<MonitorSelf>)>,
     monitors: Query<(Entity, &Monitor), With<NotifyAdded<C>>>,

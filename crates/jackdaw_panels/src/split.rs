@@ -70,7 +70,7 @@ impl Plugin for SplitPanelPlugin {
 }
 
 fn on_panel_added(
-    trigger: On<Add, Panel>,
+    trigger: On<Add<Panel>>,
     child_of: Query<&ChildOf>,
     mut queries: ParamSet<(
         Query<(&Node, &Children), With<PanelGroup>>,
@@ -148,7 +148,7 @@ fn recalculate_group(
 }
 
 fn on_handle_added(
-    trigger: On<Add, PanelHandle>,
+    trigger: On<Add<PanelHandle>>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     nodes: Query<&Node>,
     mut commands: Commands,

@@ -42,7 +42,7 @@ pub(super) fn plugin(app: &mut App) {
 /// same entity. Falls back to the project schema when the type is not
 /// in the editor registry.
 fn auto_attach_reflected_type_tooltip(
-    trigger: On<Add, ReflectedTypeTooltip>,
+    trigger: On<Add<ReflectedTypeTooltip>>,
     sources: Query<&ReflectedTypeTooltip>,
     type_registry: Res<AppTypeRegistry>,
     project_types: Res<ProjectTypes>,

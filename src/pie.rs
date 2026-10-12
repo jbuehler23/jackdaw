@@ -44,7 +44,7 @@ const STDERR_TAIL_LINES: usize = 40;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Marker for the toolbar transport buttons. `PiePlugin` installs
-/// an `On<Add, PieButton>` observer that wires each button's
+/// an `On<Add<PieButton>>` observer that wires each button's
 /// `Pointer<Click>` to the corresponding handler.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PieButton {
@@ -562,7 +562,7 @@ pub fn handle_reload(world: &mut World) {
 /// Spawn a click observer on each `PieButton` as it's added. The
 /// observer dispatches the corresponding `pie.*` operator.
 fn wire_pie_button(
-    trigger: On<Add, PieButton>,
+    trigger: On<Add<PieButton>>,
     buttons: Query<&PieButton>,
     mut commands: Commands,
 ) {

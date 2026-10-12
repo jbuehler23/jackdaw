@@ -23,7 +23,7 @@ impl Plugin for AuthoredWidgetPlugin {
 
 /// An observer rather than a system: a document load inserts `AstNodeRef` and
 /// the first click can arrive in the same frame, before an `Update` pass runs.
-fn mark_authored_node(insert: On<Insert, AstNodeRef>, mut commands: Commands) {
+fn mark_authored_node(insert: On<Insert<AstNodeRef>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(insert.event_target()) {
         entity.try_insert(AuthoredWidget);
     }
@@ -31,7 +31,7 @@ fn mark_authored_node(insert: On<Insert, AstNodeRef>, mut commands: Commands) {
 
 /// A despawn removes `AstNodeRef` too, so the entity is usually gone by the
 /// time the command runs; `try_remove` tolerates that.
-fn unmark_authored_node(remove: On<Remove, AstNodeRef>, mut commands: Commands) {
+fn unmark_authored_node(remove: On<Remove<AstNodeRef>>, mut commands: Commands) {
     if let Ok(mut entity) = commands.get_entity(remove.event_target()) {
         entity.try_remove::<AuthoredWidget>();
     }

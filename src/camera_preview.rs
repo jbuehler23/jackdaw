@@ -78,7 +78,7 @@ pub(crate) fn spawn_look_through_button(commands: &mut Commands, parent: Entity,
 }
 
 fn on_preview_strip_added(
-    trigger: On<Add, CameraPreviewStrip>,
+    trigger: On<Add<CameraPreviewStrip>>,
     state: Res<CameraPreviewState>,
     mut commands: Commands,
 ) {

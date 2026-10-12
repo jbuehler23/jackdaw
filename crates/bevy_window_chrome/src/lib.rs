@@ -40,7 +40,7 @@ use bevy::prelude::Component;
 
 /// Marker added to every entity spawned by this crate's window chrome.
 ///
-/// Host apps can react to this (for example with an `On<Add, WindowChromeEntity>` observer) to
+/// Host apps can react to this (for example with an `On<Add<WindowChromeEntity>>` observer) to
 /// stamp their own cleanup/exclusion markers onto the chrome hierarchy.
 #[derive(Component, Copy, Clone, Default)]
 pub struct WindowChromeEntity;

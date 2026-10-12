@@ -618,7 +618,7 @@ fn flag_inspector_dirty_on_archetype_change(
 /// When an `InspectorCategoryStripMount` entity is added to the world,
 /// spawn the category tab rail as a child.
 fn on_category_strip_mount_added(
-    trigger: On<Add, category_strip::InspectorCategoryStripMount>,
+    trigger: On<Add<category_strip::InspectorCategoryStripMount>>,
     registry: Res<jackdaw_api_internal::inspector::InspectorRegistry>,
     icon_font: Res<jackdaw_feathers::icons::IconFont>,
     mut commands: Commands,

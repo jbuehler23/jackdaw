@@ -41,7 +41,7 @@ impl Plugin for OperatorTooltipPlugin {
 /// yet); the button renders without a tooltip until the next layout
 /// pass.
 fn auto_attach_button_tooltip(
-    trigger: On<Add, ButtonOperatorCall>,
+    trigger: On<Add<ButtonOperatorCall>>,
     calls: Query<&ButtonOperatorCall>,
     operators: Query<&OperatorEntity>,
     actions: Query<(&OperatorAction, &Bindings)>,

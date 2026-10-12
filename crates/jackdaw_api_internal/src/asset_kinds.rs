@@ -233,7 +233,7 @@ pub struct RegisteredAssetKind {
 }
 
 pub(crate) fn cleanup_asset_kind_on_remove(
-    trigger: On<Remove, RegisteredAssetKind>,
+    trigger: On<Remove<RegisteredAssetKind>>,
     registrations: Query<&RegisteredAssetKind>,
     mut kinds: ResMut<AssetKinds>,
 ) {

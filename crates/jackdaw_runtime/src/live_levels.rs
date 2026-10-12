@@ -568,7 +568,7 @@ fn despawn_parts(commands: &mut Commands, parts: &[Entity]) {
 
 /// Take a group's live levels down with its [`LodGroup`].
 fn drop_live_levels(
-    removed: On<Remove, LodGroup>,
+    removed: On<Remove<LodGroup>>,
     mut commands: Commands,
     groups: Query<&LiveLevels>,
 ) {
@@ -577,7 +577,7 @@ fn drop_live_levels(
 
 /// Take a placed model's live levels down with its [`ModelLevels`].
 fn drop_model_levels(
-    removed: On<Remove, ModelLevels>,
+    removed: On<Remove<ModelLevels>>,
     mut commands: Commands,
     groups: Query<&LiveLevels>,
 ) {

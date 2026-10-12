@@ -336,16 +336,12 @@ impl<'w> GameApp<'w> {
 /// Usage:
 ///
 /// ```text
-/// ctx.spawn_observer(|on: On<Add, MyComp>, mut commands: Commands| { ... });
+/// ctx.spawn_observer(|on: On<Add<MyComp>>, mut commands: Commands| { ... });
 /// ```
 impl<'w> GameApp<'w> {
-    pub fn spawn_observer<E, B, M>(
-        &mut self,
-        observer: impl IntoObserverSystemBoxed<E, B, M>,
-    ) -> &mut Self
+    pub fn spawn_observer<E, M>(&mut self, observer: impl IntoObserverSystemBoxed<E, M>) -> &mut Self
     where
-        E: bevy::prelude::Event,
-        B: bevy::prelude::Bundle,
+        E: bevy::prelude::EventPattern,
     {
         let tag = GameRegistered(self.name);
         let observer = observer.into_boxed_observer();
@@ -359,15 +355,14 @@ impl<'w> GameApp<'w> {
 /// Helper trait so `spawn_observer` can accept either a raw system
 /// (function) or a pre-built `Observer`. Monomorphised into the
 /// same path.
-pub trait IntoObserverSystemBoxed<E, B, M>: 'static {
+pub trait IntoObserverSystemBoxed<E, M>: 'static {
     fn into_boxed_observer(self) -> bevy::prelude::Observer;
 }
 
-impl<E, B, M, S> IntoObserverSystemBoxed<E, B, M> for S
+impl<E, M, S> IntoObserverSystemBoxed<E, M> for S
 where
-    E: bevy::prelude::Event,
-    B: bevy::prelude::Bundle,
-    S: bevy::ecs::system::IntoObserverSystem<E, B, M> + 'static,
+    E: bevy::prelude::EventPattern,
+    S: bevy::ecs::system::IntoObserverSystem<E, M> + 'static,
 {
     fn into_boxed_observer(self) -> bevy::prelude::Observer {
         bevy::prelude::Observer::new(self)

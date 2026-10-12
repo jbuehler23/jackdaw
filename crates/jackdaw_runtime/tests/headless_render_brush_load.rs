@@ -6,7 +6,7 @@
 //! 1. `JackdawPlugin` registers `StandardMaterial`/`Image` asset reflection, so
 //!    the deserializer's handle processor turns `null` into a default handle
 //!    instead of failing (which would drop the whole brush).
-//! 2. The `On<Insert, Brush>` mesh-rebuild observer no-ops when the mesh/material
+//! 2. The `On<Insert<Brush>>` mesh-rebuild observer no-ops when the mesh/material
 //!    asset stores are absent, so loading the brush does not panic on the missing
 //!    `Assets<Mesh>`.
 //!

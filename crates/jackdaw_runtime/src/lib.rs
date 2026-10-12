@@ -1048,7 +1048,7 @@ fn attach_model(world: &mut World, entity: Entity) {
 /// `Transform` and `Visibility` are pulled into a single `world.spawn` along
 /// with a `GlobalTransform`/`InheritedVisibility` computed from the parent's
 /// already-final values, so the entity reaches its structural state in one
-/// archetype move. `On<Insert, T>` observers for the remaining components then
+/// archetype move. `On<Insert<T>>` observers for the remaining components then
 /// see correct globals. Children are spawned parent-first via recursion.
 ///
 /// Limitation: component fields of type `Entity` that reference another node
@@ -1168,7 +1168,7 @@ fn spawn_node(
         world.entity_mut(entity).insert(Name::new(name));
     }
 
-    // User components on top. `On<Insert, T>` fires here with
+    // User components on top. `On<Insert<T>>` fires here with
     // GlobalTransform / InheritedVisibility already correct. `SceneNodeId`
     // rides through this path as a normal registered tuple-struct component.
     for patch in &deferred {

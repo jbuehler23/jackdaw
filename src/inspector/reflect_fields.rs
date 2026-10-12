@@ -2410,7 +2410,7 @@ fn string_field_scene() -> impl Scene {
 /// inspector refresh does not re-seed it. Fires on the container after the
 /// scene tree (including the child text entry) has spawned.
 fn seed_string_field(
-    inserted: On<Insert, PendingFieldText>,
+    inserted: On<Insert<PendingFieldText>>,
     q_children: Query<&Children>,
     q_pending: Query<&PendingFieldText>,
     mut q_text: Query<&mut EditableText>,

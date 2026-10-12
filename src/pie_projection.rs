@@ -580,8 +580,8 @@ mod tests {
             w.register::<Mutable>();
             w.register::<Frozen>();
         }
-        world.add_observer(|_: On<Insert, Mutable>, mut n: ResMut<Inserts>| n.0 += 1);
-        world.add_observer(|_: On<Insert, Frozen>, mut n: ResMut<Inserts>| n.0 += 1);
+        world.add_observer(|_: On<Insert<Mutable>>, mut n: ResMut<Inserts>| n.0 += 1);
+        world.add_observer(|_: On<Insert<Frozen>>, mut n: ResMut<Inserts>| n.0 += 1);
         world
     }
 

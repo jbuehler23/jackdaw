@@ -772,26 +772,26 @@ fn rebuild_menu_if_dirty(world: &mut World) {
     }
 }
 
-fn flag_menu_dirty_on_window_add(_: On<Add, RegisteredWindow>, mut dirty: ResMut<MenuBarDirty>) {
+fn flag_menu_dirty_on_window_add(_: On<Add<RegisteredWindow>>, mut dirty: ResMut<MenuBarDirty>) {
     dirty.0 = true;
 }
 
 fn flag_menu_dirty_on_window_remove(
-    _: On<Remove, RegisteredWindow>,
+    _: On<Remove<RegisteredWindow>>,
     mut dirty: ResMut<MenuBarDirty>,
 ) {
     dirty.0 = true;
 }
 
 fn flag_menu_dirty_on_menu_entry_add(
-    _: On<Add, RegisteredMenuEntry>,
+    _: On<Add<RegisteredMenuEntry>>,
     mut dirty: ResMut<MenuBarDirty>,
 ) {
     dirty.0 = true;
 }
 
 fn flag_menu_dirty_on_menu_entry_remove(
-    _: On<Remove, RegisteredMenuEntry>,
+    _: On<Remove<RegisteredMenuEntry>>,
     mut dirty: ResMut<MenuBarDirty>,
 ) {
     dirty.0 = true;

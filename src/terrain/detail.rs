@@ -75,7 +75,7 @@ pub fn sync_terrain_detail(
 
 /// Keep the seeded tiles out of the outliner and out of the saved scene.
 /// A tile is grown from the terrain's document rather than saved with it.
-pub fn hide_drawn_detail(add: On<Add, DetailTile>, mut commands: Commands) {
+pub fn hide_drawn_detail(add: On<Add<DetailTile>>, mut commands: Commands) {
     commands
         .entity(add.entity)
         .insert((crate::EditorHidden, crate::NonSerializable));

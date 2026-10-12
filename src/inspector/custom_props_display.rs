@@ -377,7 +377,7 @@ fn custom_text_scene() -> impl Scene {
 /// Write the staged text into the editable buffer once it is inserted on the
 /// container, then clear it so a later inspector refresh does not re-seed it.
 fn seed_custom_text(
-    inserted: On<Insert, PendingCustomText>,
+    inserted: On<Insert<PendingCustomText>>,
     q_children: Query<&Children>,
     q_pending: Query<&PendingCustomText>,
     mut q_text: Query<&mut EditableText>,

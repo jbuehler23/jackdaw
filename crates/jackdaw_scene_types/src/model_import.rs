@@ -512,7 +512,7 @@ fn gltf_loader(app: &App) -> Option<GltfLoader> {
 }
 
 fn index_placed_model(
-    insert: On<Insert, GltfSource>,
+    insert: On<Insert<GltfSource>>,
     sources: Query<&GltfSource>,
     mut index: ResMut<ModelLodIndex>,
 ) {
@@ -526,7 +526,7 @@ fn index_placed_model(
 }
 
 fn unindex_placed_model(
-    replace: On<Discard, GltfSource>,
+    replace: On<Discard<GltfSource>>,
     sources: Query<&GltfSource>,
     mut index: ResMut<ModelLodIndex>,
 ) {

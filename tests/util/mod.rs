@@ -111,7 +111,7 @@ fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn add_editor_plugins(app: &mut App) {
     app.add_plugins(JackdawEditorPlugins::default());
-    // Bevy 0.19's component-sync hooks (`On<Remove, SyncToRenderWorld>`) read the
+    // Bevy 0.19's component-sync hooks (`On<Remove<SyncToRenderWorld>>`) read the
     // main-world `PendingSyncEntity` resource that `SyncWorldPlugin` installs.
     // The headless `RenderPlugin` (no backend) never spins up the render world,
     // so that plugin isn't pulled in here; add it explicitly so despawning a

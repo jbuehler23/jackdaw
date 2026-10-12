@@ -29,7 +29,7 @@ pub(crate) struct InspectorAddHeaderMount;
 /// come from [`rebuild_add_header`], which also catches a mount that
 /// appears after selection is already set.
 pub(crate) fn on_add_header_mount_added(
-    trigger: On<Add, InspectorAddHeaderMount>,
+    trigger: On<Add<InspectorAddHeaderMount>>,
     mut commands: Commands,
 ) {
     let host = trigger.event_target();

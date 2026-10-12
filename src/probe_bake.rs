@@ -33,7 +33,7 @@ pub(crate) fn plugin(app: &mut App) {
 
 /// Keep a probe's light probe out of the outliner and out of the saved scene:
 /// it is rebuilt from the probe whenever the scene loads.
-fn hide_probe_volumes(add: On<Add, jackdaw_surface::probe::ProbeVolume>, mut commands: Commands) {
+fn hide_probe_volumes(add: On<Add<jackdaw_surface::probe::ProbeVolume>>, mut commands: Commands) {
     commands
         .entity(add.entity)
         .insert((crate::EditorHidden, crate::NonSerializable));

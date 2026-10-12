@@ -606,7 +606,7 @@ fn push(world: &mut World, command: SetScatterData) {
 ///
 /// The chunk alone carries the mark: its children are unnamed, and a mark per
 /// drawn entity would be an archetype move per placement on every rebuild.
-pub fn hide_drawn_scatter(add: On<Add, ScatterChunk>, mut commands: Commands) {
+pub fn hide_drawn_scatter(add: On<Add<ScatterChunk>>, mut commands: Commands) {
     commands
         .entity(add.entity)
         .insert((crate::EditorHidden, crate::NonSerializable));

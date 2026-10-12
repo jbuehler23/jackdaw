@@ -1,4 +1,4 @@
-//! `On<Insert, UserType>` observers see the entity's final
+//! `On<Insert<UserType>>` observers see the entity's final
 //! `GlobalTransform` during `.bsn` scene load, not the
 //! pre-propagation identity. Verified against an actual
 //! `JackdawScene` load.
@@ -20,7 +20,7 @@ struct PlayerSpawn {
 }
 
 /// Captures `GlobalTransform.translation` values from the
-/// `On<Insert, PlayerSpawn>` observer.
+/// `On<Insert<PlayerSpawn>>` observer.
 #[derive(Resource, Default, Clone)]
 struct InsertObservation(Arc<Mutex<Vec<Vec3>>>);
 
@@ -37,7 +37,7 @@ fn on_insert_observer_sees_propagated_global_transform() {
     let observation = InsertObservation::default();
     app.insert_resource(observation.clone());
     app.add_observer(
-        |trigger: On<Insert, PlayerSpawn>,
+        |trigger: On<Insert<PlayerSpawn>>,
          transforms: Query<&GlobalTransform>,
          observation: Res<InsertObservation>| {
             if let Ok(gt) = transforms.get(trigger.entity)
@@ -84,6 +84,6 @@ bevy_ecs::hierarchy::Children [
     let translation = log[0];
     assert!(
         (translation.x - 10.0).abs() < 1e-4 && (translation.y - 5.0).abs() < 1e-4,
-        "On<Insert, PlayerSpawn> observer must see GlobalTransform = parent * child = (10, 5, 0); got {translation:?}",
+        "On<Insert<PlayerSpawn>> observer must see GlobalTransform = parent * child = (10, 5, 0); got {translation:?}",
     );
 }

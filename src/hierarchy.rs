@@ -939,7 +939,7 @@ fn drive_reveal_target(world: &mut World) {
 /// every container; the per-`(container, source)` `TreeIndex`
 /// keys keep them independent.
 fn on_root_entity_added(
-    trigger: On<Add, Transform>,
+    trigger: On<Add<Transform>>,
     mut new_roots: ResMut<NewRootRows>,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
@@ -957,7 +957,7 @@ fn on_root_entity_added(
 /// A UI scene root carries `UiTransform`, never `Transform`, so
 /// `on_root_entity_added` cannot fire for it. This mirrors it on `UiSceneRoot`.
 fn on_ui_root_added(
-    trigger: On<Add, UiSceneRoot>,
+    trigger: On<Add<UiSceneRoot>>,
     mut new_roots: ResMut<NewRootRows>,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
@@ -1040,7 +1040,7 @@ fn spawn_rows_for_new_roots(world: &mut World) {
 /// every Outliner panel. Also creates a row in each container if the
 /// entity is a visible root without one yet.
 fn on_name_changed(
-    trigger: On<Add, Name>,
+    trigger: On<Add<Name>>,
     mut commands: Commands,
     mut new_roots: ResMut<NewRootRows>,
     name_query: Query<&Name>,
@@ -1234,7 +1234,7 @@ fn refresh_all_row_chevrons(world: &mut World) {
 
 /// Re-derive the glyph whenever a component that decides it appears: the
 /// component can land after the row does, leaving the generic dot behind.
-fn refresh_icon_on_add<C: Component>(trigger: On<Add, C>, mut commands: Commands) {
+fn refresh_icon_on_add<C: Component>(trigger: On<Add<C>>, mut commands: Commands) {
     let entity = trigger.event_target();
     commands.queue(move |world: &mut World| {
         refresh_row_icon(world, entity);
@@ -1262,7 +1262,7 @@ fn refresh_icons_on_node_change(
 /// When an entity gets a parent (`ChildOf` added or changed),
 /// reparent or create its row in every Outliner panel.
 fn on_entity_reparented(
-    trigger: On<Add, ChildOf>,
+    trigger: On<Add<ChildOf>>,
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
@@ -1401,7 +1401,7 @@ fn on_entity_reparented(
 /// in every Outliner panel. Without this, panels show stale parent
 /// information after an undo.
 fn on_entity_deparented(
-    trigger: On<Remove, ChildOf>,
+    trigger: On<Remove<ChildOf>>,
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
     editor_check: Query<(), Or<(With<EditorEntity>, With<EditorHidden>)>>,
@@ -1425,7 +1425,7 @@ fn on_entity_deparented(
 /// When an entity's Name is removed, despawn its row in every
 /// Outliner panel that has one.
 fn on_entity_removed(
-    trigger: On<Despawn, Name>,
+    trigger: On<Despawn<Name>>,
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
 ) {
@@ -1441,7 +1441,7 @@ fn on_entity_removed(
 /// When `EditorHidden` is added, remove the row in every Outliner panel
 /// that has one (handles race with observers).
 fn on_entity_hidden(
-    trigger: On<Add, EditorHidden>,
+    trigger: On<Add<EditorHidden>>,
     mut commands: Commands,
     tree_index: Res<TreeIndex>,
 ) {
