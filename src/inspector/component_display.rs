@@ -1429,7 +1429,7 @@ pub(crate) fn spawn_component_display(
         commands
             .spawn_scene(bsn! {
                 @FeathersToolButton {
-                    @caption: bsn! { icon_scene(Icon::X.unicode(), tokens::TEXT_SIZE_SM_PX) },
+                    @caption: bsn! { @icon_scene(Icon::X.unicode(), tokens::TEXT_SIZE_SM_PX) },
                     @variant: {ButtonVariant::Plain}
                 }
             })

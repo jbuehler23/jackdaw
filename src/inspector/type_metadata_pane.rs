@@ -1,7 +1,7 @@
 //! Type-settings sub-pane toggled from an inspector card header.
 
 use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
-use bevy::feathers::cursor::EntityCursor;
+use bevy::picking::cursor::EntityCursor;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
@@ -246,7 +246,7 @@ fn type_metadata_toggle_button() -> impl Scene {
     let glyph = String::from(Icon::Ellipsis.unicode());
     bsn! {
         @FeathersToolButton {
-            @caption: bsn! { icon_scene(glyph, tokens::TEXT_SIZE_SM_PX) },
+            @caption: bsn! { @icon_scene(glyph, tokens::TEXT_SIZE_SM_PX) },
             @variant: {ButtonVariant::Plain}
         }
         Tooltip::title("Type settings")
@@ -257,7 +257,7 @@ fn clear_preview_button() -> impl Scene {
     let glyph = String::from(Icon::X.unicode());
     bsn! {
         @FeathersToolButton {
-            @caption: bsn! { icon_scene(glyph, tokens::TEXT_SIZE_PX) },
+            @caption: bsn! { @icon_scene(glyph, tokens::TEXT_SIZE_PX) },
             @variant: {ButtonVariant::Plain}
         }
         Tooltip::title("Clear preview")
