@@ -559,7 +559,7 @@ dependencies = [
  "glam_matrix_extras",
  "itertools 0.15.0",
  "obvhs",
- "parry3d",
+ "parry3d 0.27.0",
  "parry3d-f64",
  "smallvec",
  "thiserror 2.0.20",
@@ -1996,7 +1996,7 @@ dependencies = [
  "approx",
  "bevy_reflect 0.20.0",
  "derive_more",
- "glam 0.33.5",
+ "glam 0.33.12",
  "libm",
  "rand 0.10.2",
  "serde",
@@ -2052,7 +2052,7 @@ dependencies = [
  "bytemuck",
  "derive_more",
  "encase",
- "glam 0.33.5",
+ "glam 0.33.12",
  "half",
  "hexasphere 19.0.0",
  "serde",
@@ -2288,7 +2288,7 @@ dependencies = [
  "downcast-rs 2.0.2",
  "erased-serde",
  "foldhash 0.2.0",
- "glam 0.33.5",
+ "glam 0.33.12",
  "indexmap",
  "inventory",
  "petgraph",
@@ -2449,7 +2449,7 @@ dependencies = [
  "derive_more",
  "downcast-rs 2.0.2",
  "encase",
- "glam 0.33.5",
+ "glam 0.33.12",
  "image",
  "indexmap",
  "itertools 0.14.0",
@@ -3614,7 +3614,7 @@ dependencies = [
  "mach2",
  "ndk",
  "ndk-context",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "objc2 0.6.4",
  "objc2-audio-toolbox",
@@ -4691,9 +4691,9 @@ dependencies = [
 
 [[package]]
 name = "glam"
-version = "0.33.5"
+version = "0.33.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c426daf70099baff33fac0ba85151c42424861c56828cef9ba02dacb78eb6b26"
+checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
 dependencies = [
  "approx",
  "bytemuck",
@@ -4722,7 +4722,19 @@ dependencies = [
  "approx",
  "glam 0.32.1",
  "num-traits",
- "simba",
+ "simba 0.9.1",
+]
+
+[[package]]
+name = "glamx"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28d74079318e3a077bd3d15faa90fde24fa37bb9f157f92f853e6019a15fd413"
+dependencies = [
+ "approx",
+ "glam 0.33.12",
+ "num-traits",
+ "simba 0.10.2",
 ]
 
 [[package]]
@@ -4958,7 +4970,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "163385eff5a0cf606ebe2c10b3a44ab02f4306e83fbd068a64f5e1d72a3049ac"
 dependencies = [
  "constgebra",
- "glam 0.33.5",
+ "glam 0.33.12",
  "tinyvec",
 ]
 
@@ -5627,7 +5639,7 @@ dependencies = [
 name = "jackdaw_csg"
 version = "0.20.0-dev"
 dependencies = [
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_geometry",
  "jackdaw_scene_types",
  "manifold-rust",
@@ -5699,7 +5711,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cdt",
  "earcutr",
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_scene_types",
  "serde",
  "serde_json",
@@ -5710,9 +5722,9 @@ dependencies = [
 name = "jackdaw_hull"
 version = "0.20.0-dev"
 dependencies = [
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_geometry",
- "parry3d",
+ "parry3d 0.31.1",
 ]
 
 [[package]]
@@ -5720,7 +5732,7 @@ name = "jackdaw_jsn"
 version = "0.20.0-dev"
 dependencies = [
  "bevy 0.20.0",
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_bsn",
  "jackdaw_geometry",
  "jackdaw_scene_types",
@@ -5836,7 +5848,7 @@ dependencies = [
 name = "jackdaw_pick"
 version = "0.20.0-dev"
 dependencies = [
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_geometry",
 ]
 
@@ -5962,7 +5974,7 @@ version = "0.20.0-dev"
 dependencies = [
  "bevy 0.20.0",
  "dunce",
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_geometry",
  "meshopt",
  "path-slash",
@@ -5996,7 +6008,7 @@ dependencies = [
 name = "jackdaw_select"
 version = "0.20.0-dev"
 dependencies = [
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_geometry",
 ]
 
@@ -6004,7 +6016,7 @@ dependencies = [
 name = "jackdaw_snap"
 version = "0.20.0-dev"
 dependencies = [
- "glam 0.33.5",
+ "glam 0.33.12",
  "serde",
  "serde_json",
 ]
@@ -6036,7 +6048,7 @@ dependencies = [
 name = "jackdaw_uv"
 version = "0.20.0-dev"
 dependencies = [
- "glam 0.33.5",
+ "glam 0.33.12",
  "jackdaw_geometry",
 ]
 
@@ -6809,6 +6821,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-derive"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4e98dc3b890f6c23a0f9d3d491a2823d0dea0fa656302a13dd225fa924112a8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "num-integer"
 version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7252,7 +7275,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf590a9310ba69b2340562d39f0c9bddd3677130bfd24a5df22941552e791bac"
 dependencies = [
  "bytemuck",
- "glam 0.33.5",
+ "glam 0.32.1",
  "half",
  "log",
  "rdst",
@@ -7425,15 +7448,43 @@ dependencies = [
  "either",
  "ena",
  "foldhash 0.2.0",
- "glamx",
+ "glamx 0.2.0",
  "hashbrown 0.16.1",
  "log",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "ordered-float",
  "rayon",
- "rstar",
- "simba",
+ "rstar 0.12.2",
+ "simba 0.9.1",
+ "slab",
+ "smallvec",
+ "spade",
+ "static_assertions",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "parry3d"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b626edc0b497dba4bdf6e1e0797895294ed9f61dac2bd28cb5d34d37ad2ca7e"
+dependencies = [
+ "approx",
+ "arrayvec",
+ "bitflags 2.13.1",
+ "downcast-rs 2.0.2",
+ "either",
+ "ena",
+ "foldhash 0.2.0",
+ "glamx 0.3.1",
+ "hashbrown 0.17.1",
+ "log",
+ "num-derive 0.5.1",
+ "num-traits",
+ "ordered-float",
+ "rstar 0.13.0",
+ "simba 0.10.2",
  "slab",
  "smallvec",
  "spade",
@@ -7454,15 +7505,15 @@ dependencies = [
  "either",
  "ena",
  "foldhash 0.2.0",
- "glamx",
+ "glamx 0.2.0",
  "hashbrown 0.16.1",
  "log",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "ordered-float",
  "rayon",
- "rstar",
- "simba",
+ "rstar 0.12.2",
+ "simba 0.9.1",
  "slab",
  "smallvec",
  "spade",
@@ -8239,6 +8290,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rstar"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5912b862fa5ffb462607bfd1e35036c458c537921f508c8235a83d5f3987edfe"
+dependencies = [
+ "heapless 0.8.0",
+ "num-traits",
+ "smallvec",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8346,6 +8408,15 @@ name = "safe_arch"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
 dependencies = [
  "bytemuck",
 ]
@@ -8578,7 +8649,19 @@ dependencies = [
  "num-complex",
  "num-traits",
  "paste",
- "wide",
+ "wide 0.7.33",
+]
+
+[[package]]
+name = "simba"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1a7200d82ff1c7b4235efd12f11e2537a402c91cf83a5cb97ce80eef787fde7"
+dependencies = [
+ "approx",
+ "num-complex",
+ "num-traits",
+ "wide 1.7.1",
 ]
 
 [[package]]
@@ -10267,7 +10350,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch 1.2.0",
 ]
 
 [[package]]
