@@ -16,18 +16,21 @@ use bevy::{
     prelude::*,
     text::{EditableText, EditableTextSystems, TextCursorStyle, TextEdit},
     ui::Checked,
-    ui_widgets::{Button, Checkbox, RadioButton, RadioGroup, Slider, SliderValue, ValueChange},
+    ui_widgets::{
+        Button, Checkbox, RadioButton, RadioGroup, Slider, SliderValue, TextInput, ValueChange,
+    },
 };
 
 /// The text an authored input holds, in a form a scene document can carry.
 ///
 /// `bevy_text::EditableText` is not `Reflect`, so this reflectable half is what
 /// a document and a binding see; [`AuthoredWidgetPlugin`] keeps the two in
-/// step. [`TextCursorStyle`] is required because `bevy_ui_render`'s
-/// editable-text extract queries it without an `Option`.
+/// step. [`TextInput`] makes the buffer editable, and [`TextCursorStyle`] is
+/// required because `bevy_ui_render`'s editable-text extract queries it
+/// without an `Option`.
 #[derive(Component, Reflect, Default, Debug, Clone, PartialEq, Eq)]
 #[reflect(Component, Default)]
-#[require(EditableText, TextCursorStyle)]
+#[require(TextInput, TextCursorStyle)]
 pub struct TextValue(
     /// The text the input holds.
     pub String,
