@@ -110,11 +110,10 @@ fn screen_position_of(app: &mut App, panel: Entity, authored: Vec2) -> Vec2 {
     logical * app.world().resource::<UiScale>().0
 }
 
-fn pointer_at<E: std::fmt::Debug + Clone + Reflect>(
+fn pointer_at<E: Event<Trigger<'static>: Default>>(
     app: &mut App,
-    target: Entity,
     position: Vec2,
-    event: E,
+    event: impl FnOnce(Pointer) -> E,
 ) {
     let window = app
         .world_mut()
@@ -124,16 +123,13 @@ fn pointer_at<E: std::fmt::Debug + Clone + Reflect>(
     let render_target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointerevent {
-        entity: target,
-        pointer: Pointer::new(
-            PointerId::Mouse,
-            Location {
-                target: render_target,
-                position,
-            },
-        ),
-    });
+    app.world_mut().trigger(event(Pointer::new(
+        PointerId::Mouse,
+        Location {
+            target: render_target,
+            position,
+        },
+    )));
 }
 
 fn overlay(app: &mut App) -> Entity {
@@ -168,41 +164,32 @@ fn drag_to(app: &mut App, panel: Entity, target: Entity, from: Vec2, to: Vec2) -
         .expect("host on panel parent")
         .camera;
     let start = screen_position_of(app, panel, from);
-    pointer_at(
-        app,
-        target,
-        start,
-        DragStart {
-            button: PointerButton::Primary,
-            hit: HitData::new(camera, 0.0, None, None),
-        },
-    );
+    pointer_at(app, start, |pointer| PointerDragStart {
+        entity: target,
+        pointer,
+        button: PointerButton::Primary,
+        hit: HitData::new(camera, 0.0, None, None),
+    });
     settle(app);
     let distance = screen_position_of(app, panel, to) - start;
-    pointer_at(
-        app,
-        target,
-        start + distance,
-        Drag {
-            button: PointerButton::Primary,
-            distance,
-            delta: distance,
-        },
-    );
+    pointer_at(app, start + distance, |pointer| PointerDrag {
+        entity: target,
+        pointer,
+        button: PointerButton::Primary,
+        distance,
+        delta: distance,
+    });
     settle(app);
     (start, distance)
 }
 
 fn release(app: &mut App, target: Entity, start: Vec2, distance: Vec2) {
-    pointer_at(
-        app,
-        target,
-        start + distance,
-        DragEnd {
-            button: PointerButton::Primary,
-            distance,
-        },
-    );
+    pointer_at(app, start + distance, |pointer| PointerDragEnd {
+        entity: target,
+        pointer,
+        button: PointerButton::Primary,
+        distance,
+    });
     settle(app);
 }
 

@@ -24,17 +24,12 @@
 ///
 /// `use bevy::prelude::*` (aliased to `jackdaw_sdk::prelude`) and
 /// `use jackdaw_api::prelude::*` (also aliased to
-/// `jackdaw_sdk::prelude`) both land here. `bevy::prelude` and
-/// `jackdaw_api::prelude` define a few same-named items (`Press`,
-/// `Release` from `bevy_input` vs. `bevy_enhanced_input`). Extensions
-/// referencing those unqualified will need to disambiguate; globbing
-/// both is still the best UX since authors rarely touch the overlap.
+/// `jackdaw_sdk::prelude`) both land here.
 pub mod prelude {
-    // using the bevy-defined exports over the BEI-defined ones.
     // Linked rather than inlined: inlining copies the whole of bevy's
     // prelude into this crate's docs.
     #[doc(no_inline)]
-    pub use bevy::prelude::{Cancel, Press, Release, *};
+    pub use bevy::prelude::*;
     pub use jackdaw_api::prelude::*;
 }
 

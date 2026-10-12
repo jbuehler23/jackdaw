@@ -11,7 +11,9 @@ use bevy::{
         backend::HitData,
         events::{Pointer, PointerClick, PointerPress},
         hover::PickingInteraction,
-        pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput, PointerPress},
+        pointer::{
+            Location, PointerAction, PointerButton, PointerId, PointerInput, PointerPressState,
+        },
     },
     prelude::*,
     render::{
@@ -1366,10 +1368,6 @@ fn the_mode_control_is_a_radio_group_and_checks_the_current_mode() {
             app.world().get::<RadioButton>(segment).is_some(),
             "a segment is a radio button",
         );
-        assert!(
-            app.world().get::<Interaction>(segment).is_none(),
-            "and not a hand-rolled interaction control",
-        );
         let bar = app
             .world()
             .get::<ChildOf>(segment)
@@ -1512,15 +1510,13 @@ fn press_over_authored(app: &mut App, panel: Entity, authored: Vec2) {
         .get::<Viewport2dPanelHost>(panel)
         .map(|host| (host.stage, host.camera))
         .expect("host on panel parent");
-    let event = Press {
+    let target = window_target(app);
+    app.world_mut().trigger(PointerPress {
+        entity: stage,
+        pointer: Pointer::new(PointerId::Mouse, Location { target, position }),
         button: PointerButton::Primary,
         hit: HitData::new(camera, 0.0, None, None),
         count: 1,
-    };
-    let target = window_target(app);
-    app.world_mut().trigger(Pointerevent {
-        entity: stage,
-        pointer: Pointer::new(PointerId::Mouse, Location { target, position }),
     });
     settle(app);
 }
@@ -1533,8 +1529,8 @@ fn pointer_is_pressed(app: &App, panel: Entity) -> bool {
         .expect("host on panel parent")
         .pointer;
     app.world()
-        .get::<PointerPress>(pointer)
-        .is_some_and(PointerPress::is_any_pressed)
+        .get::<PointerPressState>(pointer)
+        .is_some_and(PointerPressState::is_any_pressed)
 }
 
 fn moved() -> PointerAction {

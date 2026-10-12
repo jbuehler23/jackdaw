@@ -726,7 +726,7 @@ fn window_target(app: &mut App) -> bevy::camera::NormalizedRenderTarget {
 
 /// Drop `dragged` on `zone` with the pointer at `position`.
 fn drop_at(app: &mut App, zone: Entity, dragged: Entity, position: Vec2) {
-    use bevy::picking::events::DragDrop;
+    use bevy::picking::events::{Pointer, PointerDragDrop};
     use bevy::picking::pointer::{Location, PointerId};
 
     let target = window_target(app);
@@ -747,7 +747,7 @@ fn drop_at(app: &mut App, zone: Entity, dragged: Entity, position: Vec2) {
 #[test]
 fn resting_a_drag_on_a_closed_row_opens_it() {
     use bevy::camera::{NormalizedRenderTarget, RenderTarget};
-    use bevy::picking::events::DragEnter;
+    use bevy::picking::events::{Pointer, PointerDragEnter};
     use bevy::picking::pointer::{Location, PointerId};
     use bevy::window::{PrimaryWindow, WindowRef};
     use jackdaw_widgets::tree_view::{TreeNodeExpanded, TreeRowContent};
