@@ -10,25 +10,46 @@ use jackdaw::prelude::*;
 
 fn main() -> AppExit {
     let args: Vec<String> = std::env::args().collect();
-    if let Some("--version" | "-V") = args.get(1).map(String::as_str) {
+    let launch = jackdaw::cli::decide(&args);
+    if launch != jackdaw::cli::Launch::Editor {
         #[cfg(all(windows, not(debug_assertions)))]
         attach_parent_console();
-        #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
-        {
-            println!(
-                "jackdaw {} (targets bevy {})",
-                jackdaw_project_build::VERSION,
-                jackdaw_project_build::BEVY_VERSION
-            );
-        }
-        return AppExit::Success;
     }
-    // `jd export-terrain` runs here: reading a scene needs this binary's
-    // Bevy types, which `jd` does not link.
-    if let Some("export-terrain") = args.get(1).map(String::as_str) {
-        #[cfg(all(windows, not(debug_assertions)))]
-        attach_parent_console();
-        return jackdaw::terrain::export::run_export_terrain_cli(&args[2..]);
+    match launch {
+        jackdaw::cli::Launch::Editor => {}
+        jackdaw::cli::Launch::Help => {
+            #[expect(clippy::print_stdout, reason = "--help reports to stdout")]
+            {
+                println!("{}", jackdaw::cli::USAGE);
+            }
+            return AppExit::Success;
+        }
+        jackdaw::cli::Launch::Version => {
+            #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
+            {
+                println!(
+                    "jackdaw {} (targets bevy {})",
+                    jackdaw_project_build::VERSION,
+                    jackdaw_project_build::BEVY_VERSION
+                );
+            }
+            return AppExit::Success;
+        }
+        // `jd export-terrain` runs here: reading a scene needs this binary's
+        // Bevy types, which `jd` does not link.
+        jackdaw::cli::Launch::ExportTerrain(rest) => {
+            return jackdaw::terrain::export::run_export_terrain_cli(rest);
+        }
+        jackdaw::cli::Launch::Unknown(flag) => {
+            #[expect(clippy::print_stderr, reason = "usage errors report to stderr")]
+            {
+                eprintln!(
+                    "jackdaw: unknown option `{flag}`\n\n{}",
+                    jackdaw::cli::USAGE
+                );
+            }
+            return AppExit::from_code(2);
+        }
     }
 
     // Install a SIGINT/SIGTERM handler before anything else gets a
@@ -197,7 +218,7 @@ fn main() -> AppExit {
 }
 
 /// Gives a console-less build the console it was started from, if any, so
-/// `--version` prints there. Output already redirected is left alone.
+/// `--version` and `--help` print there. Output already redirected is left alone.
 #[cfg(all(windows, not(debug_assertions)))]
 fn attach_parent_console() {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;

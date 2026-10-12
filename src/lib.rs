@@ -25,6 +25,7 @@ pub mod brush_element_ops;
 pub mod build_panel;
 pub mod build_status;
 pub mod builtin_extensions;
+pub mod cli;
 pub mod clip_ops;
 pub mod command_palette;
 pub mod commands;
