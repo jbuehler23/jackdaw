@@ -35,9 +35,11 @@ impl std::error::Error for BsnLoadError {}
 /// The loader strips it before installing the root, so it never reaches apply.
 pub(crate) const SCENE_ROOT_GROUP_MARKER: &str = "jackdaw_bsn::__SceneRootGroup";
 
-/// Parse BSN text into a document [`SceneBsnAst`].
+/// Parse BSN text into a document [`SceneBsnAst`], first migrating the type
+/// paths of text stamped by an older Bevy (see [`crate::migrate`]).
 pub fn parse_bsn_text(text: &str) -> Result<SceneBsnAst, BsnLoadError> {
-    let (mut ast, root) = crate::parse::parse_bsn(text).map_err(BsnLoadError::Parse)?;
+    let text = crate::migrate::migrate_stamped(text);
+    let (mut ast, root) = crate::parse::parse_bsn(&text).map_err(BsnLoadError::Parse)?;
 
     // Multiple roots emit as a single anonymous entity holding only a Children
     // relation; unwrap it to recover the real roots. A genuine single root that

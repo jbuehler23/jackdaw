@@ -247,17 +247,6 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             },
         ));
 
-        // Migrate reflect type-paths for scenes written under an older Bevy,
-        // keyed by the version the save stamped in. A no-op at the current
-        // baseline and for unstamped (hand-authored) scenes; the stamp is a
-        // BSN comment, so it does not affect parsing either way.
-        let bsn_text = match crate::scene_io::stamp::read_stamp(&bsn_text) {
-            Some(stamp) => {
-                crate::scene_io::stamp::migrate_type_paths(&bsn_text, &stamp.bevy).into_owned()
-            }
-            None => bsn_text,
-        };
-
         // Parse and validate before touching the open scene, so a rejected
         // document does not also wipe the scene already loaded.
         let mut authored = match jackdaw_bsn::parse_bsn_text(&bsn_text) {

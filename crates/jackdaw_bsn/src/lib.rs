@@ -15,6 +15,7 @@ pub mod emitter;
 pub mod file;
 pub mod header;
 pub mod loader;
+pub mod migrate;
 pub mod parse;
 pub mod retired;
 pub mod sync;
