@@ -23,4 +23,5 @@ mod scene_data_cards;
 mod schema_definition_card;
 mod selection_switch;
 mod typed_entry;
+mod unloaded_component_card;
 mod widget_cards;

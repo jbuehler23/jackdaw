@@ -317,12 +317,14 @@ pub(crate) fn component_remove(
             );
             return;
         }
-        // A project component lives only as a document patch, so there is no
-        // ECS component to remove and dropping the patch is the removal.
-        if world
+        // A project component, or one whose type the editor has not loaded,
+        // lives only as a document patch, so there is no ECS component to
+        // remove and dropping the patch is the removal.
+        let document_only = world
             .get_resource::<ProjectTypes>()
             .is_some_and(|pt| pt.is_project_component(&type_path))
-        {
+            || component_id_for_path(world, &type_path).is_none();
+        if document_only {
             let Some(mut cmd) = RemoveProjectComponent::from_world(world, entity, type_path) else {
                 return;
             };

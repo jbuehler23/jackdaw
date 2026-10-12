@@ -82,23 +82,18 @@ pub(crate) fn spawn_project_component_fields(
     }
 }
 
-/// Render a component the document holds that the editor cannot edit: no
-/// registration answers to it, and the schema reports the type it belongs to
-/// at most. Every authored field is shown as the document spells it.
+/// Render an authored variant of an enum the project schema reports, which no
+/// registration answers to. Every authored field is shown as the document
+/// spells it.
 pub(crate) fn spawn_document_component_fields(
     commands: &mut Commands,
     body_entity: Entity,
     ast: &SceneBsnAst,
     node: Entity,
     type_path: &str,
-    variant_of_a_reported_type: bool,
 ) {
-    let note = match variant_of_a_reported_type {
-        true => "This variant is shown as the document spells it, read-only.",
-        false => "The project schema does not describe this type, so its fields are read-only.",
-    };
     commands.spawn((
-        Text::new(note),
+        Text::new("This variant is shown as the document spells it, read-only."),
         TextFont {
             font_size: jackdaw_feathers::tokens::TEXT_SIZE_SM,
             ..Default::default()
@@ -116,6 +111,76 @@ pub(crate) fn spawn_document_component_fields(
             TextColor(jackdaw_feathers::tokens::TEXT_SECONDARY),
             ChildOf(body_entity),
         ));
+    }
+}
+
+/// Render a component no registration and no schema describes: its full type
+/// path, where it comes from, and every authored field as the document spells
+/// it. Nothing here is editable.
+pub(crate) fn spawn_unavailable_component_fields(
+    commands: &mut Commands,
+    body_entity: Entity,
+    ast: &SceneBsnAst,
+    node: Entity,
+    type_path: &str,
+) {
+    let line = |commands: &mut Commands, text: String, color: Color| {
+        commands.spawn((
+            Text::new(text),
+            TextFont {
+                font_size: jackdaw_feathers::tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(color),
+            ChildOf(body_entity),
+        ));
+    };
+    line(
+        commands,
+        type_path.to_string(),
+        jackdaw_feathers::tokens::TEXT_MUTED_COLOR.into(),
+    );
+    line(
+        commands,
+        super::unavailable::provider_line(type_path),
+        jackdaw_feathers::tokens::TEXT_SECONDARY,
+    );
+    for (name, value) in document_fields(ast, node, type_path) {
+        line(
+            commands,
+            format!("{name}: {value}"),
+            jackdaw_feathers::tokens::TEXT_PRIMARY,
+        );
+    }
+}
+
+/// The fields a document patch spells, each as the scene file writes it.
+fn document_fields(ast: &SceneBsnAst, node: Entity, type_path: &str) -> Vec<(String, String)> {
+    let Some(patch) = ast
+        .find_patch_by_type_path(node, type_path)
+        .and_then(|patch| ast.get_patch(patch))
+    else {
+        return Vec::new();
+    };
+    match patch {
+        jackdaw_bsn::BsnPatch::Struct(data) => data
+            .fields
+            .0
+            .iter()
+            .map(|field| {
+                (
+                    field.name.clone(),
+                    jackdaw_bsn::emit_value_text(&field.value),
+                )
+            })
+            .collect(),
+        jackdaw_bsn::BsnPatch::TupleStruct(data) => data
+            .values
+            .iter()
+            .enumerate()
+            .map(|(at, value)| (at.to_string(), jackdaw_bsn::emit_value_text(value)))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 

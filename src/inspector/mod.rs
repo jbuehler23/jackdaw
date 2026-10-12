@@ -26,6 +26,7 @@ pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
 pub(crate) mod schema_fields;
 pub(crate) mod type_metadata_pane;
+pub mod unavailable;
 pub mod val_field;
 
 use crate::EditorEntity;
@@ -93,6 +94,7 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<InspectorCollapseState>();
         app.init_resource::<bindings_card::BindingsCardEcho>();
         app.init_resource::<PendingInspectorRebuild>();
+        app.init_resource::<unavailable::UnavailableTypes>();
 
         let mut denylist = component_picker::PickerDenylist::default();
         component_picker::populate_avian_picker_denylist(&mut denylist);
@@ -139,6 +141,14 @@ impl Plugin for InspectorPlugin {
                 Update,
                 component_display::sync_inspector_to_selection
                     .before(category_strip::resolve_active_on_rebuild),
+            )
+            .add_systems(
+                Update,
+                (
+                    unavailable::track_unavailable_types,
+                    unavailable::update_unavailable_notice,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,

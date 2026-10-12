@@ -19,4 +19,5 @@ mod native_dialogs;
 mod physics_round_trip;
 mod scene_reopen;
 mod scenes_swap;
+mod unloaded_components;
 mod widget_defaults;

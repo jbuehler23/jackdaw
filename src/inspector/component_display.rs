@@ -794,12 +794,17 @@ pub(crate) fn build_inspector_displays(
     if let Some(ast) = scene_ast
         && let Some(node) = ast.ast_for(source_entity)
     {
+        let mut unavailable = Vec::new();
         for type_path in ast.component_type_paths(node) {
             let schema = project_types.component(&type_path);
             if schema.is_none()
                 && (known_to_the_editor(&registry, &type_path)
                     || project_types.type_schema(&type_path).is_some())
             {
+                continue;
+            }
+            if super::unavailable::is_unavailable(&registry, project_types, &type_path) {
+                unavailable.push(type_path);
                 continue;
             }
             let enclosing = enclosing_type(&type_path)
@@ -851,15 +856,21 @@ pub(crate) fn build_inspector_displays(
                     names,
                 ),
                 None => super::project_component_display::spawn_document_component_fields(
-                    commands,
-                    card.body,
-                    ast,
-                    node,
-                    &type_path,
-                    enclosing.is_some(),
+                    commands, card.body, ast, node, &type_path,
                 ),
             }
         }
+        spawn_unavailable_group(
+            commands,
+            inspector_entity,
+            source_entity,
+            ast,
+            node,
+            &unavailable,
+            &icon_font.0,
+            &editor_font.0,
+            collapse_state,
+        );
     }
 
     // Add Component button is in the static layout header (layout.rs entity_inspector)
@@ -887,6 +898,93 @@ pub(crate) fn build_inspector_displays(
             crate::lod_bar::spawn_placement_card(world, inspector_entity, source_entity);
         });
     }
+}
+
+/// The components on `node` the editor cannot load, as one group of read-only
+/// cards: each names its type, says where it comes from, and shows its fields
+/// as the document spells them. Removing one is allowed; editing is not.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the card spawner's inputs, passed through"
+)]
+fn spawn_unavailable_group(
+    commands: &mut Commands,
+    inspector_entity: Entity,
+    source_entity: Entity,
+    ast: &jackdaw_bsn::SceneBsnAst,
+    node: Entity,
+    type_paths: &[String],
+    icon_font: &Handle<Font>,
+    editor_font: &Handle<Font>,
+    collapse_state: &super::InspectorCollapseState,
+) {
+    if type_paths.is_empty() {
+        return;
+    }
+    let group = commands
+        .spawn((
+            // Marked as a display so the next rebuild clears it with the cards.
+            ComponentDisplay,
+            InspectorGroupSection,
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                row_gap: Val::Px(tokens::SPACING_SM),
+                ..Default::default()
+            },
+        ))
+        .id();
+    commands.spawn((
+        Text::new(format!("Not loaded ({})", type_paths.len())),
+        TextFont {
+            font_size: tokens::TEXT_SIZE_SM,
+            weight: FontWeight::MEDIUM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(group),
+    ));
+    for type_path in type_paths {
+        let card = spawn_component_display(
+            commands,
+            ComponentDisplaySpec {
+                name: super::unavailable::card_name(type_path),
+                type_path,
+                entity: source_entity,
+                is_overridden: false,
+                is_derived: false,
+                removable: true,
+                prefab_ctx: None,
+                revert_through_prefab: false,
+                icon_font,
+                editor_font,
+                collapse_state,
+            },
+        );
+        commands.entity(card.section).insert(ChildOf(group));
+        commands.spawn((
+            Node {
+                padding: UiRect::axes(Val::Px(tokens::SPACING_XS), Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_SM)),
+                flex_shrink: 0.0,
+                ..Default::default()
+            },
+            BackgroundColor(tokens::AXIS_LABEL_BG),
+            ChildOf(card.title_row),
+            children![(
+                Text::new("not loaded"),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_MUTED_COLOR.into()),
+            )],
+        ));
+        super::project_component_display::spawn_unavailable_component_fields(
+            commands, card.body, ast, node, type_path,
+        );
+    }
+    jackdaw_feathers::utils::attach_or_despawn(commands, inspector_entity, group);
 }
 
 /// Despawn inspector card and picker children as one queued world step so
@@ -1070,6 +1168,8 @@ pub(crate) struct ComponentDisplayCard {
     pub section: Entity,
     pub body: Entity,
     pub header: Entity,
+    /// The row holding the disclosure, icon and name, for chips beside the name.
+    pub title_row: Entity,
     pub type_settings: Entity,
 }
 
@@ -1394,6 +1494,7 @@ pub(crate) fn spawn_component_display(
         section: section_entity,
         body: body_entity,
         header,
+        title_row: toggle_area,
         type_settings,
     }
 }

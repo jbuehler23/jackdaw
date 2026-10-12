@@ -224,6 +224,13 @@ fn emit_fields(fields: &[BsnField], indent: usize, out: &mut String) {
     }
 }
 
+/// One value as the scene file spells it, on a single line.
+pub fn emit_value_text(value: &BsnValue) -> String {
+    let mut out = String::new();
+    emit_value(value, &mut out);
+    out
+}
+
 fn emit_value(value: &BsnValue, out: &mut String) {
     match value {
         BsnValue::Float(f) => {
