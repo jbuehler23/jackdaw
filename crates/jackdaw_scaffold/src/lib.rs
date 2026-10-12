@@ -2300,6 +2300,8 @@ fn substitute_placeholders(
     title: &str,
     modules: &ModuleSet,
 ) -> String {
+    let text = replace_line(text, "{{module_crates}}", &module_crate_lines(modules));
+    let text = replace_line(&text, "{{module_plugins}}", &module_plugin_lines(modules));
     text.replace("{{project-name | title_case}}", title)
         .replace(
             "{{jackdaw_modules}}",
@@ -2309,8 +2311,6 @@ fn substitute_placeholders(
             "{{jackdaw_runtime_features}}",
             &template_runtime_features(modules),
         )
-        .replace("{{module_crates}}\n", &module_crate_lines(modules))
-        .replace("{{module_plugins}}\n", &module_plugin_lines(modules))
         .replace("{{crate_name}}", crate_name)
         .replace("{{authors}}", authors)
         .replace("{{project-name}}", project_name)
@@ -2331,6 +2331,13 @@ fn substitute_placeholders(
             "{{jackdaw_extension_dep}}",
             &jackdaw_dep_requirement("jackdaw_extension"),
         )
+}
+
+/// Replace each line holding only `placeholder` with `lines`, whichever
+/// line ending the template was checked out with.
+fn replace_line(text: &str, placeholder: &str, lines: &str) -> String {
+    text.replace(&format!("{placeholder}\r\n"), lines)
+        .replace(&format!("{placeholder}\n"), lines)
 }
 
 /// The runtime features a new game enables: its modules' features, then
@@ -3489,6 +3496,31 @@ mod tests {
         assert_eq!(modules_arg(&args(&["game"])).unwrap(), None);
         assert!(modules_arg(&args(&["game", "--modules", "rendering"])).is_err());
         assert!(modules_arg(&args(&["game", "--modules", "physics", "--no-modules"])).is_err());
+    }
+
+    /// Windows checkouts can carry the templates with CRLF line endings.
+    #[test]
+    fn crlf_templates_still_get_their_module_lines() {
+        for path in [
+            "templates/game/Cargo.toml.template",
+            "templates/game/src/main.rs.template",
+        ] {
+            let template =
+                std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
+                    .unwrap()
+                    .replace("\r\n", "\n")
+                    .replace('\n', "\r\n");
+            let filled = substitute_placeholders(
+                &template,
+                "my-game",
+                "my_game",
+                "",
+                "My Game",
+                &ModuleCatalog::builtin().defaults(),
+            );
+            assert!(!filled.contains("{{"), "{path}: got:\n{filled}");
+            assert!(filled.contains("avian3d"), "{path}: got:\n{filled}");
+        }
     }
 
     #[test]
