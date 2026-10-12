@@ -58,6 +58,7 @@ pub(crate) fn plugin(app: &mut App) {
 
 /// Which lights cast shadows in the editor's views.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct ShadowCasters {
     pub sun: bool,
     /// Point and spot lights.

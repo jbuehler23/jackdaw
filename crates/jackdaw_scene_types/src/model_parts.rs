@@ -108,7 +108,7 @@ pub fn flatten_gltf_nodes(
                 .unwrap_or_default();
             let mesh_asset = mesh_assets.get(&primitive.mesh)?;
             needs_instance |= mesh_asset.has_morph_targets();
-            let Some(bounds) = mesh_asset.compute_aabb() else {
+            let Some(bounds) = mesh_asset.get_aabb() else {
                 warn!(
                     "a primitive of {:?} has no positions and draws nothing",
                     gltf.default_scene

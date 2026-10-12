@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy::render::renderer::{RenderAdapter, RenderInstance};
-use bevy::render::view::window::{ExtractedWindows, create_surfaces};
+use bevy::render::view::window::{ExtractedWindow, create_surfaces};
 use bevy::render::{Render, RenderApp};
-use bevy::window::CompositeAlphaMode;
+use bevy::window::{CompositeAlphaMode, PrimaryWindow, RawHandleWrapper};
 
 use crate::{WindowShellRoot, WindowTitleBarRoot};
 
@@ -52,15 +52,19 @@ fn resolve_alpha_mode(
 /// Probes each new window's surface before Bevy configures it, so an adapter
 /// without alpha compositing gets an opaque surface instead of a validation error.
 fn fall_back_to_supported_alpha_mode(
-    mut windows: ResMut<ExtractedWindows>,
+    mut windows: Query<(
+        Entity,
+        &mut ExtractedWindow,
+        &RawHandleWrapper,
+        Has<PrimaryWindow>,
+    )>,
     instance: Res<RenderInstance>,
     adapter: Res<RenderAdapter>,
     alpha: Res<SurfaceAlpha>,
     mut probed: Local<EntityHashSet>,
 ) {
-    let primary = windows.primary;
-    for window in windows.windows.values_mut() {
-        if !probed.insert(window.entity)
+    for (entity, mut window, handle, is_primary) in &mut windows {
+        if !probed.insert(entity)
             || !matches!(
                 window.alpha_mode,
                 CompositeAlphaMode::PreMultiplied | CompositeAlphaMode::PostMultiplied
@@ -69,8 +73,8 @@ fn fall_back_to_supported_alpha_mode(
             continue;
         }
         let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: Some(window.handle.get_display_handle()),
-            raw_window_handle: window.handle.get_window_handle(),
+            raw_display_handle: Some(handle.get_display_handle()),
+            raw_window_handle: handle.get_window_handle(),
         };
         // SAFETY: extracted window handles stay valid while the window exists,
         // and the probe surface is dropped before this system returns.
@@ -87,7 +91,7 @@ fn fall_back_to_supported_alpha_mode(
             window.alpha_mode
         );
         window.alpha_mode = resolved;
-        if primary == Some(window.entity) {
+        if is_primary {
             alpha.0.store(false, Ordering::Relaxed);
         }
     }

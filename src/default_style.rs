@@ -158,6 +158,7 @@ pub const DEFAULT_LINE_CONFIG: GizmoLineConfig = GizmoLineConfig {
     perspective: false,
     style: GizmoLineStyle::Solid,
     joints: GizmoLineJoint::None,
+    animation_offset: 0.0,
 };
 pub const DEFAULT_DASHED_LINE_CONFIG: GizmoLineConfig = GizmoLineConfig {
     style: GizmoLineStyle::Dashed {

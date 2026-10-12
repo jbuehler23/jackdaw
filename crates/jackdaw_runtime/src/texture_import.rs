@@ -22,8 +22,8 @@ use bevy::asset::processor::{LoadTransformAndSave, LoadTransformAndSaveSettings}
 use bevy::asset::saver::{AssetSaver, SavedAsset};
 use bevy::asset::transformer::IdentityAssetTransformer;
 use bevy::image::{
-    CompressedImageFormats, CompressedImageSaver, ImageFormat, ImageFormatSetting, ImageLoader,
-    ImageLoaderSettings, ImageType,
+    CompressedImageFormats, CompressedImageSaver, CompressedImageSaverSettings, ImageFormat,
+    ImageFormatSetting, ImageLoader, ImageLoaderSettings, ImageType,
 };
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
@@ -52,7 +52,7 @@ pub fn texture_import_meta(srgb: bool) -> Vec<u8> {
                 ..default()
             },
             transformer_settings: (),
-            saver_settings: (),
+            saver_settings: CompressedImageSaverSettings::default(),
         },
     });
     AssetMetaDyn::serialize(&meta)
@@ -145,11 +145,11 @@ impl TextureImportReader {
         )
         .map_err(|err| std::io::Error::other(err.to_string()))?;
         let mut processed = bevy::tasks::futures_lite::io::Cursor::new(Vec::new());
-        CompressedImageSaver
+        CompressedImageSaver::default()
             .save(
                 &mut processed,
                 SavedAsset::from_asset(&image),
-                &(),
+                &CompressedImageSaverSettings::default(),
                 AssetPath::from_path(path),
             )
             .await
@@ -238,5 +238,5 @@ impl AssetReader for TextureImportReader {
 pub(crate) fn register_texture_import_processor(app: &mut App) {
     use bevy::asset::AssetApp as _;
 
-    app.register_asset_processor(TextureImportProcessor::from(CompressedImageSaver));
+    app.register_asset_processor(TextureImportProcessor::from(CompressedImageSaver::default()));
 }

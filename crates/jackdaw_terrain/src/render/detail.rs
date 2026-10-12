@@ -24,6 +24,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
+use bevy::render::material_bind_groups::FallbackBuffer;
 use bevy::render::mesh::allocator::MeshAllocator;
 use bevy::render::mesh::{RenderMesh, RenderMeshBufferInfo};
 use bevy::render::render_asset::RenderAssets;
@@ -260,11 +261,11 @@ pub struct DetailTile {
     pub bounds: Aabb,
 }
 
-impl SyncComponent for DetailTile {
+impl SyncComponent<RenderApp> for DetailTile {
     type Target = Self;
 }
 
-impl ExtractComponent for DetailTile {
+impl ExtractComponent<RenderApp> for DetailTile {
     type QueryData = &'static DetailTile;
     type QueryFilter = ();
     type Out = Self;
@@ -435,6 +436,7 @@ pub type DetailKey = (Entity, usize, usize);
 
 /// The bindings every layer currently drawing is asking for.
 #[derive(Resource, Clone, Debug, Default, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct DetailLooks(pub Vec<(DetailKey, DetailBindings)>);
 
 /// A card of `segments` stacked quads, one unit tall and wide, its foot at the
@@ -1235,6 +1237,8 @@ fn prepare_detail_bind_groups(
     images: Res<RenderAssets<GpuImage>>,
     fallback: Res<FallbackImage>,
     buffers: Res<RenderAssets<GpuShaderBuffer>>,
+    shader_buffers: Res<RenderAssets<GpuShaderBuffer>>,
+    fallback_buffer: Res<FallbackBuffer>,
 ) {
     groups.0.clear();
     let mut param = (images, fallback, buffers);
@@ -1243,6 +1247,8 @@ fn prepare_detail_bind_groups(
             &pipeline.layout,
             &render_device,
             &pipeline_cache,
+            &fallback_buffer,
+            &shader_buffers,
             &mut param,
         ) {
             groups.0.insert(*key, prepared.bind_group);
@@ -2515,7 +2521,7 @@ mod tests {
                     lightmap_slab: None,
                 },
                 Opaque3dBinKey {
-                    asset_id: AssetId::<Mesh>::invalid().into(),
+                    asset_id: AssetId::<Mesh>::default().into(),
                 },
             )
         };

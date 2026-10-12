@@ -144,6 +144,8 @@ fn main() -> AppExit {
                 address_mode_w: ImageAddressMode::Repeat,
                 ..ImageSamplerDescriptor::linear()
             },
+            // Bevy 0.19 processed PNGs only; JPEGs stay raw as before.
+            default_compressed_image_processor_extensions: vec!["png".into()],
         })
         // `editor_window_plugin` disables Bevy's default
         // window-close -> AppExit wiring so `intercept_window_close`

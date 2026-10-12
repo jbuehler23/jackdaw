@@ -508,6 +508,7 @@ fn gltf_loader(app: &App) -> Option<GltfLoader> {
         default_convert_coordinates: plugin.convert_coordinates,
         extensions: world.get_resource::<GltfExtensionHandlers>()?.0.clone(),
         default_skinned_mesh_bounds_policy: plugin.skinned_mesh_bounds_policy,
+        default_mesh_compression: plugin.mesh_compression.clone(),
     })
 }
 

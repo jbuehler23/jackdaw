@@ -840,7 +840,7 @@ impl GeometryTally {
 /// original describes.
 #[cfg(feature = "navmesh")]
 fn placed_extent(mesh: &Mesh, placement: Affine3A) -> Option<Vec3> {
-    let aabb = mesh.compute_aabb()?;
+    let aabb = mesh.get_aabb()?;
     let (center, half) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
@@ -1183,7 +1183,7 @@ fn rasterize(
     terrain: &str,
 ) -> Result<NavmeshArtifact, String> {
     let aabb = input
-        .compute_aabb()
+        .get_aabb()
         .ok_or_else(|| "nothing to bake".to_string())?;
     let extent = Vec2::new(aabb.max.x - aabb.min.x, aabb.max.z - aabb.min.z);
     let params = params.fit_to_extent(extent);

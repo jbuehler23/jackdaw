@@ -734,7 +734,7 @@ mod tests {
             CatalogAssetRef {
                 name: "Gone".into(),
                 type_id: TypeId::of::<TestMaterial>(),
-                asset_id: bevy::asset::AssetId::<TestMaterial>::invalid().untyped(),
+                asset_id: bevy::asset::AssetId::<TestMaterial>::default().untyped(),
             },
         ];
 
