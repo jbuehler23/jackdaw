@@ -79,7 +79,7 @@ fn logical_rect(computed: &ComputedNode, transform: &UiGlobalTransform) -> Rect 
 }
 
 fn on_tab_drag_start(
-    trigger: On<Pointer<DragStart>>,
+    trigger: On<PointerDragStart>,
     tabs: Query<&DockTab>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
@@ -99,14 +99,14 @@ fn on_tab_drag_start(
         window_id: tab.window_id.clone(),
         window_name: display_name,
         start_pos: Vec2::new(
-            trigger.event().pointer_location.position.x,
-            trigger.event().pointer_location.position.y,
+            trigger.event().pointer.position.x,
+            trigger.event().pointer.position.y,
         ) / ui_scale.0,
     };
 }
 
 fn on_sidebar_icon_drag_start(
-    trigger: On<Pointer<DragStart>>,
+    trigger: On<PointerDragStart>,
     icons: Query<&DockSidebarIcon>,
     mut drag_state: ResMut<DockDragState>,
     registry: Res<crate::WindowRegistry>,
@@ -126,14 +126,14 @@ fn on_sidebar_icon_drag_start(
         window_id: icon.window_id.clone(),
         window_name: display_name,
         start_pos: Vec2::new(
-            trigger.event().pointer_location.position.x,
-            trigger.event().pointer_location.position.y,
+            trigger.event().pointer.position.x,
+            trigger.event().pointer.position.y,
         ) / ui_scale.0,
     };
 }
 
 fn on_grip_drag_start(
-    trigger: On<Pointer<DragStart>>,
+    trigger: On<PointerDragStart>,
     grips: Query<(), With<DockTabGrip>>,
     dock_areas: Query<&crate::ActiveDockWindow, With<DockArea>>,
     parent_query: Query<&ChildOf>,
@@ -191,14 +191,14 @@ fn on_grip_drag_start(
         window_id,
         window_name,
         start_pos: Vec2::new(
-            trigger.event().pointer_location.position.x,
-            trigger.event().pointer_location.position.y,
+            trigger.event().pointer.position.x,
+            trigger.event().pointer.position.y,
         ) / ui_scale.0,
     };
 }
 
 fn on_drag_move(
-    mut trigger: On<Pointer<Drag>>,
+    mut trigger: On<PointerDrag>,
     mut drag_state: ResMut<DockDragState>,
     mut commands: Commands,
     areas: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<DockArea>>,
@@ -218,10 +218,8 @@ fn on_drag_move(
     ui_scale: Res<UiScale>,
 ) {
     let drag_event = trigger.event();
-    let cursor_pos_ui = Vec2::new(
-        drag_event.pointer_location.position.x,
-        drag_event.pointer_location.position.y,
-    ) / ui_scale.0;
+    let cursor_pos_ui =
+        Vec2::new(drag_event.pointer.position.x, drag_event.pointer.position.y) / ui_scale.0;
 
     match &*drag_state {
         DockDragState::PendingDrag {
@@ -472,7 +470,7 @@ fn on_drag_move(
 }
 
 fn on_drag_end(
-    _trigger: On<Pointer<DragEnd>>,
+    _trigger: On<PointerDragEnd>,
     mut drag_state: ResMut<DockDragState>,
     mut commands: Commands,
 ) {

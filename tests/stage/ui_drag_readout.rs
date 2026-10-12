@@ -6,7 +6,7 @@ use bevy::{
     camera::{NormalizedRenderTarget, RenderTarget},
     picking::{
         backend::HitData,
-        events::{Drag, DragEnd, DragStart, Pointer},
+        events::{Pointer, PointerDrag, PointerDragEnd, PointerDragStart},
         pointer::{Location, PointerButton, PointerId},
     },
     prelude::*,
@@ -124,15 +124,16 @@ fn pointer_at<E: std::fmt::Debug + Clone + Reflect>(
     let render_target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target: render_target,
-            position,
-        },
-        event,
-        target,
-    ));
+    app.world_mut().trigger(Pointerevent {
+        entity: target,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: render_target,
+                position,
+            },
+        ),
+    });
 }
 
 fn overlay(app: &mut App) -> Entity {

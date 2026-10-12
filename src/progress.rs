@@ -438,7 +438,7 @@ fn cancel_button() -> impl Bundle {
     (
         button(ButtonProps::new("Cancel")),
         observe(
-            |click: On<Pointer<Click>>, progress: Res<EditorProgress>, mut commands: Commands| {
+            |click: On<PointerClick>, progress: Res<EditorProgress>, mut commands: Commands| {
                 if click.event().button != PointerButton::Primary {
                     return;
                 }

@@ -143,7 +143,7 @@ pub fn handle_sidebar_icon_clicks(
 /// leaf. Sidebar icons don't have a visible X button, so this is the
 /// equivalent of clicking X on a tab.
 pub fn on_sidebar_icon_right_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     icons: Query<&DockSidebarIcon>,
     mut tree: ResMut<DockTree>,
 ) {

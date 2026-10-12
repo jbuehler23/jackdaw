@@ -58,10 +58,10 @@ impl Plugin for SplitPanelPlugin {
             .add_observer(on_handle_added)
             .add_observer(on_handle_drag_start)
             .add_observer(on_handle_drag_end)
-            .add_observer(set_background_on_with::<Pointer<Over>, With<PanelHandle>>(
+            .add_observer(set_background_on_with::<PointerOver, With<PanelHandle>>(
                 HANDLE_HOVER_COLOR,
             ))
-            .add_observer(set_background_on_with::<Pointer<Out>, With<PanelHandle>>(
+            .add_observer(set_background_on_with::<PointerOut, With<PanelHandle>>(
                 Color::NONE,
             ))
             .add_observer(handle_panel_drag)
@@ -169,7 +169,7 @@ fn on_handle_added(
 }
 
 fn on_handle_drag_start(
-    trigger: On<Pointer<DragStart>>,
+    trigger: On<PointerDragStart>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     nodes: Query<&Node>,
     mut override_cursor: ResMut<OverrideCursor>,
@@ -190,7 +190,7 @@ fn on_handle_drag_start(
 }
 
 fn on_handle_drag_end(
-    trigger: On<Pointer<DragEnd>>,
+    trigger: On<PointerDragEnd>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     nodes: Query<&Node>,
     mut override_cursor: ResMut<OverrideCursor>,
@@ -211,7 +211,7 @@ fn on_handle_drag_end(
 }
 
 fn handle_panel_drag(
-    mut drag: On<Pointer<Drag>>,
+    mut drag: On<PointerDrag>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     groups: Query<(&PanelGroup, &Node, &ComputedNode, &Children)>,
     bindings: Query<&crate::reconcile::NodeBinding>,

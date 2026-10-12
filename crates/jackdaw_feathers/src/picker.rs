@@ -398,13 +398,13 @@ pub fn picker_item(index: usize) -> impl Bundle {
 }
 
 fn on_picker_item_clicked(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     item: Query<&PickerItem>,
     list: Query<&PickerListOf>,
     child_of: Query<&ChildOf>,
     mut commands: Commands,
 ) {
-    if click.event.button != PointerButton::Primary {
+    if click.button != PointerButton::Primary {
         return;
     }
 

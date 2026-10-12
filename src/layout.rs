@@ -623,7 +623,7 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
             (
                 crate::add_entity_picker::AddEntityButton,
                 button(ButtonProps::new("").align_left()),
-                observe(|mut click: On<Pointer<Click>>, mut commands: Commands| {
+                observe(|mut click: On<PointerClick>, mut commands: Commands| {
                     click.propagate(false);
                     commands.queue(|world: &mut World| {
                         world.run_system_cached(crate::add_entity_picker::open_add_entity_picker)
@@ -1083,7 +1083,7 @@ fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
                 TextColor(tokens::TEXT_PRIMARY),
             ),
         ],
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        observe(|_: On<PointerClick>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
                 if crate::pie::can_save_live_to_scene(world) {
                     crate::pie::save_live_entity_to_scene(world);
@@ -1404,7 +1404,7 @@ fn pie_instance_cycle_button() -> impl Bundle {
         PieInstanceCycleButton,
         // Hidden until Live mode; the appearance system flips this.
         button(ButtonProps::new("").hidden()),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        observe(|_: On<PointerClick>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
                 cycle_focused_instance(world);
             });
@@ -1514,7 +1514,7 @@ fn window_mode_button() -> impl Bundle {
         WindowModeButton,
         button(ButtonProps::new("")),
         jackdaw_feathers::tooltip::Tooltip::title("Game window: embedded or separate window"),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        observe(|_: On<PointerClick>, mut commands: Commands| {
             commands
                 .operator(PieWindowModeToggleOp::ID)
                 .settings(CallOperatorSettings {

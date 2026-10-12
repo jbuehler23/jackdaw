@@ -6,7 +6,7 @@
 //! The bar edits a model's import settings on its file card, and a placed
 //! model's own [`LodOverride`] on its placement card.
 
-use bevy::picking::events::{Click, Drag, DragEnd, DragStart, Pointer};
+use bevy::picking::events::{PointerClick, PointerDrag, PointerDragEnd, PointerDragStart};
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use jackdaw_api::prelude::*;
@@ -373,7 +373,7 @@ fn follow_target(world: &mut World) {
 }
 
 fn begin_divider_drag(
-    start: On<Pointer<DragStart>>,
+    start: On<PointerDragStart>,
     dividers: Query<&LodBarDivider>,
     mut commands: Commands,
 ) {
@@ -404,7 +404,7 @@ pub fn start_drag(world: &mut World, bar: Entity) {
 }
 
 fn drag_divider(
-    drag: On<Pointer<Drag>>,
+    drag: On<PointerDrag>,
     dividers: Query<&LodBarDivider>,
     computed: Query<&ComputedNode>,
     mut commands: Commands,
@@ -472,7 +472,7 @@ fn preview(world: &mut World, target: &BarTarget, heights: &[f32]) {
 }
 
 fn end_divider_drag(
-    end: On<Pointer<DragEnd>>,
+    end: On<PointerDragEnd>,
     dividers: Query<&LodBarDivider>,
     mut commands: Commands,
 ) {
@@ -533,7 +533,7 @@ pub fn finish_drag(world: &mut World, bar: Entity) {
 }
 
 fn force_clicked_level(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     segments: Query<&LodBarSegment>,
     bars: Query<&LodBar>,
     mut forced: ResMut<jackdaw_runtime::ForcedLod>,

@@ -732,14 +732,11 @@ fn hover_menu_bar_item(app: &mut App, target: Entity) {
         ),
         position: Vec2::ZERO,
     };
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        location,
-        Over {
-            hit: bevy::picking::backend::HitData::new(camera, 0.0, None, None),
-        },
-        target,
-    ));
+    app.world_mut().trigger(PointerOver {
+        entity: target,
+        pointer: Pointer::new(PointerId::Mouse, location),
+        hit: bevy::picking::backend::HitData::new(camera, 0.0, None, None),
+    });
 }
 
 /// The rows the top bar's View menu carries.

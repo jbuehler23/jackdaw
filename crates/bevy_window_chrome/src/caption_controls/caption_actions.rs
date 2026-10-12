@@ -11,7 +11,7 @@ pub(crate) fn register_pointer_handlers(app: &mut App) {
 }
 
 fn on_caption_button_press(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     buttons: Query<&CaptionButton>,
     mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut close_events: MessageWriter<WindowCloseRequested>,

@@ -377,7 +377,7 @@ pub fn add_workspace(registry: &mut WorkspaceRegistry, tree: &DockTree, commands
 /// deleted. Active-deleted falls through to the first remaining via
 /// `WorkspaceChanged`.
 pub fn on_workspace_close_click(
-    mut trigger: On<Pointer<Click>>,
+    mut trigger: On<PointerClick>,
     close_buttons: Query<&WorkspaceTabCloseButton>,
     mut registry: ResMut<WorkspaceRegistry>,
     tree: Res<DockTree>,
@@ -417,7 +417,7 @@ pub fn on_workspace_close_click(
 /// Tracks the previous click time per-entity in a `Local`-style
 /// `Resource` so we can measure the gap.
 pub fn detect_workspace_double_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     tabs: Query<(&WorkspaceTab, &Children)>,
     labels: Query<(Entity, &WorkspaceTabLabel)>,
     mut tracker: ResMut<WorkspaceClickTracker>,

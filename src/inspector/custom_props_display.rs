@@ -492,7 +492,7 @@ fn spawn_add_property_row(
         Tooltip::title("Add Custom Property")
             .with_description("Create a new custom property with the entered name and type."),
         ChildOf(row),
-        observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.run_system_cached_with(add_custom_property_from_ui, source_entity);
         }),
     ));

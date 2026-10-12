@@ -11,7 +11,7 @@ use bevy::{
     },
     picking::{
         backend::HitData,
-        events::{Drag, DragEnd, DragStart, Pointer, Press},
+        events::{Pointer, PointerDrag, PointerDragEnd, PointerDragStart, PointerPress},
         pointer::{Location, PointerButton, PointerId},
     },
     prelude::*,
@@ -438,7 +438,7 @@ fn a_stage_press_never_reaches_the_dock() {
     settle(&mut app);
 
     app.world_mut().entity_mut(panel).observe(
-        |_: On<Pointer<Press>>, mut presses: ResMut<DockPresses>| {
+        |_: On<PointerPress>, mut presses: ResMut<DockPresses>| {
             presses.0 += 1;
         },
     );
@@ -3668,15 +3668,16 @@ fn pointer_at<E: std::fmt::Debug + Clone + Reflect>(
     let render_target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target: render_target,
-            position,
-        },
-        event,
-        target,
-    ));
+    app.world_mut().trigger(Pointerevent {
+        entity: target,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: render_target,
+                position,
+            },
+        ),
+    });
 }
 
 /// The primary selection's overlay: the one carrying the handles, and the one

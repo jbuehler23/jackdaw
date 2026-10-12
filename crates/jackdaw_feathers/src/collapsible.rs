@@ -73,20 +73,20 @@ pub fn collapsible_section(
 
     commands
         .entity(header)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.trigger(ToggleChecked { entity: disclosure });
         });
 
     // Hover effect on header
     commands.entity(header).observe(
-        |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
+        |hover: On<PointerOver>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
                 bg.0 = tokens::HOVER_BG;
             }
         },
     );
     commands.entity(header).observe(
-        |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
+        |out: On<PointerOut>, mut bg: Query<&mut BackgroundColor, With<CollapsibleHeader>>| {
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                 bg.0 = tokens::COMPONENT_CARD_HEADER_BG;
             }

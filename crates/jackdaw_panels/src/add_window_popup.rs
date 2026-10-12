@@ -35,7 +35,7 @@ impl Plugin for AddWindowPopupPlugin {
 }
 
 fn on_add_button_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     buttons: Query<(&DockTabAddButton, &UiGlobalTransform, &ComputedNode)>,
     existing_popups: Query<Entity, With<AddWindowPopup>>,
     registry: Res<WindowRegistry>,
@@ -133,7 +133,7 @@ fn on_add_button_click(
 }
 
 fn on_item_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     items: Query<&AddWindowPopupItem>,
     popups: Query<Entity, With<AddWindowPopup>>,
     backdrops: Query<Entity, With<AddWindowPopupBackdrop>>,
@@ -158,7 +158,7 @@ fn on_item_click(
 }
 
 fn on_backdrop_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     backdrops: Query<(), With<AddWindowPopupBackdrop>>,
     popups: Query<Entity, With<AddWindowPopup>>,
     backdrop_entities: Query<Entity, With<AddWindowPopupBackdrop>>,

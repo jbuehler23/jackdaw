@@ -339,7 +339,7 @@ fn on_type_metadata_commit(
 }
 
 fn on_preview_box_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     previews: Query<&TypeMetadataPreview>,
     child_of: Query<&ChildOf>,
     mut commands: Commands,

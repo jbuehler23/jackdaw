@@ -663,7 +663,7 @@ fn spawn_folder_row(
 
     let folder = path.to_path_buf();
     commands.entity(content).observe(
-        move |click: On<Pointer<Click>>,
+        move |click: On<PointerClick>,
               mut commands: Commands,
               windows: Query<&Window>,
               mut menu: ResMut<jackdaw_widgets::context_menu::ContextMenuState>| {
@@ -1266,8 +1266,9 @@ fn attach_folder_caption(commands: &mut Commands, tile: Entity, path: &Path, fol
         ))
         .id();
     let folder = path.parent().map(Path::to_path_buf);
-    commands.entity(caption).observe(
-        move |mut click: On<Pointer<Click>>, mut commands: Commands| {
+    commands
+        .entity(caption)
+        .observe(move |mut click: On<PointerClick>, mut commands: Commands| {
             if click.event().button != PointerButton::Primary {
                 return;
             }
@@ -1278,8 +1279,7 @@ fn attach_folder_caption(commands: &mut Commands, tile: Entity, path: &Path, fol
             commands.queue(move |world: &mut World| {
                 select_path(world, &folder);
             });
-        },
-    );
+        });
 }
 
 /// Shorten a name to fit a tile, cutting on a character boundary so a
@@ -1323,7 +1323,7 @@ fn attach_tile_behaviour(commands: &mut Commands, tile: Entity, entry: &DirEntry
     let path = entry.path.clone();
     let is_directory = entry.is_directory;
     commands.entity(tile).observe(
-        move |click: On<Pointer<Click>>,
+        move |click: On<PointerClick>,
               mut state: ResMut<ProjectWindowState>,
               mut commands: Commands,
               time: Res<Time>| {
@@ -1352,7 +1352,7 @@ fn attach_tile_behaviour(commands: &mut Commands, tile: Entity, entry: &DirEntry
     let path = entry.path.clone();
     let is_directory = entry.is_directory;
     commands.entity(tile).observe(
-        move |click: On<Pointer<Click>>,
+        move |click: On<PointerClick>,
               mut commands: Commands,
               windows: Query<&Window>,
               mut menu: ResMut<jackdaw_widgets::context_menu::ContextMenuState>| {
@@ -1377,12 +1377,12 @@ fn attach_tile_behaviour(commands: &mut Commands, tile: Entity, entry: &DirEntry
     {
         let path = entry.path.clone();
         commands.entity(tile).observe(
-            move |_: On<Pointer<DragStart>>, mut drag: ResMut<ActiveAssetDrag>| {
+            move |_: On<PointerDragStart>, mut drag: ResMut<ActiveAssetDrag>| {
                 drag.image = Some(path.clone());
             },
         );
         commands.entity(tile).observe(
-            |_: On<Pointer<DragEnd>>, mut drag: ResMut<ActiveAssetDrag>| {
+            |_: On<PointerDragEnd>, mut drag: ResMut<ActiveAssetDrag>| {
                 drag.image = None;
             },
         );
@@ -1391,26 +1391,26 @@ fn attach_tile_behaviour(commands: &mut Commands, tile: Entity, entry: &DirEntry
     if entry.is_prefab() || jackdaw_bsn::is_document_path(&entry.path) {
         let path = entry.path.clone();
         commands.entity(tile).observe(
-            move |_: On<Pointer<DragStart>>, mut drag: ResMut<ActiveAssetDrag>| {
+            move |_: On<PointerDragStart>, mut drag: ResMut<ActiveAssetDrag>| {
                 drag.path = Some(path.clone());
             },
         );
         commands.entity(tile).observe(
-            |_: On<Pointer<DragEnd>>, mut drag: ResMut<ActiveAssetDrag>| {
+            |_: On<PointerDragEnd>, mut drag: ResMut<ActiveAssetDrag>| {
                 drag.path = None;
             },
         );
     }
 }
 
-fn highlight_on_hover(hover: On<Pointer<Over>>, mut backgrounds: Query<&mut BackgroundColor>) {
+fn highlight_on_hover(hover: On<PointerOver>, mut backgrounds: Query<&mut BackgroundColor>) {
     if let Ok(mut background) = backgrounds.get_mut(hover.event_target()) {
         background.0 = tokens::HOVER_BG;
     }
 }
 
 fn unhighlight_on_out(
-    out: On<Pointer<Out>>,
+    out: On<PointerOut>,
     shown: Query<(), With<ShownFolder>>,
     mut backgrounds: Query<&mut BackgroundColor>,
 ) {
@@ -1512,7 +1512,7 @@ fn rebuild_path_bar(
                     .spawn(button(
                         ButtonProps::new(name).with_variant(ButtonVariant::Ghost),
                     ))
-                    .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                    .observe(move |_: On<PointerClick>, mut commands: Commands| {
                         let target = target.clone();
                         commands.queue(move |world: &mut World| {
                             select_path(world, &target);

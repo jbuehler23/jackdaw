@@ -135,7 +135,7 @@ fn update_trigger_label(
 }
 
 fn on_trigger_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     triggers: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<WorkspaceDropdownTrigger>>,
     parents: Query<&ChildOf>,
     mut state: ResMut<WorkspaceDropdownState>,

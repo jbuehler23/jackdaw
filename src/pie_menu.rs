@@ -53,7 +53,7 @@ pub struct PieMenuState {
 }
 
 fn on_menu_button_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     buttons: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<PieMenuButton>>,
     parents: Query<&ChildOf>,
     mut state: ResMut<PieMenuState>,
@@ -275,7 +275,7 @@ fn spawn_scaffold_row(
 }
 
 fn on_instance_row_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     rows: Query<&PieInstanceRow>,
     parents: Query<&ChildOf>,
     mut commands: Commands,
@@ -306,7 +306,7 @@ fn on_instance_row_click(
 }
 
 fn on_scaffold_row_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     rows: Query<&PieScaffoldRow>,
     parents: Query<&ChildOf>,
     mut commands: Commands,

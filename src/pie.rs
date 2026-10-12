@@ -45,7 +45,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Marker for the toolbar transport buttons. `PiePlugin` installs
 /// an `On<Add<PieButton>>` observer that wires each button's
-/// `Pointer<Click>` to the corresponding handler.
+/// `PointerClick` to the corresponding handler.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PieButton {
     Play,
@@ -579,7 +579,7 @@ fn wire_pie_button(
     };
     commands
         .entity(entity)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands
                 .operator(op_id)
                 .settings(CallOperatorSettings {

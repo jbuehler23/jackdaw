@@ -716,7 +716,7 @@ pub(crate) fn spawn_color_row(
 
     commands
         .entity(swatch)
-        .observe(move |_: On<Pointer<Click>>, mut nodes: Query<&mut Node>| {
+        .observe(move |_: On<PointerClick>, mut nodes: Query<&mut Node>| {
             if let Ok(mut node) = nodes.get_mut(body) {
                 node.display = if node.display == Display::None {
                     Display::Flex
@@ -1162,7 +1162,7 @@ pub(crate) fn spawn_preview(
         .id();
 
     commands.entity(view).observe(
-        |event: On<Pointer<Drag>>, mut state: ResMut<MaterialPreviewState>| {
+        |event: On<PointerDrag>, mut state: ResMut<MaterialPreviewState>| {
             let delta = event.delta;
             state.orbit_yaw += delta.x * 0.01;
             state.orbit_pitch = (state.orbit_pitch + delta.y * 0.01).clamp(-1.4, 1.4);

@@ -192,7 +192,7 @@ fn resize_cursor_icon(direction: CompassOctant) -> SystemCursorIcon {
 }
 
 pub(crate) fn on_resize_edge_press(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     edges: Query<&WindowResizeEdge>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     live: Res<ResizeEdgesLive>,

@@ -7,7 +7,7 @@
 //! back to Discard with a warning log; there is no `rfd::FileDialog`
 //! sub-flow to pick a path for an untitled tab.
 
-use bevy::picking::events::{Click, Pointer};
+use bevy::picking::events::PointerClick;
 use bevy::prelude::*;
 use jackdaw_feathers::{icons::EditorFont, tokens};
 
@@ -370,7 +370,7 @@ fn spawn_quit_button(
 
 /// Observer attached to each quit-dialog button.
 pub fn on_quit_dialog_button_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     buttons: Query<&ConfirmQuitButton>,
     dialog: Query<Entity, With<ConfirmDialogRoot>>,
     mut commands: Commands,
@@ -496,7 +496,7 @@ pub fn leave_project_or_confirm(world: &mut World) -> bool {
 
 /// Observer attached to each button. Routes to Save / Discard / Cancel logic.
 pub fn on_dialog_button_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     buttons: Query<&ConfirmDialogButton>,
     dialog: Query<Entity, With<ConfirmDialogRoot>>,
     mut commands: Commands,

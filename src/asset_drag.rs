@@ -15,7 +15,7 @@ use jackdaw_feathers::{
 };
 
 /// Path of the asset currently being dragged out of the Project window. Set by
-/// a `Pointer<DragStart>` observer on each entry, read by the viewport's drop
+/// a `PointerDragStart` observer on each entry, read by the viewport's drop
 /// handler, and cleared after the drop (or by `DragEnd` if no drop happened).
 #[derive(Resource, Default)]
 pub struct ActiveAssetDrag {

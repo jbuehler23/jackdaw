@@ -185,7 +185,7 @@ pub(crate) fn decorate_prefab_field_rows(
             let row_type_path = row.type_path.clone();
             let row_field_path = row.field_path.clone();
             commands.entity(row_entity).observe(
-                move |click: On<Pointer<Click>>,
+                move |click: On<PointerClick>,
                       mut commands: Commands,
                       windows: Query<&Window>,
                       mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,
@@ -263,7 +263,7 @@ pub(crate) fn decorate_prefab_field_rows(
             .id();
 
         commands.entity(dot).observe(
-            move |click: On<Pointer<Click>>,
+            move |click: On<PointerClick>,
                   dots: Query<&PrefabFieldOverrideDot>,
                   mut commands: Commands| {
                 if click.event().button != PointerButton::Primary {

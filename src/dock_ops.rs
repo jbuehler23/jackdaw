@@ -177,7 +177,7 @@ fn split_extent(
 }
 
 fn on_close_button_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     close_buttons: Query<&DockTabCloseButton>,
     mut commands: Commands,
 ) {
@@ -190,7 +190,7 @@ fn on_close_button_click(
         .call();
 }
 
-fn on_tab_middle_click(trigger: On<Pointer<Click>>, tabs: Query<&DockTab>, mut commands: Commands) {
+fn on_tab_middle_click(trigger: On<PointerClick>, tabs: Query<&DockTab>, mut commands: Commands) {
     if trigger.event().button != PointerButton::Middle {
         return;
     }

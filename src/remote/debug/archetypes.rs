@@ -227,19 +227,19 @@ fn sort_header(label: &str, key: SortKey, sort: &ArchetypeSort, grow: bool) -> i
     )
 }
 
-fn on_header_over(hover: On<Pointer<Over>>, mut q: Query<&mut BackgroundColor, With<SortHeader>>) {
+fn on_header_over(hover: On<PointerOver>, mut q: Query<&mut BackgroundColor, With<SortHeader>>) {
     if let Ok(mut bg) = q.get_mut(hover.event_target()) {
         bg.0 = tokens::HOVER_BG;
     }
 }
 
-fn on_header_out(out: On<Pointer<Out>>, mut q: Query<&mut BackgroundColor, With<SortHeader>>) {
+fn on_header_out(out: On<PointerOut>, mut q: Query<&mut BackgroundColor, With<SortHeader>>) {
     if let Ok(mut bg) = q.get_mut(out.event_target()) {
         bg.0 = Color::NONE;
     }
 }
 
-fn on_header_pressed(click: On<Pointer<Click>>, mut commands: Commands) {
+fn on_header_pressed(click: On<PointerClick>, mut commands: Commands) {
     commands.trigger(ButtonClickEvent {
         entity: click.event_target(),
     });
@@ -292,13 +292,13 @@ fn arch_row(row: &ArchetypeRow, max_count: u64) -> impl Bundle {
     )
 }
 
-fn on_row_over(hover: On<Pointer<Over>>, mut q: Query<&mut BackgroundColor, With<ArchRowMarker>>) {
+fn on_row_over(hover: On<PointerOver>, mut q: Query<&mut BackgroundColor, With<ArchRowMarker>>) {
     if let Ok(mut bg) = q.get_mut(hover.event_target()) {
         bg.0 = tokens::HOVER_BG;
     }
 }
 
-fn on_row_out(out: On<Pointer<Out>>, mut q: Query<&mut BackgroundColor, With<ArchRowMarker>>) {
+fn on_row_out(out: On<PointerOut>, mut q: Query<&mut BackgroundColor, With<ArchRowMarker>>) {
     if let Ok(mut bg) = q.get_mut(out.event_target()) {
         bg.0 = Color::NONE;
     }

@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::asset::UntypedHandle;
-use bevy::picking::events::{DragDrop, Pointer};
+use bevy::picking::events::PointerDragDrop;
 use bevy::prelude::*;
 use bevy::reflect::PartialReflect;
 use jackdaw_api::prelude::AssetKinds;
@@ -255,7 +255,7 @@ pub(crate) fn attach_asset_field(
                 bevy::picking::hover::Hovered::default(),
                 Tooltip::title(NOTHING),
             ))
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 commands.queue(move |world: &mut World| {
                     open_asset_picker(world, row);
                 });
@@ -274,7 +274,7 @@ pub(crate) fn attach_asset_field(
         ));
     }
     commands.entity(row).observe(
-        move |mut event: On<Pointer<DragDrop>>,
+        move |mut event: On<PointerDragDrop>,
               mut drag: ResMut<ActiveAssetDrag>,
               mut commands: Commands| {
             let Some(dropped) = drag.path.take().or_else(|| drag.image.take()) else {

@@ -106,7 +106,7 @@ fn close_menu_on_action(
 /// Remember a press that landed on the bar, on a dropdown, or on anything
 /// inside one, so the close pass leaves the menu up for it.
 fn note_a_press_inside_the_menu(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     parts: Query<(), Or<(With<MenuBar>, With<MenuBarDropdown>, With<MenuBarItem>)>>,
     parents: Query<&ChildOf>,
     mut state: ResMut<MenuBarState>,

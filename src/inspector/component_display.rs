@@ -1344,7 +1344,7 @@ pub(crate) fn spawn_component_display(
     // emits `ValueChange<bool>` and flows through `on_disclosure_change`.
     commands
         .entity(toggle_area)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.trigger(ToggleChecked {
                 entity: disclosure_entity,
             });
@@ -1374,7 +1374,7 @@ pub(crate) fn spawn_component_display(
                 TextColor(default_style::INSPECTOR_OVERRIDE),
                 Hovered::default(),
                 ChildOf(header),
-                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                bevy::ui_widgets::observe(move |_: On<PointerClick>, mut commands: Commands| {
                     let revert_path = prefab_type_path.clone();
                     commands
                         .operator("prefab.revert_component")
@@ -1407,7 +1407,7 @@ pub(crate) fn spawn_component_display(
                 Hovered::default(),
                 bo_call,
                 ChildOf(header),
-                bevy::ui_widgets::observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                bevy::ui_widgets::observe(move |_: On<PointerClick>, mut commands: Commands| {
                     commands
                         .operator(super::ops::ComponentRevertBaselineOp::ID)
                         .param("entity", entity_param)
@@ -1444,7 +1444,7 @@ pub(crate) fn spawn_component_display(
     if let Some(menu_ctx) = prefab_ctx.clone() {
         let menu_type_path = type_path.to_string();
         commands.entity(header).observe(
-            move |click: On<Pointer<Click>>,
+            move |click: On<PointerClick>,
                   mut commands: Commands,
                   windows: Query<&Window>,
                   mut state: ResMut<jackdaw_widgets::context_menu::ContextMenuState>,

@@ -948,7 +948,7 @@ fn update_material_browser_ui(
         // Single-click: select for preview
         commands
             .entity(tile)
-            .observe(move |click: On<Pointer<Click>>, mut commands: Commands| {
+            .observe(move |click: On<PointerClick>, mut commands: Commands| {
                 if click.event().button == PointerButton::Primary {
                     commands.trigger(SelectMaterialPreview {
                         handle: handle.clone(),

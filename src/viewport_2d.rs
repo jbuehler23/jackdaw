@@ -1902,7 +1902,7 @@ fn viewport_2d_grid_step(
         ),
         jackdaw_feathers::tooltip::Tooltip::title(tooltip),
         observe(
-            move |_: On<Pointer<Click>>, mut hosts: Query<&mut Viewport2dPanelHost>| {
+            move |_: On<PointerClick>, mut hosts: Query<&mut Viewport2dPanelHost>| {
                 if let Ok(mut panel) = hosts.get_mut(host) {
                     let grid = stepped_ui_grid(panel.view.grid, steps);
                     if grid != panel.view.grid {

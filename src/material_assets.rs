@@ -597,14 +597,14 @@ pub fn spawn_material_tile(commands: &mut Commands, parent: Entity, tile: Materi
 
     let selected = tile.selected;
     commands.entity(cell).observe(
-        move |hover: On<Pointer<Over>>, mut borders: Query<&mut BorderColor>| {
+        move |hover: On<PointerOver>, mut borders: Query<&mut BorderColor>| {
             if let Ok(mut border) = borders.get_mut(hover.event_target()) {
                 *border = BorderColor::all(tokens::SELECTED_BORDER);
             }
         },
     );
     commands.entity(cell).observe(
-        move |out: On<Pointer<Out>>, mut borders: Query<&mut BorderColor>| {
+        move |out: On<PointerOut>, mut borders: Query<&mut BorderColor>| {
             if let Ok(mut border) = borders.get_mut(out.event_target()) {
                 *border = BorderColor::all(if selected {
                     tokens::ACCENT_BLUE

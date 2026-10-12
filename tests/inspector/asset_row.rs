@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::camera::{NormalizedRenderTarget, RenderTarget};
 use bevy::picking::backend::HitData;
-use bevy::picking::events::{DragDrop, Pointer};
+use bevy::picking::events::{Pointer, PointerDragDrop};
 use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowRef};
@@ -318,20 +318,20 @@ fn clicking_the_file_a_row_shows_opens_the_list_to_choose_from() {
         .expect("the row draws the file it names");
 
     let target = primary_target(&mut app);
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target,
-            position: Vec2::ZERO,
-        },
-        bevy::picking::events::Click {
-            button: PointerButton::Primary,
-            hit: HitData::new(value, 0.0, None, None),
-            duration: std::time::Duration::ZERO,
-            count: 1,
-        },
-        value,
-    ));
+    app.world_mut().trigger(PointerClick {
+        entity: value,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target,
+                position: Vec2::ZERO,
+            },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(value, 0.0, None, None),
+        duration: std::time::Duration::ZERO,
+        count: 1,
+    });
     settle(&mut app);
 
     assert!(
@@ -516,19 +516,19 @@ fn drop_file_on(app: &mut App, row: Entity, file: PathBuf) {
     app.world_mut().resource_mut::<ActiveAssetDrag>().path = Some(file);
     let target = primary_target(app);
     let dropped = app.world_mut().spawn_empty().id();
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target,
-            position: Vec2::ZERO,
-        },
-        DragDrop {
-            button: PointerButton::Primary,
-            dropped,
-            hit: HitData::new(row, 0.0, None, None),
-        },
-        row,
-    ));
+    app.world_mut().trigger(PointerDragDrop {
+        entity: row,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target,
+                position: Vec2::ZERO,
+            },
+        ),
+        button: PointerButton::Primary,
+        dropped,
+        hit: HitData::new(row, 0.0, None, None),
+    });
     settle(app);
 }
 

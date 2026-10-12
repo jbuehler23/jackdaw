@@ -730,16 +730,13 @@ fn drop_at(app: &mut App, zone: Entity, dragged: Entity, position: Vec2) {
     use bevy::picking::pointer::{Location, PointerId};
 
     let target = window_target(app);
-    app.world_mut().trigger(bevy::picking::events::Pointer::new(
-        PointerId::Mouse,
-        Location { target, position },
-        DragDrop {
-            button: bevy::picking::pointer::PointerButton::Primary,
-            dropped: dragged,
-            hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-        },
-        zone,
-    ));
+    app.world_mut().trigger(PointerDragDrop {
+        entity: zone,
+        pointer: Pointer::new(PointerId::Mouse, Location { target, position }),
+        button: bevy::picking::pointer::PointerButton::Primary,
+        dropped: dragged,
+        hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+    });
     for _ in 0..3 {
         app.update();
     }
@@ -796,19 +793,19 @@ fn resting_a_drag_on_a_closed_row_opens_it() {
     let target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(bevy::picking::events::Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target,
-            position: Vec2::ZERO,
-        },
-        DragEnter {
-            button: bevy::picking::pointer::PointerButton::Primary,
-            dragged: Entity::PLACEHOLDER,
-            hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-        },
-        content,
-    ));
+    app.world_mut().trigger(PointerDragEnter {
+        entity: content,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target,
+                position: Vec2::ZERO,
+            },
+        ),
+        button: bevy::picking::pointer::PointerButton::Primary,
+        dragged: Entity::PLACEHOLDER,
+        hit: bevy::picking::backend::HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+    });
     app.update();
     assert!(
         !app.world()

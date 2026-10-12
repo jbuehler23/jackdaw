@@ -269,7 +269,7 @@ fn on_dropdown_item_click(
 
 /// Handle click on a [`MenuBarItem`]: find the item by walking up from the event target.
 fn on_menu_bar_item_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     mut commands: Commands,
     mut state: ResMut<MenuBarState>,
     items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform)>,
@@ -300,7 +300,7 @@ fn on_menu_bar_item_click(
 }
 
 fn on_menu_bar_item_over(
-    hover: On<Pointer<Over>>,
+    hover: On<PointerOver>,
     mut commands: Commands,
     mut state: ResMut<MenuBarState>,
     items: Query<(&MenuBarItem, &ComputedNode, &UiGlobalTransform)>,
@@ -433,7 +433,7 @@ pub fn open_menu_named(
 }
 
 fn on_menu_bar_item_out(
-    out: On<Pointer<Out>>,
+    out: On<PointerOut>,
     state: Res<MenuBarState>,
     items: Query<Entity, With<MenuBarItem>>,
     parents: Query<&ChildOf>,
@@ -605,7 +605,7 @@ fn truncate_submenus(state: &mut SubmenuState, keep: usize, commands: &mut Comma
 /// The pointer entered a submenu row: wait out the dwell, and drop
 /// anything open below the row's own dropdown in the meantime.
 fn on_menu_pointer_over(
-    over: On<Pointer<Over>>,
+    over: On<PointerOver>,
     mut commands: Commands,
     mut state: ResMut<SubmenuState>,
     rows: Query<Entity, With<SubmenuRow>>,
@@ -662,7 +662,7 @@ fn on_menu_pointer_over(
 /// The pointer left a row or a child dropdown: start the grace period.
 /// Whatever it entered instead cancels or shortens this in the same frame.
 fn on_menu_pointer_out(
-    out: On<Pointer<Out>>,
+    out: On<PointerOut>,
     mut state: ResMut<SubmenuState>,
     rows: Query<Entity, With<SubmenuRow>>,
     dropdowns: Query<Entity, With<MenuBarDropdown>>,
@@ -1300,7 +1300,7 @@ mod tests {
     use bevy::feathers::constants::size::CHECKBOX_SIZE;
     use bevy::feathers::controls::{FeathersCheckbox, FeathersRadio};
     use bevy::picking::backend::HitData;
-    use bevy::picking::events::{Out, Over, Pointer};
+    use bevy::picking::events::{Pointer, PointerOut, PointerOver};
     use bevy::picking::pointer::PointerId;
     use bevy::ui::{Checked, InteractionDisabled};
 
@@ -1940,22 +1940,20 @@ mod tests {
 
     fn hover(app: &mut App, target: Entity) {
         let (location, hit) = pointer_report(app);
-        app.world_mut().trigger(Pointer::new(
-            PointerId::Mouse,
-            location,
-            Over { hit },
-            target,
-        ));
+        app.world_mut().trigger(PointerOver {
+            entity: target,
+            pointer: Pointer::new(PointerId::Mouse, location),
+            hit,
+        });
     }
 
     fn unhover(app: &mut App, target: Entity) {
         let (location, hit) = pointer_report(app);
-        app.world_mut().trigger(Pointer::new(
-            PointerId::Mouse,
-            location,
-            Out { hit },
-            target,
-        ));
+        app.world_mut().trigger(PointerOut {
+            entity: target,
+            pointer: Pointer::new(PointerId::Mouse, location),
+            hit,
+        });
     }
 
     fn advance(app: &mut App, seconds: f32) {

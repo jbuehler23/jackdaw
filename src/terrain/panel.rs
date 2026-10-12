@@ -1176,7 +1176,7 @@ fn spawn_detail_layer_row(
     ));
     commands
         .entity(row)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands
                 .operator(TerrainDetailSelectOp::ID)
                 .param("layer", index.to_string())
@@ -1594,7 +1594,7 @@ fn spawn_material_picker(commands: &mut Commands, parent: Entity, refs: &Texture
         );
         commands
             .entity(tile)
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 commands
                     .operator(TerrainMaterialAddOp::ID)
                     .param("material", name.clone())

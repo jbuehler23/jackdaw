@@ -72,7 +72,7 @@ struct RowToShow {
 struct RowDragActive(bool);
 
 fn note_drag_start(
-    start: On<Pointer<DragStart>>,
+    start: On<PointerDragStart>,
     contents: Query<(), With<TreeRowContent>>,
     mut active: ResMut<RowDragActive>,
 ) {
@@ -82,7 +82,7 @@ fn note_drag_start(
 }
 
 fn note_drag_end(
-    end: On<Pointer<DragEnd>>,
+    end: On<PointerDragEnd>,
     contents: Query<(), With<TreeRowContent>>,
     mut active: ResMut<RowDragActive>,
 ) {

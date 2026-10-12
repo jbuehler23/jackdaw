@@ -187,7 +187,7 @@ pub fn spawn_panel_card(
 
     commands
         .entity(header)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.trigger(ToggleChecked { entity: disclosure });
         });
 

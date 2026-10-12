@@ -658,7 +658,7 @@ pub fn update_event_marker_highlight(
 /// Clicking the ruler seeks the playhead, snapping to the rate or to a nearby
 /// key unless Shift is held.
 pub fn handle_scrubber_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     scrubbers: Query<(&TimelineScrubber, &ComputedNode, &UiGlobalTransform)>,
     clips: Query<(&Clip, Option<&Children>)>,
     contents: ClipContents,
@@ -673,7 +673,7 @@ pub fn handle_scrubber_click(
         return;
     };
     let result = seek_for_pointer(
-        event.pointer_location.position.x / ui_scale.0,
+        event.pointer.position.x / ui_scale.0,
         computed,
         global,
         scrubber.clip,
@@ -690,7 +690,7 @@ pub fn handle_scrubber_click(
 
 /// Dragging across the ruler seeks as it goes, so the target follows.
 pub fn handle_scrubber_drag(
-    mut event: On<Pointer<Drag>>,
+    mut event: On<PointerDrag>,
     scrubbers: Query<(&TimelineScrubber, &ComputedNode, &UiGlobalTransform)>,
     clips: Query<(&Clip, Option<&Children>)>,
     contents: ClipContents,
@@ -705,7 +705,7 @@ pub fn handle_scrubber_drag(
         return;
     };
     let result = seek_for_pointer(
-        event.pointer_location.position.x / ui_scale.0,
+        event.pointer.position.x / ui_scale.0,
         computed,
         global,
         scrubber.clip,
@@ -723,7 +723,7 @@ pub fn handle_scrubber_drag(
 /// Clear the snap hint when the ruler drag ends, so a hover highlight does not
 /// linger after the button comes up.
 pub fn clear_snap_hint_on_drag_end(
-    mut event: On<Pointer<DragEnd>>,
+    mut event: On<PointerDragEnd>,
     scrubbers: Query<&TimelineScrubber>,
     mut hint: ResMut<TimelineSnapHint>,
 ) {
@@ -737,7 +737,7 @@ pub fn clear_snap_hint_on_drag_end(
 /// A ruler drag engages the timeline, so [`crate::auto_bind_player`] installs
 /// the runtime components and the target follows the playhead.
 pub fn handle_scrubber_drag_start(
-    mut event: On<Pointer<DragStart>>,
+    mut event: On<PointerDragStart>,
     scrubbers: Query<&TimelineScrubber>,
     mut engagement: ResMut<TimelineEngagement>,
 ) {
@@ -750,7 +750,7 @@ pub fn handle_scrubber_drag_start(
 
 /// Releasing the ruler hands the target back.
 pub fn handle_scrubber_drag_end(
-    mut event: On<Pointer<DragEnd>>,
+    mut event: On<PointerDragEnd>,
     scrubbers: Query<&TimelineScrubber>,
     mut engagement: ResMut<TimelineEngagement>,
 ) {
@@ -768,7 +768,7 @@ pub fn handle_scrubber_drag_end(
 /// pointer; the move reaches the document on release, through
 /// [`KeyframeRetimed`].
 pub fn handle_keyframe_drag(
-    mut event: On<Pointer<Drag>>,
+    mut event: On<PointerDrag>,
     handles: Query<&TimelineKeyframeHandle>,
     bodies: Query<(&TimelineSheetBody, &ComputedNode, &UiGlobalTransform)>,
     clips: Query<(&Clip, Option<&Children>)>,
@@ -792,7 +792,7 @@ pub fn handle_keyframe_drag(
         clip_display_duration(body.clip, &clips)
     };
     let raw = time_for_cursor(
-        event.pointer_location.position.x / ui_scale.0,
+        event.pointer.position.x / ui_scale.0,
         computed,
         global,
         duration,
@@ -812,7 +812,7 @@ pub fn handle_keyframe_drag(
 
 /// Remember where a dragged key started.
 pub fn handle_keyframe_drag_start(
-    mut event: On<Pointer<DragStart>>,
+    mut event: On<PointerDragStart>,
     handles: Query<&TimelineKeyframeHandle>,
     contents: ClipContents,
     mut origin: ResMut<KeyframeDragOrigin>,
@@ -828,7 +828,7 @@ pub fn handle_keyframe_drag_start(
 
 /// Report the finished move so the main editor can put it through the AST.
 pub fn handle_keyframe_drag_end(
-    mut event: On<Pointer<DragEnd>>,
+    mut event: On<PointerDragEnd>,
     handles: Query<&TimelineKeyframeHandle>,
     contents: ClipContents,
     mut origin: ResMut<KeyframeDragOrigin>,
@@ -853,7 +853,7 @@ pub fn handle_keyframe_drag_end(
 
 /// Open a marquee where the drag on the sheet body began.
 pub fn handle_marquee_start(
-    mut event: On<Pointer<DragStart>>,
+    mut event: On<PointerDragStart>,
     bodies: Query<(&ComputedNode, &UiGlobalTransform), With<TimelineSheetBody>>,
     ui_scale: Res<UiScale>,
     mut marquee: ResMut<TimelineMarquee>,
@@ -861,11 +861,7 @@ pub fn handle_marquee_start(
     let Ok((computed, global)) = bodies.get(event.event_target()) else {
         return;
     };
-    let at = local_point(
-        event.pointer_location.position / ui_scale.0,
-        computed,
-        global,
-    );
+    let at = local_point(event.pointer.position / ui_scale.0, computed, global);
     marquee.from = Some(at);
     marquee.to = at;
     event.propagate(false);
@@ -873,7 +869,7 @@ pub fn handle_marquee_start(
 
 /// Track the open corner of the marquee.
 pub fn handle_marquee_drag(
-    mut event: On<Pointer<Drag>>,
+    mut event: On<PointerDrag>,
     bodies: Query<(&ComputedNode, &UiGlobalTransform), With<TimelineSheetBody>>,
     ui_scale: Res<UiScale>,
     mut marquee: ResMut<TimelineMarquee>,
@@ -884,17 +880,13 @@ pub fn handle_marquee_drag(
     if marquee.from.is_none() {
         return;
     }
-    marquee.to = local_point(
-        event.pointer_location.position / ui_scale.0,
-        computed,
-        global,
-    );
+    marquee.to = local_point(event.pointer.position / ui_scale.0, computed, global);
     event.propagate(false);
 }
 
 /// Close the marquee and ask for every key it covered.
 pub fn handle_marquee_end(
-    mut event: On<Pointer<DragEnd>>,
+    mut event: On<PointerDragEnd>,
     diamonds: Query<(&TimelineKeyframeHandle, &ComputedNode, &UiGlobalTransform)>,
     bodies: Query<(&ComputedNode, &UiGlobalTransform), With<TimelineSheetBody>>,
     keys: Res<ButtonInput<KeyCode>>,

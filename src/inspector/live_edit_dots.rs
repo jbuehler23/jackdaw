@@ -132,7 +132,7 @@ fn spawn_live_edit_dot(
         .id();
 
     commands.entity(dot).observe(
-        |click: On<Pointer<Click>>,
+        |click: On<PointerClick>,
          dots: Query<&LiveEditDot>,
          mut commands: Commands,
          windows: Query<&Window>,

@@ -2523,7 +2523,7 @@ fn spawn_groups_section(commands: &mut Commands, parent: Entity, view: &ScatterG
             let terrain_name = view.terrain_name.clone();
             commands
                 .entity(label)
-                .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                .observe(move |_: On<PointerClick>, mut commands: Commands| {
                     let mut call = commands
                         .operator(TerrainScatterGroupSelectOp::ID)
                         .param("key", key.clone());
@@ -2543,15 +2543,15 @@ fn spawn_groups_section(commands: &mut Commands, parent: Entity, view: &ScatterG
             let button = commands
                 .spawn((button::button(ButtonProps::new(caption)), ChildOf(heading)))
                 .id();
-            commands.entity(button).observe(
-                move |_: On<Pointer<Click>>, mut commands: Commands| {
+            commands
+                .entity(button)
+                .observe(move |_: On<PointerClick>, mut commands: Commands| {
                     let mut call = commands.operator(op_id).param("group", key.clone());
                     if let Some(name) = terrain_name.clone() {
                         call = call.param("terrain", name);
                     }
                     call.settings(group_dispatch_settings()).call();
-                },
-            );
+                });
         }
     }
 
@@ -2575,7 +2575,7 @@ fn spawn_groups_section(commands: &mut Commands, parent: Entity, view: &ScatterG
             let terrain_name = view.terrain_name.clone();
             commands
                 .entity(adopt)
-                .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                .observe(move |_: On<PointerClick>, mut commands: Commands| {
                     let mut call = commands
                         .operator(TerrainScatterAdoptOp::ID)
                         .param("entity", entity);

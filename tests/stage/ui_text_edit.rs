@@ -10,7 +10,7 @@ use bevy::{
     },
     picking::{
         backend::HitData,
-        events::{Pointer, Press},
+        events::{Pointer, PointerPress},
         pointer::{Location, PointerButton, PointerId},
     },
     prelude::*,
@@ -145,19 +145,19 @@ fn press_at(app: &mut App, panel: Entity, authored: Vec2, count: u8) {
     let render_target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target: render_target,
-            position,
-        },
-        Press {
-            button: PointerButton::Primary,
-            hit: HitData::new(camera, 0.0, None, None),
-            count,
-        },
-        stage,
-    ));
+    app.world_mut().trigger(PointerPress {
+        entity: stage,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: render_target,
+                position,
+            },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(camera, 0.0, None, None),
+        count,
+    });
     settle(app);
 }
 

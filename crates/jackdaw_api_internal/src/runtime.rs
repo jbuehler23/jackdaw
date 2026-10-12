@@ -339,7 +339,10 @@ impl<'w> GameApp<'w> {
 /// ctx.spawn_observer(|on: On<Add<MyComp>>, mut commands: Commands| { ... });
 /// ```
 impl<'w> GameApp<'w> {
-    pub fn spawn_observer<E, M>(&mut self, observer: impl IntoObserverSystemBoxed<E, M>) -> &mut Self
+    pub fn spawn_observer<E, M>(
+        &mut self,
+        observer: impl IntoObserverSystemBoxed<E, M>,
+    ) -> &mut Self
     where
         E: bevy::prelude::EventPattern,
     {

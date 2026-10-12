@@ -205,7 +205,7 @@ fn spawn_scene_tab(
             ChildOf(strip),
         ))
         .observe(
-            move |click: On<Pointer<Click>>,
+            move |click: On<PointerClick>,
                   mut commands: Commands,
                   mut state: ResMut<ContextMenuState>,
                   windows: Query<&Window>,
@@ -355,7 +355,7 @@ fn spawn_scene_tab(
             ),
             ChildOf(tab_entity),
         ))
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.queue(move |world: &mut World| {
                 scene_close_system(world, idx);
             });
@@ -390,7 +390,7 @@ fn spawn_add_tab_button(commands: &mut Commands, strip: Entity, icon_font: Optio
             ),
             ChildOf(strip),
         ))
-        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(|_: On<PointerClick>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
                 scene_new_system(world);
             });

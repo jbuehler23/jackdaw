@@ -2023,7 +2023,7 @@ impl jackdaw_commands::EditorCommand for SpawnKeyframeCmd {
 /// Propagation is stopped so the click doesn't also hit the
 /// scrubber and seek the playhead.
 fn on_timeline_keyframe_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     handles: Query<&jackdaw_animation::TimelineKeyframeHandle>,
     keys: Res<ButtonInput<KeyCode>>,
     mut selection: ResMut<selection::Selection>,
@@ -3066,14 +3066,14 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
 
         // Hover effects
         world.commands().entity(row).observe(
-            |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+            |hover: On<PointerOver>, mut bg: Query<&mut BackgroundColor>| {
                 if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
                     bg.0 = jackdaw_feathers::tokens::HOVER_BG;
                 }
             },
         );
         world.commands().entity(row).observe(
-            |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+            |out: On<PointerOut>, mut bg: Query<&mut BackgroundColor>| {
                 if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                     bg.0 = jackdaw_feathers::tokens::TOOLBAR_BG;
                 }
@@ -3081,8 +3081,10 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
         );
 
         // Click: open the project
-        world.commands().entity(row).observe(
-            move |_: On<Pointer<Click>>, mut commands: Commands| {
+        world
+            .commands()
+            .entity(row)
+            .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 let path = path.clone();
                 commands.insert_resource(project_select::PendingAutoOpen {
                     path: path.clone(),
@@ -3097,8 +3099,7 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
                             .set(AppState::ProjectSelect);
                     }
                 });
-            },
-        );
+            });
 
         world.commands().entity(slot_entity).add_child(row);
     }

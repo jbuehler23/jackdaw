@@ -9,7 +9,7 @@ use std::time::Duration;
 use bevy::camera::RenderTarget;
 use bevy::picking::{
     backend::HitData,
-    events::{Click, Pointer},
+    events::{Pointer, PointerClick},
     pointer::{Location, PointerButton, PointerId},
 };
 use bevy::prelude::*;
@@ -51,7 +51,7 @@ fn open_project(app: &App) -> Option<PathBuf> {
         .map(|root| root.root.clone())
 }
 
-/// Click `button` the way a user does: the `Pointer<Click>` its observer
+/// Click `button` the way a user does: the `PointerClick` its observer
 /// watches for.
 fn click(app: &mut App, button: Entity) {
     let window = app
@@ -62,20 +62,20 @@ fn click(app: &mut App, button: Entity) {
     let target = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target,
-            position: Vec2::ZERO,
-        },
-        Click {
-            button: PointerButton::Primary,
-            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-            duration: Duration::ZERO,
-            count: 1,
-        },
-        button,
-    ));
+    app.world_mut().trigger(PointerClick {
+        entity: button,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target,
+                position: Vec2::ZERO,
+            },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        duration: Duration::ZERO,
+        count: 1,
+    });
     app.update();
 }
 

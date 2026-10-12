@@ -6,7 +6,7 @@
 //! JACKDAW_RUN_OP="input.key key=KeyD mods=ctrl; input.text text=Play"
 //! ```
 //!
-//! Nothing here triggers a `Pointer<Click>` or a `FocusedInput`. Each operator
+//! Nothing here triggers a `PointerClick` or a `FocusedInput`. Each operator
 //! queues the window events winit would have delivered -- on their own message
 //! streams and on the combined [`WindowEvent`] one, as `bevy_winit` forwards
 //! them -- and moves the window's cursor with them, so everything downstream

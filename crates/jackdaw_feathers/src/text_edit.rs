@@ -479,31 +479,21 @@ fn setup_text_edit_input(
                 }]),
                 Hovered::default(),
             ))
-            .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragStart>>| {
-                    ev.propagate(false);
-                },
-            )
-            .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::Drag>>| {
-                    ev.propagate(false);
-                },
-            )
-            .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::DragEnd>>| {
-                    ev.propagate(false);
-                },
-            )
-            .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>| {
-                    ev.propagate(false);
-                },
-            )
-            .observe(
-                |mut ev: On<bevy::picking::events::Pointer<bevy::picking::events::Press>>| {
-                    ev.propagate(false);
-                },
-            )
+            .observe(|mut ev: On<bevy::picking::events::PointerDragStart>| {
+                ev.propagate(false);
+            })
+            .observe(|mut ev: On<bevy::picking::events::PointerDrag>| {
+                ev.propagate(false);
+            })
+            .observe(|mut ev: On<bevy::picking::events::PointerDragEnd>| {
+                ev.propagate(false);
+            })
+            .observe(|mut ev: On<bevy::picking::events::PointerClick>| {
+                ev.propagate(false);
+            })
+            .observe(|mut ev: On<bevy::picking::events::PointerPress>| {
+                ev.propagate(false);
+            })
             .id();
 
         // `entity` can be cascade-despawned by an inspector rebuild

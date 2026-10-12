@@ -9,7 +9,7 @@ use crate::util;
 use bevy::camera::{NormalizedRenderTarget, RenderTarget};
 use bevy::picking::{
     backend::HitData,
-    events::{Click, Pointer},
+    events::{Pointer, PointerClick},
     pointer::{Location, PointerButton, PointerId},
 };
 use bevy::prelude::*;
@@ -20,7 +20,7 @@ use bevy::window::{PrimaryWindow, WindowRef};
 use jackdaw::game_panel::{GameModeSegment, GamePanelMode, game_panel_content};
 use jackdaw::pie_mirror::{PieViewMode, PieViewSegment};
 
-/// Click `entity` the way a user does: the `Pointer<Click>` the radio
+/// Click `entity` the way a user does: the `PointerClick` the radio
 /// widget is watching for.
 fn click(app: &mut App, entity: Entity) {
     let window = app
@@ -31,20 +31,20 @@ fn click(app: &mut App, entity: Entity) {
     let target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target,
-            position: Vec2::ZERO,
-        },
-        Click {
-            button: PointerButton::Primary,
-            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
-            duration: core::time::Duration::ZERO,
-            count: 1,
-        },
-        entity,
-    ));
+    app.world_mut().trigger(PointerClick {
+        entity: entity,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target,
+                position: Vec2::ZERO,
+            },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        duration: core::time::Duration::ZERO,
+        count: 1,
+    });
     app.update();
 }
 

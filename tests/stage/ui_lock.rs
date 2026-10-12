@@ -7,7 +7,7 @@ use bevy::{
     camera::{NormalizedRenderTarget, RenderTarget},
     picking::{
         backend::HitData,
-        events::{Pointer, Press},
+        events::{Pointer, PointerPress},
         pointer::{Location, PointerButton, PointerId},
     },
     prelude::*,
@@ -139,19 +139,19 @@ fn click_authored(app: &mut App, panel: Entity, authored: Vec2) {
     let render_target: NormalizedRenderTarget = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target: render_target,
-            position,
-        },
-        Press {
-            button: PointerButton::Primary,
-            hit: HitData::new(camera, 0.0, None, None),
-            count: 1,
-        },
-        stage,
-    ));
+    app.world_mut().trigger(PointerPress {
+        entity: stage,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: render_target,
+                position,
+            },
+        ),
+        button: PointerButton::Primary,
+        hit: HitData::new(camera, 0.0, None, None),
+        count: 1,
+    });
     settle(app);
 }
 

@@ -6,7 +6,7 @@ use bevy::{
     camera::{NormalizedRenderTarget, RenderTarget},
     picking::{
         backend::HitData,
-        events::{DragDrop, Pointer},
+        events::{Pointer, PointerDragDrop},
         pointer::{Location, PointerButton, PointerId},
     },
     prelude::*,
@@ -150,19 +150,19 @@ fn drop_path_at(app: &mut App, panel: Entity, authored: Vec2, path: std::path::P
         .normalize(Some(window))
         .expect("the primary window normalizes");
     let dropped = app.world_mut().spawn_empty().id();
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        Location {
-            target: render_target,
-            position,
-        },
-        DragDrop {
-            button: PointerButton::Primary,
-            dropped,
-            hit: HitData::new(camera, 0.0, None, None),
-        },
-        stage,
-    ));
+    app.world_mut().trigger(PointerDragDrop {
+        entity: stage,
+        pointer: Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: render_target,
+                position,
+            },
+        ),
+        button: PointerButton::Primary,
+        dropped,
+        hit: HitData::new(camera, 0.0, None, None),
+    });
     settle(app);
 }
 

@@ -340,7 +340,7 @@ fn finish_tile(
     };
     commands
         .entity(tile)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let mut call = commands.operator(op_id).settings(tile_dispatch_settings());
             if let Some(index) = index {
                 call = call.param("index", index as i64);
@@ -512,7 +512,7 @@ pub(super) fn spawn_add_tile(commands: &mut Commands, parent: Entity, op_id: &'s
     ));
     commands
         .entity(tile)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands
                 .operator(op_id)
                 .settings(tile_dispatch_settings())
@@ -554,7 +554,7 @@ pub(super) fn spawn_tile_remove(
     ));
     commands
         .entity(button)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands
                 .operator(op_id)
                 .param("index", index as i64)

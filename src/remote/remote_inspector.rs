@@ -319,7 +319,7 @@ pub(crate) fn spawn_fallback_section(
     let section_for_toggle = section;
     commands
         .entity(header)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.trigger(ToggleCollapsible {
                 entity: section_for_toggle,
             });

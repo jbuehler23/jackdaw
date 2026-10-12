@@ -36,10 +36,10 @@ pub struct SplitPanelPlugin;
 
 impl Plugin for SplitPanelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(set_background_on_with::<Pointer<Over>, With<PanelHandle>>(
+        app.add_observer(set_background_on_with::<PointerOver, With<PanelHandle>>(
             crate::tokens::PANEL_BORDER,
         ))
-        .add_observer(set_background_on_with::<Pointer<Out>, With<PanelHandle>>(
+        .add_observer(set_background_on_with::<PointerOut, With<PanelHandle>>(
             Color::NONE,
         ))
         .add_observer(handle_panel_drag);
@@ -59,7 +59,7 @@ fn set_background_on_with<E: EntityEvent, F: QueryFilter>(
 }
 
 fn handle_panel_drag(
-    mut drag: On<Pointer<Drag>>,
+    mut drag: On<PointerDrag>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     groups: Query<(&PanelGroup, &Node, &ComputedNode, &Children)>,
     mut panels: Query<&mut Panel>,

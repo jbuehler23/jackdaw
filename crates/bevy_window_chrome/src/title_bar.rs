@@ -163,7 +163,7 @@ pub(crate) fn register_drag_region_handlers(app: &mut App) {
 }
 
 fn on_drag(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
 ) {
@@ -180,13 +180,13 @@ fn on_drag(
 }
 
 fn on_double_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     drag_regions: Query<Entity, With<WindowTitleBarDragRegion>>,
     windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut tracker: ResMut<LastClickedTime>,
     time: Res<Time>,
 ) {
-    if click.event.button != PointerButton::Primary {
+    if click.button != PointerButton::Primary {
         return;
     }
     if drag_regions.get(click.event_target()).is_err() {

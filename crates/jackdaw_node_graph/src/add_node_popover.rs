@@ -12,7 +12,7 @@
 //! filtering and keyboard navigation for quick-add
 //! more closely.
 
-use bevy::picking::events::{Click, Pointer};
+use bevy::picking::events::PointerClick;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
@@ -246,7 +246,7 @@ pub fn spawn_popover(
 /// the backdrop. Clicks outside the popover hit the backdrop and fire this
 /// observer; straightforward, no hover-map gymnastics.
 pub fn on_backdrop_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     backdrops: Query<&AddNodeBackdrop>,
     mut commands: Commands,
 ) {
@@ -293,7 +293,7 @@ pub fn handle_popover_escape(
 
 /// Handle a click on a list entry: issue `AddGraphNodeCmd` + close.
 pub fn on_entry_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     entries: Query<&AddNodeEntry>,
     popovers: Query<&AddNodePopover>,
     mut commands: Commands,
@@ -334,7 +334,7 @@ pub fn on_entry_click(
 
 /// Hover highlighting for list entries.
 pub fn on_entry_over(
-    event: On<Pointer<bevy::picking::events::Over>>,
+    event: On<PointerOver>,
     mut bg: Query<&mut BackgroundColor, With<AddNodeEntry>>,
 ) {
     if let Ok(mut color) = bg.get_mut(event.event_target()) {
@@ -343,7 +343,7 @@ pub fn on_entry_over(
 }
 
 pub fn on_entry_out(
-    event: On<Pointer<bevy::picking::events::Out>>,
+    event: On<PointerOut>,
     mut bg: Query<&mut BackgroundColor, With<AddNodeEntry>>,
 ) {
     if let Ok(mut color) = bg.get_mut(event.event_target()) {
@@ -353,7 +353,7 @@ pub fn on_entry_out(
 
 /// Right-click on the canvas background opens the popover at the cursor.
 pub fn on_canvas_right_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     viewports: Query<(&GraphCanvasViewport, &ComputedNode, &UiGlobalTransform)>,
     canvas_worlds: Query<(&GraphCanvasWorld, &UiGlobalTransform)>,
     registry: Res<NodeTypeRegistry>,
@@ -370,7 +370,7 @@ pub fn on_canvas_right_click(
     };
     event.propagate(false);
 
-    let cursor = event.pointer_location.position;
+    let cursor = event.pointer.position;
     let spawn_pos = cursor_to_canvas_space(cursor, viewport.graph, &canvas_worlds);
 
     spawn_popover(

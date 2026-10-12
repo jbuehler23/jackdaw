@@ -149,7 +149,7 @@ fn on_handle_added(
 }
 
 fn on_handle_drag_start(
-    trigger: On<Pointer<DragStart>>,
+    trigger: On<PointerDragStart>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     nodes: Query<(&Children, &Node)>,
     mut override_cursor: ResMut<OverrideCursor>,
@@ -176,7 +176,7 @@ fn on_handle_drag_start(
 }
 
 fn on_handle_drag_end(
-    trigger: On<Pointer<DragEnd>>,
+    trigger: On<PointerDragEnd>,
     handles: Query<&ChildOf, With<PanelHandle>>,
     nodes: Query<(&Children, &Node)>,
     mut override_cursor: ResMut<OverrideCursor>,

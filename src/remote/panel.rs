@@ -106,7 +106,7 @@ pub fn update_connection_status_indicator(
 
 /// Handle clicks on the connection indicator. Toggles connection popover.
 pub fn on_connection_indicator_click(
-    trigger: On<Pointer<Click>>,
+    trigger: On<PointerClick>,
     indicators: Query<(), With<ConnectionIndicator>>,
     mut commands: Commands,
     manager: Res<ConnectionManager>,
@@ -192,7 +192,7 @@ pub fn on_connection_indicator_click(
                         ConnectButton,
                         button(ButtonProps::new(button_text).with_variant(button_variant)),
                         observe(
-                            move |_: On<Pointer<Click>>,
+                            move |_: On<PointerClick>,
                                   mut commands: Commands,
                                   mut manager: ResMut<ConnectionManager>| {
                                 if manager.is_connected() {
@@ -213,7 +213,7 @@ pub fn on_connection_indicator_click(
                         col.spawn((
                             button(ButtonProps::new("Refresh Registry")),
                             observe(
-                                |_: On<Pointer<Click>>,
+                                |_: On<PointerClick>,
                                  mut commands: Commands,
                                  manager: Res<ConnectionManager>| {
                                     super::registry_fetch::start_registry_fetch(

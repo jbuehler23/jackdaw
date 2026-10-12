@@ -201,9 +201,9 @@ pub fn game_panel_content() -> impl Bundle {
                     position_type: PositionType::Relative,
                     ..Default::default()
                 },
-                observe(|click: On<Pointer<Click>>, mut commands: Commands| {
+                observe(|click: On<PointerClick>, mut commands: Commands| {
                     let surface = click.event_target();
-                    let window_pos = click.pointer_location.position;
+                    let window_pos = click.pointer.position;
                     commands.queue(move |world: &mut World| {
                         surface_clicked(world, surface, window_pos);
                     });
@@ -349,7 +349,7 @@ fn game_play_input_button() -> impl Bundle {
             "Forward keyboard and mouse to the running game (Shift+Esc releases)",
         ),
         button(ButtonProps::new("Play Input")),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        observe(|_: On<PointerClick>, mut commands: Commands| {
             commands
                 .operator(crate::live_input::PiePlayInputToggleOp::ID)
                 .settings(CallOperatorSettings {

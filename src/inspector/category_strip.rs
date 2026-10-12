@@ -143,7 +143,7 @@ pub(super) fn spawn_category_strip(
 
         let click_id = cat_id.clone();
         commands.entity(cell).observe(
-            move |_: On<Pointer<Click>>, mut active: ResMut<ActiveInspectorCategory>| {
+            move |_: On<PointerClick>, mut active: ResMut<ActiveInspectorCategory>| {
                 active.0 = click_id.clone();
             },
         );

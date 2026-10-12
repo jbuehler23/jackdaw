@@ -406,7 +406,7 @@ fn update_preflight_banner(
         .id();
     commands
         .entity(recheck)
-        .observe(|_: On<Pointer<Click>>, mut state: ResMut<PreflightState>| {
+        .observe(|_: On<PointerClick>, mut state: ResMut<PreflightState>| {
             state.results.clear();
             state.reported = false;
             state.task = Some(
@@ -1018,7 +1018,7 @@ fn spawn_project_row(
             .id();
 
         parent.commands().entity(x_button).observe(
-            move |mut click: On<Pointer<Click>>, mut commands: Commands| {
+            move |mut click: On<PointerClick>, mut commands: Commands| {
                 click.propagate(false);
                 let path = remove_path.clone();
                 project::remove_recent(&path);
@@ -1030,7 +1030,7 @@ fn spawn_project_row(
     }
 
     parent.commands().entity(row_entity).observe(
-        move |_: On<Pointer<Click>>, mut commands: Commands| {
+        move |_: On<PointerClick>, mut commands: Commands| {
             let path = project_path.clone();
             commands.queue(move |world: &mut World| {
                 enter_project(world, path);
@@ -1151,7 +1151,7 @@ fn if_cwd_badge(is_cwd: bool, font: Handle<Font>) -> impl Bundle {
 }
 
 fn spawn_browse_dialog(
-    _: On<Pointer<Click>>,
+    _: On<PointerClick>,
     commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
 ) {
@@ -1159,7 +1159,7 @@ fn spawn_browse_dialog(
 }
 
 fn spawn_import_dialog(
-    _: On<Pointer<Click>>,
+    _: On<PointerClick>,
     commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
 ) {
@@ -1589,14 +1589,14 @@ fn spawn_launcher_action_button(
         .id();
 
     parent.commands().entity(button).observe(
-        move |hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+        move |hover: On<PointerOver>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
                 bg.0 = hover_bg;
             }
         },
     );
     parent.commands().entity(button).observe(
-        move |out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+        move |out: On<PointerOut>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                 bg.0 = idle_bg;
             }
@@ -1630,13 +1630,14 @@ fn spawn_new_project_button(
     let button =
         spawn_launcher_action_button(parent, label, icon, font, icon_font, idle_bg, hover_bg);
 
-    parent.commands().entity(button).observe(
-        move |_: On<Pointer<Click>>, mut commands: Commands| {
+    parent
+        .commands()
+        .entity(button)
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.queue(move |world: &mut World| {
                 open_new_project_modal(world, kind);
             });
-        },
-    );
+        });
 }
 
 /// Tear down any existing New Project modal. Idempotent.
@@ -1737,7 +1738,7 @@ fn show_setup_jackdaw_card_with_recovery(
     let cancel = spawn_card_button(world, row, "Cancel", &font, false);
     world
         .entity_mut(cancel)
-        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(|_: On<PointerClick>, mut commands: Commands| {
             commands.queue(close_new_project_modal);
         });
 
@@ -1745,7 +1746,7 @@ fn show_setup_jackdaw_card_with_recovery(
     let root_open = root.clone();
     world
         .entity_mut(open_anyway)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let root = root_open.clone();
             commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
@@ -1760,7 +1761,7 @@ fn show_setup_jackdaw_card_with_recovery(
         let root_force = root.clone();
         world
             .entity_mut(anyway)
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 let root = root_force.clone();
                 let package = package.clone();
                 commands.queue(move |world: &mut World| {
@@ -1771,7 +1772,7 @@ fn show_setup_jackdaw_card_with_recovery(
         let setup = spawn_card_button(world, row, "Set up jackdaw", &font, true);
         world
             .entity_mut(setup)
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 let root = root.clone();
                 commands.queue(move |world: &mut World| on_setup_jackdaw_clicked(world, root));
             });
@@ -2199,7 +2200,7 @@ fn show_upgrade_card(
     let skip_root = root.clone();
     world
         .entity_mut(skip)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let root = skip_root.clone();
             commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
@@ -2208,7 +2209,7 @@ fn show_upgrade_card(
         });
     world
         .entity_mut(update)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let plan = plan.clone();
             commands.queue(move |world: &mut World| {
                 let root = plan.root.clone();
@@ -2262,7 +2263,7 @@ fn show_not_a_project_card(world: &mut World, root: PathBuf, reason: NotAProject
     let back = spawn_card_button(world, row, "Back", &font, false);
     world
         .entity_mut(back)
-        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(|_: On<PointerClick>, mut commands: Commands| {
             commands.queue(close_new_project_modal);
         });
 
@@ -2270,7 +2271,7 @@ fn show_not_a_project_card(world: &mut World, root: PathBuf, reason: NotAProject
         let forget = spawn_card_button(world, row, "Remove from list", &font, true);
         world
             .entity_mut(forget)
-            .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+            .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 let root = root.clone();
                 commands.queue(move |world: &mut World| {
                     project::remove_recent(&root);
@@ -2315,7 +2316,7 @@ fn show_cannot_reopen_card(world: &mut World, root: PathBuf) {
     let back = spawn_card_button(world, row, "Back", &font, false);
     world
         .entity_mut(back)
-        .observe(|_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(|_: On<PointerClick>, mut commands: Commands| {
             commands.queue(close_new_project_modal);
         });
 }
@@ -2347,12 +2348,12 @@ fn show_new_project_warnings_card(
     let open_anyway = spawn_card_button(world, row, "Open anyway", &font, true);
     world
         .entity_mut(back)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.queue(close_new_project_modal);
         });
     world
         .entity_mut(open_anyway)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let root = root.clone();
             commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
@@ -2482,12 +2483,12 @@ fn show_version_mismatch_card(
     let open_anyway = spawn_card_button(world, row, "Open anyway", &font, true);
     world
         .entity_mut(back)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             commands.queue(close_new_project_modal);
         });
     world
         .entity_mut(open_anyway)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let root = root.clone();
             commands.queue(move |world: &mut World| {
                 close_new_project_modal(world);
@@ -2615,7 +2616,7 @@ fn show_package_picker_card(
     let back = spawn_card_button(world, row, "Back", &font, false);
     world
         .entity_mut(back)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let root = root.clone();
             commands.queue(move |world: &mut World| show_setup_jackdaw_card(world, root, None));
         });
@@ -2704,17 +2705,17 @@ fn package_candidate_row(name: String, root: PathBuf, allow_bevy_mismatch: bool)
                 Pickable::IGNORE
             ),
         ]
-        on(|hover: On<Pointer<Over>>, mut bg: Query<&mut BackgroundColor>| {
+        on(|hover: On<PointerOver>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
                 bg.0 = tokens::HOVER_BG;
             }
         })
-        on(|out: On<Pointer<Out>>, mut bg: Query<&mut BackgroundColor>| {
+        on(|out: On<PointerOut>, mut bg: Query<&mut BackgroundColor>| {
             if let Ok(mut bg) = bg.get_mut(out.event_target()) {
                 bg.0 = tokens::PANEL_BG;
             }
         })
-        on(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        on(move |_: On<PointerClick>, mut commands: Commands| {
             let root = root.clone();
             let package = name.clone();
             commands.queue(move |world: &mut World| {
@@ -2817,13 +2818,13 @@ fn show_import_preview_card(
     let cancel_root = plan.root.clone();
     world
         .entity_mut(cancel)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let root = cancel_root.clone();
             commands.queue(move |world: &mut World| show_setup_jackdaw_card(world, root, None));
         });
     world
         .entity_mut(apply)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             let plan = plan.clone();
             commands.queue(move |world: &mut World| {
                 let root = plan.root.clone();
@@ -2929,7 +2930,7 @@ fn show_lib_stub_warning_card(
     let open_editor = spawn_card_button(world, row, "Open the editor", &font, true);
     world
         .entity_mut(open_editor)
-        .observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+        .observe(move |_: On<PointerClick>, mut commands: Commands| {
             // The project root, not the package directory: in a
             // workspace those differ, and `jackdaw.toml` lives at the
             // root the user opened.
@@ -3363,12 +3364,12 @@ fn replan_import_on_module_change(
     }
 }
 
-fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
+fn on_cancel_new_project(_: On<PointerClick>, mut commands: Commands) {
     commands.queue(close_new_project_modal);
 }
 
 fn on_browse_new_location(
-    _: On<Pointer<Click>>,
+    _: On<PointerClick>,
     mut commands: Commands,
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
     state: Res<NewProjectState>,
@@ -3426,7 +3427,7 @@ fn spawn_reset_location_button(
     world.entity_mut(reset).observe(on_reset_new_location);
 }
 
-fn on_reset_new_location(_: On<Pointer<Click>>, mut commands: Commands) {
+fn on_reset_new_location(_: On<PointerClick>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let default_project_location = default_projects_dir();
         world.resource_mut::<NewProjectState>().location = default_project_location;
@@ -3610,7 +3611,7 @@ fn lock_new_project_dialog_while_creating(
 }
 
 fn on_create_new_project(
-    _: On<Pointer<Click>>,
+    _: On<PointerClick>,
     mut commands: Commands,
     name_inputs: Query<Entity, With<NewProjectNameInput>>,
     text_edit_values: Query<&TextEditValue>,

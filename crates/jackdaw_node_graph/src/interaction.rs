@@ -8,14 +8,14 @@
 //!
 //! The gesture lifecycle for a node drag is:
 //!
-//! 1. `Pointer<DragStart>` -> snapshot positions, transition to
+//! 1. `PointerDragStart` -> snapshot positions, transition to
 //!    [`GraphGesture::MoveNodes`].
-//! 2. `Pointer<Drag>` -> write live positions using `Drag::distance`.
-//! 3. `Pointer<DragEnd>` -> compute `(old, new)` diffs, queue a
+//! 2. `PointerDrag` -> write live positions using `Drag::distance`.
+//! 3. `PointerDragEnd` -> compute `(old, new)` diffs, queue a
 //!    [`MoveGraphNodesCmd`] on `CommandHistory`, reset gesture to `Idle`.
 
 use bevy::ecs::relationship::Relationship;
-use bevy::picking::events::{Click, Drag, DragEnd, DragStart, Pointer};
+use bevy::picking::events::{PointerClick, PointerDrag, PointerDragEnd, PointerDragStart};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use jackdaw_commands::{CommandHistory, KeymapCapture, ShortcutPlatform};
@@ -50,7 +50,7 @@ use crate::selection::GraphSelection;
 /// to absorb their own clicks (like feathers `text_edit`) stop
 /// propagation on their own wrapper, so those clicks never reach here.
 pub fn on_node_click(
-    event: On<Pointer<Click>>,
+    event: On<PointerClick>,
     views: Query<&GraphNodeView>,
     gesture: Res<GraphGesture>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -74,13 +74,13 @@ pub fn on_node_click(
 
 /// Begin a `MoveNodes` gesture and ensure the dragged node is selected.
 ///
-/// Relies on `Pointer<DragStart>` propagation walking up from the original
+/// Relies on `PointerDragStart` propagation walking up from the original
 /// target until it hits a `GraphNodeView` ancestor; i.e. the node root.
 /// Drags from widgets that want to own their own drag gesture (like
 /// feathers `text_edit`'s scrub hitbox) stop propagation on their own
 /// wrapper so they never reach this observer.
 pub fn on_node_drag_start(
-    event: On<Pointer<DragStart>>,
+    event: On<PointerDragStart>,
     views: Query<&GraphNodeView>,
     nodes: Query<&GraphNode>,
     mut selection: ResMut<GraphSelection>,
@@ -120,7 +120,7 @@ pub fn on_node_drag_start(
 /// transitions into `MoveNodes`, and that observer already enforces the
 /// `NodeDragHandle` rule.
 pub fn on_node_drag(
-    event: On<Pointer<Drag>>,
+    event: On<PointerDrag>,
     mut nodes: Query<&mut GraphNode>,
     gesture: Res<GraphGesture>,
     canvas_views: Query<&GraphCanvasView>,
@@ -152,7 +152,7 @@ pub fn on_node_drag(
 /// `MoveNodes`, which is only set by `on_node_drag_start` after passing
 /// the `NodeDragHandle` walk-up.
 pub fn on_node_drag_end(
-    event: On<Pointer<DragEnd>>,
+    event: On<PointerDragEnd>,
     nodes: Query<&GraphNode>,
     mut gesture: ResMut<GraphGesture>,
     mut commands: Commands,
@@ -212,13 +212,13 @@ pub fn on_node_drag_end(
 /// with a `MoveNodes` gesture and the node ends up sliding around instead of
 /// spawning a wire.
 ///
-/// **Coordinate note**: `event.pointer_location.position` is in **logical**
+/// **Coordinate note**: `event.pointer.position` is in **logical**
 /// pixels while `UiGlobalTransform::translation` and `ComputedNode::size`
 /// are in **physical** pixels. We convert here so everything downstream
 /// (snap hit-testing, ghost rendering, `on_terminal_drag_end`) works in
 /// one unit system regardless of DPI scale.
 pub fn on_terminal_drag_start(
-    mut event: On<Pointer<DragStart>>,
+    mut event: On<PointerDragStart>,
     terminals: Query<(&GraphTerminalView, &ComputedNode)>,
     mut gesture: ResMut<GraphGesture>,
 ) {
@@ -235,7 +235,7 @@ pub fn on_terminal_drag_start(
         return;
     }
 
-    let cursor_physical = event.pointer_location.position / computed.inverse_scale_factor;
+    let cursor_physical = event.pointer.position / computed.inverse_scale_factor;
 
     *gesture = GraphGesture::ConnectDrag {
         source: ConnectionAnchor::FromOutput {
@@ -250,7 +250,7 @@ pub fn on_terminal_drag_start(
 
 /// Track cursor while dragging a connection ghost.
 pub fn on_terminal_drag(
-    mut event: On<Pointer<Drag>>,
+    mut event: On<PointerDrag>,
     terminals: Query<(&GraphTerminalView, &ComputedNode)>,
     mut gesture: ResMut<GraphGesture>,
 ) {
@@ -262,7 +262,7 @@ pub fn on_terminal_drag(
     let Ok((_view, computed)) = terminals.get(event.event_target()) else {
         return;
     };
-    let cursor_physical = event.pointer_location.position / computed.inverse_scale_factor;
+    let cursor_physical = event.pointer.position / computed.inverse_scale_factor;
     if let GraphGesture::ConnectDrag { cursor_pos, .. } = &mut *gesture {
         *cursor_pos = cursor_physical;
         event.propagate(false);
@@ -276,7 +276,7 @@ pub fn on_terminal_drag(
 /// terminal transforms are fresh). This observer just reads the
 /// last-computed `snap_target` off the gesture and commits it.
 pub fn on_terminal_drag_end(
-    mut event: On<Pointer<DragEnd>>,
+    mut event: On<PointerDragEnd>,
     terminal_views: Query<&GraphTerminalView>,
     nodes: Query<Option<&ChildOf>, With<GraphNode>>,
     mut gesture: ResMut<GraphGesture>,
@@ -342,7 +342,7 @@ pub fn on_terminal_drag_end(
 /// Swallow plain clicks on terminals so they don't bubble up to
 /// `on_node_click` (which would select the owning node when the user meant
 /// to interact with the terminal).
-pub fn on_terminal_click(mut event: On<Pointer<Click>>, terminals: Query<&GraphTerminalView>) {
+pub fn on_terminal_click(mut event: On<PointerClick>, terminals: Query<&GraphTerminalView>) {
     if event.button != PointerButton::Primary {
         return;
     }
@@ -358,7 +358,7 @@ pub fn on_terminal_click(mut event: On<Pointer<Click>>, terminals: Query<&GraphT
 /// removal is pushed as an `EditorCommand` so undo/redo works
 /// automatically.
 pub fn on_terminal_right_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     terminals: Query<&GraphTerminalView>,
     connections: Query<(Entity, &Connection, Option<&ChildOf>)>,
     mut commands: Commands,

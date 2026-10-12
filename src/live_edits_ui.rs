@@ -95,7 +95,7 @@ pub fn live_edits_badge() -> impl Bundle {
     (
         LiveEditsBadge,
         button(ButtonProps::new("").hidden()),
-        observe(|click: On<Pointer<Click>>, mut open: ResMut<TrayOpen>| {
+        observe(|click: On<PointerClick>, mut open: ResMut<TrayOpen>| {
             if click.event().button != PointerButton::Primary {
                 return;
             }
@@ -340,9 +340,7 @@ fn tray_entry_button(
             ButtonVariant::Disabled
         })),
         observe(
-            move |click: On<Pointer<Click>>,
-                  mut commands: Commands,
-                  mut log: ResMut<LiveEditLog>| {
+            move |click: On<PointerClick>, mut commands: Commands, mut log: ResMut<LiveEditLog>| {
                 if !enabled || click.event().button != PointerButton::Primary {
                     return;
                 }
@@ -368,7 +366,7 @@ fn tray_entry_button(
 fn tray_footer_button(label: &'static str, operator_id: &'static str) -> impl Bundle {
     (
         button(ButtonProps::new(label)),
-        observe(move |click: On<Pointer<Click>>, mut commands: Commands| {
+        observe(move |click: On<PointerClick>, mut commands: Commands| {
             if click.event().button != PointerButton::Primary {
                 return;
             }
@@ -555,7 +553,7 @@ fn stop_prompt_operator_button(label: &'static str, operator_id: &'static str) -
     (
         button(ButtonProps::new(label)),
         observe(
-            move |click: On<Pointer<Click>>,
+            move |click: On<PointerClick>,
                   mut commands: Commands,
                   mut prompt: ResMut<StopPrompt>| {
                 if click.event().button != PointerButton::Primary {
@@ -591,7 +589,7 @@ fn stop_prompt_review_button() -> impl Bundle {
         children![(
             button(ButtonProps::new("Review")),
             observe(
-                move |click: On<Pointer<Click>>,
+                move |click: On<PointerClick>,
                       mut prompt: ResMut<StopPrompt>,
                       mut open: ResMut<TrayOpen>| {
                     if click.event().button != PointerButton::Primary {

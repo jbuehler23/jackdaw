@@ -208,7 +208,7 @@ fn split_property(typed: &str) -> Option<(String, String)> {
 
 /// Clicking a track row chooses the track the curves view draws.
 pub(super) fn on_track_row_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     rows: Query<&jackdaw_animation::TimelineTrackRow>,
     mut chosen: ResMut<SelectedTrack>,
     mut dirty: ResMut<TimelineDirty>,
@@ -226,7 +226,7 @@ pub(super) fn on_track_row_click(
 /// A segment reports a radio change rather than a button click, so the toggle
 /// dispatches its operator from here rather than through `ButtonOperatorCall`.
 pub(super) fn on_view_segment_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     segments: Query<&jackdaw_animation::TimelineViewSegment>,
     mut commands: Commands,
 ) {
@@ -242,7 +242,7 @@ pub(super) fn on_view_segment_click(
 
 /// Clicking half of the loop toggle writes that mode on the clip.
 pub(super) fn on_loop_segment_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     segments: Query<&jackdaw_animation::TimelineLoopSegment>,
     mut commands: Commands,
 ) {
@@ -259,7 +259,7 @@ pub(super) fn on_loop_segment_click(
 /// Clicking an event marker parks the playhead on it, which is also what says
 /// which event `clip.event.remove` means.
 pub(super) fn on_event_marker_click(
-    mut event: On<Pointer<Click>>,
+    mut event: On<PointerClick>,
     markers: Query<&jackdaw_animation::TimelineEventHandle>,
     events: Query<&jackdaw_animation::ClipEvent>,
     mut seek: MessageWriter<jackdaw_animation::AnimationSeek>,

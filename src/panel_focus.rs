@@ -64,7 +64,7 @@ fn panel_of(
 
 /// Record the panel a press landed in.
 fn remember_pressed_panel(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     parents: Query<&ChildOf>,
     contents: Query<(Entity, &DockTabContent)>,
     mut last_pressed: ResMut<LastPressedPanel>,
