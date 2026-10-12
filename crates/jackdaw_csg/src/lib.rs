@@ -536,57 +536,51 @@ fn dedup_positions(positions: &[Vec3], eps: f32) -> (Vec<Vec3>, Vec<u32>) {
 ///
 /// Returns multiple rings when a coplanar face group has disconnected
 /// components (common after multiple cuts on the same face: each cut can
-/// leave its own coplanar region disjoint from the others).
+/// leave its own coplanar region disjoint from the others). Rings that
+/// touch at a shared vertex are split there, and edges are visited in
+/// sorted order so the same triangles always give the same rings.
 fn recover_polygon_boundaries(tris: &[(u32, u32, u32)]) -> Vec<Vec<u32>> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
 
-    let mut directed: HashSet<(u32, u32)> = HashSet::new();
+    let mut directed: BTreeSet<(u32, u32)> = BTreeSet::new();
     for &(a, b, c) in tris {
         for &(u, v) in &[(a, b), (b, c), (c, a)] {
             directed.insert((u, v));
         }
     }
-    let boundary: Vec<(u32, u32)> = directed
-        .iter()
-        .filter(|(u, v)| !directed.contains(&(*v, *u)))
-        .copied()
-        .collect();
-    if boundary.is_empty() {
-        return Vec::new();
+    let mut outgoing: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for &(u, v) in &directed {
+        if !directed.contains(&(v, u)) {
+            outgoing.entry(u).or_default().push(v);
+        }
+    }
+    // Popped from the back, so reverse to take the smallest target first.
+    for targets in outgoing.values_mut() {
+        targets.reverse();
     }
 
-    let mut next_of: HashMap<u32, u32> = HashMap::new();
-    for &(u, v) in &boundary {
-        next_of.entry(u).or_insert(v);
-    }
-
-    // Walk every starting vert, marking visited entries in `next_of` so we
-    // collect every disjoint ring on this plane.
     let mut rings: Vec<Vec<u32>> = Vec::new();
-    let mut visited: HashSet<u32> = HashSet::new();
-    for &(seed_from, _) in &boundary {
-        if visited.contains(&seed_from) {
-            continue;
-        }
-        let mut ring = vec![seed_from];
-        visited.insert(seed_from);
-        let mut cur = seed_from;
-        while let Some(&n) = next_of.get(&cur) {
-            if n == seed_from {
-                break;
+    let starts: Vec<u32> = outgoing.keys().copied().collect();
+    for start in starts {
+        while outgoing.get(&start).is_some_and(|t| !t.is_empty()) {
+            // Walk unused boundary edges until the path closes. A vertex
+            // seen twice on the path closes a loop there, which is cut off
+            // as its own ring.
+            let mut path = vec![start];
+            let mut cur = start;
+            while let Some(next) = outgoing.get_mut(&cur).and_then(Vec::pop) {
+                if let Some(pos) = path.iter().position(|&p| p == next) {
+                    let ring = path.split_off(pos);
+                    if ring.len() >= 3 {
+                        rings.push(ring);
+                    }
+                    if path.is_empty() {
+                        break;
+                    }
+                }
+                path.push(next);
+                cur = next;
             }
-            if visited.contains(&n) {
-                break;
-            }
-            ring.push(n);
-            visited.insert(n);
-            cur = n;
-            if ring.len() > 10_000 {
-                break;
-            }
-        }
-        if ring.len() >= 3 {
-            rings.push(ring);
         }
     }
     rings
@@ -1197,6 +1191,27 @@ mod tests {
         let conv = brush_to_solid(&input);
         if let Err(e) = conv {
             panic!("L-shape should round-trip into the kernel: {e:?}");
+        }
+    }
+
+    #[test]
+    fn boundary_rings_split_at_a_shared_corner_in_any_triangle_order() {
+        // Two squares on one plane touching at vertex 2: 0-1-2-3 and 2-4-5-6.
+        let mut tris = vec![(0, 1, 2), (0, 2, 3), (2, 4, 5), (2, 5, 6)];
+        let canonical = |mut rings: Vec<Vec<u32>>| {
+            for ring in &mut rings {
+                let min = ring.iter().position(|v| v == ring.iter().min().unwrap());
+                ring.rotate_left(min.unwrap());
+            }
+            rings.sort();
+            rings
+        };
+        let expected = vec![vec![0, 1, 2, 3], vec![2, 4, 5, 6]];
+        for _ in 0..tris.len() {
+            let rings = recover_polygon_boundaries(&tris);
+            assert_eq!(canonical(rings.clone()), expected);
+            assert_eq!(rings, recover_polygon_boundaries(&tris));
+            tris.rotate_left(1);
         }
     }
 }
