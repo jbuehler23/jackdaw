@@ -299,6 +299,47 @@ fn repeated_through_slots_keep_one_closed_brush() {
     );
 }
 
+/// Cuts twelve staggered pockets into the top of a slab, feeding each
+/// result into the next cut, and returns the final brush.
+fn pocketed_slab() -> Result<CsgBrush, String> {
+    let mut target = cuboid(Vec3::new(4.0, 1.0, 4.0), Vec3::ZERO);
+    for i in 0..12 {
+        let center = Vec3::new(-3.5 + i as f32 * 0.6, 1.0, (i % 3) as f32 - 1.0);
+        let cutter = cuboid(Vec3::new(0.2, 0.6, 2.0), center);
+        let mut fragments = brush_difference_split(&input(&target), &input(&cutter))
+            .map_err(|e| format!("pocket {i}: {e}"))?;
+        if fragments.len() != 1 {
+            return Err(format!("pocket {i}: {} fragments", fragments.len()));
+        }
+        let f = fragments.remove(0);
+        target = Brush {
+            faces: f.faces,
+            topology: f.topology,
+        };
+    }
+    Ok(CsgBrush {
+        faces: target.faces,
+        topology: target.topology,
+    })
+}
+
+#[test]
+fn repeated_pockets_give_the_same_closed_brush_every_run() {
+    let first = pocketed_slab().unwrap();
+    let (volume, open) = stats(&first);
+    assert_eq!(open, 0);
+    let expected = 8.0 * 2.0 * 8.0 - 12.0 * 0.4 * 0.6 * 4.0;
+    assert!(
+        close(volume, expected),
+        "volume {volume}, expected {expected}"
+    );
+    for _ in 0..5 {
+        let again = pocketed_slab().unwrap();
+        assert_eq!(again.topology.polygons.len(), first.topology.polygons.len());
+        assert_eq!(again.topology.vertices.len(), first.topology.vertices.len());
+    }
+}
+
 #[test]
 fn batch_union_of_overlapping_grid_is_one_closed_brush() {
     let brushes: Vec<Brush> = (0..9)

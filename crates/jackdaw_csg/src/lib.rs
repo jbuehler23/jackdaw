@@ -488,6 +488,8 @@ fn solid_to_brush(
         return Err(CsgError::EmptyResult);
     }
 
+    split_t_junctions(&positions, &mut face_rings);
+
     // Rebuild topology using the canonical builder. This produces the
     // same topology format the rest of the editor expects.
     let topology =
@@ -498,6 +500,43 @@ fn solid_to_brush(
     }
 
     Ok(CsgBrush { faces, topology })
+}
+
+/// Insert into each ring edge every ring vertex that lies on the edge's
+/// interior. Triangulating a face with collinear hole edges can leave one
+/// face's edge spanning several of its neighbour's edges; without the
+/// split the rebuilt brush has open edges and the kernel rejects it on the
+/// next boolean.
+fn split_t_junctions(positions: &[Vec3], rings: &mut [Vec<usize>]) {
+    let mut used: Vec<usize> = rings.iter().flatten().copied().collect();
+    used.sort_unstable();
+    used.dedup();
+    let eps2 = POS_DEDUP_EPS * POS_DEDUP_EPS;
+    for ring in rings.iter_mut() {
+        let mut out = Vec::with_capacity(ring.len());
+        for i in 0..ring.len() {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            out.push(a);
+            let (pa, pb) = (positions[a], positions[b]);
+            let edge = pb - pa;
+            let len2 = edge.length_squared();
+            if len2 <= eps2 {
+                continue;
+            }
+            let mut on_edge: Vec<(f32, usize)> = used
+                .iter()
+                .filter(|&&v| v != a && v != b)
+                .filter_map(|&v| {
+                    let t = (positions[v] - pa).dot(edge) / len2;
+                    let off = pa + edge * t - positions[v];
+                    (t > 0.0 && t < 1.0 && off.length_squared() < eps2).then_some((t, v))
+                })
+                .collect();
+            on_edge.sort_by(|x, y| x.0.total_cmp(&y.0));
+            out.extend(on_edge.into_iter().map(|(_, v)| v));
+        }
+        *ring = out;
+    }
 }
 
 /// Dedup positions within `eps` and return a remap from old index to new
