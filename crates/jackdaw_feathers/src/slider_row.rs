@@ -16,7 +16,7 @@ use std::ops::Range;
 use bevy::feathers::controls::FeathersSlider;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui_widgets::SliderPrecision;
+use bevy::ui_widgets::{SliderPrecision, SliderValue};
 
 use crate::field_row::{FieldRow, FieldRowProps, spawn_field_row};
 use crate::tokens;
@@ -134,7 +134,8 @@ pub fn spawn_slider_row<C: Component>(
     // centring that positions the digits inside the track.
     let slider = commands
         .spawn_scene(bsn! {
-            @FeathersSlider { @value: {value}, @min: {min}, @max: {max} }
+            @FeathersSlider { @min: {min}, @max: {max} }
+            SliderValue({value})
             Node {
                 flex_grow: 1.0,
                 flex_shrink: 1.0,

@@ -2035,7 +2035,8 @@ fn spawn_slot_surface_row(
     let shown = value.unwrap_or(field.unset).min(field.max);
     let max = field.max;
     let mut slider = commands.spawn_scene(bsn! {
-        @FeathersSlider { @value: {shown}, @min: 0.0, @max: {max} }
+        @FeathersSlider { @min: 0.0, @max: {max} }
+            SliderValue({shown})
         Node {
             flex_grow: 1.0,
             flex_shrink: 1.0,
