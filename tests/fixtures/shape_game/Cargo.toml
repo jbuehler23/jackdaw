@@ -8,4 +8,4 @@ publish = false
 [workspace]
 
 [dependencies]
-bevy = { version = "0.19", default-features = false, features = ["reflect_auto_register"] }
+bevy = { version = "0.20", default-features = false, features = ["reflect_auto_register"] }

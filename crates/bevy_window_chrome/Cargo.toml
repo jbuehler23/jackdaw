@@ -22,7 +22,7 @@ bevy.workspace = true
 winit.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-wgpu = { version = "29", default-features = false }
+wgpu = { version = "30", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

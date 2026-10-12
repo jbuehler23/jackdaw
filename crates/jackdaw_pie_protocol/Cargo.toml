@@ -12,7 +12,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 ipc = ["dep:ipc-channel"]
 
 [dependencies]
-bevy = { version = "0.19", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "std",
     "serialize",
     "bevy_asset",

@@ -9,7 +9,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 glam.workspace = true
-bevy = { version = "0.19", default-features = false, optional = true, features = [
+bevy = { version = "0.20", default-features = false, optional = true, features = [
     "reflect_auto_register",
     "std",
     "serialize",

@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-bevy = { version = "0.19", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "std",
     "serialize",
     "reflect_auto_register",

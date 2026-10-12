@@ -10,7 +10,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 [dependencies]
 # See `jackdaw_pie_protocol`: this crate ships inside games, so its bevy
 # features unify into theirs. Keep the list minimal and explicit.
-bevy = { version = "0.19", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "std",
     "serialize",
     "reflect_auto_register",
