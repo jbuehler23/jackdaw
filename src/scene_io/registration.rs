@@ -47,7 +47,7 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
             })
             .filter_map(|registration| registration.data::<ReflectComponent>())
             .filter_map(|reflect_component| reflect_component.reflect(entity_ref))
-            .map(bevy::reflect::PartialReflect::to_dynamic)
+            .filter_map(|value| value.to_dynamic().ok())
             .collect()
     };
     for value in values {

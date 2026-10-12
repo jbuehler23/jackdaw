@@ -1076,7 +1076,7 @@ fn snapshot_targets(world: &mut World, targets: &[(Entity, TypeId)]) -> Vec<Writ
         };
         let value = reflect_component
             .reflect(entity_ref)
-            .map(PartialReflect::to_dynamic);
+            .and_then(|value| value.to_dynamic().ok());
         out.push(WriteTarget {
             entity,
             type_id,
@@ -1133,7 +1133,7 @@ pub fn suspend_preview_writes(world: &mut World) -> Option<SuspendedPreview> {
             value: target
                 .value
                 .as_ref()
-                .map(|value| PartialReflect::to_dynamic(value.as_ref())),
+                .and_then(|value| PartialReflect::to_dynamic(value.as_ref()).ok()),
         })
         .collect();
     let targets: Vec<(Entity, TypeId)> = authored

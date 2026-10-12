@@ -511,7 +511,13 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
                 return;
             };
             if let Some(existing) = reflect_component.reflect(entity_ref) {
-                existing.to_dynamic()
+                match existing.to_dynamic() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log::warn!("cannot patch '{}': {err}", data.type_path);
+                        return;
+                    }
+                }
             } else if let Some(reflect_default) = reflect_default {
                 reflect_default.default().into_partial_reflect()
             } else {
@@ -574,7 +580,13 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
                 return;
             };
             if let Some(existing) = reflect_component.reflect(entity_ref) {
-                existing.to_dynamic()
+                match existing.to_dynamic() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log::warn!("cannot patch '{}': {err}", data.type_path);
+                        return;
+                    }
+                }
             } else {
                 reflect_default.default().into_partial_reflect()
             }
@@ -799,9 +811,17 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
         let Ok(entity_ref) = world.get_entity(entity) else {
             return;
         };
-        reflect_component
+        match reflect_component
             .reflect(entity_ref)
             .map(bevy::prelude::PartialReflect::to_dynamic)
+            .transpose()
+        {
+            Ok(existing) => existing,
+            Err(err) => {
+                log::warn!("cannot patch '{}': {err}", data.type_path);
+                return;
+            }
+        }
     };
     let mut value: Box<dyn PartialReflect> = match existing {
         Some(existing) => existing,
@@ -914,7 +934,7 @@ fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialRefl
         target.reflect_mut(),
         ReflectMut::List(_) | ReflectMut::Map(_)
     );
-    let prior = clears.then(|| target.to_dynamic());
+    let prior = clears.then(|| target.to_dynamic().ok()).flatten();
 
     if let ReflectMut::List(list) = target.reflect_mut() {
         while !list.is_empty() {
