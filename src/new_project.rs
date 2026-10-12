@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 
 pub use jackdaw_scaffold::dev_checkout::jackdaw_dev_checkout;
 
-/// Create `<location>/<name>` from an embedded template and return
-/// the created project directory.
+/// Create `<location>/<name>` from an embedded template, a game using
+/// `modules`, and return the created project directory.
 pub fn scaffold_project(
     name: &str,
     location: &Path,
     kind: crate::scaffold::TemplateKind,
+    modules: &jackdaw_project_build::modules::ModuleSet,
 ) -> Result<PathBuf, crate::scaffold::ScaffoldError> {
     // The default location is a guess (`~/Projects`) that does not
     // exist on a fresh machine, so refusing here failed the very first
@@ -27,7 +28,7 @@ pub fn scaffold_project(
         })?;
     }
     let dest = location.join(name);
-    crate::scaffold::scaffold_new_project(&dest, name, kind)?;
+    crate::scaffold::scaffold_new_project_with(&dest, name, kind, modules)?;
     // Parity with `jd new`, which inits a repository the way `cargo new`
     // does. Two entry points producing differently-set-up projects is a
     // difference nobody can see until they try to commit.

@@ -12,8 +12,9 @@ use std::process::ExitCode;
 
 use include_dir::{Dir, include_dir};
 use jackdaw_env::rust_env_command;
+use jackdaw_project_build::modules::{GameDependencies, ModuleCatalog, ModuleSet};
 use jackdaw_project_build::runtime_wiring::{
-    PIE_FEATURE, RUNTIME_CRATE, RUNTIME_FEATURES, RuntimeDependency, RuntimeWiring,
+    PIE_FEATURE, RUNTIME_CRATE, RuntimeDependency, RuntimeWiring,
 };
 use path_slash::PathExt as _;
 use toml_edit::DocumentMut;
@@ -92,6 +93,10 @@ pub struct ImportPlan {
     pub changes: Vec<ImportChange>,
     pub notes: Vec<String>,
     pub migrated_bin_target: bool,
+    /// The modules the game's dependencies already show it using.
+    pub detected_modules: ModuleSet,
+    /// The modules the project uses once the plan is applied.
+    pub modules: ModuleSet,
 }
 
 impl ImportPlan {
@@ -202,9 +207,24 @@ pub fn run_new_cli(args: &[String]) -> ExitCode {
     } else {
         TemplateKind::Game
     };
-    let Some(raw_name) = first_positional(args, &["--path"]) else {
-        eprintln!("jd new: usage: jd new <name> [--extension] [--path <dir>] [--no-git]");
+    let Some(raw_name) = first_positional(args, &["--path", "--modules"]) else {
+        eprintln!(
+            "jd new: usage: jd new <name> [--extension] [--path <dir>] [--no-git] \
+             [--modules <list> | --no-modules]"
+        );
         return ExitCode::FAILURE;
+    };
+    let modules = match modules_arg(args) {
+        Ok(None) => ModuleCatalog::builtin().defaults(),
+        Ok(Some(_)) if kind == TemplateKind::Extension => {
+            eprintln!("jd new: modules apply to games; an extension project has none");
+            return ExitCode::FAILURE;
+        }
+        Ok(Some(modules)) => modules,
+        Err(error) => {
+            eprintln!("jd new: {error}");
+            return ExitCode::FAILURE;
+        }
     };
     let project_name = match validated_project_name(raw_name) {
         Ok(name) => name,
@@ -228,9 +248,12 @@ pub fn run_new_cli(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let dest = location.join(&project_name);
-    match scaffold_new_project(&dest, &project_name, kind) {
+    match scaffold_new_project_with(&dest, &project_name, kind, &modules) {
         Ok(report) => {
             println!("jd new: created {}", dest.display());
+            if kind == TemplateKind::Game {
+                println!("  modules: {}", describe_modules(&modules));
+            }
             for a in &report.actions {
                 println!("  {a}");
             }
@@ -497,6 +520,26 @@ fn first_positional<'a>(args: &'a [String], value_flags: &[&str]) -> Option<&'a 
     None
 }
 
+/// The modules `--modules <list>` or `--no-modules` ask for, or `None`
+/// when neither is given.
+fn modules_arg(args: &[String]) -> Result<Option<ModuleSet>, String> {
+    let none = args.iter().any(|arg| arg == "--no-modules");
+    match (flag_value(args, "--modules"), none) {
+        (Some(_), true) => Err("pass --modules or --no-modules, not both".to_string()),
+        (Some(list), false) => ModuleCatalog::builtin().parse_list(&list).map(Some),
+        (None, true) => Ok(Some(ModuleSet::new())),
+        (None, false) => Ok(None),
+    }
+}
+
+/// The names of `modules` for a summary line, or `none`.
+fn describe_modules(modules: &ModuleSet) -> String {
+    if modules.is_empty() {
+        return "none".to_string();
+    }
+    ModuleCatalog::builtin().names(&modules.iter().cloned().collect::<Vec<_>>())
+}
+
 /// The value following `flag` in `args`, or the `--flag=value` form.
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
     let mut it = args.iter();
@@ -541,7 +584,15 @@ pub fn init_git_repository(dest: &Path) {
 pub fn run_import_cli(args: &[String]) -> ExitCode {
     let plugin = parse_plugin_arg(args);
     let package = flag_value(args, "--package");
-    let requested_root = first_positional(args, &["--plugin", "--package"]).map(PathBuf::from);
+    let requested_root =
+        first_positional(args, &["--plugin", "--package", "--modules"]).map(PathBuf::from);
+    let modules = match modules_arg(args) {
+        Ok(modules) => modules,
+        Err(error) => {
+            eprintln!("jd import: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let root = match requested_root
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)
@@ -554,7 +605,13 @@ pub fn run_import_cli(args: &[String]) -> ExitCode {
         }
     };
     let allow_mismatch = args.iter().any(|arg| arg == "--allow-bevy-mismatch");
-    match plan_import_with(&root, plugin, package.as_deref(), allow_mismatch) {
+    match plan_import_with_modules(
+        &root,
+        plugin,
+        package.as_deref(),
+        allow_mismatch,
+        modules.as_ref(),
+    ) {
         Ok(plan) if plan.is_empty() => {
             println!("jd import: {} is already set up", root.display());
             if !RuntimeWiring::inspect(&plan.package_dir).complete() {
@@ -570,6 +627,7 @@ pub fn run_import_cli(args: &[String]) -> ExitCode {
             if plan.package_dir != plan.root {
                 println!("  package: {}", plan.package_name);
             }
+            println!("  modules: {}", describe_modules(&plan.modules));
             for change in &plan.changes {
                 println!("  {}", change.summary());
             }
@@ -738,6 +796,8 @@ pub fn plan_upgrade_project(root: &Path) -> Result<ImportPlan, ScaffoldError> {
         changes,
         notes,
         migrated_bin_target: false,
+        detected_modules: ModuleSet::new(),
+        modules: ModuleSet::new(),
     })
 }
 
@@ -1012,12 +1072,31 @@ fn parse_plugin_arg(args: &[String]) -> Option<String> {
 
 /// Scaffold a new project at `dest` from an embedded template,
 /// substituting the project name, crate name, authors, and title
-/// placeholders. Reusable by the launcher's New Project action.
+/// placeholders. A game starts with the default modules.
 pub fn scaffold_new_project(
     dest: &Path,
     project_name: &str,
     kind: TemplateKind,
 ) -> Result<ScaffoldReport, ScaffoldError> {
+    scaffold_new_project_with(
+        dest,
+        project_name,
+        kind,
+        &ModuleCatalog::builtin().defaults(),
+    )
+}
+
+/// As [`scaffold_new_project`], with the game using `modules`: they are
+/// recorded in `jackdaw.toml`, and their runtime features, crates and
+/// plugins are written into the game. Requirements are added. Reusable by
+/// the launcher's New Project action.
+pub fn scaffold_new_project_with(
+    dest: &Path,
+    project_name: &str,
+    kind: TemplateKind,
+    modules: &ModuleSet,
+) -> Result<ScaffoldReport, ScaffoldError> {
+    let modules = ModuleCatalog::builtin().complete(modules.clone());
     if dest.exists()
         && dest
             .read_dir()
@@ -1045,8 +1124,14 @@ pub fn scaffold_new_project(
                 let text = std::str::from_utf8(file.contents()).map_err(|_| {
                     ScaffoldError::Io(format!("template file {rel} is not valid UTF-8"))
                 })?;
-                let rendered =
-                    substitute_placeholders(text, project_name, &crate_name, &authors, &title);
+                let rendered = substitute_placeholders(
+                    text,
+                    project_name,
+                    &crate_name,
+                    &authors,
+                    &title,
+                    &modules,
+                );
                 // Dotfiles are stored undotted so they do not act on
                 // the jackdaw repository itself.
                 let stripped = if stripped == "gitignore" {
@@ -1112,6 +1197,27 @@ pub fn plan_import_with(
     plugin_override: Option<String>,
     package_override: Option<&str>,
     allow_bevy_mismatch: bool,
+) -> Result<ImportPlan, ScaffoldError> {
+    plan_import_with_modules(
+        root,
+        plugin_override,
+        package_override,
+        allow_bevy_mismatch,
+        None,
+    )
+}
+
+/// As [`plan_import_with`], choosing the modules the project uses.
+///
+/// Modules the game's dependencies already show are always kept: import
+/// only adds. `None` adds nothing beyond those, except that a game without
+/// `jackdaw_runtime` yet gets the default modules with it.
+pub fn plan_import_with_modules(
+    root: &Path,
+    plugin_override: Option<String>,
+    package_override: Option<&str>,
+    allow_bevy_mismatch: bool,
+    modules: Option<&ModuleSet>,
 ) -> Result<ImportPlan, ScaffoldError> {
     let manifest_path = root.join("Cargo.toml");
     if !manifest_path.is_file() {
@@ -1188,6 +1294,16 @@ pub fn plan_import_with(
     // declaration import cannot safely extend is left to the user, and no
     // source may name the crate until it is a plain dependency.
     let wiring = RuntimeWiring::inspect(&package_dir);
+    let catalog = ModuleCatalog::builtin();
+    let game = GameDependencies::read(&package_dir, root);
+    let detected_modules = catalog.detect(&game);
+    let chosen_modules = match modules {
+        Some(chosen) => chosen.clone(),
+        None if wiring.dependency == RuntimeDependency::Missing => catalog.defaults(),
+        None => ModuleSet::new(),
+    };
+    let selected_modules =
+        catalog.complete(chosen_modules.union(&detected_modules).cloned().collect());
     let declared_plain = wiring.dependency == RuntimeDependency::Plain;
     let wire_runtime = !bevy_mismatch
         && matches!(
@@ -1204,19 +1320,32 @@ pub fn plan_import_with(
              re-run `jd import`"
         ));
     }
-    if wire_runtime && let Some(updated) = runtime_dependency_edit(&manifest_text, &wiring) {
+    if wire_runtime
+        && let Some(edit) =
+            runtime_dependency_edit(&manifest_text, &wiring, &selected_modules, &game)
+    {
         changes.push(ImportChange::WriteFile {
             path: package_manifest.clone(),
-            contents: updated,
+            contents: edit.contents,
             replace: true,
         });
-        notes.push(if declared_plain {
-            "Cargo.toml: enables the `pie` feature of jackdaw_runtime, which Play needs".to_string()
-        } else {
-            "Cargo.toml: adds jackdaw_runtime (features physics, pie), which component \
-             discovery and Play need"
-                .to_string()
-        });
+        notes.extend(edit.notes);
+    }
+    let added_modules: Vec<String> = selected_modules
+        .difference(&detected_modules)
+        .cloned()
+        .collect();
+    if wire_runtime {
+        notes.extend(plugin_notes(
+            &package_dir,
+            &added_modules.iter().cloned().collect(),
+        ));
+    }
+    if !wire_runtime && !added_modules.is_empty() {
+        notes.push(format!(
+            "jackdaw.toml records {} as used, but Cargo.toml is left for you to update",
+            catalog.names(&added_modules)
+        ));
     }
 
     // Lib target: an explicit [lib] or the conventional src/lib.rs.
@@ -1346,11 +1475,14 @@ pub fn plan_import_with(
     // A migration and the library stub wire the runtime themselves.
     if !migrated_bin_target {
         if bevy_mismatch && wiring.dependency == RuntimeDependency::Missing {
+            let mut features = module_runtime_features(&selected_modules);
+            features.push(PIE_FEATURE.to_string());
             notes.push(format!(
                 "add the runtime once the project is on bevy {}: cargo add jackdaw_runtime@{} \
-                 --features physics,pie",
+                 --features {}",
                 jackdaw_project_build::BEVY_VERSION,
-                jackdaw_project_build::BEVY_VERSION
+                jackdaw_project_build::BEVY_VERSION,
+                features.join(",")
             ));
         }
         if !wiring.plugin && (has_lib || !plugin_ready) {
@@ -1405,6 +1537,7 @@ pub fn plan_import_with(
                 plugin.as_deref(),
                 workspace_package,
                 pinned_bevy.as_deref(),
+                &selected_modules,
             ),
             replace: false,
         });
@@ -1437,6 +1570,8 @@ pub fn plan_import_with(
         changes,
         notes,
         migrated_bin_target,
+        detected_modules,
+        modules: selected_modules,
     })
 }
 
@@ -1566,45 +1701,133 @@ fn version_req_of(item: &toml_edit::Item) -> Option<String> {
         .filter(|req| !req.is_empty())
 }
 
-/// `manifest` with `jackdaw_runtime` declared, or with `pie` added to an
-/// existing plain declaration that lacks it. `None` when nothing is missing
-/// or the declaration is one this edit does not touch. A member of a
-/// workspace that declares the runtime inherits it from there.
+/// An edit to a game's Cargo manifest, with what it does in words.
+struct ManifestEdit {
+    contents: String,
+    notes: Vec<String>,
+}
+
+/// `manifest` with `jackdaw_runtime` declared, or with `pie` and the
+/// features of `modules` added to an existing plain declaration, plus the
+/// crates `modules` add. `None` when nothing is missing or the declaration
+/// is one this edit does not touch. A member of a workspace that declares
+/// the runtime inherits it from there.
 ///
 /// Edited in place so the user's formatting, comments and key order
-/// survive. A `{ workspace = true }` entry gets the feature on the member's
-/// side, which cargo unions with whatever the workspace declares.
-fn runtime_dependency_edit(manifest: &str, wiring: &RuntimeWiring) -> Option<String> {
-    let declared = match wiring.dependency {
-        RuntimeDependency::Missing => false,
-        RuntimeDependency::Plain if !wiring.pie_available() => true,
-        _ => return None,
-    };
+/// survive. A `{ workspace = true }` entry gets the features on the
+/// member's side, which cargo unions with whatever the workspace declares.
+fn runtime_dependency_edit(
+    manifest: &str,
+    wiring: &RuntimeWiring,
+    modules: &ModuleSet,
+    game: &GameDependencies,
+) -> Option<ManifestEdit> {
     let mut doc: DocumentMut = manifest.parse().ok()?;
-    let deps = doc
-        .entry("dependencies")
-        .or_insert_with(toml_edit::table)
-        .as_table_like_mut()?;
-    if !declared {
-        let features = RUNTIME_FEATURES
-            .iter()
-            .map(|feature| format!("\"{feature}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let source = if wiring.workspace_declares {
-            "workspace = true".to_string()
-        } else {
-            jackdaw_dep_requirement(RUNTIME_CRATE)
-        };
-        let entry: DocumentMut = format!("entry = {{ {source}, features = [{features}] }}")
-            .parse()
-            .ok()?;
-        let mut value = entry.get("entry")?.as_value()?.clone();
-        value.decor_mut().clear();
-        deps.insert(RUNTIME_CRATE, toml_edit::Item::Value(value));
-        return Some(doc.to_string());
+    let mut notes = Vec::new();
+    let module_features = module_runtime_features(modules);
+    match wiring.dependency {
+        RuntimeDependency::Missing => {
+            let mut features = module_features;
+            features.push(PIE_FEATURE.to_string());
+            let source = if wiring.workspace_declares {
+                "workspace = true".to_string()
+            } else {
+                jackdaw_dep_requirement(RUNTIME_CRATE)
+            };
+            let quoted = features
+                .iter()
+                .map(|feature| format!("\"{feature}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            insert_dependency(
+                &mut doc,
+                RUNTIME_CRATE,
+                &format!("{{ {source}, features = [{quoted}] }}"),
+            )?;
+            notes.push(format!(
+                "Cargo.toml: adds jackdaw_runtime (features {}), which component discovery \
+                 and Play need",
+                features.join(", ")
+            ));
+        }
+        RuntimeDependency::Plain => {
+            let mut wanted = Vec::new();
+            if !wiring.pie_available() {
+                wanted.push(PIE_FEATURE.to_string());
+            }
+            wanted.extend(
+                module_features
+                    .into_iter()
+                    .filter(|feature| !game.runtime_features.contains(feature)),
+            );
+            if !wanted.is_empty() {
+                add_runtime_features(&mut doc, &wanted)?;
+                notes.push(match wanted.as_slice() {
+                    [only] if only == PIE_FEATURE => {
+                        "Cargo.toml: enables the `pie` feature of jackdaw_runtime, which Play needs"
+                            .to_string()
+                    }
+                    _ => format!(
+                        "Cargo.toml: enables jackdaw_runtime features {}",
+                        wanted.join(", ")
+                    ),
+                });
+            }
+        }
+        RuntimeDependency::Unsupported(_) => return None,
     }
-    let entry = deps.get_mut(RUNTIME_CRATE)?;
+    notes.extend(add_module_crates(&mut doc, game, modules)?);
+    (doc.to_string() != manifest).then(|| ManifestEdit {
+        contents: doc.to_string(),
+        notes,
+    })
+}
+
+/// The runtime features and crate names `doc` declares itself, without
+/// anything a workspace adds.
+fn declared_dependencies(doc: &DocumentMut) -> GameDependencies {
+    let mut game = GameDependencies::default();
+    let Some(deps) = doc
+        .get("dependencies")
+        .and_then(toml_edit::Item::as_table_like)
+    else {
+        return game;
+    };
+    for (key, entry) in deps.iter() {
+        let name = entry
+            .get("package")
+            .and_then(toml_edit::Item::as_str)
+            .unwrap_or(key);
+        game.crates.insert(name.to_string());
+        if name == RUNTIME_CRATE {
+            let features = entry.get("features").and_then(toml_edit::Item::as_array);
+            for feature in features.into_iter().flatten().filter_map(|f| f.as_str()) {
+                game.runtime_features.insert(feature.to_string());
+            }
+        }
+    }
+    game
+}
+
+/// Insert `name = <value>` into `[dependencies]`, `value` being TOML.
+fn insert_dependency(doc: &mut DocumentMut, name: &str, value: &str) -> Option<()> {
+    let parsed: DocumentMut = format!("entry = {value}").parse().ok()?;
+    let mut value = parsed.get("entry")?.as_value()?.clone();
+    value.decor_mut().clear();
+    doc.entry("dependencies")
+        .or_insert_with(toml_edit::table)
+        .as_table_like_mut()?
+        .insert(name, toml_edit::Item::Value(value));
+    Some(())
+}
+
+/// The `jackdaw_runtime` entry of `doc` as a table, turning a bare version
+/// string into `{ version = ... }` first.
+fn runtime_entry_table(doc: &mut DocumentMut) -> Option<&mut toml_edit::Item> {
+    let entry = doc
+        .get_mut("dependencies")?
+        .as_table_like_mut()?
+        .get_mut(RUNTIME_CRATE)?;
     if let Some(value) = entry.as_value()
         && let Some(version) = value.as_str()
     {
@@ -1615,22 +1838,309 @@ fn runtime_dependency_edit(manifest: &str, wiring: &RuntimeWiring) -> Option<Str
         *replacement.decor_mut() = decor;
         *entry = toml_edit::Item::Value(replacement);
     }
+    Some(entry)
+}
+
+/// Add `features` to the `jackdaw_runtime` entry of `doc`.
+fn add_runtime_features(doc: &mut DocumentMut, features: &[String]) -> Option<()> {
+    let entry = runtime_entry_table(doc)?;
     let table = entry.as_table_like_mut()?;
     match table
         .get_mut("features")
         .and_then(toml_edit::Item::as_array_mut)
     {
-        Some(features) => features.push(PIE_FEATURE),
+        Some(array) => {
+            for feature in features {
+                array.push(feature.as_str());
+            }
+        }
         None => {
-            let mut features = toml_edit::Array::new();
-            features.push(PIE_FEATURE);
-            table.insert("features", toml_edit::value(features));
+            let mut array = toml_edit::Array::new();
+            for feature in features {
+                array.push(feature.as_str());
+            }
+            table.insert("features", toml_edit::value(array));
         }
     }
     if let Some(inline) = entry.as_inline_table_mut() {
         inline.fmt();
     }
-    Some(doc.to_string())
+    Some(())
+}
+
+/// Take `features` off the `jackdaw_runtime` entry of `doc`.
+fn remove_runtime_features(doc: &mut DocumentMut, features: &[String]) -> Option<()> {
+    let entry = runtime_entry_table(doc)?;
+    if let Some(array) = entry
+        .as_table_like_mut()?
+        .get_mut("features")
+        .and_then(toml_edit::Item::as_array_mut)
+    {
+        array.retain(|value| {
+            value
+                .as_str()
+                .is_none_or(|f| !features.iter().any(|x| x == f))
+        });
+        array.fmt();
+    }
+    Some(())
+}
+
+/// Add the crates of `modules` that `game` does not declare yet, returning
+/// a note per crate.
+fn add_module_crates(
+    doc: &mut DocumentMut,
+    game: &GameDependencies,
+    modules: &ModuleSet,
+) -> Option<Vec<String>> {
+    let mut notes = Vec::new();
+    for module in enabled_modules(modules) {
+        for krate in &module.crates {
+            if game.crates.contains(&krate.name) {
+                continue;
+            }
+            let requirement = match krate.version {
+                Some(_) => module_crate_requirement(krate),
+                None => jackdaw_crate_like_runtime(doc, &krate.name)
+                    .unwrap_or_else(|| module_crate_requirement(krate)),
+            };
+            insert_dependency(doc, &krate.name, &requirement)?;
+            notes.push(format!(
+                "Cargo.toml: adds {} for the {} module",
+                krate.name, module.name
+            ));
+        }
+    }
+    Some(notes)
+}
+
+/// What the game's code still has to do for `added` modules: add each
+/// module plugin whose crate no source file names yet.
+fn plugin_notes(package_dir: &Path, added: &ModuleSet) -> Vec<String> {
+    let sources: Vec<String> =
+        jackdaw_project_build::runtime_wiring::source_files(&package_dir.join("src"))
+            .iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .collect();
+    enabled_modules(added)
+        .flat_map(|module| &module.crates)
+        .filter_map(|krate| {
+            let plugin = krate.plugin.as_ref()?;
+            let ident = krate.name.replace('-', "_");
+            let named = sources
+                .iter()
+                .any(|text| jackdaw_project_build::runtime_wiring::mentions_ident(text, &ident));
+            (!named).then(|| format!("add `{plugin}` to the game's App"))
+        })
+        .collect()
+}
+
+/// How `doc` should ask for the jackdaw crate `name`: from the same place
+/// its `jackdaw_runtime` comes from, so the two stay one build. `None` when
+/// the runtime entry gives nothing to copy.
+fn jackdaw_crate_like_runtime(doc: &DocumentMut, name: &str) -> Option<String> {
+    let entry = doc.get("dependencies")?.get(RUNTIME_CRATE)?;
+    if let Some(version) = entry.as_str() {
+        return Some(format!("{{ version = \"{version}\" }}"));
+    }
+    let table = entry.as_table_like()?;
+    let text = |key: &str| table.get(key).and_then(toml_edit::Item::as_str);
+    if let Some(path) = text("path") {
+        let sibling = path
+            .trim_end_matches(['/', '\\'])
+            .strip_suffix(RUNTIME_CRATE)
+            .map(|parent| format!("{parent}{name}"))?;
+        return Some(format!("{{ path = '{sibling}' }}"));
+    }
+    if let Some(git) = text("git") {
+        let pin = ["rev", "tag", "branch"]
+            .into_iter()
+            .find_map(|key| text(key).map(|value| format!(", {key} = \"{value}\"")))
+            .unwrap_or_default();
+        return Some(format!("{{ git = \"{git}\"{pin} }}"));
+    }
+    text("version").map(|version| format!("{{ version = \"{version}\" }}"))
+}
+
+/// A set-up project's game package and the modules it uses.
+struct SetUpGame {
+    settings_path: PathBuf,
+    package: jackdaw_project_build::cargo_meta::PackageInfo,
+    game: GameDependencies,
+    modules: ModuleSet,
+}
+
+fn set_up_game(root: &Path) -> Result<SetUpGame, ScaffoldError> {
+    use jackdaw_project_build::project_manifest::{self, ProjectManifest};
+
+    if !ProjectManifest::exists(root) {
+        return Err(ScaffoldError::NotSetUp(root.to_path_buf()));
+    }
+    let settings_path = project_manifest::path(root);
+    let manifest =
+        ProjectManifest::read_checked(root).map_err(|detail| ScaffoldError::SettingsParse {
+            path: settings_path.clone(),
+            detail,
+        })?;
+    let package = jackdaw_project_build::cargo_meta::resolve_project_package(
+        root,
+        manifest.package.as_deref(),
+    )
+    .map_err(ScaffoldError::Package)?;
+    let game = GameDependencies::read(&package.dir, root);
+    let modules = match &manifest.modules {
+        Some(_) => manifest.modules(root),
+        None => ModuleCatalog::builtin().detect(&game),
+    };
+    Ok(SetUpGame {
+        settings_path,
+        package,
+        game,
+        modules,
+    })
+}
+
+/// The modules the set-up project at `root` uses: its `[modules]` table,
+/// or what its game package already declares when there is none.
+pub fn project_modules(root: &Path) -> Result<ModuleSet, ScaffoldError> {
+    set_up_game(root).map(|game| game.modules)
+}
+
+/// Plan switching the set-up project at `root` to `modules`: the
+/// `[modules]` table in `jackdaw.toml`, and the runtime features and crates
+/// in the game's Cargo.toml. Requirements are added. Side-effect free, like
+/// the import plan; apply it with [`apply_import_plan`].
+///
+/// Turning a module off takes its runtime features away but leaves its
+/// crates, which the game's own code may still use.
+pub fn plan_module_change(root: &Path, modules: &ModuleSet) -> Result<ImportPlan, ScaffoldError> {
+    let target = ModuleCatalog::builtin().complete(modules.clone());
+    let SetUpGame {
+        settings_path,
+        package,
+        game,
+        modules: current,
+    } = set_up_game(root)?;
+    let mut changes = Vec::new();
+    let mut notes = Vec::new();
+
+    let cargo_path = package.dir.join("Cargo.toml");
+    let cargo_text = std::fs::read_to_string(&cargo_path)
+        .map_err(|e| ScaffoldError::Io(format!("{}: {e}", cargo_path.display())))?;
+    let mut doc: DocumentMut = cargo_text
+        .parse()
+        .map_err(|e| ScaffoldError::ManifestParse(format!("{e}")))?;
+    let declared = declared_dependencies(&doc);
+    let wanted = module_runtime_features(&target);
+    let dropped: ModuleSet = current.difference(&target).cloned().collect();
+    let unwanted: Vec<String> = module_runtime_features(&dropped)
+        .into_iter()
+        .filter(|feature| !wanted.contains(feature))
+        .collect();
+    let wiring = RuntimeWiring::inspect(&package.dir);
+    if wiring.dependency == RuntimeDependency::Plain {
+        let add: Vec<String> = wanted
+            .iter()
+            .filter(|feature| !game.runtime_features.contains(*feature))
+            .cloned()
+            .collect();
+        if !add.is_empty() {
+            add_runtime_features(&mut doc, &add)
+                .ok_or_else(|| ScaffoldError::ManifestParse("jackdaw_runtime".to_string()))?;
+            notes.push(format!(
+                "Cargo.toml: enables jackdaw_runtime features {}",
+                add.join(", ")
+            ));
+        }
+        let remove: Vec<String> = unwanted
+            .iter()
+            .filter(|feature| declared.runtime_features.contains(*feature))
+            .cloned()
+            .collect();
+        if !remove.is_empty() {
+            remove_runtime_features(&mut doc, &remove)
+                .ok_or_else(|| ScaffoldError::ManifestParse("jackdaw_runtime".to_string()))?;
+            notes.push(format!(
+                "Cargo.toml: turns off jackdaw_runtime features {}",
+                remove.join(", ")
+            ));
+        }
+        let inherited: Vec<&String> = unwanted
+            .iter()
+            .filter(|feature| {
+                game.runtime_features.contains(*feature)
+                    && !declared.runtime_features.contains(*feature)
+            })
+            .collect();
+        if !inherited.is_empty() {
+            notes.push(format!(
+                "the workspace's jackdaw_runtime entry still enables {}; take it off there",
+                inherited
+                    .iter()
+                    .map(|feature| feature.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    } else if !wanted.is_empty() || !unwanted.is_empty() {
+        notes.push(
+            "Cargo.toml does not declare jackdaw_runtime as a plain dependency, so its features \
+             are left for you to change"
+                .to_string(),
+        );
+    }
+    notes.extend(
+        add_module_crates(&mut doc, &game, &target)
+            .ok_or_else(|| ScaffoldError::ManifestParse("[dependencies]".to_string()))?,
+    );
+    let added: ModuleSet = target.difference(&current).cloned().collect();
+    notes.extend(plugin_notes(&package.dir, &added));
+    for module in enabled_modules(&dropped) {
+        for krate in &module.crates {
+            if declared.crates.contains(&krate.name) {
+                notes.push(format!(
+                    "{} stays in Cargo.toml; remove it and its plugin if the game no longer uses it",
+                    krate.name
+                ));
+            }
+        }
+    }
+    let cargo_changed = doc.to_string() != cargo_text;
+    if cargo_changed {
+        changes.push(ImportChange::WriteFile {
+            path: cargo_path,
+            contents: doc.to_string(),
+            replace: true,
+        });
+        notes.push("the game rebuilds with these changes the next time it is built".to_string());
+    }
+
+    let settings_text = std::fs::read_to_string(&settings_path)
+        .map_err(|e| ScaffoldError::Io(format!("{}: {e}", settings_path.display())))?;
+    let settings = jackdaw_project_build::modules::with_modules(&settings_text, &target).map_err(
+        |detail| ScaffoldError::SettingsParse {
+            path: settings_path.clone(),
+            detail,
+        },
+    )?;
+    if settings != settings_text {
+        changes.push(ImportChange::WriteFile {
+            path: settings_path,
+            contents: settings,
+            replace: true,
+        });
+    }
+
+    Ok(ImportPlan {
+        root: root.to_path_buf(),
+        package_dir: package.dir,
+        package_name: package.name,
+        changes,
+        notes,
+        migrated_bin_target: false,
+        detected_modules: current,
+        modules: target,
+    })
 }
 
 /// The library file declaring `impl Plugin for <plugin>`, rewritten so its
@@ -1730,6 +2240,7 @@ fn jackdaw_toml_source(
     plugin: Option<&str>,
     workspace_package: Option<&str>,
     pinned_bevy: Option<&str>,
+    modules: &ModuleSet,
 ) -> String {
     let package = match workspace_package {
         Some(name) => {
@@ -1757,12 +2268,14 @@ fn jackdaw_toml_source(
          {plugin}\
          {package}\n\
          {pins}\n\
+         {modules}\n\
          [[run]]\n\
          name = \"Play\"\n",
         pins = match pinned_bevy {
             Some(bevy) => jackdaw_project_build::project_manifest::pins_toml_for_bevy(bevy),
             None => jackdaw_project_build::project_manifest::pins_toml(),
-        }
+        },
+        modules = jackdaw_project_build::modules::modules_toml(modules),
     )
 }
 
@@ -1785,8 +2298,19 @@ fn substitute_placeholders(
     crate_name: &str,
     authors: &str,
     title: &str,
+    modules: &ModuleSet,
 ) -> String {
     text.replace("{{project-name | title_case}}", title)
+        .replace(
+            "{{jackdaw_modules}}",
+            jackdaw_project_build::modules::modules_toml(modules).trim_end(),
+        )
+        .replace(
+            "{{jackdaw_runtime_features}}",
+            &template_runtime_features(modules),
+        )
+        .replace("{{module_crates}}\n", &module_crate_lines(modules))
+        .replace("{{module_plugins}}\n", &module_plugin_lines(modules))
         .replace("{{crate_name}}", crate_name)
         .replace("{{authors}}", authors)
         .replace("{{project-name}}", project_name)
@@ -1807,6 +2331,71 @@ fn substitute_placeholders(
             "{{jackdaw_extension_dep}}",
             &jackdaw_dep_requirement("jackdaw_extension"),
         )
+}
+
+/// The runtime features a new game enables: its modules' features, then
+/// terrain drawing and the editor link.
+fn template_runtime_features(modules: &ModuleSet) -> String {
+    let mut features = module_runtime_features(modules);
+    for always in ["terrain", PIE_FEATURE] {
+        if !features.iter().any(|feature| feature == always) {
+            features.push(always.to_string());
+        }
+    }
+    features
+        .iter()
+        .map(|feature| format!("\"{feature}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The `jackdaw_runtime` features `modules` enable, in catalog order.
+fn module_runtime_features(modules: &ModuleSet) -> Vec<String> {
+    let mut features: Vec<String> = Vec::new();
+    for module in enabled_modules(modules) {
+        for feature in &module.runtime_features {
+            if !features.contains(feature) {
+                features.push(feature.clone());
+            }
+        }
+    }
+    features
+}
+
+/// The catalog entries of `modules`, in catalog order.
+fn enabled_modules(
+    modules: &ModuleSet,
+) -> impl Iterator<Item = &'static jackdaw_project_build::modules::ModuleInfo> {
+    ModuleCatalog::builtin()
+        .modules()
+        .iter()
+        .filter(|module| modules.contains(&module.id))
+}
+
+/// How a game asks for a module's crate: its version, or for a jackdaw
+/// crate the source the runtime comes from.
+fn module_crate_requirement(krate: &jackdaw_project_build::modules::ModuleCrate) -> String {
+    match &krate.version {
+        Some(version) => format!("\"{version}\""),
+        None => format!("{{ {} }}", jackdaw_dep_requirement(&krate.name)),
+    }
+}
+
+/// The `[dependencies]` lines for the crates `modules` add.
+fn module_crate_lines(modules: &ModuleSet) -> String {
+    enabled_modules(modules)
+        .flat_map(|module| &module.crates)
+        .map(|krate| format!("{} = {}\n", krate.name, module_crate_requirement(krate)))
+        .collect()
+}
+
+/// The `.add_plugins(...)` lines a new game's `main` adds for `modules`.
+fn module_plugin_lines(modules: &ModuleSet) -> String {
+    enabled_modules(modules)
+        .flat_map(|module| &module.crates)
+        .filter_map(|krate| krate.plugin.as_ref())
+        .map(|plugin| format!("        .add_plugins({plugin})\n"))
+        .collect()
 }
 
 /// How a scaffolded project asks for one of the public jackdaw crates: the
@@ -2050,7 +2639,14 @@ mod tests {
             let template =
                 std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
                     .unwrap_or_else(|e| panic!("read {path}: {e}"));
-            let filled = substitute_placeholders(&template, "my-game", "my_game", "", "My Game");
+            let filled = substitute_placeholders(
+                &template,
+                "my-game",
+                "my_game",
+                "",
+                "My Game",
+                &ModuleCatalog::builtin().defaults(),
+            );
             assert!(
                 !filled.contains("{{"),
                 "{path}: every placeholder is filled, got: {filled}"
@@ -2863,6 +3459,229 @@ mod tests {
 
         let again = plan_import_project(&root, None).unwrap();
         assert!(again.is_empty(), "second run planned {:?}", again.changes);
+    }
+
+    fn modules(ids: &[&str]) -> ModuleSet {
+        ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
+    fn modules_table(root: &Path) -> std::collections::BTreeMap<String, bool> {
+        jackdaw_project_build::project_manifest::ProjectManifest::read(root)
+            .modules
+            .expect("a [modules] table")
+    }
+
+    #[test]
+    fn the_modules_flags_choose_the_modules_and_refuse_nonsense() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            modules_arg(&args(&["game", "--modules", "navmesh"])).unwrap(),
+            Some(modules(&["navmesh", "physics"]))
+        );
+        assert_eq!(
+            modules_arg(&args(&["game", "--modules=multiplayer"])).unwrap(),
+            Some(modules(&["multiplayer"]))
+        );
+        assert_eq!(
+            modules_arg(&args(&["game", "--no-modules"])).unwrap(),
+            Some(ModuleSet::new())
+        );
+        assert_eq!(modules_arg(&args(&["game"])).unwrap(), None);
+        assert!(modules_arg(&args(&["game", "--modules", "rendering"])).is_err());
+        assert!(modules_arg(&args(&["game", "--modules", "physics", "--no-modules"])).is_err());
+    }
+
+    #[test]
+    fn a_new_game_writes_its_modules_into_cargo_toml_main_and_jackdaw_toml() {
+        let dest = temp_dir("new-navmesh").join("nav-game");
+        scaffold_new_project_with(
+            &dest,
+            "nav-game",
+            TemplateKind::Game,
+            &modules(&["navmesh"]),
+        )
+        .unwrap();
+        let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("features = [\"physics\", \"navmesh\", \"terrain\", \"pie\"] }"),
+            "got:\n{cargo}"
+        );
+        assert!(cargo.contains("\navian3d = \"0.7\"\n"), "got:\n{cargo}");
+        assert!(!cargo.contains("jackdaw_multiplayer"), "got:\n{cargo}");
+        let main = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
+        assert!(
+            main.contains("        .add_plugins(avian3d::prelude::PhysicsPlugins::default())\n"),
+            "got:\n{main}"
+        );
+        let table = modules_table(&dest);
+        assert_eq!(table.get("physics"), Some(&true));
+        assert_eq!(table.get("navmesh"), Some(&true));
+        assert_eq!(table.get("multiplayer"), Some(&false));
+
+        let bare = temp_dir("new-bare").join("bare-game");
+        scaffold_new_project_with(&bare, "bare-game", TemplateKind::Game, &ModuleSet::new())
+            .unwrap();
+        let cargo = std::fs::read_to_string(bare.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("features = [\"terrain\", \"pie\"] }"),
+            "got:\n{cargo}"
+        );
+        assert!(!cargo.contains("avian3d"), "got:\n{cargo}");
+        let main = std::fs::read_to_string(bare.join("src/main.rs")).unwrap();
+        assert!(!main.contains("avian3d"), "got:\n{main}");
+        assert!(!main.contains("{{"), "got:\n{main}");
+        assert!(modules_table(&bare).values().all(|on| !on));
+
+        let net = temp_dir("new-net").join("net-game");
+        scaffold_new_project_with(
+            &net,
+            "net-game",
+            TemplateKind::Game,
+            &modules(&["multiplayer"]),
+        )
+        .unwrap();
+        let cargo = std::fs::read_to_string(net.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("\njackdaw_multiplayer = { "),
+            "got:\n{cargo}"
+        );
+        let main = std::fs::read_to_string(net.join("src/main.rs")).unwrap();
+        assert!(main.contains(".add_plugins(jackdaw_multiplayer::JackdawMultiplayerTypesPlugin)"));
+    }
+
+    #[test]
+    fn import_detects_the_modules_a_game_already_uses_and_adds_the_chosen_ones_once() {
+        let root = bevy_game(
+            "import-modules",
+            "bevy = \"0.19\"\n\
+             jackdaw_runtime = { version = \"0.19\", features = [\"physics\", \"pie\"] }\n\
+             avian3d = \"0.7\"\n",
+        );
+        std::fs::write(
+            root.join("src/main.rs"),
+            "use bevy::prelude::*;\n\nfn main() {\n    let default_plugins = \
+             jackdaw_runtime::maybe_windowless(DefaultPlugins);\n    App::new()\n        \
+             .add_plugins(default_plugins)\n        .add_plugins(my_game::GamePlugin)\n        \
+             .run();\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "use bevy::prelude::*;\n\npub struct GamePlugin;\n\n\
+             impl Plugin for GamePlugin {\n    fn build(&self, app: &mut App) {\n        \
+             app.add_plugins(jackdaw_runtime::JackdawPlugin);\n    }\n}\n",
+        )
+        .unwrap();
+
+        let plain = plan_import_project(&root, None).unwrap();
+        assert_eq!(plain.detected_modules, modules(&["physics"]));
+        assert_eq!(plain.modules, modules(&["physics"]));
+        assert!(
+            planned_contents(&plain, &root.join("Cargo.toml")).is_none(),
+            "nothing to add when no module is chosen"
+        );
+
+        let chosen = modules(&["navmesh", "multiplayer"]);
+        let plan = plan_import_with_modules(&root, None, None, false, Some(&chosen)).unwrap();
+        assert_eq!(
+            plan.modules,
+            modules(&["multiplayer", "navmesh", "physics"])
+        );
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).expect("Cargo.toml edit");
+        assert!(
+            cargo.contains("features = [\"physics\", \"pie\", \"navmesh\"]"),
+            "got:\n{cargo}"
+        );
+        assert!(cargo.contains("jackdaw_multiplayer = {"), "got:\n{cargo}");
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("JackdawMultiplayerTypesPlugin")),
+            "the plugin left to add is named: {:?}",
+            plan.notes
+        );
+        apply_import_plan(&plan).unwrap();
+        let table = modules_table(&root);
+        assert_eq!(table.get("navmesh"), Some(&true));
+        assert_eq!(table.get("multiplayer"), Some(&true));
+
+        let again = plan_import_with_modules(&root, None, None, false, Some(&chosen)).unwrap();
+        assert!(again.is_empty(), "second run planned {:?}", again.changes);
+        assert_eq!(
+            again.detected_modules,
+            modules(&["multiplayer", "navmesh", "physics"])
+        );
+    }
+
+    #[test]
+    fn changing_modules_later_edits_both_manifests_and_keeps_the_games_crates() {
+        let root = temp_dir("change-modules").join("change-game");
+        scaffold_new_project(&root, "change-game", TemplateKind::Game).unwrap();
+        let cargo_path = root.join("Cargo.toml");
+
+        let plan = plan_module_change(&root, &modules(&["navmesh"])).unwrap();
+        assert_eq!(plan.detected_modules, modules(&["physics"]));
+        apply_import_plan(&plan).unwrap();
+        let cargo = std::fs::read_to_string(&cargo_path).unwrap();
+        assert!(
+            cargo.contains("features = [\"physics\", \"terrain\", \"pie\", \"navmesh\"]"),
+            "got:\n{cargo}"
+        );
+        assert_eq!(modules_table(&root).get("navmesh"), Some(&true));
+        assert!(
+            plan_module_change(&root, &modules(&["navmesh"]))
+                .unwrap()
+                .is_empty(),
+            "asking again changes nothing"
+        );
+
+        let plan = plan_module_change(&root, &ModuleSet::new()).unwrap();
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.starts_with("avian3d stays")),
+            "{:?}",
+            plan.notes
+        );
+        assert!(
+            plan.notes.iter().any(|note| note.contains("rebuilds")),
+            "{:?}",
+            plan.notes
+        );
+        apply_import_plan(&plan).unwrap();
+        let cargo = std::fs::read_to_string(&cargo_path).unwrap();
+        assert!(
+            cargo.contains("features = [\"terrain\", \"pie\"]"),
+            "got:\n{cargo}"
+        );
+        assert!(cargo.contains("avian3d = \"0.7\""), "got:\n{cargo}");
+        assert!(modules_table(&root).values().all(|on| !on));
+        let settings = std::fs::read_to_string(root.join("jackdaw.toml")).unwrap();
+        assert!(settings.contains("[[run]]"), "got:\n{settings}");
+    }
+
+    #[test]
+    fn a_jackdaw_crate_a_module_adds_comes_from_where_the_runtime_does() {
+        let doc = |entry: &str| -> DocumentMut {
+            format!("[dependencies]\njackdaw_runtime = {entry}\n")
+                .parse()
+                .unwrap()
+        };
+        let like = |entry: &str| jackdaw_crate_like_runtime(&doc(entry), "jackdaw_multiplayer");
+        assert_eq!(
+            like("{ path = '/src/jackdaw/crates/jackdaw_runtime', features = [\"pie\"] }")
+                .as_deref(),
+            Some("{ path = '/src/jackdaw/crates/jackdaw_multiplayer' }")
+        );
+        assert_eq!(
+            like("{ git = \"https://example.com/jackdaw\", rev = \"abc\" }").as_deref(),
+            Some("{ git = \"https://example.com/jackdaw\", rev = \"abc\" }")
+        );
+        assert_eq!(like("\"0.19\"").as_deref(), Some("{ version = \"0.19\" }"));
+        assert_eq!(
+            like("{ version = \"=0.19.0-rc.10\", features = [] }").as_deref(),
+            Some("{ version = \"=0.19.0-rc.10\" }")
+        );
     }
 
     #[test]

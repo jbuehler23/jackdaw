@@ -104,6 +104,7 @@ pub mod modal_inputs;
 pub mod modal_transform;
 pub mod model_lod;
 pub mod modifier_ops;
+pub mod module_picker;
 pub mod native_dialog;
 pub mod new_project;
 pub mod numeric_transform;
@@ -127,6 +128,7 @@ pub mod progress;
 pub mod project;
 pub mod project_build;
 pub mod project_definitions;
+pub mod project_modules;
 pub mod project_select;
 pub mod project_settings;
 pub mod project_types;
@@ -474,6 +476,8 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(keybinds::KeybindsPlugin)
         .add_plugins(keybind_settings::KeybindSettingsPlugin)
         .add_plugins(play_settings::PlaySettingsPlugin)
+        .add_plugins(module_picker::ModulePickerPlugin)
+        .add_plugins(project_modules::ProjectModulesPlugin)
         .add_plugins(panel_focus::PanelFocusPlugin)
         .add_plugins((
             (
@@ -2734,6 +2738,7 @@ fn file_menu_rows(hot_reload_label: &str, recent: Vec<(String, String)>) -> Vec<
             separator(),
             op_entry::<app_ops::AppOpenKeybindsOp>("Keybinds..."),
             op_entry::<app_ops::AppOpenExtensionsOp>("Extensions..."),
+            op_entry::<project_modules::ProjectModulesOp>("Modules..."),
             op_entry::<app_ops::AppToggleHotReloadOp>(hot_reload_label),
             op_entry::<app_ops::AppGoHomeOp>("Home"),
         ],

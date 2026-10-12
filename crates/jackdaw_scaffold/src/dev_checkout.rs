@@ -86,7 +86,11 @@ pub(crate) fn rewrite_jackdaw_dep_for_dev_checkout(dest: &Path) {
 }
 
 /// The jackdaw crates a scaffolded project may depend on directly.
-const DEV_PATH_DEPS: [&str; 2] = ["jackdaw_runtime", "jackdaw_extension"];
+const DEV_PATH_DEPS: [&str; 3] = [
+    "jackdaw_runtime",
+    "jackdaw_extension",
+    "jackdaw_multiplayer",
+];
 
 /// Rewrite the known jackdaw dep lines to path deps, preserving
 /// `features` and `optional` keys. Returns `None` when nothing

@@ -30,7 +30,7 @@ fn main() -> AppExit {
 
     App::new()
         .add_plugins(default_plugins)
-        .add_plugins(avian3d::prelude::PhysicsPlugins::default())
+{{module_plugins}}
         .add_plugins(jackdaw_runtime::JackdawPlugin)
         .add_plugins({{crate_name}}::GamePlugin)
         .run()

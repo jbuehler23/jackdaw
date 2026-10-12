@@ -62,6 +62,7 @@ impl Plugin for ProjectSelectPlugin {
                     poll_new_project_tasks,
                     refresh_new_project_validation,
                     lock_new_project_dialog_while_creating,
+                    replan_import_on_module_change,
                 ),
             )
             .add_systems(
@@ -173,6 +174,14 @@ pub struct NewProjectCreateButton;
 /// resolves to, or why it cannot be used.
 #[derive(Component)]
 struct NewProjectNameHint;
+
+/// The module picker in the New Game dialog.
+#[derive(Component)]
+pub struct NewProjectModules;
+
+/// The module picker on the import review card.
+#[derive(Component)]
+pub struct ImportModules;
 
 #[derive(Component)]
 struct NewProjectBrowseButton;
@@ -974,6 +983,7 @@ fn spawn_project_row(
                         // this editor can build it at all, so it belongs
                         // next to the name rather than one click away.
                         bevy_badge(&project_path, font.clone()),
+                        missing_modules_badge(&project_path, font.clone()),
                     ],
                 ),
                 (
@@ -1088,6 +1098,41 @@ fn bevy_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
             display,
             ..Default::default()
         },
+        Pickable::IGNORE,
+    )
+}
+
+/// A chip naming the modules a project uses that this editor does not
+/// include. Absent when there are none.
+fn missing_modules_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
+    let missing = crate::module_picker::missing_modules(project_path);
+    let text = match missing.as_slice() {
+        [] => String::new(),
+        [_] => format!(
+            "needs the {} module",
+            jackdaw_project_build::modules::ModuleCatalog::builtin().names(&missing)
+        ),
+        _ => format!(
+            "needs the {} modules",
+            jackdaw_project_build::modules::ModuleCatalog::builtin().names(&missing)
+        ),
+    };
+    (
+        Node {
+            display: if missing.is_empty() {
+                Display::None
+            } else {
+                Display::Flex
+            },
+            ..Default::default()
+        },
+        Text::new(text),
+        TextFont {
+            font: font.into(),
+            font_size: tokens::TEXT_SIZE_XS,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_WARNING),
         Pickable::IGNORE,
     )
 }
@@ -2468,9 +2513,38 @@ fn plan_and_show_import(
     package: Option<String>,
     allow_bevy_mismatch: bool,
 ) {
-    match crate::scaffold::plan_import_with(&root, None, package.as_deref(), allow_bevy_mismatch) {
+    plan_and_show_import_with(
+        world,
+        root,
+        package,
+        allow_bevy_mismatch,
+        None,
+        String::new(),
+    );
+}
+
+/// As [`plan_and_show_import`], with the modules the user picked on the
+/// review card, or `None` for what import chooses by itself. `module_note`
+/// carries the picker's note over to the card that replaces it.
+fn plan_and_show_import_with(
+    world: &mut World,
+    root: PathBuf,
+    package: Option<String>,
+    allow_bevy_mismatch: bool,
+    modules: Option<jackdaw_project_build::modules::ModuleSet>,
+    module_note: String,
+) {
+    match crate::scaffold::plan_import_with_modules(
+        &root,
+        None,
+        package.as_deref(),
+        allow_bevy_mismatch,
+        modules.as_ref(),
+    ) {
         Ok(plan) if plan.is_empty() => enter_project_with(world, root, false),
-        Ok(plan) => show_import_preview_card(world, plan),
+        Ok(plan) => {
+            show_import_preview_card(world, plan, package, allow_bevy_mismatch, module_note);
+        }
         Err(ScaffoldError::Package(ResolveError::Ambiguous { candidates })) => {
             show_package_picker_card(world, root, candidates, allow_bevy_mismatch);
         }
@@ -2665,7 +2739,21 @@ fn lockfile_note(plan: &crate::scaffold::ImportPlan) -> &'static str {
     }
 }
 
-fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan) {
+/// What a review card's module picker re-plans the import with.
+#[derive(Component, Clone)]
+struct ImportReview {
+    root: PathBuf,
+    package: Option<String>,
+    allow_bevy_mismatch: bool,
+}
+
+fn show_import_preview_card(
+    world: &mut World,
+    plan: crate::scaffold::ImportPlan,
+    package: Option<String>,
+    allow_bevy_mismatch: bool,
+    module_note: String,
+) {
     let (_, card, font) = spawn_modal_card(world, 560.0, 760.0);
     spawn_card_title(world, card, "Review project integration", &font);
     // Lead with the rewrite when there is one. A blanket reassurance
@@ -2686,6 +2774,39 @@ fn show_import_preview_card(world: &mut World, plan: crate::scaffold::ImportPlan
         )
     };
     spawn_card_body(world, card, intro, &font);
+
+    world.spawn((
+        Text::new("Integrations"),
+        TextFont {
+            font: font.clone().into(),
+            font_size: tokens::TEXT_SIZE_SM,
+            ..Default::default()
+        },
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(card),
+    ));
+    let mut commands = world.commands();
+    let picker = crate::module_picker::spawn_module_picker(
+        &mut commands,
+        card,
+        plan.modules.clone(),
+        plan.detected_modules.clone(),
+        "Already in Cargo.toml.",
+    );
+    commands.entity(picker).insert((
+        crate::module_picker::ModulePicker {
+            modules: plan.modules.clone(),
+            locked: plan.detected_modules.clone(),
+            note: module_note,
+        },
+        ImportModules,
+        ImportReview {
+            root: plan.root.clone(),
+            package,
+            allow_bevy_mismatch,
+        },
+    ));
+    world.flush();
 
     spawn_change_list(world, card, &plan.changes, &font);
     spawn_note_list(world, card, &plan.notes, &font);
@@ -3050,6 +3171,33 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
 
     spawn_reset_location_button(world, location_row, &editor_font, &location);
 
+    if kind == TemplateKind::Game {
+        world.spawn((
+            Text::new("Integrations"),
+            TextFont {
+                font: editor_font.clone().into(),
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+            Node {
+                margin: UiRect::top(Val::Px(4.0)),
+                ..Default::default()
+            },
+            ChildOf(card),
+        ));
+        let mut commands = world.commands();
+        let picker = crate::module_picker::spawn_module_picker(
+            &mut commands,
+            card,
+            jackdaw_project_build::modules::ModuleCatalog::builtin().defaults(),
+            Default::default(),
+            "",
+        );
+        commands.entity(picker).insert(NewProjectModules);
+        world.flush();
+    }
+
     // Status line
     world.spawn((
         NewProjectStatusText,
@@ -3187,6 +3335,32 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
         ))
         .id();
     world.entity_mut(create).observe(on_create_new_project);
+}
+
+/// Re-plan the import when its review card's modules change, so the change
+/// list shows what the new choice writes.
+fn replan_import_on_module_change(
+    pickers: Query<(Ref<crate::module_picker::ModulePicker>, &ImportReview), With<ImportModules>>,
+    mut commands: Commands,
+) {
+    for (picker, review) in &pickers {
+        if picker.is_added() || !picker.is_changed() {
+            continue;
+        }
+        let review = review.clone();
+        let modules = picker.modules.clone();
+        let note = picker.note.clone();
+        commands.queue(move |world: &mut World| {
+            plan_and_show_import_with(
+                world,
+                review.root,
+                review.package,
+                review.allow_bevy_mismatch,
+                Some(modules),
+                note,
+            );
+        });
+    }
 }
 
 fn on_cancel_new_project(_: On<Pointer<Click>>, mut commands: Commands) {
@@ -3363,8 +3537,24 @@ fn lock_new_project_dialog_while_creating(
     text_edits: Query<Has<InteractionDisabled>, With<EditorTextEdit>>,
     mut label_colors: Query<&mut TextColor>,
     mut focus: ResMut<InputFocus>,
+    module_toggles: Query<(
+        Entity,
+        &crate::module_picker::ModuleToggle,
+        Has<InteractionDisabled>,
+    )>,
+    module_pickers: Query<(), With<NewProjectModules>>,
 ) {
     let creating = state.scaffold_task.is_some();
+    for (toggle, module, disabled) in &module_toggles {
+        if disabled == creating || !module_pickers.contains(module.picker) {
+            continue;
+        }
+        if creating {
+            commands.entity(toggle).insert(InteractionDisabled);
+        } else {
+            commands.entity(toggle).remove::<InteractionDisabled>();
+        }
+    }
     for (button, disabled, reset, children) in &buttons {
         if disabled == creating {
             continue;
@@ -3452,6 +3642,12 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
         }
         (state.location.clone(), kind)
     };
+    let modules = world
+        .query_filtered::<&crate::module_picker::ModulePicker, With<NewProjectModules>>()
+        .iter(world)
+        .next()
+        .map(|picker| picker.modules.clone())
+        .unwrap_or_else(|| jackdaw_project_build::modules::ModuleCatalog::builtin().defaults());
 
     // A name `jd new` would reject produces a project whose crate name is
     // not a valid Rust identifier, which fails at the user's first build
@@ -3474,7 +3670,7 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
         "Creating {name} and checking its dependencies resolve..."
     ));
     let task = AsyncComputeTaskPool::get().spawn(async move {
-        scaffold_project(&name, &location, kind).map(|dest| {
+        scaffold_project(&name, &location, kind, &modules).map(|dest| {
             let warnings = crate::scaffold::check_new_project(&dest);
             (dest, warnings)
         })
@@ -3640,6 +3836,8 @@ mod tests {
             changes,
             notes,
             migrated_bin_target: false,
+            detected_modules: Default::default(),
+            modules: Default::default(),
         }
     }
 
@@ -3663,6 +3861,9 @@ mod tests {
                 ],
                 vec!["game plugin: GamePlugin".into()],
             ),
+            None,
+            false,
+            String::new(),
         );
 
         let text = rendered_text(&mut world);
@@ -3684,7 +3885,13 @@ mod tests {
     #[test]
     fn a_preview_with_no_changes_or_notes_still_renders() {
         let mut world = card_world();
-        show_import_preview_card(&mut world, plan_with(Vec::new(), Vec::new()));
+        show_import_preview_card(
+            &mut world,
+            plan_with(Vec::new(), Vec::new()),
+            None,
+            false,
+            String::new(),
+        );
         assert!(
             rendered_text(&mut world)
                 .iter()
@@ -3957,7 +4164,7 @@ mod tests {
         let plan =
             crate::scaffold::plan_import_project(&plain, None).expect("a bevy lib is importable");
         let mut world = card_world();
-        show_import_preview_card(&mut world, plan);
+        show_import_preview_card(&mut world, plan, None, false, String::new());
         let text = rendered_text(&mut world).join("\n");
         assert!(
             text.contains("jackdaw.toml"),

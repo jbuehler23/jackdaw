@@ -18,10 +18,6 @@ pub const RUNTIME_PLUGIN: &str = "JackdawPlugin";
 /// The function that lets an embedded Play run without an OS window.
 pub const WINDOWLESS_FN: &str = "maybe_windowless";
 
-/// The runtime features a game needs for Play. `pie` is the editor link;
-/// `physics` builds colliders for authored brushes and terrain.
-pub const RUNTIME_FEATURES: [&str; 2] = ["physics", "pie"];
-
 /// The feature without which Play cannot reach the game at all.
 pub const PIE_FEATURE: &str = "pie";
 

@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 authors = ["{{authors}}"]
 
-# jackdaw builds its editor artifacts in .jackdaw/ and never edits this
-# manifest; `cargo run` works with or without the editor installed.
+# jackdaw builds its editor artifacts in .jackdaw/ and edits this manifest
+# only when you change the project's modules; `cargo run` works with or
+# without the editor installed.
 
 # Keeps this project out of any cargo workspace it was created inside.
 # Delete to join the surrounding workspace instead.
@@ -13,8 +14,8 @@ authors = ["{{authors}}"]
 
 [dependencies]
 bevy = "{{bevy_version}}"
-# Loads authored scenes (assets/*.bsn). `physics` builds colliders from
-# authored brushes and terrain, `terrain` draws authored terrain, `pie`
-# connects the editor's Play button; drop `pie` for a shipping build.
-jackdaw_runtime = { {{jackdaw_runtime_dep}}, features = ["physics", "terrain", "pie"] }
-avian3d = "0.7"
+# Loads authored scenes (assets/*.bsn). `terrain` draws authored terrain and
+# `pie` connects the editor's Play button; drop `pie` for a shipping build.
+# The other features and crates come from the modules in jackdaw.toml.
+jackdaw_runtime = { {{jackdaw_runtime_dep}}, features = [{{jackdaw_runtime_features}}] }
+{{module_crates}}

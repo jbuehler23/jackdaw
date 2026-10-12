@@ -136,6 +136,6 @@ fn a_crate_a_module_provides_names_the_module() {
     let (mut app, dir) = opened("module", &scene);
     let notice =
         jackdaw::inspector::unavailable::notice_showing(app.world_mut()).expect("a notice shows");
-    assert!(notice.contains("Enable the physics module"), "got {notice}");
+    assert!(notice.contains("Enable the Physics module"), "got {notice}");
     let _ = std::fs::remove_dir_all(&dir);
 }

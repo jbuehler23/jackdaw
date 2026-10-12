@@ -21,6 +21,11 @@ opens and plays.
 # other than `assets`.
 # assets_dir = "content"
 
+[modules]
+physics = true
+navmesh = false
+multiplayer = false
+
 [[run]]
 name = "Play"
 # instances = 2
@@ -44,6 +49,25 @@ Top-level keys:
   read that setting out of your code. The path must stay inside the
   project; an absolute path or one starting with `..` is ignored. A
   change takes effect the next time the editor starts.
+
+`[modules]` records the optional modules the project uses. Each
+module pairs editor tooling with what the game needs for it:
+
+| Module | Game side | Requires |
+| --- | --- | --- |
+| `physics` | `jackdaw_runtime` feature `physics`, `avian3d` and its `PhysicsPlugins` | |
+| `navmesh` | `jackdaw_runtime` feature `navmesh` | `physics` |
+| `multiplayer` | `jackdaw_multiplayer` and its types plugin | |
+
+Pick them in the New Project and import dialogs, with
+`jd new --modules physics,navmesh` (or `--no-modules`) and
+`jd import --modules ...`, and later with File > Modules in the
+editor. Changing them there edits `[modules]` and the game's
+`Cargo.toml` together; turning a module off removes its runtime
+features but leaves its crates, which your code may still use. A
+project with no `[modules]` table is read from the features its
+`jackdaw_runtime` dependency already enables. New games start with
+`physics` only.
 
 Each `[[run]]` entry is one item in the Play dropdown. Every run
 launches the same already-built game binary; entries differ only
@@ -72,15 +96,16 @@ the game binary, and for extension projects the generated shim
 crate and SDK-linked build target. It is gitignored (the scaffold
 and import both add the entry), owned entirely by the editor, and
 safe to delete; the next project open rebuilds what it needs. The
-editor never touches the project's own `Cargo.toml`, `Cargo.lock`,
-`target/`, or toolchain.
+editor edits the project's own `Cargo.toml` only when you change
+its modules, and never touches its `Cargo.lock`, `target/`, or
+toolchain.
 
 ## Command line
 
 `jackdaw` is exclusively the GUI. `jd` is the sole public command:
 
-- `jd new <name> [--extension]`
-- `jd import [path] [--plugin <Type>] [--apply]`
+- `jd new <name> [--extension] [--modules <list> | --no-modules]`
+- `jd import [path] [--plugin <Type>] [--modules <list>] [--apply]`
 - `jd open [path]`
 - `jd build [--project <path>]`
 - `jd run [--project <path>]`

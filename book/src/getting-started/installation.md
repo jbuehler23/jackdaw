@@ -269,7 +269,7 @@ Use the launcher's **New Game**, **New Extension**, and **Import Bevy
 Project** actions, or:
 
 ```bash
-jd new my-game                          # also: --extension, --path <dir>, --no-git
+jd new my-game                          # also: --extension, --path <dir>, --no-git, --modules <list>
 jd open my-game
 
 jd import /path/to/existing-game        # preview

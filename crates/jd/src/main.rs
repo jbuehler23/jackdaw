@@ -59,16 +59,17 @@ struct CommandSpec {
 const SPECS: &[CommandSpec] = &[
     CommandSpec {
         name: "new",
-        flags: &["--extension", "--no-git"],
-        values: &["--path"],
-        usage: "jd new <name> [--extension] [--path <dir>] [--no-git]",
+        flags: &["--extension", "--no-git", "--no-modules"],
+        values: &["--path", "--modules"],
+        usage: "jd new <name> [--extension] [--path <dir>] [--no-git] \
+                [--modules <list> | --no-modules]",
     },
     CommandSpec {
         name: "import",
         flags: &["--apply", "--allow-bevy-mismatch"],
-        values: &["--package", "--plugin"],
+        values: &["--package", "--plugin", "--modules"],
         usage: "jd import [path] [--apply] [--package <name>] [--plugin <Type>] \
-                [--allow-bevy-mismatch]",
+                [--modules <list>] [--allow-bevy-mismatch]",
     },
     CommandSpec {
         name: "open",
@@ -233,11 +234,14 @@ fn print_usage() {
          new <name>                 Create a Jackdaw project\n    \
            --extension                start from the editor-extension template\n    \
            --path <dir>               create it under <dir> instead of here\n    \
-           --no-git                   skip initialising a git repository\n  \
+           --no-git                   skip initialising a git repository\n    \
+           --modules <list>           the game's modules, e.g. physics,navmesh\n    \
+           --no-modules               start the game with no modules\n  \
          import [path]              Preview integration for an existing Bevy project\n    \
            --apply                    write the previewed changes\n    \
            --package <name>           in a workspace, which member is the game\n    \
            --plugin <Type>            the game plugin type to record\n    \
+           --modules <list>           modules to add, e.g. navmesh,multiplayer\n    \
            --allow-bevy-mismatch      set up even if the project targets another Bevy\n  \
          open [path]                Open a project in the Jackdaw GUI\n  \
          upgrade [path] [--apply]   Move a project to this Jackdaw's versions\n  \

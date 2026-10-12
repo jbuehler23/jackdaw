@@ -253,3 +253,109 @@ fn while_a_create_runs_the_dialog_is_locked_and_quiet_about_its_own_folder() {
 
     open_after(&mut app, &project);
 }
+
+/// The checkbox for module `id` in the open dialog.
+fn module_toggle(app: &mut App, id: &str) -> Entity {
+    app.world_mut()
+        .query::<(Entity, &jackdaw::module_picker::ModuleToggle)>()
+        .iter(app.world())
+        .find_map(|(entity, toggle)| (toggle.id == id).then_some(entity))
+        .unwrap_or_else(|| panic!("the dialog offers the {id} module"))
+}
+
+fn checked(app: &App, toggle: Entity) -> bool {
+    app.world().get::<bevy::ui::Checked>(toggle).is_some()
+}
+
+fn shown_texts(app: &mut App) -> Vec<String> {
+    app.world_mut()
+        .query::<(&Text, &Node)>()
+        .iter(app.world())
+        .filter(|(_, node)| node.display != Display::None)
+        .map(|(text, _)| text.0.clone())
+        .collect()
+}
+
+#[test]
+fn ticking_navmesh_ticks_physics_and_the_created_game_uses_both() {
+    let projects = tempfile::tempdir().expect("tempdir");
+    remember_location(projects.path());
+    let mut app = util::editor_test_app();
+
+    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    for _ in 0..4 {
+        app.update();
+    }
+    let physics = module_toggle(&mut app, "physics");
+    let navmesh = module_toggle(&mut app, "navmesh");
+    let multiplayer = module_toggle(&mut app, "multiplayer");
+    assert!(checked(&app, physics), "a new game starts with physics");
+    assert!(!checked(&app, navmesh) && !checked(&app, multiplayer));
+
+    click(&mut app, physics);
+    app.update();
+    assert!(!checked(&app, physics), "physics can be turned off");
+
+    click(&mut app, navmesh);
+    app.update();
+    assert!(checked(&app, navmesh), "navmesh is ticked");
+    assert!(
+        checked(&app, physics),
+        "and physics, which it needs, with it"
+    );
+    assert!(
+        shown_texts(&mut app)
+            .iter()
+            .any(|text| text == "Navmesh needs Physics, so it is on too."),
+        "the dialog says why physics came on: {:?}",
+        shown_texts(&mut app)
+    );
+
+    let create = create_button(&mut app);
+    click(&mut app, create);
+    let offered = jackdaw::scaffold::validated_project_name("my_game").expect("a usable name");
+    let project = projects.path().join(offered);
+    open_after(&mut app, &project);
+
+    let cargo = std::fs::read_to_string(project.join("Cargo.toml")).expect("a Cargo.toml");
+    assert!(
+        cargo.contains("features = [\"physics\", \"navmesh\", \"terrain\", \"pie\"]"),
+        "the game enables both modules' runtime features: {cargo}"
+    );
+    assert!(cargo.contains("avian3d = \"0.7\""), "{cargo}");
+    assert!(!cargo.contains("jackdaw_multiplayer"), "{cargo}");
+    let settings: toml::Table = toml::from_str(
+        &std::fs::read_to_string(project.join("jackdaw.toml")).expect("a jackdaw.toml"),
+    )
+    .expect("jackdaw.toml parses");
+    let modules = settings["modules"].as_table().expect("a [modules] table");
+    assert_eq!(modules["physics"].as_bool(), Some(true));
+    assert_eq!(modules["navmesh"].as_bool(), Some(true));
+    assert_eq!(modules["multiplayer"].as_bool(), Some(false));
+}
+
+#[test]
+fn unticking_physics_unticks_navmesh_and_says_so() {
+    let projects = tempfile::tempdir().expect("tempdir");
+    remember_location(projects.path());
+    let mut app = util::editor_test_app();
+
+    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    for _ in 0..4 {
+        app.update();
+    }
+    let physics = module_toggle(&mut app, "physics");
+    let navmesh = module_toggle(&mut app, "navmesh");
+    click(&mut app, navmesh);
+    app.update();
+    click(&mut app, physics);
+    app.update();
+    assert!(!checked(&app, physics) && !checked(&app, navmesh));
+    assert!(
+        shown_texts(&mut app)
+            .iter()
+            .any(|text| text == "Navmesh needs Physics, so it is off too."),
+        "{:?}",
+        shown_texts(&mut app)
+    );
+}

@@ -10,30 +10,20 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 use jackdaw_feathers::tokens;
+use jackdaw_project_build::modules::ModuleCatalog;
 
 use crate::project_types::ProjectTypes;
-
-/// Crates a jackdaw module provides, by the first segment of their type paths.
-const MODULE_CRATES: &[(&str, &str)] = &[
-    ("avian3d", "physics"),
-    ("jackdaw_avian_integration", "physics"),
-    ("rerecast", "navmesh"),
-    ("bevy_rerecast", "navmesh"),
-    ("lightyear", "multiplayer"),
-    ("jackdaw_multiplayer", "multiplayer"),
-];
 
 /// The crate a type path names first.
 pub(crate) fn crate_of(type_path: &str) -> &str {
     type_path.split("::").next().unwrap_or(type_path)
 }
 
-/// The jackdaw module that provides `crate_name`, if one does.
+/// The name of the jackdaw module that provides `crate_name`, if one does.
 pub(crate) fn module_for_crate(crate_name: &str) -> Option<&'static str> {
-    MODULE_CRATES
-        .iter()
-        .find(|(name, _)| *name == crate_name)
-        .map(|(_, module)| *module)
+    ModuleCatalog::builtin()
+        .providing_crate(crate_name)
+        .map(|module| module.name.as_str())
 }
 
 /// Whether the editor cannot load `type_path`: no registration answers to it
@@ -271,7 +261,7 @@ mod tests {
             "This scene uses components from avian3d and jackdaw_avian_integration, \
              which are not available."
         );
-        assert!(hint.starts_with("Enable the physics module to edit them."));
+        assert!(hint.starts_with("Enable the Physics module to edit them."));
     }
 
     #[test]
@@ -293,7 +283,7 @@ mod tests {
         ]))
         .expect("a notice");
         assert!(hint.starts_with(
-            "Enable the navmesh and physics modules, and build the project for the rest"
+            "Enable the Navmesh and Physics modules, and build the project for the rest"
         ));
     }
 
