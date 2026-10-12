@@ -91,8 +91,7 @@ fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
             // backend avoids attempts to connect to host ALSA/JACK services,
             // which can otherwise block an otherwise-complete test process.
             .disable::<bevy::audio::AudioPlugin>()
-            .disable::<WinitPlugin>()
-            .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>(),
+            .disable::<WinitPlugin>(),
     )
     // Ambient plugins moved to the binary entry point (matches
     // the launcher's `src/main.rs` and the static template's

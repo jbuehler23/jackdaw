@@ -9,32 +9,7 @@ use path_slash::PathExt as _;
 
 /// Files that still spawn a legacy control, with the reason each one is
 /// still here. Paths are relative to the repository root.
-const ALLOWED: &[(&str, &str)] = &[
-    (
-        "crates/jackdaw_panels/src/tabs.rs",
-        "the dock's own tab strip, with drag-to-reorder and a close affordance; a later pass",
-    ),
-    (
-        "crates/jackdaw_panels/src/sidebar.rs",
-        "the collapsed dock's edge icons; a later pass",
-    ),
-    (
-        "crates/jackdaw_panels/src/add_window_popup.rs",
-        "the popup's rows; the menu family they belong on is a later pass",
-    ),
-    (
-        "crates/jackdaw_feathers/src/dialog.rs",
-        "the backdrop and panel read presses to tell a click outside the dialog from one inside; neither is a control",
-    ),
-    (
-        "crates/jackdaw_feathers/src/toast.rs",
-        "the toast body blocks presses from reaching what is behind it; it is not a control",
-    ),
-    (
-        "crates/jackdaw_feathers/src/popover.rs",
-        "the popover body blocks presses from reaching what is behind it; it is not a control",
-    ),
-];
+const ALLOWED: &[(&str, &str)] = &[];
 
 /// Directories the scan covers.
 const ROOTS: &[&str] = &[

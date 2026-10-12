@@ -152,11 +152,7 @@ fn main() -> AppExit {
         // in ScenesPlugin owns the exit path, and it honors
         // `JACKDAW_WINDOW_SIZE`. Spelling its fields out here instead
         // would drop that override.
-        .set(editor_window_plugin())
-        // Its overlay inserts on every camera through a command
-        // buffer with no ordering against the dock reconciler, which
-        // despawns a rebuilt panel's cameras in the same frame.
-        .disable::<bevy::dev_tools::render_debug::RenderDebugOverlayPlugin>();
+        .set(editor_window_plugin());
     if let Some(render_plugin) = render_plugin {
         default_plugins = default_plugins.set(render_plugin);
     }
