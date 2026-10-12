@@ -78,7 +78,7 @@ fn watch_for_change<C: Component>(
             _phantom: PhantomData,
         });
     };
-    for entity in local_monitors.iter_many(changed.iter()) {
+    for entity in local_monitors.iter_many(changed.iter()).flatten() {
         trigger(&mut commands, entity, entity);
     }
     for (entity, &Monitor(mutated)) in &monitors {

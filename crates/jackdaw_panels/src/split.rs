@@ -1,6 +1,6 @@
 use bevy::{
     ecs::{query::QueryFilter, spawn::SpawnableList},
-    feathers::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor},
+    picking::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor},
     prelude::*,
     window::SystemCursorIcon,
 };
@@ -119,6 +119,7 @@ fn recalculate_group(
     let panels_ro = queries.p1();
     let total: f32 = panels_ro
         .iter_many(&child_entities)
+        .flatten()
         .filter(|(node, _)| node.display != Display::None)
         .map(|(_, panel)| panel.ratio)
         .sum();
@@ -129,7 +130,10 @@ fn recalculate_group(
 
     let mut panels = queries.p1();
     let mut iterator = panels.iter_many_mut(&child_entities);
-    while let Some((mut node, panel)) = iterator.fetch_next() {
+    while let Some(item) = iterator.fetch_next() {
+        let Ok((mut node, panel)) = item else {
+            continue;
+        };
         if node.display == Display::None {
             continue;
         }
@@ -246,7 +250,11 @@ fn handle_panel_drag(
         return;
     }
 
-    let total_ratio: f32 = panels.iter_many(children.iter()).map(|p| p.ratio).sum();
+    let total_ratio: f32 = panels
+        .iter_many(children.iter())
+        .flatten()
+        .map(|p| p.ratio)
+        .sum();
 
     let delta_ratio = (delta_px / total_px) * total_ratio;
 

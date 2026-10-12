@@ -1379,7 +1379,7 @@ fn component_paths(app: &App, entity: Entity) -> Vec<String> {
         .world()
         .inspect_entity(entity)
         .expect("the entity is live")
-        .filter_map(|info| info.type_id().map(|_| info.name().to_string()))
+        .filter_map(|(_, info)| info.type_id().map(|_| info.name().to_string()))
         .filter(|name| !name.starts_with("jackdaw_bind::types::BindContext"))
         .collect();
     paths.sort();

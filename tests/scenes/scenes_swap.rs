@@ -459,7 +459,9 @@ fn scene_new_appends_an_untitled_tab() {
             .disable::<WinitPlugin>(),
     );
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
-    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
+    app.add_plugins(bevy::extract::sync_world::SyncWorldPlugin::<
+        bevy::render::RenderApp,
+    >::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -515,7 +517,9 @@ fn scene_open_dedupes_by_path() {
             .disable::<WinitPlugin>(),
     );
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
-    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
+    app.add_plugins(bevy::extract::sync_world::SyncWorldPlugin::<
+        bevy::render::RenderApp,
+    >::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();
@@ -1119,7 +1123,9 @@ fn scene_open_flags_dirty_when_ids_need_migration() {
             .disable::<WinitPlugin>(),
     );
     app.add_plugins(jackdaw_scene_types::SceneTypesPlugin::default());
-    app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
+    app.add_plugins(bevy::extract::sync_world::SyncWorldPlugin::<
+        bevy::render::RenderApp,
+    >::default());
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw_bsn::SceneBsnAst>();

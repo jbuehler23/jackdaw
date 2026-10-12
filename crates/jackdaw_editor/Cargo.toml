@@ -8,7 +8,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-jackdaw = { version = "0.20.0-dev", path = "../.." }
+jackdaw = { version = "0.20.0-dev", path = "../..", default-features = false }
+
+[features]
+# The editor's own defaults, so `--no-default-features` on a workspace build
+# reaches the editor through this crate too.
+default = ["jackdaw/default", "physics"]
+physics = ["jackdaw/physics"]
 
 [lints]
 workspace = true

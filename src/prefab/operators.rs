@@ -607,8 +607,8 @@ fn node_identity(world: &World, entity: Entity) -> Vec<String> {
         return Vec::new();
     };
     let mut types: Vec<String> = components
-        .filter(|info| info.type_id().is_some())
-        .map(|info| info.name().to_string())
+        .filter(|(_, info)| info.type_id().is_some())
+        .map(|(_, info)| info.name().to_string())
         .collect();
     types.sort();
     types

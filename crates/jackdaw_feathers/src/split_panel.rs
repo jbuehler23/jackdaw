@@ -96,7 +96,11 @@ fn handle_panel_drag(
     }
 
     // Sum ratios of all panels in this group
-    let total_ratio: f32 = panels.iter_many(children.iter()).map(|p| p.ratio).sum();
+    let total_ratio: f32 = panels
+        .iter_many(children.iter())
+        .flatten()
+        .map(|p| p.ratio)
+        .sum();
 
     let delta_ratio = (delta_px / total_px) * total_ratio;
 

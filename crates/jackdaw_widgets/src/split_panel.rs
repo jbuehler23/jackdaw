@@ -1,5 +1,5 @@
 use bevy::{
-    feathers::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor},
+    picking::cursor::{CursorIconPlugin, EntityCursor, OverrideCursor},
     prelude::*,
     window::SystemCursorIcon,
 };
@@ -92,6 +92,7 @@ fn recalculate_group(
     let panels_ro = queries.p1();
     let total: f32 = panels_ro
         .iter_many(&child_entities)
+        .flatten()
         .filter(|(node, _)| node.display != Display::None)
         .map(|(_, panel)| panel.ratio)
         .sum();
@@ -104,7 +105,10 @@ fn recalculate_group(
     // the zero-size set by a collapse toggle.
     let mut panels = queries.p1();
     let mut iterator = panels.iter_many_mut(&child_entities);
-    while let Some((mut node, panel)) = iterator.fetch_next() {
+    while let Some(item) = iterator.fetch_next() {
+        let Ok((mut node, panel)) = item else {
+            continue;
+        };
         if node.display == Display::None {
             continue;
         }
