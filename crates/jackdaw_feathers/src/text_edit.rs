@@ -41,7 +41,7 @@ pub fn plugin(app: &mut App) {
             PostUpdate,
             sync_multiline_content_size
                 .in_set(UiSystems::Content)
-                .after(bevy::text::EditableTextSystems)
+                .after(bevy::ui::widget::update_editable_text_content_size)
                 .after(apply_default_value),
         );
 }

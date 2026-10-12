@@ -236,7 +236,9 @@ impl Plugin for AuthoredWidgetPlugin {
                 .chain()
                 .in_set(AuthoredTextSystems)
                 .after(EditableTextSystems)
-                .before(bevy::ui::UiSystems::Layout),
+                // Bevy 0.20 applies text edits after layout and lays
+                // editable text out in `PostLayout`.
+                .before(bevy::ui::UiSystems::PostLayout),
         );
         app.add_systems(
             PostUpdate,
