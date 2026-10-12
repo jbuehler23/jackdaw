@@ -79,7 +79,13 @@ impl Plugin for JackdawRemotePlugin {
 
         app.insert_resource(JackdawAppInfo {
             app_name,
-            bevy_version: "0.19".to_string(),
+            // The workspace version is anchored to Bevy's minor.
+            bevy_version: concat!(
+                env!("CARGO_PKG_VERSION_MAJOR"),
+                ".",
+                env!("CARGO_PKG_VERSION_MINOR")
+            )
+            .to_string(),
         });
 
         app.init_resource::<playback::PlaybackStepState>();

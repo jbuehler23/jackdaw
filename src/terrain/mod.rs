@@ -694,6 +694,7 @@ pub(crate) mod pointer_harness {
             .init_resource::<ActiveViewport>()
             .init_resource::<UiScale>()
             .init_resource::<HoverMap>()
+            .init_resource::<bevy::picking::pointer::PointerMap>()
             .init_resource::<ButtonInput<MouseButton>>();
 
         let terrain = terrain_of(resolution);

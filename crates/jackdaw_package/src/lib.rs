@@ -135,9 +135,11 @@ impl std::error::Error for PackageError {}
 
 pub fn host_sdk_abi() -> String {
     format!(
-        "jackdaw-{}-bevy-{}-{}",
+        "jackdaw-{}-bevy-{}.{}-{}",
         env!("CARGO_PKG_VERSION"),
-        "0.19",
+        // The workspace version is anchored to Bevy's minor.
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
         env!("JACKDAW_COMPILED_RUSTC")
     )
 }
