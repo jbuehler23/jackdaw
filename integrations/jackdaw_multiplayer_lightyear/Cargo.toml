@@ -7,6 +7,11 @@ description = "Default lightyear backend for Jackdaw networking: translates prox
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
+[package.metadata.jackdaw]
+# Why this integration cannot build on the current Bevy; CI reports it
+# instead of building. Remove once lightyear releases for Bevy 0.20.
+unavailable = "lightyear has no Bevy 0.20 release yet (cBournhonesque/lightyear#1779 ports it)"
+
 [dependencies]
 bevy = { version = "0.20", features = [
     "bevy_feathers",
