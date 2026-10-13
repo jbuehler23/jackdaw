@@ -322,7 +322,13 @@ fn ticking_navmesh_ticks_physics_and_the_created_game_uses_both() {
         cargo.contains("features = [\"physics\", \"navmesh\", \"terrain\", \"pie\"]"),
         "the game enables both modules' runtime features: {cargo}"
     );
-    assert!(cargo.contains("avian3d = \"0.7\""), "{cargo}");
+    let avian = jackdaw_project_build::modules::ModuleCatalog::builtin()
+        .get("physics")
+        .expect("a physics module")
+        .crates[0]
+        .requirement()
+        .expect("avian3d comes from outside jackdaw");
+    assert!(cargo.contains(&format!("avian3d = {avian}")), "{cargo}");
     assert!(!cargo.contains("jackdaw_multiplayer"), "{cargo}");
     let settings: toml::Table = toml::from_str(
         &std::fs::read_to_string(project.join("jackdaw.toml")).expect("a jackdaw.toml"),

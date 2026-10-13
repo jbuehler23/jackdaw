@@ -82,7 +82,7 @@ fn build_brush_colliders(
 
 /// Remove the built `Collider` when its source `AvianCollider` is removed, so a
 /// physics-off toggle or undo does not leave a stale collider behind.
-fn remove_collider_with_avian_collider(trigger: On<Remove, AvianCollider>, mut commands: Commands) {
+fn remove_collider_with_avian_collider(trigger: On<Remove<AvianCollider>>, mut commands: Commands) {
     let entity = trigger.event_target();
     if let Ok(mut ec) = commands.get_entity(entity) {
         ec.try_remove::<Collider>();
@@ -111,7 +111,7 @@ pub fn brush_collider(
     }
 
     if !force_trimesh && matches!(cfg.0, ColliderConstructor::ConvexHullFromMesh) {
-        return Collider::convex_hull(vertices);
+        return Collider::convex_hull(&vertices);
     }
 
     let indices = triangulate_polygons(
@@ -282,7 +282,7 @@ fn draw_collider_gizmos<S: Component>(
             (true, true) => physics_colors::SENSOR_SELECTED,
         };
 
-        let position = Position::from(tf);
+        let position = Position::from(tf).0;
         let rotation = Rotation::from(tf);
         gizmos.draw_collider(collider, position, rotation, color);
     }

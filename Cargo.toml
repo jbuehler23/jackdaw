@@ -53,12 +53,7 @@ camera_rig = ["dep:jackdaw_camera_rig"]
 # Avian physics authoring: the physics tool, brush colliders, the physics
 # inspector, collider overlays and the in-editor simulation preview. Scenes
 # keep their physics components without it; the editor just cannot edit them.
-physics = [
-    "dep:avian3d",
-    "dep:jackdaw_avian_integration",
-    "jackdaw_runtime/physics",
-    "jackdaw_sdk?/physics",
-]
+physics = ["dep:avian3d", "dep:jackdaw_avian_integration"]
 # The terrain navmesh bake. Needs `physics`: the bake leaves out what the
 # simulation moves, which only avian's `RigidBody` tells it.
 navmesh = ["physics", "dep:rerecast"]
@@ -267,11 +262,14 @@ serde = "1"
 lucide-icons = "0.563"
 serde_json = "1"
 # Default features stay on so the SDK resolves at least what an extension
-# does: a physics-enabled graph adds a plain `avian3d = "0.7"`, and against an
+# does: a physics-enabled graph adds avian3d with its defaults, and against an
 # SDK built leaner, any use of an item behind one of the dropped
 # features fails to compile against the redirected rlib.
 # `tests/sdk_feature_superset.rs` guards that ordering.
-avian3d = { version = "0.7", features = [
+# avian has no Bevy 0.20 release yet; this pins a fork branch carrying its
+# open Bevy 0.20 port, with bevy_heavy, bevy_transform_interpolation and
+# glam_matrix_extras forked alongside it.
+avian3d = { git = "https://github.com/jbuehler23/avian", rev = "252aac4973a35e2a9de9d33c3614426326b59bbf", features = [
     "3d",
     "parry-f32",
     "collider-from-mesh",
@@ -299,7 +297,8 @@ jackdaw_env = { version = "0.20.0-dev", path = "crates/jackdaw_env" }
 # No 0.20 release yet; master supports Bevy 0.20.
 bevy_enhanced_input = { git = "https://github.com/simgine/bevy_enhanced_input", rev = "cb50e459add7445bbf704a1c9cff37fba4c05dd1" }
 rfd = "0.15"
-rerecast = { version = "0.4", default-features = false, features = ["std"] }
+# rerecast 0.4 is on glam 0.32; this fork branch moves it to glam 0.33.
+rerecast = { git = "https://github.com/jbuehler23/rerecast", rev = "d5c10eff3f9dca404a734a21f05085875e7acf59", default-features = false, features = ["std"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
 dirs = "6"
@@ -359,7 +358,7 @@ redundant_closure_for_method_calls = "warn"
 bevy.workspace = true
 # `examples/load_terrain_world.rs` draws an authored terrain, loads its bake and
 # stands a body on the ground, which needs both runtime features.
-jackdaw_runtime = { workspace = true, features = ["terrain"] }
+jackdaw_runtime = { workspace = true, features = ["terrain", "physics"] }
 libloading = "0.8"
 serde_json.workspace = true
 tempfile = "3"

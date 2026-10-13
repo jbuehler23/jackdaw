@@ -1863,8 +1863,8 @@ fn add_module_crates(
             if game.crates.contains(&krate.name) {
                 continue;
             }
-            let requirement = match krate.version {
-                Some(_) => module_crate_requirement(krate),
+            let requirement = match krate.requirement() {
+                Some(requirement) => requirement,
                 None => jackdaw_crate_like_runtime(doc, &krate.name)
                     .unwrap_or_else(|| module_crate_requirement(krate)),
             };
@@ -2343,13 +2343,12 @@ fn enabled_modules(
         .filter(|module| modules.contains(&module.id))
 }
 
-/// How a game asks for a module's crate: its version, or for a jackdaw
+/// How a game asks for a module's crate: its registry or git source, or for a jackdaw
 /// crate the source the runtime comes from.
 fn module_crate_requirement(krate: &jackdaw_project_build::modules::ModuleCrate) -> String {
-    match &krate.version {
-        Some(version) => format!("\"{version}\""),
-        None => format!("{{ {} }}", jackdaw_dep_requirement(&krate.name)),
-    }
+    krate
+        .requirement()
+        .unwrap_or_else(|| format!("{{ {} }}", jackdaw_dep_requirement(&krate.name)))
 }
 
 /// The `[dependencies]` lines for the crates `modules` add.
@@ -3502,7 +3501,13 @@ mod tests {
             cargo.contains("features = [\"physics\", \"navmesh\", \"terrain\", \"pie\"] }"),
             "got:\n{cargo}"
         );
-        assert!(cargo.contains("\navian3d = \"0.7\"\n"), "got:\n{cargo}");
+        let avian = ModuleCatalog::builtin().get("physics").unwrap().crates[0]
+            .requirement()
+            .unwrap();
+        assert!(
+            cargo.contains(&format!("\navian3d = {avian}\n")),
+            "got:\n{cargo}"
+        );
         assert!(!cargo.contains("jackdaw_multiplayer"), "got:\n{cargo}");
         let main = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
         assert!(
@@ -3549,7 +3554,7 @@ mod tests {
     fn import_detects_the_modules_a_game_already_uses_and_adds_the_chosen_ones_once() {
         let root = bevy_game(
             "import-modules",
-            "bevy = \"0.19\"\n\
+            "bevy = \"0.20\"\n\
              jackdaw_runtime = { version = \"0.19\", features = [\"physics\", \"pie\"] }\n\
              avian3d = \"0.7\"\n",
         );
@@ -3650,7 +3655,13 @@ mod tests {
             cargo.contains("features = [\"terrain\", \"pie\"]"),
             "got:\n{cargo}"
         );
-        assert!(cargo.contains("avian3d = \"0.7\""), "got:\n{cargo}");
+        let avian = ModuleCatalog::builtin().get("physics").unwrap().crates[0]
+            .requirement()
+            .unwrap();
+        assert!(
+            cargo.contains(&format!("avian3d = {avian}")),
+            "got:\n{cargo}"
+        );
         assert!(modules_table(&root).values().all(|on| !on));
         let settings = std::fs::read_to_string(root.join("jackdaw.toml")).unwrap();
         assert!(settings.contains("[[run]]"), "got:\n{settings}");

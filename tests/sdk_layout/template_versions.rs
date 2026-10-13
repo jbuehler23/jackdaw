@@ -64,23 +64,31 @@ fn the_substituted_version_is_the_anchored_minor() {
     assert_eq!(jackdaw_project_build::BEVY_VERSION, workspace_minor());
 }
 
-/// The physics module's avian requirement is a plain literal in the
-/// module catalog (it is not jackdaw's to substitute), so it can silently
-/// drift from what the editor itself builds against. A scaffolded project
+/// The physics module's avian source is a plain literal in the module
+/// catalog (it is not jackdaw's to substitute), so it can silently drift
+/// from what the editor itself builds against. A scaffolded project
 /// resolving a different avian than the editor authors scenes with is
 /// exactly the kind of mismatch onboarding is supposed to prevent.
 #[test]
 fn the_physics_module_tracks_the_workspace_avian() {
     let workspace = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .expect("workspace manifest");
-    let req = workspace
+    let entry = workspace
+        .split_once("[workspace.dependencies]")
+        .expect("[workspace.dependencies]")
+        .1
         .lines()
-        .find_map(|line| {
-            let rest = line.trim().strip_prefix("avian3d = {")?;
-            let rest = rest.split("version = \"").nth(1)?;
-            rest.split('"').next()
-        })
-        .expect("[workspace.dependencies] avian3d version");
+        .find_map(|line| line.trim().strip_prefix("avian3d = {"))
+        .expect("[workspace.dependencies] avian3d");
+    let key = |name: &str| {
+        let rest = entry.split(&format!("{name} = \"")).nth(1)?;
+        rest.split('"').next().map(str::to_string)
+    };
+    let source: Vec<(&str, String)> = ["version", "git", "rev"]
+        .into_iter()
+        .filter_map(|name| Some((name, key(name)?)))
+        .collect();
+    assert!(!source.is_empty(), "avian3d names no version or git source");
     let dest = std::env::temp_dir()
         .join(format!("jackdaw_template_avian_{}", std::process::id()))
         .join("physical");
@@ -89,10 +97,22 @@ fn the_physics_module_tracks_the_workspace_avian() {
         .expect("scaffold");
     let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).expect("scaffolded manifest");
     let _ = std::fs::remove_dir_all(dest.parent().unwrap());
-    assert!(
-        cargo.contains(&format!("avian3d = \"{req}\"")),
-        "a game with the physics module must request avian3d \"{req}\":\n{cargo}"
-    );
+    let line = cargo
+        .lines()
+        .find(|line| line.starts_with("avian3d = "))
+        .unwrap_or_else(|| panic!("a game with the physics module must request avian3d:\n{cargo}"));
+    let bare = matches!(source.as_slice(), [("version", _)]);
+    for (name, value) in &source {
+        let wanted = if bare {
+            format!("\"{value}\"")
+        } else {
+            format!("{name} = \"{value}\"")
+        };
+        assert!(
+            line.contains(&wanted),
+            "the scaffolded avian3d must carry the workspace's {name} {value}: {line}"
+        );
+    }
 }
 
 /// The game template's own doc comment mentions `assets/*.bsn`, whose

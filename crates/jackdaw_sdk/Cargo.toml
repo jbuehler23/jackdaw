@@ -38,6 +38,7 @@ jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
 jackdaw_runtime = { workspace = true, features = [
     "render",
     "soft_shadows",
+    "physics",
     "pie",
     "terrain",
     "navmesh",
@@ -51,11 +52,6 @@ rand = { version = "0.10", features = ["std_rng", "thread_rng"] }
 # macOS, and anything depending on `tempfile` turns that feature on, which
 # resolves a second Bevy with different type ids. Enable it here so the SDK
 # already matches.
-[features]
-# Off until avian3d publishes for Bevy 0.20; the editor's `physics` feature
-# turns it on. Restore it to the runtime feature list above once avian builds.
-physics = ["jackdaw_runtime/physics"]
-
 [target.'cfg(unix)'.dependencies]
 rustix = "1"
 

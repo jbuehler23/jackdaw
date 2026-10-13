@@ -70,7 +70,7 @@ fn build_model_colliders(
 /// Take a model's part colliders off with its [`AvianCollider`], so turning
 /// physics off or undoing it leaves nothing behind.
 fn remove_model_colliders(
-    removed: On<Remove, AvianCollider>,
+    removed: On<Remove<AvianCollider>>,
     mut commands: Commands,
     models: Query<(), ModelFilter>,
     descendants: Query<&Children>,

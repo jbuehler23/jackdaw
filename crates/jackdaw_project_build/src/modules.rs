@@ -51,9 +51,38 @@ pub struct ModuleCrate {
     /// wherever the project's `jackdaw_runtime` does.
     #[serde(default)]
     pub version: Option<String>,
+    /// A git repository the crate comes from instead of the registry, for a
+    /// crate with no release on jackdaw's Bevy yet.
+    #[serde(default)]
+    pub git: Option<String>,
+    /// The commit of [`Self::git`] to build.
+    #[serde(default)]
+    pub rev: Option<String>,
     /// The plugin a new game adds to its `App` for it, as an expression.
     #[serde(default)]
     pub plugin: Option<String>,
+}
+
+impl ModuleCrate {
+    /// How a game's `[dependencies]` asks for this crate, or `None` for a
+    /// jackdaw crate, which follows the project's `jackdaw_runtime`.
+    pub fn requirement(&self) -> Option<String> {
+        let Some(git) = &self.git else {
+            return self
+                .version
+                .as_ref()
+                .map(|version| format!("\"{version}\""));
+        };
+        let mut keys = Vec::new();
+        if let Some(version) = &self.version {
+            keys.push(format!("version = \"{version}\""));
+        }
+        keys.push(format!("git = \"{git}\""));
+        if let Some(rev) = &self.rev {
+            keys.push(format!("rev = \"{rev}\""));
+        }
+        Some(format!("{{ {} }}", keys.join(", ")))
+    }
 }
 
 /// Every module this jackdaw knows.
@@ -438,11 +467,13 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let avian = workspace["workspace"]["dependencies"]["avian3d"]["version"]
-            .as_str()
-            .unwrap();
-        let physics = ModuleCatalog::builtin().get("physics").unwrap();
-        assert_eq!(physics.crates[0].version.as_deref(), Some(avian));
+        let avian = &workspace["workspace"]["dependencies"]["avian3d"];
+        let key = |name: &str| avian.get(name).and_then(|v| v.as_str()).map(str::to_string);
+        let physics = &ModuleCatalog::builtin().get("physics").unwrap().crates[0];
+        assert_eq!(physics.version, key("version"));
+        assert_eq!(physics.git, key("git"));
+        assert_eq!(physics.rev, key("rev"));
+        assert!(physics.requirement().is_some());
     }
 
     fn package(manifest: &str) -> tempfile::TempDir {

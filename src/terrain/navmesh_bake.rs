@@ -1183,7 +1183,7 @@ fn rasterize(
     terrain: &str,
 ) -> Result<NavmeshArtifact, String> {
     let aabb = input
-        .get_aabb()
+        .compute_aabb()
         .ok_or_else(|| "nothing to bake".to_string())?;
     let extent = Vec2::new(aabb.max.x - aabb.min.x, aabb.max.z - aabb.min.z);
     let params = params.fit_to_extent(extent);
