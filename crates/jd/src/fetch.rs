@@ -35,6 +35,17 @@ pub fn fetch_limited(url: &str, limit: u64) -> Result<Vec<u8>, String> {
 /// `dest`, returning the lowercase hex SHA-256 of what was written. A
 /// longer response is cut off rather than written out in full.
 pub fn download(url: &str, dest: &Path, size: u64) -> Result<String, String> {
+    download_reporting(url, dest, size, &mut |_| {})
+}
+
+/// As [`download`], calling `progress` with the bytes written so far after
+/// each chunk.
+pub fn download_reporting(
+    url: &str,
+    dest: &Path,
+    size: u64,
+    progress: &mut dyn FnMut(u64),
+) -> Result<String, String> {
     let mut reader = open(url)?.take(size + 1);
     let mut file =
         std::fs::File::create(dest).map_err(|error| format!("{}: {error}", dest.display()))?;
@@ -52,6 +63,7 @@ pub fn download(url: &str, dest: &Path, size: u64) -> Result<String, String> {
         file.write_all(&buffer[..read])
             .map_err(|error| format!("{}: {error}", dest.display()))?;
         total += read as u64;
+        progress(total);
     }
     if total != size {
         return Err(format!("{url}: expected {size} bytes, got more or fewer"));

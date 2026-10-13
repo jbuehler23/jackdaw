@@ -264,6 +264,96 @@ fn installing_a_line_registers_its_newest_patch_as_the_default() {
     assert!(stdout.contains("default"), "{stdout}");
 }
 
+fn events(stdout: &str) -> Vec<serde_json::Value> {
+    stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|_| panic!("not JSON: {line}")))
+        .collect()
+}
+
+#[test]
+fn json_output_reports_download_progress_stages_and_the_result() {
+    let mut fixture = Fixture::new();
+    fixture.publish("0.20.1", "0.20.1");
+    fixture.sign();
+
+    let events = events(&ok(&fixture.jd(&["editor", "install", "0.20", "--json"])));
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|event| event["event"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"progress"), "{kinds:?}");
+    let last_download = events
+        .iter()
+        .rev()
+        .find(|event| event["stage"] == "download")
+        .unwrap();
+    assert_eq!(last_download["done"], last_download["total"]);
+    let stages: Vec<&str> = events
+        .iter()
+        .filter(|event| event["event"] == "stage")
+        .map(|event| event["stage"].as_str().unwrap())
+        .collect();
+    assert_eq!(stages, ["unpack", "register"]);
+    let done = events.last().unwrap();
+    assert_eq!(done["event"], "done");
+    assert!(
+        done["text"]
+            .as_str()
+            .unwrap()
+            .contains("installed jackdaw 0.20.1"),
+        "{done}"
+    );
+
+    let verified = events_of(&fixture, &["editor", "verify", "0.20.1", "--json"]);
+    assert_eq!(verified.last().unwrap()["event"], "done");
+}
+
+fn events_of(fixture: &Fixture, args: &[&str]) -> Vec<serde_json::Value> {
+    events(&ok(&fixture.jd(args)))
+}
+
+#[test]
+fn json_refresh_caches_the_index_and_says_where_it_came_from() {
+    let mut fixture = Fixture::new();
+    fixture.publish("0.20.1", "0.20.1");
+    fixture.sign();
+
+    let fetched = events_of(&fixture, &["editor", "refresh", "--json"]);
+    let index = fetched
+        .iter()
+        .find(|event| event["event"] == "index")
+        .expect("an index event");
+    assert_eq!(index["origin"], "fetched");
+    assert!(fixture.launcher().join("cache/releases.signed").is_file());
+
+    std::fs::remove_file(fixture.mirror().join("releases.json")).unwrap();
+    let cached = events_of(&fixture, &["editor", "refresh", "--json"]);
+    let index = cached
+        .iter()
+        .find(|event| event["event"] == "index")
+        .expect("an index event");
+    assert_eq!(index["origin"], "cached");
+    assert!(index["reason"].is_string(), "{index}");
+}
+
+#[test]
+fn a_failed_json_command_ends_with_an_error_event() {
+    let mut fixture = Fixture::new();
+    fixture.publish("0.20.1", "0.20.1");
+    fixture.sign();
+
+    let output = fixture.jd(&["editor", "remove", "0.30.0", "--json"]);
+    assert!(!output.status.success());
+    let events = events(&String::from_utf8_lossy(&output.stdout));
+    let error = events.last().expect("an event");
+    assert_eq!(error["event"], "error");
+    assert!(
+        error["text"].as_str().unwrap().contains("not installed"),
+        "{error}"
+    );
+}
+
 #[test]
 fn a_bundle_with_a_wrong_checksum_leaves_nothing_installed() {
     let mut fixture = Fixture::new();

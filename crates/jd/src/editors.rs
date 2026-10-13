@@ -123,6 +123,19 @@ pub enum InstallOutcome {
     AlreadyInstalled(Install),
 }
 
+/// How far an [`install`] has got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallProgress {
+    /// Bytes of the editor bundle downloaded, out of `total`.
+    Download { done: u64, total: u64 },
+    /// The bundle is downloaded and being checked and unpacked.
+    Unpacking,
+    /// Fetching the requested modules.
+    Modules,
+    /// Moving the install into place and registering it.
+    Registering,
+}
+
 /// Install the release `query` selects (a version, a line such as `0.20`,
 /// `stable` or `bleeding-edge`) with `modules`, for `target`.
 ///
@@ -135,10 +148,12 @@ pub fn install(
     query: &str,
     modules: &[String],
     target: &str,
+    progress: &mut dyn FnMut(InstallProgress),
 ) -> Result<InstallOutcome, String> {
     let release = index.resolve(query)?;
     file_name_safe(&release.version)?;
     if let Some(existing) = layout.load_installs()?.get(&release.version).cloned() {
+        progress(InstallProgress::Modules);
         return add_modules(layout, release, existing, modules, target);
     }
 
@@ -159,7 +174,11 @@ pub fn install(
 
     let staging = Staging::new(&layout.editors(), &release.version)?;
     let download = staging.path().join("bundle");
-    let sha256 = fetch::download(&artifact.url, &download, artifact.size)?;
+    let total = artifact.size;
+    let sha256 = fetch::download_reporting(&artifact.url, &download, total, &mut |done| {
+        progress(InstallProgress::Download { done, total });
+    })?;
+    progress(InstallProgress::Unpacking);
     if !sha256.eq_ignore_ascii_case(&artifact.sha256) {
         return Err(format!(
             "{}: checksum mismatch (expected {}, got {sha256}); nothing was installed",
@@ -178,9 +197,13 @@ pub fn install(
             release.version, reported.version
         ));
     }
+    if !modules.is_empty() {
+        progress(InstallProgress::Modules);
+    }
     let fetched = fetch_modules(release, modules, target, staging.path())?;
     move_into(&fetched, &root.join("modules"))?;
 
+    progress(InstallProgress::Registering);
     let _lock = layout.lock()?;
     let mut installs = layout.load_installs()?;
     if let Some(existing) = installs.get(&release.version) {
