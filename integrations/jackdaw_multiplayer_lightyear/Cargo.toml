@@ -1,6 +1,6 @@
 [package]
 name = "jackdaw_multiplayer_lightyear"
-version = "0.19.0-rc.10"
+version = "0.20.0-dev"
 rust-version = "1.95"
 edition = "2024"
 description = "Default lightyear backend for Jackdaw networking: translates proxy components into real lightyear replication at runtime."
@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy = { version = "0.19", features = [
+bevy = { version = "0.20", features = [
     "bevy_feathers",
     "bevy_scene",
     "bevy_dev_tools",
@@ -19,8 +19,8 @@ bevy = { version = "0.19", features = [
     "reflect_documentation",
     "reflect_functions",
 ] }
-jackdaw_camera_rig = { version = "0.19.0-rc.10", path = "../../crates/jackdaw_camera_rig" }
-jackdaw_multiplayer = { version = "0.19.0-rc.10", path = "../../crates/jackdaw_multiplayer" }
+jackdaw_camera_rig = { version = "0.20.0-dev", path = "../../crates/jackdaw_camera_rig" }
+jackdaw_multiplayer = { version = "0.20.0-dev", path = "../../crates/jackdaw_multiplayer" }
 # Needed to express the `Serialize + DeserializeOwned` registration bounds in
 # `MultiplayerAppExt` (mirrors lightyear's own `register_component` bounds).
 serde = "1"
