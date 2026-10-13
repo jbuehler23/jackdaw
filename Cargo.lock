@@ -4818,6 +4818,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_input"
+version = "0.20.0-dev"
+dependencies = [
+ "bevy",
+ "bitflags 2.13.1",
+]
+
+[[package]]
 name = "jackdaw_jsn"
 version = "0.20.0-dev"
 dependencies = [

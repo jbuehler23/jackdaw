@@ -1,0 +1,15 @@
+[package]
+name = "jackdaw_input"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Input actions for the jackdaw editor: contexts, actions and bindings evaluated from bevy_input"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+bevy.workspace = true
+bitflags = "2"
+
+[lints]
+workspace = true
