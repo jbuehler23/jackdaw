@@ -68,6 +68,11 @@ pub struct ProjectManifest {
     /// Absent in a project set up before modules were recorded.
     #[serde(default)]
     pub modules: Option<BTreeMap<String, bool>>,
+    /// The `[extensions]` table: editor extensions this project turns on
+    /// or off over the global list, by extension id. Absent means the
+    /// global list applies unchanged.
+    #[serde(default)]
+    pub extensions: Option<BTreeMap<String, bool>>,
 }
 
 impl ProjectManifest {
@@ -130,6 +135,32 @@ impl ProjectManifest {
 
 pub fn path(root: &Path) -> PathBuf {
     root.join(FILE_NAME)
+}
+
+/// `jackdaw_toml` with its `[extensions]` table replaced by `overrides`,
+/// leaving the rest of the file as written. Empty `overrides` removes the
+/// table.
+pub fn with_extensions(
+    jackdaw_toml: &str,
+    overrides: &BTreeMap<String, bool>,
+) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut = jackdaw_toml
+        .parse()
+        .map_err(|error: toml_edit::TomlError| error.to_string())?;
+    if overrides.is_empty() {
+        doc.remove("extensions");
+        return Ok(doc.to_string());
+    }
+    let mut table = toml_edit::Table::new();
+    table.decor_mut().set_prefix(
+        "\n# Editor extensions turned on or off for this project, over the\n\
+         # global list. Change them from the launcher's Extensions page.\n",
+    );
+    for (id, enabled) in overrides {
+        table.insert(id, toml_edit::value(*enabled));
+    }
+    doc.insert("extensions", toml_edit::Item::Table(table));
+    Ok(doc.to_string())
 }
 
 fn is_inside_root(dir: &Path) -> bool {
@@ -378,6 +409,24 @@ bevy_rev = "3f2a1c9e"
 
         let written: ProjectManifest = toml::from_str(&pins_toml()).unwrap();
         assert_eq!(written.jackdaw.channel.as_deref(), Some("stable"));
+    }
+
+    #[test]
+    fn extension_overrides_are_written_to_their_own_table_and_read_back() {
+        let original = "plugin = \"GamePlugin\"\n\n[jackdaw]\nversion = \"0.20.0\"\n";
+        let overrides = BTreeMap::from([
+            ("acme.dialogue".to_string(), true),
+            ("grass".to_string(), false),
+        ]);
+        let written = with_extensions(original, &overrides).unwrap();
+        assert!(written.starts_with(original), "{written}");
+        let manifest: ProjectManifest = toml::from_str(&written).unwrap();
+        assert_eq!(manifest.extensions, Some(overrides));
+        assert_eq!(manifest.plugin.as_deref(), Some("GamePlugin"));
+
+        let cleared = with_extensions(&written, &BTreeMap::new()).unwrap();
+        let manifest: ProjectManifest = toml::from_str(&cleared).unwrap();
+        assert_eq!(manifest.extensions, None);
     }
 
     #[test]

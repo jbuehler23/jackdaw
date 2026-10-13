@@ -1034,6 +1034,61 @@ fn parse_plugin_arg(args: &[String]) -> Option<String> {
     flag_value(args, "--plugin")
 }
 
+/// What a new game's starter scene holds. The game template ships the 3D
+/// one; the others replace it after scaffolding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StarterScene {
+    /// A camera, a sun and the game plugin that loads them.
+    #[default]
+    ThreeD,
+    /// A 2D camera and a sprite.
+    TwoD,
+    /// An empty root, for a game that builds its world in code.
+    Empty,
+}
+
+const STARTER_SCENE_2D: &str = "\
+// Starter scene. Authored by the jackdaw editor; safe to edit by hand.
+
+#Root
+bevy_transform::components::transform::Transform
+bevy_camera::visibility::Visibility::Visible
+bevy_ecs::hierarchy::Children [
+    #\"Main Camera\"
+    bevy_camera::components::Camera2d
+    bevy_transform::components::transform::Transform
+    bevy_camera::visibility::Visibility::Visible,
+
+    #Sprite
+    bevy_sprite::sprite::Sprite
+    bevy_transform::components::transform::Transform {
+        scale: glam::Vec3 { x: 64.0, y: 64.0, z: 1.0 },
+    }
+    bevy_camera::visibility::Visibility::Visible
+]
+";
+
+const STARTER_SCENE_EMPTY: &str = "\
+// Starter scene. Authored by the jackdaw editor; safe to edit by hand.
+
+#Root
+bevy_transform::components::transform::Transform
+bevy_camera::visibility::Visibility::Visible
+";
+
+/// Replace the starter scene of the game scaffolded at `dest` with
+/// `starter`'s.
+pub fn write_starter_scene(dest: &Path, starter: StarterScene) -> Result<(), ScaffoldError> {
+    let text = match starter {
+        StarterScene::ThreeD => return Ok(()),
+        StarterScene::TwoD => STARTER_SCENE_2D,
+        StarterScene::Empty => STARTER_SCENE_EMPTY,
+    };
+    let scene = dest.join("assets").join("scene.bsn");
+    std::fs::write(&scene, text)
+        .map_err(|error| ScaffoldError::Io(format!("{}: {error}", scene.display())))
+}
+
 /// Scaffold a new project at `dest` from an embedded template,
 /// substituting the project name, crate name, authors, and title
 /// placeholders. A game starts with the default modules.

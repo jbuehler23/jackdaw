@@ -31,6 +31,9 @@ physics = true
 navmesh = false
 multiplayer = false
 
+[extensions]
+"acme.dialogue" = true
+
 [[run]]
 name = "Play"
 # instances = 2
@@ -80,6 +83,12 @@ features but leaves its crates, which your code may still use. A
 project with no `[modules]` table is read from the features its
 `jackdaw_runtime` dependency already enables. New games start with
 `physics` only.
+
+`[extensions]` turns editor extensions on or off for this project, by
+extension id, over the global list every project starts from. The editor
+applies it when the project opens; extensions it does not name follow
+the global list. Edit it from the launcher's Extensions page, where the
+global defaults are edited too.
 
 Each `[[run]]` entry is one item in the Play dropdown. Every run
 launches the same already-built game binary; entries differ only
