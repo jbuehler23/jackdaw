@@ -181,7 +181,7 @@ bevy_ecs::hierarchy::Children [
     scene_load_routes_embedded_assets_and_resolves_references::ProbeMaterial {
         shininess: 9.5,
     }
-    ,
+    --
     #Thing
     scene_load_routes_embedded_assets_and_resolves_references::UsesMaterial {
         material: "#Shiny",
@@ -278,12 +278,12 @@ bevy_ecs::hierarchy::Children [
     MATERIAL_TYPE {
         shininess: 2.5,
     }
-    ,
+    --
     #InlineUser
     USER_TYPE {
         material: "#Shiny",
     }
-    ,
+    --
     #CatalogUser
     USER_TYPE {
         material: "@Shiny",
@@ -332,7 +332,7 @@ bevy_ecs::hierarchy::Children [
         #Child
         jackdaw_scene_types::node_id::SceneNodeId(22)
     ]
-    ,
+    --
     #Sibling
     jackdaw_scene_types::node_id::SceneNodeId(33)
 ]

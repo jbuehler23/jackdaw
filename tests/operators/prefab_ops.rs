@@ -593,7 +593,7 @@ fn ridge_scene(extra: &str) -> String {
     bevy_ecs::hierarchy::Children [
         jackdaw::prefab::components::PrefabEntityId(1)
     ]
-    ,
+    --
     jackdaw::prefab::components::IsA {{ source: "prefabs/cliff.bsn", deleted: [] }}
     jackdaw::prefab::components::PrefabEntityId(0)
     bevy_transform::components::transform::Transform {{ translation: glam::Vec3 {{ x: 0.0, y: 5.0, z: 0.0 }}, rotation: glam::Quat {{ x: 0.0, y: 0.38268343, z: 0.0, w: 0.9238795 }}, scale: glam::Vec3 {{ x: 3.0, y: 3.0, z: 3.0 }} }}

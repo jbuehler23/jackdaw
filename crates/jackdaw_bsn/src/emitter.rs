@@ -1,7 +1,8 @@
 //! BSN text emitter: document AST to `.bsn` text.
 //!
 //! Pretty-prints a [`SceneBsnAst`] to BSN text compatible with the parser in
-//! [`crate::parse`]. Emission order is fully determined by the document's
+//! [`crate::parse`], in Bevy 0.20 `bsn!` syntax: sibling entities are
+//! separated by a `--` line. Emission order is fully determined by the document's
 //! `Vec<Entity>` fields (`SceneBsnAst::roots`, `BsnPatches`, `BsnStructFields`,
 //! `Children` lists): every emit function walks those vectors in their stored
 //! order and never consults `ecs_to_ast`/`ast_to_ecs`, so emitting the same
@@ -12,6 +13,9 @@ use std::fmt::Write;
 use bevy::prelude::Entity;
 
 use crate::{BsnField, BsnPatch, BsnStructData, BsnTupleStructData, BsnValue, SceneBsnAst};
+
+/// The line between sibling entities, Bevy 0.20's `--` (0.19 wrote `,`).
+const ENTITY_SEPARATOR: &str = "--\n";
 
 /// Emits a complete `.bsn` file from the document AST.
 ///
@@ -37,13 +41,21 @@ pub fn emit_scene(ast: &SceneBsnAst) -> String {
             emit_patches(ast, root, 1, &mut out);
             if i + 1 < ast.roots.len() {
                 write_indent(1, &mut out);
-                out.push_str(",\n");
+                out.push_str(ENTITY_SEPARATOR);
             }
         }
         writeln!(out, "]").unwrap();
     }
 
     out
+}
+
+/// Whether `name` reads back as a `#name` identifier; any other name is
+/// quoted. The words the lexer reads as literals are not identifiers.
+fn is_bare_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !matches!(name, "true" | "false" | "inf" | "nan" | "NaN" | "Infinity")
 }
 
 /// True when `root`'s sole patch is a `Children` relation, the shape that
@@ -79,7 +91,7 @@ pub fn emit_entities(ast: &SceneBsnAst, entities: &[Entity]) -> String {
             emit_patches(ast, e, 1, &mut out);
             if i + 1 < entities.len() {
                 write_indent(1, &mut out);
-                out.push_str(",\n");
+                out.push_str(ENTITY_SEPARATOR);
             }
         }
         writeln!(out, "]").unwrap();
@@ -130,7 +142,7 @@ fn emit_patch(ast: &SceneBsnAst, patch: &BsnPatch, indent: usize, out: &mut Stri
     match patch {
         BsnPatch::Name(name) => {
             write_indent(indent, out);
-            if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.is_empty() {
+            if is_bare_name(name) {
                 writeln!(out, "#{name}").unwrap();
             } else {
                 writeln!(out, "#\"{}\"", escape_string(name)).unwrap();
@@ -181,7 +193,7 @@ fn emit_patch(ast: &SceneBsnAst, patch: &BsnPatch, indent: usize, out: &mut Stri
                     emit_patches(ast, child, indent + 1, out);
                     if i + 1 < children.len() {
                         write_indent(indent + 1, out);
-                        out.push_str(",\n");
+                        out.push_str(ENTITY_SEPARATOR);
                     }
                 }
                 write_indent(indent, out);

@@ -173,7 +173,7 @@ bevy_ecs::hierarchy::Children [
     fn a_prefab_holding_two_models_draws_none() {
         let two = PACKED_FIR.replace(
             "    jackdaw::prefab::components::PrefabEntityId(1)\n]",
-            "    jackdaw::prefab::components::PrefabEntityId(1)\n    ,\n    #Stone\n    \
+            "    jackdaw::prefab::components::PrefabEntityId(1)\n    --\n    #Stone\n    \
              jackdaw_scene_types::types::GltfSource { path: \"models/stone.gltf\", scene_index: 0 }\n    \
              jackdaw::prefab::components::PrefabEntityId(2)\n]",
         );

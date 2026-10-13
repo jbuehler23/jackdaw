@@ -14,12 +14,12 @@ bevy_ecs::hierarchy::Children [
         diffuse_map: "environment_maps/pisa_diffuse_rgb9e5_zstd.ktx2",
         specular_map: "environment_maps/pisa_specular_rgb9e5_zstd.ktx2",
         intensity: 250.0,
-    },
-
+    }
+    --
     bevy_transform::components::transform::Transform
     // Embed an asset as a handle:
-    bevy_scene::components::SceneRoot("models/FlightHelmet/FlightHelmet.gltf#Scene0"),
-
+    bevy_scene::components::SceneRoot("models/FlightHelmet/FlightHelmet.gltf#Scene0")
+    --
     bevy_light::directional_light::DirectionalLight {
         shadow_maps_enabled: true,
     }

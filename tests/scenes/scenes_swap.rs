@@ -1465,7 +1465,7 @@ fn activating_a_tab_holding_retired_ui_components_spawns_nothing() {
 bevy_ecs::hierarchy::Children [
     #Overlay
     jackdaw_ui::UiCanvas
-    ,
+    --
     #World
     bevy_transform::components::transform::Transform
 ]
@@ -1507,7 +1507,7 @@ fn document_inheriting_from(base: &std::path::Path) -> jackdaw_bsn::SceneBsnAst 
         r#"bevy_ecs::hierarchy::Children [
     jackdaw::prefab::components::IsA {{ source: "{}", deleted: [] }}
     jackdaw::prefab::components::PrefabEntityId(0)
-    ,
+    --
     #World
     bevy_transform::components::transform::Transform
 ]

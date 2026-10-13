@@ -512,7 +512,7 @@ fn a_paste_refuses_a_payload_that_is_both_kinds() {
     const MIXED: &str = "bevy_ecs::hierarchy::Children [\n\
                              #Screen\n\
                              bevy_ui::ui_node::Node\n\
-                             ,\n\
+                             --\n\
                              #Thing\n\
                              bevy_transform::components::transform::Transform\n\
                          ]\n";

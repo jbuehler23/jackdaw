@@ -93,10 +93,10 @@ fn reparent_fixture() -> SceneBsnAst {
              bevy_ecs::hierarchy::Children [\n\
                  #A\n\
                  bevy_ecs::hierarchy::Children [ #G ]\n\
-                 ,\n\
+                 --\n\
                  #B\n\
              ]\n\
-             ,\n\
+             --\n\
              #R2\n\
          ]\n",
     )
@@ -200,7 +200,7 @@ fn clone_fixture() -> (SceneBsnAst, Entity, Entity) {
                  #Child\n\
                  test_types::Material { base: \"#Mat0\", strength: 0.5 }\n\
              ]\n\
-             ,\n\
+             --\n\
              #Sibling\n\
              test_types::Transform { translation: glam::Vec3 { x: 9.0 } }\n\
          ]\n",
@@ -408,7 +408,7 @@ fn duplicate_stable_ids_resolve_to_the_last_root_in_document_order() {
         "bevy_ecs::hierarchy::Children [\n\
              #First\n\
              jackdaw_scene_types::node_id::SceneNodeId(7)\n\
-             ,\n\
+             --\n\
              #Second\n\
              jackdaw_scene_types::node_id::SceneNodeId(7)\n\
          ]\n",

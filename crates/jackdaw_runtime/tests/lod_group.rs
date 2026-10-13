@@ -246,10 +246,10 @@ const GROUP_WITH_A_MODEL_PAST_ITS_LEVELS: &str = "#Tree\n\
      bevy_ecs::hierarchy::Children [\n\
      #LOD0\n\
      jackdaw_scene_types::types::GltfSource { path: \"tree.gltf\", scene_index: 0 }\n\
-     ,\n\
+     --\n\
      #LOD1\n\
      jackdaw_scene_types::types::GltfSource { path: \"tree_LOD1.gltf\", scene_index: 0 }\n\
-     ,\n\
+     --\n\
      #Nest\n\
      jackdaw_scene_types::types::GltfSource { path: \"nest.gltf\", scene_index: 0 }\n\
      ]\n";

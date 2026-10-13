@@ -17,11 +17,11 @@ bevy_ecs::hierarchy::Children [
     #Picker
     jackdaw_widgets_runtime::Dropdown
     bevy_ui::ui_node::Node
-    ,
+    --
     #Choices
     jackdaw_widgets_runtime::RadioOptions
     bevy_ui::ui_node::Node
-    ,
+    --
     #Tabs
     jackdaw_widgets_runtime::TabStrip
     bevy_ui::ui_node::Node

@@ -392,14 +392,14 @@ mod tests {
         );
         if !children.is_empty() {
             text.push_str("bevy_ecs::hierarchy::Children [\n");
-            text.push_str(&children.join(",\n"));
+            text.push_str(&children.join("--\n"));
             text.push_str("]\n");
         }
         text
     }
 
     fn scene(roots: &[String]) -> SceneBsnAst {
-        let text = format!("bevy_ecs::hierarchy::Children [\n{}]\n", roots.join(",\n"));
+        let text = format!("bevy_ecs::hierarchy::Children [\n{}]\n", roots.join("--\n"));
         jackdaw_bsn::parse_bsn_text(&text)
             .expect("the scene parses")
             .deep_clone()

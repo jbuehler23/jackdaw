@@ -17,7 +17,7 @@ bevy_ecs::hierarchy::Children [
     bevy_light::cascade::CascadeShadowConfig
     bevy_light::directional_light::DirectionalLight
     bevy_camera::visibility::Visibility::Inherited
-    ,
+    --
     #Brush
     jackdaw_scene_types::node_id::SceneNodeId(9002030351902162916)
     jackdaw_scene_types::types::Brush {

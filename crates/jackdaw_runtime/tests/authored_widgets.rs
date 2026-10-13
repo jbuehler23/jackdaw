@@ -18,11 +18,11 @@ bevy_ecs::hierarchy::Children [
     #Checkbox
     bevy_ui::ui_node::Node
     bevy_ui_widgets::checkbox::Checkbox
-    ,
+    --
     #Caption
     bevy_ui::ui_node::Node
     bevy_feathers::theme::ThemedText
-    ,
+    --
     #Plain
     bevy_ui::ui_node::Node
 ]

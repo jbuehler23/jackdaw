@@ -14,7 +14,7 @@ bevy_ecs::hierarchy::Children [
     bevy_transform::components::transform::Transform {
         translation: glam::Vec3 { x: 4.0, y: 5.0, z: 6.0 },
     }
-    ,
+    --
     #Follower
     bevy_transform::components::transform::Transform {
         translation: glam::Vec3 { x: 9.0, y: 0.0, z: 0.0 },

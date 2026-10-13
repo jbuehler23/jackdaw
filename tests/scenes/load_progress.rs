@@ -23,7 +23,7 @@ const TWO_MODELS: &str = r#"bevy_ecs::hierarchy::Children [
         path: "models/dungeon.glb",
         scene_index: 0,
     }
-    ,
+    --
     #Lantern
     bevy_transform::components::transform::Transform
     jackdaw_scene_types::types::GltfSource {
@@ -302,7 +302,7 @@ const GROUP_WITH_A_LEVEL_THAT_NEVER_DRAWS: &str = r#"bevy_ecs::hierarchy::Childr
             path: "models/dungeon.glb",
             scene_index: 0,
         }
-        ,
+        --
         #LOD1
         bevy_transform::components::transform::Transform
         jackdaw_scene_types::types::GltfSource {
@@ -351,7 +351,7 @@ const GROUP_WHOSE_COARSEST_MODEL_IS_MISSING: &str = r#"bevy_ecs::hierarchy::Chil
             path: "models/dungeon.glb",
             scene_index: 0,
         }
-        ,
+        --
         #LOD1
         bevy_transform::components::transform::Transform
         jackdaw_scene_types::types::GltfSource {

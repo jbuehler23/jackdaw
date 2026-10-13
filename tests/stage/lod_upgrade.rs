@@ -62,7 +62,7 @@ fn level_children(first_id: Option<u32>, extra: &str) -> String {
             text.push_str(extra);
         }
         if index + 1 < files.len() {
-            text.push_str("    ,\n");
+            text.push_str("    --\n");
         }
     }
     text.push_str("]\n");
@@ -81,7 +81,7 @@ fn grove_prefab() -> String {
 /// and of the second level carrying `level`.
 fn grove_instance(group: &str, level: &str) -> String {
     format!(
-        "#GroveOne\njackdaw::prefab::components::IsA {{ source: \"prefabs/grove.bsn\", deleted: [] }}\njackdaw::prefab::components::PrefabEntityId(0)\nbevy_transform::components::transform::Transform\nbevy_ecs::hierarchy::Children [\n    jackdaw::prefab::components::PrefabEntityId(1)\n{group}    bevy_ecs::hierarchy::Children [\n        jackdaw::prefab::components::PrefabEntityId(2)\n        ,\n        jackdaw::prefab::components::PrefabEntityId(3)\n{level}        ,\n        jackdaw::prefab::components::PrefabEntityId(4)\n    ]\n]\n"
+        "#GroveOne\njackdaw::prefab::components::IsA {{ source: \"prefabs/grove.bsn\", deleted: [] }}\njackdaw::prefab::components::PrefabEntityId(0)\nbevy_transform::components::transform::Transform\nbevy_ecs::hierarchy::Children [\n    jackdaw::prefab::components::PrefabEntityId(1)\n{group}    bevy_ecs::hierarchy::Children [\n        jackdaw::prefab::components::PrefabEntityId(2)\n        --\n        jackdaw::prefab::components::PrefabEntityId(3)\n{level}        --\n        jackdaw::prefab::components::PrefabEntityId(4)\n    ]\n]\n"
     )
 }
 
@@ -94,7 +94,7 @@ fn oak(extra: &str) -> String {
 }
 
 fn scene_of(nodes: &[String]) -> String {
-    format!("bevy_ecs::hierarchy::Children [\n{}]\n", nodes.join(",\n"))
+    format!("bevy_ecs::hierarchy::Children [\n{}]\n", nodes.join("--\n"))
 }
 
 struct Project {

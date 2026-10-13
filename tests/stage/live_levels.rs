@@ -36,7 +36,7 @@ fn group_at(name: &str, x: f32) -> String {
             "        #LOD{index}\n        bevy_transform::components::transform::Transform\n        jackdaw_scene_types::types::GltfSource {{\n            path: \"{path}\",\n            scene_index: 0,\n        }}\n"
         ));
         if index + 1 < TREE_LEVELS.len() {
-            text.push_str("        ,\n");
+            text.push_str("        --\n");
         }
     }
     text.push_str("    ]\n");

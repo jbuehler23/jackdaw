@@ -99,7 +99,7 @@ bevy_ecs::hierarchy::Children [
         translation: glam::Vec3 {{ x: 1.0, y: 2.0, z: 3.0 }},
     }}
     {zone_marker} {{ id: 7 }}
-    ,
+    --
     {brush_type_path} {{
         faces: [
             {faces},

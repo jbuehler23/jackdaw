@@ -1,0 +1,28 @@
+bevy_ecs::hierarchy::Children [
+    #Ground
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 {
+            x: 0.0,
+            y: -1.0,
+            z: 0.0,
+        },
+    }
+    bevy_ecs::hierarchy::Children [
+        #"Rock A"
+        bevy_render::view::Tonemapping::None
+        my_game::Tags {
+            names: [
+                "a",
+                "b",
+            ],
+        }
+        --
+        #RockB
+        bevy_transform::components::transform::Transform
+    ]
+    --
+    #Sun
+    bevy_light::directional_light::DirectionalLight {
+        illuminance: 1000.0,
+    }
+]

@@ -231,7 +231,7 @@ fn a_collider_on_a_lod_group_sits_on_its_first_levels_meshes() {
          bevy_ecs::hierarchy::Children [\n\
          #LOD0\n\
          jackdaw_scene_types::types::GltfSource {{ path: \"rock.gltf\", scene_index: 0 }}\n\
-         ,\n\
+         --\n\
          #LOD1\n\
          jackdaw_scene_types::types::GltfSource {{ path: \"rock_LOD1.gltf\", scene_index: 0 }}\n\
          ]\n"

@@ -14,6 +14,12 @@ The live in-editor document is the BSN AST (`SceneBsnAst`);
 saving writes it back out as `.bsn` text. Source of truth for
 the grammar is that crate; this page is the orientation.
 
+The syntax is Bevy 0.20's `bsn!` syntax, and the reader in
+`jackdaw_bsn::syntax` follows the `.bsn` file format Bevy is
+adding in its `bevy_bsn` crate, with a few additions that crate's
+docs list (comments, quoted names, generic type paths, list and
+map values).
+
 ## Binary form
 
 The same document also writes as `.bsb`, a binary encoding of the
@@ -81,25 +87,33 @@ components; child entities nest under
 bevy_transform::components::transform::Transform
 bevy_camera::visibility::Visibility::Visible
 bevy_ecs::hierarchy::Children [
-    #Main Camera
+    #"Main Camera"
     bevy_camera::components::Camera3d
     bevy_transform::components::transform::Transform {
         translation: glam::Vec3 { x: 0.0, y: 6.0, z: 12.0 },
         rotation: glam::Quat { x: -0.216, y: 0.0, z: 0.0, w: 0.976 },
     }
-
+    --
     #Sun
     bevy_light::directional_light::DirectionalLight
 ]
 ```
 
-- `#Name` labels the entity (its `Name` component).
+- `#Name` labels the entity (its `Name` component); a name that
+  is not an identifier is quoted, `#"Main Camera"`.
 - A bare type path is a component at its default value.
 - `Type { field: value, .. }` sets struct fields; omitted
   fields keep their defaults.
 - `Type::Variant` is an enum value; `Type(value)` a tuple
   struct.
-- `bevy_ecs::hierarchy::Children [ .. ]` nests child nodes.
+- `bevy_ecs::hierarchy::Children [ .. ]` nests child nodes, and
+  `--` separates sibling entities, there and between several
+  roots.
+
+Scenes written for Bevy 0.19 separated siblings with `,`. They
+still open: the reader rewrites that separator before parsing,
+along with the type paths 0.20 moved, and the next save writes
+the 0.20 form.
 
 Component keys are full type paths (the same string the
 inspector shows under "type path"). Values are whatever Bevy's
