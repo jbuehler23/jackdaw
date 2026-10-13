@@ -56,7 +56,7 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
     let manifest =
         SdkManifest::generate_dev(&workspace_root(), &sdk).expect("generate the SDK manifest");
     assert!(
-        manifest.artifact("bevy_math", "0.19.0").is_some() || manifest.len() > 100,
+        manifest.artifact("bevy_math", "0.20.0").is_some() || manifest.len() > 100,
         "manifest looks empty or truncated ({} entries)",
         manifest.len()
     );

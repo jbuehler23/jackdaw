@@ -83,7 +83,7 @@ publish = false
 [workspace]
 
 [dependencies]
-bevy = {{ version = "0.19", default-features = false }}
+bevy = {{ version = "0.20", default-features = false }}
 jackdaw_extension = {{ path = "{}" }}
 "#,
             workspace_root()
