@@ -18,23 +18,24 @@ pub fn fetch_https(url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Fetch an `https://` or `file://` URL.
-pub fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    match file_url_path(url) {
-        Some(path) => std::fs::read(&path).map_err(|error| format!("{url}: {error}")),
-        None => fetch_https(url),
+/// Fetch an `https://` or `file://` URL of at most `limit` bytes.
+pub fn fetch_limited(url: &str, limit: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    open(url)?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("{url}: {error}"))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{url}: larger than the {limit} bytes allowed"));
     }
+    Ok(bytes)
 }
 
-/// Stream an `https://` or `file://` URL into `dest`, returning the byte
-/// count and the lowercase hex SHA-256 of what was written.
-pub fn download(url: &str, dest: &Path) -> Result<(u64, String), String> {
-    let mut reader: Box<dyn std::io::Read> = match file_url_path(url) {
-        Some(path) => {
-            Box::new(std::fs::File::open(&path).map_err(|error| format!("{url}: {error}"))?)
-        }
-        None => open_https(url)?,
-    };
+/// Stream an `https://` or `file://` URL of exactly `size` bytes into
+/// `dest`, returning the lowercase hex SHA-256 of what was written. A
+/// longer response is cut off rather than written out in full.
+pub fn download(url: &str, dest: &Path, size: u64) -> Result<String, String> {
+    let mut reader = open(url)?.take(size + 1);
     let mut file =
         std::fs::File::create(dest).map_err(|error| format!("{}: {error}", dest.display()))?;
     let mut hasher = sha2::Sha256::new();
@@ -52,9 +53,21 @@ pub fn download(url: &str, dest: &Path) -> Result<(u64, String), String> {
             .map_err(|error| format!("{}: {error}", dest.display()))?;
         total += read as u64;
     }
+    if total != size {
+        return Err(format!("{url}: expected {size} bytes, got more or fewer"));
+    }
     file.sync_all()
         .map_err(|error| format!("{}: {error}", dest.display()))?;
-    Ok((total, jackdaw_releases::hex(&hasher.finalize())))
+    Ok(jackdaw_releases::hex(&hasher.finalize()))
+}
+
+fn open(url: &str) -> Result<Box<dyn std::io::Read>, String> {
+    match file_url_path(url) {
+        Some(path) => Ok(Box::new(
+            std::fs::File::open(&path).map_err(|error| format!("{url}: {error}"))?,
+        )),
+        None => Ok(open_https(url)?),
+    }
 }
 
 fn open_https(url: &str) -> Result<Box<dyn std::io::Read + Send + Sync>, String> {
@@ -90,7 +103,7 @@ mod tests {
     fn plain_http_is_refused_before_connecting() {
         let error = fetch_https("http://127.0.0.1:1/bundle.jdext").unwrap_err();
         assert!(error.contains("use https"), "{error}");
-        let error = fetch("http://127.0.0.1:1/releases.json").unwrap_err();
+        let error = fetch_limited("http://127.0.0.1:1/releases.json", 10).unwrap_err();
         assert!(error.contains("use https"), "{error}");
     }
 
@@ -100,13 +113,16 @@ mod tests {
         let source = dir.path().join("bundle.bin");
         std::fs::write(&source, b"bundle bytes").unwrap();
         let url = format!("file://{}", source.display());
-        assert_eq!(fetch(&url).unwrap(), b"bundle bytes");
 
         let dest = dir.path().join("copy.bin");
-        let (size, sha256) = download(&url, &dest).unwrap();
-        assert_eq!(size, 12);
+        let sha256 = download(&url, &dest, 12).unwrap();
         assert_eq!(sha256, jackdaw_releases::sha256_hex(b"bundle bytes"));
-        assert_eq!(std::fs::read(dest).unwrap(), b"bundle bytes");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"bundle bytes");
+
+        assert!(download(&url, &dest, 11).is_err());
+        assert!(download(&url, &dest, 13).is_err());
+        assert!(fetch_limited(&url, 11).is_err());
+        assert_eq!(fetch_limited(&url, 12).unwrap(), b"bundle bytes");
     }
 
     #[test]

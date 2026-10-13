@@ -310,11 +310,45 @@ fn the_cached_index_serves_listings_when_the_mirror_is_unreachable() {
     assert!(stdout.contains("0.20.1"), "{stdout}");
     assert!(stdout.contains("nightly-2026-10-11"), "{stdout}");
 
-    std::fs::remove_file(fixture.mirror().join("releases.json")).unwrap();
+    let index = fixture.mirror().join("releases.json");
+    let signed = std::fs::read_to_string(&index).unwrap();
+    std::fs::write(&index, signed.replace("0.20.1", "0.20.9")).unwrap();
+    let output = fixture.jd(&["editor", "list", "--available"]);
+    assert!(ok(&output).contains("0.20.1"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("signature"));
+
+    std::fs::remove_file(&index).unwrap();
+    let output = fixture.jd(&["editor", "list", "--available"]);
+    assert!(ok(&output).contains("0.20.1"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cached release index"));
+}
+
+#[test]
+fn an_index_older_than_the_cached_one_is_not_used() {
+    let mut fixture = Fixture::new();
+    fixture.publish("0.20.1", "0.20.1");
+    fixture.index.serial = 5;
+    fixture.sign();
+    ok(&fixture.jd(&["editor", "list", "--available"]));
+
+    fixture.publish("0.20.2", "0.20.2");
+    fixture.index.serial = 4;
+    fixture.sign();
     let output = fixture.jd(&["editor", "list", "--available"]);
     let stdout = ok(&output);
-    assert!(stdout.contains("0.20.1"), "{stdout}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("offline"));
+    assert!(!stdout.contains("0.20.2"), "{stdout}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("older than the cached"));
+}
+
+#[test]
+fn an_index_override_is_announced() {
+    let mut fixture = Fixture::new();
+    fixture.publish("0.20.1", "0.20.1");
+    fixture.sign();
+    let output = fixture.jd(&["editor", "list", "--available"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains("JACKDAW_RELEASE_INDEX is set"), "{stderr}");
+    assert!(stderr.contains("JACKDAW_RELEASE_INDEX_KEY"), "{stderr}");
 }
 
 #[test]
@@ -428,6 +462,7 @@ fn modules_are_fetched_from_the_signed_modules_list() {
     std::fs::write(fixture.mirror().join("physics.jdext"), &module_bytes).unwrap();
     let modules = ModulesIndex {
         schema: 1,
+        kind: jackdaw_releases::index::MODULES_KIND.into(),
         editor: "0.20.2".into(),
         sdk_id: None,
         modules: vec![ModuleRelease {
@@ -473,7 +508,38 @@ fn modules_are_fetched_from_the_signed_modules_list() {
 }
 
 #[test]
-fn self_update_replaces_jd_with_the_newest_stable_one() {
+fn self_update_swaps_in_the_new_jd_only_after_it_reports_its_version() {
+    let mut fixture = Fixture::new();
+    fixture.publish("99.0.0", "99.0.0");
+    fixture.sign();
+    let bin = fixture.path("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let jd = bin.join("jd");
+    std::fs::write(&jd, b"old jd").unwrap();
+
+    let outcome = jd::self_update::update(&jd, "0.20.0", &fixture.index, TARGET).unwrap();
+    assert_eq!(
+        outcome,
+        jd::self_update::SelfUpdate::Updated {
+            from: "0.20.0".into(),
+            to: "99.0.0".into()
+        }
+    );
+    assert_eq!(
+        std::fs::read_to_string(&jd).unwrap(),
+        "#!/bin/sh\necho 'jd 99.0.0'\n"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(&bin).unwrap().flatten().collect();
+    assert_eq!(leftovers.len(), 1);
+
+    fixture.publish("99.0.1", "99.0.1").artifacts[0].size += 1;
+    let error = jd::self_update::update(&jd, "99.0.0", &fixture.index, TARGET).unwrap_err();
+    assert!(error.contains("bytes"), "{error}");
+    assert!(std::fs::read_to_string(&jd).unwrap().contains("99.0.0"));
+}
+
+#[test]
+fn self_update_refuses_a_prerelease_or_bundled_jd() {
     let mut fixture = Fixture::new();
     fixture.publish("99.0.0", "99.0.0");
     fixture.sign();
@@ -481,15 +547,15 @@ fn self_update_replaces_jd_with_the_newest_stable_one() {
     std::fs::create_dir_all(&bin).unwrap();
     let jd = bin.join("jd");
     std::fs::copy(env!("CARGO_BIN_EXE_jd"), &jd).unwrap();
+    if jackdaw_project_build::VERSION.contains('-') {
+        let stderr = failed(&fixture.jd_at(&jd, &["self", "update"]));
+        assert!(stderr.contains("prerelease"), "{stderr}");
+        assert!(stderr.contains("jd editor install stable"), "{stderr}");
+    }
 
-    let stdout = ok(&fixture.jd_at(&jd, &["self", "update"]));
-    assert!(stdout.contains("to 99.0.0"), "{stdout}");
-    assert_eq!(
-        std::fs::read_to_string(&jd).unwrap(),
-        "#!/bin/sh\necho 'jd 99.0.0'\n"
-    );
-    let leftovers: Vec<_> = std::fs::read_dir(&bin).unwrap().flatten().collect();
-    assert_eq!(leftovers.len(), 1);
+    std::fs::write(bin.join("jackdaw"), b"").unwrap();
+    let stderr = failed(&fixture.jd_at(&jd, &["self", "update"]));
+    assert!(stderr.contains("editor bundle"), "{stderr}");
 }
 
 #[test]

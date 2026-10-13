@@ -11,6 +11,9 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 /// environment.
 pub const OFFICIAL_INDEX_KEY: Option<&str> = None;
 
+/// Length of a `.sig` file.
+pub const SIGNATURE_LEN: usize = 64;
+
 /// DER prefix of a PKCS#8 v1 Ed25519 private key, up to the 32-byte seed.
 const PKCS8_V1_PREFIX: [u8; 16] = [
     0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
@@ -38,8 +41,7 @@ impl std::fmt::Display for SignatureError {
         match self {
             Self::NoTrustedKey => write!(
                 f,
-                "this build carries no release index key; set JACKDAW_RELEASE_INDEX_KEY to the \
-                 index's public key"
+                "no official release index is configured in this build yet"
             ),
             Self::BadKey => write!(f, "the release index key is not 64 hexadecimal digits"),
             Self::Mismatch => write!(f, "the signature does not match"),

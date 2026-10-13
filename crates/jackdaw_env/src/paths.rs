@@ -80,14 +80,15 @@ pub fn state_dir() -> Option<PathBuf> {
 /// Where installed editors, their registry and the cached release index
 /// live, shared by every installed editor and `jd`.
 ///
-/// The per-user data directory, or `launcher` inside the config directory
-/// when [`CONFIG_DIR_VAR`] overrides it, so a run pointed at a scratch
-/// config never installs into or reads the real editor list.
+/// The [`local_data_dir`], so editors are not synced with a roaming
+/// Windows profile, or `launcher` inside the config directory when
+/// [`CONFIG_DIR_VAR`] overrides it, so a run pointed at a scratch config
+/// never installs into or reads the real editor list.
 pub fn launcher_dir() -> Option<PathBuf> {
     if let Some(overridden) = std::env::var_os(CONFIG_DIR_VAR).filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(overridden).join("launcher"));
     }
-    data_dir()
+    local_data_dir()
 }
 
 fn data_dir_fallback() -> Option<PathBuf> {

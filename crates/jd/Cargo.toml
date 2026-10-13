@@ -35,6 +35,7 @@ getrandom = "0.3"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 serde_json.workspace = true
 sha2 = "0.10"
+semver = "1"
 # Editor bundles: tar.zst on Linux, zip on macOS and Windows.
 tar = { version = "0.4", default-features = false }
 ruzstd = "0.8"

@@ -198,15 +198,21 @@ fn update_hints(installs: &Installs, index: &ReleaseIndex) -> Vec<String> {
     hints
 }
 
-fn report_origin(origin: &IndexOrigin) {
-    if let IndexOrigin::Cached(reason) = origin {
-        eprintln!("offline, using the cached release index ({reason})");
+/// Fetch the index, reporting any environment override and a fall back to
+/// the cached copy.
+fn load_index(layout: &Layout) -> Result<ReleaseIndex, String> {
+    for warning in editors::index_overrides() {
+        eprintln!("warning: {warning}");
     }
+    let (index, origin) = editors::load_index(layout)?;
+    if let IndexOrigin::Cached(reason) = origin {
+        eprintln!("warning: using the cached release index ({reason})");
+    }
+    Ok(index)
 }
 
 fn list_available(layout: &Layout) -> Result<(), String> {
-    let (index, origin) = editors::load_index(layout)?;
-    report_origin(&origin);
+    let index = load_index(layout)?;
     let installs = layout.load_installs()?;
     let installed = |version: &str| {
         if installs.get(version).is_some() {
@@ -266,8 +272,7 @@ fn install(layout: &Layout, query: &str, modules: Option<&str>) -> Result<(), St
             .collect(),
         None => Vec::new(),
     };
-    let (index, origin) = editors::load_index(layout)?;
-    report_origin(&origin);
+    let index = load_index(layout)?;
     let target = jackdaw_package::host_target();
     let release = index.resolve(query)?;
     if release.channel == Channel::BleedingEdge {
@@ -326,9 +331,7 @@ fn remove(layout: &Layout, version: &str, force: bool) -> Result<(), String> {
 }
 
 fn set_default(layout: &Layout, version: &str) -> Result<(), String> {
-    let mut installs = layout.load_installs()?;
-    installs.set_default(version)?;
-    layout.save_installs(&installs)?;
+    editors::set_default(layout, version)?;
     println!("projects without a pinned editor now open with jackdaw {version}");
     Ok(())
 }
@@ -371,23 +374,33 @@ fn self_update_inner() -> Result<(), String> {
     let layout = layout()?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let cargo_bin = self_update::cargo_bin_dir();
-    match self_update::installed_by(&executable, &layout, cargo_bin.as_deref()) {
+    let current = jackdaw_project_build::VERSION;
+    let refusal = self_update::refusal(&executable, current, &layout, cargo_bin.as_deref());
+    let reason = match refusal {
+        None => None,
         Some(SelfUpdate::CargoInstalled) => {
             println!("jd was installed with cargo; update it with `cargo install jd --locked`");
             return Ok(());
         }
         Some(SelfUpdate::PartOfInstall(version)) => {
-            println!(
-                "this jd belongs to the jackdaw {version} install; run `jd editor install \
-                 stable` for the newest editor and its jd"
-            );
-            return Ok(());
+            Some(format!("this jd belongs to the jackdaw {version} install"))
         }
-        _ => {}
+        Some(SelfUpdate::InBundle(dir)) => Some(format!(
+            "this jd is part of the editor bundle in {}, and is updated with it; rerun the \
+             install script",
+            dir.display()
+        )),
+        Some(SelfUpdate::DevelopmentBuild) => {
+            Some("this jd is a development build; rebuild it from the source checkout".into())
+        }
+        Some(_) => Some(format!("jd {current} is a prerelease")),
+    };
+    if let Some(reason) = reason {
+        return Err(format!(
+            "{reason}. For the newest editor and its jd, run `jd editor install stable`"
+        ));
     }
-    let (index, origin) = editors::load_index(&layout)?;
-    report_origin(&origin);
-    let current = jackdaw_project_build::VERSION;
+    let index = load_index(&layout)?;
     match self_update::update(&executable, current, &index, jackdaw_package::host_target())? {
         SelfUpdate::Updated { from, to } => println!("updated jd from {from} to {to}"),
         _ => println!("jd {current} is up to date"),
@@ -415,7 +428,7 @@ fn open_inner(args: &[String]) -> Result<(), String> {
         return Err(format!("{} is not a directory", root.display()));
     }
     let layout = layout()?;
-    let mut installs = layout.load_installs()?;
+    let installs = layout.load_installs()?;
     let pin = editors::project_pin(&root)?;
     let beside = jackdaw_scaffold::editor_executable();
     let choice = editors::choose_editor(&installs, &pin, &beside, jackdaw_project_build::VERSION)?;
@@ -432,8 +445,7 @@ fn open_inner(args: &[String]) -> Result<(), String> {
                 );
             }
             if pin.version.is_some() || pin.build.is_some() {
-                installs.record_project(&root, &version);
-                layout.save_installs(&installs)?;
+                editors::record_project(&layout, &root, &version)?;
             }
             executable
         }

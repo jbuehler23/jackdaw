@@ -31,52 +31,73 @@ pub enum IndexOrigin {
     Cached(String),
 }
 
+/// The largest release index or modules list `jd` reads.
+const INDEX_LIMIT: u64 = 8 << 20;
+
 /// The release index URL: [`INDEX_URL_VAR`] when set, else the official one.
 pub fn index_url() -> String {
-    std::env::var(INDEX_URL_VAR)
-        .ok()
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| OFFICIAL_INDEX_URL.to_string())
+    env_override(INDEX_URL_VAR).unwrap_or_else(|| OFFICIAL_INDEX_URL.to_string())
+}
+
+fn env_override(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+/// Warnings for the environment variables that replace the official index
+/// or its key, so an override is never in effect silently.
+pub fn index_overrides() -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(url) = env_override(INDEX_URL_VAR) {
+        warnings.push(format!(
+            "using the release index at {url} ({INDEX_URL_VAR} is set)"
+        ));
+    }
+    if env_override(INDEX_KEY_VAR).is_some() {
+        warnings.push(format!(
+            "verifying the release index with the key in {INDEX_KEY_VAR}"
+        ));
+    }
+    warnings
 }
 
 fn trusted_key() -> Result<ed25519_dalek::VerifyingKey, String> {
-    let override_key = std::env::var(INDEX_KEY_VAR)
-        .ok()
-        .filter(|key| !key.is_empty());
-    signing::trusted_key(override_key.as_deref()).map_err(|error| error.to_string())
+    signing::trusted_key(env_override(INDEX_KEY_VAR).as_deref()).map_err(|error| error.to_string())
 }
 
 fn signature_url(url: &str) -> String {
     format!("{url}.sig")
 }
 
-fn signature_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(".sig");
-    PathBuf::from(name)
-}
-
-/// Fetch and verify the release index, caching it; when the fetch fails,
-/// fall back to the cached copy, verified again.
+/// Fetch and verify the release index, caching it. The verified cache is
+/// used instead when the fetch fails, when the signature does not match,
+/// or when the served index is older than the cached one.
 pub fn load_index(layout: &Layout) -> Result<(ReleaseIndex, IndexOrigin), String> {
     let key = trusted_key()?;
     let url = index_url();
-    let fetched =
-        fetch::fetch(&url).and_then(|bytes| Ok((bytes, fetch::fetch(&signature_url(&url))?)));
-    match fetched {
-        Ok((bytes, signature)) => {
-            let index = ReleaseIndex::from_signed(&bytes, &signature, &key)
-                .map_err(|error| format!("{url}: {error}"))?;
-            let cache = layout.cached_index();
-            jackdaw_releases::write_atomically(&signature_path(&cache), &signature)?;
-            jackdaw_releases::write_atomically(&cache, &bytes)?;
-            Ok((index, IndexOrigin::Fetched))
-        }
-        Err(fetch_error) => match cached_index_with(layout, &key) {
-            Some(Ok(index)) => Ok((index, IndexOrigin::Cached(fetch_error))),
-            Some(Err(error)) => Err(format!("{fetch_error}; the cached index: {error}")),
-            None => Err(fetch_error),
+    let cached = cached_index_with(layout, &key);
+    let fetched = fetch::fetch_limited(&url, INDEX_LIMIT).and_then(|bytes| {
+        let signature = fetch::fetch_limited(&signature_url(&url), 1024)?;
+        let index = ReleaseIndex::from_signed(&bytes, &signature, &key)
+            .map_err(|error| format!("{url}: {error}"))?;
+        Ok((bytes, signature, index))
+    });
+    let reason = match fetched {
+        Ok((bytes, signature, index)) => match &cached {
+            Some(Ok(known)) if index.serial < known.serial => format!(
+                "{url} serves index serial {}, older than the cached serial {}",
+                index.serial, known.serial
+            ),
+            _ => {
+                layout.write_cached_index(&bytes, &signature)?;
+                return Ok((index, IndexOrigin::Fetched));
+            }
         },
+        Err(error) => error,
+    };
+    match cached {
+        Some(Ok(index)) => Ok((index, IndexOrigin::Cached(reason))),
+        Some(Err(error)) => Err(format!("{reason}; the cached index: {error}")),
+        None => Err(reason),
     }
 }
 
@@ -90,9 +111,7 @@ fn cached_index_with(
     layout: &Layout,
     key: &ed25519_dalek::VerifyingKey,
 ) -> Option<Result<ReleaseIndex, IndexError>> {
-    let cache = layout.cached_index();
-    let bytes = std::fs::read(&cache).ok()?;
-    let signature = std::fs::read(signature_path(&cache)).ok()?;
+    let (bytes, signature) = layout.read_cached_index()?;
     Some(ReleaseIndex::from_signed(&bytes, &signature, key))
 }
 
@@ -106,6 +125,10 @@ pub enum InstallOutcome {
 
 /// Install the release `query` selects (a version, a line such as `0.20`,
 /// `stable` or `bleeding-edge`) with `modules`, for `target`.
+///
+/// The download and checks run without the registry lock; only the final
+/// rename and registration hold it, and a version another `jd` registered
+/// in the meantime is kept rather than replaced.
 pub fn install(
     layout: &Layout,
     index: &ReleaseIndex,
@@ -115,34 +138,8 @@ pub fn install(
 ) -> Result<InstallOutcome, String> {
     let release = index.resolve(query)?;
     file_name_safe(&release.version)?;
-    let mut installs = layout.load_installs()?;
-    if let Some(existing) = installs.get(&release.version).cloned() {
-        let missing: Vec<String> = modules
-            .iter()
-            .filter(|module| !existing.modules.contains(module))
-            .cloned()
-            .collect();
-        if missing.is_empty() {
-            return Ok(InstallOutcome::AlreadyInstalled(existing));
-        }
-        let staging = Staging::new(&layout.editors(), &release.version)?;
-        let fetched = fetch_modules(release, &missing, target, staging.path())?;
-        let modules_dir = existing.path.join("modules");
-        for file in fetched {
-            std::fs::create_dir_all(&modules_dir)
-                .map_err(|error| format!("{}: {error}", modules_dir.display()))?;
-            let dest = modules_dir.join(file.file_name().unwrap_or_default());
-            std::fs::rename(&file, &dest)
-                .map_err(|error| format!("{}: {error}", dest.display()))?;
-        }
-        let install = installs
-            .get_mut(&release.version)
-            .ok_or("the registry changed during the install")?;
-        install.modules.extend(missing);
-        install.modules.sort();
-        let updated = install.clone();
-        layout.save_installs(&installs)?;
-        return Ok(InstallOutcome::AlreadyInstalled(updated));
+    if let Some(existing) = layout.load_installs()?.get(&release.version).cloned() {
+        return add_modules(layout, release, existing, modules, target);
     }
 
     let artifact = release.artifact_for(target).ok_or_else(|| {
@@ -162,17 +159,11 @@ pub fn install(
 
     let staging = Staging::new(&layout.editors(), &release.version)?;
     let download = staging.path().join("bundle");
-    let (size, sha256) = fetch::download(&artifact.url, &download)?;
+    let sha256 = fetch::download(&artifact.url, &download, artifact.size)?;
     if !sha256.eq_ignore_ascii_case(&artifact.sha256) {
         return Err(format!(
             "{}: checksum mismatch (expected {}, got {sha256}); nothing was installed",
             artifact.url, artifact.sha256
-        ));
-    }
-    if size != artifact.size {
-        return Err(format!(
-            "{}: expected {} bytes, got {size}; nothing was installed",
-            artifact.url, artifact.size
         ));
     }
     let unpacked = staging.path().join("unpacked");
@@ -188,17 +179,14 @@ pub fn install(
         ));
     }
     let fetched = fetch_modules(release, modules, target, staging.path())?;
-    if !fetched.is_empty() {
-        let modules_dir = root.join("modules");
-        std::fs::create_dir_all(&modules_dir)
-            .map_err(|error| format!("{}: {error}", modules_dir.display()))?;
-        for file in fetched {
-            let dest = modules_dir.join(file.file_name().unwrap_or_default());
-            std::fs::rename(&file, &dest)
-                .map_err(|error| format!("{}: {error}", dest.display()))?;
-        }
-    }
+    move_into(&fetched, &root.join("modules"))?;
 
+    let _lock = layout.lock()?;
+    let mut installs = layout.load_installs()?;
+    if let Some(existing) = installs.get(&release.version) {
+        return Ok(InstallOutcome::AlreadyInstalled(existing.clone()));
+    }
+    sweep_stale(&layout.editors());
     let dest = layout.editor(&release.version);
     if dest.exists() {
         remove_tree(&dest)?;
@@ -210,6 +198,74 @@ pub fn install(
     installs.add(install.clone());
     layout.save_installs(&installs)?;
     Ok(InstallOutcome::Installed(install))
+}
+
+/// Add the modules in `modules` that `existing` lacks.
+fn add_modules(
+    layout: &Layout,
+    release: &Release,
+    existing: Install,
+    modules: &[String],
+    target: &str,
+) -> Result<InstallOutcome, String> {
+    let missing: Vec<String> = modules
+        .iter()
+        .filter(|module| !existing.modules.contains(module))
+        .cloned()
+        .collect();
+    if missing.is_empty() {
+        return Ok(InstallOutcome::AlreadyInstalled(existing));
+    }
+    let staging = Staging::new(&layout.editors(), &release.version)?;
+    let fetched = fetch_modules(release, &missing, target, staging.path())?;
+    let _lock = layout.lock()?;
+    let mut installs = layout.load_installs()?;
+    let install = installs
+        .get_mut(&release.version)
+        .ok_or_else(|| format!("{} was removed during the install", release.version))?;
+    move_into(&fetched, &install.path.join("modules"))?;
+    for module in missing {
+        if !install.modules.contains(&module) {
+            install.modules.push(module);
+        }
+    }
+    install.modules.sort();
+    let updated = install.clone();
+    layout.save_installs(&installs)?;
+    Ok(InstallOutcome::AlreadyInstalled(updated))
+}
+
+fn move_into(files: &[PathBuf], dir: &Path) -> Result<(), String> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    for file in files {
+        let dest = dir.join(file.file_name().unwrap_or_default());
+        std::fs::rename(file, &dest).map_err(|error| format!("{}: {error}", dest.display()))?;
+    }
+    Ok(())
+}
+
+/// Remove staging and half-removed directories a killed `jd` left behind
+/// more than a day ago.
+fn sweep_stale(editors: &Path) {
+    let Ok(entries) = std::fs::read_dir(editors) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let leftover = name.starts_with(".staging-") || name.contains(".removing-");
+        let old = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(86_400));
+        if leftover && old {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Download the `.jdext` of each module in `names` from the release's
@@ -227,10 +283,16 @@ fn fetch_modules(
     if names.is_empty() {
         return Ok(Vec::new());
     }
-    let bytes = fetch::fetch(url)?;
-    let signature = fetch::fetch(&signature_url(url))?;
+    let bytes = fetch::fetch_limited(url, INDEX_LIMIT)?;
+    let signature = fetch::fetch_limited(&signature_url(url), 1024)?;
     let modules = ModulesIndex::from_signed(&bytes, &signature, &trusted_key()?)
         .map_err(|error| format!("{url}: {error}"))?;
+    if modules.editor != release.version {
+        return Err(format!(
+            "{url} lists modules for {}, not {}",
+            modules.editor, release.version
+        ));
+    }
     let mut files = Vec::new();
     for name in names {
         let module = modules.module(name).ok_or_else(|| {
@@ -253,7 +315,7 @@ fn fetch_modules(
             .ok_or_else(|| format!("{} has no build for {target}", module.id))?;
         file_name_safe(&module.id)?;
         let dest = dir.join(format!("{}.jdext", module.id));
-        let (_, sha256) = fetch::download(&artifact.url, &dest)?;
+        let sha256 = fetch::download(&artifact.url, &dest, artifact.size)?;
         if !sha256.eq_ignore_ascii_case(&artifact.sha256) {
             return Err(format!(
                 "{}: checksum mismatch; nothing was installed",
@@ -318,8 +380,21 @@ pub struct Reported {
 }
 
 /// Run `<editor> --version` and read `jackdaw <version> (targets bevy
-/// <minor>)` from it. A binary that does not exit in time is killed.
+/// <minor>)` from it.
 pub fn query_version(executable: &Path) -> Result<Reported, String> {
+    let output = version_output(executable)?;
+    parse_version_line(&output).ok_or_else(|| {
+        format!(
+            "{} --version printed `{}`, not a jackdaw version",
+            executable.display(),
+            output.trim()
+        )
+    })
+}
+
+/// What `<executable> --version` prints. A binary that does not exit in
+/// time is killed.
+pub fn version_output(executable: &Path) -> Result<String, String> {
     let mut child = std::process::Command::new(executable)
         .arg("--version")
         .stdin(std::process::Stdio::null())
@@ -337,10 +412,7 @@ pub fn query_version(executable: &Path) -> Result<Reported, String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!(
-                    "{} --version did not finish; is it a jackdaw editor?",
-                    executable.display()
-                ));
+                return Err(format!("{} --version did not finish", executable.display()));
             }
             Err(error) => return Err(format!("{}: {error}", executable.display())),
         }
@@ -355,13 +427,7 @@ pub fn query_version(executable: &Path) -> Result<Reported, String> {
             executable.display()
         ));
     }
-    parse_version_line(&output).ok_or_else(|| {
-        format!(
-            "{} --version printed `{}`, not a jackdaw version",
-            executable.display(),
-            output.trim()
-        )
-    })
+    Ok(output)
 }
 
 fn parse_version_line(output: &str) -> Option<Reported> {
@@ -399,6 +465,8 @@ pub fn locate(layout: &Layout, path: &Path) -> Result<Install, String> {
         ));
     }
     let reported = query_version(&executable)?;
+    file_name_safe(&reported.version)?;
+    let _lock = layout.lock()?;
     let mut installs = layout.load_installs()?;
     if let Some(existing) = installs.get(&reported.version)
         && existing.path != dir
@@ -440,6 +508,7 @@ pub enum RemoveError {
 /// Remove an install: delete a managed one, unregister a located one.
 /// Refuses while a project still opens with it, unless `force`.
 pub fn remove(layout: &Layout, version: &str, force: bool) -> Result<Install, RemoveError> {
+    let _lock = layout.lock().map_err(RemoveError::Failed)?;
     let mut installs = layout.load_installs().map_err(RemoveError::Failed)?;
     if installs.get(version).is_none() {
         return Err(RemoveError::NotInstalled);
@@ -474,6 +543,7 @@ fn delete_managed(layout: &Layout, install: &Install) -> Result<(), String> {
 /// Remove the nightlies no longer needed: all but the newest, the default,
 /// known-good builds and those a project opens with.
 pub fn clean(layout: &Layout) -> Result<Vec<Install>, String> {
+    let _lock = layout.lock()?;
     let mut installs = layout.load_installs()?;
     let removable: Vec<String> = installs
         .removable_nightlies()
@@ -489,6 +559,23 @@ pub fn clean(layout: &Layout) -> Result<Vec<Install>, String> {
         }
     }
     Ok(removed)
+}
+
+/// Make `version` the default editor.
+pub fn set_default(layout: &Layout, version: &str) -> Result<(), String> {
+    let _lock = layout.lock()?;
+    let mut installs = layout.load_installs()?;
+    installs.set_default(version)?;
+    layout.save_installs(&installs)
+}
+
+/// Remember that the project at `root` opens with `version`, so `remove`
+/// and `clean` keep that editor.
+pub fn record_project(layout: &Layout, root: &Path, version: &str) -> Result<(), String> {
+    let _lock = layout.lock()?;
+    let mut installs = layout.load_installs()?;
+    installs.record_project(root, version);
+    layout.save_installs(&installs)
 }
 
 /// The editor a project opens with.
@@ -519,9 +606,11 @@ pub fn project_pin(root: &Path) -> Result<EditorPin, String> {
 
 /// Pick the editor for a project pinned with `pin`.
 ///
-/// A matching install wins. Without one, the editor beside `jd` is used
-/// when it belongs to the pinned line, as it did before installs were
-/// managed; otherwise the error names the `jd editor install` to run.
+/// A matching install wins, except that the editor beside `jd` is
+/// preferred when it is exactly the pinned version and the install is
+/// older. Without an install, the editor beside `jd` is used when it
+/// belongs to the pinned line, as it did before installs were managed;
+/// otherwise the error names the `jd editor install` to run.
 pub fn choose_editor(
     installs: &Installs,
     pin: &EditorPin,
@@ -534,6 +623,14 @@ pub fn choose_editor(
         older_than,
     };
     match installs.resolve_pin(pin) {
+        PinResolution::Installed { install, .. }
+            if stable_pin(pin)
+                && pin.version.as_deref() == Some(beside_version)
+                && version::compare(&install.version, beside_version).is_lt()
+                && beside.is_file() =>
+        {
+            Ok(EditorChoice::Beside(beside.to_path_buf()))
+        }
         PinResolution::Installed {
             install,
             older_than_pin,
@@ -546,7 +643,7 @@ pub fn choose_editor(
             |install| installed(install, None),
         )),
         PinResolution::Missing { install_query } => {
-            let stable = pin.channel.is_none_or(|channel| channel == Channel::Stable);
+            let stable = stable_pin(pin);
             let same_line = pin.version.as_deref().and_then(version::line_of)
                 == version::line_of(beside_version);
             if stable && same_line && beside.is_file() {
@@ -562,6 +659,10 @@ pub fn choose_editor(
             ))
         }
     }
+}
+
+fn stable_pin(pin: &EditorPin) -> bool {
+    pin.channel.is_none_or(|channel| channel == Channel::Stable)
 }
 
 #[cfg(test)]
@@ -640,6 +741,24 @@ mod tests {
         );
         let error = choose_editor(&installs, &pin("0.21.0"), &beside, "0.20.0").unwrap_err();
         assert!(error.contains("jd editor install 0.21"), "{error}");
+    }
+
+    #[test]
+    fn the_exact_editor_beside_jd_wins_over_an_older_install_of_its_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let beside = dir.path().join(EDITOR_EXECUTABLE);
+        std::fs::write(&beside, b"").unwrap();
+        let mut installs = Installs::default();
+        installs.add(stable("0.20.0", Path::new("/editors")));
+        assert_eq!(
+            choose_editor(&installs, &pin("0.20.1"), &beside, "0.20.1"),
+            Ok(EditorChoice::Beside(beside.clone()))
+        );
+        installs.add(stable("0.20.2", Path::new("/editors")));
+        assert!(matches!(
+            choose_editor(&installs, &pin("0.20.1"), &beside, "0.20.1"),
+            Ok(EditorChoice::Installed { version, .. }) if version == "0.20.2"
+        ));
     }
 
     #[test]

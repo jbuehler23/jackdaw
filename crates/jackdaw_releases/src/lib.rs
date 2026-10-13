@@ -7,7 +7,8 @@
 //! ```text
 //! <launcher>/installs.json           registry: installs, default, projects
 //! <launcher>/editors/<version>/      one directory per installed editor
-//! <launcher>/cache/releases.json     last verified index, for offline use
+//! <launcher>/installs.lock           held while the registry changes
+//! <launcher>/cache/releases.signed   last verified index, for offline use
 //! ```
 //!
 //! Nothing here touches the network, so the editor can read the same state
@@ -71,9 +72,46 @@ impl Layout {
         self.editors().join(version)
     }
 
-    /// The last verified copy of the release index.
+    /// The last verified copy of the release index: its 64 signature
+    /// bytes followed by the index, so the pair is replaced in one write.
     pub fn cached_index(&self) -> PathBuf {
-        self.root.join("cache").join("releases.json")
+        self.root.join("cache").join("releases.signed")
+    }
+
+    /// Read the cached index as `(index bytes, signature)`.
+    pub fn read_cached_index(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        let mut bytes = std::fs::read(self.cached_index()).ok()?;
+        if bytes.len() < signing::SIGNATURE_LEN {
+            return None;
+        }
+        let index = bytes.split_off(signing::SIGNATURE_LEN);
+        Some((index, bytes))
+    }
+
+    /// Replace the cached index with `index` and its `signature`.
+    pub fn write_cached_index(&self, index: &[u8], signature: &[u8]) -> Result<(), String> {
+        if signature.len() != signing::SIGNATURE_LEN {
+            return Err("a release index signature is 64 bytes".into());
+        }
+        let mut bytes = signature.to_vec();
+        bytes.extend_from_slice(index);
+        write_atomically(&self.cached_index(), &bytes)
+    }
+
+    /// Take the registry lock, waiting for another `jd` that holds it.
+    /// Released when the guard is dropped.
+    pub fn lock(&self) -> Result<RegistryLock, String> {
+        let path = self.root.join("installs.lock");
+        let describe = |error: std::io::Error| format!("{}: {error}", path.display());
+        std::fs::create_dir_all(&self.root).map_err(describe)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(describe)?;
+        file.lock().map_err(describe)?;
+        Ok(RegistryLock { _file: file })
     }
 
     /// The registry, or an empty one when none was written yet.
@@ -85,6 +123,12 @@ impl Layout {
     pub fn save_installs(&self, installs: &Installs) -> Result<(), String> {
         installs.save(&self.registry())
     }
+}
+
+/// Holds the registry lock from [`Layout::lock`].
+#[derive(Debug)]
+pub struct RegistryLock {
+    _file: std::fs::File,
 }
 
 /// Lowercase hex of `bytes`.
@@ -117,4 +161,30 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&temporary);
         describe(error)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cached_index_keeps_its_signature_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        assert!(layout.read_cached_index().is_none());
+        layout.write_cached_index(b"{}", &[7; 64]).unwrap();
+        assert_eq!(
+            layout.read_cached_index(),
+            Some((b"{}".to_vec(), vec![7; 64]))
+        );
+        assert!(layout.write_cached_index(b"{}", &[7; 10]).is_err());
+    }
+
+    #[test]
+    fn the_registry_lock_can_be_taken_again_once_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path().join("launcher"));
+        drop(layout.lock().unwrap());
+        let _held = layout.lock().unwrap();
+    }
 }

@@ -10,6 +10,12 @@ use crate::version;
 /// The index layout this build reads and writes.
 pub const SCHEMA: u32 = 1;
 
+/// The `kind` of a `releases.json`.
+pub const RELEASES_KIND: &str = "releases";
+
+/// The `kind` of a `modules.json`.
+pub const MODULES_KIND: &str = "modules";
+
 /// How long Bleeding Edge builds stay in the index when it names no period.
 pub const DEFAULT_RETAIN_DAYS: u32 = 30;
 
@@ -23,6 +29,11 @@ pub enum IndexError {
     Malformed(String),
     /// Written for a newer layout than [`SCHEMA`].
     NewerSchema(u32),
+    /// A signed file of another kind, such as a modules list served as the
+    /// release index.
+    WrongKind {
+        expected: &'static str,
+    },
 }
 
 impl std::fmt::Display for IndexError {
@@ -34,6 +45,7 @@ impl std::fmt::Display for IndexError {
                 f,
                 "release index uses schema {schema}, newer than this build reads; update jd"
             ),
+            Self::WrongKind { expected } => write!(f, "expected a `{expected}` file"),
         }
     }
 }
@@ -206,6 +218,12 @@ impl Release {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ReleaseIndex {
     pub schema: u32,
+    /// Always [`RELEASES_KIND`].
+    pub kind: String,
+    /// Raised by one on every publish, so a client can refuse an index
+    /// older than one it already saw.
+    #[serde(default)]
+    pub serial: u64,
     /// When the index was written, RFC 3339.
     #[serde(default)]
     pub generated: Option<String>,
@@ -219,6 +237,8 @@ impl Default for ReleaseIndex {
     fn default() -> Self {
         Self {
             schema: SCHEMA,
+            kind: RELEASES_KIND.to_string(),
+            serial: 0,
             generated: None,
             channels: Channels::default(),
             releases: Vec::new(),
@@ -240,7 +260,7 @@ impl ReleaseIndex {
     /// Parse an index without checking a signature, for one this process
     /// is about to sign.
     pub fn parse(bytes: &[u8]) -> Result<Self, IndexError> {
-        parse_schema_checked(bytes)
+        parse_schema_checked(bytes, RELEASES_KIND)
     }
 
     /// The release a version, line or channel name selects.
@@ -391,6 +411,8 @@ pub struct ModuleRelease {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ModulesIndex {
     pub schema: u32,
+    /// Always [`MODULES_KIND`].
+    pub kind: String,
     /// The editor version the modules were built with.
     pub editor: String,
     #[serde(default)]
@@ -407,7 +429,7 @@ impl ModulesIndex {
         key: &VerifyingKey,
     ) -> Result<Self, IndexError> {
         verify_detached(key, bytes, signature).map_err(IndexError::Signature)?;
-        parse_schema_checked(bytes)
+        parse_schema_checked(bytes, MODULES_KIND)
     }
 
     /// The module a short name such as `physics` or a full id names.
@@ -426,15 +448,23 @@ pub fn module_id(name: &str) -> String {
     }
 }
 
-fn parse_schema_checked<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, IndexError> {
+fn parse_schema_checked<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    kind: &'static str,
+) -> Result<T, IndexError> {
     #[derive(Deserialize)]
     struct Header {
         schema: u32,
+        #[serde(default)]
+        kind: Option<String>,
     }
     let header: Header =
         serde_json::from_slice(bytes).map_err(|error| IndexError::Malformed(error.to_string()))?;
     if header.schema > SCHEMA {
         return Err(IndexError::NewerSchema(header.schema));
+    }
+    if header.kind.as_deref() != Some(kind) {
+        return Err(IndexError::WrongKind { expected: kind });
     }
     serde_json::from_slice(bytes).map_err(|error| IndexError::Malformed(error.to_string()))
 }
@@ -493,6 +523,8 @@ mod tests {
     fn the_documented_index_example_parses() {
         let text = r#"{
           "schema": 1,
+          "kind": "releases",
+          "serial": 12,
           "generated": "2026-10-11T06:00:00Z",
           "channels": {
             "stable": { "lines": [
@@ -533,6 +565,23 @@ mod tests {
         assert_eq!(
             ReleaseIndex::parse(br#"{"schema": 2, "releases": "changed"}"#),
             Err(IndexError::NewerSchema(2))
+        );
+    }
+
+    #[test]
+    fn a_modules_list_is_not_accepted_as_a_release_index() {
+        let modules = br#"{"schema": 1, "kind": "modules", "editor": "0.20.1"}"#;
+        assert_eq!(
+            ReleaseIndex::parse(modules),
+            Err(IndexError::WrongKind {
+                expected: RELEASES_KIND
+            })
+        );
+        assert_eq!(
+            ReleaseIndex::parse(br#"{"schema": 1}"#),
+            Err(IndexError::WrongKind {
+                expected: RELEASES_KIND
+            })
         );
     }
 
@@ -649,7 +698,7 @@ mod tests {
     #[test]
     fn modules_are_found_by_short_name_or_id() {
         let modules: ModulesIndex = serde_json::from_str(
-            r#"{"schema":1,"editor":"0.20.1","modules":[
+            r#"{"schema":1,"kind":"modules","editor":"0.20.1","modules":[
                 {"id":"jackdaw.physics","label":"Physics","version":"0.20.1","artifacts":[]}
             ]}"#,
         )

@@ -66,6 +66,26 @@ pub fn today() -> i64 {
     i64::try_from(seconds / 86_400).unwrap_or_default()
 }
 
+/// The current UTC time in RFC 3339, to the second.
+pub fn now_rfc3339() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    format_rfc3339(i64::try_from(seconds).unwrap_or_default())
+}
+
+/// Seconds since 1970-01-01 UTC as RFC 3339, e.g. `2026-10-11T06:00:00Z`.
+pub fn format_rfc3339(seconds: i64) -> String {
+    let time = seconds.rem_euclid(86_400);
+    format!(
+        "{}T{:02}:{:02}:{:02}Z",
+        format_date(seconds.div_euclid(86_400)),
+        time / 3600,
+        time / 60 % 60,
+        time % 60
+    )
+}
+
 /// A day number as `YYYY-MM-DD`.
 pub fn format_date(days: i64) -> String {
     let (year, month, day) = civil_from_days(days);
@@ -139,5 +159,6 @@ mod tests {
         }
         assert_eq!(nightly_day("nightly-1970-01-31"), Some(30));
         assert_eq!(parse_date("2026-13-01"), None);
+        assert_eq!(format_rfc3339(86_400 + 3661), "1970-01-02T01:01:01Z");
     }
 }

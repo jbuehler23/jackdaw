@@ -4,15 +4,15 @@
 //! jackdaw-release-index add --index <releases.json> --tag <tag> --dist <dir>
 //!     --base-url <url> --bevy <minor> [--rustc <version>] [--notes-url <url>]
 //!     [--bevy-rev <sha>] [--jackdaw-rev <sha>] [--known-good]
-//! jackdaw-release-index sign <file>
 //! jackdaw-release-index public-key
 //! ```
 //!
 //! `add` records the bundles in `--dist` (named `jackdaw-<target>.<ext>`)
-//! as a release and rewrites the index in place. `sign` writes `<file>.sig`
-//! with the PKCS#8 key held base64-encoded in `JACKDAW_INDEX_SIGNING_KEY`,
-//! and `public-key` prints that key's public half for
-//! `OFFICIAL_INDEX_KEY`.
+//! as a release, rewrites the index in place and writes `<index>.sig`.
+//! An existing index is only extended after its own `.sig` verifies, so a
+//! damaged or substituted download is never re-signed. Signing uses the
+//! PKCS#8 key held base64-encoded in `JACKDAW_INDEX_SIGNING_KEY`, and
+//! `public-key` prints that key's public half for `OFFICIAL_INDEX_KEY`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -30,12 +30,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("add") => add(&args[1..]),
-        Some("sign") => match args.get(1) {
-            Some(file) => sign(Path::new(file)),
-            None => Err("usage: jackdaw-release-index sign <file>".into()),
-        },
         Some("public-key") => public_key(),
-        _ => Err("usage: jackdaw-release-index <add|sign|public-key>".into()),
+        _ => Err("usage: jackdaw-release-index <add|public-key>".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -70,9 +66,28 @@ fn add(args: &[String]) -> Result<(), String> {
         Channel::Stable
     };
 
+    let key = signing_key()?;
+    let signature_path = signature_path(&index_path);
     let mut index = match std::fs::read(&index_path) {
-        Ok(bytes) => ReleaseIndex::parse(&bytes).map_err(|error| error.to_string())?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ReleaseIndex::default(),
+        Ok(bytes) => {
+            let signature = std::fs::read(&signature_path).map_err(|error| {
+                format!(
+                    "{}: {error}; refusing to extend an index whose signature is missing",
+                    signature_path.display()
+                )
+            })?;
+            ReleaseIndex::from_signed(&bytes, &signature, &key.verifying_key())
+                .map_err(|error| format!("{}: {error}", index_path.display()))?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if signature_path.exists() {
+                return Err(format!(
+                    "{} exists without its index",
+                    signature_path.display()
+                ));
+            }
+            ReleaseIndex::default()
+        }
         Err(error) => return Err(format!("{}: {error}", index_path.display())),
     };
 
@@ -106,10 +121,19 @@ fn add(args: &[String]) -> Result<(), String> {
         .map(|artifact| artifact.target.clone())
         .collect();
     index.add_release(release, today);
-    index.generated = Some(format!("{}T00:00:00Z", version::format_date(today)));
+    index.serial += 1;
+    index.generated = Some(version::now_rfc3339());
     let text = serde_json::to_string_pretty(&index).map_err(|error| error.to_string())?;
     write_atomically(&index_path, text.as_bytes())?;
-    println!("added {release_version} for {}", targets.join(", "));
+    write_atomically(
+        &signature_path,
+        &signing::sign_detached(&key, text.as_bytes()),
+    )?;
+    println!(
+        "added {release_version} for {} (serial {})",
+        targets.join(", "),
+        index.serial
+    );
     Ok(())
 }
 
@@ -155,16 +179,10 @@ fn signing_key() -> Result<ed25519_dalek::SigningKey, String> {
         .ok_or_else(|| format!("{SIGNING_KEY_VAR} is not an Ed25519 PKCS#8 key"))
 }
 
-#[expect(clippy::print_stdout, reason = "reports the signature written")]
-fn sign(file: &Path) -> Result<(), String> {
-    let key = signing_key()?;
-    let bytes = std::fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
-    let mut signature_path = file.as_os_str().to_owned();
-    signature_path.push(".sig");
-    let signature_path = PathBuf::from(signature_path);
-    write_atomically(&signature_path, &signing::sign_detached(&key, &bytes))?;
-    println!("signed {}", file.display());
-    Ok(())
+fn signature_path(file: &Path) -> PathBuf {
+    let mut path = file.as_os_str().to_owned();
+    path.push(".sig");
+    PathBuf::from(path)
 }
 
 #[expect(clippy::print_stdout, reason = "prints the public key")]

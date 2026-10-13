@@ -5047,6 +5047,7 @@ dependencies = [
  "jackdaw_releases",
  "jackdaw_scaffold",
  "ruzstd",
+ "semver",
  "serde_json",
  "sha2",
  "tar",

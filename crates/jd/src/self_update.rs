@@ -1,19 +1,28 @@
-//! `jd self update`: replace the running `jd` with the newest stable one.
+//! `jd self update`: replace a standalone `jd` with the newest stable one.
 
 use std::path::{Path, PathBuf};
 
+use jackdaw_releases::installs::EDITOR_EXECUTABLE;
 use jackdaw_releases::{Layout, ReleaseIndex, version};
 
 use crate::archive;
+use crate::editors;
 use crate::fetch;
 
-/// What `jd self update` did or would do.
+/// What `jd self update` did, or why it left `jd` alone.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SelfUpdate {
     /// This `jd` came from `cargo install`, which updates it instead.
     CargoInstalled,
     /// This `jd` is part of a managed editor install of this version.
     PartOfInstall(String),
+    /// This `jd` sits in an editor bundle, such as one the install script
+    /// unpacked, and must stay the same version as that editor.
+    InBundle(PathBuf),
+    /// This `jd` was built in a cargo `target/` directory.
+    DevelopmentBuild,
+    /// This `jd` is a prerelease or development version.
+    Prerelease(String),
     UpToDate(String),
     Updated {
         from: String,
@@ -30,33 +39,47 @@ pub fn cargo_bin_dir() -> Option<PathBuf> {
         .map(|home| home.join("bin"))
 }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
-    match (dunce::canonicalize(a), dunce::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
+fn canonical(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// How the `jd` at `executable` is updated, before anything is fetched.
-pub fn installed_by(
+/// Why the `jd` at `executable`, of version `current`, must not replace
+/// itself, or `None` when it may.
+pub fn refusal(
     executable: &Path,
+    current: &str,
     layout: &Layout,
     cargo_bin: Option<&Path>,
 ) -> Option<SelfUpdate> {
-    let dir = executable.parent()?;
-    if cargo_bin.is_some_and(|bin| same_dir(dir, bin)) {
+    let dir = canonical(executable.parent()?);
+    if cargo_bin.is_some_and(|bin| canonical(bin) == dir) {
         return Some(SelfUpdate::CargoInstalled);
     }
-    let editors = dunce::canonicalize(layout.editors()).unwrap_or_else(|_| layout.editors());
-    let dir = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let install = dir.strip_prefix(&editors).ok()?.components().next()?;
-    Some(SelfUpdate::PartOfInstall(
-        install.as_os_str().to_string_lossy().into_owned(),
-    ))
+    if let Ok(inside) = dir.strip_prefix(canonical(&layout.editors()))
+        && let Some(install) = inside.components().next()
+    {
+        return Some(SelfUpdate::PartOfInstall(
+            install.as_os_str().to_string_lossy().into_owned(),
+        ));
+    }
+    if dir.join(EDITOR_EXECUTABLE).exists() || dir.join("sdk").join("manifest.txt").exists() {
+        return Some(SelfUpdate::InBundle(dir));
+    }
+    if dir
+        .components()
+        .any(|component| component.as_os_str() == "target")
+    {
+        return Some(SelfUpdate::DevelopmentBuild);
+    }
+    match semver::Version::parse(current) {
+        Ok(parsed) if parsed.pre.is_empty() => None,
+        _ => Some(SelfUpdate::Prerelease(current.to_string())),
+    }
 }
 
 /// Replace `executable` (a `jd` of `current` version) with the `jd` from
-/// the newest stable release for `target`.
+/// the newest stable release for `target`, after checking its size and
+/// checksum and that it runs and reports that release.
 pub fn update(
     executable: &Path,
     current: &str,
@@ -80,7 +103,7 @@ pub fn update(
         std::fs::create_dir_all(&staging)
             .map_err(|error| format!("{}: {error}", staging.display()))?;
         let download = staging.join("bundle");
-        let (_, sha256) = fetch::download(&artifact.url, &download)?;
+        let sha256 = fetch::download(&artifact.url, &download, artifact.size)?;
         if !sha256.eq_ignore_ascii_case(&artifact.sha256) {
             return Err(format!("{}: checksum mismatch", artifact.url));
         }
@@ -88,12 +111,25 @@ pub fn update(
         std::fs::create_dir(&unpacked)
             .map_err(|error| format!("{}: {error}", unpacked.display()))?;
         archive::unpack(&download, format, &unpacked)?;
-        let name = executable.file_name().unwrap_or_default();
         let fresh = archive::bundle_root(&unpacked)?.join(jd_name());
         if !fresh.is_file() {
             return Err(format!("the {} bundle holds no jd", release.version));
         }
-        let old = dir.join(format!("{}.old", name.to_string_lossy()));
+        let reported = editors::version_output(&fresh)?;
+        let expected = format!("jd {}", release.version);
+        if reported
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+            != expected
+        {
+            return Err(format!(
+                "the new jd reports `{}`, not {expected}",
+                reported.trim()
+            ));
+        }
+        let old = dir.join(format!("{}.old", jd_name()));
         let _ = std::fs::remove_file(&old);
         std::fs::rename(executable, &old)
             .map_err(|error| format!("{}: {error}", executable.display()))?;
@@ -120,6 +156,22 @@ fn jd_name() -> &'static str {
 mod tests {
     use super::*;
 
+    fn standalone(dir: &Path) -> PathBuf {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        bin.join("jd")
+    }
+
+    #[test]
+    fn a_standalone_release_jd_may_update_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path().join("launcher"));
+        assert_eq!(
+            refusal(&standalone(dir.path()), "0.20.1", &layout, None),
+            None
+        );
+    }
+
     #[test]
     fn a_cargo_installed_jd_is_left_to_cargo() {
         let dir = tempfile::tempdir().unwrap();
@@ -127,12 +179,8 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         let layout = Layout::new(dir.path().join("launcher"));
         assert_eq!(
-            installed_by(&bin.join("jd"), &layout, Some(&bin)),
+            refusal(&bin.join("jd"), "0.20.1", &layout, Some(&bin)),
             Some(SelfUpdate::CargoInstalled)
-        );
-        assert_eq!(
-            installed_by(&dir.path().join("elsewhere/jd"), &layout, Some(&bin)),
-            None
         );
     }
 
@@ -143,8 +191,44 @@ mod tests {
         let install = layout.editor("0.20.1");
         std::fs::create_dir_all(&install).unwrap();
         assert_eq!(
-            installed_by(&install.join("jd"), &layout, None),
+            refusal(&install.join("jd"), "0.20.1", &layout, None),
             Some(SelfUpdate::PartOfInstall("0.20.1".into()))
+        );
+    }
+
+    #[test]
+    fn a_jd_beside_its_editor_or_sdk_stays_with_that_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path().join("launcher"));
+        let jd = standalone(dir.path());
+        std::fs::write(jd.with_file_name(EDITOR_EXECUTABLE), b"").unwrap();
+        assert!(matches!(
+            refusal(&jd, "0.20.1", &layout, None),
+            Some(SelfUpdate::InBundle(_))
+        ));
+
+        let other = dir.path().join("install/0.20.1");
+        std::fs::create_dir_all(other.join("sdk")).unwrap();
+        std::fs::write(other.join("sdk/manifest.txt"), b"").unwrap();
+        assert!(matches!(
+            refusal(&other.join("jd"), "0.20.1", &layout, None),
+            Some(SelfUpdate::InBundle(_))
+        ));
+    }
+
+    #[test]
+    fn development_and_prerelease_builds_are_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path().join("launcher"));
+        let built = dir.path().join("target/debug");
+        std::fs::create_dir_all(&built).unwrap();
+        assert_eq!(
+            refusal(&built.join("jd"), "0.20.1", &layout, None),
+            Some(SelfUpdate::DevelopmentBuild)
+        );
+        assert_eq!(
+            refusal(&standalone(dir.path()), "0.21.0-rc.1", &layout, None),
+            Some(SelfUpdate::Prerelease("0.21.0-rc.1".into()))
         );
     }
 }
