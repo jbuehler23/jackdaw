@@ -784,10 +784,10 @@ fn the_same_letter_still_arms_the_axis_away_from_the_canvas() {
     );
 }
 
-/// The draw brush's cut gesture is bound to a bare C and `bevy_enhanced_input`
-/// ignores modifiers a binding does not name, so the copy chord (Ctrl+C, Cmd+C
-/// on macOS) must not start a brush, whose modal every entity operator refuses
-/// to run behind.
+/// The draw brush's cut gesture is bound to a bare C and a binding ignores
+/// modifiers it does not name, so the copy chord (Ctrl+C, Cmd+C on macOS)
+/// must not start a brush, whose modal every entity operator refuses to run
+/// behind.
 #[test]
 fn copy_and_paste_chords_work_from_the_keyboard() {
     let (mut app, _panel) = canvas_app();

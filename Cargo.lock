@@ -4642,6 +4642,7 @@ dependencies = [
  "jackdaw_api_macros",
  "jackdaw_commands",
  "jackdaw_env",
+ "jackdaw_input",
  "jackdaw_panels",
  "jackdaw_scene_types",
  "lucide-icons",
@@ -5158,6 +5159,7 @@ dependencies = [
  "bevy",
  "bevy_enhanced_input",
  "jackdaw_commands",
+ "jackdaw_input",
  "lucide-icons",
 ]
 

@@ -160,8 +160,8 @@ fn reapplying_a_resolved_keymap_is_idempotent() {
 /// else: the shipped chord's binding entity is gone, not shadowed.
 #[test]
 fn applying_a_rebind_leaves_exactly_one_binding_on_the_new_chord() {
-    use bevy_enhanced_input::prelude::{Binding, ModKeys};
     use jackdaw_api_internal::keymap::PresetSpawnedBinding;
+    use jackdaw_input::{Binding, ModKeys};
 
     let mut app = headless_app();
     app.finish();

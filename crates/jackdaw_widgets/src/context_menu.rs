@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Press, *};
+use jackdaw_input::{Condition, Fire, InputContext, actions, bindings};
 
 /// System set containing the context menu close systems.
 /// Order your context menu openers `.after(ContextMenuCloseSet)` to avoid
@@ -11,38 +11,35 @@ pub struct ContextMenuPlugin;
 
 impl Plugin for ContextMenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_input_context::<ContextMenuInputContext>()
-            .add_systems(
-                Update,
-                close_context_menu_on_click.in_set(ContextMenuCloseSystems),
-            )
-            .add_observer(close_context_menu_on_escape)
-            .add_systems(Startup, spawn_context_menu_input_context);
+        app.add_systems(
+            Update,
+            close_context_menu_on_click.in_set(ContextMenuCloseSystems),
+        )
+        .add_observer(close_context_menu_on_escape)
+        .add_systems(Startup, spawn_context_menu_input_context);
     }
 }
 
-/// BEI input context that owns the Escape-closes-context-menu binding.
+/// Input context that owns the Escape-closes-context-menu binding.
 /// Lives on its own entity so the binding can be remapped or scoped
 /// without colliding with other Escape handlers (e.g., modal cancel).
 #[derive(Component, Default)]
+#[require(InputContext)]
 pub struct ContextMenuInputContext;
 
-/// BEI action fired when the user wants to dismiss an open context menu.
+/// Action fired when the user wants to dismiss an open context menu.
 /// Bound to `Esc` by default; an observer translates the FIRE event
 /// into a despawn of the active menu.
-#[derive(Default, InputAction)]
-#[action_output(bool)]
+#[derive(Component, Default)]
 pub struct ContextMenuDismissAction;
 
 fn spawn_context_menu_input_context(mut commands: Commands) {
     commands.spawn((
         ContextMenuInputContext,
-        actions!(
-            ContextMenuInputContext[(
-                Action::<ContextMenuDismissAction>::new(),
-                bindings!((KeyCode::Escape, Press::default()))
-            )]
-        ),
+        actions![(
+            ContextMenuDismissAction,
+            bindings![(KeyCode::Escape, Condition::Press)]
+        )],
     ));
 }
 
@@ -78,7 +75,7 @@ pub struct ContextMenuState {
 /// Only listens for LMB. Right-click is the open gesture and races
 /// the menu-open operator on the same frame; if this system also
 /// closed on RMB, the just-spawned menu would be torn down before
-/// the user could see it (system ordering between BEI-dispatched
+/// the user could see it (system ordering between action-dispatched
 /// operators and `Update` systems is non-deterministic for this
 /// kind of cross-input race).
 fn close_context_menu_on_click(
@@ -112,15 +109,19 @@ fn should_close_on_pointer_press(
     mouse.just_pressed(MouseButton::Left)
 }
 
-/// Close on Escape via the BEI dismiss action. Routing through BEI
+/// Close on Escape via the dismiss action. Routing through an action
 /// (instead of raw `keyboard.just_pressed(KeyCode::Escape)`) keeps the
-/// keybind remappable and lets BEI's context layering decide whether
-/// our action wins for the frame.
+/// keybind remappable and lets context layering decide whether our
+/// action wins for the frame.
 fn close_context_menu_on_escape(
-    _: On<Fire<ContextMenuDismissAction>>,
+    fire: On<Fire>,
+    dismiss: Query<(), With<ContextMenuDismissAction>>,
     mut commands: Commands,
     mut state: Option<ResMut<ContextMenuState>>,
 ) {
+    if !dismiss.contains(fire.action) {
+        return;
+    }
     let Some(ref mut state) = state else {
         return;
     };

@@ -864,14 +864,10 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// (cameras, grids, gizmos) and the undo/redo stacks intact. Used by
 /// snapshot apply during undo/redo.
 ///
-/// `bevy_enhanced_input`'s `Action<A>` component auto-inserts a
-/// `Name` component (see its `#[require(Name::new(any::type_name::<A>()), ...)]`),
-/// so BEI action entities are otherwise indistinguishable from
-/// scene roots. They also carry the non-generic `ActionSettings`
-/// marker, so excluding those keeps every operator's input routing
-/// alive across an `apply_ast_to_world` pass; without action
-/// entities in `Actions<CoreExtensionInputContext>`, BEI emits no
-/// `Fire` events and every editor keybind goes silent.
+/// Input action entities carry `ActionSettings`, so excluding those keeps
+/// every operator's input routing alive across an `apply_ast_to_world`
+/// pass, whatever names they were given; without its action entities a
+/// context fires nothing and every editor keybind goes silent.
 ///
 /// An entity the document spawned answers to `AstNodeRef` whether or not it
 /// carries a name, so an instance that inherited nothing leaves with its
@@ -883,7 +879,7 @@ pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError>
     let roots: Vec<Entity> = world
         .query_filtered::<Entity, (
             Or<(With<Name>, With<jackdaw_bsn::AstNodeRef>)>,
-            Without<bevy_enhanced_input::prelude::ActionSettings>,
+            Without<jackdaw_input::ActionSettings>,
         )>()
         .iter(world)
         .filter(|e| !editor_set.contains(e))

@@ -902,9 +902,9 @@ fn the_drop_line_is_drawn_at_the_gap_it_marks_on_a_hidpi_screen() {
 }
 
 /// Ctrl+Up (Cmd+Up on macOS) reorders and nothing else. Pressed through the
-/// window's own key stream because the fault only exists there:
-/// `bevy_enhanced_input` matches a binding on the modifiers it names and
-/// ignores the rest, so the bare-arrow nudge answered Ctrl+Arrow too.
+/// window's own key stream because the fault only exists there: a binding
+/// matches on the modifiers it names and ignores the rest, so the bare-arrow
+/// nudge answered Ctrl+Arrow too.
 #[test]
 fn primary_up_reorders_without_nudging() {
     use bevy::window::{PrimaryWindow, WindowResolution};

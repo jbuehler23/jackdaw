@@ -4,14 +4,15 @@ use bevy::feathers::controls::FeathersButton;
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
+use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
     picker::{DismissPickerEvent, Picker},
 };
+use jackdaw_input::{ActionOf, Condition, InputContext, actions, bindings};
 use jackdaw_scene_types::PropertyValue;
 
 use crate::selection::Selection;
@@ -23,8 +24,7 @@ use crate::selection::Selection;
 pub const CORE_EXTENSION_ID: &str = "jackdaw.core";
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_input_context::<CoreExtensionInputContext>()
-        .register_extension::<JackdawCoreExtension>()
+    app.register_extension::<JackdawCoreExtension>()
         .add_observer(dispatch_activate_operator)
         .add_observer(update_operator_button_availability)
         .add_observer(seed_operator_button_on_add)
@@ -170,12 +170,10 @@ impl JackdawExtension for JackdawCoreExtension {
     fn register(&self, ctx: &mut ExtensionContext) {
         ctx.entity_mut().insert((
             CoreExtensionInputContext,
-            actions!(
-                CoreExtensionInputContext[(
-                    Action::<CancelModalOp>::new(),
-                    bindings!((KeyCode::Escape, Press::default()))
-                )]
-            ),
+            actions![(
+                OperatorAction(CancelModalOp::ID),
+                bindings![(KeyCode::Escape, Condition::Press)]
+            )],
         ));
 
         ctx.register_operator::<CancelModalOp>();
@@ -205,15 +203,15 @@ impl JackdawExtension for JackdawCoreExtension {
             PresetInput::key("Delete"),
             PresetInput::key("Backspace"),
         ]);
-        // No Press on Step Left / Right: deferred (hold-to-repeat, not bare Press::default()).
+        // No press condition on Step Left / Right: deferred (hold-to-repeat, not a bare press).
         ctx.spawn((
-            Action::<crate::ClipTimelineStepLeftOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            OperatorAction(crate::ClipTimelineStepLeftOp::ID),
+            ActionOf(core_ext),
             bindings![KeyCode::ArrowLeft],
         ));
         ctx.spawn((
-            Action::<crate::ClipTimelineStepRightOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(core_ext),
+            OperatorAction(crate::ClipTimelineStepRightOp::ID),
+            ActionOf(core_ext),
             bindings![KeyCode::ArrowRight],
         ));
         ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpPrevOp>([
@@ -348,6 +346,7 @@ impl JackdawExtension for JackdawCoreExtension {
 }
 
 #[derive(Component, Default)]
+#[require(InputContext)]
 pub struct CoreExtensionInputContext;
 
 #[operator(

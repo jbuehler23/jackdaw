@@ -2,7 +2,7 @@ use bevy::math::Vec2;
 use bevy::prelude::*;
 use bevy::text::FontSize;
 use bevy::window::PrimaryWindow;
-use bevy_enhanced_input::prelude::{Press, *};
+use jackdaw_input::{Condition, Fire, InputContext, actions, bindings};
 use lucide_icons::Icon;
 
 /// Center angle (radians, screen space, y-down) of wedge `i` of `n`: item 0
@@ -82,32 +82,34 @@ pub struct RadialWedge {
 #[derive(Resource, Clone)]
 pub struct RadialIconFont(pub Handle<Font>);
 
-/// BEI input context that owns the Escape-closes-radial-menu binding.
+/// Input context that owns the Escape-closes-radial-menu binding.
 #[derive(Component, Default)]
+#[require(InputContext)]
 pub struct RadialMenuInputContext;
 
-/// BEI action fired when the user wants to dismiss an open radial menu.
-#[derive(Default, InputAction)]
-#[action_output(bool)]
+/// Action fired when the user wants to dismiss an open radial menu.
+#[derive(Component, Default)]
 pub struct RadialMenuDismissAction;
 
 fn spawn_radial_menu_input_context(mut commands: Commands) {
     commands.spawn((
         RadialMenuInputContext,
-        actions!(
-            RadialMenuInputContext[(
-                Action::<RadialMenuDismissAction>::new(),
-                bindings!((KeyCode::Escape, Press::default()))
-            )]
-        ),
+        actions![(
+            RadialMenuDismissAction,
+            bindings![(KeyCode::Escape, Condition::Press)]
+        )],
     ));
 }
 
 fn close_radial_menu_on_escape(
-    _: On<Fire<RadialMenuDismissAction>>,
+    fire: On<Fire>,
+    dismiss: Query<(), With<RadialMenuDismissAction>>,
     mut commands: Commands,
     mut state: Option<ResMut<RadialMenuState>>,
 ) {
+    if !dismiss.contains(fire.action) {
+        return;
+    }
     let Some(ref mut state) = state else {
         return;
     };
@@ -268,7 +270,6 @@ impl Plugin for RadialMenuPlugin {
         app.insert_resource(RadialIconFont(handle));
 
         app.init_resource::<RadialMenuState>()
-            .add_input_context::<RadialMenuInputContext>()
             .add_systems(Update, update_radial_highlight)
             .add_observer(close_radial_menu_on_escape)
             .add_systems(Startup, spawn_radial_menu_input_context);

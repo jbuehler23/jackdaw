@@ -11,9 +11,10 @@
 //! plain Arrow and PageUp/Down for nudge.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::lifecycle::OperatorAction;
+use jackdaw_input::{ActionOf, bindings};
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::entity_ops::{
@@ -79,37 +80,37 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     .alt()]);
 
     // Nudge: plain Arrow / PageUp / PageDown without Press (hold-to-repeat).
-    // Deferred: condition is NOT bare Press::default().
+    // Deferred: condition is NOT a bare press.
     let ext = ctx.id();
     ctx.entity_mut().world_scope(|world| {
         world.spawn((
-            Action::<TransformNudgeXNegOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
+            OperatorAction(TransformNudgeXNegOp::ID),
+            ActionOf(ext),
             bindings![KeyCode::ArrowLeft],
         ));
         world.spawn((
-            Action::<TransformNudgeXPosOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
+            OperatorAction(TransformNudgeXPosOp::ID),
+            ActionOf(ext),
             bindings![KeyCode::ArrowRight],
         ));
         world.spawn((
-            Action::<TransformNudgeZNegOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
+            OperatorAction(TransformNudgeZNegOp::ID),
+            ActionOf(ext),
             bindings![KeyCode::ArrowUp],
         ));
         world.spawn((
-            Action::<TransformNudgeZPosOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
+            OperatorAction(TransformNudgeZPosOp::ID),
+            ActionOf(ext),
             bindings![KeyCode::ArrowDown],
         ));
         world.spawn((
-            Action::<TransformNudgeYPosOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
+            OperatorAction(TransformNudgeYPosOp::ID),
+            ActionOf(ext),
             bindings![KeyCode::PageUp],
         ));
         world.spawn((
-            Action::<TransformNudgeYNegOp>::new(),
-            ActionOf::<CoreExtensionInputContext>::new(ext),
+            OperatorAction(TransformNudgeYNegOp::ID),
+            ActionOf(ext),
             bindings![KeyCode::PageDown],
         ));
     });
@@ -292,9 +293,10 @@ fn ui_nudge_direction(offset_direction: Vec3) -> Option<Vec2> {
 }
 
 /// `is_available` for the nudge ops: everything [`can_act_on_entities`] asks,
-/// under a bare key and no other. `bevy_enhanced_input` only matches the
-/// modifiers a binding names, so a bare arrow would otherwise answer
-/// Ctrl+Arrow (outliner reorder) and Alt+Arrow (90-degree rotate) as well.
+/// under a bare key and no other. A binding matches whenever the modifiers
+/// it names are held, so a bare arrow would otherwise answer Ctrl+Arrow
+/// (outliner reorder) and Alt+Arrow (90-degree rotate) wherever those chords
+/// are not bound in an active context.
 pub(crate) fn can_nudge(
     keybind_focus: crate::keybind_focus::KeybindFocus,
     active: ActiveModalQuery,

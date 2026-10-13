@@ -20,11 +20,11 @@ pub(crate) struct ChordModifiers {
 
 /// Whether a modifier the chord did not name is being held.
 ///
-/// `bevy_enhanced_input` matches a binding on the modifiers it *names* and
-/// says nothing about the ones it does not, so a binding on a bare key
-/// answers a chord built on that key as well: Ctrl+C started a cut brush,
-/// and Ctrl+Shift+Z ran Undo alongside Redo. Every chord that shares a key
-/// with a longer one asks this before acting.
+/// A binding matches on the modifiers it *names* and says nothing about the
+/// ones it does not. A longer chord bound on the same key wins over it, but a
+/// chord nothing binds still reaches the bare key: Ctrl+C started a cut brush
+/// while copy was bound elsewhere. Every chord that shares a key with a
+/// longer one asks this before acting.
 pub(crate) fn unwanted_modifier(keyboard: &ButtonInput<KeyCode>, named: ChordModifiers) -> bool {
     let held = |wanted: bool, keys: [KeyCode; 2]| !wanted && keyboard.any_pressed(keys);
     held(named.primary, [KeyCode::ControlLeft, KeyCode::ControlRight])

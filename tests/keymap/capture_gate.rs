@@ -100,16 +100,16 @@ fn recording_takes_the_draw_brush_chord() {
     };
 
     let context = app.world_mut().spawn_empty().id();
+    let action = app
+        .world_mut()
+        .spawn(jackdaw::draw_brush::StartDrawBrushCutAction)
+        .id();
     let cut = move |app: &mut App| {
-        app.world_mut()
-            .trigger(bevy_enhanced_input::prelude::Start::<
-                jackdaw::draw_brush::StartDrawBrushCutAction,
-            > {
-                context,
-                action: context,
-                value: true,
-                state: bevy_enhanced_input::prelude::TriggerState::Fired,
-            });
+        app.world_mut().trigger(jackdaw_input::Start {
+            action,
+            context,
+            value: jackdaw_input::ActionValue(Vec2::X),
+        });
         app.update();
         app.update();
     };

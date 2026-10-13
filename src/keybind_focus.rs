@@ -20,8 +20,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::EditableText;
-use bevy_enhanced_input::prelude::ActionSources;
 use jackdaw_commands::KeymapCapture;
+use jackdaw_input::InputSources;
 
 /// `SystemParam` that returns whether keybinds and operator dispatches
 /// should be suppressed because the keyboard belongs to something other
@@ -76,7 +76,7 @@ pub(crate) fn disable_keyboard_input_when_typing(
     focus: KeybindFocus,
     numeric: Res<crate::numeric_transform::NumericTransformState>,
     capture: Res<crate::live_input::LiveInputCapture>,
-    mut sources: ResMut<ActionSources>,
+    mut sources: ResMut<InputSources>,
 ) {
     if !focus.is_changed() && !numeric.is_changed() && !capture.is_changed() {
         return;
@@ -96,11 +96,11 @@ mod tests {
     #[test]
     fn capture_active_suppresses_action_keybinds() {
         use bevy::input_focus::InputFocus;
-        use bevy_enhanced_input::prelude::ActionSources;
+        use jackdaw_input::InputSources;
         let mut app = bevy::app::App::new();
         app.init_resource::<InputFocus>();
         app.init_resource::<crate::numeric_transform::NumericTransformState>();
-        app.init_resource::<ActionSources>();
+        app.init_resource::<InputSources>();
         app.init_resource::<crate::live_input::LiveInputCapture>();
         app.world_mut()
             .resource_mut::<crate::live_input::LiveInputCapture>()
@@ -109,7 +109,7 @@ mod tests {
             .run_system_cached(disable_keyboard_input_when_typing)
             .unwrap();
         assert!(
-            !app.world().resource::<ActionSources>().keyboard,
+            !app.world().resource::<InputSources>().keyboard,
             "capture active suppresses action keybinds"
         );
         app.world_mut()
@@ -118,6 +118,6 @@ mod tests {
         app.world_mut()
             .run_system_cached(disable_keyboard_input_when_typing)
             .unwrap();
-        assert!(app.world().resource::<ActionSources>().keyboard);
+        assert!(app.world().resource::<InputSources>().keyboard);
     }
 }

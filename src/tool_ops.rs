@@ -1,11 +1,9 @@
 //! Tool switch operators: Select, Translate, Rotate, Scale.
 //!
-//! Bound to Q/W/E/R via `bevy_enhanced_input`. Each action is guarded
-//! by a `BlockBy` referencing an RMB-held sentinel so the keys do not
-//! fire while the user is flying the camera.
+//! Bound to Q/W/E/R. The tools are unavailable while the camera flies, where
+//! W, E and Q steer it.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
@@ -24,39 +22,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator::<CoreExtensionInputContext, ToolTranslateOp>([PresetInput::key("KeyW")]);
     ctx.bind_operator::<CoreExtensionInputContext, ToolRotateOp>([PresetInput::key("KeyE")]);
     ctx.bind_operator::<CoreExtensionInputContext, ToolScaleOp>([PresetInput::key("KeyR")]);
-
-    // Spawn the RMB-held guard action (mouse binding: left unchanged) and attach
-    // BlockBy to every tool action entity so the tool keys stay silent while the
-    // camera fly is active. Must run after bind_operator so the Action<Tool*>
-    // entities already exist.
-    let ext = ctx.id();
-    ctx.entity_mut().world_scope(|world| {
-        let rmb_guard = world
-            .spawn((
-                Action::<RmbHeldGuard>::new(),
-                ActionOf::<CoreExtensionInputContext>::new(ext),
-                bindings![MouseButton::Right],
-            ))
-            .id();
-
-        let block = BlockBy::single(rmb_guard);
-        let mut q = world.query_filtered::<Entity, With<Action<ToolSelectOp>>>();
-        for e in q.iter(world).collect::<Vec<_>>() {
-            world.entity_mut(e).insert(block.clone());
-        }
-        let mut q = world.query_filtered::<Entity, With<Action<ToolTranslateOp>>>();
-        for e in q.iter(world).collect::<Vec<_>>() {
-            world.entity_mut(e).insert(block.clone());
-        }
-        let mut q = world.query_filtered::<Entity, With<Action<ToolRotateOp>>>();
-        for e in q.iter(world).collect::<Vec<_>>() {
-            world.entity_mut(e).insert(block.clone());
-        }
-        let mut q = world.query_filtered::<Entity, With<Action<ToolScaleOp>>>();
-        for e in q.iter(world).collect::<Vec<_>>() {
-            world.entity_mut(e).insert(block.clone());
-        }
-    });
 }
 
 /// Tool switching is allowed in any edit mode (Object / Vertex / Edge / Face).
@@ -67,12 +32,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// with three axes, and a UI node is placed by its layout. Q, W, E and R
 /// there are four letters of whatever is being typed at a panel that
 /// never took the focus.
+///
+/// Nor while the camera flies: W, E and Q steer it then.
 fn can_change_tool(
     keybind_focus: KeybindFocus,
     active: ActiveModalQuery,
     viewport: crate::viewport_2d::FrontedViewport,
+    nav: Option<Res<jackdaw_camera::CameraNavInput>>,
 ) -> bool {
-    !keybind_focus.keyboard_is_spoken_for() && !active.is_modal_running() && viewport.is_three_d()
+    !keybind_focus.keyboard_is_spoken_for()
+        && !active.is_modal_running()
+        && viewport.is_three_d()
+        && !nav.is_some_and(|nav| nav.fly_active)
 }
 
 /// The Rotate tool shares `KeyE` with brush face Extrude. To keep both from
@@ -84,9 +55,10 @@ fn can_rotate_tool(
     keybind_focus: KeybindFocus,
     active: ActiveModalQuery,
     viewport: crate::viewport_2d::FrontedViewport,
+    nav: Option<Res<jackdaw_camera::CameraNavInput>>,
     edit_mode: Res<crate::brush::EditMode>,
 ) -> bool {
-    can_change_tool(keybind_focus, active, viewport)
+    can_change_tool(keybind_focus, active, viewport, nav)
         && *edit_mode != crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
 }
 
@@ -134,12 +106,6 @@ pub fn tool_scale(_: In<OperatorParameters>, world: &mut World) -> OperatorResul
     tool_scale_impl(world);
     OperatorResult::Finished
 }
-
-/// Sentinel action: fires while RMB is held. Used as a `BlockBy`
-/// guard so Q/W/E/R do not fire during camera fly.
-#[derive(InputAction)]
-#[action_output(bool)]
-struct RmbHeldGuard;
 
 #[cfg(test)]
 mod tests {

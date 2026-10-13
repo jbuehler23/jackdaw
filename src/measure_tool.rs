@@ -65,22 +65,20 @@ struct MeasureLabel;
 // -- Extension registration --
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    use crate::core_extension::CoreExtensionInputContext;
-    use bevy_enhanced_input::prelude::Press;
+    use jackdaw_api_internal::lifecycle::OperatorAction;
+    use jackdaw_input::{ActionOf, Condition, bindings};
 
-    // Deferred: condition is not bare Press::default() (key + Press).
-    ctx.entity_mut()
-        .with_related::<ActionOf<CoreExtensionInputContext>>((
-            Action::<MeasureDistanceOp>::new(),
-            bindings![(KeyCode::KeyM, Press::default())],
-        ));
+    // Deferred: condition is not a bare press (key + Press).
+    ctx.entity_mut().with_related::<ActionOf>((
+        OperatorAction(MeasureDistanceOp::ID),
+        bindings![(KeyCode::KeyM, Condition::Press)],
+    ));
 
-    // Deferred: condition is not bare Press::default() (mouse button + Press).
-    ctx.entity_mut()
-        .with_related::<ActionOf<CoreExtensionInputContext>>((
-            Action::<ConfirmMeasureDistanceOp>::new(),
-            bindings![(MouseButton::Left, Press::default())],
-        ));
+    // Deferred: condition is not a bare press (mouse button + Press).
+    ctx.entity_mut().with_related::<ActionOf>((
+        OperatorAction(ConfirmMeasureDistanceOp::ID),
+        bindings![(MouseButton::Left, Condition::Press)],
+    ));
 
     ctx.register_operator::<MeasureDistanceOp>()
         .register_operator::<ConfirmMeasureDistanceOp>()

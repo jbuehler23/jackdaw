@@ -8,9 +8,8 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
-use jackdaw_input::{Binding, Bindings};
+use jackdaw_input::{ActionOf, Binding, Bindings, Condition, ModKeys, bindings};
 
-use crate::core_extension::CoreExtensionInputContext;
 use crate::creation_taxonomy::{CreationTaxonomy, WIDGET_ACTION_PREFIX};
 use crate::operator_tooltip::display_keybind;
 
@@ -21,19 +20,21 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ToggleCommandPaletteOp>();
     ctx.register_menu_entry::<ToggleCommandPaletteOp>(TopLevelMenu::Tools);
 
-    // Deferred: condition is not bare Press::default() (modifier chord + key).
+    // Deferred: condition is not a bare press (modifier chord + key).
     // Ctrl on every platform: macOS keeps Cmd+Space for Spotlight.
-    ctx.entity_mut()
-        .with_related::<ActionOf<CoreExtensionInputContext>>((
-            Action::<ToggleCommandPaletteOp>::new(),
-            bindings![
-                (
-                    KeyCode::Space.with_mod_keys(ModKeys::CONTROL),
-                    bevy_enhanced_input::prelude::Press::default()
-                ),
-                (KeyCode::F3, bevy_enhanced_input::prelude::Press::default())
-            ],
-        ));
+    ctx.entity_mut().with_related::<ActionOf>((
+        OperatorAction(ToggleCommandPaletteOp::ID),
+        bindings![
+            (
+                Binding::Keyboard {
+                    key: KeyCode::Space,
+                    mod_keys: ModKeys::CONTROL,
+                },
+                Condition::Press
+            ),
+            (KeyCode::F3, Condition::Press)
+        ],
+    ));
 }
 
 #[operator(

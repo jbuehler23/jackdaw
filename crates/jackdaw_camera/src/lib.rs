@@ -14,7 +14,7 @@ impl Plugin for JackdawCameraPlugin {
 /// The camera controller reads only this resource, so the editor can drive it
 /// from rebindable input actions while other hosts feed it directly.
 ///
-/// The editor populates this in `PreUpdate` (after `EnhancedInputSystems::Update`)
+/// The editor populates this in `PreUpdate` (after `jackdaw_input::ActionSystems`)
 /// via `populate_camera_nav_input` in `src/input_contexts.rs`. The camera
 /// system runs in `Update`, so it always sees the freshly written frame value.
 #[derive(Resource, Default, Clone)]

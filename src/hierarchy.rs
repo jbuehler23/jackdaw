@@ -5,10 +5,10 @@ use bevy::{
     prelude::*,
     ui::ui_transform::UiGlobalTransform,
 };
-use bevy_enhanced_input::prelude::{Press, *};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::entity_icons::{EntityIconRegistry, registered_icon};
 use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_feathers::{
     button::ButtonClickEvent,
     context_menu::spawn_context_menu,
@@ -16,6 +16,7 @@ use jackdaw_feathers::{
     tokens,
     tree_view::{ROW_BG, set_row_expand_toggle, tree_row_frame},
 };
+use jackdaw_input::{ActionOf, Condition, bindings};
 use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 use jackdaw_widgets::monitors::{Mutation, NotifyChanged};
 use jackdaw_widgets::tree_view::{
@@ -2891,11 +2892,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<crate::prefab::operators::PrefabUnbundleInstanceOp>()
         .register_operator::<crate::prefab::operators::PrefabRepairSelfCyclesOp>();
     let ext = ctx.id();
-    // Deferred: condition is not bare Press::default() (mouse button + Press).
+    // Deferred: condition is not a bare press (mouse button + Press).
     ctx.spawn((
-        Action::<HierarchyOpenContextMenuOp>::new(),
-        ActionOf::<crate::core_extension::CoreExtensionInputContext>::new(ext),
-        bindings![(MouseButton::Right, Press::default())],
+        OperatorAction(HierarchyOpenContextMenuOp::ID),
+        ActionOf(ext),
+        bindings![(MouseButton::Right, Condition::Press)],
     ));
     ctx.bind_operator::<crate::core_extension::CoreExtensionInputContext, RenameBeginOp>([
         PresetInput::key("F2"),

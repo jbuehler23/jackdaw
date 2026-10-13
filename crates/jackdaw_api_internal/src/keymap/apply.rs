@@ -3,11 +3,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{
-    Binding, BindingOf, InputModKeys, ModKeys, Press, Release, Tap,
-};
-
-use crate::keymap_conditions::{DoubleClick, ScrollTick};
+use jackdaw_input::{Binding, BindingOf, Condition, InputModKeys, ModKeys};
 
 use crate::lifecycle::OperatorAction;
 
@@ -142,7 +138,7 @@ pub fn apply_keymap_preset(world: &mut World, preset: &KeymapPreset) -> KeymapAp
             } => {
                 let mod_keys = mod_keys_from_bools(*ctrl, *shift, *alt, *super_);
                 ResolvedBinding::Scroll {
-                    // Scroll phase is irrelevant; ScrollTick replaces it.
+                    // Scroll phase is irrelevant; a scroll tick replaces it.
                     binding: Binding::MouseWheel { mod_keys },
                     positive: *up,
                 }
@@ -365,65 +361,35 @@ fn spawn_resolved(
     resolved: &ResolvedBinding,
     action_entities: &[Entity],
 ) -> usize {
-    let mut count = 0;
-    for &action_entity in action_entities {
-        match resolved {
-            ResolvedBinding::Press { binding, phase } => match phase {
-                PresetPhase::Press => {
-                    world.spawn((
-                        *binding,
-                        Press::default(),
-                        BindingOf(action_entity),
-                        PresetSpawnedBinding,
-                        ChildOf(action_entity),
-                    ));
-                }
-                PresetPhase::Release => {
-                    world.spawn((
-                        *binding,
-                        Release::default(),
-                        BindingOf(action_entity),
-                        PresetSpawnedBinding,
-                        ChildOf(action_entity),
-                    ));
-                }
-                PresetPhase::DoubleClick => {
-                    world.spawn((
-                        *binding,
-                        DoubleClick::default(),
-                        BindingOf(action_entity),
-                        PresetSpawnedBinding,
-                        ChildOf(action_entity),
-                    ));
-                }
-                PresetPhase::Tap => {
-                    world.spawn((
-                        *binding,
-                        Tap::new(0.2),
-                        BindingOf(action_entity),
-                        PresetSpawnedBinding,
-                        ChildOf(action_entity),
-                    ));
-                }
+    let (binding, condition) = match *resolved {
+        ResolvedBinding::Press { binding, phase } => (
+            binding,
+            match phase {
+                PresetPhase::Press => Condition::Press,
+                PresetPhase::Release => Condition::Release,
+                PresetPhase::DoubleClick => Condition::DOUBLE_CLICK,
+                PresetPhase::Tap => Condition::Tap { max_secs: 0.2 },
             },
-            ResolvedBinding::Scroll { binding, positive } => {
-                world.spawn((
-                    *binding,
-                    ScrollTick::new(*positive),
-                    BindingOf(action_entity),
-                    PresetSpawnedBinding,
-                    ChildOf(action_entity),
-                ));
-            }
+        ),
+        ResolvedBinding::Scroll { binding, positive } => {
+            (binding, Condition::ScrollTick { up: positive })
         }
-        count += 1;
+    };
+    for &action_entity in action_entities {
+        world.spawn((
+            binding,
+            condition,
+            BindingOf(action_entity),
+            PresetSpawnedBinding,
+            ChildOf(action_entity),
+        ));
     }
-    count
+    action_entities.len()
 }
 
 #[cfg(test)]
 mod tests {
-    use bevy_enhanced_input::prelude::{Binding, TriggerState};
+    use jackdaw_input::{Action, Binding};
 
     use super::*;
     use crate::keymap::{
@@ -446,9 +412,7 @@ mod tests {
     }
 
     fn spawn_action(world: &mut World, operator_id: &'static str) -> Entity {
-        world
-            .spawn((OperatorAction(operator_id), TriggerState::default()))
-            .id()
+        world.spawn((OperatorAction(operator_id), Action)).id()
     }
 
     fn user_row(operator: &str, key: &str) -> PresetBinding {
@@ -812,7 +776,7 @@ mod tests {
         let mut world = World::new();
 
         // Register the builtin action entity so the applier can find it.
-        let action = world.spawn(TriggerState::default()).id();
+        let action = world.spawn(Action).id();
         world
             .get_resource_or_init::<BuiltinActions>()
             .register("modal.confirm", action);

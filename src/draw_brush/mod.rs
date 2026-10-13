@@ -4,9 +4,10 @@ use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::{selection::Selection, viewport::ViewportCursor};
 use bevy::{input_focus::InputFocus, prelude::*};
-use bevy_enhanced_input::prelude::Press;
 use jackdaw_api_internal::keymap::{KeymapCapture, PresetInput};
+use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_api_internal::lifecycle::OperatorChordSite;
+use jackdaw_input::{ActionOf, Binding, Condition, ModKeys, Start, bindings};
 use jackdaw_scene_types::Brush;
 
 mod build;
@@ -29,40 +30,46 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     let ext = ctx.id();
     // ConfirmDrawBrushOp: deferred (MouseButton::Left binding).
     ctx.spawn((
-        Action::<ConfirmDrawBrushOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(MouseButton::Left, Press::default()),],
+        OperatorAction(ConfirmDrawBrushOp::ID),
+        ActionOf(ext),
+        bindings![(MouseButton::Left, Condition::Press),],
     ));
     // ActivateDrawBrushModalOp: deferred (MouseButton::Back binding present).
     ctx.spawn((
-        Action::<ActivateDrawBrushModalOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
+        OperatorAction(ActivateDrawBrushModalOp::ID),
+        ActionOf(ext),
         bindings![
-            (MouseButton::Back, Press::default()),
-            (KeyCode::KeyB, Press::default()),
+            (MouseButton::Back, Condition::Press),
+            (KeyCode::KeyB, Condition::Press),
         ],
     ));
     // DrawBrushCancelCutOp: deferred (MouseButton::Right binding).
     ctx.spawn((
-        Action::<DrawBrushCancelCutOp>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
-        bindings![(MouseButton::Right, Press::default())],
+        OperatorAction(DrawBrushCancelCutOp::ID),
+        ActionOf(ext),
+        bindings![(MouseButton::Right, Condition::Press)],
     ));
     // Not operators of their own: each is a chord that starts the
     // draw-brush modal with particular parameters. Tagged as a chord site
     // for it, so the keybind dialog and the tooltips say the modal has
     // these chords too rather than only the two on its own action.
     ctx.spawn((
-        Action::<StartDrawBrushAddAppendAction>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
+        StartDrawBrushAddAppendAction,
+        ActionOf(ext),
         OperatorChordSite(ActivateDrawBrushModalOp::ID),
-        bindings![(KeyCode::KeyB.with_mod_keys(ModKeys::ALT), Press::default(),)],
+        bindings![(
+            Binding::Keyboard {
+                key: KeyCode::KeyB,
+                mod_keys: ModKeys::ALT,
+            },
+            Condition::Press,
+        )],
     ));
     ctx.spawn((
-        Action::<StartDrawBrushCutAction>::new(),
-        ActionOf::<CoreExtensionInputContext>::new(ext),
+        StartDrawBrushCutAction,
+        ActionOf(ext),
         OperatorChordSite(ActivateDrawBrushModalOp::ID),
-        bindings![(KeyCode::KeyC, Press::default())],
+        bindings![(KeyCode::KeyC, Condition::Press)],
     ));
 
     ctx.bind_operator::<CoreExtensionInputContext, BrushJoinOp>([PresetInput::key("KeyJ")]);
@@ -475,15 +482,13 @@ fn configure_draw_brush_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
 /// Marker action: Alt+B starts a draw that appends the new brush to
 /// the selected one. Observed by `dispatch_start_add_append`, which
 /// fires `viewport.draw_brush_modal` with `append=true`.
-#[derive(Default, InputAction)]
-#[action_output(bool)]
+#[derive(Component, Default)]
 pub struct StartDrawBrushAddAppendAction;
 
 /// Marker action: C starts a Cut-mode draw. Observed by
 /// `dispatch_start_cut`, which fires `viewport.draw_brush_modal` with
 /// `mode="Cut"`.
-#[derive(Default, InputAction)]
-#[action_output(bool)]
+#[derive(Component, Default)]
 pub struct StartDrawBrushCutAction;
 
 /// The brush chords name no modifier of their own. Shift is theirs all
@@ -502,11 +507,15 @@ const BRUSH_CHORD_ALT: crate::keybinds::ChordModifiers = crate::keybinds::ChordM
 };
 
 fn dispatch_start_add_append(
-    _: On<Start<StartDrawBrushAddAppendAction>>,
+    start: On<Start>,
+    marker: Query<(), With<StartDrawBrushAddAppendAction>>,
     capture: Option<Res<KeymapCapture>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
+    if !marker.contains(start.action) {
+        return;
+    }
     // These two chords hang off marker actions rather than off the
     // operator, so the dispatcher's own capture gate never sees them: the
     // recorder would name the chord and start a brush with it.
@@ -528,12 +537,16 @@ fn dispatch_start_add_append(
 }
 
 fn dispatch_start_cut(
-    _: On<Start<StartDrawBrushCutAction>>,
+    start: On<Start>,
+    marker: Query<(), With<StartDrawBrushCutAction>>,
     edit_mode: Res<crate::brush::EditMode>,
     capture: Option<Res<KeymapCapture>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
+    if !marker.contains(start.action) {
+        return;
+    }
     if KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
