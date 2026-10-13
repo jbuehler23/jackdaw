@@ -246,7 +246,13 @@ jd editor list                    # what is installed
 jd editor default 0.20.1          # editor for projects that pin none
 jd editor remove 0.19.0
 jd editor clean                   # drop nightlies no project uses
+jd editor verify 0.20.1           # check that an install still runs
+jd editor refresh                 # fetch the release index into the cache
 ```
+
+Every `jd editor` command takes `--json`, which prints one JSON object per
+line (progress, stage, message, warning, index, done and error events)
+for programs that drive `jd`, such as the editor's launcher.
 
 Versions come from a signed release index, published from the first
 release that ships it on; earlier releases are not in it. `jd` checks the
@@ -261,7 +267,13 @@ launches the newest installed patch of that line, or tells you which
 last opened with `jd open` still uses that editor; `--force` removes it
 anyway. Nightlies stay installed until `jd editor clean`, which keeps the
 newest, those marked known good, and any a project opened with `jd open`
-uses. Projects opened from inside the editor are not tracked yet.
+uses. Projects the launcher opens are recorded the same way.
+
+The launcher, the editor's first window, shows the same installs: its
+Editors page installs, updates, verifies and uninstalls them through `jd`,
+and opening a project from its Projects page relaunches into the install
+the project pins, or offers to install it, open a copy with an installed
+editor, or convert the project after a backup.
 
 Editors live in `editors/` under the data directory
 (`~/.local/share/jackdaw` on Linux, `%LOCALAPPDATA%\jackdaw` on Windows),

@@ -331,7 +331,7 @@ fn on_cancel_requested(
 
 /// The launcher row the SDK's state is drawn into, under the environment
 /// checks.
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct SdkStatusRow;
 
 #[derive(Component)]

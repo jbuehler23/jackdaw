@@ -89,7 +89,10 @@ pub(crate) fn plugin(app: &mut App) {
     }
     app.add_systems(
         Update,
-        drive_boot_ops.run_if(in_state(crate::AppState::Editor)),
+        drive_boot_ops.run_if(
+            in_state(crate::AppState::Editor)
+                .or_else(any_with_component::<crate::launcher::LauncherShell>),
+        ),
     );
 }
 

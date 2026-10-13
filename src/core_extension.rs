@@ -239,6 +239,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::scenes::operators::add_to_extension(ctx);
         crate::history_ops::add_to_extension(ctx);
         crate::app_ops::add_to_extension(ctx);
+        crate::launcher::add_to_extension(ctx);
         crate::view_ops::add_to_extension(ctx);
         crate::camera_settings::add_to_extension(ctx);
         crate::viewport_settings::add_to_extension(ctx);

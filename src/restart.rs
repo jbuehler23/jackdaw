@@ -168,6 +168,18 @@ pub fn relaunch_into_project(project: &Path) -> ! {
     exec_or_spawn(relaunch_command(&exe, &args, project), &exe)
 }
 
+/// Replace this process with the editor at `executable`, opening
+/// `project`. Used to open a project with the installed editor its pin
+/// selects. Never returns.
+pub fn relaunch_into_editor(executable: &Path, project: &Path) -> ! {
+    info!(
+        "Opening {} with {}",
+        project.display(),
+        executable.display()
+    );
+    exec_or_spawn(relaunch_command(executable, &[], project), executable)
+}
+
 /// Respawn the editor binary with the same argv and env. On Unix
 /// this uses `exec` to replace the current process image; on
 /// Windows it spawns a detached child and exits. Never returns.

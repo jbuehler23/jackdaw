@@ -2063,7 +2063,7 @@ pub fn project_reveal(params: In<OperatorParameters>, mut commands: Commands) ->
 }
 
 /// Hand a folder to whatever the desktop opens folders with.
-fn show_in_file_manager(folder: &Path) -> std::io::Result<()> {
+pub(crate) fn show_in_file_manager(folder: &Path) -> std::io::Result<()> {
     let program = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {

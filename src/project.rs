@@ -231,20 +231,23 @@ pub struct RecentEntry {
 }
 
 pub fn read_recent_projects() -> RecentProjects {
+    let mut projects = read_recent_projects_including_missing();
+    projects
+        .projects
+        .retain(|entry| fs::exists(entry.path.clone()).unwrap_or_default());
+    projects
+}
+
+/// The recent-project list as written, with projects whose folder is gone,
+/// so the launcher can say so and offer to forget them.
+pub fn read_recent_projects_including_missing() -> RecentProjects {
     let Some(path) = recent_file_path() else {
         return RecentProjects::default();
     };
     let Ok(data) = std::fs::read_to_string(&path) else {
         return RecentProjects::default();
     };
-
-    let mut projects: RecentProjects = serde_json::from_str(&data).unwrap_or_default();
-
-    projects
-        .projects
-        .retain(|entry| fs::exists(entry.path.clone()).unwrap_or_default());
-
-    projects
+    serde_json::from_str(&data).unwrap_or_default()
 }
 
 pub fn save_recent_projects(projects: &RecentProjects) {
@@ -362,7 +365,7 @@ pub fn create_default_project(root: &Path) -> ProjectConfig {
 /// Remove a project from the recent projects list.
 pub fn remove_recent(path: &Path) {
     let path = dunce::simplified(path);
-    let mut recent = read_recent_projects();
+    let mut recent = read_recent_projects_including_missing();
     recent
         .projects
         .retain(|entry| dunce::simplified(entry.path.as_path()) != path);
@@ -372,7 +375,7 @@ pub fn remove_recent(path: &Path) {
 /// Record a project in the recent projects list.
 pub fn touch_recent(root: &Path, name: &str) {
     let root = dunce::simplified(root).to_path_buf();
-    let mut recent = read_recent_projects();
+    let mut recent = read_recent_projects_including_missing();
 
     // Remove existing entry for this path
     recent

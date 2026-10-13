@@ -9,7 +9,6 @@ use bevy::{
     window::{PrimaryWindow, RawHandleWrapper},
 };
 use jackdaw_feathers::{
-    button::{ButtonVariant, IconButtonProps, icon_button},
     icons::{EditorFont, Icon, font_paths},
     text_edit::{EditorTextEdit, TextEditProps, TextEditValue, text_edit},
     tokens,
@@ -22,7 +21,7 @@ use crate::{
     new_project::scaffold_project,
     project::{self, ProjectRoot},
     scaffold::{ImportChange, NewProjectWarning, ScaffoldError, TemplateKind},
-    windowing::{JackdawIcon, title_bar_repo_link},
+    windowing::JackdawIcon,
 };
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
 use bevy_window_chrome::CaptionFont;
@@ -33,7 +32,7 @@ pub struct ProjectSelectPlugin;
 
 impl Plugin for ProjectSelectPlugin {
     fn build(&self, app: &mut App) {
-        // The preflight banner exists to tell the person at the launcher that
+        // The environment checks exist to tell the person at the launcher that
         // their toolchain will not build a project. A run with no windowing
         // backend has nobody reading it, so it skips the checks rather than
         // spawning `rustc` and the compiler probes on every boot.
@@ -74,12 +73,6 @@ impl Plugin for ProjectSelectPlugin {
                 open_pending_scenes
                     .run_if(in_state(AppState::Editor))
                     .run_if(resource_exists::<PendingSceneOpens>),
-            )
-            .add_systems(
-                Update,
-                update_preflight_banner
-                    .run_if(in_state(AppState::ProjectSelect))
-                    .run_if(resource_changed::<PreflightState>),
             );
     }
 }
@@ -89,11 +82,6 @@ impl Plugin for ProjectSelectPlugin {
 #[derive(Component, Copy, Clone)]
 #[require(EditorEntity)]
 struct ProjectSelectorRoot;
-
-/// The project a launcher row points at, so an action taken elsewhere
-/// (dropping a folder that no longer exists) can find and remove it.
-#[derive(Component)]
-struct RecentRow(PathBuf);
 
 /// When set, the project selector will skip UI and auto-open the given project.
 #[derive(Resource)]
@@ -244,6 +232,9 @@ fn start_preflight(mut state: ResMut<PreflightState>, pending: Option<Res<Pendin
 /// Drain the preflight task when it completes, store the results for the UI, and
 /// log them so a failure is visible even before the panel renders.
 fn poll_preflight(mut state: ResMut<PreflightState>) {
+    if state.task.is_none() {
+        return;
+    }
     let Some(task) = state.task.as_mut() else {
         return;
     };
@@ -266,218 +257,6 @@ fn poll_preflight(mut state: ResMut<PreflightState>) {
     state.results = results;
 }
 
-/// Marker on the launcher's preflight banner container (top of the body).
-#[derive(Component)]
-pub struct PreflightBanner;
-
-/// Rebuild the preflight banner from the latest results. Quiet while checking
-/// (one line) or healthy (a single green line); expands with per-issue detail
-/// and a fix when a check warns or fails. Runs only when `PreflightState`
-/// changes, so it does not rebuild every frame.
-fn update_preflight_banner(
-    mut commands: Commands,
-    state: Res<PreflightState>,
-    banner_q: Query<(Entity, Option<&Children>), With<PreflightBanner>>,
-    editor_font: Res<EditorFont>,
-    icon_font: Res<jackdaw_feathers::icons::IconFont>,
-) {
-    use crate::preflight::CheckStatus;
-
-    let Ok((banner, children)) = banner_q.single() else {
-        return;
-    };
-    if let Some(children) = children {
-        for child in children.iter() {
-            commands.entity(child).despawn();
-        }
-    }
-
-    const GREEN: Color = Color::srgb(0.45, 0.80, 0.55);
-    const AMBER: Color = Color::srgb(0.92, 0.74, 0.36);
-    const RED: Color = Color::srgb(0.92, 0.45, 0.45);
-
-    let font = editor_font.0.clone();
-    let ifont = icon_font.0.clone();
-
-    if state.task.is_some() {
-        preflight_line(
-            &mut commands,
-            banner,
-            &ifont,
-            &font,
-            Icon::Loader,
-            tokens::TEXT_SECONDARY,
-            "Checking environment...".to_string(),
-            tokens::TEXT_SECONDARY,
-        );
-        return;
-    }
-    if state.results.is_empty() {
-        return;
-    }
-    let issues: Vec<&crate::preflight::CheckResult> = state
-        .results
-        .iter()
-        .filter(|r| r.status != CheckStatus::Ok)
-        .collect();
-    if issues.is_empty() {
-        preflight_line(
-            &mut commands,
-            banner,
-            &ifont,
-            &font,
-            Icon::CircleCheck,
-            GREEN,
-            "Environment ready".to_string(),
-            GREEN,
-        );
-        return;
-    }
-    let n = issues.len();
-    let header = format!("Environment - {n} issue{}", if n == 1 { "" } else { "s" });
-    preflight_line(
-        &mut commands,
-        banner,
-        &ifont,
-        &font,
-        Icon::TriangleAlert,
-        AMBER,
-        header,
-        AMBER,
-    );
-    for r in issues {
-        let (glyph, color) = match r.status {
-            CheckStatus::Fail => (Icon::CircleAlert, RED),
-            _ => (Icon::TriangleAlert, AMBER),
-        };
-        preflight_line(
-            &mut commands,
-            banner,
-            &ifont,
-            &font,
-            glyph,
-            color,
-            format!("{}: {}", r.label, r.detail),
-            tokens::TEXT_PRIMARY,
-        );
-        if let Some(fix) = &r.fix {
-            preflight_fix_line(&mut commands, banner, &font, format!("fix: {fix}"));
-        }
-    }
-
-    // Recheck button: re-runs the environment checks after the user fixes
-    // something, without reopening the launcher.
-    let recheck = commands
-        .spawn((
-            Node {
-                align_self: AlignSelf::FlexStart,
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(6.0),
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::TOOLBAR_BG),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            ChildOf(banner),
-            children![
-                (
-                    Text::new(String::from(Icon::RefreshCw.unicode())),
-                    TextFont {
-                        font: ifont.clone().into(),
-                        font_size: tokens::TEXT_SIZE_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                ),
-                (
-                    Text::new("Recheck"),
-                    TextFont {
-                        font: font.clone().into(),
-                        font_size: tokens::TEXT_SIZE_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                ),
-            ],
-        ))
-        .id();
-    commands
-        .entity(recheck)
-        .observe(|_: On<PointerClick>, mut state: ResMut<PreflightState>| {
-            state.results.clear();
-            state.reported = false;
-            state.task = Some(
-                AsyncComputeTaskPool::get()
-                    .spawn(async move { crate::preflight::run_all_checks() }),
-            );
-        });
-}
-
-/// A banner row: an icon glyph followed by a label.
-fn preflight_line(
-    commands: &mut Commands,
-    banner: Entity,
-    icon_font: &Handle<Font>,
-    font: &Handle<Font>,
-    icon: Icon,
-    icon_color: Color,
-    text: String,
-    text_color: Color,
-) {
-    commands.spawn((
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(tokens::SPACING_SM),
-            ..Default::default()
-        },
-        ChildOf(banner),
-        children![
-            (
-                Text::new(String::from(icon.unicode())),
-                TextFont {
-                    font: icon_font.clone().into(),
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(icon_color),
-            ),
-            (
-                Text::new(text),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..Default::default()
-                },
-                TextColor(text_color),
-            ),
-        ],
-    ));
-}
-
-/// An indented secondary "fix:" line under an issue.
-fn preflight_fix_line(commands: &mut Commands, banner: Entity, font: &Handle<Font>, text: String) {
-    commands.spawn((
-        Node {
-            margin: UiRect::left(Val::Px(22.0)),
-            ..Default::default()
-        },
-        ChildOf(banner),
-        children![(
-            Text::new(text),
-            TextFont {
-                font: font.clone().into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-    ));
-}
-
 /// Perform a queued auto-open, one frame after entering the project selector.
 /// Deferring the open to `Update` (rather than running it from the `OnEnter`
 /// spawn) lets `Startup` finish loading the editor extensions first, so the
@@ -493,8 +272,6 @@ fn apply_pending_auto_open(world: &mut World) {
 fn spawn_project_selector(
     mut commands: Commands,
     theme: Res<WindowChromeTheme>,
-    editor_font: Res<EditorFont>,
-    icon_font: Res<jackdaw_feathers::icons::IconFont>,
     jackdaw_icon: Res<JackdawIcon>,
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
     caption_font: Res<CaptionFont>,
@@ -511,17 +288,6 @@ fn spawn_project_selector(
         return;
     }
 
-    let recent = project::read_recent_projects();
-    let font = editor_font.0.clone();
-    let icon_font_handle = icon_font.0.clone();
-
-    // Detect CWD project candidate
-    let cwd = std::env::current_dir().unwrap_or_default();
-    // What marks a project: a marker like `assets/` promotes any folder
-    // that happens to have one to the top of the launcher, where clicking
-    // it lands on the not-a-project card.
-    let cwd_has_project = cwd.join("jackdaw.toml").is_file() || cwd.join("Cargo.toml").is_file();
-
     let slots = spawn_window_shell(
         &mut commands,
         &theme,
@@ -529,22 +295,17 @@ fn spawn_project_selector(
         caption_font,
         ProjectSelectorRoot,
     );
-    fill_project_selector(
+    crate::launcher::fill_launcher(
         &mut commands,
         slots.title_bar,
         slots.body,
-        font,
-        icon_font_handle,
         jackdaw_icon.0.clone(),
-        recent,
-        cwd,
-        cwd_has_project,
     );
 }
 
 /// What the launcher footer says this editor is: a source checkout it runs
 /// from, or an installed build, with the folder that holds it.
-fn build_origin() -> (String, PathBuf) {
+pub(crate) fn build_origin() -> (String, PathBuf) {
     describe_build_origin(
         crate::new_project::jackdaw_dev_checkout(),
         &jackdaw_project_build::build_source::build_source(),
@@ -586,603 +347,36 @@ fn describe_build_origin(
     }
 }
 
-fn fill_project_selector(
-    commands: &mut Commands,
-    title_bar: Entity,
-    body: Entity,
-    font: Handle<Font>,
-    icon_font_handle: Handle<Font>,
-    jackdaw_icon: Handle<Image>,
-    recent: project::RecentProjects,
-    cwd: PathBuf,
-    cwd_has_project: bool,
-) {
-    commands
-        .entity(title_bar)
-        .with_children(|title_bar_parent| {
-            title_bar_parent.spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::SpaceBetween,
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    padding: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
-                    ..Default::default()
-                },
-                Pickable::IGNORE,
-                children![
-                    (
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(tokens::SPACING_MD),
-                            ..Default::default()
-                        },
-                        children![
-                            title_bar_repo_link(jackdaw_icon),
-                            (
-                                Text::new("jackdaw"),
-                                TextFont {
-                                    font: font.clone().into(),
-                                    font_size: tokens::TEXT_SIZE,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::TEXT_PRIMARY),
-                                Pickable::IGNORE,
-                            ),
-                        ],
-                    ),
-                    (
-                        Text::new(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                        TextFont {
-                            font: font.clone().into(),
-                            font_size: tokens::TEXT_SIZE_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                        Pickable::IGNORE,
-                    )
-                ],
-            ));
-        });
-    commands.entity(body).with_children(|body_parent| {
-        // Preflight banner at the top of the body, filled live by
-        // `update_preflight_banner` as the environment checks complete.
-        body_parent.spawn((
-            PreflightBanner,
-            Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(8.0), Val::Px(0.0)),
-                ..Default::default()
-            },
-        ));
-        body_parent.spawn((
-            crate::sdk_setup::SdkStatusRow,
-            Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(4.0)),
-                ..Default::default()
-            },
-        ));
-        body_parent
-            .spawn(Node {
-                width: Val::Percent(100.0),
-                flex_grow: 1.0,
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(0.0), Val::Px(8.0)),
-                ..Default::default()
-            })
-            .with_children(|content| {
-                // Left rail owns project-creation actions. Keeping these
-                // separate from the project list makes the launcher read like
-                // the rest of the editor: tools on the side, content adjacent.
-                content
-                    .spawn((
-                        Node {
-                            width: Val::Px(300.0),
-                            height: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(8.0),
-                            padding: UiRect::all(Val::Px(10.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                            ..Default::default()
-                        },
-                        BackgroundColor(tokens::PANEL_BG),
-                        BorderColor::all(tokens::BORDER_SUBTLE),
-                    ))
-                    .with_children(|sidebar| {
-                        spawn_launcher_section_label(sidebar, "Start", font.clone());
-
-                        spawn_new_project_button(
-                            sidebar,
-                            "New Game",
-                            Icon::Gamepad2,
-                            font.clone(),
-                            icon_font_handle.clone(),
-                            TemplateKind::Game,
-                            true,
-                        );
-                        spawn_new_project_button(
-                            sidebar,
-                            "New Extension",
-                            Icon::PackagePlus,
-                            font.clone(),
-                            icon_font_handle.clone(),
-                            TemplateKind::Extension,
-                            false,
-                        );
-
-                        let import_entity = spawn_launcher_action_button(
-                            sidebar,
-                            "Import Bevy Project",
-                            Icon::Import,
-                            font.clone(),
-                            icon_font_handle.clone(),
-                            tokens::TOOLBAR_BG,
-                            tokens::HOVER_BG,
-                        );
-                        sidebar
-                            .commands()
-                            .entity(import_entity)
-                            .observe(spawn_import_dialog);
-
-                        let browse_entity = spawn_launcher_action_button(
-                            sidebar,
-                            "Open Folder",
-                            Icon::FolderOpen,
-                            font.clone(),
-                            icon_font_handle.clone(),
-                            tokens::TOOLBAR_BG,
-                            tokens::HOVER_BG,
-                        );
-                        sidebar
-                            .commands()
-                            .entity(browse_entity)
-                            .observe(spawn_browse_dialog);
-
-                        sidebar.spawn((
-                            Node {
-                                flex_grow: 1.0,
-                                ..Default::default()
-                            },
-                            Pickable::IGNORE,
-                        ));
-
-                        let (origin_label, origin_path) = build_origin();
-                        sidebar.spawn((
-                            Text::new(origin_label),
-                            TextFont {
-                                font: font.clone().into(),
-                                font_size: tokens::TEXT_SIZE_SM,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-                        ));
-                        sidebar.spawn((
-                            Text::new(origin_path.to_string_lossy().into_owned()),
-                            TextFont {
-                                font: font.clone().into(),
-                                font_size: tokens::TEXT_SIZE_XS,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_SECONDARY),
-                            Node {
-                                max_width: Val::Px(260.0),
-                                overflow: Overflow::clip(),
-                                ..Default::default()
-                            },
-                        ));
-                    });
-
-                // Main panel lists openable projects. The current checkout is
-                // promoted above recents so local development builds are one
-                // click from the launcher.
-                content
-                    .spawn((
-                        Node {
-                            flex_grow: 1.0,
-                            height: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                            overflow: Overflow::clip(),
-                            ..Default::default()
-                        },
-                        BackgroundColor(tokens::PANEL_BG),
-                        BorderColor::all(tokens::BORDER_SUBTLE),
-                    ))
-                    .with_children(|projects| {
-                        projects.spawn((
-                            Node {
-                                width: Val::Percent(100.0),
-                                height: Val::Px(34.0),
-                                align_items: AlignItems::Center,
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(0.0)),
-                                border: UiRect::bottom(Val::Px(1.0)),
-                                border_radius: BorderRadius::top(Val::Px(tokens::BORDER_RADIUS_LG)),
-                                ..Default::default()
-                            },
-                            BackgroundColor(tokens::PANEL_HEADER_BG),
-                            BorderColor::all(tokens::BORDER_SUBTLE),
-                            children![(
-                                Text::new("Projects"),
-                                TextFont {
-                                    font: font.clone().into(),
-                                    font_size: tokens::TEXT_SIZE,
-                                    ..Default::default()
-                                },
-                                TextColor(tokens::TEXT_PRIMARY),
-                            )],
-                        ));
-
-                        projects
-                            .spawn(Node {
-                                flex_direction: FlexDirection::Column,
-                                row_gap: Val::Px(6.0),
-                                padding: UiRect::all(Val::Px(10.0)),
-                                width: Val::Percent(100.0),
-                                flex_grow: 1.0,
-                                ..Default::default()
-                            })
-                            .with_children(|list| {
-                                if cwd_has_project {
-                                    let cwd_name = cwd
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().to_string())
-                                        .unwrap_or_else(|| cwd.to_string_lossy().to_string());
-                                    spawn_launcher_section_label(
-                                        list,
-                                        "Current Directory",
-                                        font.clone(),
-                                    );
-                                    spawn_project_row(
-                                        list,
-                                        &cwd_name,
-                                        &cwd.to_string_lossy(),
-                                        font.clone(),
-                                        icon_font_handle.clone(),
-                                        cwd.clone(),
-                                        None,
-                                        true,
-                                    );
-                                }
-
-                                spawn_launcher_section_label(list, "Recent", font.clone());
-                                let mut shown_recent = 0usize;
-                                for entry in &recent.projects {
-                                    if cwd_has_project
-                                        && dunce::simplified(entry.path.as_path())
-                                            == dunce::simplified(cwd.as_path())
-                                    {
-                                        continue;
-                                    }
-                                    spawn_project_row(
-                                        list,
-                                        &entry.name,
-                                        &entry.path.to_string_lossy(),
-                                        font.clone(),
-                                        icon_font_handle.clone(),
-                                        entry.path.clone(),
-                                        Some(entry.last_opened.as_str()),
-                                        false,
-                                    );
-                                    shown_recent += 1;
-                                }
-
-                                if shown_recent == 0 {
-                                    spawn_empty_recent_state(
-                                        list,
-                                        font.clone(),
-                                        icon_font_handle.clone(),
-                                    );
-                                }
-                            });
-                    });
-            });
-    });
-}
-
-fn spawn_project_row(
-    parent: &mut ChildSpawnerCommands,
-    name: &str,
-    path_display: &str,
-    font: Handle<Font>,
-    icon_font: Handle<Font>,
-    project_path: PathBuf,
-    last_opened: Option<&str>,
-    is_cwd: bool,
-) {
-    // Rows use the same dense panel styling as editor lists: icon, primary
-    // label, path, and an optional remove action for persisted recents.
-    let row_entity = parent
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                width: Val::Percent(100.0),
-                min_height: Val::Px(46.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(10.0),
-                ..Default::default()
-            },
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            jackdaw_feathers::list_view::list_row(),
-            RecentRow(project_path.clone()),
-        ))
-        .id();
-
-    let project_icon = parent
-        .commands()
-        .spawn((
-            Node {
-                width: Val::Px(26.0),
-                height: Val::Px(26.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_MD)),
-                ..Default::default()
-            },
-            BackgroundColor(tokens::DOC_TAB_ACTIVE_BG),
-            children![(
-                Text::new(String::from(Icon::Folder.unicode())),
-                TextFont {
-                    font: icon_font.clone().into(),
-                    font_size: tokens::ICON_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::DIR_ICON_COLOR),
-            )],
-            Pickable::IGNORE,
-        ))
-        .id();
-    parent.commands().entity(row_entity).add_child(project_icon);
-
-    let info_column = parent
-        .commands()
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                flex_grow: 1.0,
-                row_gap: Val::Px(2.0),
-                overflow: Overflow::clip(),
-                ..Default::default()
-            },
-            children![
-                (
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(8.0),
-                        align_items: AlignItems::Center,
-                        ..Default::default()
-                    },
-                    children![
-                        (
-                            Text::new(name.to_string()),
-                            TextFont {
-                                font: font.clone().into(),
-                                font_size: tokens::TEXT_SIZE,
-                                ..Default::default()
-                            },
-                            TextColor(tokens::TEXT_PRIMARY),
-                        ),
-                        if_cwd_badge(is_cwd, font.clone()),
-                        // A folder that has been moved or deleted is
-                        // still listed, so one stat per row says so up
-                        // front rather than at the failing click.
-                        missing_badge(&project_path, font.clone()),
-                        // The engine a project targets decides whether
-                        // this editor can build it at all, so it belongs
-                        // next to the name rather than one click away.
-                        bevy_badge(&project_path, font.clone()),
-                        missing_modules_badge(&project_path, font.clone()),
-                    ],
-                ),
-                (
-                    Text::new(row_subtitle(path_display, last_opened)),
-                    TextFont {
-                        font: font.clone().into(),
-                        font_size: tokens::TEXT_SIZE_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                    Node {
-                        max_width: Val::Percent(100.0),
-                        overflow: Overflow::clip(),
-                        ..Default::default()
-                    },
-                ),
-            ],
-            Pickable::IGNORE,
-        ))
-        .id();
-
-    parent.commands().entity(row_entity).add_child(info_column);
-
-    if !is_cwd {
-        let remove_path = project_path.clone();
-        let x_button = parent
-            .commands()
-            .spawn(icon_button(
-                IconButtonProps::new(Icon::X).variant(ButtonVariant::Ghost),
-                &icon_font,
-            ))
-            .id();
-
-        parent.commands().entity(x_button).observe(
-            move |mut click: On<PointerClick>, mut commands: Commands| {
-                click.propagate(false);
-                let path = remove_path.clone();
-                project::remove_recent(&path);
-                commands.entity(row_entity).try_despawn();
-            },
-        );
-
-        parent.commands().entity(row_entity).add_child(x_button);
-    }
-
-    parent.commands().entity(row_entity).observe(
-        move |_: On<PointerClick>, mut commands: Commands| {
-            let path = project_path.clone();
-            commands.queue(move |world: &mut World| {
-                enter_project(world, path);
-            });
-        },
-    );
-}
-
-/// The row's second line: the path, plus when the project was last
-/// opened when that is known.
-fn row_subtitle(path_display: &str, last_opened: Option<&str>) -> String {
-    match last_opened.and_then(crate::timestamps::relative_to_now) {
-        Some(when) => format!("{path_display}  .  {when}"),
-        None => path_display.to_string(),
-    }
-}
-
-/// A `missing` chip for a recent whose folder is no longer there.
-/// Clicking still explains it and offers to forget the entry; this only
-/// stops the list from claiming the project is fine.
-fn missing_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
-    let missing = !project_path.is_dir();
-    (
-        Text::new(if missing { "missing" } else { "" }.to_string()),
-        TextFont {
-            font: font.into(),
-            font_size: tokens::TEXT_SIZE_XS,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_ERROR),
-        Node {
-            display: if missing {
-                Display::Flex
-            } else {
-                Display::None
-            },
-            ..Default::default()
-        },
-        Pickable::IGNORE,
-    )
-}
-
-/// A `bevy 0.16` chip, coloured by whether this editor can build it.
-/// Absent when the project states no Bevy version, since an empty chip
-/// would read as a claim.
-fn bevy_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
-    let targeted = project_manifest::targeted_bevy(project_path);
-    let supported = targeted
-        .as_deref()
-        .is_some_and(|minor| minor == jackdaw_project_build::BEVY_VERSION);
-    let (display, color) = match &targeted {
-        Some(minor) if supported => (Display::Flex, tokens::TEXT_SECONDARY),
-        Some(_) => (Display::Flex, tokens::TEXT_ERROR),
-        None => (Display::None, tokens::TEXT_SECONDARY),
+/// Ask for a project folder, then open it, or with `import` show what
+/// setting it up for jackdaw writes.
+pub(crate) fn pick_project_folder_from(world: &mut World, import: bool) {
+    let purpose = if import {
+        FolderPurpose::Import
+    } else {
+        FolderPurpose::Open
     };
-    (
-        Text::new(format!("bevy {}", targeted.unwrap_or_default())),
-        TextFont {
-            font: font.into(),
-            font_size: tokens::TEXT_SIZE_XS,
-            ..Default::default()
-        },
-        TextColor(color),
-        Node {
-            display,
-            ..Default::default()
-        },
-        Pickable::IGNORE,
-    )
-}
-
-/// A chip naming the modules a project uses that this editor does not
-/// include. Absent when there are none.
-fn missing_modules_badge(project_path: &Path, font: Handle<Font>) -> impl Bundle {
-    let missing = crate::module_picker::missing_modules(project_path);
-    let text = match missing.as_slice() {
-        [] => String::new(),
-        [_] => format!(
-            "needs the {} module",
-            jackdaw_project_build::modules::ModuleCatalog::builtin().names(&missing)
-        ),
-        _ => format!(
-            "needs the {} modules",
-            jackdaw_project_build::modules::ModuleCatalog::builtin().names(&missing)
-        ),
-    };
-    (
-        Node {
-            display: if missing.is_empty() {
-                Display::None
-            } else {
-                Display::Flex
-            },
-            ..Default::default()
-        },
-        Text::new(text),
-        TextFont {
-            font: font.into(),
-            font_size: tokens::TEXT_SIZE_XS,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_WARNING),
-        Pickable::IGNORE,
-    )
-}
-
-fn if_cwd_badge(is_cwd: bool, font: Handle<Font>) -> impl Bundle {
-    let text = if is_cwd { "current dir" } else { "" };
-    (
-        Text::new(text.to_string()),
-        TextFont {
-            font: font.into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_ACCENT),
-    )
-}
-
-fn spawn_browse_dialog(
-    _: On<PointerClick>,
-    commands: Commands,
-    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-) {
-    pick_project_folder(commands, raw_handle, FolderPurpose::Open);
-}
-
-fn spawn_import_dialog(
-    _: On<PointerClick>,
-    commands: Commands,
-    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-) {
-    pick_project_folder(commands, raw_handle, FolderPurpose::Import);
-}
-
-fn pick_project_folder(
-    mut commands: Commands,
-    raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
-    purpose: FolderPurpose,
-) {
     let title = match purpose {
         FolderPurpose::Open => "Select project folder",
         FolderPurpose::Import => "Select the Bevy project to import",
     };
+    let mut windows = world.query_filtered::<&RawHandleWrapper, With<PrimaryWindow>>();
+    let window = windows.iter(world).next().cloned();
     let dialog = crate::native_dialog::dialog_at(
         crate::native_dialog::launcher_project_directory(),
-        raw_handle.single().ok(),
+        window.as_ref(),
     )
     .set_title(title);
-
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
-    commands.insert_resource(FolderDialogTask { task, purpose });
+    world.insert_resource(FolderDialogTask { task, purpose });
+}
+
+/// Run the environment checks again, as Doctor's Recheck does.
+pub(crate) fn restart_preflight(world: &mut World) {
+    let mut state = world.resource_mut::<PreflightState>();
+    state.results.clear();
+    state.reported = false;
+    state.task =
+        Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
 }
 
 fn poll_folder_dialog(world: &mut World) {
@@ -1299,7 +493,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 /// Every open funnels through here, so the asset-root check lives here: no
 /// other path can install a [`ProjectRoot`] whose asset folder the asset
 /// server is not reading from.
-fn transition_to_editor(world: &mut World, root: PathBuf) {
+pub(crate) fn transition_to_editor(world: &mut World, root: PathBuf) {
     let plan = world
         .get_resource::<crate::restart::AssetProjectRoot>()
         .map(|asset_root| {
@@ -1321,8 +515,10 @@ fn transition_to_editor(world: &mut World, root: PathBuf) {
         .unwrap_or_else(|| project::create_default_project(&root));
 
     project::touch_recent(&root, &config.name);
+    crate::launcher::record_open(root.clone());
 
     world.insert_resource(ProjectRoot::new(root.clone(), config));
+    crate::launcher::apply_project_overrides(world, &root);
 
     // Despawn the launcher UI.
     let mut to_despawn = Vec::new();
@@ -1471,173 +667,6 @@ fn reopen_in_new_process(root: PathBuf) {
 #[cfg(test)]
 fn reopen_in_new_process(root: PathBuf) {
     crate::restart::request_project_relaunch(root);
-}
-
-fn spawn_launcher_section_label(
-    parent: &mut ChildSpawnerCommands,
-    label: &str,
-    font: Handle<Font>,
-) {
-    parent.spawn((
-        Text::new(label.to_string()),
-        TextFont {
-            font: font.into(),
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-        Node {
-            margin: UiRect::top(Val::Px(4.0)),
-            ..Default::default()
-        },
-        Pickable::IGNORE,
-    ));
-}
-
-fn spawn_empty_recent_state(
-    parent: &mut ChildSpawnerCommands,
-    font: Handle<Font>,
-    icon_font: Handle<Font>,
-) {
-    // Empty-state copy is intentionally terse; the left rail already exposes
-    // the creation and browse affordances.
-    parent.spawn((
-        Node {
-            width: Val::Percent(100.0),
-            min_height: Val::Px(90.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            row_gap: Val::Px(6.0),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-            ..Default::default()
-        },
-        BackgroundColor(tokens::TOOLBAR_BG),
-        BorderColor::all(tokens::BORDER_SUBTLE),
-        children![
-            (
-                Text::new(String::from(Icon::FolderOpen.unicode())),
-                TextFont {
-                    font: icon_font.into(),
-                    font_size: tokens::ICON_LG,
-                    ..Default::default()
-                },
-                TextColor(tokens::DOC_TAB_INACTIVE_LABEL),
-            ),
-            (
-                Text::new("No recent projects"),
-                TextFont {
-                    font: font.into(),
-                    font_size: tokens::TEXT_SIZE,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-        ],
-        Pickable::IGNORE,
-    ));
-}
-
-fn spawn_launcher_action_button(
-    parent: &mut ChildSpawnerCommands,
-    label: &str,
-    icon: Icon,
-    font: Handle<Font>,
-    icon_font: Handle<Font>,
-    idle_bg: Color,
-    hover_bg: Color,
-) -> Entity {
-    // Shared launcher button primitive for actions that need an icon + label
-    // but do not fit the generic icon-only button component.
-    let button = parent
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(34.0),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(0.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(tokens::BORDER_RADIUS_LG)),
-                ..Default::default()
-            },
-            BackgroundColor(idle_bg),
-            BorderColor::all(tokens::BORDER_SUBTLE),
-            children![
-                (
-                    Text::new(String::from(icon.unicode())),
-                    TextFont {
-                        font: icon_font.into(),
-                        font_size: tokens::ICON_SM,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_PRIMARY),
-                ),
-                (
-                    Text::new(label.to_string()),
-                    TextFont {
-                        font: font.into(),
-                        font_size: tokens::TEXT_SIZE,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_PRIMARY),
-                ),
-            ],
-        ))
-        .id();
-
-    parent.commands().entity(button).observe(
-        move |hover: On<PointerOver>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(hover.event_target()) {
-                bg.0 = hover_bg;
-            }
-        },
-    );
-    parent.commands().entity(button).observe(
-        move |out: On<PointerOut>, mut bg: Query<&mut BackgroundColor>| {
-            if let Ok(mut bg) = bg.get_mut(out.event_target()) {
-                bg.0 = idle_bg;
-            }
-        },
-    );
-
-    button
-}
-
-/// Spawn a launcher action that opens the New Project modal with the
-/// given template kind already selected.
-fn spawn_new_project_button(
-    parent: &mut ChildSpawnerCommands,
-    label: &str,
-    icon: Icon,
-    font: Handle<Font>,
-    icon_font: Handle<Font>,
-    kind: TemplateKind,
-    primary: bool,
-) {
-    let idle_bg = if primary {
-        tokens::SELECTED_BG
-    } else {
-        tokens::TOOLBAR_BG
-    };
-    let hover_bg = if primary {
-        tokens::SELECTED_BORDER
-    } else {
-        tokens::HOVER_BG
-    };
-    let button =
-        spawn_launcher_action_button(parent, label, icon, font, icon_font, idle_bg, hover_bg);
-
-    parent
-        .commands()
-        .entity(button)
-        .observe(move |_: On<PointerClick>, mut commands: Commands| {
-            commands.queue(move |world: &mut World| {
-                open_new_project_modal(world, kind);
-            });
-        });
 }
 
 /// Tear down any existing New Project modal. Idempotent.
@@ -2275,17 +1304,7 @@ fn show_not_a_project_card(world: &mut World, root: PathBuf, reason: NotAProject
                 let root = root.clone();
                 commands.queue(move |world: &mut World| {
                     project::remove_recent(&root);
-                    let stale: Vec<Entity> = world
-                        .query::<(Entity, &RecentRow)>()
-                        .iter(world)
-                        .filter(|(_, row)| row.0 == root)
-                        .map(|(entity, _)| entity)
-                        .collect();
-                    for entity in stale {
-                        if let Ok(row) = world.get_entity_mut(entity) {
-                            row.despawn();
-                        }
-                    }
+                    crate::launcher::refresh_launcher(world);
                     close_new_project_modal(world);
                 });
             });
@@ -2448,53 +1467,20 @@ fn spawn_warning_list(
 }
 
 /// Shown when a project's recorded pins say it targets a different Bevy
-/// minor than this editor. Opening anyway is allowed (scenes and assets
-/// still load), but project code will not build, so the card says so
-/// rather than letting the user discover it as a wall of compile errors.
+/// minor than this editor: the launcher's Open with a different editor
+/// dialog, which offers to install its editor, open a copy, convert it or
+/// look at its scenes.
 fn show_version_mismatch_card(
     world: &mut World,
     root: PathBuf,
     status: project_manifest::PinStatus,
 ) {
-    let project_manifest::PinStatus::BevyDiffers { pinned, running } = status else {
+    if !matches!(status, project_manifest::PinStatus::BevyDiffers { .. }) {
         transition_to_editor(world, root);
         return;
-    };
-    let (_, card, font) = spawn_modal_card(world, 480.0, 640.0);
-    spawn_card_title(world, card, "This project targets a different Bevy", &font);
-    spawn_card_body(
-        world,
-        card,
-        format!(
-            "`{}` was set up for Bevy {pinned}; this jackdaw targets Bevy {running}. The editor \
-             and your game code have to share one Bevy version, so project code will not build \
-             until they match.\n\nEither install the jackdaw release for Bevy {pinned}, or \
-             migrate the project to Bevy {running} and update the `bevy` line in jackdaw.toml.\n\n\
-             You can still open the project to look at its scenes.",
-            root.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("this project")
-        ),
-        &font,
-    );
-
-    let row = spawn_card_button_row(world, card);
-    let back = spawn_card_button(world, row, "Back", &font, false);
-    let open_anyway = spawn_card_button(world, row, "Open anyway", &font, true);
-    world
-        .entity_mut(back)
-        .observe(move |_: On<PointerClick>, mut commands: Commands| {
-            commands.queue(close_new_project_modal);
-        });
-    world
-        .entity_mut(open_anyway)
-        .observe(move |_: On<PointerClick>, mut commands: Commands| {
-            let root = root.clone();
-            commands.queue(move |world: &mut World| {
-                close_new_project_modal(world);
-                transition_to_editor(world, root);
-            });
-        });
+    }
+    close_new_project_modal(world);
+    crate::launcher::show_open_with(world, root);
 }
 
 /// Build an import preview for the "Set up jackdaw" card. Planning is
@@ -4205,9 +3191,18 @@ mod tests {
             "a project on another bevy is recognised as such: {status:?}"
         );
         let mut world = card_world();
+        world.insert_resource(crate::launcher::Launcher(
+            crate::launcher::LauncherData::read(),
+        ));
+        world.init_resource::<crate::launcher::LauncherDialog>();
         show_version_mismatch_card(&mut world, old.clone(), status);
-        let text = rendered_text(&mut world).join("\n");
-        assert!(text.contains("0.16"), "names the bevy it targets: {text}");
+        assert!(
+            matches!(
+                world.resource::<crate::launcher::LauncherDialog>(),
+                crate::launcher::LauncherDialog::OpenWith(form) if form.project == old
+            ),
+            "the open-with dialog offers what to do with it"
+        );
 
         // A folder with only assets/ is not a project, and must not be
         // offered as the current directory.

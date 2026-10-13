@@ -186,6 +186,9 @@ half = "2"
 time.workspace = true
 jackdaw_localization = { version = "0.20.0-dev", path = "crates/jackdaw_localization" }
 jackdaw_env.workspace = true
+jackdaw_package.workspace = true
+jackdaw_releases.workspace = true
+toml_edit = "0.25"
 webbrowser.workspace = true
 
 [target.'cfg(windows)'.dependencies]

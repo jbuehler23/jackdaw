@@ -122,6 +122,21 @@ pub const VIEWPORT_CONTROL_BG: Color = Color::srgb(0.165, 0.165, 0.180);
 
 /// Elevated background for inputs and interactive elements (#36373B)
 pub const ELEVATED_BG: Color = Color::srgb(0.212, 0.216, 0.231);
+
+/// A neutral chip, the small rounded label beside a name.
+pub const CHIP_BG: Color = Color::srgb(0.275, 0.278, 0.298);
+/// A chip saying something is ready or recommended.
+pub const CHIP_SUCCESS_BG: Color = Color::srgb(0.176, 0.259, 0.075);
+/// Text on [`CHIP_SUCCESS_BG`].
+pub const CHIP_SUCCESS_TEXT: Color = Color::srgb(0.773, 0.910, 0.604);
+/// A chip saying something is missing or broken.
+pub const CHIP_WARNING_BG: Color = Color::srgb(0.353, 0.153, 0.188);
+/// Text on [`CHIP_WARNING_BG`].
+pub const CHIP_WARNING_TEXT: Color = Color::srgb(1.0, 0.702, 0.741);
+/// A chip asking for care, such as a build on an unstable channel.
+pub const CHIP_CAUTION_BG: Color = Color::srgb(0.290, 0.227, 0.110);
+/// Text on [`CHIP_CAUTION_BG`].
+pub const CHIP_CAUTION_TEXT: Color = Color::srgb(0.941, 0.776, 0.455);
 /// Axis label container background, lighter than input (#46474C)
 pub const AXIS_LABEL_BG: Color = Color::srgb(0.275, 0.278, 0.298);
 /// Active toolbar button background (#505050)

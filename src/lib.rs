@@ -83,6 +83,7 @@ pub mod extensions_dialog;
 pub mod file_ops;
 pub mod fps_overlay;
 pub mod hot_reload;
+pub mod launcher;
 pub mod layout;
 pub mod live_edits;
 pub mod live_edits_ui;
@@ -425,6 +426,7 @@ impl Plugin for EditorCorePlugin {
             jackdaw_bsn::JackdawBsnPlugin,
             (
                 project_select::ProjectSelectPlugin,
+                launcher::LauncherPlugin,
                 sdk_setup::SdkSetupPlugin,
                 scrolling_log::ScrollingLogPlugin,
                 inspector::InspectorPlugin,
