@@ -39,6 +39,8 @@ pub struct Crate {
 
 struct Workspace {
     crates: Vec<Crate>,
+    /// See [`git_pins`].
+    git_pins: BTreeMap<String, String>,
     target_dir: PathBuf,
 }
 
@@ -69,8 +71,45 @@ fn workspace() -> Result<Workspace, String> {
     }
     Ok(Workspace {
         crates,
+        git_pins: git_pins(&json),
         target_dir: PathBuf::from(target_dir),
     })
+}
+
+/// Registry dependencies of the publishable crates that the workspace takes
+/// from a git revision instead, keyed by package name, each with the inline
+/// table that patches the registry crate to that revision.
+///
+/// `cargo package` drops the git source and keeps the version, so a package
+/// resolves these from crates.io unless the consumer carries the same patch.
+pub fn git_pins(metadata: &serde_json::Value) -> BTreeMap<String, String> {
+    let publishable: BTreeSet<String> = publishable(metadata)
+        .into_iter()
+        .map(|krate| krate.name)
+        .collect();
+    metadata["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|package| {
+            package["name"]
+                .as_str()
+                .is_some_and(|name| publishable.contains(name))
+        })
+        .flat_map(|package| package["dependencies"].as_array().into_iter().flatten())
+        .filter_map(|dep| {
+            let source = dep["source"].as_str()?.strip_prefix("git+")?;
+            let source = source.split('#').next().unwrap_or(source);
+            let (url, query) = source.split_once('?').unwrap_or((source, ""));
+            let mut table = format!("git = {url:?}");
+            for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+                if ["rev", "branch", "tag"].contains(&key) {
+                    table.push_str(&format!(", {key} = {value:?}"));
+                }
+            }
+            Some((dep["name"].as_str()?.to_string(), format!("{{ {table} }}")))
+        })
+        .collect()
 }
 
 /// The packages in `cargo metadata` output that are not `publish = false`,
@@ -225,6 +264,17 @@ pub fn publish(dry_run: bool) -> bool {
             return false;
         }
     };
+    if !workspace.git_pins.is_empty() {
+        let pins: Vec<&str> = workspace.git_pins.keys().map(String::as_str).collect();
+        eprintln!(
+            "these dependencies come from git, and crates.io would resolve them from the \
+             registry instead: {}",
+            pins.join(", ")
+        );
+        if !dry_run {
+            return false;
+        }
+    }
     for krate in order {
         match on_crates_io(&krate.name, &krate.version) {
             Ok(true) => eprintln!("{} {} is already on crates.io", krate.name, krate.version),
@@ -287,7 +337,8 @@ fn publish_one(krate: &Crate) -> bool {
 /// `out` gets each `.crate` file, its unpacked sources under `src/`, and a
 /// `.cargo/config.toml` whose `[patch.crates-io]` table points every crate at
 /// those sources, so cargo run anywhere under `out` resolves the jackdaw
-/// crates from their packages as if they were on the registry. With `check`,
+/// crates from their packages as if they were on the registry. The same table
+/// patches each [`git_pins`] dependency to its revision. With `check`,
 /// every packaged library and binary is type-checked from those sources.
 pub fn package(out: &Path, check: bool) -> bool {
     let out = std::path::absolute(out).unwrap_or_else(|_| out.to_path_buf());
@@ -356,6 +407,9 @@ fn package_into(out: &Path) -> Result<Vec<Crate>, String> {
             krate.name,
             source.to_string_lossy()
         ));
+    }
+    for (name, table) in &workspace.git_pins {
+        patch.push_str(&format!("{name} = {table}\n"));
     }
     if !too_big.is_empty() {
         return Err(format!(
@@ -518,6 +572,54 @@ mod tests {
         assert_eq!(
             names(&publish_order(&crates).unwrap()),
             ["geometry", "scene"]
+        );
+    }
+
+    #[test]
+    fn git_dependencies_of_published_crates_become_patches_to_their_revision() {
+        let metadata = serde_json::json!({
+            "packages": [
+                {
+                    "name": "editor", "version": "0.1.0", "publish": null,
+                    "targets": [{ "kind": ["lib"] }],
+                    "dependencies": [
+                        {
+                            "name": "physics", "kind": null, "req": "^0.8.0-dev",
+                            "source": "git+https://example.com/physics?rev=abc123"
+                        },
+                        {
+                            "name": "input", "kind": null, "req": "^0.26.0",
+                            "source": "git+https://example.com/input?branch=main#def456"
+                        },
+                        {
+                            "name": "serde", "kind": null, "req": "^1",
+                            "source": "registry+https://github.com/rust-lang/crates.io-index"
+                        }
+                    ]
+                },
+                {
+                    "name": "fixture", "version": "0.1.0", "publish": [],
+                    "targets": [{ "kind": ["lib"] }],
+                    "dependencies": [{
+                        "name": "private", "kind": null, "req": "*",
+                        "source": "git+https://example.com/private?rev=1"
+                    }]
+                }
+            ]
+        });
+        let pins = git_pins(&metadata);
+        assert_eq!(
+            pins,
+            BTreeMap::from([
+                (
+                    "input".to_string(),
+                    r#"{ git = "https://example.com/input", branch = "main" }"#.to_string()
+                ),
+                (
+                    "physics".to_string(),
+                    r#"{ git = "https://example.com/physics", rev = "abc123" }"#.to_string()
+                ),
+            ])
         );
     }
 }

@@ -269,7 +269,7 @@ serde_json = "1"
 # avian has no Bevy 0.20 release yet; this pins a fork branch carrying its
 # open Bevy 0.20 port, with bevy_heavy, bevy_transform_interpolation and
 # glam_matrix_extras forked alongside it.
-avian3d = { git = "https://github.com/jbuehler23/avian", rev = "252aac4973a35e2a9de9d33c3614426326b59bbf", features = [
+avian3d = { version = "0.8.0-dev", git = "https://github.com/jbuehler23/avian", rev = "252aac4973a35e2a9de9d33c3614426326b59bbf", features = [
     "3d",
     "parry-f32",
     "collider-from-mesh",
@@ -295,10 +295,10 @@ jackdaw_rustc_wrapper = { version = "0.20.0-dev", path = "crates/jackdaw_rustc_w
 jackdaw_cli_internal = { version = "0.20.0-dev", path = "crates/jackdaw_cli" }
 jackdaw_env = { version = "0.20.0-dev", path = "crates/jackdaw_env" }
 # No 0.20 release yet; master supports Bevy 0.20.
-bevy_enhanced_input = { git = "https://github.com/simgine/bevy_enhanced_input", rev = "cb50e459add7445bbf704a1c9cff37fba4c05dd1" }
+bevy_enhanced_input = { version = "0.26.0", git = "https://github.com/simgine/bevy_enhanced_input", rev = "cb50e459add7445bbf704a1c9cff37fba4c05dd1" }
 rfd = "0.15"
 # rerecast 0.4 is on glam 0.32; this fork branch moves it to glam 0.33.
-rerecast = { git = "https://github.com/jbuehler23/rerecast", rev = "d5c10eff3f9dca404a734a21f05085875e7acf59", default-features = false, features = ["std"] }
+rerecast = { version = "0.4.0", git = "https://github.com/jbuehler23/rerecast", rev = "d5c10eff3f9dca404a734a21f05085875e7acf59", default-features = false, features = ["std"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
 dirs = "6"
