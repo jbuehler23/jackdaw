@@ -4,6 +4,8 @@
 //! document directly; this module only unwraps the multi-root form and
 //! installs the document roots.
 
+use std::borrow::Cow;
+
 use bevy::ecs::entity::Entity;
 
 use crate::document::{BsnPatch, SceneBsnAst};
@@ -36,10 +38,17 @@ impl std::error::Error for BsnLoadError {}
 pub(crate) const SCENE_ROOT_GROUP_MARKER: &str = "jackdaw_bsn::__SceneRootGroup";
 
 /// Parse BSN text into a document [`SceneBsnAst`], first migrating the type
-/// paths of text stamped by an older Bevy (see [`crate::migrate`]).
+/// paths of text stamped by an older Bevy, and reading the Bevy 0.19 entity
+/// separator (see [`crate::migrate`]).
 pub fn parse_bsn_text(text: &str) -> Result<SceneBsnAst, BsnLoadError> {
     let text = crate::migrate::migrate_stamped(text);
-    let (mut ast, root) = crate::parse::parse_bsn(&text).map_err(BsnLoadError::Parse)?;
+    let (mut ast, root) = match crate::parse::parse_bsn(&text) {
+        Ok(parsed) => parsed,
+        Err(err) => match crate::migrate::entity_separators(&text) {
+            Cow::Owned(text) => crate::parse::parse_bsn(&text).map_err(BsnLoadError::Parse)?,
+            Cow::Borrowed(_) => return Err(BsnLoadError::Parse(err)),
+        },
+    };
 
     // Multiple roots emit as a single anonymous entity holding only a Children
     // relation; unwrap it to recover the real roots. A genuine single root that

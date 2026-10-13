@@ -1,10 +1,10 @@
 //! Reader, editor document, and writer for the `.bsn` scene format.
 //!
-//! The parser builds the editor document ([`SceneBsnAst`]) directly from
-//! `.bsn` source text; there is no separate parse-time representation. The
-//! apply path resolves the document to ECS components, and the emitter
-//! writes the document back to `.bsn` text. The grammar rules track the
-//! dynamic-BSN work in bevyengine/bevy#23576.
+//! [`syntax`] reads `.bsn` source text into a syntax tree, mirroring
+//! `bevy_bsn` from bevyengine/bevy#26043; [`parse`] turns that tree into the
+//! editor document ([`SceneBsnAst`]). The apply path resolves the document to
+//! ECS components, and the emitter writes the document back to `.bsn` text
+//! in Bevy 0.20 syntax.
 
 pub mod apply;
 pub mod binary;
@@ -19,6 +19,7 @@ pub mod migrate;
 pub mod parse;
 pub mod retired;
 pub mod sync;
+pub mod syntax;
 pub mod writer;
 
 pub use catalog::{

@@ -4659,7 +4659,6 @@ dependencies = [
  "bevy",
  "bevy_reflect",
  "jackdaw_bind",
- "lalrpop-util",
  "log",
  "nom",
  "path-slash",

@@ -10,5 +10,3 @@ publish = false
 jackdaw_cli_internal = { path = "../crates/jackdaw_cli" }
 jackdaw_project_build = { path = "../crates/jackdaw_project_build" }
 serde_json = "1"
-# Regenerates the committed BSN parser (`cargo xtask bsn-parser`).
-lalrpop = "0.23"

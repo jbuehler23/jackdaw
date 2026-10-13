@@ -14,7 +14,6 @@ bevy = { version = "0.20", default-features = false, features = ["std", "bevy_as
 # relying on that would make theme tokens silently revert to their Debug form
 # the day the sibling stops.
 bevy_reflect = { version = "0.20", features = ["smol_str"] }
-lalrpop-util = "0.23"
 nom = "8"
 pathdiff.workspace = true
 path-slash.workspace = true

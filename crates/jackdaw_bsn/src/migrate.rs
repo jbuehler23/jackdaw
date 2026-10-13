@@ -12,8 +12,19 @@
 //! is parsed, so the component still resolves. Renames land on Bevy minor
 //! bumps, which is the granularity the stamp records. Unstamped text, such as
 //! a hand-authored scene, is read as current.
+//!
+//! The one structural change between the Bevy 0.19 and 0.20 forms of a
+//! jackdaw scene is the separator between sibling entities: `,` before, `--`
+//! now. A `,` between entities is never valid 0.20 syntax, so the loader
+//! parses first and, only when that fails, rewrites the separators with
+//! [`entity_separators`] and parses again. That reads 0.19 scenes stamped or
+//! not, and scenes an early 0.20 build stamped while it still wrote commas,
+//! without a second pass over current text. Saving writes `--` and the
+//! current stamp.
 
 use std::borrow::Cow;
+
+use crate::syntax::{lex::Token, span::Span};
 
 /// The start of a scene's version stamp line.
 pub const STAMP_MARKER: &str = "// jackdaw ";
@@ -47,6 +58,47 @@ pub fn migrate_stamped(text: &str) -> Cow<'_, str> {
         Some(stamp) => migrate_type_paths(text, &stamp.bevy),
         None => Cow::Borrowed(text),
     }
+}
+
+/// Rewrite the `,` that Bevy 0.19 put between sibling entities to the `--`
+/// of Bevy 0.20, leaving every other comma alone.
+///
+/// A comma separates entities exactly when it sits outside any `{}`, `()`
+/// or `<>`: entities are only listed at the top level or in a relationship's
+/// `[...]`, and fields, tuple values, lists, maps and generic arguments all
+/// sit inside one of those delimiters or inside a value. Text that does not
+/// lex is returned as it is, for the parser to report.
+pub fn entity_separators(text: &str) -> Cow<'_, str> {
+    // Each open delimiter, and whether its contents are entities.
+    let mut open: Vec<bool> = Vec::new();
+    let mut commas = Vec::new();
+    for token in Span::from(text) {
+        let Ok(token) = token else {
+            return Cow::Borrowed(text);
+        };
+        let entities = open.last().is_none_or(|&entities| entities);
+        match token.token {
+            Token::LBracket => open.push(entities),
+            Token::LBrace | Token::LParen | Token::Less => open.push(false),
+            Token::RBracket | Token::RBrace | Token::RParen | Token::Greater => {
+                open.pop();
+            }
+            Token::Comma if entities => commas.push(token.span.offset),
+            _ => {}
+        }
+    }
+    if commas.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + commas.len());
+    let mut rest = 0;
+    for comma in commas {
+        out.push_str(&text[rest..comma]);
+        out.push_str("--");
+        rest = comma + 1;
+    }
+    out.push_str(&text[rest..]);
+    Cow::Owned(out)
 }
 
 /// Apply type-path migrations to raw scene text for a scene written under
@@ -276,6 +328,38 @@ mod tests {
         let stamped = format!("{STAMP_MARKER}0.19.0{STAMP_SEPARATOR}0.19\n{body}");
         assert!(migrate_stamped(&stamped).contains("bevy_render::view::Tonemapping::None"));
         assert!(matches!(migrate_stamped(body), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_019_entity_comma_becomes_a_double_minus_and_value_commas_stay() {
+        let text = "#Root\n\
+                    bevy_ecs::hierarchy::Children [\n\
+                    #A\n\
+                    Wrap<a::B, a::C>(1, [2, 3])\n\
+                    Holder { m: map[(\"k\", 1)], n: 2 }\n\
+                    ,\n\
+                    #B\n\
+                    bevy_ecs::hierarchy::Children [ #C, #D ],\n\
+                    ]";
+        let out = entity_separators(text);
+        assert_eq!(
+            out,
+            "#Root\n\
+             bevy_ecs::hierarchy::Children [\n\
+             #A\n\
+             Wrap<a::B, a::C>(1, [2, 3])\n\
+             Holder { m: map[(\"k\", 1)], n: 2 }\n\
+             --\n\
+             #B\n\
+             bevy_ecs::hierarchy::Children [ #C-- #D ]--\n\
+             ]"
+        );
+    }
+
+    #[test]
+    fn a_020_scene_keeps_its_text() {
+        let text = "#A Holder { n: [1, 2] }\n--\n#B";
+        assert!(matches!(entity_separators(text), Cow::Borrowed(_)));
     }
 
     #[test]

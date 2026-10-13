@@ -456,9 +456,6 @@ jobs:
       - name: Run clippy lints without physics
         run: cargo clippy --locked -p jackdaw --no-default-features --features multiplayer,camera_rig,embed-recipe --lib --bins -- --deny warnings
 
-      - name: Check the BSN parser matches its grammar
-        run: cargo xtask bsn-parser --check
-
       - name: Check the core crates depend on no third-party Bevy crate
         run: cargo xtask core-deps
 
