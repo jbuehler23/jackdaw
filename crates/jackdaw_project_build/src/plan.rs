@@ -741,10 +741,7 @@ mod tests {
         assert_eq!(package_id_raw_name(path).as_deref(), Some("my-game"));
         let git = "git+https://github.com/o/bevy_enhanced_input?rev=cb50e459#0.26.0";
         assert_eq!(package_id_version(git), Some("0.26.0"));
-        assert_eq!(
-            package_id_name(git).as_deref(),
-            Some("bevy_enhanced_input")
-        );
+        assert_eq!(package_id_name(git).as_deref(), Some("bevy_enhanced_input"));
         let named = "git+https://github.com/o/avian?rev=252aac49#avian3d@0.8.0-dev";
         assert_eq!(package_id_name(named).as_deref(), Some("avian3d"));
     }
