@@ -6,12 +6,12 @@
 //! [`OperatorEntity`] and inserts a `Tooltip` carrying its label,
 //! description, signature, and the live keybind.
 //!
-//! The keybind is read from BEI at tooltip-attach time (and refreshed
-//! whenever a `Bindings` component changes) so user remaps surface
-//! immediately. The link from `ButtonOperatorCall.id` to the BEI
-//! action entity is the [`OperatorAction`] marker that
-//! `register_operator` auto-inserts; nothing in the editor's call
-//! sites needs to opt in.
+//! The keybind is read from the operator's action entities at
+//! tooltip-attach time (and refreshed whenever a `Bindings` component
+//! changes) so user remaps surface immediately. The link from
+//! `ButtonOperatorCall.id` to the action entity is the [`OperatorAction`]
+//! tag the action carries; nothing in the editor's call sites needs to
+//! opt in.
 //!
 //! Other tooltip sources follow the same shape (one source
 //! component, one `Add` observer). See
@@ -19,12 +19,12 @@
 //! counterpart.
 
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Binding, Bindings, ModKeys};
 use jackdaw_api_internal::keymap::{PresetInput, ShortcutPlatform, key_code_from_name};
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
 use jackdaw_commands::keybinds::key_display_name;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_input::{Binding, Bindings, ModKeys};
 
 pub struct OperatorTooltipPlugin;
 
@@ -64,7 +64,7 @@ fn auto_attach_button_tooltip(
     );
 }
 
-/// When BEI bindings change for any operator's action entity (user
+/// When the bindings change for any operator's action entity (user
 /// remap, extension load/unload), refresh the cached keybind string
 /// on every tooltip whose `ButtonOperatorCall` matches.
 fn refresh_keybind_on_bindings_change(
@@ -118,8 +118,8 @@ pub fn display_keybind(
 }
 
 /// Stringify a single [`Binding`]. Returns `None` for variants the
-/// tooltip deliberately skips (mouse motion, mouse wheel, gamepad
-/// axes; nothing useful to surface as a single key glyph).
+/// tooltip deliberately skips (mouse motion, mouse wheel; nothing
+/// useful to surface as a single key glyph).
 pub(crate) fn format_binding(binding: Binding) -> Option<String> {
     format_binding_on(binding, ShortcutPlatform::host())
 }
@@ -149,10 +149,9 @@ fn format_binding_on(binding: Binding, platform: ShortcutPlatform) -> Option<Str
             };
             Some(chord(mod_keys, button_name))
         }
-        // MouseMotion / MouseWheel / GamepadButton / GamepadAxis /
-        // AnyKey / None: not usefully expressible as a static label
-        // in the tooltip.
-        _ => None,
+        // MouseMotion / MouseWheel: not usefully expressible as a static
+        // label in the tooltip.
+        Binding::MouseMotion { .. } | Binding::MouseWheel { .. } => None,
     }
 }
 
@@ -261,8 +260,6 @@ mod tests {
             })
             .is_none(),
         );
-        assert!(format_binding(Binding::AnyKey).is_none());
-        assert!(format_binding(Binding::None).is_none());
     }
 
     /// The pending form and the applied form of one chord must read the

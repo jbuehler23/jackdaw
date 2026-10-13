@@ -4545,6 +4545,7 @@ dependencies = [
  "jackdaw_feathers",
  "jackdaw_geometry",
  "jackdaw_hull",
+ "jackdaw_input",
  "jackdaw_jsn",
  "jackdaw_loader",
  "jackdaw_localization",

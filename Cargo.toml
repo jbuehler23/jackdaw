@@ -162,6 +162,7 @@ jackdaw_sdk = { workspace = true, optional = true }
 # runtime.
 jackdaw_rustc_wrapper.workspace = true
 bevy_enhanced_input.workspace = true
+jackdaw_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 avian3d = { workspace = true, optional = true }
@@ -235,6 +236,7 @@ jackdaw_bind = { version = "0.20.0-dev", path = "crates/jackdaw_bind" }
 jackdaw_csg = { version = "0.20.0-dev", path = "crates/jackdaw_csg" }
 bevy_window_chrome = { version = "0.20.0-dev", path = "crates/bevy_window_chrome" }
 jackdaw_camera = { version = "0.20.0-dev", path = "crates/jackdaw_camera" }
+jackdaw_input = { version = "0.20.0-dev", path = "crates/jackdaw_input" }
 jackdaw_camera_rig = { version = "0.20.0-dev", path = "crates/jackdaw_camera_rig" }
 jackdaw_feathers = { version = "0.20.0-dev", path = "crates/jackdaw_feathers" }
 jackdaw_widgets = { version = "0.20.0-dev", path = "crates/jackdaw_widgets" }

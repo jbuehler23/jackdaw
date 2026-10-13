@@ -8,6 +8,7 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_input::{Binding, Bindings};
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::creation_taxonomy::{CreationTaxonomy, WIDGET_ACTION_PREFIX};

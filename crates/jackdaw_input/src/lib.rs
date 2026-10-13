@@ -347,6 +347,36 @@ pub struct BindingOf(pub Entity);
 #[relationship_target(relationship = BindingOf, linked_spawn)]
 pub struct Bindings(Vec<Entity>);
 
+macro_rules! entity_list {
+    ($name:ident) => {
+        impl $name {
+            pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
+                self.0.iter().copied()
+            }
+
+            pub fn len(&self) -> usize {
+                self.0.len()
+            }
+
+            pub fn is_empty(&self) -> bool {
+                self.0.is_empty()
+            }
+        }
+
+        impl<'a> IntoIterator for &'a $name {
+            type Item = Entity;
+            type IntoIter = core::iter::Copied<core::slice::Iter<'a, Entity>>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                self.0.iter().copied()
+            }
+        }
+    };
+}
+
+entity_list!(Actions);
+entity_list!(Bindings);
+
 /// Which devices bindings may read. Turning the keyboard off also releases
 /// every modifier, as when a text field owns the keys.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]

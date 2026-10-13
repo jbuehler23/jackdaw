@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::{Binding, Bindings};
 use jackdaw_api_internal::keymap::{
     DefaultKeymap, KeymapCapture, KeymapLoadProblem, KeymapPreset, PresetBinding, PresetContext,
     PresetInput, PresetPhase, PresetSpawnedBinding, UserKeymap, find_conflicts, key_code_from_name,
@@ -28,6 +27,7 @@ use jackdaw_feathers::{
     text_edit::{self, TextEditProps, TextEditValue},
     tokens,
 };
+use jackdaw_input::{Binding, Bindings};
 
 use crate::extension_lifecycle::LastKeymapApply;
 use crate::operator_tooltip::{format_binding, format_preset_input};

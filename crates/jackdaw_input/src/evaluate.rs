@@ -4,7 +4,6 @@ use core::time::Duration;
 
 use bevy::input::keyboard::Key;
 use bevy::input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel};
-use bevy::ecs::relationship::RelationshipTarget;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 
@@ -431,7 +430,7 @@ pub(crate) fn evaluate(
                 continue;
             };
             let require_reset = settings.require_reset;
-            for binding in action_bindings.into_iter().flat_map(RelationshipTarget::iter) {
+            for binding in action_bindings.into_iter().flat_map(Bindings::iter) {
                 if let Ok((_, _, _, mut state)) = bindings.get_mut(binding) {
                     if !active {
                         state.clear();
@@ -497,7 +496,7 @@ pub(crate) fn evaluate(
             };
             let mut contributing: Vec<Trigger> = Vec::new();
             if active {
-                for binding in action_bindings.into_iter().flat_map(RelationshipTarget::iter) {
+                for binding in action_bindings.into_iter().flat_map(Bindings::iter) {
                     let Ok((_, &input, &condition, mut state)) = bindings.get_mut(binding) else {
                         continue;
                     };
