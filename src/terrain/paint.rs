@@ -574,7 +574,7 @@ fn update_paint_brush_position(
 }
 
 /// LMB in paint mode dispatches `terrain.paint`. Mouse-button gestures
-/// are not expressible as BEI key bindings.
+/// are not expressible as key bindings.
 fn paint_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     edit_mode: Res<TerrainEditMode>,

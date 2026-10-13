@@ -81,6 +81,10 @@ pub mod op {
     };
 }
 
+/// Input contexts, actions and bindings, for an extension that declares
+/// its own rather than binding operators through the keymap.
+pub use jackdaw_input as input;
+
 /// Data-driven keymap presets for operator bindings.
 pub mod keymap {
     pub use jackdaw_api_internal::keymap::{
@@ -198,15 +202,6 @@ pub mod prelude {
     /// menu and react to selections without an explicit `ui` import.
     pub use crate::ui::{
         RadialMenuItem, RadialMenuSelect, cancel_radial_menu, confirm_radial_menu, open_radial_menu,
-    };
-
-    /// The `bevy_enhanced_input` items an extension needs to declare
-    /// actions, bind them, and observe them. Anything else comes from
-    /// `bevy_enhanced_input` directly.
-    pub use bevy_enhanced_input::prelude::{
-        Action, ActionOf, Actions, Binding, Bindings, BlockBy, Cancel, Chord, Complete, Fire, Hold,
-        InputAction, InputModKeys, ModKeys, Ongoing, Press, Release, Start, Tap, TriggerState,
-        actions, bindings,
     };
 
     /// Re-exported so manual [`Operator`] impls don't need an extra

@@ -6,14 +6,9 @@ pub use jackdaw_api::{
     DefinitionAssetType, DefinitionAssetTypes, ExtensionInputContext, ExtensionKind,
     ExtensionPoint, ExtensionRegistrar, JackdawExtension, MenuEntryDescriptor, PanelContext,
     TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetRegistry, WindowDescriptor,
-    keymap, op, scene, ui,
+    input, keymap, op, scene, ui,
 };
 pub use jackdaw_api_macros::extension_operator as operator;
-
-#[doc(hidden)]
-pub mod __private {
-    pub use bevy_enhanced_input::prelude::InputAction;
-}
 
 pub mod prelude {
     pub use jackdaw_api::keymap::{PresetInput, PresetPhase};

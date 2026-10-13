@@ -7,7 +7,6 @@
 use bevy::feathers::FeathersPlugins;
 use bevy::input_focus::InputDispatchPlugin;
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use jackdaw_feathers::EditorFeathersPlugin;
 use jackdaw_feathers::color_picker::{ColorPickerProps, color_picker};
 
@@ -41,7 +40,6 @@ fn main() -> AppExit {
         .set_error_handler(bevy::ecs::error::error)
         .add_plugins((
             DefaultPlugins,
-            EnhancedInputPlugin,
             FeathersPlugins.build().disable::<InputDispatchPlugin>(),
             EditorFeathersPlugin,
         ))

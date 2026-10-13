@@ -3,7 +3,7 @@
 //!
 //! These wrap the existing free functions in [`crate::scene_io`] so they
 //! can be dispatched uniformly through the operator API (menu, keybind,
-//! F3 command palette, extension code). BEI bindings for the
+//! F3 command palette, extension code). Key bindings for the
 //! usual Ctrl+S / Ctrl+Shift+S keybinds are attached here.
 
 use bevy::prelude::*;

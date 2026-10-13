@@ -267,7 +267,7 @@ pub(crate) fn brush_knife_commit(
 /// and Enter (commit).
 ///
 /// Lives alongside `handle_clip_mode` in the brush plugin's update
-/// schedule. Mouse-button gestures aren't expressible as BEI key
+/// schedule. Mouse-button gestures aren't expressible as key
 /// bindings, so they live inline here rather than as separate
 /// operators.
 pub(super) fn handle_knife_mode(

@@ -185,12 +185,7 @@ fn main() -> AppExit {
         // The default error handler panics, which we never *ever*
         // want to happen to the editor. Log an error instead.
         .set_error_handler(error_handler)
-        .add_plugins(default_plugins)
-        // Ambient plugins added next to `DefaultPlugins`. The
-        // editor's `EditorCorePlugin` and `PhysicsSimulationPlugin`
-        // assert presence, so user `MyGamePlugin`s can add the
-        // same plugins without conflict.
-        .add_plugins(bevy_enhanced_input::prelude::EnhancedInputPlugin);
+        .add_plugins(default_plugins);
     #[cfg(feature = "physics")]
     if std::env::var_os("JD_PERF_NO_PHYSICS").is_none() {
         app.add_plugins(avian3d::prelude::PhysicsPlugins::default());

@@ -9,8 +9,7 @@ use syn::{
 };
 
 /// Marks a plain Bevy system function as an operator. Generates the
-/// zero-sized action type, the `InputAction` derive, and the
-/// `Operator` trait impl, leaving the function itself in place as
+/// zero-sized operator type and the `Operator` trait impl, leaving the function itself in place as
 /// the `execute` system.
 ///
 /// Required keys:
@@ -46,18 +45,12 @@ use syn::{
 /// }
 /// ```
 ///
-/// Expands to a `HelloOp` struct with `InputAction` derived and an
-/// `impl Operator for HelloOp` whose `register_execute` registers the
+/// Expands to a `HelloOp` struct and an `impl Operator for HelloOp` whose `register_execute` registers the
 /// `hello` function as a Bevy system. When `is_available` is given,
 /// `register_availability_check` is emitted too.
 #[proc_macro_attribute]
 pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand_operator(
-        attr,
-        item,
-        quote!(::jackdaw_api),
-        quote!(::bevy_enhanced_input::prelude),
-    )
+    expand_operator(attr, item, quote!(::jackdaw_api))
 }
 
 /// The focused `jackdaw_extension` facade's operator macro.
@@ -66,20 +59,10 @@ pub fn operator(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// implementation-crate dependencies just to use `#[operator]`.
 #[proc_macro_attribute]
 pub fn extension_operator(attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand_operator(
-        attr,
-        item,
-        quote!(::jackdaw_extension),
-        quote!(::jackdaw_extension::__private),
-    )
+    expand_operator(attr, item, quote!(::jackdaw_extension))
 }
 
-fn expand_operator(
-    attr: TokenStream,
-    item: TokenStream,
-    api_crate: TokenStream2,
-    enhanced_input: TokenStream2,
-) -> TokenStream {
+fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2) -> TokenStream {
     let args = parse_macro_input!(
         attr with Punctuated::<Meta, Token![,]>::parse_terminated
     );
@@ -257,10 +240,6 @@ fn expand_operator(
     let expanded = quote! {
         #[derive(::core::default::Default)]
         #vis struct #struct_name;
-
-        impl #enhanced_input::InputAction for #struct_name {
-            type Output = bool;
-        }
 
         impl #api_crate::prelude::Operator for #struct_name {
             const ID: &'static str = #id;

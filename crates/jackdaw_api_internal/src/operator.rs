@@ -2,7 +2,6 @@ use std::{borrow::Cow, collections::BTreeMap};
 
 use bevy::ecs::system::{SystemId, SystemState};
 use bevy::prelude::*;
-use bevy_enhanced_input::prelude::InputAction;
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_scene_types::PropertyValue;
 
@@ -18,17 +17,13 @@ pub(super) fn plugin(app: &mut App) {
 
 /// A named, dispatchable editor action.
 ///
-/// The trait is bounded on [`InputAction`] so the operator type itself
-/// can be used as a BEI action.
 /// Usually you will want to use [`operator`](crate::prelude::operator) to define your operator, but it can be manually implemented if needed:
 ///
 /// ```ignore
-/// use bevy_enhanced_input::prelude::*;
 /// use jackdaw_api::prelude::*;
 /// use bevy::prelude::*;
 ///
-/// #[derive(Default, InputAction)]
-/// #[action_output(bool)]
+/// #[derive(Default)]
 /// struct PlaceCubeOp;
 ///
 /// impl Operator for PlaceCubeOp {
@@ -46,27 +41,20 @@ pub(super) fn plugin(app: &mut App) {
 /// }
 /// ```
 ///
-/// Extensions then bind the operator to a key via pure BEI syntax. Use
-/// BEI binding modifiers (`Press`, `Release`, `Hold`) when specific
-/// input timing is needed. See the [`jackdaw_api` documentation](crate).
-///
 /// # Registering an operator end-to-end
 ///
 /// The canonical pattern inside a [`crate::JackdawExtension::register`]
 /// implementation:
 ///
 /// ```ignore
-/// // 1. Register the operator (spawns `OperatorEntity` + `Fire<Op>` observer)
+/// // 1. Register the operator
 /// ctx.register_operator::<PlaceCubeOp>();
 ///
-/// // 2. Bind input via BEI on the extension's input context
-/// ctx.entity_mut().with_related::<ActionOf<MyInputContext>>((
-///     Action::<PlaceCubeOp>::new(),
-///     bindings![(KeyCode::KeyP, Press::default())],
-/// ));
+/// // 2. Record its default chord; the keymap binds it and the user can rebind it
+/// ctx.bind_operator_host::<PlaceCubeOp>([PresetInput::key("KeyP")]);
 ///
 /// // 3. Contribute a menu entry (label + id pulled from the operator)
-/// ctx.menu_entry_for::<PlaceCubeOp>("Add");
+/// ctx.register_menu_entry::<PlaceCubeOp>(TopLevelMenu::Add);
 /// ```
 ///
 /// Buttons in UI code dispatch the operator by attaching a
@@ -75,7 +63,7 @@ pub(super) fn plugin(app: &mut App) {
 /// a global observer that, on `ButtonClickEvent`, calls
 /// [`OperatorWorldExt::operator`] with the stored id; so no per-button
 /// click handler is needed.
-pub trait Operator: InputAction + 'static {
+pub trait Operator: 'static {
     const ID: &'static str;
     const LABEL: &'static str;
     const DESCRIPTION: &'static str = "";

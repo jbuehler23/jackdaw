@@ -28,7 +28,7 @@ pub struct CameraNavInput {
     pub zoom_ticks: f32,
     /// Normalized movement intent in camera-local axes while flying
     /// (x = right, y = up, z = forward). The host resolves WASD/QE from raw
-    /// keyboard because those keys are not yet BEI-managed this pass.
+    /// keyboard because those keys are not actions.
     pub move_axes: Vec3,
 }
 

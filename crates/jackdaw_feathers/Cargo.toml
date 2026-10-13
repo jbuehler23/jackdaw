@@ -18,7 +18,6 @@ lucide-icons.workspace = true
 jackdaw_localization.workspace = true
 
 [dev-dependencies]
-bevy_enhanced_input.workspace = true
 
 [lints]
 workspace = true

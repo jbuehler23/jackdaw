@@ -17,10 +17,6 @@ use crate::extension_resolution::resolve_enabled_list;
 use crate::input_contexts::spawn_contexts;
 
 pub(super) fn plugin(app: &mut App) {
-    // Must run after every plugin's `finish()`: BEI initializes
-    // `ContextInstances<PreUpdate>` there, and spawning a context
-    // entity before that resource exists panics.
-    //
     // Ordering guarantee: `spawn_contexts` runs before `apply_active_keymap`
     // so the `BuiltinActions` and `DefaultKeymap` entries for modal/nav are
     // present when the applier iterates preset bindings.

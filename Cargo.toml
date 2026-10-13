@@ -161,7 +161,6 @@ jackdaw_sdk = { workspace = true, optional = true }
 # wrapper crate's `[[bin]]` is also available; either path works at
 # runtime.
 jackdaw_rustc_wrapper.workspace = true
-bevy_enhanced_input.workspace = true
 jackdaw_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -296,8 +295,6 @@ jackdaw_sdk = { version = "0.20.0-dev", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.20.0-dev", path = "crates/jackdaw_rustc_wrapper" }
 jackdaw_cli_internal = { version = "0.20.0-dev", path = "crates/jackdaw_cli" }
 jackdaw_env = { version = "0.20.0-dev", path = "crates/jackdaw_env" }
-# No 0.20 release yet; master supports Bevy 0.20.
-bevy_enhanced_input = { version = "0.26.0", git = "https://github.com/simgine/bevy_enhanced_input", rev = "cb50e459add7445bbf704a1c9cff37fba4c05dd1" }
 rfd = "0.15"
 # rerecast 0.4 is on glam 0.32; this fork branch moves it to glam 0.33.
 rerecast = { version = "0.4.0", git = "https://github.com/jbuehler23/rerecast", rev = "d5c10eff3f9dca404a734a21f05085875e7acf59", default-features = false, features = ["std"] }

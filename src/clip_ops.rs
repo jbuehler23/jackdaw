@@ -35,7 +35,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 }
 
 /// LMB in clip mode dispatches `brush.clip.place_point`. Mouse-button
-/// gestures aren't expressible as BEI key bindings.
+/// gestures aren't expressible as key bindings.
 pub(crate) fn place_point_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,
     edit_mode: Res<EditMode>,

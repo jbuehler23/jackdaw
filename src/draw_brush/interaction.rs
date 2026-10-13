@@ -339,7 +339,7 @@ pub(crate) fn draw_brush_release(
 
 /// Sidecar trigger: an LMB inside an active draw modal dispatches
 /// the `draw_brush.confirm` operator. Mouse-button gestures aren't
-/// expressible as BEI key actions, so the click-to-operator translation
+/// expressible as key actions, so the click-to-operator translation
 /// has to live in a system. The operator itself owns the actual
 /// phase-advance logic and works for both Add and Cut modes.
 pub(crate) fn draw_brush_confirm(
@@ -360,7 +360,7 @@ pub(crate) fn draw_brush_confirm(
 }
 
 // Enter / Backspace / RMB / Escape during a draw are all handled via
-// BEI bindings on the `viewport.draw_brush.*` operators registered in
+// bindings on the `viewport.draw_brush.*` operators registered in
 // `add_to_extension` (and `modal.cancel` for the Add-mode Escape).
 
 pub(crate) fn draw_brush_preview(

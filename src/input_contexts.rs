@@ -117,7 +117,6 @@ fn modal_action_settings() -> ActionSettings {
     ActionSettings {
         consume_input: true,
         require_reset: true,
-        ..default()
     }
 }
 

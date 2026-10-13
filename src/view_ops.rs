@@ -931,7 +931,7 @@ fn expand_world_aabb(transform: &GlobalTransform, aabb: &Aabb, min: &mut Vec3, m
 /// Sidecar system that fans Numpad 1/3/7 (with optional Ctrl, Cmd on
 /// macOS) into `view.set_axis` calls with the right `axis`/`sign`
 /// parameters.
-/// Necessary because BEI key bindings can't carry payloads.
+/// Necessary because key bindings can't carry payloads.
 ///
 /// Works in any edit mode (Numpad keys don't collide with the Digit
 /// keybinds for vertex/edge/face mode), so users can snap to an axis

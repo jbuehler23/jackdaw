@@ -28,7 +28,7 @@ dynamic_linking = [
 
 [dependencies]
 bevy.workspace = true
-bevy_enhanced_input.workspace = true
+jackdaw_input.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_api_macros.workspace = true
 jackdaw_commands.workspace = true

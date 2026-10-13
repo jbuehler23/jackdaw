@@ -1121,7 +1121,7 @@ pub struct CameraBookmark {
 }
 
 /// Watch for save/load camera bookmark keypresses and dispatch the
-/// corresponding op with a `slot` param. BEI bindings can't carry
+/// corresponding op with a `slot` param. Key bindings can't carry
 /// payloads, so the slot index lives in a sidecar trigger system.
 fn camera_bookmark_keys(
     keyboard: Res<ButtonInput<KeyCode>>,

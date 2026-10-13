@@ -251,14 +251,12 @@ Programmatic configuration goes through `jackdaw_editor` and its
 
 ```rust
 App::new()
-    .add_plugins(EnhancedInputPlugin)
     .add_plugins(jackdaw_editor::JackdawEditorPlugins::default())
     .run();
 ```
 
 Notes:
 
-- `EnhancedInputPlugin` must be added before `JackdawEditorPlugins`.
 - `DylibLoaderPlugin` is intentionally not in the group. The
   official GUI opts into marketplace loading separately.
 

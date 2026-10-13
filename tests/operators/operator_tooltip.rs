@@ -1,7 +1,7 @@
-//! End-to-end tooltip pipeline: `auto_attach_button_tooltip` reads the live BEI
+//! End-to-end tooltip pipeline: `auto_attach_button_tooltip` reads the live
 //! bindings for the operator behind a `ButtonOperatorCall` and seeds
-//! `Tooltip::keybind`, and action entities are auto-tagged `OperatorAction` so
-//! the lookup is id-keyed.
+//! `Tooltip::keybind`, and action entities are tagged `OperatorAction` so the
+//! lookup is id-keyed.
 
 use crate::util;
 
@@ -107,7 +107,7 @@ fn tooltip_includes_mouse_button_bindings() {
     );
 }
 
-/// A button whose operator id has no BEI binding gets no `Tooltip` at all, and
+/// A button whose operator id has no binding gets no `Tooltip` at all, and
 /// the keybind path does not panic on the unknown id.
 #[test]
 fn unknown_operator_id_skips_tooltip() {

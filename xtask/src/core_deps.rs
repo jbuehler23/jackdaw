@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::process::{Command, Stdio};
 
 /// Third-party Bevy crates the core still depends on, each to be removed.
-const EXCEPTIONS: [&str; 1] = ["bevy_enhanced_input"];
+const EXCEPTIONS: [&str; 0] = [];
 
 /// The repository every crate of Bevy itself names.
 const BEVY_REPOSITORY: &str = "https://github.com/bevyengine/bevy";

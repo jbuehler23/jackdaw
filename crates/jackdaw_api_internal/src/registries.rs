@@ -1,5 +1,5 @@
 //! Panel-extension registry. Operators now live as entities (see
-//! [`crate::lifecycle::OperatorEntity`]) and keybinds go through BEI, so
+//! [`crate::lifecycle::OperatorEntity`]) and keybinds go through input actions, so
 //! this file is much smaller than in v1; only the panel-extension mapping
 //! remains, alongside the host registries an extension writes into.
 

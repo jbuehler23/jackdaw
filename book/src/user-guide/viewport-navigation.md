@@ -58,7 +58,7 @@ operations, so changing it doesn't just affect the visuals.
 ## Mouse look feels off
 
 If the viewport rotates faster or slower than you expect,
-that is the `bevy_enhanced_input` mouse sensitivity, not a
-jackdaw setting. We don't expose it in the UI yet (see
+that is the camera's look sensitivity. We don't expose it
+in the UI yet (see
 [Open Challenges](../developer-guide/open-challenges.md));
 file an issue if it's blocking you and we'll surface it.

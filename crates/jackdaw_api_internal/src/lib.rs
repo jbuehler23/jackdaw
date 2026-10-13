@@ -112,12 +112,6 @@ pub mod prelude {
         snapshot::{ActiveSnapshotter, SceneSnapshot, SceneSnapshotter},
         widgets::{WidgetDefinition, WidgetInstantiateContext, WidgetRegistry},
     };
-    // The BEI items extension authors need for `actions!` / `bindings!` / observers.
-    pub use bevy_enhanced_input::prelude::{
-        Action, ActionOf, Actions, Binding, Bindings, BlockBy, Cancel, Chord, Complete, Fire, Hold,
-        InputAction, InputModKeys, ModKeys, Ongoing, Press, Release, Start, Tap, TriggerState,
-        actions, bindings,
-    };
     // Re-export Bevy's SystemId here so Operator impls don't need to import it.
     pub use bevy::ecs::system::SystemId;
 }
@@ -149,7 +143,7 @@ pub trait JackdawExtension: Send + Sync + 'static {
     }
 
     /// Main registration logic. Called each time the extension is
-    /// enabled. Spawn operators, windows, BEI action entities, and any
+    /// enabled. Spawn operators, windows, input action entities, and any
     /// other owned state here.
     fn register(&self, registrar: &mut ExtensionRegistrar<'_>);
 
@@ -171,7 +165,7 @@ pub trait JackdawExtension: Send + Sync + 'static {
 
     /// Optional hook called before the extension entity despawns.
     ///
-    /// Child-entity cleanup handles registered windows, operators, BEI
+    /// Child-entity cleanup handles registered windows, operators, input
     /// contexts, and observers automatically. Override only for non-ECS
     /// state (file handles, network sessions, and the like).
     #[expect(unused_variables, reason = "The default implementation does nothing")]
@@ -315,8 +309,8 @@ impl<'a> ExtensionContext<'a> {
     }
 
     /// Spawn an entity as a child of the extension entity. Typically
-    /// used for BEI context entities with action bindings:
-    /// `ctx.spawn((MyContext, actions!(MyContext[...])))`.
+    /// used for input context entities with action bindings:
+    /// `ctx.spawn((MyContext, actions![...]))`.
     ///
     /// The returned [`EntityWorldMut`] lets the caller keep adding
     /// components or children. Anything spawned this way is torn down
@@ -810,8 +804,7 @@ mod tests {
 
     // Minimal operator: no-op execute, manually implements Operator so the
     // test stays self-contained without spawning SystemIds or running schedules.
-    #[derive(Default, bevy_enhanced_input::prelude::InputAction)]
-    #[action_output(bool)]
+    #[derive(Default)]
     struct TestOp;
 
     impl Operator for TestOp {

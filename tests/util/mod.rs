@@ -92,13 +92,11 @@ fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
             // which can otherwise block an otherwise-complete test process.
             .disable::<bevy::audio::AudioPlugin>()
             .disable::<WinitPlugin>(),
-    )
-    // Ambient plugins moved to the binary entry point (matches
-    // the launcher's `src/main.rs` and the static template's
-    // `editor.rs.template`). Mirror that here so the editor's
-    // internal `debug_assert!`s for `PhysicsSchedulePlugin` and
-    // `EnhancedInputPlugin` find what they expect.
-    .add_plugins(bevy_enhanced_input::prelude::EnhancedInputPlugin);
+    );
+    // Ambient plugins moved to the binary entry point (matches the
+    // launcher's `src/main.rs` and the static template's
+    // `editor.rs.template`). Mirror that here so the editor's internal
+    // `debug_assert!` for `PhysicsSchedulePlugin` finds what it expects.
     #[cfg(feature = "physics")]
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app
@@ -220,7 +218,7 @@ pub fn fixed_frame_clock(app: &mut App) {
 /// This helper runs the usual `register -> finish -> first-update` dance, then
 /// force-enables the extension explicitly so `app.world_mut().operator(id)`
 /// can find it. It also ticks one more frame so any setup observers (operator
-/// index, BEI context attachment) have settled before the caller runs
+/// index, input context attachment) have settled before the caller runs
 /// assertions.
 #[expect(clippy::allow_attributes, reason = "Some tests use this")]
 #[allow(

@@ -1,5 +1,5 @@
 //! Data-driven keymap presets. A preset is a serializable document of
-//! operator-id bindings; applying one replaces the BEI binding entities
+//! operator-id bindings; applying one replaces the binding entities
 //! of every operator action it names. Extensions record their defaults
 //! through `ExtensionContext::bind_operator`, and the generated
 //! "classic" preset reproduces those defaults exactly.

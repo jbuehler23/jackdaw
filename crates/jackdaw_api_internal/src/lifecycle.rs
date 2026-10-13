@@ -1,7 +1,7 @@
 //! Entity-based lifecycle primitives for extensions.
 //!
 //! An extension is represented as an [`Entity`] carrying an [`Extension`]
-//! component. Everything it registers (operators, BEI context entities,
+//! component. Everything it registers (operators, input context entities,
 //! dock windows, workspaces) is spawned as a child of that entity.
 //! Unloading is `world.entity_mut(ext).despawn()`; Bevy cascades through
 //! the children. A small set of observers in `ExtensionLoaderPlugin`
@@ -37,7 +37,7 @@ pub(super) fn plugin(app: &mut App) {
 /// Root component for an extension.
 ///
 /// Despawning this entity tears down all of the extension's child entities:
-/// operators, BEI context/action entities, registered windows/workspaces, and
+/// operators, input context/action entities, registered windows/workspaces, and
 /// observer entities. Non-ECS cleanup (unregistering `SystemId`s, removing
 /// entries from `WindowRegistry`) is handled by observers reacting to the
 /// child-entity despawns.
@@ -144,15 +144,12 @@ impl OperatorEntity {
     }
 }
 
-/// Marker on a BEI action entity associating it with an operator id.
-/// Auto-inserted by [`crate::ExtensionContext::register_operator`] via
-/// an `On<Add<Action<Op>>>` observer, so call sites that spawn
-/// `Action::<Op>::new()` don't need to do anything extra.
+/// Tag on an input action entity naming the operator it dispatches when
+/// it fires. [`crate::ExtensionContext::bind_operator`] and
+/// [`crate::ExtensionContext::action_for`] spawn actions carrying it.
 ///
-/// Lets systems (notably the tooltip pipeline) walk from operator id
-/// to the action entity's `Bindings` without needing the typed
-/// `Action<Op>` parameter, which would force a generic over the
-/// operator type.
+/// Lets systems (notably the tooltip pipeline and the keymap applier) walk
+/// from operator id to the action entity's `Bindings`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct OperatorAction(pub &'static str);
 
@@ -316,8 +313,7 @@ pub enum ExtensionKind {
 
 impl ExtensionCatalog {
     /// Register a constructor with its declared kind. Most callers
-    /// should use [`App::register_extension`] instead, which handles BEI
-    /// context registration.
+    /// should use [`App::register_extension`] instead.
     fn register_extension_internal(
         &mut self,
         ctor: impl Fn() -> Box<dyn crate::JackdawExtension> + Send + Sync + 'static,

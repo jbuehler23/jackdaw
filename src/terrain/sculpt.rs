@@ -227,7 +227,7 @@ fn update_terrain_brush_position(
 }
 
 /// LMB in sculpt mode, with the brush over the terrain, dispatches
-/// `terrain.sculpt`. Mouse-button gestures are not expressible as BEI key
+/// `terrain.sculpt`. Mouse-button gestures are not expressible as key
 /// bindings.
 fn sculpt_invoke_trigger(
     mouse: Res<ButtonInput<MouseButton>>,

@@ -1,6 +1,6 @@
 //! Minimal cdylib fixture for `tests/dylib_loading.rs`.
 //!
-//! Registers one operator. No windows, no BEI input contexts. The
+//! Registers one operator. No windows, no input contexts. The
 //! integration tests exercise the loader's own job (open, ABI check,
 //! catalog entry, handle retention); cross-boundary component
 //! dispatch needs the `dylib` feature plus `jackdaw_sdk` for type

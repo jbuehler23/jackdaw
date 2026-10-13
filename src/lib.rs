@@ -200,7 +200,6 @@ use bevy::{
     platform::collections::HashMap,
     prelude::*,
 };
-use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::{
     ToAnchorId as _,
@@ -224,14 +223,11 @@ pub mod prelude {
     };
     pub use jackdaw_api::prelude::*;
 
-    // Ambient plugins re-exported so binaries can write
-    // `add_plugins((PhysicsPlugins::default(), EnhancedInputPlugin))`
-    // without direct deps on avian3d / bevy_enhanced_input.
-    // Editor plugins assert presence rather than adding, so user
-    // code can add the same plugins without conflict.
+    // Re-exported so binaries can write `add_plugins(PhysicsPlugins::default())`
+    // without a direct dep on avian3d. Editor plugins assert presence rather
+    // than adding, so user code can add the same plugin without conflict.
     #[cfg(feature = "physics")]
     pub use avian3d::prelude::PhysicsPlugins;
-    pub use bevy_enhanced_input::prelude::EnhancedInputPlugin;
 }
 
 /// System set for all editor interaction systems (input handling, viewport clicks,
@@ -368,11 +364,9 @@ pub struct EditorCorePlugin;
 
 impl Plugin for EditorCorePlugin {
     fn build(&self, app: &mut App) {
-        debug_assert!(
-            app.is_plugin_added::<EnhancedInputPlugin>(),
-            "EditorCorePlugin requires EnhancedInputPlugin first; \
-             add `EnhancedInputPlugin` in main.rs before JackdawEditorPlugins."
-        );
+        if !app.is_plugin_added::<jackdaw_input::InputActionPlugin>() {
+            app.add_plugins(jackdaw_input::InputActionPlugin);
+        }
         app.init_state::<AppState>();
         jackdaw_runtime::propagate_into_reused_indices(app);
         // A game whose own UI is built on feathers adds the group itself,
@@ -710,8 +704,8 @@ impl ExtensionPlugin {
 
 impl Plugin for ExtensionPlugin {
     fn build(&self, app: &mut App) {
-        // Extension registration runs during `build()` so BEI's
-        // `finish()` hook sees every context type. Built-ins override
+        // Extension registration runs during `build()`, before any plugin's
+        // `finish()`. Built-ins override
         // `kind()` to `Builtin`; user-supplied extensions default to
         // `Custom`.
         use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;

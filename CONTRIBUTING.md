@@ -141,17 +141,13 @@ fn register(&self, ctx: &mut ExtensionContext) {
 
 ### Binding it to a key
 
-Bind a key by spawning a BEI action on the extension's input context. Use `ctx.spawn(...)` so the binding goes away with the extension if it's ever unloaded:
+Record the operator's default chord. The keymap binds it, and the user can rebind it in the keybind settings. The action goes away with the extension if it's ever unloaded:
 
 ```rust
-ctx.spawn((
-    Action::<SpawnCubeOp>::new(),
-    ActionOf::<MyInputContext>::new(ctx.id()),
-    bindings![KeyCode::KeyP.with_mod_keys(ModKeys::CONTROL)],
-));
+ctx.bind_operator_host::<SpawnCubeOp>([PresetInput::key("KeyP").ctrl_or_super()]);
 ```
 
-For chords like Ctrl+Shift+S, use `with_mod_keys(ModKeys::CONTROL | ModKeys::SHIFT)` on a single binding. Don't make a separate "ctrl-held" action.
+For chords like Ctrl+Shift+S, chain the modifiers on one input: `PresetInput::key("KeyS").ctrl_or_super().shift()`. Don't make a separate "ctrl-held" action.
 
 ### Dispatching from a button
 

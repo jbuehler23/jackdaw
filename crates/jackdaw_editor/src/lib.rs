@@ -12,7 +12,7 @@ pub mod prelude {
     #[cfg(feature = "physics")]
     pub use jackdaw::prelude::PhysicsPlugins;
     pub use jackdaw::prelude::{
-        AppState, DylibLoaderPlugin, EditorCorePlugin, EnhancedInputPlugin, ExtensionPlugin,
-        JackdawEditorPlugins, editor_window_plugin, primary_window_attributes,
+        AppState, DylibLoaderPlugin, EditorCorePlugin, ExtensionPlugin, JackdawEditorPlugins,
+        editor_window_plugin, primary_window_attributes,
     };
 }
