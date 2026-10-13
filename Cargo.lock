@@ -3272,6 +3272,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4847,6 +4857,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_releases"
+version = "0.19.0-rc.10"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "jackdaw_env",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "jackdaw_remote"
 version = "0.19.0-rc.10"
 dependencies = [
@@ -5014,15 +5038,22 @@ version = "0.19.0-rc.10"
 dependencies = [
  "dunce",
  "ed25519-dalek",
+ "flate2",
  "getrandom 0.3.4",
  "jackdaw_cli_internal",
  "jackdaw_env",
  "jackdaw_package",
  "jackdaw_project_build",
+ "jackdaw_releases",
  "jackdaw_scaffold",
+ "ruzstd",
  "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
  "toml_edit",
  "ureq",
+ "zip",
 ]
 
 [[package]]
@@ -7681,6 +7712,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8144,6 +8185,12 @@ checksum = "cb30dbbd9036155e74adad6812e9898d03ec374946234fbcebd5dfc7b9187b90"
 dependencies = [
  "rustc-hash 2.1.3",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typeid"
@@ -9631,6 +9678,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e2fc56a6707efb066c40aead2409ebb1224e6dde24a074e9fbc78ced500507b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "nix",
+ "typed-path",
 ]
 
 [[package]]

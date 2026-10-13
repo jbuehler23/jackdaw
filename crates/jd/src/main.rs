@@ -23,7 +23,9 @@ fn main() -> ExitCode {
     match command {
         Some("new") => jackdaw_scaffold::run_new_cli(&args[1..]),
         Some("import") => jackdaw_scaffold::run_import_cli(&args[1..]),
-        Some("open") => jackdaw_scaffold::run_open_cli(&args[1..]),
+        Some("open") => jd::editor_cli::open_command(&args[1..]),
+        Some("editor") => jd::editor_cli::editor_command(&args[1..]),
+        Some("self") => jd::editor_cli::self_command(&args[1..]),
         Some("upgrade") => jackdaw_scaffold::run_upgrade_cli(&args[1..]),
         Some("export-terrain") => export_terrain(&args[1..]),
         Some("extension") => extension_command(&args[1..]),
@@ -243,7 +245,9 @@ fn print_usage() {
            --plugin <Type>            the game plugin type to record\n    \
            --modules <list>           modules to add, e.g. navmesh,multiplayer\n    \
            --allow-bevy-mismatch      set up even if the project targets another Bevy\n  \
-         open [path]                Open a project in the Jackdaw GUI\n  \
+         open [path]                Open a project in the editor its jackdaw.toml pins\n  \
+         editor <command>           Install, list and remove editors (`jd editor --help`)\n  \
+         self update                Update jd to the newest stable release\n  \
          upgrade [path] [--apply]   Move a project to this Jackdaw's versions\n  \
          build [--project <path>]   Build project code for the editor\n  \
          run [--project <path>]     Build and run the game\n  \

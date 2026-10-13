@@ -775,10 +775,8 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Checkout the installers
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          sparse-checkout: scripts
 
       - name: Download the archives
         uses: actions/download-artifact@v4
@@ -808,3 +806,40 @@ jobs:
           make_latest: ${{ !contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: dist/*
+
+      - name: Install Rust toolchain
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      # jd reads the signed releases.json kept on the `index` release. This
+      # adds the tag to it and signs it again; without the signing key or the
+      # `index` release it warns and leaves the index as it was.
+      - name: Update the release index
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$JACKDAW_INDEX_SIGNING_KEY" ]; then
+            echo "::warning::JACKDAW_INDEX_SIGNING_KEY is not set; the release index was not updated"
+            exit 0
+          fi
+          if ! gh release view index --repo "$REPO" >/dev/null 2>&1; then
+            echo "::warning::there is no 'index' release; the release index was not updated"
+            exit 0
+          fi
+          mkdir -p index
+          gh release download index --repo "$REPO" --pattern releases.json --dir index || true
+          bevy=$(sed -n 's/^bevy = { version = "\([0-9]*\.[0-9]*\)".*/\1/p' Cargo.toml | head -n 1)
+          tool="cargo run --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index --"
+          $tool add --index index/releases.json --tag "$TAG" --dist dist --bevy "$bevy" \
+            --rustc "${{ env.toolchain }}" \
+            --base-url "https://github.com/$REPO/releases/download/$TAG" \
+            --notes-url "https://github.com/$REPO/releases/tag/$TAG"
+          $tool sign index/releases.json
+          gh release upload index --repo "$REPO" --clobber index/releases.json index/releases.json.sig

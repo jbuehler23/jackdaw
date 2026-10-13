@@ -31,6 +31,18 @@ pub struct VersionPins {
     /// The Bevy minor that jackdaw targeted then, e.g. `0.19`.
     #[serde(default)]
     pub bevy: Option<String>,
+    /// The editor's update channel: `stable` (also when absent) or
+    /// `bleeding-edge`. A stable project opens in the newest installed
+    /// patch of its version's line.
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// The nightly a Bleeding Edge project opens with, e.g.
+    /// `nightly-2026-10-09`.
+    #[serde(default)]
+    pub build: Option<String>,
+    /// The Bevy commit that nightly was built against.
+    #[serde(default)]
+    pub bevy_rev: Option<String>,
 }
 
 /// The subset of `jackdaw.toml` the build pipeline reads.
@@ -284,7 +296,8 @@ pub fn pins_toml_for_bevy(bevy: &str) -> String {
          # build failure.\n\
          [jackdaw]\n\
          version = \"{}\"\n\
-         bevy = \"{bevy}\"\n",
+         bevy = \"{bevy}\"\n\
+         channel = \"stable\"\n",
         crate::VERSION,
     )
 }
@@ -344,6 +357,30 @@ instances = 2
     }
 
     #[test]
+    fn the_editor_channel_and_build_are_read_from_the_jackdaw_table() {
+        let manifest: ProjectManifest = toml::from_str(
+            r#"
+[jackdaw]
+version = "0.21.0-dev"
+bevy = "main"
+channel = "bleeding-edge"
+build = "nightly-2026-10-09"
+bevy_rev = "3f2a1c9e"
+"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.jackdaw.channel.as_deref(), Some("bleeding-edge"));
+        assert_eq!(
+            manifest.jackdaw.build.as_deref(),
+            Some("nightly-2026-10-09")
+        );
+        assert_eq!(manifest.jackdaw.bevy_rev.as_deref(), Some("3f2a1c9e"));
+
+        let written: ProjectManifest = toml::from_str(&pins_toml()).unwrap();
+        assert_eq!(written.jackdaw.channel.as_deref(), Some("stable"));
+    }
+
+    #[test]
     fn a_manifest_without_pins_is_unpinned() {
         assert_eq!(compare_pins(&VersionPins::default()), PinStatus::Unpinned);
     }
@@ -353,6 +390,7 @@ instances = 2
         let pins = VersionPins {
             version: Some(crate::VERSION.to_string()),
             bevy: Some(crate::BEVY_VERSION.to_string()),
+            ..VersionPins::default()
         };
         assert_eq!(compare_pins(&pins), PinStatus::Match);
     }
@@ -362,12 +400,14 @@ instances = 2
         let bevy = VersionPins {
             version: Some(crate::VERSION.to_string()),
             bevy: Some("0.14".to_string()),
+            ..VersionPins::default()
         };
         assert!(compare_pins(&bevy).is_blocking());
 
         let jackdaw = VersionPins {
             version: Some("0.0.1".to_string()),
             bevy: Some(crate::BEVY_VERSION.to_string()),
+            ..VersionPins::default()
         };
         let status = compare_pins(&jackdaw);
         assert!(!status.is_blocking());

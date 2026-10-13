@@ -21,6 +21,11 @@ opens and plays.
 # other than `assets`.
 # assets_dir = "content"
 
+[jackdaw]
+version = "0.20.1"
+bevy = "0.20"
+channel = "stable"
+
 [modules]
 physics = true
 navmesh = false
@@ -49,6 +54,13 @@ Top-level keys:
   read that setting out of your code. The path must stay inside the
   project; an absolute path or one starting with `..` is ignored. A
   change takes effect the next time the editor starts.
+
+`[jackdaw]` records the editor the project was set up with. `jd open`
+opens a `stable` project in the newest installed patch of its
+version's line, so `0.20.1` opens in `0.20.3` once that is installed.
+A `bleeding-edge` project also records `build` (the nightly, such as
+`nightly-2026-10-09`) and `bevy_rev`, and opens only in that nightly.
+A missing `channel` means `stable`.
 
 `[modules]` records the optional modules the project uses. Each
 module pairs editor tooling with what the game needs for it:
@@ -107,6 +119,8 @@ toolchain.
 - `jd new <name> [--extension] [--modules <list> | --no-modules]`
 - `jd import [path] [--plugin <Type>] [--modules <list>] [--apply]`
 - `jd open [path]`
+- `jd editor <list|install|remove|default|locate|clean>`
+- `jd self update`
 - `jd build [--project <path>]`
 - `jd run [--project <path>]`
 - `jd setup`

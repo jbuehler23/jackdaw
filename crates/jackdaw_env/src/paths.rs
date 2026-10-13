@@ -77,6 +77,19 @@ pub fn state_dir() -> Option<PathBuf> {
         .or_else(data_dir_fallback)
 }
 
+/// Where installed editors, their registry and the cached release index
+/// live, shared by every installed editor and `jd`.
+///
+/// The per-user data directory, or `launcher` inside the config directory
+/// when [`CONFIG_DIR_VAR`] overrides it, so a run pointed at a scratch
+/// config never installs into or reads the real editor list.
+pub fn launcher_dir() -> Option<PathBuf> {
+    if let Some(overridden) = std::env::var_os(CONFIG_DIR_VAR).filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(overridden).join("launcher"));
+    }
+    data_dir()
+}
+
 fn data_dir_fallback() -> Option<PathBuf> {
     std::env::home_dir().map(|p| p.join(DATA_DIR_FALLBACK_NAME))
 }

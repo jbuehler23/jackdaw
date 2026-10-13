@@ -286,6 +286,7 @@ jackdaw_loader = { version = "0.19.0-rc.10", path = "crates/jackdaw_loader" }
 jackdaw_package = { version = "0.19.0-rc.10", path = "crates/jackdaw_package" }
 jackdaw_scaffold = { version = "0.19.0-rc.10", path = "crates/jackdaw_scaffold" }
 jd = { version = "0.19.0-rc.10", path = "crates/jd" }
+jackdaw_releases = { version = "0.19.0-rc.10", path = "crates/jackdaw_releases" }
 jackdaw_sdk = { version = "0.19.0-rc.10", path = "crates/jackdaw_sdk" }
 jackdaw_rustc_wrapper = { version = "0.19.0-rc.10", path = "crates/jackdaw_rustc_wrapper" }
 jackdaw_cli_internal = { version = "0.19.0-rc.10", path = "crates/jackdaw_cli" }

@@ -1010,42 +1010,6 @@ pub fn run_upgrade_cli(args: &[String]) -> ExitCode {
     }
 }
 
-/// Launch the GUI with a selected project.
-#[expect(clippy::print_stderr, reason = "CLI errors are written to stderr")]
-pub fn run_open_cli(args: &[String]) -> ExitCode {
-    let root = args
-        .iter()
-        .find(|arg| !arg.starts_with('-'))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let root = match dunce::canonicalize(&root) {
-        Ok(root) => root,
-        Err(error) => {
-            eprintln!("jd open: {}: {error}", root.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    if !root.is_dir() {
-        eprintln!("jd open: {} is not a directory", root.display());
-        return ExitCode::FAILURE;
-    }
-    let editor = editor_executable();
-    // Pass the project directly. Reordering the user's global recents
-    // file to smuggle the argument through would leave that edit behind
-    // even when the launch fails, and would race with any other jackdaw
-    // process.
-    match std::process::Command::new(editor)
-        .env(jackdaw_env::ENV_OPEN_PROJECT, &root)
-        .spawn()
-    {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("jd open: could not launch jackdaw: {error}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 /// The editor binary installed beside the running executable, or
 /// `jackdaw` from `PATH` when the location is unknown.
 pub fn editor_executable() -> PathBuf {

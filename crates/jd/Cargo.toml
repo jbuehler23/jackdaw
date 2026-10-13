@@ -24,6 +24,7 @@ embed-recipe = ["jackdaw_cli_internal/embed-recipe"]
 jackdaw_cli_internal.workspace = true
 jackdaw_env.workspace = true
 jackdaw_package.workspace = true
+jackdaw_releases.workspace = true
 jackdaw_project_build.workspace = true
 jackdaw_scaffold.workspace = true
 dunce = "1.0.5"
@@ -32,9 +33,16 @@ ed25519-dalek = "2"
 getrandom = "0.3"
 # https downloads. The editor never links this; it asks `jd` instead.
 ureq = { version = "2", default-features = false, features = ["tls"] }
+serde_json.workspace = true
+sha2 = "0.10"
+# Editor bundles: tar.zst on Linux, zip on macOS and Windows.
+tar = { version = "0.4", default-features = false }
+ruzstd = "0.8"
+flate2 = "1"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
-serde_json.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

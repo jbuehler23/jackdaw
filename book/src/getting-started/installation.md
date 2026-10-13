@@ -232,6 +232,44 @@ shared-SDK mode as releases:
 cargo run --bin jackdaw --features dylib --target "$(rustc -vV | sed -n 's/host: //p')"
 ```
 
+## Managing editors with jd
+
+`jd editor` installs editors side by side, one per version, so projects
+made with different Bevy versions each open in a matching editor.
+
+```bash
+jd editor list --available        # published versions, by Bevy line
+jd editor install 0.20            # newest 0.20.x
+jd editor install bleeding-edge   # newest nightly, built against Bevy main
+jd editor install 0.20.1 --modules physics,navmesh
+jd editor list                    # what is installed
+jd editor default 0.20.1          # editor for projects that pin none
+jd editor remove 0.19.0
+jd editor clean                   # drop nightlies no project uses
+```
+
+Versions come from a signed release index; `jd` checks the signature and
+each download's checksum, and runs the new editor once before keeping it.
+A failed install leaves nothing behind. The index is cached, so listing
+works offline. `jd` only reports newer versions; it never downloads
+anything you did not ask for.
+
+`jd open <project>` reads the editor the project's `jackdaw.toml` pins and
+launches the newest installed patch of that line, or tells you which
+`jd editor install` to run. `jd editor remove` refuses while a project
+still opens with that editor; `--force` removes it anyway. Nightlies stay
+installed until `jd editor clean`, which keeps the newest, those marked
+known good, and any a project uses.
+
+Editors live in `editors/` under the data directory (`~/.local/share/jackdaw`
+on Linux), next to `installs.json`. An editor installed another way, such as
+with `cargo install`, can be added with `jd editor locate <path>`; removing
+it later only unregisters it.
+
+`jd self update` replaces `jd` with the one from the newest stable release.
+A `jd` installed with cargo is updated with `cargo install jd --locked`
+instead.
+
 ## The extension SDK
 
 The extension SDK is a full compilation of Bevy and the Jackdaw API that
