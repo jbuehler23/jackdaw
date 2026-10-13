@@ -224,6 +224,27 @@ fn project_row(entry: &ProjectEntry, launcher: &Launcher) -> impl Scene {
         tokens::TEXT_PRIMARY
     };
     let details = row_details(entry);
+    let path_line = if entry.folder_missing {
+        format!("{} - folder missing", display_path(&entry.path))
+    } else {
+        display_path(&entry.path)
+    };
+    let chips_line: Box<dyn SceneList> = if details.is_empty() {
+        Box::new(bsn_list!())
+    } else {
+        ui::boxed(bsn! {
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(6),
+                row_gap: px(4),
+                min_width: px(0),
+            }
+            Pickable::IGNORE
+            Children [ {details} ]
+        })
+    };
     let action: Box<dyn SceneList> = if entry.folder_missing {
         ui::boxed(ui::button(
             "Remove from list",
@@ -288,17 +309,8 @@ fn project_row(entry: &ProjectEntry, launcher: &Launcher) -> impl Scene {
                 Pickable::IGNORE
                 Children [
                     ( {ui::text(name, tokens::TEXT_SIZE, name_color)} ),
-                    (
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: px(6),
-                            min_width: px(0),
-                            overflow: Overflow::clip(),
-                        }
-                        Pickable::IGNORE
-                        Children [ {details} ]
-                    ),
+                    ( {ui::path_text(path_line)} ),
+                    {chips_line},
                 ]
             ),
             (
@@ -315,15 +327,12 @@ fn project_row(entry: &ProjectEntry, launcher: &Launcher) -> impl Scene {
     }
 }
 
-/// The path and the chips under a project's name.
+/// The chips under a project's path.
 fn row_details(entry: &ProjectEntry) -> ui::Scenes {
     let mut details: ui::Scenes = Vec::new();
-    let path = display_path(&entry.path);
     if entry.folder_missing {
-        details.push(ui::boxed(ui::path_text(format!("{path} - folder missing"))));
         return details;
     }
-    details.push(ui::boxed(ui::path_text(path)));
     if entry.channel == Channel::BleedingEdge {
         details.push(ui::boxed(ui::chip("Bleeding Edge", Tone::Caution)));
         if let Some(rev) = &entry.bevy_rev {

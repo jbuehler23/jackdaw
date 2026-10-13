@@ -66,7 +66,8 @@ pub(super) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<LauncherExtensionsSelectOp>()
         .register_operator::<LauncherExtensionsToggleOp>()
         .register_operator::<LauncherExtensionsRevertOp>()
-        .register_operator::<LauncherExtensionsApplyOp>();
+        .register_operator::<LauncherExtensionsApplyOp>()
+        .register_operator::<LauncherInstallExtensionOp>();
 }
 
 fn path_param(params: &OperatorParameters, id: &str) -> Option<PathBuf> {
@@ -297,6 +298,67 @@ pub fn launcher_reveal_project(params: In<OperatorParameters>) -> OperatorResult
     if let Err(error) = crate::project_window::show_in_file_manager(&path) {
         warn!("launcher.reveal_project: {}: {error}", path.display());
     }
+    OperatorResult::Finished
+}
+
+/// A `.jdext` file picker the launcher is waiting on.
+#[derive(Resource)]
+pub struct LauncherExtensionPick(Task<Option<rfd::FileHandle>>);
+
+/// Install the extension bundle the person picked.
+pub fn poll_extension_pick(world: &mut World) {
+    let Some(mut pick) = world.get_resource_mut::<LauncherExtensionPick>() else {
+        return;
+    };
+    let Some(result) = future::block_on(future::poll_once(&mut pick.0)) else {
+        return;
+    };
+    world.remove_resource::<LauncherExtensionPick>();
+    if let Some(handle) = result {
+        install_extension(world, handle.path().to_path_buf());
+    }
+}
+
+fn install_extension(world: &mut World, path: PathBuf) {
+    match crate::extensions_dialog::handle_install_from_path(world, path.clone()) {
+        Ok(id) => super::notify_info(world, format!("Installed the extension `{id}`.")),
+        Err(error) => super::notify_error(
+            world,
+            format!("Could not install {}: {error}", path.display()),
+        ),
+    }
+    refresh(world);
+    world.resource_mut::<ExtensionsView>().set_changed();
+}
+
+/// Install an editor extension bundle.
+#[operator(
+    id = "launcher.install_extension",
+    label = "Install Extension...",
+    description = "Install a signed .jdext editor extension bundle into this editor.",
+    allows_undo = false,
+    params(path(String, doc = "The .jdext file. Asks for one when absent."))
+)]
+pub fn launcher_install_extension(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let path = params
+        .as_str("path")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    commands.queue(move |world: &mut World| match path {
+        Some(path) => install_extension(world, path),
+        None => {
+            let mut windows = world.query_filtered::<&RawHandleWrapper, With<PrimaryWindow>>();
+            let window = windows.iter(world).next().cloned();
+            let dialog = crate::native_dialog::dialog_at(dirs::download_dir(), window.as_ref())
+                .set_title("Install an extension")
+                .add_filter("Jackdaw extension", &["jdext"]);
+            let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
+            world.insert_resource(LauncherExtensionPick(task));
+        }
+    });
     OperatorResult::Finished
 }
 

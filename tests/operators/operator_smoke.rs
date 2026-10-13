@@ -7,8 +7,9 @@ use crate::util;
 
 use jackdaw::entity_ops::{EntityAddImageOp, EntityAddPrefabOp};
 use jackdaw::launcher::{
-    LauncherAddProjectOp, LauncherImportProjectOp, LauncherLocateEditorOp,
-    LauncherNewProjectBrowseOp, LauncherNewProjectCreateOp, LauncherOpenFolderOp,
+    LauncherAddProjectOp, LauncherImportProjectOp, LauncherInstallExtensionOp,
+    LauncherLocateEditorOp, LauncherNewProjectBrowseOp, LauncherNewProjectCreateOp,
+    LauncherOpenFolderOp,
 };
 use jackdaw::material_browser::MaterialSaveAsOp;
 use jackdaw::project_window::AssetSelectFolderOp;
@@ -49,6 +50,7 @@ const SMOKE_SKIP_LIST: &[SkipOp] = &[
     SkipOp::new::<LauncherImportProjectOp>("spawns native folder picker"),
     SkipOp::new::<LauncherNewProjectBrowseOp>("spawns native folder picker"),
     SkipOp::new::<LauncherLocateEditorOp>("spawns native folder picker without a path"),
+    SkipOp::new::<LauncherInstallExtensionOp>("spawns native file picker without a path"),
     SkipOp::new::<LauncherNewProjectCreateOp>(
         "creates a project in the default projects folder once the page is showing",
     ),

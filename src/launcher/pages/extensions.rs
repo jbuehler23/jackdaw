@@ -94,6 +94,8 @@ pub struct Entry {
     pub toggleable: bool,
     /// What turning it on changes in the game, for the details pane.
     pub changes: Vec<String>,
+    /// Whether it is installed in this editor.
+    pub installed: bool,
 }
 
 /// What the page lists for its scope.
@@ -178,6 +180,7 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
             attention,
             toggleable,
             changes: module_changes(&module.id, on),
+            installed: true,
         });
     }
 
@@ -188,29 +191,22 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
         .and_then(|root| ProjectManifest::read(root).extensions)
         .unwrap_or_default();
     if let Some(extensions) = world.get_resource::<ExtensionCatalog>() {
-        let mut entries: Vec<(String, String, String, bool)> = extensions
+        let mut entries: Vec<(String, String, String)> = extensions
             .iter_with_content()
-            .filter(|(id, ..)| !crate::extension_resolution::is_required(id))
-            .map(|(id, label, description, kind)| {
-                (
-                    id,
-                    label,
-                    description,
-                    kind == jackdaw_api::prelude::ExtensionKind::Builtin,
-                )
+            .filter(|(id, _, _, kind)| {
+                *kind == jackdaw_api::prelude::ExtensionKind::Regular
+                    && !crate::extension_resolution::is_required(id)
+                    && catalog.get(id).is_none()
             })
+            .map(|(id, label, description, _)| (id, label, description))
             .collect();
-        entries.sort_by(|a, b| (a.3, &a.1).cmp(&(b.3, &b.1)));
-        for (id, label, description, builtin) in entries {
+        entries.sort_by(|a, b| a.1.cmp(&b.1));
+        for (id, label, description) in entries {
             let item = ExtensionItem::Extension(id.clone());
             let global = globals.contains(&id);
             let current = overrides.get(&id).copied().unwrap_or(global);
             let on = pending(&item).unwrap_or(current);
-            let mut detail = if builtin {
-                "built in".to_string()
-            } else {
-                "installed".to_string()
-            };
+            let mut detail = "installed".to_string();
             if view.project.is_some() {
                 match overrides.get(&id) {
                     Some(true) => detail.push_str(" - on for this project"),
@@ -236,27 +232,33 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
                 } else {
                     "the editor's extension list".to_string()
                 }],
+                installed: true,
             });
         }
     }
 
+    let known = |id: &str| {
+        world
+            .get_resource::<ExtensionCatalog>()
+            .is_some_and(|extensions| extensions.contains(id))
+    };
     for (id, wanted) in &overrides {
-        if out.extensions.iter().any(|entry| entry.item.id() == id) {
+        if !*wanted || known(id) || catalog.get(id).is_some() {
             continue;
         }
-        let item = ExtensionItem::Extension(id.clone());
-        let on = pending(&item).unwrap_or(*wanted);
         out.extensions.push(Entry {
-            item: item.clone(),
+            item: ExtensionItem::Extension(id.clone()),
             name: id.clone(),
-            description: "Named in this project's jackdaw.toml but not installed in this editor."
+            description: "This project turns it on in its jackdaw.toml, but it is not installed \
+                          in this editor, so it stays off. Install its .jdext to use it."
                 .into(),
             detail: String::new(),
-            on,
-            pending: pending(&item).is_some_and(|value| value != *wanted),
-            attention: on.then(|| "not installed in this editor".to_string()),
-            toggleable: true,
-            changes: vec![format!("jackdaw.toml [extensions] {id}")],
+            on: false,
+            pending: false,
+            attention: Some("not installed in this editor".to_string()),
+            toggleable: false,
+            changes: vec![format!("jackdaw.toml [extensions] {id} = true")],
+            installed: false,
         });
     }
 
@@ -431,12 +433,27 @@ fn content(view: &ExtensionsView, listing: &Listing) -> impl Scene {
         .filter(|entry| keeps(view, entry))
         .map(|entry| entry_row(entry, view.selected.as_ref() == Some(&entry.item)))
         .collect();
-    let extensions: Vec<_> = listing
+    let mut extensions: ui::Scenes = listing
         .extensions
         .iter()
         .filter(|entry| keeps(view, entry))
-        .map(|entry| entry_row(entry, view.selected.as_ref() == Some(&entry.item)))
+        .map(|entry| {
+            ui::boxed(entry_row(
+                entry,
+                view.selected.as_ref() == Some(&entry.item),
+            ))
+        })
         .collect();
+    if listing.extensions.is_empty() {
+        extensions.push(ui::boxed(bsn! {
+            Node { padding: UiRect::all(px(6)) }
+            Children [ ( {ui::note(
+                "No editor extensions are installed. The editor's own windows and tools are \
+                 part of it and are not listed here.",
+                tokens::TEXT_SECONDARY,
+            )} ) ]
+        }));
+    }
     let modules_note = if view.project.is_some() {
         "official, shipped with each editor"
     } else {
@@ -453,7 +470,13 @@ fn content(view: &ExtensionsView, listing: &Listing) -> impl Scene {
         ui::boxed(ui::section(
             vec![
                 ui::boxed(ui::primary("Extensions")),
-                ui::boxed(ui::dim("editor tools")),
+                ui::boxed(ui::dim("optional editor tools")),
+                ui::boxed(ui::spacer()),
+                ui::boxed(ui::button(
+                    "Install .jdext...",
+                    ButtonOperatorCall::new("launcher.install_extension"),
+                    ButtonVariant::Normal,
+                )),
             ],
             extensions,
         )),
@@ -551,9 +574,18 @@ fn entry_row(entry: &Entry, selected: bool) -> impl Scene {
             .with_param("id", entry.item.id().to_string()),
     );
     let background = if selected {
-        tokens::DOC_TAB_ACTIVE_BG
+        tokens::SELECTED_BG
     } else {
         Color::NONE
+    };
+    let action: ui::Scenes = if entry.installed {
+        Vec::new()
+    } else {
+        vec![ui::boxed(ui::button(
+            "Install .jdext...",
+            ButtonOperatorCall::new("launcher.install_extension"),
+            ButtonVariant::Normal,
+        ))]
     };
     let (detail, color) = match (&entry.attention, entry.pending) {
         (Some(attention), _) => (attention.clone(), tokens::CHIP_WARNING_TEXT),
@@ -590,6 +622,7 @@ fn entry_row(entry: &Entry, selected: bool) -> impl Scene {
                 Node { flex_grow: 1.0, min_width: px(0) }
                 Children [ ( {ui::text(detail, tokens::TEXT_SIZE_SM, color)} ) ]
             ),
+            {action},
         ]
     }
 }

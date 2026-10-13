@@ -493,8 +493,9 @@ fn the_new_project_page_creates_the_chosen_template_pinned_to_this_editor() {
 }
 
 #[test]
-fn extension_changes_wait_until_applied_and_land_in_the_projects_jackdaw_toml() {
+fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
     let dir = tempfile::tempdir().unwrap();
+    let mut app = launcher_app();
     let project = dir.path().join("with-overrides");
     jackdaw::new_project::scaffold_project_with(
         "with-overrides",
@@ -505,26 +506,49 @@ fn extension_changes_wait_until_applied_and_land_in_the_projects_jackdaw_toml() 
         false,
     )
     .unwrap();
+    let manifest_path = project.join("jackdaw.toml");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+    let overrides = std::collections::BTreeMap::from([("acme.dialogue".to_string(), true)]);
+    std::fs::write(
+        &manifest_path,
+        jackdaw_project_build::project_manifest::with_extensions(&text, &overrides).unwrap(),
+    )
+    .unwrap();
 
-    let mut app = launcher_app();
-    let extension = app
-        .world()
-        .resource::<jackdaw_api_internal::lifecycle::ExtensionCatalog>()
-        .iter()
-        .find(|id| !jackdaw::extension_resolution::is_required(id))
-        .expect("an optional extension")
-        .to_string();
     run(
         &mut app,
         "launcher.extensions",
         &[("path", path_value(&project))],
     );
+    for _ in 0..4 {
+        app.update();
+    }
+    let texts: Vec<String> = app
+        .world_mut()
+        .query::<&Text>()
+        .iter(app.world())
+        .map(|text| text.0.clone())
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == "acme.dialogue")
+            && texts
+                .iter()
+                .any(|text| text == "not installed in this editor"),
+        "an extension the project names but this editor lacks is shown as missing: {texts:?}"
+    );
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text == "Inspector" || text == "Viewport"),
+        "the editor's own windows are not listed as extensions: {texts:?}"
+    );
+
     run(
         &mut app,
         "launcher.extensions_toggle",
         &[
             ("kind", "extension".to_string().into()),
-            ("id", extension.clone().into()),
+            ("id", "acme.dialogue".to_string().into()),
             ("enabled", false.into()),
         ],
     );
@@ -537,21 +561,27 @@ fn extension_changes_wait_until_applied_and_land_in_the_projects_jackdaw_toml() 
             ("enabled", true.into()),
         ],
     );
-    let untouched = std::fs::read_to_string(project.join("jackdaw.toml")).unwrap();
+    let pending = app
+        .world()
+        .resource::<jackdaw::launcher::ExtensionsView>()
+        .pending
+        .clone();
+    assert_eq!(
+        pending
+            .keys()
+            .map(jackdaw::launcher::ExtensionItem::id)
+            .collect::<Vec<_>>(),
+        ["physics"],
+        "a missing extension cannot be toggled; the module change waits"
+    );
+    let untouched = std::fs::read_to_string(&manifest_path).unwrap();
     assert!(
-        !untouched.contains("[extensions]"),
+        untouched.contains("physics = false"),
         "nothing is written before Apply"
     );
 
     run(&mut app, "launcher.extensions_apply", &[]);
     let manifest = jackdaw_project_build::project_manifest::ProjectManifest::read(&project);
-    assert_eq!(
-        manifest
-            .extensions
-            .as_ref()
-            .and_then(|table| table.get(&extension)),
-        Some(&false)
-    );
     assert_eq!(
         manifest
             .modules

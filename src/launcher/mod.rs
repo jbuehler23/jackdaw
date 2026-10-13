@@ -63,6 +63,7 @@ impl Plugin for LauncherPlugin {
                     poll_jd_jobs,
                     project_actions::poll_project_copies,
                     ops::poll_folder_pick,
+                    ops::poll_extension_pick,
                     pages::poll_new_project,
                     sync_launcher_fields,
                     close_dialog_on_escape,
