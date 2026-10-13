@@ -705,8 +705,9 @@ fn package_id_version(id: &str) -> Option<&str> {
 }
 
 /// The package name embedded in a cargo package id, normalized to
-/// underscores. Registry ids carry it in the fragment; path ids carry
-/// only a version there, so the name is the last path segment.
+/// underscores. Registry ids carry it in the fragment; path and git ids
+/// whose name matches the last URL segment carry only a version there, so
+/// the name is that segment without a git query.
 fn package_id_name(id: &str) -> Option<String> {
     package_id_raw_name(id).map(|n| n.replace('-', "_"))
 }
@@ -717,7 +718,10 @@ fn package_id_raw_name(id: &str) -> Option<String> {
     let (base, fragment) = id.rsplit_once('#')?;
     let name = match fragment.rsplit_once('@') {
         Some((name, _)) => name,
-        None => base.rsplit('/').next()?,
+        None => {
+            let segment = base.rsplit('/').next()?;
+            segment.split_once('?').map_or(segment, |(name, _)| name)
+        }
     };
     Some(name.to_string())
 }
@@ -735,6 +739,14 @@ mod tests {
         assert_eq!(package_id_version(path), Some("0.1.0"));
         assert_eq!(package_id_name(path).as_deref(), Some("my_game"));
         assert_eq!(package_id_raw_name(path).as_deref(), Some("my-game"));
+        let git = "git+https://github.com/o/bevy_enhanced_input?rev=cb50e459#0.26.0";
+        assert_eq!(package_id_version(git), Some("0.26.0"));
+        assert_eq!(
+            package_id_name(git).as_deref(),
+            Some("bevy_enhanced_input")
+        );
+        let named = "git+https://github.com/o/avian?rev=252aac49#avian3d@0.8.0-dev";
+        assert_eq!(package_id_name(named).as_deref(), Some("avian3d"));
     }
 
     #[test]

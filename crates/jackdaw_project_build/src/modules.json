@@ -8,6 +8,7 @@
     "crates": [
       {
         "name": "avian3d",
+        "version": "0.8.0-dev",
         "git": "https://github.com/jbuehler23/avian",
         "rev": "252aac4973a35e2a9de9d33c3614426326b59bbf",
         "plugin": "avian3d::prelude::PhysicsPlugins::default()"
