@@ -20,6 +20,7 @@ fn main() -> AppExit {
             address_mode_w: ImageAddressMode::Repeat,
             ..ImageSamplerDescriptor::linear()
         },
+        ..default()
     });
 
     // When the editor plays the game inside its viewport it asks for a
