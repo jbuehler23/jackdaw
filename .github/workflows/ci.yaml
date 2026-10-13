@@ -459,6 +459,9 @@ jobs:
       - name: Check the BSN parser matches its grammar
         run: cargo xtask bsn-parser --check
 
+      - name: Check the core crates depend on no third-party Bevy crate
+        run: cargo xtask core-deps
+
   # The lightyear backend is its own workspace so the editor never resolves
   # lightyear; it is linted and tested here instead.
   lightyear:

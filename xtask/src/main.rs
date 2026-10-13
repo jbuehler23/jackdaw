@@ -3,6 +3,7 @@ use std::process::{Command, ExitCode};
 
 mod bsn_parser;
 mod bundle_smoke;
+mod core_deps;
 mod release;
 
 /// Target triple for the heavy tier's SDK build. Reads the host from
@@ -33,6 +34,7 @@ fn sh(program: &str, args: &[&str]) -> bool {
 
 fn fast() -> bool {
     sh("cargo", &["fmt", "--all", "--check"])
+        && core_deps::cmd()
         && sh(
             "cargo",
             &[
@@ -257,6 +259,7 @@ fn main() -> ExitCode {
             return jackdaw_cli_internal::package::cmd_bundle(&args[1..]);
         }
         "bundle-smoke" => bundle_smoke::cmd(&args[1..]),
+        "core-deps" => core_deps::cmd(),
         "bsn-parser" => bsn_parser::cmd(args[1..].iter().any(|arg| arg == "--check")),
         "package" => match args.get(1) {
             Some(out) => release::package(
@@ -272,7 +275,7 @@ fn main() -> ExitCode {
         other => {
             eprintln!(
                 "usage: cargo xtask <fast|archive [FILE]|integration [N/M] [--archive FILE]|heavy|\
-                 release-gate|package-sdk|bundle|bundle-smoke|bsn-parser [--check]|\
+                 release-gate|package-sdk|bundle|bundle-smoke|core-deps|bsn-parser [--check]|\
                  package DIR [--check]|publish [--dry-run]> \
                  (got {other:?})"
             );
