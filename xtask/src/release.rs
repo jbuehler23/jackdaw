@@ -40,7 +40,7 @@ pub struct Crate {
 struct Workspace {
     crates: Vec<Crate>,
     /// See [`git_pins`].
-    git_pins: BTreeMap<String, String>,
+    git_pins: BTreeMap<String, Vec<(String, String)>>,
     target_dir: PathBuf,
 }
 
@@ -77,12 +77,12 @@ fn workspace() -> Result<Workspace, String> {
 }
 
 /// Registry dependencies of the publishable crates that the workspace takes
-/// from a git revision instead, keyed by package name, each with the inline
-/// table that patches the registry crate to that revision.
+/// from a git revision instead, keyed by package name, each with the keys of
+/// the patch that points the registry crate at that revision.
 ///
 /// `cargo package` drops the git source and keeps the version, so a package
 /// resolves these from crates.io unless the consumer carries the same patch.
-pub fn git_pins(metadata: &serde_json::Value) -> BTreeMap<String, String> {
+pub fn git_pins(metadata: &serde_json::Value) -> BTreeMap<String, Vec<(String, String)>> {
     let publishable: BTreeSet<String> = publishable(metadata)
         .into_iter()
         .map(|krate| krate.name)
@@ -101,13 +101,13 @@ pub fn git_pins(metadata: &serde_json::Value) -> BTreeMap<String, String> {
             let source = dep["source"].as_str()?.strip_prefix("git+")?;
             let source = source.split('#').next().unwrap_or(source);
             let (url, query) = source.split_once('?').unwrap_or((source, ""));
-            let mut table = format!("git = {url:?}");
+            let mut keys = vec![("git".to_string(), url.to_string())];
             for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
                 if ["rev", "branch", "tag"].contains(&key) {
-                    table.push_str(&format!(", {key} = {value:?}"));
+                    keys.push((key.to_string(), value.to_string()));
                 }
             }
-            Some((dep["name"].as_str()?.to_string(), format!("{{ {table} }}")))
+            Some((dep["name"].as_str()?.to_string(), keys))
         })
         .collect()
 }
@@ -367,6 +367,17 @@ fn package_into(out: &Path) -> Result<Vec<Crate>, String> {
             .join(format!("{}-{}.crate", krate.name, krate.version))
     };
     let mut args = vec!["package", "--locked", "--no-verify"];
+    let pinned: Vec<String> = workspace
+        .git_pins
+        .iter()
+        .flat_map(|(name, keys)| {
+            keys.iter()
+                .map(move |(key, value)| format!("patch.crates-io.{name}.{key}={value:?}"))
+        })
+        .collect();
+    for config in &pinned {
+        args.extend(["--config", config.as_str()]);
+    }
     for krate in &workspace.crates {
         let _ = std::fs::remove_file(packaged(krate));
         args.extend(["-p", krate.name.as_str()]);
@@ -408,8 +419,12 @@ fn package_into(out: &Path) -> Result<Vec<Crate>, String> {
             source.to_string_lossy()
         ));
     }
-    for (name, table) in &workspace.git_pins {
-        patch.push_str(&format!("{name} = {table}\n"));
+    for (name, keys) in &workspace.git_pins {
+        let keys: Vec<String> = keys
+            .iter()
+            .map(|(key, value)| format!("{key} = {value:?}"))
+            .collect();
+        patch.push_str(&format!("{name} = {{ {} }}\n", keys.join(", ")));
     }
     if !too_big.is_empty() {
         return Err(format!(
@@ -608,16 +623,22 @@ mod tests {
             ]
         });
         let pins = git_pins(&metadata);
+        let keys = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect()
+        };
         assert_eq!(
             pins,
             BTreeMap::from([
                 (
                     "input".to_string(),
-                    r#"{ git = "https://example.com/input", branch = "main" }"#.to_string()
+                    keys(&[("git", "https://example.com/input"), ("branch", "main")])
                 ),
                 (
                     "physics".to_string(),
-                    r#"{ git = "https://example.com/physics", rev = "abc123" }"#.to_string()
+                    keys(&[("git", "https://example.com/physics"), ("rev", "abc123")])
                 ),
             ])
         );
