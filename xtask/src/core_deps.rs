@@ -7,8 +7,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::{Command, Stdio};
 
-/// Third-party Bevy crates the core still depends on, each to be removed.
-const EXCEPTIONS: [&str; 0] = [];
+/// Third-party Bevy crates the core still depends on, each with why it is
+/// allowed for now. Each is to be removed.
+const EXCEPTIONS: [(&str, &str); 2] = [
+    ("avian3d", "moves to the Physics module"),
+    ("rerecast", "moves to the Navmesh module"),
+];
+
+fn exception(dependency: &str) -> Option<&'static str> {
+    EXCEPTIONS
+        .iter()
+        .find(|(name, _)| *name == dependency)
+        .map(|(_, reason)| *reason)
+}
 
 /// The repository every crate of Bevy itself names.
 const BEVY_REPOSITORY: &str = "https://github.com/bevyengine/bevy";
@@ -46,10 +57,14 @@ pub fn cmd() -> bool {
     let violations = violations(&metadata);
     let mut ok = true;
     for (dependency, violation) in &violations {
-        let excepted = EXCEPTIONS.contains(&dependency.as_str());
+        let reason = exception(dependency);
+        let excepted = reason.is_some();
         eprintln!(
             "{}{dependency} depends on Bevy through {}, and core crates use it: {}",
-            if excepted { "allowed for now: " } else { "" },
+            match reason {
+                Some(reason) => format!("warning: allowed until it {reason}: "),
+                None => String::new(),
+            },
             violation.path.join(" -> "),
             violation
                 .users
@@ -60,14 +75,14 @@ pub fn cmd() -> bool {
         );
         ok &= excepted;
     }
-    for exception in EXCEPTIONS {
+    for (exception, _) in EXCEPTIONS {
         if !violations.contains_key(exception) {
             eprintln!("{exception} is no longer used by the core; drop it from the exceptions");
             ok = false;
         }
     }
     if ok {
-        eprintln!("the core crates depend on no third-party Bevy crate");
+        eprintln!("the core crates depend on no third-party Bevy crate beyond the exceptions");
     }
     ok
 }
