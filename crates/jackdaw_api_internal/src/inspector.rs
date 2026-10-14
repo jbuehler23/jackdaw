@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use bevy::prelude::Resource;
+use bevy::prelude::{Component, Resource};
 use lucide_icons::Icon;
 
 /// One inspector category tab. `id` is a stable string key so the set is open
@@ -15,6 +15,21 @@ pub struct InspectorCategory {
     pub label: Cow<'static, str>,
     pub icon: Icon,
     pub order: i32,
+}
+
+/// A toggle in an inspector category's header that adds or removes one
+/// component on the selected entity.
+///
+/// Spawned by [`crate::ExtensionContext::register_inspector_chip`] as a child
+/// of the extension, so the toggle goes away when the extension unloads.
+#[derive(Component, Clone, Debug)]
+pub struct InspectorChip {
+    /// The category whose header shows the toggle.
+    pub category: Cow<'static, str>,
+    /// The toggle's text.
+    pub label: Cow<'static, str>,
+    /// The reflected type path of the component it adds and removes.
+    pub type_path: Cow<'static, str>,
 }
 
 /// Registry of inspector categories and the component-type-to-category routing

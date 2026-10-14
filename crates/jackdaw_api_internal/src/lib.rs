@@ -31,6 +31,8 @@
 //! ```
 
 pub mod asset_kinds;
+pub mod brush;
+pub mod document;
 pub mod entity_icons;
 pub mod extensions_config;
 pub mod inspector;
@@ -40,7 +42,10 @@ pub mod operator;
 pub mod pie;
 mod registries;
 pub mod runtime;
+pub mod selection;
 pub mod snapshot;
+pub mod tools;
+pub mod viewport;
 pub mod widgets;
 
 use std::borrow::Cow;
@@ -115,6 +120,24 @@ pub mod prelude {
     // Re-export Bevy's SystemId here so Operator impls don't need to import it.
     pub use bevy::ecs::system::SystemId;
 }
+
+/// Whether the editor shows its project launcher or an open project.
+///
+/// Scene tooling runs only in [`AppState::Editor`]; gate an extension's
+/// systems with `run_if(in_state(AppState::Editor))`.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum AppState {
+    #[default]
+    ProjectSelect,
+    Editor,
+}
+
+/// Marks an entity the editor spawns for itself, such as a material preview,
+/// a gizmo mesh or a panel's camera, rather than one of the scene's.
+///
+/// Tools that pick or gather scene geometry skip these.
+#[derive(Component, Copy, Clone, Default, Debug)]
+pub struct EditorEntity;
 
 /// Trait implemented by every extension. Declares the extension's name
 /// and registration logic; the framework handles everything else.
@@ -588,6 +611,59 @@ impl<'a> ExtensionContext<'a> {
                 r
             })
             .set_component_category(type_path, category_id);
+        self
+    }
+
+    /// Add a button for operator `O` to the viewport toolbar, after the
+    /// editor's own tools. The button shows `O::LABEL` as its tooltip and is
+    /// highlighted while `O` runs as a modal.
+    pub fn register_toolbar_button<O: Operator>(&mut self, icon: lucide_icons::Icon) -> &mut Self {
+        self.spawn(crate::tools::ToolbarButton {
+            operator_id: O::ID,
+            icon,
+        });
+        self
+    }
+
+    /// Add a toggle to the header of an inspector category that adds or
+    /// removes one component on the selected entity, through the
+    /// `component.add` and `component.remove` operators. The toggle reads as
+    /// on while the selected entity has the component.
+    pub fn register_inspector_chip(
+        &mut self,
+        category_id: impl Into<Cow<'static, str>>,
+        label: impl Into<Cow<'static, str>>,
+        type_path: impl Into<Cow<'static, str>>,
+    ) -> &mut Self {
+        self.spawn(crate::inspector::InspectorChip {
+            category: category_id.into(),
+            label: label.into(),
+            type_path: type_path.into(),
+        });
+        self
+    }
+
+    /// Add a row for operator `O` to the overlays the viewport settings
+    /// menu shows and hides. Clicking the row calls `O`, which flips the
+    /// overlay and writes the new state to the row's
+    /// [`ViewportOverlay::shown`](crate::viewport::ViewportOverlay::shown).
+    pub fn register_viewport_overlay<O: Operator>(
+        &mut self,
+        label: impl Into<Cow<'static, str>>,
+        shown: bool,
+    ) -> &mut Self {
+        self.spawn(crate::viewport::ViewportOverlay {
+            label: label.into(),
+            operator_id: O::ID,
+            shown,
+        });
+        self
+    }
+
+    /// Start every brush the editor creates from now on with `component`,
+    /// written to the scene document as if the person had added it.
+    pub fn register_brush_default(&mut self, component: impl Reflect) -> &mut Self {
+        self.spawn(crate::brush::BrushDefault(Box::new(component)));
         self
     }
 }

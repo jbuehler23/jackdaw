@@ -46,9 +46,9 @@ pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, InstanceMaterialOverrides,
     LodFade, LodGroup, LodLevel, LodOverride, MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH,
-    NavmeshExclude, PrefabBaseline, PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance,
-    SceneRootTag, SceneWind, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh,
-    TerrainPaletteEntry, TerrainQuantization, Wind,
+    NavmeshExclude, NavmeshIgnored, PrefabBaseline, PropertyValue, ReflectionProbe, ScatterGroup,
+    ScatterInstance, SceneRootTag, SceneWind, Terrain, TerrainChannel, TerrainChannelElement,
+    TerrainNavmesh, TerrainPaletteEntry, TerrainQuantization, Wind,
 };
 
 use bevy::prelude::*;

@@ -22,6 +22,30 @@
 //!
 //! The host binary must also enable jackdaw's `dylib` feature so the
 //! editor and loaded dylibs share one compilation of the shared types.
+//!
+//! # Editor tooling
+//!
+//! An extension reaches the editor through Bevy itself: resources and
+//! components it reads, observers it adds, system sets it orders against,
+//! and operators it calls. What it may touch is what this crate exports.
+//!
+//! | Need | Here |
+//! | --- | --- |
+//! | What is selected | [`selection`] |
+//! | The viewport camera and the ray under the cursor | [`viewport`] |
+//! | A tool with a toolbar button and a status line | [`tools`] |
+//! | When brushes rebuild, and the components new brushes start with | [`brush`] |
+//! | Toggles in an inspector category's header | [`inspector`] |
+//! | What the open scene has authored | [`document`] |
+//! | Several operator calls as one undo step | [`op::with_history_span`] |
+//! | Whether a project is open | [`AppState`] |
+//!
+//! Anything that changes the scene goes through an operator, such as
+//! `component.add`, `component.set` or `entity.set_transform`, so it reaches
+//! undo, the scene document and the saved file.
+//!
+//! This surface follows the crate's version: an extension built against
+//! one minor version of `jackdaw_api` loads in every editor of that line.
 
 // Force the Jackdaw proxy dylib into every dynamic host and extension.
 // This mirrors Bevy's own `bevy/dynamic_linking` facade: public API remains
@@ -46,6 +70,42 @@ pub use jackdaw_api_internal::{
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 
+pub use jackdaw_api_internal::{AppState, EditorEntity};
+
+/// The editor's selection. Read [`Selection`](selection::Selection) or query
+/// [`Selected`](selection::Selected), observe `On<Add, Selected>` and
+/// `On<Remove, Selected>` to follow it, and change it through the
+/// `selection.select`, `selection.extend` and `selection.clear` operators.
+pub mod selection {
+    pub use jackdaw_api_internal::selection::{Selected, Selection};
+}
+
+/// The scene viewports: the hovered one, its camera, and the ray under the
+/// cursor through [`ViewportCursor`](viewport::ViewportCursor).
+pub mod viewport {
+    pub use jackdaw_api_internal::viewport::{
+        ActiveViewport, MainViewportCamera, SceneViewport, ViewportCursor, ViewportMode,
+        ViewportOverlay, ViewportRemap,
+    };
+}
+
+/// Viewport tools: a toolbar button that starts a modal operator, and the
+/// status line while it runs.
+pub mod tools {
+    pub use jackdaw_api_internal::tools::{ModalInputs, ToolStatus, ToolbarButton};
+}
+
+/// The system sets that move and rebuild brushes, and the components new
+/// brushes start with.
+pub mod brush {
+    pub use jackdaw_api_internal::brush::{BrushDefault, BrushSystems};
+}
+
+/// The open scene as authored, as opposed to what is derived at runtime.
+pub mod document {
+    pub use jackdaw_api_internal::document::SceneDocument;
+}
+
 /// Maps component type paths to the icon the outliner shows for entities
 /// carrying them. Extensions seed it through
 /// [`ExtensionContext::register_entity_icon`].
@@ -56,7 +116,9 @@ pub mod entity_icons {
 /// Inspector category registry: route components to category tabs and register
 /// new tabs. The six built-in categories are pre-registered.
 pub mod inspector {
-    pub use jackdaw_api_internal::inspector::{InspectorCategory, InspectorRegistry};
+    pub use jackdaw_api_internal::inspector::{
+        InspectorCategory, InspectorChip, InspectorRegistry,
+    };
 }
 
 /// `#[operator]` attribute macro. See [`jackdaw_api_macros`] for the
@@ -77,7 +139,7 @@ pub mod op {
         CallOperatorError, CallOperatorSettings, ExecutionContext, IntoOperatorResult, Operator,
         OperatorCallBuilder, OperatorCommandsExt, OperatorParameters, OperatorReports,
         OperatorResult, OperatorSignature, OperatorSystemId, OperatorWarnings, OperatorWorldExt,
-        ParamSpec, RefreshOperatorButtons, report_to_caller, warn_caller,
+        ParamSpec, RefreshOperatorButtons, report_to_caller, warn_caller, with_history_span,
     };
 }
 
@@ -181,6 +243,9 @@ pub mod prelude {
     };
     pub use crate::pie::PlayState;
     pub use crate::runtime::{GameApp, GamePlugin, GameRegistered, GameRegistry, GameSystems};
+    pub use crate::selection::{Selected, Selection};
+    pub use crate::viewport::ViewportCursor;
+    pub use crate::{AppState, EditorEntity};
     pub use crate::{
         AssetKind, AssetKindSource, AssetKinds, DefaultArea, DefinitionAssetType,
         DefinitionAssetTypes, ExtensionContext, ExtensionInputContext, ExtensionKind,

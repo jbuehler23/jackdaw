@@ -3,10 +3,11 @@
 //! Game runtime and editor-host plumbing are intentionally excluded.
 
 pub use jackdaw_api::{
-    DefinitionAssetType, DefinitionAssetTypes, ExtensionInputContext, ExtensionKind,
-    ExtensionPoint, ExtensionRegistrar, JackdawExtension, MenuEntryDescriptor, PanelContext,
-    TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetRegistry, WindowDescriptor,
-    input, keymap, op, scene, ui,
+    AppState, DefinitionAssetType, DefinitionAssetTypes, EditorEntity, ExtensionInputContext,
+    ExtensionKind, ExtensionPoint, ExtensionRegistrar, JackdawExtension, MenuEntryDescriptor,
+    PanelContext, TopLevelMenu, WidgetDefinition, WidgetInstantiateContext, WidgetRegistry,
+    WindowDescriptor, brush, document, input, inspector, keymap, op, scene, selection, tools, ui,
+    viewport,
 };
 pub use jackdaw_api_macros::extension_operator as operator;
 

@@ -1423,6 +1423,16 @@ impl Default for TerrainNavmesh {
 #[reflect(Component, Default, @crate::EditorCategory::new("Navigation"))]
 pub struct NavmeshExclude;
 
+/// An entity the navmesh bake leaves out because it is not ground in the
+/// running game: a body the simulation moves, or a trigger volume nothing
+/// stands on.
+///
+/// The derived counterpart of [`NavmeshExclude`]. Tools that know an
+/// entity moves add it at runtime; it is not reflected, so it is never
+/// saved, and it applies to the entity alone rather than to its children.
+#[derive(Component, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavmeshIgnored;
+
 /// Reflect type path for [`NavmeshExclude`], for the paths that name a
 /// component by its path rather than by its type.
 pub const NAVMESH_EXCLUDE_TYPE_PATH: &str = "jackdaw_scene_types::types::NavmeshExclude";
