@@ -18,12 +18,14 @@
 
 use std::time::Duration;
 
-use bevy::{picking::hover::Hovered, prelude::*, window::PrimaryWindow};
-
-use crate::{
-    popover::{self, PopoverPlacement, PopoverProps},
-    tokens,
+use bevy::{
+    picking::hover::Hovered,
+    prelude::*,
+    ui::{UiGlobalTransform, UiSystems},
+    window::PrimaryWindow,
 };
+
+use crate::tokens;
 
 /// Delay before the title-only popover appears. Long enough to skip
 /// flicker on quick mouse-overs, short enough to feel responsive.
@@ -43,6 +45,20 @@ const TOOLTIP_MAX_WIDTH: f32 = 360.0;
 /// the descenders in the bottom-most line so wrapped content isn't
 /// clipped.
 const TOOLTIP_PADDING: f32 = 10.0;
+
+/// Space between the hovered element and its tooltip.
+const TOOLTIP_GAP: f32 = 4.0;
+
+/// Closest a tooltip comes to the window edge.
+const TOOLTIP_WINDOW_MARGIN: f32 = 8.0;
+
+/// A shown tooltip, spawned at the UI root so it sizes to its text rather
+/// than to the element it describes, and placed beside that element.
+#[derive(Component)]
+pub struct TooltipPopover {
+    /// The hovered element.
+    pub target: Entity,
+}
 
 /// Hover-tooltip data. Attach to any entity that also carries
 /// [`Hovered`] to make it surface a popover after a short hover
@@ -105,7 +121,8 @@ impl Plugin for TooltipPlugin {
     fn build(&self, app: &mut App) {
         app.world_mut().register_component::<Tooltip>();
         app.init_resource::<TooltipState>()
-            .add_systems(Update, tick_tooltip);
+            .add_systems(Update, tick_tooltip)
+            .add_systems(PostUpdate, place_tooltips.after(UiSystems::Layout));
     }
 }
 
@@ -137,12 +154,11 @@ struct TooltipState {
 /// the hover lookup, so no popover sits under the cursor over a control the user
 /// is operating.
 ///
-/// An open menu blocks it for the same reason: the popover is placed below the
-/// cursor, so a row's tooltip would cover the rows travelled to next.
+/// An open menu blocks it for the same reason: a row's tooltip would cover the
+/// rows travelled to next.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,
-    window: Single<&Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     menus: Option<Res<jackdaw_widgets::menu_bar::MenuBarState>>,
     default_font: Res<crate::icons::FeathersDefaultFont>,
@@ -191,22 +207,23 @@ fn tick_tooltip(
 
     match state.stage {
         TooltipStage::None if elapsed >= SHORT_HOVER_DELAY => {
-            let cursor_pos = window.cursor_position();
             let popover_entity = commands
                 .spawn((
-                    popover::popover(
-                        PopoverProps::new(entity)
-                            .with_position(cursor_pos)
-                            .with_placement(PopoverPlacement::BottomStart)
-                            .with_padding(TOOLTIP_PADDING)
-                            .with_gap(tokens::SPACING_XS)
-                            .with_z_index(300)
-                            .with_node(Node {
-                                flex_direction: FlexDirection::Column,
-                                max_width: Val::Px(TOOLTIP_MAX_WIDTH),
-                                ..Default::default()
-                            }),
-                    ),
+                    TooltipPopover { target: entity },
+                    Node {
+                        position_type: PositionType::Absolute,
+                        flex_direction: FlexDirection::Column,
+                        max_width: Val::Px(TOOLTIP_MAX_WIDTH),
+                        padding: UiRect::all(px(TOOLTIP_PADDING)),
+                        row_gap: px(tokens::SPACING_XS),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(tokens::CORNER_RADIUS_LG),
+                        ..Default::default()
+                    },
+                    BackgroundColor(tokens::BACKGROUND_COLOR.into()),
+                    BorderColor::all(tokens::BORDER_COLOR),
+                    GlobalZIndex(300),
+                    Visibility::Hidden,
                     // Tooltips are decorative; they must not capture
                     // pointer events. Without this, the popover spawns
                     // at the cursor and blocks the next click on the
@@ -229,6 +246,50 @@ fn tick_tooltip(
             }
         }
         _ => {}
+    }
+}
+
+/// Put each tooltip beside the element it describes, inside the window: under
+/// it when the element is in the top half of the window, over it otherwise,
+/// so a tooltip on a control near the bottom does not cover the bars below.
+/// Shown once its size is known.
+fn place_tooltips(
+    mut tips: Query<(&TooltipPopover, &ComputedNode, &mut Node, &mut Visibility)>,
+    targets: Query<(&ComputedNode, &UiGlobalTransform), Without<TooltipPopover>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+) {
+    for (tip, computed, mut node, mut visibility) in &mut tips {
+        let Ok((target, transform)) = targets.get(tip.target) else {
+            continue;
+        };
+        let size = computed.size() * computed.inverse_scale_factor();
+        if size.x <= 0.0 || size.y <= 0.0 {
+            continue;
+        }
+        let scale = target.inverse_scale_factor();
+        let center = transform.translation * scale;
+        let half = target.size() * scale / 2.0;
+        let (width, height) = (window.width(), window.height());
+        let left = (center.x - half.x).clamp(
+            TOOLTIP_WINDOW_MARGIN,
+            (width - size.x - TOOLTIP_WINDOW_MARGIN).max(TOOLTIP_WINDOW_MARGIN),
+        );
+        let below = center.y + half.y + TOOLTIP_GAP;
+        let above = center.y - half.y - TOOLTIP_GAP - size.y;
+        let below_fits = below + size.y <= height - TOOLTIP_WINDOW_MARGIN;
+        let above_fits = above >= TOOLTIP_WINDOW_MARGIN;
+        let top = if (center.y < height / 2.0 && below_fits) || !above_fits {
+            below
+        } else {
+            above
+        };
+        if node.left != Val::Px(left) {
+            node.left = Val::Px(left);
+        }
+        if node.top != Val::Px(top) {
+            node.top = Val::Px(top);
+        }
+        visibility.set_if_neq(Visibility::Inherited);
     }
 }
 
@@ -369,7 +430,7 @@ mod tests {
 
     fn popover_count(world: &mut World) -> usize {
         world
-            .query_filtered::<Entity, With<popover::EditorPopover>>()
+            .query_filtered::<Entity, With<TooltipPopover>>()
             .iter(world)
             .count()
     }
