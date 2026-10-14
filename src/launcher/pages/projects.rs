@@ -48,67 +48,65 @@ pub fn page() -> impl Scene {
             padding: UiRect::axes(px(20), px(16)),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+            }
+            Children [
+                Node { flex_grow: 1.0 }
+                Text("Projects")
+                TextFont { font_size: tokens::TEXT_SIZE_LG }
+                TextColor(tokens::TEXT_PRIMARY)
+                --
+                @{ui::dim("Filter")}
+                --
+                Node { width: px(240) }
+                TextSlot {
+                    field: LauncherField::ProjectQuery,
+                    placeholder: "Filter projects",
                 }
-                Children [
-                    (
-                        Node { flex_grow: 1.0 }
-                        Text("Projects")
-                        TextFont { font_size: tokens::TEXT_SIZE_LG }
-                        TextColor(tokens::TEXT_PRIMARY)
-                    ),
-                    ( {ui::dim("Filter")} ),
-                    (
-                        Node { width: px(240) }
-                        TextSlot {
-                            field: LauncherField::ProjectQuery,
-                            placeholder: "Filter projects",
-                        }
-                    ),
-                    ( {ui::button("Add", ButtonOperatorCall::new("launcher.add_project"), ButtonVariant::Normal)} ),
-                    ( {ui::button("New project", ButtonOperatorCall::new("launcher.new_project"), ButtonVariant::Primary)} ),
-                ]
-            ),
-            (
-                ProjectListRegion
-                Node {
-                    flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(8),
-                }
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    flex_wrap: FlexWrap::Wrap,
-                    row_gap: px(6),
-                }
-                Children [
-                    ( {ui::dim("Start")} ),
-                    ( {ui::button("New game", ButtonOperatorCall::new("launcher.new_project").with_param("template", "3d"), ButtonVariant::Normal)} ),
-                    ( {ui::button("New extension", ButtonOperatorCall::new("launcher.new_project").with_param("template", "extension"), ButtonVariant::Normal)} ),
-                    ( {ui::button("Import Bevy project", ButtonOperatorCall::new("launcher.import_project"), ButtonVariant::Normal)} ),
-                    ( {ui::button("Open folder...", ButtonOperatorCall::new("launcher.open_folder"), ButtonVariant::Normal)} ),
-                ]
-            ),
-            (
-                EnvironmentRegion
-                Node { flex_direction: FlexDirection::Column }
-            ),
-            (
-                crate::sdk_setup::SdkStatusRow
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(4),
-                }
-            ),
+                --
+                @{ui::button("Add", ButtonOperatorCall::new("launcher.add_project"), ButtonVariant::Normal)}
+                --
+                @{ui::button("New project", ButtonOperatorCall::new("launcher.new_project"), ButtonVariant::Primary)}
+            ]
+            --
+            ProjectListRegion
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+            }
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                flex_wrap: FlexWrap::Wrap,
+                row_gap: px(6),
+            }
+            Children [
+                @{ui::dim("Start")}
+                --
+                @{ui::button("New game", ButtonOperatorCall::new("launcher.new_project").with_param("template", "3d"), ButtonVariant::Normal)}
+                --
+                @{ui::button("New extension", ButtonOperatorCall::new("launcher.new_project").with_param("template", "extension"), ButtonVariant::Normal)}
+                --
+                @{ui::button("Import Bevy project", ButtonOperatorCall::new("launcher.import_project"), ButtonVariant::Normal)}
+                --
+                @{ui::button("Open folder...", ButtonOperatorCall::new("launcher.open_folder"), ButtonVariant::Normal)}
+            ]
+            --
+            EnvironmentRegion
+            Node { flex_direction: FlexDirection::Column }
+            --
+            crate::sdk_setup::SdkStatusRow
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+            }
         ]
     }
 }
@@ -147,46 +145,49 @@ pub fn list(launcher: &Launcher, view: &ProjectListView) -> impl Scene {
             row_gap: px(8),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(6),
-                }
-                Children [
-                    ( {ui::dim("Show")} ),
-                    {filters},
-                    ( {ui::spacer()} ),
-                    ( {ui::dim("Sorted by last opened")} ),
-                ]
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(10),
-                    padding: UiRect::horizontal(px(10)),
-                }
-                Children [
-                    ( Node { width: px(28) } ),
-                    ( Node { flex_grow: 1.0 } Children [ ( {ui::dim("Name")} ) ] ),
-                    ( Node { width: px(OPENED_WIDTH) } Children [ ( {ui::dim("Opened")} ) ] ),
-                    ( Node { width: px(EDITOR_WIDTH) } Children [ ( {ui::dim("Editor")} ) ] ),
-                    ( Node { width: px(28) } ),
-                ]
-            ),
-            (
-                Node {
-                    flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(2),
-                    overflow: Overflow::scroll_y(),
-                }
-                ScrollPosition::default()
-                bevy::ui_widgets::ScrollArea
-                Hovered::default()
-                Children [ {rows} ]
-            ),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(6),
+            }
+            Children [
+                @{ui::dim("Show")}
+                --
+                {filters}
+                --
+                @{ui::spacer()}
+                --
+                @{ui::dim("Sorted by last opened")}
+            ]
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: px(10),
+                padding: UiRect::horizontal(px(10)),
+            }
+            Children [
+                Node { width: px(28) }
+                --
+                Node { flex_grow: 1.0 } Children [ @{ui::dim("Name")} ]
+                --
+                Node { width: px(OPENED_WIDTH) } Children [ @{ui::dim("Opened")} ]
+                --
+                Node { width: px(EDITOR_WIDTH) } Children [ @{ui::dim("Editor")} ]
+                --
+                Node { width: px(28) }
+            ]
+            --
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(2),
+                overflow: Overflow::scroll_y(),
+            }
+            ScrollPosition::default()
+            bevy::ui_widgets::ScrollArea
+            Hovered::default()
+            Children [ {rows} ]
         ]
     }
 }
@@ -197,7 +198,7 @@ fn empty_state(message: &'static str) -> impl Scene {
             padding: UiRect::all(px(16)),
             justify_content: JustifyContent::Center,
         }
-        Children [ ( {ui::secondary(message)} ) ]
+        Children [ @{ui::secondary(message)} ]
     }
 }
 
@@ -230,7 +231,7 @@ fn project_row(entry: &ProjectEntry, launcher: &Launcher) -> impl Scene {
         display_path(&entry.path)
     };
     let chips_line: Box<dyn SceneList> = if details.is_empty() {
-        Box::new(bsn_list!())
+        Box::new(bsn_list! {})
     } else {
         ui::boxed(bsn! {
             Node {
@@ -277,52 +278,50 @@ fn project_row(entry: &ProjectEntry, launcher: &Launcher) -> impl Scene {
         BackgroundColor(Color::NONE)
         Button
         Hovered::default()
-        template_value(open)
-        on(|over: On<Pointer<Over>>, mut backgrounds: Query<&mut BackgroundColor>| {
+        ~{open}
+        on(|over: On<PointerOver>, mut backgrounds: Query<&mut BackgroundColor>| {
             if let Ok(mut background) = backgrounds.get_mut(over.event_target()) {
                 background.0 = tokens::ELEVATED_BG;
             }
         })
-        on(|out: On<Pointer<Out>>, mut backgrounds: Query<&mut BackgroundColor>| {
+        on(|out: On<PointerOut>, mut backgrounds: Query<&mut BackgroundColor>| {
             if let Ok(mut background) = backgrounds.get_mut(out.event_target()) {
                 background.0 = Color::NONE;
             }
         })
         Children [
-            (
-                Node { width: px(28), justify_content: JustifyContent::Center }
-                Text(folder_glyph)
-                TextFont {
-                    font: FontSourceTemplate::Handle(font_paths::LUCIDE),
-                    font_size: FontSize::Px(18.0),
-                }
-                TextColor(folder_color)
-                Pickable::IGNORE
-            ),
-            (
-                Node {
-                    flex_grow: 1.0,
-                    min_width: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(4),
-                }
-                Pickable::IGNORE
-                Children [
-                    ( {ui::text(name, tokens::TEXT_SIZE, name_color)} ),
-                    ( {ui::path_text(path_line)} ),
-                    {chips_line},
-                ]
-            ),
-            (
-                Node { width: px(OPENED_WIDTH) }
-                Pickable::IGNORE
-                Children [ ( {ui::dim(opened)} ) ]
-            ),
-            (
-                Node { width: px(EDITOR_WIDTH), flex_direction: FlexDirection::Column }
-                Children [ {action} ]
-            ),
-            {menu},
+            Node { width: px(28), justify_content: JustifyContent::Center }
+            Text(folder_glyph)
+            TextFont {
+                font: FontSourceTemplate::Handle(font_paths::LUCIDE),
+                font_size: FontSize::Px(18.0),
+            }
+            TextColor(folder_color)
+            Pickable::IGNORE
+            --
+            Node {
+                flex_grow: 1.0,
+                min_width: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+            }
+            Pickable::IGNORE
+            Children [
+                @{ui::text(name, tokens::TEXT_SIZE, name_color)}
+                --
+                @{ui::path_text(path_line)}
+                --
+                {chips_line}
+            ]
+            --
+            Node { width: px(OPENED_WIDTH) }
+            Pickable::IGNORE
+            Children [ @{ui::dim(opened)} ]
+            --
+            Node { width: px(EDITOR_WIDTH), flex_direction: FlexDirection::Column }
+            Children [ {action} ]
+            --
+            {menu}
         ]
     }
 }
@@ -382,7 +381,7 @@ fn menu_item(caption: &'static str, call: ButtonOperatorCall) -> impl Scene {
         @FeathersMenuItem {
             @caption: bsn! { Text(caption) ThemedText },
         }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -392,25 +391,26 @@ fn row_menu(entry: &ProjectEntry) -> impl Scene {
         @FeathersMenu
         Node { width: px(28) }
         Children [
-            (
-                @FeathersMenuButton {
-                    @caption: bsn! { {ui::button_glyph(Icon::Ellipsis)} },
-                    @arrow: false,
-                }
-            ),
-            (
-                @FeathersMenuPopup
-                template_value(TabGroup::modal())
-                template_value(ui::end_aligned_popover())
-                Node { min_width: px(200) }
-                Children [
-                    ( {menu_item("Open", call("launcher.open_project", &path))} ),
-                    ( {menu_item("Open with...", call("launcher.open_with", &path))} ),
-                    ( {menu_item("Extensions and plugins", call("launcher.extensions", &path))} ),
-                    ( {menu_item("Show in files", call("launcher.reveal_project", &path))} ),
-                    ( {menu_item("Remove from list", call("launcher.remove_project", &path))} ),
-                ]
-            ),
+            @FeathersMenuButton {
+                @caption: bsn! { @{ui::button_glyph(Icon::Ellipsis)} },
+                @arrow: false,
+            }
+            --
+            @FeathersMenuPopup
+            ~{TabGroup::modal()}
+            ~{ui::end_aligned_popover()}
+            Node { min_width: px(200) }
+            Children [
+                @{menu_item("Open", call("launcher.open_project", &path))}
+                --
+                @{menu_item("Open with...", call("launcher.open_with", &path))}
+                --
+                @{menu_item("Extensions and plugins", call("launcher.extensions", &path))}
+                --
+                @{menu_item("Show in files", call("launcher.reveal_project", &path))}
+                --
+                @{menu_item("Remove from list", call("launcher.remove_project", &path))}
+            ]
         ]
     }
 }
@@ -447,10 +447,13 @@ pub fn environment(launcher: &Launcher, preflight: &PreflightState) -> impl Scen
         }
         BackgroundColor(tokens::WINDOW_BG)
         Children [
-            ( {ui::dim("Environment")} ),
-            {chips},
-            ( {ui::spacer()} ),
-            ( {ui::button("Doctor", ButtonOperatorCall::new("launcher.doctor"), ButtonVariant::Plain)} ),
+            @{ui::dim("Environment")}
+            --
+            {chips}
+            --
+            @{ui::spacer()}
+            --
+            @{ui::button("Doctor", ButtonOperatorCall::new("launcher.doctor"), ButtonVariant::Plain)}
         ]
     }
 }

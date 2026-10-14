@@ -68,22 +68,20 @@ pub fn title_bar() -> impl Scene {
         }
         Pickable::IGNORE
         Children [
-            (
-                Text("jackdaw launcher")
-                TextFont { font_size: tokens::TEXT_SIZE, weight: FontWeight::BOLD }
-                TextColor(tokens::TEXT_PRIMARY)
-                Pickable::IGNORE
-            ),
-            ( {ui::spacer()} ),
-            (
-                HeaderRegion
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(4),
-                }
-                Pickable::IGNORE
-            ),
+            Text("jackdaw launcher")
+            TextFont { font_size: tokens::TEXT_SIZE, weight: FontWeight::BOLD }
+            TextColor(tokens::TEXT_PRIMARY)
+            Pickable::IGNORE
+            --
+            @{ui::spacer()}
+            --
+            HeaderRegion
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(4),
+            }
+            Pickable::IGNORE
         ]
     }
 }
@@ -100,38 +98,32 @@ pub fn body() -> impl Scene {
         }
         BorderColor::all(tokens::PANEL_BORDER)
         Children [
-            (
-                NavRegion
-                Node {
-                    width: px(200),
-                    flex_shrink: 0.0,
-                    flex_direction: FlexDirection::Column,
-                    border: UiRect::right(px(1)),
-                }
-                BorderColor::all(tokens::PANEL_BORDER)
-            ),
-            (
+            NavRegion
+            Node {
+                width: px(200),
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Column,
+                border: UiRect::right(px(1)),
+            }
+            BorderColor::all(tokens::PANEL_BORDER)
+            --
+            Node {
+                flex_grow: 1.0,
+                min_width: px(0),
+                flex_direction: FlexDirection::Column,
+            }
+            BackgroundColor(tokens::PANEL_BG)
+            Children [
+                NoticeRegion
+                Node { flex_direction: FlexDirection::Column }
+                --
+                PageRegion
                 Node {
                     flex_grow: 1.0,
-                    min_width: px(0),
+                    min_height: px(0),
                     flex_direction: FlexDirection::Column,
                 }
-                BackgroundColor(tokens::PANEL_BG)
-                Children [
-                    (
-                        NoticeRegion
-                        Node { flex_direction: FlexDirection::Column }
-                    ),
-                    (
-                        PageRegion
-                        Node {
-                            flex_grow: 1.0,
-                            min_height: px(0),
-                            flex_direction: FlexDirection::Column,
-                        }
-                    ),
-                ]
-            ),
+            ]
         ]
     }
 }
@@ -190,9 +182,11 @@ fn header(running: usize, issues: usize) -> impl Scene {
         }
         Pickable::IGNORE
         Children [
-            ( {ui::icon_button(Icon::Download, downloads, op("launcher.downloads"), ButtonVariant::Plain)} ),
-            ( {ui::icon_button(Icon::Activity, doctor, op("launcher.doctor"), doctor_variant)} ),
-            ( {ui::icon_button(Icon::Settings, "", op("launcher.settings"), ButtonVariant::Plain)} ),
+            @{ui::icon_button(Icon::Download, downloads, op("launcher.downloads"), ButtonVariant::Plain)}
+            --
+            @{ui::icon_button(Icon::Activity, doctor, op("launcher.doctor"), doctor_variant)}
+            --
+            @{ui::icon_button(Icon::Settings, "", op("launcher.settings"), ButtonVariant::Plain)}
         ]
     }
 }
@@ -224,7 +218,7 @@ fn nav_button(caption: &'static str, page: LauncherPage, current: LauncherPage) 
     };
     let call = ButtonOperatorCall::new("launcher.show_page").with_param("page", page.id());
     bsn! {
-        {ui::button(caption, call, variant)}
+        @{ui::button(caption, call, variant)}
         Node {
             width: percent(100),
             height: px(30),
@@ -264,25 +258,30 @@ fn nav(page: LauncherPage, launcher: &Launcher, index: &IndexStatus) -> impl Sce
             padding: UiRect::all(px(10)),
         }
         Children [
-            ( {nav_button("Projects", LauncherPage::Projects, page)} ),
-            ( {nav_button("Editors", LauncherPage::Editors, page)} ),
-            ( {nav_button("Extensions", LauncherPage::Extensions, page)} ),
-            ( {ui::spacer()} ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(4),
-                    padding: UiRect::all(px(10)),
-                    border_radius: BorderRadius::all(px(4)),
-                }
-                BackgroundColor(tokens::PANEL_BG)
-                Children [
-                    ( {ui::text(name, tokens::TEXT_SIZE_SM, tokens::TEXT_PRIMARY)} ),
-                    ( {ui::dim(line)} ),
-                    ( {ui::dim(jd)} ),
-                    {origin},
-                ]
-            ),
+            @{nav_button("Projects", LauncherPage::Projects, page)}
+            --
+            @{nav_button("Editors", LauncherPage::Editors, page)}
+            --
+            @{nav_button("Extensions", LauncherPage::Extensions, page)}
+            --
+            @{ui::spacer()}
+            --
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                padding: UiRect::all(px(10)),
+                border_radius: BorderRadius::all(px(4)),
+            }
+            BackgroundColor(tokens::PANEL_BG)
+            Children [
+                @{ui::text(name, tokens::TEXT_SIZE_SM, tokens::TEXT_PRIMARY)}
+                --
+                @{ui::dim(line)}
+                --
+                @{ui::dim(jd)}
+                --
+                {origin}
+            ]
         ]
     }
 }
@@ -366,12 +365,12 @@ fn notice_strip(notice: &super::Notice) -> impl Scene {
             padding: UiRect::new(px(20), px(20), px(10), px(0)),
         }
         Children [
-            ( {ui::chip(if notice.error { "Problem" } else { "Note" }, tone)} ),
-            (
-                Node { flex_grow: 1.0, min_width: px(0) }
-                Children [ ( {ui::note(text, tokens::TEXT_PRIMARY)} ) ]
-            ),
-            ( {ui::button("Dismiss", op("launcher.dismiss_notice"), ButtonVariant::Plain)} ),
+            @{ui::chip(if notice.error { "Problem" } else { "Note" }, tone)}
+            --
+            Node { flex_grow: 1.0, min_width: px(0) }
+            Children [ @{ui::note(text, tokens::TEXT_PRIMARY)} ]
+            --
+            @{ui::button("Dismiss", op("launcher.dismiss_notice"), ButtonVariant::Plain)}
         ]
     }
 }

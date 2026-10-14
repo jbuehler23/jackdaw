@@ -11,7 +11,7 @@ use std::time::Duration;
 use bevy::camera::RenderTarget;
 use bevy::picking::{
     backend::HitData,
-    events::{Click, Pointer, Press, Release},
+    events::{Pointer, PointerClick, PointerPress, PointerRelease},
     pointer::{Location, PointerButton, PointerId},
 };
 use bevy::prelude::*;
@@ -153,42 +153,38 @@ fn click(app: &mut App, entity: Entity) {
     let target = RenderTarget::Window(WindowRef::Primary)
         .normalize(Some(window))
         .expect("the primary window normalizes");
-    let location = Location {
-        target,
-        position: Vec2::ZERO,
+    let pointer = || {
+        Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: target.clone(),
+                position: Vec2::ZERO,
+            },
+        )
     };
     let hit = || HitData::new(Entity::PLACEHOLDER, 0.0, None, None);
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        location.clone(),
-        Press {
-            button: PointerButton::Primary,
-            hit: hit(),
-            count: 1,
-        },
+    app.world_mut().trigger(PointerPress {
         entity,
-    ));
+        pointer: pointer(),
+        button: PointerButton::Primary,
+        hit: hit(),
+        count: 1,
+    });
     app.update();
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        location.clone(),
-        Click {
-            button: PointerButton::Primary,
-            hit: hit(),
-            duration: Duration::ZERO,
-            count: 1,
-        },
+    app.world_mut().trigger(PointerClick {
         entity,
-    ));
-    app.world_mut().trigger(Pointer::new(
-        PointerId::Mouse,
-        location,
-        Release {
-            button: PointerButton::Primary,
-            hit: hit(),
-        },
+        pointer: pointer(),
+        button: PointerButton::Primary,
+        hit: hit(),
+        duration: Duration::ZERO,
+        count: 1,
+    });
+    app.world_mut().trigger(PointerRelease {
         entity,
-    ));
+        pointer: pointer(),
+        button: PointerButton::Primary,
+        hit: hit(),
+    });
     app.update();
     app.update();
 }
@@ -478,8 +474,18 @@ fn the_new_project_page_creates_the_chosen_template_pinned_to_this_editor() {
                 .is_some_and(|root| root.root == project)
         },
     );
-    let scene = std::fs::read_to_string(project.join("assets/scene.bsn")).unwrap();
-    assert!(scene.contains("Camera2d"), "the 2D starter scene: {scene}");
+    util::update_until(
+        &mut app,
+        "the 2D starter scene's sprite",
+        Duration::from_secs(30),
+        |app| {
+            app.world_mut()
+                .query_filtered::<(), With<Sprite>>()
+                .iter(app.world())
+                .next()
+                .is_some()
+        },
+    );
     let manifest = std::fs::read_to_string(project.join("jackdaw.toml")).unwrap();
     assert!(
         manifest.contains(&format!("version = \"{}\"", jackdaw_project_build::VERSION)),

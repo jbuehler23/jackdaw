@@ -98,42 +98,38 @@ fn frame(title: String, width: f32, content: ui::Scenes, footer: ui::Scenes) -> 
         BorderColor::all(tokens::COMPONENT_CARD_BORDER)
         BoxShadow::new(Color::BLACK.with_alpha(0.9), px(0), px(0), px(1), px(4))
         Children [
-            (
-                Node {
-                    min_height: px(36),
-                    padding: UiRect::horizontal(px(12)),
-                    align_items: AlignItems::Center,
-                    border_radius: BorderRadius::top(px(4)),
-                }
-                BackgroundColor(tokens::WINDOW_BG)
-                Children [ ( {ui::text(title, tokens::TEXT_SIZE_LG, tokens::TEXT_PRIMARY)} ) ]
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(12),
-                    padding: UiRect::all(px(12)),
-                    min_height: px(0),
-                    flex_shrink: 1.0,
-                    overflow: Overflow::scroll_y(),
-                }
-                ScrollPosition::default()
-                bevy::ui_widgets::ScrollArea
-                bevy::picking::hover::Hovered::default()
-                Children [ {content} ]
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::FlexEnd,
-                    column_gap: px(8),
-                    padding: UiRect::axes(px(12), px(10)),
-                    border: UiRect::top(px(1)),
-                }
-                BorderColor::all(tokens::ELEVATED_BG)
-                Children [ {footer} ]
-            ),
+            Node {
+                min_height: px(36),
+                padding: UiRect::horizontal(px(12)),
+                align_items: AlignItems::Center,
+                border_radius: BorderRadius::top(px(4)),
+            }
+            BackgroundColor(tokens::WINDOW_BG)
+            Children [ @{ui::text(title, tokens::TEXT_SIZE_LG, tokens::TEXT_PRIMARY)} ]
+            --
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                padding: UiRect::all(px(12)),
+                min_height: px(0),
+                flex_shrink: 1.0,
+                overflow: Overflow::scroll_y(),
+            }
+            ScrollPosition::default()
+            bevy::ui_widgets::ScrollArea
+            bevy::picking::hover::Hovered::default()
+            Children [ {content} ]
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::FlexEnd,
+                column_gap: px(8),
+                padding: UiRect::axes(px(12), px(10)),
+                border: UiRect::top(px(1)),
+            }
+            BorderColor::all(tokens::ELEVATED_BG)
+            Children [ {footer} ]
         ]
     }
 }
@@ -176,27 +172,25 @@ fn option_card(
         BackgroundColor(tokens::ELEVATED_BG)
         BorderColor::all(outline)
         Children [
-            {radio},
-            (
+            {radio}
+            --
+            Node {
+                flex_grow: 1.0,
+                min_width: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+            }
+            Children [
                 Node {
-                    flex_grow: 1.0,
-                    min_width: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(4),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: px(8),
+                    flex_wrap: FlexWrap::Wrap,
                 }
-                Children [
-                    (
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: px(8),
-                            flex_wrap: FlexWrap::Wrap,
-                        }
-                        Children [ {title} ]
-                    ),
-                    {lines},
-                ]
-            ),
+                Children [ {title} ]
+                --
+                {lines}
+            ]
         ]
     }
 }
@@ -272,7 +266,7 @@ fn version_picker(launcher: &Launcher, form: &InstallForm) -> impl Scene {
                 @FeathersMenuItem {
                     @caption: bsn! { Text(label) ThemedText },
                 }
-                template_value(call)
+                ~{call}
             }
         })
         .collect();
@@ -280,18 +274,15 @@ fn version_picker(launcher: &Launcher, form: &InstallForm) -> impl Scene {
         @FeathersMenu
         Node { flex_grow: 1.0 }
         Children [
-            (
-                @FeathersMenuButton {
-                    @caption: bsn! { Text(caption) ThemedText },
-                }
-                Node { flex_grow: 1.0 }
-            ),
-            (
-                @FeathersMenuPopup
-                template_value(TabGroup::modal())
-                Node { min_width: px(320) }
-                Children [ {items} ]
-            ),
+            @FeathersMenuButton {
+                @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } },
+            }
+            Node { flex_grow: 1.0 }
+            --
+            @FeathersMenuPopup
+            ~{TabGroup::modal()}
+            Node { min_width: px(320) }
+            Children [ {items} ]
         ]
     }
 }
@@ -304,8 +295,9 @@ fn field_row(label: &'static str, value: impl Scene) -> impl Scene {
             column_gap: px(10),
         }
         Children [
-            ( Node { width: px(90), flex_shrink: 0.0 } Children [ ( {ui::dim(label)} ) ] ),
-            ( Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8) } Children [ ( {value} ) ] ),
+            Node { width: px(90), flex_shrink: 0.0 } Children [ @{ui::dim(label)} ]
+            --
+            Node { flex_grow: 1.0, min_width: px(0), flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8) } Children [ @{value} ]
         ]
     }
 }
@@ -366,9 +358,11 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
                 column_gap: px(10),
             }
             Children [
-                ( Node { width: px(90), flex_shrink: 0.0 } Children [ ( {ui::dim("Version")} ) ] ),
-                ( {version_picker(launcher, form)} ),
-                ( {ui::button(older_caption, older, ButtonVariant::Plain)} ),
+                Node { width: px(90), flex_shrink: 0.0 } Children [ @{ui::dim("Version")} ]
+                --
+                @{version_picker(launcher, form)}
+                --
+                @{ui::button(older_caption, older, ButtonVariant::Plain)}
             ]
         }));
     }
@@ -418,8 +412,9 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
                 min_height: px(26),
             }
             Children [
-                ( Node { width: px(140), flex_shrink: 0.0 } Children [ ( {ui::checkbox(module.name.clone(), form.modules.contains(&module.id), locked, call)} ) ] ),
-                ( Node { flex_grow: 1.0, min_width: px(0) } Children [ ( {ui::note(note, tokens::DOC_TAB_INACTIVE_LABEL)} ) ] ),
+                Node { width: px(140), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), form.modules.contains(&module.id), locked, call)} ]
+                --
+                Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(note, tokens::DOC_TAB_INACTIVE_LABEL)} ]
             ]
         }));
     }
@@ -437,11 +432,13 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
                 border_radius: BorderRadius::all(px(4)),
             }
             BackgroundColor(tokens::WINDOW_BG)
-            Children [ ( {ui::note(
-                "Extensions you installed are built for one editor. After installing, rebuild \
-                 them for this one from their projects.",
-                tokens::TEXT_SECONDARY,
-            )} ) ]
+            Children [
+                @{ui::note(
+                    "Extensions you installed are built for one editor. After installing, rebuild \
+                     them for this one from their projects.",
+                    tokens::TEXT_SECONDARY,
+                )}
+            ]
         }));
     }
 
@@ -465,7 +462,7 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
     let confirm = if existing { "Apply" } else { "Install" };
     let footer: ui::Scenes = vec![
         ui::boxed(
-            bsn! { Node { flex_grow: 1.0, min_width: px(0) } Children [ ( {ui::dim(summary)} ) ] },
+            bsn! { Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::dim(summary)} ] },
         ),
         ui::boxed(ui::button("Release notes", notes, ButtonVariant::Plain)),
         close("Cancel"),
@@ -673,7 +670,7 @@ fn editor_choices(
                 @FeathersMenuItem {
                     @caption: bsn! { Text(label) ThemedText },
                 }
-                template_value(call)
+                ~{call}
             }
         })
         .collect();
@@ -681,8 +678,9 @@ fn editor_choices(
         @FeathersMenu
         Node { align_self: AlignSelf::FlexStart }
         Children [
-            ( @FeathersMenuButton { @caption: bsn! { Text(caption) ThemedText } } ),
-            ( @FeathersMenuPopup template_value(TabGroup::modal()) Node { min_width: px(240) } Children [ {items} ] ),
+            @FeathersMenuButton { @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } } }
+            --
+            @FeathersMenuPopup ~{TabGroup::modal()} Node { min_width: px(240) } Children [ {items} ]
         ]
     }))
 }
@@ -745,11 +743,14 @@ fn doctor(preflight: &PreflightState) -> impl Scene {
             }
             BackgroundColor(tokens::ELEVATED_BG)
             Children [
-                (
-                    Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8) }
-                    Children [ ( {ui::chip(word, tone)} ), ( {ui::primary(label)} ) ]
-                ),
-                {lines},
+                Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8) }
+                Children [
+                    @{ui::chip(word, tone)}
+                    --
+                    @{ui::primary(label)}
+                ]
+                --
+                {lines}
             ]
         }));
     }
@@ -825,7 +826,7 @@ fn downloads(jobs: &JdJobs) -> impl Scene {
                         overflow: Overflow::clip(),
                     }
                     BackgroundColor(tokens::WINDOW_BG)
-                    Children [ ( Node { width: percent(width), height: percent(100) } BackgroundColor(tokens::ACCENT_BLUE) ) ]
+                    Children [ Node { width: percent(width), height: percent(100) } BackgroundColor(tokens::ACCENT_BLUE) ]
                 })]
             }
             _ => Vec::new(),
@@ -850,17 +851,20 @@ fn downloads(jobs: &JdJobs) -> impl Scene {
             }
             BackgroundColor(tokens::ELEVATED_BG)
             Children [
-                (
-                    Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8) }
-                    Children [
-                        ( {ui::chip(word, tone)} ),
-                        ( {ui::primary(label)} ),
-                        ( {ui::spacer()} ),
-                        {cancel},
-                    ]
-                ),
-                {bar},
-                ( {ui::note(summary, tokens::TEXT_SECONDARY)} ),
+                Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(8) }
+                Children [
+                    @{ui::chip(word, tone)}
+                    --
+                    @{ui::primary(label)}
+                    --
+                    @{ui::spacer()}
+                    --
+                    {cancel}
+                ]
+                --
+                {bar}
+                --
+                @{ui::note(summary, tokens::TEXT_SECONDARY)}
             ]
         }));
     }

@@ -37,8 +37,8 @@ const SHORT_HOVER_DELAY: Duration = Duration::from_millis(300);
 /// linger to read the manual.
 const FULL_HOVER_DELAY: Duration = Duration::from_millis(1200);
 
-/// Maximum width of the popover. Wider lines wrap; taller content
-/// grows the popover vertically without re-positioning.
+/// Maximum width of the popover, and its width once a description is shown,
+/// so wrapped text and the popover's height agree. Wider lines wrap.
 const TOOLTIP_MAX_WIDTH: f32 = 360.0;
 
 /// Padding around the popover content. Tuned to leave clearance for
@@ -242,6 +242,12 @@ fn tick_tooltip(
         TooltipStage::Title if elapsed >= FULL_HOVER_DELAY => {
             if let Some(popover) = state.active {
                 spawn_body(&mut commands, popover, tip, &default_font.0);
+                if !tip.description.is_empty() {
+                    commands
+                        .entity(popover)
+                        .entry::<Node>()
+                        .and_modify(|mut node| node.width = px(TOOLTIP_MAX_WIDTH));
+                }
                 state.stage = TooltipStage::Full;
             }
         }
@@ -387,17 +393,30 @@ fn spawn_body(
         ));
     }
     if !tip.footer.is_empty() {
-        commands.spawn((
-            Text::new(tip.footer.clone()),
-            TextFont {
-                font: default_font.into(),
-                font_size: tokens::TEXT_SIZE_SM,
-                ..default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-            bevy::picking::Pickable::IGNORE,
-            ChildOf(popover),
-        ));
+        commands
+            .spawn((
+                Node {
+                    max_width: px(TOOLTIP_MAX_WIDTH - 2.0 * TOOLTIP_PADDING),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                bevy::picking::Pickable::IGNORE,
+                ChildOf(popover),
+            ))
+            .with_child((
+                Text::new(tip.footer.clone()),
+                TextFont {
+                    font: default_font.into(),
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                TextLayout {
+                    linebreak: LineBreak::NoWrap,
+                    ..default()
+                },
+                bevy::picking::Pickable::IGNORE,
+            ));
     }
 }
 

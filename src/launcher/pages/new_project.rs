@@ -73,90 +73,91 @@ pub fn page() -> impl Scene {
             padding: UiRect::axes(px(20), px(16)),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                }
-                Children [
-                    ( {ui::icon_button(Icon::ArrowLeft, "", back, ButtonVariant::Plain)} ),
-                    (
-                        Node { flex_grow: 1.0 }
-                        Text("New project")
-                        TextFont { font_size: tokens::TEXT_SIZE_LG }
-                        TextColor(tokens::TEXT_PRIMARY)
-                    ),
-                    ( {label("Editor")} ),
-                    ( template_value(NewProjectRegion::Editor) Node { width: px(300) } ),
-                ]
-            ),
-            (
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+            }
+            Children [
+                @{ui::icon_button(Icon::ArrowLeft, "", back, ButtonVariant::Plain)}
+                --
+                Node { flex_grow: 1.0 }
+                Text("New project")
+                TextFont { font_size: tokens::TEXT_SIZE_LG }
+                TextColor(tokens::TEXT_PRIMARY)
+                --
+                @{label("Editor")}
+                --
+                ~{NewProjectRegion::Editor} Node { width: px(300) }
+            ]
+            --
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Row,
+                column_gap: px(12),
+            }
+            Children [
                 Node {
                     flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(12),
+                    min_width: px(0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(12),
+                    overflow: Overflow::scroll_y(),
                 }
+                ScrollPosition::default()
+                bevy::ui_widgets::ScrollArea
+                Hovered::default()
                 Children [
-                    (
-                        Node {
-                            flex_grow: 1.0,
-                            min_width: px(0),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: px(12),
-                            overflow: Overflow::scroll_y(),
-                        }
-                        ScrollPosition::default()
-                        bevy::ui_widgets::ScrollArea
-                        Hovered::default()
-                        Children [
-                            ( {label("Template")} ),
-                            ( template_value(NewProjectRegion::Templates) Node { flex_direction: FlexDirection::Column } ),
-                            ( template_value(NewProjectRegion::Modules) Node { flex_direction: FlexDirection::Column, row_gap: px(6) } ),
-                            ( template_value(NewProjectRegion::Extensions) Node { flex_direction: FlexDirection::Column, row_gap: px(6) } ),
-                        ]
-                    ),
-                    (
-                        Node {
-                            width: px(340),
-                            flex_shrink: 0.0,
-                            flex_direction: FlexDirection::Column,
-                            row_gap: px(8),
-                            padding: UiRect::all(px(12)),
-                            border_radius: BorderRadius::all(px(4)),
-                        }
-                        BackgroundColor(tokens::ELEVATED_BG)
-                        Children [
-                            ( template_value(NewProjectRegion::Details) Node { flex_direction: FlexDirection::Column, row_gap: px(6) } ),
-                            ( {label("Name")} ),
-                            (
-                                Node { width: percent(100) }
-                                TextSlot { field: LauncherField::NewProjectName, placeholder: "my_game" }
-                            ),
-                            ( {label("Location")} ),
-                            (
-                                Node {
-                                    flex_direction: FlexDirection::Row,
-                                    align_items: AlignItems::Center,
-                                    column_gap: px(6),
-                                }
-                                Children [
-                                    (
-                                        Node { flex_grow: 1.0, min_width: px(0) }
-                                        TextSlot { field: LauncherField::NewProjectLocation, placeholder: "Folder" }
-                                    ),
-                                    ( {ui::icon_button(Icon::FolderOpen, "", ButtonOperatorCall::new("launcher.new_project_browse"), ButtonVariant::Normal)} ),
-                                ]
-                            ),
-                            ( template_value(NewProjectRegion::Git) Node { flex_direction: FlexDirection::Column } ),
-                            ( template_value(NewProjectRegion::Preview) Node { flex_direction: FlexDirection::Column } ),
-                            ( {ui::spacer()} ),
-                            ( template_value(NewProjectRegion::Footer) Node { flex_direction: FlexDirection::Column, row_gap: px(6) } ),
-                        ]
-                    ),
+                    @{label("Template")}
+                    --
+                    ~{NewProjectRegion::Templates} Node { flex_direction: FlexDirection::Column }
+                    --
+                    ~{NewProjectRegion::Modules} Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
+                    --
+                    ~{NewProjectRegion::Extensions} Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
                 ]
-            ),
+                --
+                Node {
+                    width: px(340),
+                    flex_shrink: 0.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(8),
+                    padding: UiRect::all(px(12)),
+                    border_radius: BorderRadius::all(px(4)),
+                }
+                BackgroundColor(tokens::ELEVATED_BG)
+                Children [
+                    ~{NewProjectRegion::Details} Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
+                    --
+                    @{label("Name")}
+                    --
+                    Node { width: percent(100) }
+                    TextSlot { field: LauncherField::NewProjectName, placeholder: "my_game" }
+                    --
+                    @{label("Location")}
+                    --
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: px(6),
+                    }
+                    Children [
+                        Node { flex_grow: 1.0, min_width: px(0) }
+                        TextSlot { field: LauncherField::NewProjectLocation, placeholder: "Folder" }
+                        --
+                        @{ui::icon_button(Icon::FolderOpen, "", ButtonOperatorCall::new("launcher.new_project_browse"), ButtonVariant::Normal)}
+                    ]
+                    --
+                    ~{NewProjectRegion::Git} Node { flex_direction: FlexDirection::Column }
+                    --
+                    ~{NewProjectRegion::Preview} Node { flex_direction: FlexDirection::Column }
+                    --
+                    @{ui::spacer()}
+                    --
+                    ~{NewProjectRegion::Footer} Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
+                ]
+            ]
         ]
     }
 }
@@ -225,18 +226,15 @@ fn editor_picker(launcher: &Launcher, form: &NewProjectForm) -> impl Scene {
         @FeathersMenu
         Node { width: percent(100) }
         Children [
-            (
-                @FeathersMenuButton {
-                    @caption: bsn! { Text(caption) ThemedText },
-                }
-                Node { flex_grow: 1.0 }
-            ),
-            (
-                @FeathersMenuPopup
-                template_value(TabGroup::modal())
-                Node { min_width: px(300) }
-                Children [ {items} ]
-            ),
+            @FeathersMenuButton {
+                @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } },
+            }
+            Node { flex_grow: 1.0 }
+            --
+            @FeathersMenuPopup
+            ~{TabGroup::modal()}
+            Node { min_width: px(300) }
+            Children [ {items} ]
         ]
     }
 }
@@ -246,9 +244,9 @@ fn editor_item(caption: String, version: String) -> impl Scene {
         ButtonOperatorCall::new("launcher.new_project_editor").with_param("version", version);
     bsn! {
         @FeathersMenuItem {
-            @caption: bsn! { Text(caption) ThemedText },
+            @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } },
         }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -281,10 +279,11 @@ fn template_card(template: Template, selected: bool) -> impl Scene {
         BorderColor::all(outline)
         Button
         Hovered::default()
-        template_value(call)
+        ~{call}
         Children [
-            ( {ui::primary(template.title())} ),
-            ( {ui::dim(template.summary())} ),
+            @{ui::primary(template.title())}
+            --
+            @{ui::dim(template.summary())}
         ]
     }
 }
@@ -330,9 +329,11 @@ fn modules(form: &NewProjectForm) -> impl Scene {
                     min_height: px(30),
                 }
                 Children [
-                    ( Node { width: px(160), flex_shrink: 0.0 } Children [ ( {ui::checkbox(module.name.clone(), on, false, call)} ) ] ),
-                    ( Node { flex_grow: 1.0, min_width: px(0) } Children [ ( {ui::note(description, tokens::DOC_TAB_INACTIVE_LABEL)} ) ] ),
-                    {status},
+                    Node { width: px(160), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), on, false, call)} ]
+                    --
+                    Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(description, tokens::DOC_TAB_INACTIVE_LABEL)} ]
+                    --
+                    {status}
                 ]
             }));
         }
@@ -340,23 +341,21 @@ fn modules(form: &NewProjectForm) -> impl Scene {
     bsn! {
         Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
         Children [
-            (
-                Node { flex_direction: FlexDirection::Row, column_gap: px(8), align_items: AlignItems::Center }
-                Children [
-                    ( {label("Modules")} ),
-                    ( {ui::dim("written to Cargo.toml, main.rs and jackdaw.toml [modules]")} ),
-                ]
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(2),
-                    padding: UiRect::axes(px(10), px(6)),
-                    border_radius: BorderRadius::all(px(4)),
-                }
-                BackgroundColor(tokens::ELEVATED_BG)
-                Children [ {rows} ]
-            ),
+            Node { flex_direction: FlexDirection::Row, column_gap: px(8), align_items: AlignItems::Center }
+            Children [
+                @{label("Modules")}
+                --
+                @{ui::dim("written to Cargo.toml, main.rs and jackdaw.toml [modules]")}
+            ]
+            --
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(2),
+                padding: UiRect::axes(px(10), px(6)),
+                border_radius: BorderRadius::all(px(4)),
+            }
+            BackgroundColor(tokens::ELEVATED_BG)
+            Children [ {rows} ]
         ]
     }
 }
@@ -401,24 +400,25 @@ fn extensions(
     bsn! {
         Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
         Children [
-            ( {label("Extensions")} ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    flex_wrap: FlexWrap::Wrap,
-                    column_gap: px(8),
-                    row_gap: px(6),
-                    padding: UiRect::axes(px(10), px(8)),
-                    border_radius: BorderRadius::all(px(4)),
-                }
-                BackgroundColor(tokens::ELEVATED_BG)
-                Children [
-                    {chips},
-                    ( {ui::spacer()} ),
-                    ( {ui::button("Global defaults...", manage, ButtonVariant::Normal)} ),
-                ]
-            ),
+            @{label("Extensions")}
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(8),
+                row_gap: px(6),
+                padding: UiRect::axes(px(10), px(8)),
+                border_radius: BorderRadius::all(px(4)),
+            }
+            BackgroundColor(tokens::ELEVATED_BG)
+            Children [
+                {chips}
+                --
+                @{ui::spacer()}
+                --
+                @{ui::button("Global defaults...", manage, ButtonVariant::Normal)}
+            ]
         ]
     }
 }
@@ -427,8 +427,9 @@ fn details(form: &NewProjectForm) -> impl Scene {
     bsn! {
         Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
         Children [
-            ( {ui::primary(form.template.title())} ),
-            ( {ui::note(form.template.description(), tokens::TEXT_SECONDARY)} ),
+            @{ui::primary(form.template.title())}
+            --
+            @{ui::note(form.template.description(), tokens::TEXT_SECONDARY)}
         ]
     }
 }
@@ -551,12 +552,11 @@ fn footer(form: &NewProjectForm) -> impl Scene {
     bsn! {
         Node { flex_direction: FlexDirection::Column, row_gap: px(6) }
         Children [
-            {status},
-            (
-                {ui::button(caption, create, ButtonVariant::Primary)}
-                CreateProjectButton
-                Node { height: px(30), width: percent(100) }
-            ),
+            {status}
+            --
+            @{ui::button(caption, create, ButtonVariant::Primary)}
+            CreateProjectButton
+            Node { height: px(30), width: percent(100) }
         ]
     }
 }

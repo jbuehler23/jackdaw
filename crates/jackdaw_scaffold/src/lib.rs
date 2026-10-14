@@ -1057,8 +1057,8 @@ bevy_ecs::hierarchy::Children [
     #\"Main Camera\"
     bevy_camera::components::Camera2d
     bevy_transform::components::transform::Transform
-    bevy_camera::visibility::Visibility::Visible,
-
+    bevy_camera::visibility::Visibility::Visible
+    --
     #Sprite
     bevy_sprite::sprite::Sprite
     bevy_transform::components::transform::Transform {

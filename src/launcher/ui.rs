@@ -87,13 +87,13 @@ pub fn path_text(content: impl Into<String>) -> impl Scene {
     bsn! {
         Node { overflow: Overflow::clip(), min_width: px(0), flex_shrink: 1.0 }
         Pickable::IGNORE
-        Children [(
+        Children [
             Text(content)
             TextFont { font_size: tokens::TEXT_SIZE_SM }
             TextColor(tokens::DOC_TAB_INACTIVE_LABEL)
             TextLayout { linebreak: LineBreak::NoWrap }
             Pickable::IGNORE
-        )]
+        ]
     }
 }
 
@@ -107,7 +107,7 @@ pub fn button_glyph(glyph: Icon) -> impl Scene {
             font: FontSourceTemplate::Handle(font_paths::LUCIDE),
             font_size: FontSize::Px(tokens::ICON_SM_PX),
         }
-        template_value(PropagateOver::<TextFont>::default())
+        ~{PropagateOver::<TextFont>::default()}
         ThemedText
     }
 }
@@ -140,13 +140,13 @@ pub fn chip(content: impl Into<String>, tone: Tone) -> impl Scene {
         }
         BackgroundColor(background)
         Pickable::IGNORE
-        Children [(
+        Children [
             Text(content)
             TextFont { font_size: tokens::TEXT_SIZE_SM }
             TextColor(color)
             TextLayout { linebreak: LineBreak::NoWrap }
             Pickable::IGNORE
-        )]
+        ]
     }
 }
 
@@ -162,7 +162,7 @@ pub fn button(
             @caption: bsn! { Text(caption) ThemedText },
             @variant: {variant},
         }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -178,19 +178,18 @@ pub fn icon_button(
     bsn! {
         @FeathersButton {
             @caption: bsn_list! {
-                ( {button_glyph(glyph)} ),
-                (
-                    Node {
-                        display: {if has_caption { Display::Flex } else { Display::None }},
-                        margin: UiRect::left(px(6)),
-                    }
-                    Text(caption)
-                    ThemedText
-                )
+                @{button_glyph(glyph)}
+                --
+                Node {
+                    display: {if has_caption { Display::Flex } else { Display::None }},
+                    margin: UiRect::left(px(6)),
+                }
+                Text(caption)
+                ThemedText
             },
             @variant: {variant},
         }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -201,24 +200,21 @@ pub fn picker_button(caption: impl Into<String>, call: ButtonOperatorCall) -> im
     bsn! {
         @FeathersButton {
             @caption: bsn_list! {
-                (
-                    Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip() }
-                    Children [(
-                        Text(caption)
-                        TextFont { font_size: tokens::TEXT_SIZE }
-                        TextLayout { linebreak: LineBreak::NoWrap }
-                        template_value(PropagateOver::<TextFont>::default())
-                        ThemedText
-                    )]
-                ),
-                (
-                    Node { margin: UiRect::left(px(8)) }
-                    Children [ ( {button_glyph(Icon::ChevronDown)} ) ]
-                )
+                Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip() }
+                Children [
+                    Text(caption)
+                    TextFont { font_size: tokens::TEXT_SIZE }
+                    TextLayout { linebreak: LineBreak::NoWrap }
+                    ~{PropagateOver::<TextFont>::default()}
+                    ThemedText
+                ]
+                --
+                Node { margin: UiRect::left(px(8)) }
+                Children [ @{button_glyph(Icon::ChevronDown)} ]
             },
         }
         Node { justify_content: JustifyContent::SpaceBetween }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -248,16 +244,16 @@ pub fn checkbox(
         @FeathersCheckbox {
             @caption: bsn! { Text(caption) ThemedText },
         }
-        template_value(ToggleOperatorCall(call))
-        {toggle_state(checked, disabled)}
+        ~{ToggleOperatorCall(call)}
+        @{toggle_state(checked, disabled)}
     }
 }
 
 /// `Checked` and `InteractionDisabled` as a control starts with them.
 pub fn toggle_state(checked: bool, disabled: bool) -> impl Scene {
     (
-        checked.then_some(template_value(Checked)),
-        disabled.then_some(template_value(InteractionDisabled)),
+        checked.then_some(bsn! { Checked }),
+        disabled.then_some(bsn! { InteractionDisabled }),
     )
 }
 
@@ -265,8 +261,8 @@ pub fn toggle_state(checked: bool, disabled: bool) -> impl Scene {
 pub fn radio(checked: bool, call: ButtonOperatorCall) -> impl Scene {
     bsn! {
         @FeathersRadio
-        template_value(ToggleOperatorCall(call))
-        {toggle_state(checked, false)}
+        ~{ToggleOperatorCall(call)}
+        @{toggle_state(checked, false)}
     }
 }
 
@@ -281,27 +277,24 @@ pub fn section(header: impl SceneList, body: impl SceneList) -> impl Scene {
         }
         BackgroundColor(tokens::ELEVATED_BG)
         Children [
-            (
-                Node {
-                    min_height: px(30),
-                    padding: UiRect::horizontal(px(10)),
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    flex_wrap: FlexWrap::Wrap,
-                }
-                Children [ {header} ]
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(6),
-                    padding: UiRect::all(px(6)),
-                    margin: UiRect::new(px(1), px(1), px(0), px(1)),
-                    border_radius: BorderRadius::bottom(px(4)),
-                }
-                BackgroundColor(tokens::PANEL_BG)
-                Children [ {body} ]
-            ),
+            Node {
+                min_height: px(30),
+                padding: UiRect::horizontal(px(10)),
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                flex_wrap: FlexWrap::Wrap,
+            }
+            Children [ {header} ]
+            --
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                padding: UiRect::all(px(6)),
+                margin: UiRect::new(px(1), px(1), px(0), px(1)),
+                border_radius: BorderRadius::bottom(px(4)),
+            }
+            BackgroundColor(tokens::PANEL_BG)
+            Children [ {body} ]
         ]
     }
 }
@@ -359,5 +352,5 @@ pub type Scenes = Vec<Box<dyn SceneList>>;
 
 /// Box a scene so lists of different scenes can be built.
 pub fn boxed(scene: impl Scene) -> Box<dyn SceneList> {
-    Box::new(bsn_list!(({ scene })))
+    Box::new(bsn_list! { @{ scene } })
 }

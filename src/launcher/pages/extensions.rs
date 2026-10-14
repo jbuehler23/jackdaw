@@ -46,34 +46,30 @@ pub fn page() -> impl Scene {
             padding: UiRect::axes(px(20), px(16)),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                }
-                Children [
-                    (
-                        Text("Extensions and plugins")
-                        TextFont { font_size: tokens::TEXT_SIZE_LG }
-                        TextColor(tokens::TEXT_PRIMARY)
-                    ),
-                    ( ExtensionsScopeRegion Node { flex_grow: 1.0, min_width: px(0) } ),
-                    ( {ui::dim("Filter")} ),
-                    (
-                        Node { width: px(200) }
-                        TextSlot { field: LauncherField::ExtensionQuery, placeholder: "Filter" }
-                    ),
-                ]
-            ),
-            (
-                ExtensionsRegion
-                Node {
-                    flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Column,
-                }
-            ),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+            }
+            Children [
+                Text("Extensions and plugins")
+                TextFont { font_size: tokens::TEXT_SIZE_LG }
+                TextColor(tokens::TEXT_PRIMARY)
+                --
+                ExtensionsScopeRegion Node { flex_grow: 1.0, min_width: px(0) }
+                --
+                @{ui::dim("Filter")}
+                --
+                Node { width: px(200) }
+                TextSlot { field: LauncherField::ExtensionQuery, placeholder: "Filter" }
+            ]
+            --
+            ExtensionsRegion
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Column,
+            }
         ]
     }
 }
@@ -379,23 +375,19 @@ fn scope_picker(view: &ExtensionsView, launcher: &Launcher) -> impl Scene {
             column_gap: px(8),
         }
         Children [
-            (
-                @FeathersMenu
-                Children [
-                    (
-                        @FeathersMenuButton {
-                            @caption: bsn! { Text(caption) ThemedText },
-                        }
-                    ),
-                    (
-                        @FeathersMenuPopup
-                template_value(TabGroup::modal())
+            @FeathersMenu
+            Children [
+                @FeathersMenuButton {
+                    @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } },
+                }
+                --
+                @FeathersMenuPopup
+                ~{TabGroup::modal()}
                         Node { min_width: px(220) }
                         Children [ {items} ]
-                    ),
-                ]
-            ),
-            ( {ui::dim(editor)} ),
+            ]
+            --
+            @{ui::dim(editor)}
         ]
     }
 }
@@ -404,9 +396,9 @@ fn scope_item(caption: String, path: String) -> impl Scene {
     let call = ButtonOperatorCall::new("launcher.extensions").with_param("path", path);
     bsn! {
         @FeathersMenuItem {
-            @caption: bsn! { Text(caption) ThemedText },
+            @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } },
         }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -447,11 +439,13 @@ fn content(view: &ExtensionsView, listing: &Listing) -> impl Scene {
     if listing.extensions.is_empty() {
         extensions.push(ui::boxed(bsn! {
             Node { padding: UiRect::all(px(6)) }
-            Children [ ( {ui::note(
-                "No editor extensions are installed. The editor's own windows and tools are \
-                 part of it and are not listed here.",
-                tokens::TEXT_SECONDARY,
-            )} ) ]
+            Children [
+                @{ui::note(
+                    "No editor extensions are installed. The editor's own windows and tools are \
+                     part of it and are not listed here.",
+                    tokens::TEXT_SECONDARY,
+                )}
+            ]
         }));
     }
     let modules_note = if view.project.is_some() {
@@ -522,44 +516,44 @@ fn content(view: &ExtensionsView, listing: &Listing) -> impl Scene {
             row_gap: px(12),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(6),
-                }
-                Children [
-                    ( {ui::dim("Status")} ),
-                    {filters},
-                    ( {ui::spacer()} ),
-                    ( {ui::dim(explanation)} ),
-                ]
-            ),
-            (
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(6),
+            }
+            Children [
+                @{ui::dim("Status")}
+                --
+                {filters}
+                --
+                @{ui::spacer()}
+                --
+                @{ui::dim(explanation)}
+            ]
+            --
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Row,
+                column_gap: px(12),
+            }
+            Children [
                 Node {
                     flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(12),
+                    min_width: px(0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(10),
+                    overflow: Overflow::scroll_y(),
                 }
-                Children [
-                    (
-                        Node {
-                            flex_grow: 1.0,
-                            min_width: px(0),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: px(10),
-                            overflow: Overflow::scroll_y(),
-                        }
-                        ScrollPosition::default()
-                        bevy::ui_widgets::ScrollArea
-                        Hovered::default()
-                        Children [ {sections} ]
-                    ),
-                    ( {details} ),
-                ]
-            ),
-            {pending},
+                ScrollPosition::default()
+                bevy::ui_widgets::ScrollArea
+                Hovered::default()
+                Children [ {sections} ]
+                --
+                @{details}
+            ]
+            --
+            {pending}
         ]
     }
 }
@@ -610,19 +604,18 @@ fn entry_row(entry: &Entry, selected: bool) -> impl Scene {
         BackgroundColor(background)
         Button
         Hovered::default()
-        template_value(select)
+        ~{select}
         Children [
-            (
-                @FeathersToggleSwitch
-                template_value(toggle)
-                {ui::toggle_state(on, disabled)}
-            ),
-            ( Node { width: px(160), flex_shrink: 0.0 } Children [ ( {ui::primary(name)} ) ] ),
-            (
-                Node { flex_grow: 1.0, min_width: px(0) }
-                Children [ ( {ui::text(detail, tokens::TEXT_SIZE_SM, color)} ) ]
-            ),
-            {action},
+            @FeathersToggleSwitch
+            ~{toggle}
+            @{ui::toggle_state(on, disabled)}
+            --
+            Node { width: px(160), flex_shrink: 0.0 } Children [ @{ui::primary(name)} ]
+            --
+            Node { flex_grow: 1.0, min_width: px(0) }
+            Children [ @{ui::text(detail, tokens::TEXT_SIZE_SM, color)} ]
+            --
+            {action}
         ]
     }
 }
@@ -694,7 +687,7 @@ fn pending_bar(view: &ExtensionsView, listing: &Listing) -> Box<dyn SceneList> {
     let Some(summary) = summary else {
         return match &view.status {
             Some(status) => ui::boxed(ui::note(status.clone(), tokens::TEXT_SECONDARY)),
-            None => Box::new(bsn_list!()),
+            None => Box::new(bsn_list! {}),
         };
     };
     let extension_changes = listing.extensions.iter().any(|entry| entry.pending);
@@ -714,9 +707,11 @@ fn pending_bar(view: &ExtensionsView, listing: &Listing) -> Box<dyn SceneList> {
         }
         BackgroundColor(tokens::WINDOW_BG)
         Children [
-            ( Node { flex_grow: 1.0, min_width: px(0) } Children [ ( {ui::note(summary, tokens::TEXT_PRIMARY)} ) ] ),
-            ( {ui::button("Revert", ButtonOperatorCall::new("launcher.extensions_revert"), ButtonVariant::Plain)} ),
-            ( {ui::button(caption, apply, ButtonVariant::Primary)} ),
+            Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(summary, tokens::TEXT_PRIMARY)} ]
+            --
+            @{ui::button("Revert", ButtonOperatorCall::new("launcher.extensions_revert"), ButtonVariant::Plain)}
+            --
+            @{ui::button(caption, apply, ButtonVariant::Primary)}
         ]
     })
 }

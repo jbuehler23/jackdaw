@@ -37,32 +37,30 @@ pub fn page() -> impl Scene {
             padding: UiRect::axes(px(20), px(16)),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                }
-                Children [
-                    (
-                        Node { flex_grow: 1.0 }
-                        Text("Editors")
-                        TextFont { font_size: tokens::TEXT_SIZE_LG }
-                        TextColor(tokens::TEXT_PRIMARY)
-                    ),
-                    ( {ui::button("Check for updates", ButtonOperatorCall::new("launcher.refresh_index"), ButtonVariant::Plain)} ),
-                    ( {ui::button("Locate...", ButtonOperatorCall::new("launcher.locate_editor"), ButtonVariant::Normal)} ),
-                    ( {ui::button("Install editor", ButtonOperatorCall::new("launcher.install_editor"), ButtonVariant::Primary)} ),
-                ]
-            ),
-            (
-                EditorListRegion
-                Node {
-                    flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Column,
-                }
-            ),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+            }
+            Children [
+                Node { flex_grow: 1.0 }
+                Text("Editors")
+                TextFont { font_size: tokens::TEXT_SIZE_LG }
+                TextColor(tokens::TEXT_PRIMARY)
+                --
+                @{ui::button("Check for updates", ButtonOperatorCall::new("launcher.refresh_index"), ButtonVariant::Plain)}
+                --
+                @{ui::button("Locate...", ButtonOperatorCall::new("launcher.locate_editor"), ButtonVariant::Normal)}
+                --
+                @{ui::button("Install editor", ButtonOperatorCall::new("launcher.install_editor"), ButtonVariant::Primary)}
+            ]
+            --
+            EditorListRegion
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Column,
+            }
         ]
     }
 }
@@ -110,28 +108,30 @@ pub fn list(launcher: &Launcher, view: &EditorListView) -> impl Scene {
             row_gap: px(12),
         }
         Children [
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(6),
-                }
-                Children [ ( {ui::dim("Show")} ), {filters} ]
-            ),
-            {index_note},
-            (
-                Node {
-                    flex_grow: 1.0,
-                    min_height: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(12),
-                    overflow: Overflow::scroll_y(),
-                }
-                ScrollPosition::default()
-                bevy::ui_widgets::ScrollArea
-                Hovered::default()
-                Children [ {sections} ]
-            ),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(6),
+            }
+            Children [
+                @{ui::dim("Show")}
+                --
+                {filters}
+            ]
+            --
+            {index_note}
+            --
+            Node {
+                flex_grow: 1.0,
+                min_height: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                overflow: Overflow::scroll_y(),
+            }
+            ScrollPosition::default()
+            bevy::ui_widgets::ScrollArea
+            Hovered::default()
+            Children [ {sections} ]
         ]
     }
 }
@@ -179,24 +179,21 @@ fn card(left: ui::Scenes, right: ui::Scenes) -> impl Scene {
         }
         BackgroundColor(tokens::ELEVATED_BG)
         Children [
-            (
-                Node {
-                    flex_grow: 1.0,
-                    min_width: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(6),
-                }
-                Children [ {left} ]
-            ),
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(8),
-                    flex_shrink: 0.0,
-                }
-                Children [ {right} ]
-            ),
+            Node {
+                flex_grow: 1.0,
+                min_width: px(0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+            }
+            Children [ {left} ]
+            --
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(8),
+                flex_shrink: 0.0,
+            }
+            Children [ {right} ]
         ]
     }
 }
@@ -307,9 +304,9 @@ fn short_target(target: &str) -> String {
 fn menu_item(caption: String, call: ButtonOperatorCall) -> impl Scene {
     bsn! {
         @FeathersMenuItem {
-            @caption: bsn! { Text(caption) ThemedText },
+            @caption: bsn! { Text(caption) ThemedText Node { margin: UiRect::right(px(6)) } },
         }
-        template_value(call)
+        ~{call}
     }
 }
 
@@ -353,18 +350,15 @@ fn manage_menu(editor: &InstalledEditor) -> impl Scene {
     bsn! {
         @FeathersMenu
         Children [
-            (
-                @FeathersMenuButton {
-                    @caption: bsn! { Text("Manage") ThemedText },
-                }
-            ),
-            (
-                @FeathersMenuPopup
-                template_value(TabGroup::modal())
-                template_value(ui::end_aligned_popover())
-                Node { min_width: px(240) }
-                Children [ {items} ]
-            ),
+            @FeathersMenuButton {
+                @caption: bsn! { Text("Manage") ThemedText Node { margin: UiRect::right(px(6)) } },
+            }
+            --
+            @FeathersMenuPopup
+            ~{TabGroup::modal()}
+            ~{ui::end_aligned_popover()}
+            Node { min_width: px(240) }
+            Children [ {items} ]
         ]
     }
 }
@@ -443,9 +437,11 @@ fn rollback_row(line: &EditorLine) -> impl Scene {
             padding: UiRect::axes(px(10), px(4)),
         }
         Children [
-            ( {ui::dim(text)} ),
-            ( {ui::spacer()} ),
-            ( {ui::button("Clean up", ButtonOperatorCall::new("launcher.clean_nightlies"), ButtonVariant::Plain)} ),
+            @{ui::dim(text)}
+            --
+            @{ui::spacer()}
+            --
+            @{ui::button("Clean up", ButtonOperatorCall::new("launcher.clean_nightlies"), ButtonVariant::Plain)}
         ]
     }
 }
