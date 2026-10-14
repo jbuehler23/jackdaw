@@ -1,8 +1,8 @@
-#![cfg(all(feature = "terrain", feature = "physics"))]
+#![cfg(feature = "terrain")]
 //! The ground a game stands on is the ground it draws.
 //!
-//! With both the terrain and physics features, every loaded terrain gets a
-//! heightfield collider built from the heights the mesher draws from. These
+//! With the `terrain` feature, every loaded terrain gets a heightfield
+//! collider built from the heights the mesher draws from. These
 //! tests check that the two agree: a ray dropped on a world point meets the
 //! collider at the height stored for that point, wherever the grid is
 //! anchored.
@@ -88,7 +88,10 @@ fn game(assets: &Path) -> App {
     });
     // The mesh store a windowed game gets from its render plugins.
     app.init_asset::<Mesh>();
-    app.add_plugins(JackdawPlugin);
+    app.add_plugins((
+        JackdawPlugin,
+        jackdaw_avian_integration::AvianColliderBridgePlugin,
+    ));
     app.add_plugins(PhysicsPlugins::default());
     // Avian registers its diagnostics resources from `Plugin::finish`, and
     // the systems reading them require those resources. `run` would call

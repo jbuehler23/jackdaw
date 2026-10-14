@@ -28,22 +28,24 @@ jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
 #
 # Cargo resolves features per package selection. This crate is what a
 # packaged SDK is built from, so anything an extension enables that the SDK
-# did not gets compiled against SDK rlibs that were built without it: a
-# default physics-enabled graph pulls `bevy_math/approx` through the
-# physics integration, and against an SDK whose `glam` lacks `approx`
-# that fails on missing trait impls in a crate the user never named.
+# did not gets compiled against SDK rlibs that were built without it.
 # Depending on the whole runtime here also puts its closure in the SDK
 # manifest, so extensions redirect those crates instead of rebuilding
 # them.
 jackdaw_runtime = { workspace = true, features = [
     "render",
     "soft_shadows",
-    "physics",
     "pie",
     "terrain",
     "navmesh",
     "animation",
 ] }
+# `approx` on Bevy's math crates, which physics engines such as avian turn
+# on: against an SDK whose `glam` lacks it, a project using one fails on
+# missing trait impls in a crate the project never named.
+bevy_math = { version = "0.20", features = ["approx"] }
+bevy_curve = { version = "0.20", features = ["approx"] }
+bevy_shape = { version = "0.20", features = ["approx"] }
 # The version `bevy_math` uses, with the generator features a project's own
 # `rand` dependency enables, so the SDK build already carries them.
 rand = { version = "0.10", features = ["std_rng", "thread_rng"] }

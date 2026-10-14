@@ -3,7 +3,6 @@
 //! A preview evaluator owns the components it writes, so the field rows refuse an
 //! authored edit to one, and so does the component header's remove button:
 //! letting it through would leave the session driving a component that is gone.
-//! `physics.disable` is the same edit again, larger still.
 
 use crate::util;
 
@@ -11,8 +10,6 @@ use bevy::prelude::*;
 use jackdaw::preview_context;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
-#[cfg(feature = "physics")]
-use jackdaw_avian_integration::AvianCollider;
 use jackdaw_bind::{BindPath, Binding, Bindings};
 use jackdaw_scene_types::UiSceneRoot;
 
@@ -99,86 +96,5 @@ fn a_previewed_component_cannot_be_removed_until_the_session_ends() {
     assert!(
         app.world().get::<Node>(fill).is_none(),
         "with the session over the same removal is an ordinary edit",
-    );
-}
-
-/// A widget in the same scene whose binding drives its collider, carrying
-/// the physics pair `physics.disable` would take off. Returns that entity.
-#[cfg(feature = "physics")]
-fn scene_with_a_bound_collider() -> (App, Entity) {
-    let mut app = util::editor_test_app();
-    app.register_type::<Vitals>();
-
-    let world = app.world_mut();
-    let root = world
-        .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
-        .id();
-    let solid = world
-        .spawn((
-            Name::new("Solid"),
-            Node::default(),
-            avian3d::prelude::RigidBody::Static,
-            AvianCollider::default(),
-            ChildOf(root),
-            Bindings(vec![Binding::Field {
-                read: vec![BindPath::new("Vitals.ratio")],
-                via: None,
-                write: BindPath::new("AvianCollider.0"),
-                as_percent: false,
-            }]),
-        ))
-        .id();
-    jackdaw::scene_io::register_entity_in_ast(world, root);
-    jackdaw::scene_io::register_entity_in_ast(world, solid);
-    app.world_mut().resource_mut::<Selection>().entities = vec![solid];
-    app.update();
-    (app, solid)
-}
-
-#[cfg(feature = "physics")]
-fn disable_physics(app: &mut App, entity: Entity) {
-    let outcome = app
-        .world_mut()
-        .operator("physics.disable")
-        .settings(CallOperatorSettings {
-            execution_context: ExecutionContext::Invoke,
-            creates_history_entry: true,
-        })
-        .param("entity", entity)
-        .call()
-        .expect("dispatch");
-    assert!(
-        matches!(outcome, OperatorResult::Finished),
-        "the disable has to be dispatched before anything can refuse it",
-    );
-    app.update();
-}
-
-/// Both halves again, for the disable.
-#[cfg(feature = "physics")]
-#[test]
-fn previewed_physics_cannot_be_disabled_until_the_session_ends() {
-    let (mut app, solid) = scene_with_a_bound_collider();
-
-    preview_context::set_preview(app.world_mut(), true);
-    app.update();
-    disable_physics(&mut app, solid);
-    assert!(
-        app.world().get::<AvianCollider>(solid).is_some(),
-        "the preview owns the collider it writes, so the disable is refused",
-    );
-    assert!(
-        app.world()
-            .get::<avian3d::prelude::RigidBody>(solid)
-            .is_some(),
-        "and the rest of the bundle it would have taken with it stays too",
-    );
-
-    preview_context::set_preview(app.world_mut(), false);
-    app.update();
-    disable_physics(&mut app, solid);
-    assert!(
-        app.world().get::<AvianCollider>(solid).is_none(),
-        "with the session over the same call is an ordinary edit",
     );
 }

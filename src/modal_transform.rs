@@ -147,10 +147,11 @@ fn viewport_drag_detect(
     gizmo_hover: Res<GizmoHoverState>,
     mirror_plane_hover: Res<crate::brush::mirror_plane_overlay::MirrorPlaneHover>,
     mut drag_state: ResMut<ViewportDragState>,
-    (edit_mode, draw_state, terrain_edit_mode): (
+    (edit_mode, draw_state, terrain_edit_mode, active_modal): (
         Res<crate::brush::EditMode>,
         Res<crate::draw_brush::DrawBrushState>,
         Res<crate::terrain::TerrainEditMode>,
+        jackdaw_api::prelude::ActiveModalQuery,
     ),
     (mut ray_cast, parents, brushes, editor_entities): (
         MeshRayCast,
@@ -162,6 +163,7 @@ fn viewport_drag_detect(
     // A hovered mirror-plane handle wins the press, so the viewport object drag
     // must not also start and move the whole brush.
     if modal.active.is_some()
+        || active_modal.is_modal_running()
         || gizmo_drag.active
         || gizmo_hover.hovered_axis.is_some()
         || mirror_plane_hover.target.is_some()

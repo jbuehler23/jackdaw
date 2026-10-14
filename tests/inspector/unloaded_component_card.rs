@@ -129,9 +129,6 @@ fn removing_the_last_unloaded_component_hides_the_notice() {
 
 #[test]
 fn a_crate_a_module_provides_names_the_module() {
-    if cfg!(feature = "physics") {
-        return;
-    }
     let scene = format!("bevy_ecs::hierarchy::Children [\n    #Crate\n    {COLLIDER}\n]\n");
     let (mut app, dir) = opened("module", &scene);
     let notice =

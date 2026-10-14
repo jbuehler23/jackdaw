@@ -79,10 +79,12 @@ pub mod ext_build;
 pub mod extension_build;
 mod extension_lifecycle;
 pub mod extension_resolution;
+pub mod extension_slots;
 pub mod extensions_dialog;
 pub mod file_ops;
 pub mod fps_overlay;
 pub mod hot_reload;
+pub mod launch;
 pub mod launcher;
 pub mod layout;
 pub mod live_edits;
@@ -111,10 +113,6 @@ pub mod new_project;
 pub mod numeric_transform;
 pub mod operator_tooltip;
 pub mod perf_probe;
-#[cfg(feature = "physics")]
-pub mod physics_brush_bridge;
-#[cfg(feature = "physics")]
-pub mod physics_tool;
 pub mod pie;
 pub mod pie_menu;
 pub mod pie_mirror;
@@ -223,12 +221,6 @@ pub mod prelude {
         EditorHidden, EditorPreview, ExtensionPlugin, JackdawEditorPlugins, SkipSerialization,
     };
     pub use jackdaw_api::prelude::*;
-
-    // Re-exported so binaries can write `add_plugins(PhysicsPlugins::default())`
-    // without a direct dep on avian3d. Editor plugins assert presence rather
-    // than adding, so user code can add the same plugin without conflict.
-    #[cfg(feature = "physics")]
-    pub use avian3d::prelude::PhysicsPlugins;
 }
 
 /// System set for all editor interaction systems (input handling, viewport clicks,
@@ -251,15 +243,7 @@ pub fn no_dialog_open(
     dialogs.is_empty() && overlays.is_empty()
 }
 
-#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum AppState {
-    #[default]
-    ProjectSelect,
-    Editor,
-}
-
-#[derive(Component, Copy, Clone, Default)]
-pub struct EditorEntity;
+pub use jackdaw_api_internal::{AppState, EditorEntity};
 
 /// Marker component for UI overlays that should block viewport camera input
 /// (scroll, pan, orbit) while they exist. Add this to any overlay entity
@@ -520,6 +504,7 @@ impl Plugin for EditorCorePlugin {
             viewport_quality::plugin,
             viewport_redraw::plugin,
             toolbar_overflow::plugin,
+            extension_slots::plugin,
         ))
         .add_plugins(native_dialog::NativeDialogPlugin)
         .add_plugins(definition_assets::plugin)
@@ -654,14 +639,6 @@ impl Plugin for EditorCorePlugin {
         .add_observer(on_clip_selector_change)
         .add_observer(on_duration_input_commit)
         .add_observer(on_timeline_keyframe_click);
-
-        #[cfg(feature = "physics")]
-        app.add_plugins((
-            jackdaw_avian_integration::PhysicsOverlaysPlugin::<selection::Selected>::new(),
-            jackdaw_avian_integration::simulation::PhysicsSimulationPlugin,
-            physics_brush_bridge::PhysicsBrushBridgePlugin,
-            physics_tool::PhysicsToolPlugin,
-        ));
         app.add_plugins(extension_lifecycle::plugin);
     }
 }
@@ -2171,21 +2148,6 @@ fn drop_imported_clip_entities(
 }
 
 /// The View menu's viewport camera rows: field of view and far clip presets, and looking through a scene camera.
-/// The View menu's physics overlay toggles.
-#[cfg(feature = "physics")]
-fn physics_view_rows() -> Vec<(String, String)> {
-    vec![
-        op_entry::<view_ops::ViewToggleColliderGizmosOp>("Toggle Collider Gizmos"),
-        op_entry::<view_ops::ViewToggleHierarchyArrowsOp>("Toggle Hierarchy Arrows"),
-    ]
-}
-
-/// No physics overlays: the editor was built without physics.
-#[cfg(not(feature = "physics"))]
-fn physics_view_rows() -> Vec<(String, String)> {
-    Vec::new()
-}
-
 fn viewport_lens_rows(lens: &camera_settings::CameraPreferences) -> Vec<(String, String)> {
     let id = camera_settings::ViewportCameraOp::ID;
     let fov = [30.0_f32, 45.0, 60.0, 75.0, 90.0].map(|degrees| {
@@ -2393,7 +2355,6 @@ fn populate_menu(
                     op_entry::<view_ops::ViewToggleBrushOutlineOp>("Toggle Brush Outline"),
                     op_entry::<view_ops::ViewToggleAlignmentGuidesOp>("Toggle Alignment Guides"),
                 ],
-                physics_view_rows(),
                 vec![
                     op_entry::<lod_group::ViewCycleForcedLodOp>("Cycle Forced LOD"),
                     op_entry::<lod_bar::ViewToggleLodColorsOp>("Toggle LOD Colors"),

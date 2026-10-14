@@ -257,7 +257,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
 
     // Only a scene that spawned gets the viewport; a failed activation would
     // otherwise bring an empty stage forward.
-    let mode = crate::viewport_host::ViewportMode::for_scene_kind(scene_kind);
+    let mode = crate::viewport_host::mode_for_scene_kind(scene_kind);
     if spawned_ok && scene_kind == crate::scenes::operators::SceneKind::Ui {
         crate::viewport_host::focus_viewport(world, mode);
         // `apply_view_state` withdraws this request for a tab framed before.

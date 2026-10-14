@@ -172,7 +172,6 @@ pub(crate) fn numeric_entry_eligible(
             .brushes
             .values()
             .any(|s| !s.vertices.is_empty() || !s.edges.is_empty() || !s.faces.is_empty()),
-        EditMode::Physics => false,
     }
 }
 
@@ -347,7 +346,6 @@ fn draw_numeric_axis_guide(
             }
             centroid(&positions)
         }
-        EditMode::Physics => return,
     };
 
     gizmos.line(
@@ -466,7 +464,6 @@ pub fn numeric_transform_apply(
         EditMode::BrushEdit(_) => {
             apply_sub_elements(&op, axis_dir, value, &brush_selection, brush_params);
         }
-        EditMode::Physics => {}
     }
 
     state.clear();

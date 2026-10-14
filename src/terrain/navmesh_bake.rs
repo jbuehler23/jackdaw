@@ -467,42 +467,20 @@ pub(crate) fn terrain_navmesh_toggle_overlay(
 /// One definition, used by the bake and by the staleness check, so the two
 /// cannot disagree about what the bake was over. These are geometry, not
 /// obstacles: they are rasterized into the same heightfield the ground is.
-/// Left out are a body the simulation moves, a mesh hidden in the viewport,
-/// and a trigger volume nothing collides with.
+/// Left out are a mesh hidden in the viewport and anything a tool marked
+/// [`NavmeshIgnored`](jackdaw_scene_types::NavmeshIgnored), such as a body the
+/// simulation moves or a trigger volume.
 #[cfg(feature = "navmesh")]
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneGeometry<'w, 's> {
     meshes: Query<
         'w,
         's,
+        (Entity, &'static GlobalTransform, &'static Mesh3d),
         (
-            Entity,
-            &'static GlobalTransform,
-            &'static Mesh3d,
-            Option<&'static avian3d::prelude::RigidBody>,
-            Option<&'static avian3d::prelude::Sensor>,
-        ),
-        (Without<EditorEntity>, Without<TerrainSurface>),
-    >,
-    /// Colliders standing on their own, with no mesh to rasterize.
-    ///
-    /// A shape authored straight onto an entity is an obstacle in the running
-    /// game and nothing to a bake that reads meshes, so the bake warns.
-    mesh_less_colliders: Query<
-        'w,
-        's,
-        (
-            Entity,
-            Option<&'static avian3d::prelude::RigidBody>,
-            Option<&'static avian3d::prelude::Sensor>,
-        ),
-        (
-            With<avian3d::prelude::Collider>,
-            Without<Mesh3d>,
             Without<EditorEntity>,
-            // The ground reaches the bake through its heights rather than
-            // through a mesh, so a collider on it is not a gap.
-            Without<jackdaw_scene_types::Terrain>,
+            Without<TerrainSurface>,
+            Without<jackdaw_scene_types::NavmeshIgnored>,
         ),
     >,
     visibility: Query<'w, 's, (Option<&'static Visibility>, Option<&'static ChildOf>)>,
@@ -542,17 +520,10 @@ impl SceneGeometry<'_, '_> {
         let spawned = self
             .meshes
             .iter()
-            .filter(|(entity, _, handle, body, sensor)| {
-                // A body that moves is not ground, and nothing stands on a
-                // trigger volume. A collider with no body is static, like an
-                // unsimulated scene mesh.
-                !moves(*body)
-                    && sensor.is_none()
-                    && !self.hidden(*entity)
-                    && self.readable(handle)
-                    && !self.in_lod_level(*entity)
+            .filter(|(entity, _, handle)| {
+                !self.hidden(*entity) && self.readable(handle) && !self.in_lod_level(*entity)
             })
-            .map(|(entity, transform, handle, _, _)| (entity, transform.affine(), &handle.0));
+            .map(|(entity, transform, handle)| (entity, transform.affine(), &handle.0));
         let first_levels = self
             .first_level_models()
             .filter(|(level, ..)| !self.hidden(*level))
@@ -732,16 +703,6 @@ impl SceneGeometry<'_, '_> {
                     self.describe(entity)
                 ),
             }
-        }
-        for (entity, body, sensor) in self.mesh_less_colliders.iter() {
-            if moves(body) || sensor.is_some() || self.hidden(entity) || self.excluded(entity) {
-                continue;
-            }
-            warn!(
-                "{} has a collider but no mesh, so it is not in the navmesh -- \
-                 the bake reads geometry, not collision shapes",
-                self.describe(entity)
-            );
         }
         (out, tally)
     }
@@ -954,17 +915,6 @@ fn params_match(baked: BakeParams, now: BakeParams) -> bool {
         && baked.agent_height == now.agent_height
         && baked.max_slope_degrees == now.max_slope_degrees
         && baked.climb == now.climb
-}
-
-/// A body that moves is not ground: baking it would freeze one frame of a
-/// simulation into the navmesh. A collider with no body is static, like an
-/// unsimulated scene mesh.
-#[cfg(feature = "navmesh")]
-fn moves(body: Option<&avian3d::prelude::RigidBody>) -> bool {
-    matches!(
-        body,
-        Some(avian3d::prelude::RigidBody::Dynamic | avian3d::prelude::RigidBody::Kinematic)
-    )
 }
 
 /// Smallest placed piece this bake rasterizes: what the terrain authored,
@@ -3475,16 +3425,8 @@ mod tests {
     fn what_the_bake_leaves_out_of_the_scene() {
         assert!(geometry_takes_plain_cube(), "an ordinary mesh is ground");
         assert!(
-            geometry_takes(avian3d::prelude::RigidBody::Static),
-            "so is a static body"
-        );
-        assert!(
-            !geometry_takes(avian3d::prelude::RigidBody::Dynamic),
-            "a body the simulation moves is one frame of a simulation"
-        );
-        assert!(
-            !geometry_takes(avian3d::prelude::Sensor),
-            "nothing stands on a trigger volume"
+            !geometry_takes(jackdaw_scene_types::NavmeshIgnored),
+            "a mesh a tool marked as moving at runtime is not ground"
         );
         assert!(
             !geometry_takes(Visibility::Hidden),
@@ -3696,15 +3638,6 @@ mod tests {
             world.resource::<TerrainNavmeshState>().status,
             BakeStatus::Idle
         );
-    }
-
-    #[test]
-    fn a_moving_body_is_not_ground() {
-        use avian3d::prelude::RigidBody;
-        assert!(!moves(None));
-        assert!(!moves(Some(&RigidBody::Static)));
-        assert!(moves(Some(&RigidBody::Dynamic)));
-        assert!(moves(Some(&RigidBody::Kinematic)));
     }
 
     #[test]

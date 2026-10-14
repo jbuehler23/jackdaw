@@ -255,8 +255,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::ui_grouping::add_to_extension(ctx);
         crate::ui_layout_presets::add_to_extension(ctx);
         crate::transform_ops::add_to_extension(ctx);
-        #[cfg(feature = "physics")]
-        crate::physics_tool::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
         crate::file_ops::add_to_extension(ctx);
         crate::material_assets::add_to_extension(ctx);
@@ -333,8 +331,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::project_window::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
         crate::inspector::ops::add_to_extension(ctx);
-        #[cfg(feature = "physics")]
-        crate::inspector::physics_display::add_to_extension(ctx);
         crate::viewport::add_to_extension(ctx);
         crate::screenshot::add_to_extension(ctx);
         crate::camera_capture::add_to_extension(ctx);

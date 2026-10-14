@@ -531,7 +531,7 @@ bevy_rev = "3f2a1c9e"
             .modules(Path::new("/nowhere"))
             .into_iter()
             .collect();
-        assert_eq!(enabled, ["navmesh", "physics"]);
+        assert_eq!(enabled, ["navmesh"]);
     }
 
     /// A project set up before `[modules]` existed keeps working: what its

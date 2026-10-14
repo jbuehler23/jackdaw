@@ -26,10 +26,27 @@ impl Plugin for ModulePickerPlugin {
     }
 }
 
-/// Whether this editor build includes the tooling for module `id`.
-pub fn editor_has_module(id: &str) -> bool {
-    const BUILT: [(&str, bool); 3] = [
-        ("physics", cfg!(feature = "physics")),
+/// Whether this editor has the tooling for module `id`: the extension the
+/// module names is installed, or the tooling is built in.
+pub fn editor_has_module(world: &World, id: &str) -> bool {
+    catalog_has_module(
+        world.get_resource::<jackdaw_api_internal::ExtensionCatalog>(),
+        id,
+    )
+}
+
+/// [`editor_has_module`] given the installed extensions.
+pub fn catalog_has_module(
+    catalog: Option<&jackdaw_api_internal::ExtensionCatalog>,
+    id: &str,
+) -> bool {
+    if let Some(extension) = ModuleCatalog::builtin()
+        .get(id)
+        .and_then(|module| module.extension.as_deref())
+    {
+        return catalog.is_some_and(|catalog| catalog.contains(extension));
+    }
+    const BUILT: [(&str, bool); 2] = [
         ("navmesh", cfg!(feature = "navmesh")),
         ("multiplayer", cfg!(feature = "multiplayer")),
     ];
@@ -37,11 +54,11 @@ pub fn editor_has_module(id: &str) -> bool {
 }
 
 /// The modules the project at `root` uses that this editor does not include.
-pub fn missing_modules(root: &Path) -> Vec<String> {
+pub fn missing_modules(world: &World, root: &Path) -> Vec<String> {
     ProjectManifest::read(root)
         .modules(root)
         .into_iter()
-        .filter(|id| !editor_has_module(id))
+        .filter(|id| !editor_has_module(world, id))
         .collect()
 }
 
@@ -137,12 +154,19 @@ pub fn spawn_module_picker(
         if modules.contains(&module.id) {
             checkbox.insert(Checked);
         }
-        if locked.contains(&module.id) {
+        let unavailable = module
+            .unavailable
+            .as_deref()
+            .filter(|_| !modules.contains(&module.id));
+        if locked.contains(&module.id) || unavailable.is_some() {
             checkbox.insert(InteractionDisabled);
         }
         let mut detail = module.description.clone();
         if locked.contains(&module.id) && !locked_reason.is_empty() {
             detail = format!("{detail} {locked_reason}");
+        }
+        if let Some(reason) = unavailable {
+            detail = format!("{detail} Not available yet: {reason}.");
         }
         commands.spawn((
             Text::new(detail),
@@ -157,8 +181,12 @@ pub fn spawn_module_picker(
             },
             ChildOf(row),
         ));
-        if !editor_has_module(&module.id) {
-            commands.spawn((
+        let id = module.id.clone();
+        commands.queue(move |world: &mut World| {
+            if editor_has_module(world, &id) || world.get_entity(row).is_err() {
+                return;
+            }
+            world.spawn((
                 Text::new("This editor does not include this module."),
                 TextFont {
                     font_size: tokens::TEXT_SIZE_SM,
@@ -171,7 +199,7 @@ pub fn spawn_module_picker(
                 },
                 ChildOf(row),
             ));
-        }
+        });
     }
     commands.spawn((
         ModulePickerNote(picker),
@@ -218,6 +246,9 @@ fn on_module_toggled(
     };
     let picker = &mut *picker;
     let catalog = ModuleCatalog::builtin();
+    if change.value && catalog.unavailable(&toggle.id).is_some() {
+        return;
+    }
     let name = |id: &str| catalog.get(id).map_or(id.to_string(), |m| m.name.clone());
     picker.note = if change.value {
         let also = catalog.enable(&mut picker.modules, &toggle.id);

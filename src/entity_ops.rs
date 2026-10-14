@@ -825,9 +825,8 @@ pub fn spawn_template_in_document(world: &mut World, template: EntityTemplate) -
     let entity = create_entity(&mut commands, template, &mut selection);
     system_state.apply(world);
     crate::scene_io::register_entity_in_ast(world, entity);
-    #[cfg(feature = "physics")]
     if world.get::<crate::brush::Brush>(entity).is_some() {
-        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
+        crate::brush::apply_brush_defaults(world, entity);
     }
     entity
 }
@@ -3492,18 +3491,20 @@ mod asset_path_tests {
     }
 }
 
-#[cfg(all(test, feature = "physics"))]
+#[cfg(test)]
 mod clone_brush_tests {
     use super::*;
-    use avian3d::prelude::RigidBody;
     use bevy::reflect::PartialReflect;
-    use jackdaw_avian_integration::AvianCollider;
     use jackdaw_bsn::SceneBsnAst;
     use jackdaw_scene_types::Brush;
 
     #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
     #[reflect(Component, Default)]
     struct ExtraBrushMarker;
+
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Component, Default)]
+    struct DefaultBrushMarker(u32);
 
     #[test]
     fn cloned_brush_keeps_extra_components() {
@@ -3515,8 +3516,11 @@ mod clone_brush_tests {
         app.register_type::<Visibility>();
         app.register_type::<Name>();
         app.register_type::<jackdaw_scene_types::SceneNodeId>();
-        app.register_type::<RigidBody>();
-        app.register_type::<AvianCollider>();
+        app.register_type::<DefaultBrushMarker>();
+        app.world_mut()
+            .spawn(jackdaw_api_internal::brush::BrushDefault(Box::new(
+                DefaultBrushMarker(7),
+            )));
         app.register_type::<ExtraBrushMarker>();
 
         let source = app
@@ -3529,7 +3533,7 @@ mod clone_brush_tests {
             ))
             .id();
         crate::scene_io::register_entity_in_ast(app.world_mut(), source);
-        crate::physics_brush_bridge::insert_default_brush_physics(app.world_mut(), source);
+        crate::brush::apply_brush_defaults(app.world_mut(), source);
 
         app.world_mut().entity_mut(source).insert(ExtraBrushMarker);
         crate::commands::sync_component_to_bsn_doc(
@@ -3553,11 +3557,10 @@ mod clone_brush_tests {
             "user-added components must copy onto the clone"
         );
         assert_eq!(
-            spawned_ref.get::<RigidBody>().copied(),
-            Some(RigidBody::Static),
-            "authored physics must copy onto the clone"
+            spawned_ref.get::<DefaultBrushMarker>(),
+            Some(&DefaultBrushMarker(7)),
+            "a component every new brush starts with must copy onto the clone"
         );
-        assert!(spawned_ref.contains::<AvianCollider>());
         assert_eq!(
             spawned_ref.get::<Brush>().map(|b| b.faces.len()),
             Some(new_brush.faces.len()),

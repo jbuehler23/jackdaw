@@ -233,10 +233,6 @@ fn view_settings_make_no_history_entry() {
         ("view.toggle_brush_wireframe", vec![]),
         ("view.toggle_brush_outline", vec![]),
         ("view.toggle_alignment_guides", vec![]),
-        #[cfg(feature = "physics")]
-        ("view.toggle_collider_gizmos", vec![]),
-        #[cfg(feature = "physics")]
-        ("view.toggle_hierarchy_arrows", vec![]),
         ("view.toggle_lod_colors", vec![]),
         ("viewport.quality.preset", vec![("preset", "low")]),
         ("viewport.quality.set", vec![("anti_aliasing", "taa")]),

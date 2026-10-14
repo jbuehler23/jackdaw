@@ -334,6 +334,7 @@ fn update_status_right(
     modal: Res<ModalTransformState>,
     edit_mode: Res<EditMode>,
     draw_state: Res<DrawBrushState>,
+    tool_status: Res<jackdaw_api_internal::tools::ToolStatus>,
     build_status: Res<BuildStatus>,
     numeric: Res<NumericTransformState>,
     notice: Res<StatusNotice>,
@@ -471,9 +472,8 @@ fn update_status_right(
         return;
     }
 
-    // Show physics tool mode info; Space commits, Esc cancels.
-    if *edit_mode == EditMode::Physics {
-        text.0 = "Physics Tool | drag selected to release | Space commit | Esc cancel".to_string();
+    if let Some(status) = &tool_status.0 {
+        text.0 = status.clone();
         return;
     }
 

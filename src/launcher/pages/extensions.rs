@@ -143,7 +143,7 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
     let project_modules = view.project.as_deref().map(project_modules);
     for module in catalog.modules() {
         let item = ExtensionItem::Module(module.id.clone());
-        let included = crate::module_picker::editor_has_module(&module.id);
+        let included = crate::module_picker::editor_has_module(world, &module.id);
         let (current, toggleable, detail) = match &project_modules {
             Some(modules) => {
                 let requires = if module.requires.is_empty() {

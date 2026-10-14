@@ -1,22 +1,21 @@
-//! Avian physics integration for the jackdaw editor.
+//! Avian physics for jackdaw games.
 //!
-//! Provides collider wireframe visualization, hierarchy arrows, type
-//! registration for avian3d physics components, and an interactive
-//! simulation workflow (see [`simulation`]).
+//! A scene authors colliders as [`AvianCollider`] and bodies as avian's own
+//! [`RigidBody`]. [`AvianColliderBridgePlugin`] builds the [`Collider`] each
+//! authored collider stands for, from a brush's faces, a placed model's
+//! meshes or a primitive shape, and with the `terrain` feature a heightfield
+//! under every loaded terrain. Add avian's `PhysicsPlugins` beside it to
+//! simulate.
 
-#[cfg(feature = "overlays")]
-use std::marker::PhantomData;
-
-#[cfg(feature = "overlays")]
-use avian3d::debug_render::{PhysicsGizmoExt, PhysicsGizmos};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use jackdaw_geometry::{ModifierStack, is_convex_topology, triangulate_polygons};
 use jackdaw_scene_types::{Brush, evaluate_brush_geometry};
 
 mod model_colliders;
-pub mod simulation;
 mod static_bodies;
+#[cfg(feature = "terrain")]
+mod terrain_ground;
 
 pub use model_colliders::ModelCollidersPlugin;
 pub use static_bodies::{ImpliedStaticBody, StaticCollidersPlugin};
@@ -38,15 +37,13 @@ pub use static_bodies::{ImpliedStaticBody, StaticCollidersPlugin};
 #[reflect(Component, Default)]
 pub struct AvianCollider(pub ColliderConstructor);
 
-/// Runtime bridge that builds an avian [`Collider`] from the editor-authored
-/// [`AvianCollider`] wrapper, so brushes and meshes saved with a collider
-/// actually collide at runtime, not only in the editor preview. Wired into
-/// `jackdaw_runtime`'s `JackdawPlugin` behind its `physics` feature.
+/// Builds an avian [`Collider`] from every authored [`AvianCollider`], so
+/// brushes and models saved with a collider collide in the game and in the
+/// editor alike. Add it beside `JackdawPlugin`.
 ///
-/// The editor uses its own bridge that reads the live edit caches; this one
-/// rebuilds the collider from the serialized `Brush` geometry, so it also works
-/// in a headless server with no rendering. Registering the avian types here also
-/// lets the scene loader deserialize `AvianCollider` in the first place.
+/// The collider is rebuilt from the saved `Brush` geometry, so it also works
+/// in a headless server with no rendering. Registering the avian types here
+/// also lets the scene loader read `AvianCollider` in the first place.
 pub struct AvianColliderBridgePlugin;
 
 impl Plugin for AvianColliderBridgePlugin {
@@ -55,6 +52,8 @@ impl Plugin for AvianColliderBridgePlugin {
         app.add_plugins((ModelCollidersPlugin, StaticCollidersPlugin))
             .add_systems(PreUpdate, build_brush_colliders)
             .add_observer(remove_collider_with_avian_collider);
+        #[cfg(feature = "terrain")]
+        app.add_plugins(terrain_ground::plugin);
     }
 }
 
@@ -125,70 +124,6 @@ pub fn brush_collider(
     Some(Collider::trimesh(vertices, indices))
 }
 
-pub mod physics_colors {
-    use bevy::prelude::Color;
-
-    pub const COLLIDER_WIREFRAME: Color = Color::srgba(0.0, 1.0, 0.5, 0.7);
-    pub const SENSOR_WIREFRAME: Color = Color::srgba(0.0, 0.8, 1.0, 0.5);
-    pub const COLLIDER_SELECTED: Color = Color::srgba(0.0, 1.0, 0.5, 1.0);
-    pub const SENSOR_SELECTED: Color = Color::srgba(0.0, 0.8, 1.0, 0.85);
-    pub const COLLIDER_HIERARCHY_ARROW: Color = Color::srgba(0.4, 0.7, 1.0, 0.6);
-}
-
-#[cfg(feature = "overlays")]
-#[derive(Resource, Clone, PartialEq, Default)]
-pub struct PhysicsOverlayConfig {
-    pub show_colliders: bool,
-    pub show_hierarchy_arrows: bool,
-}
-
-/// Plugin that renders collider wireframes and hierarchy arrows.
-///
-/// Generic over a `SelectionMarker` component type so callers can wire in
-/// their own selection system. Systems run unconditionally; wrap the plugin
-/// in your own run condition if you need editor-only behavior.
-#[cfg(feature = "overlays")]
-pub struct PhysicsOverlaysPlugin<S: Component> {
-    _marker: PhantomData<S>,
-}
-
-#[cfg(feature = "overlays")]
-impl<S: Component> Default for PhysicsOverlaysPlugin<S> {
-    fn default() -> Self {
-        Self {
-            _marker: PhantomData,
-        }
-    }
-}
-
-#[cfg(feature = "overlays")]
-impl<S: Component> PhysicsOverlaysPlugin<S> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-#[cfg(feature = "overlays")]
-impl<S: Component> Plugin for PhysicsOverlaysPlugin<S> {
-    fn build(&self, app: &mut App) {
-        register_avian_types(app);
-
-        app.init_resource::<PhysicsOverlayConfig>()
-            .init_gizmo_group::<PhysicsGizmos>()
-            .add_systems(
-                PostUpdate,
-                // TODO: Use `JackdawDrawSystems` here
-                (draw_collider_gizmos::<S>, draw_hierarchy_arrows::<S>)
-                    .after(bevy::transform::TransformSystems::Propagate),
-            );
-
-        let mut store = app.world_mut().resource_mut::<GizmoConfigStore>();
-        let (config, _) = store.config_mut::<PhysicsGizmos>();
-        config.depth_bias = -0.5;
-        config.line.width = 1.5;
-    }
-}
-
 /// Register avian3d types that have both `reflect(Component)` and `reflect(Default)`,
 /// so they appear in the editor's component picker, edit through the JSN AST, and
 /// deserialize at runtime.
@@ -235,112 +170,6 @@ pub fn register_avian_types(app: &mut App) {
     // NOTE: Many more avian internal types (ColliderAabb, ComputedMass,
     // ColliderMassProperties, etc.) also exist but may not be publicly
     // exported from avian3d::prelude. Register more as needed.
-}
-
-#[cfg(feature = "overlays")]
-fn draw_collider_gizmos<S: Component>(
-    mut gizmos: Gizmos<PhysicsGizmos>,
-    config: Res<PhysicsOverlayConfig>,
-    colliders: Query<(
-        Entity,
-        &Collider,
-        &GlobalTransform,
-        &InheritedVisibility,
-        Option<&Sensor>,
-    )>,
-    selected_bodies: Query<Entity, (With<RigidBody>, With<S>)>,
-    children_query: Query<&Children>,
-    collider_check: Query<(), With<Collider>>,
-) {
-    if !config.show_colliders {
-        return;
-    }
-
-    let mut highlighted = bevy::ecs::entity::EntityHashSet::default();
-    for body_entity in &selected_bodies {
-        collect_descendant_colliders(
-            body_entity,
-            &children_query,
-            &collider_check,
-            &mut highlighted,
-        );
-        if collider_check.contains(body_entity) {
-            highlighted.insert(body_entity);
-        }
-    }
-
-    for (entity, collider, tf, vis, sensor) in &colliders {
-        if !vis.get() {
-            continue;
-        }
-
-        let is_highlighted = highlighted.contains(&entity);
-        let color = match (sensor.is_some(), is_highlighted) {
-            (false, false) => physics_colors::COLLIDER_WIREFRAME,
-            (false, true) => physics_colors::COLLIDER_SELECTED,
-            (true, false) => physics_colors::SENSOR_WIREFRAME,
-            (true, true) => physics_colors::SENSOR_SELECTED,
-        };
-
-        let position = Position::from(tf).0;
-        let rotation = Rotation::from(tf);
-        gizmos.draw_collider(collider, position, rotation, color);
-    }
-}
-
-#[cfg(feature = "overlays")]
-fn draw_hierarchy_arrows<S: Component>(
-    mut gizmos: Gizmos<PhysicsGizmos>,
-    config: Res<PhysicsOverlayConfig>,
-    selected_bodies: Query<(Entity, &GlobalTransform), (With<RigidBody>, With<S>)>,
-    children_query: Query<&Children>,
-    collider_transforms: Query<&GlobalTransform, With<Collider>>,
-    collider_check: Query<(), With<Collider>>,
-) {
-    if !config.show_hierarchy_arrows {
-        return;
-    }
-
-    for (body_entity, body_tf) in &selected_bodies {
-        let body_pos = body_tf.translation();
-        let mut descendants = bevy::ecs::entity::EntityHashSet::default();
-        collect_descendant_colliders(
-            body_entity,
-            &children_query,
-            &collider_check,
-            &mut descendants,
-        );
-
-        for collider_entity in &descendants {
-            if *collider_entity == body_entity {
-                continue;
-            }
-            if let Ok(collider_tf) = collider_transforms.get(*collider_entity) {
-                gizmos.arrow(
-                    body_pos,
-                    collider_tf.translation(),
-                    physics_colors::COLLIDER_HIERARCHY_ARROW,
-                );
-            }
-        }
-    }
-}
-
-#[cfg(feature = "overlays")]
-fn collect_descendant_colliders(
-    entity: Entity,
-    children_query: &Query<&Children>,
-    collider_check: &Query<(), With<Collider>>,
-    out: &mut bevy::ecs::entity::EntityHashSet,
-) {
-    if let Ok(children) = children_query.get(entity) {
-        for child in children.iter() {
-            if collider_check.contains(child) {
-                out.insert(child);
-            }
-            collect_descendant_colliders(child, children_query, collider_check, out);
-        }
-    }
 }
 
 #[cfg(test)]

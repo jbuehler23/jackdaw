@@ -9,10 +9,7 @@ use std::process::{Command, Stdio};
 
 /// Third-party Bevy crates the core still depends on, each with why it is
 /// allowed for now. Each is to be removed.
-const EXCEPTIONS: [(&str, &str); 2] = [
-    ("avian3d", "moves to the Physics module"),
-    ("rerecast", "moves to the Navmesh module"),
-];
+const EXCEPTIONS: [(&str, &str); 1] = [("rerecast", "moves to the Navmesh module")];
 
 fn exception(dependency: &str) -> Option<&'static str> {
     EXCEPTIONS

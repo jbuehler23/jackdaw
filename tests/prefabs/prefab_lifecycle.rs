@@ -3303,8 +3303,6 @@ fn spawn_instance_undo_via_framework_snapshot_round_trip_removes_instance() {
     app.init_resource::<jackdaw::snapping::SnapSettings>();
     app.init_resource::<jackdaw::view_modes::ViewModeSettings>();
     app.init_resource::<jackdaw::viewport_overlays::OverlaySettings>();
-    #[cfg(feature = "physics")]
-    app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
 
     app.world_mut().insert_resource(ActiveSnapshotter(Box::new(
         jackdaw::undo_snapshot::BsnDocumentSnapshotter,
@@ -3731,8 +3729,6 @@ fn typed_command_and_snapshot_diff_interleave_cleanly_on_undo() {
     app.init_resource::<jackdaw::snapping::SnapSettings>();
     app.init_resource::<jackdaw::view_modes::ViewModeSettings>();
     app.init_resource::<jackdaw::viewport_overlays::OverlaySettings>();
-    #[cfg(feature = "physics")]
-    app.init_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>();
     app.world_mut()
         .insert_resource(jackdaw_api_internal::snapshot::ActiveSnapshotter(Box::new(
             jackdaw::undo_snapshot::BsnDocumentSnapshotter,

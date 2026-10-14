@@ -718,8 +718,7 @@ fn spawn_extruded_brush(
             .spawn((Name::new("Brush"), brush, transform, Visibility::default()))
             .id();
         crate::scene_io::register_entity_in_ast(world, entity);
-        #[cfg(feature = "physics")]
-        crate::physics_brush_bridge::insert_default_brush_physics(world, entity);
+        crate::brush::apply_brush_defaults(world, entity);
 
         let selection = world.resource::<Selection>();
         let old_selected: Vec<Entity> = selection.entities.clone();

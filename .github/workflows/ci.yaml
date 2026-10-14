@@ -451,9 +451,9 @@ jobs:
       - name: Run clippy lints
         run: cargo clippy --locked --workspace --all-targets --features dylib -- --deny warnings
 
-      # The default features minus `physics` and `navmesh`, so the gate on
-      # those features keeps compiling.
-      - name: Run clippy lints without physics
+      # The default features minus `navmesh`, so the gate on that feature
+      # keeps compiling.
+      - name: Run clippy lints without navmesh
         run: cargo clippy --locked -p jackdaw --no-default-features --features multiplayer,camera_rig,embed-recipe --lib --bins -- --deny warnings
 
       - name: Check the core crates depend on no third-party Bevy crate
@@ -527,6 +527,55 @@ jobs:
       - name: Run tests
         if: steps.availability.outputs.available == 'true'
         run: cargo test --locked --manifest-path "$MANIFEST"
+
+  # The Physics module is its own workspace so the editor never resolves
+  # avian; it is linted and tested here, against the editor by path.
+  physics:
+    name: Physics module
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MANIFEST: integrations/physics/Cargo.toml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: clippy, rustfmt
+          toolchain: ${{ env.toolchain }}
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
+        timeout-minutes: 10
+
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: integrations/physics
+
+      - name: Run cargo fmt
+        run: cargo fmt --manifest-path "$MANIFEST" --all -- --check
+
+      - name: Run clippy lints
+        run: cargo clippy --locked --manifest-path "$MANIFEST" --workspace --all-targets -- --deny warnings
+
+      - name: Run tests
+        run: cargo nextest run --locked --manifest-path "$MANIFEST" --workspace
 
   # Check formatting.
   format:

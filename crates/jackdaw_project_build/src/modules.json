@@ -4,7 +4,7 @@
     "name": "Physics",
     "description": "Colliders, rigid bodies and joints with avian, edited in the editor and simulated in the game.",
     "default": true,
-    "runtime_features": ["physics"],
+    "former_runtime_features": ["physics"],
     "crates": [
       {
         "name": "avian3d",
@@ -12,17 +12,22 @@
         "git": "https://github.com/jbuehler23/avian",
         "rev": "252aac4973a35e2a9de9d33c3614426326b59bbf",
         "plugin": "avian3d::prelude::PhysicsPlugins::default()"
+      },
+      {
+        "name": "jackdaw_avian_integration",
+        "plugin": "jackdaw_avian_integration::AvianColliderBridgePlugin"
       }
     ],
-    "provides": ["avian3d", "jackdaw_avian_integration"]
+    "provides": ["avian3d", "jackdaw_avian_integration"],
+    "extension": "jackdaw.physics",
+    "unavailable": "avian has no release for Bevy 0.20 yet"
   },
   {
     "id": "navmesh",
     "name": "Navmesh",
     "description": "Bake a navigation mesh from the terrain and load it with the scene in the game.",
     "runtime_features": ["navmesh"],
-    "provides": ["rerecast", "bevy_rerecast"],
-    "requires": ["physics"]
+    "provides": ["rerecast", "bevy_rerecast"]
   },
   {
     "id": "multiplayer",

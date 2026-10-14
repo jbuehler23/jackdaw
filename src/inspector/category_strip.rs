@@ -35,16 +35,17 @@ pub(crate) fn applicable_categories<'a>(
 /// "object" and "components" are always shown: every entity can receive a
 /// component, so the Components tab must stay reachable even before the entity
 /// has any generic component. "mesh" is shown only when a Brush card is
-/// present. "modifiers", "material", and
-/// "physics" are shown when a Brush is present OR when the category already has
-/// a card; an editor built without physics shows "physics" only for a card.
-/// Extension ids are shown only when they have a card.
+/// present. "modifiers", "material", and any category an extension
+/// registered header chips for are shown when a Brush is present OR when the
+/// category already has a card. Other ids are shown only when they have a
+/// card.
 ///
 /// This is the canonical visibility rule shared by both the strip paint system
 /// and the sticky-category resolver so the two cannot drift apart.
 pub(super) fn shown_categories<'a>(
     registry: &'a InspectorRegistry,
     applicable: &[&'a str],
+    chip_categories: &[&str],
 ) -> Vec<&'a str> {
     let brush_present = applicable.contains(&"mesh");
     registry
@@ -54,8 +55,8 @@ pub(super) fn shown_categories<'a>(
         .filter(|id| match *id {
             "object" | "components" => true,
             "mesh" => brush_present,
-            "physics" if !cfg!(feature = "physics") => applicable.contains(id),
-            "modifiers" | "material" | "physics" => brush_present || applicable.contains(id),
+            "modifiers" | "material" => brush_present || applicable.contains(id),
+            id if chip_categories.contains(&id) => brush_present || applicable.contains(&id),
             _ => applicable.contains(id),
         })
         .collect()
@@ -159,8 +160,8 @@ pub(super) fn spawn_category_strip(
 /// Visibility rules:
 /// - `object`: always shown.
 /// - `mesh`: shown only when a Brush card is present.
-/// - `modifiers`, `material`, `physics`: shown when a Brush is present OR
-///   when the category already has a card.
+/// - `modifiers`, `material` and categories with header chips: shown when a
+///   Brush is present OR when the category already has a card.
 /// - `components`: shown only when applicable (has a card).
 /// - Extension categories: shown only when applicable.
 ///
@@ -180,6 +181,7 @@ pub(super) fn paint_category_tabs(
     mut bg_query: Query<&mut BackgroundColor>,
     mut border_query: Query<&mut BorderColor>,
     mut icon_query: Query<&mut TextColor, With<InspectorCategoryTabIcon>>,
+    chips: Query<&jackdaw_api_internal::inspector::InspectorChip>,
 ) {
     // Skip repaint when neither the active category nor the displayed card
     // set has changed this frame.
@@ -189,7 +191,8 @@ pub(super) fn paint_category_tabs(
 
     let present_paths: Vec<&str> = type_paths.iter().map(|p| p.0.as_str()).collect();
     let applicable = applicable_categories(&registry, present_paths.into_iter());
-    let shown_set = shown_categories(&registry, &applicable);
+    let chip_categories: Vec<&str> = chips.iter().map(|chip| chip.category.as_ref()).collect();
+    let shown_set = shown_categories(&registry, &applicable, &chip_categories);
 
     for (cell, tab, children) in &tabs {
         let id = tab.0.as_ref();
@@ -252,13 +255,15 @@ pub(super) fn resolve_active_on_rebuild(
     added: Query<(), Added<super::ComponentDisplay>>,
     mut removed: RemovedComponents<super::ComponentDisplay>,
     mut active: ResMut<ActiveInspectorCategory>,
+    chips: Query<&jackdaw_api_internal::inspector::InspectorChip>,
 ) {
     let changed = !added.is_empty() || removed.read().next().is_some();
     if !changed {
         return;
     }
     let applicable = applicable_categories(&registry, cards.iter().map(|t| t.0.as_str()));
-    let shown = shown_categories(&registry, &applicable);
+    let chip_categories: Vec<&str> = chips.iter().map(|chip| chip.category.as_ref()).collect();
+    let shown = shown_categories(&registry, &applicable, &chip_categories);
     let resolved = resolve_active_category(active.0.as_ref(), &shown).to_string();
     active.0 = std::borrow::Cow::Owned(resolved);
 }

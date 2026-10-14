@@ -1,6 +1,6 @@
-//! A scene's physics components survive an open and a save whether or not the
-//! editor was built with physics. Without it they are kept in the document as
-//! types the editor cannot resolve.
+//! A scene's physics components survive an open and a save in an editor
+//! without the Physics module, kept in the document as types the editor
+//! cannot resolve.
 
 use crate::util;
 
@@ -17,7 +17,7 @@ const SCENE: &str = "bevy_ecs::hierarchy::Children [
 ";
 
 #[test]
-fn physics_components_survive_an_open_and_resave() {
+fn physics_components_survive_an_open_and_resave_without_the_module() {
     let mut app = util::editor_test_app();
     let dir = std::env::temp_dir().join(format!("jd_physics_resave_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -32,9 +32,12 @@ fn physics_components_survive_an_open_and_resave() {
         .world()
         .resource::<jackdaw_bsn::UnresolvedTypes>()
         .types();
-    if cfg!(feature = "physics") {
-        assert!(unresolved.is_empty(), "unresolved: {unresolved:?}");
-    }
+    assert!(
+        unresolved
+            .iter()
+            .any(|type_path| type_path.starts_with("avian3d::")),
+        "without the module avian's types stay unresolved: {unresolved:?}"
+    );
 
     let emitted = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), &dir);
     for needle in [

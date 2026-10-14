@@ -1,0 +1,258 @@
+//! The editor binary's entry point, shared with binaries that bundle
+//! extensions with the editor.
+
+use crate::prelude::*;
+use bevy::{
+    asset::AssetPlugin,
+    ecs::error::ErrorContext,
+    image::{ImageAddressMode, ImagePlugin, ImageSamplerDescriptor},
+    prelude::*,
+};
+
+/// Run the editor as the `jackdaw` binary does, calling `extend` on the
+/// `App` after the editor's plugins are added and before it runs.
+///
+/// A binary that bundles extensions with the editor registers them in
+/// `extend`, for example with `app.register_extension::<MyExtension>()`.
+pub fn run(extend: impl FnOnce(&mut App)) -> AppExit {
+    let args: Vec<String> = std::env::args().collect();
+    let launch = crate::cli::decide(&args);
+    if launch != crate::cli::Launch::Editor {
+        #[cfg(all(windows, not(debug_assertions)))]
+        attach_parent_console();
+    }
+    match launch {
+        crate::cli::Launch::Editor => {}
+        crate::cli::Launch::Help => {
+            #[expect(clippy::print_stdout, reason = "--help reports to stdout")]
+            {
+                println!("{}", crate::cli::USAGE);
+            }
+            return AppExit::Success;
+        }
+        crate::cli::Launch::Version => {
+            #[expect(clippy::print_stdout, reason = "--version reports to stdout")]
+            {
+                println!(
+                    "jackdaw {} (targets bevy {})",
+                    jackdaw_project_build::VERSION,
+                    jackdaw_project_build::BEVY_VERSION
+                );
+            }
+            return AppExit::Success;
+        }
+        // `jd export-terrain` runs here: reading a scene needs this binary's
+        // Bevy types, which `jd` does not link.
+        crate::cli::Launch::ExportTerrain(rest) => {
+            return crate::terrain::export::run_export_terrain_cli(rest);
+        }
+        crate::cli::Launch::Unknown(flag) => {
+            #[expect(clippy::print_stderr, reason = "usage errors report to stderr")]
+            {
+                eprintln!("jackdaw: unknown option `{flag}`\n\n{}", crate::cli::USAGE);
+            }
+            return AppExit::from_code(2);
+        }
+    }
+
+    // Install a SIGINT/SIGTERM handler before anything else gets a
+    // chance to. Something in the dep tree (wgpu, gilrs, or one of
+    // their transitive deps) installs its own `ctrlc` handler that
+    // swallows the signal without propagating an exit intent; so
+    // by default Ctrl+C in the terminal is a no-op for jackdaw.
+    // Claiming the handler first with `std::process::exit(130)`
+    // guarantees Ctrl+C actually kills the process.
+    //
+    // Error ignored: if another handler has already been claimed by
+    // the time this runs, that's what bevy also reports ("Skipping
+    // installing Ctrl+C handler as one was already installed"),
+    // and we can't do anything about it from here.
+    let _ = ctrlc::set_handler(|| {
+        error!("jackdaw: received Ctrl+C, exiting");
+        std::process::exit(130);
+    });
+
+    // Claim the IO task pool before `TaskPoolPlugin` can, so scenes
+    // with hundreds of models get a stack their nested glTF loads fit
+    // in. Has to run before the app is built.
+    crate::io_pool::init();
+
+    // The asset root is fixed at startup, so it has to agree with the
+    // project this process will actually open. `jd open <path>` names
+    // one explicitly; without this, opening anything other than the
+    // most recent project would root the asset server at a different
+    // project's asset folder.
+    let project_root = crate::project::requested_project()
+        .or_else(crate::project::read_last_project)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let assets_dir = crate::project::project_assets_dir(&project_root);
+
+    // Picker is the default landing screen on every launch. The
+    // user clicks the project they want from recents (or scaffolds
+    // a new one), which then triggers the build + handoff. Two
+    // exceptions:
+    //
+    // - Respawn after a scaffold/install: the parent process did
+    //   the build already, so we skip straight to the editor view
+    //   for the just-scaffolded project.
+    // - `JACKDAW_AUTO_OPEN=1` env var: opt in to "re-open last
+    //   project on launch" for power users who prefer that flow.
+    //
+    // The picker comes first otherwise: a static game project needs a
+    // 5-10 minute build on first run, so auto-opening one leaves the
+    // user staring at an idle-looking launcher.
+    let respawn_skip_build = std::env::var_os(crate::restart::ENV_SKIP_INITIAL_BUILD).is_some();
+    let auto_open_opt_in = std::env::var_os("JACKDAW_AUTO_OPEN").is_some();
+    let auto_open = if respawn_skip_build {
+        crate::project::read_last_project().map(|path| crate::project_select::PendingAutoOpen {
+            path,
+            skip_build: true,
+        })
+    } else if let Some(path) = crate::project::requested_project() {
+        // `jd open <path>` names the project explicitly rather than
+        // reordering the recents file to make it the most recent.
+        Some(crate::project_select::PendingAutoOpen {
+            path,
+            skip_build: false,
+        })
+    } else if auto_open_opt_in {
+        crate::project::read_last_project()
+            .filter(|p| p.is_dir() && p.join("Cargo.toml").is_file())
+            .map(|path| crate::project_select::PendingAutoOpen {
+                path,
+                skip_build: false,
+            })
+    } else {
+        None
+    };
+
+    // GPU timestamps are a device feature, so a diagnostics run has to
+    // ask for them before the device exists. `None` on every other
+    // launch, which leaves `RenderPlugin` exactly as it was.
+    let render_plugin =
+        crate::render_diagnostics::wgpu_settings().map(|settings| bevy::render::RenderPlugin {
+            render_creation: settings.into(),
+            ..default()
+        });
+
+    let mut default_plugins = DefaultPlugins
+        .set(AssetPlugin {
+            file_path: assets_dir.to_string_lossy().to_string(),
+            ..default()
+        })
+        .set(ImagePlugin {
+            default_sampler: ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                address_mode_w: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            },
+            // Bevy 0.19 processed PNGs only; JPEGs stay raw as before.
+            default_compressed_image_processor_extensions: vec!["png".into()],
+        })
+        // `editor_window_plugin` disables Bevy's default
+        // window-close -> AppExit wiring so `intercept_window_close`
+        // in ScenesPlugin owns the exit path, and it honors
+        // `JACKDAW_WINDOW_SIZE`. Spelling its fields out here instead
+        // would drop that override.
+        .set(editor_window_plugin());
+    if let Some(render_plugin) = render_plugin {
+        default_plugins = default_plugins.set(render_plugin);
+    }
+    // Without a console nothing reads stderr, so the log goes to a file.
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        default_plugins = default_plugins.set(bevy::log::LogPlugin {
+            fmt_layer: |_| {
+                let path = crate::editor_log::log_file()?;
+                let layer = crate::editor_log::file_layer(&path).ok()?;
+                Some(Box::new(layer))
+            },
+            ..default()
+        });
+        crate::editor_log::log_panics();
+    }
+
+    let mut app = App::new();
+    app.register_asset_source(
+        bevy::asset::io::AssetSourceId::Default,
+        jackdaw_runtime::texture_import::with_texture_imports(
+            bevy::asset::io::AssetSourceBuilder::platform_default(
+                &assets_dir.to_string_lossy(),
+                None,
+            ),
+            crate::texture_import::cache_dir(&project_root),
+        ),
+    );
+    app
+        // The default error handler panics, which we never *ever*
+        // want to happen to the editor. Log an error instead.
+        .set_error_handler(error_handler)
+        .add_plugins(default_plugins);
+    app.add_plugins(editor_plugins);
+    extend(&mut app);
+
+    // The resolved asset root, so the open flow can tell whether a requested project is
+    // the one this process reads assets for.
+    app.insert_resource(crate::restart::AssetProjectRoot(project_root));
+
+    if let Some(pending) = auto_open {
+        app.insert_resource(pending);
+    }
+
+    let exit = app.run();
+
+    // Opening another project asks for a process rooted at it. The request outlives the
+    // world, so it is honored here.
+    if let Some(project) = crate::restart::take_project_relaunch() {
+        crate::restart::relaunch_into_project(&project);
+    }
+
+    exit
+}
+
+/// Gives a console-less build the console it was started from, if any, so
+/// `--version` and `--help` print there. Output already redirected is left alone.
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_parent_console() {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: both calls only query or attach the process's console.
+    unsafe {
+        let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        if stdout.is_null() || stdout == INVALID_HANDLE_VALUE {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
+/// Build the editor plugin for the prebuilt `jackdaw` binary.
+///
+/// Prebuilt releases use the shared SDK and can safely load native
+/// extension bundles. Self-contained source installs remain useful as
+/// editors and project scaffolders, but cannot load Rust dylibs because
+/// they do not share a type graph with those libraries.
+fn editor_plugins(app: &mut App) {
+    app.add_plugins(JackdawEditorPlugins::default());
+    // The remote-control server belongs to the editor *process*, not to
+    // the plugin group: a headless test app builds the same group, and
+    // two of them would fight over the port. It refuses to start when the
+    // project turns `remote.enabled` off.
+    app.add_plugins(crate::remote::server::JackdawEditorRemotePlugin::default());
+    #[cfg(feature = "dylib")]
+    app.add_plugins(DylibLoaderPlugin);
+}
+
+#[track_caller]
+#[inline]
+fn error_handler(error: BevyError, ctx: ErrorContext) {
+    let msg = format!("{error}");
+    if msg.contains("Note that interacting with a despawned entity is the most common cause of this error but there are others") {
+        // TODO: Ideally these should not happen. But as-is, we get a lot of them and they are benign, so let's not flood the logs
+        bevy::ecs::error::debug(error, ctx);
+        return;
+    }
+    bevy::ecs::error::error(error, ctx);
+}

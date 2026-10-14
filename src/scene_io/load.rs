@@ -390,7 +390,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
 
         // The document's own kind picks the mode. Only a UI screen also fronts
         // the panel; an ordinary scene must not yank the viewport.
-        let mode = crate::viewport_host::ViewportMode::for_scene_kind(scene_kind);
+        let mode = crate::viewport_host::mode_for_scene_kind(scene_kind);
         if scene_kind == crate::scenes::operators::SceneKind::Ui {
             crate::viewport_host::focus_viewport(world, mode);
             // Without a fit, a 1920x1080 reference shown at 100% in a dock

@@ -155,7 +155,7 @@ pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&st
     }
 
     // The kind picks the mode; a flat scene also brings its canvas forward.
-    let mode = crate::viewport_host::ViewportMode::for_scene_kind(kind);
+    let mode = crate::viewport_host::mode_for_scene_kind(kind);
     match kind {
         SceneKind::TwoD | SceneKind::Ui => crate::viewport_host::focus_viewport(world, mode),
         SceneKind::ThreeD => crate::viewport_host::set_viewport_mode(world, mode, false),

@@ -261,10 +261,6 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "field.set",
     "hierarchy.rename_begin",
     "material.override",
-    #[cfg(feature = "physics")]
-    "physics.disable",
-    #[cfg(feature = "physics")]
-    "physics.enable",
     "prefab.pack",
     "prefab.pack_matching",
     "terrain.scatter.adopt",

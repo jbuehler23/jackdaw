@@ -43,8 +43,10 @@ pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
 pub use topology_ops::vertex_bevel::VertexBevelModalState;
 pub use topology_ops::vertex_slide_modal::VertexSlideModalState;
 
+pub use jackdaw_api_internal::brush::{BrushDefault, BrushSystems};
+
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
-#[derive(Component)]
+#[derive(Component, Default, Clone, Debug)]
 pub struct BrushMeshCache {
     pub vertices: Vec<Vec3>,
     /// Per-face: ordered vertex indices into `vertices`.
@@ -156,6 +158,44 @@ impl BrushMeshCache {
     }
 }
 
+/// Give a newly created brush every [`BrushDefault`] extensions registered,
+/// in the scene document as well as on the entity. A component it already
+/// has is left alone.
+pub(crate) fn apply_brush_defaults(world: &mut World, entity: Entity) {
+    let mut defaults = world.query::<(Entity, &BrushDefault)>();
+    let mut ordered: Vec<(Entity, &BrushDefault)> = defaults.iter(world).collect();
+    ordered.sort_by_key(|(entity, _)| *entity);
+    let values: Vec<Box<dyn PartialReflect>> = ordered
+        .into_iter()
+        .filter_map(|(_, default)| default.0.to_dynamic().ok())
+        .collect();
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    for value in values {
+        let Some(type_info) = value.get_represented_type_info() else {
+            continue;
+        };
+        let reflect_component = {
+            let registry = registry.read();
+            let Some(reflect_component) = registry
+                .get(type_info.type_id())
+                .and_then(|registration| registration.data::<ReflectComponent>())
+                .cloned()
+            else {
+                continue;
+            };
+            reflect_component
+        };
+        let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+            return;
+        };
+        if reflect_component.contains(&entity_mut) {
+            continue;
+        }
+        reflect_component.insert(&mut entity_mut, value.as_ref(), &registry.read());
+        crate::commands::sync_component_to_bsn_doc(world, entity, value.as_ref());
+    }
+}
+
 /// Marker on child entities that render a chunk of brush faces sharing
 /// one material. `face_of_tri` maps each triangle of the chunk's mesh
 /// (by triangle index) back to the authored face index so raycast hits
@@ -192,7 +232,6 @@ pub enum EditMode {
     #[default]
     Object,
     BrushEdit(BrushEditMode),
-    Physics,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Reflect)]
@@ -535,14 +574,10 @@ impl Plugin for BrushPlugin {
                     mesh::sync_brush_preview,
                     ApplyDeferred,
                     mesh::mark_brushes_changed_on_modifier_removal,
-                    mesh::recenter_brush_origins,
-                    #[cfg(feature = "physics")]
-                    crate::physics_brush_bridge::sync_avian_position_from_brush_transform,
+                    mesh::recenter_brush_origins.in_set(BrushSystems::Recenter),
                     ApplyDeferred,
-                    mesh::regenerate_brush_meshes,
+                    mesh::regenerate_brush_meshes.in_set(BrushSystems::Rebuild),
                     ApplyDeferred,
-                    #[cfg(feature = "physics")]
-                    crate::physics_brush_bridge::sync_editor_collider_config,
                     mesh::ensure_brush_chunk_materials,
                 )
                     .chain()

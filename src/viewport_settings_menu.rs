@@ -217,23 +217,34 @@ fn show_rows(world: &World, settings: &ViewportSettings) -> Vec<(String, String)
             "Alignment Guides",
         ),
     ];
-    #[cfg(feature = "physics")]
-    {
-        let colliders = world
-            .get_resource::<jackdaw_avian_integration::PhysicsOverlayConfig>()
-            .is_some_and(|config| config.show_colliders);
-        rows.push(overlay(
-            colliders,
-            crate::view_ops::ViewToggleColliderGizmosOp::ID,
-            "Colliders",
-        ));
-    }
+    rows.extend(extension_overlay_rows(world));
     rows.push(overlay(
         overlays.show_icons,
         ViewToggleIconsOp::ID,
         "Light and Camera Icons",
     ));
     rows
+}
+
+/// The overlays extensions registered, in registration order.
+fn extension_overlay_rows(world: &World) -> Vec<(String, String)> {
+    let Some(mut query) =
+        world.try_query::<(Entity, &jackdaw_api_internal::viewport::ViewportOverlay)>()
+    else {
+        return Vec::new();
+    };
+    let mut overlays: Vec<_> = query.iter(world).collect();
+    overlays.sort_by_key(|(entity, _)| *entity);
+    overlays
+        .into_iter()
+        .map(|(_, overlay)| {
+            checked_row(
+                overlay.shown,
+                call(overlay.operator_id, &[]),
+                overlay.label.as_ref(),
+            )
+        })
+        .collect()
 }
 
 fn quality_rows(settings: &ViewportSettings) -> Vec<(String, String)> {

@@ -1,0 +1,71 @@
+# The Physics module: avian rigid bodies and colliders in the editor and in
+# the game. Its own workspace, so the editor's workspace and lockfile never
+# resolve avian. The jackdaw crates it uses come from the main workspace by
+# path.
+[workspace]
+resolver = "3"
+members = ["jackdaw_avian_integration", "jackdaw_physics"]
+
+[workspace.package]
+version = "0.20.0-dev"
+rust-version = "1.97.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[workspace.dependencies]
+# avian has no Bevy 0.20 release yet; this pins a fork branch carrying its
+# open Bevy 0.20 port, with bevy_heavy, bevy_transform_interpolation and
+# glam_matrix_extras forked alongside it.
+avian3d = { version = "0.8.0-dev", git = "https://github.com/jbuehler23/avian", rev = "252aac4973a35e2a9de9d33c3614426326b59bbf", features = [
+    "3d",
+    "parry-f32",
+    "collider-from-mesh",
+] }
+jackdaw_avian_integration = { version = "0.20.0-dev", path = "jackdaw_avian_integration", default-features = false }
+
+[workspace.lints.clippy]
+doc_markdown = "warn"
+
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+type_complexity = "allow"
+unwrap_or_default = "warn"
+disallowed_methods = "warn"
+needless_lifetimes = "allow"
+too_many_arguments = "allow"
+nonstandard_macro_braces = "warn"
+print_stdout = "warn"
+
+ptr_as_ptr = "warn"
+ptr_cast_constness = "warn"
+ref_as_ptr = "warn"
+
+# see: https://github.com/bevyengine/bevy/pull/15375#issuecomment-2366966219
+too_long_first_doc_paragraph = "allow"
+
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+match_same_arms = "warn"
+manual_let_else = "warn"
+print_stderr = "warn"
+redundant_closure_for_method_calls = "warn"
+
+# TODO: enable these if you have time!
+# undocumented_unsafe_blocks = "warn"
+
+# The editor workspace's dev profile, so the two share built dependencies.
+[profile.dev]
+opt-level = 1
+lto = "off"
+incremental = false
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.wgpu-types]
+debug-assertions = false
+
+[profile.dev.package.bevy_ptr]
+debug-assertions = false

@@ -526,7 +526,13 @@ fn modules_arg(args: &[String]) -> Result<Option<ModuleSet>, String> {
     let none = args.iter().any(|arg| arg == "--no-modules");
     match (flag_value(args, "--modules"), none) {
         (Some(_), true) => Err("pass --modules or --no-modules, not both".to_string()),
-        (Some(list), false) => ModuleCatalog::builtin().parse_list(&list).map(Some),
+        (Some(list), false) => {
+            let catalog = ModuleCatalog::builtin();
+            catalog
+                .parse_list(&list)
+                .and_then(|set| catalog.available(set))
+                .map(Some)
+        }
         (None, true) => Ok(Some(ModuleSet::new())),
         (None, false) => Ok(None),
     }
@@ -1914,6 +1920,13 @@ fn add_module_crates(
 ) -> Option<Vec<String>> {
     let mut notes = Vec::new();
     for module in enabled_modules(modules) {
+        if let Some(reason) = &module.unavailable {
+            notes.push(format!(
+                "{} is not available on this editor line, so none of its crates were added: {reason}.",
+                module.name
+            ));
+            continue;
+        }
         for krate in &module.crates {
             if game.crates.contains(&krate.name) {
                 continue;
@@ -3439,7 +3452,7 @@ mod tests {
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).expect("Cargo.toml edit");
         assert!(
             cargo.contains(&format!(
-                "jackdaw_runtime = {{ {}, features = [\"physics\", \"pie\"] }}",
+                "jackdaw_runtime = {{ {}, features = [\"pie\"] }}",
                 jackdaw_dep_requirement("jackdaw_runtime")
             )),
             "got:\n{cargo}"
@@ -3501,7 +3514,7 @@ mod tests {
         let args = |list: &[&str]| list.iter().map(|a| (*a).to_string()).collect::<Vec<_>>();
         assert_eq!(
             modules_arg(&args(&["game", "--modules", "navmesh"])).unwrap(),
-            Some(modules(&["navmesh", "physics"]))
+            Some(modules(&["navmesh"]))
         );
         assert_eq!(
             modules_arg(&args(&["game", "--modules=multiplayer"])).unwrap(),
@@ -3513,6 +3526,7 @@ mod tests {
         );
         assert_eq!(modules_arg(&args(&["game"])).unwrap(), None);
         assert!(modules_arg(&args(&["game", "--modules", "rendering"])).is_err());
+        assert!(modules_arg(&args(&["game", "--modules", "physics"])).is_err());
         assert!(modules_arg(&args(&["game", "--modules", "physics", "--no-modules"])).is_err());
     }
 
@@ -3534,10 +3548,13 @@ mod tests {
                 "my_game",
                 "",
                 "My Game",
-                &ModuleCatalog::builtin().defaults(),
+                &modules(&["multiplayer"]),
             );
             assert!(!filled.contains("{{"), "{path}: got:\n{filled}");
-            assert!(filled.contains("avian3d"), "{path}: got:\n{filled}");
+            assert!(
+                filled.contains("jackdaw_multiplayer"),
+                "{path}: got:\n{filled}"
+            );
         }
     }
 
@@ -3553,24 +3570,13 @@ mod tests {
         .unwrap();
         let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains("features = [\"physics\", \"navmesh\", \"terrain\", \"pie\"] }"),
+            cargo.contains("features = [\"navmesh\", \"terrain\", \"pie\"] }"),
             "got:\n{cargo}"
         );
-        let avian = ModuleCatalog::builtin().get("physics").unwrap().crates[0]
-            .requirement()
-            .unwrap();
-        assert!(
-            cargo.contains(&format!("\navian3d = {avian}\n")),
-            "got:\n{cargo}"
-        );
+        assert!(!cargo.contains("avian3d"), "got:\n{cargo}");
         assert!(!cargo.contains("jackdaw_multiplayer"), "got:\n{cargo}");
-        let main = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
-        assert!(
-            main.contains("        .add_plugins(avian3d::prelude::PhysicsPlugins::default())\n"),
-            "got:\n{main}"
-        );
         let table = modules_table(&dest);
-        assert_eq!(table.get("physics"), Some(&true));
+        assert_eq!(table.get("physics"), Some(&false));
         assert_eq!(table.get("navmesh"), Some(&true));
         assert_eq!(table.get("multiplayer"), Some(&false));
 
@@ -3675,19 +3681,19 @@ mod tests {
         scaffold_new_project(&root, "change-game", TemplateKind::Game).unwrap();
         let cargo_path = root.join("Cargo.toml");
 
-        let plan = plan_module_change(&root, &modules(&["navmesh"])).unwrap();
-        assert_eq!(plan.detected_modules, modules(&["physics"]));
+        let chosen = modules(&["multiplayer", "navmesh"]);
+        let plan = plan_module_change(&root, &chosen).unwrap();
+        assert_eq!(plan.detected_modules, ModuleSet::new());
         apply_import_plan(&plan).unwrap();
         let cargo = std::fs::read_to_string(&cargo_path).unwrap();
         assert!(
-            cargo.contains("features = [\"physics\", \"terrain\", \"pie\", \"navmesh\"]"),
+            cargo.contains("features = [\"terrain\", \"pie\", \"navmesh\"]"),
             "got:\n{cargo}"
         );
+        assert!(cargo.contains("jackdaw_multiplayer = {"), "got:\n{cargo}");
         assert_eq!(modules_table(&root).get("navmesh"), Some(&true));
         assert!(
-            plan_module_change(&root, &modules(&["navmesh"]))
-                .unwrap()
-                .is_empty(),
+            plan_module_change(&root, &chosen).unwrap().is_empty(),
             "asking again changes nothing"
         );
 
@@ -3695,12 +3701,7 @@ mod tests {
         assert!(
             plan.notes
                 .iter()
-                .any(|note| note.starts_with("avian3d stays")),
-            "{:?}",
-            plan.notes
-        );
-        assert!(
-            plan.notes.iter().any(|note| note.contains("rebuilds")),
+                .any(|note| note.starts_with("jackdaw_multiplayer stays")),
             "{:?}",
             plan.notes
         );
@@ -3710,13 +3711,7 @@ mod tests {
             cargo.contains("features = [\"terrain\", \"pie\"]"),
             "got:\n{cargo}"
         );
-        let avian = ModuleCatalog::builtin().get("physics").unwrap().crates[0]
-            .requirement()
-            .unwrap();
-        assert!(
-            cargo.contains(&format!("avian3d = {avian}")),
-            "got:\n{cargo}"
-        );
+        assert!(cargo.contains("jackdaw_multiplayer = {"), "got:\n{cargo}");
         assert!(modules_table(&root).values().all(|on| !on));
         let settings = std::fs::read_to_string(root.join("jackdaw.toml")).unwrap();
         assert!(settings.contains("[[run]]"), "got:\n{settings}");
@@ -3935,9 +3930,7 @@ mod tests {
         let plan = plan_import_project(&root, None).unwrap();
         let cargo = planned_contents(&plan, &member.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains(
-                "jackdaw_runtime = { workspace = true, features = [\"physics\", \"pie\"] }"
-            ),
+            cargo.contains("jackdaw_runtime = { workspace = true, features = [\"pie\"] }"),
             "got:\n{cargo}"
         );
     }

@@ -233,16 +233,19 @@ fn warn_about_missing_modules(
         return;
     }
     *warned_for = Some(project.root.clone());
-    let missing = match crate::scaffold::project_modules(&project.root) {
-        Ok(modules) => modules
-            .into_iter()
-            .filter(|id| !crate::module_picker::editor_has_module(id))
-            .collect(),
-        Err(_) => missing_modules(&project.root),
-    };
-    let Some(notice) = missing_modules_notice(&missing) else {
-        return;
-    };
-    warn!("{notice}");
-    commands.queue(move |world: &mut World| crate::status_bar::notify_warn(world, notice));
+    let root = project.root.clone();
+    commands.queue(move |world: &mut World| {
+        let missing = match crate::scaffold::project_modules(&root) {
+            Ok(modules) => modules
+                .into_iter()
+                .filter(|id| !crate::module_picker::editor_has_module(world, id))
+                .collect(),
+            Err(_) => missing_modules(world, &root),
+        };
+        let Some(notice) = missing_modules_notice(&missing) else {
+            return;
+        };
+        warn!("{notice}");
+        crate::status_bar::notify_warn(world, notice);
+    });
 }

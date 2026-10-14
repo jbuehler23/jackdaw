@@ -1,12 +1,7 @@
-#[cfg(feature = "physics")]
-use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
-#[cfg(feature = "physics")]
-use jackdaw_avian_integration::AvianCollider;
-#[cfg(feature = "physics")]
-use jackdaw_feathers::button::ButtonVariant;
+use jackdaw_api_internal::inspector::InspectorChip;
 use jackdaw_feathers::{
-    button::{ButtonOperatorCall, ButtonProps, ButtonSize, button},
+    button::{ButtonOperatorCall, ButtonProps, ButtonSize, ButtonVariant, button},
     combobox::{ComboBoxChangeEvent, ComboBoxOptionData, combobox_with_selected},
     tokens,
 };
@@ -44,35 +39,32 @@ pub(crate) fn on_add_header_mount_added(
 }
 
 /// Replace the add-header children when the active category, selection,
-/// card set, or material registry changes, or when a mount is added so a
-/// late-spawned inspector catches up to the current selection.
+/// card set, material registry or registered chips change, or when a mount
+/// is added so a late-spawned inspector catches up to the current selection.
 pub(crate) fn rebuild_add_header(
     active: Res<ActiveInspectorCategory>,
     selection: Res<Selection>,
     material_registry: Option<Res<MaterialRegistry>>,
     mounts: Query<(Entity, Option<&Children>), With<InspectorAddHeaderMount>>,
     added_mounts: Query<(), Added<InspectorAddHeaderMount>>,
-    #[cfg(feature = "physics")] has_rb: Query<Has<RigidBody>>,
-    #[cfg(feature = "physics")] has_ac: Query<Has<AvianCollider>>,
     added_cards: Query<(), Added<super::ComponentDisplay>>,
     mut removed_cards: RemovedComponents<super::ComponentDisplay>,
+    added_chips: Query<(), Added<InspectorChip>>,
+    mut removed_chips: RemovedComponents<InspectorChip>,
     mut commands: Commands,
 ) {
     let cards_changed = !added_cards.is_empty() || removed_cards.read().next().is_some();
+    let chips_changed = !added_chips.is_empty() || removed_chips.read().next().is_some();
     let registry_changed = material_registry.is_some_and(|r| r.is_changed());
     let should_rebuild = active.is_changed()
         || selection.is_changed()
         || cards_changed
+        || chips_changed
         || registry_changed
         || !added_mounts.is_empty();
     if !should_rebuild {
         return;
     }
-
-    #[cfg(feature = "physics")]
-    let (rb, ac) = physics_presence(&selection, &has_rb, &has_ac);
-    #[cfg(not(feature = "physics"))]
-    let (rb, ac) = (false, false);
 
     for (host, children) in &mounts {
         if let Some(children) = children {
@@ -85,37 +77,12 @@ pub(crate) fn rebuild_add_header(
                 }
             });
         }
-        build_add_header_children(&mut commands, host, active.0.as_ref(), rb, ac);
+        build_add_header_children(&mut commands, host, active.0.as_ref());
     }
 }
 
-/// Return `(has_rigid_body, has_avian_collider)` for the primary selected entity.
-#[cfg(feature = "physics")]
-fn physics_presence(
-    selection: &Selection,
-    has_rb: &Query<Has<RigidBody>>,
-    has_ac: &Query<Has<AvianCollider>>,
-) -> (bool, bool) {
-    let Some(entity) = selection.primary() else {
-        return (false, false);
-    };
-    let rb = has_rb.get(entity).unwrap_or(false);
-    let ac = has_ac.get(entity).unwrap_or(false);
-    (rb, ac)
-}
-
 /// Spawn the appropriate add-UI children under `host` for `category`.
-#[cfg_attr(
-    not(feature = "physics"),
-    expect(unused_variables, reason = "only the physics header reads presence")
-)]
-fn build_add_header_children(
-    commands: &mut Commands,
-    host: Entity,
-    category: &str,
-    has_rigid_body: bool,
-    has_collider: bool,
-) {
+fn build_add_header_children(commands: &mut Commands, host: Entity, category: &str) {
     match category {
         "modifiers" => {
             commands.spawn((
@@ -123,38 +90,6 @@ fn build_add_header_children(
                 ButtonOperatorCall::new("modifier.add").with_param("kind", "mirror"),
                 ChildOf(host),
             ));
-        }
-        #[cfg(feature = "physics")]
-        "physics" => {
-            // A two-button row: Rigid Body and Collider.
-            // Each button shows its active/remove state when the component is
-            // already present on the selected entity.
-            let row = commands
-                .spawn((
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(tokens::SPACING_XS),
-                        width: Val::Percent(100.0),
-                        ..Default::default()
-                    },
-                    ChildOf(host),
-                ))
-                .id();
-
-            spawn_physics_chip(
-                commands,
-                row,
-                "Rigid Body",
-                super::physics_display::RIGID_BODY_TYPE_PATH,
-                has_rigid_body,
-            );
-            spawn_physics_chip(
-                commands,
-                row,
-                "Collider",
-                super::physics_display::AVIAN_COLLIDER_TYPE_PATH,
-                has_collider,
-            );
         }
         "material" => {
             // Defer so we can read `MaterialRegistry` from the world.
@@ -164,32 +99,90 @@ fn build_add_header_children(
             });
         }
         _ => {
-            commands.spawn((
-                button(ButtonProps::new("Add Component").align_left()),
-                InspectorAddComponentButton,
-                ChildOf(host),
-            ));
+            let category = category.to_string();
+            commands.queue(move |world: &mut World| {
+                spawn_category_header(world, host, &category);
+            });
         }
     }
 }
 
-/// Spawn a single physics attach/detach chip button inside `row`.
+/// A category's header: the toggles extensions registered for it, or the
+/// Add Component button when it has none.
+fn spawn_category_header(world: &mut World, host: Entity, category: &str) {
+    if world.get_entity(host).is_err() {
+        return;
+    }
+    let mut chips_query = world.query::<(Entity, &InspectorChip)>();
+    let mut chips: Vec<(Entity, InspectorChip)> = chips_query
+        .iter(world)
+        .filter(|(_, chip)| chip.category == category)
+        .map(|(entity, chip)| (entity, chip.clone()))
+        .collect();
+    if chips.is_empty() {
+        world.spawn((
+            button(ButtonProps::new("Add Component").align_left()),
+            InspectorAddComponentButton,
+            ChildOf(host),
+        ));
+        return;
+    }
+    chips.sort_by_key(|(entity, _)| *entity);
+    let primary = world.resource::<Selection>().primary();
+    let row = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(tokens::SPACING_XS),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(host),
+        ))
+        .id();
+    for (_, chip) in chips {
+        let present =
+            primary.is_some_and(|entity| has_component_at_path(world, entity, &chip.type_path));
+        spawn_component_chip(world, row, chip, present);
+    }
+}
+
+/// Whether `entity` has the component reflected at `type_path`: authored in
+/// the scene document for an entity the document tracks, so a companion a
+/// plugin derived does not read as one the person added, and live otherwise.
+fn has_component_at_path(world: &World, entity: Entity, type_path: &str) -> bool {
+    if world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .is_some_and(|ast| ast.ast_for(entity).is_some())
+    {
+        return jackdaw_api_internal::document::SceneDocument::authored_components(world, entity)
+            .iter()
+            .any(|authored| authored == type_path);
+    }
+    let type_id = {
+        let registry = world.resource::<AppTypeRegistry>().read();
+        let Some(registration) = registry.get_with_type_path(type_path) else {
+            return false;
+        };
+        registration.type_id()
+    };
+    world.components().get_id(type_id).is_some_and(|component| {
+        world
+            .get_entity(entity)
+            .is_ok_and(|e| e.contains_id(component))
+    })
+}
+
+/// Spawn a single add/remove toggle inside `row`.
 ///
 /// When `present` is true the button renders with `ButtonVariant::Active` and
 /// a trailing X label; clicking dispatches `component.remove`. When `present`
 /// is false it renders as a plain default button and clicking dispatches
 /// `component.add`.
-#[cfg(feature = "physics")]
-fn spawn_physics_chip(
-    commands: &mut Commands,
-    row: Entity,
-    label: &'static str,
-    type_path: &'static str,
-    present: bool,
-) {
+fn spawn_component_chip(world: &mut World, row: Entity, chip: InspectorChip, present: bool) {
     // The selected entity is only known at click time (the user can reselect
     // while the header is shown), so the chip carries a marker and
-    // `on_physics_chip_click` reads the current `Selection` and dispatches the
+    // `on_component_chip_click` reads the current `Selection` and dispatches the
     // add/remove operator with the resolved entity. A `ButtonOperatorCall` is
     // deliberately NOT attached: it would auto-dispatch a second time without
     // the required `entity` param.
@@ -198,41 +191,40 @@ fn spawn_physics_chip(
     } else {
         ButtonVariant::Default
     };
-
     let display_label = if present {
-        format!("{label}  x")
+        format!("{}  x", chip.label)
     } else {
-        label.to_string()
+        chip.label.to_string()
     };
-
-    commands.spawn((
+    world.spawn((
         button(
             ButtonProps::new(display_label)
                 .with_variant(variant)
                 .with_size(ButtonSize::MD),
         ),
-        PhysicsChipButton { type_path, present },
+        ComponentChipButton {
+            type_path: chip.type_path.to_string(),
+            present,
+        },
         ChildOf(row),
     ));
 }
 
-/// Marker on a physics chip button. Carries the `type_path` and presence flag
-/// so the click observer can forward the right operator without holding a
-/// stale entity capture.
-#[cfg(feature = "physics")]
+/// Marker on a component chip button. Carries the `type_path` and presence
+/// flag so the click observer can forward the right operator without holding
+/// a stale entity capture.
 #[derive(Component)]
-pub(crate) struct PhysicsChipButton {
-    pub(crate) type_path: &'static str,
+pub(crate) struct ComponentChipButton {
+    pub(crate) type_path: String,
     pub(crate) present: bool,
 }
 
 /// Observer wired by `InspectorPlugin`: intercepts `ButtonClickEvent` on any
-/// `PhysicsChipButton` and dispatches `component.add` or `component.remove`
+/// `ComponentChipButton` and dispatches `component.add` or `component.remove`
 /// against the current primary selection.
-#[cfg(feature = "physics")]
-pub(crate) fn on_physics_chip_click(
+pub(crate) fn on_component_chip_click(
     event: On<jackdaw_feathers::button::ButtonClickEvent>,
-    chips: Query<&PhysicsChipButton>,
+    chips: Query<&ComponentChipButton>,
     selection: Res<Selection>,
     mut commands: Commands,
 ) {
@@ -242,20 +234,17 @@ pub(crate) fn on_physics_chip_click(
     let Some(entity) = selection.primary() else {
         return;
     };
-    let type_path = chip.type_path;
-    if chip.present {
-        commands
-            .operator("component.remove")
-            .param("entity", entity)
-            .param("type_path", type_path)
-            .call();
+    let type_path = chip.type_path.clone();
+    let operator = if chip.present {
+        "component.remove"
     } else {
-        commands
-            .operator("component.add")
-            .param("entity", entity)
-            .param("type_path", type_path)
-            .call();
-    }
+        "component.add"
+    };
+    commands
+        .operator(operator)
+        .param("entity", entity)
+        .param("type_path", type_path)
+        .call();
 }
 
 // -- Material header ---------------------------------------------------------

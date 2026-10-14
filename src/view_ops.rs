@@ -42,9 +42,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ViewUiZoomInOp>()
         .register_operator::<ViewUiZoomOutOp>()
         .register_operator::<ViewUiZoomResetOp>();
-    #[cfg(feature = "physics")]
-    ctx.register_operator::<ViewToggleColliderGizmosOp>()
-        .register_operator::<ViewToggleHierarchyArrowsOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, ViewToggleWireframeOp>([PresetInput::key(
         "KeyW",
@@ -178,34 +175,6 @@ pub(crate) fn view_toggle_alignment_guides(
     mut settings: ResMut<crate::viewport_overlays::OverlaySettings>,
 ) -> OperatorResult {
     settings.show_alignment_guides = !settings.show_alignment_guides;
-    OperatorResult::Finished
-}
-
-#[cfg(feature = "physics")]
-#[operator(
-    id = "view.toggle_collider_gizmos",
-    label = "Toggle Collider Gizmos",
-    allows_undo = false
-)]
-pub(crate) fn view_toggle_collider_gizmos(
-    _: In<OperatorParameters>,
-    mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
-) -> OperatorResult {
-    config.show_colliders = !config.show_colliders;
-    OperatorResult::Finished
-}
-
-#[cfg(feature = "physics")]
-#[operator(
-    id = "view.toggle_hierarchy_arrows",
-    label = "Toggle Hierarchy Arrows",
-    allows_undo = false
-)]
-pub(crate) fn view_toggle_hierarchy_arrows(
-    _: In<OperatorParameters>,
-    mut config: ResMut<jackdaw_avian_integration::PhysicsOverlayConfig>,
-) -> OperatorResult {
-    config.show_hierarchy_arrows = !config.show_hierarchy_arrows;
     OperatorResult::Finished
 }
 

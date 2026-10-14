@@ -1,4 +1,3 @@
-#![cfg(feature = "physics")]
 //! A placed model saved with a collider collides in a game: its meshes get
 //! colliders of the saved shape once the model has loaded.
 
@@ -69,7 +68,10 @@ fn game(assets: &Path) -> App {
     });
     app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
     app.init_asset::<Mesh>();
-    app.add_plugins(JackdawPlugin);
+    app.add_plugins((
+        JackdawPlugin,
+        jackdaw_avian_integration::AvianColliderBridgePlugin,
+    ));
     app.add_plugins(bevy::gltf::GltfPlugin::default());
     app.add_plugins(PhysicsPlugins::default());
     app.finish();

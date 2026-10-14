@@ -6,8 +6,8 @@
 //! editor. This module locates the sidecar, resolves the terrain's material
 //! names against the project catalog, and follows the game's camera.
 //!
-//! With the `physics` feature enabled, the decoded heights also become a
-//! heightfield collider.
+//! The decoded heights are published on each terrain as [`TerrainHeights`],
+//! for code that needs the ground's shape, such as a physics collider.
 //!
 //! A sidecar that exists but fails to decode draws nothing, rather than
 //! building ground from partial data. A missing sidecar is the flat-ground
@@ -33,9 +33,6 @@ use jackdaw_terrain::texture_set::TextureSet;
 use jackdaw_terrain::{ClipmapLevel, Heightmap, RegionTerrainData};
 
 use crate::JackdawCatalog;
-
-#[cfg(feature = "physics")]
-use avian3d::prelude::{Collider, RigidBody};
 
 /// Colour of a terrain drawn without a texture set.
 ///
@@ -63,8 +60,7 @@ pub(crate) fn plugin(app: &mut App) {
                 .before(ScatterSystems::Rebuild)
                 .before(DetailSystems::Rebuild),
         );
-    #[cfg(feature = "physics")]
-    app.add_systems(Update, build_ground_colliders.after(refresh_heightmaps));
+    app.add_systems(Update, publish_heights.after(refresh_heightmaps));
 }
 
 /// Answer the prefabs stored scatter names with the models they draw, read
@@ -685,101 +681,24 @@ fn refresh_heightmaps(mut terrains: Query<(&Terrain, &mut TerrainDocument), Chan
     }
 }
 
-/// Marks the entity carrying one terrain's ground collider, and names the
-/// terrain it stands under.
+/// The heights a terrain is drawn from, in metres, kept current as its
+/// sidecar loads and its dimensions change.
 ///
-/// A child rather than the terrain itself, because the collider has to be
-/// offset: parry's heightfield is centred on its own origin while a terrain's
-/// cells start at its grid anchor. The child's `Transform` holds the
-/// difference and follows the terrain.
-#[cfg(feature = "physics")]
-#[derive(Component)]
-struct TerrainGround(Entity);
+/// Read it for anything that needs the ground's shape, such as a heightfield
+/// collider. Grid vertex `(x, z)` sits at
+/// `origin + (x, z) * size / (resolution - 1)` in the terrain's own space.
+#[derive(Component, Clone, Debug)]
+pub struct TerrainHeights(pub Arc<Heightmap>);
 
-/// The collider that stands under a terrain's drawn ground, and where it
-/// sits in the terrain's own space.
-///
-/// Built from the heightmap the mesher draws from, so the two cannot disagree
-/// about where the ground is. Parry's heightfield is a unit grid stretched by
-/// a scale vector, which requires:
-///
-/// - an XZ scale of the grid's whole span, `(resolution - 1) * cell`, which is
-///   [`GridShape::size`](jackdaw_terrain::GridShape);
-/// - a Y scale of `1`, because the stored heights are already metres, the same
-///   numbers [`jackdaw_terrain::build_clipmap_mesh_data`] writes into vertex
-///   positions;
-/// - and a grid centred on the shape's origin, which is not where the cells
-///   are. Cells start at the grid anchor: the terrain's own origin for a
-///   terrain authored against this format, and `-size/2` for one migrated from
-///   a declared rectangle. The returned offset is that difference, and applying
-///   it puts grid vertex `(x, z)` at `anchor + (x, z) * cell`, where the mesher
-///   puts it.
-///
-/// Avian takes the heights as rows of a square array and hands them to parry
-/// column-major, leaving the outer index advancing X and the inner one Z.
-///
-/// `None` for a terrain with no cells: parry needs two rows and two columns,
-/// and a terrain holding no regions is the unsculpted case rather than a fault.
-#[cfg(feature = "physics")]
-fn ground_collider(heightmap: &Heightmap) -> Option<(Collider, Vec3)> {
-    let resolution = heightmap.resolution;
-    if resolution < 2 {
-        return None;
-    }
-    let heights: Vec<Vec<f32>> = (0..resolution)
-        .map(|x| {
-            (0..resolution)
-                .map(|z| heightmap.get_height(x, z))
-                .collect()
-        })
-        .collect();
-    let centre = heightmap.origin + heightmap.size / 2.0;
-    Some((
-        Collider::heightfield(heights, Vec3::new(heightmap.size.x, 1.0, heightmap.size.y)),
-        Vec3::new(centre.x, 0.0, centre.y),
-    ))
-}
-
-/// Put ground under every terrain whose heights arrived, and take it away from
-/// one left with no cells.
-///
-/// `Changed` rather than `Added`, because a `Terrain` whose dimensions change
-/// has its heights rebuilt in place by [`refresh_heightmaps`].
-#[cfg(feature = "physics")]
-fn build_ground_colliders(
+/// Publish each terrain's heights whenever they are rebuilt.
+fn publish_heights(
     mut commands: Commands,
     terrains: Query<(Entity, &TerrainDocument), Changed<TerrainDocument>>,
-    grounds: Query<(Entity, &TerrainGround)>,
 ) {
     for (terrain, document) in &terrains {
-        let standing = grounds
-            .iter()
-            .find(|(_, ground)| ground.0 == terrain)
-            .map(|(entity, _)| entity);
-        match ground_collider(&document.heightmap) {
-            Some((collider, offset)) => {
-                // Avian only simulates a collider that some rigid body owns,
-                // and the ground belongs to no other.
-                let ground = (
-                    collider,
-                    RigidBody::Static,
-                    Transform::from_translation(offset),
-                );
-                match standing {
-                    Some(entity) => {
-                        commands.entity(entity).insert(ground);
-                    }
-                    None => {
-                        commands.spawn((TerrainGround(terrain), ground, ChildOf(terrain)));
-                    }
-                }
-            }
-            None => {
-                if let Some(entity) = standing {
-                    commands.entity(entity).despawn();
-                }
-            }
-        }
+        commands
+            .entity(terrain)
+            .insert(TerrainHeights(document.heightmap.clone()));
     }
 }
 

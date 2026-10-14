@@ -18,8 +18,6 @@ mod operator_smoke;
 mod operator_tooltip;
 mod operator_undo;
 mod param_declarations;
-#[cfg(feature = "physics")]
-mod physics_ops;
 mod prefab_ops;
 mod remote_coverage;
 mod scatter_ops;

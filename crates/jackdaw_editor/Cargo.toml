@@ -13,8 +13,7 @@ jackdaw = { version = "0.20.0-dev", path = "../..", default-features = false }
 [features]
 # The editor's own defaults, so `--no-default-features` on a workspace build
 # reaches the editor through this crate too.
-default = ["jackdaw/default", "physics"]
-physics = ["jackdaw/physics"]
+default = ["jackdaw/default"]
 
 [lints]
 workspace = true

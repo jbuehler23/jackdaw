@@ -41,7 +41,7 @@ default-run = "jackdaw"
 # feature here would leave the installed editor without its required
 # SDK dylib. Release builds explicitly enable `dylib` after staging the
 # matching SDK beside the editor.
-default = ["multiplayer", "camera_rig", "embed-recipe", "physics", "navmesh"]
+default = ["multiplayer", "camera_rig", "embed-recipe", "navmesh"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
@@ -50,13 +50,8 @@ default = ["multiplayer", "camera_rig", "embed-recipe", "physics", "navmesh"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
-# Avian physics authoring: the physics tool, brush colliders, the physics
-# inspector, collider overlays and the in-editor simulation preview. Scenes
-# keep their physics components without it; the editor just cannot edit them.
-physics = ["dep:avian3d", "dep:jackdaw_avian_integration"]
-# The terrain navmesh bake. Needs `physics`: the bake leaves out what the
-# simulation moves, which only avian's `RigidBody` tells it.
-navmesh = ["physics", "dep:rerecast"]
+# The terrain navmesh bake.
+navmesh = ["dep:rerecast"]
 # The SDK-backed extension flow: builds the SDK facade plus separate Bevy
 # and Jackdaw runtime dylibs. The editor and every loaded extension import
 # those same libraries so TypeIds and process-wide registries cross
@@ -114,7 +109,6 @@ jackdaw_surface.workspace = true
 jackdaw_node_graph.workspace = true
 jackdaw_animation.workspace = true
 jackdaw_animation_runtime.workspace = true
-jackdaw_avian_integration = { workspace = true, optional = true }
 # Optional, activated by the default-on `multiplayer` feature. Together
 # these bundle the editor-only networking authoring extension (proxy
 # reflection types + the toggleable networking extension) into the
@@ -164,7 +158,6 @@ jackdaw_rustc_wrapper.workspace = true
 jackdaw_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-avian3d = { workspace = true, optional = true }
 rfd.workspace = true
 rerecast = { workspace = true, optional = true }
 # Hands the BRP client thread's reply back to the task polling it.
@@ -265,20 +258,6 @@ rand = "0.10"
 serde = "1"
 lucide-icons = "0.563"
 serde_json = "1"
-# Default features stay on so the SDK resolves at least what an extension
-# does: a physics-enabled graph adds avian3d with its defaults, and against an
-# SDK built leaner, any use of an item behind one of the dropped
-# features fails to compile against the redirected rlib.
-# `tests/sdk_feature_superset.rs` guards that ordering.
-# avian has no Bevy 0.20 release yet; this pins a fork branch carrying its
-# open Bevy 0.20 port, with bevy_heavy, bevy_transform_interpolation and
-# glam_matrix_extras forked alongside it.
-avian3d = { version = "0.8.0-dev", git = "https://github.com/jbuehler23/avian", rev = "252aac4973a35e2a9de9d33c3614426326b59bbf", features = [
-    "3d",
-    "parry-f32",
-    "collider-from-mesh",
-] }
-jackdaw_avian_integration = { version = "0.20.0-dev", path = "crates/jackdaw_avian_integration" }
 jackdaw_multiplayer = { version = "0.20.0-dev", path = "crates/jackdaw_multiplayer" }
 jackdaw_multiplayer_editor = { version = "0.20.0-dev", path = "crates/jackdaw_multiplayer_editor" }
 jackdaw_runtime = { version = "0.20.0-dev", path = "crates/jackdaw_runtime" }
@@ -358,9 +337,7 @@ redundant_closure_for_method_calls = "warn"
 
 [dev-dependencies]
 bevy.workspace = true
-# `examples/load_terrain_world.rs` draws an authored terrain, loads its bake and
-# stands a body on the ground, which needs both runtime features.
-jackdaw_runtime = { workspace = true, features = ["terrain", "physics"] }
+jackdaw_runtime = { workspace = true, features = ["terrain"] }
 libloading = "0.8"
 serde_json.workspace = true
 tempfile = "3"
@@ -418,11 +395,6 @@ codegen-units = 1
 # `jackdaw_rustc_wrapper` lib crate's docs (cargo translates dashes
 # to underscores), and the shim has nothing user-facing to document
 # anyway.
-# Stands a physics body on the loaded ground.
-[[example]]
-name = "load_terrain_world"
-required-features = ["physics"]
-
 [[bin]]
 name = "jackdaw-rustc-wrapper"
 path = "src/bin/jackdaw-rustc-wrapper.rs"

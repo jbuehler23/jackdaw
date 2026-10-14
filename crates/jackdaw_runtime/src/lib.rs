@@ -58,10 +58,6 @@
 //! - `navmesh`: load the baked navmesh without drawing anything. A server that
 //!   validates moves is `render` plus `navmesh` and no `terrain`, which leaves
 //!   out the mesher, the splat material and the texture loads.
-//! - `physics`: build avian colliders from authored `AvianCollider`
-//!   components. The game adds `PhysicsPlugins` itself to simulate them. With
-//!   `terrain` as well, the authored ground gets a heightfield collider built
-//!   from the heights it is drawn from.
 //! - `animation`: play the animation sets a scene authored, binding each to
 //!   the skeleton spawned under it. Off by default: a game with no rigs links
 //!   neither Bevy's animation support nor its glTF loader.
@@ -129,7 +125,7 @@ mod terrain;
 #[cfg(feature = "terrain")]
 pub use jackdaw_terrain::render::{DetailPressers, DetailSettings, DetailViewer};
 #[cfg(feature = "terrain")]
-pub use terrain::TerrainViewer;
+pub use terrain::{TerrainHeights, TerrainViewer};
 
 #[cfg(feature = "navmesh")]
 mod navmesh;
@@ -319,12 +315,6 @@ impl Plugin for JackdawPlugin {
         // a set survives a load in the same build that runs it.
         #[cfg(feature = "animation")]
         app.add_plugins(jackdaw_animation_runtime::AnimationRuntimePlugin);
-
-        // Build avian colliders from authored `AvianCollider` components so
-        // brushes collide at runtime. Add `PhysicsPlugins` in your app to run
-        // the simulation.
-        #[cfg(feature = "physics")]
-        app.add_plugins(jackdaw_avian_integration::AvianColliderBridgePlugin);
 
         // When `JACKDAW_PIE` is set, open the ipc-channel link to the editor
         // and attach the PIE stream / control systems. A connect failure logs

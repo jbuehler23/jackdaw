@@ -57,12 +57,6 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
         "a held brush stroke; one stamp at a named place instead, or \
          terrain.tint.stamp for the colour domain of the same tool",
     ),
-    #[cfg(feature = "physics")]
-    (
-        "physics.activate",
-        Some("physics.enable"),
-        "grab-and-throw in the viewport; enable the body instead",
-    ),
     (
         "viewport.draw_brush_modal",
         Some("mesh.add_brush"),

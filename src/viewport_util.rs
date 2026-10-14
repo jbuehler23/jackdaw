@@ -3,34 +3,7 @@ use bevy::{picking::prelude::Pickable, prelude::*, ui::UiGlobalTransform};
 use crate::default_style;
 use crate::viewport::SceneViewport;
 
-/// Window-to-camera-space mapping for the scene viewport node.
-///
-/// `top_left` is where the viewport node starts in window logical pixels,
-/// `vp_size` is its logical size, and `remap` scales window-local pixels
-/// onto the camera's render target (which may differ from the UI node
-/// size on `HiDPI` / fractional scaling).
-pub(crate) struct ViewportRemap {
-    pub top_left: Vec2,
-    pub vp_size: Vec2,
-    pub remap: Vec2,
-}
-
-impl ViewportRemap {
-    /// Compute remap parameters from the camera and the scene viewport's
-    /// `ComputedNode` + `UiGlobalTransform`.
-    pub fn new(camera: &Camera, computed: &ComputedNode, vp_transform: &UiGlobalTransform) -> Self {
-        let scale = computed.inverse_scale_factor();
-        let vp_pos = vp_transform.translation * scale;
-        let vp_size = computed.size() * scale;
-        let top_left = vp_pos - vp_size / 2.0;
-        let target_size = camera.logical_viewport_size().unwrap_or(vp_size);
-        Self {
-            top_left,
-            vp_size,
-            remap: target_size / vp_size,
-        }
-    }
-}
+pub(crate) use jackdaw_api_internal::viewport::ViewportRemap;
 
 /// Build the rubber-band marquee overlay node spanning `start`..`current`
 /// in window pixels. Returns the node bundle without a marker component so

@@ -94,12 +94,6 @@ fn snapshot_notices_editor_state_changes() {
     *world.resource_mut::<GizmoSpace>() = GizmoSpace::Local;
     world.resource_mut::<SnapSettings>().grid_power = 3;
     world.resource_mut::<OverlaySettings>().show_bounding_boxes = true;
-    #[cfg(feature = "physics")]
-    {
-        world
-            .resource_mut::<jackdaw_avian_integration::PhysicsOverlayConfig>()
-            .show_colliders = false;
-    }
 
     let after = world
         .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));

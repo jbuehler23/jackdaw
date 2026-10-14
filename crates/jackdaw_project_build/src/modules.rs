@@ -31,6 +31,10 @@ pub struct ModuleInfo {
     /// Features of `jackdaw_runtime` the game enables for it.
     #[serde(default)]
     pub runtime_features: Vec<String>,
+    /// Features of `jackdaw_runtime` an older game enabled for it, which no
+    /// longer exist but still show the game uses the module.
+    #[serde(default)]
+    pub former_runtime_features: Vec<String>,
     /// Crates the game depends on for it, besides `jackdaw_runtime`.
     #[serde(default)]
     pub crates: Vec<ModuleCrate>,
@@ -40,6 +44,14 @@ pub struct ModuleInfo {
     /// Modules this one needs.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// The id of the editor extension that carries the module's tooling,
+    /// for a module whose tooling is not built into the editor.
+    #[serde(default)]
+    pub extension: Option<String>,
+    /// Why a new game cannot use the module on this editor line yet, such as
+    /// a crate it needs having no release for this Bevy.
+    #[serde(default)]
+    pub unavailable: Option<String>,
 }
 
 /// A crate a module adds to the game.
@@ -144,15 +156,29 @@ impl ModuleCatalog {
             .find(|module| module.provides.iter().any(|name| name == crate_name))
     }
 
-    /// The modules a new game starts with.
+    /// The modules a new game starts with: the default ones a game can use
+    /// on this editor line.
     pub fn defaults(&self) -> ModuleSet {
         self.complete(
             self.modules
                 .iter()
-                .filter(|module| module.default_enabled)
+                .filter(|module| module.default_enabled && module.unavailable.is_none())
                 .map(|module| module.id.clone())
                 .collect(),
         )
+    }
+
+    /// Why module `id` cannot be added to a new game, if it cannot.
+    pub fn unavailable(&self, id: &str) -> Option<&str> {
+        self.get(id)?.unavailable.as_deref()
+    }
+
+    /// `set`, refused when it names a module a new game cannot use yet.
+    pub fn available(&self, set: ModuleSet) -> Result<ModuleSet, String> {
+        match set.iter().find_map(|id| Some((id, self.unavailable(id)?))) {
+            Some((id, reason)) => Err(format!("module `{id}` is not available: {reason}")),
+            None => Ok(set),
+        }
     }
 
     /// `set` with everything its modules require added.
@@ -218,6 +244,7 @@ impl ModuleCatalog {
                     known.join(", ")
                 ));
             }
+
             set.insert(id.to_string());
         }
         Ok(self.complete(set))
@@ -232,6 +259,7 @@ impl ModuleCatalog {
                 module
                     .runtime_features
                     .iter()
+                    .chain(&module.former_runtime_features)
                     .any(|feature| game.runtime_features.contains(feature))
                     || module
                         .crates
@@ -397,39 +425,29 @@ mod tests {
     }
 
     #[test]
-    fn a_new_game_starts_with_physics_alone() {
-        assert_eq!(ModuleCatalog::builtin().defaults(), set(&["physics"]));
+    fn a_new_game_starts_with_no_module_this_line_cannot_build() {
+        let catalog = ModuleCatalog::builtin();
+        assert!(catalog.unavailable("physics").is_some());
+        assert_eq!(catalog.defaults(), ModuleSet::new());
     }
 
     #[test]
-    fn turning_navmesh_on_turns_physics_on_with_it() {
+    fn navmesh_needs_no_other_module() {
         let catalog = ModuleCatalog::builtin();
         let mut modules = ModuleSet::new();
-        assert_eq!(catalog.enable(&mut modules, "navmesh"), vec!["physics"]);
-        assert_eq!(modules, set(&["navmesh", "physics"]));
         assert!(catalog.enable(&mut modules, "navmesh").is_empty());
+        assert_eq!(modules, set(&["navmesh"]));
     }
 
     #[test]
-    fn turning_physics_off_turns_navmesh_off_with_it() {
+    fn a_listed_module_must_be_known_and_available() {
         let catalog = ModuleCatalog::builtin();
-        let mut modules = set(&["multiplayer", "navmesh", "physics"]);
-        assert_eq!(catalog.disable(&mut modules, "physics"), vec!["navmesh"]);
-        assert_eq!(modules, set(&["multiplayer"]));
-        let mut modules = set(&["navmesh", "physics"]);
-        assert!(catalog.disable(&mut modules, "navmesh").is_empty());
-        assert_eq!(modules, set(&["physics"]));
-    }
-
-    #[test]
-    fn a_listed_module_brings_its_requirements_and_an_unknown_one_is_refused() {
-        let catalog = ModuleCatalog::builtin();
-        assert_eq!(
-            catalog.parse_list("navmesh").unwrap(),
-            set(&["navmesh", "physics"])
-        );
+        assert_eq!(catalog.parse_list("navmesh").unwrap(), set(&["navmesh"]));
         assert_eq!(catalog.parse_list("").unwrap(), ModuleSet::new());
-        assert!(catalog.parse_list("physics,rendering").is_err());
+        assert!(catalog.parse_list("rendering").is_err());
+        let physics = catalog.parse_list("physics").unwrap();
+        let error = catalog.available(physics).unwrap_err();
+        assert!(error.contains("not available"), "{error}");
     }
 
     #[test]
@@ -458,13 +476,16 @@ mod tests {
         assert_eq!(module("bevy_hanabi"), None);
     }
 
-    /// The physics module adds the avian the runtime itself is built with;
-    /// two avians in one game would not share a `Collider`.
+    /// The physics module adds the avian its integration is built with; two
+    /// avians in one game would not share a `Collider`.
     #[test]
-    fn the_physics_module_adds_the_avian_the_runtime_uses() {
+    fn the_physics_module_adds_the_avian_its_integration_uses() {
         let workspace: toml::Table = toml::from_str(
-            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
-                .unwrap(),
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../integrations/physics/Cargo.toml"
+            ))
+            .unwrap(),
         )
         .unwrap();
         let avian = &workspace["workspace"]["dependencies"]["avian3d"];
@@ -487,6 +508,7 @@ mod tests {
         let dir = package(
             "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
              jackdaw_runtime = { version = \"0.19\", features = [\"navmesh\", \"pie\"] }\n\
+             avian3d = \"0.8\"\n\
              net = { package = \"lightyear\", version = \"0.28\" }\n",
         );
         let game = GameDependencies::read(dir.path(), dir.path());

@@ -17,34 +17,14 @@ use crate::scenes::operators::SceneKind;
 use crate::viewport::{CameraFlyActive, ViewportPanelHost};
 use crate::viewport_2d::{Ui2dPanActive, Viewport2dPanelHost};
 
-/// What a viewport panel is showing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ViewportMode {
-    /// The 3D world: perspective camera, grid, world-space tools.
-    #[default]
-    ThreeD,
-    /// The 2D canvas: an orthographic stage at the authored reference size.
-    TwoD,
-}
+pub use jackdaw_api_internal::viewport::ViewportMode;
 
-impl ViewportMode {
-    /// The mode a scene of this kind is authored in. A 2D world scene and a
-    /// UI screen are both drawn flat, so both open on the canvas.
-    pub fn for_scene_kind(kind: SceneKind) -> Self {
-        match kind {
-            SceneKind::ThreeD => Self::ThreeD,
-            SceneKind::TwoD | SceneKind::Ui => Self::TwoD,
-        }
-    }
-
-    /// The mode a `mode` operator parameter names, or `None` when it names
-    /// neither. Case and surrounding space are ignored.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "3d" => Some(Self::ThreeD),
-            "2d" => Some(Self::TwoD),
-            _ => None,
-        }
+/// The mode a scene of this kind is authored in. A 2D world scene and a UI
+/// screen are both drawn flat, so both open on the canvas.
+pub fn mode_for_scene_kind(kind: SceneKind) -> ViewportMode {
+    match kind {
+        SceneKind::ThreeD => ViewportMode::ThreeD,
+        SceneKind::TwoD | SceneKind::Ui => ViewportMode::TwoD,
     }
 }
 
@@ -395,26 +375,17 @@ mod viewport_mode_tests {
 
     #[test]
     fn a_ui_scene_is_authored_on_the_canvas() {
-        assert_eq!(
-            ViewportMode::for_scene_kind(SceneKind::Ui),
-            ViewportMode::TwoD
-        );
+        assert_eq!(mode_for_scene_kind(SceneKind::Ui), ViewportMode::TwoD);
     }
 
     #[test]
     fn a_2d_world_scene_is_authored_on_the_canvas() {
-        assert_eq!(
-            ViewportMode::for_scene_kind(SceneKind::TwoD),
-            ViewportMode::TwoD
-        );
+        assert_eq!(mode_for_scene_kind(SceneKind::TwoD), ViewportMode::TwoD);
     }
 
     #[test]
     fn a_3d_scene_is_authored_in_the_world_viewport() {
-        assert_eq!(
-            ViewportMode::for_scene_kind(SceneKind::ThreeD),
-            ViewportMode::ThreeD
-        );
+        assert_eq!(mode_for_scene_kind(SceneKind::ThreeD), ViewportMode::ThreeD);
     }
 
     #[test]

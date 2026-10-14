@@ -37,7 +37,7 @@ fn find<'a>(pickables: &'a [PickableComponent], path: &str) -> Option<&'a Pickab
 /// `AvianCollider` is the editor wrapper users pick to attach a collider.
 #[test]
 fn avian_collider_wrapper_is_pickable() {
-    let mut app = util::editor_test_app();
+    let mut app = util::editor_app();
     let pickables = enumerate(&mut app);
 
     let entry = find(&pickables, "jackdaw_avian_integration::AvianCollider").unwrap_or_else(|| {
@@ -62,7 +62,7 @@ fn avian_collider_wrapper_is_pickable() {
 /// but it must be pickable directly too, to switch a static body to dynamic.
 #[test]
 fn rigid_body_is_pickable() {
-    let mut app = util::editor_test_app();
+    let mut app = util::editor_app();
     let pickables = enumerate(&mut app);
 
     let entry = find(&pickables, "avian3d::dynamics::rigid_body::RigidBody")
@@ -74,7 +74,7 @@ fn rigid_body_is_pickable() {
 /// for Mesh3d trees (Jan's prop-placement use case).
 #[test]
 fn collider_constructor_hierarchy_is_pickable() {
-    let mut app = util::editor_test_app();
+    let mut app = util::editor_app();
     let pickables = enumerate(&mut app);
 
     find(
@@ -88,7 +88,7 @@ fn collider_constructor_hierarchy_is_pickable() {
 /// added without a mesh. The denylist must keep it out of the picker.
 #[test]
 fn standalone_collider_constructor_is_hidden() {
-    let mut app = util::editor_test_app();
+    let mut app = util::editor_app();
     let pickables = enumerate(&mut app);
 
     assert!(

@@ -172,7 +172,7 @@ pub fn region(
     let scene: Box<dyn SceneList> = match region {
         NewProjectRegion::Editor => ui::boxed(editor_picker(launcher, form)),
         NewProjectRegion::Templates => ui::boxed(templates(form)),
-        NewProjectRegion::Modules => ui::boxed(modules(form)),
+        NewProjectRegion::Modules => ui::boxed(modules(form, catalog)),
         NewProjectRegion::Extensions => ui::boxed(extensions(form, catalog)),
         NewProjectRegion::Details => ui::boxed(details(form)),
         NewProjectRegion::Git => ui::boxed(ui::checkbox(
@@ -302,7 +302,10 @@ fn templates(form: &NewProjectForm) -> impl Scene {
     }
 }
 
-fn modules(form: &NewProjectForm) -> impl Scene {
+fn modules(
+    form: &NewProjectForm,
+    catalog: Option<&jackdaw_api_internal::lifecycle::ExtensionCatalog>,
+) -> impl Scene {
     let mut rows: ui::Scenes = Vec::new();
     if form.template == Template::Extension {
         rows.push(ui::boxed(ui::note(
@@ -312,7 +315,7 @@ fn modules(form: &NewProjectForm) -> impl Scene {
     } else {
         for module in ModuleCatalog::builtin().modules() {
             let on = form.modules.contains(&module.id);
-            let included = crate::module_picker::editor_has_module(&module.id);
+            let included = crate::module_picker::catalog_has_module(catalog, &module.id);
             let call = ButtonOperatorCall::new("launcher.new_project_module")
                 .with_param("id", module.id.clone());
             let status = if included {

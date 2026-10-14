@@ -453,31 +453,15 @@ fn toolbar_tools() -> impl Scene {
             @toolbar_op_button(EditModeFaceOp::ID, Icon::Hexagon)
             --
             @toolbar_op_button(EditModeClipOp::ID, Icon::ScissorsLineDashed)
-            --
-            {physics_tool_buttons()}
         ]
     }
 }
-
-/// The physics tool's toolbar group.
-#[cfg(feature = "physics")]
-fn physics_tool_buttons() -> impl SceneList {
-    bsn_list! {
-        @toolbar_separator()
-        --
-        @toolbar_op_button(crate::physics_tool::PhysicsActivateOp::ID, Icon::Zap)
-    }
-}
-
-/// Nothing: the editor was built without physics.
-#[cfg(not(feature = "physics"))]
-fn physics_tool_buttons() -> impl SceneList {}
 
 /// Font size for the toolbar's icon glyphs.
 const TOOLBAR_ICON_PX: f32 = 16.0;
 
 /// Thin vertical rule separating groups of toolbar buttons.
-fn toolbar_separator() -> impl Scene {
+pub(crate) fn toolbar_separator() -> impl Scene {
     bsn! {
         Node {
             width: px(1),
@@ -564,7 +548,7 @@ pub fn update_grid_size_label(
 /// Starts in the `Plain` variant so idle buttons read flat against the
 /// toolbar panel; [`update_toolbar_button_variants`] flips the active
 /// tool/mode/modal button to `Primary`.
-fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
+pub(crate) fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
     let glyph = String::from(icon.unicode());
     bsn! {
         @FeathersToolButton {
@@ -715,16 +699,6 @@ fn scene_view() -> impl Bundle {
     )
 }
 
-#[cfg(feature = "physics")]
-fn is_physics_tool_op(id: &str) -> bool {
-    id == crate::physics_tool::PhysicsActivateOp::ID
-}
-
-#[cfg(not(feature = "physics"))]
-fn is_physics_tool_op(_id: &str) -> bool {
-    false
-}
-
 /// Operator ids the main viewport toolbar owns. The terrain contextual
 /// toolbar spawns the same `ButtonOperatorCall` and `ButtonVariant`
 /// component pair and drives its own highlighter, so
@@ -744,7 +718,6 @@ fn is_main_toolbar_op(id: &str) -> bool {
         || id == EditModeFaceOp::ID
         || id == EditModeClipOp::ID
         || id == EditModeKnifeOp::ID
-        || is_physics_tool_op(id)
         || id == GridToggleSnapOp::ID
 }
 
@@ -772,12 +745,16 @@ pub fn update_toolbar_button_variants(
     gizmo_space: Res<GizmoSpace>,
     snap: Res<SnapSettings>,
     active_modal: ActiveModalQuery,
-    mut buttons: Query<(&ButtonOperatorCall, &mut ButtonVariant)>,
+    mut buttons: Query<(
+        &ButtonOperatorCall,
+        &mut ButtonVariant,
+        Has<crate::extension_slots::ExtensionToolbarItem>,
+    )>,
 ) {
     let modal_running = active_modal.is_modal_running();
-    for (call, mut variant) in &mut buttons {
+    for (call, mut variant, from_extension) in &mut buttons {
         let id = call.id.as_ref();
-        if !is_main_toolbar_op(id) {
+        if !from_extension && !is_main_toolbar_op(id) {
             continue;
         }
         // While any modal is running only the modal's own button
@@ -806,8 +783,6 @@ pub fn update_toolbar_button_variants(
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Clip)
         } else if id == EditModeKnifeOp::ID {
             *edit_mode == EditMode::BrushEdit(BrushEditMode::Knife)
-        } else if is_physics_tool_op(id) {
-            *edit_mode == EditMode::Physics
         } else if id == GridToggleSnapOp::ID {
             snap.translate_snap
         } else {

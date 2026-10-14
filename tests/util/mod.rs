@@ -93,12 +93,6 @@ fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
             .disable::<bevy::audio::AudioPlugin>()
             .disable::<WinitPlugin>(),
     );
-    // Ambient plugins moved to the binary entry point (matches the
-    // launcher's `src/main.rs` and the static template's
-    // `editor.rs.template`). Mirror that here so the editor's internal
-    // `debug_assert!` for `PhysicsSchedulePlugin` finds what it expects.
-    #[cfg(feature = "physics")]
-    app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
     app
 }
 

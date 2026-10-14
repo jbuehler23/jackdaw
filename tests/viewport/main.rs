@@ -7,7 +7,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
-mod avian_picker_visibility;
+mod extension_tooling;
 mod fly_cursor;
 mod multi_viewport;
 mod preview_context;

@@ -18,8 +18,6 @@ pub(crate) mod material_row;
 mod modifier_display;
 pub mod node_card;
 pub(crate) mod ops;
-#[cfg(feature = "physics")]
-pub(crate) mod physics_display;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
@@ -99,8 +97,7 @@ impl Plugin for InspectorPlugin {
         let mut denylist = component_picker::PickerDenylist::default();
         component_picker::populate_avian_picker_denylist(&mut denylist);
         app.insert_resource(denylist);
-        #[cfg(feature = "physics")]
-        app.add_observer(add_header::on_physics_chip_click);
+        app.add_observer(add_header::on_component_chip_click);
 
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)

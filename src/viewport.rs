@@ -24,15 +24,10 @@ use crate::selection::{Selected, Selection};
 use crate::snapping::GridSettings;
 use jackdaw_widgets::file_browser::FileBrowserItem;
 
-use crate::viewport_host::{ViewportMode, ViewportModeIntent};
-
-/// Marker for a 3D viewport camera. Once multi-viewport support
-/// lands every viewport panel will spawn its own camera carrying this
-/// marker, so queries that need *all* viewport cameras (or a specific
-/// one selected via [`ActiveViewport`]) iterate them rather than
-/// using `Single<>`.
-#[derive(Component)]
-pub struct MainViewportCamera;
+use crate::viewport_host::ViewportModeIntent;
+pub use jackdaw_api_internal::viewport::{
+    ActiveViewport, MainViewportCamera, SceneViewport, UiCursorPos, ViewportCursor, ViewportMode,
+};
 
 /// Dock window id of the viewport panel, where scenes are authored.
 pub const VIEWPORT_WINDOW_ID: &str = "jackdaw.viewport";
@@ -56,13 +51,6 @@ pub fn canonical_window_id(window_id: &str) -> &str {
 pub(crate) const DEFAULT_VIEWPORT_WIDTH: u32 = 1280;
 /// Height paired with [`DEFAULT_VIEWPORT_WIDTH`].
 pub(crate) const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
-
-/// Marker on a UI node that hosts a 3D viewport (the leaf inside
-/// which `ViewportNode` projects a camera's render target). With
-/// multi-viewport, each registered `jackdaw.viewport` panel spawns
-/// one of these.
-#[derive(Component)]
-pub struct SceneViewport;
 
 /// The 3D presentation's state, on the dock-leaf content entity that hosts a
 /// viewport panel. Holds the entities the despawn observer cleans up when the
@@ -123,174 +111,6 @@ impl ViewportLayerCounter {
     pub(crate) fn next(&mut self) -> usize {
         self.0 += 1;
         self.0
-    }
-}
-
-/// Tracks which viewport panel currently has the mouse over it.
-///
-/// Hover-routed viewport input (camera fly mode, click handling,
-/// gizmo hover, etc.) reads this to decide which viewport to act on.
-/// Updated each frame by `update_active_viewport`.
-///
-/// During a right-click fly session the resource keeps pointing at
-/// the camera that started the session, even if the cursor strays
-/// outside the viewport's bounds, so fly input stays attached to the
-/// right viewport until the user releases the mouse.
-///
-/// A panel showing its 2D canvas reports its [`Self::host`] and [`Self::mode`]
-/// but leaves [`Self::camera`] and [`Self::ui_node`] empty, which is what makes
-/// every world-space tool stand down over a canvas.
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct ActiveViewport {
-    /// Camera entity of the currently-hovered viewport, when it is showing
-    /// the 3D world.
-    pub camera: Option<Entity>,
-    /// UI-node entity of the currently-hovered viewport's
-    /// `SceneViewport`, when it is showing the 3D world.
-    pub ui_node: Option<Entity>,
-    /// Panel entity of the currently-hovered viewport, in either mode.
-    pub host: Option<Entity>,
-    /// What the currently-hovered viewport is showing, or `None` when the
-    /// cursor is over no viewport at all.
-    pub mode: Option<ViewportMode>,
-}
-
-/// Bundled queries for converting screen position to a viewport ray.
-/// Used by selection, gizmos, modal transforms, and drawing systems.
-///
-/// Multi-viewport-aware: routes via [`ActiveViewport`] (the hovered
-/// viewport). Modal operators that need a stable target across frames
-/// should capture an entity at start and pass it to [`Self::camera_for`].
-#[derive(SystemParam)]
-pub(crate) struct ViewportCursor<'w, 's> {
-    pub windows: Query<'w, 's, &'static Window>,
-    cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<MainViewportCamera>>,
-    viewports: Query<
-        'w,
-        's,
-        (
-            &'static ComputedNode,
-            &'static UiGlobalTransform,
-            &'static ViewportNode,
-        ),
-        With<SceneViewport>,
-    >,
-    active: Res<'w, ActiveViewport>,
-    ui_scale: Res<'w, UiScale>,
-    hover_map: Res<'w, bevy::picking::hover::HoverMap>,
-}
-
-impl ViewportCursor<'_, '_> {
-    /// True when UI drawn on top of the hovered viewport, such as the terrain
-    /// tool palette, is under the cursor rather than the viewport's own
-    /// `SceneViewport` node.
-    pub fn blocked_by_overlay(&self) -> bool {
-        hover_blocks_click(&self.hover_map, self.active.ui_node)
-    }
-
-    pub fn viewport_pointer(&self) -> Option<Vec2> {
-        let viewport_entity = self.active.ui_node?;
-        if hover_blocks_click(&self.hover_map, Some(viewport_entity)) {
-            return None;
-        }
-        self.cursor()
-    }
-
-    /// The hovered viewport's camera + global transform.
-    pub fn camera(&self) -> Option<(&Camera, &GlobalTransform)> {
-        let camera_entity = self.active.camera?;
-        self.cameras.get(camera_entity).ok()
-    }
-
-    /// The hovered viewport's UI-node geometry (for cursor remapping).
-    pub fn viewport(&self) -> Option<(&ComputedNode, &UiGlobalTransform)> {
-        let ui_entity = self.active.ui_node?;
-        self.viewports.get(ui_entity).ok().map(|(c, t, _)| (c, t))
-    }
-
-    /// Camera entity of the hovered viewport (for modal capture).
-    pub fn camera_entity(&self) -> Option<Entity> {
-        self.active.camera
-    }
-
-    /// UI-node entity of the hovered viewport (for modal capture).
-    pub fn viewport_entity(&self) -> Option<Entity> {
-        self.active.ui_node
-    }
-
-    /// Look up a specific camera by entity. Used by modal operators
-    /// that captured the active viewport at drag-start and want to
-    /// keep referring to it across frames regardless of where the
-    /// cursor wanders.
-    pub fn camera_for(&self, entity: Entity) -> Option<(&Camera, &GlobalTransform)> {
-        self.cameras.get(entity).ok()
-    }
-
-    /// Look up a specific viewport UI node by entity (companion to
-    /// [`Self::camera_for`]).
-    pub fn viewport_for(&self, entity: Entity) -> Option<(&ComputedNode, &UiGlobalTransform)> {
-        self.viewports.get(entity).ok().map(|(c, t, _)| (c, t))
-    }
-
-    /// Convert a window-space cursor position into the camera-space
-    /// coordinates of a specific viewport. Positions outside the pane
-    /// are still remapped, so a captured-viewport drag can keep updating
-    /// over adjacent UI. Returns `None` only if `viewport_entity` is no
-    /// longer a `SceneViewport`.
-    pub fn viewport_cursor_for(
-        &self,
-        camera: &Camera,
-        viewport_entity: Entity,
-        cursor: Vec2,
-    ) -> Option<Vec2> {
-        let (computed, vp_tf, _) = self.viewports.get(viewport_entity).ok()?;
-        let map = crate::viewport_util::ViewportRemap::new(camera, computed, vp_tf);
-        Some((cursor - map.top_left) * map.remap)
-    }
-
-    /// Cursor position in ui-logical pixels
-    pub fn cursor(&self) -> Option<Vec2> {
-        let window = self.windows.single().ok()?;
-        let raw = window.cursor_position()?;
-        Some(raw / self.ui_scale.0)
-    }
-}
-
-/// True when the hover map contains an entity other than `viewport_entity`.
-/// With no viewport to compare against, nothing can be over one.
-fn hover_blocks_click(
-    hover_map: &bevy::picking::hover::HoverMap,
-    viewport_entity: Option<Entity>,
-) -> bool {
-    let Some(viewport_entity) = viewport_entity else {
-        return false;
-    };
-    hover_map
-        .values()
-        .flat_map(|hits| hits.keys())
-        .any(|&entity| entity != viewport_entity)
-}
-
-/// Cursor position in ui-logical pixels, the space `Val::Px` and
-/// [`crate::viewport_util::ViewportRemap`] operate in. Use this anywhere the
-/// cursor will be compared against UI nodes or fed into viewport-coordinate
-/// math, instead of calling `Window::cursor_position()` directly.
-///
-/// Systems that already take [`ViewportCursor`] can use
-/// [`ViewportCursor::cursor`] instead and drop this parameter.
-#[derive(SystemParam)]
-pub(crate) struct UiCursorPos<'w, 's> {
-    windows: Query<'w, 's, &'static Window>,
-    ui_scale: Res<'w, UiScale>,
-}
-
-impl UiCursorPos<'_, '_> {
-    /// Ui-logical cursor position, or `None` if the cursor is outside
-    /// the window / there's no primary window.
-    pub fn get(&self) -> Option<Vec2> {
-        let window = self.windows.single().ok()?;
-        let raw = window.cursor_position()?;
-        Some(raw / self.ui_scale.0)
     }
 }
 
@@ -1271,24 +1091,7 @@ pub(crate) fn viewport_bookmark_load(
 
 #[cfg(test)]
 mod tests {
-    use bevy::picking::{backend::HitData, hover::HoverMap, pointer::PointerId};
-
     use super::*;
-
-    fn hover_map_with(entity: Entity) -> HoverMap {
-        let hit = HitData {
-            camera: Entity::PLACEHOLDER,
-            depth: 0.0,
-            position: None,
-            normal: None,
-            extra: None,
-        };
-        let mut hits = bevy::ecs::entity::EntityHashMap::default();
-        hits.insert(entity, hit);
-        let mut map = HoverMap::default();
-        map.insert(PointerId::Mouse, hits);
-        map
-    }
 
     #[test]
     fn editor_views_render_into_the_same_format() {
@@ -1310,32 +1113,5 @@ mod tests {
                 "{view} renders in a format of its own"
             );
         }
-    }
-
-    #[test]
-    fn viewport_own_node_does_not_block_the_click() {
-        let viewport = Entity::from_raw_u32(1).unwrap();
-        let hover_map = hover_map_with(viewport);
-        assert!(!hover_blocks_click(&hover_map, Some(viewport)));
-    }
-
-    #[test]
-    fn an_overlay_entity_blocks_the_click() {
-        let viewport = Entity::from_raw_u32(1).unwrap();
-        let palette_button = Entity::from_raw_u32(2).unwrap();
-        let hover_map = hover_map_with(palette_button);
-        assert!(hover_blocks_click(&hover_map, Some(viewport)));
-    }
-
-    #[test]
-    fn an_empty_hover_map_does_not_block_the_click() {
-        let viewport = Entity::from_raw_u32(1).unwrap();
-        assert!(!hover_blocks_click(&HoverMap::default(), Some(viewport)));
-    }
-
-    #[test]
-    fn no_active_viewport_does_not_block_the_click() {
-        let hover_map = hover_map_with(Entity::from_raw_u32(2).unwrap());
-        assert!(!hover_blocks_click(&hover_map, None));
     }
 }

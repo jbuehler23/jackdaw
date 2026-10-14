@@ -66,13 +66,16 @@ fn the_substituted_version_is_the_anchored_minor() {
 
 /// The physics module's avian source is a plain literal in the module
 /// catalog (it is not jackdaw's to substitute), so it can silently drift
-/// from what the editor itself builds against. A scaffolded project
-/// resolving a different avian than the editor authors scenes with is
+/// from what the Physics module builds against. A scaffolded project
+/// resolving a different avian than the module authors scenes with is
 /// exactly the kind of mismatch onboarding is supposed to prevent.
 #[test]
-fn the_physics_module_tracks_the_workspace_avian() {
-    let workspace = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
-        .expect("workspace manifest");
+fn the_physics_module_tracks_the_integrations_avian() {
+    let workspace = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/integrations/physics/Cargo.toml"
+    ))
+    .expect("physics workspace manifest");
     let entry = workspace
         .split_once("[workspace.dependencies]")
         .expect("[workspace.dependencies]")
@@ -93,7 +96,8 @@ fn the_physics_module_tracks_the_workspace_avian() {
         .join(format!("jackdaw_template_avian_{}", std::process::id()))
         .join("physical");
     let _ = std::fs::remove_dir_all(&dest);
-    jackdaw::scaffold::scaffold_new_project(&dest, "physical", TemplateKind::Game)
+    let physics = ["physics".to_string()].into_iter().collect();
+    jackdaw::scaffold::scaffold_new_project_with(&dest, "physical", TemplateKind::Game, &physics)
         .expect("scaffold");
     let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).expect("scaffolded manifest");
     let _ = std::fs::remove_dir_all(dest.parent().unwrap());

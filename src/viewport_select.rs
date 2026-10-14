@@ -183,8 +183,6 @@ pub(crate) fn handle_viewport_click(
     let just_finished_draw = *was_drawing && !drawing_now;
     *was_drawing = drawing_now;
 
-    // Physics mode is intentionally not blocked: the user needs to
-    // click-select entities to drag them in the physics tool.
     if !pointer.pointer_primary_just_pressed()
         || guards.is_any_interaction_active()
         || guards.gizmo_hover.hovered_axis.is_some()
@@ -299,20 +297,7 @@ pub(crate) fn handle_viewport_click(
 
     if let Some(entity) = best_entity {
         let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-        let in_physics_mode = *guards.edit_mode == crate::brush::EditMode::Physics;
-
-        if in_physics_mode {
-            // In Physics mode: clicking an already-selected entity is a drag
-            // start, NOT a re-select. Only modify selection for unselected
-            // entities (add them). This preserves multi-selection.
-            if !selection.is_selected(entity) {
-                if ctrl {
-                    selection.toggle(&mut commands, entity);
-                } else {
-                    selection.select_single(&mut commands, entity);
-                }
-            }
-        } else if ctrl {
+        if ctrl {
             selection.toggle(&mut commands, entity);
         } else {
             selection.select_single(&mut commands, entity);

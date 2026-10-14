@@ -424,7 +424,6 @@ fn a_wide_viewport_shows_every_tool_and_no_overflow_menu() {
 }
 
 /// Hold the toolbar to `width`, as a viewport docked that narrow holds it.
-#[cfg(feature = "physics")]
 fn narrow_the_toolbar(app: &mut App, width: f32) {
     let mut toolbars = app
         .world_mut()
@@ -436,26 +435,25 @@ fn narrow_the_toolbar(app: &mut App, width: f32) {
     settle(app);
 }
 
-#[cfg(feature = "physics")]
 #[test]
 fn a_narrow_viewport_lists_the_cut_tools_in_the_overflow_menu() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app_with_panel(dir.path());
-    narrow_the_toolbar(&mut app, 520.0);
+    narrow_the_toolbar(&mut app, 420.0);
     let button = overflow_button(&mut app);
     assert_eq!(
         displayed(&app, button),
         Display::Flex,
         "the overflow menu shows once a tool is cut"
     );
-    let physics_button = app
+    let draw_button = app
         .world_mut()
         .query::<(&Visibility, &jackdaw_feathers::button::ButtonOperatorCall)>()
         .iter(app.world())
-        .find(|(_, call)| call.id == "physics.activate")
+        .find(|(_, call)| call.id == "viewport.draw_brush_modal")
         .map(|(visibility, _)| *visibility);
     assert_eq!(
-        physics_button,
+        draw_button,
         Some(Visibility::Hidden),
         "a cut tool is hidden rather than drawn half cut"
     );
@@ -463,7 +461,7 @@ fn a_narrow_viewport_lists_the_cut_tools_in_the_overflow_menu() {
     let at = centre_of(&app, button);
     click(&mut app, at);
     assert!(menu_is_open(&app), "a click on the button opens the menu");
-    let physics = "op:physics.activate".to_string();
+    let draw = "op:viewport.draw_brush_modal".to_string();
     let rows: Vec<String> = app
         .world_mut()
         .query::<&MenuBarDropdownItem>()
@@ -471,18 +469,20 @@ fn a_narrow_viewport_lists_the_cut_tools_in_the_overflow_menu() {
         .map(|row| row.action.clone())
         .collect();
     assert!(
-        rows.contains(&physics),
-        "the cut Physics tool is listed: {rows:?}"
+        rows.contains(&draw),
+        "the cut Draw Brush tool is listed: {rows:?}"
     );
     assert!(
         !rows.contains(&"op:tool.select".to_string()),
         "a tool still on the toolbar is not: {rows:?}"
     );
 
-    click_row(&mut app, &physics);
-    assert_eq!(
-        *app.world().resource::<jackdaw::brush::EditMode>(),
-        jackdaw::brush::EditMode::Physics,
-        "the row dispatches the tool's operator"
-    );
+    click_row(&mut app, &draw);
+    let running = app
+        .world_mut()
+        .run_system_cached(|active: jackdaw_api::prelude::ActiveModalQuery| {
+            active.is_operator("viewport.draw_brush_modal")
+        })
+        .expect("the query runs");
+    assert!(running, "the row dispatches the tool's operator");
 }
