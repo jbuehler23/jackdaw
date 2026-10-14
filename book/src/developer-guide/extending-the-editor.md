@@ -13,7 +13,6 @@ use jackdaw_editor::prelude::*;
 fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins.set(editor_window_plugin()))
-        .add_plugins(PhysicsPlugins::default())
         .add_plugins(JackdawEditorPlugins::default())
         .run()
 }
@@ -98,8 +97,8 @@ built-in ones and installed bundles. A plugin cannot be removed again, so:
   the extension as a bundle once, restart, and later builds that keep the
   plugin reload live.
 
-Guard plugins the editor may already have, such as physics, with
-`app.is_plugin_added::<T>()`. `jd extension pack` records `requires_restart`
+Guard plugins another extension may already have added, such as a physics
+engine, with `app.is_plugin_added::<T>()`. `jd extension pack` records `requires_restart`
 in the bundle manifest when the extension defines `app_plugin`, so tools can
 show the restart without loading the library.
 

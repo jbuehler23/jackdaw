@@ -1,10 +1,16 @@
 # Physics and prop placement
 
 Jackdaw uses [avian3d](https://github.com/Jondolf/avian) for
-physics. There's no global "enable physics" toggle: you opt an
-entity in by adding the components it needs, and the editor's
-Physics Tool lets you drop dynamic bodies into the scene and
-let them settle.
+physics, through the Physics module. The module's editor
+extension (`jackdaw.physics`, from the `jackdaw_physics` crate) brings the tools on this page; the
+game adds `avian3d` and `jackdaw_avian_integration`. Without the
+extension, scenes keep their physics components and the
+inspector shows them as components from a module that is not
+loaded.
+
+There's no global "enable physics" toggle: you opt an entity in
+by adding the components it needs, and the Physics Tool lets you
+drop dynamic bodies into the scene and let them settle.
 
 ## Adding physics to a brush or entity
 
@@ -80,10 +86,9 @@ poses. That's what the Physics Tool is for.
 4. Click and drag a selected entity. Release. Gravity takes
    over and the body falls / settles.
 5. Drag again to nudge.
-6. Press `Space` to commit and exit. Settled positions are
-   pushed onto the undo stack as a single entry, so `Ctrl+Z`
-   returns you to physics mode at those positions for
-   another pass.
+6. Press `Space` (or `Enter`) to commit and exit. Settled
+   positions are pushed onto the undo stack as a single entry,
+   so `Ctrl+Z` puts the bodies back where the tool found them.
 7. `Esc` instead of `Space` cancels and reverts to the
    pre-tool poses.
 

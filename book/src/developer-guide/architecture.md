@@ -14,7 +14,6 @@ The editor binary looks like:
 ```rust
 App::new()
     .add_plugins(DefaultPlugins.set(editor_window_plugin()))
-    .add_plugins(PhysicsPlugins::default())
     .add_plugins(JackdawEditorPlugins::default())
     .run()
 ```

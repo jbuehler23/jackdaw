@@ -70,12 +70,16 @@ module pairs editor tooling with what the game needs for it:
 
 | Module | Game side | Requires |
 | --- | --- | --- |
-| `physics` | `jackdaw_runtime` feature `physics`, `avian3d` and its `PhysicsPlugins` | |
-| `navmesh` | `jackdaw_runtime` feature `navmesh` | `physics` |
+| `physics` | `avian3d` and its `PhysicsPlugins`, `jackdaw_avian_integration` and its `AvianColliderBridgePlugin` | |
+| `navmesh` | `jackdaw_runtime` feature `navmesh` | |
 | `multiplayer` | `jackdaw_multiplayer` and its types plugin | |
 
+Physics is not available for Bevy 0.20 projects until avian releases
+for it; the dialogs show it greyed out with that reason, and `jd new`
+refuses it.
+
 Pick them in the New Project and import dialogs, with
-`jd new --modules physics,navmesh` (or `--no-modules`) and
+`jd new --modules navmesh,multiplayer` (or `--no-modules`) and
 `jd import --modules ...`, and later with File > Modules in the
 editor. Changing them there edits `[modules]` and the game's
 `Cargo.toml` together; turning a module off removes its runtime

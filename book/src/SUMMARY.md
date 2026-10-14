@@ -27,6 +27,7 @@
 - [Custom Components](developer-guide/custom-components.md)
 - [BSN Format](developer-guide/bsn-format.md)
 - [Extending the Editor](developer-guide/extending-the-editor.md)
+- [Writing Editor Tooling](developer-guide/editor-tooling.md)
 - [Remote Control and jd mcp](developer-guide/remote-control.md)
 - [Open Challenges](developer-guide/open-challenges.md)
 

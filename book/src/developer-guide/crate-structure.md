@@ -56,8 +56,6 @@ else in the workspace. The interesting layers:
 - `jackdaw_commands`: the undo/redo command stack. Editor
   operations push `EditorCommand`s here.
 - `jackdaw_terrain`: heightmap data + sculpt + erosion.
-- `jackdaw_avian_integration`: physics overlays and the
-  Physics tool. Glue between the editor and Avian.
 - `jackdaw_animation`: animation graph editing, clip
   authoring.
 - `jackdaw_node_graph`: node-graph primitives shared between
@@ -153,3 +151,15 @@ the workspace crates.
 `src/` is over 100 files. The brush, animation, and remote
 inspector subsystems are the obvious candidates for
 extraction into their own crates. Not blocking on it.
+
+## Modules
+
+Integrations with crates built on Bevy live under `integrations/`, each in its
+own workspace, so the editor's workspace never resolves them.
+
+- `integrations/physics`: `jackdaw_physics`, the editor extension with the
+  Physics tool, collider overlays and inspector toggles, and
+  `jackdaw_avian_integration`, which builds avian colliders from a scene's
+  authored components in the game.
+- `integrations/jackdaw_multiplayer_lightyear`: the lightyear backend for
+  `jackdaw_multiplayer`.
