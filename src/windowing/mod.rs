@@ -15,7 +15,6 @@ use bevy::window::{ExitCondition, WindowPlugin};
 use bevy_window_chrome::{CaptionTheme, WindowChromePlugin, WindowChromeTheme};
 use icon::WindowIconPlugin;
 use jackdaw_feathers::tokens;
-use time::{Month, OffsetDateTime};
 
 const WINDOW_ICON_PNG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -36,10 +35,7 @@ fn window_icon_png_bytes() -> &'static [u8] {
 }
 
 pub(crate) fn is_pride_month() -> bool {
-    let Ok(date_time) = OffsetDateTime::now_local() else {
-        return false;
-    };
-    date_time.month() == Month::June
+    crate::timestamps::utc_month_now() == 6
 }
 
 /// Window chrome theme built from jackdaw's design tokens.

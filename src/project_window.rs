@@ -2052,7 +2052,7 @@ pub fn project_reveal(params: In<OperatorParameters>, mut commands: Commands) ->
         } else {
             path.parent().map(Path::to_path_buf).unwrap_or(path)
         };
-        if let Err(err) = show_in_file_manager(&folder) {
+        if let Err(err) = open_with_desktop(&folder) {
             warn!(
                 "project.reveal: {} cannot be opened: {err}",
                 folder.display()
@@ -2062,8 +2062,8 @@ pub fn project_reveal(params: In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
-/// Hand a folder to whatever the desktop opens folders with.
-pub(crate) fn show_in_file_manager(folder: &Path) -> std::io::Result<()> {
+/// Hand a folder or URL to whatever the desktop opens it with.
+pub(crate) fn open_with_desktop(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
     let program = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {
@@ -2071,7 +2071,7 @@ pub(crate) fn show_in_file_manager(folder: &Path) -> std::io::Result<()> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(program).arg(folder).spawn()?;
+    std::process::Command::new(program).arg(target).spawn()?;
     Ok(())
 }
 

@@ -73,7 +73,7 @@ fn on_repo_link_click(
     if buttons.get(click.entity).is_err() {
         return;
     }
-    if let Err(error) = webbrowser::open(JACKDAW_REPO_URL) {
+    if let Err(error) = crate::project_window::open_with_desktop(JACKDAW_REPO_URL) {
         bevy::log::warn!("jackdaw: failed to open repository URL: {error}");
     }
 }

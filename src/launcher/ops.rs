@@ -295,7 +295,7 @@ pub fn launcher_reveal_project(params: In<OperatorParameters>) -> OperatorResult
     let Some(path) = path_param(&params, "launcher.reveal_project") else {
         return OperatorResult::Cancelled;
     };
-    if let Err(error) = crate::project_window::show_in_file_manager(&path) {
+    if let Err(error) = crate::project_window::open_with_desktop(&path) {
         warn!("launcher.reveal_project: {}: {error}", path.display());
     }
     OperatorResult::Finished
@@ -1062,7 +1062,7 @@ pub fn launcher_release_notes(
         });
         return OperatorResult::Cancelled;
     };
-    if let Err(error) = webbrowser::open(&url) {
+    if let Err(error) = crate::project_window::open_with_desktop(&url) {
         warn!("launcher.release_notes: {url}: {error}");
     }
     OperatorResult::Finished
@@ -1086,7 +1086,7 @@ pub fn launcher_reveal_editor(
     let Some(install) = launcher.installs.get(&version) else {
         return OperatorResult::Cancelled;
     };
-    if let Err(error) = crate::project_window::show_in_file_manager(&install.path) {
+    if let Err(error) = crate::project_window::open_with_desktop(&install.path) {
         warn!(
             "launcher.reveal_editor: {}: {error}",
             install.path.display()

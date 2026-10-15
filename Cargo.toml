@@ -172,13 +172,11 @@ toml = "1"
 winit.workspace = true
 image.workspace = true
 half = "2"
-time.workspace = true
 jackdaw_localization = { version = "0.20.0-dev", path = "crates/jackdaw_localization" }
 jackdaw_env.workspace = true
 jackdaw_package.workspace = true
 jackdaw_releases.workspace = true
 toml_edit = "0.25"
-webbrowser.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -284,16 +282,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 winit = "0.30.13"
 image = { version = "0.25.10", default-features = false, features = ["png", "hdr"] }
-time = { version = "0.3.47", default-features = false, features = [
-    "std",
-    "local-offset",
-    "formatting",
-    # Read back the RFC 3339 stamps we write, so the launcher can show
-    # how long ago a project was last opened.
-    "parsing",
-] }
 fluent = "0.16"
-webbrowser = "1"
 fluent_content = "0.0.5"
 unic-langid = { version = "0.9", features = ["macros"] }
 sys-locale = "0.3"
