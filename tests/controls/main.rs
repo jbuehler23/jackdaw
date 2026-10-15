@@ -8,6 +8,7 @@
 mod util;
 
 mod button_operator_dispatch;
+mod checkboxes;
 mod color_picker;
 mod comboboxes;
 mod context_menus;
