@@ -63,6 +63,9 @@ impl From<std::io::Error> for PlanError {
 /// workspace build in dev.
 pub struct SdkManifest {
     artifacts: BTreeMap<(String, String), String>,
+    /// The features each artifact was compiled with, when the SDK
+    /// recorded them. An SDK from before they were recorded has none.
+    features: BTreeMap<(String, String), BTreeSet<String>>,
 }
 
 impl SdkManifest {
@@ -82,7 +85,11 @@ impl SdkManifest {
                 artifact.to_string(),
             );
         }
-        Ok(Self { artifacts })
+        let features = read_features(&features_path(path));
+        Ok(Self {
+            artifacts,
+            features,
+        })
     }
 
     /// Generate the manifest from a dev workspace: the SDK's runtime
@@ -173,6 +180,7 @@ impl SdkManifest {
         };
         let roots = build_private_roots(sdk);
         let mut artifacts = BTreeMap::new();
+        let mut features = BTreeMap::new();
         let mut link_paths: BTreeSet<String> = BTreeSet::new();
         let mut host_deps: BTreeSet<String> = BTreeSet::new();
         for line in messages.lines() {
@@ -274,6 +282,13 @@ impl SdkManifest {
                         .find(|f| f.ends_with(".rmeta"))
                 });
             if let Some(artifact) = artifact {
+                let enabled: BTreeSet<String> = msg["features"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|feature| feature.as_str().map(str::to_string))
+                    .collect();
+                features.insert((name.clone(), version.to_string()), enabled);
                 artifacts.insert((name, version.to_string()), artifact.to_string());
             }
         }
@@ -306,17 +321,34 @@ impl SdkManifest {
 
         write_link_paths(&link_paths_path(&sdk.manifest), &link_paths)?;
         write_lines(&host_deps_path(&sdk.manifest), &host_deps)?;
-        let manifest = Self { artifacts };
+        let manifest = Self {
+            artifacts,
+            features,
+        };
         manifest.write(&sdk.manifest)?;
         Ok(manifest)
     }
 
+    /// Write the manifest to `path` and the recorded features beside it.
     pub fn write(&self, path: &Path) -> Result<(), PlanError> {
         let mut file = std::fs::File::create(path)?;
         for ((name, version), artifact) in &self.artifacts {
             writeln!(file, "{name} {version} {artifact}")?;
         }
-        Ok(())
+        let lines: BTreeSet<String> = self
+            .features
+            .iter()
+            .map(|((name, version), features)| {
+                let features: Vec<&str> = features.iter().map(String::as_str).collect();
+                format!("{name} {version} {}", features.join(","))
+            })
+            .collect();
+        write_lines(&features_path(path), &lines)
+    }
+
+    /// The features the SDK compiled `name` `version` with, if recorded.
+    pub fn features(&self, name: &str, version: &str) -> Option<&BTreeSet<String>> {
+        self.features.get(&(name.to_string(), version.to_string()))
     }
 
     pub fn len(&self) -> usize {
@@ -437,6 +469,7 @@ fn plan_contents(
     let mut contents = Vec::new();
     let mut edges = 0;
     let mut absent: BTreeSet<String> = BTreeSet::new();
+    let local = built_locally(metadata, manifest);
     let empty = Vec::new();
     for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
         let Some(consumer_id) = node["id"].as_str() else {
@@ -460,6 +493,9 @@ fn plan_contents(
             else {
                 continue;
             };
+            if local.contains(pkg_id) {
+                continue;
+            }
             if let Some(artifact) = manifest.artifact(&dep_name, dep_version) {
                 // Key the edge on the consumer's exact version: a graph
                 // can hold two versions of one crate (two `rand`s), each
@@ -500,6 +536,133 @@ fn plan_contents(
         writeln!(contents, "replaced:{name}")?;
     }
     Ok((contents, edges))
+}
+
+/// The repository every crate of Bevy itself names.
+const BEVY_REPOSITORY: &str = "https://github.com/bevyengine/bevy";
+
+/// The packages the project builds itself instead of taking the SDK's
+/// copy, by package id.
+///
+/// The SDK holds each crate with the features the editor needed. A
+/// project can ask one for more: rapier asks `profiling` for
+/// `procmacros`, so a redirect hands it an SDK `profiling` without
+/// `#[profiling::function]` and the compile fails inside rapier. Such a
+/// crate is left to the project's own build, which has the features,
+/// and its consumers link that.
+///
+/// Only where that cannot split a type in two. A Bevy or jackdaw crate
+/// always comes from the SDK, since the editor shares its types with the
+/// game. Any other crate stays redirected when a redirected consumer
+/// that links it also links an SDK crate built on it: that consumer
+/// would see two copies, and the SDK's lacking a feature is the smaller
+/// problem. Shadow consumers compile against the project's copies of
+/// everything, so they see one. An SDK that recorded no features
+/// redirects as before.
+fn built_locally(metadata: &serde_json::Value, manifest: &SdkManifest) -> BTreeSet<String> {
+    let empty = Vec::new();
+    let shared = |package: &serde_json::Value| {
+        package["repository"]
+            .as_str()
+            .is_some_and(|repository| repository.trim_end_matches('/') == BEVY_REPOSITORY)
+            || package["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("jackdaw"))
+    };
+    let mut host_only: BTreeSet<&str> = BTreeSet::new();
+    let mut never_local: BTreeSet<&str> = BTreeSet::new();
+    for package in metadata["packages"].as_array().unwrap_or(&empty) {
+        let Some(id) = package["id"].as_str() else {
+            continue;
+        };
+        if shared(package) {
+            never_local.insert(id);
+        }
+        let proc_macro = package["targets"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .any(|target| {
+                target["kind"]
+                    .as_array()
+                    .unwrap_or(&empty)
+                    .iter()
+                    .any(|kind| kind == "proc-macro")
+            });
+        if proc_macro {
+            host_only.insert(id);
+        }
+    }
+    let covered = |id: &str| {
+        package_id_name(id)
+            .zip(package_id_version(id))
+            .is_some_and(|(name, version)| manifest.artifact(&name, version).is_some())
+    };
+
+    let mut links: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut candidates: Vec<&str> = Vec::new();
+    for node in metadata["resolve"]["nodes"].as_array().unwrap_or(&empty) {
+        let Some(id) = node["id"].as_str() else {
+            continue;
+        };
+        let linked = links.entry(id).or_default();
+        for dep in node["deps"].as_array().unwrap_or(&empty) {
+            let target_side = dep["dep_kinds"]
+                .as_array()
+                .unwrap_or(&empty)
+                .iter()
+                .any(|kind| kind["kind"].is_null());
+            if let Some(pkg) = dep["pkg"].as_str()
+                && target_side
+                && !host_only.contains(pkg)
+            {
+                linked.push(pkg);
+            }
+        }
+        let (Some(name), Some(version)) = (package_id_name(id), package_id_version(id)) else {
+            continue;
+        };
+        let Some(sdk_features) = manifest.features(&name, version) else {
+            continue;
+        };
+        let wanted_more = node["features"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|feature| !sdk_features.contains(feature));
+        if wanted_more && !never_local.contains(id) {
+            candidates.push(id);
+        }
+    }
+
+    let reaches = |from: &str, to: &str| {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut pending = vec![from];
+        while let Some(id) = pending.pop() {
+            if id == to {
+                return true;
+            }
+            if seen.insert(id) {
+                pending.extend(links.get(id).into_iter().flatten().copied());
+            }
+        }
+        false
+    };
+    let shadows = shadow_names(metadata, manifest);
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            !links.iter().any(|(consumer, linked)| {
+                package_id_name(consumer).is_none_or(|name| !shadows.contains(&name))
+                    && linked.contains(candidate)
+                    && linked.iter().any(|other| {
+                        other != candidate && covered(other) && reaches(other, candidate)
+                    })
+            })
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// The packages the wrapper compiles untouched: the crates every
@@ -756,9 +919,20 @@ mod tests {
             ("glam".to_string(), "0.32.1".to_string()),
             "/sdk/deps/libglam-abc.rlib".to_string(),
         );
-        let manifest = SdkManifest { artifacts };
+        let features = BTreeMap::from([(
+            ("glam".to_string(), "0.32.1".to_string()),
+            BTreeSet::from(["std".to_string(), "serde".to_string()]),
+        )]);
+        let manifest = SdkManifest {
+            artifacts,
+            features,
+        };
         manifest.write(&path).unwrap();
         let back = SdkManifest::load(&path).unwrap();
+        assert_eq!(
+            back.features("glam", "0.32.1"),
+            Some(&BTreeSet::from(["serde".to_string(), "std".to_string()]))
+        );
         assert_eq!(
             back.artifact("glam", "0.32.1"),
             Some("/sdk/deps/libglam-abc.rlib")
@@ -838,7 +1012,10 @@ mod tests {
                 )
             })
             .collect();
-        SdkManifest { artifacts }
+        SdkManifest {
+            artifacts,
+            features: BTreeMap::new(),
+        }
     }
 
     fn shadows(metadata: &serde_json::Value, manifest: &SdkManifest) -> Vec<String> {
@@ -1006,6 +1183,129 @@ mod tests {
         let _ = std::fs::remove_dir_all(&deps_dir);
     }
 
+    /// Resolve `features` for package `spec` in `graph`.
+    fn with_features(graph: &mut serde_json::Value, spec: &str, features: &[&str]) {
+        let id = package_id(spec);
+        for node in graph["resolve"]["nodes"].as_array_mut().unwrap() {
+            if node["id"] == id.as_str() {
+                node["features"] = serde_json::json!(features);
+            }
+        }
+    }
+
+    fn sdk_features(manifest: &mut SdkManifest, spec: &str, features: &[&str]) {
+        let (name, version) = spec.split_once('@').unwrap();
+        manifest.features.insert(
+            (name.to_string(), version.to_string()),
+            features.iter().map(ToString::to_string).collect(),
+        );
+    }
+
+    fn local(graph: &serde_json::Value, manifest: &SdkManifest) -> Vec<String> {
+        built_locally(graph, manifest)
+            .iter()
+            .filter_map(|id| package_id_name(id))
+            .collect()
+    }
+
+    /// rapier asks `profiling` for `procmacros`, which the SDK's build
+    /// of it lacks, so rapier links the project's own `profiling`. wgpu
+    /// links it beside `wgpu_core`, which is built on it, but wgpu is a
+    /// shadow and compiles against the project's copies of both.
+    #[test]
+    fn a_crate_wanting_features_the_sdk_lacks_is_built_locally() {
+        let mut graph = metadata(
+            &[
+                ("shim@0.0.0", &["rapier3d@0.36.1", "wgpu@30.0.1"]),
+                ("rapier3d@0.36.1", &["profiling@1.0.18", "log@0.4.28"]),
+                ("wgpu@30.0.1", &["profiling@1.0.18", "wgpu-core@30.0.1"]),
+                ("wgpu-core@30.0.1", &["profiling@1.0.18"]),
+                ("profiling@1.0.18", &[]),
+                ("log@0.4.28", &[]),
+            ],
+            &[],
+        );
+        with_features(&mut graph, "profiling@1.0.18", &["default", "procmacros"]);
+        with_features(&mut graph, "log@0.4.28", &["std"]);
+        let mut manifest = sdk_manifest(&[
+            "profiling@1.0.18",
+            "log@0.4.28",
+            "wgpu@30.0.1",
+            "wgpu_core@30.0.1",
+        ]);
+        sdk_features(&mut manifest, "profiling@1.0.18", &[]);
+        sdk_features(&mut manifest, "log@0.4.28", &["std"]);
+        assert_eq!(local(&graph, &manifest), ["profiling"]);
+
+        let deps_dir =
+            std::env::temp_dir().join(format!("jackdaw_plan_local_{}", std::process::id()));
+        std::fs::create_dir_all(&deps_dir).unwrap();
+        for name in ["profiling", "log", "wgpu", "wgpu_core"] {
+            std::fs::write(deps_dir.join(format!("lib{name}-abc.rlib")), b"rlib").unwrap();
+        }
+        let (contents, _) = plan_contents(&graph, &manifest, &deps_dir).unwrap();
+        let contents = String::from_utf8(contents).unwrap();
+        let _ = std::fs::remove_dir_all(&deps_dir);
+        assert!(contents.contains("rapier3d@0.36.1:log="), "{contents}");
+        assert!(!contents.contains(":profiling="), "{contents}");
+        assert!(contents.contains("replaced:profiling\n"), "{contents}");
+    }
+
+    /// A consumer that links the crate and an SDK crate built on it
+    /// would see two copies, so the crate stays redirected.
+    #[test]
+    fn a_crate_an_sdk_crate_hands_to_the_same_consumer_stays_redirected() {
+        let mut graph = metadata(
+            &[
+                ("shim@0.0.0", &["my-game@0.1.0"]),
+                ("my-game@0.1.0", &["glam@0.33.0", "bevy_math@0.20.0"]),
+                ("bevy_math@0.20.0", &["glam@0.33.0"]),
+                ("glam@0.33.0", &[]),
+            ],
+            &[],
+        );
+        with_features(&mut graph, "glam@0.33.0", &["std", "mint"]);
+        let mut manifest = sdk_manifest(&["glam@0.33.0", "bevy_math@0.20.0"]);
+        sdk_features(&mut manifest, "glam@0.33.0", &["std"]);
+        assert!(local(&graph, &manifest).is_empty());
+    }
+
+    /// The editor shares Bevy's types with the game, so a Bevy crate
+    /// always comes from the SDK, whatever features the game asks for.
+    #[test]
+    fn a_bevy_crate_always_comes_from_the_sdk() {
+        let mut graph = metadata(
+            &[
+                ("shim@0.0.0", &["my-game@0.1.0"]),
+                ("my-game@0.1.0", &["bevy@0.20.0"]),
+                ("bevy@0.20.0", &[]),
+            ],
+            &[],
+        );
+        with_features(&mut graph, "bevy@0.20.0", &["std", "bevy_audio"]);
+        graph["packages"][2]["repository"] = serde_json::json!(BEVY_REPOSITORY);
+        let mut manifest = sdk_manifest(&["bevy@0.20.0"]);
+        sdk_features(&mut manifest, "bevy@0.20.0", &["std"]);
+        assert!(local(&graph, &manifest).is_empty());
+    }
+
+    /// An SDK from before features were recorded redirects every covered
+    /// edge, as it always did.
+    #[test]
+    fn an_sdk_without_recorded_features_redirects_as_before() {
+        let mut graph = metadata(
+            &[
+                ("shim@0.0.0", &["rapier3d@0.36.1"]),
+                ("rapier3d@0.36.1", &["profiling@1.0.18"]),
+                ("profiling@1.0.18", &[]),
+            ],
+            &[],
+        );
+        with_features(&mut graph, "profiling@1.0.18", &["procmacros"]);
+        let manifest = sdk_manifest(&["profiling@1.0.18"]);
+        assert!(local(&graph, &manifest).is_empty());
+    }
+
     /// rustc runs from the shim's directory, so a relative result would
     /// name a file that is not there and fail the compile against a
     /// crate the user never mentioned.
@@ -1128,6 +1428,34 @@ pub fn read_link_paths(manifest: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Where the features each SDK artifact was compiled with sit, beside
+/// the manifest.
+pub fn features_path(manifest: &Path) -> PathBuf {
+    manifest.with_file_name("jackdaw_sdk_features.txt")
+}
+
+/// `name version feature,feature` lines, keyed by name and version.
+/// Absent means an SDK from before features were recorded.
+fn read_features(path: &Path) -> BTreeMap<(String, String), BTreeSet<String>> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, ' ');
+            let (name, version) = (parts.next()?, parts.next()?);
+            let features = parts
+                .next()
+                .unwrap_or_default()
+                .split(',')
+                .filter(|feature| !feature.is_empty())
+                .map(str::to_string)
+                .collect();
+            Some(((name.to_string(), version.to_string()), features))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -444,6 +444,13 @@ fn package(workspace: &Path, out: &Path, artifacts: Option<&Path>) -> Result<Str
         rlibs += 1;
     }
     write(&sdk_out.join("manifest.txt"), &shipped_manifest)?;
+    let features = jackdaw_project_build::plan::features_path(&sdk.manifest);
+    if features.is_file() {
+        copy(
+            &features,
+            &jackdaw_project_build::plan::features_path(&sdk_out.join("manifest.txt")),
+        )?;
+    }
 
     // Every OTHER rlib generation in the deps dir too, beyond the
     // manifest's one-per-crate picks. A target dir that held two
