@@ -1,6 +1,6 @@
 //! Editor extension surfacing Jackdaw's networking proxy components
 //! (`jackdaw_multiplayer::Replication`, `NetworkRoom`) in the inspector. Pure
-//! authoring: no networking runtime, no lightyear dependency.
+//! authoring: no networking runtime.
 
 use jackdaw_api::prelude::{ExtensionContext, ExtensionKind, Icon, JackdawExtension};
 
@@ -30,7 +30,7 @@ impl JackdawExtension for MultiplayerExtension {
     }
     fn description(&self) -> String {
         "Author backend-agnostic networking on entities (Replication, NetworkRoom). \
-         A backend (default: lightyear) translates these to real networking at runtime."
+         The game's networking backend translates these at runtime."
             .to_string()
     }
     fn kind(&self) -> ExtensionKind {

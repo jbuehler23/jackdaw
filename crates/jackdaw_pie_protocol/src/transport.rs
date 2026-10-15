@@ -3,7 +3,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use crate::event::PieChannel;
 
 /// A byte pipe between an editor client and a game server, abstracting the
-/// wire (lightyear, local socket, etc.). The protocol layer serializes
+/// wire (a local socket, an IPC channel). The protocol layer serializes
 /// `PieEvent`s to bytes (`event::to_bytes`) and routes them by channel.
 pub trait PieTransport {
     /// Queue `bytes` for delivery on `channel`.
@@ -17,7 +17,7 @@ pub trait PieTransport {
 }
 
 /// In-process transport pair for tests: whatever one end sends the other
-/// receives. Production code uses the lightyear/socket transports.
+/// receives.
 pub struct LoopbackTransport {
     outgoing: Sender<(PieChannel, Vec<u8>)>,
     incoming: Receiver<(PieChannel, Vec<u8>)>,

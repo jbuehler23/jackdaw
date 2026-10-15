@@ -705,9 +705,9 @@ impl Plugin for ExtensionPlugin {
         // Bundled behind the default-on `multiplayer` feature. Registers the
         // proxy reflection types the networking authoring components need
         // (`Replication`, `NetworkRoom`) plus the user-toggleable networking
-        // extension. No lightyear is compiled into the editor here. Kept a
-        // separate gated `if` so the cfg stays localized off the method chain
-        // above; `ExtensionAppExt` is already in scope from the `use` above.
+        // extension. Kept a separate gated `if` so the cfg stays localized off
+        // the method chain above; `ExtensionAppExt` is already in scope from
+        // the `use` above.
         #[cfg(feature = "multiplayer")]
         if self.enable_builtin_extensiosn {
             app.add_plugins(jackdaw_multiplayer::JackdawMultiplayerTypesPlugin)

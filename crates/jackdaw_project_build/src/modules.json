@@ -51,7 +51,7 @@
         "plugin": "jackdaw_multiplayer::JackdawMultiplayerTypesPlugin"
       }
     ],
-    "provides": ["jackdaw_multiplayer", "lightyear"],
+    "provides": ["jackdaw_multiplayer"],
     "component_prefixes": ["jackdaw_multiplayer"]
   }
 ]

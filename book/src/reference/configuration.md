@@ -195,8 +195,8 @@ features.
 
 - `default = ["multiplayer", "camera_rig", "embed-recipe"]`.
 - `multiplayer`. Bundles the editor-only networking authoring
-  extension. The editor writes replication metadata; no lightyear
-  is compiled into it.
+  extension. The editor writes replication metadata; the game
+  brings its own networking backend.
 - `camera_rig`. The authorable camera-rig components.
 - `dylib`. The SDK-backed extension flow: builds the proxy dylib
   that extension builds link against. On by default in

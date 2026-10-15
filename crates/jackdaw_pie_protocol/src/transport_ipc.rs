@@ -8,7 +8,7 @@
 //! `ipc-channel` is reliable-ordered on every platform, so
 //! [`PieChannel::Unreliable`] frames are
 //! delivered reliably here. The channel tag is preserved so transports that do
-//! distinguish the two (lightyear, raw sockets) can act on it.
+//! distinguish the two can act on it.
 
 use bevy::log::warn;
 use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};

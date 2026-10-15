@@ -1,9 +1,7 @@
 //! Backend-agnostic networking proxy components for Jackdaw scenes.
-//! Authored in the editor; a backend crate (default: `jackdaw_multiplayer_lightyear`)
-//! translates them to real networking components at runtime. These are plain
-//! `Reflect` components with NO component hooks, so they insert cleanly in the
-//! editor (unlike lightyear's `Replicate`, whose `on_insert` hook panics
-//! without the runtime plugins).
+//! Authored in the editor; the game's networking backend translates them to
+//! real networking components at runtime. These are plain `Reflect`
+//! components with no component hooks, so they insert cleanly in the editor.
 
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
@@ -11,8 +9,8 @@ use jackdaw_scene_types::EditorCategory;
 use serde::{Deserialize, Serialize};
 
 /// Backend-agnostic replication intent for an entity. A designer adds this in
-/// the inspector; the active networking backend (e.g. `jackdaw_multiplayer_lightyear`)
-/// reads it at load and inserts the concrete replication component.
+/// the inspector; the game's networking backend reads it at load and inserts
+/// the concrete replication component.
 #[derive(Component, Reflect, Clone, Copy, PartialEq, Debug, Default)]
 #[reflect(Component, Default, @EditorCategory::new("Multiplayer"))]
 pub struct Replication {
@@ -35,7 +33,7 @@ pub enum ReplTarget {
 }
 
 /// A stable zone/room id for interest management. The backend maps this to its
-/// own room/relevance mechanism (lightyear: a `Room` entity + `RoomEvent`).
+/// own room or relevance mechanism.
 #[derive(Component, Reflect, Clone, Default, PartialEq, Debug)]
 #[reflect(Component, Default, @EditorCategory::new("Multiplayer"))]
 pub struct NetworkRoom {

@@ -45,8 +45,8 @@ default = ["multiplayer", "camera_rig", "embed-recipe"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
-# editor authors networking metadata only - no lightyear is compiled
-# into the editor; the lightyear backend lives game-side. On by
+# editor authors networking metadata only; the game brings its own
+# networking backend. On by
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
@@ -110,8 +110,7 @@ jackdaw_animation_runtime.workspace = true
 # Optional, activated by the default-on `multiplayer` feature. Together
 # these bundle the editor-only networking authoring extension (proxy
 # reflection types + the toggleable networking extension) into the
-# editor; no lightyear is compiled into the editor. Gated so
-# `--no-default-features` produces a slimmer build.
+# editor. Gated so `--no-default-features` produces a slimmer build.
 jackdaw_multiplayer = { workspace = true, optional = true }
 jackdaw_multiplayer_editor = { workspace = true, optional = true }
 jackdaw_camera_rig = { workspace = true, optional = true }

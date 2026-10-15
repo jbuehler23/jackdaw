@@ -76,10 +76,6 @@ else in the workspace. The interesting layers:
   editor is a thin adapter over them.
 - `jackdaw_multiplayer`, `jackdaw_multiplayer_editor`: networking
   authoring. The editor writes replication metadata only.
-- `integrations/jackdaw_multiplayer_lightyear`: the game-side
-  lightyear backend. It is its own workspace with its own
-  lockfile, so the editor workspace never resolves lightyear;
-  build it with `--manifest-path`.
 - `jackdaw_localization`: editor string catalogue.
 - `bevy_window_chrome`: custom title bar window chrome for Bevy.
 
@@ -166,5 +162,3 @@ own workspace, so the editor's workspace never resolves them.
   navmesh generator it bakes with, from rerecast's port of Recast. The game
   reads the baked file with `jackdaw_runtime`'s `navmesh` feature and needs
   no crate of its own.
-- `integrations/jackdaw_multiplayer_lightyear`: the lightyear backend for
-  `jackdaw_multiplayer`.

@@ -525,7 +525,7 @@ mod tests {
         let module = |name: &str| catalog.providing_crate(name).map(|m| m.id.as_str());
         assert_eq!(module("avian3d"), Some("physics"));
         assert_eq!(module("rerecast"), Some("navmesh"));
-        assert_eq!(module("lightyear"), Some("multiplayer"));
+        assert_eq!(module("jackdaw_multiplayer"), Some("multiplayer"));
         assert_eq!(module("bevy_hanabi"), None);
     }
 
@@ -562,7 +562,7 @@ mod tests {
             "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
              jackdaw_runtime = { version = \"0.19\", features = [\"navmesh\", \"pie\"] }\n\
              avian3d = \"0.8\"\n\
-             net = { package = \"lightyear\", version = \"0.28\" }\n",
+             net = { package = \"jackdaw_multiplayer\", version = \"0.19\" }\n",
         );
         let game = GameDependencies::read(dir.path(), dir.path());
         assert_eq!(
