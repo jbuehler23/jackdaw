@@ -249,17 +249,30 @@ mod tests {
         paths.iter().map(|path| (*path).to_string()).collect()
     }
 
+    /// A component path in each crate module `id` provides.
+    fn provided_by(id: &str) -> (Vec<String>, Vec<String>) {
+        let module = ModuleCatalog::builtin().get(id).expect("a catalog module");
+        let paths = module
+            .provides
+            .iter()
+            .map(|krate| format!("{krate}::Body"))
+            .collect();
+        (module.provides.clone(), paths)
+    }
+
     #[test]
     fn a_crate_a_module_provides_names_the_module() {
-        let (title, hint) = notice(&set(&[
-            "avian3d::dynamics::rigid_body::RigidBody::Dynamic",
-            "jackdaw_avian_integration::AvianCollider",
-        ]))
-        .expect("a notice");
+        let (crates, paths) = provided_by("physics");
+        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let (title, hint) = notice(&set(&paths)).expect("a notice");
+        let mut crates: Vec<&str> = crates.iter().map(String::as_str).collect();
+        crates.sort_unstable();
         assert_eq!(
             title,
-            "This scene uses components from avian3d and jackdaw_avian_integration, \
-             which are not available."
+            format!(
+                "This scene uses components from {}, which are not available.",
+                join_names(&crates)
+            )
         );
         assert!(hint.starts_with("Enable the Physics module to edit them."));
     }
@@ -276,9 +289,11 @@ mod tests {
 
     #[test]
     fn modules_and_other_crates_together_name_both_remedies() {
+        let (_, navmesh) = provided_by("navmesh");
+        let (_, physics) = provided_by("physics");
         let (_, hint) = notice(&set(&[
-            "rerecast::NavmeshSettings",
-            "avian3d::Collider",
+            navmesh[0].as_str(),
+            physics[0].as_str(),
             "vehicle_tools::Suspension",
         ]))
         .expect("a notice");
@@ -290,13 +305,10 @@ mod tests {
     #[test]
     fn a_variant_card_names_its_enum() {
         assert_eq!(
-            card_name("avian3d::dynamics::rigid_body::RigidBody::Dynamic"),
-            "RigidBody::Dynamic"
+            card_name("vehicle_tools::drive::Drivetrain::Rear"),
+            "Drivetrain::Rear"
         );
-        assert_eq!(
-            card_name("avian3d::dynamics::rigid_body::LinearDamping"),
-            "LinearDamping"
-        );
+        assert_eq!(card_name("vehicle_tools::drive::Suspension"), "Suspension");
         assert_eq!(card_name("Lonely"), "Lonely");
     }
 

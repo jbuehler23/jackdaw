@@ -25,6 +25,7 @@ use jackdaw_feathers::{
     tokens,
 };
 use jackdaw_localization::LocalizedText;
+use jackdaw_project_build::modules::ModuleCatalog;
 use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, CollapsibleSection};
 
 use jackdaw_feathers::text_edit::TextEditValue;
@@ -235,17 +236,18 @@ const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 3] = [
 /// the inspector should offer as a card.
 ///
 /// A namespace cull with two kinds of hole punched in it: the crates whose
-/// components are user-facing wholesale, and the individual scene-data
-/// types in [`SCENE_TYPES_WITH_INSPECTOR_CARDS`].
+/// components are user-facing wholesale, modules' crates among them, and the
+/// individual scene-data types in [`SCENE_TYPES_WITH_INSPECTOR_CARDS`].
 fn hidden_by_namespace(full_path: &str) -> bool {
     full_path.starts_with("jackdaw")
         && !full_path.starts_with("jackdaw_jsn")
         && !full_path.starts_with("jackdaw_geometry")
         && !full_path.starts_with("jackdaw::reference_image")
-        && !full_path.starts_with("jackdaw_avian_integration")
         && !full_path.starts_with("jackdaw_animation")
-        && !full_path.starts_with("jackdaw_multiplayer")
         && !full_path.starts_with("jackdaw_bind::")
+        && ModuleCatalog::builtin()
+            .component_module(full_path)
+            .is_none()
         && !SCENE_TYPES_WITH_INSPECTOR_CARDS.contains(&full_path)
         && !authored_widget_components().contains(&full_path)
 }
@@ -442,8 +444,9 @@ pub(crate) fn build_inspector_displays(
                     && !full_path.starts_with("core")
                     && !full_path.starts_with("std")
                     && (!full_path.starts_with("jackdaw")
-                        || full_path.starts_with("jackdaw_avian_integration")
-                        || full_path.starts_with("jackdaw_multiplayer"));
+                        || ModuleCatalog::builtin()
+                            .component_module(full_path)
+                            .is_some());
                 if !is_user_type
                     && !crate::worn_material::material_component_paths().contains(&full_path)
                     && !authored_type_paths.is_empty()
@@ -1757,10 +1760,9 @@ mod tests {
         assert!(hidden_by_namespace(
             "jackdaw_scene_types::node_id::SceneNodeId"
         ));
-        // The wholesale-allowed crates are untouched by the cull.
-        assert!(!hidden_by_namespace(
-            "jackdaw_avian_integration::AvianCollider"
-        ));
+        // The wholesale-allowed crates are untouched by the cull, modules'
+        // crates among them.
+        assert!(!hidden_by_namespace("jackdaw_multiplayer::Replication"));
         assert!(!hidden_by_namespace(
             "jackdaw_geometry::modifiers::ModifierStack"
         ));

@@ -1654,7 +1654,7 @@ pub(crate) fn apply_json_field_to_ecs(
         // Full component replacement via TypedReflectDeserializer.
         // Always use `insert` (not `apply`)  -- this handles:
         //  - Immutable components like RigidBody (apply panics on immutable)
-        //  - Components removed externally (e.g. avian removing ColliderConstructor)
+        //  - Components removed externally (e.g. a one-shot constructor its plugin consumed)
         //  - Normal mutable components (insert replaces in-place)
         let deserializer =
             bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);

@@ -11,7 +11,7 @@
 //! game binary at Play time.
 //!
 //! Only types the editor does NOT already know natively are kept here.
-//! Native types (bevy, avian, jackdaw) keep their real registrations
+//! Native types (Bevy, modules, jackdaw) keep their real registrations
 //! and their existing real-component handling.
 
 use std::collections::HashMap;

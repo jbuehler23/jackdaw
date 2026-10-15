@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 use jackdaw::inspector::component_picker::{
     PickableComponent, PickerDenylist, enumerate_pickable_components,
-    populate_avian_picker_denylist,
+    populate_module_picker_denylist,
 };
 use jackdaw::project_types::ProjectTypes;
 use jackdaw::type_metadata::{TypeChrome, TypeMeta, TypeMetadata};
@@ -232,13 +232,13 @@ fn non_avian_paths_have_no_category_fallback() {
     assert_eq!(chrome.group("outliner::component_picker::WithDefault"), "");
 }
 
-/// `populate_avian_picker_denylist` hides solver / cache types whatever the
+/// `populate_module_picker_denylist` hides solver / cache types whatever the
 /// registry holds. Asserting against the populated denylist keeps the test
 /// independent of avian being a test dep.
 #[test]
-fn avian_denylist_includes_known_internals() {
+fn module_denylist_includes_known_internals() {
     let mut denylist = PickerDenylist::default();
-    populate_avian_picker_denylist(&mut denylist);
+    populate_module_picker_denylist(&mut denylist);
 
     for path in [
         "avian3d::dynamics::solver::contact::Contact",

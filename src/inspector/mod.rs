@@ -95,7 +95,7 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<unavailable::UnavailableTypes>();
 
         let mut denylist = component_picker::PickerDenylist::default();
-        component_picker::populate_avian_picker_denylist(&mut denylist);
+        component_picker::populate_module_picker_denylist(&mut denylist);
         app.insert_resource(denylist);
         app.add_observer(add_header::on_component_chip_click);
 
@@ -572,10 +572,10 @@ fn flag_inspector_dirty_on_modifier_stack_change(
 
 /// Rebuild the inspector when the displayed entity's archetype changes.
 ///
-/// Some component picks pull in extra components asynchronously (e.g.
-/// `AvianCollider` triggers our `PostUpdate` sync that builds a real
-/// `Collider`, after which avian's own systems insert `Position`,
-/// `Rotation`, `ColliderAabb`, mass aggregates, etc.). Without this
+/// Some component picks pull in extra components asynchronously (e.g. a
+/// collider component an extension turns into a physics engine's own
+/// collider, after which the engine inserts its position, bounds and mass
+/// components). Without this
 /// watcher the panel built by `sync_inspector_to_selection` keeps showing
 /// only the originally-added component until the user reselects.
 ///

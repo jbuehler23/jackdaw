@@ -17,6 +17,19 @@
       }
     ],
     "provides": ["avian3d", "jackdaw_avian_integration"],
+    "component_prefixes": ["avian3d::", "jackdaw_avian_integration::"],
+    "component_group": "Avian3d",
+    "hidden_components": [
+      "avian3d::dynamics::solver::",
+      "avian3d::collider_tree::",
+      "avian3d::ancestor_marker::",
+      "avian3d::dynamics::rigid_body::mass_properties::components::computed::",
+      "avian3d::dynamics::rigid_body::sleeping::SleepTimer",
+      "avian3d::dynamics::rigid_body::sleeping::TimeToSleep",
+      "avian3d::dynamics::integrator::VelocityIntegrationData",
+      "avian3d::dynamics::integrator::IntegrationFlags",
+      "avian3d::collision::collider::constructor::ColliderConstructor"
+    ],
     "extension": "jackdaw.physics",
     "unavailable": "avian has no Bevy 0.20 release yet (avianphysics/avian#1070 ports it)"
   },
@@ -25,7 +38,8 @@
     "name": "Navmesh",
     "description": "Bake a navigation mesh from the terrain and load it with the scene in the game.",
     "runtime_features": ["navmesh"],
-    "provides": ["rerecast", "bevy_rerecast"]
+    "provides": ["rerecast", "bevy_rerecast"],
+    "extension": "jackdaw.navmesh"
   },
   {
     "id": "multiplayer",
@@ -37,6 +51,7 @@
         "plugin": "jackdaw_multiplayer::JackdawMultiplayerTypesPlugin"
       }
     ],
-    "provides": ["jackdaw_multiplayer", "lightyear"]
+    "provides": ["jackdaw_multiplayer", "lightyear"],
+    "component_prefixes": ["jackdaw_multiplayer"]
   }
 ]

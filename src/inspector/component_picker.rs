@@ -14,6 +14,7 @@ use jackdaw_feathers::picker::{
 };
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
+use jackdaw_project_build::modules::ModuleCatalog;
 
 use super::ComponentPicker;
 use crate::project_types::ProjectTypes;
@@ -55,41 +56,19 @@ impl PickerDenylist {
     }
 }
 
-/// Adds the avian internals jackdaw doesn't want users to see in the
-/// picker: solver state, derived mass caches, ancestry book-keeping,
-/// sleep-state timers. The user-facing avian components (`RigidBody`,
-/// `Collider`, `Mass`, joints, etc.) are deliberately left in.
-///
-/// This is a conservative starter list; refinements are welcome.
-pub fn populate_avian_picker_denylist(denylist: &mut PickerDenylist) {
-    // Solver-internal state: contact constraints, islands, solver
-    // bodies, schedule plumbing. None of it is user-authored.
-    denylist.deny_prefix("avian3d::dynamics::solver::");
-    // Internal acceleration structure for collider lookups.
-    denylist.deny_prefix("avian3d::collider_tree::");
-    // Hierarchy book-keeping (`AncestorMarker<...>` instantiations).
-    denylist.deny_prefix("avian3d::ancestor_marker::");
-    // Derived mass / inertia caches recomputed every frame from the
-    // canonical `Mass` / collider density. The `Computed*` shape is
-    // for solver consumption.
-    denylist.deny_prefix("avian3d::dynamics::rigid_body::mass_properties::components::computed::");
-    // Sleep-cycle timers (managed by avian, not the user).
-    denylist
-        .deny_path("avian3d::dynamics::rigid_body::sleeping::SleepTimer")
-        .deny_path("avian3d::dynamics::rigid_body::sleeping::TimeToSleep");
-    // Per-frame integrator scratch state.
-    denylist
-        .deny_path("avian3d::dynamics::integrator::VelocityIntegrationData")
-        .deny_path("avian3d::dynamics::integrator::IntegrationFlags");
-    // Avian's standalone `ColliderConstructor` is a one-shot bundle
-    // consumed by `init_collider_constructors`. Adding it via the
-    // picker on an entity without a `Mesh3d` panics that system.
-    // Users should pick `AvianCollider` (the editor wrapper) instead,
-    // which builds the `Collider` synchronously and handles brushes
-    // / mesh assets. `ColliderConstructorHierarchy` is fine to add
-    // (it descends into children for mesh discovery) and stays
-    // available.
-    denylist.deny_path("avian3d::collision::collider::constructor::ColliderConstructor");
+/// Hides the components each module's catalog entry lists, such as a
+/// physics engine's solver state and derived caches. The components people
+/// author stay in.
+pub fn populate_module_picker_denylist(denylist: &mut PickerDenylist) {
+    for module in ModuleCatalog::builtin().modules() {
+        for hidden in &module.hidden_components {
+            if hidden.ends_with("::") {
+                denylist.deny_prefix(hidden);
+            } else {
+                denylist.deny_path(hidden);
+            }
+        }
+    }
 }
 
 /// Empty group string is the Game section.

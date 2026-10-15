@@ -41,6 +41,19 @@ pub struct ModuleInfo {
     /// Crates whose types the module's editor tooling handles.
     #[serde(default)]
     pub provides: Vec<String>,
+    /// Type path prefixes of the components the module's crates add, which
+    /// the inspector offers as the project's own rather than as editor
+    /// internals.
+    #[serde(default)]
+    pub component_prefixes: Vec<String>,
+    /// The heading the component picker groups those components under,
+    /// instead of their crate's.
+    #[serde(default)]
+    pub component_group: Option<String>,
+    /// Components of the module's crates the picker leaves out, such as a
+    /// solver's own state. An entry ending in `::` hides everything under it.
+    #[serde(default)]
+    pub hidden_components: Vec<String>,
     /// Modules this one needs.
     #[serde(default)]
     pub requires: Vec<String>,
@@ -154,6 +167,16 @@ impl ModuleCatalog {
         self.modules
             .iter()
             .find(|module| module.provides.iter().any(|name| name == crate_name))
+    }
+
+    /// The module whose crates add the component at `type_path`.
+    pub fn component_module(&self, type_path: &str) -> Option<&ModuleInfo> {
+        self.modules.iter().find(|module| {
+            module
+                .component_prefixes
+                .iter()
+                .any(|prefix| type_path.starts_with(prefix.as_str()))
+        })
     }
 
     /// The modules a new game starts with: the default ones a game can use
@@ -464,6 +487,36 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_component_is_traced_to_the_module_whose_crate_adds_it() {
+        let catalog = ModuleCatalog::builtin();
+        let module = |path: &str| catalog.component_module(path).map(|m| m.id.as_str());
+        assert_eq!(
+            module("avian3d::dynamics::rigid_body::RigidBody"),
+            Some("physics")
+        );
+        assert_eq!(
+            module("jackdaw_multiplayer::Replication"),
+            Some("multiplayer")
+        );
+        assert_eq!(module("bevy_transform::components::Transform"), None);
+    }
+
+    /// A module hides only what its own crates add.
+    #[test]
+    fn hidden_components_belong_to_their_module() {
+        let catalog = ModuleCatalog::builtin();
+        for module in catalog.modules() {
+            for hidden in &module.hidden_components {
+                assert_eq!(
+                    catalog.component_module(hidden).map(|m| m.id.as_str()),
+                    Some(module.id.as_str()),
+                    "{hidden}"
+                );
+            }
+        }
     }
 
     #[test]

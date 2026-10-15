@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::reflect::TypeInfo;
+use jackdaw_project_build::modules::ModuleCatalog;
 use jackdaw_runtime::{EditorCategory, EditorDescription, EditorHidden, EditorPreview};
 use serde::{Deserialize, Serialize};
 
@@ -50,15 +51,17 @@ pub struct TypeChrome {
 
 impl TypeChrome {
     /// Grouping key for the picker and inspector card list: authored
-    /// category, else the Bevy crate name / Avian / Jackdaw, else empty (Game).
+    /// category, else the group a module names for its crates' components,
+    /// the Bevy crate name or Jackdaw, else empty (Game).
     pub fn group(&self, type_path: &str) -> String {
         if !self.category.is_empty() {
             return self.category.clone();
         }
-        if type_path.starts_with("avian3d::")
-            || type_path.starts_with("jackdaw_avian_integration::")
+        if let Some(group) = ModuleCatalog::builtin()
+            .component_module(type_path)
+            .and_then(|module| module.component_group.as_ref())
         {
-            "Avian3d".to_string()
+            group.clone()
         } else if type_path.starts_with("bevy") {
             type_path.split("::").next().unwrap_or("bevy").to_string()
         } else if type_path.starts_with("jackdaw") {
@@ -70,7 +73,9 @@ impl TypeChrome {
 }
 
 fn is_game_type(type_path: &str) -> bool {
-    !type_path.starts_with("avian3d::")
+    ModuleCatalog::builtin()
+        .component_module(type_path)
+        .is_none()
         && !type_path.starts_with("bevy")
         && !type_path.starts_with("jackdaw")
 }
@@ -519,12 +524,26 @@ mod tests {
         assert_eq!(chrome.preview, "models/flag.glb");
     }
 
+    /// A component from one of a module's crates, and the group the module
+    /// names for it.
+    fn module_component() -> (String, String) {
+        let module = ModuleCatalog::builtin()
+            .modules()
+            .iter()
+            .find(|module| module.component_group.is_some())
+            .expect("a module names a component group");
+        (
+            format!("{}Body", module.component_prefixes[0]),
+            module.component_group.clone().unwrap_or_default(),
+        )
+    }
+
     #[test]
     fn group_falls_back_from_type_path() {
         let unspecified = TypeChrome::default();
+        let (module_path, module_group) = module_component();
+        assert_eq!(unspecified.group(&module_path), module_group);
         for (path, expected) in [
-            ("avian3d::dynamics::rigid_body::RigidBody", "Avian3d"),
-            ("jackdaw_avian_integration::AvianCollider", "Avian3d"),
             ("bevy_pbr::pbr_material::StandardMaterial", "bevy_pbr"),
             ("bevy::ecs::Name", "bevy"),
             ("jackdaw_scene_types::Brush", "Jackdaw"),
@@ -537,10 +556,7 @@ mod tests {
             category: "Gameplay".into(),
             ..Default::default()
         };
-        assert_eq!(
-            authored.group("avian3d::dynamics::rigid_body::RigidBody"),
-            "Gameplay"
-        );
+        assert_eq!(authored.group(&module_path), "Gameplay");
     }
 
     #[test]
@@ -553,7 +569,7 @@ mod tests {
         );
         assert_eq!(
             group_order("jackdaw_scene_types::Brush", "Mesh"),
-            group_order("avian3d::dynamics::rigid_body::RigidBody", ""),
+            group_order(&module_component().0, ""),
         );
     }
 

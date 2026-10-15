@@ -306,7 +306,7 @@ impl<E: std::fmt::Display> IntoOperatorResult for Result<OperatorResult, E> {
 /// use bevy::prelude::*;
 ///
 /// fn my_button(world: &mut World) {
-///     let result = world.operator("avian.add_rigid_body").call().unwrap();
+///     let result = world.operator("example.add_rigid_body").call().unwrap();
 ///     if !result.is_finished() {
 ///        warn!("heck!");
 ///     }
