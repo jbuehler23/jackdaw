@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use crate::commands::CommandHistory;
 use crate::project::ProjectRoot;
 use crate::terrain::TerrainDataStore;
-use crate::terrain::navmesh_bake::TabNavmesh;
+use jackdaw_api_internal::document::{SceneResource, SceneResourceValue};
 
 pub struct ScenesPlugin;
 
@@ -136,10 +136,9 @@ pub struct SceneTab {
     /// Decoded terrain sidecars owned by this tab while it is inactive.
     /// The active tab's store lives in the world as a resource instead.
     pub terrain_data_store: TerrainDataStore,
-    /// This tab's baked navmesh and any bake still running for it. Held per tab,
-    /// like the terrain data: a bake describes one scene's ground and must not
-    /// follow the editor to another.
-    pub navmesh: TabNavmesh,
+    /// Extensions' [`SceneResource`] values owned by this tab while it is
+    /// inactive, like the terrain data.
+    pub scene_resources: TabResources,
     /// Recorded `CommandHistory.undo_stack.len()` as of the last time
     /// the dirty-tracking system ran (or the tab was activated, or
     /// saved). If the live history is deeper than this, the user has
@@ -186,11 +185,46 @@ impl SceneTab {
             view_state: ViewState::with_default_camera(),
             history: CommandHistory::default(),
             terrain_data_store: TerrainDataStore::default(),
-            navmesh: TabNavmesh::default(),
+            scene_resources: TabResources::default(),
             history_depth_at_last_check: 0,
             refusal: None,
         }
     }
+}
+
+/// Extensions' [`SceneResource`] values, keyed by resource type.
+pub type TabResources = std::collections::HashMap<std::any::TypeId, SceneResourceValue>;
+
+fn scene_resources(world: &mut World) -> Vec<SceneResource> {
+    world
+        .query::<&SceneResource>()
+        .iter(world)
+        .copied()
+        .collect()
+}
+
+/// Take every extension's [`SceneResource`] out of the world, for the tab
+/// going inactive.
+pub(crate) fn take_scene_resources(world: &mut World) -> TabResources {
+    scene_resources(world)
+        .into_iter()
+        .filter_map(|resource| Some((resource.type_id(), resource.take(world)?)))
+        .collect()
+}
+
+/// Put back the values a tab took with it, and the default for any it has
+/// none of.
+pub(crate) fn restore_scene_resources(world: &mut World, mut values: TabResources) {
+    for resource in scene_resources(world) {
+        let value = values.remove(&resource.type_id());
+        resource.restore(world, value);
+    }
+}
+
+/// Reset every extension's [`SceneResource`], for a scene leaving the world
+/// with nowhere to keep it.
+pub(crate) fn reset_scene_resources(world: &mut World) {
+    restore_scene_resources(world, TabResources::default());
 }
 
 /// When `Scenes` mutates, mirror the open-tab paths into the project

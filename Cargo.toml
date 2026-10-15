@@ -41,7 +41,7 @@ default-run = "jackdaw"
 # feature here would leave the installed editor without its required
 # SDK dylib. Release builds explicitly enable `dylib` after staging the
 # matching SDK beside the editor.
-default = ["multiplayer", "camera_rig", "embed-recipe", "navmesh"]
+default = ["multiplayer", "camera_rig", "embed-recipe"]
 # Bundles the editor-only networking authoring extension into the
 # editor: registers the proxy reflection types (`Replication`,
 # `NetworkRoom`) plus the user-toggleable networking extension. The
@@ -50,8 +50,6 @@ default = ["multiplayer", "camera_rig", "embed-recipe", "navmesh"]
 # default; opt out with `--no-default-features` for a slimmer build.
 multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
 camera_rig = ["dep:jackdaw_camera_rig"]
-# The terrain navmesh bake.
-navmesh = ["dep:rerecast"]
 # The SDK-backed extension flow: builds the SDK facade plus separate Bevy
 # and Jackdaw runtime dylibs. The editor and every loaded extension import
 # those same libraries so TypeIds and process-wide registries cross
@@ -159,7 +157,6 @@ jackdaw_input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rfd.workspace = true
-rerecast = { workspace = true, optional = true }
 # Hands the BRP client thread's reply back to the task polling it.
 async-channel = "2"
 base64.workspace = true
@@ -278,8 +275,6 @@ jackdaw_rustc_wrapper = { version = "0.20.0-dev", path = "crates/jackdaw_rustc_w
 jackdaw_cli_internal = { version = "0.20.0-dev", path = "crates/jackdaw_cli" }
 jackdaw_env = { version = "0.20.0-dev", path = "crates/jackdaw_env" }
 rfd = "0.15"
-# rerecast 0.4 is on glam 0.32; this fork branch moves it to glam 0.33.
-rerecast = { version = "0.4.0", git = "https://github.com/jbuehler23/rerecast", rev = "d5c10eff3f9dca404a734a21f05085875e7acf59", default-features = false, features = ["std"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
 dirs = "6"

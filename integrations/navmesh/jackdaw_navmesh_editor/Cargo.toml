@@ -1,0 +1,42 @@
+[package]
+name = "jackdaw_navmesh_editor"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+description = "The Navmesh module's editor tooling: the terrain navmesh bake and its overlay"
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.jackdaw]
+# The editor line this module is built for.
+editor = "0.20"
+
+[dependencies]
+# The editor's Bevy feature set, so this crate and the editor agree on every
+# type they share.
+bevy = { version = "0.20", features = [
+    "bevy_feathers",
+    "bevy_scene",
+    "bevy_dev_tools",
+    "serialize",
+    "debug",
+    "bevy_remote",
+    "file_watcher",
+    "reflect_documentation",
+    "reflect_functions",
+] }
+jackdaw_api = { version = "0.20.0-dev", path = "../../../crates/jackdaw_api" }
+jackdaw_scene_types = { version = "0.20.0-dev", path = "../../../crates/jackdaw_scene_types" }
+jackdaw_terrain = { version = "0.20.0-dev", path = "../../../crates/jackdaw_terrain" }
+jackdaw_navmesh = { workspace = true }
+
+[dev-dependencies]
+# The editor, to host the extension in tests the way a person's editor does.
+jackdaw = { version = "0.20.0-dev", path = "../../.." }
+jackdaw_api_internal = { version = "0.20.0-dev", path = "../../../crates/jackdaw_api_internal" }
+jackdaw_env = { version = "0.20.0-dev", path = "../../../crates/jackdaw_env" }
+jackdaw_feathers = { version = "0.20.0-dev", path = "../../../crates/jackdaw_feathers" }
+jackdaw_project_build = { version = "0.20.0-dev", path = "../../../crates/jackdaw_project_build" }
+
+[lints]
+workspace = true

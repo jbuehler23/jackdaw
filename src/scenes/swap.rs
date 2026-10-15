@@ -121,7 +121,7 @@ pub(crate) fn capture_active_tab(world: &mut World) {
     let terrain_data_store = world
         .get_resource_mut::<crate::terrain::TerrainDataStore>()
         .map(|mut store| std::mem::take(&mut *store));
-    let navmesh = crate::terrain::navmesh_bake::take_from_world(world);
+    let scene_resources = crate::scenes::take_scene_resources(world);
     let mut scenes = world.resource_mut::<Scenes>();
     let tab = &mut scenes.tabs[active];
     tab.view_state = view_state;
@@ -129,16 +129,14 @@ pub(crate) fn capture_active_tab(world: &mut World) {
     if let Some(terrain_data_store) = terrain_data_store {
         tab.terrain_data_store = terrain_data_store;
     }
-    if let Some(navmesh) = navmesh {
-        tab.navmesh = navmesh;
-    }
+    tab.scene_resources = scene_resources;
 }
 
 /// Spawn the target tab's document into the live world and restore per-tab
 /// history and view state.
 pub fn activate_tab(world: &mut World, target: usize) {
     let has_terrain_data_store = world.contains_resource::<crate::terrain::TerrainDataStore>();
-    let (mut content, view_state, history, tab_path, terrain_data_store, navmesh) = {
+    let (mut content, view_state, history, tab_path, terrain_data_store, scene_resources) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];
         (
@@ -147,7 +145,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
             std::mem::take(&mut tab.history),
             tab.path.clone(),
             has_terrain_data_store.then(|| std::mem::take(&mut tab.terrain_data_store)),
-            std::mem::take(&mut tab.navmesh),
+            std::mem::take(&mut tab.scene_resources),
         )
     };
 
@@ -157,8 +155,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
     if let Some(terrain_data_store) = terrain_data_store {
         *world.resource_mut::<crate::terrain::TerrainDataStore>() = terrain_data_store;
     }
-    // The bake taken from that ground, restored with it.
-    crate::terrain::navmesh_bake::install_in_world(world, navmesh);
+    crate::scenes::restore_scene_resources(world, scene_resources);
 
     // Materialize the document to install. For `Prefab` tabs, clone from
     // the cache; for `Scene` tabs, take the captured document (or default).
@@ -315,12 +312,12 @@ pub fn activate_tab(world: &mut World, target: usize) {
             crate::scene_io::SidecarImport::RefreshChanged
         };
         crate::scene_io::import_terrain_sidecars(world, &path.to_string_lossy(), mode);
-        crate::terrain::navmesh_bake::import_beside_scene(world, &path.to_string_lossy());
     }
 
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;
     scenes.tabs[target].history_depth_at_last_check = history_depth;
+    world.trigger(jackdaw_api_internal::document::SceneOpened { path: tab_path });
 }
 
 /// Captures camera transform, edit mode, and selection as scene node ids.

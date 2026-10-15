@@ -17,9 +17,7 @@ use jackdaw_feathers::{
     tokens,
     tooltip::Tooltip,
 };
-use jackdaw_terrain::navmesh::BakeParams;
 
-use super::navmesh_bake::TerrainNavmeshState;
 use super::regions::{RegionVisibility, TerrainRegionView};
 use super::texture_ops::TerrainPaintTargetOp;
 use super::tint_ops::{TerrainPaintTintOp, TerrainTintVariationOp};
@@ -29,6 +27,7 @@ use super::ui_fields::{
 };
 use super::{PaintDomain, TerrainBrushSettings, TerrainEditMode, TerrainPaintState};
 use crate::selection::Selection;
+use jackdaw_api::terrain::TerrainToolOptions;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
@@ -88,11 +87,6 @@ struct RegionGridCheckbox;
 /// [`QuantizationToggleCheckbox`].
 #[derive(Component)]
 struct RestoreAutoCheckbox;
-
-/// Tags the Navmesh bar's overlay checkbox, same reasoning as
-/// [`QuantizationToggleCheckbox`].
-#[derive(Component)]
-struct NavmeshOverlayCheckbox;
 
 /// Tags the Detail bar's erase checkbox, same reasoning as
 /// [`QuantizationToggleCheckbox`].
@@ -162,18 +156,6 @@ enum TextureField {
     DetailOpacity,
 }
 
-/// Tags the Navmesh bar's agent chips. They describe the character a bake is
-/// for, which is authored on the terrain, so they write the scene document
-/// rather than a resource.
-#[derive(Component, Clone, Copy)]
-enum NavmeshField {
-    AgentRadius,
-    AgentHeight,
-    MaxSlope,
-    Climb,
-    MinObstacle,
-}
-
 /// What the bar last rendered, so it rebuilds only on a structural change
 /// (switching tool, terrain or paint target, or the paint channel table
 /// changing shape) and never while a scrub field is being dragged or typed
@@ -185,17 +167,6 @@ struct BarState {
     channel_signature: Option<ChannelSignature>,
     texture_signature: Option<TextureBarSignature>,
     region_signature: Option<RegionBarSignature>,
-    navmesh_signature: Option<NavmeshBarSignature>,
-}
-
-/// What the Navmesh bar shows beyond its chips: the overlay toggle and the line
-/// reporting the last bake, which changes as a bake runs and again when the
-/// ground moves out from under it.
-#[derive(PartialEq, Clone, Debug)]
-struct NavmeshBarSignature {
-    show_overlay: bool,
-    summary: String,
-    agent: jackdaw_scene_types::TerrainNavmesh,
 }
 
 /// What the Regions bar shows: the two view choices and which region is active,
@@ -249,7 +220,6 @@ fn update_options_bar_content(
     store: Res<super::TerrainDataStore>,
     splat: Res<super::splat::TerrainSplatMaterials>,
     region_view: Res<TerrainRegionView>,
-    navmesh: Res<TerrainNavmeshState>,
 ) {
     let terrain_entity = selection.primary().filter(|&e| terrains.contains(e));
     let selected_terrain = terrain_entity.and_then(|e| terrain_data.get(e).ok());
@@ -297,21 +267,12 @@ fn update_options_bar_content(
         active: terrain_entity.and_then(|entity| region_view.active_of(entity)),
     });
 
-    let navmesh_signature = (*edit_mode == TerrainEditMode::Navmesh).then(|| NavmeshBarSignature {
-        show_overlay: navmesh.show_overlay,
-        summary: super::navmesh_bake::summary(&navmesh),
-        agent: selected_terrain
-            .map(|terrain| terrain.navmesh.clone())
-            .unwrap_or_default(),
-    });
-
     let state = BarState {
         terrain_entity,
         mode: edit_mode.clone(),
         channel_signature,
         texture_signature,
         region_signature,
-        navmesh_signature,
     };
     if *local_state == state {
         return;
@@ -404,12 +365,19 @@ fn update_options_bar_content(
                     region_view.active_of(terrain_entity_id),
                 );
             }
-            TerrainEditMode::Navmesh => {
-                let agent = terrain_data
-                    .get(terrain_entity_id)
-                    .map(|t| t.navmesh.clone())
-                    .unwrap_or_default();
-                spawn_navmesh_fields(&mut commands, bar, &navmesh, &agent);
+            TerrainEditMode::Extension(tool) => {
+                commands.spawn((
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        align_items: AlignItems::Center,
+                        column_gap: px(tokens::SPACING_MD),
+                        row_gap: px(tokens::SPACING_XS),
+                        ..default()
+                    },
+                    TerrainToolOptions { tool },
+                    ChildOf(bar),
+                ));
             }
         }
     }
@@ -943,97 +911,6 @@ fn spawn_quantize_fields(
     ));
 }
 
-/// The Navmesh bar: what the agent is, the Bake action, whether the result
-/// draws, and what the last bake produced. An editor built without the
-/// `navmesh` feature has no Bake action.
-///
-/// The agent chips are scene data on the terrain, so they commit like the
-/// quantization chips do: on release, through the document, undoable. The
-/// overlay toggle is view state and leaves no history entry. There is no voxel
-/// size field; the voxel follows the terrain's own cell, and a second size to
-/// keep in step with it could produce a navmesh finer than the heights behind
-/// it.
-fn spawn_navmesh_fields(
-    commands: &mut Commands,
-    parent: Entity,
-    navmesh: &TerrainNavmeshState,
-    agent: &jackdaw_scene_types::TerrainNavmesh,
-) {
-    // Radius reads as continuous and is not: the baker erodes in whole voxels,
-    // using `ceil(radius / voxel)`. At the voxel a kilometre of terrain bakes
-    // at, the whole chip range lands on about six distinct erosions, so
-    // neighbouring values on the chip give the same navmesh.
-    spawn_scrub_chip(
-        commands,
-        parent,
-        "Agent Radius",
-        "How wide the character is. Walkable ground is pulled back this far from every wall",
-        agent.agent_radius,
-        0.05..3.0,
-        FieldKind::Continuous,
-        NavmeshField::AgentRadius,
-    );
-    spawn_scrub_chip(
-        commands,
-        parent,
-        "Agent Height",
-        "How tall the character is. Ground with less headroom than this is not walkable",
-        agent.agent_height,
-        0.5..6.0,
-        FieldKind::Continuous,
-        NavmeshField::AgentHeight,
-    );
-    spawn_scrub_chip(
-        commands,
-        parent,
-        "Max Slope",
-        "Steepest ground the character can stand on, in degrees",
-        agent.max_slope_degrees,
-        0.0..85.0,
-        FieldKind::Continuous,
-        NavmeshField::MaxSlope,
-    );
-    spawn_scrub_chip(
-        commands,
-        parent,
-        "Step Height",
-        "Tallest step the character walks up without leaving the ground. Kerbs and stair \
-         treads under this stay one connected surface",
-        agent.climb,
-        0.0..2.0,
-        FieldKind::Continuous,
-        NavmeshField::Climb,
-    );
-    spawn_scrub_chip(
-        commands,
-        parent,
-        "Min Obstacle",
-        "Smallest scene mesh the bake rasterizes. Below this a piece is decoration the bake \
-         walks over. 0 filters nothing",
-        agent.min_obstacle_size,
-        0.0..2.0,
-        FieldKind::Continuous,
-        NavmeshField::MinObstacle,
-    );
-    #[cfg(feature = "navmesh")]
-    commands.spawn((
-        button::button(
-            ButtonProps::new("Bake Navmesh")
-                .with_variant(ButtonVariant::Primary)
-                .call_operator(super::navmesh_bake::TerrainNavmeshBakeOp::ID),
-        ),
-        ChildOf(parent),
-    ));
-    spawn_checkbox(
-        commands,
-        parent,
-        "Show Navmesh",
-        navmesh.show_overlay,
-        NavmeshOverlayCheckbox,
-    );
-    spawn_hint(commands, parent, &super::navmesh_bake::summary(navmesh));
-}
-
 /// The Paint bar's channel and value tile grids.
 fn spawn_channel_bar(
     commands: &mut Commands,
@@ -1128,7 +1005,7 @@ fn spawn_channel_bar(
 // --- Commits ---
 
 /// Brush fields commit on every event, since they only write a resource.
-/// Quantization and navmesh-agent fields commit only on `is_final`: a commit
+/// Quantization fields commit only on `is_final`: a commit
 /// there syncs the scene document and can flag a full chunk rebuild, which per
 /// drag frame would remesh while dragging and leave a history entry each frame.
 fn on_scrub_value_change(
@@ -1136,7 +1013,6 @@ fn on_scrub_value_change(
     brush_bindings: Query<&BrushField>,
     quant_bindings: Query<&QuantField>,
     texture_bindings: Query<&TextureField>,
-    navmesh_bindings: Query<&NavmeshField>,
     mut brush_settings: ResMut<TerrainBrushSettings>,
     mut paint_state: ResMut<TerrainPaintState>,
     selection: Res<Selection>,
@@ -1175,25 +1051,6 @@ fn on_scrub_value_change(
         }
         return;
     }
-    if let Ok(&field) = navmesh_bindings.get(source) {
-        if !event.is_final {
-            return;
-        }
-        let Some(entity) = selection.primary() else {
-            return;
-        };
-        let value = event.value;
-        commands.queue(move |world: &mut World| {
-            crate::terrain::navmesh_bake::commit_navmesh(world, entity, |agent| match field {
-                NavmeshField::AgentRadius => agent.agent_radius = value.clamp(0.05, 3.0),
-                NavmeshField::AgentHeight => agent.agent_height = value.clamp(0.5, 6.0),
-                NavmeshField::MaxSlope => agent.max_slope_degrees = value.clamp(0.0, 85.0),
-                NavmeshField::Climb => agent.climb = value.clamp(0.0, BakeParams::MAX_CLIMB),
-                NavmeshField::MinObstacle => agent.min_obstacle_size = value.clamp(0.0, 2.0),
-            });
-        });
-        return;
-    }
     if let Ok(&field) = quant_bindings.get(source) {
         if !event.is_final {
             return;
@@ -1223,7 +1080,6 @@ fn on_terrain_checkbox_value_change(
     region_grid: Query<(), With<RegionGridCheckbox>>,
     restore_auto: Query<(), With<RestoreAutoCheckbox>>,
     detail_erase: Query<(), With<DetailEraseCheckbox>>,
-    navmesh_overlay: Query<(), With<NavmeshOverlayCheckbox>>,
     mut commands: Commands,
 ) {
     let target = event.event_target();
@@ -1237,8 +1093,6 @@ fn on_terrain_checkbox_value_change(
         crate::terrain::texture_ops::TerrainPaintRestoreOp::ID
     } else if detail_erase.contains(target) {
         crate::terrain::detail_ops::TerrainDetailPaintOp::ID
-    } else if navmesh_overlay.contains(target) {
-        crate::terrain::navmesh_bake::TerrainNavmeshToggleOverlayOp::ID
     } else {
         return;
     };
@@ -1348,7 +1202,6 @@ mod tests {
             channel_signature: None,
             texture_signature: None,
             region_signature: None,
-            navmesh_signature: None,
         };
         let b = BarState {
             terrain_entity: None,
@@ -1356,7 +1209,6 @@ mod tests {
             channel_signature: None,
             texture_signature: None,
             region_signature: None,
-            navmesh_signature: None,
         };
         assert_ne!(a, b);
     }
@@ -1377,7 +1229,6 @@ mod tests {
                 detail_layer: 0,
             }),
             region_signature: None,
-            navmesh_signature: None,
         }
     }
 
@@ -1392,7 +1243,6 @@ mod tests {
                 visibility,
                 active: None,
             }),
-            navmesh_signature: None,
         }
     }
 

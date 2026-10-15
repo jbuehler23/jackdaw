@@ -26,15 +26,13 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TerrainToolSmoothOp>()
         .register_operator::<TerrainToolNoiseOp>()
         .register_operator::<TerrainToolQuantizeOp>()
-        .register_operator::<TerrainToolNavmeshOp>()
         .register_operator::<TerrainToolExitToSelectOp>()
         .register_operator::<TerrainGenerateOp>()
         .register_operator::<TerrainErodeOp>();
 
-    // Palette shortcuts, Alt+1-9 down the palette's left-to-right,
-    // top-to-bottom order (Raise, Lower, Flatten, Smooth, Noise, Paint,
-    // Quantize, Navmesh, Regions; the last is bound in `regions.rs` beside
-    // its operator). Plain Digit1-4 dispatch mesh edit-mode switches on
+    // Palette shortcuts, Alt+1-7 down the palette's top-to-bottom order
+    // (Raise, Lower, Flatten, Smooth, Noise, Paint, Quantize), and Alt+9 for
+    // Regions, bound in `regions.rs` beside its operator. Plain Digit1-4 dispatch mesh edit-mode switches on
     // this input context (`edit_mode_ops.rs`), so the terrain palette takes
     // the Alt chord rather than colliding with them.
     ctx.bind_operator::<CoreExtensionInputContext, TerrainToolRaiseOp>([PresetInput::key(
@@ -65,24 +63,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         "Digit7",
     )
     .alt()]);
-    ctx.bind_operator::<CoreExtensionInputContext, TerrainToolNavmeshOp>([PresetInput::key(
-        "Digit8",
-    )
-    .alt()]);
     // Esc leaves the active tool for no-tool. Mid-stroke the sculpt/paint
     // modal's cancel binding (Escape) takes precedence: this op's
     // `is_available` refuses to fire while a stroke is in progress.
     ctx.bind_operator::<CoreExtensionInputContext, TerrainToolExitToSelectOp>([PresetInput::key(
         "Escape",
     )]);
-}
-
-fn toggle_to(mode: &mut TerrainEditMode, target: TerrainEditMode) {
-    *mode = if *mode == target {
-        TerrainEditMode::None
-    } else {
-        target
-    };
 }
 
 /// Tool-toggle ops require a terrain to be selected; without one the
@@ -99,7 +85,7 @@ pub(super) fn has_selected_terrain(
 /// a tool is active and no stroke is running, so it does not fight the
 /// modal's stroke-cancel handling. There is no palette button for it: the
 /// main toolbar's Select tool and pressing an active tool's button again
-/// (see `toggle_to`) both leave a terrain tool.
+/// (see `TerrainEditMode::toggle`) both leave a terrain tool.
 #[operator(
     id = "terrain.tool.exit_to_select",
     label = "Exit to Select",
@@ -142,10 +128,7 @@ pub(crate) fn terrain_tool_raise(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(
-        &mut mode,
-        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise),
-    );
+    mode.toggle(TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise));
     OperatorResult::Finished
 }
 
@@ -160,10 +143,7 @@ pub(crate) fn terrain_tool_lower(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(
-        &mut mode,
-        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Lower),
-    );
+    mode.toggle(TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Lower));
     OperatorResult::Finished
 }
 
@@ -178,10 +158,9 @@ pub(crate) fn terrain_tool_flatten(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(
-        &mut mode,
-        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Flatten),
-    );
+    mode.toggle(TerrainEditMode::Sculpt(
+        jackdaw_terrain::SculptTool::Flatten,
+    ));
     OperatorResult::Finished
 }
 
@@ -196,10 +175,7 @@ pub(crate) fn terrain_tool_smooth(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(
-        &mut mode,
-        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Smooth),
-    );
+    mode.toggle(TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Smooth));
     OperatorResult::Finished
 }
 
@@ -214,10 +190,7 @@ pub(crate) fn terrain_tool_noise(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(
-        &mut mode,
-        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Noise),
-    );
+    mode.toggle(TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Noise));
     OperatorResult::Finished
 }
 
@@ -233,23 +206,7 @@ pub(crate) fn terrain_tool_quantize(
     _: In<OperatorParameters>,
     mut mode: ResMut<TerrainEditMode>,
 ) -> OperatorResult {
-    toggle_to(&mut mode, TerrainEditMode::Quantize);
-    OperatorResult::Finished
-}
-
-/// Pick the Navmesh tool, which shows the bake params, the Bake action and
-/// the overlay toggle in the options bar. Claims no viewport input.
-#[operator(
-    id = "terrain.tool.navmesh",
-    label = "Navmesh",
-    description = "Bake a navigation mesh from this terrain.",
-    is_available = has_selected_terrain
-)]
-pub(crate) fn terrain_tool_navmesh(
-    _: In<OperatorParameters>,
-    mut mode: ResMut<TerrainEditMode>,
-) -> OperatorResult {
-    toggle_to(&mut mode, TerrainEditMode::Navmesh);
+    mode.toggle(TerrainEditMode::Quantize);
     OperatorResult::Finished
 }
 

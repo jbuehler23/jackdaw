@@ -1471,7 +1471,7 @@ pub fn wait_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
 
     if params.get("until").and_then(Value::as_str) == Some("idle") {
         let modal = world.run_system_cached(active_modal).unwrap_or(None);
-        // Idle means no build, navmesh bake, or model load is still running. A
+        // Idle means no build, model load or background task is still running. A
         // modal operator is reported rather than waited on, since nothing is
         // going to finish it.
         if editor_is_busy(world) {
@@ -1590,7 +1590,11 @@ fn editor_is_busy(world: &mut World) -> bool {
     building
         || placing
         || refining
-        || crate::terrain::navmesh_bake::bake_in_flight(world)
+        || world
+            .query::<&jackdaw_api_internal::BackgroundTask>()
+            .iter(world)
+            .next()
+            .is_some()
         || scene_is_loading(world)
 }
 

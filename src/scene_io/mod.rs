@@ -3,7 +3,6 @@
 
 use std::any::TypeId;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use bevy::ecs::component::ComponentId;
 use bevy::ecs::reflect::AppTypeRegistry;
@@ -331,36 +330,16 @@ pub fn is_scene_dirty(world: &World) -> bool {
     history.undo_stack.len() != dirty_state.undo_len_at_save
 }
 
-/// Stores the currently active scene file path and metadata.
-#[derive(Resource, Default)]
-pub struct SceneFilePath {
-    pub path: Option<String>,
-    pub metadata: SceneMetadata,
-    pub last_directory: Option<PathBuf>,
-}
+pub use jackdaw_api_internal::document::{SceneFilePath, SceneMetadata};
 
-/// Human-readable metadata for the active scene, tracked live on
-/// [`SceneFilePath`]. Mirrors the fields the legacy JSN scene metadata
-/// carried, decoupled from `jackdaw_jsn` so only the import boundary
-/// (the `From` conversion below) touches that crate.
-#[derive(Clone, Debug, Default)]
-pub struct SceneMetadata {
-    pub name: String,
-    pub description: String,
-    pub author: String,
-    pub created: String,
-    pub modified: String,
-}
-
-impl From<jackdaw_jsn::format::JsnMetadata> for SceneMetadata {
-    fn from(metadata: jackdaw_jsn::format::JsnMetadata) -> Self {
-        Self {
-            name: metadata.name,
-            description: metadata.description,
-            author: metadata.author,
-            created: metadata.created,
-            modified: metadata.modified,
-        }
+/// The metadata a legacy JSN scene carried.
+pub(crate) fn jsn_scene_metadata(metadata: jackdaw_jsn::format::JsnMetadata) -> SceneMetadata {
+    SceneMetadata {
+        name: metadata.name,
+        description: metadata.description,
+        author: metadata.author,
+        created: metadata.created,
+        modified: metadata.modified,
     }
 }
 

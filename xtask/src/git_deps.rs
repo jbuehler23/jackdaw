@@ -39,16 +39,8 @@ pub fn cmd() -> bool {
             }
         };
         for name in git_sources(&table) {
-            let reason = crate::core_deps::exception(&name);
-            eprintln!(
-                "{}{}: {name} comes from git",
-                match reason {
-                    Some(reason) => format!("warning: allowed until it {reason}: "),
-                    None => String::new(),
-                },
-                manifest.display()
-            );
-            ok &= reason.is_some();
+            eprintln!("{}: {name} comes from git", manifest.display());
+            ok = false;
         }
     }
     for module in ModuleCatalog::builtin().modules() {
@@ -62,7 +54,7 @@ pub fn cmd() -> bool {
     }
     if ok {
         eprintln!(
-            "{} manifests and the module catalog take no dependency from git beyond the exceptions",
+            "{} manifests and the module catalog take no dependency from git",
             manifests.len()
         );
     }

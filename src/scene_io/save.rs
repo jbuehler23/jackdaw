@@ -10,37 +10,7 @@ use super::asset_fields::AbsoluteAssetField;
 use super::load::SceneDialogTask;
 use super::{SceneDirtyState, SceneFilePath, doc_skip_type_ids, should_skip_component};
 
-/// Write `contents` to `path` atomically: write to a temp file beside
-/// `path`, then rename over the target. `std::fs::write` truncates the
-/// destination in place, so a crash or a full disk mid-write would leave
-/// a truncated file where the last-known-good copy used to be; a rename
-/// within one directory is a single filesystem operation and cannot
-/// observe a half-written state.
-///
-/// The temp file is created in `path`'s own directory rather than a
-/// system temp dir: a rename across filesystems (e.g. `/tmp` to a
-/// project on another mount) is not atomic and fails outright on most
-/// platforms.
-pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::other(format!("{} has no file name", path.display())))?;
-    let temp_path = parent.join(format!(
-        ".{}.tmp-{}",
-        file_name.to_string_lossy(),
-        std::process::id()
-    ));
-    if let Err(err) = std::fs::write(&temp_path, contents) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(err);
-    }
-    if let Err(err) = std::fs::rename(&temp_path, path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(err);
-    }
-    Ok(())
-}
+pub(crate) use jackdaw_api_internal::document::write_atomic;
 
 /// Write the model settings and prefabs edited along with the scene, and say
 /// which files the save wrote.
@@ -186,15 +156,7 @@ pub fn retarget_active_scene(world: &mut World, path: &str) {
             tab.display_name = display_name;
         }
     }
-    // A rename leaves the ground unchanged, so the bake taken from it follows the new name.
-    // Left pointed at the old file, the check that stops one scene's navmesh landing beside
-    // another's would refuse the next save's artifact write.
-    if let Some(mut state) =
-        world.get_resource_mut::<crate::terrain::navmesh_bake::TerrainNavmeshState>()
-        && let Some(baked) = state.baked.as_mut()
-    {
-        baked.scene = Some(path);
-    }
+    world.trigger(jackdaw_api_internal::document::SceneRenamed { path });
 }
 
 pub fn save_scene_as(world: &mut World) {
@@ -387,9 +349,9 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // write back as an outside edit.
     crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
 
-    // A terrain bake writes its own artifact when it finishes; this covers a scene that has
-    // moved since, keeping the two files named after each other.
-    crate::terrain::navmesh_bake::export_beside_scene(world, &path);
+    world.trigger(jackdaw_api_internal::document::SceneSaved {
+        path: PathBuf::from(&path),
+    });
 
     write_alongside(world, &path)?;
 
@@ -1937,7 +1899,7 @@ mod terrain_sidecar_tests {
     }
 
     /// A scene with no terrain must not litter the project with an empty
-    /// sidecar, exactly as the navmesh writer no-ops when nothing is baked.
+    /// sidecar.
     #[test]
     fn no_sidecar_when_the_scene_has_no_terrain() {
         let tmp = unique_tmp_dir("bare");

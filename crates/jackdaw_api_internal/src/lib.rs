@@ -44,6 +44,7 @@ mod registries;
 pub mod runtime;
 pub mod selection;
 pub mod snapshot;
+pub mod terrain;
 pub mod tools;
 pub mod viewport;
 pub mod widgets;
@@ -138,6 +139,17 @@ pub enum AppState {
 /// Tools that pick or gather scene geometry skip these.
 #[derive(Component, Copy, Clone, Default, Debug)]
 pub struct EditorEntity;
+
+/// Work the editor is still doing off the main thread, such as a bake.
+///
+/// An extension spawns an entity carrying it when the work starts and
+/// despawns it when the work lands. While any exists the editor is not idle,
+/// so a remote `wait` for idle keeps waiting.
+#[derive(Component, Clone, Debug)]
+pub struct BackgroundTask {
+    /// What the work is, as a person would name it.
+    pub label: Cow<'static, str>,
+}
 
 /// Trait implemented by every extension. Declares the extension's name
 /// and registration logic; the framework handles everything else.
@@ -664,6 +676,29 @@ impl<'a> ExtensionContext<'a> {
     /// written to the scene document as if the person had added it.
     pub fn register_brush_default(&mut self, component: impl Reflect) -> &mut Self {
         self.spawn(crate::brush::BrushDefault(Box::new(component)));
+        self
+    }
+
+    /// Add a button for operator `O` to the terrain tool palette. `O` picks
+    /// the tool by setting [`crate::terrain::TerrainEditMode::Extension`] to its own
+    /// id.
+    pub fn register_terrain_tool<O: Operator>(&mut self, icon: lucide_icons::Icon) -> &mut Self {
+        self.spawn(crate::terrain::TerrainTool {
+            operator_id: O::ID,
+            icon,
+        });
+        self
+    }
+
+    /// Initialize resource `R` as one each scene tab keeps its own of; see
+    /// [`crate::document::SceneResource`].
+    pub fn register_scene_resource<
+        R: Resource<Mutability = bevy::ecs::component::Mutable> + Default,
+    >(
+        &mut self,
+    ) -> &mut Self {
+        self.init_resource::<R>();
+        self.spawn(crate::document::SceneResource::of::<R>());
         self
     }
 }

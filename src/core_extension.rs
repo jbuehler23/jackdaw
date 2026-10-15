@@ -310,7 +310,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::terrain::ground::add_to_extension(ctx);
         crate::terrain::import::add_to_extension(ctx);
         crate::terrain::regions::add_to_extension(ctx);
-        crate::terrain::navmesh_bake::add_to_extension(ctx);
         crate::terrain::paint::add_to_extension(ctx);
         crate::terrain::channel_ops::add_to_extension(ctx);
         crate::terrain::quantize_ops::add_to_extension(ctx);

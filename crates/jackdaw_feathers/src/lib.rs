@@ -13,6 +13,7 @@ pub mod inspector_field;
 pub mod list_view;
 pub mod menu_bar;
 pub mod number_input;
+pub mod options_bar;
 pub mod panel_card;
 pub mod panel_section;
 pub mod picker;

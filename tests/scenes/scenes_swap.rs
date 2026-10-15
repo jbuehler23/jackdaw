@@ -965,7 +965,7 @@ fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
         view_state: jackdaw::scenes::ViewState::default(),
         history: jackdaw::commands::CommandHistory::default(),
         terrain_data_store: jackdaw::terrain::TerrainDataStore::default(),
-        navmesh: jackdaw::terrain::navmesh_bake::TabNavmesh::default(),
+        scene_resources: Default::default(),
         history_depth_at_last_check: 0,
         refusal: None,
     };

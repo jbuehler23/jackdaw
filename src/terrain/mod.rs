@@ -7,7 +7,6 @@ pub mod ground;
 pub mod import;
 pub mod inspector;
 pub mod mesh;
-pub mod navmesh_bake;
 pub mod ops;
 pub mod options_bar;
 pub mod paint;
@@ -91,7 +90,6 @@ impl Plugin for TerrainPlugin {
                 scatter::plugin,
                 palette::plugin,
                 regions::plugin,
-                navmesh_bake::plugin,
                 splat::plugin,
                 (
                     import::plugin,
@@ -351,7 +349,8 @@ fn prune_terrain_heightmaps(
 #[require(
     crate::EditorHidden,
     crate::NonSerializable,
-    crate::ViewDependentBounds
+    crate::ViewDependentBounds,
+    jackdaw_scene_types::NavmeshIgnored
 )]
 pub struct TerrainSurface {
     pub terrain_entity: Entity,
@@ -368,52 +367,7 @@ pub struct TerrainDirtyChunks {
 
 // --- Resources ---
 
-/// Current terrain editing mode. `None` is no tool active; `Sculpt` carries the
-/// specific sculpt tool (Raise, Lower, Flatten, Smooth, Noise).
-#[derive(Resource, Default, PartialEq, Eq, Clone, Debug)]
-pub enum TerrainEditMode {
-    #[default]
-    None,
-    Sculpt(jackdaw_terrain::SculptTool),
-    /// Stamping palette values into the active paint channel.
-    Paint,
-    /// Showing the grid-quantization options (cell size, height step, on/off,
-    /// Apply). Claims no viewport input.
-    Quantize,
-    /// Choosing which region is active and how the rest of them draw
-    /// (`regions.rs`). A click picks a region; the terrain is not edited, so
-    /// this claims no brush.
-    Regions,
-    /// Showing the navmesh bake params, the Bake action and the overlay toggle
-    /// (`navmesh_bake.rs`). Claims no viewport input.
-    Navmesh,
-}
-
-impl TerrainEditMode {
-    /// Whether the brush (sculpt or paint) is the active tool and owns viewport
-    /// input: entity click-select, gizmo drag, and Shift+Scroll grid resize all
-    /// defer to it.
-    pub fn brush_active(&self) -> bool {
-        matches!(self, Self::Sculpt(_) | Self::Paint)
-    }
-}
-
-#[cfg(test)]
-mod terrain_edit_mode_tests {
-    use super::*;
-
-    #[test]
-    fn brush_active_covers_both_sculpt_and_paint() {
-        assert!(TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise).brush_active());
-        assert!(TerrainEditMode::Paint.brush_active());
-    }
-
-    #[test]
-    fn brush_active_excludes_quantize_and_none() {
-        assert!(!TerrainEditMode::None.brush_active());
-        assert!(!TerrainEditMode::Quantize.brush_active());
-    }
-}
+pub use jackdaw_api_internal::terrain::TerrainEditMode;
 
 /// Whether a brush-modal stroke (`terrain.sculpt`, `terrain.paint`)
 /// should end this frame.

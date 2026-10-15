@@ -2910,7 +2910,7 @@ fn cleanup_editor(world: &mut World) {
     world.insert_resource(scenes::confirm_dialog::PendingTabClose::default());
     world.remove_resource::<project_select::PendingSceneOpens>();
     world.insert_resource(terrain::TerrainDataStore::default());
-    terrain::navmesh_bake::forget_scene_navmesh(world);
+    scenes::reset_scene_resources(world);
     world.insert_resource(brush::BrushSelection::default());
 
     // 6. Remove project root

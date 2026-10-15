@@ -46,11 +46,7 @@ pub fn catalog_has_module(
     {
         return catalog.is_some_and(|catalog| catalog.contains(extension));
     }
-    const BUILT: [(&str, bool); 2] = [
-        ("navmesh", cfg!(feature = "navmesh")),
-        ("multiplayer", cfg!(feature = "multiplayer")),
-    ];
-    BUILT.iter().any(|(module, built)| *module == id && *built)
+    id == "multiplayer" && cfg!(feature = "multiplayer")
 }
 
 /// The modules the project at `root` uses that this editor does not include.

@@ -388,7 +388,7 @@ fn converting_a_document_a_tab_has_open_is_refused() {
             view_state: jackdaw::scenes::ViewState::default(),
             history: jackdaw::commands::CommandHistory::default(),
             terrain_data_store: jackdaw::terrain::TerrainDataStore::default(),
-            navmesh: jackdaw::terrain::navmesh_bake::TabNavmesh::default(),
+            scene_resources: Default::default(),
             history_depth_at_last_check: 0,
             refusal: None,
         });

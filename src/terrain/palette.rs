@@ -1,10 +1,10 @@
 //! The vertical tool palette overlaid on the viewport's left edge.
 //!
 //! One button per operation (Raise, Lower, Flatten, Smooth, Noise, Paint,
-//! Quantize, Navmesh, Regions), visible only while a Terrain entity is
-//! selected. There is no Select entry: the viewport's main-toolbar Select tool
+//! Quantize, Regions), then one per tool an extension added, visible only
+//! while a Terrain entity is selected. There is no Select entry: the viewport's main-toolbar Select tool
 //! covers leaving a terrain tool, and pressing an active tool's own button
-//! again puts it away (see `toggle_to` in `ops.rs`).
+//! again puts it away (see `TerrainEditMode::toggle`).
 //!
 //! `jackdaw_panels::area::DefaultArea` has no anchor for pinning to the edge of
 //! another panel's content (only Left/Center/BottomDock/`RightSidebar`), so
@@ -22,14 +22,15 @@ use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSourceTemplate};
 use jackdaw_api::prelude::*;
+use jackdaw_api::terrain::TerrainTool;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::icons::{Icon, font_paths};
 use jackdaw_feathers::tokens;
 
 use super::TerrainEditMode;
 use super::ops::{
-    TerrainToolFlattenOp, TerrainToolLowerOp, TerrainToolNavmeshOp, TerrainToolNoiseOp,
-    TerrainToolQuantizeOp, TerrainToolRaiseOp, TerrainToolSmoothOp,
+    TerrainToolFlattenOp, TerrainToolLowerOp, TerrainToolNoiseOp, TerrainToolQuantizeOp,
+    TerrainToolRaiseOp, TerrainToolSmoothOp,
 };
 use super::paint::TerrainToolPaintOp;
 use super::regions::TerrainToolRegionsOp;
@@ -39,7 +40,7 @@ use crate::selection::Selection;
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        toggle_palette_visibility.run_if(in_state(crate::AppState::Editor)),
+        (toggle_palette_visibility, sync_extension_tools).run_if(in_state(crate::AppState::Editor)),
     )
     .add_observer(update_terrain_palette_highlights);
 }
@@ -113,8 +114,6 @@ pub fn terrain_palette() -> impl Scene {
             --
             @palette_button(TerrainToolQuantizeOp::ID, Icon::Grid3x3)
             --
-            @palette_button(TerrainToolNavmeshOp::ID, Icon::Waypoints)
-            --
             @palette_button(TerrainToolRegionsOp::ID, Icon::Grid2x2)
         ]
     }
@@ -162,6 +161,50 @@ fn toggle_palette_visibility(
     }
 }
 
+/// A palette button spawned for an extension's [`TerrainTool`].
+#[derive(Component)]
+struct ExtensionToolButton;
+
+/// Rebuild the extension tools at the end of the palette whenever an
+/// extension adds or removes one, and put away a tool whose extension has
+/// gone.
+fn sync_extension_tools(
+    added: Query<(), Added<TerrainTool>>,
+    mut removed: RemovedComponents<TerrainTool>,
+    added_palettes: Query<(), Added<TerrainPalette>>,
+    tools: Query<(Entity, &TerrainTool)>,
+    palettes: Query<Entity, With<TerrainPalette>>,
+    buttons: Query<Entity, With<ExtensionToolButton>>,
+    mut edit_mode: ResMut<TerrainEditMode>,
+    mut commands: Commands,
+) {
+    let removed = removed.read().count() > 0;
+    if added.is_empty() && added_palettes.is_empty() && !removed {
+        return;
+    }
+    for button in &buttons {
+        commands.entity(button).despawn();
+    }
+    let mut ordered: Vec<(Entity, TerrainTool)> = tools
+        .iter()
+        .map(|(entity, tool)| (entity, tool.clone()))
+        .collect();
+    ordered.sort_by_key(|(entity, _)| *entity);
+    if let TerrainEditMode::Extension(id) = *edit_mode
+        && !ordered.iter().any(|(_, tool)| tool.operator_id == id)
+    {
+        *edit_mode = TerrainEditMode::None;
+    }
+    for palette in &palettes {
+        for (_, tool) in &ordered {
+            commands
+                .spawn_scene(palette_button(tool.operator_id, tool.icon))
+                .insert((ExtensionToolButton, ChildOf(palette)));
+        }
+    }
+    commands.trigger(RefreshOperatorButtons);
+}
+
 /// Highlights the active palette entry by flipping its [`ButtonVariant`] to
 /// `Primary`. Entries are identified by operator id, ids this palette does not
 /// own are skipped, and it reruns off [`RefreshOperatorButtons`] so a
@@ -169,10 +212,19 @@ fn toggle_palette_visibility(
 fn update_terrain_palette_highlights(
     _: On<RefreshOperatorButtons>,
     edit_mode: Res<TerrainEditMode>,
-    mut buttons: Query<(&ButtonOperatorCall, &mut ButtonVariant)>,
+    mut buttons: Query<(
+        &ButtonOperatorCall,
+        &mut ButtonVariant,
+        Has<ExtensionToolButton>,
+    )>,
 ) {
-    for (call, mut variant) in &mut buttons {
-        let Some(active) = palette_entry_active(&edit_mode, call.id.as_ref()) else {
+    for (call, mut variant, extension) in &mut buttons {
+        let active = if extension {
+            Some(matches!(*edit_mode, TerrainEditMode::Extension(id) if id == call.id))
+        } else {
+            palette_entry_active(&edit_mode, call.id.as_ref())
+        };
+        let Some(active) = active else {
             continue;
         };
         let target = if active {
@@ -210,8 +262,6 @@ fn palette_entry_active(mode: &TerrainEditMode, op_id: &str) -> Option<bool> {
         Some(*mode == TerrainEditMode::Quantize)
     } else if op_id == TerrainToolRegionsOp::ID {
         Some(*mode == TerrainEditMode::Regions)
-    } else if op_id == TerrainToolNavmeshOp::ID {
-        Some(*mode == TerrainEditMode::Navmesh)
     } else {
         None
     }
@@ -275,22 +325,6 @@ mod tests {
         );
         assert_eq!(
             palette_entry_active(&TerrainEditMode::Regions, TerrainToolPaintOp::ID),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn the_navmesh_entry_highlights_only_in_its_own_mode() {
-        assert_eq!(
-            palette_entry_active(&TerrainEditMode::Navmesh, TerrainToolNavmeshOp::ID),
-            Some(true)
-        );
-        assert_eq!(
-            palette_entry_active(&TerrainEditMode::None, TerrainToolNavmeshOp::ID),
-            Some(false)
-        );
-        assert_eq!(
-            palette_entry_active(&TerrainEditMode::Quantize, TerrainToolNavmeshOp::ID),
             Some(false)
         );
     }

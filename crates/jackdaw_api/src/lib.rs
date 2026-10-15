@@ -36,7 +36,9 @@
 //! | A tool with a toolbar button and a status line | [`tools`] |
 //! | When brushes rebuild, and the components new brushes start with | [`brush`] |
 //! | Toggles in an inspector category's header | [`inspector`] |
-//! | What the open scene has authored | [`document`] |
+//! | Terrain data, and tools in the terrain palette | [`terrain`] |
+//! | What the open scene has authored, and its file | [`document`] |
+//! | Work the editor waits on before it is idle | [`BackgroundTask`] |
 //! | Several operator calls as one undo step | [`op::with_history_span`] |
 //! | Whether a project is open | [`AppState`] |
 //!
@@ -70,7 +72,7 @@ pub use jackdaw_api_internal::{
 
 pub use jackdaw_api_internal::lifecycle::ExtensionKind;
 
-pub use jackdaw_api_internal::{AppState, EditorEntity};
+pub use jackdaw_api_internal::{AppState, BackgroundTask, EditorEntity};
 
 /// The editor's selection. Read [`Selection`](selection::Selection) or query
 /// [`Selected`](selection::Selected), observe `On<Add, Selected>` and
@@ -101,9 +103,20 @@ pub mod brush {
     pub use jackdaw_api_internal::brush::{BrushDefault, BrushSystems};
 }
 
-/// The open scene as authored, as opposed to what is derived at runtime.
+/// The open scene: what it authored, as opposed to what is derived at
+/// runtime, and the file it lives in.
 pub mod document {
-    pub use jackdaw_api_internal::document::SceneDocument;
+    pub use jackdaw_api_internal::document::{
+        SceneDocument, SceneFilePath, SceneMetadata, SceneOpened, SceneRenamed, SceneResource,
+        SceneSaved, write_atomic,
+    };
+}
+
+/// The open scene's terrain data, and tools in the terrain tool palette.
+pub mod terrain {
+    pub use jackdaw_api_internal::terrain::{
+        TerrainDataStore, TerrainEditMode, TerrainTool, TerrainToolOptions,
+    };
 }
 
 /// Maps component type paths to the icon the outliner shows for entities
@@ -182,9 +195,13 @@ pub mod scene {
 /// deliberately small.
 pub mod ui {
     pub use jackdaw_feathers::button::{
-        ButtonProps, button, operator_button, operator_button_variant,
+        ButtonProps, ButtonVariant, button, operator_button, operator_button_variant,
     };
     pub use jackdaw_feathers::icons::Icon;
+
+    /// Fields for a tool's row on the options bar above the viewport.
+    pub use jackdaw_feathers::options_bar::{spawn_checkbox, spawn_hint, spawn_scrub_chip};
+    pub use jackdaw_feathers::slider_row::FieldKind;
 
     /// Radial (pie) quick-menu widget. Open a ring of [`RadialMenuItem`]s at
     /// a screen anchor with [`open_radial_menu`], let the highlight follow the

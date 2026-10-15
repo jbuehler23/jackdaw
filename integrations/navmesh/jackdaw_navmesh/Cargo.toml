@@ -1,0 +1,21 @@
+[package]
+name = "jackdaw_navmesh"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+description = "Navigation mesh generation, from rerecast's Rust port of Recast"
+authors = ["Jan Hohenheim <jan@hohenheim.ch>"]
+license = "MIT OR Apache-2.0"
+repository.workspace = true
+
+[dependencies]
+anyhow = "1"
+bitflags = "2"
+glam = "0.33"
+slotmap = "1"
+thiserror = "2"
+tracing = "0.1"
+
+# Recast's functions take many parameters.
+[lints.clippy]
+too_many_arguments = "allow"

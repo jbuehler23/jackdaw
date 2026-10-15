@@ -7,17 +7,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::{Command, Stdio};
 
-/// Third-party Bevy crates the core still depends on, each with why it is
-/// allowed for now. Each is to be removed.
-const EXCEPTIONS: [(&str, &str); 1] = [("rerecast", "moves to the Navmesh module")];
-
-pub fn exception(dependency: &str) -> Option<&'static str> {
-    EXCEPTIONS
-        .iter()
-        .find(|(name, _)| *name == dependency)
-        .map(|(_, reason)| *reason)
-}
-
 /// The repository every crate of Bevy itself names.
 const BEVY_REPOSITORY: &str = "https://github.com/bevyengine/bevy";
 
@@ -52,16 +41,9 @@ pub fn cmd() -> bool {
         }
     };
     let violations = violations(&metadata);
-    let mut ok = true;
     for (dependency, violation) in &violations {
-        let reason = exception(dependency);
-        let excepted = reason.is_some();
         eprintln!(
-            "{}{dependency} depends on Bevy through {}, and core crates use it: {}",
-            match reason {
-                Some(reason) => format!("warning: allowed until it {reason}: "),
-                None => String::new(),
-            },
+            "{dependency} depends on Bevy through {}, and core crates use it: {}",
             violation.path.join(" -> "),
             violation
                 .users
@@ -70,18 +52,11 @@ pub fn cmd() -> bool {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        ok &= excepted;
     }
-    for (exception, _) in EXCEPTIONS {
-        if !violations.contains_key(exception) {
-            eprintln!("{exception} is no longer used by the core; drop it from the exceptions");
-            ok = false;
-        }
+    if violations.is_empty() {
+        eprintln!("the core crates depend on no third-party Bevy crate");
     }
-    if ok {
-        eprintln!("the core crates depend on no third-party Bevy crate beyond the exceptions");
-    }
-    ok
+    violations.is_empty()
 }
 
 /// A third-party crate that brings Bevy into the core.

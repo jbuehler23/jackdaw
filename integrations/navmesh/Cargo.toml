@@ -1,0 +1,62 @@
+# The Navmesh module: baking a navigation mesh from the terrain in the
+# editor. Its own workspace, like the other modules; the jackdaw crates it
+# uses come from the main workspace by path.
+[workspace]
+resolver = "3"
+members = ["jackdaw_navmesh", "jackdaw_navmesh_editor"]
+
+[workspace.package]
+version = "0.20.0-dev"
+rust-version = "1.97.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[workspace.dependencies]
+jackdaw_navmesh = { version = "0.20.0-dev", path = "jackdaw_navmesh" }
+
+[workspace.lints.clippy]
+doc_markdown = "warn"
+
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+type_complexity = "allow"
+unwrap_or_default = "warn"
+disallowed_methods = "warn"
+needless_lifetimes = "allow"
+too_many_arguments = "allow"
+nonstandard_macro_braces = "warn"
+print_stdout = "warn"
+
+ptr_as_ptr = "warn"
+ptr_cast_constness = "warn"
+ref_as_ptr = "warn"
+
+# see: https://github.com/bevyengine/bevy/pull/15375#issuecomment-2366966219
+too_long_first_doc_paragraph = "allow"
+
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+match_same_arms = "warn"
+manual_let_else = "warn"
+print_stderr = "warn"
+redundant_closure_for_method_calls = "warn"
+
+# TODO: enable these if you have time!
+# undocumented_unsafe_blocks = "warn"
+
+# The editor workspace's dev profile, so the two share built dependencies.
+[profile.dev]
+opt-level = 1
+lto = "off"
+incremental = false
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.wgpu-types]
+debug-assertions = false
+
+[profile.dev.package.bevy_ptr]
+debug-assertions = false

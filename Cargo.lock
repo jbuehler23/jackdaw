@@ -4316,7 +4316,6 @@ dependencies = [
  "path-slash",
  "pathdiff",
  "regex",
- "rerecast",
  "rfd",
  "serde",
  "serde_json",
@@ -4383,6 +4382,7 @@ dependencies = [
  "jackdaw_input",
  "jackdaw_panels",
  "jackdaw_scene_types",
+ "jackdaw_terrain",
  "lucide-icons",
  "serde",
  "serde_json",
@@ -6737,20 +6737,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "rerecast"
-version = "0.4.0"
-source = "git+https://github.com/jbuehler23/rerecast?rev=d5c10eff3f9dca404a734a21f05085875e7acf59#d5c10eff3f9dca404a734a21f05085875e7acf59"
-dependencies = [
- "anyhow",
- "bevy_reflect",
- "bitflags 2.13.1",
- "glam",
- "slotmap",
- "thiserror 2.0.20",
- "tracing",
 ]
 
 [[package]]

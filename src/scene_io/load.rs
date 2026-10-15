@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::{
     ecs::reflect::AppTypeRegistry,
@@ -416,7 +416,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
 
             // Restore metadata
             let mut scene_path = world.resource_mut::<SceneFilePath>();
-            scene_path.metadata = jsn.metadata.into();
+            scene_path.metadata = super::jsn_scene_metadata(jsn.metadata);
         }
     }
 
@@ -424,14 +424,11 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
     // explicit load means disk is the truth, so this overwrites whatever
     // the store held for these paths.
     import_terrain_sidecars(world, &path, SidecarImport::Reload);
-    // The navmesh baked from that ground lives beside it; reading it back lets the options
-    // bar distinguish a never-baked terrain from a baked one.
-    crate::terrain::navmesh_bake::import_beside_scene(world, &path);
 
     if let Some(hash) = loaded_hash {
         crate::scenes::external_watch::note_known_hash(world, Path::new(&path), hash);
     }
-    world.resource_mut::<SceneFilePath>().path = Some(path);
+    world.resource_mut::<SceneFilePath>().path = Some(path.clone());
 
     // A UI root authored before roots stated a size shrinks to fit its
     // content, and every placement then resolves against that box.
@@ -442,6 +439,9 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
     if let Some(upgrade) = pending_upgrade {
         crate::lod_upgrade::finish_upgrade(world, upgrade);
     }
+    world.trigger(jackdaw_api_internal::document::SceneOpened {
+        path: Some(PathBuf::from(path)),
+    });
 
     LoadOutcome::Loaded
 }
@@ -830,10 +830,9 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
         world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
     }
 
-    // The baked navmesh belongs to the scene being cleared, not to the tab it was in. A tab
-    // switch has stashed it by the time this runs (`capture_active_tab`), so only a bake
-    // whose scene is going away is dropped here.
-    crate::terrain::navmesh_bake::forget_scene_navmesh(world);
+    // Extensions' per-scene state belongs to the scene being cleared, not to the tab it was
+    // in. A tab switch has stashed it by the time this runs (`capture_active_tab`).
+    crate::scenes::reset_scene_resources(world);
 
     world
         .resource_mut::<crate::selection::Selection>()

@@ -14,7 +14,7 @@ use jackdaw::viewport_host::{ViewportMode, set_viewport_mode};
 use jackdaw_feathers::button::ButtonOperatorCall;
 
 /// Operator ids the terrain palette's buttons carry, one per entry.
-const PALETTE_OP_IDS: [&str; 9] = [
+const PALETTE_OP_IDS: [&str; 8] = [
     "terrain.tool.raise",
     "terrain.tool.lower",
     "terrain.tool.flatten",
@@ -22,7 +22,6 @@ const PALETTE_OP_IDS: [&str; 9] = [
     "terrain.tool.noise",
     "terrain.tool.paint",
     "terrain.tool.quantize",
-    "terrain.tool.navmesh",
     "terrain.tool.regions",
 ];
 

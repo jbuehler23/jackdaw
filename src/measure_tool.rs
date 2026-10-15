@@ -209,8 +209,8 @@ fn confirm_measure_distance(
 /// The nearest scene geometry under `ray`.
 ///
 /// Editor entities are filtered out: the tool reports distances in the authored
-/// world, and the editor draws meshes into it that are not part of it. The
-/// navmesh overlay is a sheet floating above the ground it describes, so
+/// world, and the editor draws meshes into it that are not part of it. An
+/// overlay such as a baked navmesh floats above the ground it describes, so
 /// measuring against it would answer with the drawing rather than the terrain.
 fn raycast_closest_point(
     ray: Ray3d,

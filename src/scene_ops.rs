@@ -38,7 +38,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 )]
 pub fn scene_save(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     // A named destination stands in for the Save As dialog. It renames the tab first, so
-    // everything the save writes beside the scene (terrain sidecars, the baked navmesh)
+    // everything the save writes beside the scene (terrain sidecars, extensions' files)
     // lands beside the new name.
     let path = params
         .as_str("path")

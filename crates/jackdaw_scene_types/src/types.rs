@@ -1425,7 +1425,8 @@ pub struct NavmeshExclude;
 
 /// An entity the navmesh bake leaves out because it is not ground in the
 /// running game: a body the simulation moves, or a trigger volume nothing
-/// stands on.
+/// stands on. A terrain's surface meshes carry it too, since the bake reads
+/// the terrain from its heights.
 ///
 /// The derived counterpart of [`NavmeshExclude`]. Tools that know an
 /// entity moves add it at runtime; it is not reflected, so it is never

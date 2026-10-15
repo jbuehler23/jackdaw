@@ -101,11 +101,6 @@ pub const TERRAIN_SCULPT_GIZMO: Color = Color::srgb(1.0, 0.8, 0.2);
 pub const TERRAIN_REGION_GRID: Color = Color::srgba(0.85, 0.87, 0.92, 0.6);
 /// The active region's border: the editor's accent, matching a selected tab.
 pub const TERRAIN_REGION_ACTIVE: Color = jackdaw_feathers::tokens::ACCENT_BLUE;
-/// Outlines of the baked navmesh's walkable polygons.
-pub const TERRAIN_NAVMESH_OVERLAY: Color = Color::srgba(0.35, 0.85, 0.45, 0.85);
-/// The same outlines once the heights beneath them have changed: amber, the
-/// editor's colour for a value that does not match its source.
-pub const TERRAIN_NAVMESH_STALE: Color = Color::srgba(0.95, 0.70, 0.25, 0.85);
 
 // -- Material preview --
 pub const MATERIAL_PREVIEW_BG: Color = Color::srgba(0.15, 0.15, 0.15, 1.0);
