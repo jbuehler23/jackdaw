@@ -8,9 +8,7 @@
     "crates": [
       {
         "name": "avian3d",
-        "version": "0.8.0-dev",
-        "git": "https://github.com/jbuehler23/avian",
-        "rev": "252aac4973a35e2a9de9d33c3614426326b59bbf",
+        "version": "0.8",
         "plugin": "avian3d::prelude::PhysicsPlugins::default()"
       },
       {
@@ -20,7 +18,7 @@
     ],
     "provides": ["avian3d", "jackdaw_avian_integration"],
     "extension": "jackdaw.physics",
-    "unavailable": "avian has no release for Bevy 0.20 yet"
+    "unavailable": "avian has no Bevy 0.20 release yet (avianphysics/avian#1070 ports it)"
   },
   {
     "id": "navmesh",

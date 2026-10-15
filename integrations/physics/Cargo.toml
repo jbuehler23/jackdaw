@@ -14,10 +14,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [workspace.dependencies]
-# avian has no Bevy 0.20 release yet; this pins a fork branch carrying its
-# open Bevy 0.20 port, with bevy_heavy, bevy_transform_interpolation and
-# glam_matrix_extras forked alongside it.
-avian3d = { version = "0.8.0-dev", git = "https://github.com/jbuehler23/avian", rev = "252aac4973a35e2a9de9d33c3614426326b59bbf", features = [
+# The avian release for Bevy 0.20. Until it is out this workspace does not
+# resolve, and the members say so in `package.metadata.jackdaw.unavailable`.
+avian3d = { version = "0.8", features = [
     "3d",
     "parry-f32",
     "collider-from-mesh",

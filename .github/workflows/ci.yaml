@@ -540,41 +540,65 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Each member names why it cannot build in
+      # `package.metadata.jackdaw.unavailable`; the job reports that as a
+      # warning instead of building the module.
+      - name: Read availability
+        id: availability
+        run: |
+          reason=$(python3 -c 'import sys, tomllib; print(next(filter(None, (tomllib.load(open(path, "rb"))["package"].get("metadata", {}).get("jackdaw", {}).get("unavailable", "") for path in sys.argv[1:])), ""))' integrations/physics/*/Cargo.toml)
+          if [ -n "$reason" ]; then
+            echo "::warning title=Physics module unavailable::$reason"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Rust toolchain
+        if: steps.availability.outputs.available == 'true'
         uses: dtolnay/rust-toolchain@master
         with:
           components: clippy, rustfmt
           toolchain: ${{ env.toolchain }}
 
       - name: Activate CI cargo config
+        if: steps.availability.outputs.available == 'true'
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
       - name: Install cargo binstall
+        if: steps.availability.outputs.available == 'true'
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
+        if: steps.availability.outputs.available == 'true'
         run: cargo binstall wild-linker --locked --force
 
       - name: Install cargo-nextest
+        if: steps.availability.outputs.available == 'true'
         uses: taiki-e/install-action@nextest
 
       - name: Install dependencies
+        if: steps.availability.outputs.available == 'true'
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
         timeout-minutes: 10
 
       - name: Populate target directory from cache
+        if: steps.availability.outputs.available == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: integrations/physics
 
       - name: Run cargo fmt
+        if: steps.availability.outputs.available == 'true'
         run: cargo fmt --manifest-path "$MANIFEST" --all -- --check
 
       - name: Run clippy lints
+        if: steps.availability.outputs.available == 'true'
         run: cargo clippy --locked --manifest-path "$MANIFEST" --workspace --all-targets -- --deny warnings
 
       - name: Run tests
+        if: steps.availability.outputs.available == 'true'
         run: cargo nextest run --locked --manifest-path "$MANIFEST" --workspace
 
   # Check formatting.

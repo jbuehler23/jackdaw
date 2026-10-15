@@ -1922,7 +1922,7 @@ fn add_module_crates(
     for module in enabled_modules(modules) {
         if let Some(reason) = &module.unavailable {
             notes.push(format!(
-                "{} is not available on this editor line, so none of its crates were added: {reason}.",
+                "{} is not compatible with this editor line, so none of its crates were added: {reason}.",
                 module.name
             ));
             continue;

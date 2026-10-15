@@ -318,12 +318,19 @@ fn modules(
             let included = crate::module_picker::catalog_has_module(catalog, &module.id);
             let call = ButtonOperatorCall::new("launcher.new_project_module")
                 .with_param("id", module.id.clone());
-            let status = if included {
+            let unavailable = module.unavailable.as_ref().filter(|_| !on);
+            let status = if unavailable.is_some() {
+                ui::boxed(ui::chip("not compatible", Tone::Caution))
+            } else if included {
                 ui::boxed(ui::chip("tools built in", Tone::Success))
             } else {
                 ui::boxed(ui::chip("not in this editor", Tone::Caution))
             };
-            let description = module.description.clone();
+            let description = match unavailable {
+                Some(reason) => format!("{} Not compatible: {reason}.", module.description),
+                None => module.description.clone(),
+            };
+            let disabled = unavailable.is_some();
             rows.push(ui::boxed(bsn! {
                 Node {
                     flex_direction: FlexDirection::Row,
@@ -332,7 +339,7 @@ fn modules(
                     min_height: px(30),
                 }
                 Children [
-                    Node { width: px(160), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), on, false, call)} ]
+                    Node { width: px(160), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), on, disabled, call)} ]
                     --
                     Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(description, tokens::DOC_TAB_INACTIVE_LABEL)} ]
                     --

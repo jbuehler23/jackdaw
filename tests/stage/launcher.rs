@@ -444,9 +444,21 @@ fn the_new_project_page_creates_the_chosen_template_pinned_to_this_editor() {
         .resource::<jackdaw::launcher::NewProjectForm>()
         .modules
         .clone();
+    assert!(modules.contains("navmesh"), "navmesh is on: {modules:?}");
+    let refused = app
+        .world_mut()
+        .operator("launcher.new_project_module")
+        .param("id", "physics")
+        .param("enabled", true)
+        .call()
+        .expect("the operator runs");
+    assert!(matches!(refused, OperatorResult::Cancelled));
     assert!(
-        modules.contains("navmesh") && modules.contains("physics"),
-        "navmesh turns on what it needs: {modules:?}"
+        !app.world()
+            .resource::<jackdaw::launcher::NewProjectForm>()
+            .modules
+            .contains("physics"),
+        "physics is not compatible with this Bevy, so it stays off"
     );
     run(
         &mut app,
@@ -558,15 +570,17 @@ fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
             ("enabled", false.into()),
         ],
     );
-    run(
-        &mut app,
-        "launcher.extensions_toggle",
-        &[
-            ("kind", "module".to_string().into()),
-            ("id", "physics".to_string().into()),
-            ("enabled", true.into()),
-        ],
-    );
+    for id in ["physics", "navmesh"] {
+        run(
+            &mut app,
+            "launcher.extensions_toggle",
+            &[
+                ("kind", "module".to_string().into()),
+                ("id", id.to_string().into()),
+                ("enabled", true.into()),
+            ],
+        );
+    }
     let pending = app
         .world()
         .resource::<jackdaw::launcher::ExtensionsView>()
@@ -577,12 +591,12 @@ fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
             .keys()
             .map(jackdaw::launcher::ExtensionItem::id)
             .collect::<Vec<_>>(),
-        ["physics"],
-        "a missing extension cannot be toggled; the module change waits"
+        ["navmesh"],
+        "a missing extension and an incompatible module cannot be toggled; the module change waits"
     );
     let untouched = std::fs::read_to_string(&manifest_path).unwrap();
     assert!(
-        untouched.contains("physics = false"),
+        untouched.contains("navmesh = false"),
         "nothing is written before Apply"
     );
 
@@ -592,7 +606,7 @@ fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
         manifest
             .modules
             .as_ref()
-            .and_then(|table| table.get("physics")),
+            .and_then(|table| table.get("navmesh")),
         Some(&true)
     );
     assert!(

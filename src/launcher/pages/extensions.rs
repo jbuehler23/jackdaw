@@ -144,15 +144,23 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
     for module in catalog.modules() {
         let item = ExtensionItem::Module(module.id.clone());
         let included = crate::module_picker::editor_has_module(world, &module.id);
+        let incompatible = module
+            .unavailable
+            .as_ref()
+            .map(|reason| format!("not compatible: {reason}"));
         let (current, toggleable, detail) = match &project_modules {
             Some(modules) => {
-                let requires = if module.requires.is_empty() {
+                let used = modules.contains(&module.id);
+                let detail = if let Some(incompatible) = &incompatible {
+                    incompatible.clone()
+                } else if module.requires.is_empty() {
                     String::new()
                 } else {
                     format!("needs {}", catalog.names(&module.requires))
                 };
-                (modules.contains(&module.id), true, requires)
+                (used, used || incompatible.is_none(), detail)
             }
+            None if incompatible.is_some() => (included, false, incompatible.unwrap_or_default()),
             None => (
                 included,
                 false,

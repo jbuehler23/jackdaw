@@ -294,7 +294,7 @@ fn an_unavailable_module_is_offered_but_cannot_be_ticked() {
     assert!(
         shown_texts(&mut app)
             .iter()
-            .any(|text| text.contains("Not available yet: avian has no release")),
+            .any(|text| text.contains("Not compatible: avian has no Bevy 0.20 release")),
         "the dialog says why: {:?}",
         shown_texts(&mut app)
     );

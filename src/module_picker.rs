@@ -166,7 +166,7 @@ pub fn spawn_module_picker(
             detail = format!("{detail} {locked_reason}");
         }
         if let Some(reason) = unavailable {
-            detail = format!("{detail} Not available yet: {reason}.");
+            detail = format!("{detail} Not compatible: {reason}.");
         }
         commands.spawn((
             Text::new(detail),

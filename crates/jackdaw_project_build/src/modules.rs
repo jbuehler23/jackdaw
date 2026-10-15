@@ -176,7 +176,7 @@ impl ModuleCatalog {
     /// `set`, refused when it names a module a new game cannot use yet.
     pub fn available(&self, set: ModuleSet) -> Result<ModuleSet, String> {
         match set.iter().find_map(|id| Some((id, self.unavailable(id)?))) {
-            Some((id, reason)) => Err(format!("module `{id}` is not available: {reason}")),
+            Some((id, reason)) => Err(format!("module `{id}` is not compatible: {reason}")),
             None => Ok(set),
         }
     }
@@ -447,7 +447,7 @@ mod tests {
         assert!(catalog.parse_list("rendering").is_err());
         let physics = catalog.parse_list("physics").unwrap();
         let error = catalog.available(physics).unwrap_err();
-        assert!(error.contains("not available"), "{error}");
+        assert!(error.contains("not compatible"), "{error}");
     }
 
     #[test]

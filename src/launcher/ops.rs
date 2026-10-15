@@ -612,6 +612,10 @@ pub fn launcher_new_project_module(
     let mut modules = form.modules.clone();
     if enabled {
         catalog.enable(&mut modules, id);
+        if let Err(reason) = catalog.available(modules.clone()) {
+            warn!("launcher.new_project_module: {reason}");
+            return OperatorResult::Cancelled;
+        }
     } else {
         catalog.disable(&mut modules, id);
     }
