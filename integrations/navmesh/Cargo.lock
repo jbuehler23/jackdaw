@@ -4111,11 +4111,13 @@ dependencies = [
  "jackdaw_multiplayer",
  "jackdaw_multiplayer_editor",
  "jackdaw_node_graph",
+ "jackdaw_package",
  "jackdaw_panels",
  "jackdaw_pick",
  "jackdaw_pie_protocol",
  "jackdaw_prefab",
  "jackdaw_project_build",
+ "jackdaw_releases",
  "jackdaw_remote",
  "jackdaw_runtime",
  "jackdaw_rustc_wrapper",
@@ -4139,6 +4141,7 @@ dependencies = [
  "serde_json",
  "time",
  "toml",
+ "toml_edit",
  "webbrowser",
  "windows-sys 0.61.2",
  "winit",
@@ -4497,6 +4500,18 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
+]
+
+[[package]]
+name = "jackdaw_releases"
+version = "0.20.0-dev"
+dependencies = [
+ "ed25519-dalek",
+ "jackdaw_env",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
