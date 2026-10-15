@@ -20,6 +20,8 @@ pub mod render;
 pub mod scatter;
 pub mod sidecar;
 pub mod splat;
+#[cfg(feature = "render")]
+pub mod store;
 pub mod texture_set;
 pub mod tint;
 
