@@ -4,8 +4,8 @@ An extension that adds a tool to the editor, rather than a window, needs to
 know what is selected, where the cursor points in the scene, and how to
 change the scene so the change can be undone. `jackdaw_api` exposes those as
 ordinary Bevy resources, components, system sets and operators. This chapter
-walks through them; the Physics module in `integrations/physics` uses every
-one and is a complete example.
+walks through them. The Physics module in `integrations/physics` and the
+Navmesh module in `integrations/navmesh` are complete examples.
 
 ## What an extension can reach
 
@@ -21,11 +21,16 @@ one and is a complete example.
 | Toggles in an inspector category's header | `register_inspector_chip` |
 | A row in the viewport's overlay menu | `register_viewport_overlay` |
 | What the open scene authored | `document::SceneDocument` |
+| The open scene's file, and when it opens, saves or moves | `document` |
+| State each scene tab keeps its own of | `register_scene_resource` |
+| The open scene's terrain data | `terrain::TerrainDataStore` |
+| A tool in the terrain palette, and its options bar | `register_terrain_tool` |
+| Work the editor waits on before it is idle | `BackgroundTask` |
 | Several changes as one undo step | `op::with_history_span` |
 
 Everything registered through `ExtensionRegistrar` is a child entity of the
 extension, so disabling the extension removes its toolbar buttons, chips,
-overlay rows and brush defaults with it.
+overlay rows, brush defaults, terrain tools and scene resources with it.
 
 ## Selection
 
@@ -133,6 +138,67 @@ components.
 overlay menu. Clicking it calls `Op`, which should flip its overlay and write
 the new state to the row's `ViewportOverlay::shown`.
 
+## Scene files
+
+`document::SceneFilePath` names the file the open scene was opened from or
+last saved to, `None` until an untitled scene is first saved. An extension
+that keeps files of its own beside the scene, such as a bake, observes three
+events:
+
+- `SceneOpened` once a scene is in front, opened from disk or brought back by
+  a tab switch;
+- `SceneSaved` after the scene is written, which is when to write beside it;
+- `SceneRenamed` when Save As or a rename gives the scene a new file.
+
+Write with `document::write_atomic`, which goes through a temporary file the
+way the editor writes scenes, so a crash leaves the old file whole.
+
+## State per scene
+
+A resource registered with `register_scene_resource::<R>()` belongs to the
+scene in front rather than to the editor. When another tab comes to the
+front, the editor keeps this one's value with its tab and brings back the
+other's; a scene opened or created in a tab starts from `R::default()`.
+
+```rust
+ctx.register_scene_resource::<BakeState>();
+```
+
+Keep preferences that should survive opening another scene, such as whether
+an overlay is drawn, in an ordinary resource instead.
+
+## Terrain
+
+`terrain::TerrainDataStore` holds the open scene's terrain heights, material
+list, paint and scatter, keyed by the `data_path` the `Terrain` component
+carries. Read it; change terrain through the editor's `terrain.*` operators.
+The meshes the viewport draws a terrain with carry `NavmeshIgnored` and
+`EditorHidden`, so tools gathering scene geometry can tell them from the
+scene's own.
+
+`register_terrain_tool::<Op>(icon)` puts a button in the terrain tool
+palette that calls `Op`. The operator picks the tool:
+
+```rust
+#[operator(id = "example.terrain_tool", label = "Example")]
+fn pick(_: In<OperatorParameters>, mut mode: ResMut<TerrainEditMode>) -> OperatorResult {
+    mode.toggle(TerrainEditMode::Extension(PickOp::ID));
+    OperatorResult::Finished
+}
+```
+
+While it is picked, the options bar above the viewport holds a node carrying
+`TerrainToolOptions`. Observe `On<Add, TerrainToolOptions>`, or check for the
+node each frame, and fill it with `ui::spawn_scrub_chip`, `ui::spawn_checkbox`,
+`ui::spawn_hint` and buttons. The editor despawns it when the tool is put
+away.
+
+## Background work
+
+Spawn an entity carrying `BackgroundTask` while work runs off the main
+thread, and despawn it when the work lands. Until then the editor is not
+idle, and a remote `wait` for idle keeps waiting.
+
 ## Comparison with other editors
 
 Unity users will recognise `Selection` and `Selection.selectionChanged`,
@@ -141,6 +207,15 @@ Unity users will recognise `Selection` and `Selection.selectionChanged`,
 ground with `get_selection`, `_forward_3d_gui_input`,
 `add_control_to_container`, inspector plugins and `EditorUndoRedoManager`.
 Unreal's editor modes, toolbar extenders and detail customisations are the
-nearest match there. Jackdaw differs in using plain ECS data for all of it:
+nearest match there.
+
+The scene file events match Unity's `EditorSceneManager.sceneOpened` and
+`sceneSaved`, Godot's `scene_changed` and `scene_saved` signals, and Unreal's
+`FEditorDelegates::OnMapOpened` and `PostSaveWorld`. A scene resource is
+Godot's `EditorPlugin._get_state` and `_set_state`, which hand a plugin its
+state back per edited scene. Terrain tools follow Unity's `TerrainPaintTool`,
+which adds a tool and its settings to the terrain inspector, and Unreal's
+landscape mode tools. `BackgroundTask` is Unity's `Progress.Start` and
+Unreal's async task notifications. Jackdaw differs in using plain ECS data for all of it:
 registrations are entities, state is resources, and every change goes
 through an operator.

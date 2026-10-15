@@ -78,6 +78,10 @@ Physics is not available for Bevy 0.20 projects until avian releases
 for it; the dialogs show it greyed out with that reason, and `jd new`
 refuses it.
 
+Physics and Navmesh bring their editor tooling as extensions
+(`jackdaw.physics` and `jackdaw.navmesh`) rather than building it into
+the editor.
+
 Pick them in the New Project and import dialogs, with
 `jd new --modules navmesh,multiplayer` (or `--no-modules`) and
 `jd import --modules ...`, and later with File > Modules in the
@@ -189,14 +193,7 @@ These are features of the `jackdaw` crate itself, relevant if you
 build the editor from source. Projects have no jackdaw-related
 features.
 
-- `default = ["multiplayer", "camera_rig", "embed-recipe", "physics", "navmesh"]`.
-- `physics`. Avian physics authoring: the physics tool, brush
-  colliders, the physics inspector, collider overlays and the
-  simulation preview. Without it, a scene's physics components are
-  kept and saved as they are.
-- `navmesh`. The terrain navmesh bake. Implies `physics`. Without
-  it, a navmesh already baked beside a scene is still loaded, drawn
-  and saved with the scene.
+- `default = ["multiplayer", "camera_rig", "embed-recipe"]`.
 - `multiplayer`. Bundles the editor-only networking authoring
   extension. The editor writes replication metadata; no lightyear
   is compiled into it.

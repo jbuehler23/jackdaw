@@ -161,5 +161,10 @@ own workspace, so the editor's workspace never resolves them.
   Physics tool, collider overlays and inspector toggles, and
   `jackdaw_avian_integration`, which builds avian colliders from a scene's
   authored components in the game.
+- `integrations/navmesh`: `jackdaw_navmesh_editor`, the editor extension
+  with the terrain navmesh bake and its overlay, and `jackdaw_navmesh`, the
+  navmesh generator it bakes with, from rerecast's port of Recast. The game
+  reads the baked file with `jackdaw_runtime`'s `navmesh` feature and needs
+  no crate of its own.
 - `integrations/jackdaw_multiplayer_lightyear`: the lightyear backend for
   `jackdaw_multiplayer`.

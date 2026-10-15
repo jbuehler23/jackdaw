@@ -101,6 +101,11 @@ whose palette entry blocks agents, so scatter needs no
 `NavmeshExclude` tagging; a placement whose model has not loaded gets a
 default footprint, counted in the bake summary.
 
+The bake is the Navmesh tool in the terrain palette, from the Navmesh
+module's extension (`jackdaw.navmesh`). It writes `<scene>.jdnav` beside
+the scene, which the game reads with `jackdaw_runtime`'s `navmesh`
+feature.
+
 ## Sidecars and export
 
 Scene files keep the small terrain descriptor, while heights,
