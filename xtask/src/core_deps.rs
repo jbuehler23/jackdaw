@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 /// allowed for now. Each is to be removed.
 const EXCEPTIONS: [(&str, &str); 1] = [("rerecast", "moves to the Navmesh module")];
 
-fn exception(dependency: &str) -> Option<&'static str> {
+pub fn exception(dependency: &str) -> Option<&'static str> {
     EXCEPTIONS
         .iter()
         .find(|(name, _)| *name == dependency)

@@ -4,7 +4,7 @@
 //!
 //! A loaded dylib is never unloaded, so each reload leaves its mapped
 //! pages resident. This builds one representative SDK-linked dylib
-//! (bevy + avian), then dlopens fresh copies in a
+//! (bevy + rapier), then dlopens fresh copies in a
 //! loop and reports the RSS growth per load, so we know whether
 //! auto-reload-per-save is viable and how aggressively reloads must
 //! be bounded.
@@ -53,7 +53,7 @@ fn measure_reload_memory_growth() {
     );
 
     // Build the representative SDK-linked dylib through the production
-    // pipeline (bevy + avian).
+    // pipeline (bevy + rapier).
     let fixture_dir = util::stage_fixture("ecosystem_game");
     std::fs::copy(&sdk.lockfile, fixture_dir.join("Cargo.lock")).expect("seed lock");
     let manifest = SdkManifest::generate_dev(&workspace_root(), &sdk).expect("manifest");

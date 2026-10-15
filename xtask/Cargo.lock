@@ -415,6 +415,7 @@ dependencies = [
  "jackdaw_cli_internal",
  "jackdaw_project_build",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

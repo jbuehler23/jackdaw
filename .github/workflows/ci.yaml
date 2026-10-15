@@ -459,6 +459,9 @@ jobs:
       - name: Check the core crates depend on no third-party Bevy crate
         run: cargo xtask core-deps
 
+      - name: Check no manifest takes a dependency from git
+        run: cargo xtask git-deps
+
   # The lightyear backend is its own workspace so the editor never resolves
   # lightyear; it is linted and tested here instead.
   lightyear:

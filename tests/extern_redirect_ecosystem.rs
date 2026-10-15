@@ -2,10 +2,10 @@
 //! Whole-graph extern redirect with an ecosystem dependency.
 //!
 //! Builds `tests/fixtures/ecosystem_game` (bevy +
-//! avian3d, one Reflect-derived component, zero registration code)
+//! `bevy_rapier3d`, one Reflect-derived component, zero registration code)
 //! through the production plan pipeline
 //! ([`jackdaw::project_build::plan`]), dlopens the result, and checks
-//! that both the user's component and avian's own reflected types
+//! that both the user's component and rapier's own reflected types
 //! cross the boundary.
 //!
 //! The test must run with an explicit `--target` (the host triple) so
@@ -136,17 +136,17 @@ fn ecosystem_dependency_compiles_and_registers_across_the_boundary() {
         "registration lacks ReflectComponent data"
     );
 
-    // avian's own reflected types crossed too: the ecosystem crate was
+    // rapier's own reflected types crossed too: the ecosystem crate was
     // compiled with the same shared bevy_reflect, so its derives submitted
     // into the same inventory.
-    let avian_types = after
+    let rapier_types = after
         .iter()
-        .filter(|reg| reg.type_info().type_path().starts_with("avian3d::"))
+        .filter(|reg| reg.type_info().type_path().starts_with("bevy_rapier3d::"))
         .count();
     assert!(
-        avian_types > 0,
-        "no avian3d types registered; ecosystem reflection did not cross"
+        rapier_types > 0,
+        "no bevy_rapier3d types registered; ecosystem reflection did not cross"
     );
 
-    println!("{COMPONENT_TYPE_PATH} + {avian_types} avian3d types registered across dlopen");
+    println!("{COMPONENT_TYPE_PATH} + {rapier_types} bevy_rapier3d types registered across dlopen");
 }
