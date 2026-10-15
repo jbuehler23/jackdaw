@@ -359,6 +359,40 @@ fn spawn_instance_reads_a_path_relative_to_the_assets_directory() {
     );
 }
 
+/// A drop from the Project window starts from the file's absolute path, which
+/// the operator refuses; the viewport sends it relative to the assets
+/// directory.
+#[test]
+fn spawn_instance_reads_a_dropped_file_made_assets_relative() {
+    let (mut app, dir) = app_in_project();
+    let written = dir.path().join("assets/prefabs/rock.bsn");
+    std::fs::create_dir_all(written.parent().expect("parent")).expect("create prefabs dir");
+    std::fs::write(
+        &written,
+        "#Rock\nbevy_transform::components::transform::Transform\n",
+    )
+    .expect("write the prefab");
+
+    let assets = app.world().resource::<ProjectRoot>().assets_dir();
+    let relative = jackdaw_scene_types::to_asset_path(&written.to_string_lossy(), Some(&assets));
+    call(
+        &mut app,
+        "prefab.spawn_instance",
+        &[
+            ("path", PropertyValue::from(relative.clone())),
+            ("pos_x", PropertyValue::Float(0.0)),
+            ("pos_y", PropertyValue::Float(0.0)),
+            ("pos_z", PropertyValue::Float(0.0)),
+        ],
+    );
+
+    assert_eq!(
+        instance_roots(&mut app).len(),
+        1,
+        "the assets-relative path {relative:?} resolved to the file"
+    );
+}
+
 /// Matching one level deep calls two groups copies when they agree on their
 /// direct children and differ below, and `pack_matching` deletes what it matches.
 #[test]
