@@ -11,8 +11,7 @@ what it needs.
 One direct dependency, no editor in the dependency graph:
 
 - `jackdaw_runtime`: the standalone scene loader for authored
-  `.bsn` scenes, the optional `physics` feature that builds
-  avian colliders from authored data, and the `EditorMeta` /
+  `.bsn` scenes and the `EditorMeta` /
   `ReflectEditorMeta` reflect attributes (`EditorCategory`,
   `EditorDescription`, `EditorHidden`) that user game crates
   use on their components.

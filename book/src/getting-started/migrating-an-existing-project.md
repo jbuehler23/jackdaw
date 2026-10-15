@@ -123,6 +123,11 @@ That rewrites the `[jackdaw]` pins and moves any `jackdaw_*` dependency to the
 matching version, leaving your run configurations, comments, features, and
 every other dependency untouched. Path and git dependencies are left alone.
 
+A `jackdaw_runtime` feature that no longer exists, such as `physics`, is
+dropped, and the module that replaced it is recorded under `[modules]` in
+`jackdaw.toml`. `jd doctor` reports such a feature and the launcher offers the
+update when the project is opened.
+
 ## Bringing asset references up to date
 
 A project written before assets were files at paths spells a material or any

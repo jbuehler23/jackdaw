@@ -452,6 +452,13 @@ fn report_runtime_wiring(root: &Path, package_dir: &Path) -> bool {
             &import_fix,
         );
     }
+    for removed in removed_feature_problems(root, package_dir) {
+        ok = false;
+        fail(&removed.problem, &removed.fix);
+        if let Some(note) = removed.note {
+            println!("         note: {note}");
+        }
+    }
     if wiring.plugin {
         println!("  [ ok ] runtime plugin: JackdawPlugin added");
     } else {
@@ -477,6 +484,45 @@ fn report_runtime_wiring(root: &Path, package_dir: &Path) -> bool {
         );
     }
     ok
+}
+
+/// A failed project check, with the command that fixes it.
+struct Problem {
+    problem: String,
+    fix: String,
+    note: Option<String>,
+}
+
+/// The `jackdaw_runtime` features the game asks for that no longer exist.
+/// Upgrading drops them and records the module that replaced each.
+fn removed_feature_problems(root: &Path, package_dir: &Path) -> Vec<Problem> {
+    use jackdaw_project_build::modules::{GameDependencies, ModuleCatalog};
+    use jackdaw_project_build::project_manifest::ProjectManifest;
+
+    let game = GameDependencies::read(package_dir, root);
+    let command = if ProjectManifest::exists(root) {
+        "upgrade"
+    } else {
+        "import"
+    };
+    ModuleCatalog::builtin()
+        .removed_runtime_features(&game)
+        .into_iter()
+        .map(|(feature, module)| Problem {
+            problem: format!(
+                "runtime feature: jackdaw_runtime no longer has `{feature}`, so the game does not \
+                 build; the {} module replaces it",
+                module.name
+            ),
+            fix: format!("jd {command} --apply {}", root.display()),
+            note: module.unavailable.as_ref().map(|reason| {
+                format!(
+                    "{} is not compatible with this editor line yet: {reason}",
+                    module.name
+                )
+            }),
+        })
+        .collect()
 }
 
 /// Ask cargo to resolve the project's full dependency graph, reporting
@@ -699,7 +745,53 @@ fn parse_project_arg(args: &[String]) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SdkGrade, grade_sdk};
+    use super::{SdkGrade, grade_sdk, removed_feature_problems};
+
+    fn game_with_runtime(name: &str, features: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("jackdaw_cli_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+                 jackdaw_runtime = {{ version = \"0.19\", features = [{features}] }}\n"
+            ),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn a_removed_runtime_feature_fails_with_the_upgrade_that_drops_it() {
+        let root = game_with_runtime("removed-feature", "\"physics\", \"pie\"");
+        std::fs::write(root.join("jackdaw.toml"), "").unwrap();
+        let problems = removed_feature_problems(&root, &root);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].problem.contains("`physics`"));
+        assert!(problems[0].problem.contains("Physics module"));
+        assert_eq!(
+            problems[0].fix,
+            format!("jd upgrade --apply {}", root.display())
+        );
+        assert!(problems[0].note.is_some());
+    }
+
+    #[test]
+    fn a_removed_runtime_feature_in_a_project_not_set_up_is_fixed_by_import() {
+        let root = game_with_runtime("removed-feature-unset", "\"physics\"");
+        let problems = removed_feature_problems(&root, &root);
+        assert_eq!(
+            problems[0].fix,
+            format!("jd import --apply {}", root.display())
+        );
+    }
+
+    #[test]
+    fn current_runtime_features_are_no_problem() {
+        let root = game_with_runtime("current-features", "\"navmesh\", \"pie\"");
+        assert!(removed_feature_problems(&root, &root).is_empty());
+    }
 
     #[test]
     fn a_missing_sdk_is_information_for_a_game_and_a_failure_for_an_extension() {

@@ -296,6 +296,29 @@ impl ModuleCatalog {
         self.complete(set)
     }
 
+    /// The features of `jackdaw_runtime` that `game` still enables but that
+    /// no longer exist, each with the module that took its place.
+    pub fn removed_runtime_features<'a>(
+        &'a self,
+        game: &'a GameDependencies,
+    ) -> Vec<(&'a str, &'a ModuleInfo)> {
+        game.runtime_features
+            .iter()
+            .filter_map(|feature| Some((feature.as_str(), self.replacing_feature(feature)?)))
+            .collect()
+    }
+
+    /// The module that took the place of the removed `jackdaw_runtime`
+    /// feature `feature`.
+    pub fn replacing_feature(&self, feature: &str) -> Option<&ModuleInfo> {
+        self.modules.iter().find(|module| {
+            module
+                .former_runtime_features
+                .iter()
+                .any(|former| former == feature)
+        })
+    }
+
     /// The display names of `ids` in catalog order, joined for a sentence.
     pub fn names(&self, ids: &[String]) -> String {
         let position = |id: &String| {
@@ -569,6 +592,21 @@ mod tests {
             ModuleCatalog::builtin().detect(&game),
             set(&["multiplayer", "navmesh", "physics"])
         );
+    }
+
+    #[test]
+    fn a_removed_runtime_feature_names_the_module_that_replaced_it() {
+        let dir = package(
+            "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+             jackdaw_runtime = { version = \"0.19\", features = [\"physics\", \"navmesh\", \"pie\"] }\n",
+        );
+        let game = GameDependencies::read(dir.path(), dir.path());
+        let removed: Vec<(&str, &str)> = ModuleCatalog::builtin()
+            .removed_runtime_features(&game)
+            .into_iter()
+            .map(|(feature, module)| (feature, module.id.as_str()))
+            .collect();
+        assert_eq!(removed, [("physics", "physics")]);
     }
 
     #[test]

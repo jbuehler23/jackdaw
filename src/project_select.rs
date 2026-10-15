@@ -454,16 +454,26 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     }
     // A same-Bevy jackdaw change is safe to open, but the project still
     // claims the old version and still requests the old crate line, and
-    // only an offer to fix it makes that actionable. Skipped when the
+    // only an offer to fix it makes that actionable. A game asking for a
+    // runtime feature that is gone does not build at all. Skipped when the
     // upgrade would be a no-op or cannot be planned.
-    if let project_manifest::PinStatus::JackdawDiffers { pinned, running } = &pins {
-        info!("Project was set up with jackdaw {pinned}; running {running}");
-        if let Ok(plan) = crate::scaffold::plan_upgrade_project(&root)
-            && !plan.is_empty()
-        {
-            show_upgrade_card(world, root, pinned.clone(), running.clone(), plan);
-            return;
+    let versions = match &pins {
+        project_manifest::PinStatus::JackdawDiffers { pinned, running } => {
+            info!("Project was set up with jackdaw {pinned}; running {running}");
+            Some((pinned.clone(), running.clone()))
         }
+        _ => None,
+    };
+    let game = manifest.game_dependencies(&root);
+    let removed_features = !jackdaw_project_build::modules::ModuleCatalog::builtin()
+        .removed_runtime_features(&game)
+        .is_empty();
+    if (versions.is_some() || removed_features)
+        && let Ok(plan) = crate::scaffold::plan_upgrade_project(&root)
+        && !plan.is_empty()
+    {
+        show_upgrade_card(world, root, versions, plan);
+        return;
     }
 
     // An extension builds against the SDK; on an install without one, the
@@ -1198,27 +1208,30 @@ fn spawn_card_button(
 fn show_upgrade_card(
     world: &mut World,
     root: PathBuf,
-    pinned: String,
-    running: String,
+    versions: Option<(String, String)>,
     plan: crate::scaffold::ImportPlan,
 ) {
     let (_, card, font) = spawn_modal_card(world, 520.0, 720.0);
     spawn_card_title(world, card, "Update this project for jackdaw", &font);
-    spawn_card_body(
-        world,
-        card,
-        format!(
-            "`{}` was set up with jackdaw {pinned}; you are running {running}. Both target \
+    let name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("This project");
+    let body = match versions {
+        Some((pinned, running)) => format!(
+            "`{name}` was set up with jackdaw {pinned}; you are running {running}. Both target \
              Bevy {bevy}, so the project still builds either way.\n\n\
              Updating records the new version and moves the project's jackdaw dependencies \
              onto the matching release line:",
-            root.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("This project"),
             bevy = jackdaw_project_build::BEVY_VERSION,
         ),
-        &font,
-    );
+        None => format!(
+            "`{name}` asks jackdaw_runtime for features this jackdaw no longer has, so the game \
+             does not build until they are dropped.\n\n\
+             Updating drops them and records the modules that replaced them:"
+        ),
+    };
+    spawn_card_body(world, card, body, &font);
     spawn_change_list(world, card, &plan.changes, &font);
     spawn_note_list(world, card, &plan.notes, &font);
 

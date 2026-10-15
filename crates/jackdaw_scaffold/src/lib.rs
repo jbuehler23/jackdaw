@@ -727,14 +727,12 @@ pub fn plan_upgrade_project(root: &Path) -> Result<ImportPlan, ScaffoldError> {
     // while silently moving the bevy pin describes half of what it does.
     let recorded_bevy = settings.jackdaw.bevy.clone();
 
+    let modules = settings.modules(root);
     let settings_path = jackdaw_project_build::project_manifest::path(root);
     let settings = std::fs::read_to_string(&settings_path).unwrap_or_default();
+    let mut new_settings = settings.clone();
     if let Some(updated) = rewrite_pins(&settings, project_bevy.as_deref()) {
-        changes.push(ImportChange::WriteFile {
-            path: settings_path,
-            contents: updated,
-            replace: true,
-        });
+        new_settings = updated;
         let recorded_bevy = recorded_bevy.as_deref().unwrap_or("none");
         let new_bevy = project_bevy
             .as_deref()
@@ -761,38 +759,74 @@ pub fn plan_upgrade_project(root: &Path) -> Result<ImportPlan, ScaffoldError> {
     // `jackdaw_runtime` to a version that requires Bevy 0.19 inside a
     // project pinned to an older Bevy produces a manifest that cannot
     // resolve, which is worse than leaving it alone.
-    let mut bumped_any = false;
-    let mut manifests = Vec::new();
-    if project_bevy
+    let bump = project_bevy
         .as_deref()
-        .is_none_or(|minor| minor == jackdaw_project_build::BEVY_VERSION)
-    {
-        manifests.push(package.dir.join("Cargo.toml"));
-        if package.dir != root {
-            manifests.push(root.join("Cargo.toml"));
-        }
-    } else {
+        .is_none_or(|minor| minor == jackdaw_project_build::BEVY_VERSION);
+    if !bump {
         notes.push(
             "leaving the jackdaw dependencies alone: moving them forward would require a bevy \
              this project does not use"
                 .to_string(),
         );
     }
+    let mut manifests = vec![package.dir.join("Cargo.toml")];
+    if package.dir != root {
+        manifests.push(root.join("Cargo.toml"));
+    }
     let requirement = jackdaw_project_build::jackdaw_requirement();
+    let mut bumped_any = false;
+    let mut dropped = Vec::new();
     for manifest_path in manifests {
         let cargo = std::fs::read_to_string(&manifest_path)
             .map_err(|e| ScaffoldError::Io(format!("{}: {e}", manifest_path.display())))?;
-        if let Some(updated) = bump_jackdaw_requirements(&cargo, &requirement) {
+        let mut updated = cargo.clone();
+        if bump && let Some(bumped) = bump_jackdaw_requirements(&updated, &requirement) {
+            updated = bumped;
+            bumped_any = true;
+        }
+        if let Ok(mut doc) = updated.parse::<DocumentMut>() {
+            let removed = drop_removed_runtime_features(&mut doc);
+            if !removed.is_empty() {
+                updated = doc.to_string();
+                dropped.extend(removed);
+            }
+        }
+        if updated != cargo {
             changes.push(ImportChange::WriteFile {
                 path: manifest_path,
                 contents: updated,
                 replace: true,
             });
-            bumped_any = true;
         }
     }
     if bumped_any {
         notes.push(format!("requests the jackdaw crates at {requirement}"));
+    }
+    dropped.sort();
+    dropped.dedup();
+    if !dropped.is_empty() {
+        let catalog = ModuleCatalog::builtin();
+        let mut target = modules;
+        target.extend(
+            dropped
+                .iter()
+                .filter_map(|feature| catalog.replacing_feature(feature))
+                .map(|module| module.id.clone()),
+        );
+        let target = catalog.complete(target);
+        new_settings = jackdaw_project_build::modules::with_modules(&new_settings, &target)
+            .map_err(|detail| ScaffoldError::SettingsParse {
+                path: settings_path.clone(),
+                detail,
+            })?;
+        notes.extend(removed_feature_notes(&dropped));
+    }
+    if new_settings != settings {
+        changes.push(ImportChange::WriteFile {
+            path: settings_path,
+            contents: new_settings,
+            replace: true,
+        });
     }
 
     Ok(ImportPlan {
@@ -1801,6 +1835,9 @@ fn runtime_dependency_edit(
         }
         RuntimeDependency::Unsupported(_) => return None,
     }
+    notes.extend(removed_feature_notes(&drop_removed_runtime_features(
+        &mut doc,
+    )));
     notes.extend(add_module_crates(&mut doc, game, modules)?);
     (doc.to_string() != manifest).then(|| ManifestEdit {
         contents: doc.to_string(),
@@ -1909,6 +1946,65 @@ fn remove_runtime_features(doc: &mut DocumentMut, features: &[String]) -> Option
         array.fmt();
     }
     Some(())
+}
+
+/// Take the `jackdaw_runtime` features that no longer exist off the entries
+/// in `doc`'s `[dependencies]` and `[workspace.dependencies]`. Returns the
+/// features taken off.
+fn drop_removed_runtime_features(doc: &mut DocumentMut) -> Vec<String> {
+    let catalog = ModuleCatalog::builtin();
+    let mut dropped = Vec::new();
+    let mut drop_from = |deps: Option<&mut toml_edit::Item>| {
+        let Some(array) = deps
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .and_then(|deps| deps.get_mut(RUNTIME_CRATE))
+            .and_then(toml_edit::Item::as_table_like_mut)
+            .and_then(|entry| entry.get_mut("features"))
+            .and_then(toml_edit::Item::as_array_mut)
+        else {
+            return;
+        };
+        array.retain(|value| match value.as_str() {
+            Some(feature) if catalog.replacing_feature(feature).is_some() => {
+                dropped.push(feature.to_string());
+                false
+            }
+            _ => true,
+        });
+        array.fmt();
+    };
+    drop_from(doc.get_mut("dependencies"));
+    drop_from(
+        doc.get_mut("workspace")
+            .and_then(|workspace| workspace.get_mut("dependencies")),
+    );
+    dropped.sort();
+    dropped.dedup();
+    dropped
+}
+
+/// A note per removed `jackdaw_runtime` feature in `features`, naming the
+/// module recorded in its place.
+fn removed_feature_notes(features: &[String]) -> Vec<String> {
+    let catalog = ModuleCatalog::builtin();
+    features
+        .iter()
+        .filter_map(|feature| {
+            let module = catalog.replacing_feature(feature)?;
+            let mut note = format!(
+                "Cargo.toml: drops the `{feature}` feature of jackdaw_runtime, which no longer \
+                 exists; jackdaw.toml records the {} module in its place",
+                module.name
+            );
+            if let Some(reason) = &module.unavailable {
+                note.push_str(&format!(
+                    ". {} is not compatible with this editor line yet: {reason}",
+                    module.name
+                ));
+            }
+            Some(note)
+        })
+        .collect()
 }
 
 /// Add the crates of `modules` that `game` does not declare yet, returning
@@ -2945,7 +3041,7 @@ mod tests {
             root.join("Cargo.toml"),
             "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n\
-             jackdaw_runtime = { version = \"0.14\", features = [\"physics\"] }\n",
+             jackdaw_runtime = { version = \"0.14\", features = [\"navmesh\"] }\n",
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
@@ -2979,9 +3075,93 @@ mod tests {
             "got:\n{cargo}"
         );
         // The bump must not drop the features the project asked for.
-        assert!(cargo.contains("physics"), "got:\n{cargo}");
+        assert!(cargo.contains("navmesh"), "got:\n{cargo}");
         // Nor touch anything that is not a jackdaw crate.
         assert!(cargo.contains("bevy = \"0.20\""), "got:\n{cargo}");
+    }
+
+    fn set_up_project(name: &str, runtime: &str) -> PathBuf {
+        let root = temp_dir(name);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                 [dependencies]\nbevy = \"0.20\"\njackdaw_runtime = {runtime}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
+        std::fs::write(
+            root.join("jackdaw.toml"),
+            format!(
+                "plugin = \"GamePlugin\"\n\n{}",
+                jackdaw_project_build::project_manifest::pins_toml_for_bevy(
+                    jackdaw_project_build::BEVY_VERSION
+                )
+            ),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn upgrade_drops_a_removed_runtime_feature_and_records_its_module() {
+        let root = set_up_project(
+            "upgrade-removed-feature",
+            &format!(
+                "{{ version = \"{}\", features = [\"physics\", \"pie\"] }}",
+                jackdaw_project_build::jackdaw_requirement()
+            ),
+        );
+
+        let plan = plan_upgrade_project(&root).unwrap();
+        assert!(
+            plan.notes
+                .iter()
+                .any(|note| note.contains("`physics`") && note.contains("not compatible")),
+            "got: {:?}",
+            plan.notes
+        );
+        apply_import_plan(&plan).unwrap();
+
+        let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("features = [\"pie\"]"), "got:\n{cargo}");
+        assert_eq!(modules_table(&root).get("physics"), Some(&true));
+        assert!(plan_upgrade_project(&root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn upgrade_drops_a_removed_runtime_feature_from_the_workspace_entry() {
+        let root = set_up_project("upgrade-removed-workspace-feature", "{ workspace = true }");
+        let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "{cargo}\n[workspace.dependencies]\n\
+                 jackdaw_runtime = {{ version = \"{}\", features = [\"pie\", \"physics\"] }}\n",
+                jackdaw_project_build::jackdaw_requirement()
+            ),
+        )
+        .unwrap();
+
+        apply_import_plan(&plan_upgrade_project(&root).unwrap()).unwrap();
+
+        let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(!cargo.contains("physics"), "got:\n{cargo}");
+        assert_eq!(modules_table(&root).get("physics"), Some(&true));
+    }
+
+    #[test]
+    fn import_drops_a_removed_runtime_feature() {
+        let root = bevy_game(
+            "import-removed-feature",
+            "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"physics\"] }\n",
+        );
+        let plan = plan_import_project(&root, None).unwrap();
+        assert_eq!(plan.modules, modules(&["physics"]));
+        let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("features = [\"pie\"]"), "got:\n{cargo}");
     }
 
     /// Deferring a mismatch must not silence it. Recording this
@@ -3638,9 +3818,10 @@ mod tests {
         let plain = plan_import_project(&root, None).unwrap();
         assert_eq!(plain.detected_modules, modules(&["physics"]));
         assert_eq!(plain.modules, modules(&["physics"]));
+        let cargo = planned_contents(&plain, &root.join("Cargo.toml")).expect("Cargo.toml edit");
         assert!(
-            planned_contents(&plain, &root.join("Cargo.toml")).is_none(),
-            "nothing to add when no module is chosen"
+            cargo.contains("features = [\"pie\"]"),
+            "only the removed feature goes when no module is chosen, got:\n{cargo}"
         );
 
         let chosen = modules(&["navmesh", "multiplayer"]);
@@ -3651,7 +3832,7 @@ mod tests {
         );
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).expect("Cargo.toml edit");
         assert!(
-            cargo.contains("features = [\"physics\", \"pie\", \"navmesh\"]"),
+            cargo.contains("features = [\"pie\", \"navmesh\"]"),
             "got:\n{cargo}"
         );
         assert!(cargo.contains("jackdaw_multiplayer = {"), "got:\n{cargo}");
@@ -3753,12 +3934,12 @@ mod tests {
 
         let root = bevy_game(
             "extend-features",
-            "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"physics\"] }\n",
+            "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"navmesh\"] }\n",
         );
         let plan = plan_import_project(&root, None).unwrap();
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains("features = [\"physics\", \"pie\"]"),
+            cargo.contains("features = [\"navmesh\", \"pie\"]"),
             "got:\n{cargo}"
         );
     }

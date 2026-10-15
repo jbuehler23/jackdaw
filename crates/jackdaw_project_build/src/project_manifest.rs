@@ -115,16 +115,20 @@ impl ProjectManifest {
     pub fn modules(&self, root: &Path) -> ModuleSet {
         match &self.modules {
             Some(table) => crate::modules::enabled_in(table),
-            None => {
-                let package_dir = self
-                    .package
-                    .as_deref()
-                    .map(|name| root.join(name))
-                    .filter(|dir| dir.join("Cargo.toml").is_file())
-                    .unwrap_or_else(|| root.to_path_buf());
-                ModuleCatalog::builtin().detect(&GameDependencies::read(&package_dir, root))
-            }
+            None => ModuleCatalog::builtin().detect(&self.game_dependencies(root)),
         }
+    }
+
+    /// What the game package of the project at `root` declares that bears
+    /// on modules.
+    pub fn game_dependencies(&self, root: &Path) -> GameDependencies {
+        let package_dir = self
+            .package
+            .as_deref()
+            .map(|name| root.join(name))
+            .filter(|dir| dir.join("Cargo.toml").is_file())
+            .unwrap_or_else(|| root.to_path_buf());
+        GameDependencies::read(&package_dir, root)
     }
 
     /// Whether this project has been set up for jackdaw at all.
