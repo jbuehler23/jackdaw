@@ -11,7 +11,7 @@ use jackdaw_scene_types::HiddenInGame;
 /// leaves tagged volumes drawn so they can be placed against the running
 /// game.
 pub(crate) fn hide_on_add(
-    add: On<Add, HiddenInGame>,
+    add: On<Add<HiddenInGame>>,
     mut vis: Query<(&mut Visibility, &mut InheritedVisibility)>,
     mut commands: Commands,
 ) {
@@ -19,7 +19,7 @@ pub(crate) fn hide_on_add(
     if crate::pie::pie_config().is_some() {
         return;
     }
-    let entity = add.entity;
+    let entity = add.event_target();
     if let Ok((mut visibility, mut inherited)) = vis.get_mut(entity) {
         *visibility = Visibility::Hidden;
         *inherited = InheritedVisibility::HIDDEN;
