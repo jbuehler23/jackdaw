@@ -9,14 +9,14 @@ use std::collections::HashSet;
 use bevy::ecs::reflect::AppTypeRegistry;
 use jackdaw::inspector::component_picker::{
     PickableComponent, PickerDenylist, enumerate_pickable_components,
-    populate_avian_picker_denylist,
+    populate_module_picker_denylist,
 };
 use jackdaw::project_types::ProjectTypes;
 use jackdaw::type_metadata::TypeMetadata;
 
 fn enumerate(app: &mut bevy::prelude::App) -> Vec<PickableComponent> {
     let mut denylist = PickerDenylist::default();
-    populate_avian_picker_denylist(&mut denylist);
+    populate_module_picker_denylist(&mut denylist);
     let registry = app.world().resource::<AppTypeRegistry>().clone();
     let metadata = app.world().resource::<TypeMetadata>().clone();
     let project_types = app.world().resource::<ProjectTypes>().clone();
