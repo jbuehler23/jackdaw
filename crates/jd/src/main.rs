@@ -237,7 +237,7 @@ fn print_usage() {
            --extension                start from the editor-extension template\n    \
            --path <dir>               create it under <dir> instead of here\n    \
            --no-git                   skip initialising a git repository\n    \
-           --modules <list>           the game's modules, e.g. physics,navmesh\n    \
+           --modules <list>           the game's modules, e.g. navmesh,multiplayer\n    \
            --no-modules               start the game with no modules\n  \
          import [path]              Preview integration for an existing Bevy project\n    \
            --apply                    write the previewed changes\n    \
