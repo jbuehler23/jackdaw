@@ -367,8 +367,7 @@ fn notice_strip(notice: &super::Notice) -> impl Scene {
         Children [
             @{ui::chip(if notice.error { "Problem" } else { "Note" }, tone)}
             --
-            Node { flex_grow: 1.0, min_width: px(0) }
-            Children [ @{ui::note(text, tokens::TEXT_PRIMARY)} ]
+            @{ui::fill(ui::boxed(ui::note(text, tokens::TEXT_PRIMARY)))}
             --
             @{ui::button("Dismiss", op("launcher.dismiss_notice"), ButtonVariant::Plain)}
         ]

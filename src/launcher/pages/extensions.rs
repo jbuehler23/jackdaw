@@ -620,8 +620,7 @@ fn entry_row(entry: &Entry, selected: bool) -> impl Scene {
             --
             Node { width: px(160), flex_shrink: 0.0 } Children [ @{ui::primary(name)} ]
             --
-            Node { flex_grow: 1.0, min_width: px(0) }
-            Children [ @{ui::text(detail, tokens::TEXT_SIZE_SM, color)} ]
+            @{ui::fill(ui::boxed(ui::note(detail, color)))}
             --
             {action}
         ]
@@ -715,7 +714,7 @@ fn pending_bar(view: &ExtensionsView, listing: &Listing) -> Box<dyn SceneList> {
         }
         BackgroundColor(tokens::WINDOW_BG)
         Children [
-            Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(summary, tokens::TEXT_PRIMARY)} ]
+            @{ui::fill(ui::boxed(ui::note(summary, tokens::TEXT_PRIMARY)))}
             --
             @{ui::button("Revert", ButtonOperatorCall::new("launcher.extensions_revert"), ButtonVariant::Plain)}
             --
