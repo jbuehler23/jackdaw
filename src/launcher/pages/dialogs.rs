@@ -414,7 +414,7 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
             Children [
                 Node { width: px(140), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), form.modules.contains(&module.id), locked, call)} ]
                 --
-                Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(note, tokens::DOC_TAB_INACTIVE_LABEL)} ]
+                @{ui::fill(ui::boxed(ui::note(note, tokens::DOC_TAB_INACTIVE_LABEL)))}
             ]
         }));
     }
