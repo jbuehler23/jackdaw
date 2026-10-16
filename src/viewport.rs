@@ -633,13 +633,17 @@ fn handle_viewport_drop(
     }
 
     if let Some(prefab_path) = prefab_drag {
+        // The Project window hands over an absolute path, but the operator
+        // only takes one relative to the assets directory, so it can't reach
+        // outside the project.
+        let prefab_path = crate::entity_ops::to_asset_path(&prefab_path.to_string_lossy());
         commands
             .operator("prefab.spawn_instance")
             .settings(CallOperatorSettings {
                 creates_history_entry: true,
                 ..default()
             })
-            .param("path", prefab_path.to_string_lossy().into_owned())
+            .param("path", prefab_path)
             .param("pos_x", snapped_pos.x as f64)
             .param("pos_y", snapped_pos.y as f64)
             .param("pos_z", snapped_pos.z as f64)
