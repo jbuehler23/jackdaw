@@ -157,21 +157,13 @@ fn merge_prefab_under_instance(
         return;
     };
 
-    let existing_ids: HashSet<u32> = ast
-        .descendants_of(instance_root)
+    let existing: HashMap<u32, Entity> = scoped_descendants(ast, instance_root)
         .into_iter()
-        .filter_map(|node| read_prefab_entity_id(ast, node))
+        .filter_map(|node| read_prefab_entity_id(ast, node).map(|id| (id, node)))
         .collect();
 
     inherit_root_components(ast, instance_root, prefab, prefab_root);
-    materialize_descendants(
-        ast,
-        instance_root,
-        prefab,
-        prefab_root,
-        deleted,
-        &existing_ids,
-    );
+    materialize_descendants(ast, instance_root, prefab, prefab_root, deleted, &existing);
     merge_descendant_overrides(ast, instance_root, prefab, prefab_root);
 }
 
@@ -216,34 +208,75 @@ fn inherit_root_components(
     }
 }
 
+/// The descendants of `root` that share its `PrefabEntityId` space: every node
+/// reached without passing through a nested `IsA` node. A nested instance root
+/// is included, since it is an entry of the outer prefab, but its subtree is
+/// numbered by its own prefab and is left out.
+fn scoped_descendants(ast: &SceneBsnAst, root: Entity) -> Vec<Entity> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        for child in ast.get_children_ast(current) {
+            out.push(child);
+            if ast.find_patch_by_type_path(child, ISA_TYPE).is_none() {
+                stack.push(child);
+            }
+        }
+    }
+    out
+}
+
 /// Clone every prefab descendant the instance does not already carry into the
 /// scene, keyed by `PrefabEntityId`, skipping ids in `deleted`. A running
-/// prefab-node to scene-node map tracks where each cloned node's parent landed.
+/// prefab-node to scene-node map tracks where each node's parent landed.
+///
+/// Only nodes in the prefab's own id space are matched against `existing`. The
+/// subtree of a nested instance is cloned along with its root when the root is
+/// new, and otherwise left to the scene's nested instance to resolve.
 fn materialize_descendants(
     ast: &mut SceneBsnAst,
     instance_root: Entity,
     prefab: &SceneBsnAst,
     prefab_root: Entity,
     deleted: &[u32],
-    existing_ids: &HashSet<u32>,
+    existing: &HashMap<u32, Entity>,
 ) {
+    let scoped: HashSet<Entity> = scoped_descendants(prefab, prefab_root)
+        .into_iter()
+        .collect();
     let mut prefab_to_scene: HashMap<Entity, Entity> = HashMap::default();
     prefab_to_scene.insert(prefab_root, instance_root);
+    let mut cloned: HashSet<Entity> = HashSet::default();
 
     for prefab_node in prefab.descendants_of(prefab_root) {
+        let prefab_parent = prefab.ast_parent_of(prefab_node).unwrap_or(prefab_root);
+        if !scoped.contains(&prefab_node) {
+            if let Some(&scene_parent) = prefab_to_scene.get(&prefab_parent)
+                && cloned.contains(&prefab_parent)
+            {
+                let new_node = clone_node_into(ast, prefab, prefab_node, scene_parent);
+                prefab_to_scene.insert(prefab_node, new_node);
+                cloned.insert(prefab_node);
+            }
+            continue;
+        }
         let Some(id) = read_prefab_entity_id(prefab, prefab_node) else {
             continue;
         };
-        if deleted.contains(&id) || existing_ids.contains(&id) {
+        if deleted.contains(&id) {
             continue;
         }
-        let prefab_parent = prefab.ast_parent_of(prefab_node).unwrap_or(prefab_root);
+        if let Some(&scene_node) = existing.get(&id) {
+            prefab_to_scene.insert(prefab_node, scene_node);
+            continue;
+        }
         let scene_parent = prefab_to_scene
             .get(&prefab_parent)
             .copied()
             .unwrap_or(instance_root);
         let new_node = clone_node_into(ast, prefab, prefab_node, scene_parent);
         prefab_to_scene.insert(prefab_node, new_node);
+        cloned.insert(prefab_node);
     }
 }
 
@@ -256,22 +289,22 @@ fn merge_descendant_overrides(
     prefab: &SceneBsnAst,
     prefab_root: Entity,
 ) {
-    let override_nodes: Vec<Entity> = ast
-        .descendants_of(instance_root)
+    let override_nodes: Vec<Entity> = scoped_descendants(ast, instance_root)
         .into_iter()
         .filter(|node| {
             ast.find_patch_by_type_path(*node, PREFAB_ENTITY_ID_TYPE)
                 .is_some()
         })
         .collect();
+    let prefab_nodes = scoped_descendants(prefab, prefab_root);
 
     for node in override_nodes {
         let Some(id) = read_prefab_entity_id(ast, node) else {
             continue;
         };
-        let Some(prefab_match) = prefab
-            .descendants_of(prefab_root)
-            .into_iter()
+        let Some(prefab_match) = prefab_nodes
+            .iter()
+            .copied()
             .find(|pn| read_prefab_entity_id(prefab, *pn) == Some(id))
         else {
             continue;
