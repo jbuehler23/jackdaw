@@ -638,3 +638,61 @@ fn an_idle_launcher_spawns_and_rebuilds_nothing() {
     }
     assert_eq!(before, nodes(&mut app), "the idle launcher keeps its nodes");
 }
+
+#[test]
+fn a_module_description_is_the_widest_part_of_its_row_in_a_narrow_window() {
+    let mut app = launcher_app();
+    let (window, mut state) = app
+        .world_mut()
+        .query_filtered::<(Entity, &mut Window), With<PrimaryWindow>>()
+        .single_mut(app.world_mut())
+        .expect("headless apps still have a primary window");
+    state.resolution = bevy::window::WindowResolution::new(950, 720);
+    app.world_mut().write_message(bevy::window::WindowResized {
+        window,
+        width: 950.0,
+        height: 720.0,
+    });
+    run(
+        &mut app,
+        "launcher.new_project",
+        &[("template", "3d".to_string().into())],
+    );
+    for _ in 0..8 {
+        app.update();
+    }
+    let catalog = jackdaw_project_build::modules::ModuleCatalog::builtin();
+    for module in catalog.modules() {
+        let text = app
+            .world_mut()
+            .query::<(Entity, &Text)>()
+            .iter(app.world())
+            .find_map(|(entity, text)| text.0.starts_with(&module.description).then_some(entity))
+            .unwrap_or_else(|| panic!("the page describes {}", module.id));
+        let parent = |entity: Entity| app.world().get::<ChildOf>(entity).unwrap().parent();
+        let column = parent(text);
+        let row = parent(column);
+        let width = |entity: Entity| {
+            app.world()
+                .get::<bevy::ui::ComputedNode>(entity)
+                .expect("laid out")
+                .size()
+                .x
+        };
+        let others: Vec<f32> = app
+            .world()
+            .get::<Children>(row)
+            .unwrap()
+            .iter()
+            .filter(|&child| child != column)
+            .map(width)
+            .collect();
+        assert!(
+            others.iter().all(|&other| width(column) > other),
+            "{}: the description gets {} of a {} row beside {others:?}",
+            module.id,
+            width(column),
+            width(row),
+        );
+    }
+}

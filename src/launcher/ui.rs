@@ -320,6 +320,21 @@ pub fn row(gap: f32, children: impl SceneList) -> impl Scene {
     }
 }
 
+/// A column that takes the width its row has left over. Its basis is zero,
+/// so long text wraps inside it instead of squeezing the row's other items.
+pub fn fill(children: impl SceneList) -> impl Scene {
+    bsn! {
+        Node {
+            flex_grow: 1.0,
+            flex_basis: px(0),
+            min_width: px(0),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(2),
+        }
+        Children [ {children} ]
+    }
+}
+
 /// A column of children with a gap.
 pub fn column(gap: f32, children: impl SceneList) -> impl Scene {
     bsn! {
