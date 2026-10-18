@@ -135,7 +135,7 @@ pub fn parse_query_rows(value: &Value) -> Vec<QueryRow> {
 }
 
 fn parse_query_row(value: &Value) -> Option<QueryRow> {
-    let entity = value.get("entity")?.as_u64()?;
+    let entity = jackdaw_pie_protocol::snapshot::entity_bits(value.get("entity")?)?;
     let components = value.get("components").and_then(Value::as_object);
 
     let mut paths: Vec<String> = components

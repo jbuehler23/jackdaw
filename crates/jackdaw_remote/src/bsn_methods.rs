@@ -42,7 +42,8 @@ pub fn jackdaw_apply_bsn_handler(In(params): In<Option<Value>>, world: &mut Worl
         world.insert_resource(prior_ast);
     }
 
-    Ok(json!({ "entities": spawned }))
+    let entities: Vec<u64> = spawned.iter().map(|entity| entity.to_bits()).collect();
+    Ok(json!({ "entities": entities }))
 }
 
 pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {

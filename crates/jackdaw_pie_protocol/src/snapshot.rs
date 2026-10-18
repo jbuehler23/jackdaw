@@ -25,6 +25,19 @@ pub struct RemoteEntity {
     pub scene_node_id: Option<u64>,
 }
 
+/// The bits of an entity a reflected component carries, as JSON: the
+/// `{index}v{generation}` text Bevy writes, or bare bits, alone or as the
+/// single field of a tuple struct such as `ChildOf`.
+pub fn entity_bits(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.parse::<Entity>().ok().map(Entity::to_bits),
+        Value::Array(fields) => fields.first().and_then(entity_bits),
+        Value::Object(fields) => fields.values().next().and_then(entity_bits),
+        _ => None,
+    }
+}
+
 /// Component type path prefixes to skip during scene snapshot.
 const SKIP_PREFIXES: &[&str] = &[
     "bevy_render::",
@@ -241,5 +254,16 @@ mod tests {
             "expected a Name component, got: {:?}",
             snap[0].components.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn an_entity_is_read_from_its_text_or_its_bits() {
+        let entity = Entity::from_raw_u32(5).unwrap();
+        let bits = entity.to_bits();
+        let text = serde_json::to_value(entity).unwrap();
+        assert_eq!(entity_bits(&text), Some(bits));
+        assert_eq!(entity_bits(&serde_json::json!(bits)), Some(bits));
+        assert_eq!(entity_bits(&serde_json::json!([text])), Some(bits));
+        assert_eq!(entity_bits(&serde_json::json!("not an entity")), None);
     }
 }

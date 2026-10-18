@@ -7,10 +7,9 @@
 //! ```
 //!
 //! Nothing here triggers a `PointerClick` or a `FocusedInput`. Each operator
-//! queues the window events winit would have delivered -- on their own message
-//! streams and on the combined [`WindowEvent`] one, as `bevy_winit` forwards
-//! them -- and moves the window's cursor with them, so everything downstream
-//! behaves as it does for a user.
+//! queues the [`WindowEvent`]s winit would have delivered, which `bevy_window`
+//! splits into their own message streams and moves the window's cursor with,
+//! so everything downstream behaves as it does for a user.
 //!
 //! A gesture is a list of beats, one emitted per pass with `frames` frames
 //! before the next, so a press lands on a hover the editor has already seen.
@@ -29,7 +28,7 @@ use bevy::{
     math::DVec2,
     picking::PickingSystems,
     prelude::*,
-    window::{PrimaryWindow, WindowEvent},
+    window::{PrimaryWindow, RawCursorMoved, WindowEvent},
 };
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::key_code_from_name;
@@ -164,66 +163,48 @@ fn drive_synthetic_input(world: &mut World) {
     }
 }
 
-/// Deliver one event the way `bevy_winit` does: on its own message stream and
-/// on the combined [`WindowEvent`] one, with the window's cursor moved to match.
+/// Deliver one event the way `bevy_winit` does: as a [`WindowEvent`], which
+/// `bevy_window` splits into its own message stream and uses to move the
+/// window's cursor.
 fn emit(world: &mut World, window: Entity, event: Emit) {
-    match event {
+    let event = match event {
         Emit::Cursor(logical) => {
-            let Some(mut win) = world.get_mut::<Window>(window) else {
+            let Some(win) = world.get::<Window>(window) else {
                 return;
             };
-            let scale = win.resolution.scale_factor();
-            let physical =
-                DVec2::new(f64::from(logical.x), f64::from(logical.y)) * f64::from(scale);
-            let last = win.physical_cursor_position();
-            win.set_physical_cursor_position(Some(physical));
-            let delta = last.map(|last| (physical.as_vec2() - last) / scale);
-            let moved = CursorMoved {
+            let scale = f64::from(win.resolution.scale_factor());
+            WindowEvent::CursorMoved(RawCursorMoved {
                 window,
-                position: logical,
-                delta,
-            };
-            world.write_message(moved.clone());
-            world.write_message(WindowEvent::CursorMoved(moved));
+                physical_position: DVec2::new(f64::from(logical.x), f64::from(logical.y)) * scale,
+            })
         }
-        Emit::Button { button, state } => {
-            let input = MouseButtonInput {
-                button,
-                state,
-                window,
-            };
-            world.write_message(input);
-            world.write_message(WindowEvent::MouseButtonInput(input));
-        }
-        Emit::Wheel(lines) => {
-            let wheel = MouseWheel {
-                unit: MouseScrollUnit::Line,
-                x: lines.x,
-                y: lines.y,
-                window,
-                phase: TouchPhase::Moved,
-            };
-            world.write_message(wheel);
-            world.write_message(WindowEvent::MouseWheel(wheel));
-        }
+        Emit::Button { button, state } => WindowEvent::MouseButtonInput(MouseButtonInput {
+            button,
+            state,
+            window,
+        }),
+        Emit::Wheel(lines) => WindowEvent::MouseWheel(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: lines.x,
+            y: lines.y,
+            window,
+            phase: TouchPhase::Moved,
+        }),
         Emit::Key {
             key,
             logical,
             text,
             state,
-        } => {
-            let input = KeyboardInput {
-                key_code: key,
-                logical_key: logical,
-                state,
-                text: text.map(Into::into),
-                repeat: false,
-                window,
-            };
-            world.write_message(input.clone());
-            world.write_message(WindowEvent::KeyboardInput(input));
-        }
-    }
+        } => WindowEvent::KeyboardInput(KeyboardInput {
+            key_code: key,
+            logical_key: logical,
+            state,
+            text: text.map(Into::into),
+            repeat: false,
+            window,
+        }),
+    };
+    world.write_message(event);
 }
 
 /// The modifiers a `mods=` list names, in press order. An unknown name is
@@ -901,24 +882,25 @@ mod tests {
     #[test]
     fn a_wheel_turn_reaches_the_window_as_lines() {
         let mut world = World::new();
-        world.init_resource::<Messages<MouseWheel>>();
         world.init_resource::<Messages<WindowEvent>>();
         let window = world.spawn_empty().id();
         emit(&mut world, window, Emit::Wheel(Vec2::new(0.0, -3.0)));
 
         let turned = world
-            .run_system_once(|mut wheel: MessageReader<MouseWheel>| {
-                wheel.read().copied().collect::<Vec<_>>()
+            .run_system_once(|mut events: MessageReader<WindowEvent>| {
+                events
+                    .read()
+                    .filter_map(|event| match event {
+                        WindowEvent::MouseWheel(wheel) => Some(*wheel),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
             })
             .expect("the reader runs");
         assert_eq!(turned.len(), 1);
         assert_eq!(turned[0].unit, MouseScrollUnit::Line);
         assert_eq!((turned[0].x, turned[0].y), (0.0, -3.0));
         assert_eq!(turned[0].window, window);
-        let combined = world
-            .run_system_once(|mut events: MessageReader<WindowEvent>| events.read().count())
-            .expect("the reader runs");
-        assert_eq!(combined, 1, "the combined window stream carries it too");
     }
 
     #[test]

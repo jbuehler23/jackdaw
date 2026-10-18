@@ -110,11 +110,10 @@ fn screen_position_of(app: &mut App, panel: Entity, authored: Vec2) -> Vec2 {
     logical * app.world().resource::<UiScale>().0
 }
 
-fn pointer_at<E: Event<Trigger<'static>: Default>>(
-    app: &mut App,
-    position: Vec2,
-    event: impl FnOnce(Pointer) -> E,
-) {
+fn pointer_at<E: Event>(app: &mut App, position: Vec2, event: impl FnOnce(Pointer) -> E)
+where
+    bevy::ecs::event::EventTriggerState<'static, E>: Default,
+{
     let window = app
         .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>()
