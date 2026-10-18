@@ -5,7 +5,8 @@ checkout. All three provide the GUI, `jd`, the rustc wrapper, project
 scaffolding, and import.
 
 Jackdaw versions track Bevy minors: Jackdaw 0.19 targets Bevy 0.19, and so do
-the `jackdaw_*` crates your project depends on.
+the `jackdaw_*` crates your project depends on. Nightly builds track Bevy's
+`main` branch; see [Stable and Bleeding Edge](channels.md).
 
 ## Which one to use
 
