@@ -7,21 +7,22 @@ resolver = "3"
 members = ["jackdaw_avian_integration", "jackdaw_physics"]
 
 [workspace.package]
-version = "0.20.0-dev"
+version = "0.21.0-dev"
 rust-version = "1.97.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [workspace.dependencies]
-# The avian release for Bevy 0.20. Until it is out this workspace does not
-# resolve, and the members say so in `package.metadata.jackdaw.unavailable`.
+# avian has no release that builds against Bevy's main branch, so this
+# workspace does not resolve, and the members say so in
+# `package.metadata.jackdaw.unavailable`.
 avian3d = { version = "0.8", features = [
     "3d",
     "parry-f32",
     "collider-from-mesh",
 ] }
-jackdaw_avian_integration = { version = "0.20.0-dev", path = "jackdaw_avian_integration", default-features = false }
+jackdaw_avian_integration = { version = "0.21.0-dev", path = "jackdaw_avian_integration", default-features = false }
 
 [workspace.lints.clippy]
 doc_markdown = "warn"

@@ -10,14 +10,14 @@ repository = "https://github.com/jbuehler23/jackdaw"
 [dependencies]
 noise = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-bevy_math = "0.20"
+bevy_math = { git = "https://github.com/bevyengine/bevy", branch = "main" }
 bytemuck = { version = "1", features = ["derive"], optional = true }
-bevy = { version = "0.20", default-features = false, optional = true, features = [
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, optional = true, features = [
     "std",
     "bevy_asset",
 ] }
 path-slash = { workspace = true, optional = true }
-jackdaw_scene_types = { version = "0.20.0-dev", path = "../jackdaw_scene_types", default-features = false, optional = true }
+jackdaw_scene_types = { version = "0.21.0-dev", path = "../jackdaw_scene_types", default-features = false, optional = true }
 
 [features]
 default = ["render", "procgen"]
