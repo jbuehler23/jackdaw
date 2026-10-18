@@ -4,6 +4,8 @@
 //! jackdaw-release-index add --index <releases.json> --tag <tag> --dist <dir>
 //!     --base-url <url> --bevy <minor> [--rustc <version>] [--notes-url <url>]
 //!     [--bevy-rev <sha>] [--jackdaw-rev <sha>] [--known-good]
+//! jackdaw-release-index mark --index <releases.json> (--known-good [--version <nightly>]
+//!     | --broken --version <nightly>)
 //! jackdaw-release-index public-key
 //! ```
 //!
@@ -13,6 +15,11 @@
 //! damaged or substituted download is never re-signed. Signing uses the
 //! PKCS#8 key held base64-encoded in `JACKDAW_INDEX_SIGNING_KEY`, and
 //! `public-key` prints that key's public half for `OFFICIAL_INDEX_KEY`.
+//!
+//! `mark` flags a nightly already in the index: known good (by default the
+//! newest healthy one), which keeps it past the usual retention, or broken,
+//! which takes it out of the Bleeding Edge channel. It re-signs the index
+//! the same way.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -30,8 +37,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("add") => add(&args[1..]),
+        Some("mark") => mark(&args[1..]),
         Some("public-key") => public_key(),
-        _ => Err("usage: jackdaw-release-index <add|public-key>".into()),
+        _ => Err("usage: jackdaw-release-index <add|mark|public-key>".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -67,29 +75,7 @@ fn add(args: &[String]) -> Result<(), String> {
     };
 
     let key = signing_key()?;
-    let signature_path = signature_path(&index_path);
-    let mut index = match std::fs::read(&index_path) {
-        Ok(bytes) => {
-            let signature = std::fs::read(&signature_path).map_err(|error| {
-                format!(
-                    "{}: {error}; refusing to extend an index whose signature is missing",
-                    signature_path.display()
-                )
-            })?;
-            ReleaseIndex::from_signed(&bytes, &signature, &key.verifying_key())
-                .map_err(|error| format!("{}: {error}", index_path.display()))?
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if signature_path.exists() {
-                return Err(format!(
-                    "{} exists without its index",
-                    signature_path.display()
-                ));
-            }
-            ReleaseIndex::default()
-        }
-        Err(error) => return Err(format!("{}: {error}", index_path.display())),
-    };
+    let mut index = load(&index_path, &key)?;
 
     let today = version::today();
     let release = Release {
@@ -121,19 +107,82 @@ fn add(args: &[String]) -> Result<(), String> {
         .map(|artifact| artifact.target.clone())
         .collect();
     index.add_release(release, today);
-    index.serial += 1;
-    index.generated = Some(version::now_rfc3339());
-    let text = serde_json::to_string_pretty(&index).map_err(|error| error.to_string())?;
-    write_atomically(&index_path, text.as_bytes())?;
-    write_atomically(
-        &signature_path,
-        &signing::sign_detached(&key, text.as_bytes()),
-    )?;
+    save(&mut index, &index_path, &key)?;
     println!(
         "added {release_version} for {} (serial {})",
         targets.join(", "),
         index.serial
     );
+    Ok(())
+}
+
+/// The index at `index_path` once its signature verifies, or an empty index
+/// when there is none yet.
+fn load(index_path: &Path, key: &ed25519_dalek::SigningKey) -> Result<ReleaseIndex, String> {
+    let signature_path = signature_path(index_path);
+    match std::fs::read(index_path) {
+        Ok(bytes) => {
+            let signature = std::fs::read(&signature_path).map_err(|error| {
+                format!(
+                    "{}: {error}; refusing to extend an index whose signature is missing",
+                    signature_path.display()
+                )
+            })?;
+            ReleaseIndex::from_signed(&bytes, &signature, &key.verifying_key())
+                .map_err(|error| format!("{}: {error}", index_path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if signature_path.exists() {
+                return Err(format!(
+                    "{} exists without its index",
+                    signature_path.display()
+                ));
+            }
+            Ok(ReleaseIndex::default())
+        }
+        Err(error) => Err(format!("{}: {error}", index_path.display())),
+    }
+}
+
+/// Raise the serial, then write and sign `index`.
+fn save(
+    index: &mut ReleaseIndex,
+    index_path: &Path,
+    key: &ed25519_dalek::SigningKey,
+) -> Result<(), String> {
+    index.serial += 1;
+    index.generated = Some(version::now_rfc3339());
+    let text = serde_json::to_string_pretty(index).map_err(|error| error.to_string())?;
+    write_atomically(index_path, text.as_bytes())?;
+    write_atomically(
+        &signature_path(index_path),
+        &signing::sign_detached(key, text.as_bytes()),
+    )
+}
+
+#[expect(clippy::print_stdout, reason = "reports what was marked")]
+fn mark(args: &[String]) -> Result<(), String> {
+    let index_path = PathBuf::from(required(args, "--index")?);
+    let version = flag(args, "--version");
+    let known_good = args.iter().any(|arg| arg == "--known-good");
+    let broken = args.iter().any(|arg| arg == "--broken");
+    let key = signing_key()?;
+    let mut index = load(&index_path, &key)?;
+    let marked = match (known_good, broken, version) {
+        (true, false, version) => {
+            let marked = index.mark_known_good(version.as_deref())?;
+            format!("{marked} is known good")
+        }
+        (false, true, Some(version)) => {
+            index.mark_broken(&version)?;
+            format!("{version} is broken")
+        }
+        _ => {
+            return Err("mark takes --known-good [--version <v>] or --broken --version <v>".into());
+        }
+    };
+    save(&mut index, &index_path, &key)?;
+    println!("{marked} (serial {})", index.serial);
     Ok(())
 }
 
