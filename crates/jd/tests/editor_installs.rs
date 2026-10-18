@@ -52,9 +52,18 @@ impl Fixture {
 
     /// Publish a release whose bundle holds an editor reporting `reports`.
     fn publish(&mut self, version: &str, reports: &str) -> &mut Release {
+        self.publish_targeting(version, reports, "0.20")
+    }
+
+    /// As [`Fixture::publish`], with the editor reporting that it targets
+    /// bevy `targets`, such as `main at <commit>`.
+    fn publish_targeting(&mut self, version: &str, reports: &str, targets: &str) -> &mut Release {
         let name = format!("jackdaw-{version}-{TARGET}.tar.zst");
         let bundle = tar_zst(&[
-            ("jackdaw".to_string(), fake_editor(reports).into_bytes()),
+            (
+                "jackdaw".to_string(),
+                fake_editor(reports, targets).into_bytes(),
+            ),
             (
                 "jd".to_string(),
                 format!("#!/bin/sh\necho 'jd {version}'\n").into_bytes(),
@@ -183,10 +192,10 @@ impl Fixture {
 
 /// An editor stand-in: answers `--version`, and otherwise records the
 /// project it was asked to open beside itself.
-fn fake_editor(reports: &str) -> String {
+fn fake_editor(reports: &str, targets: &str) -> String {
     format!(
         "#!/bin/sh\n\
-         if [ \"$1\" = --version ]; then echo 'jackdaw {reports} (targets bevy 0.20)'; exit 0; fi\n\
+         if [ \"$1\" = --version ]; then echo 'jackdaw {reports} (targets bevy {targets})'; exit 0; fi\n\
          echo \"$JACKDAW_OPEN_PROJECT\" > \"$(dirname \"$0\")/opened\"\n"
     )
 }
@@ -516,6 +525,62 @@ fn clean_keeps_the_newest_known_good_and_pinned_nightlies() {
     );
 }
 
+const BEVY_REV: &str = "85503941e488152711a4695bbe248e9ed9f453fc";
+
+#[test]
+fn a_bleeding_edge_project_opens_in_the_nightly_and_bevy_commit_it_pins() {
+    let mut fixture = Fixture::new();
+    let targets = format!("main at {BEVY_REV}");
+    for day in ["17", "18"] {
+        let version = format!("nightly-2026-10-{day}");
+        fixture
+            .publish_targeting(&version, &version, &targets)
+            .bevy_rev = Some(BEVY_REV.to_string());
+    }
+    fixture.sign();
+
+    let stdout = ok(&fixture.jd(&["editor", "install", "bleeding-edge"]));
+    assert!(stdout.contains("nightly-2026-10-18"), "{stdout}");
+    ok(&fixture.jd(&["editor", "install", "nightly-2026-10-17"]));
+    let installs = fixture.installs();
+    let installed = installs
+        .get("nightly-2026-10-17")
+        .expect("the pinned nightly");
+    assert_eq!(installed.channel, Channel::BleedingEdge);
+    assert_eq!(installed.bevy, "main");
+    assert_eq!(installed.bevy_rev.as_deref(), Some(BEVY_REV));
+
+    let project = fixture.project(
+        "edge",
+        &format!(
+            "[jackdaw]\nversion = \"0.21.0-dev\"\nbevy = \"main\"\nchannel = \"bleeding-edge\"\n\
+             build = \"nightly-2026-10-17\"\nbevy_rev = \"{BEVY_REV}\"\n"
+        ),
+    );
+    ok(&fixture.jd(&["open", project.to_str().unwrap()]));
+    let opened = wait_for(&fixture.launcher().join("editors/nightly-2026-10-17/opened"));
+    assert_eq!(
+        opened.trim(),
+        dunce::canonicalize(&project).unwrap().to_str().unwrap()
+    );
+}
+
+#[test]
+fn a_nightly_built_against_another_bevy_commit_is_not_installed() {
+    let mut fixture = Fixture::new();
+    fixture
+        .publish_targeting(
+            "nightly-2026-10-18",
+            "nightly-2026-10-18",
+            "main at 0123abcd",
+        )
+        .bevy_rev = Some(BEVY_REV.to_string());
+    fixture.sign();
+    let stderr = failed(&fixture.jd(&["editor", "install", "bleeding-edge"]));
+    assert!(stderr.contains("0123abcd"), "{stderr}");
+    assert!(fixture.installed_dirs().is_empty());
+}
+
 #[test]
 fn default_and_locate_manage_editors_installed_elsewhere() {
     let mut fixture = Fixture::new();
@@ -526,7 +591,7 @@ fn default_and_locate_manage_editors_installed_elsewhere() {
     let elsewhere = fixture.path("cargo-bin");
     std::fs::create_dir_all(&elsewhere).unwrap();
     let editor = elsewhere.join("jackdaw");
-    std::fs::write(&editor, fake_editor("0.19.4")).unwrap();
+    std::fs::write(&editor, fake_editor("0.19.4", "0.20")).unwrap();
     std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
     let stdout = ok(&fixture.jd(&["editor", "locate", editor.to_str().unwrap()]));

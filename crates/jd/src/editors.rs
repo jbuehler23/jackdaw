@@ -197,6 +197,15 @@ pub fn install(
             release.version, reported.version
         ));
     }
+    if let (Some(listed), Some(built)) = (&release.bevy_rev, &reported.bevy_rev)
+        && listed != built
+    {
+        return Err(format!(
+            "the {} bundle is built against bevy {built}, not the {listed} the index lists; \
+             nothing was installed",
+            release.version
+        ));
+    }
     if !modules.is_empty() {
         progress(InstallProgress::Modules);
     }
@@ -398,12 +407,14 @@ fn remove_tree(path: &Path) -> Result<(), String> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Reported {
     pub version: String,
-    /// The Bevy minor it targets.
+    /// The Bevy minor it targets, or `main`.
     pub bevy: String,
+    /// The Bevy commit a build on Bevy's main branch was made against.
+    pub bevy_rev: Option<String>,
 }
 
 /// Run `<editor> --version` and read `jackdaw <version> (targets bevy
-/// <minor>)` from it.
+/// <minor>)`, or `(targets bevy main at <commit>)`, from it.
 pub fn query_version(executable: &Path) -> Result<Reported, String> {
     let output = version_output(executable)?;
     parse_version_line(&output).ok_or_else(|| {
@@ -457,14 +468,19 @@ fn parse_version_line(output: &str) -> Option<Reported> {
     let line = output.lines().next()?.trim();
     let rest = line.strip_prefix("jackdaw ")?;
     let (version, rest) = rest.split_once(' ').unwrap_or((rest, ""));
-    let bevy = rest
+    let targets = rest
         .trim()
         .strip_prefix("(targets bevy ")
         .and_then(|rest| rest.strip_suffix(')'))
         .unwrap_or_default();
+    let (bevy, bevy_rev) = match targets.split_once(" at ") {
+        Some((bevy, rev)) => (bevy, Some(rev.to_string())),
+        None => (targets, None),
+    };
     Some(Reported {
         version: version.to_string(),
         bevy: bevy.to_string(),
+        bevy_rev,
     })
 }
 
@@ -508,7 +524,7 @@ pub fn locate(layout: &Layout, path: &Path) -> Result<Install, String> {
         },
         version: reported.version,
         bevy: reported.bevy,
-        bevy_rev: None,
+        bevy_rev: reported.bevy_rev,
         path: dir,
         managed: false,
         modules: Vec::new(),
@@ -726,7 +742,16 @@ mod tests {
             parse_version_line("jackdaw 0.20.1 (targets bevy 0.20)\n"),
             Some(Reported {
                 version: "0.20.1".into(),
-                bevy: "0.20".into()
+                bevy: "0.20".into(),
+                bevy_rev: None,
+            })
+        );
+        assert_eq!(
+            parse_version_line("jackdaw nightly-2026-10-18 (targets bevy main at 85503941e4)\n"),
+            Some(Reported {
+                version: "nightly-2026-10-18".into(),
+                bevy: "main".into(),
+                bevy_rev: Some("85503941e4".into()),
             })
         );
         assert_eq!(
