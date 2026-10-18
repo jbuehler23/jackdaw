@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Installation](getting-started/installation.md)
+- [Stable and Bleeding Edge](getting-started/channels.md)
 - [Your First Scene](getting-started/first-scene.md)
 - [Migrating an Existing Project](getting-started/migrating-an-existing-project.md)
 - [Troubleshooting](getting-started/troubleshooting.md)
