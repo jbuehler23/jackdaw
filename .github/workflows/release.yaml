@@ -50,6 +50,8 @@ jobs:
     outputs:
       include: ${{ steps.pick.outputs.include }}
       publishes: ${{ steps.version.outputs.publishes }}
+      bevy: ${{ steps.version.outputs.bevy }}
+      bevy_main: ${{ steps.version.outputs.bevy_main }}
       profile: ${{ steps.version.outputs.profile }}
       warm: ${{ steps.version.outputs.warm }}
     steps:
@@ -84,7 +86,15 @@ jobs:
           if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = true ] && [ "${tag#*-}" = "$tag" ]; then
             profile=full
           fi
+          bevy=$(sed -n 's/^bevy = { version = "\([0-9]*\.[0-9]*\)".*/\1/p' Cargo.toml | head -n 1)
           echo "publishes=$publishes" >> "$GITHUB_OUTPUT"
+          echo "bevy=$bevy" >> "$GITHUB_OUTPUT"
+          # On Bevy's main branch nothing is packaged or published.
+          if grep -q '^bevy = { git = ' Cargo.toml; then
+            echo "bevy_main=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bevy_main=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
           echo "warm=${{ github.event_name == 'schedule' }}" >> "$GITHUB_OUTPUT"
 
@@ -117,7 +127,8 @@ jobs:
   # anything is published. The projects are kept for `published-resolves`.
   scaffold-resolves:
     name: Scaffolded projects resolve
-    if: github.event_name != 'schedule'
+    needs: [plan]
+    if: github.event_name != 'schedule' && needs.plan.outputs.bevy_main == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -220,7 +231,8 @@ jobs:
   # Every publishable crate builds from its packaged sources before anything
   # is uploaded.
   packages:
-    if: github.event_name != 'schedule'
+    needs: [plan]
+    if: github.event_name != 'schedule' && needs.plan.outputs.bevy_main == 'false'
     uses: ./.github/workflows/packages.yaml
 
   # Publishes every crate that is not `publish = false`: the editor, `jd`
@@ -259,341 +271,16 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo xtask publish
 
-  # Downloadable per-platform bundles: the editor, its CLI, the rustc
-  # wrapper, the runtime dylibs, and a relocatable SDK, all in one archive.
-  # A user extracts and runs offline - no bootstrap compile, no source
-  # checkout. Independent of the crates.io publish.
+  # Downloadable per-platform bundles, independent of the crates.io publish.
   binaries:
-    name: Bundle - ${{ matrix.triple }}
     needs: [plan]
-    runs-on: ${{ matrix.os }}
-    # The bundled editor is the one whose scaffolds ship, and this job is
-    # the only place that knows its crates are on their way to the
-    # registry. Without the flag the build reads as a git build, and
-    # every project it set up would be pinned to the release commit
-    # rather than to the release.
-    #
-    # Linux links against glibc 2.31 rather than the runner's own, so the
-    # bundle starts on older distributions. cargo-zigbuild drives every
-    # cargo invocation that compiles the shipped graph, with zig as the C
-    # compiler and linker for that target. zig is a tool of this job only.
-    env:
-      JACKDAW_RELEASE_BUILD: "1"
-      CARGO_FRONTEND: ${{ matrix.glibc_target && 'cargo-zigbuild' || 'cargo' }}
-      BUILD_TARGET: ${{ matrix.glibc_target || matrix.triple }}
-    # This job builds the editor once for the binaries, then an extension
-    # against the staged SDK. A cold macOS or Windows runner can still take
-    # hours, and a job cut off by its limit reports only `cancelled`.
-    timeout-minutes: 300
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.include) }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.toolchain }}
-          targets: ${{ matrix.triple }}
-
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
-        timeout-minutes: 10
-
-      # The tracked cargo config links Linux builds through clang and wild.
-      - name: Install cargo binstall (Linux)
-        if: runner.os == 'Linux'
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild (Linux)
-        if: runner.os == 'Linux'
-        run: cargo binstall wild-linker --locked --force
-
-      - name: Install zig (Linux)
-        if: matrix.glibc_target
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-          use-cache: false
-
-      - name: Install cargo-zigbuild (Linux)
-        if: matrix.glibc_target
-        run: cargo binstall cargo-zigbuild@0.23.4 --locked --force
-
-      # cargo-zigbuild covers target units and `cc`-built C. Two things sit
-      # outside it: proc macros are host units, which the bundle ships for a
-      # user's rustc to load, so cargo's host config links them through zig
-      # too, and CC and CXX send any C a host unit compiles to the same zig
-      # toolchain.
-      - name: Point host links and compilers at zig (Linux)
-        if: matrix.glibc_target
-        run: |
-          floor="${{ matrix.glibc_target }}"
-          for tool in cc c++; do
-            printf '#!/bin/sh\nexec cargo-zigbuild zig %s -- -g -fno-sanitize=all -target x86_64-linux-gnu.%s "$@"\n' "$tool" "${floor##*gnu.}" > "$RUNNER_TEMP/zig-$tool"
-            chmod +x "$RUNNER_TEMP/zig-$tool"
-          done
-          echo "CC=$RUNNER_TEMP/zig-cc" >> "$GITHUB_ENV"
-          echo "CXX=$RUNNER_TEMP/zig-c++" >> "$GITHUB_ENV"
-          echo "CARGO_UNSTABLE_HOST_CONFIG=true" >> "$GITHUB_ENV"
-          echo "CARGO_HOST_LINKER=$RUNNER_TEMP/zig-cc" >> "$GITHUB_ENV"
-
-      # Saved only from main (the schedule, or a dispatch asking for it), so
-      # tags restore it. rust-cache adds the lockfile and the env to the
-      # key; the profile is named here because it is pinned after this step.
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.save_cache == true) }}
-          shared-key: bundle-${{ runner.os }}-${{ needs.plan.outputs.profile }}
-          # The cargo config is in the key because it carries rustflags
-          # (the linker choice and its flags): a cache built under
-          # different flags restores artifacts whose crate disambiguators
-          # no longer match what a fresh build produces, and the mix
-          # surfaces as undefined `type_info::CELL` symbols at link time.
-          key: ${{ matrix.glibc_target || matrix.triple }}-${{ hashFiles('.cargo/config.toml') }}
-          # xtask is a detached workspace with its own target dir, which
-          # the default cache paths do not cover: the bundler rebuilt
-          # cold on every run, which was most of the staging step's
-          # 15-27 minutes.
-          workspaces: |
-            . -> target
-            xtask -> target
-          # Save even when the job fails. This job is where a platform
-          # gets iterated on, and the default is to save nothing unless
-          # it succeeds: the two platforms that were failing therefore
-          # never once had a warm cache, so every attempt rebuilt from
-          # scratch and Windows spent 75 minutes on the same step twice
-          # in a row. The build is the same work whether the test after
-          # it passed.
-          cache-on-failure: true
-
-      # Final bundles build with one codegen unit and thin LTO, or the
-      # platform's LTO override, which take more memory than `cargo install`
-      # is given. Pinned for every cargo invocation in the job: the smoke
-      # check builds its extension at release too, and a step that resolved a
-      # different profile would rebuild the graph and mix artifact generations.
-      - name: Pin the release profile for the whole job
-        if: needs.plan.outputs.profile == 'full'
-        run: |
-          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_RELEASE_LTO=${{ matrix.lto || 'thin' }}" >> "$GITHUB_ENV"
-
-      # Every cargo invocation in this job, not just the one that builds
-      # the binaries: the later steps rebuild the same graph, and a
-      # differing RUSTFLAGS both invalidates all of it and leaves the
-      # staged SDK dylib without the runtime search path it needs to
-      # find libstd beside itself. Skipped where the value is empty,
-      # because setting RUSTFLAGS at all would discard the rust-lld
-      # flags `.cargo/config.toml` supplies for the MSVC target.
-      # Single quotes, or bash expands the undefined `$ORIGIN` inside the
-      # flag to an empty string and every shipped Linux binary loses its
-      # runpath: the dylibs sit beside it and the loader still reports
-      # them "not found".
-      #
-      # The glibc-target leg also allows undefined symbols inside the shared
-      # libraries it links against: the runner's libasound and libudev were
-      # built against its newer glibc, and on the user's machine their own
-      # copies, built against that machine's glibc, are what load.
-      - name: Pin the runtime search path for the whole job
-        if: matrix.rpath != ''
-        run: echo 'RUSTFLAGS=${{ matrix.rpath }} ${{ matrix.link }}' >> "$GITHUB_ENV"
-
-      # The rustc wrapper is a HOST tool (cargo runs it as RUSTC_WRAPPER);
-      # built without --target so it lands in target/release, where the
-      # bundler's SdkPaths looks for it.
-      - name: Build rustc wrapper (host)
-        if: '!matrix.glibc_target'
-        run: cargo build --release -p jackdaw_rustc_wrapper
-
-      # The root package owns the editor and installed wrapper. The
-      # artifact list is kept for the bundler, which would otherwise build
-      # again to learn it.
-      - name: Build installed binaries (target)
-        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jackdaw --features dylib --bins --message-format=json-render-diagnostics > "$RUNNER_TEMP/bundle-build.json"
-
-      # `jd` on its own: built with the editor's `dylib` features it would
-      # link the Bevy runtime through the schema crate's reflection.
-      - name: Build jd (target)
-        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jd --bin jd
-
-      # Under the glibc target the shipped wrapper is the root package's
-      # own, built above against the same glibc, placed where the bundler
-      # looks for the host one.
-      - name: Place the rustc wrapper (Linux)
-        if: matrix.glibc_target
-        run: |
-          mkdir -p target/release
-          cp "target/${{ matrix.triple }}/release/jackdaw-rustc-wrapper" target/release/
-
-      # A PE export table addresses its entries with a 16-bit ordinal, so
-      # 65,535 is the format's ceiling and no linker escapes it.
-      # Each shared Rust library has its own PE export table. Keep every one
-      # below a conservative ceiling so a future dependency cannot silently
-      # recombine the split and fail only at the final Windows link.
-      - name: Check shared DLL PE export headroom
-        if: runner.os == 'Windows'
-        run: |
-          set -euo pipefail
-          rustup component add llvm-tools
-          readobj="$(rustc --print sysroot)/lib/rustlib/${{ matrix.triple }}/bin/llvm-readobj"
-          shopt -s nullglob
-          bevy_dlls=("target/${{ matrix.triple }}/release/deps/bevy_dylib"*.dll)
-          jackdaw_dlls=("target/${{ matrix.triple }}/release/deps/jackdaw_dylib"*.dll)
-          if [ "${#bevy_dlls[@]}" -eq 0 ] || [ "${#jackdaw_dlls[@]}" -eq 0 ]; then
-            echo "expected separate Bevy and Jackdaw runtime DLLs"
-            exit 1
-          fi
-          dlls=("target/${{ matrix.triple }}/release/jackdaw_sdk.dll" "${bevy_dlls[@]}" "${jackdaw_dlls[@]}")
-          for dll in "${dlls[@]}"; do
-            exports=$("$readobj" --coff-exports "$dll" | grep -c "  Ordinal:")
-            echo "$(basename "$dll") exports $exports symbols of the 65535 a PE file can hold"
-            if [ "$exports" -gt 60000 ]; then
-              echo "under 5000 from the ceiling; split the DLL or shrink its public surface"
-              exit 1
-            fi
-          done
-
-      # Built ahead of staging so a cache-warming run stores it too.
-      - name: Build the bundler
-        run: |
-          if [ -n "${{ matrix.glibc_target }}" ]; then
-            cargo-zigbuild build --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET"
-          else
-            cargo build --quiet --package xtask --manifest-path xtask/Cargo.toml
-          fi
-
-      # A cache-warming run stops here.
-      - name: Stage the bundle
-        if: needs.plan.outputs.warm != 'true'
-        # RUNNER_TEMP is outside the source checkout. Running `jd` from here
-        # therefore exercises installed behavior and cannot accidentally
-        # rewrite scaffolded manifests to local path dependencies.
-        #
-        # The bundler reads the SDK's artifacts from the build step's saved
-        # JSON instead of building again. A second build compiled the editor
-        # again whenever its environment differed from the first.
-        run: |
-          out="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          artifacts="$RUNNER_TEMP/bundle-build.json"
-          if [ -n "${{ matrix.glibc_target }}" ]; then
-            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle --out "$out" --workspace . --artifacts "$artifacts"
-          else
-            cargo xtask bundle --out "$out" --workspace . --artifacts "$artifacts"
-          fi
-
-      # A binary that needs a newer glibc than the target names fails at the
-      # loader on an older distribution, which the runner itself never shows.
-      - name: Verify the staged binaries' glibc floor (Linux)
-        if: needs.plan.outputs.warm != 'true' && matrix.glibc_target
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          floor="${{ matrix.glibc_target }}"
-          floor="${floor##*gnu.}"
-          fail=0
-          while IFS= read -r -d '' f; do
-            file -b "$f" | grep -q '^ELF' || continue
-            need=$(objdump -T "$f" | { grep -o 'GLIBC_[0-9.]*' || true; } | sed 's/GLIBC_//' | sort -V | tail -1)
-            echo "${f#$root/}: glibc ${need:-none}"
-            if [ -n "$need" ] && [ "$(printf '%s\n%s\n' "$need" "$floor" | sort -V | tail -1)" != "$floor" ]; then
-              echo "::error::${f#$root/} needs glibc $need, above $floor"; fail=1
-            fi
-          done < <(find "$root" -type f \( -perm -u+x -o -name '*.so' \) -print0)
-          exit "$fail"
-
-      # A binary that links the runtime dylibs but carries no `$ORIGIN`
-      # runpath extracts fine and dies at the loader on the user's
-      # machine; CI never notices because `cargo test` puts the build
-      # tree on LD_LIBRARY_PATH.
-      - name: Verify the staged binaries carry their runpath
-        if: needs.plan.outputs.warm != 'true' && runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          for bin in jackdaw jd; do
-            if ! readelf -d "$root/$bin" | grep -E 'RUNPATH|RPATH' | grep -qF '$ORIGIN'; then
-              echo "$bin is missing its \$ORIGIN runpath:"
-              readelf -d "$root/$bin" | head -20
-              exit 1
-            fi
-          done
-
-      # An archive that is missing a piece installs and then fails at the first
-      # extension build, which is how a missing sdk/manifest.txt reached a user.
-      - name: Verify the staged bundle
-        if: needs.plan.outputs.warm != 'true'
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          exe=""
-          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
-          missing=0
-          for f in sdk/manifest.txt Cargo.lock toolchain.txt \
-                   "jackdaw$exe" "jd$exe" "jackdaw-rustc-wrapper$exe"; do
-            if [ ! -f "$root/$f" ]; then echo "bundle is missing $f"; missing=1; fi
-          done
-          if [ ! -d "$root/sdk/${{ matrix.triple }}" ]; then
-            echo "bundle is missing sdk/${{ matrix.triple }}"; missing=1
-          fi
-          if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
-          echo "bundle layout verified"
-
-      # Build an extension against the staged release SDK, the way an
-      # installed user does. It runs from xtask, so the editor is not
-      # compiled again for a test target. Under cargo-zigbuild the extension
-      # build inherits the zig toolchain the staged SDK was linked with.
-      - name: Bundle smoke (extension builds against the release SDK)
-        if: needs.plan.outputs.warm != 'true'
-        env:
-          # On failure, the wrapper re-runs the failed unit with rustc's
-          # crate-locator trace, so a rejected extern says why it was
-          # rejected instead of a bare "can't find crate".
-          JACKDAW_WRAPPER_EXPLAIN: "1"
-        run: |
-          bundle="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          if [ -n "${{ matrix.glibc_target }}" ]; then
-            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle-smoke --bundle "$bundle" --workspace .
-          else
-            cargo xtask bundle-smoke --bundle "$bundle" --workspace .
-          fi
-
-      - name: Archive (tar.zst)
-        if: needs.plan.outputs.warm != 'true' && matrix.archive == 'tar.zst'
-        run: tar --zstd -cf "jackdaw-${{ matrix.triple }}.tar.zst" -C "$RUNNER_TEMP" "jackdaw-${{ matrix.triple }}"
-
-      - name: Archive (zip)
-        if: needs.plan.outputs.warm != 'true' && matrix.archive == 'zip' && runner.os == 'Windows'
-        working-directory: ${{ runner.temp }}
-        run: 7z a "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip" "./jackdaw-${{ matrix.triple }}"
-
-      # ditto keeps the symlinks and executable bits Finder and unzip restore.
-      - name: Archive (zip, macOS)
-        if: needs.plan.outputs.warm != 'true' && matrix.archive == 'zip' && runner.os == 'macOS'
-        working-directory: ${{ runner.temp }}
-        run: ditto -c -k --keepParent "jackdaw-${{ matrix.triple }}" "$GITHUB_WORKSPACE/jackdaw-${{ matrix.triple }}.zip"
-
-      - name: Generate checksum
-        if: needs.plan.outputs.warm != 'true'
-        run: openssl dgst -sha256 "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}" > "jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256"
-
-      - name: Keep the archive
-        if: needs.plan.outputs.warm != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bundle-${{ matrix.triple }}
-          path: |
-            jackdaw-${{ matrix.triple }}.${{ matrix.archive }}
-            jackdaw-${{ matrix.triple }}.${{ matrix.archive }}.sha256
-          retention-days: 7
-          compression-level: 0
+    uses: ./.github/workflows/bundle.yaml
+    with:
+      include: ${{ needs.plan.outputs.include }}
+      profile: ${{ needs.plan.outputs.profile }}
+      warm: ${{ needs.plan.outputs.warm == 'true' }}
+      save_cache: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.save_cache == true) }}
+      release: true
 
   # The one-line installers, run against the archives this run built, served
   # from a local web server in place of the release: a piped install
@@ -810,69 +497,15 @@ jobs:
           files: dist/*
 
   # jd reads the signed releases.json kept on the `index` release. This adds
-  # the tag to it and signs it again. Without the signing key or the `index`
-  # release it warns and leaves the index as it was. One run at a time, so two
-  # tags never overwrite each other's entry.
+  # the tag to it and signs it again.
   release-index:
-    name: Release index
-    needs: [github-release]
+    needs: [plan, github-release]
     if: ${{ !contains(github.ref_name, '-') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: release-index
-      cancel-in-progress: false
     permissions:
       contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.toolchain }}
-
-      - name: Build the index tool
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
-        run: cargo build --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index
-
-      - name: Download the archives
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bundle-*
-          path: dist
-          merge-multiple: true
-
-      - name: Add the release to the index
-        env:
-          GH_TOKEN: ${{ github.token }}
-          JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
-          TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -eu
-          if [ -z "$JACKDAW_INDEX_SIGNING_KEY" ]; then
-            echo "::warning::JACKDAW_INDEX_SIGNING_KEY is not set; the release index was not updated"
-            exit 0
-          fi
-          if ! assets=$(gh release view index --repo "$REPO" --json assets --jq '.assets[].name' 2>&1); then
-            if printf '%s' "$assets" | grep -qi 'release not found'; then
-              echo "::warning::there is no 'index' release; the release index was not updated"
-              exit 0
-            fi
-            printf '%s\n' "$assets" >&2
-            exit 1
-          fi
-          mkdir -p index
-          if printf '%s\n' "$assets" | grep -qx releases.json; then
-            gh release download index --repo "$REPO" --dir index \
-              --pattern releases.json --pattern releases.json.sig
-          fi
-          bevy=$(sed -n 's/^bevy = { version = "\([0-9]*\.[0-9]*\)".*/\1/p' Cargo.toml | head -n 1)
-          target/debug/jackdaw-release-index add --index index/releases.json --tag "$TAG" \
-            --dist dist --bevy "$bevy" --rustc "${{ env.toolchain }}" \
-            --base-url "https://github.com/$REPO/releases/download/$TAG" \
-            --notes-url "https://github.com/$REPO/releases/tag/$TAG"
-          gh release upload index --repo "$REPO" --clobber index/releases.json index/releases.json.sig
+    uses: ./.github/workflows/release-index.yaml
+    with:
+      tag: ${{ github.ref_name }}
+      bevy: ${{ needs.plan.outputs.bevy }}
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}

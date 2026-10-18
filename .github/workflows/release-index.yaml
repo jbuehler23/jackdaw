@@ -1,0 +1,135 @@
+name: Release index
+
+# Reusable: updates the signed releases.json kept on the `index` release. jd
+# and the launcher read it to list and install editors. `add` records a
+# release's bundles (the `bundle-*` artifacts of the calling run), `known-good`
+# marks the newest healthy nightly, and `broken` marks one nightly broken.
+# Without the signing key or the `index` release it warns and leaves the index
+# as it was. One run at a time, so two runs never overwrite each other.
+
+on:
+  workflow_call:
+    inputs:
+      operation:
+        description: "`add`, `known-good` or `broken`"
+        type: string
+        default: add
+      tag:
+        description: "The release: its tag for `add`, the nightly for `broken`"
+        type: string
+        default: ""
+      bevy:
+        description: "The Bevy minor, or `main`"
+        type: string
+        default: ""
+      bevy_rev:
+        description: "The Bevy commit a nightly was built against"
+        type: string
+        default: ""
+      known_good:
+        description: "Add the nightly as known good"
+        type: boolean
+        default: false
+    outputs:
+      updated:
+        description: "Whether the index was signed and uploaded"
+        value: ${{ jobs.index.outputs.updated }}
+      nightlies:
+        description: "The nightlies the index keeps, one per line"
+        value: ${{ jobs.index.outputs.nightlies }}
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY:
+        required: false
+
+env:
+  toolchain: 1.99.0
+
+jobs:
+  index:
+    name: Release index
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: release-index
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      updated: ${{ steps.update.outputs.updated }}
+      nightlies: ${{ steps.update.outputs.nightlies }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Build the index tool
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
+        run: cargo build --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index
+
+      - name: Download the archives
+        if: inputs.operation == 'add'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+
+      - name: Update the index
+        id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
+          OPERATION: ${{ inputs.operation }}
+          TAG: ${{ inputs.tag }}
+          BEVY: ${{ inputs.bevy }}
+          BEVY_REV: ${{ inputs.bevy_rev }}
+          KNOWN_GOOD: ${{ inputs.known_good }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          echo "updated=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$JACKDAW_INDEX_SIGNING_KEY" ]; then
+            echo "::warning::JACKDAW_INDEX_SIGNING_KEY is not set; the release index was not updated"
+            exit 0
+          fi
+          if ! assets=$(gh release view index --repo "$REPO" --json assets --jq '.assets[].name' 2>&1); then
+            if printf '%s' "$assets" | grep -qi 'release not found'; then
+              echo "::warning::there is no 'index' release; the release index was not updated"
+              exit 0
+            fi
+            printf '%s\n' "$assets" >&2
+            exit 1
+          fi
+          mkdir -p index
+          if printf '%s\n' "$assets" | grep -qx releases.json; then
+            gh release download index --repo "$REPO" --dir index \
+              --pattern releases.json --pattern releases.json.sig
+          fi
+          tool=target/debug/jackdaw-release-index
+          case "$OPERATION" in
+            add)
+              args=(--index index/releases.json --tag "$TAG" --dist dist --bevy "$BEVY"
+                --rustc "${{ env.toolchain }}"
+                --base-url "https://github.com/$REPO/releases/download/$TAG"
+                --notes-url "https://github.com/$REPO/releases/tag/$TAG")
+              if [ -n "$BEVY_REV" ]; then args+=(--bevy-rev "$BEVY_REV" --jackdaw-rev "$SHA"); fi
+              if [ "$KNOWN_GOOD" = true ]; then args+=(--known-good); fi
+              "$tool" add "${args[@]}"
+              ;;
+            known-good) "$tool" mark --index index/releases.json --known-good ;;
+            broken) "$tool" mark --index index/releases.json --broken --version "$TAG" ;;
+            *) echo "::error::unknown operation $OPERATION"; exit 1 ;;
+          esac
+          gh release upload index --repo "$REPO" --clobber index/releases.json index/releases.json.sig
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "nightlies<<EOF"
+            jq -r '.releases[] | select(.channel == "bleeding-edge") | .version' index/releases.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
