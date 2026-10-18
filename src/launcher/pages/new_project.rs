@@ -119,7 +119,9 @@ pub fn page() -> impl Scene {
                 ]
                 --
                 Node {
-                    width: px(340),
+                    width: percent(36),
+                    min_width: px(260),
+                    max_width: px(340),
                     flex_shrink: 0.0,
                     flex_direction: FlexDirection::Column,
                     row_gap: px(8),
@@ -326,10 +328,16 @@ fn modules(
             } else {
                 ui::boxed(ui::chip("not in this editor", Tone::Caution))
             };
-            let description = match unavailable {
-                Some(reason) => format!("{} Not compatible: {reason}.", module.description),
-                None => module.description.clone(),
-            };
+            let mut text: ui::Scenes = vec![ui::boxed(ui::note(
+                module.description.clone(),
+                tokens::TEXT_SECONDARY,
+            ))];
+            if let Some(reason) = unavailable {
+                text.push(ui::boxed(ui::note(
+                    format!("Not compatible: {reason}."),
+                    tokens::DOC_TAB_INACTIVE_LABEL,
+                )));
+            }
             let disabled = unavailable.is_some();
             rows.push(ui::boxed(bsn! {
                 Node {
@@ -339,9 +347,9 @@ fn modules(
                     min_height: px(30),
                 }
                 Children [
-                    Node { width: px(160), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), on, disabled, call)} ]
+                    Node { min_width: px(120), flex_shrink: 0.0 } Children [ @{ui::checkbox(module.name.clone(), on, disabled, call)} ]
                     --
-                    Node { flex_grow: 1.0, min_width: px(0) } Children [ @{ui::note(description, tokens::DOC_TAB_INACTIVE_LABEL)} ]
+                    @{ui::fill(text)}
                     --
                     {status}
                 ]
