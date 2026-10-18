@@ -35,15 +35,39 @@ env:
   toolchain: 1.99.0
 
 jobs:
+  # The packaged crates stand in for crates.io, which has nothing for a
+  # workspace on Bevy's main branch: there the journey installs from the
+  # checkout only.
+  sources:
+    name: Install sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: Cargo.toml
+          sparse-checkout-cone-mode: false
+      - id: pick
+        run: |
+          if [ "${{ inputs.journey }}" = true ] && ! grep -q '^bevy = { git = ' Cargo.toml; then
+            echo 'list=["checkout", "package"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'list=["checkout"]' >> "$GITHUB_OUTPUT"
+          fi
+
   cargo-install:
     name: Cargo install (${{ matrix.source }}, ${{ matrix.os }})
+    needs: sources
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ inputs.journey && 300 || 90 }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.platforms) }}
-        source: ${{ fromJSON(inputs.journey && '["checkout", "package"]' || '["checkout"]') }}
+        source: ${{ fromJSON(needs.sources.outputs.list) }}
     defaults:
       run:
         shell: bash
@@ -141,8 +165,12 @@ jobs:
         run: jd build
 
       # These runners have no GPU adapter for the schema step, so the game is
-      # built with cargo alone.
+      # built with cargo alone, at the Bevy commit `jd build` would pin.
       - name: Build the game (Windows, macOS)
         if: inputs.journey && runner.os != 'Linux'
         working-directory: ${{ runner.temp }}/projects/journey-game
-        run: cargo build
+        run: |
+          set -euo pipefail
+          rev=$(grep -A2 '^name = "bevy"$' "$GITHUB_WORKSPACE/Cargo.lock" | sed -n 's/^source = "git+.*#\(.*\)"$/\1/p')
+          if [ -n "$rev" ]; then cargo update --package bevy --precise "$rev"; fi
+          cargo build

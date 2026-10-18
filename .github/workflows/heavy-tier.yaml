@@ -1,10 +1,15 @@
 name: Heavy tier
 
-# Reusable: called by regression.yaml (nightly, on demand) and by release.yaml,
-# which gates publishing on it. Kept in its own file so the release gate and
+# Reusable: called by regression.yaml (nightly, on demand), by release.yaml,
+# which gates publishing on it, and by nightly.yaml against Bevy's main. Kept in its own file so the release gate and
 # the nightly run the same definition.
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      lockfile:
+        description: "An artifact of this run holding the Cargo.lock to test with"
+        type: string
+        default: ""
 
 env:
   toolchain: 1.99.0
@@ -21,6 +26,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Use the pinned lockfile
+        if: inputs.lockfile != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.lockfile }}
+          path: .
 
       # The SDK dylib and the editor binary are multi-hundred-MB artifacts;
       # the default runner image does not leave room for both.

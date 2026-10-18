@@ -1,0 +1,346 @@
+name: Nightly
+
+# The Bleeding Edge channel. main tracks Bevy's main branch, and Cargo.lock
+# holds it at a commit. Each night this moves the lock to Bevy's newest commit,
+# tests main against it, builds the bundles and, only if all of that is green,
+# publishes them as the `nightly-YYYY-MM-DD` prerelease and adds them to the
+# signed release index. A red night opens or updates one tracking issue
+# instead. The moved lock is never committed: it is what the nightly was built
+# with, and the index records the commit.
+#
+# Nightlies are kept for the index's retention (30 days), apart from the newest
+# and the weekly known-good build, which Monday's run marks.
+
+on:
+  schedule:
+    - cron: "41 1 * * *"
+  workflow_dispatch:
+    inputs:
+      bevy_rev:
+        description: "Build against this Bevy commit instead of main's newest"
+        type: string
+        default: ""
+      publish:
+        description: "Publish the nightly when it is green"
+        type: boolean
+        default: true
+      broken:
+        description: "Only mark this nightly (nightly-YYYY-MM-DD) broken in the index"
+        type: string
+        default: ""
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  toolchain: 1.99.0
+  CARGO_INCREMENTAL: "0"
+  TRACKING_LABEL: bevy-main
+
+jobs:
+  # Fixes what the whole run builds against: one Bevy commit, and the
+  # lockfiles moved to it, shared with every job as an artifact so they all
+  # resolve the same graph.
+  pin:
+    name: Pin Bevy main
+    if: inputs.broken == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      bevy_rev: ${{ steps.pin.outputs.bevy_rev }}
+      nightly: ${{ steps.pin.outputs.nightly }}
+      known_good: ${{ steps.pin.outputs.known_good }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Move the lockfiles to Bevy main
+        id: pin
+        env:
+          REQUESTED: ${{ inputs.bevy_rev }}
+        run: |
+          set -euo pipefail
+          rev="$REQUESTED"
+          if [ -z "$rev" ]; then
+            rev=$(git ls-remote https://github.com/bevyengine/bevy refs/heads/main | cut -f1)
+          fi
+          for workspace in . integrations/navmesh; do
+            (cd "$workspace" && cargo update --package bevy --precise "$rev")
+          done
+          echo "bevy_rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "nightly=nightly-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          if [ "$(date -u +%u)" = 1 ]; then
+            echo "known_good=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "known_good=false" >> "$GITHUB_OUTPUT"
+          fi
+          git diff --stat -- Cargo.lock integrations/navmesh/Cargo.lock
+
+      - name: Check the dependency sources
+        run: cargo xtask git-deps
+
+      - name: Keep the lockfiles
+        uses: actions/upload-artifact@v4
+        with:
+          name: bevy-main-lock
+          path: |
+            Cargo.lock
+            integrations/navmesh/Cargo.lock
+          retention-days: 7
+
+  # The fast and integration tiers, as CI runs them on a pull request.
+  test:
+    name: Tests
+    needs: pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use the pinned lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: bevy-main-lock
+          path: .
+
+      - name: Remove unused software
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt, clippy
+          toolchain: ${{ env.toolchain }}
+
+      - name: Set LD_LIBRARY_PATH
+        run: echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
+        timeout-minutes: 10
+
+      - name: Activate CI cargo config
+        run: mv .cargo/config_ci.toml .cargo/config.toml
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Fast tier
+        run: cargo xtask fast
+
+      - name: Integration tier
+        run: cargo xtask integration
+
+      - name: Navmesh module
+        run: cargo clippy --locked --manifest-path integrations/navmesh/Cargo.toml --workspace --all-targets -- --deny warnings
+
+  heavy:
+    needs: pin
+    uses: ./.github/workflows/heavy-tier.yaml
+    with:
+      lockfile: bevy-main-lock
+
+  bundles:
+    needs: pin
+    uses: ./.github/workflows/bundle.yaml
+    with:
+      include: '[{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","glibc_target":"x86_64-unknown-linux-gnu.2.31","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","link":"-C link-arg=-Wl,--allow-shlib-undefined","archive":"tar.zst"},{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"zip"},{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}]'
+      nightly: ${{ needs.pin.outputs.nightly }}
+      lockfile: bevy-main-lock
+
+  # A prerelease, never the latest release, tagged at the commit it was built
+  # from. A second run on the same day replaces that day's nightly.
+  publish:
+    name: Publish ${{ needs.pin.outputs.nightly }}
+    needs: [pin, test, heavy, bundles]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.publish) && needs.test.result == 'success' && needs.heavy.result == 'success' && needs.bundles.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout the installers
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Download the archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add the installers
+        run: cp scripts/install.sh scripts/install.ps1 dist/
+
+      - name: Attest the archives
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.zst
+            dist/*.zip
+
+      - name: Create the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.pin.outputs.nightly }}
+          BEVY_REV: ${{ needs.pin.outputs.bevy_rev }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes
+          fi
+          notes="Built from jackdaw $SHA against Bevy main at [$BEVY_REV](https://github.com/bevyengine/bevy/commit/$BEVY_REV).
+
+          Install with \`jd editor install bleeding-edge\`. Bleeding Edge builds are untested beyond CI; report breakage with the \`$TRACKING_LABEL\` label."
+          gh release create "$TAG" dist/* --repo "$REPO" --target "$SHA" \
+            --prerelease --latest=false --title "$TAG" --notes "$notes"
+
+  index:
+    needs: [pin, publish]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-index.yaml
+    with:
+      tag: ${{ needs.pin.outputs.nightly }}
+      bevy: main
+      bevy_rev: ${{ needs.pin.outputs.bevy_rev }}
+      known_good: ${{ needs.pin.outputs.known_good == 'true' }}
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
+
+  # Monday's nightly is red: the newest green one becomes the week's
+  # known-good build instead.
+  known-good:
+    needs: [pin, publish]
+    if: ${{ !cancelled() && needs.pin.outputs.known_good == 'true' && needs.publish.result != 'success' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-index.yaml
+    with:
+      operation: known-good
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
+
+  mark-broken:
+    if: inputs.broken != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-index.yaml
+    with:
+      operation: broken
+      tag: ${{ inputs.broken }}
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
+
+  # Deletes the nightly prereleases the index no longer lists. Without an
+  # index, those past 30 days apart from the newest.
+  prune:
+    name: Prune old nightlies
+    needs: [publish, index]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Delete nightlies past retention
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          UPDATED: ${{ needs.index.outputs.updated }}
+          KEPT: ${{ needs.index.outputs.nightlies }}
+        run: |
+          set -euo pipefail
+          tags=$(gh release list --repo "$REPO" --limit 1000 --json tagName --jq '.[].tagName' | grep '^nightly-' | sort -r || true)
+          if [ "$UPDATED" = true ]; then
+            keep="$KEPT"
+          else
+            cutoff=$(date -u -d '30 days ago' +%F)
+            keep=$(printf '%s\n' "$tags" | head -n 1)
+            keep="$keep
+          $(printf '%s\n' "$tags" | awk -v cutoff="nightly-$cutoff" '$0 >= cutoff')"
+          fi
+          for tag in $tags; do
+            if ! printf '%s\n' "$keep" | grep -qx "$tag"; then
+              echo "deleting $tag"
+              gh release delete "$tag" --repo "$REPO" --cleanup-tag --yes
+            fi
+          done
+
+  # One open issue tracks a red Bleeding Edge, updated by each red night and
+  # closed by the next green one.
+  report:
+    name: Report
+    needs: [pin, test, heavy, bundles, publish]
+    if: ${{ always() && inputs.broken == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          BEVY_REV: ${{ needs.pin.outputs.bevy_rev }}
+          NIGHTLY: ${{ needs.pin.outputs.nightly }}
+          SHA: ${{ github.sha }}
+          GREEN: ${{ needs.pin.result == 'success' && needs.test.result == 'success' && needs.heavy.result == 'success' && needs.bundles.result == 'success' }}
+        run: |
+          set -euo pipefail
+          title="Bleeding Edge is failing against Bevy main"
+          issue=$(gh issue list --repo "$REPO" --label "$TRACKING_LABEL" --state open \
+            --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ "$GREEN" = true ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --repo "$REPO" \
+                --comment "$NIGHTLY is green against Bevy main at $BEVY_REV: $RUN"
+            fi
+            exit 0
+          fi
+          failed=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/${GITHUB_RUN_ATTEMPT}/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion == "failure") | "- " + .name + ": " + ([.steps[] | select(.conclusion == "failure") | .name] | join(", "))')
+          body="$NIGHTLY did not build against Bevy main.
+
+          - Bevy: [${BEVY_REV:-not pinned}](https://github.com/bevyengine/bevy/commit/$BEVY_REV)
+          - jackdaw: $SHA
+          - run: $RUN
+
+          Failing:
+          ${failed:-- the run did not get far enough to report a job}"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$REPO" --body "$body"
+          else
+            gh label create "$TRACKING_LABEL" --repo "$REPO" --color d93f0b \
+              --description "Breakage from tracking Bevy main" --force
+            gh issue create --repo "$REPO" --title "$title" --label "$TRACKING_LABEL" --body "$body"
+          fi
