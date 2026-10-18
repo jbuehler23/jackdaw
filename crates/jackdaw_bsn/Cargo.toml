@@ -8,12 +8,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy = { version = "0.20", default-features = false, features = ["std", "bevy_asset"] }
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["std", "bevy_asset"] }
 # Named directly to turn on `smol_str`, which is what gives `SmolStr` its
 # reflect impl. In the workspace build a sibling crate happens to enable it;
 # relying on that would make theme tokens silently revert to their Debug form
 # the day the sibling stops.
-bevy_reflect = { version = "0.20", features = ["smol_str"] }
+bevy_reflect = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["smol_str"] }
 nom = "8"
 pathdiff.workspace = true
 path-slash.workspace = true

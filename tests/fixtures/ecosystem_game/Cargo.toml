@@ -8,5 +8,5 @@ publish = false
 
 
 [dependencies]
-bevy = { version = "0.20", default-features = false, features = ["reflect_auto_register"] }
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["reflect_auto_register"] }
 bevy_rapier3d = { version = "0.37", default-features = false, features = ["dim3"] }

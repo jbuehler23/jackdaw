@@ -43,9 +43,9 @@ jackdaw_runtime = { workspace = true, features = [
 # `approx` on Bevy's math crates, which physics engines such as avian turn
 # on: against an SDK whose `glam` lacks it, a project using one fails on
 # missing trait impls in a crate the project never named.
-bevy_math = { version = "0.20", features = ["approx"] }
-bevy_curve = { version = "0.20", features = ["approx"] }
-bevy_shape = { version = "0.20", features = ["approx"] }
+bevy_math = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["approx"] }
+bevy_curve = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["approx"] }
+bevy_shape = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["approx"] }
 # The version `bevy_math` uses, with the generator features a project's own
 # `rand` dependency enables, so the SDK build already carries them.
 rand = { version = "0.10", features = ["std_rng", "thread_rng"] }
