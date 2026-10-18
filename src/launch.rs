@@ -35,8 +35,8 @@ pub fn run(extend: impl FnOnce(&mut App)) -> AppExit {
             {
                 println!(
                     "jackdaw {} (targets bevy {})",
-                    jackdaw_project_build::VERSION,
-                    jackdaw_project_build::BEVY_VERSION
+                    jackdaw_project_build::build_name(),
+                    jackdaw_project_build::bevy_description()
                 );
             }
             return AppExit::Success;

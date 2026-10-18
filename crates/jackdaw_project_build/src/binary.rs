@@ -120,6 +120,15 @@ pub fn build_project_binary_with_load(
         target_dir.display()
     )));
 
+    // A build on Bevy's main branch hands the game its own Bevy commit; a
+    // lockfile at another commit would build a game whose types are not
+    // the editor's.
+    match crate::bevy_source::pin_project(&spec.project_root) {
+        Ok(Some(pinned)) => report(BuildEvent::Log(pinned)),
+        Ok(None) => {}
+        Err(error) => report(BuildEvent::Log(format!("warning: {error}"))),
+    }
+
     let mut command = rust_env_command("cargo");
     command
         .arg("build")

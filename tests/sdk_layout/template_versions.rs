@@ -41,8 +41,8 @@ fn templates_state_versions_as_placeholders() {
     ] {
         let text = template(path);
         assert!(
-            text.contains("bevy = \"{{bevy_version}}\""),
-            "{path}: bevy must use the {{{{bevy_version}}}} placeholder"
+            text.contains("bevy = {{bevy_dependency}}"),
+            "{path}: bevy must use the {{{{bevy_dependency}}}} placeholder"
         );
         let dep_line = text
             .lines()
@@ -59,9 +59,60 @@ fn templates_state_versions_as_placeholders() {
     }
 }
 
+/// The Bevy commit the workspace lockfile pins, when Bevy comes from git.
+fn locked_bevy_rev() -> Option<String> {
+    let lockfile =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock")).unwrap();
+    jackdaw_project_build::bevy_source::locked_rev(&lockfile)
+}
+
 #[test]
-fn the_substituted_version_is_the_anchored_minor() {
-    assert_eq!(jackdaw_project_build::BEVY_VERSION, workspace_minor());
+fn the_substituted_version_is_the_anchored_minor_or_main() {
+    match locked_bevy_rev() {
+        Some(rev) => {
+            assert_eq!(jackdaw_project_build::BEVY_VERSION, "main");
+            assert_eq!(jackdaw_project_build::BEVY_REV, Some(rev.as_str()));
+        }
+        None => {
+            assert_eq!(jackdaw_project_build::BEVY_VERSION, workspace_minor());
+            assert_eq!(jackdaw_project_build::BEVY_REV, None);
+        }
+    }
+}
+
+/// A project set up by a build on Bevy's main branch asks for the branch and
+/// records the commit the editor is built against, which the build pins its
+/// lockfile to.
+#[test]
+fn a_game_on_bevy_main_records_the_editors_commit() {
+    let Some(rev) = locked_bevy_rev() else {
+        return;
+    };
+    let dest = std::env::temp_dir()
+        .join(format!("jackdaw_template_bevy_main_{}", std::process::id()))
+        .join("tracking");
+    let _ = std::fs::remove_dir_all(&dest);
+    jackdaw::scaffold::scaffold_new_project(&dest, "tracking", TemplateKind::Game)
+        .expect("scaffold");
+    let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).expect("scaffolded manifest");
+    let settings = std::fs::read_to_string(dest.join("jackdaw.toml")).expect("jackdaw.toml");
+    let _ = std::fs::remove_dir_all(dest.parent().unwrap());
+    let manifest: toml::Table = toml::from_str(&cargo).expect("the manifest parses");
+    let bevy = &manifest["dependencies"]["bevy"];
+    assert_eq!(
+        bevy["git"].as_str(),
+        Some("https://github.com/bevyengine/bevy")
+    );
+    assert_eq!(bevy["branch"].as_str(), Some("main"));
+    assert!(
+        cargo.contains(&rev),
+        "the manifest names the commit:\n{cargo}"
+    );
+    let settings: toml::Table = toml::from_str(&settings).expect("jackdaw.toml parses");
+    let pins = &settings["jackdaw"];
+    assert_eq!(pins["bevy"].as_str(), Some("main"));
+    assert_eq!(pins["channel"].as_str(), Some("bleeding-edge"));
+    assert_eq!(pins["bevy_rev"].as_str(), Some(rev.as_str()));
 }
 
 /// The physics module's avian source is a plain literal in the module

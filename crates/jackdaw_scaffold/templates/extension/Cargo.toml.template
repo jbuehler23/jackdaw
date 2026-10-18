@@ -19,5 +19,6 @@ license = "MIT OR Apache-2.0"
 label = "{{project-name | title_case}}"
 
 [dependencies]
-bevy = "{{bevy_version}}"
+{{bevy_pin_note}}
+bevy = {{bevy_dependency}}
 jackdaw_extension = { {{jackdaw_extension_dep}} }

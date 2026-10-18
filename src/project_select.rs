@@ -3148,7 +3148,11 @@ mod tests {
         std::fs::create_dir_all(plain.join("src")).unwrap();
         std::fs::write(
             plain.join("Cargo.toml"),
-            b"[package]\nname = \"plain-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n              [dependencies]\nbevy = \"0.20\"\n",
+            format!(
+                "[package]\nname = \"plain-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                 [dependencies]\nbevy = {}\n",
+                jackdaw_project_build::bevy_source::dependency()
+            ),
         )
         .unwrap();
         std::fs::write(

@@ -96,8 +96,8 @@ pub fn windowless_note() -> String {
 /// The dependency line a project without `jackdaw_runtime` needs.
 fn runtime_dependency_note() -> String {
     format!(
-        "add the runtime: cargo add jackdaw_runtime@{} --features physics,pie",
-        jackdaw_project_build::BEVY_VERSION
+        "add the runtime: cargo add {} --features physics,pie",
+        jackdaw_project_build::build_source::build_source().cargo_add("jackdaw_runtime")
     )
 }
 

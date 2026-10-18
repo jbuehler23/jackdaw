@@ -41,8 +41,8 @@ pub fn run_args(args: &[String]) -> ExitCode {
         Some("--version" | "-V" | "version") => {
             println!(
                 "jd {} (targets bevy {})",
-                jackdaw_project_build::VERSION,
-                jackdaw_project_build::BEVY_VERSION
+                jackdaw_project_build::build_name(),
+                jackdaw_project_build::bevy_description()
             );
             ExitCode::SUCCESS
         }

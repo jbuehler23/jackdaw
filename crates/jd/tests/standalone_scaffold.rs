@@ -135,8 +135,8 @@ fn the_shipped_binary_scaffolds_without_a_checkout() {
     );
     assert!(
         manifest.contains(&format!(
-            "bevy = \"{}\"",
-            jackdaw_project_build::BEVY_VERSION
+            "bevy = {}",
+            jackdaw_project_build::bevy_source::dependency()
         )),
         "got:\n{manifest}"
     );
@@ -203,8 +203,8 @@ fn the_shipped_binary_imports_without_a_checkout() {
         project.join("Cargo.toml"),
         format!(
             "[package]\nname = \"their-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
-             [dependencies]\nbevy = \"{}\"\n",
-            jackdaw_project_build::BEVY_VERSION
+             [dependencies]\nbevy = {}\n",
+            jackdaw_project_build::bevy_source::dependency()
         ),
     )
     .expect("write manifest");
