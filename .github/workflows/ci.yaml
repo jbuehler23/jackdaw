@@ -332,13 +332,36 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Whether the workspace takes Bevy from its main branch. Nothing is
+  # published from there: a package can only ask crates.io for its Bevy.
+  bevy-source:
+    name: Bevy source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      main: ${{ steps.source.outputs.main }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: Cargo.toml
+          sparse-checkout-cone-mode: false
+      - id: source
+        run: |
+          if grep -q '^bevy = { git = ' Cargo.toml; then
+            echo "main=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main=false" >> "$GITHUB_OUTPUT"
+          fi
+
   packages:
-    needs: package-paths
-    if: ${{ !cancelled() && (github.event_name == 'push' || needs.package-paths.outputs.changed == 'true') }}
+    needs: [package-paths, bevy-source]
+    if: ${{ !cancelled() && needs.bevy-source.outputs.main == 'false' && (github.event_name == 'push' || needs.package-paths.outputs.changed == 'true') }}
     uses: ./.github/workflows/packages.yaml
 
   templates:
     name: Template - ${{ matrix.template }}
+    needs: bevy-source
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -385,20 +408,35 @@ jobs:
       # Scaffolded by a `jd` built as the release bundles are and copied out
       # of the checkout, so the project states the registry versions a user
       # gets. It sits under the packaged crates, whose cargo config resolves
-      # those versions to the packages built from this change.
+      # those versions to the packages built from this change. On Bevy's
+      # main branch nothing is packaged, and the project depends on this
+      # checkout instead.
       - name: Scaffold ${{ matrix.template }}
+        env:
+          BEVY_MAIN: ${{ needs.bevy-source.outputs.main }}
         run: |
           set -euxo pipefail
           template="${{ matrix.template }}"
-          cargo xtask package "$RUNNER_TEMP/packages"
-          JACKDAW_RELEASE_BUILD=1 cargo build -p jd --bin jd
-          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/packages/projects"
+          projects="$RUNNER_TEMP/packages/projects"
+          mkdir -p "$RUNNER_TEMP/bin" "$projects"
+          if [ "$BEVY_MAIN" = true ]; then
+            cargo build -p jd --bin jd
+            export JACKDAW_DEV_CHECKOUT="$GITHUB_WORKSPACE"
+          else
+            cargo xtask package "$RUNNER_TEMP/packages"
+            JACKDAW_RELEASE_BUILD=1 cargo build -p jd --bin jd
+          fi
           cp target/debug/jd "$RUNNER_TEMP/bin/"
           cp -r .cargo "$RUNNER_TEMP/"
           extra=""
           if [ "$template" = "extension" ]; then extra="--extension"; fi
-          "$RUNNER_TEMP/bin/jd" new "test-$template" --path "$RUNNER_TEMP/packages/projects" --no-git $extra
-          echo "PROJECT=$RUNNER_TEMP/packages/projects/test-$template" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/bin/jd" new "test-$template" --path "$projects" --no-git $extra
+          if [ "$BEVY_MAIN" = true ]; then
+            # The commit this checkout builds against, as the editor pins it.
+            rev=$(grep -A2 '^name = "bevy"$' Cargo.lock | sed -n 's/^source = "git+.*#\(.*\)"$/\1/p')
+            (cd "$projects/test-$template" && cargo update --package bevy --precise "$rev")
+          fi
+          echo "PROJECT=$projects/test-$template" >> "$GITHUB_ENV"
 
       - name: Run cargo fmt
         working-directory: ${{ env.PROJECT }}
