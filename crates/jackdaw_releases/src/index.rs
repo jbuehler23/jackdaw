@@ -335,16 +335,64 @@ impl ReleaseIndex {
 
     /// Add or replace `release`, drop nightlies past retention as of
     /// `today` (days since 1970-01-01), and recompute the channel
-    /// summaries.
+    /// summaries. The newest healthy nightly is kept however old it is, so
+    /// the channel never empties while nightlies are failing.
     pub fn add_release(&mut self, release: Release, today: i64) {
         self.releases
             .retain(|known| known.version != release.version);
         self.releases.push(release);
+        self.prune(today);
+    }
+
+    /// Mark a nightly known good, keeping it for [`KNOWN_GOOD_RETAIN_DAYS`]:
+    /// `version`, or the newest healthy nightly. Returns the version marked.
+    pub fn mark_known_good(&mut self, version: Option<&str>) -> Result<String, String> {
+        let version = match version {
+            Some(version) => version.to_string(),
+            None => self
+                .newest(|release| release.channel == Channel::BleedingEdge)
+                .map(|release| release.version.clone())
+                .ok_or_else(|| "no healthy nightly to mark known good".to_string())?,
+        };
+        let release = self.nightly_mut(&version)?;
+        if release.broken {
+            return Err(format!("{version} is marked broken"));
+        }
+        release.known_good = true;
+        self.refresh_channels();
+        Ok(version)
+    }
+
+    /// Mark the nightly `version` broken, so no channel query picks it.
+    pub fn mark_broken(&mut self, version: &str) -> Result<(), String> {
+        let release = self.nightly_mut(version)?;
+        release.broken = true;
+        release.known_good = false;
+        self.refresh_channels();
+        Ok(())
+    }
+
+    fn nightly_mut(&mut self, version: &str) -> Result<&mut Release, String> {
+        self.releases
+            .iter_mut()
+            .find(|release| release.version == version && release.channel == Channel::BleedingEdge)
+            .ok_or_else(|| format!("no nightly `{version}` is in the index"))
+    }
+
+    /// Drop nightlies past retention as of `today`, keeping the newest
+    /// healthy one, and recompute the channel summaries.
+    pub fn prune(&mut self, today: i64) {
+        let newest = self
+            .newest(|release| release.channel == Channel::BleedingEdge)
+            .map(|release| release.version.clone());
         let retain = i64::from(self.channels.bleeding_edge.retain_days);
         self.releases.retain(|release| {
             let Some(day) = version::nightly_day(&release.version) else {
                 return true;
             };
+            if newest.as_deref() == Some(release.version.as_str()) {
+                return true;
+            }
             let limit = if release.known_good {
                 i64::from(KNOWN_GOOD_RETAIN_DAYS)
             } else {
@@ -683,6 +731,48 @@ mod tests {
                 "0.20.0"
             ]
         );
+    }
+
+    #[test]
+    fn the_newest_healthy_nightly_outlives_retention() {
+        let day = |date: &str| version::parse_date(date).unwrap();
+        let mut index = ReleaseIndex::default();
+        let mut broken = release("nightly-2026-08-03", "main");
+        broken.broken = true;
+        index.add_release(release("nightly-2026-08-02", "main"), day("2026-08-02"));
+        index.add_release(broken, day("2026-08-03"));
+        index.prune(day("2026-10-11"));
+        let versions: Vec<_> = index
+            .releases
+            .iter()
+            .map(|release| release.version.as_str())
+            .collect();
+        assert_eq!(versions, ["nightly-2026-08-02"]);
+        assert_eq!(
+            index.channels.bleeding_edge.latest.as_deref(),
+            Some("nightly-2026-08-02")
+        );
+    }
+
+    #[test]
+    fn known_good_marks_the_newest_healthy_nightly() {
+        let mut index = ReleaseIndex::default();
+        let mut broken = release("nightly-2026-10-12", "main");
+        broken.broken = true;
+        index.add_release(release("nightly-2026-10-11", "main"), 0);
+        index.add_release(broken, 0);
+        assert_eq!(
+            index.mark_known_good(None).as_deref(),
+            Ok("nightly-2026-10-11")
+        );
+        assert!(index.find("nightly-2026-10-11").unwrap().known_good);
+        assert!(index.mark_known_good(Some("nightly-2026-10-12")).is_err());
+        assert!(index.mark_known_good(Some("0.20.0")).is_err());
+
+        index.mark_broken("nightly-2026-10-11").unwrap();
+        let marked = index.find("nightly-2026-10-11").unwrap();
+        assert!(marked.broken && !marked.known_good);
+        assert!(index.resolve("bleeding-edge").is_err());
     }
 
     #[test]
