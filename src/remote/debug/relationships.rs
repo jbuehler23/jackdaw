@@ -60,7 +60,7 @@ fn extract_parent(entity: &RemoteEntity) -> Option<u64> {
     entity
         .components
         .get("bevy_ecs::hierarchy::ChildOf")
-        .and_then(serde_json::Value::as_u64)
+        .and_then(jackdaw_pie_protocol::snapshot::entity_bits)
 }
 
 /// Derive hierarchy nodes and child->parent edges from a snapshot reply.

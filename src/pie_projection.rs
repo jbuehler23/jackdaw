@@ -73,17 +73,10 @@ fn projection_skips(type_path: &str) -> bool {
             .any(|prefix| type_path.starts_with(prefix))
 }
 
-/// `ChildOf` is a single-field struct over `Entity`, and the snapshot
-/// serializer writes `Entity` as raw u64 bits, so the wire value is the bare
-/// number. The array/object arms tolerate the other reflect serialization
-/// shapes a tuple struct can take.
+/// `ChildOf` is a single-field struct over `Entity`, which the snapshot
+/// serializer writes as the parent's `{index}v{generation}` text.
 fn parent_bits_from_value(value: &serde_json::Value) -> Option<u64> {
-    match value {
-        serde_json::Value::Number(n) => n.as_u64(),
-        serde_json::Value::Array(a) => a.first().and_then(serde_json::Value::as_u64),
-        serde_json::Value::Object(o) => o.values().next().and_then(serde_json::Value::as_u64),
-        _ => None,
-    }
+    jackdaw_pie_protocol::snapshot::entity_bits(value)
 }
 
 fn reparent_preview(world: &mut World, child: Entity, parent: Entity) {

@@ -1214,7 +1214,7 @@ struct MultilineHeightMeasure {
 }
 
 impl Measure for MultilineHeightMeasure {
-    fn measure(&mut self, measure_args: MeasureArgs<'_>) -> Vec2 {
+    fn measure(&self, measure_args: MeasureArgs<'_>) -> Vec2 {
         let width = measure_args.resolve_width();
         let x = width
             .effective
