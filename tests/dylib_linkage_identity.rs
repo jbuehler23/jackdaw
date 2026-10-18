@@ -83,9 +83,10 @@ publish = false
 [workspace]
 
 [dependencies]
-bevy = {{ version = "0.20", default-features = false }}
+bevy = {{ {}, default-features = false }}
 jackdaw_extension = {{ path = "{}" }}
 "#,
+            jackdaw_project_build::bevy_source::requirement(),
             workspace_root()
                 .join("crates/jackdaw_extension")
                 .to_slash_lossy()

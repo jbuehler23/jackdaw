@@ -18,6 +18,7 @@
 //! share the editor's Bevy types and therefore compile against jackdaw's
 //! prebuilt SDK so the artifact can be dlopened in-process.
 
+pub mod bevy_source;
 pub mod bootstrap;
 pub mod build_source;
 pub mod build_tools;
@@ -57,16 +58,34 @@ pub const RECIPE_HASH: &str = env!("RECIPE_HASH");
 /// The single source for `--version` output and the scene version stamp.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The Bevy minor this build targets. The workspace version is anchored
-/// to Bevy's minor (`0.19.x` targets Bevy `0.19`), so it derives from the
-/// crate version rather than a separate source. Shown in `--version` and
-/// stamped into saved scenes: a future jackdaw reads it to migrate type
-/// paths across a Bevy rename (renames land on minor bumps).
-pub const BEVY_VERSION: &str = concat!(
-    env!("CARGO_PKG_VERSION_MAJOR"),
-    ".",
-    env!("CARGO_PKG_VERSION_MINOR")
-);
+/// The Bevy this build targets: a minor such as `0.20`, which the workspace
+/// version is anchored to, or `main` for a build that tracks Bevy's main
+/// branch (see [`BEVY_REV`]). Shown in `--version` and stamped into saved
+/// scenes: a future jackdaw reads it to migrate type paths across a Bevy
+/// rename (renames land on minor bumps).
+pub const BEVY_VERSION: &str = env!("JACKDAW_BEVY_LINE");
+
+/// The Bevy commit a build that tracks Bevy's main branch was made against,
+/// from the workspace lockfile. `None` for a build on a Bevy release.
+pub const BEVY_REV: Option<&str> = option_env!("JACKDAW_BEVY_REV");
+
+/// The nightly this build is, e.g. `nightly-2026-10-18`, when the nightly
+/// workflow built it.
+pub const NIGHTLY: Option<&str> = option_env!("JACKDAW_NIGHTLY");
+
+/// The name this build goes by: its nightly, or else its version.
+pub fn build_name() -> &'static str {
+    NIGHTLY.unwrap_or(VERSION)
+}
+
+/// What this build targets, for `--version` and messages: `0.20`, or
+/// `main at <commit>`.
+pub fn bevy_description() -> String {
+    match BEVY_REV {
+        Some(rev) => format!("{BEVY_VERSION} at {rev}"),
+        None => BEVY_VERSION.to_string(),
+    }
+}
 
 /// The version requirement a project states for this build's jackdaw crates.
 pub fn jackdaw_requirement() -> String {

@@ -70,6 +70,19 @@ impl BuildSource {
         }
     }
 
+    /// The `cargo add` arguments that add `crate_name` from where this
+    /// build's crates come from, e.g. `jackdaw_runtime@0.20` or
+    /// `jackdaw_runtime --git <repository> --rev <rev>`.
+    pub fn cargo_add(&self, crate_name: &str) -> String {
+        match self {
+            Self::Release => format!("{crate_name}@{}", crate::jackdaw_requirement()),
+            Self::Git { repository, rev } => {
+                format!("{crate_name} --git {repository} --rev {rev}")
+            }
+            Self::Path(root) => format!("--path {}", crate_path(root, crate_name).to_slash_lossy()),
+        }
+    }
+
     /// Where a project's jackdaw crates are fetched from, for a message:
     /// the registry version, the git revision, or the checkout path.
     pub fn describe(&self) -> String {
@@ -121,6 +134,23 @@ mod tests {
             format!("version = \"{}\"", crate::jackdaw_requirement())
         );
         assert!(source.resolution_note().is_none());
+    }
+
+    #[test]
+    fn cargo_add_names_the_same_source_as_the_requirement() {
+        assert_eq!(
+            BuildSource::parse("release", REPO).cargo_add("jackdaw_runtime"),
+            format!("jackdaw_runtime@{}", crate::jackdaw_requirement())
+        );
+        assert_eq!(
+            BuildSource::parse(&format!("git:{REV}"), REPO).cargo_add("jackdaw_runtime"),
+            format!("jackdaw_runtime --git {REPO} --rev {REV}")
+        );
+        assert!(
+            BuildSource::parse("path:/home/dev/jackdaw", REPO)
+                .cargo_add("jackdaw_runtime")
+                .ends_with("crates/jackdaw_runtime")
+        );
     }
 
     #[test]

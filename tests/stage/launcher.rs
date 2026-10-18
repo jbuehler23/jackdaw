@@ -369,10 +369,12 @@ fn opening_a_copy_moves_the_copy_to_this_editor_and_leaves_the_original() {
         },
     );
     let copied = std::fs::read_to_string(copy.join("jackdaw.toml")).unwrap();
-    assert!(
-        copied.contains(&format!("version = \"{}\"", jackdaw_project_build::VERSION)),
-        "{copied}"
-    );
+    // A Bleeding Edge editor pins the copy to its build instead of a version.
+    let pin = match jackdaw_project_build::BEVY_REV {
+        Some(_) => format!("build = \"{}\"", jackdaw_project_build::build_name()),
+        None => format!("version = \"{}\"", jackdaw_project_build::VERSION),
+    };
+    assert!(copied.contains(&pin), "{copied}");
     let original = std::fs::read_to_string(project.join("jackdaw.toml")).unwrap();
     assert!(original.contains("0.17.3"), "{original}");
 }

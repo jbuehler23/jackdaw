@@ -61,6 +61,8 @@ fn main() {
         println!("cargo:rerun-if-changed={}", ws.join("Cargo.lock").display());
     }
     emit_build_source(&manifest_dir, workspace.as_deref(), packaged);
+    emit_bevy_source(workspace.as_deref().filter(|_| !packaged));
+    emit_nightly();
 
     println!("cargo:rerun-if-changed=build.rs");
     // The embed is toggled only through this feature env, which gates no
@@ -89,6 +91,69 @@ fn emit_build_source(manifest_dir: &Path, workspace: Option<&Path>, packaged: bo
         format!("path:{}", workspace.unwrap_or(manifest_dir).display())
     };
     println!("cargo:rustc-env=JACKDAW_BUILD_SOURCE={source}");
+}
+
+/// Record which Bevy this build targets: `main` and the commit the workspace
+/// lockfile pins when Bevy comes from git, otherwise the minor the workspace
+/// version is anchored to.
+fn emit_bevy_source(workspace: Option<&Path>) {
+    let rev = workspace.and_then(|ws| {
+        let lockfile = ws.join("Cargo.lock");
+        println!("cargo:rerun-if-changed={}", lockfile.display());
+        locked_bevy_rev(&fs::read_to_string(lockfile).ok()?)
+    });
+    let line = match &rev {
+        Some(rev) => {
+            println!("cargo:rustc-env=JACKDAW_BEVY_REV={rev}");
+            "main".to_string()
+        }
+        None => format!(
+            "{}.{}",
+            env::var("CARGO_PKG_VERSION_MAJOR").unwrap(),
+            env::var("CARGO_PKG_VERSION_MINOR").unwrap()
+        ),
+    };
+    println!("cargo:rustc-env=JACKDAW_BEVY_LINE={line}");
+}
+
+/// The commit a lockfile pins the `bevy` package's git source to.
+fn locked_bevy_rev(lockfile: &str) -> Option<String> {
+    let table: toml::Table = toml::from_str(lockfile).ok()?;
+    table
+        .get("package")?
+        .as_array()?
+        .iter()
+        .filter_map(toml::Value::as_table)
+        .find(|package| package.get("name").and_then(toml::Value::as_str) == Some("bevy"))?
+        .get("source")?
+        .as_str()?
+        .strip_prefix("git+")?
+        .rsplit_once('#')
+        .map(|(_, rev)| rev.to_string())
+}
+
+/// Record the nightly this build is, which the nightly workflow names in
+/// `JACKDAW_NIGHTLY` (`nightly-YYYY-MM-DD`).
+fn emit_nightly() {
+    println!("cargo:rerun-if-env-changed=JACKDAW_NIGHTLY");
+    if let Ok(name) = env::var("JACKDAW_NIGHTLY")
+        && !name.is_empty()
+    {
+        let date = name.strip_prefix("nightly-").unwrap_or_default();
+        let well_formed = date.len() == 10
+            && date.char_indices().all(|(i, c)| {
+                if i == 4 || i == 7 {
+                    c == '-'
+                } else {
+                    c.is_ascii_digit()
+                }
+            });
+        assert!(
+            well_formed,
+            "JACKDAW_NIGHTLY must be nightly-YYYY-MM-DD, not `{name}`"
+        );
+        println!("cargo:rustc-env=JACKDAW_NIGHTLY={name}");
+    }
 }
 
 /// The full revision `dir` is checked out at, and nothing when it is not

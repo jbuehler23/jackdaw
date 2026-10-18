@@ -215,6 +215,14 @@ pub fn compare_pins(pins: &VersionPins) -> PinStatus {
             running: crate::BEVY_VERSION.to_string(),
         };
     }
+    if let (Some(pinned), Some(running)) = (&pins.build, crate::NIGHTLY)
+        && pinned != running
+    {
+        return PinStatus::JackdawDiffers {
+            pinned: pinned.clone(),
+            running: running.to_string(),
+        };
+    }
     match &pins.version {
         None => PinStatus::Unpinned,
         Some(pinned) if pinned == crate::VERSION => PinStatus::Match,
@@ -265,8 +273,8 @@ pub fn targeted_bevy_from_manifest(root: &Path) -> Option<String> {
     declared_bevy_minor(root)
 }
 
-/// The `major.minor` of the bevy requirement in `<root>/Cargo.toml`, for
-/// projects that record no pins. Deliberately shallow: only a plain
+/// The `major.minor` of the bevy requirement in `<root>/Cargo.toml`, or
+/// `main` for Bevy's own repository, for projects that record no pins. Deliberately shallow: only a plain
 /// `x.y`-shaped requirement is conclusive enough to block an open on.
 fn declared_bevy_minor(root: &Path) -> Option<String> {
     // In a workspace the game is a member, and its bevy requirement is
@@ -300,6 +308,9 @@ fn declared_bevy_minor(root: &Path) -> Option<String> {
     } else {
         bevy
     };
+    if bevy.get("git").and_then(toml::Value::as_str) == Some(crate::bevy_source::BEVY_GIT) {
+        return Some("main".to_string());
+    }
     let req = bevy
         .as_str()
         .or_else(|| bevy.get("version")?.as_str())?
@@ -324,17 +335,31 @@ pub fn pins_toml() -> String {
 /// Used when a project is set up despite targeting a different Bevy:
 /// the pin has to describe the project, so the mismatch keeps being
 /// reported until it is actually resolved.
+///
+/// A project on this build's Bevy main is a Bleeding Edge project: it also
+/// records the nightly that set it up and the Bevy commit that nightly is
+/// built against.
 pub fn pins_toml_for_bevy(bevy: &str) -> String {
-    format!(
+    let mut pins = format!(
         "# Recorded when this project was set up. Jackdaw compares these on\n\
          # open so an editor upgrade is reported instead of surfacing as a\n\
          # build failure.\n\
          [jackdaw]\n\
          version = \"{}\"\n\
-         bevy = \"{bevy}\"\n\
-         channel = \"stable\"\n",
+         bevy = \"{bevy}\"\n",
         crate::VERSION,
-    )
+    );
+    match crate::BEVY_REV.filter(|_| bevy == crate::BEVY_VERSION) {
+        Some(rev) => {
+            pins.push_str("channel = \"bleeding-edge\"\n");
+            if let Some(nightly) = crate::NIGHTLY {
+                pins.push_str(&format!("build = \"{nightly}\"\n"));
+            }
+            pins.push_str(&format!("bevy_rev = \"{rev}\"\n"));
+        }
+        None => pins.push_str("channel = \"stable\"\n"),
+    }
+    pins
 }
 
 #[cfg(test)]
@@ -412,7 +437,33 @@ bevy_rev = "3f2a1c9e"
         assert_eq!(manifest.jackdaw.bevy_rev.as_deref(), Some("3f2a1c9e"));
 
         let written: ProjectManifest = toml::from_str(&pins_toml()).unwrap();
+        let channel = if crate::BEVY_REV.is_some() {
+            "bleeding-edge"
+        } else {
+            "stable"
+        };
+        assert_eq!(written.jackdaw.channel.as_deref(), Some(channel));
+        assert_eq!(written.jackdaw.bevy_rev.as_deref(), crate::BEVY_REV);
+        assert_eq!(written.jackdaw.build.as_deref(), crate::NIGHTLY);
+    }
+
+    #[test]
+    fn a_project_on_another_bevy_is_pinned_to_the_stable_channel() {
+        let written: ProjectManifest = toml::from_str(&pins_toml_for_bevy("0.14")).unwrap();
+        assert_eq!(written.jackdaw.bevy.as_deref(), Some("0.14"));
         assert_eq!(written.jackdaw.channel.as_deref(), Some("stable"));
+        assert_eq!(written.jackdaw.bevy_rev, None);
+    }
+
+    #[test]
+    fn a_project_on_bevy_main_targets_main() {
+        let dir = project(
+            "main",
+            "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+             bevy = { git = \"https://github.com/bevyengine/bevy\", branch = \"main\" }\n",
+        );
+        assert_eq!(targeted_bevy_from_manifest(&dir).as_deref(), Some("main"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

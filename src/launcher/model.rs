@@ -45,13 +45,19 @@ impl RunningEditor {
         }
     }
 
-    /// This build's version, on the stable channel.
+    /// This build: a stable version, or on Bleeding Edge when it tracks
+    /// Bevy's main branch, named by its nightly when it is one.
     pub fn of_this_build() -> Self {
+        let rev = jackdaw_project_build::BEVY_REV;
         Self {
-            version: jackdaw_project_build::VERSION.to_string(),
+            version: jackdaw_project_build::build_name().to_string(),
             bevy: jackdaw_project_build::BEVY_VERSION.to_string(),
-            channel: Channel::Stable,
-            bevy_rev: None,
+            channel: if rev.is_some() {
+                Channel::BleedingEdge
+            } else {
+                Channel::Stable
+            },
+            bevy_rev: rev.map(str::to_string),
         }
     }
 
@@ -564,7 +570,9 @@ pub fn resolve_editor(
             let same_line = pin.version.as_deref().and_then(version::line_of)
                 == version::line_of(&running.version);
             let this_line = stable && same_line && running.channel == Channel::Stable;
-            let this_nightly = !stable && pin.build.as_deref() == Some(running.version.as_str());
+            let this_nightly = !stable
+                && pin.build.as_deref().or(pin.version.as_deref())
+                    == Some(running.version.as_str());
             if this_line || this_nightly {
                 ProjectEditor::Running
             } else {

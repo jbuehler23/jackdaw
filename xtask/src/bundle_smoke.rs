@@ -99,6 +99,7 @@ fn build_extension(workspace: &Path, staging: &Path, sdk: &SdkPaths) -> Result<P
         .join("crates/jackdaw_extension")
         .to_string_lossy()
         .replace('\\', "/");
+    let bevy = jackdaw_project_build::bevy_source::requirement();
     write(
         &extension_dir.join("Cargo.toml"),
         &format!(
@@ -111,7 +112,7 @@ publish = false
 [workspace]
 
 [dependencies]
-bevy = {{ version = "0.20", default-features = false }}
+bevy = {{ {bevy}, default-features = false }}
 jackdaw_extension = {{ path = "{extension_crate}" }}
 "#
         ),

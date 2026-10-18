@@ -863,11 +863,6 @@ fn rewrite_pins(settings: &str, project_bevy: Option<&str>) -> Option<String> {
         // already recorded rather than asserting this editor's.
         None => get("bevy").unwrap_or_else(|| jackdaw_project_build::BEVY_VERSION.to_string()),
     };
-    if get("version").as_deref() == Some(jackdaw_project_build::VERSION)
-        && get("bevy").as_deref() == Some(bevy.as_str())
-    {
-        return None;
-    }
     // Edit the existing table in place where there is one, so its
     // position in the file, and any other keys or comments inside it,
     // survive. Replacing the item wholesale moves it to the end and
@@ -875,6 +870,14 @@ fn rewrite_pins(settings: &str, project_bevy: Option<&str>) -> Option<String> {
     let pins: DocumentMut = jackdaw_project_build::project_manifest::pins_toml_for_bevy(&bevy)
         .parse()
         .ok()?;
+    let current = pins["jackdaw"]
+        .as_table()?
+        .iter()
+        .filter(|(key, _)| *key != "channel")
+        .all(|(key, value)| get(key).as_deref() == value.as_str());
+    if current {
+        return None;
+    }
     match doc
         .get_mut("jackdaw")
         .and_then(|item| item.as_table_like_mut())
@@ -889,8 +892,15 @@ fn rewrite_pins(settings: &str, project_bevy: Option<&str>) -> Option<String> {
                     existing.insert(key, toml_edit::value(text));
                 }
             };
-            set("version", jackdaw_project_build::VERSION);
-            set("bevy", &bevy);
+            for (key, value) in pins["jackdaw"]
+                .as_table()
+                .into_iter()
+                .flat_map(|table| table.iter())
+            {
+                if let Some(text) = value.as_str() {
+                    set(key, text);
+                }
+            }
         }
         None => doc["jackdaw"] = pins["jackdaw"].clone(),
     }
@@ -963,7 +973,21 @@ fn bump_jackdaw_deps(deps: &mut dyn toml_edit::TableLike, requirement: &str) -> 
             }
         } else if let Some(table) = entry.as_table_like_mut() {
             // A path or git dependency resolves elsewhere; there is no
-            // version requirement to bring forward.
+            // version requirement to bring forward. A git dependency on this
+            // build's own repository moves to the revision it was built at.
+            if table.get("git").is_some()
+                && let jackdaw_project_build::build_source::BuildSource::Git { repository, rev } =
+                    jackdaw_project_build::build_source::build_source()
+                && table.get("git").and_then(|git| git.as_str()) == Some(repository.as_str())
+                && table
+                    .get("rev")
+                    .and_then(|pinned| pinned.as_str())
+                    .is_some_and(|pinned| pinned != rev)
+            {
+                table.insert("rev", toml_edit::value(rev));
+                changed = true;
+                continue;
+            }
             if table.get("path").is_some() || table.get("git").is_some() {
                 continue;
             }
@@ -1537,10 +1561,9 @@ pub fn plan_import_with_modules(
             let mut features = module_runtime_features(&selected_modules);
             features.push(PIE_FEATURE.to_string());
             notes.push(format!(
-                "add the runtime once the project is on bevy {}: cargo add jackdaw_runtime@{} \
-                 --features {}",
+                "add the runtime once the project is on bevy {}: cargo add {} --features {}",
                 jackdaw_project_build::BEVY_VERSION,
-                jackdaw_project_build::BEVY_VERSION,
+                jackdaw_project_build::build_source::build_source().cargo_add("jackdaw_runtime"),
                 features.join(",")
             ));
         }
@@ -1714,6 +1737,11 @@ fn requirement_admits_supported_bevy(req: &str) -> bool {
         // a reason to block an import.
         return true;
     };
+    // A build on Bevy's main branch takes it from git; no registry release
+    // is that Bevy.
+    if jackdaw_project_build::BEVY_REV.is_some() {
+        return false;
+    }
     let Some((major, minor)) = SUPPORTED_BEVY_MINOR.split_once('.') else {
         return true;
     };
@@ -2429,6 +2457,7 @@ fn substitute_placeholders(
     modules: &ModuleSet,
 ) -> String {
     let text = replace_line(text, "{{module_crates}}", &module_crate_lines(modules));
+    let text = replace_line(&text, "{{bevy_pin_note}}", &bevy_pin_note());
     let text = replace_line(&text, "{{module_plugins}}", &module_plugin_lines(modules));
     text.replace("{{project-name | title_case}}", title)
         .replace(
@@ -2446,7 +2475,10 @@ fn substitute_placeholders(
             "{{jackdaw_pins}}",
             jackdaw_project_build::project_manifest::pins_toml().trim_end(),
         )
-        .replace("{{bevy_version}}", jackdaw_project_build::BEVY_VERSION)
+        .replace(
+            "{{bevy_dependency}}",
+            &jackdaw_project_build::bevy_source::dependency(),
+        )
         .replace(
             "{{jackdaw_version}}",
             &jackdaw_project_build::jackdaw_requirement(),
@@ -2459,6 +2491,20 @@ fn substitute_placeholders(
             "{{jackdaw_extension_dep}}",
             &jackdaw_dep_requirement("jackdaw_extension"),
         )
+}
+
+/// The comment above a scaffolded `bevy` dependency that tracks Bevy's main
+/// branch, naming the commit the lockfile is held at. Nothing for a release.
+fn bevy_pin_note() -> String {
+    match jackdaw_project_build::BEVY_REV {
+        Some(rev) => format!(
+            "# Bevy's main branch. Cargo.lock holds it at the commit this jackdaw is\n\
+             # built against, recorded as `bevy_rev` in jackdaw.toml:\n\
+             # {rev}\n\
+             # The editor moves the lockfile back to it before each build.\n"
+        ),
+        None => String::new(),
+    }
 }
 
 /// Replace each line holding only `placeholder` with `lines`, whichever
@@ -2640,6 +2686,18 @@ pub(crate) use jackdaw_project_build::detect::detect_plugin;
 
 #[cfg(test)]
 mod tests {
+    /// A fixture manifest on the Bevy this build supports: its `bevy = "0.20"`
+    /// lines ask for whatever this build would scaffold.
+    fn with_bevy(text: &str) -> String {
+        text.replace(
+            "bevy = \"0.20\"",
+            &format!(
+                "bevy = {}",
+                jackdaw_project_build::bevy_source::dependency()
+            ),
+        )
+    }
+
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -2812,7 +2870,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"their-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nbevy = \"0.20\"\n",
+            with_bevy("[package]\nname = \"their-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nbevy = \"0.20\"\n"),
         )
         .unwrap();
         std::fs::write(
@@ -2823,7 +2881,7 @@ mod tests {
         let report = import_project(&root, None).unwrap();
         assert!(!report.created_lib_stub);
         let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-        assert!(cargo.contains("bevy = \"0.20\""));
+        assert!(cargo.contains(&with_bevy("bevy = \"0.20\"")));
         assert!(cargo.contains("jackdaw_runtime"));
         let toml = std::fs::read_to_string(root.join("jackdaw.toml")).unwrap();
         assert!(toml.contains("plugin = \"TheirPlugin\""));
@@ -2838,7 +2896,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"bin-only\"\nversion = \"0.1.0\"\n\n[dependencies]\nbevy = \"0.20\"\n",
+            with_bevy("[package]\nname = \"bin-only\"\nversion = \"0.1.0\"\n\n[dependencies]\nbevy = \"0.20\"\n"),
         )
         .unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
@@ -2851,6 +2909,13 @@ mod tests {
 
     #[test]
     fn version_requirements_are_compared_not_prefix_matched() {
+        // A build on Bevy's main branch matches no registry requirement.
+        if jackdaw_project_build::BEVY_REV.is_some() {
+            assert!(!requirement_admits_supported_bevy("0.20"));
+            assert!(!requirement_admits_supported_bevy("*"));
+            assert!(requirement_admits_supported_bevy("not a version"));
+            return;
+        }
         // Compatible with 0.20 one way or another.
         for req in [
             "0.20",
@@ -2931,8 +2996,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         // A type merely named `*Plugin` above the real one, which a
@@ -2965,8 +3032,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub struct Health(f32);\n").unwrap();
@@ -2988,8 +3057,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn helper() {}\n").unwrap();
@@ -3012,8 +3083,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(
@@ -3039,9 +3112,11 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n\
              jackdaw_runtime = { version = \"0.14\", features = [\"navmesh\"] }\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
@@ -3077,7 +3152,10 @@ mod tests {
         // The bump must not drop the features the project asked for.
         assert!(cargo.contains("navmesh"), "got:\n{cargo}");
         // Nor touch anything that is not a jackdaw crate.
-        assert!(cargo.contains("bevy = \"0.20\""), "got:\n{cargo}");
+        assert!(
+            cargo.contains(&with_bevy("bevy = \"0.20\"")),
+            "got:\n{cargo}"
+        );
     }
 
     fn set_up_project(name: &str, runtime: &str) -> PathBuf {
@@ -3085,10 +3163,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            format!(
+            with_bevy(&format!(
                 "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
                  [dependencies]\nbevy = \"0.20\"\njackdaw_runtime = {runtime}\n"
-            ),
+            )),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
@@ -3156,7 +3234,9 @@ mod tests {
     fn import_drops_a_removed_runtime_feature() {
         let root = bevy_game(
             "import-removed-feature",
-            "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"physics\"] }\n",
+            &with_bevy(
+                "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"physics\"] }\n",
+            ),
         );
         let plan = plan_import_project(&root, None).unwrap();
         assert_eq!(plan.modules, modules(&["physics"]));
@@ -3207,8 +3287,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
@@ -3225,8 +3307,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
@@ -3328,10 +3412,12 @@ mod tests {
     /// other keys and comments inside it.
     #[test]
     fn refreshing_pins_keeps_the_table_in_place() {
-        let settings = "plugin = \"GamePlugin\"\n\n\
+        let settings = &with_bevy(
+            "plugin = \"GamePlugin\"\n\n\
                         [jackdaw]\n# why this is here\nversion = \"0.14.0\"\nbevy = \"0.20\"\n\
                         note = \"keep me\"\n\n\
-                        [[run]]\nname = \"Play\"\n";
+                        [[run]]\nname = \"Play\"\n",
+        );
         let out = rewrite_pins(settings, Some("0.20")).expect("changed");
         assert!(out.contains("note = \"keep me\""), "got:\n{out}");
         assert!(out.contains("# why this is here"), "got:\n{out}");
@@ -3347,8 +3433,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "impl Plugin for GamePlugin {}\n").unwrap();
@@ -3381,7 +3469,10 @@ mod tests {
     fn import_resolves_the_game_member_of_a_workspace() {
         let root = workspace_fixture(
             "ws",
-            &[("tools", "clap = \"4\""), ("game", "bevy = \"0.20\"")],
+            &[
+                ("tools", "clap = \"4\""),
+                ("game", &with_bevy("bevy = \"0.20\"")),
+            ],
         );
 
         let plan = plan_import_project(&root, None).unwrap();
@@ -3404,7 +3495,10 @@ mod tests {
     fn import_asks_which_member_when_several_use_bevy() {
         let root = workspace_fixture(
             "wsambig",
-            &[("client", "bevy = \"0.20\""), ("server", "bevy = \"0.20\"")],
+            &[
+                ("client", &with_bevy("bevy = \"0.20\"")),
+                ("server", &with_bevy("bevy = \"0.20\"")),
+            ],
         );
 
         let err = plan_import_project(&root, None).unwrap_err();
@@ -3423,16 +3517,20 @@ mod tests {
         std::fs::create_dir_all(root.join("helper/src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[workspace]\nmembers = [\".\", \"helper\"]\nresolver = \"2\"\n\n\
+            with_bevy(
+                "[workspace]\nmembers = [\".\", \"helper\"]\nresolver = \"2\"\n\n\
              [package]\nname = \"the-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\nhelper = { path = \"helper\" }\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
         std::fs::write(
             root.join("helper/Cargo.toml"),
-            "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("helper/src/lib.rs"), "pub struct HelperPlugin;\n").unwrap();
@@ -3486,8 +3584,10 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"pinned\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"pinned\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
@@ -3516,8 +3616,8 @@ mod tests {
         );
         let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
         assert!(cargo.contains(&format!(
-            "bevy = \"{}\"",
-            jackdaw_project_build::BEVY_VERSION
+            "bevy = {}",
+            jackdaw_project_build::bevy_source::dependency()
         )));
         assert!(!cargo.contains("{{"));
     }
@@ -3598,7 +3698,10 @@ mod tests {
              app.add_plugins(my_game::GamePlugin);\n    app.run();\n}\n",
         ];
         for (index, shape) in shapes.iter().enumerate() {
-            let root = bevy_game(&format!("wrap-shape-{index}"), "bevy = \"0.20\"\n");
+            let root = bevy_game(
+                &format!("wrap-shape-{index}"),
+                &with_bevy("bevy = \"0.20\"\n"),
+            );
             std::fs::write(
                 root.join("src/main.rs"),
                 format!("use bevy::prelude::*;\n\n{shape}"),
@@ -3626,7 +3729,7 @@ mod tests {
 
     #[test]
     fn import_wires_the_runtime_into_a_plain_bevy_game() {
-        let root = bevy_game("wire-runtime", "bevy = \"0.20\"\n");
+        let root = bevy_game("wire-runtime", &with_bevy("bevy = \"0.20\"\n"));
 
         let plan = plan_import_project(&root, None).unwrap();
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).expect("Cargo.toml edit");
@@ -3672,7 +3775,7 @@ mod tests {
 
     #[test]
     fn a_second_import_has_nothing_to_do() {
-        let root = bevy_game("reimport", "bevy = \"0.20\"\n");
+        let root = bevy_game("reimport", &with_bevy("bevy = \"0.20\"\n"));
         apply_import_plan(&plan_import_project(&root, None).unwrap()).unwrap();
 
         let again = plan_import_project(&root, None).unwrap();
@@ -3795,9 +3898,11 @@ mod tests {
     fn import_detects_the_modules_a_game_already_uses_and_adds_the_chosen_ones_once() {
         let root = bevy_game(
             "import-modules",
-            "bevy = \"0.20\"\n\
+            &with_bevy(
+                "bevy = \"0.20\"\n\
              jackdaw_runtime = { version = \"0.19\", features = [\"physics\", \"pie\"] }\n\
              avian3d = \"0.7\"\n",
+            ),
         );
         std::fs::write(
             root.join("src/main.rs"),
@@ -3924,7 +4029,10 @@ mod tests {
 
     #[test]
     fn import_enables_pie_on_an_existing_runtime_dependency() {
-        let root = bevy_game("add-pie", "bevy = \"0.20\"\njackdaw_runtime = \"0.19\"\n");
+        let root = bevy_game(
+            "add-pie",
+            &with_bevy("bevy = \"0.20\"\njackdaw_runtime = \"0.19\"\n"),
+        );
         let plan = plan_import_project(&root, None).unwrap();
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
         assert!(
@@ -3934,7 +4042,9 @@ mod tests {
 
         let root = bevy_game(
             "extend-features",
-            "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"navmesh\"] }\n",
+            &with_bevy(
+                "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", features = [\"navmesh\"] }\n",
+            ),
         );
         let plan = plan_import_project(&root, None).unwrap();
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
@@ -3954,8 +4064,10 @@ mod tests {
         std::fs::create_dir_all(member.join("src")).unwrap();
         std::fs::write(
             member.join("Cargo.toml"),
-            "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\njackdaw_runtime = { workspace = true }\n",
+            ),
         )
         .unwrap();
         std::fs::write(member.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
@@ -3987,7 +4099,9 @@ mod tests {
     fn the_runtime_edit_keeps_manifest_comments_and_order() {
         let root = bevy_game(
             "keep-comments",
-            "# Engine.\nbevy = \"0.20\" # pinned to the minor\n\n# Utilities.\nrand = \"0.9\"\n",
+            &with_bevy(
+                "# Engine.\nbevy = \"0.20\" # pinned to the minor\n\n# Utilities.\nrand = \"0.9\"\n",
+            ),
         );
         let before = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
         let plan = plan_import_project(&root, None).unwrap();
@@ -4000,7 +4114,9 @@ mod tests {
     fn enabling_pie_keeps_a_trailing_comment() {
         let root = bevy_game(
             "pie-comment",
-            "bevy = \"0.20\"\njackdaw_runtime = \"0.19\" # scene loading\nrand = \"0.9\"\n",
+            &with_bevy(
+                "bevy = \"0.20\"\njackdaw_runtime = \"0.19\" # scene loading\nrand = \"0.9\"\n",
+            ),
         );
         let plan = plan_import_project(&root, None).unwrap();
         let cargo = planned_contents(&plan, &root.join("Cargo.toml")).unwrap();
@@ -4033,7 +4149,9 @@ mod tests {
     fn an_optional_runtime_gets_notes_not_edits() {
         let root = bevy_game(
             "optional-runtime",
-            "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", optional = true }\n",
+            &with_bevy(
+                "bevy = \"0.20\"\njackdaw_runtime = { version = \"0.19\", optional = true }\n",
+            ),
         );
         assert_leaves_sources_alone(&plan_import_project(&root, None).unwrap(), &root);
     }
@@ -4042,14 +4160,16 @@ mod tests {
     fn a_renamed_runtime_is_not_declared_twice() {
         let root = bevy_game(
             "renamed-runtime",
-            "bevy = \"0.20\"\nruntime = { package = \"jackdaw_runtime\", version = \"0.19\" }\n",
+            &with_bevy(
+                "bevy = \"0.20\"\nruntime = { package = \"jackdaw_runtime\", version = \"0.19\" }\n",
+            ),
         );
         assert_leaves_sources_alone(&plan_import_project(&root, None).unwrap(), &root);
     }
 
     #[test]
     fn a_target_specific_runtime_is_not_declared_again() {
-        let root = bevy_game("target-runtime", "bevy = \"0.20\"\n");
+        let root = bevy_game("target-runtime", &with_bevy("bevy = \"0.20\"\n"));
         let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
@@ -4063,7 +4183,7 @@ mod tests {
     fn pie_from_a_package_feature_is_not_forced_on() {
         let root = bevy_game(
             "feature-pie",
-            "bevy = \"0.20\"\njackdaw_runtime = \"0.19\"\n",
+            &with_bevy("bevy = \"0.20\"\njackdaw_runtime = \"0.19\"\n"),
         );
         let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
         std::fs::write(
@@ -4102,8 +4222,10 @@ mod tests {
         std::fs::create_dir_all(member.join("src")).unwrap();
         std::fs::write(
             member.join("Cargo.toml"),
-            "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+            with_bevy(
+                "[package]\nname = \"game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
              [dependencies]\nbevy = \"0.20\"\n",
+            ),
         )
         .unwrap();
         std::fs::write(member.join("src/lib.rs"), "pub struct GamePlugin;\n").unwrap();
@@ -4118,7 +4240,7 @@ mod tests {
 
     #[test]
     fn an_uneditable_plugin_keeps_the_manual_note() {
-        let root = bevy_game("manual-plugin", "bevy = \"0.20\"\n");
+        let root = bevy_game("manual-plugin", &with_bevy("bevy = \"0.20\"\n"));
         std::fs::write(
             root.join("src/lib.rs"),
             "pub struct GamePlugin;\nimpl Plugin for GamePlugin {}\n",
@@ -4141,7 +4263,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
-            "[package]\nname = \"preview\"\nversion = \"0.1.0\"\n\n[dependencies]\nbevy = \"0.20\"\n",
+            with_bevy("[package]\nname = \"preview\"\nversion = \"0.1.0\"\n\n[dependencies]\nbevy = \"0.20\"\n"),
         )
         .unwrap();
         std::fs::write(

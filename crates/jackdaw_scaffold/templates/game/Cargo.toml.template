@@ -13,7 +13,8 @@ authors = ["{{authors}}"]
 [workspace]
 
 [dependencies]
-bevy = "{{bevy_version}}"
+{{bevy_pin_note}}
+bevy = {{bevy_dependency}}
 # Loads authored scenes (assets/*.bsn). `terrain` draws authored terrain and
 # `pie` connects the editor's Play button; drop `pie` for a shipping build.
 # The other features and crates come from the modules in jackdaw.toml.
