@@ -31,6 +31,7 @@ mod material_row;
 mod mesh_quick_menu;
 mod model_lod;
 mod modeling_essentials;
+mod module_extensions;
 mod new_asset;
 mod new_project;
 mod play_controls;

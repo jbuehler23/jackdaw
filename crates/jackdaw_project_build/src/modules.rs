@@ -61,6 +61,10 @@ pub struct ModuleInfo {
     /// for a module whose tooling is not built into the editor.
     #[serde(default)]
     pub extension: Option<String>,
+    /// The crate that builds that extension, which release archives ship
+    /// prebuilt.
+    #[serde(default)]
+    pub extension_crate: Option<String>,
     /// Why a new game cannot use the module on this editor line yet, such as
     /// a crate it needs having no release for this Bevy.
     #[serde(default)]

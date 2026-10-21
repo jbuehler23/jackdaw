@@ -30,7 +30,8 @@
       "avian3d::dynamics::integrator::IntegrationFlags",
       "avian3d::collision::collider::constructor::ColliderConstructor"
     ],
-    "extension": "jackdaw.physics"
+    "extension": "jackdaw.physics",
+    "extension_crate": "jackdaw_physics"
   },
   {
     "id": "navmesh",
@@ -38,7 +39,8 @@
     "description": "Bake a navigation mesh from the terrain and load it with the scene in the game.",
     "runtime_features": ["navmesh"],
     "provides": ["rerecast", "bevy_rerecast"],
-    "extension": "jackdaw.navmesh"
+    "extension": "jackdaw.navmesh",
+    "extension_crate": "jackdaw_navmesh_editor"
   },
   {
     "id": "multiplayer",
