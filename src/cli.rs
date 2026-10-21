@@ -8,6 +8,7 @@ pub enum Launch<'a> {
     Help,
     Version,
     ExportTerrain(&'a [String]),
+    CheckExtensions(&'a [String]),
     /// An option the editor does not accept.
     Unknown(&'a str),
 }
@@ -18,6 +19,7 @@ jackdaw: the Jackdaw scene editor
 Usage:
   jackdaw                       start the editor
   jackdaw export-terrain ...    export a scene's terrain (jackdaw export-terrain <scene.bsn> --out <dir>)
+  jackdaw check-extensions      load each shipped and installed extension once and report it
   jackdaw --version, -V         print the version and exit
   jackdaw --help, -h            print this help and exit
 
@@ -32,6 +34,7 @@ pub fn decide(args: &[String]) -> Launch<'_> {
         Some("--help" | "-h") => Launch::Help,
         Some("--version" | "-V") => Launch::Version,
         Some("export-terrain") => Launch::ExportTerrain(&args[2..]),
+        Some("check-extensions") => Launch::CheckExtensions(&args[2..]),
         // macOS passes `-psn_<n>` when launching an app bundle.
         Some(flag) if flag.starts_with('-') && !flag.starts_with("-psn_") => Launch::Unknown(flag),
         _ => Launch::Editor,
@@ -65,6 +68,12 @@ mod tests {
     fn export_terrain_forwards_its_arguments() {
         let args = argv(&["export-terrain", "a.bsn", "--out", "d"]);
         assert_eq!(decide(&args), Launch::ExportTerrain(&args[2..]));
+    }
+
+    #[test]
+    fn check_extensions_forwards_its_arguments() {
+        let args = argv(&["check-extensions", "--expect", "jackdaw.physics"]);
+        assert_eq!(decide(&args), Launch::CheckExtensions(&args[2..]));
     }
 
     #[test]

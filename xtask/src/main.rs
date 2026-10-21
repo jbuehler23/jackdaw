@@ -1,6 +1,7 @@
 //! Test-harness orchestrator. `cargo xtask <tier>` runs a tier through nextest.
 use std::process::{Command, ExitCode};
 
+mod bundle_modules;
 mod bundle_smoke;
 mod core_deps;
 mod git_deps;
@@ -259,6 +260,7 @@ fn main() -> ExitCode {
         "bundle" => {
             return jackdaw_cli_internal::package::cmd_bundle(&args[1..]);
         }
+        "bundle-modules" => bundle_modules::cmd(&args[1..]),
         "bundle-smoke" => bundle_smoke::cmd(&args[1..]),
         "core-deps" => core_deps::cmd(),
         "git-deps" => git_deps::cmd(),
@@ -276,7 +278,7 @@ fn main() -> ExitCode {
         other => {
             eprintln!(
                 "usage: cargo xtask <fast|archive [FILE]|integration [N/M] [--archive FILE]|heavy|\
-                 release-gate|package-sdk|bundle|bundle-smoke|core-deps|git-deps|\
+                 release-gate|package-sdk|bundle|bundle-modules|bundle-smoke|core-deps|git-deps|\
                  package DIR [--check]|publish [--dry-run]> \
                  (got {other:?})"
             );

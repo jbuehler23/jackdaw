@@ -280,6 +280,22 @@ jobs:
             cargo xtask bundle --out "$out" --workspace . --artifacts "$artifacts"
           fi
 
+      # The editor extensions of the modules, built against the staged SDK
+      # and packed by the staged jd, so a downloaded editor offers them. A
+      # project turns each on with its module. A module that cannot build on
+      # this Bevy is skipped.
+      - name: Bundle the module extensions
+        if: ${{ !inputs.warm }}
+        env:
+          JACKDAW_WRAPPER_EXPLAIN: "1"
+        run: |
+          bundle="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          if [ -n "${{ matrix.glibc_target }}" ]; then
+            cargo-zigbuild run --quiet --package xtask --manifest-path xtask/Cargo.toml --target "$BUILD_TARGET" -- bundle-modules --bundle "$bundle" --workspace .
+          else
+            cargo xtask bundle-modules --bundle "$bundle" --workspace .
+          fi
+
       # A binary that needs a newer glibc than the target names fails at the
       # loader on an older distribution, which the runner itself never shows.
       - name: Verify the staged binaries' glibc floor (Linux)
@@ -338,7 +354,8 @@ jobs:
           echo "bundle layout verified"
 
       # Build an extension against the staged release SDK, the way an
-      # installed user does. It runs from xtask, so the editor is not
+      # installed user does, and have the staged editor load the module
+      # extensions it ships. It runs from xtask, so the editor is not
       # compiled again for a test target. Under cargo-zigbuild the extension
       # build inherits the zig toolchain the staged SDK was linked with.
       - name: Bundle smoke (extension builds against the release SDK)
