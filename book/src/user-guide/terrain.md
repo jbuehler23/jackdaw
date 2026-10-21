@@ -227,7 +227,7 @@ the ground the way the editor showed it.
   draws terrain behind its `terrain` feature, which is off by
   default so a game without terrain links neither the mesher
   nor the shader. Turn it on in your game's `Cargo.toml`:
-  `jackdaw_runtime = { version = "0.19", features = ["terrain"] }`.
+  `jackdaw_runtime = { version = "0.20", features = ["terrain"] }`.
   With it on, `JackdawPlugin` reads each `Terrain` entity's
   `.jdterrain` sidecar from beside the `.bsn` scene that spawned
   it and draws the result with the same splat material and

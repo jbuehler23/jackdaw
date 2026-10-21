@@ -1,6 +1,6 @@
 # Architecture
 
-Jackdaw is a standalone editor built from Bevy 0.19 plugin sets. The editor and the standalone
+Jackdaw is a standalone editor built from Bevy 0.20 plugin sets. The editor and the standalone
 runtime share the same scene format and the same component
 reflection. There's no separate engine; if you can write a Bevy
 plugin, you can write a jackdaw extension.

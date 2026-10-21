@@ -18,7 +18,7 @@ Install jackdaw from a GitHub release for the current user.
 
 Usage: install.sh [options]
 
-  --version <v>       Install release v<v>, e.g. 0.19.0-rc.9 (default: latest)
+  --version <v>       Install release v<v>, e.g. 0.20.0-rc.1 (default: latest)
   --prefix <dir>      Where versions are kept (default: $XDG_DATA_HOME/jackdaw/install)
   --bin-dir <dir>     Where the jackdaw and jd commands go (default: ~/.local/bin)
   --no-modify-path    Do not add the bin directory to shell startup files
