@@ -188,6 +188,8 @@ pub struct InstallForm {
     /// The release to install, as `jd editor install` takes it.
     pub version: String,
     pub show_older: bool,
+    /// List release candidates beside the releases.
+    pub show_prereleases: bool,
     pub modules: ModuleSet,
     /// Adding modules to this existing install rather than installing.
     pub existing: Option<String>,

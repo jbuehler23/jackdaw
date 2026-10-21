@@ -928,6 +928,7 @@ mod tests {
             yanked: false,
             broken: false,
             known_good: false,
+            prerelease: !nightly && version.contains('-'),
             known_issues: Vec::new(),
             artifacts: vec![Artifact {
                 target: TARGET.into(),

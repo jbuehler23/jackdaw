@@ -42,6 +42,7 @@ pub(super) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<LauncherInstallChannelOp>()
         .register_operator::<LauncherInstallVersionOp>()
         .register_operator::<LauncherInstallShowOlderOp>()
+        .register_operator::<LauncherInstallShowPrereleasesOp>()
         .register_operator::<LauncherInstallModuleOp>()
         .register_operator::<LauncherInstallConfirmOp>()
         .register_operator::<LauncherUpdateEditorOp>()
@@ -734,6 +735,7 @@ pub fn launcher_install_editor(
         channel,
         version,
         show_older: false,
+        show_prereleases: release.is_some_and(|release| release.prerelease),
         modules: ModuleCatalog::builtin().defaults(),
         existing: None,
     }));
@@ -826,6 +828,30 @@ pub fn launcher_install_show_older(
     if form.show_older != show {
         let mut next = form.clone();
         next.show_older = show;
+        *dialog = LauncherDialog::InstallEditor(next);
+    }
+    OperatorResult::Finished
+}
+
+/// Show or hide release candidates in the Install editor dialog.
+#[operator(
+    id = "launcher.install_show_prereleases",
+    label = "Show Prereleases",
+    description = "List release candidates in the Install editor dialog.",
+    allows_undo = false,
+    params(enabled(bool, doc = "Whether release candidates are listed."))
+)]
+pub fn launcher_install_show_prereleases(
+    params: In<OperatorParameters>,
+    mut dialog: ResMut<LauncherDialog>,
+) -> OperatorResult {
+    let Some(form) = install_form(dialog.bypass_change_detection()) else {
+        return OperatorResult::Cancelled;
+    };
+    let show = params.as_bool("enabled").unwrap_or(!form.show_prereleases);
+    if form.show_prereleases != show {
+        let mut next = form.clone();
+        next.show_prereleases = show;
         *dialog = LauncherDialog::InstallEditor(next);
     }
     OperatorResult::Finished
@@ -1147,6 +1173,7 @@ pub fn launcher_editor_modules(
         channel: install.channel,
         version: install.version.clone(),
         show_older: false,
+        show_prereleases: false,
         modules: install.modules.iter().cloned().collect(),
         existing: Some(install.version.clone()),
     }));
