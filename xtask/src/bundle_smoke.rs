@@ -84,12 +84,49 @@ fn run(workspace: &Path, bundle: &Path) -> Result<(), String> {
     let result = build_extension(workspace, &staging, &sdk);
     let _ = std::fs::remove_dir_all(&staging);
     let dylib = result?;
+    check_shipped_extensions(workspace, bundle)?;
     println!(
         "BUNDLE SMOKE PASS: built {} against the SDK in {}",
         dylib.display(),
         bundle.display()
     );
     Ok(())
+}
+
+/// Have the bundle's editor load each module extension the bundle ships,
+/// with a home of its own so nothing installed on this machine joins in.
+fn check_shipped_extensions(workspace: &Path, bundle: &Path) -> Result<(), String> {
+    let expected = crate::bundle_modules::shipped_extensions();
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let home = workspace
+        .join("target")
+        .join(format!("bundle-smoke-home-{}", std::process::id()));
+    std::fs::create_dir_all(&home).map_err(|e| format!("creating {}: {e}", home.display()))?;
+    let editor = bundle.join(format!("jackdaw{}", std::env::consts::EXE_SUFFIX));
+    let output = std::process::Command::new(&editor)
+        .args(["check-extensions", "--expect", &expected.join(",")])
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("roaming"))
+        .env("LOCALAPPDATA", home.join("local"))
+        .env_remove("JACKDAW_CONFIG_DIR")
+        .output();
+    let _ = std::fs::remove_dir_all(&home);
+    let output = output.map_err(|e| format!("running {}: {e}", editor.display()))?;
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the bundled editor did not load {}: {}",
+            expected.join(", "),
+            output.status
+        ))
+    }
 }
 
 fn build_extension(workspace: &Path, staging: &Path, sdk: &SdkPaths) -> Result<PathBuf, String> {

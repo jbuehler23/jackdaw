@@ -886,16 +886,34 @@ fn apply_to_project(world: &World, root: &Path, view: &ExtensionsView) -> Result
     ))
 }
 
-/// Turn on or off the extensions a project's `[extensions]` table names,
-/// for this session, without changing the global list.
+/// Turn on the tooling of the modules a project uses and off that of the
+/// ones it does not, then the extensions its `[extensions]` table names, for
+/// this session, without changing the global list. A module extension the
+/// user turned off globally stays off.
 pub fn apply_project_overrides(world: &mut World, root: &Path) {
-    let Some(overrides) = ProjectManifest::read(root).extensions else {
-        return;
-    };
     let catalog_has = |world: &World, id: &str| {
         world
             .get_resource::<ExtensionCatalog>()
             .is_some_and(|catalog| catalog.contains(id))
+    };
+    let modules = project_modules(root);
+    for module in ModuleCatalog::builtin().modules() {
+        let Some(id) = module.extension.as_deref() else {
+            continue;
+        };
+        if !catalog_has(world, id) {
+            continue;
+        }
+        let wanted = modules.contains(&module.id)
+            && jackdaw_api_internal::extensions_config::is_extension_enabled(id);
+        if wanted {
+            jackdaw_api_internal::lifecycle::enable_extension(world, id);
+        } else {
+            jackdaw_api_internal::lifecycle::disable_extension(world, id);
+        }
+    }
+    let Some(overrides) = ProjectManifest::read(root).extensions else {
+        return;
     };
     for (id, enabled) in overrides {
         if crate::extension_resolution::is_required(&id) || !catalog_has(world, &id) {

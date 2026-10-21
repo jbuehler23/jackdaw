@@ -270,6 +270,35 @@ pub fn install_bytes(
         write_json_atomic(&trust_path()?, &trust)?;
     }
 
+    let installed = place(&root, verified, bytes)?;
+    jackdaw_env::extensions_config::set_extension_enabled(&installed.manifest.id, true);
+    Ok(installed)
+}
+
+/// Stage a bundle into `root` with the layout [`list_bundled`] reads, for a
+/// release archive that ships extensions beside the editor.
+///
+/// The bundle's checksum and signature are checked, but not its ABI and
+/// target, which name the editor in the archive rather than the program
+/// staging it. Trust and the enabled list are left alone: the archive is
+/// what a user trusts.
+pub fn stage_bundled(root: &Path, bytes: &[u8]) -> Result<InstalledExtension, PackageError> {
+    let bundle: ExtensionBundle = serde_json::from_slice(bytes)
+        .map_err(|error| PackageError::Invalid(format!("invalid .jdext: {error}")))?;
+    validate_manifest_shape(&bundle.manifest)?;
+    let verified = check_signature(bundle)?;
+    std::fs::create_dir_all(root)
+        .map_err(|error| PackageError::Io(format!("{}: {error}", root.display())))?;
+    place(root, verified, bytes)
+}
+
+/// Write a verified bundle's library and the bundle itself under
+/// `root/<id>/<version>/` and make that version the active one.
+fn place(
+    root: &Path,
+    verified: VerifiedBundle,
+    bytes: &[u8],
+) -> Result<InstalledExtension, PackageError> {
     let id_root = root.join(&verified.manifest.id);
     let version_root = id_root.join(&verified.manifest.version);
     if version_root.exists() {
@@ -316,7 +345,6 @@ pub fn install_bytes(
         write_json_atomic(&root.join("garbage.json"), &garbage)?;
     }
     write_json_atomic(&root.join("active.json"), &active)?;
-    jackdaw_env::extensions_config::set_extension_enabled(&verified.manifest.id, true);
 
     Ok(InstalledExtension {
         library_path: version_root.join(&verified.manifest.library),
@@ -393,7 +421,28 @@ pub fn rollback(id: &str) -> Result<Option<InstalledExtension>, PackageError> {
 }
 
 pub fn list_installed() -> Result<Vec<InstalledExtension>, PackageError> {
-    let root = extension_root()?;
+    list_in(&extension_root()?)
+}
+
+/// The extensions shipped in the release archive the running editor came
+/// from, in `extensions/` beside its executable. Empty for any other build.
+pub fn list_bundled() -> Result<Vec<InstalledExtension>, PackageError> {
+    match bundled_extension_root() {
+        Some(root) if root.is_dir() => list_in(&root),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Where a release archive keeps the extensions it ships.
+pub fn bundled_extension_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join(BUNDLED_EXTENSIONS_DIR))
+}
+
+/// The directory beside the editor executable that holds bundled extensions.
+pub const BUNDLED_EXTENSIONS_DIR: &str = "extensions";
+
+fn list_in(root: &Path) -> Result<Vec<InstalledExtension>, PackageError> {
     let active = read_json::<ActiveIndex>(&root.join("active.json")).unwrap_or_default();
     let mut installed = Vec::new();
     for (id, entry) in active.extensions {
@@ -661,6 +710,87 @@ mod tests {
         decoded.manifest.label = "Tampered".into();
         std::fs::write(&path, serde_json::to_vec(&decoded).unwrap()).unwrap();
         assert!(matches!(verify_bundle(&path), Err(PackageError::Signature)));
+    }
+
+    #[test]
+    fn a_staged_bundle_is_listed_from_its_root_whatever_abi_it_names() {
+        use ed25519_dalek::Signer as _;
+
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let library = format!("ext.{}", std::env::consts::DLL_EXTENSION);
+        let mut manifest = ExtensionManifest::new(
+            "jackdaw.example",
+            "Example",
+            "0.20.0",
+            "Jackdaw",
+            "MIT OR Apache-2.0",
+            library.clone(),
+            b"native library",
+        );
+        manifest.sdk_abi = "another editor's abi".into();
+        let bundle = encode_bundle(
+            manifest,
+            b"native library",
+            key.verifying_key().as_bytes(),
+            |message| key.sign(message).to_bytes(),
+        )
+        .unwrap();
+        let root =
+            std::env::temp_dir().join(format!("jackdaw-staged-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let staged = stage_bundled(&root, &bundle).unwrap();
+        assert_eq!(
+            staged.library_path,
+            root.join("jackdaw.example/0.20.0").join(&library)
+        );
+        assert_eq!(
+            std::fs::read(&staged.library_path).unwrap(),
+            b"native library"
+        );
+        assert!(matches!(
+            list_in(&root),
+            Err(PackageError::Incompatible { .. })
+        ));
+
+        let mut tampered: ExtensionBundle = serde_json::from_slice(&bundle).unwrap();
+        tampered.manifest.label = "Tampered".into();
+        assert!(matches!(
+            stage_bundled(&root, &serde_json::to_vec(&tampered).unwrap()),
+            Err(PackageError::Signature)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_bundle_staged_for_this_editor_is_listed() {
+        use ed25519_dalek::Signer as _;
+
+        let key = ed25519_dalek::SigningKey::from_bytes(&[11; 32]);
+        let manifest = ExtensionManifest::new(
+            "jackdaw.example",
+            "Example",
+            "0.20.0",
+            "Jackdaw",
+            "MIT OR Apache-2.0",
+            format!("ext.{}", std::env::consts::DLL_EXTENSION),
+            b"native library",
+        );
+        let bundle = encode_bundle(
+            manifest,
+            b"native library",
+            key.verifying_key().as_bytes(),
+            |message| key.sign(message).to_bytes(),
+        )
+        .unwrap();
+        let root =
+            std::env::temp_dir().join(format!("jackdaw-listed-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        stage_bundled(&root, &bundle).unwrap();
+        let listed = list_in(&root).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].manifest.id, "jackdaw.example");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn fixture(name: &str) -> Vec<u8> {
