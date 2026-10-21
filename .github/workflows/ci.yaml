@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release-*"]
   pull_request:
-    branches: [main]
+    branches: [main, "release-*"]
   # Pull requests only restore caches. This daily run on main saves any that
   # were pushed out. Only the jobs on a pull request's longest path keep a
   # cache, so the saved keys fit the repository's 10 GB together. Off the
