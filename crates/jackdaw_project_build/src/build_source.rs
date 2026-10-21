@@ -113,14 +113,41 @@ impl BuildSource {
     }
 }
 
-/// Where a jackdaw crate's sources sit inside a workspace.
-fn crate_path(root: &Path, crate_name: &str) -> PathBuf {
-    root.join("crates").join(crate_name)
+/// Where a jackdaw crate's sources sit inside a checkout: under `crates/`, or
+/// for a module's crate, in its workspace under `integrations/`.
+pub fn crate_path(root: &Path, crate_name: &str) -> PathBuf {
+    let in_crates = root.join("crates").join(crate_name);
+    if in_crates.is_dir() {
+        return in_crates;
+    }
+    std::fs::read_dir(root.join("integrations"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path().join(crate_name))
+        .find(|path| path.join("Cargo.toml").is_file())
+        .unwrap_or(in_crates)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_module_crate_is_found_in_its_integration_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let module = root
+            .path()
+            .join("integrations/physics/jackdaw_avian_integration");
+        std::fs::create_dir_all(&module).unwrap();
+        std::fs::write(module.join("Cargo.toml"), "").unwrap();
+        std::fs::create_dir_all(root.path().join("crates/jackdaw_runtime")).unwrap();
+        assert_eq!(crate_path(root.path(), "jackdaw_avian_integration"), module);
+        assert_eq!(
+            crate_path(root.path(), "jackdaw_runtime"),
+            root.path().join("crates/jackdaw_runtime")
+        );
+    }
 
     const REPO: &str = "https://github.com/jbuehler23/jackdaw";
     const REV: &str = "0123456789abcdef0123456789abcdef01234567";
