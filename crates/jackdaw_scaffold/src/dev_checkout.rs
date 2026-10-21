@@ -86,10 +86,11 @@ pub(crate) fn rewrite_jackdaw_dep_for_dev_checkout(dest: &Path) {
 }
 
 /// The jackdaw crates a scaffolded project may depend on directly.
-const DEV_PATH_DEPS: [&str; 3] = [
+const DEV_PATH_DEPS: [&str; 4] = [
     "jackdaw_runtime",
     "jackdaw_extension",
     "jackdaw_multiplayer",
+    "jackdaw_avian_integration",
 ];
 
 /// Rewrite the known jackdaw dep lines to path deps, preserving
@@ -108,7 +109,7 @@ fn rewrite_dep_lines(contents: &str, checkout: &Path) -> Option<String> {
         });
         match dep {
             Some(name) if !trimmed.contains("path =") && !trimmed.contains("path=") => {
-                let path = checkout.join("crates").join(name);
+                let path = jackdaw_project_build::build_source::crate_path(checkout, name);
                 let mut replacement = format!("{name} = {{ path = '{}'", path.display());
                 if let Some(features) = extract_features_list(trimmed) {
                     replacement.push_str(&format!(", features = {features}"));
@@ -211,6 +212,21 @@ mod tests {
                 expected_path.display()
             )),
             "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_dep_lines_points_a_module_crate_at_its_integration() {
+        let template = "jackdaw_avian_integration = { git = \"https://example.com/jackdaw\", rev = \"abc\" }\n";
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let out = rewrite_dep_lines(template, &checkout).unwrap();
+        let expected_path = checkout.join("integrations/physics/jackdaw_avian_integration");
+        assert_eq!(
+            out,
+            format!(
+                "jackdaw_avian_integration = {{ path = '{}' }}\n",
+                expected_path.display()
+            )
         );
     }
 
