@@ -1191,13 +1191,12 @@ fn a_reloaded_text_input_keeps_its_text() {
         Some("Ada Lovelace".to_string()),
         "the document carries the text through the save",
     );
-    let shown: String = reloaded
+    let shown = reloaded
         .world()
         .get::<bevy::text::EditableText>(loaded)
         .expect("the loaded input still has an editor")
         .value()
-        .into_iter()
-        .collect();
+        .into_owned();
     assert_eq!(
         shown, "Ada Lovelace",
         "and the loaded document puts it back in the box",

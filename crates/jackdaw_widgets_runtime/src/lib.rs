@@ -1022,7 +1022,7 @@ fn authored_text_self_update(
         if editable.is_added() {
             continue;
         }
-        let typed: String = editable.value().into_iter().collect();
+        let typed = editable.value().into_owned();
         if value.0 != typed {
             value.0.clone_from(&typed);
             commands.trigger(ValueChange {
@@ -1042,7 +1042,7 @@ fn authored_text_follows_value(
     mut inputs: Query<(&mut EditableText, &TextValue), Changed<TextValue>>,
 ) {
     for (mut editable, value) in &mut inputs {
-        let shown: String = editable.value().into_iter().collect();
+        let shown = editable.value();
         if shown == value.0 {
             continue;
         }
@@ -1162,8 +1162,7 @@ mod tests {
             .get::<EditableText>(entity)
             .expect("the input keeps its editor")
             .value()
-            .into_iter()
-            .collect()
+            .into_owned()
     }
 
     fn set_editor_text(app: &mut App, entity: Entity, text: &str) {

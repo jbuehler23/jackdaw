@@ -1035,12 +1035,14 @@ mod extract_tests {
         width: u32,
     }
 
-    fn register_asset<T: GetTypeRegistration + FromReflect + Asset>(registry: &mut TypeRegistry) {
+    fn register_asset<T: GetTypeRegistration + Reflect + FromReflect + Asset>(
+        registry: &mut TypeRegistry,
+    ) {
         registry.register::<T>();
         registry.register_type_data::<T, ReflectAsset>();
     }
 
-    fn assets_of<T: GetTypeRegistration + FromReflect + Asset>() -> Vec<TypeSchema> {
+    fn assets_of<T: GetTypeRegistration + Reflect + FromReflect + Asset>() -> Vec<TypeSchema> {
         let mut registry = TypeRegistry::default();
         register_asset::<T>(&mut registry);
         extract_asset_types(&registry)

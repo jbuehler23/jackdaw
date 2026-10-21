@@ -550,7 +550,7 @@ impl MatchText {
         let font = world.resource::<EditorFont>().0.clone();
         let mut commands = world.commands();
         commands.entity(ctx.entity).insert(InheritableFont {
-            font,
+            font: font.into(),
             font_size: tokens::TEXT_SIZE,
             ..default()
         });

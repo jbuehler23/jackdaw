@@ -52,7 +52,7 @@ pub fn set_text_input_value(editable: &mut EditableText, text: String) {
 }
 
 fn editable_text_string(editable: &EditableText) -> String {
-    editable.value().into_iter().collect()
+    editable.value().into_owned()
 }
 
 #[derive(Event)]
