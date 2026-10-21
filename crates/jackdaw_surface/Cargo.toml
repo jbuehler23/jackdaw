@@ -19,7 +19,7 @@ bevy = { version = "0.20", default-features = false, features = [
     "bevy_post_process",
     "bevy_anti_alias",
 ] }
-jackdaw_scene_types = { version = "0.20.0-dev", path = "../jackdaw_scene_types", default-features = false }
+jackdaw_scene_types = { version = "0.20.0-rc.1", path = "../jackdaw_scene_types", default-features = false }
 half = "2"
 
 [lints]
