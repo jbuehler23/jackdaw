@@ -277,7 +277,7 @@ fn shown_texts(app: &mut App) -> Vec<String> {
 }
 
 #[test]
-fn an_unavailable_module_is_offered_but_cannot_be_ticked() {
+fn physics_is_offered_ticked_and_can_be_unticked() {
     let projects = tempfile::tempdir().expect("tempdir");
     remember_location(projects.path());
     let mut app = util::editor_test_app();
@@ -287,20 +287,20 @@ fn an_unavailable_module_is_offered_but_cannot_be_ticked() {
         app.update();
     }
     let physics = module_toggle(&mut app, "physics");
+    assert!(checked(&app, physics), "a new game starts with physics");
     assert!(
-        !checked(&app, physics),
-        "a new game cannot start with physics yet"
-    );
-    assert!(
-        shown_texts(&mut app)
+        !shown_texts(&mut app)
             .iter()
-            .any(|text| text.contains("Not compatible: avian has no Bevy 0.20 release")),
-        "the dialog says why: {:?}",
+            .any(|text| text.contains("Not compatible")),
+        "{:?}",
         shown_texts(&mut app)
     );
     click(&mut app, physics);
     app.update();
-    assert!(!checked(&app, physics), "a click does not tick it");
+    assert!(!checked(&app, physics), "a click unticks it");
+    click(&mut app, physics);
+    app.update();
+    assert!(checked(&app, physics), "and another ticks it again");
 }
 
 #[test]
@@ -313,9 +313,14 @@ fn ticking_navmesh_gives_the_created_game_the_navmesh_feature() {
     for _ in 0..4 {
         app.update();
     }
+    let physics = module_toggle(&mut app, "physics");
     let navmesh = module_toggle(&mut app, "navmesh");
     let multiplayer = module_toggle(&mut app, "multiplayer");
     assert!(!checked(&app, navmesh) && !checked(&app, multiplayer));
+
+    click(&mut app, physics);
+    app.update();
+    assert!(!checked(&app, physics), "physics is unticked");
 
     click(&mut app, navmesh);
     app.update();

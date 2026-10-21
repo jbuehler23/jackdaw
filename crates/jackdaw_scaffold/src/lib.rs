@@ -3119,7 +3119,7 @@ mod tests {
         assert!(
             plan.notes
                 .iter()
-                .any(|note| note.contains("`physics`") && note.contains("not compatible")),
+                .any(|note| note.contains("`physics`") && note.contains("Physics module")),
             "got: {:?}",
             plan.notes
         );
@@ -3706,7 +3706,10 @@ mod tests {
         );
         assert_eq!(modules_arg(&args(&["game"])).unwrap(), None);
         assert!(modules_arg(&args(&["game", "--modules", "rendering"])).is_err());
-        assert!(modules_arg(&args(&["game", "--modules", "physics"])).is_err());
+        assert_eq!(
+            modules_arg(&args(&["game", "--modules", "physics"])).unwrap(),
+            Some(modules(&["physics"]))
+        );
         assert!(modules_arg(&args(&["game", "--modules", "physics", "--no-modules"])).is_err());
     }
 
@@ -3859,7 +3862,8 @@ mod tests {
     #[test]
     fn changing_modules_later_edits_both_manifests_and_keeps_the_games_crates() {
         let root = temp_dir("change-modules").join("change-game");
-        scaffold_new_project(&root, "change-game", TemplateKind::Game).unwrap();
+        scaffold_new_project_with(&root, "change-game", TemplateKind::Game, &ModuleSet::new())
+            .unwrap();
         let cargo_path = root.join("Cargo.toml");
 
         let chosen = modules(&["multiplayer", "navmesh"]);
