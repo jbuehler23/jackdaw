@@ -202,7 +202,11 @@ fn releases_for(launcher: &Launcher, form: &InstallForm) -> Vec<(String, String)
     let mut releases: Vec<&jackdaw_releases::Release> = index
         .releases
         .iter()
-        .filter(|release| release.channel == form.channel && !release.yanked)
+        .filter(|release| {
+            release.channel == form.channel
+                && !release.yanked
+                && (form.show_prereleases || !release.prerelease)
+        })
         .collect();
     releases.sort_by(|a, b| version::compare(&b.version, &a.version));
     if !form.show_older {
@@ -211,7 +215,7 @@ fn releases_for(launcher: &Launcher, form: &InstallForm) -> Vec<(String, String)
             let key = if release.channel == Channel::BleedingEdge {
                 release.version.clone()
             } else {
-                release.bevy.clone()
+                format!("{} {}", release.bevy, release.prerelease)
             };
             if seen.contains(&key) {
                 false
@@ -232,6 +236,8 @@ fn releases_for(launcher: &Launcher, form: &InstallForm) -> Vec<(String, String)
                 label.push_str(" - installed");
             } else if release.known_good {
                 label.push_str(" - known good");
+            } else if release.prerelease {
+                label.push_str(" - prerelease");
             }
             (release.version.clone(), label)
         })
@@ -351,6 +357,16 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
         } else {
             "Show older"
         };
+        let prereleases = (form.channel == Channel::Stable).then(|| {
+            let call = ButtonOperatorCall::new("launcher.install_show_prereleases")
+                .with_param("enabled", !form.show_prereleases);
+            let caption = if form.show_prereleases {
+                "Hide prereleases"
+            } else {
+                "Show prereleases"
+            };
+            ui::boxed(ui::button(caption, call, ButtonVariant::Plain))
+        });
         content.push(ui::boxed(bsn! {
             Node {
                 flex_direction: FlexDirection::Row,
@@ -363,6 +379,8 @@ fn install_editor(form: &InstallForm, launcher: &Launcher) -> impl Scene {
                 @{version_picker(launcher, form)}
                 --
                 @{ui::button(older_caption, older, ButtonVariant::Plain)}
+                --
+                {prereleases.into_iter().collect::<ui::Scenes>()}
             ]
         }));
     }

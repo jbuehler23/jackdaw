@@ -24,7 +24,8 @@ usage: jd editor <command> [--json]
 commands:
   list [--available]          Installed editors, or every published one
   install <version|line|stable|bleeding-edge> [--modules <list>]
-                              Download, verify and install an editor
+                              Download, verify and install an editor;
+                              a prerelease installs by its exact version
   remove <version> [--force]  Remove an editor (refused while projects use it)
   default <version>           Open unpinned projects with this editor
   locate <path>               Register an editor installed another way
@@ -389,6 +390,29 @@ fn list_available(layout: &Layout) -> Result<(), String> {
             installed(&line.latest)
         );
     }
+    let mut prereleases: Vec<_> = index
+        .releases
+        .iter()
+        .filter(|release| release.prerelease && !release.yanked)
+        .filter(|release| {
+            index.channels.stable.lines.iter().all(|line| {
+                line.bevy != release.bevy
+                    || version::compare(&release.version, &line.latest).is_gt()
+            })
+        })
+        .collect();
+    prereleases.sort_by(|a, b| version::compare(&b.version, &a.version));
+    if !prereleases.is_empty() {
+        println!("Prereleases (install by exact version)");
+        for release in prereleases {
+            println!(
+                "  Bevy {:<8} {:<20}{}",
+                release.bevy,
+                release.version,
+                installed(&release.version)
+            );
+        }
+    }
     let nightlies: Vec<_> = index
         .releases
         .iter()
@@ -443,6 +467,12 @@ fn install(
         for issue in &release.known_issues {
             report.say(format!("  known issue: {issue}"));
         }
+    }
+    if release.prerelease {
+        report.say(format!(
+            "{} is a release candidate, for testing before the final release.",
+            release.version
+        ));
     }
     report.say(format!(
         "installing jackdaw {} for {target}",
