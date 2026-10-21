@@ -10,9 +10,6 @@ repository.workspace = true
 [package.metadata.jackdaw]
 # The editor line this module is built for.
 editor = "0.20"
-# Why this module cannot build on the current Bevy; CI reports it instead
-# of building. Remove once avian releases for Bevy 0.20.
-unavailable = "avian has no Bevy 0.20 release yet (avianphysics/avian#1070 ports it)"
 
 [dependencies]
 # See `jackdaw_pie_protocol`: this crate ships inside games, so its bevy
