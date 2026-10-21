@@ -73,8 +73,15 @@ jobs:
           if [ -z "$rev" ]; then
             rev=$(git ls-remote https://github.com/bevyengine/bevy refs/heads/main | cut -f1)
           fi
+          # Moving Bevy re-resolves gpu-allocator's `windows` range onto the
+          # 0.61 that ipc-channel needs, which breaks wgpu-hal's dx12 backend
+          # on 0.62. Updating gpu-allocator in place puts it back on 0.62.
           for workspace in . integrations/navmesh; do
-            (cd "$workspace" && cargo update --package bevy --precise "$rev")
+            (
+              cd "$workspace"
+              cargo update --package bevy --precise "$rev"
+              cargo update --package gpu-allocator --precise "$(cargo pkgid gpu-allocator | cut -d@ -f2)"
+            )
           done
           echo "bevy_rev=$rev" >> "$GITHUB_OUTPUT"
           echo "nightly=nightly-$(date -u +%F)" >> "$GITHUB_OUTPUT"
