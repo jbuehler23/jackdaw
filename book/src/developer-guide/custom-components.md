@@ -102,7 +102,7 @@ The file is a plain `.bsn` whose second line names the type it
 holds:
 
 ```text
-// jackdaw 0.19.0 | bevy 0.19
+// jackdaw 0.20.0 | bevy 0.20
 // jackdaw asset my_game::content::ItemDef
 #torch
 my_game::content::ItemDef { stack_size: 4 }

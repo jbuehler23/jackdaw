@@ -197,8 +197,8 @@ marketplace has to know the client's before it offers a download. Ask it:
 
 ```bash
 $ jd extension abi --json
-{"sdk_abi":"jackdaw-0.19.0-bevy-0.19-rustc 1.90.0","target":"x86_64-unknown-linux-gnu",
- "jackdaw":"0.19.0","bevy":"0.19"}
+{"sdk_abi":"jackdaw-0.20.0-bevy-0.20-rustc 1.99.0","target":"x86_64-unknown-linux-gnu",
+ "jackdaw":"0.20.0","bevy":"0.20"}
 ```
 
 `sdk_abi` covers the Jackdaw version, the Bevy minor, and the exact rustc that

@@ -52,7 +52,7 @@ You can also enable Bevy's `dynamic_linking` feature, which can improve link tim
 
 ```toml
 [workspace.dependencies]
-bevy = { version = "0.19", features = [
+bevy = { version = "0.20", features = [
     "dynamic_linking", # Add this line!
     "bevy_feathers",
     "bevy_scene",

@@ -4,7 +4,7 @@
 #
 # With options:
 #
-#   & ([scriptblock]::Create((irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1))) -Version 0.19.0-rc.9
+#   & ([scriptblock]::Create((irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1))) -Version 0.20.0-rc.1
 [CmdletBinding()]
 param(
     [string]$Version = $env:JACKDAW_VERSION,
@@ -118,7 +118,7 @@ function Invoke-JackdawInstall {
         Write-Host @'
 Install jackdaw from a GitHub release for the current user.
 
-  -Version <v>      Install release v<v>, e.g. 0.19.0-rc.9 (default: latest)
+  -Version <v>      Install release v<v>, e.g. 0.20.0-rc.1 (default: latest)
   -Prefix <dir>     Where versions are kept (default: %LOCALAPPDATA%\jackdaw\install)
   -NoModifyPath     Do not add the install to the user PATH
   -Yes              Accepted for parity with install.sh; this script never asks
