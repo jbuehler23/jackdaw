@@ -220,13 +220,16 @@ mod tests {
         let template = "jackdaw_avian_integration = { git = \"https://example.com/jackdaw\", rev = \"abc\" }\n";
         let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let out = rewrite_dep_lines(template, &checkout).unwrap();
-        let expected_path = checkout.join("integrations/physics/jackdaw_avian_integration");
+        let path = out
+            .strip_prefix("jackdaw_avian_integration = { path = '")
+            .and_then(|rest| rest.strip_suffix("' }\n"))
+            .unwrap_or_else(|| panic!("got:\n{out}"));
         assert_eq!(
-            out,
-            format!(
-                "jackdaw_avian_integration = {{ path = '{}' }}\n",
-                expected_path.display()
-            )
+            Path::new(path),
+            checkout
+                .join("integrations")
+                .join("physics")
+                .join("jackdaw_avian_integration")
         );
     }
 
