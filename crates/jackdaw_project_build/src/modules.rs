@@ -471,10 +471,24 @@ mod tests {
     }
 
     #[test]
-    fn a_new_game_starts_with_no_module_this_line_cannot_build() {
+    fn a_new_game_starts_with_physics() {
         let catalog = ModuleCatalog::builtin();
-        assert!(catalog.unavailable("physics").is_some());
-        assert_eq!(catalog.defaults(), ModuleSet::new());
+        assert!(catalog.unavailable("physics").is_none());
+        assert_eq!(catalog.defaults(), set(&["physics"]));
+    }
+
+    fn catalog_with_an_unavailable_module() -> ModuleCatalog {
+        ModuleCatalog::from_json(
+            r#"[{"id": "a", "name": "A", "description": "", "default": true},
+                {"id": "b", "name": "B", "description": "", "default": true,
+                 "unavailable": "it needs a crate with no release yet"}]"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_game_starts_with_no_module_this_line_cannot_build() {
+        assert_eq!(catalog_with_an_unavailable_module().defaults(), set(&["a"]));
     }
 
     #[test]
@@ -492,8 +506,12 @@ mod tests {
         assert_eq!(catalog.parse_list("").unwrap(), ModuleSet::new());
         assert!(catalog.parse_list("rendering").is_err());
         let physics = catalog.parse_list("physics").unwrap();
-        let error = catalog.available(physics).unwrap_err();
-        assert!(error.contains("not compatible"), "{error}");
+        assert_eq!(catalog.available(physics).unwrap(), set(&["physics"]));
+        let catalog = catalog_with_an_unavailable_module();
+        let error = catalog
+            .available(catalog.parse_list("a,b").unwrap())
+            .unwrap_err();
+        assert!(error.contains("`b` is not compatible"), "{error}");
     }
 
     #[test]

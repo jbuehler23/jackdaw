@@ -14,8 +14,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [workspace.dependencies]
-# The avian release for Bevy 0.20. Until it is out this workspace does not
-# resolve, and the members say so in `package.metadata.jackdaw.unavailable`.
+# The avian release for Bevy 0.20.
 avian3d = { version = "0.8", features = [
     "3d",
     "parry-f32",

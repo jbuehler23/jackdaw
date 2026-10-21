@@ -30,8 +30,7 @@
       "avian3d::dynamics::integrator::IntegrationFlags",
       "avian3d::collision::collider::constructor::ColliderConstructor"
     ],
-    "extension": "jackdaw.physics",
-    "unavailable": "avian has no Bevy 0.20 release yet (avianphysics/avian#1070 ports it)"
+    "extension": "jackdaw.physics"
   },
   {
     "id": "navmesh",

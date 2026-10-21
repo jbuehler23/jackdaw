@@ -4810,10 +4810,13 @@ dependencies = [
 name = "jackdaw_sdk"
 version = "0.20.0-dev"
 dependencies = [
+ "approx",
  "bevy",
  "bevy_curve",
  "bevy_math",
  "bevy_shape",
+ "downcast-rs 2.0.2",
+ "hashbrown 0.16.1",
  "jackdaw_api",
  "jackdaw_runtime",
  "rand 0.10.2",
