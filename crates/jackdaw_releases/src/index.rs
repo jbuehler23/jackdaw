@@ -191,6 +191,10 @@ pub struct Release {
     /// A nightly picked as a known-good weekly build, kept longer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub known_good: bool,
+    /// A release candidate such as `0.20.0-rc.1`: installed only by its exact
+    /// version, never picked by a channel or line.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prerelease: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_issues: Vec<String>,
     #[serde(default)]
@@ -210,7 +214,7 @@ impl Release {
 
     /// Whether a channel or line query may pick this release.
     fn selectable(&self) -> bool {
-        !self.yanked && !self.broken
+        !self.yanked && !self.broken && !self.prerelease
     }
 }
 
@@ -267,8 +271,8 @@ impl ReleaseIndex {
     ///
     /// `stable` is the current line's latest release and `bleeding-edge`
     /// (or `nightly`) the newest healthy nightly. A line such as `0.20`
-    /// picks its newest release. An exact version is taken as is, unless it
-    /// was yanked.
+    /// picks its newest release. Prereleases are never picked this way. An
+    /// exact version is taken as is, unless it was yanked.
     pub fn resolve(&self, query: &str) -> Result<&Release, String> {
         let query = query.strip_prefix('v').unwrap_or(query);
         match Channel::parse(query) {
@@ -498,6 +502,7 @@ mod tests {
             yanked: false,
             broken: false,
             known_good: false,
+            prerelease: version.contains('-') && !version::is_nightly(version),
             known_issues: Vec::new(),
             artifacts: vec![Artifact {
                 target: "x86_64-unknown-linux-gnu".into(),
@@ -617,6 +622,30 @@ mod tests {
         assert_eq!(index.resolve("v0.20.1").unwrap().version, "0.20.1");
         assert!(index.resolve("0.20.3").unwrap_err().contains("withdrawn"));
         assert!(index.resolve("0.18").is_err());
+    }
+
+    #[test]
+    fn prereleases_resolve_only_by_exact_version() {
+        let mut index = index(&[
+            release("0.19.4", "0.19"),
+            release("0.20.0-rc.1", "0.20"),
+            release("0.20.0-rc.2", "0.20"),
+        ]);
+        assert!(index.resolve("0.20").is_err());
+        assert_eq!(index.resolve("stable").unwrap().version, "0.19.4");
+        assert_eq!(index.resolve("0.20.0-rc.1").unwrap().version, "0.20.0-rc.1");
+        let lines: Vec<_> = index
+            .channels
+            .stable
+            .lines
+            .iter()
+            .map(|line| line.latest.as_str())
+            .collect();
+        assert_eq!(lines, ["0.19.4"]);
+
+        index.add_release(release("0.20.0", "0.20"), 0);
+        assert_eq!(index.resolve("0.20").unwrap().version, "0.20.0");
+        assert_eq!(index.resolve("stable").unwrap().version, "0.20.0");
     }
 
     #[test]

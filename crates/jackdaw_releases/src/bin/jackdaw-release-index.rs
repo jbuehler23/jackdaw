@@ -8,7 +8,7 @@
 //! ```
 //!
 //! `add` records the bundles in `--dist` (named `jackdaw-<target>.<ext>`)
-//! as a release, rewrites the index in place and writes `<index>.sig`.
+//! as a release (a prerelease for a version such as `0.20.0-rc.1`), rewrites the index in place and writes `<index>.sig`.
 //! An existing index is only extended after its own `.sig` verifies, so a
 //! damaged or substituted download is never re-signed. Signing uses the
 //! PKCS#8 key held base64-encoded in `JACKDAW_INDEX_SIGNING_KEY`, and
@@ -108,6 +108,7 @@ fn add(args: &[String]) -> Result<(), String> {
         yanked: false,
         broken: false,
         known_good: args.iter().any(|arg| arg == "--known-good"),
+        prerelease: channel == Channel::Stable && release_version.contains('-'),
         known_issues: Vec::new(),
         artifacts: artifacts(&dist, base_url.trim_end_matches('/'))?,
         modules_index: None,

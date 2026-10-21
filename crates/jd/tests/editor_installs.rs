@@ -83,6 +83,7 @@ impl Fixture {
             yanked: false,
             broken: false,
             known_good: false,
+            prerelease: !nightly && version.contains('-'),
             known_issues: Vec::new(),
             artifacts: vec![Artifact {
                 target: TARGET.to_string(),
@@ -262,6 +263,25 @@ fn installing_a_line_registers_its_newest_patch_as_the_default() {
     let stdout = ok(&fixture.jd(&["editor", "list"]));
     assert!(stdout.contains("Bevy 0.20"), "{stdout}");
     assert!(stdout.contains("default"), "{stdout}");
+}
+
+#[test]
+fn a_prerelease_installs_only_by_its_exact_version() {
+    let mut fixture = Fixture::new();
+    fixture.publish("0.20.0-rc.1", "0.20.0-rc.1");
+    fixture.sign();
+
+    let refused = fixture.jd(&["editor", "install", "0.20"]);
+    assert!(!refused.status.success());
+
+    let stdout = ok(&fixture.jd(&["editor", "list", "--available"]));
+    assert!(stdout.contains("Prereleases"), "{stdout}");
+    assert!(stdout.contains("0.20.0-rc.1"), "{stdout}");
+
+    let stdout = ok(&fixture.jd(&["editor", "install", "0.20.0-rc.1"]));
+    assert!(stdout.contains("release candidate"), "{stdout}");
+    assert!(stdout.contains("installed jackdaw 0.20.0-rc.1"), "{stdout}");
+    assert_eq!(fixture.installed_dirs(), ["0.20.0-rc.1"]);
 }
 
 fn events(stdout: &str) -> Vec<serde_json::Value> {
