@@ -46,6 +46,7 @@ pub fn run(extend: impl FnOnce(&mut App)) -> AppExit {
         crate::cli::Launch::ExportTerrain(rest) => {
             return crate::terrain::export::run_export_terrain_cli(rest);
         }
+        crate::cli::Launch::CheckExtensions(rest) => return check_extensions(rest),
         crate::cli::Launch::Unknown(flag) => {
             #[expect(clippy::print_stderr, reason = "usage errors report to stderr")]
             {
@@ -238,4 +239,73 @@ fn error_handler(error: BevyError, ctx: ErrorContext) {
         return;
     }
     bevy::ecs::error::error(error, ctx);
+}
+
+/// `jackdaw check-extensions [--expect <id,id>]`: load every extension shipped
+/// with this editor and every installed one once, and report each. Fails when
+/// one does not load, or when an id named by `--expect` is not among them.
+#[expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a command-line check reports to the terminal"
+)]
+fn check_extensions(args: &[String]) -> AppExit {
+    use jackdaw_loader::package;
+
+    let expected: Vec<String> = args
+        .iter()
+        .position(|arg| arg == "--expect")
+        .and_then(|index| args.get(index + 1))
+        .map(|list| list.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
+    let mut found = Vec::new();
+    let mut failed = false;
+    for (origin, listed) in [
+        ("shipped", package::list_bundled()),
+        ("installed", package::list_installed()),
+    ] {
+        let extensions = match listed {
+            Ok(extensions) => extensions,
+            Err(error) => {
+                eprintln!("{origin} extensions: {error}");
+                failed = true;
+                continue;
+            }
+        };
+        for extension in extensions {
+            let manifest = &extension.manifest;
+            match jackdaw_loader::probe(&extension.library_path) {
+                Ok(id) if id == manifest.id => {
+                    println!("{id} {} ({origin}): loads", manifest.version);
+                    found.push(id);
+                }
+                Ok(id) => {
+                    eprintln!(
+                        "{} ({origin}): the library registers as `{id}`",
+                        manifest.id
+                    );
+                    failed = true;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "{} ({origin}): {} does not load: {error}",
+                        manifest.id,
+                        extension.library_path.display()
+                    );
+                    failed = true;
+                }
+            }
+        }
+    }
+    for id in &expected {
+        if !found.contains(id) {
+            eprintln!("{id}: not found");
+            failed = true;
+        }
+    }
+    if failed {
+        AppExit::from_code(1)
+    } else {
+        AppExit::Success
+    }
 }

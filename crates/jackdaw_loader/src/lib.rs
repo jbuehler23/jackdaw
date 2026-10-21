@@ -203,7 +203,7 @@ impl Plugin for DylibLoaderPlugin {
             Ok(installed) => installed,
             Err(error) => {
                 warn!("Could not read installed extensions: {error}");
-                return;
+                Vec::new()
             }
         };
         for extension in installed {
@@ -236,6 +236,40 @@ impl Plugin for DylibLoaderPlugin {
                 }
                 Err(err) => {
                     warn!("Failed to load {}: {err}", file.display());
+                    failed += 1;
+                }
+            }
+        }
+
+        let bundled = match package::list_bundled() {
+            Ok(bundled) => bundled,
+            Err(error) => {
+                warn!("Could not read the extensions shipped with this editor: {error}");
+                Vec::new()
+            }
+        };
+        for extension in bundled {
+            let id = &extension.manifest.id;
+            let installed = app
+                .world()
+                .get_resource::<jackdaw_api_internal::lifecycle::ExtensionCatalog>()
+                .is_some_and(|catalog| catalog.contains(id));
+            if installed {
+                info!(
+                    "Extension `{id}` is installed; the copy shipped with the editor is not loaded"
+                );
+                continue;
+            }
+            match try_load(app, &extension.library_path) {
+                Ok(id) => {
+                    info!(
+                        "Loaded extension `{id}` shipped with the editor from {}",
+                        extension.library_path.display()
+                    );
+                    loaded += 1;
+                }
+                Err(err) => {
+                    warn!("Failed to load {}: {err}", extension.library_path.display());
                     failed += 1;
                 }
             }
@@ -377,6 +411,22 @@ fn open_and_construct(
     let ext =
         std::panic::catch_unwind(AssertUnwindSafe(ctor)).map_err(|_| LoadError::EntryPanicked)?;
     Ok((ctor, ext))
+}
+
+/// Open the extension library at `path` and construct it once, without
+/// registering it anywhere, and return its id. For checking that a library
+/// loads into this editor.
+pub fn probe(path: &Path) -> Result<String, LoadError> {
+    let mut world = World::new();
+    world.init_resource::<LoadedDylibs>();
+    world.init_resource::<AppTypeRegistry>();
+    let (_, extension) = open_and_construct(&mut world, path)?;
+    let id = extension.id();
+    drop(extension);
+    // The library stays mapped for the rest of the process: code it handed
+    // out may still be referenced.
+    std::mem::forget(world.remove_resource::<LoadedDylibs>());
+    Ok(id)
 }
 
 /// Startup load: construct once to harvest the extension id and add its App

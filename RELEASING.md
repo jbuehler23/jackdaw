@@ -6,7 +6,8 @@ Commands below assume a checkout of that branch and `gh` signed in to
 
 ## One-time setup
 
-The release workflow signs `releases.json` on the `index` release, and `jd`
+Do this before tagging the first release candidate, which is the first
+release added to the index. The release workflow signs `releases.json` on the `index` release, and `jd`
 and the launcher only accept an index signed by the key built into them.
 
 1. Generate the signing key (an Ed25519 PKCS#8 key, base64 on one line) and
@@ -33,8 +34,7 @@ and the launcher only accept an index signed by the key built into them.
    ```
 
    Merge this into the release branch and into `main` before tagging the
-   first release that should verify the index. Builds without it refuse
-   every index.
+   first release candidate. Builds without it refuse every index.
 
 4. Create the `index` release once. It must never become the latest
    release, because the install scripts download from `releases/latest`:
@@ -45,7 +45,7 @@ and the launcher only accept an index signed by the key built into them.
      --prerelease --latest=false
    ```
 
-   The first final release writes `releases.json` and `releases.json.sig`
+   The first tagged release writes `releases.json` and `releases.json.sig`
    to it.
 
 ## Each release
@@ -70,13 +70,17 @@ and the launcher only accept an index signed by the key built into them.
 
    `release.yaml` runs the heavy tier, checks that scaffolded projects
    resolve against the packaged crates, builds and smoke-tests the bundles
-   for Linux, macOS and Windows, tests `install.sh` and `install.ps1`,
+   for Linux, macOS and Windows with the Physics and Navmesh module
+   extensions built in, tests `install.sh` and `install.ps1`,
    publishes the crates with `cargo xtask publish` (dependency order, skips
    versions already on crates.io, waits out rate limits; re-run the job if
    it stops), checks that a scaffolded project resolves from crates.io, and
    creates a GitHub prerelease with the archives, install scripts and
-   attestations. `regression.yaml` and `onboarding.yaml` also run on
-   release candidate tags. Release candidates are not added to the index.
+   attestations. The `Release index` job adds it to `releases.json` as a
+   prerelease, which `jd editor install 0.20.0-rc.1` and the launcher's Show
+   prereleases offer and nothing picks by line or channel.
+   `regression.yaml` and `onboarding.yaml` also run on release candidate
+   tags.
 
    A tag that does not match the workspace version builds bundles but
    publishes nothing.
@@ -89,10 +93,10 @@ and the launcher only accept an index signed by the key built into them.
    `v0.20.0`. The final tag builds bundles with one codegen unit and thin
    LTO, skips the heavy tier, regression and onboarding (the last release
    candidate passed them), publishes the crates, marks the GitHub release
-   as latest, and the `Release index` job adds it to `releases.json` and
-   signs it.
+   as latest, and the `Release index` job adds it to `releases.json` as the
+   line's release and signs it.
 
-5. Check the index. The `Release index` job warns and leaves the index
+5. Check the index after each tag. The `Release index` job warns and leaves the index
    unchanged when the secret or the `index` release is missing, so look
    for warnings in the run, then:
 
@@ -102,4 +106,5 @@ and the launcher only accept an index signed by the key built into them.
    jd editor list --available
    ```
 
-   `jd` from the new release should list it without warnings.
+   `jd` from the new release should list it, a release candidate under
+   Prereleases, without warnings.
