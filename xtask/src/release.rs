@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use jackdaw_project_build::build_source::crate_path;
+use jackdaw_project_build::modules::ModuleCatalog;
+
 /// Crates that must be published: the editor, `jd` and MCP server users
 /// install, and the crates the project templates depend on.
 const REQUIRED: [&str; 5] = [
@@ -42,22 +45,45 @@ struct Workspace {
     /// See [`git_pins`].
     git_pins: BTreeMap<String, Vec<(String, String)>>,
     target_dir: PathBuf,
+    /// Crates a module adds to a game that live in an `integrations/`
+    /// workspace, packaged and published after this workspace's crates.
+    integrations: Vec<Integration>,
 }
 
-fn workspace() -> Result<Workspace, String> {
-    let output = Command::new("cargo")
-        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+/// A publishable crate of one of the `integrations/` workspaces.
+struct Integration {
+    manifest: PathBuf,
+    target_dir: PathBuf,
+    krate: Crate,
+}
+
+/// `cargo metadata --no-deps` for the workspace at `manifest`, or the
+/// current one.
+fn metadata(manifest: Option<&Path>) -> Result<serde_json::Value, String> {
+    let mut command = Command::new("cargo");
+    command.args(["metadata", "--no-deps", "--format-version", "1", "--locked"]);
+    if let Some(manifest) = manifest {
+        command.arg("--manifest-path").arg(manifest);
+    }
+    let output = command
         .stderr(Stdio::inherit())
         .output()
         .map_err(|error| format!("run cargo metadata: {error}"))?;
     if !output.status.success() {
         return Err("cargo metadata failed".to_string());
     }
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("parse cargo metadata: {error}"))?;
-    let target_dir = json["target_directory"]
+    serde_json::from_slice(&output.stdout).map_err(|error| format!("parse cargo metadata: {error}"))
+}
+
+fn target_dir(metadata: &serde_json::Value) -> Result<PathBuf, String> {
+    metadata["target_directory"]
         .as_str()
-        .ok_or("cargo metadata has no target directory")?;
+        .map(PathBuf::from)
+        .ok_or_else(|| "cargo metadata has no target directory".to_string())
+}
+
+fn workspace() -> Result<Workspace, String> {
+    let json = metadata(None)?;
     let crates = publishable(&json);
     let missing: Vec<&str> = REQUIRED
         .into_iter()
@@ -69,11 +95,49 @@ fn workspace() -> Result<Workspace, String> {
             missing.join(", ")
         ));
     }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let integrations = integrations(&root, &crates)?;
     Ok(Workspace {
         crates,
         git_pins: git_pins(&json),
-        target_dir: PathBuf::from(target_dir),
+        target_dir: target_dir(&json)?,
+        integrations,
     })
+}
+
+/// The jackdaw crates the available modules add to a game that are not in
+/// this workspace, each found in its `integrations/` workspace.
+fn integrations(root: &Path, crates: &[Crate]) -> Result<Vec<Integration>, String> {
+    let mut found = Vec::new();
+    let module_crates = ModuleCatalog::builtin()
+        .modules()
+        .iter()
+        .filter(|module| module.unavailable.is_none())
+        .flat_map(|module| &module.crates)
+        .filter(|krate| krate.version.is_none());
+    for module_crate in module_crates {
+        let name = module_crate.name.as_str();
+        if crates.iter().any(|krate| krate.name == name) {
+            continue;
+        }
+        let dir = crate_path(root, name);
+        let manifest = dir
+            .parent()
+            .filter(|_| dir.starts_with(root.join("integrations")))
+            .map(|workspace| workspace.join("Cargo.toml"))
+            .ok_or_else(|| format!("module crate `{name}` is in no workspace"))?;
+        let json = metadata(Some(&manifest))?;
+        let krate = publishable(&json)
+            .into_iter()
+            .find(|krate| krate.name == name)
+            .ok_or_else(|| format!("module crate `{name}` is not publishable"))?;
+        found.push(Integration {
+            target_dir: target_dir(&json)?,
+            manifest,
+            krate,
+        });
+    }
+    Ok(found)
 }
 
 /// Registry dependencies of the publishable crates that the workspace takes
@@ -275,12 +339,20 @@ pub fn publish(dry_run: bool) -> bool {
             return false;
         }
     }
-    for krate in order {
+    let integrations = workspace
+        .integrations
+        .iter()
+        .map(|integration| (&integration.krate, Some(integration.manifest.as_path())));
+    for (krate, manifest) in order
+        .into_iter()
+        .map(|krate| (krate, None))
+        .chain(integrations)
+    {
         match on_crates_io(&krate.name, &krate.version) {
             Ok(true) => eprintln!("{} {} is already on crates.io", krate.name, krate.version),
             Ok(false) if dry_run => eprintln!("would publish {} {}", krate.name, krate.version),
             Ok(false) => {
-                if !publish_one(krate) {
+                if !publish_one(krate, manifest) {
                     return false;
                 }
             }
@@ -293,15 +365,18 @@ pub fn publish(dry_run: bool) -> bool {
     true
 }
 
-fn publish_one(krate: &Crate) -> bool {
+/// Publish `krate` from this workspace, or from the one at `manifest`.
+fn publish_one(krate: &Crate, manifest: Option<&Path>) -> bool {
     let mut attempt = 0;
     loop {
         attempt += 1;
         eprintln!("+ cargo publish --locked --no-verify -p {}", krate.name);
-        let output = Command::new("cargo")
-            .args(["publish", "--locked", "--no-verify", "-p", &krate.name])
-            .stdout(Stdio::inherit())
-            .output();
+        let mut command = Command::new("cargo");
+        command.args(["publish", "--locked", "--no-verify", "-p", &krate.name]);
+        if let Some(manifest) = manifest {
+            command.arg("--manifest-path").arg(manifest);
+        }
+        let output = command.stdout(Stdio::inherit()).output();
         let output = match output {
             Ok(output) => output,
             Err(error) => {
@@ -392,32 +467,7 @@ fn package_into(out: &Path) -> Result<Vec<Crate>, String> {
     let mut patch = String::from("[patch.crates-io]\n");
     let mut too_big = Vec::new();
     for krate in &workspace.crates {
-        let packaged = packaged(krate);
-        let file_name = packaged.file_name().unwrap_or_default();
-        let size = std::fs::metadata(&packaged)
-            .map_err(|error| format!("{}: {error}", packaged.display()))?
-            .len();
-        if size > UPLOAD_LIMIT {
-            too_big.push(format!("{} is {size} bytes", file_name.display()));
-        }
-        std::fs::copy(&packaged, out.join(file_name))
-            .map_err(|error| format!("copy {}: {error}", packaged.display()))?;
-        let unpacked = Command::new("tar")
-            .arg("-xzf")
-            .arg(&packaged)
-            .arg("-C")
-            .arg(&sources)
-            .status()
-            .is_ok_and(|status| status.success());
-        if !unpacked {
-            return Err(format!("unpack {}", packaged.display()));
-        }
-        let source = sources.join(format!("{}-{}", krate.name, krate.version));
-        patch.push_str(&format!(
-            "{} = {{ path = {:?} }}\n",
-            krate.name,
-            source.to_string_lossy()
-        ));
+        patch.push_str(&unpack(krate, &packaged(krate), out, &mut too_big)?);
     }
     for (name, keys) in &workspace.git_pins {
         let keys: Vec<String> = keys
@@ -426,21 +476,91 @@ fn package_into(out: &Path) -> Result<Vec<Crate>, String> {
             .collect();
         patch.push_str(&format!("{name} = {{ {} }}\n", keys.join(", ")));
     }
+    let config = out.join(".cargo").join("config.toml");
+    std::fs::create_dir_all(out.join(".cargo")).map_err(|error| error.to_string())?;
+    let mut crates = workspace.crates;
+    // An integration crate depends on this workspace's crates at versions no
+    // registry has yet, so it is packaged against the ones just unpacked. The
+    // patch changes what its workspace's lockfile records, so the lockfile is
+    // put back afterwards.
+    for integration in workspace.integrations {
+        std::fs::write(&config, &patch).map_err(|error| error.to_string())?;
+        let krate = integration.krate;
+        let packaged = integration
+            .target_dir
+            .join("package")
+            .join(format!("{}-{}.crate", krate.name, krate.version));
+        let _ = std::fs::remove_file(&packaged);
+        let lockfile = integration.manifest.with_file_name("Cargo.lock");
+        let locked = std::fs::read(&lockfile)
+            .map_err(|error| format!("read {}: {error}", lockfile.display()))?;
+        let manifest = integration.manifest.to_string_lossy().into_owned();
+        let config = config.to_string_lossy().into_owned();
+        let args = [
+            "package",
+            "--no-verify",
+            "--manifest-path",
+            manifest.as_str(),
+            "--config",
+            config.as_str(),
+            "-p",
+            krate.name.as_str(),
+        ];
+        let ok = crate::sh("cargo", &args);
+        std::fs::write(&lockfile, locked)
+            .map_err(|error| format!("restore {}: {error}", lockfile.display()))?;
+        if !ok {
+            return Err(format!("cargo package failed for {}", krate.name));
+        }
+        patch.push_str(&unpack(&krate, &packaged, out, &mut too_big)?);
+        crates.push(krate);
+    }
     if !too_big.is_empty() {
         return Err(format!(
             "crates.io accepts packages up to {UPLOAD_LIMIT} bytes:\n  {}",
             too_big.join("\n  ")
         ));
     }
-    let config = out.join(".cargo");
-    std::fs::create_dir_all(&config).map_err(|error| error.to_string())?;
-    std::fs::write(config.join("config.toml"), patch).map_err(|error| error.to_string())?;
-    eprintln!(
-        "packaged {} crates into {}",
-        workspace.crates.len(),
-        out.display()
-    );
-    Ok(workspace.crates)
+    std::fs::write(&config, patch).map_err(|error| error.to_string())?;
+    eprintln!("packaged {} crates into {}", crates.len(), out.display());
+    Ok(crates)
+}
+
+/// Copy the `.crate` at `packaged` into `out` and unpack it under
+/// `out/src`, noting it in `too_big` when crates.io would refuse it. Returns
+/// the `[patch.crates-io]` line that points `krate` at the unpacked source.
+fn unpack(
+    krate: &Crate,
+    packaged: &Path,
+    out: &Path,
+    too_big: &mut Vec<String>,
+) -> Result<String, String> {
+    let sources = out.join("src");
+    let file_name = packaged.file_name().unwrap_or_default();
+    let size = std::fs::metadata(packaged)
+        .map_err(|error| format!("{}: {error}", packaged.display()))?
+        .len();
+    if size > UPLOAD_LIMIT {
+        too_big.push(format!("{} is {size} bytes", file_name.display()));
+    }
+    std::fs::copy(packaged, out.join(file_name))
+        .map_err(|error| format!("copy {}: {error}", packaged.display()))?;
+    let unpacked = Command::new("tar")
+        .arg("-xzf")
+        .arg(packaged)
+        .arg("-C")
+        .arg(&sources)
+        .status()
+        .is_ok_and(|status| status.success());
+    if !unpacked {
+        return Err(format!("unpack {}", packaged.display()));
+    }
+    let source = sources.join(format!("{}-{}", krate.name, krate.version));
+    Ok(format!(
+        "{} = {{ path = {:?} }}\n",
+        krate.name,
+        source.to_string_lossy()
+    ))
 }
 
 /// Type-check the packaged crates from their unpacked sources through a

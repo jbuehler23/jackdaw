@@ -2102,10 +2102,18 @@ fn jackdaw_crate_like_runtime(doc: &DocumentMut, name: &str) -> Option<String> {
     let table = entry.as_table_like()?;
     let text = |key: &str| table.get(key).and_then(toml_edit::Item::as_str);
     if let Some(path) = text("path") {
-        let sibling = path
+        let parent = path
             .trim_end_matches(['/', '\\'])
-            .strip_suffix(RUNTIME_CRATE)
-            .map(|parent| format!("{parent}{name}"))?;
+            .strip_suffix(RUNTIME_CRATE)?;
+        let checkout = Path::new(parent.trim_end_matches(['/', '\\']));
+        let sibling = match checkout.parent() {
+            Some(root) if checkout.file_name() == Some("crates".as_ref()) => {
+                jackdaw_project_build::build_source::crate_path(root, name)
+                    .to_slash_lossy()
+                    .into_owned()
+            }
+            _ => format!("{parent}{name}"),
+        };
         return Some(format!("{{ path = '{sibling}' }}"));
     }
     if let Some(git) = text("git") {
@@ -3964,7 +3972,8 @@ mod tests {
     #[test]
     fn changing_modules_later_edits_both_manifests_and_keeps_the_games_crates() {
         let root = temp_dir("change-modules").join("change-game");
-        scaffold_new_project(&root, "change-game", TemplateKind::Game).unwrap();
+        scaffold_new_project_with(&root, "change-game", TemplateKind::Game, &ModuleSet::new())
+            .unwrap();
         let cargo_path = root.join("Cargo.toml");
 
         let chosen = modules(&["multiplayer", "navmesh"]);
