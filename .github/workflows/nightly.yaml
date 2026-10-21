@@ -85,6 +85,12 @@ jobs:
           fi
           git diff --stat -- Cargo.lock integrations/navmesh/Cargo.lock
 
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
       - name: Check the dependency sources
         run: cargo xtask git-deps
 
