@@ -810,13 +810,14 @@ jobs:
           files: dist/*
 
   # jd reads the signed releases.json kept on the `index` release. This adds
-  # the tag to it and signs it again. Without the signing key or the `index`
-  # release it warns and leaves the index as it was. One run at a time, so two
-  # tags never overwrite each other's entry.
+  # the tag to it, as a prerelease for a release candidate, and signs it
+  # again. Without the signing key or the `index` release it warns and leaves
+  # the index as it was. One run at a time, so two tags never overwrite each
+  # other's entry.
   release-index:
     name: Release index
     needs: [github-release]
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
