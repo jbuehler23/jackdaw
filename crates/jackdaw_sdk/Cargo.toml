@@ -46,6 +46,9 @@ jackdaw_runtime = { workspace = true, features = [
 bevy_math = { version = "0.20", features = ["approx"] }
 bevy_curve = { version = "0.20", features = ["approx"] }
 bevy_shape = { version = "0.20", features = ["approx"] }
+# The rest of what avian turns on in crates the SDK shares with a game.
+approx = "0.5"
+downcast-rs = { version = "2", features = ["sync"] }
 # The version `bevy_math` uses, with the generator features a project's own
 # `rand` dependency enables, so the SDK build already carries them.
 rand = { version = "0.10", features = ["std_rng", "thread_rng"] }
