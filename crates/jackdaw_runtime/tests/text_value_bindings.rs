@@ -166,8 +166,7 @@ fn editor_text(world: &World, entity: Entity) -> String {
         .get::<EditableText>(entity)
         .expect("the input keeps its editor")
         .value()
-        .into_iter()
-        .collect()
+        .into_owned()
 }
 
 fn set_editor_text(app: &mut App, entity: Entity, text: &str) {

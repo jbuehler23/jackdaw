@@ -371,7 +371,7 @@ pub(super) fn handle_input_field_blur(
         return;
     };
 
-    let text = editable.value().into_iter().collect::<String>();
+    let text = editable.value().into_owned();
     if text.is_empty() {
         return;
     }
