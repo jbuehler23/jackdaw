@@ -3,6 +3,8 @@
 //! Free of Bevy so `jd` can install, list and verify extensions without
 //! building the editor. Creating and signing bundles lives in `jd`.
 
+pub mod sdk_identity;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

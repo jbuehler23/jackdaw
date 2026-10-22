@@ -11,12 +11,15 @@
 //!    lock is never touched).
 //! 3. [`plan::write_plan`]: the per-edge extern redirect plan for the
 //!    rustc wrapper.
-//! 4. `cargo rustc --crate-type dylib --target <triple>` through the
+//! 4. `cargo rustc --crate-type cdylib --target <triple>` through the
 //!    wrapper, into a target dir keyed by their contents (cargo does not
 //!    fingerprint wrapper behavior, so a changed plan must not reuse
-//!    stale units).
-//! 5. [`linkage::verify_linkage`]: the artifact provably links the
-//!    running SDK before anything dlopens it.
+//!    stale units). The wrapper's `-C prefer-dynamic` links the SDK dylib
+//!    dynamically, so the extension shares the editor's one copy of Bevy
+//!    and jackdaw; as a `cdylib` it exports only its entry points, however
+//!    many crates it links in (a Windows DLL holds at most 65,535 exports).
+//! 5. [`linkage::verify_linkage`]: the artifact carries the hash of the SDK
+//!    it was built against, which the editor checks before opening it.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -227,7 +230,9 @@ pub fn build_project_dylib(
         report(BuildEvent::Log(note));
     }
 
-    let shim_dir = shim::ensure_shim(spec, jackdaw_dir)?;
+    let sdk_svh = linkage::sdk_svh(&sdk.dylib, sdk.toolchain.as_deref())
+        .map_err(ProjectBuildError::Linkage)?;
+    let shim_dir = shim::ensure_shim(spec, jackdaw_dir, &sdk_svh)?;
 
     // Pin the shim's toolchain to the SDK's. The shim is outside the
     // user's workspace, so it would otherwise build with the ambient
@@ -323,7 +328,7 @@ pub fn build_project_dylib(
     retain_recent_target_dirs(&target_root, &salt, &crate::game_target_dir(jackdaw_dir));
 
     let mut cmd = rust_env_command("cargo");
-    cmd.args(["rustc", "--crate-type", "dylib", "--target", &sdk.triple])
+    cmd.args(["rustc", "--crate-type", "cdylib", "--target", &sdk.triple])
         // Machine-readable stream so the editor can show live per-crate
         // progress, with rustc's diagnostics in it.
         //
@@ -392,10 +397,9 @@ pub fn build_project_dylib(
         .join(&sdk.triple)
         .join("debug")
         .join(dylib_file_name("jackdaw_shim"));
-    // Prove the artifact imports the exact SDK facade before anything dlopens
-    // it. The facade in turn imports the shipped Bevy and Jackdaw runtimes.
-    linkage::verify_linkage(&dylib, &sdk.dylib, sdk.toolchain.as_deref())
-        .map_err(ProjectBuildError::Linkage)?;
+    // The hash the editor matches against its own SDK made it into the
+    // artifact.
+    linkage::verify_linkage(&dylib, &sdk_svh).map_err(ProjectBuildError::Linkage)?;
     std::fs::write(
         jackdaw_dir.join(LAST_BUILD_RECORD),
         dylib.to_string_lossy().as_bytes(),

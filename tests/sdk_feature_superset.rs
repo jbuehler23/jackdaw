@@ -106,7 +106,7 @@ fn scaffold_with_shim(root: &Path) -> Result<PathBuf, String> {
         .map_err(|e| format!("scaffold {}: {e}", root.display()))?;
 
     let spec = shim_spec_for_project(root).map_err(|error| error.to_string())?;
-    shim::ensure_shim(&spec, &root.join(".jackdaw")).map_err(|e| format!("generate shim: {e}"))
+    shim::ensure_shim(&spec, &root.join(".jackdaw"), "0").map_err(|e| format!("generate shim: {e}"))
 }
 
 /// Skip when the environment cannot resolve dependencies (no registry

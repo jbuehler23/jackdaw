@@ -6,9 +6,11 @@ an issue first so the approach can be talked through.
 
 ## Windows dylib hardening
 
-The editor loads extension code as dylibs built against its SDK
+The editor loads extension code as libraries built against its SDK
 proxy. On Windows, a PE export table addresses its entries with a
 16-bit ordinal, so 65,535 is the ceiling and no linker escapes it.
+Extensions are `cdylib`s that export only their entry points, so the
+ceiling applies to the SDK's own libraries.
 Builds split the runtime into `bevy_dylib` and `jackdaw_dylib`
 beside the SDK facade, so each library has its own table. Measured
 on the current split, the hottest table is `bevy_dylib` (~46k

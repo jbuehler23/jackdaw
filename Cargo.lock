@@ -4638,6 +4638,7 @@ version = "0.21.0-dev"
 dependencies = [
  "dunce",
  "jackdaw_env",
+ "jackdaw_package",
  "jackdaw_schema",
  "libc",
  "path-slash",

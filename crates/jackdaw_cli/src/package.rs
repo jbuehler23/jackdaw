@@ -420,9 +420,17 @@ fn package(workspace: &Path, out: &Path, artifacts: Option<&Path>) -> Result<Str
     create_dir(&deps_out)?;
     create_dir(&host_deps_out)?;
 
-    // The SDK dylib itself.
+    // The SDK dylib itself, and its crate hash beside it, which extensions
+    // built against it embed and the installed editor matches them by.
     copy_into(&sdk.dylib, &triple_out)?;
     copy_import_lib(&sdk.dylib, &triple_out)?;
+    let staged_dylib = triple_out.join(
+        sdk.dylib
+            .file_name()
+            .ok_or_else(|| format!("{} has no file name", sdk.dylib.display()))?,
+    );
+    jackdaw_project_build::linkage::record_sdk_svh(&staged_dylib, sdk.toolchain.as_deref())
+        .map_err(|e| format!("recording the SDK's crate hash: {e}"))?;
 
     // Runtime-closure rlibs, plus a manifest that names them by basename
     // only so the plan resolves them against this install's `deps/`.
