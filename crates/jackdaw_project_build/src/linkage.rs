@@ -1,16 +1,16 @@
-//! Linkage identity: compatibility verification with no user-authored
-//! tags.
+//! Linkage identity: which SDK build an extension was compiled against.
 //!
-//! An extension dylib built as a Rust dylib keeps its `.rustc` metadata
-//! section, which records every dependency crate with the exact SVH it
-//! was compiled against. Comparing the dylib's recorded `jackdaw_sdk`
-//! dependency hash with the running SDK dylib's own hash proves the
-//! dylib links THE running SDK: a stale or foreign SDK build has a
-//! different hash even at the same crate version. The hashes are read
-//! with `rustc -Zls=root` using the toolchain the editor already ships
-//! for extension builds; a foreign compiler's artifact fails to parse
-//! outright (the metadata format is versioned), which is itself the
-//! toolchain-mismatch signal.
+//! The SDK dylib is a Rust dylib, so its `.rustc` metadata carries its own
+//! crate hash (SVH), which changes with any change to the SDK or anything it
+//! was built from. The extension build reads that hash with `rustc -Zls=root`
+//! using the SDK's toolchain and compiles it into the extension through
+//! [`jackdaw_package::sdk_identity`]; rustc itself refuses to compile the
+//! extension against any other build of the SDK crate. The editor compares
+//! the embedded hash with its own SDK's before opening the library.
+//!
+//! An installed SDK records the hash in a file beside its dylib, so an
+//! editor never needs a compiler to know it. A checkout's SDK is read with
+//! `rustc` each time, since it is rebuilt in place.
 //!
 //! `-Zls` has no stable equivalent, so the dump runs with
 //! `RUSTC_BOOTSTRAP=1`. It only reads metadata written by that same
@@ -22,11 +22,10 @@ use jackdaw_env::rust_env_command;
 
 #[derive(Debug)]
 pub enum LinkageError {
-    /// `rustc -Zls` failed on the artifact (missing file, cdylib with
-    /// no metadata section, or a foreign-toolchain artifact).
+    /// The artifact or the SDK's metadata could not be read.
     Unreadable { artifact: String, detail: String },
-    /// The artifact does not record a `jackdaw_sdk` dependency at all;
-    /// it was not built through the SDK pipeline.
+    /// The artifact names no SDK; it was not built through the SDK
+    /// pipeline.
     NotSdkLinked { artifact: String },
     /// The recorded SDK hash differs from the running SDK's.
     Mismatch { expected: String, recorded: String },
@@ -36,15 +35,15 @@ impl std::fmt::Display for LinkageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreadable { artifact, detail } => {
-                write!(f, "could not read crate metadata from {artifact}: {detail}")
+                write!(f, "could not read {artifact}: {detail}")
             }
             Self::NotSdkLinked { artifact } => {
                 write!(f, "{artifact} was not built against the jackdaw SDK")
             }
             Self::Mismatch { expected, recorded } => write!(
                 f,
-                "dylib links a different SDK build (recorded {recorded}, running {expected}); \
-                 rebuild the project"
+                "the extension was built against a different SDK build (recorded {recorded}, \
+                 running {expected}); rebuild the project"
             ),
         }
     }
@@ -52,21 +51,55 @@ impl std::fmt::Display for LinkageError {
 
 impl std::error::Error for LinkageError {}
 
-/// Verify that `dylib` links the running SDK at `sdk_dylib`.
-///
-/// `toolchain` is the SDK's toolchain: only the compiler that wrote the
-/// metadata can read it, and the user's default may be another release.
-pub fn verify_linkage(
-    dylib: &Path,
-    sdk_dylib: &Path,
-    toolchain: Option<&str>,
-) -> Result<(), LinkageError> {
-    let expected = own_hash(sdk_dylib, toolchain)?;
-    let recorded = recorded_sdk_dep_hash(dylib, toolchain)?;
-    if recorded != expected {
-        return Err(LinkageError::Mismatch { expected, recorded });
+/// The file beside an SDK dylib that records its hash.
+pub fn identity_file(sdk_dylib: &Path) -> std::path::PathBuf {
+    sdk_dylib.with_file_name("jackdaw_sdk.svh")
+}
+
+/// The crate hash of the SDK dylib at `sdk_dylib`: from the file beside it
+/// when the SDK was installed with one, otherwise read from its metadata.
+pub fn sdk_svh(sdk_dylib: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
+    if let Ok(recorded) = std::fs::read_to_string(identity_file(sdk_dylib)) {
+        let recorded = recorded.trim();
+        if !recorded.is_empty() {
+            return Ok(recorded.to_string());
+        }
     }
-    Ok(())
+    own_hash(sdk_dylib, toolchain)
+}
+
+/// Write the hash of the SDK dylib at `sdk_dylib` beside it, for an SDK that
+/// is about to be shipped.
+pub fn record_sdk_svh(sdk_dylib: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
+    let svh = own_hash(sdk_dylib, toolchain)?;
+    std::fs::write(identity_file(sdk_dylib), format!("{svh}\n")).map_err(|e| {
+        LinkageError::Unreadable {
+            artifact: sdk_dylib.display().to_string(),
+            detail: e.to_string(),
+        }
+    })?;
+    Ok(svh)
+}
+
+/// Verify that the extension library at `library` was built against the SDK
+/// whose hash is `svh`.
+pub fn verify_linkage(library: &Path, svh: &str) -> Result<(), LinkageError> {
+    let bytes = std::fs::read(library).map_err(|e| LinkageError::Unreadable {
+        artifact: library.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    match jackdaw_package::sdk_identity::check(&bytes, svh) {
+        Ok(()) => Ok(()),
+        Err(jackdaw_package::sdk_identity::Mismatch::Unmarked) => Err(LinkageError::NotSdkLinked {
+            artifact: library.display().to_string(),
+        }),
+        Err(jackdaw_package::sdk_identity::Mismatch::Other { built, running }) => {
+            Err(LinkageError::Mismatch {
+                expected: running,
+                recorded: built,
+            })
+        }
+    }
 }
 
 fn metadata_dump(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
@@ -105,27 +138,5 @@ fn own_hash(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageE
         .ok_or_else(|| LinkageError::Unreadable {
             artifact: artifact.display().to_string(),
             detail: "no own hash in metadata dump".into(),
-        })
-}
-
-/// The SVH the artifact recorded for its `jackdaw_sdk` dependency.
-fn recorded_sdk_dep_hash(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
-    let dump = metadata_dump(artifact, toolchain)?;
-    dump.lines()
-        .find_map(|line| {
-            let mut parts = line.split_whitespace();
-            let _index = parts.next()?;
-            let name = parts.next()?;
-            if !name.starts_with("jackdaw_sdk") {
-                return None;
-            }
-            let hash_kw = parts.next()?;
-            if hash_kw != "hash" {
-                return None;
-            }
-            parts.next().map(str::to_string)
-        })
-        .ok_or_else(|| LinkageError::NotSdkLinked {
-            artifact: artifact.display().to_string(),
         })
 }
