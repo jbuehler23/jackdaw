@@ -33,6 +33,7 @@ toml_edit = "0.25"
 tracing = { workspace = true }
 jackdaw_schema.workspace = true
 jackdaw_env.workspace = true
+jackdaw_package.workspace = true
 path-slash.workspace = true
 
 # `setpriority` for background builds; nothing in std reaches it.

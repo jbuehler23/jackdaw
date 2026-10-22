@@ -167,7 +167,15 @@ jd extension uninstall example.my-tool
 ```
 
 The manifest and signature are checked before native code is loaded. Bundles
-must match the exact Jackdaw SDK ABI and target. Trusting a publisher is an
+must match the exact Jackdaw SDK ABI and target.
+
+An extension is built as a `cdylib` that links the editor's SDK dynamically,
+so it shares the editor's Bevy and exports only its entry points, however
+large its dependencies (a Windows DLL holds at most 65,535 exports). The build
+embeds the crate hash of the SDK it was compiled against, and the editor opens
+an extension library only when that hash is its own SDK's. One built by
+another Jackdaw, or by a Jackdaw from before the hash was embedded, is refused
+with a message to rebuild it. Trusting a publisher is an
 explicit confirmation because native extensions run with the user's full
 permissions. Updates are staged by version and activated atomically; a failed
 activation leaves the previous version available for recovery. Inter-extension

@@ -226,7 +226,22 @@ fn editor_plugins(app: &mut App) {
     // project turns `remote.enabled` off.
     app.add_plugins(crate::remote::server::JackdawEditorRemotePlugin::default());
     #[cfg(feature = "dylib")]
-    app.add_plugins(DylibLoaderPlugin);
+    {
+        jackdaw_loader::set_running_sdk(running_sdk_svh());
+        app.add_plugins(DylibLoaderPlugin);
+    }
+}
+
+/// The crate hash of the SDK this editor builds and loads extensions
+/// against, or why it cannot be read.
+#[cfg(feature = "dylib")]
+fn running_sdk_svh() -> Result<String, String> {
+    let sdk = crate::sdk_paths::SdkPaths::compute();
+    if !sdk.dylib_exists() {
+        return Err(format!("no SDK at {}", sdk.dylib.display()));
+    }
+    crate::project_build::linkage::sdk_svh(&sdk.dylib, sdk.toolchain.as_deref())
+        .map_err(|error| error.to_string())
 }
 
 #[track_caller]
@@ -258,6 +273,8 @@ fn check_extensions(args: &[String]) -> AppExit {
         .and_then(|index| args.get(index + 1))
         .map(|list| list.split(',').map(str::to_string).collect())
         .unwrap_or_default();
+    #[cfg(feature = "dylib")]
+    jackdaw_loader::set_running_sdk(running_sdk_svh());
     let mut found = Vec::new();
     let mut failed = false;
     for (origin, listed) in [
