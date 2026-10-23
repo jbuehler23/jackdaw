@@ -9,7 +9,8 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 /// with, as 64 hex digits, or `None` in a build made before that key was
 /// provisioned, which then trusts only a key supplied through the
 /// environment.
-pub const OFFICIAL_INDEX_KEY: Option<&str> = None;
+pub const OFFICIAL_INDEX_KEY: Option<&str> =
+    Some("fe00db76a933650609caf9e2fab122901f2b64a7c5c6f051184ae4ce2eebb4a2");
 
 /// Length of a `.sig` file.
 pub const SIGNATURE_LEN: usize = 64;
