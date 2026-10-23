@@ -524,9 +524,9 @@ impl JackdawMcp {
     /// Let the editor catch up.
     #[tool(
         description = "Let frames pass, or hold until the editor reaches a state: `idle` (no \
-                       bake, build or modal tool running), `pie_running` or `pie_stopped`. Use \
-                       after opening a scene, starting a bake or pressing play, before reading \
-                       or capturing."
+                       bake, build, modal tool or synthetic input still running), `pie_running` \
+                       or `pie_stopped`. Use after opening a scene, starting a bake, sending \
+                       input or pressing play, before reading or capturing."
     )]
     pub async fn wait(
         &self,
