@@ -10,6 +10,7 @@ mod util;
 mod asset_row;
 mod bindings_card;
 mod bindings_link;
+mod card_header_width;
 mod definition_card;
 mod inspector_panel_width;
 mod inspector_preview_guard;
