@@ -1424,3 +1424,47 @@ fn a_call_reports_only_the_entities_it_spawned_itself() {
         "a call was handed an entity another one spawned"
     );
 }
+
+/// A synthetic key chord plays out over the frames after the call returns, so
+/// the wait for idle holds until it has been delivered: a caller that reads the
+/// scene after the wait sees what the chord did.
+#[test]
+fn waiting_for_idle_holds_until_a_synthetic_chord_has_landed() {
+    let mut app = editor_with_a_scene();
+    call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.add.cube" }),
+    );
+    app.update();
+    let cubes = |app: &mut App| {
+        let tree = call(app, scene_tree_handler, json!({}));
+        tree["tree"]
+            .as_array()
+            .expect("an array of roots")
+            .iter()
+            .filter(|node| node["name"] == json!("Cube"))
+            .count()
+    };
+    assert_eq!(cubes(&mut app), 1, "the cube arrived");
+
+    let outcome = call(
+        &mut app,
+        call_operator_handler,
+        json!({
+            "id": "input.key",
+            "params": { "key": "KeyZ", "mods": util::primary_mod() },
+        }),
+    );
+    assert_eq!(outcome["result"], json!("finished"), "{outcome}");
+    let held = app
+        .world_mut()
+        .run_system_cached_with(wait_handler, Some(json!({ "until": "idle" })))
+        .expect("the handler ran")
+        .expect("the handler did not refuse");
+    assert_eq!(held, None, "idle answered before the chord was delivered");
+
+    let idle = poll(&mut app, wait_handler, json!({ "until": "idle" }));
+    assert_eq!(idle["idle"], json!(true));
+    assert_eq!(cubes(&mut app), 0, "the undo chord took the cube away");
+}

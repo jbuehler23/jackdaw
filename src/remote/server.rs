@@ -1471,9 +1471,9 @@ pub fn wait_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
 
     if params.get("until").and_then(Value::as_str) == Some("idle") {
         let modal = world.run_system_cached(active_modal).unwrap_or(None);
-        // Idle means no build, model load or background task is still running. A
-        // modal operator is reported rather than waited on, since nothing is
-        // going to finish it.
+        // Idle means no build, model load, background task or synthetic gesture
+        // is still running. A modal operator is reported rather than waited on,
+        // since nothing is going to finish it.
         if editor_is_busy(world) {
             return Ok(None);
         }
@@ -1587,9 +1587,14 @@ fn editor_is_busy(world: &mut World) -> bool {
         || world
             .get_resource::<jackdaw_scene_types::model_parts::ModelParts>()
             .is_some_and(|parts| parts.loading_count() > 0);
+    // A synthetic gesture is delivered over the frames after its call returns.
+    let gesturing = world
+        .get_resource::<crate::test_input::SyntheticInput>()
+        .is_some_and(|input| !input.is_idle());
     building
         || placing
         || refining
+        || gesturing
         || world
             .query::<&jackdaw_api_internal::BackgroundTask>()
             .iter(world)
