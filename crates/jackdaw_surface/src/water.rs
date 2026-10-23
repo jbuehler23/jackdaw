@@ -176,6 +176,18 @@ impl Water {
         self.wave_height * (long * LONG_WAVE_SHARE + short * (1.0 - LONG_WAVE_SHARE))
     }
 
+    /// How steeply the wave rises along X and along Z at `world`, read off
+    /// [`Self::wave_offset`] a short step to either side. The shader tilts each
+    /// fragment by this same slope.
+    pub fn wave_slope(&self, world: Vec3, time: f32) -> Vec2 {
+        let step = self.wave_scale.max(1e-4) * 0.02;
+        let along_x = self.wave_offset(world + Vec3::X * step, time)
+            - self.wave_offset(world - Vec3::X * step, time);
+        let along_z = self.wave_offset(world + Vec3::Z * step, time)
+            - self.wave_offset(world - Vec3::Z * step, time);
+        Vec2::new(along_x, along_z) / (2.0 * step)
+    }
+
     /// How far toward [`Self::deep_color`] a fragment is, `0..1`, with the bed
     /// `depth` behind the surface. The shader computes this same expression.
     pub fn depth_blend(&self, depth: f32) -> f32 {
@@ -483,6 +495,28 @@ mod tests {
         assert!(
             (water.wave_offset(at, 0.0) - water.wave_offset(at, 1.7)).abs() > 1e-3,
             "the same point rides differently a moment later",
+        );
+    }
+
+    #[test]
+    fn the_wave_tilts_the_surface_within_one_wavelength() {
+        let water = Water::default();
+        let here = water.wave_slope(Vec3::new(10.0, 0.0, 4.0), 1.0);
+        let a_quarter_wave_on = water.wave_slope(Vec3::new(11.5, 0.0, 4.0), 1.0);
+
+        assert!(here.length() > 1e-3, "a raised surface leans");
+        assert!(
+            (here - a_quarter_wave_on).length() > 1e-3,
+            "the lean changes before the next crest, not across a whole sheet",
+        );
+        let flat = Water {
+            wave_height: 0.0,
+            ..default()
+        };
+        assert_eq!(
+            flat.wave_slope(Vec3::new(10.0, 0.0, 4.0), 1.0),
+            Vec2::ZERO,
+            "a flat surface does not lean",
         );
     }
 
