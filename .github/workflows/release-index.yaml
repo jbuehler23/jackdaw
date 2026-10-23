@@ -6,6 +6,8 @@ name: Release index
 # marks the newest healthy nightly, and `broken` marks one nightly broken.
 # Without the signing key or the `index` release it warns and leaves the index
 # as it was. One run at a time, so two runs never overwrite each other.
+# Dispatched with a tag, it adds that published release from its GitHub
+# release archives.
 
 on:
   workflow_call:
@@ -40,6 +42,12 @@ on:
     secrets:
       JACKDAW_INDEX_SIGNING_KEY:
         required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The published release to add"
+        type: string
+        required: true
 
 env:
   toolchain: 1.99.0
@@ -66,9 +74,13 @@ jobs:
         with:
           toolchain: ${{ env.toolchain }}
 
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
       - name: Build the index tool
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
         run: cargo build --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index
 
       - name: Download the archives
@@ -79,14 +91,34 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Checkout the release
+        if: ${{ !inputs.operation }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          path: release
+          sparse-checkout: Cargo.toml
+          sparse-checkout-cone-mode: false
+
+      - name: Download the published archives
+        if: ${{ !inputs.operation }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release download "$TAG" --repo "$REPO" --dir dist --pattern 'jackdaw-*'
+          bevy=$(sed -n 's/^bevy = { version = "\([0-9]*\.[0-9]*\)".*/\1/p' release/Cargo.toml | head -n 1)
+          echo "BEVY=$bevy" >> "$GITHUB_ENV"
+
       - name: Update the index
         id: update
         env:
           GH_TOKEN: ${{ github.token }}
           JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
-          OPERATION: ${{ inputs.operation }}
+          OPERATION: ${{ inputs.operation || 'add' }}
           TAG: ${{ inputs.tag }}
-          BEVY: ${{ inputs.bevy }}
+          BEVY: ${{ inputs.bevy || env.BEVY }}
           BEVY_REV: ${{ inputs.bevy_rev }}
           KNOWN_GOOD: ${{ inputs.known_good }}
           REPO: ${{ github.repository }}
