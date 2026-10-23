@@ -826,70 +826,14 @@ jobs:
           files: dist/*
 
   # jd reads the signed releases.json kept on the `index` release. This adds
-  # the tag to it, as a prerelease for a release candidate, and signs it
-  # again. Without the signing key or the `index` release it warns and leaves
-  # the index as it was. One run at a time, so two tags never overwrite each
-  # other's entry.
+  # the tag to it, as a prerelease for a release candidate.
   release-index:
-    name: Release index
     needs: [github-release]
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: release-index
-      cancel-in-progress: false
     permissions:
       contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.toolchain }}
-
-      - name: Build the index tool
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
-        run: cargo build --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index
-
-      - name: Download the archives
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bundle-*
-          path: dist
-          merge-multiple: true
-
-      - name: Add the release to the index
-        env:
-          GH_TOKEN: ${{ github.token }}
-          JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
-          TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -eu
-          if [ -z "$JACKDAW_INDEX_SIGNING_KEY" ]; then
-            echo "::warning::JACKDAW_INDEX_SIGNING_KEY is not set; the release index was not updated"
-            exit 0
-          fi
-          if ! assets=$(gh release view index --repo "$REPO" --json assets --jq '.assets[].name' 2>&1); then
-            if printf '%s' "$assets" | grep -qi 'release not found'; then
-              echo "::warning::there is no 'index' release; the release index was not updated"
-              exit 0
-            fi
-            printf '%s\n' "$assets" >&2
-            exit 1
-          fi
-          mkdir -p index
-          if printf '%s\n' "$assets" | grep -qx releases.json; then
-            gh release download index --repo "$REPO" --dir index \
-              --pattern releases.json --pattern releases.json.sig
-          fi
-          bevy=$(sed -n 's/^bevy = { version = "\([0-9]*\.[0-9]*\)".*/\1/p' Cargo.toml | head -n 1)
-          target/debug/jackdaw-release-index add --index index/releases.json --tag "$TAG" \
-            --dist dist --bevy "$bevy" --rustc "${{ env.toolchain }}" \
-            --base-url "https://github.com/$REPO/releases/download/$TAG" \
-            --notes-url "https://github.com/$REPO/releases/tag/$TAG"
-          gh release upload index --repo "$REPO" --clobber index/releases.json index/releases.json.sig
+    uses: ./.github/workflows/release-index.yaml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}

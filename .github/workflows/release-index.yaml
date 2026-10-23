@@ -1,0 +1,105 @@
+name: Release index
+
+# Adds a release to the signed releases.json kept on the `index` release, which
+# jd reads, and signs it again. The release workflow calls it with the bundles
+# of its run; dispatched with a tag, it adds that published release from its
+# GitHub release archives. Without the signing key or the `index` release it
+# warns and leaves the index as it was. One run at a time, so two tags never
+# overwrite each other's entry.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    secrets:
+      JACKDAW_INDEX_SIGNING_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The published release to add"
+        type: string
+        required: true
+
+env:
+  toolchain: 1.99.0
+
+jobs:
+  index:
+    name: Release index
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: release-index
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Wild
+        run: cargo binstall wild-linker --locked --force
+
+      - name: Build the index tool
+        run: cargo build --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index
+
+      - name: Download the archives
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download the published archives
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: gh release download "$TAG" --repo "$REPO" --dir dist --pattern 'jackdaw-*'
+
+      - name: Add the release to the index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JACKDAW_INDEX_SIGNING_KEY: ${{ secrets.JACKDAW_INDEX_SIGNING_KEY }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ -z "$JACKDAW_INDEX_SIGNING_KEY" ]; then
+            echo "::warning::JACKDAW_INDEX_SIGNING_KEY is not set; the release index was not updated"
+            exit 0
+          fi
+          if ! assets=$(gh release view index --repo "$REPO" --json assets --jq '.assets[].name' 2>&1); then
+            if printf '%s' "$assets" | grep -qi 'release not found'; then
+              echo "::warning::there is no 'index' release; the release index was not updated"
+              exit 0
+            fi
+            printf '%s\n' "$assets" >&2
+            exit 1
+          fi
+          mkdir -p index
+          if printf '%s\n' "$assets" | grep -qx releases.json; then
+            gh release download index --repo "$REPO" --dir index \
+              --pattern releases.json --pattern releases.json.sig
+          fi
+          bevy=$(sed -n 's/^bevy = { version = "\([0-9]*\.[0-9]*\)".*/\1/p' Cargo.toml | head -n 1)
+          target/debug/jackdaw-release-index add --index index/releases.json --tag "$TAG" \
+            --dist dist --bevy "$bevy" --rustc "${{ env.toolchain }}" \
+            --base-url "https://github.com/$REPO/releases/download/$TAG" \
+            --notes-url "https://github.com/$REPO/releases/tag/$TAG"
+          gh release upload index --repo "$REPO" --clobber index/releases.json index/releases.json.sig
