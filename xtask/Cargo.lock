@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_package"
-version = "0.20.0-rc.1"
+version = "0.21.0-dev"
 dependencies = [
  "base64",
  "ed25519-dalek",
