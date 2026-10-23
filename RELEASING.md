@@ -53,7 +53,7 @@ and the launcher only accept an index signed by the key built into them.
 1. Open a PR into the release branch that sets the workspace version, every
    `version = "..."` on a jackdaw path dependency, and the lockfiles
    (`Cargo.lock`, `xtask/Cargo.lock`, `integrations/*/Cargo.lock`) to the new
-   version, such as `0.20.0-rc.1`. Before merging it, check the packages
+   version, such as `0.<minor>.0-rc.1`. Before merging it, check the packages
    and the publish order:
 
    ```sh
@@ -64,20 +64,20 @@ and the launcher only accept an index signed by the key built into them.
 2. Tag the release candidate from the merged branch:
 
    ```sh
-   git tag v0.20.0-rc.1 origin/release-0.20
-   git push origin v0.20.0-rc.1
+   git tag v0.<minor>.0-rc.1 origin/release-0.<minor>
+   git push origin v0.<minor>.0-rc.1
    ```
 
    `release.yaml` runs the heavy tier, checks that scaffolded projects
    resolve against the packaged crates, builds and smoke-tests the bundles
-   for Linux, macOS and Windows with the Physics and Navmesh module
-   extensions built in, tests `install.sh` and `install.ps1`,
+   for Linux, macOS and Windows with the extensions of every module that
+   builds on that Bevy, tests `install.sh` and `install.ps1`,
    publishes the crates with `cargo xtask publish` (dependency order, skips
    versions already on crates.io, waits out rate limits; re-run the job if
    it stops), checks that a scaffolded project resolves from crates.io, and
    creates a GitHub prerelease with the archives, install scripts and
    attestations. The `Release index` job adds it to `releases.json` as a
-   prerelease, which `jd editor install 0.20.0-rc.1` and the launcher's Show
+   prerelease, which `jd editor install 0.<minor>.0-rc.1` and the launcher's Show
    prereleases offer and nothing picks by line or channel.
    `regression.yaml` and `onboarding.yaml` also run on release candidate
    tags.
@@ -89,8 +89,8 @@ and the launcher only accept an index signed by the key built into them.
    branch by PR, and into `main` too when they apply there. Repeat from
    step 1 with the next `-rc.N`.
 
-4. For the final release, set the version to `0.20.0` the same way and tag
-   `v0.20.0`. The final tag builds bundles with one codegen unit and thin
+4. For the final release, set the version to `0.<minor>.0` the same way and tag
+   `v0.<minor>.0`. The final tag builds bundles with one codegen unit and thin
    LTO, skips the heavy tier, regression and onboarding (the last release
    candidate passed them), publishes the crates, marks the GitHub release
    as latest, and the `Release index` job adds it to `releases.json` as the
