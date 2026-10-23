@@ -350,6 +350,15 @@ pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
             _ => {}
         }
     }
+
+    // A saved document leaves out the default `Visibility`, and a placed entity
+    // without one breaks visibility propagation for its children.
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity)
+        && entity_mut.contains::<Transform>()
+        && !entity_mut.contains::<Visibility>()
+    {
+        entity_mut.insert(Visibility::Inherited);
+    }
 }
 
 /// Apply a single component patch to an ECS entity. The editor's field-edit
@@ -3009,6 +3018,57 @@ mod apply_value_tests {
             .link(entity, patches_entity);
         apply_ast_to_ecs(world, entity);
         entity
+    }
+
+    fn placed_world() -> World {
+        let world = base_world();
+        {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let mut registry = registry.write();
+            registry.register::<Transform>();
+            registry.register::<Visibility>();
+        }
+        world
+    }
+
+    fn type_patch<T: bevy::reflect::TypePath>(variant: Option<&str>) -> BsnPatch {
+        let path = T::type_path();
+        BsnPatch::Type(match variant {
+            Some(variant) => format!("{path}::{variant}"),
+            None => path.to_string(),
+        })
+    }
+
+    #[test]
+    fn a_placed_entity_saved_without_visibility_inherits_it() {
+        let mut world = placed_world();
+        let entity = round_trip_patch(&mut world, type_patch::<Transform>(None));
+        assert_eq!(
+            world.get::<Visibility>(entity),
+            Some(&Visibility::Inherited)
+        );
+    }
+
+    #[test]
+    fn an_authored_visibility_is_kept() {
+        let mut world = placed_world();
+        let patches_entity = world.resource_mut::<SceneBsnAst>().create_entity_node(vec![
+            type_patch::<Transform>(None),
+            type_patch::<Visibility>(Some("Hidden")),
+        ]);
+        let entity = world.spawn(AstNodeRef { patches_entity }).id();
+        world
+            .resource_mut::<SceneBsnAst>()
+            .link(entity, patches_entity);
+        apply_ast_to_ecs(&mut world, entity);
+        assert_eq!(world.get::<Visibility>(entity), Some(&Visibility::Hidden));
+    }
+
+    #[test]
+    fn an_entity_with_no_transform_gets_no_visibility() {
+        let mut world = placed_world();
+        let entity = round_trip_patch(&mut world, BsnPatch::Name("loose".into()));
+        assert_eq!(world.get::<Visibility>(entity), None);
     }
 
     #[test]
