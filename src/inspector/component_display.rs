@@ -1138,6 +1138,10 @@ pub(crate) struct ComponentDisplaySpec<'a> {
     pub collapse_state: &'a super::InspectorCollapseState,
 }
 
+/// The width a card's title row takes before its header buttons wrap below
+/// it: the disclosure and icon, and about eight characters of the name.
+const TITLE_ROW_BASIS: f32 = 96.0;
+
 /// Entities spawned by [`spawn_component_display`]. `section` is the card
 /// root; `body` is where field widgets go; `type_settings` sits between
 /// header and body so type-settings chrome can span the header width.
@@ -1199,10 +1203,19 @@ pub(crate) fn spawn_component_display(
         ))
         .id();
 
-    // Header keeps `pane_header`'s space-between layout so the toggle area sits
-    // left and the revert / remove buttons sit right.
+    // The toggle area grows to push the revert / remove buttons right. When the
+    // panel is too narrow for both, the buttons wrap to a row of their own
+    // rather than leave the title no room.
     let header = commands
-        .spawn_scene(pane_header())
+        .spawn_scene((
+            pane_header(),
+            bsn! {
+                Node {
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::FlexEnd,
+                }
+            },
+        ))
         .insert((CollapsibleHeader, ChildOf(section_entity)))
         .id();
 
@@ -1251,6 +1264,8 @@ pub(crate) fn spawn_component_display(
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(tokens::SPACING_SM),
                 flex_grow: 1.0,
+                // The room the title row asks for before the buttons wrap.
+                flex_basis: Val::Px(TITLE_ROW_BASIS),
                 // A generic type path is one unbreakable word wider than the
                 // sidebar; the full path is on the hover tooltip.
                 min_width: Val::Px(0.0),
