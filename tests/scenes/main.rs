@@ -20,4 +20,5 @@ mod physics_round_trip;
 mod scene_reopen;
 mod scenes_swap;
 mod unloaded_components;
+mod visibility_defaults;
 mod widget_defaults;
