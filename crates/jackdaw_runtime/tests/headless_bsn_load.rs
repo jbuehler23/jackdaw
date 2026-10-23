@@ -66,3 +66,55 @@ bevy_ecs::hierarchy::Children [
         "second root loaded"
     );
 }
+
+/// A saved scene leaves out `Visibility::Inherited`, so the game gives it to a
+/// placed entity that has none, and an authored visibility still wins.
+#[test]
+fn a_placed_entity_without_visibility_loads_inheriting_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene_text = r##"
+bevy_ecs::hierarchy::Children [
+    #Parent
+    bevy_transform::components::transform::Transform
+    bevy_ecs::hierarchy::Children [
+        #Kid
+        bevy_transform::components::transform::Transform
+        bevy_camera::visibility::Visibility::Hidden
+    ]
+]
+"##;
+    std::fs::write(dir.path().join("scene.bsn"), scene_text).unwrap();
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(bevy::asset::AssetPlugin {
+        file_path: dir.path().to_string_lossy().into_owned(),
+        ..Default::default()
+    });
+    app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    app.add_plugins(JackdawPlugin);
+
+    let handle: Handle<JackdawScene> = app.world().resource::<AssetServer>().load("scene.bsn");
+    app.world_mut().spawn(JackdawSceneRoot(handle));
+
+    let visibility = |app: &mut App, wanted: &str| {
+        let mut query = app.world_mut().query::<(&Name, Option<&Visibility>)>();
+        query
+            .iter(app.world())
+            .find(|(name, _)| name.as_str() == wanted)
+            .map(|(_, visibility)| visibility.copied())
+    };
+    for _ in 0..200 {
+        app.update();
+        if visibility(&mut app, "Kid").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        visibility(&mut app, "Parent"),
+        Some(Some(Visibility::Inherited))
+    );
+    assert_eq!(visibility(&mut app, "Kid"), Some(Some(Visibility::Hidden)));
+}

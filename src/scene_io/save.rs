@@ -935,6 +935,26 @@ fn normalize_runtime_derived_values(world: &World, ast: &mut jackdaw_bsn::SceneB
     }
 }
 
+/// Leave `Visibility::Inherited` out of a file: a load gives it to every entity
+/// with a `Transform` that has none. Inside a prefab instance it stays, since
+/// there it can override the prefab's own visibility.
+fn drop_inherited_visibility(ast: &mut jackdaw_bsn::SceneBsnAst) {
+    let visibility = <Visibility as bevy::reflect::TypePath>::type_path();
+    let inherited = format!("{visibility}::Inherited");
+    for node in ast.entities_with_component(visibility) {
+        let Some(patch) = ast.find_patch_by_type_path(node, visibility) else {
+            continue;
+        };
+        let is_inherited = matches!(ast.get_patch(patch), Some(jackdaw_bsn::BsnPatch::Type(path)) if *path == inherited);
+        let in_instance = ast
+            .ancestor_with_component(node, jackdaw_prefab::ISA_TYPE)
+            .is_some();
+        if is_inherited && !in_instance {
+            ast.remove_component_patch(node, visibility);
+        }
+    }
+}
+
 /// Rewrite `entity`'s existing patch for `component`'s type, adding none.
 fn replace_patch(
     ast: &mut jackdaw_bsn::SceneBsnAst,
@@ -1110,6 +1130,7 @@ fn author(
     // After sparsifying, which reads sources as the cache keys them.
     if spelling == SourceSpelling::RelativeToFile {
         crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
+        drop_inherited_visibility(&mut ast);
     }
 
     normalize_runtime_derived_values(world, &mut ast);
