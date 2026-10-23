@@ -184,8 +184,12 @@ impl Plugin for InspectorPlugin {
                         .after(prefab_field_dots::decorate_prefab_field_rows)
                         .after(live_edit_dots::refresh_live_edit_field_dots),
                     refresh_name_field,
-                    flag_inspector_dirty_on_archetype_change,
-                    flag_inspector_dirty_on_modifier_stack_change,
+                    // Ahead of the variant refresh: a rebuild between its pass and
+                    // its spawns would take down the row those spawns attach to.
+                    flag_inspector_dirty_on_archetype_change
+                        .before(reflect_fields::refresh_enum_variants),
+                    flag_inspector_dirty_on_modifier_stack_change
+                        .before(reflect_fields::refresh_enum_variants),
                     category_strip::paint_category_tabs,
                     add_header::rebuild_add_header,
                     persist_inspector_collapse,
