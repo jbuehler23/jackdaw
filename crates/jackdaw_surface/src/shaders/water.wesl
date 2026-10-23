@@ -35,6 +35,10 @@ const REFRACTION_PIXELS: f32 = 24.0;
 // Past that the pattern is finer than a pixel and would alias into bands
 // marching across the distance.
 const SETTLE_TILES: f32 = 10.0;
+// How many pixels the wave's shorter octave has to span before it tilts the
+// light in full. It fades out by half that, since at a grazing angle a finer
+// wave aliases into streaks across the reflection.
+const SWELL_PIXELS: f32 = 24.0;
 // The roughness a fully smooth surface reaches, below which Bevy's lighting
 // breaks down.
 const MIN_ROUGHNESS: f32 = 0.089;
@@ -90,6 +94,10 @@ fn wave_offset(world: vec3<f32>, time: f32) -> f32 {
 // How steeply the wave rises along X and along Z where it lifts a point, read
 // off the wave itself a short step to either side so the slope always matches
 // the height the vertex stage used.
+//
+// The fragment stage reads it at every pixel rather than the vertices passing
+// it down: a lake is often one wide quad, and a slope taken at its corners and
+// blended across it tilts the whole reflection back and forth as one sheet.
 fn wave_slope(world: vec3<f32>, time: f32) -> vec2<f32> {
     let step = max(water.wave_scale, 1e-4) * 0.02;
     let along_x = wave_offset(world + vec3<f32>(step, 0.0, 0.0), time)
@@ -175,22 +183,19 @@ fn vertex(packed: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(packed, packed.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(packed.instance_index);
-    var slope = vec2<f32>(0.0);
 
     @if(VERTEX_POSITIONS) {
         let flat_position = mesh_functions::mesh_position_local_to_world(
             world_from_local, vec4<f32>(vertex.position, 1.0));
         let lifted = flat_position.xyz
             + vec3<f32>(0.0, wave_offset(flat_position.xyz, globals.time), 0.0);
-        slope = wave_slope(flat_position.xyz, globals.time);
         out.world_position = vec4<f32>(lifted, 1.0);
         out.position = position_world_to_clip(lifted);
     }
 
     @if(VERTEX_NORMALS) {
-        let resting = mesh_functions::mesh_normal_local_to_world(
+        out.world_normal = mesh_functions::mesh_normal_local_to_world(
             vertex.normal, packed.instance_index);
-        out.world_normal = normalize(resting + vec3<f32>(-slope.x, 0.0, -slope.y));
     }
 
     @if(VERTEX_UVS_A)
@@ -230,16 +235,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     let world_position = in.world_position.xyz;
-    let settled = clamp(
-        1.0 - distance(view.world_position, world_position)
-            / (max(water.normal_scale, 1e-4) * SETTLE_TILES),
-        0.0,
-        1.0,
-    );
+    let away = distance(view.world_position, world_position);
+    let settled = clamp(1.0 - away / (max(water.normal_scale, 1e-4) * SETTLE_TILES), 0.0, 1.0);
     let rippled = ripple_slope(world_position, globals.time) * settled;
+    let short_wave = max(water.wave_scale, 1e-4) / SHORT_WAVE_RATE;
+    let footprint = length(fwidth(world_position));
+    let swell_settled = clamp(2.0 - SWELL_PIXELS * footprint / short_wave, 0.0, 1.0);
+    let swell = wave_slope(world_position, globals.time) * swell_settled;
+    let tilt = swell + rippled * water.normal_strength;
     let facing = normalize(pbr_input.world_normal);
-    pbr_input.N = normalize(
-        facing + vec3<f32>(-rippled.x, 0.0, -rippled.y) * water.normal_strength);
+    pbr_input.N = normalize(facing + vec3<f32>(-tilt.x, 0.0, -tilt.y));
 
     let bent = rippled * water.refraction_strength * REFRACTION_PIXELS;
     let depth = depth_behind(in.position, bent);
