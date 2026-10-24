@@ -17,7 +17,7 @@ bevy = { version = "0.20", default-features = false, optional = true, features =
     "bevy_asset",
 ] }
 path-slash = { workspace = true, optional = true }
-jackdaw_scene_types = { version = "0.20.0-rc.2", path = "../jackdaw_scene_types", default-features = false, optional = true }
+jackdaw_scene_types = { version = "0.20.0", path = "../jackdaw_scene_types", default-features = false, optional = true }
 
 [features]
 default = ["render", "procgen"]

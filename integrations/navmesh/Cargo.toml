@@ -6,14 +6,14 @@ resolver = "3"
 members = ["jackdaw_navmesh", "jackdaw_navmesh_editor"]
 
 [workspace.package]
-version = "0.20.0-rc.2"
+version = "0.20.0"
 rust-version = "1.97.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [workspace.dependencies]
-jackdaw_navmesh = { version = "0.20.0-rc.2", path = "jackdaw_navmesh" }
+jackdaw_navmesh = { version = "0.20.0", path = "jackdaw_navmesh" }
 
 [workspace.lints.clippy]
 doc_markdown = "warn"
