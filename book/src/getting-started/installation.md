@@ -107,7 +107,7 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jbuehler23/jackdaw/rele
 
 | `install.sh`        | `install.ps1`    | Environment                  | Effect                                       |
 | ------------------- | ---------------- | ---------------------------- | -------------------------------------------- |
-| `--version <v>`     | `-Version <v>`   | `JACKDAW_VERSION`            | Install release `v<v>`, such as `0.20.0-rc.1` |
+| `--version <v>`     | `-Version <v>`   | `JACKDAW_VERSION`            | Install release `v<v>`, such as `0.20.0`    |
 | `--prefix <dir>`    | `-Prefix <dir>`  | `JACKDAW_INSTALL_DIR`        | Keep release folders in `<dir>`              |
 | `--bin-dir <dir>`   |                  | `JACKDAW_BIN_DIR`            | Put the commands in `<dir>`                   |
 | `--no-modify-path`  | `-NoModifyPath`  | `JACKDAW_NO_MODIFY_PATH=1`   | Leave shell files and `PATH` alone           |
@@ -119,7 +119,7 @@ piped, it does not ask. `iex` cannot pass parameters, so on Windows run the
 script as a script block instead:
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1))) -Version 0.20.0-rc.1
+& ([scriptblock]::Create((irm https://github.com/jbuehler23/jackdaw/releases/latest/download/install.ps1))) -Version 0.20.0
 ```
 
 `releases/latest` is the newest final release. Release candidates carry the
