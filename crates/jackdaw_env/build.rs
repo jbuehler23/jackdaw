@@ -1,5 +1,6 @@
 //! Records the rustup toolchain that compiles this crate, so the SDK and
-//! every extension are later built by the same compiler as the editor.
+//! every extension are later built by the same compiler as the editor, and
+//! the target it compiles for, which is the editor's host.
 
 use std::{env, process::Command};
 
@@ -21,6 +22,8 @@ fn main() {
         host,
     );
     println!("cargo:rustc-env=JACKDAW_TOOLCHAIN={toolchain}");
+    let target = env::var("TARGET").expect("cargo sets TARGET for build scripts");
+    println!("cargo:rustc-env=JACKDAW_HOST_TRIPLE={target}");
 }
 
 fn field<'a>(version: &'a str, key: &str) -> Option<&'a str> {
