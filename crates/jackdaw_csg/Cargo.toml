@@ -9,7 +9,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
 glam.workspace = true
-jackdaw_geometry = { version = "0.20.0", path = "../jackdaw_geometry", default-features = false }
+jackdaw_geometry = { version = "0.20.1-rc.1", path = "../jackdaw_geometry", default-features = false }
 manifold-rust = "0.16"
 
 [dev-dependencies]
