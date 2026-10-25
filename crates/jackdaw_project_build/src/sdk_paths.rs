@@ -22,9 +22,6 @@
 //!    `project_build::plan`.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
-
-use jackdaw_env::rust_env_command;
 
 /// Where the SDK a build is using came from.
 ///
@@ -382,22 +379,11 @@ fn dev_sdk_superseded(dev: &SdkPaths, triple: &str) -> bool {
         .is_some_and(|cache| crate::bootstrap::cache_resolves(&cache, triple))
 }
 
-/// The host triple, from `rustc -vV`, cached for the process. Every
+/// The host triple, from the target the editor was compiled for. Every
 /// editor-driven build passes it as an explicit `--target` so cargo
 /// separates host-side units (which the wrapper must never rewrite).
 pub fn host_triple() -> &'static str {
-    static TRIPLE: OnceLock<String> = OnceLock::new();
-    TRIPLE.get_or_init(|| {
-        let output = rust_env_command("rustc")
-            .arg("-vV")
-            .output()
-            .expect("rustc -vV must run; the editor requires a Rust toolchain");
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .find_map(|line| line.strip_prefix("host: "))
-            .expect("rustc -vV reports a host triple")
-            .to_string()
-    })
+    jackdaw_env::HOST_TRIPLE
 }
 
 /// Read the `channel` from a `rust-toolchain.toml` (dev checkout).
@@ -442,6 +428,17 @@ pub(crate) fn wrapper_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_triple_names_the_platform_the_editor_runs_on() {
+        let triple = host_triple();
+        assert!(triple.starts_with(std::env::consts::ARCH), "{triple}");
+        let os = match std::env::consts::OS {
+            "macos" => "darwin",
+            os => os,
+        };
+        assert!(triple.contains(os), "{triple}");
+    }
 
     /// Build the layout `cargo xtask bundle` stages, per the doc comment
     /// on `jackdaw_cli::package`.
