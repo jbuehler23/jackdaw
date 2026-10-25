@@ -7,7 +7,7 @@ resolver = "3"
 members = ["jackdaw_avian_integration", "jackdaw_physics"]
 
 [workspace.package]
-version = "0.20.1-rc.1"
+version = "0.20.1"
 rust-version = "1.97.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -20,7 +20,7 @@ avian3d = { version = "0.8", features = [
     "parry-f32",
     "collider-from-mesh",
 ] }
-jackdaw_avian_integration = { version = "0.20.1-rc.1", path = "jackdaw_avian_integration", default-features = false }
+jackdaw_avian_integration = { version = "0.20.1", path = "jackdaw_avian_integration", default-features = false }
 
 [workspace.lints.clippy]
 doc_markdown = "warn"

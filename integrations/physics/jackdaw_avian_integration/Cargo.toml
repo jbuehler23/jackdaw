@@ -22,11 +22,11 @@ bevy = { version = "0.20", default-features = false, features = [
     "bevy_mesh",
 ] }
 avian3d = { workspace = true }
-jackdaw_geometry = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_geometry", default-features = false, features = ["reflect"] }
-jackdaw_scene_types = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_scene_types" }
+jackdaw_geometry = { version = "0.20.1", path = "../../../crates/jackdaw_geometry", default-features = false, features = ["reflect"] }
+jackdaw_scene_types = { version = "0.20.1", path = "../../../crates/jackdaw_scene_types" }
 # The heights a loaded terrain is drawn from, for its ground collider.
-jackdaw_runtime = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_runtime", default-features = false, optional = true }
-jackdaw_terrain = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_terrain", default-features = false, optional = true }
+jackdaw_runtime = { version = "0.20.1", path = "../../../crates/jackdaw_runtime", default-features = false, optional = true }
+jackdaw_terrain = { version = "0.20.1", path = "../../../crates/jackdaw_terrain", default-features = false, optional = true }
 
 [features]
 default = ["terrain"]
@@ -35,8 +35,8 @@ terrain = ["dep:jackdaw_runtime", "jackdaw_runtime/terrain", "dep:jackdaw_terrai
 
 [dev-dependencies]
 bevy = { version = "0.20", default-features = false, features = ["bevy_gltf", "bevy_world_serialization"] }
-jackdaw_runtime = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_runtime", features = ["terrain"] }
-jackdaw_terrain = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_terrain" }
+jackdaw_runtime = { version = "0.20.1", path = "../../../crates/jackdaw_runtime", features = ["terrain"] }
+jackdaw_terrain = { version = "0.20.1", path = "../../../crates/jackdaw_terrain" }
 tempfile = "3"
 
 [lints]
