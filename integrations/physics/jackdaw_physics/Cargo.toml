@@ -26,20 +26,20 @@ bevy = { version = "0.20", features = [
     "reflect_functions",
 ] }
 avian3d = { workspace = true, features = ["debug-plugin"] }
-jackdaw_api = { version = "0.20.0", path = "../../../crates/jackdaw_api" }
+jackdaw_api = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_api" }
 jackdaw_avian_integration = { workspace = true }
-jackdaw_geometry = { version = "0.20.0", path = "../../../crates/jackdaw_geometry" }
-jackdaw_scene_types = { version = "0.20.0", path = "../../../crates/jackdaw_scene_types" }
+jackdaw_geometry = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_geometry" }
+jackdaw_scene_types = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_scene_types" }
 
 [dev-dependencies]
 # The editor, to host the extension in tests the way a person's editor does.
-jackdaw = { version = "0.20.0", path = "../../.." }
-jackdaw_api_internal = { version = "0.20.0", path = "../../../crates/jackdaw_api_internal" }
-jackdaw_bsn = { version = "0.20.0", path = "../../../crates/jackdaw_bsn" }
-jackdaw_bind = { version = "0.20.0", path = "../../../crates/jackdaw_bind" }
-jackdaw_env = { version = "0.20.0", path = "../../../crates/jackdaw_env" }
-jackdaw_feathers = { version = "0.20.0", path = "../../../crates/jackdaw_feathers" }
-jackdaw_project_build = { version = "0.20.0", path = "../../../crates/jackdaw_project_build" }
+jackdaw = { version = "0.20.1-rc.1", path = "../../.." }
+jackdaw_api_internal = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_api_internal" }
+jackdaw_bsn = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_bsn" }
+jackdaw_bind = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_bind" }
+jackdaw_env = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_env" }
+jackdaw_feathers = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_feathers" }
+jackdaw_project_build = { version = "0.20.1-rc.1", path = "../../../crates/jackdaw_project_build" }
 
 [lints]
 workspace = true
