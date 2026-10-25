@@ -885,6 +885,7 @@ fn rebuild_detail_tiles(
             let wanted = detail_tiles_around(viewer_cell, cull_cells, DETAIL_TILE_CELLS);
 
             let mut standing = HashSet::new();
+            let mut relevelled: HashMap<IVec2, Vec<Entity>> = HashMap::new();
             for (tile_entity, tile) in &tiles {
                 if tile.terrain != entity || tile.layer != index {
                     continue;
@@ -895,10 +896,11 @@ fn rebuild_detail_tiles(
                     Some(tile.lod),
                 );
                 let retired = !wanted.iter().any(|(coord, _)| *coord == tile.tile)
-                    || level != tile.lod
                     || stale.is_some_and(|rect| touches(rect, tile.tile));
                 if retired {
                     commands.entity(tile_entity).despawn();
+                } else if level != tile.lod {
+                    relevelled.entry(tile.tile).or_default().push(tile_entity);
                 } else {
                     standing.insert(tile.tile);
                 }
@@ -921,6 +923,9 @@ fn rebuild_detail_tiles(
                     break;
                 };
                 spent += 1;
+                for old in relevelled.remove(&coord).into_iter().flatten() {
+                    commands.entity(old).despawn();
+                }
                 let instances = seed_tile(source, &settings, index, coord, lod, world_from_local);
                 let weights: Vec<f32> = entry
                     .layer
@@ -2145,6 +2150,75 @@ mod tests {
             let nearest = Vec2::new(56.0, 56.0).clamp(min, min + Vec2::splat(16.0));
             assert!(Vec2::new(56.0, 56.0).distance(nearest) <= 25.0);
         }
+    }
+
+    /// A tile changing detail level stays standing until its replacement is
+    /// seeded, for every variety at once, while tiles out of range still go.
+    #[test]
+    fn a_tile_changing_detail_level_never_leaves_bare_ground() {
+        let mut app = detail_app();
+        let mut grown = layer("grass", "grass");
+        grown.varieties = vec![DetailVariety::default(), DetailVariety::default()];
+        spawn_terrain(&mut app, &terrain(vec![grown]), &document(64, &["grass"]));
+        let viewer = spawn_viewer(&mut app, Vec3::new(24.0, 5.0, 24.0));
+        settle(&mut app);
+        let before = tiles(&mut app);
+
+        let moved = Vec3::new(40.0, 5.0, 40.0);
+        *app.world_mut()
+            .get_mut::<GlobalTransform>(viewer)
+            .expect("the viewer has a transform") = GlobalTransform::from_translation(moved);
+        let wanted: Vec<IVec2> = detail_tiles_around(IVec2::new(40, 40), 24.0, DETAIL_TILE_CELLS)
+            .into_iter()
+            .map(|(coord, _)| coord)
+            .collect();
+        let kept: Vec<IVec2> = before
+            .iter()
+            .map(|tile| tile.tile)
+            .filter(|coord| wanted.contains(coord))
+            .collect();
+        for _ in 0..400 {
+            app.update();
+            let now = tiles(&mut app);
+            for coord in &kept {
+                for variety in 0..2 {
+                    assert!(
+                        now.iter()
+                            .any(|tile| tile.tile == *coord && tile.variety == variety),
+                        "variety {variety} of {coord} stood throughout"
+                    );
+                }
+            }
+        }
+
+        let after = tiles(&mut app);
+        let level = |placed: &[DetailTile], coord: IVec2| {
+            placed
+                .iter()
+                .find(|tile| tile.tile == coord)
+                .map(|tile| tile.lod)
+        };
+        assert!(
+            kept.iter()
+                .any(|coord| level(&before, *coord) != level(&after, *coord)),
+            "some tile changed detail level"
+        );
+        for tile in &after {
+            assert!(wanted.contains(&tile.tile), "{} is out of range", tile.tile);
+            assert_eq!(
+                after
+                    .iter()
+                    .filter(|other| other.tile == tile.tile && other.variety == tile.variety)
+                    .count(),
+                1,
+                "{} stands once per variety",
+                tile.tile
+            );
+        }
+        assert!(
+            before.iter().any(|tile| !wanted.contains(&tile.tile)),
+            "the walk left some tile behind"
+        );
     }
 
     #[test]
