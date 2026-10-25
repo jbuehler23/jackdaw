@@ -12,6 +12,10 @@ pub const ENV_OPEN_PROJECT: &str = "JACKDAW_OPEN_PROJECT";
 /// it, because a Rust dylib only loads into a process built by the same compiler.
 pub const RUSTUP_TOOLCHAIN: &str = env!("JACKDAW_TOOLCHAIN");
 
+/// The target triple this crate was compiled for. The editor runs natively,
+/// so this is its host, known without running a toolchain that may be missing.
+pub const HOST_TRIPLE: &str = env!("JACKDAW_HOST_TRIPLE");
+
 pub fn rust_env_command<S: AsRef<OsStr>>(command: S) -> std::process::Command {
     let mut command = Command::new(command);
     command.env("RUSTUP_TOOLCHAIN", RUSTUP_TOOLCHAIN);
