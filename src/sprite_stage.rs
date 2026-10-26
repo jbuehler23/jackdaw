@@ -190,11 +190,7 @@ impl SpritePixels<'_> {
         )
     }
 
-    pub(crate) fn local_rect(&self, sprite: &Sprite, anchor: Anchor) -> Option<Rect> {
-        sprite_local_rect(sprite, anchor, &self.images, &self.atlases)
-    }
-
-    fn world_corners(
+    pub(crate) fn world_corners(
         &self,
         sprite: &Sprite,
         anchor: Anchor,
