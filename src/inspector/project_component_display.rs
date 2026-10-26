@@ -12,9 +12,9 @@
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 
-use jackdaw_bsn::{BsnPatch, BsnValue, SceneBsnAst};
+use jackdaw_bsn::{BsnStructData, BsnValue, SceneBsnAst};
 use jackdaw_feathers::icons::{EditorFont, IconFont};
-use jackdaw_schema::TypeSchema;
+use jackdaw_schema::{TypeKind, TypeSchema};
 use serde_json::Value;
 
 use crate::project_types::ProjectTypes;
@@ -74,13 +74,17 @@ fn project_component_json(world: &World, node: Entity, schema: &TypeSchema) -> V
     };
     let authored = world.get_resource::<SceneBsnAst>().and_then(|ast| {
         let patch = ast.find_patch_by_type_path(node, &schema.type_path)?;
-        match ast.get_patch(patch)? {
-            BsnPatch::Struct(data) => Some(data.clone()),
-            _ => None,
-        }
+        schema_values::authored_fields(ast.get_patch(patch)?)
     });
     match authored {
         Some(data) => schema_values::value_json(world, types, schema, &data),
+        None if schema.kind == TypeKind::TupleStruct => {
+            let unauthored = BsnStructData {
+                type_path: schema.type_path.clone(),
+                fields: Default::default(),
+            };
+            schema_values::value_json(world, types, schema, &unauthored)
+        }
         None => {
             schema_values::type_default_json(schema).unwrap_or(Value::Object(Default::default()))
         }

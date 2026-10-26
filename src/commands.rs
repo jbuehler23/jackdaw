@@ -772,6 +772,7 @@ impl AddProjectComponent {
 impl EditorCommand for AddProjectComponent {
     fn execute(&mut self, world: &mut World) {
         self.entity = live_entity(world, self.entity);
+        let tuple = project_tuple_defaults(world, &self.type_path).is_some();
         let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
         let Some(node) = ast.ast_for(self.entity) else {
             warn!(
@@ -784,13 +785,18 @@ impl EditorCommand for AddProjectComponent {
         if ast.find_patch_by_type_path(node, &self.type_path).is_some() {
             return;
         }
-        // A struct patch with no field overrides materializes as the
-        // type's Default at Play; the inspector shows the schema
-        // defaults until a field is edited (which writes an override).
-        let patch = jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
-            type_path: self.type_path.clone(),
-            fields: jackdaw_bsn::BsnStructFields(Vec::new()),
-        });
+        // A patch with no field overrides materializes as the type's
+        // Default at Play; the inspector shows the schema defaults until a
+        // field is edited (which writes an override). A tuple struct starts
+        // as the bare type, since its values are positional.
+        let patch = if tuple {
+            jackdaw_bsn::BsnPatch::Type(self.type_path.clone())
+        } else {
+            jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
+                type_path: self.type_path.clone(),
+                fields: jackdaw_bsn::BsnStructFields(Vec::new()),
+            })
+        };
         let patch_entity = ast.world.spawn(patch).id();
         if let Some(patches) = ast.get_patches_mut(node) {
             patches.0.push(patch_entity);
@@ -1460,6 +1466,9 @@ impl EditorCommand for SetBsnField {
         let is_project = world
             .get_resource::<crate::project_types::ProjectTypes>()
             .is_some_and(|pt| pt.is_project_component(&self.type_path));
+        let tuple_defaults = is_project
+            .then(|| project_tuple_defaults(world, &self.type_path))
+            .flatten();
         let had_patch = {
             let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
             ast.ast_for(self.entity)
@@ -1489,6 +1498,7 @@ impl EditorCommand for SetBsnField {
                     &self.type_path,
                     &self.field_path,
                     self.new_value.clone(),
+                    tuple_defaults.as_deref(),
                 );
             } else {
                 jackdaw_bsn::set_bsn_field(
@@ -1537,6 +1547,9 @@ impl EditorCommand for SetBsnField {
         let is_project = world
             .get_resource::<crate::project_types::ProjectTypes>()
             .is_some_and(|pt| pt.is_project_component(&self.type_path));
+        let tuple_defaults = is_project
+            .then(|| project_tuple_defaults(world, &self.type_path))
+            .flatten();
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -1561,6 +1574,14 @@ impl EditorCommand for SetBsnField {
                 }
             } else if removes_component {
                 ast.remove_component_patch(patches_entity, &self.type_path);
+            } else if removes_field && tuple_defaults.is_some() {
+                remove_project_tuple_field(
+                    &mut ast,
+                    patches_entity,
+                    &self.type_path,
+                    &self.field_path,
+                    tuple_defaults.as_deref().unwrap_or_default(),
+                );
             } else if removes_field {
                 jackdaw_bsn::remove_bsn_field(
                     &mut ast,
@@ -1576,6 +1597,7 @@ impl EditorCommand for SetBsnField {
                         &self.type_path,
                         &self.field_path,
                         old_value.clone(),
+                        tuple_defaults.as_deref(),
                     );
                 } else {
                     jackdaw_bsn::set_bsn_field(
@@ -2170,15 +2192,36 @@ fn authored_project_field_json(
         .and_then(|ast| {
             let node = ast.ast_for(entity)?;
             let patch = ast.find_patch_by_type_path(node, &schema.type_path)?;
-            match ast.get_patch(patch)? {
-                jackdaw_bsn::BsnPatch::Struct(data) => Some(data.clone()),
-                _ => None,
-            }
+            crate::schema_values::authored_fields(ast.get_patch(patch)?)
         });
     match authored {
         Some(data) => crate::schema_values::field_json(world, types, schema, &data, field),
         None => crate::schema_values::default_field_json(schema, &field.name),
     }
+}
+
+/// The default of each position of a project tuple struct, as BSN, or `None`
+/// when the project type is not a tuple struct. A position whose default
+/// cannot be spelled is `None`.
+fn project_tuple_defaults(
+    world: &World,
+    type_path: &str,
+) -> Option<Vec<Option<jackdaw_bsn::BsnValue>>> {
+    let types = world.get_resource::<crate::project_types::ProjectTypes>()?;
+    let schema = types.component(type_path)?;
+    if schema.kind != jackdaw_schema::TypeKind::TupleStruct {
+        return None;
+    }
+    Some(
+        schema
+            .fields
+            .iter()
+            .map(|field| {
+                let json = crate::schema_values::default_field_json(schema, &field.name)?;
+                crate::schema_values::bsn_for_json(world, types, &field.type_path, &json)
+            })
+            .collect(),
+    )
 }
 
 /// Author a field value on a project component's document patch without a
@@ -2187,22 +2230,24 @@ fn authored_project_field_json(
 /// named field directly on the node's struct patch instead. A path reaching
 /// deeper names the same top-level field, whose whole new value
 /// [`project_field_edit_to_bsn_value`] has already merged.
+///
+/// `tuple_defaults` is given for a tuple struct, whose fields are named by
+/// position: the value is written at its position in a tuple patch, and any
+/// position before it the patch does not spell yet takes its default.
 fn set_project_field(
     ast: &mut jackdaw_bsn::SceneBsnAst,
     node: Entity,
     type_path: &str,
     field_path: &str,
     value: jackdaw_bsn::BsnValue,
+    tuple_defaults: Option<&[Option<jackdaw_bsn::BsnValue>]>,
 ) {
     let patch_entity = match ast.find_patch_by_type_path(node, type_path) {
         Some(pe) => pe,
         None => {
             let pe = ast
                 .world
-                .spawn(jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
-                    type_path: type_path.to_string(),
-                    fields: jackdaw_bsn::BsnStructFields(Vec::new()),
-                }))
+                .spawn(jackdaw_bsn::BsnPatch::Type(type_path.to_string()))
                 .id();
             if let Some(patches) = ast.get_patches_mut(node) {
                 patches.0.push(pe);
@@ -2215,32 +2260,109 @@ fn set_project_field(
     };
     let patch = patch.into_inner();
     if let jackdaw_bsn::BsnPatch::Type(existing) = patch {
-        let existing = existing.clone();
-        *patch = jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
-            type_path: existing,
-            fields: jackdaw_bsn::BsnStructFields(Vec::new()),
-        });
+        let type_path = existing.clone();
+        *patch = if tuple_defaults.is_some() {
+            jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                type_path,
+                values: Vec::new(),
+            })
+        } else {
+            jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
+                type_path,
+                fields: jackdaw_bsn::BsnStructFields(Vec::new()),
+            })
+        };
     }
     if field_path.is_empty() {
-        if let jackdaw_bsn::BsnValue::Struct(data) = value {
-            *patch = jackdaw_bsn::BsnPatch::Struct(data);
+        match value {
+            jackdaw_bsn::BsnValue::Struct(data) => *patch = jackdaw_bsn::BsnPatch::Struct(data),
+            jackdaw_bsn::BsnValue::TupleStruct(data) => {
+                *patch = jackdaw_bsn::BsnPatch::TupleStruct(data);
+            }
+            _ => {}
         }
         return;
     }
-    let jackdaw_bsn::BsnPatch::Struct(data) = patch else {
-        return;
-    };
     let steps = crate::schema_values::parse_path(field_path);
     let Some(crate::schema_values::Step::Field(name)) = steps.first() else {
         return;
     };
-    if let Some(existing) = data.fields.0.iter_mut().find(|f| &f.name == name) {
-        existing.value = value;
-    } else {
-        data.fields.0.push(jackdaw_bsn::BsnField {
-            name: name.clone(),
-            value,
-        });
+    match patch {
+        jackdaw_bsn::BsnPatch::Struct(data) => {
+            if let Some(existing) = data.fields.0.iter_mut().find(|f| &f.name == name) {
+                existing.value = value;
+            } else {
+                data.fields.0.push(jackdaw_bsn::BsnField {
+                    name: name.clone(),
+                    value,
+                });
+            }
+        }
+        jackdaw_bsn::BsnPatch::TupleStruct(data) => {
+            let Ok(at) = name.parse::<usize>() else {
+                warn!("`{type_path}` is a tuple struct, which has no field `{name}`");
+                return;
+            };
+            if at < data.values.len() {
+                data.values[at] = value;
+                return;
+            }
+            let defaults = tuple_defaults.unwrap_or_default();
+            let mut filled = Vec::new();
+            for position in data.values.len()..at {
+                let Some(Some(default)) = defaults.get(position) else {
+                    warn!(
+                        "`{type_path}` has no default to write at position {position}, \
+                         before the edited position {at}"
+                    );
+                    return;
+                };
+                filled.push(default.clone());
+            }
+            data.values.extend(filled);
+            data.values.push(value);
+        }
+        _ => {}
+    }
+}
+
+/// Undo the first authoring of one position of a project tuple struct. The
+/// last position is dropped, and the patch goes back to the bare type once it
+/// spells nothing; an earlier position takes its default, since the ones
+/// after it hold their place.
+fn remove_project_tuple_field(
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    node: Entity,
+    type_path: &str,
+    field_path: &str,
+    defaults: &[Option<jackdaw_bsn::BsnValue>],
+) {
+    let Some(patch_entity) = ast.find_patch_by_type_path(node, type_path) else {
+        return;
+    };
+    let Some(mut patch) = ast.world.get_mut::<jackdaw_bsn::BsnPatch>(patch_entity) else {
+        return;
+    };
+    let jackdaw_bsn::BsnPatch::TupleStruct(data) = &mut *patch else {
+        return;
+    };
+    let Some(crate::schema_values::Step::Field(name)) =
+        crate::schema_values::parse_path(field_path)
+            .first()
+            .cloned()
+    else {
+        return;
+    };
+    let Ok(at) = name.parse::<usize>() else {
+        return;
+    };
+    if at + 1 == data.values.len() {
+        data.values.pop();
+    } else if let (Some(slot), Some(Some(default))) = (data.values.get_mut(at), defaults.get(at)) {
+        *slot = default.clone();
+    }
+    if data.values.is_empty() {
+        *patch = jackdaw_bsn::BsnPatch::Type(type_path.to_string());
     }
 }
 

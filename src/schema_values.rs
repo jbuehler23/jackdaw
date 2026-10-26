@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 use bevy::reflect::PartialReflect;
-use jackdaw_bsn::{BsnAssetContext, BsnField, BsnStructData, BsnStructFields, BsnValue};
+use jackdaw_bsn::{BsnAssetContext, BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue};
 use jackdaw_schema::{FieldSchema, TypeKind, TypeSchema};
 use serde_json::Value;
 
@@ -126,9 +126,41 @@ pub fn type_default_json(schema: &TypeSchema) -> Option<Value> {
     )
 }
 
-/// One field's default, from the type's whole-value default.
+/// One field's default, from the type's whole-value default. A tuple struct's
+/// fields are named by position; one with a single field serializes as that
+/// field alone.
 pub fn default_field_json(schema: &TypeSchema, field: &str) -> Option<Value> {
-    type_default_json(schema)?.get(field).cloned()
+    let default = type_default_json(schema)?;
+    if schema.kind != TypeKind::TupleStruct {
+        return default.get(field).cloned();
+    }
+    let at = field.parse::<usize>().ok()?;
+    match schema.fields.len() {
+        1 => (at == 0).then_some(default),
+        _ => default.get(at).cloned(),
+    }
+}
+
+/// What a project component's patch authors, field by field. A tuple struct's
+/// values are named by position, the way its schema names its fields.
+pub fn authored_fields(patch: &BsnPatch) -> Option<BsnStructData> {
+    match patch {
+        BsnPatch::Struct(data) => Some(data.clone()),
+        BsnPatch::TupleStruct(data) => Some(BsnStructData {
+            type_path: data.type_path.clone(),
+            fields: BsnStructFields(
+                data.values
+                    .iter()
+                    .enumerate()
+                    .map(|(at, value)| BsnField {
+                        name: at.to_string(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            ),
+        }),
+        _ => None,
+    }
 }
 
 /// The element type of a list field, from the schema where it is reported and
@@ -726,6 +758,63 @@ mod tests {
             &parse_path("loot[2].item"),
             Value::String("gem".into())
         ));
+    }
+
+    fn tuple_schema(fields: &[&str], default: Value) -> TypeSchema {
+        serde_json::from_value(serde_json::json!({
+            "type_path": "my_game::Collider",
+            "short_name": "Collider",
+            "module_path": "my_game",
+            "category": "",
+            "description": "",
+            "hidden": false,
+            "default_constructible": true,
+            "kind": "TupleStruct",
+            "default": { "my_game::Collider": default },
+            "fields": fields
+                .iter()
+                .enumerate()
+                .map(|(at, type_path)| serde_json::json!({ "name": at.to_string(), "type_path": type_path }))
+                .collect::<Vec<_>>()
+        }))
+        .expect("the schema reads")
+    }
+
+    #[test]
+    fn a_newtype_default_is_its_one_field() {
+        let schema = tuple_schema(&["my_game::Shape"], Value::String("TrimeshFromMesh".into()));
+        assert_eq!(
+            default_field_json(&schema, "0"),
+            Some(Value::String("TrimeshFromMesh".into()))
+        );
+        assert_eq!(default_field_json(&schema, "1"), None);
+    }
+
+    #[test]
+    fn a_tuple_default_is_read_by_position() {
+        let schema = tuple_schema(&["f32", "my_game::Shape"], serde_json::json!([1.5, "Ball"]));
+        assert_eq!(
+            default_field_json(&schema, "0"),
+            Some(serde_json::json!(1.5))
+        );
+        assert_eq!(
+            default_field_json(&schema, "1"),
+            Some(serde_json::json!("Ball"))
+        );
+    }
+
+    #[test]
+    fn a_tuple_patch_authors_its_values_by_position() {
+        let patch = BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+            type_path: "my_game::Collider".into(),
+            values: vec![
+                BsnValue::Type("my_game::Shape::Ball".into()),
+                BsnValue::Int(3),
+            ],
+        });
+        let data = authored_fields(&patch).expect("a tuple patch authors fields");
+        assert_eq!(field_names(&data), vec!["0", "1"]);
+        assert!(matches!(authored(&data, "1"), Some(BsnValue::Int(3))));
     }
 
     fn item_schema() -> TypeSchema {
