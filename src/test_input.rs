@@ -449,7 +449,8 @@ fn bounded(params: &OperatorParameters, key: &str, default: i64, max: i64) -> u3
 
 /// Where a clause's `x`/`y` land in window logical pixels. `space=window` is
 /// the default and passes them through; `space=canvas` reads them as authored
-/// canvas pixels and maps them through the fronted 2D panel's stage.
+/// canvas pixels and maps them through the fronted 2D panel's stage;
+/// `space=world` reads them as 2D world units (y up) under that panel's view.
 fn resolve_position(world: &mut World, params: &OperatorParameters) -> Option<Vec2> {
     let x = params.as_float("x")?;
     let y = params.as_float("y")?;
@@ -460,17 +461,23 @@ fn resolve_position(world: &mut World, params: &OperatorParameters) -> Option<Ve
     let point = Vec2::new(x as f32, y as f32);
     match params.as_str("space").unwrap_or("window") {
         "window" => Some(point),
-        "canvas" => {
+        space @ ("canvas" | "world") => {
             let mut panels = world.query::<(Entity, &crate::viewport_host::ViewportHost)>();
             let panel = crate::viewport_host::primary_2d_host(panels.iter(world))?;
-            let cursor = crate::ui_stage::canvas_to_cursor(world, panel, point)?;
+            let authored = if space == "world" {
+                let host = world.get::<crate::viewport_2d::Viewport2dPanelHost>(panel)?;
+                crate::viewport_2d::world_to_target_pixel(host.view, host.target_size, point)
+            } else {
+                point
+            };
+            let cursor = crate::ui_stage::canvas_to_cursor(world, panel, authored)?;
             Some(cursor * world.resource::<UiScale>().0)
         }
         other => {
             jackdaw_api_internal::operator::warn_caller(
                 world,
                 format!(
-                    "input.pointer: {other:?} is not a space; expected window or canvas. The \
+                    "input.pointer: {other:?} is not a space; expected window, canvas or world. The \
                      gesture was left where the cursor already was."
                 ),
             );
@@ -518,9 +525,10 @@ fn pointer_button(world: &mut World, name: &str) -> Option<MouseButton> {
         y(f64, doc = "Vertical position, in the space `space` names."),
         space(
             String,
-            doc = "`window` (default) for window logical pixels, or `canvas` for \
-                   authored pixels on the 2D panel's canvas. Those two only; \
-                   anything else is refused with a warning."
+            doc = "`window` (default) for window logical pixels, `canvas` for \
+                   authored pixels on the 2D panel's canvas, or `world` for 2D \
+                   world units (y up) under that panel's pan and zoom. Anything \
+                   else is refused with a warning."
         ),
         action(
             String,

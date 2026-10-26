@@ -327,6 +327,30 @@ fn a_locked_background_lets_a_band_be_pulled_out_over_it() {
     );
 }
 
+/// A scene with every node locked offers no hit at all, and the band still
+/// comes out over it.
+#[test]
+fn a_fully_locked_scene_still_pulls_out_a_band() {
+    let mut app = util::editor_test_app();
+    let panel = panel(&mut app);
+    let (root, left, right) = two_boxes(&mut app);
+    for entity in [root, left, right] {
+        jackdaw::hierarchy::set_locked(app.world_mut(), entity, true);
+    }
+    settle(&mut app);
+
+    band_to(
+        &mut app,
+        panel,
+        Vec2::new(50.0, 50.0),
+        Vec2::new(950.0, 400.0),
+    );
+    assert!(
+        app.world().resource::<MarqueeSelect>().corners().is_some(),
+        "the band is being pulled out",
+    );
+}
+
 #[test]
 fn a_band_that_crosses_nothing_empties_the_selection() {
     let mut app = util::editor_test_app();
