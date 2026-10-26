@@ -6,14 +6,22 @@
 //! ```text
 //! grid <path> <tile width> <tile height> <columns> <rows>
 //! anim <base path> <strip path> <frames> <exact|loose>
+//! terrains <path> <tile width> <tile height> <count>
 //! ```
 //!
-//! Paths are relative to the directory; `#` starts a comment line.
+//! `terrains` analyses the sheet alone as a packed grid of that tile size and
+//! counts the terrains found.
+//!
+//! Paths are relative to the directory; `#` starts a comment line. Lines of
+//! any other kind are skipped.
 
 use std::path::{Path, PathBuf};
 
 use glam::UVec2;
-use jackdaw_tilemap::{LOOSE_FRAME_MATCH, RgbaImage, detect_animation, detect_grid};
+use jackdaw_tilemap::{
+    GridLayout, LOOSE_FRAME_MATCH, RgbaImage, SheetInput, detect_animation, detect_grid,
+    find_terrains,
+};
 
 struct Sheet {
     width: u32,
@@ -44,39 +52,95 @@ fn number(field: Option<&str>, line: &str) -> u32 {
         .unwrap_or_else(|| panic!("bad number in: {line}"))
 }
 
-#[expect(clippy::print_stdout, reason = "reports each checked case")]
 fn check(root: &Path, line: &str) {
     let mut fields = line.split_whitespace();
     let kind = fields.next().unwrap_or_default();
+    if !matches!(kind, "grid" | "anim" | "terrains") {
+        return;
+    }
     let path = fields
         .next()
         .unwrap_or_else(|| panic!("missing path in: {line}"));
     let sheet = Sheet::load(root, path);
-    let found = detect_grid(&sheet.image()).unwrap_or_else(|| panic!("no grid: {path}"));
-    if kind == "grid" {
-        let tile = UVec2::new(number(fields.next(), line), number(fields.next(), line));
-        let cells = (number(fields.next(), line), number(fields.next(), line));
-        println!("{path}: {:?} confidence {}", found.layout, found.confidence);
-        assert_eq!(found.layout.tile, tile, "{line}");
-        assert_eq!((found.layout.columns, found.layout.rows), cells, "{line}");
-    } else if kind == "anim" {
-        let strip_path = fields
-            .next()
-            .unwrap_or_else(|| panic!("missing strip in: {line}"));
-        let frames = number(fields.next(), line);
-        let share = match fields.next() {
-            Some("exact") => 0.0,
-            Some("loose") => LOOSE_FRAME_MATCH,
-            _ => panic!("expected exact or loose in: {line}"),
-        };
-        let strip = Sheet::load(root, strip_path);
-        let animation = detect_animation(&sheet.image(), &found.layout, &strip.image(), share)
-            .unwrap_or_else(|| panic!("not an animation: {line}"));
-        println!("{strip_path}: {} frames of {path}", animation.frames);
-        assert_eq!(animation.frames, frames, "{line}");
-    } else {
-        panic!("unknown line: {line}");
+    match kind {
+        "grid" => check_grid(&sheet, path, fields, line),
+        "anim" => check_anim(root, &sheet, path, fields, line),
+        _ => check_terrains(&sheet, path, fields, line),
     }
+}
+
+#[expect(clippy::print_stdout, reason = "reports each checked case")]
+fn check_grid<'a>(
+    sheet: &Sheet,
+    path: &str,
+    mut fields: impl Iterator<Item = &'a str>,
+    line: &str,
+) {
+    let found = detect_grid(&sheet.image()).unwrap_or_else(|| panic!("no grid: {path}"));
+    let tile = UVec2::new(number(fields.next(), line), number(fields.next(), line));
+    let cells = (number(fields.next(), line), number(fields.next(), line));
+    println!("{path}: {:?} confidence {}", found.layout, found.confidence);
+    assert_eq!(found.layout.tile, tile, "{line}");
+    assert_eq!((found.layout.columns, found.layout.rows), cells, "{line}");
+}
+
+#[expect(clippy::print_stdout, reason = "reports each checked case")]
+fn check_anim<'a>(
+    root: &Path,
+    sheet: &Sheet,
+    path: &str,
+    mut fields: impl Iterator<Item = &'a str>,
+    line: &str,
+) {
+    let found = detect_grid(&sheet.image()).unwrap_or_else(|| panic!("no grid: {path}"));
+    let strip_path = fields
+        .next()
+        .unwrap_or_else(|| panic!("missing strip in: {line}"));
+    let frames = number(fields.next(), line);
+    let share = match fields.next() {
+        Some("exact") => 0.0,
+        Some("loose") => LOOSE_FRAME_MATCH,
+        _ => panic!("expected exact or loose in: {line}"),
+    };
+    let strip = Sheet::load(root, strip_path);
+    let animation = detect_animation(&sheet.image(), &found.layout, &strip.image(), share)
+        .unwrap_or_else(|| panic!("not an animation: {line}"));
+    println!("{strip_path}: {} frames of {path}", animation.frames);
+    assert_eq!(animation.frames, frames, "{line}");
+}
+
+#[expect(clippy::print_stdout, reason = "reports each checked case")]
+fn check_terrains<'a>(
+    sheet: &Sheet,
+    path: &str,
+    mut fields: impl Iterator<Item = &'a str>,
+    line: &str,
+) {
+    let image = sheet.image();
+    let tile = UVec2::new(number(fields.next(), line), number(fields.next(), line));
+    let layout = GridLayout {
+        tile,
+        margin: UVec2::ZERO,
+        spacing: UVec2::ZERO,
+        columns: sheet.width / tile.x.max(1),
+        rows: sheet.height / tile.y.max(1),
+    };
+    let found = find_terrains(&[SheetInput {
+        name: path,
+        image,
+        layout,
+    }]);
+    for t in &found.terrains {
+        println!(
+            "{path}: terrain {} {:?} {:?} pure {}",
+            t.id,
+            t.name,
+            t.swatch,
+            t.pure_tiles.len()
+        );
+    }
+    let count = number(fields.next(), line) as usize;
+    assert_eq!(found.terrains.len(), count, "{line}");
 }
 
 #[test]

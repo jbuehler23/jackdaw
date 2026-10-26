@@ -15,6 +15,7 @@ mod slice;
 mod solver;
 mod strip;
 mod template;
+mod terrain_find;
 mod tile;
 
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
@@ -37,4 +38,7 @@ pub use solver::{
 };
 pub use strip::{AnimationStrip, FrameRun, LOOSE_FRAME_MATCH, detect_animation, pair_animations};
 pub use template::LayoutTemplate;
+pub use terrain_find::{
+    FoundTerrain, SheetInput, TerrainAnalysis, TileAddress, TileKind, TileLabels, find_terrains,
+};
 pub use tile::{TerrainId, TileRef};
