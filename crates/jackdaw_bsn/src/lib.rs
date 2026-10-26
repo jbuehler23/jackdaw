@@ -63,9 +63,10 @@ pub use retired::{RETIRED_UI_PREFIX, RetiredUiComponents, reject_retired_ui_comp
 
 pub use apply::{
     AstDirty, BsnApplyAssets, BsnAssetPaths, BsnProjectAssets, BsnSceneAssets, DocumentOnlyTypes,
-    UnresolvedTypes, apply_ast_to_ecs, apply_component_patch, apply_dirty_ast_patches,
-    apply_reference_map, bsn_value_to_reflect, get_bsn_field, remove_bsn_field, set_bsn_field,
-    spawn_ast_node, spawn_from_ast,
+    FieldWriteError, UnresolvedTypes, apply_ast_to_ecs, apply_component_patch,
+    apply_dirty_ast_patches, apply_reference_map, bsn_value_to_reflect, get_bsn_field,
+    remove_bsn_field, set_bsn_field, spawn_ast_node, spawn_from_ast, try_set_bsn_field,
+    whole_value_write,
 };
 
 pub use sync::{
