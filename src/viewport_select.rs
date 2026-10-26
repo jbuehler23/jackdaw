@@ -63,6 +63,7 @@ fn escape_is_free(
     guards: InteractionGuards,
     keybind_focus: crate::keybind_focus::KeybindFocus,
     ui_gesture: Res<crate::ui_stage::UiManipulation>,
+    sprite_gesture: Res<crate::sprite_gizmo::SpriteManipulation>,
     guide_gesture: Res<crate::ui_stage::GuideManipulation>,
     marquee: Res<crate::ui_stage::MarqueeSelect>,
     box_select: Res<BoxSelectState>,
@@ -82,6 +83,7 @@ fn escape_is_free(
         return false;
     }
     if ui_gesture.is_running()
+        || sprite_gesture.is_running()
         || guide_gesture.position().is_some()
         || marquee.corners().is_some()
         || box_select.active

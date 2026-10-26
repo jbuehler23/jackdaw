@@ -88,6 +88,17 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     "bevy_ui::ui_node::UiTargetCamera",
 ];
 
+/// The quad and material bevy's sprite renderer puts on every `Sprite`. A
+/// save leaves them off an entity that has a `Sprite`, and nowhere else, so
+/// an authored `Mesh2d` still saves.
+pub(crate) fn sprite_render_component_paths() -> [&'static str; 2] {
+    use bevy::reflect::TypePath;
+    [
+        bevy::mesh::Mesh2d::type_path(),
+        bevy::sprite_render::MeshMaterial2d::<bevy::sprite_render::SpriteMeshMaterial>::type_path(),
+    ]
+}
+
 /// The UI state bevy computes every frame from `Node` and the text or image
 /// beside it. None of it is authored, and a document that records it reloads
 /// carrying a measurement of the session that saved it.

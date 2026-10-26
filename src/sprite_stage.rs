@@ -8,7 +8,10 @@ use std::{cmp::Ordering, collections::HashMap};
 use bevy::{
     asset::AssetEvent,
     ecs::system::SystemParam,
-    picking::{events::PointerPress, prelude::Pickable},
+    picking::{
+        events::{PointerDrag, PointerPress, PointerRelease},
+        prelude::Pickable,
+    },
     prelude::*,
     sprite::{Anchor, SpritePickingMode, SpritePickingSettings},
     transform::TransformSystems,
@@ -23,7 +26,7 @@ use crate::{
     selection::Selection,
     ui_stage::{stage_pixels_per_target_pixel, stage_to_authored},
     viewport_2d::{
-        Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, cursor_stage_offset,
+        Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, stage_offset_clamped,
         target_pixel_to_world, target_pixels_per_stage_pixel, world_to_target_pixel,
     },
 };
@@ -38,12 +41,16 @@ pub struct SpriteStagePlugin;
 
 impl Plugin for SpriteStagePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_sprite_press).add_systems(
-            PostUpdate,
-            sync_sprite_outlines
-                .after(TransformSystems::Propagate)
-                .before(UiSystems::Prepare),
-        );
+        app.init_resource::<SpritePress>()
+            .add_observer(on_sprite_press)
+            .add_observer(on_sprite_drag)
+            .add_observer(on_sprite_release)
+            .add_systems(
+                PostUpdate,
+                sync_sprite_outlines
+                    .after(TransformSystems::Propagate)
+                    .before(UiSystems::Prepare),
+            );
     }
 }
 
@@ -62,6 +69,65 @@ pub(crate) fn shows_2d_world<'a>(
         && !routed
             .into_iter()
             .any(|routed| routed.entity() == host.camera)
+}
+
+/// Which world the transform tools act on from the keyboard: the 3D world,
+/// or the 2D panel in front when it is editing a 2D world scene.
+#[derive(SystemParam)]
+pub(crate) struct ToolViewport<'w, 's> {
+    fronted: crate::viewport_2d::FrontedViewport<'w, 's>,
+    ui_roots: Query<'w, 's, &'static UiTargetCamera, AuthoredUiSceneRoot>,
+    scene_roots: Scene2dRoots<'w, 's>,
+}
+
+impl ToolViewport<'_, '_> {
+    /// Whether the tools apply: not on a UI canvas, nor on a 2D panel that is
+    /// being played rather than edited.
+    pub(crate) fn takes_tools(&self) -> bool {
+        if self.fronted.is_three_d() {
+            return true;
+        }
+        self.fronted.two_d_host().is_some_and(|host| {
+            host.mode == Viewport2dMode::Edit
+                && shows_2d_world(host, self.ui_roots.iter(), &self.scene_roots)
+        })
+    }
+}
+
+/// The sprite the last press on a 2D world stage picked, if any. A drag that
+/// follows the press moves the selection when this is selected.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub(crate) struct SpritePress {
+    pub(crate) stage: Option<Entity>,
+    pub(crate) sprite: Option<Entity>,
+    /// A sprite of a larger selection the press kept the selection for, so
+    /// a drag could take all of it. Released without a drag, the click
+    /// narrows the selection to it.
+    narrow: Option<Entity>,
+}
+
+/// The world point under `cursor` (ui-logical) on a 2D panel's stage, and
+/// whether the cursor is on the stage at all; off it, the point is clamped
+/// to the stage's edge.
+pub(crate) fn stage_world_point(
+    cursor: Vec2,
+    host: &Viewport2dPanelHost,
+    computed: &ComputedNode,
+    transform: &UiGlobalTransform,
+) -> (Vec2, bool) {
+    let (offset, inside) = stage_offset_clamped(
+        cursor,
+        transform.translation,
+        computed.size(),
+        computed.inverse_scale_factor(),
+        target_pixels_per_stage_pixel(computed.size(), host.target_size),
+    );
+    let point = target_pixel_to_world(
+        host.view,
+        host.target_size,
+        stage_to_authored(offset, host.target_size),
+    );
+    (point, inside)
 }
 
 /// The outline drawn around one selected sprite on one panel's stage.
@@ -122,6 +188,10 @@ impl SpritePixels<'_> {
             &self.atlases,
             &self.images,
         )
+    }
+
+    pub(crate) fn local_rect(&self, sprite: &Sprite, anchor: Anchor) -> Option<Rect> {
+        sprite_local_rect(sprite, anchor, &self.images, &self.atlases)
     }
 
     fn world_corners(
@@ -249,7 +319,7 @@ pub fn sprite_contains(
 }
 
 /// Whether `entity` sits under an open [`Scene2dRoot`].
-fn in_2d_scene(entity: Entity, parents: &Query<&ChildOf>, roots: &Scene2dRoots) -> bool {
+pub(crate) fn in_2d_scene(entity: Entity, parents: &Query<&ChildOf>, roots: &Scene2dRoots) -> bool {
     parents
         .iter_ancestors(entity)
         .any(|ancestor| roots.contains(ancestor))
@@ -302,6 +372,7 @@ fn on_sprite_press(
     sprites: Query<PickParts, (Without<Locked>, Without<EditorEntity>)>,
     pixels: SpritePixels,
     mut selection: ResMut<Selection>,
+    mut press: ResMut<SpritePress>,
     mut commands: Commands,
 ) -> Result {
     if event.button != PointerButton::Primary {
@@ -315,20 +386,15 @@ fn on_sprite_press(
         return Ok(());
     }
     let (computed, transform) = stages.get(host.stage)?;
-    let Some(offset) = cursor_stage_offset(
+    let (point, inside) = stage_world_point(
         event.pointer.position / ui_scale.0,
-        transform.translation,
-        computed.size(),
-        computed.inverse_scale_factor(),
-        target_pixels_per_stage_pixel(computed.size(), host.target_size),
-    ) else {
-        return Ok(());
-    };
-    let point = target_pixel_to_world(
-        host.view,
-        host.target_size,
-        stage_to_authored(offset, host.target_size),
+        host,
+        computed,
+        transform,
     );
+    if !inside {
+        return Ok(());
+    }
 
     let hits: Vec<(Entity, f32)> = sprites
         .iter()
@@ -353,14 +419,51 @@ fn on_sprite_press(
 
     let extend = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let toggle = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let mut narrow = None;
     match picked {
+        Some(entity) if !extend && !toggle && selection.is_selected(entity) => {
+            if selection.entities.len() > 1 {
+                narrow = Some(entity);
+            }
+        }
         Some(entity) if extend => selection.extend(&mut commands, entity),
         Some(entity) if toggle => selection.toggle(&mut commands, entity),
         Some(entity) => selection.select_single(&mut commands, entity),
         None if !extend && !toggle => selection.clear(&mut commands),
         None => {}
     }
+    *press = SpritePress {
+        stage: Some(host.stage),
+        sprite: picked,
+        narrow,
+    };
     Ok(())
+}
+
+/// A drag from the press, once past the drag threshold, keeps the selection
+/// it started with.
+fn on_sprite_drag(event: On<PointerDrag>, ui_scale: Res<UiScale>, mut press: ResMut<SpritePress>) {
+    if press.stage == Some(event.event_target())
+        && event.distance.length() / ui_scale.0 > crate::viewport_select::BOX_SELECT_DRAG_THRESHOLD
+    {
+        press.narrow = None;
+    }
+}
+
+/// A click on one sprite of a larger selection, released without a drag,
+/// selects that sprite alone.
+fn on_sprite_release(
+    event: On<PointerRelease>,
+    mut press: ResMut<SpritePress>,
+    mut selection: ResMut<Selection>,
+    mut commands: Commands,
+) {
+    if event.button != PointerButton::Primary || press.stage != Some(event.event_target()) {
+        return;
+    }
+    if let Some(entity) = press.narrow.take() {
+        selection.select_single(&mut commands, entity);
+    }
 }
 
 /// Keep one outline per selected sprite on each 2D panel in

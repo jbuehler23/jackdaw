@@ -2150,6 +2150,23 @@ impl FrontedViewport<'_, '_> {
     pub(crate) fn is_three_d(&self) -> bool {
         !self.is_two_d()
     }
+
+    /// The 2D panel the user is looking at: the one under the cursor, else
+    /// the fronted viewport panel while it shows 2D.
+    pub(crate) fn two_d_host(&self) -> Option<&Viewport2dPanelHost> {
+        if let Some(host) = self
+            .hosts
+            .iter()
+            .find(|host| entity_is_hovered(host.area, &self.hover_map, &self.parents))
+        {
+            return Some(host);
+        }
+        if !self.is_two_d() {
+            return None;
+        }
+        fronted_viewport_hosts(&self.tree, &self.contents)
+            .find_map(|entity| self.hosts.get(entity).ok())
+    }
 }
 
 /// True while the 3D world is the one the keyboard belongs to. The single-letter
