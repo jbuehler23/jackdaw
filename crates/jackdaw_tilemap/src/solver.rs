@@ -15,8 +15,10 @@
 //! in `Corners` mode only the higher cell draws the band.
 //!
 //! Candidates share the cell's centre and score one point per matched required
-//! peer. Ties go to more matched sides, then a positive weight, then set order;
-//! tiles with that exact shape are then picked by weight from a cell hash.
+//! peer. Ties go to more matched sides, then a positive weight, then no joined
+//! side (side equal to centre) the cell does not join, then a straight tile
+//! along a joined run, then set order; tiles with that exact shape are then
+//! picked by weight from a cell hash.
 //! Hand overrides are returned unchanged by [`resolve_region`].
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -243,6 +245,30 @@ struct Lookup<'a> {
     positions: BTreeMap<TerrainId, usize>,
     /// (centre, carried terrain, class) for every used non-centre peer.
     transitions: BTreeSet<(TerrainId, TerrainId, PeerClass)>,
+    /// Per tile, indexed like `set.tiles`; all zero when sides are not matched.
+    links: Vec<SideLinks>,
+}
+
+/// Side masks over [`Peer::SIDES`], one bit per side.
+#[derive(Clone, Copy)]
+struct SideLinks {
+    /// Sides whose terrain equals the centre.
+    joined: u8,
+    /// `joined` when it is exactly Top and Bottom or exactly Left and Right, else 0.
+    straight: u8,
+}
+
+const TOP_BOTTOM: u8 = 0b1001;
+const LEFT_RIGHT: u8 = 0b0110;
+
+fn side_mask(joined: impl Fn(Peer) -> bool) -> u8 {
+    let mut mask = 0;
+    for (bit, side) in Peer::SIDES.into_iter().enumerate() {
+        if joined(side) {
+            mask |= 1 << bit;
+        }
+    }
+    mask
 }
 
 impl<'a> Lookup<'a> {
@@ -260,10 +286,29 @@ impl<'a> Lookup<'a> {
                 }
             }
         }
+        let links = set
+            .tiles
+            .iter()
+            .map(|tile| {
+                let t = tile.terrains;
+                let joined = if set.mode.uses_sides() {
+                    side_mask(|side| t.get(side) == t.centre())
+                } else {
+                    0
+                };
+                let straight = if joined == TOP_BOTTOM || joined == LEFT_RIGHT {
+                    joined
+                } else {
+                    0
+                };
+                SideLinks { joined, straight }
+            })
+            .collect();
         Self {
             set,
             positions,
             transitions,
+            links,
         }
     }
 
@@ -413,18 +458,24 @@ fn resolve_with(lookup: &Lookup, terrain: &ChunkedLayer<TerrainId>, cell: CellCo
     }
     let required = required_from_block(lookup, &block);
     let max_score = required.iter().filter(|r| r.is_some()).count() as u8;
-    let mut best: Option<(&TerrainTile, (u8, u8, bool))> = None;
-    for tile in set.tiles.iter().filter(|t| t.terrains.centre() == centre) {
+    let needed = side_mask(|side| required[side.index()] == Some(centre));
+    let mut best: Option<(&TerrainTile, (u8, u8, bool, bool, bool))> = None;
+    for (tile, links) in set.tiles.iter().zip(&lookup.links) {
+        if tile.terrains.centre() != centre {
+            continue;
+        }
         let key = (
             match_score(&required, &tile.terrains),
             count_matches(&required, &tile.terrains, &Peer::SIDES),
             tile.weight > 0,
+            links.joined & !needed == 0,
+            links.straight != 0 && links.straight & !needed == 0,
         );
         if best.is_none_or(|(_, k)| key > k) {
             best = Some((tile, key));
         }
     }
-    let Some((shape, (score, _, _))) = best else {
+    let Some((shape, (score, ..))) = best else {
         return Resolved {
             tile: TileRef::EMPTY,
             score: 0,
@@ -491,7 +542,7 @@ pub fn resolve_region(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LayoutTemplate;
+    use crate::{LayoutTemplate, Legend, Region, parse_rows, write_region};
 
     fn layer(cells: &[(i32, i32, TerrainId)]) -> ChunkedLayer<TerrainId> {
         let mut layer = ChunkedLayer::new();
@@ -1088,5 +1139,345 @@ mod tests {
         let b = resolve_region(&set, &terrain, &BTreeMap::new(), dirty);
         assert_eq!(a, b);
         assert!(a.iter().any(|(_, t)| !t.is_empty()));
+    }
+
+    const GRASS: TerrainId = 1;
+    const DRY: TerrainId = 2;
+    const TILLED: TerrainId = 3;
+
+    struct PathTiles {
+        terrain: TerrainId,
+        isolated: [u16; 2],
+        vertical: [u16; 3],
+        horizontal: [u16; 3],
+    }
+
+    // Tile indices are from a CC0 12-column farm tilesheet.
+    const DRY_PATH: PathTiles = PathTiles {
+        terrain: DRY,
+        isolated: [0, 63],
+        vertical: [12, 24, 36],
+        horizontal: [60, 61, 62],
+    };
+    const TILLED_PATH: PathTiles = PathTiles {
+        terrain: TILLED,
+        isolated: [1, 51],
+        vertical: [13, 25, 37],
+        horizontal: [48, 49, 50],
+    };
+
+    fn path_shape(terrain: TerrainId, joins: &[Peer]) -> TileTerrains {
+        let mut shape = TileTerrains::filled(GRASS).with(Peer::Centre, terrain);
+        for side in joins {
+            shape = shape.with(*side, terrain);
+        }
+        shape
+    }
+
+    fn path_tile(index: u16, terrain: TerrainId, joins: &[Peer], weight: u32) -> TerrainTile {
+        TerrainTile::new(TileRef::new(index), path_shape(terrain, joins), weight)
+    }
+
+    fn add_path(mut set: TerrainSet, path: &PathTiles, horizontal_first: bool) -> TerrainSet {
+        let t = path.terrain;
+        let isolated = [
+            path_tile(path.isolated[0], t, &[], 1),
+            path_tile(path.isolated[1], t, &[], 1),
+        ];
+        let vertical = [
+            path_tile(path.vertical[0], t, &[Peer::Bottom], 1),
+            path_tile(path.vertical[1], t, &[Peer::Top, Peer::Bottom], 1),
+            path_tile(path.vertical[2], t, &[Peer::Top], 1),
+        ];
+        let horizontal = [
+            path_tile(path.horizontal[0], t, &[Peer::Right], 1),
+            path_tile(path.horizontal[1], t, &[Peer::Left, Peer::Right], 1),
+            path_tile(path.horizontal[2], t, &[Peer::Left], 1),
+        ];
+        let (first, second) = if horizontal_first {
+            (horizontal, vertical)
+        } else {
+            (vertical, horizontal)
+        };
+        for tile in isolated.into_iter().chain(first).chain(second) {
+            set = set.with_tile(tile);
+        }
+        set
+    }
+
+    fn farm_set() -> TerrainSet {
+        let set = add_path(TerrainSet::new(MatchMode::Sides), &DRY_PATH, false);
+        add_path(set, &TILLED_PATH, false)
+    }
+
+    fn farm_set_horizontal_first() -> TerrainSet {
+        let set = add_path(TerrainSet::new(MatchMode::Sides), &DRY_PATH, true);
+        add_path(set, &TILLED_PATH, true)
+    }
+
+    struct Case {
+        set: TerrainSet,
+        region: Region,
+        terrain: ChunkedLayer<TerrainId>,
+        tiles: BTreeMap<CellCoord, TileRef>,
+    }
+
+    impl Case {
+        fn new(set: TerrainSet, rows: &str) -> Self {
+            let legend = Legend::parse_entries([(".", "grass"), ("=", "dry"), ("#", "tilled")])
+                .expect("valid legend");
+            let region = parse_rows(rows, CellCoord::new(0, 0), &legend).expect("valid rows");
+            let mut terrain = ChunkedLayer::new();
+            write_region(&mut terrain, &region, |symbol| match symbol {
+                '=' => DRY,
+                '#' => TILLED,
+                _ => GRASS,
+            });
+            let dirty: Vec<_> = terrain.cells().map(|(c, _)| c).collect();
+            let tiles = resolve_region(&set, &terrain, &BTreeMap::new(), dirty)
+                .into_iter()
+                .collect();
+            Self {
+                set,
+                region,
+                terrain,
+                tiles,
+            }
+        }
+
+        fn tile(&self, col: u32, row: u32) -> Option<u16> {
+            let tile = self.tiles[&self.region.world(col, row)];
+            (!tile.is_empty()).then_some(tile.index())
+        }
+
+        fn grid(&self) -> Vec<Vec<Option<u16>>> {
+            (0..self.region.height)
+                .map(|row| {
+                    (0..self.region.width)
+                        .map(|col| self.tile(col, row))
+                        .collect()
+                })
+                .collect()
+        }
+
+        fn at(&self, col: u32, row: u32) -> Resolved {
+            resolve_cell(&self.set, &self.terrain, self.region.world(col, row))
+        }
+    }
+
+    fn some<const N: usize>(indices: [u16; N]) -> [Option<u16>; N] {
+        indices.map(Some)
+    }
+
+    #[test]
+    fn straight_runs_resolve_to_caps_and_middles() {
+        for path in [DRY_PATH, TILLED_PATH] {
+            let s = if path.terrain == DRY { '=' } else { '#' };
+            let [top, mid, bottom] = some(path.vertical);
+            let [left, centre, right] = some(path.horizontal);
+            let one = Case::new(farm_set(), &format!("...\n.{s}.\n..."));
+            assert!(some(path.isolated).contains(&one.tile(1, 1)));
+            assert!(one.at(1, 1).is_exact());
+            for (n, expected) in [
+                (2, vec![top, bottom]),
+                (5, vec![top, mid, mid, mid, bottom]),
+            ] {
+                let mut rows = vec!["...".to_string()];
+                rows.extend((0..n).map(|_| format!(".{s}.")));
+                rows.push("...".to_string());
+                let case = Case::new(farm_set(), &rows.join("\n"));
+                let column: Vec<_> = (1..=n).map(|row| case.tile(1, row)).collect();
+                assert_eq!(column, expected);
+                assert!((1..=n).all(|row| case.at(1, row).is_exact()));
+            }
+            for (n, expected) in [
+                (2, vec![left, right]),
+                (5, vec![left, centre, centre, centre, right]),
+            ] {
+                let dots = ".".repeat(n as usize + 2);
+                let run: String = std::iter::repeat_n(s, n as usize).collect();
+                let case = Case::new(farm_set(), &format!("{dots}\n.{run}.\n{dots}"));
+                let line: Vec<_> = (1..=n).map(|col| case.tile(col, 1)).collect();
+                assert_eq!(line, expected);
+                assert!((1..=n).all(|col| case.at(col, 1).is_exact()));
+            }
+        }
+    }
+
+    #[test]
+    fn grass_resolves_empty() {
+        let out = Case::new(farm_set(), "....\n.==.\n....").grid();
+        assert_eq!(out[0], vec![None; 4]);
+        assert_eq!(out[1][0], None);
+        assert_eq!(out[1][3], None);
+        assert_eq!(out[1][1], Some(DRY_PATH.horizontal[0]));
+    }
+
+    #[test]
+    fn l_turn_arms_are_exact_and_set_order_picks_the_corner_cap() {
+        let [v_top, v_mid, v_bottom] = some(DRY_PATH.vertical);
+        let [h_left, h_mid, h_right] = some(DRY_PATH.horizontal);
+        let down_right = ".....\n.===.\n.=...\n.=...\n.....";
+        let case = Case::new(farm_set(), down_right);
+        assert_eq!([case.tile(2, 1), case.tile(3, 1)], [h_mid, h_right]);
+        assert_eq!([case.tile(1, 2), case.tile(1, 3)], [v_mid, v_bottom]);
+        for (col, row) in [(2, 1), (3, 1), (1, 2), (1, 3)] {
+            assert!(case.at(col, row).is_exact());
+        }
+        let corner = case.at(1, 1);
+        assert_eq!((corner.score, corner.max_score), (4, 5));
+        let mirrors = [
+            (down_right, (1, 1), [v_top, h_left]),
+            (
+                ".....\n.===.\n...=.\n...=.\n.....",
+                (3, 1),
+                [v_top, h_right],
+            ),
+            (
+                ".....\n.=...\n.=...\n.===.\n.....",
+                (1, 3),
+                [v_bottom, h_left],
+            ),
+            (
+                ".....\n...=.\n...=.\n.===.\n.....",
+                (3, 3),
+                [v_bottom, h_right],
+            ),
+        ];
+        for (rows, (col, row), [vertical_cap, horizontal_cap]) in mirrors {
+            let vertical_first = Case::new(farm_set(), rows).tile(col, row);
+            let horizontal_first = Case::new(farm_set_horizontal_first(), rows).tile(col, row);
+            assert_eq!(vertical_first, vertical_cap);
+            assert_eq!(horizontal_first, horizontal_cap);
+        }
+    }
+
+    #[test]
+    fn t_junction_keeps_the_through_run() {
+        let [_, v_mid, v_bottom] = some(DRY_PATH.vertical);
+        let [h_left, h_mid, h_right] = some(DRY_PATH.horizontal);
+        let case = Case::new(farm_set(), ".......\n.=====.\n...=...\n...=...\n.......");
+        let top: Vec<_> = (1..6).map(|col| case.tile(col, 1)).collect();
+        assert_eq!(top, [h_left, h_mid, h_mid, h_mid, h_right]);
+        assert_eq!([case.tile(3, 2), case.tile(3, 3)], [v_mid, v_bottom]);
+        let side = Case::new(farm_set(), ".....\n.=...\n.==..\n.=...\n.....");
+        assert_eq!(side.tile(1, 2), v_mid);
+        assert_eq!(side.tile(2, 2), h_right);
+    }
+
+    #[test]
+    fn cross_centre_is_a_middle_chosen_by_set_order() {
+        let [v_top, v_mid, v_bottom] = some(DRY_PATH.vertical);
+        let [h_left, h_mid, h_right] = some(DRY_PATH.horizontal);
+        let cross = ".......\n...=...\n...=...\n.=====.\n...=...\n...=...\n.......";
+        let case = Case::new(farm_set(), cross);
+        let row: Vec<_> = [1, 2, 4, 5].map(|col| case.tile(col, 3)).to_vec();
+        assert_eq!(row, [h_left, h_mid, h_mid, h_right]);
+        let column: Vec<_> = [1, 2, 4, 5].map(|r| case.tile(3, r)).to_vec();
+        assert_eq!(column, [v_top, v_mid, v_mid, v_bottom]);
+        assert_eq!(case.tile(3, 3), v_mid);
+        let flipped = Case::new(farm_set_horizontal_first(), cross);
+        assert_eq!(flipped.tile(3, 3), h_mid);
+    }
+
+    #[test]
+    fn straight_run_beats_an_equal_scoring_turn() {
+        let set = add_path(
+            TerrainSet::new(MatchMode::Sides).with_tile(path_tile(
+                99,
+                DRY,
+                &[Peer::Right, Peer::Bottom],
+                1,
+            )),
+            &DRY_PATH,
+            false,
+        );
+        let tee = Case::new(set.clone(), ".......\n.=====.\n...=...\n.......");
+        assert_eq!(tee.tile(3, 1), Some(DRY_PATH.horizontal[1]));
+        let turn = Case::new(set, "....\n.==.\n.=..\n....");
+        assert_eq!(turn.tile(1, 1), Some(99));
+        assert!(turn.at(1, 1).is_exact());
+    }
+
+    #[test]
+    fn zero_weight_straight_loses_to_a_weighted_turn() {
+        let set = TerrainSet::new(MatchMode::Sides)
+            .with_tile(path_tile(
+                DRY_PATH.horizontal[1],
+                DRY,
+                &[Peer::Left, Peer::Right],
+                0,
+            ))
+            .with_tile(path_tile(99, DRY, &[Peer::Right, Peer::Bottom], 1));
+        let tee = Case::new(set, ".......\n.=====.\n...=...\n.......");
+        assert_eq!(tee.tile(3, 1), Some(99));
+    }
+
+    #[test]
+    fn path_end_without_a_cap_shows_the_isolated_tile() {
+        let [a, b] = DRY_PATH.isolated;
+        let set = TerrainSet::new(MatchMode::Sides)
+            .with_tile(path_tile(
+                DRY_PATH.vertical[1],
+                DRY,
+                &[Peer::Top, Peer::Bottom],
+                1,
+            ))
+            .with_tile(path_tile(a, DRY, &[], 1))
+            .with_tile(path_tile(b, DRY, &[], 1));
+        let case = Case::new(set, "...\n.=.\n.=.\n.=.\n...");
+        assert!(some(DRY_PATH.isolated).contains(&case.tile(1, 1)));
+        assert!(some(DRY_PATH.isolated).contains(&case.tile(1, 3)));
+        assert_eq!(case.tile(1, 2), Some(DRY_PATH.vertical[1]));
+    }
+
+    #[test]
+    fn adjacent_parallel_strips_connect() {
+        let [v_top, v_mid, _] = some(DRY_PATH.vertical);
+        let [h_left, _, h_right] = some(DRY_PATH.horizontal);
+        let case = Case::new(farm_set(), "....\n.==.\n.==.\n.==.\n....");
+        let req = required_peers(&case.set, &case.terrain, case.region.world(1, 2));
+        assert_eq!(req[Peer::Right.index()], Some(DRY));
+        assert_eq!([case.tile(1, 2), case.tile(2, 2)], [v_mid, v_mid]);
+        assert!(!case.at(1, 2).is_exact() && !case.at(2, 2).is_exact());
+        assert!([v_top, h_left].contains(&case.tile(1, 1)));
+        assert!([v_top, h_right].contains(&case.tile(2, 1)));
+    }
+
+    #[test]
+    fn dry_beside_tilled_has_no_transition() {
+        let pair = Case::new(farm_set(), "....\n.=#.\n....");
+        assert!(some(DRY_PATH.isolated).contains(&pair.tile(1, 1)));
+        assert!(some(TILLED_PATH.isolated).contains(&pair.tile(2, 1)));
+        let rows = "......\n.==##.\n......";
+        let runs = Case::new(farm_set(), rows);
+        let line: Vec<_> = (1..5).map(|col| runs.tile(col, 1)).collect();
+        let expected = [
+            DRY_PATH.horizontal[0],
+            DRY_PATH.horizontal[2],
+            TILLED_PATH.horizontal[0],
+            TILLED_PATH.horizontal[2],
+        ];
+        assert_eq!(line, some(expected));
+        assert!(!runs.at(2, 1).is_exact() && !runs.at(3, 1).is_exact());
+        assert_eq!(Case::new(farm_set(), rows).grid(), runs.grid());
+    }
+
+    #[test]
+    fn isolated_cells_use_both_variants_stably() {
+        let mut rows = Vec::new();
+        for _ in 0..10 {
+            rows.push(".".repeat(41));
+            rows.push(format!(".{}", "=.".repeat(20)));
+        }
+        rows.push(".".repeat(41));
+        let rows = rows.join("\n");
+        let case = Case::new(farm_set(), &rows);
+        let picks: Vec<_> = case.grid().into_iter().flatten().flatten().collect();
+        assert_eq!(picks.len(), 200);
+        assert!(picks.iter().all(|i| DRY_PATH.isolated.contains(i)));
+        let first = picks.iter().filter(|i| **i == DRY_PATH.isolated[0]).count();
+        assert!((60..=140).contains(&first), "{first}");
+        assert_eq!(Case::new(farm_set(), &rows).grid(), case.grid());
     }
 }
