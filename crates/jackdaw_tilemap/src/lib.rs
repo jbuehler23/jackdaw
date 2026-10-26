@@ -8,6 +8,7 @@
 
 mod grid;
 mod layer;
+mod layout_fit;
 mod path;
 mod region_text;
 mod sidecar;
@@ -20,6 +21,9 @@ mod tile;
 
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
+pub use layout_fit::{
+    FitError, FittedTile, ProposedSet, ProposedTerrain, TilesetProposal, fit_layouts,
+};
 pub use path::{Links, StrokeError, apply_connect_stroke, apply_path_stroke, orthogonal_line};
 pub use region_text::{
     Legend, LegendEntry, ReadRegionError, Region, RegionTextError, RegionTextErrorKind, emit_rows,

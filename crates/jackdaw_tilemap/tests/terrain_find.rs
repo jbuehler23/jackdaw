@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
+
 use glam::UVec2;
 use jackdaw_tilemap::{
-    GridLayout, Peer, RgbaImage, SheetInput, TerrainAnalysis, TerrainId, TileAddress, TileKind,
-    TileTerrains, find_terrains,
+    CellCoord, ChunkedLayer, GridLayout, Links, MatchMode, Peer, ProposedSet, RgbaImage,
+    SheetInput, TerrainAnalysis, TerrainId, TerrainSet, TerrainTile, TileAddress, TileKind,
+    TileRef, TileTerrains, TilesetProposal, find_terrains, fit_layouts, resolve_region,
 };
 
 struct Sheet {
@@ -92,14 +95,21 @@ impl PathTiles {
         .collect()
     }
 
-    /// Where the pixels disagree with the fixture: the horizontal strip and
-    /// the second isolated tile fill rows 4 to 15 of their tiles, so their
-    /// bottom side, and the bottom corners where the strip runs on, show the
+    /// Tiles whose strip fills rows 4 to 15, so their bottom edge shows the
     /// strip's lower lip rather than grass.
+    fn lipped(&self) -> Vec<u32> {
+        let [_, isolated] = self.isolated;
+        self.horizontal
+            .into_iter()
+            .chain([isolated])
+            .map(u32::from)
+            .collect()
+    }
+
+    /// The raw label peers that show the lip: the bottom side, and the bottom
+    /// corners where the strip runs on.
     fn lip(&self, index: u32, joins: &[Peer]) -> Vec<Peer> {
-        let low =
-            self.horizontal.map(u32::from).contains(&index) || index == u32::from(self.isolated[1]);
-        if !low {
+        if !self.lipped().contains(&index) {
             return Vec::new();
         }
         let mut lip = vec![Peer::Bottom];
@@ -160,34 +170,183 @@ fn tiny_farm_has_grass_and_two_path_terrains() {
     );
 }
 
+/// The fixture's logical peers: grass everywhere but the centre and the
+/// joined sides.
+fn path_shape(terrain: TerrainId, grass: TerrainId, joins: &[Peer]) -> TileTerrains {
+    joins.iter().fold(
+        TileTerrains::filled(grass).with(Peer::Centre, terrain),
+        |t, side| t.with(*side, terrain),
+    )
+}
+
+fn fit(sheet: &Sheet, name: &str) -> (TerrainAnalysis, TilesetProposal) {
+    let input = sheet.input(name);
+    let found = find_terrains(&[input]);
+    let proposal = fit_layouts(&found, &[input]).expect("matching inputs");
+    (found, proposal)
+}
+
+fn path_set(proposal: &TilesetProposal, inner: TerrainId) -> &ProposedSet {
+    proposal
+        .sets
+        .iter()
+        .find(|s| s.inner == inner)
+        .unwrap_or_else(|| panic!("no set over {inner}: {:#?}", proposal.sets))
+}
+
 #[test]
-fn tiny_farm_path_tiles_match_the_solver_fixture() {
+fn tiny_farm_fitted_path_tiles_match_the_solver_fixture() {
+    let sheet = packed();
+    let (found, proposal) = fit(&sheet, "tilemap_packed.png");
+    let farm = farm_terrains(&found);
+    for (path, terrain) in [(DRY_PATH, farm.dry), (TILLED_PATH, farm.tilled)] {
+        let set = path_set(&proposal, terrain);
+        let mut tiles: Vec<u32> = set.tiles.iter().map(|t| t.address.tile).collect();
+        let mut expected = path.all();
+        tiles.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(tiles, expected);
+        for (index, joins) in path.joins() {
+            let fitted = set.tiles.iter().find(|t| t.address.tile == index);
+            let fitted = fitted.unwrap_or_else(|| panic!("tile {index} fitted"));
+            let shape = path_shape(terrain, farm.grass, &joins);
+            assert_eq!(fitted.terrains, shape, "tile {index}");
+            let lipped = path.lipped().contains(&index);
+            assert_eq!(
+                fitted.corrected[Peer::Bottom.index()],
+                lipped,
+                "tile {index}"
+            );
+        }
+    }
+    // The raw labels read the dry lip as tilled, the colour it shares.
+    for index in DRY_PATH.lipped() {
+        assert_eq!(tile(&found, 0, index).get(Peer::Bottom), farm.tilled);
+    }
+}
+
+#[test]
+fn tiny_farm_raw_path_labels_differ_from_the_fixture_only_on_the_lip() {
     let sheet = packed();
     let found = find_terrains(&[sheet.input("tilemap_packed.png")]);
     let farm = farm_terrains(&found);
     for (path, terrain) in [(DRY_PATH, farm.dry), (TILLED_PATH, farm.tilled)] {
         for (index, joins) in path.joins() {
-            let lip = path.lip(index, &joins);
-            let got = tile(&found, 0, index);
-            let kind = found.tile(TileAddress {
+            let labels = found.tile(TileAddress {
                 sheet: 0,
                 tile: index,
             });
             assert_eq!(
-                kind.map(|t| t.kind),
+                labels.map(|t| t.kind),
                 Some(TileKind::Terrain),
                 "tile {index}"
             );
+            let got = tile(&found, 0, index);
+            let shape = path_shape(terrain, farm.grass, &joins);
+            let lip = path.lip(index, &joins);
             for peer in Peer::ALL {
-                let joined = peer == Peer::Centre || joins.contains(&peer);
-                let expected = if joined { terrain } else { farm.grass };
                 if lip.contains(&peer) {
                     let lower = got.get(peer);
                     assert!(lower != farm.grass && lower != 0, "tile {index} {peer:?}");
                 } else {
-                    assert_eq!(got.get(peer), expected, "tile {index} {peer:?}: {got:?}");
+                    assert_eq!(got.get(peer), shape.get(peer), "tile {index} {peer:?}");
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn tiny_farm_proposal_has_two_side_path_sets_over_background_grass() {
+    let sheet = packed();
+    let (found, proposal) = fit(&sheet, "tilemap_packed.png");
+    let farm = farm_terrains(&found);
+    assert_eq!(proposal.sets.len(), 2, "{:#?}", proposal.sets);
+    for terrain in [farm.dry, farm.tilled] {
+        let set = path_set(&proposal, terrain);
+        assert_eq!((set.mode, set.outer), (MatchMode::Sides, farm.grass));
+        assert_eq!((set.covered, set.total), (7, 16));
+        assert_eq!(set.missing.len(), 9);
+        assert_eq!(set.template, None);
+    }
+    let background: Vec<TerrainId> = proposal
+        .terrains
+        .iter()
+        .filter(|t| t.background)
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(background, [farm.grass]);
+    let unassigned: Vec<u32> = proposal.unassigned.iter().map(|a| a.tile).collect();
+    let barn = [90, 92, 102, 103, 104, 114, 115, 116, 127];
+    let roof = [93, 95, 105, 107, 117, 118, 119, 129, 131];
+    let bench_and_trough = [98, 99, 110, 111, 112, 113];
+    for index in barn.into_iter().chain(roof).chain(bench_and_trough) {
+        assert!(unassigned.contains(&index), "tile {index}: {unassigned:?}");
+    }
+    // The plank tile is its terrain's only pure tile, so the terrain stays.
+    assert!(!unassigned.contains(&91));
+}
+
+#[test]
+fn tiny_farm_packed_and_spaced_sheets_give_the_same_proposal() {
+    let (a, b) = (packed(), spaced());
+    let (_, alone) = fit(&a, "tilemap_packed.png");
+    let (_, spaced) = fit(&b, "tilemap.png");
+    assert_eq!(spaced, alone);
+}
+
+/// Resolves every cell of `rows` ('.' grass, '=' the path) with `set`.
+fn paint(
+    set: &TerrainSet,
+    rows: &str,
+    grass: TerrainId,
+    path: TerrainId,
+) -> Vec<(CellCoord, TileRef)> {
+    let mut terrain = ChunkedLayer::new();
+    for (row, line) in rows.lines().enumerate() {
+        for (col, symbol) in line.chars().enumerate() {
+            let id = if symbol == '=' { path } else { grass };
+            terrain.set(CellCoord::new(col as i32, -(row as i32)), id);
+        }
+    }
+    let dirty: Vec<CellCoord> = terrain.cells().map(|(c, _)| c).collect();
+    let links = ChunkedLayer::<Links>::new();
+    resolve_region(set, &terrain, &links, &BTreeMap::new(), dirty)
+}
+
+#[test]
+fn tiny_farm_fitted_sets_paint_like_the_hand_fixture() {
+    let sheet = packed();
+    let (found, proposal) = fit(&sheet, "tilemap_packed.png");
+    let farm = farm_terrains(&found);
+    let runs = [
+        ".......\n.=====.\n.......",
+        "...\n.=.\n.=.\n.=.\n.=.\n.=.\n...",
+        ".....\n.===.\n.=...\n.=...\n.....",
+        ".....\n.=...\n.=...\n.===.\n.....",
+    ];
+    for (path, terrain) in [(DRY_PATH, farm.dry), (TILLED_PATH, farm.tilled)] {
+        let [i0, i1] = path.isolated;
+        let mut hand = TerrainSet::new(MatchMode::Sides);
+        for (index, joins) in [(i0, vec![]), (i1, vec![])].into_iter().chain(
+            path.joins()
+                .into_iter()
+                .filter(|(_, j)| !j.is_empty())
+                .map(|(i, j)| (i as u16, j)),
+        ) {
+            let shape = path_shape(terrain, farm.grass, &joins);
+            hand = hand.with_tile(TerrainTile::new(TileRef::new(index), shape, 1));
+        }
+        let fitted = path_set(&proposal, terrain)
+            .terrain_set(|a| u16::try_from(a.tile).ok().map(TileRef::new));
+        for rows in runs {
+            let expected = paint(&hand, rows, farm.grass, terrain);
+            assert!(expected.iter().any(|(_, t)| !t.is_empty()));
+            assert_eq!(
+                paint(&fitted, rows, farm.grass, terrain),
+                expected,
+                "{rows}"
+            );
         }
     }
 }

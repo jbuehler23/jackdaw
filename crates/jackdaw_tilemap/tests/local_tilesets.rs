@@ -7,10 +7,13 @@
 //! grid <path> <tile width> <tile height> <columns> <rows>
 //! anim <base path> <strip path> <frames> <exact|loose>
 //! terrains <path> <tile width> <tile height> <count>
+//! fit <path> <tile width> <tile height> <sets> <mode> <covered> <total> <backgrounds>
 //! ```
 //!
 //! `terrains` analyses the sheet alone as a packed grid of that tile size and
-//! counts the terrains found.
+//! counts the terrains found. `fit` also fits layouts, counts the proposed
+//! sets, checks the mode (`Sides`, `Corners` or `CornersAndSides`) and
+//! coverage of the set with the most tiles, and counts background terrains.
 //!
 //! Paths are relative to the directory; `#` starts a comment line. Lines of
 //! any other kind are skipped.
@@ -19,8 +22,8 @@ use std::path::{Path, PathBuf};
 
 use glam::UVec2;
 use jackdaw_tilemap::{
-    GridLayout, LOOSE_FRAME_MATCH, RgbaImage, SheetInput, detect_animation, detect_grid,
-    find_terrains,
+    GridLayout, LOOSE_FRAME_MATCH, RgbaImage, SheetInput, TerrainAnalysis, TileAddress,
+    detect_animation, detect_grid, find_terrains, fit_layouts,
 };
 
 struct Sheet {
@@ -55,7 +58,7 @@ fn number(field: Option<&str>, line: &str) -> u32 {
 fn check(root: &Path, line: &str) {
     let mut fields = line.split_whitespace();
     let kind = fields.next().unwrap_or_default();
-    if !matches!(kind, "grid" | "anim" | "terrains") {
+    if !matches!(kind, "grid" | "anim" | "terrains" | "fit") {
         return;
     }
     let path = fields
@@ -65,7 +68,8 @@ fn check(root: &Path, line: &str) {
     match kind {
         "grid" => check_grid(&sheet, path, fields, line),
         "anim" => check_anim(root, &sheet, path, fields, line),
-        _ => check_terrains(&sheet, path, fields, line),
+        "terrains" => check_terrains(&sheet, path, fields, line),
+        _ => check_fit(&sheet, path, fields, line),
     }
 }
 
@@ -109,14 +113,13 @@ fn check_anim<'a>(
     assert_eq!(animation.frames, frames, "{line}");
 }
 
-#[expect(clippy::print_stdout, reason = "reports each checked case")]
-fn check_terrains<'a>(
-    sheet: &Sheet,
-    path: &str,
-    mut fields: impl Iterator<Item = &'a str>,
+/// The sheet alone as a packed grid of the next two fields' tile size.
+fn packed_input<'a>(
+    sheet: &'a Sheet,
+    path: &'a str,
+    fields: &mut impl Iterator<Item = &'a str>,
     line: &str,
-) {
-    let image = sheet.image();
+) -> SheetInput<'a> {
     let tile = UVec2::new(number(fields.next(), line), number(fields.next(), line));
     let layout = GridLayout {
         tile,
@@ -125,11 +128,15 @@ fn check_terrains<'a>(
         columns: sheet.width / tile.x.max(1),
         rows: sheet.height / tile.y.max(1),
     };
-    let found = find_terrains(&[SheetInput {
+    SheetInput {
         name: path,
-        image,
+        image: sheet.image(),
         layout,
-    }]);
+    }
+}
+
+#[expect(clippy::print_stdout, reason = "reports each checked case")]
+fn print_terrains(path: &str, found: &TerrainAnalysis) {
     for t in &found.terrains {
         println!(
             "{path}: terrain {} {:?} {:?} pure {}",
@@ -139,8 +146,57 @@ fn check_terrains<'a>(
             t.pure_tiles.len()
         );
     }
+}
+
+fn check_terrains<'a>(
+    sheet: &'a Sheet,
+    path: &'a str,
+    mut fields: impl Iterator<Item = &'a str>,
+    line: &str,
+) {
+    let input = packed_input(sheet, path, &mut fields, line);
+    let found = find_terrains(&[input]);
+    print_terrains(path, &found);
     let count = number(fields.next(), line) as usize;
     assert_eq!(found.terrains.len(), count, "{line}");
+}
+
+#[expect(clippy::print_stdout, reason = "reports each checked case")]
+fn check_fit<'a>(
+    sheet: &'a Sheet,
+    path: &'a str,
+    mut fields: impl Iterator<Item = &'a str>,
+    line: &str,
+) {
+    let input = packed_input(sheet, path, &mut fields, line);
+    let found = find_terrains(&[input]);
+    print_terrains(path, &found);
+    let proposal = fit_layouts(&found, &[input]).unwrap_or_else(|e| panic!("{path}: {e}"));
+    for set in &proposal.sets {
+        let tiles: Vec<u32> = set.tiles.iter().map(|t| t.address.tile).collect();
+        println!(
+            "{path}: set {} over {} {:?} {}/{} {:?} tiles {tiles:?}",
+            set.inner, set.outer, set.mode, set.covered, set.total, set.template
+        );
+    }
+    println!("{path}: terrains {:?}", proposal.terrains);
+    let tiles = |a: &[TileAddress]| a.iter().map(|a| a.tile).collect::<Vec<_>>();
+    println!("{path}: unassigned {:?}", tiles(&proposal.unassigned));
+    println!(
+        "{path}: low confidence {:?}",
+        tiles(&proposal.low_confidence)
+    );
+    let sets = number(fields.next(), line) as usize;
+    assert_eq!(proposal.sets.len(), sets, "{line}");
+    let Some(main) = proposal.sets.iter().max_by_key(|s| s.tiles.len()) else {
+        return;
+    };
+    let mode = fields.next().unwrap_or_default();
+    assert_eq!(format!("{:?}", main.mode), mode, "{line}");
+    let coverage = (number(fields.next(), line), number(fields.next(), line));
+    assert_eq!((main.covered as u32, main.total as u32), coverage, "{line}");
+    let backgrounds = proposal.terrains.iter().filter(|t| t.background).count();
+    assert_eq!(backgrounds, number(fields.next(), line) as usize, "{line}");
 }
 
 #[test]

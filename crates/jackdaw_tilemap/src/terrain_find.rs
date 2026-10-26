@@ -17,7 +17,7 @@ use glam::{Vec3, Vec4};
 use crate::{GridLayout, Peer, RgbaImage, TerrainId, TileTerrains, empty_tiles};
 
 /// Fainter pixels count as transparent.
-const MIN_ALPHA: f32 = 0.2;
+pub(crate) const MIN_ALPHA: f32 = 0.2;
 /// Least covered share of a non-empty region.
 const EMPTY_COVERAGE: f32 = 0.5;
 /// Most variance of a seed region.
@@ -254,7 +254,7 @@ fn sample_sheet(input: &SheetInput) -> Vec<Option<Regions>> {
 
 /// Region rectangles `[x, y, width, height]` within a `w x h` tile, in
 /// [`Peer`] order.
-fn region_rects(w: u32, h: u32) -> [[u32; 4]; 9] {
+pub(crate) fn region_rects(w: u32, h: u32) -> [[u32; 4]; 9] {
     let spans = |n: u32| {
         let c = (n / 8).max(1).min(n);
         let d = (n / 16).max(1).min(n);
@@ -601,7 +601,7 @@ fn colour_word(oklab: Vec3) -> &'static str {
     }
 }
 
-fn srgb_to_oklab(p: [u8; 4]) -> Vec3 {
+pub(crate) fn srgb_to_oklab(p: [u8; 4]) -> Vec3 {
     let linear = |c: u8| {
         let c = f32::from(c) / 255.0;
         if c <= 0.04045 {

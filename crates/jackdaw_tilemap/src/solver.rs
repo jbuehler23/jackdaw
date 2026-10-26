@@ -77,6 +77,17 @@ impl Peer {
         IVec2::new(i % 3 - 1, 1 - i / 3)
     }
 
+    /// The peer facing `offset`, `None` outside the 3x3 block.
+    pub fn from_offset(offset: IVec2) -> Option<Peer> {
+        if offset.abs().max_element() > 1 {
+            return None;
+        }
+        let index = (1 - offset.y) * 3 + offset.x + 1;
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| Peer::ALL.get(i).copied())
+    }
+
     /// The peer on the opposite side of the centre.
     pub const fn opposite(self) -> Peer {
         match self {
@@ -1178,6 +1189,15 @@ mod tests {
         diagonal.set(CellCoord::new(-1, 0), DIRT);
         let req = required_peers(&set, &diagonal, &no_links(), CellCoord::new(0, 0));
         assert_eq!(req[Peer::TopRight.index()], Is(WATER));
+    }
+
+    #[test]
+    fn peers_round_trip_through_their_offsets() {
+        for peer in Peer::ALL {
+            assert_eq!(Peer::from_offset(peer.offset()), Some(peer));
+        }
+        assert_eq!(Peer::from_offset(IVec2::new(2, 0)), None);
+        assert_eq!(Peer::from_offset(IVec2::new(0, -2)), None);
     }
 
     #[test]
