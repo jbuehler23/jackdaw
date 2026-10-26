@@ -140,8 +140,12 @@ pub struct LoadedBsnScene {
 /// `#Name`/`@Name` reference strings resolve during apply), entity roots spawn
 /// into the world, and the parsed document becomes the live [`SceneBsnAst`].
 pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, BsnLoadError> {
-    let ast = parse_bsn_text(text)?;
+    Ok(load_bsn_document(world, parse_bsn_text(text)?))
+}
 
+/// [`load_bsn_scene`] for a document already parsed, so a caller can parse
+/// before clearing the scene it replaces.
+pub fn load_bsn_document(world: &mut World, ast: SceneBsnAst) -> LoadedBsnScene {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let mut assets = Vec::new();
     {
@@ -180,7 +184,7 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
     crate::apply_dirty_ast_patches(world);
     report_unresolved_types(world);
 
-    Ok(LoadedBsnScene { entities, assets })
+    LoadedBsnScene { entities, assets }
 }
 
 /// Reports once, after a load, that the editor's picture of the project is

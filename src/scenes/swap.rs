@@ -10,28 +10,38 @@ use crate::commands::CommandHistory;
 use crate::scene_io::clear_scene_entities;
 use crate::scenes::{Scenes, TabContent, ViewState};
 
-/// Switch the active tab to `target`. No-op if `target == active`.
-/// Cancels any in-flight modal first to avoid corrupt per-frame state.
-pub fn swap_active_tab(world: &mut World, target: usize) {
+/// Switch the active tab to `target`, returning whether `target` is now
+/// active. No-op if `target == active`. Cancels any in-flight modal first to
+/// avoid corrupt per-frame state.
+///
+/// A scene that cannot be captured stays in front, untouched, with the reason
+/// in the status bar.
+pub fn swap_active_tab(world: &mut World, target: usize) -> bool {
     let current = world.resource::<Scenes>().active;
     if current == target {
-        return;
+        return true;
     }
     let tab_count = world.resource::<Scenes>().tabs.len();
     if target >= tab_count {
         warn!("swap_active_tab: target {target} out of range (len {tab_count})");
-        return;
+        return false;
     }
 
     // Cancel any in-flight modal so per-frame state doesn't dangle.
     let _ = world.cancel_active_modal();
 
-    capture_active_tab(world);
+    if let Err(err) = capture_active_tab(world) {
+        let message = format!("Cannot switch tabs: this scene could not be captured: {err}");
+        error!("{message}");
+        crate::status_bar::notify_error(world, message);
+        return false;
+    }
     clear_scene_entities(world);
     activate_tab(world, target);
     // The respawn above replaced every authored entity, so any live game
     // projection now points at stale ids; rebuild it against the new tab.
     crate::pie_projection::reproject_focused(world);
+    true
 }
 
 /// Spawn the target tab's snapshot into a world that has just been
@@ -57,7 +67,12 @@ pub(crate) fn respawn_scene_from_ast(world: &mut World) {
     if world.resource::<Scenes>().tabs.is_empty() {
         return;
     }
-    capture_active_tab(world);
+    if let Err(err) = capture_active_tab(world) {
+        let message = format!("Scene not reverted: it could not be captured: {err}");
+        error!("{message}");
+        crate::status_bar::notify_error(world, message);
+        return;
+    }
     clear_scene_entities(world);
     activate_tab(world, active);
 }
@@ -65,15 +80,15 @@ pub(crate) fn respawn_scene_from_ast(world: &mut World) {
 /// Capture the live scene document into the active tab and stash the
 /// per-tab history and view state. Pre-condition: a tab exists at
 /// `Scenes.active`.
-pub(crate) fn capture_active_tab(world: &mut World) {
+///
+/// A document whose text does not parse back is refused before anything is
+/// taken from the world, so the caller can leave the scene as it is.
+pub(crate) fn capture_active_tab(world: &mut World) -> Result<(), jackdaw_bsn::UnparsableEmit> {
     let active = world.resource::<Scenes>().active;
 
     // A refused tab never got its document into the world, so there is nothing
     // to snapshot; the rest of the capture still applies.
     let refused = world.resource::<Scenes>().tabs[active].is_refused();
-
-    let view_state = capture_view_state(world);
-    let history = std::mem::take(&mut *world.resource_mut::<CommandHistory>());
 
     let (prefab_target, tab_path) = {
         let scenes = world.resource::<Scenes>();
@@ -93,29 +108,30 @@ pub(crate) fn capture_active_tab(world: &mut World) {
         .as_ref()
         .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    if !refused {
+    let snapshot = if refused {
+        None
+    } else {
         let text = crate::scene_io::emit_bsn_scene_with_inline_assets(world, &parent);
+        Some(jackdaw_bsn::parse_emitted(&text)?)
+    };
 
-        if let Some(path) = prefab_target {
-            // Prefab tab: flush the snapshot into the cache entry the
-            // `TabContent::Prefab` key points at, rather than onto the tab.
-            if let Ok(bsn) = jackdaw_bsn::parse_bsn_text(&text) {
-                world
-                    .resource_mut::<crate::prefab::PrefabAstCache>()
-                    .insert(path.as_path(), bsn);
-            }
-        } else {
-            // Scene tab: store the captured document directly on the tab.
-            let doc = match jackdaw_bsn::parse_bsn_text(&text) {
-                Ok(doc) => doc,
-                Err(err) => {
-                    warn!("capture_active_tab: snapshot parse failed: {err}");
-                    jackdaw_bsn::SceneBsnAst::default()
-                }
-            };
+    let view_state = capture_view_state(world);
+    let history = std::mem::take(&mut *world.resource_mut::<CommandHistory>());
+
+    match (snapshot, prefab_target) {
+        // Prefab tab: flush the snapshot into the cache entry the
+        // `TabContent::Prefab` key points at, rather than onto the tab.
+        (Some(bsn), Some(path)) => {
+            world
+                .resource_mut::<crate::prefab::PrefabAstCache>()
+                .insert(path.as_path(), bsn);
+        }
+        // Scene tab: store the captured document directly on the tab.
+        (Some(doc), None) => {
             let mut scenes = world.resource_mut::<Scenes>();
             scenes.tabs[active].content = TabContent::Scene(Some(Box::new(doc)));
         }
+        (None, _) => {}
     }
 
     let terrain_data_store = world
@@ -130,6 +146,7 @@ pub(crate) fn capture_active_tab(world: &mut World) {
         tab.terrain_data_store = terrain_data_store;
     }
     tab.scene_resources = scene_resources;
+    Ok(())
 }
 
 /// Spawn the target tab's document into the live world and restore per-tab

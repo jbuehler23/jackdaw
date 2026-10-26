@@ -11,8 +11,8 @@ use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::{
-    BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, SceneBsnAst, emit_scene,
-    get_bsn_field, patch_type_path, set_bsn_field,
+    BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, SceneBsnAst, get_bsn_field,
+    patch_type_path, set_bsn_field,
 };
 use jackdaw_prefab::source::{peid_value, synthetic_root_patches};
 use jackdaw_scene_types::SceneNodeId;
@@ -250,22 +250,26 @@ fn write_prefab_doc(
     replace: bool,
 ) -> Option<PathBuf> {
     let path = prefab_bsn_path(target_path);
-    if path != target_path {
-        back_up_legacy_prefab(target_path);
-    }
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let mut out = crate::prefab::resolver_bsn::clone_scene(prefab);
     crate::prefab::save_load::relativize_for_file(
         world,
         &mut out,
         path.parent().unwrap_or(Path::new(".")),
     );
-    let text = crate::asset_files::asset_file_text(
-        crate::prefab::resolver_bsn::PREFAB_TYPE,
-        &emit_scene(&out),
-    );
+    let body = match jackdaw_bsn::emit_scene_checked(&out) {
+        Ok(body) => body,
+        Err(err) => {
+            warn!("{op_id}: cannot write {}: {err}", path.display());
+            return None;
+        }
+    };
+    if path != target_path {
+        back_up_legacy_prefab(target_path);
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text = crate::asset_files::asset_file_text(crate::prefab::resolver_bsn::PREFAB_TYPE, &body);
     let written = if replace {
         std::fs::write(&path, text)
     } else {
@@ -2009,10 +2013,13 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
             &mut out,
             write_path.parent().unwrap_or(Path::new(".")),
         );
-        crate::asset_files::asset_file_text(
-            crate::prefab::resolver_bsn::PREFAB_TYPE,
-            &emit_scene(&out),
-        )
+        let body = jackdaw_bsn::emit_scene_checked(&out).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("cannot save {}: {err}", prefab_path.display()),
+            )
+        })?;
+        crate::asset_files::asset_file_text(crate::prefab::resolver_bsn::PREFAB_TYPE, &body)
     };
     if write_path != prefab_path {
         back_up_legacy_prefab(prefab_path);
@@ -2048,6 +2055,7 @@ pub fn prefab_save(_: In<OperatorParameters>, mut commands: Commands) -> Operato
         };
         if let Err(err) = save_prefab_to_disk(world, path.as_path()) {
             warn!("prefab.save: write failed: {err}");
+            crate::status_bar::notify_error(world, format!("Prefab not saved: {err}"));
         }
     });
     OperatorResult::Finished

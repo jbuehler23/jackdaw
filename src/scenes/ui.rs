@@ -432,8 +432,8 @@ pub fn on_scene_tab_context_action(event: On<ContextMenuAction>, mut commands: C
     commands.queue(move |world: &mut World| match prefix.as_str() {
         "scene.tab.save" => {
             let current = world.resource::<crate::scenes::Scenes>().active;
-            if idx != current {
-                crate::scenes::swap::swap_active_tab(world, idx);
+            if idx != current && !crate::scenes::swap::swap_active_tab(world, idx) {
+                return;
             }
             if let Some(path) = world
                 .resource::<crate::scenes::Scenes>()
@@ -448,8 +448,8 @@ pub fn on_scene_tab_context_action(event: On<ContextMenuAction>, mut commands: C
         }
         "scene.tab.save_as" => {
             let current = world.resource::<crate::scenes::Scenes>().active;
-            if idx != current {
-                crate::scenes::swap::swap_active_tab(world, idx);
+            if idx != current && !crate::scenes::swap::swap_active_tab(world, idx) {
+                return;
             }
             crate::scene_io::save_scene_as(world);
         }

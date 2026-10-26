@@ -12,7 +12,10 @@ use std::fmt::Write;
 
 use bevy::prelude::Entity;
 
-use crate::{BsnField, BsnPatch, BsnStructData, BsnTupleStructData, BsnValue, SceneBsnAst};
+use crate::{
+    BsnField, BsnLoadError, BsnPatch, BsnStructData, BsnTupleStructData, BsnValue, SceneBsnAst,
+    parse_bsn_text,
+};
 
 /// The line between sibling entities, Bevy 0.20's `--` (0.19 wrote `,`).
 const ENTITY_SEPARATOR: &str = "--\n";
@@ -48,6 +51,25 @@ pub fn emit_scene(ast: &SceneBsnAst) -> String {
     }
 
     out
+}
+
+/// Emitted text that does not parse back into a document. Writing or keeping
+/// such text in place of the document would lose it.
+#[derive(Debug, thiserror::Error)]
+#[error("the document's BSN text does not parse back ({0})")]
+pub struct UnparsableEmit(pub BsnLoadError);
+
+/// [`emit_scene`], refused when the text does not parse back.
+pub fn emit_scene_checked(ast: &SceneBsnAst) -> Result<String, UnparsableEmit> {
+    let text = emit_scene(ast);
+    parse_emitted(&text)?;
+    Ok(text)
+}
+
+/// Parse text emitted from a document back into one, so text that would not
+/// load again is refused before it is written or stored.
+pub fn parse_emitted(text: &str) -> Result<SceneBsnAst, UnparsableEmit> {
+    parse_bsn_text(text).map_err(UnparsableEmit)
 }
 
 /// Whether `name` reads back as a `#name` identifier; any other name is
@@ -537,5 +559,49 @@ mod tests {
         let second = emit_scene(&ast);
         assert_eq!(first, expected);
         assert_eq!(first, second);
+    }
+
+    fn document_with(patches: Vec<BsnPatch>) -> SceneBsnAst {
+        let mut ast = SceneBsnAst::default();
+        let patches = patches
+            .into_iter()
+            .map(|patch| ast.world.spawn(patch).id())
+            .collect();
+        let entity = ast.world.spawn(BsnPatches(patches)).id();
+        ast.roots.push(entity);
+        ast
+    }
+
+    #[test]
+    fn checked_emit_returns_the_text_of_a_document_that_reads_back() {
+        let ast = document_with(vec![
+            BsnPatch::Name("Lamp".into()),
+            BsnPatch::Struct(BsnStructData {
+                type_path: "test::Glow".into(),
+                fields: BsnStructFields(vec![BsnField {
+                    name: "power".into(),
+                    value: BsnValue::Int(3),
+                }]),
+            }),
+        ]);
+
+        assert_eq!(emit_scene_checked(&ast).ok(), Some(emit_scene(&ast)));
+    }
+
+    #[test]
+    fn checked_emit_refuses_a_document_whose_text_does_not_read_back() {
+        let ast = document_with(vec![BsnPatch::Struct(BsnStructData {
+            type_path: String::new(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "0".into(),
+                value: BsnValue::Int(1),
+            }]),
+        })]);
+
+        let refused = emit_scene_checked(&ast).expect_err("the text does not parse");
+        assert!(
+            refused.to_string().contains("does not parse back"),
+            "{refused}"
+        );
     }
 }

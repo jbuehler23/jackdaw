@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::binary::{self, BinaryError};
 use crate::header::read_asset_header;
-use crate::{BsnLoadError, SceneBsnAst, emit_scene, parse_bsn_text};
+use crate::{BsnLoadError, SceneBsnAst, UnparsableEmit, emit_scene, parse_bsn_text, parse_emitted};
 
 /// The extension a text document carries.
 pub const TEXT_EXTENSION: &str = "bsn";
@@ -57,6 +57,8 @@ pub enum DocumentError {
     Binary(PathBuf, BinaryError),
     #[error("{} holds text that is not UTF-8", .0.display())]
     NotUtf8(PathBuf),
+    #[error("refusing to write {}: {}", .0.display(), .1)]
+    Unparsable(PathBuf, UnparsableEmit),
     #[error("refusing to convert {}: {} is already on disk", .1.display(), .0.display())]
     TwinExists(PathBuf, PathBuf),
     #[error("refusing to export {}: {} sits inside it", .1.display(), .0.display())]
@@ -216,15 +218,9 @@ pub fn convert_to_text(path: &Path) -> Result<PathBuf, DocumentError> {
 
 fn convert(path: &Path, to: DocumentForm) -> Result<PathBuf, DocumentError> {
     let document = read_document(path)?;
-    let (target, bytes) = match to {
-        DocumentForm::Binary => (
-            binary_twin(path),
-            binary::encode(&document.ast, document.preamble.as_deref()),
-        ),
-        DocumentForm::Text => (
-            text_twin(path),
-            document_as_text(&document.ast, document.preamble.as_deref()).into_bytes(),
-        ),
+    let target = match to {
+        DocumentForm::Binary => binary_twin(path),
+        DocumentForm::Text => text_twin(path),
     };
     if document.form == to && target == path {
         return Ok(target);
@@ -232,6 +228,15 @@ fn convert(path: &Path, to: DocumentForm) -> Result<PathBuf, DocumentError> {
     if target != path && target.exists() {
         return Err(DocumentError::TwinExists(target, path.to_path_buf()));
     }
+    let bytes = match to {
+        DocumentForm::Binary => binary::encode(&document.ast, document.preamble.as_deref()),
+        DocumentForm::Text => {
+            let text = document_as_text(&document.ast, document.preamble.as_deref());
+            parse_emitted(&text)
+                .map_err(|err| DocumentError::Unparsable(path.to_path_buf(), err))?;
+            text.into_bytes()
+        }
+    };
     std::fs::write(&target, bytes).map_err(|err| DocumentError::Write(target.clone(), err))?;
     if target != path {
         std::fs::remove_file(path).map_err(|err| DocumentError::Write(path.to_path_buf(), err))?;

@@ -241,6 +241,10 @@ pub fn write_graph_file(world: &mut World) -> Option<PathBuf> {
             &body,
         )
     };
+    if let Err(err) = jackdaw_bsn::parse_emitted(&text) {
+        warn!("could not write {}: {err}", file.display());
+        return None;
+    }
     if let Some(parent) = file.parent()
         && let Err(err) = std::fs::create_dir_all(parent)
     {
