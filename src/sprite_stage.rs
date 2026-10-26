@@ -54,8 +54,11 @@ impl Plugin for SpriteStagePlugin {
     }
 }
 
+/// The filter naming the root of an open 2D world scene.
+pub(crate) type OpenScene2dRoot = (With<Scene2dRoot>, Without<ChildOf>);
+
 /// Roots of the open 2D world scenes.
-pub(crate) type Scene2dRoots<'w, 's> = Query<'w, 's, (), (With<Scene2dRoot>, Without<ChildOf>)>;
+pub(crate) type Scene2dRoots<'w, 's> = Query<'w, 's, Entity, OpenScene2dRoot>;
 
 /// Whether `host`'s stage shows a 2D world scene: one is open and no authored
 /// UI is routed to the panel's camera. The sprite adapter owns such a stage,
@@ -70,7 +73,7 @@ pub(crate) fn shows_2d_world<'a>(
 
 /// Whether a panel shows a 2D world scene, given whether one is open and the
 /// cameras authored UI is routed to.
-fn world_on_panel<'a>(
+pub(crate) fn world_on_panel<'a>(
     open: bool,
     routed: impl IntoIterator<Item = &'a UiTargetCamera>,
     host: &Viewport2dPanelHost,
@@ -84,7 +87,7 @@ fn world_on_panel<'a>(
 /// rows.
 pub(crate) fn world_shows_2d_world(world: &World, host: &Viewport2dPanelHost) -> bool {
     let open = world
-        .try_query_filtered::<(), (With<Scene2dRoot>, Without<ChildOf>)>()
+        .try_query_filtered::<(), OpenScene2dRoot>()
         .is_some_and(|mut roots| roots.iter(world).next().is_some());
     let Some(mut routed) = world.try_query_filtered::<&UiTargetCamera, AuthoredUiSceneRoot>()
     else {

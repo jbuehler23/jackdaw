@@ -15,7 +15,7 @@ use crate::sprite_gizmo::{
 };
 use crate::util::OperatorResultExt as _;
 
-fn set_kind(app: &mut App, kind: &str, on: bool) {
+pub(crate) fn set_kind(app: &mut App, kind: &str, on: bool) {
     app.world_mut()
         .operator("canvas.snap")
         .param("kind", kind.to_string())
@@ -26,14 +26,14 @@ fn set_kind(app: &mut App, kind: &str, on: bool) {
 }
 
 /// Snapping on with only the kinds named.
-fn snap_only(app: &mut App, kinds: &[&str]) {
+pub(crate) fn snap_only(app: &mut App, kinds: &[&str]) {
     set_kind(app, "enabled", true);
-    for kind in ["pixel", "grid", "sprite_edges"] {
+    for kind in ["pixel", "grid", "sprite_edges", "guides"] {
         set_kind(app, kind, kinds.contains(&kind));
     }
 }
 
-fn highlights(app: &mut App) -> Vec<CanvasAxis> {
+pub(crate) fn highlights(app: &mut App) -> Vec<CanvasAxis> {
     let mut axes: Vec<CanvasAxis> = app
         .world_mut()
         .query::<&SnapHighlight>()
@@ -184,14 +184,17 @@ fn the_snap_menu_offers_the_world_scenes_kinds() {
         .iter()
         .filter_map(|(action, _)| action.split("kind=").nth(1))
         .collect();
-    assert_eq!(kinds, vec!["enabled", "pixel", "grid", "sprite_edges"]);
+    assert_eq!(
+        kinds,
+        vec!["enabled", "pixel", "guides", "grid", "sprite_edges"]
+    );
     assert!(rows.contains(&(
         "[x]op:canvas.snap?kind=sprite_edges".to_string(),
         "Sprite Edges".to_string()
     )));
 }
 
-fn handle(app: &mut App, kind: SpriteHandle) -> Vec2 {
+pub(crate) fn handle(app: &mut App, kind: SpriteHandle) -> Vec2 {
     app.world_mut()
         .query::<&SpriteGizmoHandle>()
         .iter(app.world())
@@ -266,7 +269,7 @@ fn a_scale_whose_edge_cannot_reach_the_line_does_not_land() {
     );
 }
 
-fn ghost(app: &mut App, parent: Entity, at: Vec3) -> Entity {
+pub(crate) fn ghost(app: &mut App, parent: Entity, at: Vec3) -> Entity {
     let missing = app
         .world()
         .resource::<AssetServer>()

@@ -33,7 +33,9 @@ use jackdaw_feathers::{
 use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
 use crate::{
-    canvas_snap::{CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp},
+    canvas_snap::{
+        CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp, GuideScene,
+    },
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
     prelude::*,
     selection::Selection,
@@ -788,28 +790,34 @@ fn park_ui_scene_roots(commands: &mut Commands, images: &mut Assets<Image>) -> E
 /// This is the reference-resolution contract: Bevy derives a UI root's layout
 /// viewport from its target's size, so sizing the image to `reference_size`
 /// makes authored layout compute at the resolution it was designed for whatever
-/// the dock leaf measures. With no UI scene open the stage fills its area and
+/// the dock leaf measures. With no UI scene on the panel the stage fills its area and
 /// the panel is a plain 1:1 viewport.
 ///
 /// A pending fit ([`request_2d_fit`]) lands here too, this being the one place
 /// holding both the reference size and the area's laid-out size.
 pub fn size_targets_to_reference(
-    roots: Query<&UiSceneRoot, AuthoredUiSceneRoot>,
+    roots: Query<(&UiSceneRoot, Option<&UiTargetCamera>), AuthoredUiSceneRoot>,
+    worlds: crate::sprite_stage::Scene2dRoots,
     mut hosts: Query<&mut Viewport2dPanelHost>,
     targets: Query<&RenderTarget, With<Viewport2dCamera>>,
     mut stages: Query<(&mut Node, &ComputedNode), With<Scene2dViewport>>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let reference = roots
+    let ui_reference = roots
         .iter()
         .next()
-        .map(|root| root.reference_size.max(UVec2::ONE));
+        .map(|(root, _)| root.reference_size.max(UVec2::ONE));
 
     for mut host in &mut hosts {
         let Ok((mut node, computed)) = stages.get_mut(host.stage) else {
             continue;
         };
+        // A panel showing the 2D world beside an open UI scene is a plain
+        // viewport, not the canvas.
+        let routed = roots.iter().filter_map(|(_, routed)| routed);
+        let reference = ui_reference
+            .filter(|_| !crate::sprite_stage::world_on_panel(!worlds.is_empty(), routed, &host));
 
         // The area's logical size, because a `Node` is written in logical
         // pixels and so is the view's zoom.
@@ -1165,9 +1173,10 @@ mod world_mapping_tests {
 /// measures against the same area size the canvas was laid into.
 fn sync_rulers(
     snap: Res<CanvasSnap>,
-    roots: Query<(Entity, &UiSceneRoot), AuthoredUiSceneRoot>,
+    scene: GuideScene,
     hosts: Query<&Viewport2dPanelHost>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
+    stages: Query<&ComputedNode, With<Scene2dViewport>>,
     rulers: Query<(Entity, &CanvasRuler, Option<&RulerMarks>, Option<&Children>)>,
     parts: Query<Entity, With<CanvasRulerPart>>,
     mark_nodes: Query<&RulerMarkNode>,
@@ -1190,13 +1199,6 @@ fn sync_rulers(
         return;
     }
 
-    // A malformed document holding several roots picks the lowest entity, the
-    // same one the guide operators write.
-    let reference = roots
-        .iter()
-        .min_by_key(|(entity, _)| *entity)
-        .map(|(_, root)| root.reference_size.max(UVec2::ONE));
-
     for (entity, ruler, drawn, children) in &rulers {
         let Ok(host) = hosts.get(ruler.host) else {
             continue;
@@ -1205,19 +1207,28 @@ fn sync_rulers(
             .get(host.area)
             .map(|area| area.size() * area.inverse_scale_factor())
             .unwrap_or(Vec2::ZERO);
-        let Some(reference) = reference else {
+        let Some(((_, space), stage)) = scene.open(Some(host)).zip(stages.get(host.stage).ok())
+        else {
             if drawn.is_some() {
                 despawn_ruler_marks(&mut commands, children, &mark_nodes);
                 commands.entity(entity).remove::<RulerMarks>();
             }
             continue;
         };
-        let origin = stage_origin(reference, host.view, area);
-        let (origin, length) = match ruler.axis {
-            CanvasAxis::Vertical => (origin.x, area.x),
-            CanvasAxis::Horizontal => (origin.y, area.y),
-        };
-        let marks = ruler_marks(origin, host.view.zoom, length);
+        let scale = crate::ui_stage::stage_scale(stage, host.target_size);
+        let (origin, step) = space.ruler_axis(host, area, scale, ruler.axis);
+        // Adding zero turns a negated zero into the "0" the label prints.
+        let marks: Vec<RulerMark> = ruler_marks(
+            origin,
+            step.abs(),
+            crate::ui_stage::axis_of(area, ruler.axis),
+        )
+        .into_iter()
+        .map(|mark| RulerMark {
+            authored: mark.authored * step.signum() + 0.0,
+            ..mark
+        })
+        .collect();
         let reading = RulerMarks(
             marks
                 .iter()
@@ -1279,48 +1290,55 @@ fn despawn_ruler_marks(
 fn sync_ruler_guide_marks(
     mut commands: Commands,
     snap: Res<CanvasSnap>,
-    scenes: Query<(Entity, &UiSceneRoot, Option<&CanvasGuides>), AuthoredUiSceneRoot>,
+    scene: GuideScene,
+    guides: Query<&CanvasGuides>,
     hosts: Query<&Viewport2dPanelHost>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
+    stages: Query<&ComputedNode, With<Scene2dViewport>>,
     rulers: Query<(Entity, &CanvasRuler)>,
     marks: Query<(Entity, &RulerGuideMark)>,
     mut nodes: Query<&mut Node>,
 ) {
-    let scene = scenes
-        .iter()
-        .min_by_key(|(entity, _, _)| *entity)
-        .filter(|_| snap.show_rulers && snap.show_guides);
-
     let mut wanted: Vec<(Entity, RulerGuideMark, f32)> = Vec::new();
-    if let Some((_, root, Some(guides))) = scene {
-        let reference = root.reference_size.max(UVec2::ONE);
-        for (ruler_entity, ruler) in &rulers {
-            let Ok(host) = hosts.get(ruler.host) else {
-                continue;
-            };
-            if host.mode != Viewport2dMode::Edit {
-                continue;
-            }
-            let area = areas
-                .get(host.area)
-                .map(|area| area.size() * area.inverse_scale_factor())
-                .unwrap_or(Vec2::ZERO);
-            let origin = stage_origin(reference, host.view, area);
-            let (origin, positions) = match ruler.axis {
-                CanvasAxis::Vertical => (origin.x, &guides.vertical),
-                CanvasAxis::Horizontal => (origin.y, &guides.horizontal),
-            };
-            for (index, at) in positions.iter().enumerate() {
-                wanted.push((
-                    ruler_entity,
-                    RulerGuideMark {
-                        host: ruler.host,
-                        axis: ruler.axis,
-                        index,
-                    },
-                    origin + at * host.view.zoom,
-                ));
-            }
+    for (ruler_entity, ruler) in rulers
+        .iter()
+        .filter(|_| snap.show_rulers && snap.show_guides)
+    {
+        let Ok(host) = hosts.get(ruler.host) else {
+            continue;
+        };
+        if host.mode != Viewport2dMode::Edit {
+            continue;
+        }
+        let Some((space, guides)) = scene
+            .open(Some(host))
+            .and_then(|(root, space)| Some((space, guides.get(root).ok()?)))
+        else {
+            continue;
+        };
+        let Ok(stage) = stages.get(host.stage) else {
+            continue;
+        };
+        let area = areas
+            .get(host.area)
+            .map(|area| area.size() * area.inverse_scale_factor())
+            .unwrap_or(Vec2::ZERO);
+        let scale = crate::ui_stage::stage_scale(stage, host.target_size);
+        let (origin, step) = space.ruler_axis(host, area, scale, ruler.axis);
+        let positions = match ruler.axis {
+            CanvasAxis::Vertical => &guides.vertical,
+            CanvasAxis::Horizontal => &guides.horizontal,
+        };
+        for (index, at) in positions.iter().enumerate() {
+            wanted.push((
+                ruler_entity,
+                RulerGuideMark {
+                    host: ruler.host,
+                    axis: ruler.axis,
+                    index,
+                },
+                origin + step * at,
+            ));
         }
     }
 

@@ -24,12 +24,12 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform, UiSystems, UiTransform},
 };
 use jackdaw_feathers::tokens;
-use jackdaw_scene_types::{Locked, Scene2dRoot};
+use jackdaw_scene_types::{CanvasGuides, Locked, Scene2dRoot};
 
 use crate::{
     EditorEntity,
     active_tool::ActiveTool,
-    canvas_snap::CanvasSnap,
+    canvas_snap::{CanvasSnap, GuideScene, GuideSpace},
     commands::{CommandGroup, CommandHistory, EditorCommand, SetTransform},
     gizmos::MIN_SCALE,
     keybind_focus::KeybindFocus,
@@ -38,8 +38,8 @@ use crate::{
     snapping::SnapSettings,
     sprite_snap::{SpriteLanding, SpriteSnapRules, SpriteSnapTargets, land},
     sprite_stage::{
-        Scene2dRoots, SpritePixels, SpritePress, in_2d_scene, shows_2d_world, sprite_local_rect,
-        sprite_world_corners, stage_world_point,
+        OpenScene2dRoot, Scene2dRoots, SpritePixels, SpritePress, in_2d_scene, shows_2d_world,
+        sprite_local_rect, sprite_world_corners, stage_world_point,
     },
     ui_stage::{
         CanvasAxis, EDGE_SNAP_PIXELS, HighlightLine, stage_pixels_per_target_pixel,
@@ -520,14 +520,25 @@ fn on_handle_press(mut event: On<PointerPress>, handles: Query<(), With<SpriteGi
     }
 }
 
-fn on_drag_start(mut event: On<PointerDragStart>, targets: GrabTargets, mut commands: Commands) {
+fn on_drag_start(
+    mut event: On<PointerDragStart>,
+    targets: GrabTargets,
+    scene: GuideScene,
+    mut commands: Commands,
+) {
     let target = event.event_target();
     let Some((host, kind)) = targets.grab(target, event.button) else {
         return;
     };
     event.propagate(false);
+    let guides = targets
+        .hosts
+        .get(host)
+        .ok()
+        .and_then(|(_, panel)| scene.open(Some(panel)))
+        .and_then(|(root, space)| (space == GuideSpace::World).then_some(root));
     commands.queue(move |world: &mut World| {
-        let drag = begin_drag(world, target, host, kind);
+        let drag = begin_drag(world, target, host, kind, guides);
         world.resource_mut::<SpriteManipulation>().drag = drag;
     });
 }
@@ -627,11 +638,16 @@ fn sprite_bounds(world: &World, entity: Entity) -> Option<Rect> {
     ))
 }
 
-/// The edges and centres of the open 2D world scene's visible sprites, less
-/// the `dragged` ones and everything they carry.
-fn snap_targets(world: &World, dragged: &HashSet<Entity>) -> SpriteSnapTargets {
+/// The lines of the open 2D world scene a drag can land on: the edges and
+/// centres of its visible sprites, less the `dragged` ones and everything they
+/// carry, and the guides on `guides`, the root the drag's panel draws them for.
+fn snap_targets(
+    world: &World,
+    dragged: &HashSet<Entity>,
+    guides: Option<Entity>,
+) -> SpriteSnapTargets {
     let mut stack: Vec<Entity> = world
-        .try_query_filtered::<Entity, (With<Scene2dRoot>, Without<ChildOf>)>()
+        .try_query_filtered::<Entity, OpenScene2dRoot>()
         .map(|mut roots| roots.iter(world).collect())
         .unwrap_or_default();
     let mut rects = Vec::new();
@@ -654,7 +670,12 @@ fn snap_targets(world: &World, dragged: &HashSet<Entity>) -> SpriteSnapTargets {
             rects.push(rect);
         }
     }
-    SpriteSnapTargets::from_rects(rects)
+    let mut targets = SpriteSnapTargets::from_rects(rects);
+    if let Some(guides) = guides.and_then(|root| world.get::<CanvasGuides>(root)) {
+        targets.guide_x.clone_from(&guides.vertical);
+        targets.guide_y.clone_from(&guides.horizontal);
+    }
+    targets
 }
 
 /// What a drag of `kind` on `items` can land on: nothing for a rotate.
@@ -663,13 +684,14 @@ fn gather_snap(
     kind: SpriteHandle,
     items: &[DragItem],
     primary: Option<Entity>,
+    guides: Option<Entity>,
 ) -> Option<DragSnap> {
     let dragged: HashSet<Entity> = items.iter().map(|item| item.entity).collect();
     match kind {
         SpriteHandle::Rotate => None,
         SpriteHandle::Scale(x, y) => Some(DragSnap::Scale {
             side: [x, y],
-            targets: snap_targets(world, &dragged),
+            targets: snap_targets(world, &dragged, guides),
         }),
         SpriteHandle::Body | SpriteHandle::AxisX | SpriteHandle::AxisY => {
             let moving_primary = primary.filter(|&primary| {
@@ -692,7 +714,7 @@ fn gather_snap(
                     .filter_map(|item| sprite_bounds(world, item.entity))
                     .reduce(|a, b| a.union(b)),
                 anchor,
-                targets: snap_targets(world, &dragged),
+                targets: snap_targets(world, &dragged, guides),
             })
         }
     }
@@ -731,6 +753,7 @@ fn begin_drag(
     target: Entity,
     host: Entity,
     kind: SpriteHandle,
+    guides: Option<Entity>,
 ) -> Option<SpriteDrag> {
     let selection = world.get_resource::<Selection>()?;
     let items = movable_items(world, &selection.entities);
@@ -755,7 +778,7 @@ fn begin_drag(
             })
         }
     };
-    let snap = gather_snap(world, kind, &items, selection.primary());
+    let snap = gather_snap(world, kind, &items, selection.primary(), guides);
     Some(SpriteDrag {
         target,
         host,

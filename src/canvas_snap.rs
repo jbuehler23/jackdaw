@@ -5,16 +5,22 @@
 
 use std::path::PathBuf;
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*, ui::UiTargetCamera};
 use jackdaw_api::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use jackdaw_scene_types::CanvasGuides;
+use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
 use crate::commands::{CommandHistory, EditorCommand, SetCanvasGuides};
+use crate::prefab::AuthoredUiSceneRoot;
 use crate::project::ProjectRoot;
 use crate::project_settings::{Section, load_section, store_section};
-use crate::ui_stage::CanvasAxis;
+use crate::sprite_snap::SpriteSnapRules;
+use crate::sprite_stage::{Scene2dRoots, world_on_panel};
+use crate::ui_stage::{CanvasAxis, axis_of};
+use crate::viewport_2d::{
+    FrontedViewport, Viewport2dPanelHost, stage_origin, world_to_target_pixel,
+};
 
 /// The settings-file key the canvas settings live under.
 const CANVAS_SECTION: &str = "canvas";
@@ -34,7 +40,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<CanvasGuideRemoveOp>();
 }
 
-/// How near, in authored pixels, a position has to be to a guide to name it.
+/// How near, in guide units, a position has to be to a guide to name it.
 pub(crate) const GUIDE_MATCH: f32 = 0.5;
 
 /// One switch on the canvas's snapping: the master, the pixel rounding,
@@ -122,14 +128,13 @@ impl CanvasSnapKind {
     /// canvas (not `world`).
     pub fn applies(self, world: bool) -> bool {
         match self {
-            Self::Enabled | Self::Pixel => true,
+            Self::Enabled | Self::Pixel | Self::Guides => true,
             Self::Grid | Self::SpriteEdges => world,
             Self::Parent
             | Self::PercentLines
             | Self::SiblingSides
             | Self::SiblingCenters
-            | Self::OtherNodes
-            | Self::Guides => !world,
+            | Self::OtherNodes => !world,
         }
     }
 }
@@ -202,6 +207,12 @@ impl CanvasSnap {
             CanvasSnapKind::Grid => self.grid,
             CanvasSnapKind::SpriteEdges => self.sprite_edges,
         }
+    }
+
+    /// Whether a drag lands on the scene's guides: they are offered and
+    /// drawn. A hidden guide is not a line to aim at.
+    pub fn snaps_to_guides(&self) -> bool {
+        self.guides && self.show_guides
     }
 
     /// Whether a gesture snaps at all: the master, inverted by Ctrl for the
@@ -328,7 +339,7 @@ pub(crate) fn canvas_guides(
     OperatorResult::Finished
 }
 
-/// Add a guide to the open UI scene, or remove the one nearest a position.
+/// Add a guide to the open scene, or remove the one nearest a position.
 /// One history entry per edit, and none when nothing changes.
 fn edit_guides(world: &mut World, root: Entity, axis: CanvasAxis, position: f32, add: bool) {
     let before = world.get::<CanvasGuides>(root).cloned();
@@ -410,17 +421,138 @@ fn record_guides(
         .push_executed(Box::new(command));
 }
 
-/// The open UI scene's root, or `None` when no UI scene is open. A
-/// malformed document holding several picks the lowest entity.
-fn guide_root(roots: &Query<Entity, crate::prefab::AuthoredUiSceneRoot>) -> Option<Entity> {
-    roots.iter().min()
+/// What a scene's guides are measured in: a UI canvas's authored pixels from
+/// its top-left corner (y down), or a 2D world scene's world units (y up).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum GuideSpace {
+    /// A UI canvas of this reference size.
+    Canvas(UVec2),
+    /// A 2D world scene, read through each panel's view.
+    World,
 }
 
-/// Draw a guide down or across the open UI scene's canvas.
+impl GuideSpace {
+    /// How positions on `axis` map onto `host`'s render target: position `at`
+    /// shows at target pixel `origin + step * at`, with `step` negative where
+    /// positions grow against the pixels.
+    pub(crate) fn target_axis(self, host: &Viewport2dPanelHost, axis: CanvasAxis) -> (f32, f32) {
+        match self {
+            Self::Canvas(_) => (0.0, 1.0),
+            Self::World => {
+                let zero = world_to_target_pixel(host.view, host.target_size, Vec2::ZERO);
+                let one = world_to_target_pixel(host.view, host.target_size, Vec2::ONE);
+                (axis_of(zero, axis), axis_of(one - zero, axis))
+            }
+        }
+    }
+
+    /// Where a guide at `at` on `axis` shows on `host`'s render target, in
+    /// target pixels from its top-left corner.
+    pub(crate) fn to_target(self, host: &Viewport2dPanelHost, axis: CanvasAxis, at: f32) -> f32 {
+        let (origin, step) = self.target_axis(host, axis);
+        origin + step * at
+    }
+
+    /// The guide position at target pixel `pixel` on `axis`: the inverse of
+    /// [`Self::to_target`].
+    pub(crate) fn position_at(
+        self,
+        host: &Viewport2dPanelHost,
+        axis: CanvasAxis,
+        pixel: f32,
+    ) -> f32 {
+        let (origin, step) = self.target_axis(host, axis);
+        (pixel - origin) / step
+    }
+
+    /// Where position zero sits along `axis`'s ruler inside an `area`-sized
+    /// stage area, in its logical pixels, and the signed logical pixels per
+    /// position, for a stage drawn at `scale` stage pixels per target pixel.
+    /// The guide lines' own mapping, moved to wherever the stage sits.
+    pub(crate) fn ruler_axis(
+        self,
+        host: &Viewport2dPanelHost,
+        area: Vec2,
+        scale: f32,
+        axis: CanvasAxis,
+    ) -> (f32, f32) {
+        let corner = match self {
+            Self::Canvas(reference) => stage_origin(reference, host.view, area),
+            Self::World => Vec2::ZERO,
+        };
+        let (origin, step) = self.target_axis(host, axis);
+        (axis_of(corner, axis) + origin * scale, step * scale)
+    }
+
+    /// The step a dragged guide lands on, if any. On a UI canvas it is the
+    /// panel's grid while the magnet is on, else a whole pixel; on a 2D world
+    /// scene it is the grid or pixel a sprite drag would land on.
+    pub(crate) fn lattice(self, kinds: &CanvasSnap, ctrl: bool, grid: f32) -> Option<f32> {
+        let magnet = kinds.magnet(ctrl);
+        match self {
+            Self::Canvas(_) => Some(if magnet && grid > 0.0 && grid.is_finite() {
+                grid
+            } else {
+                1.0
+            }),
+            Self::World => {
+                let rules = SpriteSnapRules::new(kinds, magnet, grid, 0.0);
+                rules.magnet.then_some(rules.grid.or(rules.pixel)).flatten()
+            }
+        }
+    }
+}
+
+/// The scenes a panel's guides can belong to.
+#[derive(SystemParam)]
+pub(crate) struct GuideScene<'w, 's> {
+    ui: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static UiSceneRoot,
+            Option<&'static UiTargetCamera>,
+        ),
+        AuthoredUiSceneRoot,
+    >,
+    world: Scene2dRoots<'w, 's>,
+}
+
+impl GuideScene<'_, '_> {
+    /// The root whose guides `host` draws and edits, and the space they are
+    /// measured in: the open 2D world scene's while the panel shows it, by the
+    /// same routing rule the sprite stage takes, else the open UI scene's.
+    /// With no panel, the UI scene's while one is open. A malformed document
+    /// holding several roots of a kind picks the lowest entity.
+    pub(crate) fn open(&self, host: Option<&Viewport2dPanelHost>) -> Option<(Entity, GuideSpace)> {
+        let world = self.world.iter().min();
+        let shows_world = match host {
+            Some(host) => world_on_panel(
+                world.is_some(),
+                self.ui.iter().filter_map(|(.., routed)| routed),
+                host,
+            ),
+            None => self.ui.is_empty(),
+        };
+        if shows_world {
+            return world.map(|root| (root, GuideSpace::World));
+        }
+        self.ui
+            .iter()
+            .min_by_key(|(entity, ..)| *entity)
+            .map(|(root, scene, _)| {
+                let reference = scene.reference_size.max(UVec2::ONE);
+                (root, GuideSpace::Canvas(reference))
+            })
+    }
+}
+
+/// Draw a guide down or across the open UI scene's canvas or 2D world scene.
 #[operator(
     id = "canvas.guide.add",
     label = "Add Canvas Guide",
-    description = "Add a guide line to the open UI scene's canvas.",
+    description = "Add a guide line to the open UI scene's canvas or 2D world scene.",
     allows_undo = false,
     params(
         axis(
@@ -429,16 +561,18 @@ fn guide_root(roots: &Query<Entity, crate::prefab::AuthoredUiSceneRoot>) -> Opti
         ),
         position(
             f64,
-            doc = "Where the line sits, in authored pixels from the canvas's top-left corner."
+            doc = "Where the line sits: authored pixels from a UI canvas's top-left corner, or world units (y up) in a 2D world scene."
         )
     )
 )]
 pub(crate) fn canvas_guide_add(
     params: In<OperatorParameters>,
-    roots: Query<Entity, crate::prefab::AuthoredUiSceneRoot>,
+    scene: GuideScene,
+    fronted: FrontedViewport,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some((root, axis, position)) = guide_call(&params, &roots, "canvas.guide.add") else {
+    let Some((root, axis, position)) = guide_call(&params, &scene, &fronted, "canvas.guide.add")
+    else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| edit_guides(world, root, axis, position, true));
@@ -449,7 +583,7 @@ pub(crate) fn canvas_guide_add(
 #[operator(
     id = "canvas.guide.remove",
     label = "Remove Canvas Guide",
-    description = "Remove the guide nearest a position on the open UI scene's canvas.",
+    description = "Remove the guide nearest a position on the open UI scene's canvas or 2D world scene.",
     allows_undo = false,
     params(
         axis(
@@ -458,16 +592,18 @@ pub(crate) fn canvas_guide_add(
         ),
         position(
             f64,
-            doc = "Where to look, in authored pixels from the canvas's top-left corner."
+            doc = "Where to look: authored pixels from a UI canvas's top-left corner, or world units (y up) in a 2D world scene."
         )
     )
 )]
 pub(crate) fn canvas_guide_remove(
     params: In<OperatorParameters>,
-    roots: Query<Entity, crate::prefab::AuthoredUiSceneRoot>,
+    scene: GuideScene,
+    fronted: FrontedViewport,
     mut commands: Commands,
 ) -> OperatorResult {
-    let Some((root, axis, position)) = guide_call(&params, &roots, "canvas.guide.remove") else {
+    let Some((root, axis, position)) = guide_call(&params, &scene, &fronted, "canvas.guide.remove")
+    else {
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| edit_guides(world, root, axis, position, false));
@@ -478,7 +614,8 @@ pub(crate) fn canvas_guide_remove(
 /// warned when the call names none of it.
 fn guide_call(
     params: &OperatorParameters,
-    roots: &Query<Entity, crate::prefab::AuthoredUiSceneRoot>,
+    scene: &GuideScene,
+    fronted: &FrontedViewport,
     id: &str,
 ) -> Option<(Entity, CanvasAxis, f32)> {
     let Some(axis) = params.as_str("axis").and_then(CanvasAxis::parse) else {
@@ -486,11 +623,11 @@ fn guide_call(
         return None;
     };
     let Some(position) = params.as_float("position") else {
-        warn!("{id}: 'position' must be a number of authored pixels");
+        warn!("{id}: 'position' must be a number");
         return None;
     };
-    let Some(root) = guide_root(roots) else {
-        warn!("{id}: no UI scene is open to draw a guide on");
+    let Some((root, _)) = scene.open(fronted.two_d_host()) else {
+        warn!("{id}: no UI or 2D world scene is open to draw a guide on");
         return None;
     };
     Some((root, axis, position as f32))

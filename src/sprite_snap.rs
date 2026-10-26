@@ -3,8 +3,8 @@
 //! the canvas settings, and [`jackdaw_snap::land_2d`] decides the landing,
 //! the same pipeline the UI canvas runs.
 //!
-//! Each axis is decided on its own, first match wins: another sprite's edge
-//! or centre within the radius, then the grid, then the pixel. Grid and pixel
+//! Each axis is decided on its own, first match wins: another sprite's edge,
+//! centre or a guide within the radius, then the grid, then the pixel. Grid and pixel
 //! both put the moving bounds' lower corner on their lattice, so a pixel snap
 //! keeps a sprite's texel edges on whole pixels whatever its anchor. With the
 //! magnet off nothing snaps.
@@ -22,12 +22,15 @@ pub const WORLD_UNITS_PER_PIXEL: f32 = 1.0;
 /// landed on and still count as on it.
 const REACH_TOLERANCE: f32 = 1e-3;
 
-/// The lines a drag can land on, per axis, in world units: the edges and
-/// centres of the sprites that are not moving.
+/// The lines a drag can land on, per axis, in world units.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpriteSnapTargets {
+    /// The edges and centres of the sprites that are not moving.
     pub x: Vec<f32>,
     pub y: Vec<f32>,
+    /// The scene's guides: the vertical ones' x and the horizontal ones' y.
+    pub guide_x: Vec<f32>,
+    pub guide_y: Vec<f32>,
 }
 
 impl SpriteSnapTargets {
@@ -52,6 +55,10 @@ pub struct SpriteSnapRules {
     pub grid: Option<f32>,
     /// The pixel in world units, when pixel snapping is on.
     pub pixel: Option<f32>,
+    /// Whether the other sprites' edges and centres are offered.
+    pub edges: bool,
+    /// Whether the scene's guides are offered.
+    pub guides: bool,
     /// How near, in world units, a line has to be to land on it.
     pub radius: f32,
 }
@@ -64,14 +71,17 @@ impl SpriteSnapRules {
             magnet,
             grid: (kinds.grid && grid > 0.0 && grid.is_finite()).then_some(grid),
             pixel: kinds.pixel.then_some(WORLD_UNITS_PER_PIXEL),
-            radius: if kinds.sprite_edges { radius } else { 0.0 },
+            edges: kinds.sprite_edges,
+            guides: kinds.snaps_to_guides(),
+            radius,
         }
     }
 
     /// These rules less the sprite edges, for a drag whose size is unknown.
+    /// The guides stay: they are lines in the world, not a sprite's size.
     pub fn without_edges(self) -> Self {
         Self {
-            radius: 0.0,
+            edges: false,
             ..self
         }
     }
@@ -82,9 +92,9 @@ impl SpriteSnapRules {
 pub struct SpriteLanding {
     /// How far the drag moves on top of the pointer's own delta.
     pub nudge: Vec2,
-    /// The x of the sprite line the x axis landed on, if any.
+    /// The x of the line the x axis landed on, if any.
     pub x: Option<f32>,
-    /// The y of the sprite line the y axis landed on, if any.
+    /// The y of the line the y axis landed on, if any.
     pub y: Option<f32>,
 }
 
@@ -121,21 +131,28 @@ pub fn land(
     if !rules.magnet {
         return SpriteLanding::default();
     }
+    let offered = |edges: &[f32], guides: &[f32]| -> Vec<f32> {
+        let edges = edges.iter().filter(|_| rules.edges);
+        let guides = guides.iter().filter(|_| rules.guides);
+        edges.chain(guides).copied().collect()
+    };
+    let x = offered(&targets.x, &targets.guide_x);
+    let y = offered(&targets.y, &targets.guide_y);
     let landing = land_2d(
         SnapRect {
             min: moving.min,
             max: moving.max,
         },
         axes,
-        &targets.x,
-        &targets.y,
+        &x,
+        &y,
         rules.radius,
         rules.grid.or(rules.pixel).unwrap_or(0.0),
     );
     SpriteLanding {
         nudge: landing.nudge,
-        x: landing.x.map(|won| targets.x[won.candidate]),
-        y: landing.y.map(|won| targets.y[won.candidate]),
+        x: landing.x.map(|won| x[won.candidate]),
+        y: landing.y.map(|won| y[won.candidate]),
     }
 }
 
@@ -148,6 +165,8 @@ mod tests {
             magnet: true,
             grid,
             pixel: pixel.then_some(1.0),
+            edges: true,
+            guides: true,
             radius: 3.0,
         }
     }
@@ -264,6 +283,31 @@ mod tests {
     }
 
     #[test]
+    fn edges_and_guides_are_offered_on_their_own() {
+        let targets = SpriteSnapTargets {
+            guide_x: vec![30.0],
+            ..SpriteSnapTargets::from_rects([square(Vec2::new(11.0, 50.0))])
+        };
+        let point = Rect::from_corners(Vec2::new(10.5, 0.0), Vec2::new(10.5, 0.0));
+        let edges_only = SpriteSnapRules {
+            guides: false,
+            ..rules(None, false)
+        };
+        assert_eq!(
+            land(point, BVec2::TRUE, &targets, &edges_only).x,
+            Some(11.0)
+        );
+        let anchored = rules(None, false).without_edges();
+        assert_eq!(land(point, BVec2::TRUE, &targets, &anchored).x, None);
+        let near_guide = Rect::from_corners(Vec2::new(29.0, 0.0), Vec2::new(29.0, 0.0));
+        assert_eq!(
+            land(near_guide, BVec2::TRUE, &targets, &anchored).x,
+            Some(30.0),
+            "a point still lands on a guide"
+        );
+    }
+
+    #[test]
     fn the_magnet_off_snaps_nothing() {
         let targets = SpriteSnapTargets::from_rects([square(Vec2::new(11.0, 11.0))]);
         let off = SpriteSnapRules {
@@ -282,6 +326,7 @@ mod tests {
         assert_eq!(on.grid, Some(8.0));
         assert_eq!(on.pixel, Some(WORLD_UNITS_PER_PIXEL));
         assert_eq!(on.radius, 4.0);
+        assert!(on.edges && on.guides);
         assert!(
             !SpriteSnapRules::new(&kinds, kinds.magnet(true), 8.0, 4.0).magnet,
             "the magnet modifier suspends snapping"
@@ -290,12 +335,25 @@ mod tests {
             enabled: false,
             grid: false,
             sprite_edges: false,
+            guides: false,
             ..kinds
         };
         let inverted = SpriteSnapRules::new(&off, off.magnet(true), 8.0, 4.0);
         assert!(inverted.magnet, "and turns it on while the master is off");
         assert_eq!(inverted.grid, None);
-        assert_eq!(inverted.radius, 0.0, "no sprite edges, no reach");
-        assert_eq!(on.without_edges().radius, 0.0);
+        assert!(!inverted.edges && !inverted.guides);
+        let anchored = on.without_edges();
+        assert!(
+            !anchored.edges && anchored.guides,
+            "an unknown size keeps the guides"
+        );
+        let hidden = CanvasSnap {
+            show_guides: false,
+            ..kinds
+        };
+        assert!(
+            !SpriteSnapRules::new(&hidden, true, 8.0, 4.0).guides,
+            "a hidden guide is not offered"
+        );
     }
 }

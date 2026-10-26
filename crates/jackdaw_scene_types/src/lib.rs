@@ -204,11 +204,12 @@ impl Default for UiSceneRoot {
 pub struct Scene2dRoot;
 
 /// Guide lines an author pulled off the 2D canvas's rulers, on the root
-/// of an authored UI scene.
+/// of an authored UI scene or of a 2D world scene.
 ///
-/// Positions are authored pixels from the canvas's top-left corner: the
-/// same measure the scene's own layout is written in, so a guide stays
-/// where the author put it whatever the panel is doing.
+/// On a UI scene positions are authored pixels from the canvas's top-left
+/// corner; on a 2D world scene they are world units, y up. Either way it is
+/// the measure the scene itself is written in, so a guide stays where the
+/// author put it whatever the panel is doing.
 ///
 /// Editor-only in effect -- a running game never reads it -- but it
 /// lives here rather than in the editor because the save filter drops

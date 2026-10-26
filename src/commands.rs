@@ -2476,7 +2476,7 @@ impl EditorCommand for SetUiNode {
     }
 }
 
-/// Undoable edit of one UI scene root's [`jackdaw_scene_types::CanvasGuides`].
+/// Undoable edit of one UI or 2D world scene root's [`jackdaw_scene_types::CanvasGuides`].
 /// `None` on either side means the component is absent, so the first guide
 /// inserts it and the last one takes it off again.
 pub struct SetCanvasGuides {
