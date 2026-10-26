@@ -8,12 +8,17 @@
 //! anim <base path> <strip path> <frames> <exact|loose>
 //! terrains <path> <tile width> <tile height> <count>
 //! fit <path> <tile width> <tile height> <sets> <mode> <covered> <total> <backgrounds>
+//! trace <path> <tile width> <tile height> <tile> <solid colour> <polygons> <max vertices> <half|traced>
 //! ```
 //!
 //! `terrains` analyses the sheet alone as a packed grid of that tile size and
 //! counts the terrains found. `fit` also fits layouts, counts the proposed
 //! sets, checks the mode (`Sides`, `Corners` or `CornersAndSides`) and
 //! coverage of the set with the most tiles, and counts background terrains.
+//! `trace` fits layouts, makes every terrain whose name has that colour word
+//! (`blue` matches `blue`, `blue 2`, ...) Solid, traces the sheet and checks
+//! the tile's polygon count, vertex count and whether the half-tile rule
+//! made its shape.
 //!
 //! Paths are relative to the directory; `#` starts a comment line. Lines of
 //! any other kind are skipped.
@@ -23,7 +28,7 @@ use std::path::{Path, PathBuf};
 use glam::UVec2;
 use jackdaw_tilemap::{
     GridLayout, LOOSE_FRAME_MATCH, RgbaImage, SheetInput, TerrainAnalysis, TileAddress,
-    detect_animation, detect_grid, find_terrains, fit_layouts,
+    detect_animation, detect_grid, find_terrains, fit_layouts, trace_proposal,
 };
 
 struct Sheet {
@@ -58,7 +63,7 @@ fn number(field: Option<&str>, line: &str) -> u32 {
 fn check(root: &Path, line: &str) {
     let mut fields = line.split_whitespace();
     let kind = fields.next().unwrap_or_default();
-    if !matches!(kind, "grid" | "anim" | "terrains" | "fit") {
+    if !matches!(kind, "grid" | "anim" | "terrains" | "fit" | "trace") {
         return;
     }
     let path = fields
@@ -69,7 +74,8 @@ fn check(root: &Path, line: &str) {
         "grid" => check_grid(&sheet, path, fields, line),
         "anim" => check_anim(root, &sheet, path, fields, line),
         "terrains" => check_terrains(&sheet, path, fields, line),
-        _ => check_fit(&sheet, path, fields, line),
+        "fit" => check_fit(&sheet, path, fields, line),
+        _ => check_trace(&sheet, path, fields, line),
     }
 }
 
@@ -197,6 +203,55 @@ fn check_fit<'a>(
     assert_eq!((main.covered as u32, main.total as u32), coverage, "{line}");
     let backgrounds = proposal.terrains.iter().filter(|t| t.background).count();
     assert_eq!(backgrounds, number(fields.next(), line) as usize, "{line}");
+}
+
+#[expect(clippy::print_stdout, reason = "reports each checked case")]
+fn check_trace<'a>(
+    sheet: &'a Sheet,
+    path: &'a str,
+    mut fields: impl Iterator<Item = &'a str>,
+    line: &str,
+) {
+    let input = packed_input(sheet, path, &mut fields, line);
+    let address = TileAddress {
+        sheet: 0,
+        tile: number(fields.next(), line),
+    };
+    let colour = fields.next().unwrap_or_default();
+    let found = find_terrains(&[input]);
+    print_terrains(path, &found);
+    let proposal = fit_layouts(&found, &[input]).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let solid: Vec<u8> = (found.terrains.iter())
+        .filter(|t| t.name.split(' ').nth(1) == Some(colour))
+        .map(|t| t.id)
+        .collect();
+    assert!(!solid.is_empty(), "no {colour} terrain: {line}");
+    let shapes = trace_proposal(&found, &[input], &proposal, |id| solid.contains(&id), &[])
+        .unwrap_or_else(|e| panic!("{path}: {e}"));
+    let fitted = (proposal.sets.iter())
+        .find_map(|s| Some((s.mode, s.tiles.iter().find(|t| t.address == address)?)));
+    println!(
+        "{path} tile {}: labels {:?}, fitted {:?}",
+        address.tile,
+        found.tile(address),
+        fitted.map(|(mode, t)| (mode, t.terrains))
+    );
+    let shape = shapes.get(&address).cloned().unwrap_or_default();
+    println!(
+        "{path} tile {}: solid {solid:?}, {} polygons, {} vertices, area {}, half {:?}: {:?}",
+        address.tile,
+        shape.polygons.len(),
+        shape.vertex_count(),
+        shape.area(),
+        shape.half_tile,
+        shape.polygons
+    );
+    let polygons = number(fields.next(), line) as usize;
+    assert_eq!(shape.polygons.len(), polygons, "{line}");
+    let most = number(fields.next(), line) as usize;
+    assert!(shape.vertex_count() <= most, "{line}");
+    let made_by = if shape.half_tile { "half" } else { "traced" };
+    assert_eq!(made_by, fields.next().unwrap_or_default(), "{line}");
 }
 
 #[test]
