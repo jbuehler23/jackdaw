@@ -10,9 +10,9 @@ use glam::UVec2;
 
 use crate::{
     AnimationStrip, FitError, GridLayout, LOOSE_FRAME_MATCH, LayoutTemplate, MatchMode, RgbaImage,
-    SheetInput, Stamp, TerrainAnalysis, TerrainId, TileAddress, TileKind, TilesetProposal,
-    detect_grid_shared, find_stamps, find_terrains, fit_layouts, pair_animations, reconcile,
-    trace_proposal,
+    SheetInput, Stamp, TerrainAnalysis, TerrainId, TileAddress, TileKind, TileShape,
+    TilesetProposal, detect_grid_shared, find_stamps, find_terrains, fit_layouts, pair_animations,
+    reconcile, trace_proposal,
 };
 
 /// Everything auto setup proposes for one import.
@@ -24,6 +24,8 @@ pub struct AutoSetup {
     pub analysis: TerrainAnalysis,
     pub proposal: TilesetProposal,
     pub stamps: Vec<Stamp>,
+    /// Collision shapes traced for the solid terrains asked for, by tile.
+    pub shapes: BTreeMap<TileAddress, TileShape>,
     pub report: SetupReport,
 }
 
@@ -34,8 +36,14 @@ pub enum SetupError {
     Fit(FitError),
     /// A sheet index that names no input; a pipeline bug, not bad input.
     UnknownSheet(usize),
-    /// A proposed terrain missing from the analysis.
+    /// A terrain missing from the analysis or the setup.
     UnknownTerrain(TerrainId),
+    /// No terrain set of the setup has this inner and outer terrain.
+    UnknownSet(TerrainId, TerrainId),
+    /// Every terrain id is taken; ids are never reused.
+    TooManyTerrains,
+    /// The input at this index repeats an earlier sheet name.
+    DuplicateSheet(usize),
 }
 
 impl fmt::Display for SetupError {
@@ -44,7 +52,12 @@ impl fmt::Display for SetupError {
             SetupError::NoGrid => write!(f, "no tile grid found in any sheet"),
             SetupError::Fit(e) => write!(f, "{e}"),
             SetupError::UnknownSheet(i) => write!(f, "sheet index {i} names no input"),
-            SetupError::UnknownTerrain(id) => write!(f, "terrain {id} is not in the analysis"),
+            SetupError::UnknownTerrain(id) => write!(f, "terrain {id} is not known"),
+            SetupError::UnknownSet(inner, outer) => {
+                write!(f, "no terrain set {inner} over {outer}")
+            }
+            SetupError::TooManyTerrains => write!(f, "no terrain ids left"),
+            SetupError::DuplicateSheet(i) => write!(f, "input {i} repeats a sheet name"),
         }
     }
 }
@@ -165,17 +178,17 @@ pub fn auto_setup(
     let proposal = fit_layouts(&analysis, &sheet_inputs)?;
     let stamps = find_stamps(&analysis, &sheet_inputs, &proposal)?;
     let proposal = reconcile(proposal, &stamps);
-    let collision = if solid.is_empty() {
-        None
+    let shapes = if solid.is_empty() {
+        BTreeMap::new()
     } else {
         let is_solid = |id: TerrainId| solid.contains(&id);
-        let shapes = trace_proposal(&analysis, &sheet_inputs, &proposal, is_solid, &[])?;
-        Some(CollisionReport {
-            solid: solid.to_vec(),
-            shapes: shapes.len(),
-            half_tiles: shapes.values().filter(|s| s.half_tile).count(),
-        })
+        trace_proposal(&analysis, &sheet_inputs, &proposal, is_solid, &[])?
     };
+    let collision = (!solid.is_empty()).then(|| CollisionReport {
+        solid: solid.to_vec(),
+        shapes: shapes.len(),
+        half_tiles: shapes.values().filter(|s| s.half_tile).count(),
+    });
 
     let input_name = |i: usize| {
         let (name, _) = inputs.get(i).ok_or(SetupError::UnknownSheet(i))?;
@@ -265,6 +278,7 @@ pub fn auto_setup(
         analysis,
         proposal,
         stamps,
+        shapes,
         report,
     })
 }

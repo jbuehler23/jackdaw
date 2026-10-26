@@ -40,7 +40,7 @@ use crate::layout_fit::check_inputs;
 use crate::terrain_find::{MIN_ALPHA, srgb_to_oklab};
 use crate::{
     FitError, MatchMode, Peer, SheetInput, TerrainAnalysis, TerrainId, TileAddress, TileKind,
-    TileLabels, TileTerrains, TilesetProposal,
+    TileTerrains, TilesetProposal,
 };
 
 /// Snap grid divisions per tile side.
@@ -130,15 +130,10 @@ pub fn solid_mask(
         return Ok(None);
     };
     let peers = peers.unwrap_or(&labels.terrains);
-    Ok(mask_of(
-        analysis,
-        inputs,
-        address,
-        labels,
-        peers,
-        &solid,
-        decor_solid,
-    ))
+    let palette = |id: TerrainId| Some((analysis.terrain(id)?.oklab, solid(id)));
+    let input = inputs.get(address.sheet);
+    let terrain = labels.kind == TileKind::Terrain;
+    Ok(input.and_then(|i| mask_of(i, address.tile, terrain, peers, &palette, decor_solid)))
 }
 
 /// Traces, simplifies and snaps the outer boundaries of `mask`.
@@ -173,6 +168,7 @@ pub fn trace_proposal(
 ) -> Result<BTreeMap<TileAddress, TileShape>, FitError> {
     check_inputs(analysis, inputs)?;
     let solid_decor: BTreeSet<&TileAddress> = solid_decor.iter().collect();
+    let palette = |id: TerrainId| Some((analysis.terrain(id)?.oklab, solid(id)));
     let mut fitted = BTreeMap::new();
     for set in &proposal.sets {
         for tile in &set.tiles {
@@ -194,18 +190,17 @@ pub fn trace_proposal(
             let (peers, mode) = fitted.get(&address).copied().unwrap_or(raw);
             let decor = solid_decor.contains(&address);
             let terrain = labels.kind == TileKind::Terrain && !decor;
-            if !decor && !(terrain && peers.peers.iter().any(|id| *id != 0 && solid(*id))) {
-                continue;
-            }
-            let Some(mask) = mask_of(analysis, inputs, address, labels, peers, &solid, decor)
-            else {
+            let Some(input) = inputs.get(sheet) else {
                 continue;
             };
-            let quadrants = terrain
-                .then(|| half_quadrants(&mask, peers, mode, &solid))
-                .flatten();
-            let shape = quadrants.map_or_else(|| trace_mask(&mask), quadrant_shape);
-            if !shape.is_empty() {
+            let tile = TileTrace {
+                tile: address.tile,
+                peers,
+                mode,
+                terrain,
+                decor_solid: decor,
+            };
+            if let Some(shape) = trace_tile(input, &tile, &palette) {
                 shapes.insert(address, shape);
             }
         }
@@ -213,27 +208,51 @@ pub fn trace_proposal(
     Ok(shapes)
 }
 
-fn mask_of(
-    analysis: &TerrainAnalysis,
-    inputs: &[SheetInput],
-    address: TileAddress,
-    labels: &TileLabels,
-    peers: &TileTerrains,
-    solid: &dyn Fn(TerrainId) -> bool,
-    decor_solid: bool,
-) -> Option<SolidMask> {
-    let input = inputs.get(address.sheet)?;
-    if address.tile >= input.layout.tile_count() {
+/// Terrain colour and whether it is Solid, by terrain id.
+pub(crate) type Palette<'a> = &'a dyn Fn(TerrainId) -> Option<(Vec3, bool)>;
+
+/// One tile to trace: its peers, the mode they are read in, whether it is a
+/// terrain tile and whether every opaque pixel is solid.
+pub(crate) struct TileTrace<'a> {
+    pub tile: u32,
+    pub peers: &'a TileTerrains,
+    pub mode: MatchMode,
+    pub terrain: bool,
+    pub decor_solid: bool,
+}
+
+/// The shape of one tile of `input`, `None` when nothing in it is solid;
+/// skips reading pixels when no peer is Solid.
+pub(crate) fn trace_tile(input: &SheetInput, t: &TileTrace, palette: Palette) -> Option<TileShape> {
+    let solid = |id: TerrainId| palette(id).is_some_and(|(_, s)| s);
+    let any_solid = t.peers.peers.iter().any(|id| *id != 0 && solid(*id));
+    if !t.decor_solid && !(t.terrain && any_solid) {
         return None;
     }
-    let (origin, size) = input.layout.tile_rect(address.tile);
+    let mask = mask_of(input, t.tile, t.terrain, t.peers, palette, t.decor_solid)?;
+    let quadrants = (t.terrain)
+        .then(|| half_quadrants(&mask, t.peers, t.mode, &solid))
+        .flatten();
+    let shape = quadrants.map_or_else(|| trace_mask(&mask), quadrant_shape);
+    (!shape.is_empty()).then_some(shape)
+}
+
+fn mask_of(
+    input: &SheetInput,
+    tile: u32,
+    terrain: bool,
+    peers: &TileTerrains,
+    palette: Palette,
+    decor_solid: bool,
+) -> Option<SolidMask> {
+    if tile >= input.layout.tile_count() {
+        return None;
+    }
+    let (origin, size) = input.layout.tile_rect(tile);
     let mut ids: Vec<TerrainId> = peers.peers.iter().copied().filter(|id| *id != 0).collect();
     ids.sort_unstable();
     ids.dedup();
-    let colours: Vec<(Vec3, bool)> = (ids.iter())
-        .filter_map(|id| Some((analysis.terrain(*id)?.oklab, solid(*id))))
-        .collect();
-    let terrain = labels.kind == TileKind::Terrain;
+    let colours: Vec<(Vec3, bool)> = ids.iter().filter_map(|id| palette(*id)).collect();
     if !decor_solid && !(terrain && colours.iter().any(|(_, s)| *s)) {
         return SolidMask::new(size, vec![false; size.x as usize * size.y as usize]);
     }
@@ -571,7 +590,7 @@ fn signed_area(ring: &[Vec2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FittedTile, GridLayout, ProposedSet, RgbaImage};
+    use crate::{FittedTile, GridLayout, ProposedSet, RgbaImage, TileLabels};
 
     /// A mask from rows top to bottom, `#` solid.
     fn mask(rows: &[&str]) -> SolidMask {

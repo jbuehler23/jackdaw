@@ -13,6 +13,7 @@ mod layout_fit;
 mod path;
 mod region_text;
 mod report;
+mod setup;
 mod sidecar;
 mod slice;
 mod solver;
@@ -36,6 +37,10 @@ pub use region_text::{
 pub use report::{
     AutoSetup, CollisionReport, SetReport, SetupError, SetupReport, SheetReport, StampReport,
     StripReport, TerrainReport, auto_setup,
+};
+pub use setup::{
+    CollisionMode, Provenance, Scope, SetupSet, SetupTerrain, SetupTile, TilesetSetup, Tracked,
+    rerun, reset_to_auto,
 };
 pub use sidecar::{
     LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
