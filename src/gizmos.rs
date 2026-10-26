@@ -84,7 +84,8 @@ const GIZMO_SCREEN_SCALE: f32 = 0.1;
 const INACTIVE_ALPHA: f32 = 0.15;
 const ROTATE_SENSITIVITY: f32 = 0.01;
 const SCALE_SENSITIVITY: f32 = 0.005;
-const MIN_SCALE: f32 = 0.01;
+/// The smallest scale a gizmo drag leaves on an axis.
+pub(crate) const MIN_SCALE: f32 = 0.01;
 const AXIS_HIT_DISTANCE: f32 = 35.0;
 /// Pixel radius around the projected gizmo center that grabs the uniform
 /// scale handle. Smaller than `AXIS_START_OFFSET` projected, so it never

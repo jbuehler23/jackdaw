@@ -41,6 +41,8 @@ struct Scene {
     tile: Entity,
     /// 20x20, centre-anchored at (100, 0).
     other: Entity,
+    /// 40x20, bottom-left anchored at (-100, 50).
+    corner: Entity,
 }
 
 fn world_app() -> (App, Scene) {
@@ -87,6 +89,14 @@ fn world_app() -> (App, Scene) {
         Anchor::CENTER,
         Vec3::new(100.0, 0.0, 0.0),
     );
+    let corner = sprite(
+        &mut app,
+        root,
+        "Corner",
+        Sprite::from_color(Color::WHITE, Vec2::new(40.0, 20.0)),
+        Anchor::BOTTOM_LEFT,
+        Vec3::new(-100.0, 50.0, 0.0),
+    );
     jackdaw::selection::clear_selection_in_world(app.world_mut());
     settle(&mut app);
     (
@@ -96,6 +106,7 @@ fn world_app() -> (App, Scene) {
             root,
             tile,
             other,
+            corner,
         },
     )
 }
@@ -205,6 +216,10 @@ fn redo(app: &mut App) {
 
 fn near(a: Vec3, b: Vec3) -> bool {
     (a - b).length() < 1e-3
+}
+
+fn angle_of(transform: &Transform) -> f32 {
+    transform.rotation.to_euler(EulerRot::ZYX).0.to_degrees()
 }
 
 fn available(app: &mut App, id: &'static str) -> bool {
@@ -715,4 +730,323 @@ fn the_arrows_nudge_a_sprite_along_world_y_not_z() {
         transform(&app, scene.tile).translation,
         Vec3::new(VIEW.grid, 1.0, 0.0)
     ));
+}
+
+#[test]
+fn a_rotate_drag_turns_the_sprite_about_its_anchor() {
+    let (mut app, scene) = world_app();
+    select(&mut app, Vec2::new(-90.0, 60.0), ActiveTool::Rotate);
+    let anchor = Vec2::new(-100.0, 50.0);
+    let knob = handle(&mut app, SpriteHandle::Rotate);
+    let reach = (knob - anchor).length();
+    assert!(
+        (knob - anchor).normalize().abs_diff_eq(Vec2::Y, 1e-3),
+        "the knob sits above the anchor"
+    );
+
+    drag(&mut app, knob, anchor + Vec2::new(-reach, 0.0), "");
+    let turned = transform(&app, scene.corner);
+    assert!((angle_of(&turned) - 90.0).abs() < 1e-2, "a quarter turn");
+    assert!(
+        near(turned.translation, anchor.extend(0.0)),
+        "the anchor holds"
+    );
+    let far_corner = app
+        .world()
+        .get::<GlobalTransform>(scene.corner)
+        .expect("propagated")
+        .transform_point(Vec3::new(40.0, 0.0, 0.0));
+    assert!(near(far_corner, Vec3::new(-100.0, 90.0, 0.0)));
+}
+
+#[test]
+fn ctrl_turns_in_rotate_increments() {
+    let (mut app, scene) = world_app();
+    select(&mut app, Vec2::ZERO, ActiveTool::Rotate);
+    let knob = handle(&mut app, SpriteHandle::Rotate);
+    let reach = knob.length();
+    let at = Vec2::from_angle(140f32.to_radians()) * reach;
+    drag(&mut app, knob, at, "ctrl");
+    let angle = angle_of(&transform(&app, scene.tile));
+    assert!(
+        (angle - 45.0).abs() < 1e-2,
+        "50 degrees lands on 45: {angle}"
+    );
+}
+
+#[test]
+fn a_scale_drag_holds_the_opposite_edge() {
+    let (mut app, scene) = world_app();
+    select(&mut app, Vec2::ZERO, ActiveTool::Scale);
+    let right = handle(&mut app, SpriteHandle::Scale(1, 0));
+    assert!(right.abs_diff_eq(Vec2::new(10.0, 0.0), 1e-3));
+
+    drag(&mut app, right, Vec2::new(20.0, 3.0), "");
+    let scaled = transform(&app, scene.tile);
+    assert!(near(scaled.scale, Vec3::new(1.5, 1.0, 1.0)));
+    assert!(near(scaled.translation, Vec3::new(5.0, 0.0, 0.0)));
+}
+
+#[test]
+fn shift_scales_uniformly_and_ctrl_in_increments() {
+    let (mut app, scene) = world_app();
+    select(&mut app, Vec2::ZERO, ActiveTool::Scale);
+    let corner = handle(&mut app, SpriteHandle::Scale(1, 1));
+    drag(&mut app, corner, Vec2::new(20.0, 12.0), "shift");
+    let scaled = transform(&app, scene.tile);
+    assert!(near(scaled.scale, Vec3::new(1.3, 1.3, 1.0)), "{scaled:?}");
+    assert!(near(scaled.translation, Vec3::new(3.0, 3.0, 0.0)));
+
+    undo(&mut app);
+    let right = handle(&mut app, SpriteHandle::Scale(1, 0));
+    drag(&mut app, right, Vec2::new(20.6, 0.0), "ctrl");
+    let scaled = transform(&app, scene.tile);
+    assert!(near(scaled.scale, Vec3::new(1.5, 1.0, 1.0)), "{scaled:?}");
+}
+
+fn set_transform(app: &mut App, entity: Entity, transform: Transform) {
+    *app.world_mut()
+        .get_mut::<Transform>(entity)
+        .expect("the sprite has a transform") = transform;
+    settle(app);
+}
+
+fn world_x_axis(app: &App, entity: Entity) -> Vec2 {
+    app.world()
+        .get::<GlobalTransform>(entity)
+        .expect("propagated")
+        .affine()
+        .matrix3
+        .x_axis
+        .truncate()
+}
+
+#[test]
+fn a_move_takes_a_selection_whose_primary_is_no_sprite() {
+    let (mut app, scene) = world_app();
+    let (group, kid) = group_with_kid(&mut app, scene.root);
+    app.world_mut().insert_resource(ActiveTool::Translate);
+    jackdaw::selection::select_only(app.world_mut(), kid);
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .entities
+        .push(group);
+    settle(&mut app);
+    drag(&mut app, Vec2::new(-98.0, 52.0), Vec2::new(-68.0, 42.0), "");
+    assert!(near(world_position(&app, kid), Vec3::new(-70.0, 40.0, 0.0)));
+}
+
+#[test]
+fn a_move_takes_a_selection_whose_primary_image_never_loaded() {
+    let (mut app, scene) = world_app();
+    let missing = app
+        .world()
+        .resource::<AssetServer>()
+        .load::<Image>("no/such/image.png");
+    let ghost = sprite(
+        &mut app,
+        scene.root,
+        "Ghost",
+        Sprite {
+            image: missing,
+            ..default()
+        },
+        Anchor::CENTER,
+        Vec3::new(-150.0, -100.0, 0.0),
+    );
+    select(&mut app, Vec2::ZERO, ActiveTool::Translate);
+    app.world_mut()
+        .resource_mut::<Selection>()
+        .entities
+        .push(ghost);
+    settle(&mut app);
+    drag(&mut app, Vec2::new(2.0, 3.0), Vec2::new(32.0, -17.0), "");
+    assert!(near(
+        transform(&app, scene.tile).translation,
+        Vec3::new(30.0, -20.0, 0.0)
+    ));
+    assert!(near(
+        transform(&app, ghost).translation,
+        Vec3::new(-120.0, -120.0, 0.0)
+    ));
+}
+
+#[test]
+fn a_scale_never_reaches_zero_and_flips_past_it() {
+    let (mut app, scene) = world_app();
+    select(&mut app, Vec2::ZERO, ActiveTool::Scale);
+    let right = handle(&mut app, SpriteHandle::Scale(1, 0));
+
+    drag(&mut app, right, Vec2::new(-10.0, 0.0), "");
+    let onto_held = transform(&app, scene.tile).scale.x;
+    assert!((onto_held - 0.01).abs() < 1e-6, "floored: {onto_held}");
+    undo(&mut app);
+
+    drag(&mut app, right, Vec2::new(-30.0, 0.0), "");
+    let flipped = transform(&app, scene.tile).scale.x;
+    assert!((flipped + 1.0).abs() < 1e-3, "flipped: {flipped}");
+    undo(&mut app);
+
+    drag(&mut app, right, Vec2::new(-9.6, 0.0), "ctrl");
+    let snapped = transform(&app, scene.tile).scale.x;
+    assert!(
+        (snapped - 0.01).abs() < 1e-6,
+        "a step to zero floors: {snapped}"
+    );
+}
+
+#[test]
+fn ctrl_steps_only_the_axes_a_scale_handle_drives() {
+    let (mut app, scene) = world_app();
+    set_transform(
+        &mut app,
+        scene.tile,
+        Transform::from_scale(Vec3::new(1.0, 1.37, 1.37)),
+    );
+    select(&mut app, Vec2::ZERO, ActiveTool::Scale);
+    let right = handle(&mut app, SpriteHandle::Scale(1, 0));
+    drag(&mut app, right, right + Vec2::new(10.6, 0.0), "ctrl");
+    assert!(near(
+        transform(&app, scene.tile).scale,
+        Vec3::new(1.5, 1.37, 1.37)
+    ));
+
+    undo(&mut app);
+    set_transform(
+        &mut app,
+        scene.tile,
+        Transform::from_scale(Vec3::new(1.0, 1.0, 1.37)),
+    );
+    let corner = handle(&mut app, SpriteHandle::Scale(1, 1));
+    drag(&mut app, corner, Vec2::new(20.6, 15.4), "ctrl");
+    assert!(near(
+        transform(&app, scene.tile).scale,
+        Vec3::new(1.5, 1.3, 1.37)
+    ));
+}
+
+#[test]
+fn shift_and_ctrl_step_the_uniform_factor_and_keep_proportions() {
+    let (mut app, scene) = world_app();
+    set_transform(
+        &mut app,
+        scene.tile,
+        Transform::from_scale(Vec3::new(2.0, 1.0, 1.0)),
+    );
+    select(&mut app, Vec2::ZERO, ActiveTool::Scale);
+    let corner = handle(&mut app, SpriteHandle::Scale(1, 1));
+    assert!(corner.abs_diff_eq(Vec2::new(20.0, 10.0), 1e-3));
+    drag(&mut app, corner, Vec2::new(41.2, 20.6), "shift,ctrl");
+    assert!(near(
+        transform(&app, scene.tile).scale,
+        Vec3::new(3.0, 1.5, 1.0)
+    ));
+}
+
+#[test]
+fn a_rotate_follows_the_pointer_under_a_mirrored_parent() {
+    let (mut app, scene) = world_app();
+    let mirror = app
+        .world_mut()
+        .spawn((
+            Name::new("Mirror"),
+            Transform::from_xyz(-100.0, -80.0, 0.0).with_scale(Vec3::new(-1.0, 1.0, 1.0)),
+            ChildOf(scene.root),
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), mirror);
+    let flip = sprite(
+        &mut app,
+        mirror,
+        "Flip",
+        Sprite::from_color(Color::WHITE, Vec2::splat(20.0)),
+        Anchor::CENTER,
+        Vec3::ZERO,
+    );
+    select(&mut app, Vec2::new(-100.0, -80.0), ActiveTool::Rotate);
+    assert!(world_x_axis(&app, flip).abs_diff_eq(Vec2::NEG_X, 1e-3));
+    let pivot = Vec2::new(-100.0, -80.0);
+    let knob = handle(&mut app, SpriteHandle::Rotate);
+    let reach = (knob - pivot).length();
+    drag(&mut app, knob, pivot + Vec2::new(-reach, 0.0), "");
+    let axis = world_x_axis(&app, flip);
+    assert!(
+        axis.abs_diff_eq(Vec2::NEG_Y, 1e-3),
+        "a quarter turn counter-clockwise on screen: {axis}"
+    );
+}
+
+#[test]
+fn ctrl_lands_the_rotation_itself_on_an_increment() {
+    let (mut app, scene) = world_app();
+    set_transform(
+        &mut app,
+        scene.tile,
+        Transform::from_rotation(Quat::from_rotation_z(10f32.to_radians())),
+    );
+    select(&mut app, Vec2::ZERO, ActiveTool::Rotate);
+    for (reach_to, lands_on) in [(91.0_f32, 0.0_f32), (106.0, 15.0), (133.0, 45.0)] {
+        let knob = handle(&mut app, SpriteHandle::Rotate);
+        let at = Vec2::from_angle(reach_to.to_radians()) * knob.length();
+        drag(&mut app, knob, at, "ctrl");
+        let angle = angle_of(&transform(&app, scene.tile));
+        assert!(
+            (angle - lands_on).abs() < 1e-2,
+            "from 10 to {} lands on {lands_on}: {angle}",
+            reach_to - 90.0
+        );
+        undo(&mut app);
+    }
+}
+
+#[test]
+fn rotate_and_scale_take_the_whole_selection_about_the_primary() {
+    let (mut app, scene) = world_app();
+    let third = sprite(
+        &mut app,
+        scene.root,
+        "Third",
+        Sprite::from_color(Color::WHITE, Vec2::splat(20.0)),
+        Anchor::CENTER,
+        Vec3::new(0.0, 100.0, 0.0),
+    );
+    select(&mut app, Vec2::new(100.0, 0.0), ActiveTool::Translate);
+    pointer(&mut app, Vec2::new(0.0, 100.0), "click", "shift");
+    pointer(&mut app, Vec2::ZERO, "click", "shift");
+    assert_eq!(
+        app.world().resource::<Selection>().entities,
+        vec![scene.other, third, scene.tile]
+    );
+    app.world_mut().insert_resource(ActiveTool::Rotate);
+    settle(&mut app);
+    let entries = history_len(&app);
+
+    let knob = handle(&mut app, SpriteHandle::Rotate);
+    drag(&mut app, knob, Vec2::new(-knob.length(), 0.0), "");
+    assert_eq!(history_len(&app), entries + 1, "one entry for the three");
+    for (entity, at) in [
+        (scene.tile, Vec3::ZERO),
+        (scene.other, Vec3::new(0.0, 100.0, 0.0)),
+        (third, Vec3::new(-100.0, 0.0, 0.0)),
+    ] {
+        let turned = transform(&app, entity);
+        assert!(near(turned.translation, at), "{turned:?}");
+        assert!((angle_of(&turned) - 90.0).abs() < 1e-2);
+    }
+
+    undo(&mut app);
+    app.world_mut().insert_resource(ActiveTool::Scale);
+    settle(&mut app);
+    let corner = handle(&mut app, SpriteHandle::Scale(1, 1));
+    drag(&mut app, corner, Vec2::new(20.0, 12.0), "shift");
+    assert_eq!(history_len(&app), entries + 1);
+    for (entity, at) in [
+        (scene.tile, Vec3::new(3.0, 3.0, 0.0)),
+        (scene.other, Vec3::new(133.0, 3.0, 0.0)),
+        (third, Vec3::new(3.0, 133.0, 0.0)),
+    ] {
+        let scaled = transform(&app, entity);
+        assert!(near(scaled.translation, at), "{scaled:?}");
+        assert!(near(scaled.scale, Vec3::new(1.3, 1.3, 1.0)), "{scaled:?}");
+    }
 }
