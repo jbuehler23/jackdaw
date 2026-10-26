@@ -292,41 +292,39 @@ fn respawn(
 
 /// Respawn the open scene from a document's text: resolve its prefab
 /// instances, despawn the scene and load the text in its place. Undo history
-/// is kept.
+/// is kept. Text that does not parse leaves the scene as it is.
 pub(crate) fn reload_document_text(world: &mut World, text: &str) {
+    let resolved = jackdaw_bsn::parse_emitted(text).and_then(|authored| {
+        let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() else {
+            return Ok(authored);
+        };
+        let get_prefab = |p: &std::path::Path| cache.get(p);
+        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+            Ok(resolved) => jackdaw_bsn::parse_emitted(&jackdaw_bsn::emit_scene(&resolved)),
+            Err(e) => {
+                warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
+                Ok(authored)
+            }
+        }
+    });
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            let message = format!("Scene not restored: {err}");
+            error!("undo snapshot: {message}");
+            crate::status_bar::notify_error(world, message);
+            return;
+        }
+    };
+
     crate::selection::clear_selection_in_world(world);
     if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
         error!("Failed to clear tree rows: {err}");
     }
-
-    let resolved_text: std::borrow::Cow<'_, str> =
-        match world.get_resource::<crate::prefab::PrefabAstCache>() {
-            Some(_) => match jackdaw_bsn::parse_bsn_text(text) {
-                Ok(authored) => {
-                    let cache = world.resource::<crate::prefab::PrefabAstCache>();
-                    let get_prefab = |p: &std::path::Path| cache.get(p);
-                    match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-                        Ok(resolved) => jackdaw_bsn::emit_scene(&resolved).into(),
-                        Err(e) => {
-                            warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
-                            text.into()
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("undo snapshot: parse failed: {e}; spawning raw text");
-                    text.into()
-                }
-            },
-            None => text.into(),
-        };
-
     if let Err(err) = crate::scene_io::despawn_scene_entities(world) {
         error!("undo snapshot: despawn_scene_entities failed: {err}");
     }
-    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
-        error!("undo snapshot failed to reload: {err}");
-    }
+    jackdaw_bsn::load_bsn_document(world, resolved);
 }
 
 /// A history entry holding two whole snapshots, for a document that could not
@@ -717,5 +715,42 @@ mod tests {
         // Re-capturing after apply matches the original snapshot.
         let snap3 = BsnDocumentSnapshotter.capture(app.world_mut());
         assert!(snap1.equals(&*snap3), "apply then capture is a fixpoint");
+    }
+
+    #[test]
+    fn restoring_text_that_does_not_parse_keeps_the_scene() {
+        let mut app = snapshot_app();
+        app.init_resource::<crate::status_bar::StatusNotice>();
+        jackdaw_bsn::load_bsn_scene(app.world_mut(), &doc(1.0)).expect("initial load");
+        let mut unparsable = jackdaw_bsn::SceneBsnAst::default();
+        let node = unparsable.create_entity_node(vec![jackdaw_bsn::BsnPatch::Struct(
+            jackdaw_bsn::BsnStructData {
+                type_path: String::new(),
+                fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                    name: "0".to_string(),
+                    value: jackdaw_bsn::BsnValue::Int(1),
+                }]),
+            },
+        )]);
+        unparsable.add_to_roots(node);
+
+        reload_document_text(app.world_mut(), &jackdaw_bsn::emit_scene(&unparsable));
+
+        let mut query = app.world_mut().query::<&Name>();
+        let names: Vec<String> = query.iter(app.world()).map(ToString::to_string).collect();
+        assert_eq!(names, vec!["Node".to_string()], "the scene was replaced");
+        assert_eq!(
+            app.world()
+                .resource::<jackdaw_bsn::SceneBsnAst>()
+                .roots
+                .len(),
+            1
+        );
+        assert!(
+            app.world()
+                .resource::<crate::status_bar::StatusNotice>()
+                .text()
+                .contains("Scene not restored")
+        );
     }
 }

@@ -484,7 +484,7 @@ pub fn respawn_from_sparse_text(world: &mut World, sparse_text: &str) {
 /// [`respawn_from_sparse_text`] without the outliner rebuild, for a caller
 /// respawning more than once before the tree is read.
 fn respawn_scene(world: &mut World, sparse_text: &str) {
-    let resolved_text = {
+    let resolved = {
         let authored = match jackdaw_bsn::parse_bsn_text(sparse_text) {
             Ok(a) => a,
             Err(e) => {
@@ -494,10 +494,17 @@ fn respawn_scene(world: &mut World, sparse_text: &str) {
         };
         let cache = world.resource::<PrefabAstCache>();
         let get_prefab = |p: &Path| cache.get(p);
-        match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-            Ok(resolved) => jackdaw_bsn::emit_scene(&resolved),
+        let resolved = match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
+            Ok(resolved) => resolved,
             Err(e) => {
                 warn!("reload_all_instances: resolver failed: {e}");
+                return;
+            }
+        };
+        match jackdaw_bsn::parse_emitted(&jackdaw_bsn::emit_scene(&resolved)) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                warn!("reload_all_instances: the resolved scene was not respawned: {err}");
                 return;
             }
         }
@@ -516,11 +523,9 @@ fn respawn_scene(world: &mut World, sparse_text: &str) {
         bevy::log::error!("reload_all_instances: despawn_scene_entities failed: {err}");
     }
 
-    // `load_bsn_scene` installs the resolved document as the live
+    // `load_bsn_document` installs the resolved document as the live
     // `SceneBsnAst`, re-adds inline assets, and applies patches.
-    if let Err(err) = jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
-        bevy::log::error!("reload_all_instances: load_bsn_scene failed: {err}");
-    }
+    jackdaw_bsn::load_bsn_document(world, resolved);
 }
 
 #[cfg(test)]

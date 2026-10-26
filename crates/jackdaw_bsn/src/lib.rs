@@ -25,7 +25,8 @@ pub mod writer;
 pub use catalog::{
     CatalogAssetRef, CatalogEntry, LoadedBsnScene, adopt_asset_roots, append_assets_to_ast,
     asset_roots, asset_value_from_root, entity_roots, is_asset_root, load_asset_root,
-    load_bsn_assets, load_bsn_scene, serialize_assets_to_bsn, serialize_assets_to_bsn_reporting,
+    load_bsn_assets, load_bsn_document, load_bsn_scene, serialize_assets_to_bsn,
+    serialize_assets_to_bsn_reporting,
 };
 
 pub use header::{
@@ -56,7 +57,8 @@ pub use document::{
     is_enum_variant_of, patch_type_path, type_paths_include,
 };
 pub use emitter::{
-    emit_entities, emit_entity, emit_entity_without_children, emit_scene, emit_value_text,
+    UnparsableEmit, emit_entities, emit_entity, emit_entity_without_children, emit_scene,
+    emit_scene_checked, emit_value_text, parse_emitted,
 };
 pub use loader::{BsnLoadError, parse_bsn_text};
 pub use retired::{RETIRED_UI_PREFIX, RetiredUiComponents, reject_retired_ui_components};

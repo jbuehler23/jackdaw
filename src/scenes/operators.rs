@@ -729,8 +729,9 @@ fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
             continue;
         };
 
-        if i != world.resource::<Scenes>().active {
-            swap_active_tab(world, i);
+        if i != world.resource::<Scenes>().active && !swap_active_tab(world, i) {
+            failures.push(format!("{name} (could not switch to it)"));
+            continue;
         }
 
         // Use the same persistence boundary as a single-scene save: terrain
@@ -748,14 +749,17 @@ fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
     }
 
     // Restore to the originally active tab, then re-point SceneFilePath at
-    // its (possibly redirected) path.
+    // the (possibly redirected) path of whichever tab is in front.
     if original_active != world.resource::<Scenes>().active {
         swap_active_tab(world, original_active);
     }
-    let active_path = world
-        .resource::<Scenes>()
+    if !failures.is_empty() {
+        crate::status_bar::notify_error(world, format!("Not saved: {}", failures.join("; ")));
+    }
+    let scenes = world.resource::<Scenes>();
+    let active_path = scenes
         .tabs
-        .get(original_active)
+        .get(scenes.active)
         .and_then(|tab| tab.path.as_ref())
         .map(|p| p.to_string_lossy().into_owned());
     if let Some(mut sfp) = world.get_resource_mut::<SceneFilePath>() {
