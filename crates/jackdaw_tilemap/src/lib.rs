@@ -12,9 +12,11 @@ mod layer;
 mod layout_fit;
 mod path;
 mod region_text;
+mod report;
 mod sidecar;
 mod slice;
 mod solver;
+mod stamp;
 mod strip;
 mod template;
 mod terrain_find;
@@ -31,6 +33,10 @@ pub use region_text::{
     Legend, LegendEntry, ReadRegionError, Region, RegionTextError, RegionTextErrorKind, emit_rows,
     parse_rows, read_region, write_region,
 };
+pub use report::{
+    AutoSetup, CollisionReport, SetReport, SetupError, SetupReport, SheetReport, StampReport,
+    StripReport, TerrainReport, auto_setup,
+};
 pub use sidecar::{
     LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
     encode,
@@ -43,6 +49,7 @@ pub use solver::{
     MatchMode, Peer, RequiredPeers, Requirement, Resolved, TerrainSet, TerrainTile, TileTerrains,
     match_score, required_peers, resolve_cell, resolve_region,
 };
+pub use stamp::{Stamp, find_stamps, reconcile};
 pub use strip::{AnimationStrip, FrameRun, LOOSE_FRAME_MATCH, detect_animation, pair_animations};
 pub use template::LayoutTemplate;
 pub use terrain_find::{

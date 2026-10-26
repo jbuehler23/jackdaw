@@ -9,6 +9,7 @@
 //! terrains <path> <tile width> <tile height> <count>
 //! fit <path> <tile width> <tile height> <sets> <mode> <covered> <total> <backgrounds>
 //! trace <path> <tile width> <tile height> <tile> <solid colour> <polygons> <max vertices> <half|traced>
+//! report <path>,<path>,... <expected report path>
 //! ```
 //!
 //! `terrains` analyses the sheet alone as a packed grid of that tile size and
@@ -18,7 +19,9 @@
 //! `trace` fits layouts, makes every terrain whose name has that colour word
 //! (`blue` matches `blue`, `blue 2`, ...) Solid, traces the sheet and checks
 //! the tile's polygon count, vertex count and whether the half-tile rule
-//! made its shape.
+//! made its shape. `report` runs auto setup over the listed sheets as one
+//! import, named by their paths, and compares the rendered report with the
+//! expected file.
 //!
 //! Paths are relative to the directory; `#` starts a comment line. Lines of
 //! any other kind are skipped.
@@ -27,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use glam::UVec2;
 use jackdaw_tilemap::{
-    GridLayout, LOOSE_FRAME_MATCH, RgbaImage, SheetInput, TerrainAnalysis, TileAddress,
+    GridLayout, LOOSE_FRAME_MATCH, RgbaImage, SheetInput, TerrainAnalysis, TileAddress, auto_setup,
     detect_animation, detect_grid, find_terrains, fit_layouts, trace_proposal,
 };
 
@@ -63,6 +66,10 @@ fn number(field: Option<&str>, line: &str) -> u32 {
 fn check(root: &Path, line: &str) {
     let mut fields = line.split_whitespace();
     let kind = fields.next().unwrap_or_default();
+    if kind == "report" {
+        check_report(root, fields, line);
+        return;
+    }
     if !matches!(kind, "grid" | "anim" | "terrains" | "fit" | "trace") {
         return;
     }
@@ -252,6 +259,30 @@ fn check_trace<'a>(
     assert!(shape.vertex_count() <= most, "{line}");
     let made_by = if shape.half_tile { "half" } else { "traced" };
     assert_eq!(made_by, fields.next().unwrap_or_default(), "{line}");
+}
+
+#[expect(clippy::print_stdout, reason = "shows the report")]
+fn check_report<'a>(root: &Path, mut fields: impl Iterator<Item = &'a str>, line: &str) {
+    let paths: Vec<&str> = fields
+        .next()
+        .unwrap_or_else(|| panic!("missing paths in: {line}"))
+        .split(',')
+        .collect();
+    let expected = fields
+        .next()
+        .unwrap_or_else(|| panic!("missing expected file in: {line}"));
+    let sheets: Vec<Sheet> = paths.iter().map(|p| Sheet::load(root, p)).collect();
+    let inputs: Vec<(&str, RgbaImage)> = paths
+        .iter()
+        .copied()
+        .zip(sheets.iter().map(Sheet::image))
+        .collect();
+    let found = auto_setup(&inputs, &[]).unwrap_or_else(|e| panic!("{line}: {e}"));
+    let report = found.report.to_string();
+    println!("{report}");
+    let want =
+        std::fs::read_to_string(root.join(expected)).unwrap_or_else(|e| panic!("{expected}: {e}"));
+    assert_eq!(report, want, "{line}");
 }
 
 #[test]

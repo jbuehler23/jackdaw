@@ -1,0 +1,23 @@
+sheets: 1
+  sheet "tilemap_packed.png": tile 16x16, margin 0x0, spacing 0x0, 12 columns, 11 rows, confidence 0.37
+terrains: 3
+  terrain 1 "tilemap_packed green": swatch #84c669, background, pure tiles 0
+  terrain 2 "tilemap_packed sand": swatch #e7a16a, pure tiles 0
+  terrain 3 "tilemap_packed brown": swatch #cb7c51, pure tiles 0
+terrain sets: 2
+  set 2 over 1: Sides, 7/16 shapes, 9 missing, template none
+  set 3 over 1: Sides, 7/16 shapes, 9 missing, template none
+stamps: 9
+  stamp "tilemap_packed.png" at column 2 row 0: 1x2, 2 tiles
+  stamp "tilemap_packed.png" at column 3 row 0: 1x2, 2 tiles
+  stamp "tilemap_packed.png" at column 2 row 2: 1x2, 2 tiles
+  stamp "tilemap_packed.png" at column 9 row 6: 3x5, 13 tiles
+  stamp "tilemap_packed.png" at column 6 row 7: 3x4, 12 tiles
+  stamp "tilemap_packed.png" at column 2 row 8: 2x1, 2 tiles
+  stamp "tilemap_packed.png" at column 4 row 8: 2x1, 2 tiles
+  stamp "tilemap_packed.png" at column 2 row 9: 2x1, 2 tiles
+  stamp "tilemap_packed.png" at column 4 row 9: 2x1, 2 tiles
+unassigned tiles: 1
+  "tilemap_packed.png": 11
+decor tiles: 76
+low confidence tiles: 0
