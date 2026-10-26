@@ -7,8 +7,12 @@
 
 mod grid;
 mod layer;
+mod sidecar;
 mod tile;
 
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
+pub use sidecar::{
+    LayerData, LayerKind, SidecarError, TerrainAuthoring, TilemapData, decode, encode,
+};
 pub use tile::{TerrainId, TileRef};
