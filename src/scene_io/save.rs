@@ -623,6 +623,7 @@ fn collect_bsn_inline_assets(
     mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
 ) -> BsnInlineAssetPass {
     let kept = KeptComponents::new(registry);
+    let sprite_render = crate::scene_io::sprite_render_component_paths();
 
     let mut refs: Vec<jackdaw_bsn::CatalogAssetRef> = Vec::new();
     let mut touched: Vec<(Entity, String)> = Vec::new();
@@ -640,8 +641,12 @@ fn collect_bsn_inline_assets(
             .filter_map(|&id| *slots.entry(id).or_insert_with(|| kept.slot(world, id)))
             .collect();
         present.sort_unstable();
+        let sprite = entity_ref.contains::<Sprite>();
         for slot in present {
             let (reflect_component, type_path) = kept.components[slot];
+            if sprite && sprite_render.contains(&type_path) {
+                continue;
+            }
             let Some(component) = reflect_component.reflect(entity_ref) else {
                 continue;
             };
@@ -911,6 +916,11 @@ fn normalize_runtime_derived_values(world: &World, ast: &mut jackdaw_bsn::SceneB
         };
         for path in crate::scene_io::computed_ui_component_paths() {
             ast.remove_component_patch(node, path);
+        }
+        if entity_ref.contains::<Sprite>() {
+            for path in crate::scene_io::sprite_render_component_paths() {
+                ast.remove_component_patch(node, path);
+            }
         }
         if entity_ref.contains::<ProgressFill>() {
             jackdaw_bsn::remove_bsn_field(ast, node, node_path, "width");

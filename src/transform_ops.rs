@@ -265,9 +265,13 @@ fn transform_rotate_90_roll_cw(
 /// reports whether the selection was its to move; routing is by the selection,
 /// not by panel focus.
 fn nudge_by_axis(world: &mut World, offset_direction: Vec3) {
-    if let Some(direction) = ui_nudge_direction(offset_direction)
+    let direction = ui_nudge_direction(offset_direction);
+    if let Some(direction) = direction
         && crate::ui_stage::nudge_ui_selection(world, direction)
     {
+        return;
+    }
+    if crate::sprite_gizmo::nudge_sprites(world, direction) {
         return;
     }
     let grid_size = world

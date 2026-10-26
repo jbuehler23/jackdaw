@@ -807,6 +807,8 @@ fn forget_dragged_entities(world: &mut World) {
     // a drag.
     use crate::brush::topology_ops as topo;
     forget_drag_resource::<crate::ui_stage::UiManipulation>(world);
+    forget_drag_resource::<crate::sprite_gizmo::SpriteManipulation>(world);
+    forget_drag_resource::<crate::sprite_stage::SpritePress>(world);
     forget_drag_resource::<topo::extrude::ExtrudeModalState>(world);
     forget_drag_resource::<topo::inset::InsetModalState>(world);
     forget_drag_resource::<topo::edge_bevel::EdgeBevelModalState>(world);

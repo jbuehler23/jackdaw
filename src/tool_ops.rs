@@ -26,23 +26,27 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 /// Tool switching is allowed in any edit mode (Object / Vertex / Edge / Face).
 /// In-flight brush drags are blocked by `is_modal_running` since drag systems
-/// install an `ActiveModalOperator` for their duration.
+/// install an `ActiveModalOperator` for their duration, and a sprite drag by
+/// its own state.
 ///
-/// Not on the canvas: the tools move, rotate and scale a thing in a world
-/// with three axes, and a UI node is placed by its layout. Q, W, E and R
-/// there are four letters of whatever is being typed at a panel that
-/// never took the focus.
+/// Not on a UI canvas: the tools move, rotate and scale a thing in a world,
+/// and a UI node is placed by its layout. Q, W, E and R there are four
+/// letters of whatever is being typed at a panel that never took the focus.
+/// A 2D world scene's view in edit mode has a gizmo of its own, so they work
+/// there.
 ///
 /// Nor while the camera flies: W, E and Q steer it then.
 fn can_change_tool(
     keybind_focus: KeybindFocus,
     active: ActiveModalQuery,
-    viewport: crate::viewport_2d::FrontedViewport,
+    viewport: crate::sprite_stage::ToolViewport,
+    sprite_drag: Res<crate::sprite_gizmo::SpriteManipulation>,
     nav: Option<Res<jackdaw_camera::CameraNavInput>>,
 ) -> bool {
     !keybind_focus.keyboard_is_spoken_for()
         && !active.is_modal_running()
-        && viewport.is_three_d()
+        && !sprite_drag.is_running()
+        && viewport.takes_tools()
         && !nav.is_some_and(|nav| nav.fly_active)
 }
 
@@ -54,11 +58,12 @@ fn can_change_tool(
 fn can_rotate_tool(
     keybind_focus: KeybindFocus,
     active: ActiveModalQuery,
-    viewport: crate::viewport_2d::FrontedViewport,
+    viewport: crate::sprite_stage::ToolViewport,
+    sprite_drag: Res<crate::sprite_gizmo::SpriteManipulation>,
     nav: Option<Res<jackdaw_camera::CameraNavInput>>,
     edit_mode: Res<crate::brush::EditMode>,
 ) -> bool {
-    can_change_tool(keybind_focus, active, viewport, nav)
+    can_change_tool(keybind_focus, active, viewport, sprite_drag, nav)
         && *edit_mode != crate::brush::EditMode::BrushEdit(crate::brush::BrushEditMode::Face)
 }
 

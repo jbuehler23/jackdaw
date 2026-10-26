@@ -3475,6 +3475,7 @@ fn finish_guide_drag(world: &mut World, commit: bool) {
 pub fn cancel_canvas_gestures(world: &mut World) {
     finish_manipulation(world, false);
     finish_guide_drag(world, false);
+    crate::sprite_gizmo::cancel_sprite_drag(world);
 }
 
 /// Escape puts the guides back exactly as the drag found them.

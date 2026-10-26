@@ -118,9 +118,10 @@ fn on_discard_function(mut world: DeferredWorld, context: HookContext) {
 
 /// Shared counter that hands out a unique [`RenderLayers`] index per
 /// viewport. Layer 0 is the default world; layer 1 is reserved for the
-/// material preview and layer 2 for the Project window's thumbnail stage
-/// ([`crate::thumbnail::THUMBNAIL_LAYER`]). Per-viewport grids start after
-/// those so they only render to "their" camera.
+/// material preview, layer 2 for the Project window's thumbnail stage
+/// ([`crate::thumbnail::THUMBNAIL_LAYER`]) and layer 3 for the 3D transform
+/// gizmo ([`crate::gizmos::TRANSFORM_GIZMO_LAYER`]). Per-viewport grids start
+/// after those so they only render to "their" camera.
 #[derive(Resource)]
 pub(crate) struct ViewportLayerCounter {
     last: usize,
@@ -130,7 +131,7 @@ pub(crate) struct ViewportLayerCounter {
 impl Default for ViewportLayerCounter {
     fn default() -> Self {
         Self {
-            last: crate::thumbnail::THUMBNAIL_LAYER,
+            last: crate::gizmos::TRANSFORM_GIZMO_LAYER,
             free: vec![],
         }
     }
@@ -318,7 +319,11 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
     // in the camera's mask so scene content (default-layer entities)
     // still draws here.
     let viewport_layer = world.resource_mut::<ViewportLayerCounter>().next();
-    let camera_layers = RenderLayers::from_layers(&[0, viewport_layer.get_layer()]);
+    let camera_layers = RenderLayers::from_layers(&[
+        0,
+        crate::gizmos::TRANSFORM_GIZMO_LAYER,
+        viewport_layer.get_layer(),
+    ]);
     let grid_layers = RenderLayers::layer(viewport_layer.get_layer());
 
     let grid_settings = world.resource::<GridSettings>().0;

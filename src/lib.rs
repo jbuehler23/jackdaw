@@ -152,6 +152,7 @@ pub mod sdk_paths;
 pub mod sdk_setup;
 pub mod selection;
 pub mod snapping;
+pub mod sprite_gizmo;
 pub mod sprite_stage;
 pub mod status_bar;
 pub mod terrain;
@@ -440,6 +441,7 @@ impl Plugin for EditorCorePlugin {
             ),
         ))
         .add_plugins(sprite_stage::SpriteStagePlugin)
+        .add_plugins(sprite_gizmo::SpriteGizmoPlugin)
         .add_plugins(prefab::PrefabPlugin)
         .add_plugins(prefab::watcher::PrefabWatcherPlugin)
         .add_plugins(jackdaw_surface::EnvironmentPlugin)
