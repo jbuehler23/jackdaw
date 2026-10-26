@@ -30,7 +30,8 @@ pub use sidecar::{
     encode,
 };
 pub use slice::{
-    COMMON_TILE_SIZES, GridDetection, GridLayout, RgbaImage, detect_grid, empty_tiles, uniform_tile,
+    COMMON_TILE_SIZES, GridDetection, GridLayout, RgbaImage, SharedDetection, detect_grid,
+    detect_grid_shared, empty_tiles, uniform_tile,
 };
 pub use solver::{
     MatchMode, Peer, RequiredPeers, Requirement, Resolved, TerrainSet, TerrainTile, TileTerrains,
