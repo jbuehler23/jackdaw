@@ -1,7 +1,7 @@
 //! The 2D world adapter on the 2D panel's stage: picks and outlines the
 //! [`Sprite`]s of a scene rooted at a [`Scene2dRoot`]. It sits beside
 //! [`crate::ui_stage`], which does the same for authored UI, and owns a stage
-//! only while [`shows_2d_world`] holds for it.
+//! only while `shows_2d_world` holds for it.
 
 use std::{cmp::Ordering, collections::HashMap};
 
