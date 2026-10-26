@@ -24,7 +24,7 @@ pub enum Token {
     StringLit(String),
     /// Integer: 1, 10, -10
     Int(i128),
-    /// Floating point: 0.1, .1, 10.1, and the `inf` / `NaN` spellings.
+    /// Floating point: 0.1, .1, 10.1, and the `-inf` / `-NaN` spellings.
     Float(f64),
     /// Left bracket: [
     LBracket,
@@ -137,27 +137,30 @@ fn lex_false(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
     Ok((rest, Token::Bool(false).spanned(value)))
 }
 
-/// `inf`, `-inf`, `NaN`, `-NaN`, and the `Infinity` / `nan` spellings the
-/// reflect serializer also writes. Whole words only, so `information` stays
-/// an identifier.
+/// `-inf`, `-NaN`, and the `-Infinity` / `-nan` spellings the reflect
+/// serializer also writes. Whole words only, so `-information` is not one.
+///
+/// Unsigned, these words lex as identifiers, since a field, a variant or a
+/// path segment may be named `inf` or `Infinity`; the parser reads one as a
+/// float only where a value stands alone (see [`special_float`]).
 fn lex_special_float(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
     let (rest, raw) = recognize((
-        opt(char('-')),
+        char('-'),
         alt((tag("Infinity"), tag("inf"), tag("NaN"), tag("nan"))),
         word_end,
     ))
     .parse(input)?;
-    let (negative, word) = match raw.fragment.strip_prefix('-') {
-        Some(word) => (true, word),
-        None => (false, raw.fragment),
-    };
-    let magnitude = if word.eq_ignore_ascii_case("nan") {
-        f64::NAN
-    } else {
-        f64::INFINITY
-    };
-    let value = if negative { -magnitude } else { magnitude };
+    let value = special_float(&raw.fragment[1..]).map_or(f64::NAN, |magnitude| -magnitude);
     Ok((rest, Token::Float(value).spanned(raw)))
+}
+
+/// The float an unsigned `inf`, `Infinity`, `NaN` or `nan` stands for.
+pub(crate) fn special_float(word: &str) -> Option<f64> {
+    match word {
+        "inf" | "Infinity" => Some(f64::INFINITY),
+        "NaN" | "nan" => Some(f64::NAN),
+        _ => None,
+    }
 }
 
 fn lex_ident(input: Span<'_>) -> IResult<Span<'_>, SpannedToken<'_>> {
@@ -450,18 +453,23 @@ mod tests {
     }
 
     #[test]
-    fn lexes_special_floats() {
-        let floats: Vec<f64> = tokens("inf -inf Infinity NaN nan -NaN")
+    fn lexes_signed_special_floats() {
+        let floats: Vec<f64> = tokens("-inf -Infinity -NaN -nan")
             .into_iter()
             .map(|t| match t {
                 Token::Float(f) => f,
                 other => panic!("expected a float, got {other:?}"),
             })
             .collect();
-        assert!(floats[0].is_infinite() && floats[0] > 0.0);
-        assert!(floats[1].is_infinite() && floats[1] < 0.0);
-        assert!(floats[2].is_infinite() && floats[2] > 0.0);
-        assert!(floats[3..].iter().all(|f| f.is_nan()));
+        assert!(floats[..2].iter().all(|f| f.is_infinite() && *f < 0.0));
+        assert!(floats[2..].iter().all(|f| f.is_nan()));
+    }
+
+    #[test]
+    fn unsigned_special_float_words_lex_as_identifiers() {
+        for word in ["inf", "Infinity", "NaN", "nan"] {
+            assert_eq!(tokens(word), vec![Token::Ident(word.into())], "{word}");
+        }
     }
 
     #[test]
