@@ -24,7 +24,7 @@ const EMPTY_COVERAGE: f32 = 0.5;
 const SEED_VARIANCE: f32 = 0.002;
 const TEXTURE_WEIGHT: f32 = 0.5;
 /// Oklab distance within one terrain.
-const CLUSTER_RADIUS: f32 = 0.06;
+pub(crate) const CLUSTER_RADIUS: f32 = 0.06;
 const REFINE_PASSES: usize = 16;
 /// Distinct tiles seeding a terrain.
 const MIN_TERRAIN_TILES: usize = 2;
