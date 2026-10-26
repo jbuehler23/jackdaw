@@ -6,7 +6,7 @@
 //! dependency, so it can drive snapping in any host. The editor wraps this in
 //! a Bevy resource newtype that derefs to it.
 
-use glam::{Vec2, Vec3};
+use glam::{BVec2, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Lowest grid power offered by the editor's grid stepping. The grid size is
@@ -322,9 +322,131 @@ pub fn nearest_candidate(lines: [f32; 3], candidates: &[f32], threshold: f32) ->
     best
 }
 
+/// `point` rounded onto a lattice of `step`. A non-positive or non-finite
+/// step is no lattice at all rather than a division by zero.
+pub fn snap_to_lattice(point: Vec2, step: f32) -> Vec2 {
+    if step <= 0.0 || !step.is_finite() {
+        return point;
+    }
+    (point / step).round() * step
+}
+
+/// The part of `rect` a 2D gesture drags, and the axes it moves on. `sides`
+/// zero on both axes is a move of the whole rect; otherwise it names the edge
+/// or corner a resize pulls, per axis -1 for the near side, 1 for the far
+/// side and 0 for an axis the resize leaves alone, and the rect collapses to
+/// that corner.
+pub fn dragged_part(rect: SnapRect, sides: [i8; 2]) -> (SnapRect, BVec2) {
+    if sides == [0, 0] {
+        return (rect, BVec2::TRUE);
+    }
+    let pick = |side: i8, min: f32, max: f32| if side > 0 { max } else { min };
+    let corner = Vec2::new(
+        pick(sides[0], rect.min.x, rect.max.x),
+        pick(sides[1], rect.min.y, rect.max.y),
+    );
+    (
+        SnapRect {
+            min: corner,
+            max: corner,
+        },
+        BVec2::new(sides[0] != 0, sides[1] != 0),
+    )
+}
+
+/// What one 2D landing came to.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Landing2d {
+    /// How far the gesture moves on top of the pointer's own delta.
+    pub nudge: Vec2,
+    /// The candidate the x axis landed on, if any.
+    pub x: Option<AxisSnap>,
+    /// The candidate the y axis landed on, if any.
+    pub y: Option<AxisSnap>,
+}
+
+/// Land `moving` on the axes `axes` names. Per axis, the nearest candidate
+/// line within `threshold` wins (see [`snap_edges_2d_with_winners`]); on an
+/// axis no candidate claimed, the rect's `min` corner lands on a lattice of
+/// `step` (see [`snap_to_lattice`]). An axis left out neither moves nor
+/// lands.
+pub fn land_2d(
+    moving: SnapRect,
+    axes: BVec2,
+    candidates_x: &[f32],
+    candidates_y: &[f32],
+    threshold: f32,
+    step: f32,
+) -> Landing2d {
+    let none: &[f32] = &[];
+    let (x, y) = snap_edges_2d_with_winners(
+        moving,
+        if axes.x { candidates_x } else { none },
+        if axes.y { candidates_y } else { none },
+        threshold,
+    );
+    let lattice = snap_to_lattice(moving.min, step) - moving.min;
+    let nudge = |won: Option<AxisSnap>, driven: bool, lattice: f32| match won {
+        Some(won) => won.delta,
+        None if driven => lattice,
+        None => 0.0,
+    };
+    Landing2d {
+        nudge: Vec2::new(nudge(x, axes.x, lattice.x), nudge(y, axes.y, lattice.y)),
+        x,
+        y,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lattice_rounds_and_ignores_a_degenerate_step() {
+        assert_eq!(
+            snap_to_lattice(Vec2::new(13.0, -5.0), 8.0),
+            Vec2::new(16.0, -8.0)
+        );
+        assert_eq!(
+            snap_to_lattice(Vec2::new(1.3, 2.7), 0.0),
+            Vec2::new(1.3, 2.7)
+        );
+        assert_eq!(
+            snap_to_lattice(Vec2::new(1.3, 2.7), f32::NAN),
+            Vec2::new(1.3, 2.7)
+        );
+    }
+
+    #[test]
+    fn a_resize_collapses_to_the_dragged_corner() {
+        let rect = SnapRect::from_min_size(Vec2::new(10.0, 20.0), Vec2::new(30.0, 40.0));
+        assert_eq!(dragged_part(rect, [0, 0]), (rect, BVec2::TRUE));
+        let (corner, axes) = dragged_part(rect, [1, -1]);
+        assert_eq!(corner.min, Vec2::new(40.0, 20.0));
+        assert_eq!(corner.max, corner.min);
+        assert_eq!(axes, BVec2::TRUE);
+        let (edge, axes) = dragged_part(rect, [0, 1]);
+        assert_eq!(edge.min.y, 60.0);
+        assert_eq!(axes, BVec2::new(false, true));
+    }
+
+    #[test]
+    fn a_landing_takes_a_line_first_then_the_lattice() {
+        let moving = SnapRect::from_min_size(Vec2::new(10.5, 1.0), Vec2::splat(10.0));
+        let landing = land_2d(moving, BVec2::TRUE, &[22.0], &[40.0], 3.0, 8.0);
+        assert_eq!(landing.nudge, Vec2::new(1.5, -1.0));
+        assert_eq!(landing.x.map(|won| won.candidate), Some(0));
+        assert_eq!(landing.y, None);
+    }
+
+    #[test]
+    fn an_axis_left_out_of_a_landing_stays_put() {
+        let moving = SnapRect::from_min_size(Vec2::new(10.5, 1.0), Vec2::splat(10.0));
+        let landing = land_2d(moving, BVec2::new(true, false), &[22.0], &[1.5], 3.0, 8.0);
+        assert_eq!(landing.nudge.y, 0.0);
+        assert_eq!(landing.y, None);
+    }
 
     #[test]
     fn grid_size_is_two_to_the_power() {

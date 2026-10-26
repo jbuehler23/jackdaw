@@ -65,10 +65,32 @@ pub(crate) fn shows_2d_world<'a>(
     routed: impl IntoIterator<Item = &'a UiTargetCamera>,
     scene_roots: &Scene2dRoots,
 ) -> bool {
-    !scene_roots.is_empty()
-        && !routed
-            .into_iter()
-            .any(|routed| routed.entity() == host.camera)
+    world_on_panel(!scene_roots.is_empty(), routed, host)
+}
+
+/// Whether a panel shows a 2D world scene, given whether one is open and the
+/// cameras authored UI is routed to.
+fn world_on_panel<'a>(
+    open: bool,
+    routed: impl IntoIterator<Item = &'a UiTargetCamera>,
+    host: &Viewport2dPanelHost,
+) -> bool {
+    open && !routed
+        .into_iter()
+        .any(|routed| routed.entity() == host.camera)
+}
+
+/// [`shows_2d_world`] read straight off the world, for a menu building its
+/// rows.
+pub(crate) fn world_shows_2d_world(world: &World, host: &Viewport2dPanelHost) -> bool {
+    let open = world
+        .try_query_filtered::<(), (With<Scene2dRoot>, Without<ChildOf>)>()
+        .is_some_and(|mut roots| roots.iter(world).next().is_some());
+    let Some(mut routed) = world.try_query_filtered::<&UiTargetCamera, AuthoredUiSceneRoot>()
+    else {
+        return open;
+    };
+    world_on_panel(open, routed.iter(world), host)
 }
 
 /// Which world the transform tools act on from the keyboard: the 3D world,

@@ -153,6 +153,7 @@ pub mod sdk_setup;
 pub mod selection;
 pub mod snapping;
 pub mod sprite_gizmo;
+pub mod sprite_snap;
 pub mod sprite_stage;
 pub mod status_bar;
 pub mod terrain;

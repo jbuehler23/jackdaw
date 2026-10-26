@@ -1856,10 +1856,10 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
             kind.label(),
         )
     };
-    let grid = world
-        .get::<Viewport2dPanelHost>(host)
-        .map(|host| host.view.grid)
-        .unwrap_or(DEFAULT_UI_GRID);
+    let panel = world.get::<Viewport2dPanelHost>(host);
+    let grid = panel.map_or(DEFAULT_UI_GRID, |host| host.view.grid);
+    let world_scene =
+        panel.is_some_and(|host| crate::sprite_stage::world_shows_2d_world(world, host));
 
     let mut rows = vec![
         kind_row(CanvasSnapKind::Enabled),
@@ -1874,6 +1874,7 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         CanvasSnapKind::ALL
             .into_iter()
             .filter(|kind| !matches!(kind, CanvasSnapKind::Enabled | CanvasSnapKind::Pixel))
+            .filter(|kind| kind.applies(world_scene))
             .map(kind_row),
     );
     rows.push((SEPARATOR_ACTION.to_string(), String::new()));

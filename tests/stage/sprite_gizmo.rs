@@ -13,6 +13,7 @@ use bevy::{
 };
 use jackdaw::{
     active_tool::ActiveTool,
+    canvas_snap::CanvasSnap,
     commands::CommandHistory,
     gizmos::TransformGizmoGroup,
     selection::Selection,
@@ -34,18 +35,18 @@ const VIEW: Ui2dView = Ui2dView {
 
 const TOOLS: [&str; 4] = ["tool.select", "tool.translate", "tool.rotate", "tool.scale"];
 
-struct Scene {
-    panel: Entity,
-    root: Entity,
+pub(crate) struct Scene {
+    pub(crate) panel: Entity,
+    pub(crate) root: Entity,
     /// 20x20, centre-anchored at the origin.
-    tile: Entity,
+    pub(crate) tile: Entity,
     /// 20x20, centre-anchored at (100, 0).
-    other: Entity,
+    pub(crate) other: Entity,
     /// 40x20, bottom-left anchored at (-100, 50).
-    corner: Entity,
+    pub(crate) corner: Entity,
 }
 
-fn world_app() -> (App, Scene) {
+pub(crate) fn world_app() -> (App, Scene) {
     let mut app = util::editor_test_app();
     util::fixed_frame_clock(&mut app);
     {
@@ -98,6 +99,11 @@ fn world_app() -> (App, Scene) {
         Vec3::new(-100.0, 50.0, 0.0),
     );
     jackdaw::selection::clear_selection_in_world(app.world_mut());
+    // The gizmo's own arithmetic, free of the canvas snapping.
+    app.world_mut().insert_resource(CanvasSnap {
+        enabled: false,
+        ..default()
+    });
     settle(&mut app);
     (
         app,
@@ -111,7 +117,7 @@ fn world_app() -> (App, Scene) {
     )
 }
 
-fn sprite(
+pub(crate) fn sprite(
     app: &mut App,
     root: Entity,
     name: &str,
@@ -133,13 +139,13 @@ fn sprite(
     entity
 }
 
-fn settle(app: &mut App) {
+pub(crate) fn settle(app: &mut App) {
     for _ in 0..8 {
         app.update();
     }
 }
 
-fn run(app: &mut App, clause: &str) {
+pub(crate) fn run(app: &mut App, clause: &str) {
     jackdaw::boot_ops::run_op_clause(app.world_mut(), clause)
         .expect("the clause dispatches")
         .assert_finished();
@@ -156,7 +162,7 @@ fn run(app: &mut App, clause: &str) {
     settle(app);
 }
 
-fn pointer(app: &mut App, at: Vec2, action: &str, mods: &str) {
+pub(crate) fn pointer(app: &mut App, at: Vec2, action: &str, mods: &str) {
     let mods = if mods.is_empty() {
         String::new()
     } else {
@@ -171,13 +177,13 @@ fn pointer(app: &mut App, at: Vec2, action: &str, mods: &str) {
     );
 }
 
-fn drag(app: &mut App, from: Vec2, to: Vec2, mods: &str) {
+pub(crate) fn drag(app: &mut App, from: Vec2, to: Vec2, mods: &str) {
     pointer(app, from, "press", "");
     pointer(app, to, "move", mods);
     pointer(app, to, "release", "");
 }
 
-fn select(app: &mut App, at: Vec2, tool: ActiveTool) {
+pub(crate) fn select(app: &mut App, at: Vec2, tool: ActiveTool) {
     app.world_mut().insert_resource(tool);
     pointer(app, at, "click", "");
 }
@@ -192,17 +198,17 @@ fn handle(app: &mut App, kind: SpriteHandle) -> Vec2 {
         .unwrap_or_else(|| panic!("the gizmo shows a {kind:?} handle"))
 }
 
-fn transform(app: &App, entity: Entity) -> Transform {
+pub(crate) fn transform(app: &App, entity: Entity) -> Transform {
     *app.world()
         .get::<Transform>(entity)
         .expect("the sprite has a transform")
 }
 
-fn history_len(app: &App) -> usize {
+pub(crate) fn history_len(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
 }
 
-fn undo(app: &mut App) {
+pub(crate) fn undo(app: &mut App) {
     app.world_mut()
         .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
     settle(app);
@@ -214,7 +220,7 @@ fn redo(app: &mut App) {
     settle(app);
 }
 
-fn near(a: Vec3, b: Vec3) -> bool {
+pub(crate) fn near(a: Vec3, b: Vec3) -> bool {
     (a - b).length() < 1e-3
 }
 
