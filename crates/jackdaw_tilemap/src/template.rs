@@ -238,7 +238,7 @@ mod tests {
             let set = LayoutTemplate::Corner16.terrain_set(inner, outer);
             for mask in 0..=255u8 {
                 let (layer, cells) = neighbourhood(mask, inner, inner, outer);
-                let r = resolve_cell(&set, &layer, origin());
+                let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), origin());
                 assert!(r.is_exact(), "mask {mask}");
                 let expected = mask_index(&cells, outer, Peer::CORNERS, true);
                 assert_eq!(r.tile, TileRef::new(expected), "mask {mask}");
@@ -252,7 +252,7 @@ mod tests {
             let set = LayoutTemplate::Side16.terrain_set(inner, outer);
             for mask in 0..=255u8 {
                 let (layer, cells) = neighbourhood(mask, inner, inner, outer);
-                let r = resolve_cell(&set, &layer, origin());
+                let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), origin());
                 assert!(r.is_exact(), "mask {mask}");
                 let expected = mask_index(&cells, outer, Peer::SIDES, false);
                 assert_eq!(r.tile, TileRef::new(expected), "mask {mask}");
@@ -267,7 +267,7 @@ mod tests {
             let set = LayoutTemplate::Blob47.terrain_set(inner, outer);
             for mask in 0..=255u8 {
                 let (layer, cells) = neighbourhood(mask, inner, inner, outer);
-                let r = resolve_cell(&set, &layer, origin());
+                let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), origin());
                 assert!(r.is_exact(), "mask {mask}");
                 let config = blob_config(&cells, outer);
                 let expected = tiles.iter().position(|t| *t == config).unwrap();
@@ -285,8 +285,12 @@ mod tests {
                     let ordered = plain.clone().with_order(order);
                     for mask in 0..=255u8 {
                         let (layer, _) = neighbourhood(mask, inner, inner, outer);
-                        let a = resolve_cell(&plain, &layer, origin());
-                        assert_eq!(resolve_cell(&ordered, &layer, origin()), a, "mask {mask}");
+                        let a = resolve_cell(&plain, &layer, &ChunkedLayer::new(), origin());
+                        assert_eq!(
+                            resolve_cell(&ordered, &layer, &ChunkedLayer::new(), origin()),
+                            a,
+                            "mask {mask}"
+                        );
                         assert!(a.is_exact());
                     }
                 }
@@ -306,7 +310,7 @@ mod tests {
             }
         }
         for i in 0..200 {
-            let r = resolve_cell(&set, &layer, CellCoord::new(i * 4, 0));
+            let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), CellCoord::new(i * 4, 0));
             assert_eq!((r.score, r.max_score), (4, 5));
             assert_eq!(r.tile, TileRef::new(0), "cell {i}");
         }
@@ -318,10 +322,10 @@ mod tests {
         let mut exact = 0;
         for mask in 0..=255u8 {
             let (layer, cells) = neighbourhood(mask, inner, inner, outer);
-            let r = resolve_cell(set, &layer, origin());
+            let r = resolve_cell(set, &layer, &ChunkedLayer::new(), origin());
             assert!(!r.tile.is_empty(), "mask {mask}");
             let config = blob_config(&cells, outer);
-            let required = required_peers(set, &layer, origin());
+            let required = required_peers(set, &layer, &ChunkedLayer::new(), origin());
             let best = set
                 .tiles
                 .iter()
@@ -367,7 +371,7 @@ mod tests {
             let set = template.terrain_set(1, 2);
             for mask in [0u8, 0x5a, 0xff] {
                 let (layer, _) = neighbourhood(mask, 2, 1, 2);
-                let r = resolve_cell(&set, &layer, origin());
+                let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), origin());
                 assert_eq!(r.tile, TileRef::EMPTY);
                 assert_eq!(r.score, 0);
             }

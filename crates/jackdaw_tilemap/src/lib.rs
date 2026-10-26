@@ -7,6 +7,7 @@
 
 mod grid;
 mod layer;
+mod path;
 mod region_text;
 mod sidecar;
 mod solver;
@@ -15,6 +16,7 @@ mod tile;
 
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
+pub use path::{Links, StrokeError, apply_connect_stroke, apply_path_stroke, orthogonal_line};
 pub use region_text::{
     Legend, LegendEntry, ReadRegionError, Region, RegionTextError, RegionTextErrorKind, emit_rows,
     parse_rows, read_region, write_region,
@@ -24,8 +26,8 @@ pub use sidecar::{
     encode,
 };
 pub use solver::{
-    MatchMode, Peer, RequiredPeers, Resolved, TerrainSet, TerrainTile, TileTerrains, match_score,
-    required_peers, resolve_cell, resolve_region,
+    MatchMode, Peer, RequiredPeers, Requirement, Resolved, TerrainSet, TerrainTile, TileTerrains,
+    match_score, required_peers, resolve_cell, resolve_region,
 };
 pub use template::LayoutTemplate;
 pub use tile::{TerrainId, TileRef};

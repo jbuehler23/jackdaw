@@ -7,12 +7,12 @@
 //! would never write, and the file must end exactly where the declared
 //! structure ends.
 //!
-//! # Format version 1
+//! # Format version 2
 //!
 //! ```text
 //! size      field
 //! 8         magic, b"JDTILES\0"
-//! 2         format version, u16 == 1
+//! 2         format version, u16 == 2
 //! 2         flags, u16 (bit 0 = authoring data present, other bits must be 0)
 //! 4         layer_count, u32
 //! then, per layer:
@@ -31,19 +31,28 @@
 //! then, per override in ascending CellCoord order:
 //! 4 + 4     cell x, cell y, i32
 //! 2 + 1     index u16, orientation u8
+//! 4         link_chunk_count, u32
+//! then, per link chunk in ascending ChunkCoord order:
+//! 4 + 4     chunk x, chunk y, i32
+//! 1024      Links bits per cell, u8, in local index order
 //! ```
 //!
 //! An empty cell is index `0xFFFF` with orientation 0. Stored chunks hold at
-//! least one non-empty cell, overrides are never empty, and orientation bytes
-//! never set reserved bits.
+//! least one non-empty cell, overrides are never empty, and orientation and
+//! link bytes never set reserved bits. A stored link cell has the Path bit and
+//! a non-zero terrain id; encode prunes any other link data.
+//!
+//! Version 1 is version 2 without the link chunk list; decode reads it with
+//! empty links and encode always writes version 2.
 //!
 //! Flags bit 0 is set exactly when some terrain layer has authoring data; then
 //! every terrain layer carries an authoring block, written empty for a layer
 //! whose authoring is `None`. Tile layers never carry one: encode ignores their
-//! authoring. So `encode(decode(b)) == b` for every accepted file, and
+//! authoring. So `encode(decode(b)) == b` for every accepted version 2 file
+//! (a version 1 file re-encodes as version 2), and
 //! `decode(encode(d)) == d` once `d` is normalised: tile layer authoring is
-//! `None`, empty overrides are dropped, and when any terrain layer has authoring
-//! the others hold `Some` empty authoring.
+//! `None`, empty overrides and invalid links are dropped, and when any terrain
+//! layer has authoring the others hold `Some` empty authoring.
 
 use std::collections::BTreeMap;
 
@@ -51,10 +60,11 @@ use glam::IVec2;
 
 use crate::grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, ChunkCoord};
 use crate::layer::{CellValue, ChunkedLayer};
+use crate::path::Links;
 use crate::tile::{TerrainId, TileRef};
 
 pub const MAGIC: [u8; 8] = *b"JDTILES\0";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 const FLAG_AUTHORING: u16 = 1 << 0;
 const LAYER_HEADER: usize = 8;
 const OVERRIDE_RECORD: usize = 11;
@@ -73,6 +83,8 @@ pub struct TerrainAuthoring {
     pub terrain: ChunkedLayer<TerrainId>,
     /// Hand-placed tiles that win over the resolved terrain tile. Never empty.
     pub overrides: BTreeMap<CellCoord, TileRef>,
+    /// Links written by Path strokes; see [`Links`].
+    pub links: ChunkedLayer<Links>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,7 +115,7 @@ pub enum SidecarError {
     BadMagic,
     /// Version 0, or written by a newer jackdaw than this one.
     UnsupportedVersion(u16),
-    /// A reserved flag bit or reserved byte was non-zero.
+    /// A reserved flag bit, reserved byte or reserved link bit was non-zero.
     ReservedBits,
     /// The file ended before the declared data did.
     Truncated,
@@ -112,6 +124,8 @@ pub enum SidecarError {
     UnknownLayerKind(u8),
     /// A cell or override held a value encode never writes.
     InvalidCell,
+    /// A link cell lacked the Path bit or sat on a cell without terrain.
+    InvalidLinks,
     /// A stored chunk held only empty cells.
     EmptyChunk,
     /// Chunks or overrides were out of order or duplicated.
@@ -130,6 +144,7 @@ impl core::fmt::Display for SidecarError {
             Self::TrailingBytes => write!(f, "tilemap sidecar has trailing bytes"),
             Self::UnknownLayerKind(k) => write!(f, "unknown tilemap layer kind {k}"),
             Self::InvalidCell => write!(f, "tilemap sidecar holds an invalid cell"),
+            Self::InvalidLinks => write!(f, "tilemap sidecar holds invalid link data"),
             Self::EmptyChunk => write!(f, "tilemap sidecar stores an empty chunk"),
             Self::Unordered => write!(f, "tilemap sidecar entries are out of order"),
         }
@@ -171,6 +186,13 @@ pub fn encode(data: &TilemapData) -> Vec<u8> {
                 put_ivec(&mut out, cell.0);
                 put_tile(&mut out, *tile);
             }
+            let mut links = ChunkedLayer::new();
+            for (cell, l) in authoring.links.cells() {
+                if l.is_path() && authoring.terrain.get(cell) != 0 {
+                    links.set(cell, l);
+                }
+            }
+            write_chunks(&mut out, &links, |out, l| out.push(l.bits()));
         }
     }
     out
@@ -219,7 +241,24 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
                 check_ascending(&mut last, cell)?;
                 overrides.insert(cell, tile);
             }
-            authoring = Some(TerrainAuthoring { terrain, overrides });
+            let links = if version >= 2 {
+                read_chunks(&mut r, 1, |cell| {
+                    Links::from_bits(cell[0]).ok_or(SidecarError::ReservedBits)
+                })?
+            } else {
+                ChunkedLayer::new()
+            };
+            if links
+                .cells()
+                .any(|(cell, l)| !l.is_path() || terrain.get(cell) == 0)
+            {
+                return Err(SidecarError::InvalidLinks);
+            }
+            authoring = Some(TerrainAuthoring {
+                terrain,
+                overrides,
+                links,
+            });
         }
         layers.push(LayerData {
             kind,
@@ -360,6 +399,7 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Peer;
 
     const CHUNK_RECORD: usize = 8 + 3 * CHUNK_AREA;
 
@@ -398,6 +438,16 @@ mod tests {
             CellCoord::new(-1000, 1000),
             TileRef::new(7).with_flip_y(true),
         );
+        let path = Links::EMPTY.with_path();
+        authoring.terrain.set(CellCoord::new(-32, 5), 1);
+        authoring.terrain.set(CellCoord::new(-70, -2), 2);
+        authoring
+            .links
+            .set(CellCoord::new(-33, 5), path.with(Peer::Right));
+        authoring
+            .links
+            .set(CellCoord::new(-32, 5), path.with(Peer::Left));
+        authoring.links.set(CellCoord::new(-70, -2), path);
         terrain.authoring = Some(authoring);
         TilemapData {
             layers: vec![ground, terrain],
@@ -481,6 +531,9 @@ mod tests {
         authoring
             .overrides
             .insert(CellCoord::new(1, 1), TileRef::new(2));
+        authoring
+            .links
+            .set(CellCoord::new(1, 1), Links::EMPTY.with_path());
         terrain.authoring = Some(authoring);
         map.layers.push(terrain);
         let bytes = encode(&map);
@@ -498,8 +551,8 @@ mod tests {
         assert_eq!(decode(&bad), Err(SidecarError::BadMagic));
 
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&2u16.to_le_bytes());
-        assert_eq!(decode(&newer), Err(SidecarError::UnsupportedVersion(2)));
+        newer[8..10].copy_from_slice(&3u16.to_le_bytes());
+        assert_eq!(decode(&newer), Err(SidecarError::UnsupportedVersion(3)));
 
         let mut zero = bytes.clone();
         zero[8..10].copy_from_slice(&0u16.to_le_bytes());
@@ -597,7 +650,7 @@ mod tests {
         let mut bytes = encode(&TilemapData {
             layers: vec![terrain],
         });
-        let index = bytes.len() - 3;
+        let index = bytes.len() - 4 - 3;
         bytes[index..index + 2].copy_from_slice(&TileRef::EMPTY_INDEX.to_le_bytes());
         assert_eq!(decode(&bytes), Err(SidecarError::InvalidCell));
     }
@@ -608,7 +661,7 @@ mod tests {
             layers: vec![tile_layer(&[(0, 0, TileRef::new(5).with_flip_x(true))])],
         };
 
-        let header = [1, 0, 0, 0, 1, 0, 0, 0];
+        let header = [2, 0, 0, 0, 1, 0, 0, 0];
         let layer_header = [0, 0, 0, 0];
         let chunk_count = [1, 0, 0, 0];
         let chunk_coord = [0; 8];
@@ -666,7 +719,132 @@ mod tests {
             assert!(layer.tiles.take_dirty().is_empty());
             if let Some(authoring) = &mut layer.authoring {
                 assert!(authoring.terrain.take_dirty().is_empty());
+                assert!(authoring.links.take_dirty().is_empty());
             }
         }
+    }
+
+    /// One terrain layer with one tile, one terrain cell and the given links.
+    fn linked_layer(links: &[(i32, i32, Links)]) -> TilemapData {
+        let mut terrain = tile_layer(&[(0, 0, TileRef::new(5))]);
+        terrain.kind = LayerKind::Terrain;
+        let mut authoring = TerrainAuthoring::default();
+        authoring.terrain.set(CellCoord::new(0, 0), 2);
+        for &(x, y, l) in links {
+            authoring.terrain.set(CellCoord::new(x, y), 2);
+            authoring.links.set(CellCoord::new(x, y), l);
+        }
+        terrain.authoring = Some(authoring);
+        TilemapData {
+            layers: vec![terrain],
+        }
+    }
+
+    #[test]
+    fn golden_terrain_layer_with_links() {
+        let path = Links::EMPTY.with_path().with(Peer::Bottom);
+        let map = linked_layer(&[(-1, 0, path)]);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"JDTILES\0");
+        expected.extend_from_slice(&[2, 0, 1, 0, 1, 0, 0, 0]);
+        expected.extend_from_slice(&[1, 0, 0, 0]);
+        expected.extend_from_slice(&[1, 0, 0, 0]);
+        expected.extend_from_slice(&[0; 8]);
+        expected.extend_from_slice(&[5, 0, 0]);
+        for _ in 1..CHUNK_AREA {
+            expected.extend_from_slice(&[0xFF, 0xFF, 0]);
+        }
+        expected.extend_from_slice(&[2, 0, 0, 0]);
+        expected.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
+        let mut west = [0; CHUNK_AREA];
+        west[31] = 2;
+        expected.extend_from_slice(&west);
+        expected.extend_from_slice(&[0; 8]);
+        expected.push(2);
+        expected.extend_from_slice(&[0; CHUNK_AREA - 1]);
+        expected.extend_from_slice(&[0, 0, 0, 0]);
+        expected.extend_from_slice(&[1, 0, 0, 0]);
+        expected.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
+        let mut links = [0; CHUNK_AREA];
+        links[31] = Links::PATH | Links::BOTTOM;
+        expected.extend_from_slice(&links);
+
+        assert_eq!(encode(&map), expected);
+        assert_eq!(decode(&expected).unwrap(), map);
+    }
+
+    #[test]
+    fn version_1_decodes_with_empty_links_and_re_encodes_as_version_2() {
+        let map = linked_layer(&[]);
+        let v2 = encode(&map);
+        let mut v1 = v2[..v2.len() - 4].to_vec();
+        v1[8..10].copy_from_slice(&1u16.to_le_bytes());
+        let decoded = decode(&v1).unwrap();
+        assert_eq!(decoded, map);
+        assert_eq!(encode(&decoded), v2);
+        assert_eq!(decode(&v2[..]).unwrap(), map);
+        let mut v1_with_links = v2.clone();
+        v1_with_links[8..10].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(decode(&v1_with_links), Err(SidecarError::TrailingBytes));
+    }
+
+    #[test]
+    fn rejects_reserved_empty_and_unordered_link_chunks() {
+        let map = linked_layer(&[(0, 0, Links::EMPTY.with_path())]);
+        let bytes = encode(&map);
+        let cell = bytes.len() - CHUNK_AREA;
+
+        let mut reserved = bytes.clone();
+        reserved[cell] = 0x20;
+        assert_eq!(decode(&reserved), Err(SidecarError::ReservedBits));
+
+        let mut empty = bytes.clone();
+        empty[cell] = 0;
+        assert_eq!(decode(&empty), Err(SidecarError::EmptyChunk));
+
+        let two = linked_layer(&[
+            (0, 0, Links::EMPTY.with_path()),
+            (32, 0, Links::EMPTY.with_path()),
+        ]);
+        let bytes = encode(&two);
+        let record = 8 + CHUNK_AREA;
+        let start = bytes.len() - 2 * record;
+        let mut swapped = bytes[..start].to_vec();
+        swapped.extend_from_slice(&bytes[start + record..]);
+        swapped.extend_from_slice(&bytes[start..start + record]);
+        assert_eq!(decode(&swapped), Err(SidecarError::Unordered));
+    }
+
+    #[test]
+    fn rejects_links_without_path_bit_or_terrain() {
+        let map = linked_layer(&[(1, 0, Links::EMPTY.with_path())]);
+        let bytes = encode(&map);
+        let link = bytes.len() - CHUNK_AREA + 1;
+
+        let mut side_only = bytes.clone();
+        side_only[link] = Links::BOTTOM;
+        assert_eq!(decode(&side_only), Err(SidecarError::InvalidLinks));
+
+        let terrain_cells = 16 + 4 + 4 + CHUNK_RECORD + 4 + 8;
+        let mut bare = bytes;
+        assert_eq!(bare[terrain_cells + 1], 2);
+        bare[terrain_cells + 1] = 0;
+        assert_eq!(decode(&bare), Err(SidecarError::InvalidLinks));
+    }
+
+    #[test]
+    fn encode_prunes_invalid_links() {
+        let map = linked_layer(&[(1, 0, Links::EMPTY.with_path())]);
+        let mut stale = map.clone();
+        let authoring = stale.layers[0].authoring.as_mut().unwrap();
+        authoring
+            .links
+            .set(CellCoord::new(-5, 3), Links::EMPTY.with_path());
+        authoring
+            .links
+            .set(CellCoord::new(0, 0), Links::EMPTY.with(Peer::Top));
+        assert_eq!(encode(&stale), encode(&map));
+        assert_eq!(decode(&encode(&stale)).unwrap(), map);
     }
 }
