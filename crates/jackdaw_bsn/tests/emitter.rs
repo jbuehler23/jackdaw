@@ -2,6 +2,7 @@
 //! trip.
 
 use bevy::ecs::entity::Entity;
+use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 
 use jackdaw_bsn::{
     BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue,
@@ -641,4 +642,51 @@ fn a_generic_enums_variant_emits_without_its_type_arguments() {
         "the variant carries no type arguments of its own:\n{text}"
     );
     parse_bsn_text(&text).expect("what the writer emits is what the reader takes");
+}
+
+#[derive(bevy::reflect::Reflect, Clone, Debug, PartialEq)]
+enum Reach {
+    Near,
+    Infinity,
+}
+
+#[derive(bevy::ecs::component::Component, bevy::reflect::Reflect, Clone, Debug, PartialEq)]
+#[reflect(Component)]
+struct Grid<const N: usize> {
+    inf: f32,
+    nan: f32,
+    reach: Reach,
+}
+
+/// Names the lexer once read as floats, and a const generic type path, all
+/// written by the emitter and read back into the same component.
+#[test]
+fn special_float_names_and_const_generics_save_and_reload() {
+    use bevy::reflect::TypePath;
+
+    let registry = AppTypeRegistry::default();
+    registry.write().register::<Grid<16>>();
+    let grid = Grid::<16> {
+        inf: f32::INFINITY,
+        nan: 2.0,
+        reach: Reach::Infinity,
+    };
+    let patch = jackdaw_bsn::component_to_bsn_patch(&grid, &registry.read());
+    let mut ast = SceneBsnAst::default();
+    let node = ast.create_entity_node(vec![patch]);
+    let text = jackdaw_bsn::emit_entity(&ast, node);
+
+    let (read, root) = jackdaw_bsn::parse_bsn(&text)
+        .unwrap_or_else(|err| panic!("the emitted text reads back: {err}\n{text}"));
+    let patch = read
+        .find_patch_by_type_path(root, Grid::<16>::type_path())
+        .and_then(|patch| read.get_patch(patch))
+        .cloned()
+        .unwrap_or_else(|| panic!("the emitted text names the type:\n{text}"));
+    let mut world = bevy::ecs::world::World::new();
+    world.insert_resource(registry);
+    let entity = world.spawn_empty().id();
+    jackdaw_bsn::apply_component_patch(&mut world, entity, &patch);
+
+    assert_eq!(world.get::<Grid<16>>(entity), Some(&grid), "from:\n{text}");
 }
