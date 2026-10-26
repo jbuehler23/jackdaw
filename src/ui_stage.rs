@@ -32,7 +32,7 @@ use bevy::{
 };
 use jackdaw_feathers::tokens;
 use jackdaw_scene_types::{CanvasGuides, Locked};
-use jackdaw_snap::{SnapLine, SnapRect, snap_edges_2d_with_winners};
+use jackdaw_snap::{SnapLine, SnapRect, dragged_part, land_2d};
 use path_slash::PathExt as _;
 
 use crate::{
@@ -82,7 +82,7 @@ const GUIDE_HIT_WIDTH: f32 = 5.0;
 /// authored ones, so the radius stays constant on screen at any zoom; the
 /// gesture converts it with the scale the panel is drawing at (see
 /// [`live_scale`]).
-const EDGE_SNAP_PIXELS: f32 = 6.0;
+pub(crate) const EDGE_SNAP_PIXELS: f32 = 6.0;
 
 /// The eight handle positions, clockwise from the top-left corner.
 const HANDLE_POSITIONS: [(i8, i8); 8] = [
@@ -2710,44 +2710,19 @@ fn snap_gesture(
     if !magnet {
         return SnapOutcome::default();
     }
-    let min = Vec2::new(rect.x, rect.y);
-    let moving = match edges {
-        (0, 0) => SnapRect::from_min_size(min, Vec2::new(rect.z, rect.w)),
-        (x, y) => {
-            let corner = Vec2::new(
-                if x > 0 { min.x + rect.z } else { min.x },
-                if y > 0 { min.y + rect.w } else { min.y },
-            );
-            SnapRect {
-                min: corner,
-                max: corner,
-            }
-        }
-    };
-    const NONE: [Candidate; 0] = [];
-    let x = if edges == (0, 0) || edges.0 != 0 {
-        candidates.x.as_slice()
-    } else {
-        &NONE
-    };
-    let y = if edges == (0, 0) || edges.1 != 0 {
-        candidates.y.as_slice()
-    } else {
-        &NONE
-    };
-    let at_x: Vec<f32> = x.iter().map(|candidate| candidate.at).collect();
-    let at_y: Vec<f32> = y.iter().map(|candidate| candidate.at).collect();
-    let (won_x, won_y) = snap_edges_2d_with_winners(moving, &at_x, &at_y, EDGE_SNAP_PIXELS * scale);
+    let (moving, axes) = dragged_part(
+        SnapRect::from_min_size(Vec2::new(rect.x, rect.y), Vec2::new(rect.z, rect.w)),
+        [edges.0, edges.1],
+    );
+    let at_x: Vec<f32> = candidates.x.iter().map(|candidate| candidate.at).collect();
+    let at_y: Vec<f32> = candidates.y.iter().map(|candidate| candidate.at).collect();
     // The grid only has a say on an axis no neighbour claimed; rounding an
     // edge landing afterwards would take it back off.
-    let lattice = snap_to_pixel_grid(moving.min, grid) - moving.min;
+    let landing = land_2d(moving, axes, &at_x, &at_y, EDGE_SNAP_PIXELS * scale, grid);
     SnapOutcome {
-        nudge: Vec2::new(
-            won_x.map_or(lattice.x, |snap| snap.delta),
-            won_y.map_or(lattice.y, |snap| snap.delta),
-        ),
-        x: won_x.map(|snap| winner(snap, x, edges.0)),
-        y: won_y.map(|snap| winner(snap, y, edges.1)),
+        nudge: landing.nudge,
+        x: landing.x.map(|snap| winner(snap, &candidates.x, edges.0)),
+        y: landing.y.map(|snap| winner(snap, &candidates.y, edges.1)),
     }
 }
 
@@ -2767,15 +2742,6 @@ fn winner(snap: jackdaw_snap::AxisSnap, candidates: &[Candidate], edge: i8) -> S
         percent: candidate.percent,
         line,
     }
-}
-
-/// `point` rounded onto a lattice of `grid` authored pixels. A non-positive
-/// or non-finite grid is no grid at all rather than a division by zero.
-pub fn snap_to_pixel_grid(point: Vec2, grid: f32) -> Vec2 {
-    if grid <= 0.0 || !grid.is_finite() {
-        return point;
-    }
-    (point / grid).round() * grid
 }
 
 fn on_gesture_end(mut event: On<PointerDragEnd>, parts: GestureTargets, mut commands: Commands) {
@@ -2942,8 +2908,14 @@ fn sync_snap_highlights(
     stages: Query<&ComputedNode, With<Scene2dViewport>>,
     highlights: Query<(Entity, &SnapHighlight)>,
     mut nodes: Query<&mut Node>,
+    sprites: Option<Res<crate::sprite_gizmo::SpriteManipulation>>,
 ) {
-    let wanted = highlight_lines(&manipulation, &hosts, &stages);
+    let mut wanted = highlight_lines(&manipulation, &hosts, &stages);
+    if let Some(sprites) = sprites {
+        wanted.extend(crate::sprite_gizmo::snap_highlight_lines(
+            &sprites, &hosts, &stages,
+        ));
+    }
 
     for (entity, highlight) in &highlights {
         match wanted
@@ -2992,12 +2964,12 @@ fn sync_snap_highlights(
 
 /// One line the running gesture wants drawn. Every landing is painted
 /// [`tokens::SNAP_HIGHLIGHT`], whatever kind of line it was.
-struct HighlightLine {
-    host: Entity,
-    stage: Entity,
-    axis: CanvasAxis,
+pub(crate) struct HighlightLine {
+    pub(crate) host: Entity,
+    pub(crate) stage: Entity,
+    pub(crate) axis: CanvasAxis,
     /// Where the line sits in the stage's logical pixels.
-    at: f32,
+    pub(crate) at: f32,
 }
 
 /// The lines the gesture in progress is landing on, in the stage's own

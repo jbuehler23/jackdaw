@@ -8,6 +8,8 @@
 //! the opposite side of the sprite's rect still. Each drag lands as one
 //! history entry; Escape puts back what the drag started from.
 
+use std::collections::HashSet;
+
 use bevy::{
     asset::AssetEvent,
     ecs::system::SystemParam,
@@ -27,17 +29,22 @@ use jackdaw_scene_types::{Locked, Scene2dRoot};
 use crate::{
     EditorEntity,
     active_tool::ActiveTool,
+    canvas_snap::CanvasSnap,
     commands::{CommandGroup, CommandHistory, EditorCommand, SetTransform},
     gizmos::MIN_SCALE,
     keybind_focus::KeybindFocus,
     prefab::AuthoredUiSceneRoot,
     selection::Selection,
     snapping::SnapSettings,
+    sprite_snap::{SpriteLanding, SpriteSnapRules, SpriteSnapTargets, land},
     sprite_stage::{
         Scene2dRoots, SpritePixels, SpritePress, in_2d_scene, shows_2d_world, sprite_local_rect,
-        stage_world_point,
+        sprite_world_corners, stage_world_point,
     },
-    ui_stage::{stage_pixels_per_target_pixel, without_selected_ancestors},
+    ui_stage::{
+        CanvasAxis, EDGE_SNAP_PIXELS, HighlightLine, stage_pixels_per_target_pixel,
+        without_selected_ancestors,
+    },
     viewport_2d::{
         Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, target_pixel_to_world,
         target_pixels_per_stage_pixel, world_to_target_pixel,
@@ -135,6 +142,29 @@ struct SpriteDrag {
     /// nothing moves.
     started: bool,
     items: Vec<DragItem>,
+    /// What a move or scale can land on; `None` for a rotate.
+    snap: Option<DragSnap>,
+    /// Where the last drag event landed, for the snap highlight.
+    landing: SpriteLanding,
+}
+
+/// What a move or scale can land on, gathered as the drag starts.
+enum DragSnap {
+    Move {
+        /// The world bounds of the dragged sprites whose size is known.
+        bounds: Option<Rect>,
+        /// Where the grid and pixel are measured from when no size is
+        /// known: the primary sprite's anchor if it moves, else the first
+        /// dragged sprite's.
+        anchor: Vec2,
+        targets: SpriteSnapTargets,
+    },
+    Scale {
+        /// The side of the primary's rect the handle pulls, on its local x
+        /// and y.
+        side: [i8; 2],
+        targets: SpriteSnapTargets,
+    },
 }
 
 /// The primary sprite a rotate turns about and a scale measures against.
@@ -564,12 +594,14 @@ pub(crate) fn cancel_sprite_drag(world: &mut World) {
 /// Whether `entity` is a sprite of the open 2D world scene that the stage
 /// may move.
 fn movable_sprite(world: &World, entity: Entity) -> bool {
-    if world.get::<Sprite>(entity).is_none()
-        || world.get::<Locked>(entity).is_some()
-        || world.get::<EditorEntity>(entity).is_some()
-    {
-        return false;
-    }
+    world.get::<Sprite>(entity).is_some()
+        && world.get::<Locked>(entity).is_none()
+        && world.get::<EditorEntity>(entity).is_none()
+        && in_open_2d_scene(world, entity)
+}
+
+/// Whether `entity` sits under the open 2D world scene's root.
+fn in_open_2d_scene(world: &World, entity: Entity) -> bool {
     let mut current = entity;
     while let Some(parent) = world.get::<ChildOf>(current) {
         current = parent.parent();
@@ -578,6 +610,92 @@ fn movable_sprite(world: &World, entity: Entity) -> bool {
         }
     }
     false
+}
+
+/// The world bounds of `entity`'s sprite, `None` while its size is unknown.
+fn sprite_bounds(world: &World, entity: Entity) -> Option<Rect> {
+    let corners = sprite_world_corners(
+        world.get::<Sprite>(entity)?,
+        world.get::<Anchor>(entity).copied().unwrap_or_default(),
+        world.get::<GlobalTransform>(entity)?,
+        world.get_resource::<Assets<Image>>()?,
+        world.get_resource::<Assets<TextureAtlasLayout>>()?,
+    )?;
+    Some(corners.into_iter().fold(
+        Rect::from_corners(corners[0], corners[0]),
+        |rect, corner| rect.union_point(corner),
+    ))
+}
+
+/// The edges and centres of the open 2D world scene's visible sprites, less
+/// the `dragged` ones and everything they carry.
+fn snap_targets(world: &World, dragged: &HashSet<Entity>) -> SpriteSnapTargets {
+    let mut stack: Vec<Entity> = world
+        .try_query_filtered::<Entity, (With<Scene2dRoot>, Without<ChildOf>)>()
+        .map(|mut roots| roots.iter(world).collect())
+        .unwrap_or_default();
+    let mut rects = Vec::new();
+    while let Some(entity) = stack.pop() {
+        if world.get::<EditorEntity>(entity).is_some() {
+            continue;
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            stack.extend(
+                children
+                    .into_iter()
+                    .copied()
+                    .filter(|child| !dragged.contains(child)),
+            );
+        }
+        let visible = world
+            .get::<InheritedVisibility>(entity)
+            .is_none_or(|visible| visible.get());
+        if visible && let Some(rect) = sprite_bounds(world, entity) {
+            rects.push(rect);
+        }
+    }
+    SpriteSnapTargets::from_rects(rects)
+}
+
+/// What a drag of `kind` on `items` can land on: nothing for a rotate.
+fn gather_snap(
+    world: &World,
+    kind: SpriteHandle,
+    items: &[DragItem],
+    primary: Option<Entity>,
+) -> Option<DragSnap> {
+    let dragged: HashSet<Entity> = items.iter().map(|item| item.entity).collect();
+    match kind {
+        SpriteHandle::Rotate => None,
+        SpriteHandle::Scale(x, y) => Some(DragSnap::Scale {
+            side: [x, y],
+            targets: snap_targets(world, &dragged),
+        }),
+        SpriteHandle::Body | SpriteHandle::AxisX | SpriteHandle::AxisY => {
+            let moving_primary = primary.filter(|&primary| {
+                let mut current = Some(primary);
+                while let Some(at) = current {
+                    if dragged.contains(&at) {
+                        return true;
+                    }
+                    current = world.get::<ChildOf>(at).map(ChildOf::parent);
+                }
+                false
+            });
+            let anchor = moving_primary
+                .and_then(|primary| world.get::<GlobalTransform>(primary))
+                .map(|global| global.translation().xy())
+                .or_else(|| items.first().map(|item| item.world.xy()))?;
+            Some(DragSnap::Move {
+                bounds: items
+                    .iter()
+                    .filter_map(|item| sprite_bounds(world, item.entity))
+                    .reduce(|a, b| a.union(b)),
+                anchor,
+                targets: snap_targets(world, &dragged),
+            })
+        }
+    }
 }
 
 /// The sprites of `entities` a drag or nudge takes, each once: movable
@@ -637,6 +755,7 @@ fn begin_drag(
             })
         }
     };
+    let snap = gather_snap(world, kind, &items, selection.primary());
     Some(SpriteDrag {
         target,
         host,
@@ -644,13 +763,15 @@ fn begin_drag(
         frame,
         started: false,
         items,
+        snap,
+        landing: SpriteLanding::default(),
     })
 }
 
 /// Follow the drag on `target` from the pointer at `from` to `now`, both
 /// ui-logical, writing the live transforms.
 fn drag_to(world: &mut World, target: Entity, from: Vec2, now: Vec2) {
-    let poses = {
+    let (poses, landing) = {
         let Some(drag) = world
             .resource::<SpriteManipulation>()
             .drag
@@ -681,10 +802,35 @@ fn drag_to(world: &mut World, target: Entity, from: Vec2, now: Vec2) {
             .get_resource::<SnapSettings>()
             .map(|snap| snap.0.clone())
             .unwrap_or_default();
-        drag.poses(from, now, shift, ctrl, &snap)
+        let kinds = world
+            .get_resource::<CanvasSnap>()
+            .copied()
+            .unwrap_or_default();
+        // Ctrl inverts the canvas magnet for a move; a scale takes Ctrl for
+        // its own increments, so there it only suspends the canvas snapping.
+        let magnet = match drag.kind {
+            SpriteHandle::Scale(..) => kinds.enabled && !ctrl,
+            _ => kinds.magnet(ctrl),
+        };
+        let ui_scale = world.get_resource::<UiScale>().map_or(1.0, |scale| scale.0);
+        let rules = SpriteSnapRules::new(
+            &kinds,
+            magnet,
+            host.view.grid,
+            snap_radius(host, computed, ui_scale),
+        );
+        let mut landing = drag.landing(from, now, shift, &rules);
+        if let Some(reached) = drag.scale_reach(now + landing.nudge, shift, ctrl, &snap) {
+            landing = landing.keep_reached(reached);
+        }
+        (
+            drag.poses(from, now + landing.nudge, shift, ctrl, &snap),
+            landing,
+        )
     };
     if let Some(drag) = world.resource_mut::<SpriteManipulation>().drag.as_mut() {
         drag.started = true;
+        drag.landing = landing;
     }
     for (entity, pose) in poses {
         if let Some(mut transform) = world.get_mut::<Transform>(entity) {
@@ -693,8 +839,33 @@ fn drag_to(world: &mut World, target: Entity, from: Vec2, now: Vec2) {
     }
 }
 
-/// The part of a world-space drag `delta` a move handle follows. Snapping a
-/// move belongs here.
+/// Whether `global` keeps a sprite's rect square to the world: both local
+/// axes along world axes and at right angles, so nothing shears it. `Some`
+/// with whether its local x runs along the world's y.
+fn square_to_world(global: &GlobalTransform) -> Option<bool> {
+    let matrix = global.affine().matrix3;
+    let x = matrix.x_axis.truncate().normalize_or_zero();
+    let y = matrix.y_axis.truncate().normalize_or_zero();
+    let flat = |axis: Vec2| axis != Vec2::ZERO && (axis.x.abs() < 1e-4 || axis.y.abs() < 1e-4);
+    (flat(x) && flat(y) && x.dot(y).abs() < 1e-4).then_some(x.x.abs() < x.y.abs())
+}
+
+/// [`EDGE_SNAP_PIXELS`] in world units on `host`'s stage, read the way the UI
+/// canvas reads it: pointer pixels.
+fn snap_radius(host: &Viewport2dPanelHost, computed: &ComputedNode, ui_scale: f32) -> f32 {
+    let stage = stage_pixels_per_target_pixel(
+        target_pixels_per_stage_pixel(computed.size(), host.target_size),
+        computed.inverse_scale_factor(),
+    );
+    let pointer_per_world = stage * host.view.zoom * ui_scale;
+    if pointer_per_world > 0.0 && pointer_per_world.is_finite() {
+        EDGE_SNAP_PIXELS / pointer_per_world
+    } else {
+        0.0
+    }
+}
+
+/// The part of a world-space drag `delta` a move handle follows.
 fn move_delta(kind: SpriteHandle, delta: Vec2) -> Vec2 {
     match kind {
         SpriteHandle::AxisX => Vec2::new(delta.x, 0.0),
@@ -717,6 +888,89 @@ fn floored(value: f32, hint: f32, fallback: f32) -> f32 {
 }
 
 impl SpriteDrag {
+    /// Where the canvas snapping takes a pointer that went from `from` to
+    /// `now`: a move lands the selection's bounds (its anchor alone while no
+    /// size is known), a scale handle lands the edge or corner it pulls. A
+    /// scale snaps only while the sprite is square to the world and not a
+    /// Shift corner, where the edge would not follow the pointer.
+    fn landing(
+        &self,
+        from: Vec2,
+        now: Vec2,
+        shift: bool,
+        rules: &SpriteSnapRules,
+    ) -> SpriteLanding {
+        match &self.snap {
+            None => SpriteLanding::default(),
+            Some(DragSnap::Move {
+                bounds,
+                anchor,
+                targets,
+            }) => {
+                let delta = move_delta(self.kind, now - from);
+                let axes = BVec2::new(
+                    self.kind != SpriteHandle::AxisY,
+                    self.kind != SpriteHandle::AxisX,
+                );
+                match bounds {
+                    Some(bounds) => {
+                        let moving = Rect {
+                            min: bounds.min + delta,
+                            max: bounds.max + delta,
+                        };
+                        land(moving, axes, targets, rules)
+                    }
+                    None => {
+                        let at = *anchor + delta;
+                        let point = Rect::from_corners(at, at);
+                        land(point, axes, targets, &rules.without_edges())
+                    }
+                }
+            }
+            Some(DragSnap::Scale { side, targets }) => {
+                let turned = self
+                    .frame
+                    .as_ref()
+                    .and_then(|frame| square_to_world(&frame.global));
+                let Some(turned) = turned else {
+                    return SpriteLanding::default();
+                };
+                let (x, y) = (side[0] != 0, side[1] != 0);
+                if shift && x && y {
+                    return SpriteLanding::default();
+                }
+                let axes = if turned {
+                    BVec2::new(y, x)
+                } else {
+                    BVec2::new(x, y)
+                };
+                land(Rect::from_corners(now, now), axes, targets, rules)
+            }
+        }
+    }
+
+    /// Where a scale handle pulled to `now` actually leaves its edge or
+    /// corner once the scale is stepped and floored, in the world; `None` for
+    /// a drag that is not a scale.
+    fn scale_reach(
+        &self,
+        now: Vec2,
+        shift: bool,
+        ctrl: bool,
+        snap: &jackdaw_snap::SnapSettings,
+    ) -> Option<Vec2> {
+        let SpriteHandle::Scale(x, y) = self.kind else {
+            return None;
+        };
+        let frame = self.frame.as_ref()?;
+        let side = Vec2::new(f32::from(x), f32::from(y));
+        let factor = Self::scale_factor(frame, side, now, shift, ctrl, snap)?;
+        let (fixed, stretch) = Self::stretch(frame, side, factor);
+        let handle = frame.rect.center() + frame.rect.half_size() * side;
+        let handle = frame.global.transform_point(handle.extend(0.0)).xy();
+        Some(fixed + stretch * (handle - fixed))
+    }
+
     /// Each dragged sprite's transform for a pointer that went from `from` to
     /// `now`, in world units. A rotate or scale is the primary sprite's, and
     /// the rest of the selection turns or scales with it about the same point.
@@ -800,19 +1054,18 @@ impl SpriteDrag {
             .collect()
     }
 
-    /// Scale the selection by the handle on `side` of the primary's rect
-    /// pulled to the world point `now`, about the primary's opposite side.
-    /// Shift keeps proportions; Ctrl steps the axes the handle drives (the
-    /// shared factor, with Shift). No axis reaches zero.
-    fn scaled(
-        &self,
+    /// The primary's scale factor on its local axes for the handle on `side`
+    /// pulled to the world point `now`. Shift keeps proportions; Ctrl steps
+    /// the axes the handle drives (the shared factor, with Shift). No axis
+    /// reaches zero.
+    fn scale_factor(
         frame: &PrimaryFrame,
         side: Vec2,
         now: Vec2,
         shift: bool,
         ctrl: bool,
         snap: &jackdaw_snap::SnapSettings,
-    ) -> Vec<(Entity, Transform)> {
+    ) -> Option<Vec2> {
         let primary = frame.scale;
         let half = frame.rect.half_size() * side;
         let held = frame.rect.center() - half;
@@ -847,9 +1100,13 @@ impl SpriteDrag {
             floored(target[axis], primary[axis] * raw[axis], primary[axis]) / primary[axis]
         };
         let factor = Vec2::new(pick(0), pick(1));
-        if !factor.is_finite() {
-            return Vec::new();
-        }
+        factor.is_finite().then_some(factor)
+    }
+
+    /// The world point the scale about `side`'s opposite side holds still,
+    /// and the world-space stretch `factor` makes about it.
+    fn stretch(frame: &PrimaryFrame, side: Vec2, factor: Vec2) -> (Vec2, Mat2) {
+        let held = frame.rect.center() - frame.rect.half_size() * side;
         let x_axis = frame.global.affine().matrix3.x_axis.truncate();
         let y_axis = frame.global.affine().matrix3.y_axis.truncate();
         let axes = Mat2::from_cols(
@@ -858,6 +1115,24 @@ impl SpriteDrag {
         );
         let stretch = axes * Mat2::from_diagonal(factor) * axes.inverse();
         let fixed = frame.global.transform_point(held.extend(0.0)).xy();
+        (fixed, stretch)
+    }
+
+    /// Scale the selection by the handle on `side` of the primary's rect
+    /// pulled to the world point `now`, about the primary's opposite side.
+    fn scaled(
+        &self,
+        frame: &PrimaryFrame,
+        side: Vec2,
+        now: Vec2,
+        shift: bool,
+        ctrl: bool,
+        snap: &jackdaw_snap::SnapSettings,
+    ) -> Vec<(Entity, Transform)> {
+        let Some(factor) = Self::scale_factor(frame, side, now, shift, ctrl, snap) else {
+            return Vec::new();
+        };
+        let (fixed, stretch) = Self::stretch(frame, side, factor);
         self.items
             .iter()
             .map(|item| {
@@ -876,6 +1151,49 @@ impl SpriteDrag {
             })
             .collect()
     }
+}
+
+/// The lines the running sprite drag is landing on, in its stage's logical
+/// pixels, for the canvas's snap highlight.
+pub(crate) fn snap_highlight_lines(
+    manipulation: &SpriteManipulation,
+    hosts: &Query<&Viewport2dPanelHost>,
+    stages: &Query<&ComputedNode, With<Scene2dViewport>>,
+) -> Vec<HighlightLine> {
+    let Some(drag) = manipulation.drag.as_ref().filter(|drag| drag.started) else {
+        return Vec::new();
+    };
+    let Ok(host) = hosts.get(drag.host) else {
+        return Vec::new();
+    };
+    let Ok(stage) = stages.get(host.stage) else {
+        return Vec::new();
+    };
+    if host.mode != Viewport2dMode::Edit {
+        return Vec::new();
+    }
+    let scale = stage_pixels_per_target_pixel(
+        target_pixels_per_stage_pixel(stage.size(), host.target_size),
+        stage.inverse_scale_factor(),
+    );
+    let on_stage = |world: Vec2| world_to_target_pixel(host.view, host.target_size, world) * scale;
+    let line = |axis: CanvasAxis, at: f32| HighlightLine {
+        host: drag.host,
+        stage: host.stage,
+        axis,
+        at,
+    };
+    let landing = drag.landing;
+    landing
+        .x
+        .map(|x| line(CanvasAxis::Vertical, on_stage(Vec2::new(x, 0.0)).x))
+        .into_iter()
+        .chain(
+            landing
+                .y
+                .map(|y| line(CanvasAxis::Horizontal, on_stage(Vec2::new(0.0, y)).y)),
+        )
+        .collect()
 }
 
 /// End the drag: record what it wrote as one history entry, or put back

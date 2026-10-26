@@ -58,11 +58,16 @@ pub enum CanvasSnapKind {
     OtherNodes,
     /// The guides pulled off the rulers.
     Guides,
+    /// The panel's grid, on a 2D world scene. A UI canvas always rests on
+    /// its grid when nothing else is near.
+    Grid,
+    /// The edges and centres of other sprites, on a 2D world scene.
+    SpriteEdges,
 }
 
 impl CanvasSnapKind {
     /// Every kind, in the order the canvas offers them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Enabled,
         Self::Pixel,
         Self::Parent,
@@ -71,6 +76,8 @@ impl CanvasSnapKind {
         Self::SiblingCenters,
         Self::OtherNodes,
         Self::Guides,
+        Self::Grid,
+        Self::SpriteEdges,
     ];
 
     /// The kind `id` names, or `None` when it names none of them.
@@ -90,6 +97,8 @@ impl CanvasSnapKind {
             Self::SiblingCenters => "sibling_centers",
             Self::OtherNodes => "other_nodes",
             Self::Guides => "guides",
+            Self::Grid => "grid",
+            Self::SpriteEdges => "sprite_edges",
         }
     }
 
@@ -104,6 +113,23 @@ impl CanvasSnapKind {
             Self::SiblingCenters => "Sibling Centers",
             Self::OtherNodes => "Other Nodes",
             Self::Guides => "Guides",
+            Self::Grid => "Grid",
+            Self::SpriteEdges => "Sprite Edges",
+        }
+    }
+
+    /// Whether this kind has a say on a 2D world scene (`world`) or on a UI
+    /// canvas (not `world`).
+    pub fn applies(self, world: bool) -> bool {
+        match self {
+            Self::Enabled | Self::Pixel => true,
+            Self::Grid | Self::SpriteEdges => world,
+            Self::Parent
+            | Self::PercentLines
+            | Self::SiblingSides
+            | Self::SiblingCenters
+            | Self::OtherNodes
+            | Self::Guides => !world,
         }
     }
 }
@@ -132,6 +158,10 @@ pub struct CanvasSnap {
     pub other_nodes: bool,
     /// Snap to the scene's guides.
     pub guides: bool,
+    /// Snap a sprite to the panel's grid.
+    pub grid: bool,
+    /// Snap a sprite to other sprites' edges and centres.
+    pub sprite_edges: bool,
     /// Draw the rulers along the top and left of the stage.
     pub show_rulers: bool,
     /// Draw the scene's guides over the stage.
@@ -149,6 +179,8 @@ impl Default for CanvasSnap {
             sibling_centers: true,
             other_nodes: false,
             guides: true,
+            grid: true,
+            sprite_edges: true,
             show_rulers: true,
             show_guides: true,
         }
@@ -167,11 +199,14 @@ impl CanvasSnap {
             CanvasSnapKind::SiblingCenters => self.sibling_centers,
             CanvasSnapKind::OtherNodes => self.other_nodes,
             CanvasSnapKind::Guides => self.guides,
+            CanvasSnapKind::Grid => self.grid,
+            CanvasSnapKind::SpriteEdges => self.sprite_edges,
         }
     }
 
     /// Whether a gesture snaps at all: the master, inverted by Ctrl for the
-    /// length of the gesture.
+    /// length of the gesture. A sprite move follows it too; a sprite rotate
+    /// or scale takes Ctrl for its own increments instead.
     pub fn magnet(&self, ctrl: bool) -> bool {
         self.enabled != ctrl
     }
@@ -187,6 +222,8 @@ impl CanvasSnap {
             CanvasSnapKind::SiblingCenters => &mut self.sibling_centers,
             CanvasSnapKind::OtherNodes => &mut self.other_nodes,
             CanvasSnapKind::Guides => &mut self.guides,
+            CanvasSnapKind::Grid => &mut self.grid,
+            CanvasSnapKind::SpriteEdges => &mut self.sprite_edges,
         };
         *field = on;
     }
@@ -235,7 +272,7 @@ pub(crate) fn persist(project: Option<&ProjectRoot>, snap: &CanvasSnap) {
     params(
         kind(
             String,
-            doc = "Which switch: `enabled`, `pixel`, `parent`, `percent_lines`, `sibling_sides`, `sibling_centers`, `other_nodes` or `guides`."
+            doc = "Which switch: `enabled`, `pixel`, `parent`, `percent_lines`, `sibling_sides`, `sibling_centers`, `other_nodes`, `guides`, `grid` or `sprite_edges`."
         ),
         on(bool, doc = "On or off. Omit to flip whichever way it currently is.")
     )

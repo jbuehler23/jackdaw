@@ -36,6 +36,8 @@ fn the_snap_kinds_ship_with_the_defaults_the_canvas_expects() {
             "sibling_sides",
             "sibling_centers",
             "guides",
+            "grid",
+            "sprite_edges",
         ],
         "the canvas snaps out of the box, and every kind but the cross-tree one is on",
     );
