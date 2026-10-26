@@ -174,6 +174,20 @@ pub fn world_at(view: Ui2dView, area_offset: Vec2) -> Vec2 {
     view.pan + Vec2::new(area_offset.x, -area_offset.y) / view.zoom
 }
 
+/// World point (y up) drawn at `pixel` of a panel's render-target image,
+/// measured from the image's top-left corner, when the panel shows a 2D world
+/// scene through `view`. Matches the camera [`apply_2d_view`] places: centred
+/// on the pan, `1 / zoom` world units per target pixel.
+pub fn target_pixel_to_world(view: Ui2dView, target_size: UVec2, pixel: Vec2) -> Vec2 {
+    world_at(view, pixel - target_size.as_vec2() / 2.0)
+}
+
+/// Inverse of [`target_pixel_to_world`].
+pub fn world_to_target_pixel(view: Ui2dView, target_size: UVec2, world: Vec2) -> Vec2 {
+    let offset = (world - view.pan) * view.zoom;
+    Vec2::new(offset.x, -offset.y) + target_size.as_vec2() / 2.0
+}
+
 /// Zoom by `ticks` wheel steps about the point under the cursor: the pan is
 /// re-solved so [`world_at`] returns the same authored point before and after.
 pub fn zoom_toward(view: Ui2dView, area_offset: Vec2, ticks: f32) -> Ui2dView {
@@ -328,7 +342,7 @@ pub struct Viewport2dPanelHost {
     /// framing.
     pub fit_pending: bool,
     /// Size of the camera's render-target image, in its own pixels: the
-    /// reference size of the active UI scene, or the stage's own size when none
+    /// reference size of the active UI scene, or the stage's logical size when none
     /// is open. Cached here so the pan/zoom pass need not touch `Assets<Image>`.
     pub target_size: UVec2,
 }
@@ -828,7 +842,21 @@ pub fn size_targets_to_reference(
                 }
                 reference
             }
-            None => computed.size().as_uvec2().max(UVec2::ONE),
+            // Logical pixels, the measure the view is driven in, so one
+            // target pixel is one stage logical pixel at any scale factor.
+            None => {
+                let size = (computed.size() * computed.inverse_scale_factor())
+                    .round()
+                    .as_uvec2()
+                    .max(UVec2::ONE);
+                if let Ok(RenderTarget::Image(target)) = targets.get(host.camera)
+                    && let Some(mut image) = images.get_mut(&target.handle)
+                    && image.size() != size
+                {
+                    image.resize(size.to_extents());
+                }
+                size
+            }
         };
         if host.target_size != target_size {
             host.target_size = target_size;
@@ -1081,6 +1109,54 @@ mod ruler_label_step_tests {
         assert_eq!(ruler_label_step(1.0), 50.0);
         assert_eq!(ruler_label_step(0.5), 100.0);
         assert_eq!(ruler_label_step(0.1), 500.0);
+    }
+}
+
+#[cfg(test)]
+mod world_mapping_tests {
+    use super::*;
+
+    const TARGET: UVec2 = UVec2::new(800, 600);
+
+    #[test]
+    fn the_image_centre_shows_the_pan() {
+        let view = Ui2dView {
+            pan: Vec2::new(30.0, -12.0),
+            zoom: 2.0,
+            ..default()
+        };
+        assert_eq!(
+            target_pixel_to_world(view, TARGET, Vec2::new(400.0, 300.0)),
+            view.pan
+        );
+    }
+
+    #[test]
+    fn pixels_run_y_down_and_world_y_up_scaled_by_zoom() {
+        let view = Ui2dView {
+            pan: Vec2::ZERO,
+            zoom: 2.0,
+            ..default()
+        };
+        let world = target_pixel_to_world(view, TARGET, Vec2::new(500.0, 200.0));
+        assert_eq!(world, Vec2::new(50.0, 50.0));
+    }
+
+    #[test]
+    fn the_two_mappings_are_inverses() {
+        let view = Ui2dView {
+            pan: Vec2::new(-140.0, 75.5),
+            zoom: 0.37,
+            ..default()
+        };
+        for world in [Vec2::ZERO, Vec2::new(12.5, -900.0), Vec2::new(-3.0, 41.0)] {
+            let pixel = world_to_target_pixel(view, TARGET, world);
+            let back = target_pixel_to_world(view, TARGET, pixel);
+            assert!(
+                (back - world).length() < 1e-3,
+                "{world} came back as {back}"
+            );
+        }
     }
 }
 

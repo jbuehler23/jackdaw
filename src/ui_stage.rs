@@ -41,6 +41,7 @@ use crate::{
     commands::push_layout_edits,
     prefab::AuthoredUiSceneRoot,
     selection::Selection,
+    sprite_stage::{Scene2dRoots, shows_2d_world},
     viewport_2d::{
         CanvasRuler, Scene2dViewport, Viewport2dMode, Viewport2dPanelHost, cursor_stage_offset,
         target_pixels_per_stage_pixel,
@@ -957,6 +958,7 @@ fn on_marquee_start(
     hosts: Query<(Entity, &Viewport2dPanelHost)>,
     stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
     roots: Query<(Entity, &UiTargetCamera), AuthoredUiSceneRoot>,
+    scene_roots: Scene2dRoots,
     nodes: AuthoredNodes,
     children: Query<&Children>,
     selection: Res<Selection>,
@@ -992,6 +994,11 @@ fn on_marquee_start(
     let Ok(stage) = stages.get(host.stage) else {
         return;
     };
+    // A 2D world scene's stage belongs to the sprite adapter.
+    if shows_2d_world(host, roots.iter().map(|(_, routed)| routed), &scene_roots) {
+        marquee.seed = None;
+        return;
+    }
     let cursor = event.pointer.position / ui_scale.0;
     if let StagePick::Hit(entity) = hit_at(
         cursor,
