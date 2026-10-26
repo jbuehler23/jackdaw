@@ -124,10 +124,11 @@ impl ProposedSet {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProposedTerrain {
     pub id: TerrainId,
     pub background: bool,
+    pub pure_tiles: Vec<TileAddress>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -254,6 +255,7 @@ pub fn fit_layouts(
             background: outers.contains(&t.id)
                 && !inners.contains(&t.id)
                 && t.pure_tiles.is_empty(),
+            pure_tiles: t.pure_tiles.clone(),
         })
         .collect();
     let mut placed: BTreeSet<TileAddress> = (kept.iter())
@@ -327,18 +329,52 @@ fn outer_of(
 }
 
 fn tile_edges(input: &SheetInput, tile: u32) -> Option<Edges> {
+    let side = |slot: usize| side_pixels(input, tile, slot);
+    Some([side(0)?, side(1)?, side(2)?, side(3)?])
+}
+
+/// The pixels along side `slot` ([`Peer::SIDES`] order) of `tile`; `None`
+/// when the tile is outside the layout.
+pub(crate) fn side_pixels(input: &SheetInput, tile: u32, slot: usize) -> Option<Vec<Option<Vec3>>> {
     if tile >= input.layout.tile_count() {
         return None;
     }
-    let (origin, size) = input.layout.tile_rect(tile);
-    let (last_x, last_y) = (size.x.checked_sub(1)?, size.y.checked_sub(1)?);
-    let pixel = |x: u32, y: u32| {
-        let p = input.image.pixel(origin.x + x, origin.y + y)?;
-        (f32::from(p[3]) / 255.0 >= MIN_ALPHA).then(|| srgb_to_oklab(p))
+    let size = input.layout.tile;
+    let along = if slot == 1 || slot == 2 {
+        size.y
+    } else {
+        size.x
     };
-    let row = |y: u32| (0..size.x).map(|x| pixel(x, y)).collect();
-    let column = |x: u32| (0..size.y).map(|y| pixel(x, y)).collect();
-    Some([row(0), column(0), column(last_x), row(last_y)])
+    Some(
+        (0..along)
+            .map(|i| side_pixel(input, tile, slot, 0, i))
+            .collect(),
+    )
+}
+
+/// Pixel `i` along side `slot` of `tile`, `depth` pixels in, in Oklab;
+/// `None` when transparent or outside the tile.
+pub(crate) fn side_pixel(
+    input: &SheetInput,
+    tile: u32,
+    slot: usize,
+    depth: u32,
+    i: u32,
+) -> Option<Vec3> {
+    let (origin, size) = input.layout.tile_rect(tile);
+    let vertical = slot == 1 || slot == 2;
+    let (along, across) = if vertical {
+        (size.y, size.x)
+    } else {
+        (size.x, size.y)
+    };
+    if tile >= input.layout.tile_count() || i >= along || depth >= across {
+        return None;
+    }
+    let inward = if slot >= 2 { across - 1 - depth } else { depth };
+    let (x, y) = if vertical { (inward, i) } else { (i, inward) };
+    let p = input.image.pixel(origin.x + x, origin.y + y)?;
+    (f32::from(p[3]) / 255.0 >= MIN_ALPHA).then(|| srgb_to_oklab(p))
 }
 
 /// Corrects the tiles of `inner` over `outer` and charges each mode.
@@ -496,13 +532,13 @@ fn segment(peer: Peer, side: Peer, w: u32, h: u32) -> Range<usize> {
     start as usize..(start + len) as usize
 }
 
-fn widen(range: Range<usize>, len: usize) -> Range<usize> {
+pub(crate) fn widen(range: Range<usize>, len: usize) -> Range<usize> {
     range.start.saturating_sub(SEAM_SHIFT)..(range.end + SEAM_SHIFT).min(len)
 }
 
 /// Mean over `range` of each pixel's distance to the nearest pixel of the
 /// other edge within [`SEAM_SHIFT`], both ways; `None` when nothing compares.
-fn seam(a: &[Option<Vec3>], b: &[Option<Vec3>], range: Range<usize>) -> Option<f32> {
+pub(crate) fn seam(a: &[Option<Vec3>], b: &[Option<Vec3>], range: Range<usize>) -> Option<f32> {
     let (mut sum, mut count) = (0.0, 0usize);
     for (x, y) in [(a, b), (b, a)] {
         for i in range.clone() {
