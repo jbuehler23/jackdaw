@@ -542,8 +542,9 @@ fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, t
             if let Some(path) = tab_path {
                 // Swap to the target tab if it is not active.
                 let active = world.resource::<crate::scenes::Scenes>().active;
-                if active != target {
-                    crate::scenes::swap::swap_active_tab(world, target);
+                if active != target && !crate::scenes::swap::swap_active_tab(world, target) {
+                    world.resource_mut::<PendingTabClose>().tab_index = None;
+                    return;
                 }
 
                 // Point SceneFilePath at this tab so save works correctly.

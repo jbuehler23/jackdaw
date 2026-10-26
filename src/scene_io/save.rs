@@ -245,14 +245,11 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let text = emit_bsn_scene_with_inline_assets(world, &parent);
-        match jackdaw_bsn::parse_bsn_text(&text) {
-            Ok(bsn) => {
-                world
-                    .resource_mut::<crate::prefab::PrefabAstCache>()
-                    .insert(&path, bsn);
-            }
-            Err(err) => warn!("scene.save: prefab snapshot parse failed: {err}"),
-        }
+        let bsn = jackdaw_bsn::parse_emitted(&text)
+            .map_err(|err| BevyError::from(format!("cannot save {}: {err}", path.display())))?;
+        world
+            .resource_mut::<crate::prefab::PrefabAstCache>()
+            .insert(&path, bsn);
         crate::prefab::operators::save_prefab_to_disk(world, &path)
             .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
         write_alongside(world, &path.to_string_lossy())?;
@@ -312,6 +309,8 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .unwrap_or_default();
         let body = emit_bsn_scene_for_file(world, &parent_path)
             .map_err(|refusal| BevyError::from(format!("cannot save {path}: {refusal}")))?;
+        jackdaw_bsn::parse_emitted(&body)
+            .map_err(|err| BevyError::from(format!("cannot save {path}: {err}")))?;
         // Record the jackdaw + Bevy version at the disk boundary only, so
         // the in-memory undo / tab-swap snapshots from the same emitter stay
         // stamp-free.

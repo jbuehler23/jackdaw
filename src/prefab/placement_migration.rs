@@ -352,8 +352,11 @@ fn write_changed(
     let mut written = Vec::new();
     for document in documents.iter().filter(|document| document.changed) {
         let text = jackdaw_bsn::document_as_text(&document.ast, document.preamble.as_deref());
-        let result = jackdaw_bsn::document_bytes(&document.file, &text)
+        let result = jackdaw_bsn::parse_emitted(&text)
             .map_err(|err| err.to_string())
+            .and_then(|_| {
+                jackdaw_bsn::document_bytes(&document.file, &text).map_err(|err| err.to_string())
+            })
             .and_then(|bytes| {
                 crate::scene_io::save::write_atomic(&document.file, &bytes)
                     .map_err(|err| err.to_string())
