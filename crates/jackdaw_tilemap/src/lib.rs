@@ -9,6 +9,8 @@ mod grid;
 mod layer;
 mod region_text;
 mod sidecar;
+mod solver;
+mod template;
 mod tile;
 
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
@@ -21,4 +23,9 @@ pub use sidecar::{
     LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
     encode,
 };
+pub use solver::{
+    MatchMode, Peer, RequiredPeers, Resolved, TerrainSet, TerrainTile, TileTerrains, match_score,
+    required_peers, resolve_cell, resolve_region,
+};
+pub use template::LayoutTemplate;
 pub use tile::{TerrainId, TileRef};
