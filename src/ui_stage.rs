@@ -37,7 +37,7 @@ use path_slash::PathExt as _;
 
 use crate::{
     EditorEntity,
-    canvas_snap::CanvasSnap,
+    canvas_snap::{CanvasSnap, GuideScene, GuideSpace},
     commands::push_layout_edits,
     prefab::AuthoredUiSceneRoot,
     selection::Selection,
@@ -725,6 +725,15 @@ pub fn stage_pixels_per_target_pixel(target_scale: f32, inverse_scale_factor: f3
         return 1.0;
     }
     inverse_scale_factor / target_scale
+}
+
+/// [`stage_pixels_per_target_pixel`] for a laid-out `stage` showing a
+/// `target_size` render target.
+pub(crate) fn stage_scale(stage: &ComputedNode, target_size: UVec2) -> f32 {
+    stage_pixels_per_target_pixel(
+        target_pixels_per_stage_pixel(stage.size(), target_size),
+        stage.inverse_scale_factor(),
+    )
 }
 
 /// Authored (render-target) pixels per pointer pixel: what a
@@ -2451,7 +2460,7 @@ fn gather_candidates(world: &World, entity: Entity, kinds: &CanvasSnap) -> SnapC
         }
     }
 
-    if kinds.guides
+    if kinds.snaps_to_guides()
         && let Some(guides) = world.get::<CanvasGuides>(scene_root(world, entity))
     {
         for at in &guides.vertical {
@@ -3042,13 +3051,14 @@ fn place_highlight(node: &mut Node, axis: CanvasAxis, at: f32) {
 fn sync_guide_lines(
     mut commands: Commands,
     snap: Res<CanvasSnap>,
-    roots: Query<(Entity, &CanvasGuides), AuthoredUiSceneRoot>,
+    scene: GuideScene,
+    guides: Query<&CanvasGuides>,
     hosts: Query<(Entity, &Viewport2dPanelHost)>,
     stages: Query<&ComputedNode, With<Scene2dViewport>>,
     lines: Query<(Entity, &GuideLine)>,
     mut nodes: Query<&mut Node>,
 ) {
-    let wanted = guide_lines(&snap, &roots, &hosts, &stages);
+    let wanted = guide_lines(&snap, &scene, &guides, &hosts, &stages);
 
     for (entity, line) in &lines {
         match wanted.iter().find(|want| {
@@ -3116,23 +3126,19 @@ struct WantedGuide {
     at: f32,
 }
 
-/// Every guide every panel wants drawn. A guide's position is canvas-global
-/// authored pixels and the stage node *is* the canvas, so there is no
-/// parent corner to add, unlike a snap landing.
+/// Every guide every panel wants drawn. The stage node *is* the render
+/// target, so a guide's target pixel needs no parent corner added, unlike a
+/// snap landing.
 fn guide_lines(
     snap: &CanvasSnap,
-    roots: &Query<(Entity, &CanvasGuides), AuthoredUiSceneRoot>,
+    scene: &GuideScene,
+    guides: &Query<&CanvasGuides>,
     hosts: &Query<(Entity, &Viewport2dPanelHost)>,
     stages: &Query<&ComputedNode, With<Scene2dViewport>>,
 ) -> Vec<WantedGuide> {
     if !snap.show_guides {
         return Vec::new();
     }
-    // A malformed document holding several roots picks the lowest entity,
-    // the same one the guide operators write.
-    let Some((_, guides)) = roots.iter().min_by_key(|(entity, _)| *entity) else {
-        return Vec::new();
-    };
 
     let mut wanted = Vec::new();
     for (host_entity, host) in hosts {
@@ -3142,8 +3148,13 @@ fn guide_lines(
         let Ok(stage) = stages.get(host.stage) else {
             continue;
         };
-        let target_scale = target_pixels_per_stage_pixel(stage.size(), host.target_size);
-        let scale = stage_pixels_per_target_pixel(target_scale, stage.inverse_scale_factor());
+        let Some((space, guides)) = scene
+            .open(Some(host))
+            .and_then(|(root, space)| Some((space, guides.get(root).ok()?)))
+        else {
+            continue;
+        };
+        let scale = stage_scale(stage, host.target_size);
         for (axis, positions) in [
             (CanvasAxis::Vertical, &guides.vertical),
             (CanvasAxis::Horizontal, &guides.horizontal),
@@ -3154,7 +3165,7 @@ fn guide_lines(
                     stage: host.stage,
                     axis,
                     index,
-                    at: at * scale,
+                    at: space.to_target(host, axis, *at) * scale,
                 });
             }
         }
@@ -3188,8 +3199,8 @@ pub struct GuideManipulation {
 }
 
 impl GuideManipulation {
-    /// Where the guide being dragged is now, in canvas-global authored
-    /// pixels, or `None` when no guide is being dragged.
+    /// Where the guide being dragged is now, in the scene's guide units,
+    /// or `None` when no guide is being dragged.
     pub fn position(&self) -> Option<f32> {
         self.active.as_ref().map(|drag| drag.position)
     }
@@ -3200,12 +3211,14 @@ struct GuideDrag {
     /// The panel the drag is running on, so every event maps the cursor
     /// through the canvas that panel is showing.
     host: Entity,
-    /// The UI scene root the guides belong to.
+    /// The scene root the guides belong to.
     root: Entity,
+    /// What the guides are measured in.
+    space: GuideSpace,
     axis: CanvasAxis,
     /// The axis's other guides, which the drag leaves where they are.
     others: Vec<f32>,
-    /// Where the dragged guide is now, in canvas-global authored pixels.
+    /// Where the dragged guide is now, in the scene's guide units.
     position: f32,
     /// The guides as the drag found them, for the history entry and for
     /// Escape.
@@ -3320,6 +3333,7 @@ fn on_guide_drag_start(
     mut event: On<PointerDragStart>,
     parts: GuideTargets,
     pointer: GuidePointer,
+    scene: GuideScene,
     mut commands: Commands,
 ) {
     let target = event.event_target();
@@ -3331,8 +3345,16 @@ fn on_guide_drag_start(
         return;
     }
     event.propagate(false);
+    let Some(scene) = parts
+        .hosts
+        .get(host)
+        .ok()
+        .and_then(|panel| scene.open(Some(panel)))
+    else {
+        return;
+    };
     commands.queue(move |world: &mut World| {
-        let started = begin_guide_drag(world, host, axis, index, cursor);
+        let started = begin_guide_drag(world, scene, host, axis, index, cursor);
         world.resource_mut::<GuideManipulation>().active = started;
     });
 }
@@ -3342,15 +3364,12 @@ fn on_guide_drag_start(
 /// scene; the history hears about it once, on release.
 fn begin_guide_drag(
     world: &mut World,
+    (root, space): (Entity, GuideSpace),
     host: Entity,
     axis: CanvasAxis,
     index: Option<usize>,
     cursor: Vec2,
 ) -> Option<GuideDrag> {
-    let root = world
-        .query_filtered::<Entity, AuthoredUiSceneRoot>()
-        .iter(world)
-        .min()?;
     let before = world.get::<CanvasGuides>(root).cloned();
     let mut others = before
         .clone()
@@ -3362,12 +3381,13 @@ fn begin_guide_drag(
     let position = match index {
         Some(index) if index < others.len() => others.remove(index),
         Some(_) => return None,
-        None => guide_landing(world, host, axis, cursor)?,
+        None => guide_landing(world, host, space, axis, cursor)?,
     };
 
     let drag = GuideDrag {
         host,
         root,
+        space,
         axis,
         others,
         position,
@@ -3398,7 +3418,8 @@ fn on_guide_drag(
             let Some(drag) = manipulation.active.as_mut() else {
                 return;
             };
-            let Some(position) = guide_landing(world, drag.host, drag.axis, cursor) else {
+            let Some(position) = guide_landing(world, drag.host, drag.space, drag.axis, cursor)
+            else {
                 return;
             };
             drag.position = position;
@@ -3465,12 +3486,19 @@ fn cancel_guide_drag(
     }
 }
 
-/// Where a guide dragged to `cursor` comes to rest, in canvas-global
-/// authored pixels. Whole pixels at the least, so the figure can be typed
-/// back into the inspector; with the canvas's magnet on it lands on the
-/// panel's own lattice instead, and Ctrl inverts that.
-fn guide_landing(world: &World, host: Entity, axis: CanvasAxis, cursor: Vec2) -> Option<f32> {
-    let raw = axis_of(cursor_on_canvas(world, host, cursor)?, axis);
+/// Where a guide dragged to `cursor` comes to rest, in the scene's guide
+/// units, on the lattice `GuideSpace::lattice` names. Ctrl inverts the
+/// canvas's magnet.
+fn guide_landing(
+    world: &World,
+    host: Entity,
+    space: GuideSpace,
+    axis: CanvasAxis,
+    cursor: Vec2,
+) -> Option<f32> {
+    let panel = world.get::<Viewport2dPanelHost>(host)?;
+    let pixel = axis_of(cursor_on_canvas(world, panel, cursor)?, axis);
+    let raw = space.position_at(panel, axis, pixel);
     let ctrl = world
         .get_resource::<ButtonInput<KeyCode>>()
         .is_some_and(|keys| keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]));
@@ -3478,17 +3506,14 @@ fn guide_landing(world: &World, host: Entity, axis: CanvasAxis, cursor: Vec2) ->
         .get_resource::<CanvasSnap>()
         .copied()
         .unwrap_or_default();
-    let grid = world
-        .get::<Viewport2dPanelHost>(host)
-        .map_or(0.0, |host| host.view.grid);
-    if kinds.magnet(ctrl) && grid > 0.0 && grid.is_finite() {
-        return Some((raw / grid).round() * grid);
-    }
-    Some(raw.round())
+    Some(match space.lattice(&kinds, ctrl, panel.view.grid) {
+        Some(step) => (raw / step).round() * step,
+        None => raw,
+    })
 }
 
 /// The coordinate a guide of this axis is stated in.
-fn axis_of(point: Vec2, axis: CanvasAxis) -> f32 {
+pub(crate) fn axis_of(point: Vec2, axis: CanvasAxis) -> f32 {
     match axis {
         CanvasAxis::Vertical => point.x,
         CanvasAxis::Horizontal => point.y,
@@ -3497,8 +3522,7 @@ fn axis_of(point: Vec2, axis: CanvasAxis) -> f32 {
 
 /// Where the cursor (ui-logical pixels) is over a panel's canvas, in
 /// canvas-global authored pixels, on the canvas or off it.
-fn cursor_on_canvas(world: &World, host: Entity, cursor: Vec2) -> Option<Vec2> {
-    let host = world.get::<Viewport2dPanelHost>(host)?;
+fn cursor_on_canvas(world: &World, host: &Viewport2dPanelHost, cursor: Vec2) -> Option<Vec2> {
     let computed = world.get::<ComputedNode>(host.stage)?;
     let transform = world.get::<UiGlobalTransform>(host.stage)?;
     let target_scale = target_pixels_per_stage_pixel(computed.size(), host.target_size);

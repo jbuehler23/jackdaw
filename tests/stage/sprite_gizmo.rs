@@ -47,6 +47,11 @@ pub(crate) struct Scene {
 }
 
 pub(crate) fn world_app() -> (App, Scene) {
+    world_app_sized(1200.0)
+}
+
+/// [`world_app`] with a stage area `area_width` logical pixels wide.
+pub(crate) fn world_app_sized(area_width: f32) -> (App, Scene) {
     let mut app = util::editor_test_app();
     util::fixed_frame_clock(&mut app);
     {
@@ -58,26 +63,7 @@ pub(crate) fn world_app() -> (App, Scene) {
             .expect("headless apps still have a primary window");
         window.resolution = WindowResolution::new(1600, 1000);
     }
-    let panel = app
-        .world_mut()
-        .spawn((
-            jackdaw::EditorEntity,
-            Node {
-                width: px(1200.0 + RULER_SIZE),
-                height: px(600.0 + RULER_SIZE + jackdaw_feathers::tokens::TOOLBAR_HEIGHT),
-                ..default()
-            },
-        ))
-        .id();
-    build_viewport_2d_panel(app.world_mut(), panel);
-    {
-        let mut host = app
-            .world_mut()
-            .get_mut::<Viewport2dPanelHost>(panel)
-            .expect("host on panel parent");
-        host.set_view(VIEW);
-        host.fit_pending = false;
-    }
+    let panel = add_panel(&mut app, area_width);
 
     let root = jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
     let square = || Sprite::from_color(Color::WHITE, Vec2::splat(20.0));
@@ -115,6 +101,30 @@ pub(crate) fn world_app() -> (App, Scene) {
             corner,
         },
     )
+}
+
+/// A 2D panel with a stage area `area_width` by 600 logical pixels, framed
+/// at the test view.
+pub(crate) fn add_panel(app: &mut App, area_width: f32) -> Entity {
+    let panel = app
+        .world_mut()
+        .spawn((
+            jackdaw::EditorEntity,
+            Node {
+                width: px(area_width + RULER_SIZE),
+                height: px(600.0 + RULER_SIZE + jackdaw_feathers::tokens::TOOLBAR_HEIGHT),
+                ..default()
+            },
+        ))
+        .id();
+    build_viewport_2d_panel(app.world_mut(), panel);
+    let mut host = app
+        .world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent");
+    host.set_view(VIEW);
+    host.fit_pending = false;
+    panel
 }
 
 pub(crate) fn sprite(
