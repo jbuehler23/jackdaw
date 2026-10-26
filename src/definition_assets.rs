@@ -236,6 +236,12 @@ pub fn write_asset_file(
     if existing.is_some_and(|existing| existing == text) {
         return Ok(path.to_path_buf());
     }
+    jackdaw_bsn::parse_emitted(&text).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("cannot write '{name}': {err}"),
+        )
+    })?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

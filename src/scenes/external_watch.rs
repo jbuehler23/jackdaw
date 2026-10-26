@@ -281,8 +281,12 @@ fn reload_tab_from_disk(world: &mut World, path: &Path) -> Result<(), RefusedRel
     // The load installs into the active tab's world, so the swap comes first
     // and a refusal has to swap back.
     let was_active = world.resource::<Scenes>().active;
-    if was_active != index {
-        crate::scenes::swap::swap_active_tab(world, index);
+    if was_active != index && !crate::scenes::swap::swap_active_tab(world, index) {
+        return Err(RefusedReload {
+            path: path.to_path_buf(),
+            category: crate::scene_io::RefusalCategory::NotSpawned,
+            reason: "the scene in front could not be captured to switch to this tab".to_string(),
+        });
     }
 
     match crate::scene_io::load_scene_from_file_with_outcome(world, path) {

@@ -4177,3 +4177,80 @@ fn a_prefab_that_fails_to_parse_stays_watched_and_recovers() {
         "the repaired prefab is picked up; got {names:?}"
     );
 }
+
+#[test]
+fn saving_a_prefab_whose_text_does_not_parse_back_leaves_the_file_and_stays_dirty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+    let original = "#p\n\
+                    jackdaw::prefab::components::Prefab\n\
+                    jackdaw::prefab::components::PrefabEntityId(0)\n";
+    std::fs::write(&prefab_path, original).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::status_bar::StatusNotice>();
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(&prefab_path, bsn_ast(original));
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let canonical = jackdaw::prefab::canonical_prefab_path(&prefab_path);
+        let mut tab = jackdaw::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(prefab_path.clone());
+        tab.kind = jackdaw::scenes::TabKind::Prefab;
+        tab.content = jackdaw::scenes::TabContent::Prefab(canonical);
+        scenes.tabs.push(tab);
+        scenes.active = 0;
+    }
+    jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
+
+    {
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        let odd = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Struct(
+            jackdaw_bsn::BsnStructData {
+                type_path: String::new(),
+                fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                    name: "0".to_string(),
+                    value: jackdaw_bsn::BsnValue::Int(1),
+                }]),
+            },
+        )]);
+        ast.add_to_roots(odd);
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw::scenes::Scenes>()
+        .tabs[0]
+        .dirty = true;
+
+    assert!(!jackdaw::scene_io::save_scene(app.world_mut()));
+
+    assert_eq!(
+        std::fs::read_to_string(&prefab_path).unwrap(),
+        original,
+        "the prefab file was overwritten"
+    );
+    assert!(
+        app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
+        "a prefab that was not written stays dirty"
+    );
+    let cached_roots = app
+        .world()
+        .resource::<jackdaw::prefab::PrefabAstCache>()
+        .get(&prefab_path)
+        .map(|ast| ast.roots.len());
+    assert_eq!(
+        cached_roots,
+        Some(1),
+        "the cache keeps the prefab's last good document"
+    );
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(
+        notice.contains("Not saved"),
+        "the refusal is shown: {notice:?}"
+    );
+}

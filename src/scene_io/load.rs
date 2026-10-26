@@ -976,7 +976,10 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
 
                 match save_scene_inner(world) {
                     Ok(()) => {}
-                    Err(err) => error!("scene save (after Save As dialog) failed: {err}"),
+                    Err(err) => {
+                        error!("scene save (after Save As dialog) failed: {err}");
+                        crate::status_bar::notify_error(world, format!("Not saved: {err}"));
+                    }
                 }
             }
         }
