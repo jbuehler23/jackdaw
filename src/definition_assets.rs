@@ -176,17 +176,16 @@ fn read_schema_asset(kind: &AssetKind, path: &Path, text: &str) -> Option<AssetV
     Some(AssetValue::Schema(Box::new(data)))
 }
 
-/// The struct patch a document root carries, with a bare type reading as a
-/// value that authors nothing.
+/// The fields a document root's patch authors, with a bare type reading as a
+/// value that authors nothing and a tuple struct's values named by position.
 fn patch_of_root(ast: &jackdaw_bsn::SceneBsnAst, root: Entity) -> Option<BsnStructData> {
     let patches = ast.get_patches(root)?;
     patches
         .0
         .iter()
-        .find_map(|&patch| match ast.get_patch(patch) {
-            Some(BsnPatch::Struct(data)) => Some(data.clone()),
-            Some(BsnPatch::Type(type_path)) => Some(empty_patch(type_path)),
-            _ => None,
+        .find_map(|&patch| match ast.get_patch(patch)? {
+            BsnPatch::Type(type_path) => Some(empty_patch(type_path)),
+            patch => crate::schema_values::authored_fields(patch),
         })
 }
 
@@ -263,9 +262,10 @@ fn asset_text(world: &World, name: &str, value: &AssetValue) -> Option<String> {
                 asset_id: handle.id(),
             }],
         ),
-        AssetValue::Schema(data) => {
-            emit_definition_patch(&sanitize_definition_name(name), (**data).clone())
-        }
+        AssetValue::Schema(data) => emit_definition_patch(
+            &sanitize_definition_name(name),
+            definition_patch(world, data)?,
+        ),
         AssetValue::Unloaded => return None,
     };
     if body.trim().is_empty() {
@@ -292,11 +292,57 @@ fn asset_type_path(world: &World, value: &AssetValue) -> Option<String> {
     }
 }
 
+/// The patch a schema-backed value saves as. A tuple struct's fields are its
+/// positions: it is written as a tuple up to the last position it authors,
+/// each one before that it leaves alone taking the type's default.
+fn definition_patch(world: &World, data: &BsnStructData) -> Option<BsnPatch> {
+    let types = world.get_resource::<crate::project_types::ProjectTypes>();
+    let Some((types, schema)) = types
+        .and_then(|types| Some((types, types.asset(&data.type_path)?)))
+        .filter(|(_, schema)| schema.kind == jackdaw_schema::TypeKind::TupleStruct)
+    else {
+        return Some(BsnPatch::Struct(data.clone()));
+    };
+    let authored = |field: &jackdaw_schema::FieldSchema| {
+        data.fields
+            .0
+            .iter()
+            .find(|authored| authored.name == field.name)
+            .map(|authored| authored.value.clone())
+    };
+    let Some(last) = schema
+        .fields
+        .iter()
+        .rposition(|field| authored(field).is_some())
+    else {
+        return Some(BsnPatch::Type(data.type_path.clone()));
+    };
+    let mut values = Vec::new();
+    for field in &schema.fields[..=last] {
+        let value = authored(field).or_else(|| {
+            let json = crate::schema_values::default_field_json(schema, &field.name)?;
+            crate::schema_values::bsn_for_json(world, types, &field.type_path, &json)
+        });
+        let Some(value) = value else {
+            warn!(
+                "`{}` has no default to write at position {}",
+                data.type_path, field.name
+            );
+            return None;
+        };
+        values.push(value);
+    }
+    Some(BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+        type_path: data.type_path.clone(),
+        values,
+    }))
+}
+
 /// Emit one named patch as a document of its own.
-fn emit_definition_patch(name: &str, data: BsnStructData) -> String {
+fn emit_definition_patch(name: &str, patch: BsnPatch) -> String {
     let mut ast = jackdaw_bsn::SceneBsnAst::default();
     let name_patch = ast.world.spawn(BsnPatch::Name(name.to_string())).id();
-    let type_patch = ast.world.spawn(BsnPatch::Struct(data)).id();
+    let type_patch = ast.world.spawn(patch).id();
     let root = ast
         .world
         .spawn(BsnPatches(vec![name_patch, type_patch]))

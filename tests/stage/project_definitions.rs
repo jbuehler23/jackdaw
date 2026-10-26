@@ -994,3 +994,102 @@ fn editing_one_field_of_a_loaded_file_rewrites_one_line() {
         "only the field that was edited moved, got:\n{after}"
     );
 }
+
+const TINT_TYPE: &str = "definition_project::content::Tint";
+
+/// An asset type that is a tuple struct, so its fields are its positions.
+fn tint_schema() -> jackdaw_schema::TypeSchema {
+    serde_json::from_value(serde_json::json!({
+        "type_path": TINT_TYPE,
+        "short_name": "Tint",
+        "module_path": "definition_project::content",
+        "category": "",
+        "description": "",
+        "editor_description": "",
+        "hidden": false,
+        "preview": "",
+        "default_constructible": true,
+        "fields": [
+            { "name": "0", "type_path": "f32" },
+            { "name": "1", "type_path": "alloc::string::String" }
+        ],
+        "kind": "TupleStruct",
+        "default": { TINT_TYPE: [1.0, "white"] },
+        "variants": [],
+        "entity_fields": [],
+        "fills_gaps": true,
+        "asset": true
+    }))
+    .expect("the schema reads")
+}
+
+#[test]
+fn a_tuple_struct_definition_is_saved_by_position_and_read_back() {
+    let (mut app, tmp) = editor_with_items();
+    let native = jackdaw::project_types::native_type_paths(
+        &app.world().resource::<AppTypeRegistry>().read(),
+    );
+    app.world_mut()
+        .resource_mut::<jackdaw::project_types::ProjectTypes>()
+        .update(
+            &jackdaw_schema::ProjectSchema {
+                assets: vec![tint_schema()],
+                ..default()
+            },
+            &native,
+        );
+    jackdaw::project_definitions::register_project_definitions(app.world_mut());
+    app.update();
+
+    call(
+        &mut app,
+        "asset.new",
+        &[("type", "tint".into()), ("name", "dusk".into())],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "1".into()), ("value", "red".into())],
+    );
+    call(&mut app, "asset.save", &[]);
+
+    let path = item_path(&tmp, "dusk");
+    let written = std::fs::read_to_string(&path).expect("the file reads");
+    assert!(
+        written.contains(&format!(r#"{TINT_TYPE}(1.0, "red")"#)),
+        "the value is written by position, the earlier one at its default, got:\n{written}"
+    );
+    assert!(
+        jackdaw_bsn::parse_bsn_text(&written).is_ok(),
+        "and reads back, got:\n{written}"
+    );
+    let open = jackdaw::definition_assets::open_definition_path(app.world())
+        .expect("a definition is open");
+    let read_back = jackdaw::definition_assets::schema_definition_json(app.world(), "tint", &open)
+        .expect("the definition reads back");
+    assert_eq!(read_back["1"], "red");
+    assert_eq!(read_back["0"], 1.0);
+
+    let kind = app
+        .world()
+        .resource::<AssetKinds>()
+        .by_kind("tint")
+        .cloned()
+        .expect("the tuple type is a kind");
+    let reread = jackdaw::definition_assets::read_asset_file(app.world_mut(), &kind, &path);
+    let fields = reread
+        .as_ref()
+        .and_then(jackdaw::asset_index::AssetValue::schema)
+        .map(|data| {
+            data.fields
+                .0
+                .iter()
+                .map(|field| field.name.clone())
+                .collect::<Vec<_>>()
+        });
+    assert_eq!(
+        fields,
+        Some(vec!["0".to_string(), "1".to_string()]),
+        "the file reads back as the positions it holds"
+    );
+}
