@@ -111,15 +111,14 @@ impl LayoutTemplate {
 
     /// A set of this template's tiles, tile index = grid position, weight 1.
     pub fn terrain_set(self, inner: TerrainId, outer: TerrainId) -> TerrainSet {
-        TerrainSet {
-            mode: self.mode(),
-            tiles: self
-                .tiles(inner, outer)
-                .into_iter()
-                .enumerate()
-                .map(|(i, terrains)| TerrainTile::new(TileRef::new(i as u16), terrains, 1))
-                .collect(),
-        }
+        let mut set = TerrainSet::new(self.mode());
+        set.tiles = self
+            .tiles(inner, outer)
+            .into_iter()
+            .enumerate()
+            .map(|(i, terrains)| TerrainTile::new(TileRef::new(i as u16), terrains, 1))
+            .collect();
+        set
     }
 }
 
@@ -278,6 +277,24 @@ mod tests {
     }
 
     #[test]
+    fn orders_with_direct_transitions_match_unordered_results() {
+        for (inner, outer) in PAIRS {
+            for template in [LayoutTemplate::Blob47, LayoutTemplate::Side16] {
+                let plain = template.terrain_set(inner, outer);
+                for order in [vec![outer, 5, inner], vec![inner, outer], vec![]] {
+                    let ordered = plain.clone().with_order(order);
+                    for mask in 0..=255u8 {
+                        let (layer, _) = neighbourhood(mask, inner, inner, outer);
+                        let a = resolve_cell(&plain, &layer, origin());
+                        assert_eq!(resolve_cell(&ordered, &layer, origin()), a, "mask {mask}");
+                        assert!(a.is_exact());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn corner16_fallback_picks_one_shape_everywhere() {
         let mut set = LayoutTemplate::Corner16.terrain_set(2, 1);
         set.tiles.remove(1);
@@ -304,7 +321,7 @@ mod tests {
             let r = resolve_cell(set, &layer, origin());
             assert!(!r.tile.is_empty(), "mask {mask}");
             let config = blob_config(&cells, outer);
-            let required = required_peers(set.mode, &layer, origin());
+            let required = required_peers(set, &layer, origin());
             let best = set
                 .tiles
                 .iter()
