@@ -4812,6 +4812,7 @@ name = "jackdaw_tilemap"
 version = "0.21.0-dev"
 dependencies = [
  "glam",
+ "image",
 ]
 
 [[package]]
