@@ -4808,6 +4808,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_tilemap"
+version = "0.21.0-dev"
+dependencies = [
+ "glam",
+]
+
+[[package]]
 name = "jackdaw_uv"
 version = "0.21.0-dev"
 dependencies = [
