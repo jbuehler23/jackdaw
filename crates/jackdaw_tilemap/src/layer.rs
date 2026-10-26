@@ -25,10 +25,17 @@ struct Chunk<T> {
 }
 
 /// An unbounded layer of cells stored as sparse 32x32 chunks.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ChunkedLayer<T: CellValue> {
     chunks: BTreeMap<ChunkCoord, Chunk<T>>,
     dirty: BTreeSet<ChunkCoord>,
+}
+
+/// Compares stored cells only; pending dirty chunks are not part of the value.
+impl<T: CellValue> PartialEq for ChunkedLayer<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.chunks == other.chunks
+    }
 }
 
 impl<T: CellValue> Default for ChunkedLayer<T> {
@@ -83,6 +90,14 @@ impl<T: CellValue> ChunkedLayer<T> {
         }
         self.dirty.insert(coord);
         previous
+    }
+
+    /// Installs a whole chunk without marking it dirty. An all-empty chunk is ignored.
+    pub(crate) fn insert_chunk(&mut self, coord: ChunkCoord, cells: Box<[T; CHUNK_AREA]>) {
+        let filled = cells.iter().filter(|value| !value.is_empty()).count();
+        if filled > 0 {
+            self.chunks.insert(coord, Chunk { cells, filled });
+        }
     }
 
     pub fn clear(&mut self, cell: CellCoord) -> T {
@@ -304,5 +319,30 @@ mod tests {
         assert_eq!(layer.painted_bounds(), Some(rect((-3, 2), (-2, 3))));
         layer.clear(c(-3, 2));
         assert_eq!(layer.painted_bounds(), None);
+    }
+
+    #[test]
+    fn equality_ignores_pending_dirty_chunks() {
+        let mut a = ChunkedLayer::<u8>::new();
+        a.set(CellCoord::new(3, 4), 2);
+        let mut b = a.clone();
+        b.take_dirty();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn insert_chunk_is_clean_and_ignores_empty() {
+        let mut cells = Box::new([0u8; CHUNK_AREA]);
+        cells[5] = 3;
+        cells[6] = 4;
+        let mut layer = ChunkedLayer::<u8>::new();
+        layer.insert_chunk(ChunkCoord::new(1, 0), cells);
+        layer.insert_chunk(ChunkCoord::new(2, 0), Box::new([0u8; CHUNK_AREA]));
+        assert_eq!(layer.chunk_count(), 1);
+        assert_eq!(layer.get(c(32 + 5, 0)), 3);
+        assert!(layer.take_dirty().is_empty());
+        layer.clear(c(32 + 5, 0));
+        layer.clear(c(32 + 6, 0));
+        assert!(layer.is_empty());
     }
 }
