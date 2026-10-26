@@ -101,6 +101,11 @@ impl Parse for BsnFields {
     fn parse(input: &mut ParseStream<'_>) -> Result<Self, ParseError> {
         Ok(if input.peek::<LBrace>() {
             let _ = input.parse::<LBrace>()?;
+            if input.peek::<Int>() {
+                let values = parse_positional_fields(input)?;
+                let _ = input.parse::<RBrace>()?;
+                return Ok(BsnFields::UnnamedFields(values));
+            }
             let mut fields = Vec::new();
             while !input.is_empty_or_closing_delimiter() {
                 fields.push(input.parse::<BsnNamedField>()?);
@@ -126,6 +131,26 @@ impl Parse for BsnFields {
 fn parse_values(input: &mut ParseStream<'_>) -> Result<Vec<BsnValue>, ParseError> {
     let mut values = Vec::new();
     while !input.is_empty_or_closing_delimiter() {
+        values.push(input.parse::<BsnValue>()?);
+        if input.is_empty_or_closing_delimiter() {
+            break;
+        }
+        input.parse::<Comma>()?;
+    }
+    Ok(values)
+}
+
+/// Fields named by position, `{ 0: a, 1: b }`, read as the tuple `(a, b)` they
+/// stand for. Jackdaw 0.20.0 wrote tuple structs this way.
+fn parse_positional_fields(input: &mut ParseStream<'_>) -> Result<Vec<BsnValue>, ParseError> {
+    let mut values = Vec::new();
+    while !input.is_empty_or_closing_delimiter() {
+        match input.next_token()? {
+            Some(token) if matches!(token.token, Token::Int(at) if at == values.len() as i128) => {}
+            Some(token) => return Err(ParseError::UnexpectedToken(token.into())),
+            None => return Err(ParseError::EndOfInput),
+        }
+        let _ = input.parse::<Colon>()?;
         values.push(input.parse::<BsnValue>()?);
         if input.is_empty_or_closing_delimiter() {
             break;
