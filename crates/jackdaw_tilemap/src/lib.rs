@@ -7,11 +7,16 @@
 
 mod grid;
 mod layer;
+mod region_text;
 mod sidecar;
 mod tile;
 
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
+pub use region_text::{
+    Legend, LegendEntry, ReadRegionError, Region, RegionTextError, RegionTextErrorKind, emit_rows,
+    parse_rows, read_region, write_region,
+};
 pub use sidecar::{
     LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
     encode,
