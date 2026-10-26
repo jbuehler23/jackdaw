@@ -53,8 +53,8 @@ use crate::grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, ChunkCoord};
 use crate::layer::{CellValue, ChunkedLayer};
 use crate::tile::{TerrainId, TileRef};
 
-const MAGIC: [u8; 8] = *b"JDTILES\0";
-const VERSION: u16 = 1;
+pub const MAGIC: [u8; 8] = *b"JDTILES\0";
+pub const VERSION: u16 = 1;
 const FLAG_AUTHORING: u16 = 1 << 0;
 const LAYER_HEADER: usize = 8;
 const OVERRIDE_RECORD: usize = 11;

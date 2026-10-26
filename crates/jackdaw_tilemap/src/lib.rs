@@ -13,6 +13,7 @@ mod tile;
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
 pub use sidecar::{
-    LayerData, LayerKind, SidecarError, TerrainAuthoring, TilemapData, decode, encode,
+    LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
+    encode,
 };
 pub use tile::{TerrainId, TileRef};
