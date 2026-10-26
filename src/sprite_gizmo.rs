@@ -672,8 +672,7 @@ fn snap_targets(
     }
     let mut targets = SpriteSnapTargets::from_rects(rects);
     if let Some(guides) = guides.and_then(|root| world.get::<CanvasGuides>(root)) {
-        targets.guide_x.clone_from(&guides.vertical);
-        targets.guide_y.clone_from(&guides.horizontal);
+        targets.add_guides(guides);
     }
     targets
 }
@@ -875,7 +874,11 @@ fn square_to_world(global: &GlobalTransform) -> Option<bool> {
 
 /// [`EDGE_SNAP_PIXELS`] in world units on `host`'s stage, read the way the UI
 /// canvas reads it: pointer pixels.
-fn snap_radius(host: &Viewport2dPanelHost, computed: &ComputedNode, ui_scale: f32) -> f32 {
+pub(crate) fn snap_radius(
+    host: &Viewport2dPanelHost,
+    computed: &ComputedNode,
+    ui_scale: f32,
+) -> f32 {
     let stage = stage_pixels_per_target_pixel(
         target_pixels_per_stage_pixel(computed.size(), host.target_size),
         computed.inverse_scale_factor(),

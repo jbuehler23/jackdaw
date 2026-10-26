@@ -571,6 +571,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
         false,
     ),
     ("selection.select", &["entity"], false),
+    ("sprite.add", &["parent"], false),
     ("terrain.scatter.adopt", &["entity"], true),
     ("viewport.capture", &["camera"], false),
     ("viewport.look_through", &["entity"], true),

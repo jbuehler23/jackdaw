@@ -8,7 +8,7 @@ use jackdaw_commands::{CommandGroup, EditorCommand};
 use jackdaw_feathers::dialog::{DialogChoices, EditorDialog, answer_dialog, resolve_dialog_choice};
 
 use crate::commands::{CommandHistory, ReparentEntity, SetBsnField, SetTransform, SpawnEntity};
-use crate::entity_ops::{EntityTemplate, spawn_template_in_document};
+use crate::entity_ops::EntityTemplate;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityAddGroupOp>()
@@ -70,7 +70,10 @@ fn a_dialog_is_up(dialogs: Query<(), With<EditorDialog>>) -> bool {
     allows_undo = false,
     params(
         name(String, doc = "Name for the new node. Defaults to \"Group\"."),
-        parent(Entity, doc = "Node that adopts it. Top level when omitted."),
+        parent(
+            Entity,
+            doc = "Node that adopts it. Left out, top level, or in an open 2D world scene beside a selection inside the scene, else under the scene root."
+        ),
     )
 )]
 pub(crate) fn entity_add_group(
@@ -86,8 +89,11 @@ pub(crate) fn entity_add_group(
     commands.queue(move |world: &mut World| {
         // Spawn through the same command `entity.add.empty` pushes, so undo
         // despawns the node rather than only taking back its rename.
+        let in_2d = crate::sprite_ops::scene_2d_parent(world, None);
         let mut spawn = SpawnEntity::new(
-            |world: &mut World| spawn_template_in_document(world, EntityTemplate::Empty),
+            move |world: &mut World| {
+                crate::entity_ops::spawn_template_under(world, EntityTemplate::Empty, in_2d)
+            },
             "Add Group".to_string(),
         );
         spawn.execute(world);
@@ -118,7 +124,7 @@ pub(crate) fn entity_add_group(
         {
             group.push(Box::new(ReparentEntity {
                 entity,
-                old_parent: None,
+                old_parent: world.get::<ChildOf>(entity).map(ChildOf::parent),
                 new_parent: Some(parent),
                 old_index: None,
             }));

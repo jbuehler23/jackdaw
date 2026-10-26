@@ -817,13 +817,30 @@ fn apply_last_material(entity: Entity) -> impl FnOnce(&mut World) {
 }
 
 /// Spawn a template into the live world and register it in the scene document.
+/// In an open 2D world scene it joins that scene, by the rule `sprite.add`
+/// places a sprite by.
 pub fn spawn_template_in_document(world: &mut World, template: EntityTemplate) -> Entity {
+    let parent = crate::sprite_ops::scene_2d_parent(world, None);
+    spawn_template_under(world, template, parent)
+}
+
+/// `spawn_template_in_document` under a `parent` chosen beforehand, so a redo
+/// puts the entity back where the first spawn did.
+pub(crate) fn spawn_template_under(
+    world: &mut World,
+    template: EntityTemplate,
+    parent: Option<Entity>,
+) -> Entity {
+    let parent = parent.map(|parent| crate::scene_nodes::live_entity(world, parent));
     let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
     let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
         return Entity::PLACEHOLDER;
     };
     let entity = create_entity(&mut commands, template, &mut selection);
     system_state.apply(world);
+    if let Some(parent) = parent {
+        world.entity_mut(entity).insert(ChildOf(parent));
+    }
     crate::scene_io::register_entity_in_ast(world, entity);
     if world.get::<crate::brush::Brush>(entity).is_some() {
         crate::brush::apply_brush_defaults(world, entity);
@@ -872,8 +889,9 @@ pub fn seed_2d_scene_root(world: &mut World) -> Entity {
 /// Pushes a `SpawnEntity` command so the addition can be undone.
 pub fn create_entity_in_world(world: &mut World, template: EntityTemplate) {
     let label = format!("Add {}", template.label());
+    let parent = crate::sprite_ops::scene_2d_parent(world, None);
     let spawn_fn =
-        move |world: &mut World| -> Entity { spawn_template_in_document(world, template) };
+        move |world: &mut World| -> Entity { spawn_template_under(world, template, parent) };
 
     let mut cmd: Box<dyn EditorCommand> =
         Box::new(crate::commands::SpawnEntity::new(spawn_fn, label));
@@ -2301,6 +2319,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         // Registered on core rather than on the UI Widgets extension, so it
         // reports an unknown widget name rather than disappearing with it.
         .register_operator::<crate::ui_palette::WidgetAddOp>()
+        .register_operator::<crate::sprite_ops::SpriteAddOp>()
         .register_operator::<crate::add_entity_picker::EntityAddPickerOp>();
 
     #[cfg(feature = "multiplayer")]

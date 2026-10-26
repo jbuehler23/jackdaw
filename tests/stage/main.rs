@@ -45,6 +45,7 @@ mod save_before_play;
 mod scene_environment;
 mod scene_wind;
 mod selection_undo;
+mod sprite_drop;
 mod sprite_gizmo;
 mod sprite_picking;
 mod sprite_snap;

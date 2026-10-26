@@ -153,6 +153,7 @@ pub mod sdk_setup;
 pub mod selection;
 pub mod snapping;
 pub mod sprite_gizmo;
+pub mod sprite_ops;
 pub mod sprite_snap;
 pub mod sprite_stage;
 pub mod status_bar;
@@ -483,6 +484,7 @@ impl Plugin for EditorCorePlugin {
                 material_preview::MaterialPreviewPlugin,
                 material_ui::plugin,
                 canvas_snap::plugin,
+                sprite_ops::plugin,
                 undo_snapshot::plugin,
                 migrate_dialog::plugin,
             ),
