@@ -15,6 +15,7 @@ bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-fe
 # the day the sibling stops.
 bevy_reflect = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["smol_str"] }
 nom = "8"
+serde.workspace = true
 pathdiff.workspace = true
 path-slash.workspace = true
 thiserror = "2"

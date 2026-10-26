@@ -14,9 +14,10 @@ use bevy::platform::collections::HashMap;
 mod from_reflect;
 mod mutate;
 mod query;
+pub(crate) mod serde_value;
 
 pub use from_reflect::{
-    BsnAssetContext, component_to_bsn_patch, component_to_bsn_patch_with_assets,
+    BsnAssetContext, UnencodableValue, component_to_bsn_patch, component_to_bsn_patch_with_assets,
 };
 pub use mutate::{MAX_AST_DEPTH, clone_node_into, clone_subtree_into};
 pub use query::{bsn_value_as_int, is_enum_variant_of, patch_type_path, type_paths_include};

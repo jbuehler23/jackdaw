@@ -941,16 +941,23 @@ fn apply_authored_value(target: &mut dyn PartialReflect, value: &dyn PartialRefl
     // map as it was.
     let clears = matches!(
         target.reflect_mut(),
-        ReflectMut::List(_) | ReflectMut::Map(_)
+        ReflectMut::List(_) | ReflectMut::Map(_) | ReflectMut::Set(_)
     );
     let prior = clears.then(|| target.to_dynamic().ok()).flatten();
 
-    if let ReflectMut::List(list) = target.reflect_mut() {
-        while !list.is_empty() {
-            list.remove(list.len() - 1);
+    match target.reflect_mut() {
+        ReflectMut::List(list) => {
+            while !list.is_empty() {
+                list.remove(list.len() - 1);
+            }
         }
-    } else if let ReflectMut::Map(map) = target.reflect_mut() {
-        map.drain();
+        ReflectMut::Map(map) => {
+            map.drain();
+        }
+        ReflectMut::Set(set) => {
+            set.drain();
+        }
+        _ => {}
     }
     // Plain `apply` panics on a value the document shaped wrong: refusing the
     // write costs the field, panicking costs the document.
@@ -1058,7 +1065,7 @@ pub fn bsn_value_to_reflect(
         return Some(result);
     }
 
-    match value {
+    let native: Option<Box<dyn PartialReflect>> = match value {
         BsnValue::Float(f) => float_to_reflect(*f, expected),
         BsnValue::Int(i) => int_to_reflect(*i, expected),
         BsnValue::Bool(b) => Some(Box::new(*b)),
@@ -1078,7 +1085,89 @@ pub fn bsn_value_to_reflect(
         BsnValue::TupleStruct(data) => tuple_struct_value_to_reflect(data, registry, assets),
         BsnValue::List(items) => list_value_to_reflect(items, expected, registry, assets),
         BsnValue::Map(entries) => map_value_to_reflect(entries, expected, registry, assets),
+    };
+    let fits = native.as_ref().is_some_and(|native| {
+        native
+            .get_represented_type_info()
+            .is_some_and(|info| info.type_id() == expected)
+    });
+    if fits {
+        return native;
     }
+    opaque_value_to_reflect(value, expected, registry).or(native)
+}
+
+/// Read a value bevy reflects as opaque: a range from its two bounds, anything
+/// else through the type's own `Deserialize`, the counterpart of how
+/// `BsnValue::from_reflect` wrote it.
+fn opaque_value_to_reflect(
+    value: &BsnValue,
+    expected: TypeId,
+    registry: &TypeRegistry,
+) -> Option<Box<dyn PartialReflect>> {
+    if let Some(range) = range_value_to_reflect(value, expected, registry) {
+        return Some(range);
+    }
+    let registration = registry.get(expected)?;
+    if !matches!(registration.type_info(), bevy::reflect::TypeInfo::Opaque(_)) {
+        return None;
+    }
+    let deserialize = registration.data::<bevy::reflect::ReflectDeserialize>()?;
+    match deserialize.deserialize(crate::document::serde_value::ValueDeserializer(value)) {
+        Ok(read) => Some(read.into_partial_reflect()),
+        Err(err) => {
+            log::warn!(
+                "cannot read a '{}' from the document: {err}",
+                registration.type_info().type_path()
+            );
+            None
+        }
+    }
+}
+
+/// A `Range` or `RangeInclusive` from the `{ start, end }` it is written as.
+fn range_value_to_reflect(
+    value: &BsnValue,
+    expected: TypeId,
+    registry: &TypeRegistry,
+) -> Option<Box<dyn PartialReflect>> {
+    let BsnValue::Struct(data) = value else {
+        return None;
+    };
+    let bound = |name: &str| {
+        data.fields
+            .0
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| &f.value)
+    };
+    macro_rules! bounds {
+        ($($t:ty),*) => {
+            $(
+                if expected == TypeId::of::<core::ops::Range<$t>>() {
+                    let start = range_bound::<$t>(bound("start")?, registry)?;
+                    let end = range_bound::<$t>(bound("end")?, registry)?;
+                    return Some(Box::new(start..end));
+                }
+                if expected == TypeId::of::<core::ops::RangeInclusive<$t>>() {
+                    let start = range_bound::<$t>(bound("start")?, registry)?;
+                    let end = range_bound::<$t>(bound("end")?, registry)?;
+                    return Some(Box::new(start..=end));
+                }
+            )*
+        };
+    }
+    bounds!(
+        f32, f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+    );
+    None
+}
+
+fn range_bound<T: bevy::reflect::FromReflect>(
+    value: &BsnValue,
+    registry: &TypeRegistry,
+) -> Option<T> {
+    T::from_reflect(bsn_value_to_reflect(value, TypeId::of::<T>(), registry, None)?.as_ref())
 }
 
 /// Refuses a variant the document named and could not build, wording the
@@ -1394,6 +1483,18 @@ fn list_value_to_reflect(
         return Some(Box::new(dynamic));
     }
 
+    // Sets take the list literal too.
+    if let Ok(set_info) = registration.type_info().as_set() {
+        let item_type_id = set_info.value_ty().id();
+        use bevy::reflect::set::Set as _;
+        let mut dynamic = bevy::reflect::set::DynamicSet::default();
+        for item in items {
+            dynamic.insert_boxed(bsn_value_to_reflect(item, item_type_id, registry, assets)?);
+        }
+        dynamic.set_represented_type(Some(registration.type_info()));
+        return Some(Box::new(dynamic));
+    }
+
     // Fixed-size arrays take the same `[a, b]` literal as lists.
     if let Ok(array_info) = registration.type_info().as_array() {
         let item_type_id = array_info.item_ty().id();
@@ -1481,6 +1582,9 @@ pub enum FieldWriteError {
     /// The path names nothing in the value it runs through.
     #[error("'{path}' does not name a value of '{type_path}'")]
     NoSuchPath { type_path: String, path: String },
+    /// The value the path runs through has no document form.
+    #[error(transparent)]
+    Unencodable(#[from] crate::UnencodableValue),
 }
 
 /// Why a nested write stopped, before the caller names the path.
@@ -1568,7 +1672,7 @@ pub fn try_set_bsn_field(
         whole_write_at(ast, patches_entity, type_path, &steps, current, registry)
     }) {
         Some((at, holder)) => {
-            let mut whole = BsnValue::from_reflect(holder, registry);
+            let mut whole = BsnValue::try_from_reflect(holder, registry)?;
             let holder_type = holder
                 .get_represented_type_info()
                 .map_or("", bevy::reflect::TypeInfo::type_path);
