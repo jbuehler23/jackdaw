@@ -12,6 +12,8 @@
 use bevy::math::{BVec2, Rect, Vec2};
 use jackdaw_snap::{SnapRect, land_2d};
 
+use jackdaw_scene_types::CanvasGuides;
+
 use crate::canvas_snap::CanvasSnap;
 
 /// World units per sprite pixel. No project setting names another density
@@ -34,6 +36,12 @@ pub struct SpriteSnapTargets {
 }
 
 impl SpriteSnapTargets {
+    /// Offer the lines of `guides` as well.
+    pub fn add_guides(&mut self, guides: &CanvasGuides) {
+        self.guide_x.extend_from_slice(&guides.vertical);
+        self.guide_y.extend_from_slice(&guides.horizontal);
+    }
+
     /// The edges and centres of `rects`.
     pub fn from_rects(rects: impl IntoIterator<Item = Rect>) -> Self {
         let mut targets = Self::default();

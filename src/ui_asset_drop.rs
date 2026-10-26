@@ -1,4 +1,6 @@
-//! Dropping an image from the Project window onto the 2D canvas.
+//! Dropping an image from the Project window onto a UI scene's canvas. A drop
+//! on a 2D world scene is not handled here: the stage dispatches `sprite.add`
+//! at the drop point instead.
 //!
 //! What is under the cursor decides the landing: an `ImageNode` takes the
 //! texture, a container takes a new image as its last child, and bare canvas

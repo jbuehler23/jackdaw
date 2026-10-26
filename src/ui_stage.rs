@@ -1551,10 +1551,47 @@ fn on_stage_press(
     }
 }
 
+/// What an image drop on a 2D world stage snaps by.
+#[derive(SystemParam)]
+struct WorldDropSnap<'w, 's> {
+    snap: Res<'w, CanvasSnap>,
+    keys: Option<Res<'w, ButtonInput<KeyCode>>>,
+    scene: GuideScene<'w, 's>,
+    guides: Query<'w, 's, &'static jackdaw_scene_types::CanvasGuides>,
+}
+
+impl WorldDropSnap<'_, '_> {
+    /// `point` on `host`'s stage, landed the way a sprite drag lands.
+    fn land(
+        &self,
+        point: Vec2,
+        host: &Viewport2dPanelHost,
+        stage: &ComputedNode,
+        ui_scale: f32,
+    ) -> Vec2 {
+        let ctrl = self
+            .keys
+            .as_ref()
+            .is_some_and(|keys| keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]));
+        let rules = crate::sprite_snap::SpriteSnapRules::new(
+            &self.snap,
+            self.snap.magnet(ctrl),
+            host.view.grid,
+            crate::sprite_gizmo::snap_radius(host, stage, ui_scale),
+        );
+        let guides = self
+            .scene
+            .open(Some(host))
+            .and_then(|(root, _)| self.guides.get(root).ok());
+        crate::sprite_ops::snap_point(point, &rules, guides)
+    }
+}
+
 /// Land an asset dragged out of the Project window on the canvas, claimed
 /// off the dock the way a press is and only in [`Viewport2dMode::Edit`].
-/// What the drop means is decided by what is under the cursor; see
-/// [`crate::ui_asset_drop::classify_drop`].
+/// On a 2D world scene the image becomes a sprite at the drop point, through
+/// `sprite.add`; on a UI scene what the drop means is decided by what is
+/// under the cursor; see [`crate::ui_asset_drop::classify_drop`].
 fn on_stage_asset_drop(
     mut event: On<PointerDragDrop>,
     ui_scale: Res<UiScale>,
@@ -1567,6 +1604,8 @@ fn on_stage_asset_drop(
     mut drag: ResMut<crate::asset_drag::ActiveAssetDrag>,
     mut commands: Commands,
     mut hit_cache: ResMut<StageHitCache>,
+    sprite_gate: crate::sprite_ops::SpriteAddGate,
+    world_drop: WorldDropSnap,
 ) {
     let target = event.event_target();
     let panel = match overlays.get(target) {
@@ -1582,14 +1621,38 @@ fn on_stage_asset_drop(
     if host.mode != Viewport2dMode::Edit {
         return;
     }
-    let Some(path) = drag.image.take() else {
+    if drag.image.is_none() {
         return;
-    };
-    event.propagate(false);
+    }
     let Ok(stage) = stages.get(host.stage) else {
         return;
     };
     let cursor = event.pointer.position / ui_scale.0;
+    let routed = roots.iter().map(|(_, routed)| routed);
+    if shows_2d_world(host, routed, sprite_gate.scene_roots()) {
+        // A drop that adds nothing leaves the drag to whoever else can take it.
+        let (computed, transform) = stage;
+        let (point, inside) =
+            crate::sprite_stage::stage_world_point(cursor, host, computed, transform);
+        if !inside {
+            return;
+        }
+        if !sprite_gate.allows() {
+            warn!("image drop: sprite.add is not available now, so nothing was added");
+            return;
+        }
+        let Some(path) = drag.image.take() else {
+            return;
+        };
+        event.propagate(false);
+        let point = world_drop.land(point, host, computed, ui_scale.0);
+        crate::sprite_ops::dispatch_drop(&mut commands, path.to_slash_lossy().into_owned(), point);
+        return;
+    }
+    let Some(path) = drag.image.take() else {
+        return;
+    };
+    event.propagate(false);
     let under = match hit_at(
         cursor,
         host,

@@ -16,6 +16,7 @@ use crate::entity_ops::{
 };
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
+use crate::sprite_ops::SpriteAddOp;
 
 /// Action prefix of an entry that creates a registered UI widget.
 pub const WIDGET_ACTION_PREFIX: &str = "widget:";
@@ -45,6 +46,14 @@ const UI_GROUP_ORDER: i32 = -8;
 
 /// Sort order of a widget group whose category is not in `UI_CATEGORY_ORDER`.
 const UI_UNKNOWN_CATEGORY_ORDER: i32 = UI_GROUP_ORDER - UI_CATEGORY_ORDER.len() as i32;
+
+/// The group holding the 2D world entity kinds, present while a 2D world
+/// scene is open.
+pub const TWO_D_GROUP: &str = "2d";
+
+/// Sort order of [`TWO_D_GROUP`]: after General, and before 3D Objects by
+/// its label.
+const TWO_D_GROUP_ORDER: i32 = -1;
 
 /// The group holding one entry per asset kind.
 pub const ASSETS_GROUP: &str = "assets";
@@ -229,6 +238,25 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
     }
 }
 
+/// The 2D world entity kinds, offered only while a 2D world scene is open.
+fn two_d(taxonomy: &mut CreationTaxonomy, world: &mut World) {
+    let open = world
+        .query_filtered::<(), crate::sprite_stage::OpenScene2dRoot>()
+        .iter(world)
+        .next()
+        .is_some();
+    if !open {
+        return;
+    }
+    taxonomy
+        .groups
+        .push(group(TWO_D_GROUP, "2D", TWO_D_GROUP_ORDER));
+    taxonomy.entries.extend([
+        entry(TWO_D_GROUP, SpriteAddOp::LABEL, op_action::<SpriteAddOp>()),
+        entry(TWO_D_GROUP, "Empty 2D", op_action::<EntityAddEmptyOp>()),
+    ]);
+}
+
 /// The registered UI widgets, as one child group of [`UI_GROUP`] per category.
 fn widgets(taxonomy: &mut CreationTaxonomy, world: &mut World) {
     let mut definitions = world
@@ -351,6 +379,7 @@ impl CreationTaxonomy {
     pub fn collect(world: &mut World) -> Self {
         let mut taxonomy = Self::default();
         builtin(&mut taxonomy);
+        two_d(&mut taxonomy, world);
         widgets(&mut taxonomy, world);
         assets(&mut taxonomy, world);
         extensions(&mut taxonomy, world);
