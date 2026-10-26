@@ -6,6 +6,7 @@
 //! layer origin, and cells are half-open `[min, max)` so a point exactly on
 //! an edge belongs to the cell whose min corner it is.
 
+mod collision_trace;
 mod grid;
 mod layer;
 mod layout_fit;
@@ -19,6 +20,7 @@ mod template;
 mod terrain_find;
 mod tile;
 
+pub use collision_trace::{SolidMask, TileShape, solid_mask, trace_mask, trace_proposal};
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
 pub use layout_fit::{

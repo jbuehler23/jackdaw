@@ -280,7 +280,10 @@ pub fn fit_layouts(
     })
 }
 
-fn check_inputs(analysis: &TerrainAnalysis, inputs: &[SheetInput]) -> Result<(), FitError> {
+pub(crate) fn check_inputs(
+    analysis: &TerrainAnalysis,
+    inputs: &[SheetInput],
+) -> Result<(), FitError> {
     if inputs.len() != analysis.tiles.len() {
         return Err(FitError::SheetCount {
             inputs: inputs.len(),
