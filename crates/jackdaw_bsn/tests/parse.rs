@@ -131,6 +131,41 @@ fn parses_tuple() {
 }
 
 #[test]
+fn fields_named_by_position_parse_as_a_tuple() {
+    let text = "game::Collider {\n    0: physics::Shape::TrimeshFromMesh,\n}\ngame::Pair { 0: 1, 1: Inner { 0: true } }";
+    let (ast, root) = parse_bsn(text).expect("text should parse");
+    let patches = ast.get_patches(root).expect("root patch group").0.clone();
+    let BsnPatch::TupleStruct(data) = patch(&ast, patches[0]) else {
+        panic!("expected TupleStruct");
+    };
+    assert_eq!(data.type_path, "game::Collider");
+    assert!(
+        matches!(&data.values[..], [BsnValue::Type(path)] if path == "physics::Shape::TrimeshFromMesh")
+    );
+    let BsnPatch::TupleStruct(pair) = patch(&ast, patches[1]) else {
+        panic!("expected TupleStruct");
+    };
+    assert!(matches!(pair.values[0], BsnValue::Int(1)));
+    assert!(matches!(&pair.values[1], BsnValue::TupleStruct(inner) if inner.values.len() == 1));
+
+    let written = jackdaw_bsn::emit_entity(&ast, root);
+    assert!(
+        written.contains("game::Collider(physics::Shape::TrimeshFromMesh)"),
+        "written in tuple form: {written}"
+    );
+    assert!(
+        parse_bsn(&written).is_ok(),
+        "written text parses: {written}"
+    );
+}
+
+#[test]
+fn fields_named_out_of_position_are_rejected() {
+    assert!(parse_bsn("Pair { 1: 1, 0: 2 }").is_err());
+    assert!(parse_bsn("Pair { 0: 1, b: 2 }").is_err());
+}
+
+#[test]
 fn parses_list_literal() {
     let (ast, patches) = parse("Holder { items: [1, 2, 3] }");
     let BsnPatch::Struct(data) = patch(&ast, patches[0]) else {
