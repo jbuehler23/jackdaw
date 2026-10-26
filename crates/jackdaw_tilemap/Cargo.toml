@@ -1,0 +1,14 @@
+[package]
+name = "jackdaw_tilemap"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Engine-agnostic tilemap grid and chunk storage for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+glam.workspace = true
+
+[lints]
+workspace = true
