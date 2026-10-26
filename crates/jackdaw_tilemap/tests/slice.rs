@@ -1,5 +1,7 @@
 use glam::UVec2;
-use jackdaw_tilemap::{GridLayout, RgbaImage, detect_grid, empty_tiles};
+use jackdaw_tilemap::{
+    GridLayout, LOOSE_FRAME_MATCH, RgbaImage, detect_grid, empty_tiles, pair_animations,
+};
 
 /// Packed sheets of seamless terrain have cell boundaries only modestly
 /// sharper than the art inside cells, so a correct packed detection scores
@@ -52,4 +54,16 @@ fn tiny_farm_spaced_is_16px_with_1px_spacing() {
         found.confidence
     );
     assert!(empty_tiles(&image, &found.layout).iter().all(|e| !e));
+}
+
+#[test]
+fn tiny_farm_sheets_are_not_animations_of_each_other() {
+    let (pw, ph, packed) = load("tilemap_packed.png");
+    let (sw, sh, spaced) = load("tilemap.png");
+    let images = [
+        RgbaImage::new(pw, ph, &packed).expect("sized"),
+        RgbaImage::new(sw, sh, &spaced).expect("sized"),
+    ];
+    let layouts = [grid(16, 0, 12, 11), grid(16, 1, 12, 11)];
+    assert!(pair_animations(&images, &layouts, LOOSE_FRAME_MATCH).is_empty());
 }

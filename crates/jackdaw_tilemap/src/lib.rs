@@ -13,6 +13,7 @@ mod region_text;
 mod sidecar;
 mod slice;
 mod solver;
+mod strip;
 mod template;
 mod tile;
 
@@ -34,5 +35,6 @@ pub use solver::{
     MatchMode, Peer, RequiredPeers, Requirement, Resolved, TerrainSet, TerrainTile, TileTerrains,
     match_score, required_peers, resolve_cell, resolve_region,
 };
+pub use strip::{AnimationStrip, FrameRun, LOOSE_FRAME_MATCH, detect_animation, pair_animations};
 pub use template::LayoutTemplate;
 pub use tile::{TerrainId, TileRef};
