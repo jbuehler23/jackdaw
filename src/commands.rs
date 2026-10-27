@@ -283,7 +283,7 @@ pub(crate) fn set_bsn_field_command(
 }
 
 /// Execute `edits` and push them as one history entry.
-fn push_field_edits(world: &mut World, edits: Vec<SetBsnField>, group_label: &str) {
+pub(crate) fn push_field_edits(world: &mut World, edits: Vec<SetBsnField>, group_label: &str) {
     let mut done: Vec<Box<dyn EditorCommand>> = Vec::new();
     for mut edit in edits {
         edit.execute(world);
@@ -1677,7 +1677,7 @@ impl EditorCommand for SetBsnField {
 
 /// Re-apply `entity`'s `type_path` patch from the document to the live
 /// component.
-fn mirror_document_component(world: &mut World, entity: Entity, type_path: &str) {
+pub(crate) fn mirror_document_component(world: &mut World, entity: Entity, type_path: &str) {
     let patch = {
         let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
         let Some(patches_entity) = ast.ast_for(entity) else {
@@ -1939,7 +1939,7 @@ pub(crate) fn authored_bsn_field(
 /// An edit reaching into a map entry authors the whole map at the map's own
 /// path: a reflect path cannot name a map key, so the entry is written on a
 /// copy of the map and the map is what the document records.
-fn field_edit_to_bsn_value(
+pub(crate) fn field_edit_to_bsn_value(
     world: &World,
     entity: Entity,
     type_path: &str,

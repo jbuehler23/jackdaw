@@ -263,6 +263,8 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "material.override",
     "prefab.pack",
     "prefab.pack_matching",
+    "sprite.set_anchor",
+    "sprite.set_pixels_per_unit",
     "terrain.scatter.adopt",
     "viewport.look_through",
 ];

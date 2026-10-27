@@ -329,6 +329,8 @@ fn the_parametric_authoring_operators_are_registered() {
         ),
         ("selection.extend", &["name"][..]),
         ("sprite.add", &["path", "x", "y", "parent", "name"][..]),
+        ("sprite.set_pixels_per_unit", &["entity", "ppu"][..]),
+        ("sprite.set_anchor", &["entity", "preset", "x", "y"][..]),
         ("prefab.pack", &["entity", "path", "overwrite"][..]),
         (
             "prefab.pack_matching",
