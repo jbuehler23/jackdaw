@@ -1,13 +1,14 @@
 //! Every native file and folder dialog in the editor is built here, so
 //! they all open parented to the main window and pointed at the folder
-//! the user is already browsing rather than at the home directory.
+//! the user is already browsing rather than at the home directory. An app
+//! with no window to parent them to, such as a headless test, never opens one.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, RawHandleWrapper};
-use rfd::AsyncFileDialog;
+use rfd::{AsyncFileDialog, FileHandle};
 
 use crate::project::ProjectRoot;
 
@@ -179,23 +180,53 @@ fn primary_window_handle(world: &mut World) -> Option<RawHandleWrapper> {
         .cloned()
 }
 
-/// Parent `dialog` to the editor window and start it in `directory`.
-pub fn dialog_at(directory: Option<PathBuf>, parent: Option<&RawHandleWrapper>) -> AsyncFileDialog {
+/// A native file dialog, or nothing when there is no window to parent it to.
+/// Picking from nothing returns `None`, as if the dialog was cancelled.
+pub struct FileDialog(Option<AsyncFileDialog>);
+
+impl FileDialog {
+    pub fn set_title(self, title: impl Into<String>) -> Self {
+        Self(self.0.map(|dialog| dialog.set_title(title)))
+    }
+
+    pub fn set_file_name(self, name: impl Into<String>) -> Self {
+        Self(self.0.map(|dialog| dialog.set_file_name(name)))
+    }
+
+    pub fn add_filter(self, name: impl Into<String>, extensions: &[impl ToString]) -> Self {
+        Self(self.0.map(|dialog| dialog.add_filter(name, extensions)))
+    }
+
+    pub async fn pick_file(self) -> Option<FileHandle> {
+        self.0?.pick_file().await
+    }
+
+    pub async fn pick_folder(self) -> Option<FileHandle> {
+        self.0?.pick_folder().await
+    }
+
+    pub async fn save_file(self) -> Option<FileHandle> {
+        self.0?.save_file().await
+    }
+}
+
+/// Parent a dialog to the editor window and start it in `directory`.
+pub fn dialog_at(directory: Option<PathBuf>, parent: Option<&RawHandleWrapper>) -> FileDialog {
+    let Some(parent) = parent else {
+        return FileDialog(None);
+    };
     let mut dialog = AsyncFileDialog::new();
     if let Some(directory) = directory {
         dialog = dialog.set_directory(directory);
     }
-    if let Some(parent) = parent {
-        // SAFETY: called on the main thread, where the primary window's
-        // handle is live; it is only read to parent the dialog.
-        let handle = unsafe { parent.get_handle() };
-        dialog = dialog.set_parent(&handle);
-    }
-    dialog
+    // SAFETY: called on the main thread, where the primary window's
+    // handle is live; it is only read to parent the dialog.
+    let handle = unsafe { parent.get_handle() };
+    FileDialog(Some(dialog.set_parent(&handle)))
 }
 
 /// An open dialog for `purpose`, started where the user is browsing.
-pub fn file_dialog(world: &mut World, purpose: DialogPurpose) -> AsyncFileDialog {
+pub fn file_dialog(world: &mut World, purpose: DialogPurpose) -> FileDialog {
     let directory = start_directory(world, purpose);
     let parent = primary_window_handle(world);
     dialog_at(directory, parent.as_ref())
@@ -203,17 +234,13 @@ pub fn file_dialog(world: &mut World, purpose: DialogPurpose) -> AsyncFileDialog
 
 /// A save dialog for `purpose`, started where the user is browsing and
 /// prefilled with `suggested_name`.
-pub fn save_dialog(
-    world: &mut World,
-    purpose: DialogPurpose,
-    suggested_name: &str,
-) -> AsyncFileDialog {
+pub fn save_dialog(world: &mut World, purpose: DialogPurpose, suggested_name: &str) -> FileDialog {
     file_dialog(world, purpose).set_file_name(suggested_name)
 }
 
 /// A dialog started at `directory`, for the pickers that already hold
 /// the folder they are re-choosing.
-pub fn dialog_starting_at(world: &mut World, directory: Option<PathBuf>) -> AsyncFileDialog {
+pub fn dialog_starting_at(world: &mut World, directory: Option<PathBuf>) -> FileDialog {
     let directory = directory.as_deref().and_then(existing_directory);
     let parent = primary_window_handle(world);
     dialog_at(directory, parent.as_ref())
@@ -278,4 +305,17 @@ pub fn launcher_project_directory() -> Option<PathBuf> {
                 .and_then(existing_directory)
         })
         .or_else(|| dirs::home_dir().as_deref().and_then(existing_directory))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dialog_without_a_window_returns_nothing_instead_of_opening() {
+        let mut world = World::new();
+        let dialog = save_dialog(&mut world, DialogPurpose::Scene, "scene.bsn")
+            .add_filter("BSN Scene", &["bsn"]);
+        assert!(bevy::tasks::block_on(dialog.save_file()).is_none());
+    }
 }
