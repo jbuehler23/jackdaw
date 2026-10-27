@@ -2052,10 +2052,7 @@ fn map_entry_edit(
     } else {
         merged.reflect_path(map_path.as_str()).ok()?
     };
-    Some((
-        map_path.clone(),
-        jackdaw_bsn::BsnValue::from_reflect(map, &registry),
-    ))
+    Some((map_path.clone(), authorable(map, &registry)?))
 }
 
 /// Write `value` into the live map entry `field_path` names. Whether the path
@@ -2169,10 +2166,7 @@ pub(crate) fn json_field_edit(
         let deserializer =
             bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);
         let reflected = deserializer.deserialize(value).ok()?;
-        return Some((
-            String::new(),
-            jackdaw_bsn::BsnValue::from_reflect(reflected.as_ref(), &registry),
-        ));
+        return Some((String::new(), authorable(reflected.as_ref(), &registry)?));
     }
     let reflect_component = registration.data::<ReflectComponent>()?;
     let entity_ref = world.get_entity(entity).ok()?;
@@ -2210,10 +2204,19 @@ pub(crate) fn json_field_edit(
             )
         });
     let (path, authored) = whole.unwrap_or((field_path.to_string(), field));
-    Some((
-        path,
-        jackdaw_bsn::BsnValue::from_reflect(authored, &registry),
-    ))
+    Some((path, authorable(authored, &registry)?))
+}
+
+/// A value as the document writes it, or `None`, logged, when it has no
+/// document form: an edit that cannot be saved is refused rather than saved
+/// as text that reads back as something else.
+fn authorable(
+    value: &dyn bevy::reflect::PartialReflect,
+    registry: &bevy::reflect::TypeRegistry,
+) -> Option<jackdaw_bsn::BsnValue> {
+    jackdaw_bsn::BsnValue::try_from_reflect(value, registry)
+        .inspect_err(|err| warn!("cannot author the edit: {err}"))
+        .ok()
 }
 
 /// Convert a field edit on a project (schema-reported) component into the
@@ -2685,10 +2688,7 @@ pub(crate) fn live_bsn_field(
     let entity_ref = world.get_entity(entity).ok()?;
     let component = reflect_component.reflect(entity_ref)?;
     let field = component.reflect_path(field_path).ok()?;
-    Some(jackdaw_bsn::BsnValue::from_reflect(
-        field.as_partial_reflect(),
-        &registry,
-    ))
+    jackdaw_bsn::BsnValue::try_from_reflect(field.as_partial_reflect(), &registry).ok()
 }
 
 #[cfg(test)]
@@ -3421,6 +3421,22 @@ mod set_bsn_field_tests {
         );
 
         assert_eq!(reloaded::<Reach>(&app).range, (0.0, 4.0));
+    }
+
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Component, Default)]
+    struct Cooldown {
+        timer: Timer,
+    }
+
+    #[test]
+    fn a_timer_saves_and_reloads_with_its_duration() {
+        let cooldown = Cooldown {
+            timer: Timer::from_seconds(2.5, TimerMode::Repeating),
+        };
+        let (app, _) = selected_app(cooldown.clone());
+
+        assert_eq!(reloaded::<Cooldown>(&app), cooldown);
     }
 }
 
