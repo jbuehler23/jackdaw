@@ -414,6 +414,14 @@ pub fn component_cards_showing(world: &mut World) -> Vec<String> {
     cards.iter(world).map(|card| card.0.clone()).collect()
 }
 
+/// The component a card shows, as its type path, or `None` when the entity is
+/// no component card.
+pub fn component_card_type_path(world: &World, card: Entity) -> Option<&str> {
+    world
+        .get::<ComponentDisplayTypePath>(card)
+        .map(|card| card.0.as_str())
+}
+
 /// Every line of text under the card for `type_path`, which is what a person
 /// reading the card sees.
 pub fn component_card_text(world: &mut World, type_path: &str) -> Vec<String> {
