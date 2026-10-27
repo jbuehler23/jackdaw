@@ -159,3 +159,53 @@ fn the_add_component_button_survives_a_component_being_added() {
 
     assert_eq!(add_component_button(&mut app), Some(button));
 }
+
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
+struct Stamina(f32);
+
+#[test]
+fn a_new_selection_whose_cardless_components_arrive_a_frame_later_is_built_once() {
+    let (mut app, _first, _second) = app_with_two_entities();
+    reset(&mut app);
+
+    let entity = app
+        .world_mut()
+        .spawn((Name::new("third"), Transform::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    jackdaw::selection::select_only(app.world_mut(), entity);
+    app.update();
+    app.world_mut()
+        .entity_mut(entity)
+        .insert((ViewVisibility::default(), InheritedVisibility::default()));
+    settle(&mut app);
+
+    let showing = cards_showing(&mut app);
+    assert!(showing > 0, "the new entity's cards are up");
+    assert_eq!(
+        app.world().resource::<Tally>().cards_added,
+        showing,
+        "components with no card of their own do not put the cards up again",
+    );
+}
+
+#[test]
+fn a_component_that_gets_a_card_arriving_later_puts_the_cards_up_again() {
+    let (mut app, first, _second) = app_with_two_entities();
+    app.register_type::<Stamina>();
+    select(&mut app, first);
+    let before = cards_showing(&mut app);
+    reset(&mut app);
+
+    app.world_mut().entity_mut(first).insert(Stamina(1.0));
+    settle(&mut app);
+
+    let showing = cards_showing(&mut app);
+    assert!(showing > before, "the new component has a card");
+    assert_eq!(
+        app.world().resource::<Tally>().cards_added,
+        showing,
+        "and the cards were put up once",
+    );
+}

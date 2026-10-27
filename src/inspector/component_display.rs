@@ -80,9 +80,9 @@ pub(crate) struct CardBuildInputs<'w, 's> {
 }
 
 /// What a panel's cards were last built for: how many entities were selected,
-/// for the multi-selection header, and the components of the entity shown, so
-/// a component arriving later puts the cards up again while the panel's own
-/// [`InspectorDirty`] marker coming and going does not.
+/// for the multi-selection header, and the components of the entity shown that
+/// have a card, so a component that gets one puts the cards up again while one
+/// that never shows does not.
 #[derive(Component)]
 pub(crate) struct InspectorShown {
     selection_count: usize,
@@ -90,42 +90,34 @@ pub(crate) struct InspectorShown {
 }
 
 impl InspectorShown {
-    fn new(
-        selection_count: usize,
-        archetype: Option<&Archetype>,
-        dirty: Option<ComponentId>,
-    ) -> Self {
+    fn new(selection_count: usize, shape: Option<(ArchetypeId, Vec<ComponentId>)>) -> Self {
         Self {
             selection_count,
-            shape: archetype.map(|archetype| (archetype.id(), shown_components(archetype, dirty))),
+            shape,
         }
     }
 
-    /// Whether the entity now has components other than the ones the cards
-    /// show. An archetype that differs only by the dirty marker is taken as the
-    /// one shown, so the comparison is not repeated every frame.
-    fn reshaped(&mut self, archetype: &Archetype, dirty: Option<ComponentId>) -> bool {
+    /// Whether the entity has left the archetype the cards were built from,
+    /// which is the only time its carded components can differ.
+    fn moved(&self, archetype: &Archetype) -> bool {
+        self.shape
+            .as_ref()
+            .is_some_and(|(id, _)| *id != archetype.id())
+    }
+
+    /// Whether `carded` differs from the components the cards show. When it
+    /// does not, the new archetype is taken as the one shown, so the comparison
+    /// is not repeated every frame.
+    fn reshaped(&mut self, archetype: &Archetype, carded: Vec<ComponentId>) -> bool {
         let Some((id, components)) = self.shape.as_mut() else {
             return false;
         };
-        if *id == archetype.id() {
-            return false;
-        }
-        if *components != shown_components(archetype, dirty) {
+        if *components != carded {
             return true;
         }
         *id = archetype.id();
         false
     }
-}
-
-fn shown_components(archetype: &Archetype, dirty: Option<ComponentId>) -> Vec<ComponentId> {
-    let mut components: Vec<ComponentId> = archetype
-        .iter_components()
-        .filter(|&component| Some(component) != dirty)
-        .collect();
-    components.sort_unstable();
-    components
 }
 
 /// Keep each inspector's cards pointed at [`Selection::primary`], and put them
@@ -159,7 +151,6 @@ pub(crate) fn sync_inspector_to_selection(
         });
     }
 
-    let dirty_id = inputs.components.component_id::<InspectorDirty>();
     let sel_count = selection.entities.len();
 
     for (inspector, target, mut shown) in &mut inspectors {
@@ -172,7 +163,19 @@ pub(crate) fn sync_inspector_to_selection(
         let reshaped = current.zip(shown.as_mut()).is_some_and(|(current, shown)| {
             entity_query
                 .get(current)
-                .is_ok_and(|(archetype, _)| shown.reshaped(archetype, dirty_id))
+                .is_ok_and(|(archetype, entity_ref)| {
+                    shown.moved(archetype) && {
+                        let authored = inspector_type_paths_for(
+                            &inputs.asts.bsn,
+                            &inputs.prefab_cache,
+                            current,
+                            entity_ref,
+                            &lineage.child_of,
+                            &lineage.is_a,
+                        );
+                        shown.reshaped(archetype, carded_components(archetype, &inputs, &authored))
+                    }
+                })
         });
         if !(retarget || marked || reshaped) {
             continue;
@@ -201,7 +204,7 @@ pub(crate) fn sync_inspector_to_selection(
             });
             commands.entity(inspector).insert((
                 InspectorTarget(primary),
-                InspectorShown::new(sel_count, None, dirty_id),
+                InspectorShown::new(sel_count, None),
             ));
             continue;
         }
@@ -211,7 +214,7 @@ pub(crate) fn sync_inspector_to_selection(
             });
             commands.entity(inspector).insert((
                 InspectorTarget(primary),
-                InspectorShown::new(sel_count, None, dirty_id),
+                InspectorShown::new(sel_count, None),
             ));
             continue;
         }
@@ -253,7 +256,13 @@ pub(crate) fn sync_inspector_to_selection(
 
         commands.entity(inspector).insert((
             InspectorTarget(primary),
-            InspectorShown::new(sel_count, Some(archetype), dirty_id),
+            InspectorShown::new(
+                sel_count,
+                Some((
+                    archetype.id(),
+                    carded_components(archetype, &inputs, &authored_type_paths),
+                )),
+            ),
         ));
     }
 
@@ -387,6 +396,129 @@ fn source_note(path: &std::path::Path) -> String {
     clippy::too_many_arguments,
     reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
 )]
+/// The components of `archetype` that get a card of their own, before any is
+/// folded into the card of another.
+fn listed_components(
+    archetype: &Archetype,
+    components: &Components,
+    registry: &bevy::reflect::TypeRegistry,
+    type_metadata: &TypeMetadata,
+    project_types: &crate::project_types::ProjectTypes,
+    authored_type_paths: &HashSet<String>,
+) -> Vec<ListedComponent> {
+    archetype
+        .iter_components()
+        .filter_map(|component_id| {
+            listed_component(
+                component_id,
+                components,
+                registry,
+                type_metadata,
+                project_types,
+                authored_type_paths,
+            )
+        })
+        .collect()
+}
+
+/// The card [`listed_components`] gives `component_id`, or `None` when it
+/// gets none.
+fn listed_component(
+    component_id: ComponentId,
+    components: &Components,
+    registry: &bevy::reflect::TypeRegistry,
+    type_metadata: &TypeMetadata,
+    project_types: &crate::project_types::ProjectTypes,
+    authored_type_paths: &HashSet<String>,
+) -> Option<ListedComponent> {
+    let info = components.get_info(component_id)?;
+    let type_id = info.type_id();
+
+    // Try TypeRegistry first for proper names
+    if let Some(type_id) = type_id
+        && let Some(registration) = registry.get(type_id)
+    {
+        let table = registration.type_info().type_path_table();
+        let full_path = table.path();
+        let chrome = type_metadata.resolve(full_path, registry, project_types);
+        if !offered_as_card(full_path, &chrome) {
+            return None;
+        }
+        // AST filter: hide Bevy-internal components that
+        // aren't tracked in the scene file. User-defined
+        // components (anything outside the `bevy::*`,
+        // `core::*`, `std::*`, and `jackdaw_*` namespaces)
+        // are always shown so the inspector reflects the
+        // actual ECS state. Without this exception, a user
+        // component newly added via the picker would be
+        // invisible if `AddComponent::execute`'s AST
+        // serialization failed silently (e.g., a struct
+        // field whose `Reflect` impl can't round-trip
+        // through `TypedReflectSerializer`), leaving the
+        // user wondering whether the click registered.
+        let is_user_type = !full_path.starts_with("bevy")
+            && !full_path.starts_with("core")
+            && !full_path.starts_with("std")
+            && (!full_path.starts_with("jackdaw")
+                || ModuleCatalog::builtin()
+                    .component_module(full_path)
+                    .is_some());
+        if !is_user_type
+            && !crate::worn_material::material_component_paths().contains(&full_path)
+            && !authored_type_paths.is_empty()
+            && !jackdaw_bsn::type_paths_include(
+                authored_type_paths.iter().map(String::as_str),
+                full_path,
+            )
+        {
+            return None;
+        }
+        let group = chrome.group(full_path);
+        return Some(ListedComponent {
+            name: table.short_path().to_string(),
+            group,
+            component_id,
+            type_path: full_path.to_string(),
+            chrome,
+        });
+    }
+
+    // Unreflected components fall back to the `Components` name.
+    let name = components.get_name(component_id)?;
+    if hidden_by_namespace(&name) {
+        return None;
+    }
+    Some(ListedComponent {
+        name: name.shortname().to_string(),
+        group: "Other".to_string(),
+        component_id,
+        type_path: name.to_string(),
+        chrome: TypeChrome::default(),
+    })
+}
+
+/// The components a panel's cards are built from, as compared between frames.
+fn carded_components(
+    archetype: &Archetype,
+    inputs: &CardBuildInputs,
+    authored_type_paths: &HashSet<String>,
+) -> Vec<ComponentId> {
+    let registry = inputs.type_registry.read();
+    let mut carded: Vec<ComponentId> = listed_components(
+        archetype,
+        inputs.components,
+        &registry,
+        &inputs.asts.type_metadata,
+        &inputs.asts.project_types,
+        authored_type_paths,
+    )
+    .into_iter()
+    .map(|listed| listed.component_id)
+    .collect();
+    carded.sort_unstable();
+    carded
+}
+
 pub(crate) fn build_inspector_displays(
     commands: &mut Commands,
     components: &Components,
@@ -483,75 +615,14 @@ pub(crate) fn build_inspector_displays(
         ));
     }
 
-    let mut comp_list: Vec<ListedComponent> = archetype
-        .iter_components()
-        .filter_map(|component_id| {
-            let info = components.get_info(component_id)?;
-            let type_id = info.type_id();
-
-            // Try TypeRegistry first for proper names
-            if let Some(type_id) = type_id
-                && let Some(registration) = registry.get(type_id)
-            {
-                let table = registration.type_info().type_path_table();
-                let full_path = table.path();
-                let chrome = type_metadata.resolve(full_path, &registry, project_types);
-                if !offered_as_card(full_path, &chrome) {
-                    return None;
-                }
-                // AST filter: hide Bevy-internal components that
-                // aren't tracked in the scene file. User-defined
-                // components (anything outside the `bevy::*`,
-                // `core::*`, `std::*`, and `jackdaw_*` namespaces)
-                // are always shown so the inspector reflects the
-                // actual ECS state. Without this exception, a user
-                // component newly added via the picker would be
-                // invisible if `AddComponent::execute`'s AST
-                // serialization failed silently (e.g., a struct
-                // field whose `Reflect` impl can't round-trip
-                // through `TypedReflectSerializer`), leaving the
-                // user wondering whether the click registered.
-                let is_user_type = !full_path.starts_with("bevy")
-                    && !full_path.starts_with("core")
-                    && !full_path.starts_with("std")
-                    && (!full_path.starts_with("jackdaw")
-                        || ModuleCatalog::builtin()
-                            .component_module(full_path)
-                            .is_some());
-                if !is_user_type
-                    && !crate::worn_material::material_component_paths().contains(&full_path)
-                    && !authored_type_paths.is_empty()
-                    && !jackdaw_bsn::type_paths_include(
-                        authored_type_paths.iter().map(String::as_str),
-                        full_path,
-                    )
-                {
-                    return None;
-                }
-                let group = chrome.group(full_path);
-                return Some(ListedComponent {
-                    name: table.short_path().to_string(),
-                    group,
-                    component_id,
-                    type_path: full_path.to_string(),
-                    chrome,
-                });
-            }
-
-            // Unreflected components fall back to the `Components` name.
-            let name = components.get_name(component_id)?;
-            if hidden_by_namespace(&name) {
-                return None;
-            }
-            Some(ListedComponent {
-                name: name.shortname().to_string(),
-                group: "Other".to_string(),
-                component_id,
-                type_path: name.to_string(),
-                chrome: TypeChrome::default(),
-            })
-        })
-        .collect();
+    let mut comp_list = listed_components(
+        archetype,
+        components,
+        &registry,
+        type_metadata,
+        project_types,
+        authored_type_paths,
+    );
 
     // Sort: game EditorCategory groups, then Game, then engine groups,
     // then by group name, authored before derived, then alphabetical.
