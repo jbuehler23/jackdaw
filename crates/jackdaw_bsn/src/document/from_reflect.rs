@@ -3,10 +3,28 @@ use std::path::Path;
 use bevy::asset::{AssetServer, ReflectHandle};
 use bevy::platform::collections::HashMap;
 use bevy::reflect::enums::VariantType;
-use bevy::reflect::{PartialReflect, ReflectRef, TypeRegistry};
+use bevy::reflect::{PartialReflect, ReflectRef, ReflectSerialize, TypeRegistry};
 use path_slash::PathExt as _;
+use serde::Serialize as _;
 
+use super::serde_value::ValueSerializer;
 use super::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue};
+
+/// A value with no form the document can hold: an opaque type with no
+/// serializer, or something holding one.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("a '{type_path}' value has no document form")]
+pub struct UnencodableValue {
+    /// The type that could not be written.
+    pub type_path: String,
+}
+
+fn type_path_or_unknown(value: &dyn PartialReflect) -> String {
+    value
+        .get_represented_type_info()
+        .map_or("<unknown>", bevy::reflect::TypeInfo::type_path)
+        .to_string()
+}
 
 /// Context for resolving `Handle<T>` fields to asset-path strings during BSN
 /// emission. `parent_path` is the directory the emitted `.bsn` file lives in,
@@ -62,8 +80,13 @@ fn is_handle_type_path(type_path: &str) -> bool {
 
 impl BsnValue {
     /// Create a [`BsnValue`] from a reflected value and its type info.
+    ///
+    /// A field of a struct with no document form is left out, so the struct
+    /// reads back with that field's default. A value that has none as a
+    /// whole is logged and written as its bare type path; use
+    /// [`BsnValue::try_from_reflect`] to refuse it instead.
     pub fn from_reflect(value: &dyn PartialReflect, type_registry: &TypeRegistry) -> Self {
-        Self::from_reflect_inner(value, type_registry, None)
+        Self::encode_or_type(value, type_registry, None)
     }
 
     /// Create a [`BsnValue`] from a reflected value, resolving `Handle<T>`
@@ -73,85 +96,115 @@ impl BsnValue {
         type_registry: &TypeRegistry,
         ctx: &BsnAssetContext,
     ) -> Self {
+        Self::encode_or_type(value, type_registry, Some(ctx))
+    }
+
+    /// Create a [`BsnValue`] from a reflected value, or say which type in it
+    /// has no document form.
+    pub fn try_from_reflect(
+        value: &dyn PartialReflect,
+        type_registry: &TypeRegistry,
+    ) -> Result<Self, UnencodableValue> {
+        Self::from_reflect_inner(value, type_registry, None)
+    }
+
+    /// [`BsnValue::try_from_reflect`], resolving `Handle<T>` fields to
+    /// asset-path strings via `ctx`.
+    pub fn try_from_reflect_with_assets(
+        value: &dyn PartialReflect,
+        type_registry: &TypeRegistry,
+        ctx: &BsnAssetContext,
+    ) -> Result<Self, UnencodableValue> {
         Self::from_reflect_inner(value, type_registry, Some(ctx))
+    }
+
+    fn encode_or_type(
+        value: &dyn PartialReflect,
+        type_registry: &TypeRegistry,
+        ctx: Option<&BsnAssetContext>,
+    ) -> Self {
+        Self::from_reflect_inner(value, type_registry, ctx).unwrap_or_else(|err| {
+            log::warn!("{err}; writing its type alone");
+            BsnValue::Type(type_path_or_unknown(value))
+        })
     }
 
     fn from_reflect_inner(
         value: &dyn PartialReflect,
         type_registry: &TypeRegistry,
         ctx: Option<&BsnAssetContext>,
-    ) -> Self {
+    ) -> Result<Self, UnencodableValue> {
         // Try primitives first.
         if let Some(v) = value.try_downcast_ref::<f32>() {
-            return BsnValue::Float(*v as f64);
+            return Ok(BsnValue::Float(*v as f64));
         }
         if let Some(v) = value.try_downcast_ref::<f64>() {
-            return BsnValue::Float(*v);
+            return Ok(BsnValue::Float(*v));
         }
         if let Some(v) = value.try_downcast_ref::<bool>() {
-            return BsnValue::Bool(*v);
+            return Ok(BsnValue::Bool(*v));
         }
         if let Some(v) = value.try_downcast_ref::<String>() {
-            return BsnValue::String(v.clone());
+            return Ok(BsnValue::String(v.clone()));
         }
         if let Some(v) = value.try_downcast_ref::<std::borrow::Cow<'static, str>>() {
-            return BsnValue::String(v.to_string());
+            return Ok(BsnValue::String(v.to_string()));
         }
         // Path types reflect as opaque and would otherwise hit the Debug
         // fallback, which wraps the path in literal quotes. Emit the plain
         // path string so it round-trips through one string value.
         if let Some(v) = value.try_downcast_ref::<std::path::PathBuf>() {
-            return BsnValue::String(v.to_string_lossy().into_owned());
+            return Ok(BsnValue::String(v.to_string_lossy().into_owned()));
         }
         // Integer types.
         if let Some(v) = value.try_downcast_ref::<i32>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<u32>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<i64>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<u64>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<usize>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<i8>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<u8>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<i16>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         if let Some(v) = value.try_downcast_ref::<u16>() {
-            return BsnValue::Int(*v as i128);
+            return Ok(BsnValue::Int(*v as i128));
         }
         // `NonZero` reflects as opaque, so without these arms it reaches the
         // `Debug` fallback and lands in the document as a quoted string no
         // reader takes back as a number. Bevy's grid lines are `NonZero`.
         if let Some(v) = value.try_downcast_ref::<std::num::NonZeroI16>() {
-            return BsnValue::Int(i128::from(v.get()));
+            return Ok(BsnValue::Int(i128::from(v.get())));
         }
         if let Some(v) = value.try_downcast_ref::<std::num::NonZeroU16>() {
-            return BsnValue::Int(i128::from(v.get()));
+            return Ok(BsnValue::Int(i128::from(v.get())));
         }
         if let Some(v) = value.try_downcast_ref::<std::num::NonZeroI32>() {
-            return BsnValue::Int(i128::from(v.get()));
+            return Ok(BsnValue::Int(i128::from(v.get())));
         }
         if let Some(v) = value.try_downcast_ref::<std::num::NonZeroU32>() {
-            return BsnValue::Int(i128::from(v.get()));
+            return Ok(BsnValue::Int(i128::from(v.get())));
         }
 
         // `SmolStr` reflects as opaque, so without this arm it reaches the
         // `Debug` fallback and lands in the document double-quoted.
         // `bevy_feathers` theme tokens are `SmolStr`.
         if let Some(v) = value.try_downcast_ref::<smol_str::SmolStr>() {
-            return BsnValue::String(v.to_string());
+            return Ok(BsnValue::String(v.to_string()));
         }
 
         // Handle<T> fields: resolve to an asset-path string when an asset
@@ -169,11 +222,11 @@ impl BsnValue {
                     && let Some(untyped_handle) =
                         reflect_handle.downcast_handle_untyped(concrete.as_any())
                 {
-                    return BsnValue::String(ctx.handle_string(untyped_handle.id()));
+                    return Ok(BsnValue::String(ctx.handle_string(untyped_handle.id())));
                 }
                 // No context (or a handle that failed to downcast): emit an
                 // empty string.
-                return BsnValue::String(String::new());
+                return Ok(BsnValue::String(String::new()));
             }
         }
 
@@ -189,7 +242,7 @@ impl BsnValue {
             .get_represented_type_info()
             .is_some_and(|info| is_handle_type_path(info.type_path()))
         {
-            return BsnValue::String(String::new());
+            return Ok(BsnValue::String(String::new()));
         }
 
         // Option<Handle<T>> fields: emit the inner asset path (Some) or an
@@ -220,7 +273,7 @@ impl BsnValue {
 
             if inner_is_handle {
                 match e.variant_name() {
-                    "None" => return BsnValue::String(String::new()),
+                    "None" => return Ok(BsnValue::String(String::new())),
                     "Some" => {
                         if let Some(inner) = e.field_at(0)
                             && let Some(concrete) = inner.try_as_reflect()
@@ -231,7 +284,9 @@ impl BsnValue {
                                 && let Some(untyped_handle) =
                                     reflect_handle.downcast_handle_untyped(concrete.as_any())
                             {
-                                return BsnValue::String(ctx.handle_string(untyped_handle.id()));
+                                return Ok(BsnValue::String(
+                                    ctx.handle_string(untyped_handle.id()),
+                                ));
                             }
                         }
                     }
@@ -240,7 +295,8 @@ impl BsnValue {
             }
         }
 
-        // Structs.
+        // Structs. A struct value names only the fields it sets, so one with
+        // no document form is left out and reads back as its default.
         if let ReflectRef::Struct(s) = value.reflect_ref() {
             let type_path = value
                 .get_represented_type_info()
@@ -250,15 +306,16 @@ impl BsnValue {
             for i in 0..s.field_len() {
                 let name = s.name_at(i).unwrap().to_string();
                 let field_value = s.field_at(i).unwrap();
-                fields.push(BsnField {
-                    name,
-                    value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
-                });
+                if let Some(value) =
+                    encoded_field(&type_path, &name, field_value, type_registry, ctx)
+                {
+                    fields.push(BsnField { name, value });
+                }
             }
-            return BsnValue::Struct(BsnStructData {
+            return Ok(BsnValue::Struct(BsnStructData {
                 type_path,
                 fields: BsnStructFields(fields),
-            });
+            }));
         }
 
         // Tuple structs.
@@ -274,9 +331,12 @@ impl BsnValue {
                     field_value,
                     type_registry,
                     ctx,
-                ));
+                )?);
             }
-            return BsnValue::TupleStruct(BsnTupleStructData { type_path, values });
+            return Ok(BsnValue::TupleStruct(BsnTupleStructData {
+                type_path,
+                values,
+            }));
         }
 
         // Enums.
@@ -294,13 +354,13 @@ impl BsnValue {
                         let field_value = e.field_at(i).unwrap();
                         fields.push(BsnField {
                             name,
-                            value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
+                            value: BsnValue::from_reflect_inner(field_value, type_registry, ctx)?,
                         });
                     }
-                    return BsnValue::Struct(BsnStructData {
+                    return Ok(BsnValue::Struct(BsnStructData {
                         type_path: full_path,
                         fields: BsnStructFields(fields),
-                    });
+                    }));
                 }
                 VariantType::Tuple => {
                     let mut values = Vec::new();
@@ -310,15 +370,15 @@ impl BsnValue {
                             field_value,
                             type_registry,
                             ctx,
-                        ));
+                        )?);
                     }
-                    return BsnValue::TupleStruct(BsnTupleStructData {
+                    return Ok(BsnValue::TupleStruct(BsnTupleStructData {
                         type_path: full_path,
                         values,
-                    });
+                    }));
                 }
                 VariantType::Unit => {
-                    return BsnValue::Type(full_path);
+                    return Ok(BsnValue::Type(full_path));
                 }
             }
         }
@@ -328,10 +388,10 @@ impl BsnValue {
             let mut items = Vec::new();
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
-                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
+                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx)?);
                 }
             }
-            return BsnValue::List(items);
+            return Ok(BsnValue::List(items));
         }
 
         // Tuples emit like lists. BSN has no tuple literal, and a `(String,
@@ -341,10 +401,10 @@ impl BsnValue {
             let mut items = Vec::new();
             for i in 0..t.field_len() {
                 if let Some(item) = t.field(i) {
-                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
+                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx)?);
                 }
             }
-            return BsnValue::List(items);
+            return Ok(BsnValue::List(items));
         }
 
         // Fixed-size arrays emit like lists; the applier rebuilds them against
@@ -353,10 +413,10 @@ impl BsnValue {
             let mut items = Vec::new();
             for i in 0..a.len() {
                 if let Some(item) = a.get(i) {
-                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx));
+                    items.push(BsnValue::from_reflect_inner(item, type_registry, ctx)?);
                 }
             }
-            return BsnValue::List(items);
+            return Ok(BsnValue::List(items));
         }
 
         // Maps / HashMaps.
@@ -364,24 +424,115 @@ impl BsnValue {
             let mut entries = Vec::new();
             for (key, val) in m.iter() {
                 entries.push((
-                    BsnValue::from_reflect_inner(key, type_registry, ctx),
-                    BsnValue::from_reflect_inner(val, type_registry, ctx),
+                    BsnValue::from_reflect_inner(key, type_registry, ctx)?,
+                    BsnValue::from_reflect_inner(val, type_registry, ctx)?,
                 ));
             }
-            return BsnValue::Map(entries);
+            return Ok(BsnValue::Map(entries));
         }
 
-        // Fallback: emit as string via Debug. The quoted string parses back,
-        // but the original typed value is not recoverable from it.
-        log::warn!(
-            "value of type '{}' has no BSN representation; storing its Debug form as a string",
-            value
-                .get_represented_type_info()
-                .map(bevy::reflect::TypeInfo::type_path)
-                .unwrap_or("<unknown>")
-        );
-        BsnValue::String(format!("{value:?}"))
+        // Sets emit like lists, in the order their items emit, so a save does
+        // not reorder them.
+        if let ReflectRef::Set(set) = value.reflect_ref() {
+            let mut items = set
+                .iter()
+                .map(|item| BsnValue::from_reflect_inner(item, type_registry, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            items.sort_by_cached_key(crate::emit_value_text);
+            return Ok(BsnValue::List(items));
+        }
+
+        if let Some(range) = range_value(value, type_registry, ctx)? {
+            return Ok(range);
+        }
+
+        // Any other opaque value is written as what its own serializer
+        // writes, which its deserializer reads back.
+        if let Some(concrete) = value.try_as_reflect()
+            && let Some(serialize) = type_registry
+                .get_type_data::<ReflectSerialize>(concrete.reflect_type_info().type_id())
+        {
+            return serialize
+                .get_serializable(concrete)
+                .serialize(ValueSerializer)
+                .map_err(|err| {
+                    log::warn!("cannot write a '{}': {err}", type_path_or_unknown(value));
+                    UnencodableValue {
+                        type_path: type_path_or_unknown(value),
+                    }
+                });
+        }
+
+        Err(UnencodableValue {
+            type_path: type_path_or_unknown(value),
+        })
     }
+}
+
+/// One field of a struct as the document writes it, or `None`, logged, when
+/// it has no document form.
+fn encoded_field(
+    struct_path: &str,
+    name: &str,
+    value: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: Option<&BsnAssetContext>,
+) -> Option<BsnValue> {
+    match BsnValue::from_reflect_inner(value, type_registry, ctx) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            log::warn!("{struct_path}.{name}: {err}; leaving the field out");
+            None
+        }
+    }
+}
+
+/// `Range` and `RangeInclusive` reflect as opaque with no serializer, so each
+/// is written as its two bounds: `core::ops::Range<f32> { start: 0.0, end:
+/// 1.0 }`.
+fn range_value(
+    value: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: Option<&BsnAssetContext>,
+) -> Result<Option<BsnValue>, UnencodableValue> {
+    macro_rules! bounds {
+        ($($t:ty),*) => {
+            $(
+                if let Some(range) = value.try_downcast_ref::<core::ops::Range<$t>>() {
+                    return range_struct(value, &range.start, &range.end, type_registry, ctx);
+                }
+                if let Some(range) = value.try_downcast_ref::<core::ops::RangeInclusive<$t>>() {
+                    return range_struct(value, range.start(), range.end(), type_registry, ctx);
+                }
+            )*
+        };
+    }
+    bounds!(
+        f32, f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+    );
+    Ok(None)
+}
+
+fn range_struct(
+    range: &dyn PartialReflect,
+    start: &dyn PartialReflect,
+    end: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: Option<&BsnAssetContext>,
+) -> Result<Option<BsnValue>, UnencodableValue> {
+    let fields = [("start", start), ("end", end)]
+        .into_iter()
+        .map(|(name, bound)| {
+            Ok(BsnField {
+                name: name.to_string(),
+                value: BsnValue::from_reflect_inner(bound, type_registry, ctx)?,
+            })
+        })
+        .collect::<Result<Vec<_>, UnencodableValue>>()?;
+    Ok(Some(BsnValue::Struct(BsnStructData {
+        type_path: type_path_or_unknown(range),
+        fields: BsnStructFields(fields),
+    })))
 }
 
 /// Convert a component's reflected data into a BSN AST patch.
@@ -443,11 +594,11 @@ fn component_to_bsn_patch_inner(
                     true
                 };
 
-                if should_emit {
-                    fields.push(BsnField {
-                        name,
-                        value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
-                    });
+                if should_emit
+                    && let Some(value) =
+                        encoded_field(&type_path, &name, field_value, type_registry, ctx)
+                {
+                    fields.push(BsnField { name, value });
                 }
             }
 
@@ -462,54 +613,56 @@ fn component_to_bsn_patch_inner(
         }
 
         ReflectRef::TupleStruct(ts) => {
-            let mut values = Vec::new();
-            for i in 0..ts.field_len() {
-                let field_value = ts.field(i).unwrap();
-                values.push(BsnValue::from_reflect_inner(
-                    field_value,
-                    type_registry,
-                    ctx,
-                ));
+            let values = (0..ts.field_len())
+                .filter_map(|i| ts.field(i))
+                .map(|field_value| BsnValue::from_reflect_inner(field_value, type_registry, ctx))
+                .collect::<Result<Vec<_>, _>>();
+            match values {
+                Ok(values) => BsnPatch::TupleStruct(BsnTupleStructData { type_path, values }),
+                Err(err) => unencodable_patch(type_path, &err),
             }
-            BsnPatch::TupleStruct(BsnTupleStructData { type_path, values })
         }
 
         ReflectRef::Enum(e) => {
             let full_path = variant_type_path(&type_path, e.variant_name());
             match e.variant_type() {
                 VariantType::Struct => {
-                    let mut fields = Vec::new();
-                    for i in 0..e.field_len() {
-                        let name = e.name_at(i).unwrap().to_string();
-                        let field_value = e.field_at(i).unwrap();
-                        fields.push(BsnField {
-                            name,
-                            value: BsnValue::from_reflect_inner(field_value, type_registry, ctx),
-                        });
-                    }
-                    if fields.is_empty() {
-                        BsnPatch::Type(full_path)
-                    } else {
-                        BsnPatch::Struct(BsnStructData {
+                    let fields = (0..e.field_len())
+                        .filter_map(|i| Some((e.name_at(i)?, e.field_at(i)?)))
+                        .map(|(name, field_value)| {
+                            Ok(BsnField {
+                                name: name.to_string(),
+                                value: BsnValue::from_reflect_inner(
+                                    field_value,
+                                    type_registry,
+                                    ctx,
+                                )?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, UnencodableValue>>();
+                    match fields {
+                        Ok(fields) if fields.is_empty() => BsnPatch::Type(full_path),
+                        Ok(fields) => BsnPatch::Struct(BsnStructData {
                             type_path: full_path,
                             fields: BsnStructFields(fields),
-                        })
+                        }),
+                        Err(err) => unencodable_patch(type_path, &err),
                     }
                 }
                 VariantType::Tuple => {
-                    let mut values = Vec::new();
-                    for i in 0..e.field_len() {
-                        let field_value = e.field_at(i).unwrap();
-                        values.push(BsnValue::from_reflect_inner(
-                            field_value,
-                            type_registry,
-                            ctx,
-                        ));
+                    let values = (0..e.field_len())
+                        .filter_map(|i| e.field_at(i))
+                        .map(|field_value| {
+                            BsnValue::from_reflect_inner(field_value, type_registry, ctx)
+                        })
+                        .collect::<Result<Vec<_>, _>>();
+                    match values {
+                        Ok(values) => BsnPatch::TupleStruct(BsnTupleStructData {
+                            type_path: full_path,
+                            values,
+                        }),
+                        Err(err) => unencodable_patch(type_path, &err),
                     }
-                    BsnPatch::TupleStruct(BsnTupleStructData {
-                        type_path: full_path,
-                        values,
-                    })
                 }
                 VariantType::Unit => BsnPatch::Type(full_path),
             }
@@ -517,4 +670,11 @@ fn component_to_bsn_patch_inner(
 
         _ => BsnPatch::Type(type_path),
     }
+}
+
+/// The patch for a component holding a value with no document form: the bare
+/// type, which reads back as the component's default.
+fn unencodable_patch(type_path: String, err: &UnencodableValue) -> BsnPatch {
+    log::warn!("{type_path}: {err}; writing the component with its defaults");
+    BsnPatch::Type(type_path)
 }

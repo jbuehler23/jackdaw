@@ -15,6 +15,7 @@ bevy = { version = "0.20", default-features = false, features = ["std", "bevy_as
 # the day the sibling stops.
 bevy_reflect = { version = "0.20", features = ["smol_str"] }
 nom = "8"
+serde.workspace = true
 pathdiff.workspace = true
 path-slash.workspace = true
 thiserror = "2"

@@ -681,8 +681,8 @@ fn native_bsn_for_json(world: &World, type_path: &str, json: &Value) -> Option<B
     let server = world.get_resource::<AssetServer>();
     let references = jackdaw_bsn::apply_reference_map(world);
     let reflected = native_value_for_json(&registry, server, Some(&references), type_path, json)?;
-    Some(match server {
-        Some(server) => BsnValue::from_reflect_with_assets(
+    let written = match server {
+        Some(server) => BsnValue::try_from_reflect_with_assets(
             reflected.as_ref(),
             &registry,
             &BsnAssetContext {
@@ -691,8 +691,11 @@ fn native_bsn_for_json(world: &World, type_path: &str, json: &Value) -> Option<B
                 asset_names: None,
             },
         ),
-        None => BsnValue::from_reflect(reflected.as_ref(), &registry),
-    })
+        None => BsnValue::try_from_reflect(reflected.as_ref(), &registry),
+    };
+    written
+        .inspect_err(|err| warn!("cannot write a '{type_path}': {err}"))
+        .ok()
 }
 
 fn deserialize_typed(
