@@ -216,6 +216,7 @@ pub(super) fn spawn_custom_properties_display(
                     rgba,
                     prop_name,
                     0.0,
+                    None,
                     move |world, rgba, is_final| {
                         if !is_final {
                             return;

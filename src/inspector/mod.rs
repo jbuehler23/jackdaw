@@ -92,6 +92,7 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<InspectorCollapseState>();
         app.init_resource::<bindings_card::BindingsCardEcho>();
         app.init_resource::<PendingInspectorRebuild>();
+        app.init_resource::<reflect_fields::OpenColorRows>();
         app.init_resource::<unavailable::UnavailableTypes>();
 
         let mut denylist = component_picker::PickerDenylist::default();
@@ -393,6 +394,14 @@ pub fn field_edited_by(world: &World, widget: Entity) -> Option<(&str, &str)> {
         .map(|binding| (binding.type_path.as_str(), binding.field_path.as_str()))
 }
 
+/// The component path and field path an enum field's variant picker edits,
+/// or `None` when the entity hosts no enum field.
+pub fn enum_field_shown_by(world: &World, host: Entity) -> Option<(&str, &str)> {
+    world
+        .get::<EnumVariantHost>(host)
+        .map(|host| (host.type_path.as_str(), host.field_path.as_str()))
+}
+
 /// The list a control edits, as the type path and field path of that list, or
 /// `None` when the entity is no list control. Addresses Add, Remove and the
 /// move arrows by the list they act on rather than by their position.
@@ -485,6 +494,9 @@ pub struct EnumVariantHost {
     pub(super) field_path: String,
     pub(super) depth: usize,
     pub(super) current_variant: String,
+    /// The field's name, shown beside the variant menu; empty for an enum
+    /// that is the whole component.
+    pub(super) label: String,
 }
 
 /// Container for brush face properties (texture, UV, etc). Populated dynamically.

@@ -26,6 +26,9 @@ impl BsnAssetContext<'_> {
     fn handle_string(&self, id: bevy::asset::UntypedAssetId) -> String {
         if let Some(path) = self.asset_server.get_path(id) {
             let path_str = path.to_string();
+            if self.parent_path.as_os_str().is_empty() {
+                return path_str;
+            }
             if let Some(relative) = pathdiff::diff_paths(&path_str, self.parent_path) {
                 return relative.to_slash_lossy().into_owned();
             }

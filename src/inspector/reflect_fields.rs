@@ -136,6 +136,7 @@ pub(crate) fn spawn_reflected_fields(
             spawn_enum_field(
                 commands,
                 parent,
+                "",
                 e,
                 depth,
                 base_path,
@@ -865,6 +866,7 @@ pub(crate) fn spawn_field_row(
             spawn_enum_field(
                 commands,
                 parent,
+                name,
                 e,
                 depth,
                 field_path,
@@ -1136,16 +1138,17 @@ fn spawn_vec2_row(
         ))
         .id();
 
-    // Label
-    commands.spawn((
-        Text::new(name),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_TERTIARY),
-        ChildOf(col),
-    ));
+    if !name.is_empty() {
+        commands.spawn((
+            Text::new(name),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_TERTIARY),
+            ChildOf(col),
+        ));
+    }
 
     // Axis inputs row
     let axes_row = commands
@@ -1218,16 +1221,17 @@ fn spawn_vec4_row(
         ))
         .id();
 
-    // Label
-    commands.spawn((
-        Text::new(name),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_TERTIARY),
-        ChildOf(col),
-    ));
+    if !name.is_empty() {
+        commands.spawn((
+            Text::new(name),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_TERTIARY),
+            ChildOf(col),
+        ));
+    }
 
     // XYZW axis inputs row
     let axes_row = commands
@@ -1443,12 +1447,17 @@ pub(crate) struct HexColorInput {
 /// `(world, rgba, is_final)` each time the color settles, so callers route the
 /// result wherever they need without touching the shared observer path. Returns
 /// the field root, which carries `ColorFieldState` and `ColorCommit`.
+///
+/// A picker given a `collapse` key shows only its label, hex and swatch until
+/// the swatch is clicked, the way a colour row reads in the other cards, and
+/// stays open across rebuilds while [`OpenColorRows`] holds the key.
 pub(crate) fn spawn_color_picker(
     commands: &mut Commands,
     parent: Entity,
     initial: [f32; 4],
     name: &str,
     left_padding: f32,
+    collapse: Option<ColorRowKey>,
     commit: impl Fn(&mut World, [f32; 4], bool) + Send + Sync + 'static,
 ) -> Entity {
     let rgba = initial;
@@ -1523,14 +1532,61 @@ pub(crate) fn spawn_color_picker(
         }
     });
 
-    commands.spawn_scene(bsn! { @FeathersColorSwatch }).insert((
-        ColorSwatchValue(Color::Srgba(srgba)),
-        ColorSubWidget {
-            root,
-            part: ColorPart::Plane,
-        },
-        ChildOf(header),
-    ));
+    let swatch = commands
+        .spawn_scene(bsn! { @FeathersColorSwatch })
+        .insert((
+            ColorSwatchValue(Color::Srgba(srgba)),
+            ColorSubWidget {
+                root,
+                part: ColorPart::Plane,
+            },
+            ChildOf(header),
+        ))
+        .id();
+    let detail = if let Some(key) = collapse {
+        let detail = commands
+            .spawn((
+                Node {
+                    display: Display::None,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(tokens::SPACING_XS),
+                    width: Val::Percent(100.0),
+                    ..Default::default()
+                },
+                ChildOf(root),
+            ))
+            .id();
+        let remembered = key.clone();
+        commands.queue(move |world: &mut World| {
+            if world.resource::<OpenColorRows>().0.contains(&remembered)
+                && let Some(mut node) = world.get_mut::<Node>(detail)
+            {
+                node.display = Display::Flex;
+            }
+        });
+        commands.entity(swatch).observe(
+            move |click: On<bevy::picking::events::PointerClick>,
+                  mut nodes: Query<&mut Node>,
+                  mut open: ResMut<OpenColorRows>| {
+                if click.button != bevy::picking::pointer::PointerButton::Primary {
+                    return;
+                }
+                let Ok(mut node) = nodes.get_mut(detail) else {
+                    return;
+                };
+                if node.display == Display::None {
+                    node.display = Display::Flex;
+                    open.0.insert(key.clone());
+                } else {
+                    node.display = Display::None;
+                    open.0.remove(&key);
+                }
+            },
+        );
+        detail
+    } else {
+        root
+    };
 
     // Red/blue plane picker. The plane's fixed channel is green (`z`); its `x`
     // is red, `y` is blue.
@@ -1542,7 +1598,7 @@ pub(crate) fn spawn_color_picker(
                 root,
                 part: ColorPart::Plane,
             },
-            ChildOf(root),
+            ChildOf(detail),
         ));
 
     // One slider per channel. `SliderBaseColor` drives the gradient; the
@@ -1563,12 +1619,25 @@ pub(crate) fn spawn_color_picker(
             .insert((
                 SliderBaseColor(Color::Srgba(srgba)),
                 ColorSubWidget { root, part },
-                ChildOf(root),
+                ChildOf(detail),
             ));
     }
 
     root
 }
+
+/// A colour field a collapsed picker stands for.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ColorRowKey {
+    pub(crate) entity: Entity,
+    pub(crate) type_path: String,
+    pub(crate) field_path: String,
+}
+
+/// The collapsed colour rows the author opened, kept so a rebuild of the
+/// inspector leaves them open.
+#[derive(Resource, Default)]
+pub(crate) struct OpenColorRows(pub(crate) std::collections::HashSet<ColorRowKey>);
 
 fn spawn_color_field(
     commands: &mut Commands,
@@ -1585,6 +1654,11 @@ fn spawn_color_field(
     let srgba = color.to_srgba();
     let rgba = [srgba.red, srgba.green, srgba.blue, srgba.alpha];
 
+    let key = ColorRowKey {
+        entity: source_entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.clone(),
+    };
     let tp = type_path.to_string();
     let path = field_path;
 
@@ -1597,7 +1671,15 @@ fn spawn_color_field(
         }
     };
 
-    let root = spawn_color_picker(commands, parent, rgba, name, left_padding, commit);
+    let root = spawn_color_picker(
+        commands,
+        parent,
+        rgba,
+        name,
+        left_padding,
+        Some(key),
+        commit,
+    );
 
     // The plane/slider drag observers skip read-only remote proxy targets. Held
     // as a `ColorCommitSkip` on the root so the shared observers never touch
@@ -3186,6 +3268,7 @@ fn is_opaque_type(value: &dyn PartialReflect) -> bool {
 fn spawn_enum_field(
     commands: &mut Commands,
     parent: Entity,
+    name: &str,
     enum_ref: &dyn bevy::reflect::enums::Enum,
     depth: usize,
     field_path: String,
@@ -3245,21 +3328,14 @@ fn spawn_enum_field(
     let left_padding = depth as f32 * tokens::SPACING_MD;
 
     if all_unit {
-        // Menu-button + popup in a row for unit-only enums.
-        let row = commands
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(tokens::SPACING_XS),
-                    padding: UiRect::left(px(left_padding)),
-                    width: Val::Percent(100.0),
-                    ..Default::default()
-                },
-                ChildOf(parent),
-            ))
-            .id();
-
+        // Menu-button + popup in a row for unit-only enums, labelled when the
+        // enum is a field rather than the whole component.
+        let row = if name.is_empty() {
+            unlabelled_enum_row(commands, parent, left_padding)
+        } else {
+            let column = padded_column(commands, parent, left_padding);
+            spawn_labelled_row(commands, column, name)
+        };
         spawn_enum_menu(
             commands,
             row,
@@ -3292,6 +3368,7 @@ fn spawn_enum_field(
             field_path: field_path.clone(),
             depth,
             current_variant: enum_ref.variant_name().to_string(),
+            label: name.to_string(),
         };
         spawn_variant_contents(
             commands,
@@ -3305,6 +3382,45 @@ fn spawn_enum_field(
         );
         commands.entity(container).insert(host);
     }
+}
+
+fn unlabelled_enum_row(commands: &mut Commands, parent: Entity, left_padding: f32) -> Entity {
+    commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(tokens::SPACING_XS),
+                padding: UiRect::left(px(left_padding)),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(parent),
+        ))
+        .id()
+}
+
+/// A column inset by `left_padding`, the way an enum's variant container is,
+/// so a labelled unit enum lines up with a labelled data enum at its depth.
+fn padded_column(commands: &mut Commands, parent: Entity, left_padding: f32) -> Entity {
+    commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::left(px(left_padding)),
+                width: Val::Percent(100.0),
+                ..Default::default()
+            },
+            ChildOf(parent),
+        ))
+        .id()
+}
+
+/// A field row labelled `name` in an already inset parent, returning the slot
+/// its control goes in.
+fn spawn_labelled_row(commands: &mut Commands, parent: Entity, name: &str) -> Entity {
+    let props = jackdaw_feathers::field_row::FieldRowProps::new(name);
+    jackdaw_feathers::field_row::spawn_field_row(commands, parent, props).control
 }
 
 /// Spawn a select menu for an enum field: a `FeathersMenu` holding a
@@ -3399,9 +3515,14 @@ pub(super) fn spawn_variant_contents(
     }
     let current_variant = enum_ref.variant_name();
 
+    let menu_parent = if host.label.is_empty() {
+        container
+    } else {
+        spawn_labelled_row(commands, container, &host.label)
+    };
     spawn_enum_menu(
         commands,
-        container,
+        menu_parent,
         &variant_names,
         current_variant,
         &host.field_path,
@@ -3419,6 +3540,16 @@ pub(super) fn spawn_variant_contents(
             .name_at(i)
             .map(std::string::ToString::to_string)
             .unwrap_or_else(|| format!("{i}"));
+        // The one value of a tuple variant such as `Some` is the field itself,
+        // already named on the row above.
+        let label = if enum_ref.name_at(i).is_none()
+            && variant_field_count == 1
+            && !host.label.is_empty()
+        {
+            ""
+        } else {
+            field_name.as_str()
+        };
         let child_path = if host.field_path.is_empty() {
             field_name.clone()
         } else {
@@ -3427,7 +3558,7 @@ pub(super) fn spawn_variant_contents(
         spawn_field_row(
             commands,
             container,
-            &field_name,
+            label,
             field_value,
             host.depth + 1,
             child_path,

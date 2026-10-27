@@ -192,64 +192,28 @@ pub(crate) fn field_edit_commit(
     }
     // Immediate commits (no prior preview) still need a derived baseline.
     field_edit_begin(world, type_path, field_path);
-    let mut targets = field_edit_session_targets(world);
-    targets.retain(|&target| {
-        let previewed = crate::preview_context::preview_writes_type_path(world, target, type_path);
-        if previewed {
-            warn!(
-                "{}: `{type_path}` on {target}",
-                crate::preview_context::PREVIEW_EDIT_REFUSED
-            );
-        }
-        !previewed
-    });
-
-    let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
+    let targets = field_edit_session_targets(world);
+    let mut edits = Vec::new();
     for &target in &targets {
         let Some((path, new_value)) =
             field_edit_to_bsn_value(world, target, type_path, field_path, new_json)
         else {
             continue;
         };
-        let old_value = resolve_field_edit_old_value(world, target, type_path, &path);
-        // A commit that leaves the field as it was must not bury the edit
-        // before it under an entry that undoes to the same value.
-        if old_value.as_ref() == Some(&new_value) {
-            continue;
+        if let Ok(edit) = set_bsn_field_command(world, target, type_path, &path, new_value) {
+            edits.push(edit);
         }
-        sub_commands.push(Box::new(SetBsnField {
-            entity: target,
-            type_path: type_path.to_string(),
-            field_path: path,
-            old_value,
-            new_value,
-            was_derived: false,
-        }));
     }
     clear_field_edit_session(world, type_path, field_path);
-
-    if sub_commands.is_empty() {
-        return;
-    }
-
-    let mut cmd: Box<dyn EditorCommand> = if sub_commands.len() == 1 {
-        sub_commands.remove(0)
-    } else {
-        Box::new(CommandGroup {
-            label: group_label.to_string(),
-            commands: sub_commands,
-        })
-    };
-    cmd.execute(world);
-    world.resource_mut::<CommandHistory>().push_executed(cmd);
+    push_field_edits(world, edits, group_label);
 }
 
 /// Set one field on one entity's component, as one undo entry. Unlike
 /// [`field_edit_commit`], which writes the whole selection, this writes only
 /// the named entity.
 ///
-/// Returns whether a value was written; `false` when the JSON does not
-/// convert to the field's type.
+/// Returns whether the value was taken; `false` when the JSON does not
+/// convert to the field's type or the running preview drives the component.
 pub(crate) fn field_edit_commit_on(
     world: &mut World,
     entity: Entity,
@@ -257,30 +221,83 @@ pub(crate) fn field_edit_commit_on(
     field_path: &str,
     new_json: &serde_json::Value,
 ) -> bool {
-    if crate::preview_context::preview_writes_type_path(world, entity, type_path) {
-        warn!(
-            "{}: `{type_path}` on {entity}",
-            crate::preview_context::PREVIEW_EDIT_REFUSED
-        );
-        return false;
-    }
     let Some((path, new_value)) =
         field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)
     else {
         return false;
     };
-    let old_value = resolve_field_edit_old_value(world, entity, type_path, &path);
-    let mut cmd: Box<dyn EditorCommand> = Box::new(SetBsnField {
+    match set_bsn_field_command(world, entity, type_path, &path, new_value) {
+        Ok(edit) => {
+            push_field_edits(world, vec![edit], "Set field");
+            true
+        }
+        Err(FieldEditSkip::Unchanged) => {
+            // Nothing to record, but the live component may have drifted
+            // from the document; put the document's value back on it.
+            mirror_document_component(world, entity, type_path);
+            true
+        }
+        Err(FieldEditSkip::Previewed) => false,
+    }
+}
+
+/// Why [`set_bsn_field_command`] built no command.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FieldEditSkip {
+    /// The field already holds the value; an entry would undo to itself.
+    Unchanged,
+    /// The running binding preview drives the component and rewrites it every
+    /// frame.
+    Previewed,
+}
+
+/// A [`SetBsnField`] writing `new_value` to `field_path` of `entity`'s
+/// `type_path`, undoing to what the field holds now. Every field edit builds
+/// its command here.
+pub(crate) fn set_bsn_field_command(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    new_value: jackdaw_bsn::BsnValue,
+) -> Result<SetBsnField, FieldEditSkip> {
+    if crate::preview_context::preview_writes_type_path(world, entity, type_path) {
+        warn!(
+            "{}: `{type_path}` on {entity}",
+            crate::preview_context::PREVIEW_EDIT_REFUSED
+        );
+        return Err(FieldEditSkip::Previewed);
+    }
+    let old_value = resolve_field_edit_old_value(world, entity, type_path, field_path);
+    if old_value.as_ref() == Some(&new_value) {
+        return Err(FieldEditSkip::Unchanged);
+    }
+    Ok(SetBsnField {
         entity,
         type_path: type_path.to_string(),
-        field_path: path,
+        field_path: field_path.to_string(),
         old_value,
         new_value,
         was_derived: false,
-    });
-    cmd.execute(world);
-    world.resource_mut::<CommandHistory>().push_executed(cmd);
-    true
+    })
+}
+
+/// Execute `edits` and push them as one history entry.
+fn push_field_edits(world: &mut World, edits: Vec<SetBsnField>, group_label: &str) {
+    let mut done: Vec<Box<dyn EditorCommand>> = Vec::new();
+    for mut edit in edits {
+        edit.execute(world);
+        done.push(Box::new(edit));
+    }
+    let entry: Box<dyn EditorCommand> = match done.len() {
+        0 => return,
+        1 => done.pop().expect("one command"),
+        _ => Box::new(CommandGroup {
+            label: group_label.to_string(),
+            commands: done,
+        }),
+    };
+    world.resource_mut::<CommandHistory>().push_executed(entry);
 }
 
 /// Set one field on one entity's component, as one undo entry, undoing to the
@@ -1436,23 +1453,12 @@ impl SetBsnField {
     /// Re-apply this command's component patch from the document to the live
     /// entity, so ECS matches the document after execute or undo.
     fn mirror_patch_to_ecs(&self, world: &mut World) {
-        let patch = {
-            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-            let Some(patches_entity) = ast.ast_for(self.entity) else {
-                return;
-            };
-            ast.find_patch_by_type_path(patches_entity, &self.type_path)
-                .and_then(|pe| ast.get_patch(pe))
-                .cloned()
-        };
-        if let Some(patch) = patch {
-            jackdaw_bsn::apply_component_patch(world, self.entity, &patch);
-        }
+        mirror_document_component(world, self.entity, &self.type_path);
     }
 }
 
-impl EditorCommand for SetBsnField {
-    fn execute(&mut self, world: &mut World) {
+impl SetBsnField {
+    fn write(&mut self, world: &mut World) {
         self.entity = live_entity(world, self.entity);
         // Names live in the document as `#name` reference patches, not
         // component patches, so route them through the name path.
@@ -1527,7 +1533,7 @@ impl EditorCommand for SetBsnField {
         }
     }
 
-    fn undo(&mut self, world: &mut World) {
+    fn unwrite(&mut self, world: &mut World) {
         self.entity = live_entity(world, self.entity);
         if self.type_path == NAME_TYPE_PATH {
             let old_name = self
@@ -1643,10 +1649,57 @@ impl EditorCommand for SetBsnField {
             self.mirror_patch_to_ecs(world);
         }
     }
+}
+
+impl EditorCommand for SetBsnField {
+    fn execute(&mut self, world: &mut World) {
+        self.write(world);
+        world.trigger(FieldWritten {
+            entity: self.entity,
+            type_path: self.type_path.clone(),
+            undo: false,
+        });
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        self.unwrite(world);
+        world.trigger(FieldWritten {
+            entity: self.entity,
+            type_path: self.type_path.clone(),
+            undo: true,
+        });
+    }
 
     fn description(&self) -> &str {
         "Set component field"
     }
+}
+
+/// Re-apply `entity`'s `type_path` patch from the document to the live
+/// component.
+fn mirror_document_component(world: &mut World, entity: Entity, type_path: &str) {
+    let patch = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let Some(patches_entity) = ast.ast_for(entity) else {
+            return;
+        };
+        ast.find_patch_by_type_path(patches_entity, type_path)
+            .and_then(|pe| ast.get_patch(pe))
+            .cloned()
+    };
+    if let Some(patch) = patch {
+        jackdaw_bsn::apply_component_patch(world, entity, &patch);
+    }
+}
+
+/// A [`SetBsnField`] wrote a field of `type_path` on `entity`, on execute or
+/// redo, or put it back on undo. For a card whose controls are not plain field
+/// rows to follow the value.
+#[derive(Event, Debug, Clone)]
+pub struct FieldWritten {
+    pub entity: Entity,
+    pub type_path: String,
+    pub undo: bool,
 }
 
 /// Apply a JSON value to an ECS component -- either full component replacement
@@ -2585,17 +2638,27 @@ pub(crate) fn sync_component_to_bsn_doc(
         let registry = world.resource::<AppTypeRegistry>().read();
         jackdaw_bsn::component_to_bsn_patch(value, &registry)
     };
-    let type_path = match value.get_represented_type_info() {
-        Some(info) => info.type_path().to_string(),
-        None => return,
+    let Some(info) = value.get_represented_type_info() else {
+        return;
     };
+    upsert_bsn_patch(world, entity, info.type_path(), patch);
+}
+
+/// Put `patch` on the entity's BSN document node as its `type_path` patch,
+/// replacing one already there.
+pub(crate) fn upsert_bsn_patch(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    patch: jackdaw_bsn::BsnPatch,
+) {
     let Some(mut ast) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>() else {
         return;
     };
     let Some(patches_entity) = ast.ast_for(entity) else {
         return;
     };
-    if let Some(existing) = ast.find_patch_by_type_path(patches_entity, &type_path) {
+    if let Some(existing) = ast.find_patch_by_type_path(patches_entity, type_path) {
         ast.set_patch(existing, patch);
     } else {
         let patch_entity = ast.world.spawn(patch).id();
