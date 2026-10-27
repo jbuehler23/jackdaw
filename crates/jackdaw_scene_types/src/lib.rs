@@ -32,6 +32,7 @@ pub mod node_id;
 #[cfg(feature = "render")]
 pub mod render_assets;
 pub mod types;
+pub mod y_sort;
 
 pub use asset_path::to_asset_path;
 pub use brush_chunks::{MeshChunk, build_brush_chunks};
@@ -50,6 +51,10 @@ pub use types::{
     PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind,
     Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
     TerrainQuantization, Wind,
+};
+pub use y_sort::{
+    DrawOrderPlugin, Y_SORT_RANGE, Y_SORT_SPAN, Y_SORT_TYPE_PATH, YSort, unsorted_global,
+    y_sort_offset,
 };
 
 use bevy::prelude::*;
@@ -138,7 +143,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<Locked>();
 
         app.init_resource::<SceneWind>()
-            .add_systems(First, follow_the_scene_wind);
+            .add_systems(First, follow_the_scene_wind)
+            .add_plugins(DrawOrderPlugin);
 
         #[cfg(feature = "render")]
         {

@@ -196,88 +196,96 @@ pub(crate) fn component_add(
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
-        // Live mode: stream the add to the running game; the next state
-        // delta repopulates the mirror and the inspector.
-        if let Some(bits) = pie_live_target_bits(world, entity) {
-            // The running game has the project type registered for real, so
-            // a project component streams to it like any other; fall back to
-            // the extracted schema default when the editor cannot build one.
-            let value = default_component_json(world, &type_path)
-                .or_else(|| {
-                    // The schema default is `ReflectSerializer`-wrapped
-                    // (`{type_path: value}`); the game deserializes with
-                    // `TypedReflectDeserializer`, which wants the inner value.
-                    world
-                        .get_resource::<ProjectTypes>()
-                        .and_then(|pt| pt.component(&type_path))
-                        .and_then(|schema| schema.default.as_ref())
-                        .and_then(|d| d.as_object())
-                        .and_then(|o| o.get(&type_path).cloned())
-                })
-                .unwrap_or(serde_json::Value::Null);
-            crate::pie::send_control_to_focused(
-                world,
-                jackdaw_pie_protocol::ControlEvent::AddComponent {
-                    entity: bits,
-                    type_path,
-                    value,
-                },
-            );
-            return;
-        }
-        if world
-            .resource::<jackdaw_bsn::SceneBsnAst>()
-            .ast_for(entity)
-            .is_none()
-        {
-            warn!(
-                "component.add: entity {entity:?} is not tracked in the scene document; \
-                 {type_path} was not added."
-            );
-            return;
-        }
-        // A project component is never a real ECS component in the
-        // editor. It lives in the scene document as a dynamic patch;
-        // its real type exists only in the game binary at Play.
-        if world
-            .get_resource::<ProjectTypes>()
-            .is_some_and(|pt| pt.is_project_component(&type_path))
-        {
-            let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-            if ast
-                .ast_for(entity)
-                .is_some_and(|node| ast.find_patch_by_type_path(node, &type_path).is_some())
-            {
-                return;
-            }
-            let mut cmd = AddProjectComponent::new(entity, type_path);
-            cmd.execute(world);
-            world
-                .resource_mut::<CommandHistory>()
-                .push_executed(Box::new(cmd));
-            if let Ok(mut ec) = world.get_entity_mut(entity) {
-                ec.insert(super::InspectorDirty);
-            }
-            return;
-        }
-        let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
-            warn!(
-                "component.add: no registration for type_path '{type_path}'. \
-                 Make sure your plugin calls `register_type::<T>()` and that `T` \
-                 derives `Reflect, Default` with `#[reflect(Component, Default)]`."
-            );
-            return;
-        };
-        let mut cmd = AddComponent::new(entity, type_id, component_id, type_path);
-        cmd.execute(world);
-        world
-            .resource_mut::<CommandHistory>()
-            .push_executed(Box::new(cmd));
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.insert(super::InspectorDirty);
+        if let Some(edit) = add_component_edit(world, entity, type_path) {
+            world.resource_mut::<CommandHistory>().push_executed(edit);
         }
     });
     Some(OperatorResult::Finished)
+}
+
+/// Add `type_path` to `entity` as `component.add` does: streamed to the
+/// running game in Live view, else applied and returned as the executed
+/// history entry for the caller to push. `None` when nothing was recorded.
+pub(crate) fn add_component_edit(
+    world: &mut World,
+    entity: Entity,
+    type_path: String,
+) -> Option<Box<dyn EditorCommand>> {
+    // Live mode: stream the add to the running game; the next state
+    // delta repopulates the mirror and the inspector.
+    if let Some(bits) = pie_live_target_bits(world, entity) {
+        // The running game has the project type registered for real, so
+        // a project component streams to it like any other; fall back to
+        // the extracted schema default when the editor cannot build one.
+        let value = default_component_json(world, &type_path)
+            .or_else(|| {
+                // The schema default is `ReflectSerializer`-wrapped
+                // (`{type_path: value}`); the game deserializes with
+                // `TypedReflectDeserializer`, which wants the inner value.
+                world
+                    .get_resource::<ProjectTypes>()
+                    .and_then(|pt| pt.component(&type_path))
+                    .and_then(|schema| schema.default.as_ref())
+                    .and_then(|d| d.as_object())
+                    .and_then(|o| o.get(&type_path).cloned())
+            })
+            .unwrap_or(serde_json::Value::Null);
+        crate::pie::send_control_to_focused(
+            world,
+            jackdaw_pie_protocol::ControlEvent::AddComponent {
+                entity: bits,
+                type_path,
+                value,
+            },
+        );
+        return None;
+    }
+    if world
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .ast_for(entity)
+        .is_none()
+    {
+        warn!(
+            "component.add: entity {entity:?} is not tracked in the scene document; \
+             {type_path} was not added."
+        );
+        return None;
+    }
+    // A project component is never a real ECS component in the
+    // editor. It lives in the scene document as a dynamic patch;
+    // its real type exists only in the game binary at Play.
+    if world
+        .get_resource::<ProjectTypes>()
+        .is_some_and(|pt| pt.is_project_component(&type_path))
+    {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        if ast
+            .ast_for(entity)
+            .is_some_and(|node| ast.find_patch_by_type_path(node, &type_path).is_some())
+        {
+            return None;
+        }
+        let mut cmd = AddProjectComponent::new(entity, type_path);
+        cmd.execute(world);
+        if let Ok(mut ec) = world.get_entity_mut(entity) {
+            ec.insert(super::InspectorDirty);
+        }
+        return Some(Box::new(cmd));
+    }
+    let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
+        warn!(
+            "component.add: no registration for type_path '{type_path}'. \
+             Make sure your plugin calls `register_type::<T>()` and that `T` \
+             derives `Reflect, Default` with `#[reflect(Component, Default)]`."
+        );
+        return None;
+    };
+    let mut cmd = AddComponent::new(entity, type_id, component_id, type_path);
+    cmd.execute(world);
+    if let Ok(mut ec) = world.get_entity_mut(entity) {
+        ec.insert(super::InspectorDirty);
+    }
+    Some(Box::new(cmd))
 }
 
 /// Remove a component from the target entity.
@@ -298,56 +306,63 @@ pub(crate) fn component_remove(
     let entity = params.as_entity("entity")?;
     let type_path = params.as_str("type_path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
-        // Live mode: stream the removal to the running game.
-        if let Some(bits) = pie_live_target_bits(world, entity) {
-            crate::pie::send_control_to_focused(
-                world,
-                jackdaw_pie_protocol::ControlEvent::RemoveComponent {
-                    entity: bits,
-                    type_path,
-                },
-            );
-            return;
+        if let Some(edit) = remove_component_edit(world, entity, type_path) {
+            world.resource_mut::<CommandHistory>().push_executed(edit);
         }
-        // A running preview owns the components its evaluator writes.
-        if crate::preview_context::preview_writes_type_path(world, entity, &type_path) {
-            warn!(
-                "{}: `{type_path}` on {entity}",
-                crate::preview_context::PREVIEW_EDIT_REFUSED
-            );
-            return;
-        }
-        // A project component, or one whose type the editor has not loaded,
-        // lives only as a document patch, so there is no ECS component to
-        // remove and dropping the patch is the removal.
-        let document_only = world
-            .get_resource::<ProjectTypes>()
-            .is_some_and(|pt| pt.is_project_component(&type_path))
-            || component_id_for_path(world, &type_path).is_none();
-        if document_only {
-            let Some(mut cmd) = RemoveProjectComponent::from_world(world, entity, type_path) else {
-                return;
-            };
-            cmd.execute(world);
-            world
-                .resource_mut::<CommandHistory>()
-                .push_executed(Box::new(cmd));
-            return;
-        }
-        let Some((component_id, type_id)) = component_id_for_path(world, &type_path) else {
-            return;
-        };
-        let mut cmd: Box<dyn EditorCommand> = Box::new(RemoveComponent::from_world(
-            world,
-            entity,
-            type_id,
-            component_id,
-            type_path,
-        ));
-        cmd.execute(world);
-        world.resource_mut::<CommandHistory>().push_executed(cmd);
     });
     Some(OperatorResult::Finished)
+}
+
+/// Remove `type_path` from `entity` as `component.remove` does: streamed to
+/// the running game in Live view, refused while a running preview drives it,
+/// else applied and returned as the executed history entry for the caller to
+/// push. `None` when nothing was recorded.
+pub(crate) fn remove_component_edit(
+    world: &mut World,
+    entity: Entity,
+    type_path: String,
+) -> Option<Box<dyn EditorCommand>> {
+    // Live mode: stream the removal to the running game.
+    if let Some(bits) = pie_live_target_bits(world, entity) {
+        crate::pie::send_control_to_focused(
+            world,
+            jackdaw_pie_protocol::ControlEvent::RemoveComponent {
+                entity: bits,
+                type_path,
+            },
+        );
+        return None;
+    }
+    // A running preview owns the components its evaluator writes.
+    if crate::preview_context::preview_writes_type_path(world, entity, &type_path) {
+        warn!(
+            "{}: `{type_path}` on {entity}",
+            crate::preview_context::PREVIEW_EDIT_REFUSED
+        );
+        return None;
+    }
+    // A project component, or one whose type the editor has not loaded,
+    // lives only as a document patch, so there is no ECS component to
+    // remove and dropping the patch is the removal.
+    let document_only = world
+        .get_resource::<ProjectTypes>()
+        .is_some_and(|pt| pt.is_project_component(&type_path))
+        || component_id_for_path(world, &type_path).is_none();
+    if document_only {
+        let mut cmd = RemoveProjectComponent::from_world(world, entity, type_path)?;
+        cmd.execute(world);
+        return Some(Box::new(cmd));
+    }
+    let (component_id, type_id) = component_id_for_path(world, &type_path)?;
+    let mut cmd: Box<dyn EditorCommand> = Box::new(RemoveComponent::from_world(
+        world,
+        entity,
+        type_id,
+        component_id,
+        type_path,
+    ));
+    cmd.execute(world);
+    Some(cmd)
 }
 
 /// Read a parameter as the JSON a field edit commits. A string is parsed as

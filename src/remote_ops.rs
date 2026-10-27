@@ -191,12 +191,10 @@ pub(crate) fn entity_set_transform(
         let parent = world
             .get::<ChildOf>(entity)
             .map(ChildOf::parent)
-            .and_then(|parent| world.get::<GlobalTransform>(parent).copied())
+            .and_then(|parent| jackdaw_scene_types::unsorted_global(world, parent))
             .unwrap_or_default();
         let basis = if in_world {
-            world
-                .get::<GlobalTransform>(entity)
-                .copied()
+            jackdaw_scene_types::unsorted_global(world, entity)
                 .unwrap_or_default()
                 .compute_transform()
         } else {

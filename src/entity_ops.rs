@@ -2322,6 +2322,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<crate::sprite_ops::SpriteAddOp>()
         .register_operator::<crate::sprite_props::SpriteSetPixelsPerUnitOp>()
         .register_operator::<crate::sprite_props::SpriteSetAnchorOp>()
+        .register_operator::<crate::sprite_props::SpriteZUpOp>()
+        .register_operator::<crate::sprite_props::SpriteZDownOp>()
+        .register_operator::<crate::sprite_props::SpriteYSortOp>()
         .register_operator::<crate::add_entity_picker::EntityAddPickerOp>();
 
     #[cfg(feature = "multiplayer")]

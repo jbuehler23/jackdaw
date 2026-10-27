@@ -1341,9 +1341,9 @@ fn instance_node_patches(
     // it was given. A placement that only moves writes only the translation.
     let local = parent_node
         .and(parent)
-        .and_then(|parent| world.get::<GlobalTransform>(parent))
+        .and_then(|parent| jackdaw_scene_types::unsorted_global(world, parent))
         .map_or(placement, |parent| {
-            GlobalTransform::from(placement).reparented_to(parent)
+            GlobalTransform::from(placement).reparented_to(&parent)
         });
     let source = prefab_path.to_string_lossy().into_owned();
     let mut patches = vec![

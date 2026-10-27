@@ -265,6 +265,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "prefab.pack_matching",
     "sprite.set_anchor",
     "sprite.set_pixels_per_unit",
+    "sprite.y_sort",
     "terrain.scatter.adopt",
     "viewport.look_through",
 ];

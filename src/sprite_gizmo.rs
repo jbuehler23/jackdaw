@@ -24,7 +24,7 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform, UiSystems, UiTransform},
 };
 use jackdaw_feathers::tokens;
-use jackdaw_scene_types::{CanvasGuides, Locked, Scene2dRoot};
+use jackdaw_scene_types::{CanvasGuides, Locked, Scene2dRoot, unsorted_global};
 
 use crate::{
     EditorEntity,
@@ -169,6 +169,7 @@ enum DragSnap {
 
 /// The primary sprite a rotate turns about and a scale measures against.
 struct PrimaryFrame {
+    /// Placed as authored, without any y-sort offset.
     global: GlobalTransform,
     /// The sprite's own scale, in its parent's space.
     scale: Vec3,
@@ -179,9 +180,10 @@ struct PrimaryFrame {
 struct DragItem {
     entity: Entity,
     start: Transform,
-    /// Where the sprite's anchor started, in the world.
+    /// Where the sprite's anchor started, in the world, without any y-sort
+    /// offset.
     world: Vec3,
-    /// World to the parent's space.
+    /// World to the parent's space, without any y-sort offset.
     to_parent: Affine3A,
 }
 
@@ -604,7 +606,7 @@ pub(crate) fn cancel_sprite_drag(world: &mut World) {
 
 /// Whether `entity` is a sprite of the open 2D world scene that the stage
 /// may move.
-fn movable_sprite(world: &World, entity: Entity) -> bool {
+pub(crate) fn movable_sprite(world: &World, entity: Entity) -> bool {
     world.get::<Sprite>(entity).is_some()
         && world.get::<Locked>(entity).is_none()
         && world.get::<EditorEntity>(entity).is_none()
@@ -729,10 +731,10 @@ fn movable_items(world: &World, entities: &[Entity]) -> Vec<DragItem> {
         .into_iter()
         .filter_map(|entity| {
             let start = *world.get::<Transform>(entity)?;
-            let at = world.get::<GlobalTransform>(entity)?.translation();
+            let at = unsorted_global(world, entity)?.translation();
             let to_parent = world
                 .get::<ChildOf>(entity)
-                .and_then(|parent| world.get::<GlobalTransform>(parent.parent()))
+                .and_then(|parent| unsorted_global(world, parent.parent()))
                 .map_or(Affine3A::IDENTITY, |parent| parent.affine().inverse());
             Some(DragItem {
                 entity,
@@ -763,7 +765,7 @@ fn begin_drag(
             let sprite = world.get::<Sprite>(primary)?;
             let anchor = world.get::<Anchor>(primary).copied().unwrap_or_default();
             Some(PrimaryFrame {
-                global: *world.get::<GlobalTransform>(primary)?,
+                global: unsorted_global(world, primary)?,
                 scale: world.get::<Transform>(primary)?.scale,
                 rect: sprite_local_rect(
                     sprite,
@@ -1038,9 +1040,13 @@ impl SpriteDrag {
         }
     }
 
-    /// `item` with its anchor carried to the world point `to`.
+    /// `item` with its anchor carried to the world point `to`, at the z it
+    /// started at.
     fn placed(item: &DragItem, to: Vec2) -> Vec3 {
-        item.to_parent.transform_point3(to.extend(item.world.z))
+        item.to_parent
+            .transform_point3(to.extend(item.world.z))
+            .xy()
+            .extend(item.start.translation.z)
     }
 
     /// Turn the selection about the primary's anchor by the angle the pointer
@@ -1266,7 +1272,8 @@ fn finish_drag(world: &mut World, commit: bool) {
 /// (screen axes, y down): one world unit, or the 2D grid with Shift held. The
 /// same sprites a body drag takes, each offset in its parent's space, as one
 /// history entry. Says whether the selection was sprites; `None` (the page
-/// keys) moves nothing, as no 2D handle changes a sprite's z.
+/// keys) moves nothing here, as on a sprite they step z through
+/// [`step_sprites_z`] instead.
 pub(crate) fn nudge_sprites(world: &mut World, direction: Option<Vec2>) -> bool {
     let primary = world
         .get_resource::<Selection>()
@@ -1290,17 +1297,34 @@ pub(crate) fn nudge_sprites(world: &mut World, direction: Option<Vec2>) -> bool 
         1.0
     };
     let delta = Vec3::new(direction.x, -direction.y, 0.0) * step;
-    let mut edits: Vec<Box<dyn EditorCommand>> = Vec::new();
+    move_selected_sprites(world, "Nudge", |item| {
+        item.start.translation + item.to_parent.transform_vector3(delta)
+    });
+    true
+}
+
+/// Step the selected sprites of the open 2D world scene `delta` along their
+/// own `Transform` z, as one history entry. The same sprites a nudge takes.
+pub(crate) fn step_sprites_z(world: &mut World, delta: f32) {
+    move_selected_sprites(world, "Step Z", |item| {
+        item.start.translation + Vec3::Z * delta
+    });
+}
+
+/// Move the selected sprites a nudge takes to the translation `moved` gives
+/// each, as one history entry under `label`.
+fn move_selected_sprites(world: &mut World, label: &str, moved: impl Fn(&DragItem) -> Vec3) {
     let selected = world
         .get_resource::<Selection>()
         .map(|selection| selection.entities.clone())
         .unwrap_or_default();
+    let mut edits: Vec<Box<dyn EditorCommand>> = Vec::new();
     for item in movable_items(world, &selected) {
         let mut command = SetTransform {
             entity: item.entity,
             old_transform: item.start,
             new_transform: Transform {
-                translation: item.start.translation + item.to_parent.transform_vector3(delta),
+                translation: moved(&item),
                 ..item.start
             },
         };
@@ -1312,8 +1336,7 @@ pub(crate) fn nudge_sprites(world: &mut World, direction: Option<Vec2>) -> bool 
             .resource_mut::<CommandHistory>()
             .push_executed(Box::new(CommandGroup {
                 commands: edits,
-                label: "Nudge".to_string(),
+                label: label.to_owned(),
             }));
     }
-    true
 }

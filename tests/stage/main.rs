@@ -50,6 +50,7 @@ mod sprite_drop;
 mod sprite_gizmo;
 mod sprite_picking;
 mod sprite_snap;
+mod sprite_sort;
 mod synthetic_input;
 mod ui_align;
 mod ui_asset_drop;
