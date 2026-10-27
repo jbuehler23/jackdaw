@@ -2282,6 +2282,278 @@ fn the_screenshot_ops_aim_at_the_window_and_the_panel_and_write_pngs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A frame the size of the panel's render target, the way a readback returns it.
+fn target_sized_frame(app: &App, panel: Entity) -> Image {
+    let size = app
+        .world()
+        .get::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .target_size;
+    Image::new_fill(
+        size.to_extents(),
+        TextureDimension::D2,
+        &[255, 0, 0, 255],
+        TextureFormat::Rgba8UnormSrgb,
+        default(),
+    )
+}
+
+type Params = Vec<(&'static str, jackdaw_scene_types::PropertyValue)>;
+
+fn region_params(x: f64, y: f64, w: f64, h: f64, space: Option<&'static str>) -> Params {
+    let mut params: Params = vec![
+        ("region_x", x.into()),
+        ("region_y", y.into()),
+        ("region_w", w.into()),
+        ("region_h", h.into()),
+    ];
+    if let Some(space) = space {
+        params.push(("region_space", space.into()));
+    }
+    params
+}
+
+/// Call `viewport2d.screenshot`, expecting it to finish or to cancel, and
+/// return where it was asked to write.
+fn queue_region(app: &mut App, name: &str, params: Params, finishes: bool) -> std::path::PathBuf {
+    let path =
+        std::env::temp_dir().join(format!("jackdaw-region-{}-{name}.png", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let mut call = app
+        .world_mut()
+        .operator("viewport2d.screenshot")
+        .param("path", path.to_string_lossy().to_string());
+    for (key, value) in params {
+        call = call.param(key, value);
+    }
+    let result = call.call().expect("viewport2d.screenshot dispatches");
+    if finishes {
+        result.assert_finished();
+    } else {
+        result.assert_cancelled();
+    }
+    app.update();
+    path
+}
+
+/// Land a synthetic frame on every queued capture, as the readback would.
+fn land_frames(app: &mut App, panel: Entity) {
+    let queued: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .iter(app.world())
+        .collect();
+    for entity in queued {
+        let image = target_sized_frame(app, panel);
+        app.world_mut()
+            .trigger(ScreenshotCaptured { entity, image });
+        app.world_mut().despawn(entity);
+    }
+}
+
+fn written_size(path: &std::path::Path) -> Option<(u32, u32)> {
+    path.exists()
+        .then(|| ::image::image_dimensions(path).expect("a readable PNG"))
+}
+
+fn logged_size(app: &App, path: &std::path::Path) -> Option<(u32, u32)> {
+    app.world()
+        .resource::<jackdaw::screenshot::CaptureLog>()
+        .size_of(path)
+}
+
+fn queued_captures(app: &mut App) -> usize {
+    app.world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .iter(app.world())
+        .count()
+}
+
+fn zoomed_view(app: &mut App, panel: Entity, zoom: f32) {
+    hold_view(app, panel);
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .set_view(Ui2dView {
+            pan: Vec2::new(5.0, 0.0),
+            zoom,
+            ..default()
+        });
+}
+
+#[test]
+fn a_pixel_region_crops_the_written_png_and_the_capture_log() {
+    let mut app = util::editor_test_app();
+    let parent = fit_panel(&mut app);
+    app.update();
+
+    let path = queue_region(
+        &mut app,
+        "pixels",
+        region_params(10.0, 20.0, 30.0, 12.0, Some("pixels")),
+        true,
+    );
+    land_frames(&mut app, parent);
+    assert_eq!(
+        written_size(&path),
+        Some((30, 12)),
+        "the PNG is the region, not the frame",
+    );
+    assert_eq!(
+        logged_size(&app, &path),
+        Some((30, 12)),
+        "the log records the cropped size",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_world_region_is_resolved_through_the_panel_view() {
+    let mut app = util::editor_test_app();
+    let parent = fit_panel(&mut app);
+    app.update();
+    zoomed_view(&mut app, parent, 2.0);
+
+    let path = queue_region(
+        &mut app,
+        "world",
+        region_params(-3.0, -4.0, 16.0, 8.0, None),
+        true,
+    );
+    land_frames(&mut app, parent);
+    assert_eq!(
+        written_size(&path),
+        Some((32, 16)),
+        "16 by 8 world units at zoom 2, with world as the default space",
+    );
+    assert_eq!(logged_size(&app, &path), Some((32, 16)));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_world_region_follows_the_view_the_panel_has_when_the_frame_lands() {
+    let mut app = util::editor_test_app();
+    let parent = fit_panel(&mut app);
+    app.update();
+    zoomed_view(&mut app, parent, 2.0);
+
+    let path = queue_region(
+        &mut app,
+        "moved",
+        region_params(-3.0, -4.0, 16.0, 8.0, None),
+        true,
+    );
+    zoomed_view(&mut app, parent, 1.0);
+    land_frames(&mut app, parent);
+    assert_eq!(
+        written_size(&path),
+        Some((16, 8)),
+        "the crop follows the zoom the panel has by readback, not the one at queue time",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_region_partly_outside_is_clamped_and_one_wholly_outside_is_refused() {
+    let mut app = util::editor_test_app();
+    let parent = fit_panel(&mut app);
+    app.update();
+
+    let partial = queue_region(
+        &mut app,
+        "partial",
+        region_params(-10.0, -10.0, 30.0, 25.0, Some("pixels")),
+        true,
+    );
+    land_frames(&mut app, parent);
+    assert_eq!(
+        written_size(&partial),
+        Some((20, 15)),
+        "the part inside the image is kept",
+    );
+    let _ = std::fs::remove_file(&partial);
+
+    let outside = queue_region(
+        &mut app,
+        "outside",
+        region_params(99999.0, 0.0, 10.0, 10.0, Some("pixels")),
+        false,
+    );
+    assert_eq!(
+        queued_captures(&mut app),
+        0,
+        "a refused region queues nothing"
+    );
+    assert!(!outside.exists());
+}
+
+#[test]
+fn a_ui_scene_capture_takes_pixel_regions_and_refuses_world_ones() {
+    let mut app = util::editor_test_app();
+    let parent = fit_panel(&mut app);
+    app.world_mut().spawn((
+        UiSceneRoot {
+            reference_size: UVec2::new(1280, 720),
+        },
+        Node {
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        },
+    ));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(
+        app.world()
+            .get::<Viewport2dPanelHost>(parent)
+            .expect("host on panel parent")
+            .shows_ui_scene,
+        "the panel reports the canvas it shows",
+    );
+
+    let default_space = queue_region(
+        &mut app,
+        "ui-default",
+        region_params(100.0, 50.0, 300.0, 120.0, None),
+        true,
+    );
+    land_frames(&mut app, parent);
+    assert_eq!(
+        written_size(&default_space),
+        Some((300, 120)),
+        "a UI scene's region is in authored pixels by default",
+    );
+    let _ = std::fs::remove_file(&default_space);
+
+    let world = queue_region(
+        &mut app,
+        "ui-world",
+        region_params(0.0, 0.0, 10.0, 10.0, Some("world")),
+        false,
+    );
+    assert_eq!(queued_captures(&mut app), 0);
+    assert!(!world.exists());
+}
+
+#[test]
+fn an_incomplete_or_malformed_region_cancels_the_operator() {
+    let mut app = util::editor_test_app();
+    fit_panel(&mut app);
+    app.update();
+
+    let bad: [Params; 4] = [
+        vec![("region_x", 1.0.into())],
+        vec![("region_space", "pixels".into())],
+        region_params(1.0, 1.0, 0.0, 5.0, None),
+        region_params(1.0, 1.0, 5.0, 5.0, Some("screen")),
+    ];
+    for (index, params) in bad.into_iter().enumerate() {
+        queue_region(&mut app, &format!("bad{index}"), params, false);
+        assert_eq!(queued_captures(&mut app), 0);
+    }
+}
+
 /// Session restore opens its scenes before it has a workspace to show them
 /// in, so the focus a scene asks for is held until there is a leaf to honour
 /// it on, and a new panel starts with a fit pending.

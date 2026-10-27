@@ -572,6 +572,160 @@ fn a_screenshot_resolves_once_the_capture_log_has_the_file() {
     );
 }
 
+/// A region rides the request into the capture, and the answer reports the
+/// cropped size. The readback is stood in for by a synthetic frame.
+#[test]
+fn a_screenshot_region_crops_the_capture_it_answers_for() {
+    use bevy::image::ToExtents as _;
+    use bevy::render::render_resource::{TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+
+    let (mut app, _project) = editor_with_a_project();
+    let panel = app
+        .world_mut()
+        .spawn((
+            jackdaw::EditorEntity,
+            Node {
+                width: px(600),
+                height: px(400),
+                ..default()
+            },
+        ))
+        .id();
+    jackdaw::viewport_2d::build_viewport_2d_panel(app.world_mut(), panel);
+    app.update();
+
+    let params = Some(json!({
+        "kind": "viewport2d",
+        "path": "region.png",
+        "request": "one",
+        "region": { "x": 8, "y": 8, "w": 24, "h": 10, "space": "pixels" },
+    }));
+    let first = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params.clone())
+        .expect("the handler ran")
+        .expect("a region within the image queues");
+    assert!(first.is_none());
+
+    let shot = app
+        .world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .single(app.world())
+        .expect("one capture queued");
+    app.world_mut().trigger(ScreenshotCaptured {
+        entity: shot,
+        image: Image::new_fill(
+            UVec2::new(200, 100).to_extents(),
+            TextureDimension::D2,
+            &[0, 255, 0, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            default(),
+        ),
+    });
+
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params)
+        .expect("the handler ran")
+        .expect("the handler answered")
+        .expect("a landed capture answers");
+    assert_eq!(answer["width"], json!(24), "{answer}");
+    assert_eq!(answer["height"], json!(10), "{answer}");
+}
+
+/// A malformed region is the caller's mistake, reported as one.
+#[test]
+fn a_malformed_screenshot_region_is_an_invalid_params_error() {
+    let (mut app, _project) = editor_with_a_project();
+    for region in [
+        json!({ "x": 1, "y": 1, "w": 5 }),
+        json!({ "x": 1, "y": 1, "w": 5, "h": 0 }),
+        json!({ "x": 1, "y": 1, "w": 5, "h": 5, "space": "screen" }),
+    ] {
+        let refused = app
+            .world_mut()
+            .run_system_cached_with(
+                screenshot_handler,
+                Some(json!({ "kind": "window", "region": region })),
+            )
+            .expect("the handler ran");
+        let err = refused.expect_err("a malformed region is refused");
+        assert_eq!(err.code, bevy::remote::error_codes::INVALID_PARAMS);
+    }
+}
+
+/// A window capture takes a pixel region like a viewport one, and the answer
+/// reports the cropped size.
+#[test]
+fn a_window_screenshot_crops_to_a_pixel_region() {
+    use bevy::image::ToExtents as _;
+    use bevy::render::render_resource::{TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+
+    let (mut app, _project) = editor_with_a_project();
+    let params = Some(json!({
+        "kind": "window",
+        "path": "window-region.png",
+        "request": "one",
+        "region": { "x": 5, "y": 6, "w": 40, "h": 20, "space": "pixels" },
+    }));
+    let first = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params.clone())
+        .expect("the handler ran")
+        .expect("a pixel region on a window capture queues");
+    assert!(first.is_none());
+
+    let shot = app
+        .world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .single(app.world())
+        .expect("one capture queued");
+    app.world_mut().trigger(ScreenshotCaptured {
+        entity: shot,
+        image: Image::new_fill(
+            UVec2::new(200, 100).to_extents(),
+            TextureDimension::D2,
+            &[0, 0, 255, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            default(),
+        ),
+    });
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params)
+        .expect("the handler ran")
+        .expect("the handler answered")
+        .expect("a landed capture answers");
+    assert_eq!(answer["width"], json!(40), "{answer}");
+    assert_eq!(answer["height"], json!(20), "{answer}");
+}
+
+/// A region the capture cannot honour is the caller's mistake, not the
+/// editor's.
+#[test]
+fn a_region_the_capture_cannot_honour_is_an_invalid_params_error() {
+    let (mut app, _project) = editor_with_a_project();
+    for params in [
+        json!({ "kind": "window", "region": { "x": 0, "y": 0, "w": 5, "h": 5, "space": "world" } }),
+        json!({ "kind": "window", "region": { "x": -50, "y": 0, "w": 5, "h": 5, "space": "pixels" } }),
+        json!({ "kind": "window", "region": { "space": "pixels" } }),
+        json!({ "kind": "window", "region": { "x": 0, "y": 0, "w": 5, "h": 5, "space": "" } }),
+    ] {
+        let refused = app
+            .world_mut()
+            .run_system_cached_with(screenshot_handler, Some(params.clone()))
+            .expect("the handler ran");
+        let err = refused.expect_err("the region is refused");
+        assert_eq!(
+            err.code,
+            bevy::remote::error_codes::INVALID_PARAMS,
+            "{params}"
+        );
+    }
+}
+
 /// A frame wait answers after the frames it was asked for and not before, so a
 /// caller waiting for a scene load does wait. Frames, not polls.
 #[test]

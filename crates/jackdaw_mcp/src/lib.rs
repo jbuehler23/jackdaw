@@ -232,6 +232,40 @@ pub struct ScreenshotArgs {
     /// Where to aim the viewport camera before capturing.
     #[serde(default)]
     pub look_at: Option<LookAt>,
+    /// Keep only part of the capture.
+    #[serde(default)]
+    pub region: Option<Region>,
+}
+
+impl ScreenshotArgs {
+    /// The `jackdaw/screenshot` parameters for these arguments.
+    fn brp_params(&self, request: String) -> Value {
+        compact(json!({
+            "kind": self.kind,
+            "path": self.path,
+            "region": self.region,
+            "request": request,
+        }))
+    }
+}
+
+/// The part of a screenshot to keep, from its minimum corner. Clamped to the
+/// image; refused when nothing is left.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct Region {
+    /// Left edge in pixels, or minimum x in world units.
+    pub x: f64,
+    /// Top edge in pixels (y down), or minimum y in world units (y up).
+    pub y: f64,
+    /// Width, in the same units.
+    pub w: f64,
+    /// Height, in the same units.
+    pub h: f64,
+    /// `world` (the 2D scene's units, the default for a 2D view) or
+    /// `pixels` (image pixels from the top-left, the only choice for the 3D
+    /// view).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 /// An eye and a target in world metres, as `view.look_at` takes them.
@@ -446,7 +480,9 @@ impl JackdawMcp {
         description = "Capture the viewport (or the whole window) to a PNG and return the image \
                        along with its path. Waits for the capture to reach disk, so the file is \
                        there when this answers. `look_at` aims the camera first, since a camera \
-                       left where it was frames a scene edge-on."
+                       left where it was frames a scene edge-on. `region` keeps only part of \
+                       the image: world units by default for a 2D view, pixels from the \
+                       top-left otherwise."
     )]
     pub async fn screenshot(
         &self,
@@ -473,11 +509,7 @@ impl JackdawMcp {
         let result = self
             .brp(
                 "jackdaw/screenshot",
-                compact(json!({
-                    "kind": args.kind,
-                    "path": args.path,
-                    "request": self.next_request_id(),
-                })),
+                args.brp_params(self.next_request_id()),
             )
             .await?;
         let path = result
@@ -670,5 +702,38 @@ mod tests {
     fn an_omitted_argument_is_dropped_rather_than_sent_as_null() {
         let params = compact(json!({ "kind": "viewport", "path": Value::Null }));
         assert_eq!(params, json!({ "kind": "viewport" }));
+    }
+
+    #[test]
+    fn a_screenshot_region_is_forwarded_and_an_omitted_one_is_not() {
+        let args: ScreenshotArgs = serde_json::from_value(json!({
+            "kind": "viewport2d",
+            "region": { "x": -8.0, "y": 4.0, "w": 16.0, "h": 16.0, "space": "world" },
+        }))
+        .expect("region arguments parse");
+        assert_eq!(
+            args.brp_params("r1".to_string()),
+            json!({
+                "kind": "viewport2d",
+                "region": { "x": -8.0, "y": 4.0, "w": 16.0, "h": 16.0, "space": "world" },
+                "request": "r1",
+            }),
+        );
+
+        let args: ScreenshotArgs = serde_json::from_value(json!({
+            "region": { "x": 0.0, "y": 0.0, "w": 64.0, "h": 32.0 },
+        }))
+        .expect("a region without a space parses");
+        let params = args.brp_params("r2".to_string());
+        assert_eq!(
+            params["region"],
+            json!({ "x": 0.0, "y": 0.0, "w": 64.0, "h": 32.0 })
+        );
+
+        let args: ScreenshotArgs = serde_json::from_value(json!({})).expect("no arguments");
+        assert_eq!(
+            args.brp_params("r3".to_string()),
+            json!({ "request": "r3" })
+        );
     }
 }

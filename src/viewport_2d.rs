@@ -433,6 +433,10 @@ pub struct Viewport2dPanelHost {
     /// reference size of the active UI scene, or the stage's logical size when none
     /// is open. Cached here so the pan/zoom pass need not touch `Assets<Image>`.
     pub target_size: UVec2,
+    /// Whether the panel is showing a UI scene's canvas rather than the 2D
+    /// world, so [`Self::view`] does not map the render target to world
+    /// coordinates.
+    pub shows_ui_scene: bool,
 }
 
 impl Viewport2dPanelHost {
@@ -957,6 +961,9 @@ pub fn size_targets_to_reference(
         };
         if host.target_size != target_size {
             host.target_size = target_size;
+        }
+        if host.shows_ui_scene != reference.is_some() {
+            host.shows_ui_scene = reference.is_some();
         }
 
         place_stage(&mut node, reference, view, area);
@@ -1860,6 +1867,7 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
         view_touched: false,
         fit_pending: true,
         target_size: UVec2::new(DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT),
+        shows_ui_scene: false,
     });
 
     column
