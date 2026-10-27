@@ -145,6 +145,7 @@ pub fn seed_default_categories(r: &mut InspectorRegistry) {
         // Components among the computed read-only ones, and the tab the
         // inspector opens on had nothing to say about a selected screen.
         ("bevy_ui::ui_node::Node", "object"),
+        ("bevy_sprite::sprite::Sprite", "object"),
         // Brush geometry lives in the Mesh tab. The real reflect path is
         // jackdaw_scene_types::types::Brush; the short alias is seeded as well so
         // any lookup using the unqualified form also resolves correctly.
