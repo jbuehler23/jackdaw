@@ -107,7 +107,7 @@ fn material_card_kind_for(
 /// `ComponentDisplayTypePath` equals `type_path`, for the inspector(s) showing
 /// `source`. In-place edits that change just one card's content (e.g. a material
 /// apply re-resolving the assigned handle) trigger this instead of the
-/// full-panel teardown in `on_inspector_dirty`.
+/// full-panel teardown an [`InspectorDirty`] marker asks for.
 #[derive(Event)]
 pub(crate) struct RefreshInspectorCardBody {
     pub(crate) source: Entity,

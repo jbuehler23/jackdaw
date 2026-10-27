@@ -8,7 +8,7 @@ use std::any::TypeId;
 use bevy::ecs::component::ComponentInfo;
 use bevy::{
     ecs::{
-        archetype::Archetype,
+        archetype::{Archetype, ArchetypeId},
         component::{ComponentId, Components},
         reflect::{AppTypeRegistry, ReflectComponent},
     },
@@ -30,8 +30,6 @@ use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, Collapsib
 
 use jackdaw_feathers::text_edit::TextEditValue;
 use std::collections::HashSet;
-
-use jackdaw_widgets::monitors::{Addition, Monitor, NotifyAdded};
 
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
@@ -66,26 +64,92 @@ pub(crate) struct SceneAsts<'w> {
     pub(crate) type_metadata: Res<'w, crate::type_metadata::TypeMetadata>,
 }
 
-/// Keep each inspector's cards pointed at [`Selection::primary`]. Runs
-/// when selection changes, or when a panel has no [`InspectorTarget`]
-/// yet and something is already selected (inspector spawned after the
-/// selection was written). An empty selection takes an open file or
-/// definition card down with it.
+/// What a panel builds its cards from, bundled into one param so the systems
+/// that build them stay under the system param-count limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CardBuildInputs<'w, 's> {
+    components: &'w Components,
+    type_registry: Res<'w, AppTypeRegistry>,
+    names: Query<'w, 's, &'static Name>,
+    icon_font: Res<'w, IconFont>,
+    editor_font: Res<'w, EditorFont>,
+    materials: Res<'w, Assets<StandardMaterial>>,
+    asts: SceneAsts<'w>,
+    prefab_cache: Res<'w, PrefabAstCache>,
+    collapse_state: Res<'w, super::InspectorCollapseState>,
+}
+
+/// What a panel's cards were last built for: how many entities were selected,
+/// for the multi-selection header, and the components of the entity shown, so
+/// a component arriving later puts the cards up again while the panel's own
+/// [`InspectorDirty`] marker coming and going does not.
+#[derive(Component)]
+pub(crate) struct InspectorShown {
+    selection_count: usize,
+    shape: Option<(ArchetypeId, Vec<ComponentId>)>,
+}
+
+impl InspectorShown {
+    fn new(
+        selection_count: usize,
+        archetype: Option<&Archetype>,
+        dirty: Option<ComponentId>,
+    ) -> Self {
+        Self {
+            selection_count,
+            shape: archetype.map(|archetype| (archetype.id(), shown_components(archetype, dirty))),
+        }
+    }
+
+    /// Whether the entity now has components other than the ones the cards
+    /// show. An archetype that differs only by the dirty marker is taken as the
+    /// one shown, so the comparison is not repeated every frame.
+    fn reshaped(&mut self, archetype: &Archetype, dirty: Option<ComponentId>) -> bool {
+        let Some((id, components)) = self.shape.as_mut() else {
+            return false;
+        };
+        if *id == archetype.id() {
+            return false;
+        }
+        if *components != shown_components(archetype, dirty) {
+            return true;
+        }
+        *id = archetype.id();
+        false
+    }
+}
+
+fn shown_components(archetype: &Archetype, dirty: Option<ComponentId>) -> Vec<ComponentId> {
+    let mut components: Vec<ComponentId> = archetype
+        .iter_components()
+        .filter(|&component| Some(component) != dirty)
+        .collect();
+    components.sort_unstable();
+    components
+}
+
+/// Keep each inspector's cards pointed at [`Selection::primary`], and put them
+/// up again when what they show has changed: another entity or selection size,
+/// an [`InspectorDirty`] marker on the entity shown, or a component added to or
+/// taken from it. However many of those land in a frame, a panel is rebuilt at
+/// most once. A reselect of the entity already shown leaves the panel
+/// standing. An empty selection takes an open file or definition card down
+/// with it.
 pub(crate) fn sync_inspector_to_selection(
     mut commands: Commands,
-    components: &Components,
-    type_registry: Res<AppTypeRegistry>,
     selection: Res<Selection>,
-    entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
-    inspectors: Query<(Entity, Option<&InspectorTarget>), With<Inspector>>,
-    names: Query<&Name>,
-    icon_font: Res<IconFont>,
-    editor_font: Res<EditorFont>,
-    materials: Res<Assets<StandardMaterial>>,
-    asts: SceneAsts,
-    prefab_cache: Res<PrefabAstCache>,
+    entity_query: Query<(&Archetype, EntityRef), (Without<EditorEntity>, Without<Inspector>)>,
+    mut inspectors: Query<
+        (
+            Entity,
+            Option<&InspectorTarget>,
+            Option<&mut InspectorShown>,
+        ),
+        With<Inspector>,
+    >,
+    dirty: Query<Entity, With<InspectorDirty>>,
     lineage: InspectorLineage,
-    collapse_state: Res<super::InspectorCollapseState>,
+    inputs: CardBuildInputs,
 ) {
     let desired = selection.primary();
     if desired.is_none() && selection.is_changed() {
@@ -94,20 +158,23 @@ pub(crate) fn sync_inspector_to_selection(
             crate::definition_assets::close_open_definition(world);
         });
     }
-    if !selection.is_changed() {
-        if desired.is_none() {
-            return;
-        }
-        if !inspectors.iter().any(|(_, target)| target.is_none()) {
-            return;
-        }
-    }
 
+    let dirty_id = inputs.components.component_id::<InspectorDirty>();
     let sel_count = selection.entities.len();
 
-    for (inspector, target) in &inspectors {
+    for (inspector, target, mut shown) in &mut inspectors {
         let current = target.map(|t| t.0);
-        if current == desired && !selection.is_changed() {
+        let retarget = current != desired
+            || shown
+                .as_ref()
+                .is_some_and(|shown| shown.selection_count != sel_count);
+        let marked = current.is_some_and(|current| dirty.contains(current));
+        let reshaped = current.zip(shown.as_mut()).is_some_and(|(current, shown)| {
+            entity_query
+                .get(current)
+                .is_ok_and(|(archetype, _)| shown.reshaped(archetype, dirty_id))
+        });
+        if !(retarget || marked || reshaped) {
             continue;
         }
 
@@ -122,7 +189,7 @@ pub(crate) fn sync_inspector_to_selection(
 
         commands
             .entity(inspector)
-            .remove::<(InspectorTarget, Monitor, NotifyAdded<InspectorDirty>)>();
+            .remove::<(InspectorTarget, InspectorShown)>();
         despawn_inspector_display_children(&mut commands, inspector);
 
         let Some(primary) = desired else {
@@ -134,8 +201,7 @@ pub(crate) fn sync_inspector_to_selection(
             });
             commands.entity(inspector).insert((
                 InspectorTarget(primary),
-                Monitor(primary),
-                NotifyAdded::<InspectorDirty>::default(),
+                InspectorShown::new(sel_count, None, dirty_id),
             ));
             continue;
         }
@@ -145,8 +211,7 @@ pub(crate) fn sync_inspector_to_selection(
             });
             commands.entity(inspector).insert((
                 InspectorTarget(primary),
-                Monitor(primary),
-                NotifyAdded::<InspectorDirty>::default(),
+                InspectorShown::new(sel_count, None, dirty_id),
             ));
             continue;
         }
@@ -156,8 +221,8 @@ pub(crate) fn sync_inspector_to_selection(
 
         let source_entity = entity_ref.entity();
         let authored_type_paths = inspector_type_paths_for(
-            &asts.bsn,
-            &prefab_cache,
+            &inputs.asts.bsn,
+            &inputs.prefab_cache,
             source_entity,
             entity_ref,
             &lineage.child_of,
@@ -166,31 +231,34 @@ pub(crate) fn sync_inspector_to_selection(
 
         build_inspector_displays(
             &mut commands,
-            components,
-            &type_registry,
+            inputs.components,
+            &inputs.type_registry,
             source_entity,
             archetype,
             entity_ref,
             inspector,
             sel_count,
-            &names,
-            &icon_font,
-            &editor_font,
+            &inputs.names,
+            &inputs.icon_font,
+            &inputs.editor_font,
             false,
-            &materials,
+            &inputs.materials,
             &authored_type_paths,
-            Some(&asts.bsn),
-            Some(&prefab_cache),
-            &collapse_state,
-            &asts.project_types,
-            &asts.type_metadata,
+            Some(&inputs.asts.bsn),
+            Some(&inputs.prefab_cache),
+            &inputs.collapse_state,
+            &inputs.asts.project_types,
+            &inputs.asts.type_metadata,
         );
 
         commands.entity(inspector).insert((
             InspectorTarget(primary),
-            Monitor(primary),
-            NotifyAdded::<InspectorDirty>::default(),
+            InspectorShown::new(sel_count, Some(archetype), dirty_id),
         ));
+    }
+
+    for marked in &dirty {
+        commands.entity(marked).try_remove::<InspectorDirty>();
     }
 }
 
@@ -985,124 +1053,6 @@ fn despawn_inspector_display_children(commands: &mut Commands, inspector: Entity
             }
         }
     });
-}
-
-/// Handles `Addition<InspectorDirty>` on the Inspector entity: despawn existing
-/// displays and rebuild from the monitored source entity.
-pub(crate) fn on_inspector_dirty(
-    _: On<Addition<InspectorDirty>>,
-    mut commands: Commands,
-    components: &Components,
-    type_registry: Res<AppTypeRegistry>,
-    inspectors: Query<(Entity, &InspectorTarget), With<Inspector>>,
-    entity_query: Query<(&Archetype, EntityRef), Without<EditorEntity>>,
-    selection: Res<Selection>,
-    names: Query<&Name>,
-    icon_font: Res<IconFont>,
-    editor_font: Res<EditorFont>,
-    materials: Res<Assets<StandardMaterial>>,
-    asts: SceneAsts,
-    prefab_cache: Res<PrefabAstCache>,
-    lineage: InspectorLineage,
-    collapse_state: Res<super::InspectorCollapseState>,
-) {
-    // Multi-instance: rebuild every Inspector tab in lockstep. Each
-    // inspector entity carries its own `InspectorTarget`; the dirty
-    // signal originates from `InspectorDirty` on the source entity
-    // and applies to every inspector watching that source.
-    let mut clear_dirty_for: Option<Entity> = None;
-    for (inspector_entity, target) in &inspectors {
-        let mut source_entity = target.0;
-
-        despawn_inspector_display_children(&mut commands, inspector_entity);
-
-        if lineage.files.contains(source_entity) {
-            let source = source_entity;
-            commands.queue(move |world: &mut World| {
-                super::file_card::fill_file_card(world, inspector_entity, source);
-            });
-            clear_dirty_for = clear_dirty_for.or(Some(source_entity));
-            continue;
-        }
-
-        if lineage.definitions.contains(source_entity) {
-            let source = source_entity;
-            commands.queue(move |world: &mut World| {
-                super::definition_card::fill_definition_card(world, inspector_entity, source);
-            });
-            clear_dirty_for = clear_dirty_for.or(Some(source_entity));
-            continue;
-        }
-
-        // Rebuild this inspector's contents. If the monitored target is gone
-        // (despawned/respawned by CSG, undo, or prefab install), fall back to
-        // the live primary selection and re-point this inspector, rather than
-        // despawning the cards and rebuilding an empty panel.
-        let (archetype, entity_ref) = match entity_query.get(source_entity) {
-            Ok(found) => found,
-            Err(_) => {
-                let Some(primary) = selection.primary() else {
-                    continue;
-                };
-                let Ok(found) = entity_query.get(primary) else {
-                    continue;
-                };
-                commands.entity(inspector_entity).insert((
-                    InspectorTarget(primary),
-                    Monitor(primary),
-                    NotifyAdded::<InspectorDirty>::default(),
-                ));
-                source_entity = primary;
-                found
-            }
-        };
-        if clear_dirty_for.is_none() {
-            clear_dirty_for = Some(source_entity);
-        }
-        let sel_count = selection.entities.len();
-
-        let authored_type_paths = inspector_type_paths_for(
-            &asts.bsn,
-            &prefab_cache,
-            source_entity,
-            entity_ref,
-            &lineage.child_of,
-            &lineage.is_a,
-        );
-
-        build_inspector_displays(
-            &mut commands,
-            components,
-            &type_registry,
-            source_entity,
-            archetype,
-            entity_ref,
-            inspector_entity,
-            sel_count,
-            &names,
-            &icon_font,
-            &editor_font,
-            false,
-            &materials,
-            &authored_type_paths,
-            Some(&asts.bsn),
-            Some(&prefab_cache),
-            &collapse_state,
-            &asts.project_types,
-            &asts.type_metadata,
-        );
-    }
-
-    // Strip `InspectorDirty` from the source entity once after the
-    // rebuild fans out. All inspectors watching the same source share
-    // a single dirty signal.
-    if let Some(source_entity) = clear_dirty_for {
-        commands.queue(move |world: &mut World| {
-            if let Ok(mut ec) = world.get_entity_mut(source_entity) {
-                ec.remove::<InspectorDirty>();
-            }
-        });
-    }
 }
 
 /// The disclosure link and its handler live with the shared card widget;
