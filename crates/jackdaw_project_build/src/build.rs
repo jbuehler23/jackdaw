@@ -27,7 +27,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::process::StderrCapture;
+use jackdaw_env::sdk_toolchain_command;
 
 use crate::linkage;
 use crate::plan::{self, PlanError, SdkManifest};
@@ -52,6 +53,9 @@ pub enum ProjectBuildError {
     UnusableSdk {
         problems: Vec<String>,
     },
+    /// The toolchain extensions build with is missing and could not be
+    /// installed.
+    Toolchain(String),
 }
 
 impl std::fmt::Display for ProjectBuildError {
@@ -67,6 +71,7 @@ impl std::fmt::Display for ProjectBuildError {
             Self::UnusableSdk { .. } => {
                 write!(f, "the Jackdaw SDK is not usable (see above)")
             }
+            Self::Toolchain(detail) => f.write_str(detail),
         }
     }
 }
@@ -221,6 +226,21 @@ pub fn build_project_dylib(
         return Err(ProjectBuildError::UnusableSdk { problems });
     }
 
+    // Everything from here runs the editor's toolchain, from reading the
+    // SDK's hash to the build itself. Installed up front and in view, since
+    // rustup would otherwise either refuse each step or download it
+    // unannounced partway through.
+    if jackdaw_env::sdk_toolchain_installed() == Some(false) {
+        report(BuildEvent::Log(format!(
+            "installing the {} toolchain extensions build with",
+            jackdaw_env::RUSTUP_TOOLCHAIN
+        )));
+    }
+    if let Err(error) = jackdaw_env::ensure_sdk_toolchain() {
+        report(BuildEvent::Log(error.clone()));
+        return Err(ProjectBuildError::Toolchain(error));
+    }
+
     // A checkout can build the editor and its SDK with separate commands
     // (`cargo run` writes neither into the triple dir), so they drift
     // apart silently. The extension links the SDK, so an SDK older than
@@ -327,7 +347,7 @@ pub fn build_project_dylib(
     let target_dir = target_root.join(&salt);
     retain_recent_target_dirs(&target_root, &salt, &crate::game_target_dir(jackdaw_dir));
 
-    let mut cmd = rust_env_command("cargo");
+    let mut cmd = sdk_toolchain_command("cargo");
     cmd.args(["rustc", "--crate-type", "cdylib", "--target", &sdk.triple])
         // Machine-readable stream so the editor can show live per-crate
         // progress, with rustc's diagnostics in it.
@@ -368,10 +388,10 @@ pub fn build_project_dylib(
             link_paths.join(PATH_LIST_SEPARATOR),
         );
     }
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    // Cargo's own failures, such as an unresolvable dependency or a missing
+    // toolchain, never reach the JSON stream.
+    let stderr = StderrCapture::echoed(&mut child);
 
     // Drain the JSON stream: bump the compile counter per artifact and
     // forward rendered diagnostics, both to the live `report` sink and
@@ -384,9 +404,7 @@ pub fn build_project_dylib(
     }
     let status = child.wait()?;
     if !status.success() {
-        if log.trim().is_empty() {
-            log.push_str("extension failed to compile (no diagnostics captured)");
-        }
+        let mut log = crate::binary::compile_failure_log(log, &stderr.finish());
         if let Some(note) = stale_sdk_hint(&log, sdk, &manifest) {
             log.push_str(&note);
         }

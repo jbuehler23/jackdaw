@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use include_dir::{Dir, include_dir};
-use jackdaw_env::rust_env_command;
 use jackdaw_project_build::modules::{GameDependencies, ModuleCatalog, ModuleSet};
 use jackdaw_project_build::runtime_wiring::{
     PIE_FEATURE, RUNTIME_CRATE, RuntimeDependency, RuntimeWiring,
@@ -428,7 +427,10 @@ impl std::fmt::Display for NewProjectWarning {
 /// build would hit. Runs cargo's resolver, which updates the registry
 /// index first on a cold cache, so call it off the UI thread.
 pub fn check_new_project(dest: &Path) -> Vec<NewProjectWarning> {
-    check_new_project_with(dest, resolves)
+    check_new_project_with(
+        dest,
+        jackdaw_project_build::cargo_meta::resolve_dependencies,
+    )
 }
 
 /// [`check_new_project`] with the resolver supplied by the caller.
@@ -477,27 +479,6 @@ fn enclosing_workspace(dest: &Path) -> Option<PathBuf> {
         }
         candidate = candidate.parent()?;
     }
-}
-
-/// Whether cargo can resolve a project's full dependency graph,
-/// reporting its first error line. Unlike the `--no-deps` metadata call
-/// used to find a package, this one does the version solving.
-fn resolves(root: &Path) -> Result<(), String> {
-    let output = rust_env_command("cargo")
-        .current_dir(root)
-        .args(["metadata", "--format-version", "1"])
-        .output()
-        .map_err(|error| format!("could not run cargo: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(stderr
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("error"))
-        .unwrap_or("cargo could not resolve this project's dependencies")
-        .to_string())
 }
 
 /// The first bare argument, skipping flags and the values belonging to

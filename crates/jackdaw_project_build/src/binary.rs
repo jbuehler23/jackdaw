@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::process::StderrCapture;
+use jackdaw_env::user_toolchain_command;
 use jackdaw_schema::{ProjectSchema, SCHEMA_FLAG, parse_from_stdout, write_schema};
 
 use crate::build::{BuildEvent, ProjectBuildError, parse_build_line};
@@ -120,28 +121,11 @@ pub fn build_project_binary_with_load(
         target_dir.display()
     )));
 
-    let mut command = rust_env_command("cargo");
-    command
-        .arg("build")
-        .args(["-p", &spec.package_name])
-        .arg("--target-dir")
-        .arg(&target_dir)
-        // Plain `json`, not `json-render-diagnostics`: that variant renders
-        // diagnostics to cargo's own stderr and emits no `compiler-message`
-        // records, leaving the parser below with nothing to report.
-        .arg("--message-format=json")
-        .current_dir(&spec.project_root)
-        .stdout(Stdio::piped())
-        // Captured rather than inherited: cargo's own failures, such as an
-        // unresolvable dependency, are never in the JSON stream, and inherited
-        // they reach only the terminal the editor was launched from.
-        .stderr(Stdio::piped());
-    detach_from_host_build(&mut command);
-    apply_load(&mut command, load);
+    let mut command = game_build_command(spec, &target_dir, load);
     let mut child = command.spawn()?;
 
     let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().map(drain_on_a_thread);
+    let stderr = StderrCapture::take(&mut child);
     let mut done = 0u32;
     let mut log = String::new();
     let mut executables: Vec<PathBuf> = Vec::new();
@@ -153,10 +137,7 @@ pub fn build_project_binary_with_load(
     }
     let status = child.wait()?;
     if !status.success() {
-        let stderr = stderr
-            .and_then(|handle| handle.join().ok())
-            .unwrap_or_default();
-        let stderr = failure_stderr(&String::from_utf8_lossy(&stderr));
+        let stderr = stderr.finish();
         // Cargo's own account of the failure never goes through the JSON stream.
         // `Display` for `Compile` is one line, so the detail has to reach the
         // panel line by line the way rustc's diagnostics do.
@@ -196,24 +177,28 @@ pub fn build_project_binary_with_load(
     Ok(ProjectBinaryBuild { binary, schema })
 }
 
-/// Cargo's stderr without its per-crate progress notes, which say nothing
-/// about why a build failed and would bury the lines that do.
-fn failure_stderr(stderr: &str) -> String {
-    const PROGRESS: [&str; 5] = [
-        "Compiling ",
-        "Checking ",
-        "Downloading ",
-        "Downloaded ",
-        "Fresh ",
-    ];
-    stderr
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            !PROGRESS.iter().any(|verb| line.starts_with(verb))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// The `cargo build` that compiles the game, run by the project's own
+/// toolchain and detached from the editor's build environment.
+fn game_build_command(spec: &ShimSpec, target_dir: &Path, load: BuildLoad) -> Command {
+    let mut command = user_toolchain_command("cargo");
+    command
+        .arg("build")
+        .args(["-p", &spec.package_name])
+        .arg("--target-dir")
+        .arg(target_dir)
+        // Plain `json`, not `json-render-diagnostics`: that variant renders
+        // diagnostics to cargo's own stderr and emits no `compiler-message`
+        // records, leaving the parser below with nothing to report.
+        .arg("--message-format=json")
+        .current_dir(&spec.project_root)
+        .stdout(Stdio::piped())
+        // Captured rather than inherited: cargo's own failures, such as an
+        // unresolvable dependency, are never in the JSON stream, and inherited
+        // they reach only the terminal the editor was launched from.
+        .stderr(Stdio::piped());
+    detach_from_host_build(&mut command);
+    apply_load(&mut command, load);
+    command
 }
 
 /// What a failed build reports: rustc's diagnostics, then cargo's own stderr.
@@ -221,7 +206,7 @@ fn failure_stderr(stderr: &str) -> String {
 /// rustc's arrive as `compiler-message` records on stdout; cargo's are on stderr
 /// and are the only account of a failure before any code was compiled. Either
 /// can be empty, so both are carried.
-fn compile_failure_log(diagnostics: String, stderr: &str) -> String {
+pub(crate) fn compile_failure_log(diagnostics: String, stderr: &str) -> String {
     let mut log = diagnostics;
     let stderr = stderr.trim();
     if !stderr.is_empty() {
@@ -536,6 +521,26 @@ mod tests {
         assert!(is_host_build_var("LD_LIBRARY_PATH"));
     }
 
+    #[test]
+    fn a_game_command_uses_the_projects_toolchain() {
+        let spec = ShimSpec {
+            package_name: "my-game".to_string(),
+            crate_name: "my_game".to_string(),
+            project_root: PathBuf::from("/game"),
+            extension_type: None,
+        };
+        let command = game_build_command(&spec, Path::new("/target"), BuildLoad::Foreground);
+        let toolchain: Vec<_> = command
+            .get_envs()
+            .filter(|(key, _)| *key == "RUSTUP_TOOLCHAIN")
+            .collect();
+        assert_eq!(
+            toolchain,
+            [(std::ffi::OsStr::new("RUSTUP_TOOLCHAIN"), None)],
+            "the editor's toolchain must be removed so the project's own applies"
+        );
+    }
+
     /// Locating the toolchain and the shared package cache is exactly
     /// what should carry over, so a project build reuses what is
     /// already downloaded.
@@ -680,17 +685,6 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn a_failure_leaves_out_cargos_progress_notes() {
-        let stderr = "   Compiling bevy v0.19.1\n   Compiling my-game v0.1.0 (/p)\n\
-                      error: could not compile `my-game` (lib) due to 1 previous error\n";
-
-        assert_eq!(
-            failure_stderr(stderr),
-            "error: could not compile `my-game` (lib) due to 1 previous error"
-        );
     }
 
     #[test]
