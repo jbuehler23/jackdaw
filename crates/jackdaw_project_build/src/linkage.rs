@@ -18,7 +18,7 @@
 
 use std::path::Path;
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::sdk_toolchain_command;
 
 #[derive(Debug)]
 pub enum LinkageError {
@@ -103,7 +103,7 @@ pub fn verify_linkage(library: &Path, svh: &str) -> Result<(), LinkageError> {
 }
 
 fn metadata_dump(artifact: &Path, toolchain: Option<&str>) -> Result<String, LinkageError> {
-    let mut cmd = rust_env_command("rustc");
+    let mut cmd = sdk_toolchain_command("rustc");
     // The rustup proxy selects the pinned toolchain from this variable;
     // a real rustc binary ignores it.
     if let Some(toolchain) = toolchain {

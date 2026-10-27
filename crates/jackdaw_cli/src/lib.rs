@@ -23,7 +23,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use jackdaw_env::rust_env_command;
 use jackdaw_project_build::bootstrap::{self, SetupProgress};
 use jackdaw_project_build::build_tools::CheckStatus;
 use jackdaw_project_build::{BuildEvent, build_project_binary, build_project_dylib, sdk_paths};
@@ -70,8 +69,8 @@ fn cmd_setup() -> ExitCode {
             bootstrap::SDK_BUILD_ESTIMATE
         );
     }
-    // Print phase headers; cargo's own progress reaches the terminal on
-    // inherited stderr, so per-crate events are left for the editor's bar.
+    // Print phase headers; cargo's own progress is echoed to the terminal,
+    // so per-crate events are left for the editor's bar.
     let report = |event: SetupProgress| {
         if let SetupProgress::Phase(phase) = event {
             println!("jd setup: {phase}");
@@ -385,7 +384,7 @@ fn report_project(root: &Path) -> bool {
     // compiler, so every other check above can pass while nothing
     // builds. This is the one check that exercises the manifest a
     // scaffold or import actually produced.
-    match resolve_dependencies(root) {
+    match jackdaw_project_build::cargo_meta::resolve_dependencies(root) {
         Ok(()) => pass("dependencies: resolve".to_string()),
         Err(detail) => {
             ok = false;
@@ -525,28 +524,6 @@ fn removed_feature_problems(root: &Path, package_dir: &Path) -> Vec<Problem> {
         .collect()
 }
 
-/// Ask cargo to resolve the project's full dependency graph, reporting
-/// its first error line. Unlike the `--no-deps` metadata call used to
-/// find the package, this one does the version solving, which is where
-/// an unpublished or mistyped requirement surfaces.
-fn resolve_dependencies(root: &Path) -> Result<(), String> {
-    let output = rust_env_command("cargo")
-        .current_dir(root)
-        .args(["metadata", "--format-version", "1"])
-        .output()
-        .map_err(|error| format!("could not run cargo: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(stderr
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("error"))
-        .unwrap_or("cargo could not resolve this project's dependencies")
-        .to_string())
-}
-
 /// `jd build [--project <path>]`: run the same pipeline the editor runs.
 /// A game persists `.jackdaw/schema.json`, which a running editor watches
 /// and reloads; a project that is only an extension builds its library
@@ -557,25 +534,37 @@ fn cmd_build(args: &[String]) -> ExitCode {
         Ok(root) => root,
         Err(code) => return code,
     };
-    build_project(&root)
+    match build_project(&root) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(code) => code,
+    }
 }
 
 /// `jd run [--project <path>]`: build the game (refreshing the schema a
-/// running editor reloads), then launch it. A build failure aborts
-/// before running, since the game would fail to compile anyway.
+/// running editor reloads), then launch the binary that build produced,
+/// the way the editor's Play does. A build failure aborts before running.
 fn cmd_run(args: &[String]) -> ExitCode {
     let root = match resolve_root(args) {
         Ok(root) => root,
         Err(code) => return code,
     };
-    let built = build_project(&root);
-    if !matches!(built, ExitCode::SUCCESS) {
-        return built;
-    }
+    let binary = match build_project(&root) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => {
+            eprintln!(
+                "jackdaw run: {} is an editor extension with no game to run",
+                root.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        Err(code) => return code,
+    };
     println!("jackdaw run: launching {}", root.display());
-    match rust_env_command("cargo")
-        .arg("run")
+    let mut command = std::process::Command::new(&binary);
+    jackdaw_project_build::prepare_game_command(&mut command, &binary);
+    match command
         .current_dir(&root)
+        .env("BEVY_ASSET_ROOT", &root)
         .status()
     {
         Ok(status) if status.success() => ExitCode::SUCCESS,
@@ -599,19 +588,23 @@ fn resolve_root(args: &[String]) -> Result<PathBuf, ExitCode> {
 }
 
 /// Build the project at `root`: a game as its own binary with its schema
-/// persisted, a project that is only an extension against the SDK.
-fn build_project(root: &Path) -> ExitCode {
+/// persisted, a project that is only an extension against the SDK. Returns
+/// the game's binary, or `None` for an extension.
+fn build_project(root: &Path) -> Result<Option<PathBuf>, ExitCode> {
     let spec = match jackdaw_project_build::shim_spec_for_project(root) {
         Ok(spec) => spec,
         Err(error) => {
             eprintln!("jackdaw build: {error}");
-            return ExitCode::FAILURE;
+            return Err(ExitCode::FAILURE);
         }
     };
 
     let jackdaw_dir = root.join(".jackdaw");
     if bootstrap::project_needs_sdk(root) {
-        return build_extension(root, &spec, &jackdaw_dir);
+        return match build_extension(root, &spec, &jackdaw_dir) {
+            ExitCode::SUCCESS => Ok(None),
+            code => Err(code),
+        };
     }
 
     println!("jackdaw build: building {}", root.display());
@@ -634,11 +627,11 @@ fn build_project(root: &Path) -> ExitCode {
                 build.binary.display(),
                 schema_path(&jackdaw_dir).display()
             );
-            ExitCode::SUCCESS
+            Ok(Some(build.binary))
         }
         Err(err) => {
             eprintln!("jackdaw build: failed: {err}");
-            ExitCode::FAILURE
+            Err(ExitCode::FAILURE)
         }
     }
 }
