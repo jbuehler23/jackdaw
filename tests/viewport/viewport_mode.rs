@@ -695,6 +695,44 @@ fn the_viewport_capture_aims_at_the_surface_the_mode_is_showing() {
     }
 }
 
+/// A 3D capture has no world to resolve a region in: only pixels are accepted,
+/// and a world region is refused before anything queues.
+#[test]
+fn a_3d_capture_accepts_a_pixel_region_and_refuses_a_world_one() {
+    use bevy::render::view::screenshot::Screenshot;
+
+    let mut app = util::editor_test_app();
+    panel(&mut app);
+    switch_mode(&mut app, "3d");
+
+    let path = std::env::temp_dir().join("jackdaw-region-3d.png");
+    for (space, finishes) in [("world", false), ("pixels", true)] {
+        let result = app
+            .world_mut()
+            .operator("viewport.screenshot")
+            .param("path", path.to_string_lossy().to_string())
+            .param("region_x", 0.0)
+            .param("region_y", 0.0)
+            .param("region_w", 1.0)
+            .param("region_h", 1.0)
+            .param("region_space", space)
+            .call()
+            .expect("viewport.screenshot dispatches");
+        if finishes {
+            result.assert_finished();
+        } else {
+            result.assert_cancelled();
+        }
+        app.update();
+        let queued = app
+            .world_mut()
+            .query_filtered::<Entity, With<Screenshot>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(queued, usize::from(finishes), "region_space={space}");
+    }
+}
+
 /// The dock reconciler rebuilds a leaf whenever its tabs change, it is split,
 /// or the workspace switches, so a panel that always started in the 3D world
 /// would drop a screen's canvas on any of them.

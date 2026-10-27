@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 use crate::boot_ops::{BootOp, resolve_entity_params};
 use crate::project::ProjectRoot;
 use crate::scenes::Scenes;
+use crate::screenshot::CaptureError;
 use crate::selection::Selection;
 
 /// The editor's BRP port. One past the game's 15702, so an editor and the
@@ -1373,6 +1374,7 @@ pub fn screenshot_handler(
         Some(path) => project_path(world, path)?,
         None => default_capture_path(world, &kind),
     };
+    let region = capture_region(&params)?;
     let key = request_key(&params);
 
     let frame = current_frame(world);
@@ -1390,15 +1392,19 @@ pub fn screenshot_handler(
         }
         let queue = path.clone();
         let outcome = match kind.as_str() {
-            "window" => {
-                crate::screenshot::queue_window_capture(world, queue, false);
-                Ok(())
-            }
-            "viewport2d" => crate::screenshot::queue_2d_capture(world, queue, false),
-            _ => crate::screenshot::queue_capture(world, queue, false),
+            "window" => crate::screenshot::queue_window_capture(world, queue, false, region),
+            "viewport2d" => crate::screenshot::queue_2d_capture(world, queue, false, region),
+            _ => crate::screenshot::queue_capture(world, queue, false, region),
         };
         if let Err(err) = outcome {
-            return Err(internal_error(err.to_string()));
+            return Err(match err {
+                CaptureError::NoViewport | CaptureError::NotAnImageTarget => {
+                    internal_error(err.to_string())
+                }
+                CaptureError::WorldRegionWithoutView
+                | CaptureError::WorldRegionOnUiScene
+                | CaptureError::EmptyRegion => invalid_params(err.to_string()),
+            });
         }
         world
             .get_resource_or_init::<PendingWaits>()
@@ -1439,6 +1445,17 @@ pub fn screenshot_handler(
         "width": width,
         "height": height,
     })))
+}
+
+/// The `region` a screenshot request names: `{x, y, w, h, space}` with the
+/// space optional.
+fn capture_region(params: &Value) -> BrpResult<Option<crate::screenshot::CaptureRegion>> {
+    match params.get("region").filter(|region| !region.is_null()) {
+        Some(region) => crate::screenshot::CaptureRegion::from_json(region)
+            .map(Some)
+            .map_err(invalid_params),
+        None => Ok(None),
+    }
 }
 
 /// Where an unnamed remote capture goes.
