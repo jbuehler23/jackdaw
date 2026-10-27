@@ -392,10 +392,6 @@ fn source_note(path: &std::path::Path) -> String {
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inspector rebuild needs the full system param set; bundling into a struct would just push the problem one frame down"
-)]
 /// The components of `archetype` that get a card of their own, before any is
 /// folded into the card of another.
 fn listed_components(
