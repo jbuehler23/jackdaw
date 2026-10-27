@@ -35,7 +35,18 @@ fn select(app: &mut App, entity: Entity) {
     settle(app);
 }
 
+/// Run frames until one passes with no UI node coming or going, then zero the
+/// tally, so work that lands late, such as assets finishing loading on a slow
+/// machine, is not counted against what the test does next.
 fn reset(app: &mut App) {
+    for _ in 0..120 {
+        *app.world_mut().resource_mut::<Tally>() = Tally::default();
+        app.update();
+        let tally = app.world().resource::<Tally>();
+        if tally.nodes_added == 0 && tally.nodes_removed == 0 {
+            break;
+        }
+    }
     *app.world_mut().resource_mut::<Tally>() = Tally::default();
 }
 
