@@ -284,6 +284,13 @@ fn authored_widget_components() -> [&'static str; 10] {
     ]
 }
 
+/// Cards another card shows inside itself, as (absorbed, host) type paths.
+/// An absorbed card is left out whenever its host's card is listed.
+fn folded_cards() -> [(&'static str, &'static str); 1] {
+    use bevy::reflect::TypePath;
+    [(bevy::sprite::Anchor::type_path(), Sprite::type_path())]
+}
+
 struct ListedComponent {
     name: String,
     group: String,
@@ -484,6 +491,16 @@ pub(crate) fn build_inspector_displays(
             })
         })
         .collect();
+
+    let listed: HashSet<String> = comp_list
+        .iter()
+        .map(|listed| listed.type_path.clone())
+        .collect();
+    comp_list.retain(|component| {
+        !folded_cards()
+            .iter()
+            .any(|(absorbed, host)| component.type_path == *absorbed && listed.contains(*host))
+    });
 
     // Sort: game EditorCategory groups, then Game, then engine groups,
     // then by group name, authored before derived, then alphabetical.
@@ -721,6 +738,14 @@ pub(crate) fn build_inspector_displays(
                 let body = body_entity;
                 commands.queue(move |world: &mut World| {
                     node_card::fill_node_card_body(world, source_entity, body);
+                });
+                continue;
+            }
+
+            if type_id == TypeId::of::<Sprite>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    super::sprite_card::fill_sprite_card_body(world, source_entity, body);
                 });
                 continue;
             }
