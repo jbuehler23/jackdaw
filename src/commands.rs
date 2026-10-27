@@ -1896,8 +1896,7 @@ fn field_edit_to_bsn_value(
     if let Some(edit) = map_entry_edit(world, entity, type_path, field_path, value) {
         return Some(edit);
     }
-    json_field_edit_to_bsn_value(world, entity, type_path, field_path, value)
-        .map(|new_value| (field_path.to_string(), new_value))
+    json_field_edit(world, entity, type_path, field_path, value)
 }
 
 /// Where a field path steps into a map entry: the map's own path, the entry's
@@ -2085,17 +2084,22 @@ fn write_map_entry(
     written.then_some(map_path)
 }
 
-/// Convert one field edit given as reflect-format JSON into the
-/// [`jackdaw_bsn::BsnValue`] to author. Field-level edits merge the JSON into
-/// a copy of the entity's current component so nested values convert with
-/// their concrete types; whole-component edits deserialize the JSON directly.
-pub(crate) fn json_field_edit_to_bsn_value(
+/// Convert one field edit given as reflect-format JSON into the path to
+/// author and the [`jackdaw_bsn::BsnValue`] to author there. Field-level edits
+/// merge the JSON into a copy of the entity's current component so nested
+/// values convert with their concrete types; whole-component edits deserialize
+/// the JSON directly.
+///
+/// An edit inside a value the document does not hold yet and can only spell
+/// whole, such as an enum variant left at its default, authors that whole
+/// value at its own path (see [`jackdaw_bsn::whole_value_write`]).
+pub(crate) fn json_field_edit(
     world: &World,
     entity: Entity,
     type_path: &str,
     field_path: &str,
     value: &serde_json::Value,
-) -> Option<jackdaw_bsn::BsnValue> {
+) -> Option<(String, jackdaw_bsn::BsnValue)> {
     use bevy::reflect::GetPath;
     use serde::de::DeserializeSeed;
 
@@ -2105,15 +2109,16 @@ pub(crate) fn json_field_edit_to_bsn_value(
         // Project (schema-reported) components have no editor registration; the
         // field's authored value comes straight from the extracted schema type.
         drop(registry);
-        return project_field_edit_to_bsn_value(world, entity, type_path, field_path, value);
+        return project_field_edit_to_bsn_value(world, entity, type_path, field_path, value)
+            .map(|new_value| (field_path.to_string(), new_value));
     };
     if field_path.is_empty() {
         let deserializer =
             bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);
         let reflected = deserializer.deserialize(value).ok()?;
-        return Some(jackdaw_bsn::BsnValue::from_reflect(
-            reflected.as_ref(),
-            &registry,
+        return Some((
+            String::new(),
+            jackdaw_bsn::BsnValue::from_reflect(reflected.as_ref(), &registry),
         ));
     }
     let reflect_component = registration.data::<ReflectComponent>()?;
@@ -2130,13 +2135,32 @@ pub(crate) fn json_field_edit_to_bsn_value(
             .get_represented_type_info()
             .is_some_and(|info| crate::typed_values::takes_asset_path(&registry, info.type_id()))
     {
-        return Some(jackdaw_bsn::BsnValue::String(text.to_string()));
+        return Some((
+            field_path.to_string(),
+            jackdaw_bsn::BsnValue::String(text.to_string()),
+        ));
     }
     if let Ok(field) = merged.reflect_path_mut(field_path) {
         apply_json_to_reflect(field, value, &registry);
     }
     let field = merged.reflect_path(field_path).ok()?;
-    Some(jackdaw_bsn::BsnValue::from_reflect(field, &registry))
+    let whole = world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .and_then(|ast| {
+            jackdaw_bsn::whole_value_write(
+                ast,
+                ast.ast_for(entity)?,
+                type_path,
+                field_path,
+                merged.as_partial_reflect(),
+                &registry,
+            )
+        });
+    let (path, authored) = whole.unwrap_or((field_path.to_string(), field));
+    Some((
+        path,
+        jackdaw_bsn::BsnValue::from_reflect(authored, &registry),
+    ))
 }
 
 /// Convert a field edit on a project (schema-reported) component into the
@@ -2607,6 +2631,8 @@ pub(crate) fn live_bsn_field(
 #[cfg(test)]
 mod set_bsn_field_tests {
     use super::*;
+    use bevy::pbr::{DistanceFog, FogFalloff};
+    use bevy::text::{FontSize, TextFont};
     use jackdaw_bsn::{BsnValue, SceneBsnAst, create_entity_in_ast, get_bsn_field};
 
     fn field_app() -> App {
@@ -3216,6 +3242,122 @@ mod set_bsn_field_tests {
             doc_and_ecs_name(&app, entity),
             (Some("Old".to_string()), Some("Old".to_string()))
         );
+    }
+
+    /// One entity carrying `component`, linked into the document and selected.
+    fn selected_app<T: Component + bevy::reflect::GetTypeRegistration>(
+        component: T,
+    ) -> (App, Entity) {
+        let mut app = field_app();
+        app.register_type::<T>();
+        let entity = app.world_mut().spawn(component).id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+        jackdaw_bsn::sync_to_ast(app.world_mut(), entity, std::any::TypeId::of::<T>());
+        app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+        (app, entity)
+    }
+
+    /// The `T` a save and reload gives back: the document emitted to text, read
+    /// back, and applied onto a fresh entity.
+    fn reloaded<T: Component + Clone + bevy::reflect::TypePath>(app: &App) -> T {
+        let text = jackdaw_bsn::emit_scene(app.world().resource::<SceneBsnAst>());
+        let (ast, root) = jackdaw_bsn::parse_bsn(&text)
+            .unwrap_or_else(|err| panic!("the saved text reads back: {err}\n{text}"));
+        let patch = ast
+            .find_patch_by_type_path(root, T::type_path())
+            .and_then(|patch| ast.get_patch(patch))
+            .cloned()
+            .unwrap_or_else(|| panic!("the saved text holds the component:\n{text}"));
+        let mut world = World::new();
+        world.insert_resource(app.world().resource::<AppTypeRegistry>().clone());
+        let entity = world.spawn_empty().id();
+        jackdaw_bsn::apply_component_patch(&mut world, entity, &patch);
+        world
+            .get::<T>(entity)
+            .cloned()
+            .unwrap_or_else(|| panic!("the component applies from:\n{text}"))
+    }
+
+    fn undo(app: &mut App) {
+        app.world_mut()
+            .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    }
+
+    fn authored(app: &App, entity: Entity, type_path: &str, field_path: &str) -> Option<BsnValue> {
+        let ast = app.world().resource::<SceneBsnAst>();
+        get_bsn_field(ast, ast.ast_for(entity)?, type_path, field_path)
+    }
+
+    #[test]
+    fn a_font_size_edit_at_its_default_variant_saves_and_reloads() {
+        let (mut app, entity) = selected_app(TextFont::default());
+        let type_path = TextFont::type_path();
+        field_edit_commit(
+            app.world_mut(),
+            type_path,
+            "font_size.0",
+            &serde_json::json!(1.5),
+            "Set field",
+        );
+
+        assert!(matches!(
+            app.world().get::<TextFont>(entity).map(|font| font.font_size),
+            Some(FontSize::Rem(size)) if size == 1.5
+        ));
+        assert!(matches!(
+            reloaded::<TextFont>(&app).font_size,
+            FontSize::Rem(size) if size == 1.5
+        ));
+
+        undo(&mut app);
+        assert_eq!(
+            authored(&app, entity, type_path, "font_size"),
+            None,
+            "undo takes back the whole variant the edit authored"
+        );
+        assert!(matches!(
+            app.world().get::<TextFont>(entity).map(|font| font.font_size),
+            Some(FontSize::Rem(size)) if size == 1.0
+        ));
+    }
+
+    #[test]
+    fn a_struct_variant_edit_at_its_default_keeps_the_other_fields() {
+        let (mut app, _) = selected_app(DistanceFog::default());
+        field_edit_commit(
+            app.world_mut(),
+            DistanceFog::type_path(),
+            "falloff.start",
+            &serde_json::json!(5.0),
+            "Set field",
+        );
+
+        let fog = reloaded::<DistanceFog>(&app);
+        assert!(
+            matches!(fog.falloff, FogFalloff::Linear { start, end } if start == 5.0 && end == 100.0),
+            "got {:?}",
+            fog.falloff
+        );
+    }
+
+    #[derive(Component, Reflect, Default, Clone, PartialEq, Debug)]
+    #[reflect(Component, Default)]
+    struct Reach {
+        range: (f32, f32),
+    }
+
+    #[test]
+    fn a_tuple_field_edit_at_its_default_saves_and_reloads() {
+        let (mut app, _) = selected_app(Reach::default());
+        field_edit_commit(
+            app.world_mut(),
+            Reach::type_path(),
+            "range.1",
+            &serde_json::json!(4.0),
+            "Set field",
+        );
+
+        assert_eq!(reloaded::<Reach>(&app).range, (0.0, 4.0));
     }
 }
 

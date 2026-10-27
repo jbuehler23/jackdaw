@@ -341,23 +341,23 @@ fn build_save_command(
     };
     match component_authored {
         true => {
-            let old_value = {
-                let ast = world.resource::<SceneBsnAst>();
-                ast.ast_for(entity).and_then(|node| {
-                    jackdaw_bsn::get_bsn_field(ast, node, &key.type_path, &key.field_path)
-                })
-            };
-            let new_value = crate::commands::json_field_edit_to_bsn_value(
+            let (field_path, new_value) = crate::commands::json_field_edit(
                 world,
                 entity,
                 &key.type_path,
                 &key.field_path,
                 &entry.live_value,
             )?;
+            let old_value = {
+                let ast = world.resource::<SceneBsnAst>();
+                ast.ast_for(entity).and_then(|node| {
+                    jackdaw_bsn::get_bsn_field(ast, node, &key.type_path, &field_path)
+                })
+            };
             Some(Box::new(SetBsnField {
                 entity,
                 type_path: key.type_path.clone(),
-                field_path: key.field_path.clone(),
+                field_path,
                 old_value,
                 new_value,
                 was_derived: false,
@@ -368,13 +368,8 @@ fn build_save_command(
             if full.is_null() {
                 return None;
             }
-            let new_value = crate::commands::json_field_edit_to_bsn_value(
-                world,
-                entity,
-                &key.type_path,
-                "",
-                &full,
-            )?;
+            let (_, new_value) =
+                crate::commands::json_field_edit(world, entity, &key.type_path, "", &full)?;
             Some(Box::new(SetBsnField {
                 entity,
                 type_path: key.type_path.clone(),
