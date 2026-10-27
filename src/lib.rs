@@ -154,6 +154,7 @@ pub mod selection;
 pub mod snapping;
 pub mod sprite_gizmo;
 pub mod sprite_ops;
+pub mod sprite_props;
 pub mod sprite_snap;
 pub mod sprite_stage;
 pub mod status_bar;

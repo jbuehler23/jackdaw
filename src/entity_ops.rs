@@ -2320,6 +2320,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         // reports an unknown widget name rather than disappearing with it.
         .register_operator::<crate::ui_palette::WidgetAddOp>()
         .register_operator::<crate::sprite_ops::SpriteAddOp>()
+        .register_operator::<crate::sprite_props::SpriteSetPixelsPerUnitOp>()
+        .register_operator::<crate::sprite_props::SpriteSetAnchorOp>()
         .register_operator::<crate::add_entity_picker::EntityAddPickerOp>();
 
     #[cfg(feature = "multiplayer")]

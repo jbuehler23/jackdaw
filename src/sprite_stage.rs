@@ -263,7 +263,20 @@ pub fn sprite_local_rect(
 ) -> Option<Rect> {
     let size = sprite
         .custom_size
-        .or_else(|| sprite.rect.map(|rect| rect.size()))
+        .or_else(|| sprite_source_size(sprite, images, atlases))?;
+    Some(Rect::from_center_size(-anchor.as_vec() * size, size))
+}
+
+/// The pixel size of what the sprite draws from its image: its `rect`, the
+/// atlas cell or the whole image. `None` while the image has not loaded.
+pub fn sprite_source_size(
+    sprite: &Sprite,
+    images: &Assets<Image>,
+    atlases: &Assets<TextureAtlasLayout>,
+) -> Option<Vec2> {
+    sprite
+        .rect
+        .map(|rect| rect.size())
         .or_else(|| {
             sprite
                 .texture_atlas
@@ -275,8 +288,7 @@ pub fn sprite_local_rect(
             images
                 .get(&sprite.image)
                 .map(|image| image.size().as_vec2())
-        })?;
-    Some(Rect::from_center_size(-anchor.as_vec() * size, size))
+        })
 }
 
 /// The four corners of [`sprite_local_rect`] carried into the world (y up),
