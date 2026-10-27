@@ -632,10 +632,7 @@ fn sprite_bounds(world: &World, entity: Entity) -> Option<Rect> {
         world.get_resource::<Assets<Image>>()?,
         world.get_resource::<Assets<TextureAtlasLayout>>()?,
     )?;
-    Some(corners.into_iter().fold(
-        Rect::from_corners(corners[0], corners[0]),
-        |rect, corner| rect.union_point(corner),
-    ))
+    crate::sprite_stage::bounds_of(corners)
 }
 
 /// The lines of the open 2D world scene a drag can land on: the edges and

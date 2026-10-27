@@ -346,6 +346,8 @@ fn the_parametric_authoring_operators_are_registered() {
         ),
         ("view.orbit", &["yaw", "pitch", "distance"][..]),
         ("view.set_axis", &["axis", "sign"][..]),
+        ("viewport2d.pan", &["x", "y", "panel"][..]),
+        ("viewport2d.pixel_perfect", &["panel"][..]),
     ] {
         let op = all
             .iter()

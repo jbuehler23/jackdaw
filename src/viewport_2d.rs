@@ -217,6 +217,92 @@ pub fn fit_view(view: Ui2dView, reference: UVec2, area: Vec2) -> Ui2dView {
     }
 }
 
+/// The view that shows the world rect `rect` inside an `area`-sized window,
+/// centred on it, with `FIT_MARGIN` to spare on each edge. A rect thinner than
+/// a world unit is floored at one, so a lone point frames at a finite zoom.
+pub fn fit_world_rect(view: Ui2dView, rect: Rect, area: Vec2) -> Ui2dView {
+    let size = rect.size().max(Vec2::ONE);
+    let usable = (area - Vec2::splat(FIT_MARGIN * 2.0)).max(Vec2::ONE);
+    Ui2dView {
+        pan: rect.center(),
+        zoom: (usable / size).min_element().clamp(MIN_ZOOM, MAX_ZOOM),
+        ..view
+    }
+}
+
+/// Texels per world unit of a 2D world scene. One world unit is one texel
+/// until the project says otherwise.
+fn world_pixels_per_unit() -> f32 {
+    1.0
+}
+
+/// What a pixel-perfect snap lands the view on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PixelGrid {
+    /// Texels to a view unit: the project's pixels per unit for a world
+    /// scene, `1.0` for a UI scene, whose texel is its authored pixel.
+    pub texels_per_unit: f32,
+    /// Physical pixels per logical pixel of the panel the view is drawn in.
+    pub scale_factor: f32,
+    /// Per axis, whether the canvas has an odd number of texels, which puts
+    /// its texel edges half a texel off the view's centre. A world scene has
+    /// no canvas and passes `false`.
+    pub canvas_odd: BVec2,
+    /// Per axis, whether the area has an odd number of physical pixels, which
+    /// puts its centre half a pixel off a pixel edge.
+    pub area_odd: BVec2,
+}
+
+impl Default for PixelGrid {
+    fn default() -> Self {
+        Self {
+            texels_per_unit: 1.0,
+            scale_factor: 1.0,
+            canvas_odd: BVec2::FALSE,
+            area_odd: BVec2::FALSE,
+        }
+    }
+}
+
+/// `view` with every texel a whole number of physical pixels across (at least
+/// one) and every texel edge on a physical pixel edge.
+///
+/// The zoom becomes a whole multiple of `texels_per_unit / scale_factor`, kept
+/// within the zoom range. When no multiple fits the range (a texel wider than
+/// the largest zoom allows), the zoom is clamped to the range instead and the
+/// texels are no longer whole pixels. The pan goes to the texel grid, then
+/// half a physical pixel further on an axis whose area is odd, so the grid
+/// lands on pixel edges rather than between them.
+pub fn pixel_perfect_view(view: Ui2dView, grid: PixelGrid) -> Ui2dView {
+    let positive = |value: f32| {
+        if value.is_finite() && value > 0.0 {
+            value
+        } else {
+            1.0
+        }
+    };
+    let texels = positive(grid.texels_per_unit);
+    let scale = positive(grid.scale_factor);
+    let most = (MAX_ZOOM * scale / texels).floor().max(1.0);
+    let steps = (view.zoom * scale / texels).round().clamp(1.0, most);
+    let zoom = (steps * texels / scale).clamp(MIN_ZOOM, MAX_ZOOM);
+
+    let half_pixel = 0.5 / (zoom * scale);
+    let snap = |pan: f32, canvas_odd: bool, area_odd: bool| {
+        let offset = if canvas_odd { 0.5 } else { 0.0 };
+        let shift = if area_odd { half_pixel } else { 0.0 };
+        ((((pan - shift) * texels) - offset).round() + offset) / texels + shift
+    };
+    Ui2dView {
+        pan: Vec2::new(
+            snap(view.pan.x, grid.canvas_odd.x, grid.area_odd.x),
+            snap(view.pan.y, grid.canvas_odd.y, grid.area_odd.y),
+        ),
+        zoom,
+        ..view
+    }
+}
+
 /// Ask every 2D viewport panel to frame the UI scene it is showing. Requested
 /// rather than computed here, because the reference size and the area's
 /// laid-out size are only settled after layout.
@@ -404,6 +490,9 @@ impl Plugin for Viewport2dPlugin {
                     route_ui_roots_to_cameras.before(UiSystems::Prepare),
                     // After layout, so the stage is placed from the area's
                     // measured size.
+                    fit_world_views
+                        .after(UiSystems::PostLayout)
+                        .before(size_targets_to_reference),
                     size_targets_to_reference.after(UiSystems::PostLayout),
                     // After the placement, so a ruler's marks are measured
                     // against the area the canvas was just laid into.
@@ -1835,7 +1924,7 @@ fn viewport_2d_header(host: Entity) -> impl Bundle {
                         .call_operator(Viewport2dFrameOp::ID),
                 ),
                 jackdaw_feathers::tooltip::Tooltip::title(
-                    "Fit: zoom so the whole UI scene is in view",
+                    "Fit: zoom so the selected sprites, or the whole scene, are in view",
                 ),
             ),
             viewport_2d_mode_bar(host),
@@ -2111,7 +2200,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_menu_entry::<Viewport2dFrameOp>(TopLevelMenu::View);
     ctx.register_operator::<Viewport2dModeOp>();
     ctx.register_operator::<Viewport2dGridOp>()
-        .register_operator::<Viewport2dZoomOp>();
+        .register_operator::<Viewport2dZoomOp>()
+        .register_operator::<Viewport2dPanOp>()
+        .register_operator::<Viewport2dPixelPerfectOp>();
     ctx.register_operator::<SelectionSelectOp>();
     ctx.register_operator::<SelectionExtendOp>();
     crate::canvas_snap::add_to_extension(ctx);
@@ -2267,13 +2358,17 @@ fn fronted_viewport_hosts<'a>(
         })
 }
 
-/// Frame the UI scene in the 2D viewport: zoom and pan so the whole canvas is in
-/// view. Every open 2D panel is framed, an operator having no panel to be called
-/// on.
+/// Frame the open scene in the 2D viewport. A UI scene is fitted whole. A 2D
+/// world scene is framed on its selected sprites (a selected group stands for
+/// the sprites under it), or on every sprite when none is selected, and an
+/// empty one goes back to the origin at zoom 1. A sprite whose image has not
+/// loaded counts as its origin point. Every open 2D panel is framed, an
+/// operator having no panel to be called on. The fit lands on the next frame
+/// the panel has a laid-out size.
 #[operator(
     id = "viewport2d.frame",
     label = "Fit 2D View",
-    description = "Zoom the 2D viewport so the whole UI scene is in view.",
+    description = "Zoom the 2D viewport so the selected sprites, or the whole scene, are in view.",
     allows_undo = false,
     is_available = viewport_2d_is_current
 )]
@@ -2283,6 +2378,95 @@ pub(crate) fn viewport_2d_frame(
 ) -> OperatorResult {
     commands.queue(request_2d_fit);
     OperatorResult::Finished
+}
+
+/// Land each panel's pending fit on a 2D world scene, once the panel has a
+/// laid-out size. A UI scene's fit is [`size_targets_to_reference`]'s.
+pub fn fit_world_views(
+    mut hosts: Query<&mut Viewport2dPanelHost>,
+    areas: Query<&ComputedNode, With<Scene2dStageArea>>,
+    ui_roots: Query<&UiTargetCamera, AuthoredUiSceneRoot>,
+    scene_roots: crate::sprite_stage::Scene2dRoots,
+    selection: Res<Selection>,
+    sprites: Query<WorldSpriteParts, Without<crate::EditorEntity>>,
+    parents: Query<&ChildOf>,
+    pixels: crate::sprite_stage::SpritePixels,
+) {
+    let area_of = |host: &Viewport2dPanelHost| {
+        areas
+            .get(host.area)
+            .map(|area| area.size() * area.inverse_scale_factor())
+            .unwrap_or(Vec2::ZERO)
+    };
+    let ready = |host: &Viewport2dPanelHost| {
+        let area = area_of(host);
+        host.fit_pending
+            && area.x > 0.0
+            && area.y > 0.0
+            && crate::sprite_stage::shows_2d_world(host, ui_roots.iter(), &scene_roots)
+    };
+    if !hosts.iter().any(&ready) {
+        return;
+    }
+    let rect = world_frame_rect(&selection, &sprites, &parents, &scene_roots, &pixels);
+    for mut host in &mut hosts {
+        if !ready(&host) {
+            continue;
+        }
+        let view = match rect {
+            Some(rect) => fit_world_rect(host.view, rect, area_of(&host)),
+            None => Ui2dView {
+                pan: Vec2::ZERO,
+                zoom: 1.0,
+                ..host.view
+            },
+        };
+        host.set_view(view);
+        host.fit_pending = false;
+    }
+}
+
+type WorldSpriteParts = (
+    Entity,
+    &'static Sprite,
+    Option<&'static bevy::sprite::Anchor>,
+    &'static GlobalTransform,
+    &'static InheritedVisibility,
+);
+
+/// The world rect a frame shows: the visible sprites of the open 2D scene that
+/// are selected or sit under a selected entity, or every visible sprite of it
+/// when none is. A sprite with no known size counts as its origin point.
+/// `None` for a scene with no such sprite.
+fn world_frame_rect(
+    selection: &Selection,
+    sprites: &Query<WorldSpriteParts, Without<crate::EditorEntity>>,
+    parents: &Query<&ChildOf>,
+    scene_roots: &crate::sprite_stage::Scene2dRoots,
+    pixels: &crate::sprite_stage::SpritePixels,
+) -> Option<Rect> {
+    let mut everything: Option<Rect> = None;
+    let mut chosen: Option<Rect> = None;
+    for (entity, sprite, anchor, transform, visibility) in sprites {
+        if !visibility.get() || !crate::sprite_stage::in_2d_scene(entity, parents, scene_roots) {
+            continue;
+        }
+        let anchor = anchor.copied().unwrap_or_default();
+        let origin = transform.translation().xy();
+        let bounds = pixels
+            .world_corners(sprite, anchor, transform)
+            .and_then(crate::sprite_stage::bounds_of)
+            .unwrap_or(Rect::from_corners(origin, origin));
+        everything = Some(everything.map_or(bounds, |rect| rect.union(bounds)));
+        let picked = selection.entities.contains(&entity)
+            || parents
+                .iter_ancestors(entity)
+                .any(|ancestor| selection.entities.contains(&ancestor));
+        if picked {
+            chosen = Some(chosen.map_or(bounds, |rect| rect.union(bounds)));
+        }
+    }
+    chosen.or(everything)
 }
 
 /// Put the 2D viewport into Edit or Interact mode: the header's segmented
@@ -2396,6 +2580,102 @@ pub(crate) fn viewport_2d_zoom(
             continue;
         }
         let view = Ui2dView { zoom, ..host.view };
+        host.set_view(view);
+        host.fit_pending = false;
+    }
+    Some(OperatorResult::Finished)
+}
+
+/// Centre the 2D viewport on a point of the view's own space, on one named
+/// panel or on every open one: world units for a world scene, authored pixels
+/// for a UI scene. A stated pan stands a pending fit down.
+#[operator(
+    id = "viewport2d.pan",
+    label = "Pan 2D View",
+    description = "Centre the 2D viewport on a point, in world units or authored pixels.",
+    allows_undo = false,
+    params(
+        x(f64, doc = "Horizontal position to centre on."),
+        y(f64, doc = "Vertical position to centre on, y up."),
+        panel(
+            i64,
+            doc = "Bits of the panel content Entity to pan. Omit to pan every open 2D panel."
+        )
+    )
+)]
+pub(crate) fn viewport_2d_pan(
+    params: In<OperatorParameters>,
+    mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
+) -> Option<OperatorResult> {
+    let pan = Vec2::new(params.as_float("x")? as f32, params.as_float("y")? as f32);
+    if !pan.is_finite() {
+        warn!("viewport2d.pan: 'x' and 'y' must be finite numbers");
+        return None;
+    }
+    let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
+    if open.is_empty() {
+        warn!("viewport2d.pan: no 2D viewport panel is open to pan");
+        return None;
+    }
+    let wanted = named_panels(&params, "viewport2d.pan", &open);
+    for (entity, mut host) in &mut hosts {
+        if !wanted.contains(&entity) {
+            continue;
+        }
+        let view = Ui2dView { pan, ..host.view };
+        host.set_view(view);
+        host.fit_pending = false;
+    }
+    Some(OperatorResult::Finished)
+}
+
+/// Snap the 2D viewport onto the texel grid, on one named panel or on every
+/// open one: each texel a whole number of physical pixels across and its edges
+/// on pixel edges. See [`pixel_perfect_view`].
+#[operator(
+    id = "viewport2d.pixel_perfect",
+    label = "Pixel Perfect 2D View",
+    description = "Snap the 2D viewport's zoom to whole pixels per texel and its pan to the texel grid.",
+    allows_undo = false,
+    params(panel(
+        i64,
+        doc = "Bits of the panel content Entity to snap. Omit to snap every open 2D panel."
+    ))
+)]
+pub(crate) fn viewport_2d_pixel_perfect(
+    params: In<OperatorParameters>,
+    mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
+    roots: Query<(&UiSceneRoot, Option<&UiTargetCamera>), AuthoredUiSceneRoot>,
+    areas: Query<&ComputedNode, With<Scene2dStageArea>>,
+    scene_roots: crate::sprite_stage::Scene2dRoots,
+) -> Option<OperatorResult> {
+    let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
+    if open.is_empty() {
+        warn!("viewport2d.pixel_perfect: no 2D viewport panel is open to snap");
+        return None;
+    }
+    let wanted = named_panels(&params, "viewport2d.pixel_perfect", &open);
+    let canvas = roots.iter().next().map(|(root, _)| root.reference_size);
+    for (entity, mut host) in &mut hosts {
+        if !wanted.contains(&entity) {
+            continue;
+        }
+        let routed = roots.iter().filter_map(|(_, routed)| routed);
+        let world = crate::sprite_stage::shows_2d_world(&host, routed, &scene_roots);
+        let mut grid = PixelGrid::default();
+        if world {
+            grid.texels_per_unit = world_pixels_per_unit();
+        } else if let Some(canvas) = canvas {
+            grid.canvas_odd = BVec2::new(canvas.x % 2 == 1, canvas.y % 2 == 1);
+        }
+        if let Ok(area) = areas.get(host.area) {
+            let physical = area.size().round();
+            grid.area_odd = BVec2::new(physical.x % 2.0 == 1.0, physical.y % 2.0 == 1.0);
+            if area.inverse_scale_factor() > 0.0 {
+                grid.scale_factor = 1.0 / area.inverse_scale_factor();
+            }
+        }
+        let view = pixel_perfect_view(host.view, grid);
         host.set_view(view);
         host.fit_pending = false;
     }
