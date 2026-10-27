@@ -1579,16 +1579,19 @@ pub fn tree_keyboard_navigation(
     row_children: Query<(), With<TreeRowChildren>>,
     text_inputs: Query<(), With<crate::text_edit::EditorTextEdit>>,
     input_focus: Res<bevy::input_focus::InputFocus>,
+    mut was_typing: Local<bool>,
 ) {
     if jackdaw_commands::KeymapCapture::is_recording(capture.as_deref()) {
         return;
     }
     // A field being typed into takes the keys; anything else holding focus does
-    // not. Standing down for any focus at all left the arrow keys dead.
-    if input_focus
+    // not. Standing down for any focus at all left the arrow keys dead. A field
+    // that let go of focus since the last pass did so on this frame's keys, as
+    // Enter commits and unfocuses it, so those keys are the field's too.
+    let typing = input_focus
         .get()
-        .is_some_and(|entity| text_inputs.contains(entity))
-    {
+        .is_some_and(|entity| text_inputs.contains(entity));
+    if std::mem::replace(&mut *was_typing, typing) || typing {
         return;
     }
     let visible_rows =
@@ -1745,5 +1748,77 @@ fn collect_visible_rows_recursive(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::input_focus::InputFocus;
+
+    #[derive(Resource, Default)]
+    struct Clicks(usize);
+
+    /// A tree with one row the keyboard walk is standing on, and a text field
+    /// beside it.
+    fn walk_app() -> (App, Entity) {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<TreeFocused>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Clicks>()
+            .add_systems(Update, tree_keyboard_navigation)
+            .add_observer(|_: On<TreeRowClicked>, mut clicks: ResMut<Clicks>| {
+                clicks.0 += 1;
+            });
+        let source = app.world_mut().spawn_empty().id();
+        let root = app.world_mut().spawn(TreeRoot).id();
+        let row = app
+            .world_mut()
+            .spawn((TreeNode(source), TreeNodeExpanded(false), ChildOf(root)))
+            .id();
+        app.world_mut().spawn((TreeRowContent, ChildOf(row)));
+        app.world_mut().resource_mut::<TreeFocused>().0 = Some(row);
+        let field = app.world_mut().spawn(crate::text_edit::EditorTextEdit).id();
+        (app, field)
+    }
+
+    fn press_enter(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::Enter);
+        keys.clear();
+        keys.press(KeyCode::Enter);
+    }
+
+    #[test]
+    fn enter_on_the_focused_row_clicks_it() {
+        let (mut app, _field) = walk_app();
+        press_enter(&mut app);
+        app.update();
+        assert_eq!(app.world().resource::<Clicks>().0, 1);
+    }
+
+    #[test]
+    fn enter_that_commits_a_field_does_not_click_the_focused_row() {
+        let (mut app, field) = walk_app();
+        *app.world_mut().resource_mut::<InputFocus>() = InputFocus::from_entity(field);
+        app.update();
+
+        app.world_mut().resource_mut::<InputFocus>().clear();
+        press_enter(&mut app);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Clicks>().0,
+            0,
+            "the press that took focus off the field belongs to the field",
+        );
+
+        press_enter(&mut app);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Clicks>().0,
+            1,
+            "the next press is the row's again",
+        );
     }
 }

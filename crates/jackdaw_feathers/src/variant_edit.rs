@@ -16,7 +16,11 @@ use crate::utils::is_descendant_of;
 pub fn plugin(app: &mut App) {
     app.add_observer(handle_variant_edit_click)
         .add_observer(handle_variant_combobox_change)
-        .add_systems(Update, (setup_variant_edit, sync_variant_edit_button));
+        .add_systems(Update, (setup_variant_edit, sync_variant_edit_button))
+        .add_systems(
+            PostUpdate,
+            setup_variant_edit.in_set(crate::WidgetSetupSystems),
+        );
 }
 
 #[derive(Component)]

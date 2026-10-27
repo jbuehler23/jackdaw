@@ -146,7 +146,8 @@ impl TryFrom<&str> for ButtonOperatorCall {
 
 pub fn plugin(app: &mut App) {
     app.add_systems(Startup, register_button_theme_tokens)
-        .add_systems(Update, (setup_button, paint_variant_background))
+        .add_systems(Update, paint_variant_background)
+        .add_observer(setup_button)
         .add_observer(fire_click_on_activate);
 }
 
@@ -579,26 +580,26 @@ pub fn button(props: ButtonProps) -> impl Bundle {
     )
 }
 
+/// Finish a button the moment it is spawned, so the first frame that draws it
+/// draws the whole button rather than a bare node.
 fn setup_button(
+    add: On<Add<ButtonConfig>>,
     mut commands: Commands,
     editor_font: Res<EditorFont>,
     icon_font: Res<crate::icons::IconFont>,
-    mut buttons: Query<
-        (
-            Entity,
-            &mut ButtonConfig,
-            &ButtonVariant,
-            &ButtonSize,
-            &mut Node,
-        ),
-        Added<ButtonConfig>,
-    >,
+    mut buttons: Query<(
+        Entity,
+        &mut ButtonConfig,
+        &ButtonVariant,
+        &ButtonSize,
+        &mut Node,
+    )>,
 ) {
     let font = editor_font.0.clone();
 
-    for (entity, mut config, variant, size, mut node) in &mut buttons {
+    if let Ok((entity, mut config, variant, size, mut node)) = buttons.get_mut(add.entity) {
         if config.initialized {
-            continue;
+            return;
         }
         config.initialized = true;
 
@@ -653,6 +654,9 @@ fn setup_button(
                 return;
             }
             apply_feathers_button(world, entity, variant, tool);
+            if let Some(token) = variant.background_token(false) {
+                world.entity_mut(entity).insert(ThemeBackgroundColor(token));
+            }
             match left_mark {
                 Some(LeadingMark::Checkbox(checked)) => {
                     spawn_inert_checkbox(world, entity, checked);
@@ -1033,6 +1037,45 @@ mod tests {
         assert!(
             button.contains::<FeathersButton>(),
             "which the tool button is itself built on",
+        );
+    }
+
+    /// Whether `entity` has a descendant carrying the button's caption.
+    fn has_caption(world: &World, entity: Entity) -> bool {
+        let mut pending = vec![entity];
+        while let Some(next) = pending.pop() {
+            if world.get::<ButtonContentText>(next).is_some() {
+                return true;
+            }
+            if let Some(children) = world.get::<Children>(next) {
+                pending.extend(children.iter());
+            }
+        }
+        false
+    }
+
+    /// A button is whole as soon as it is spawned, so the first frame that
+    /// draws it already draws the finished button.
+    #[test]
+    fn a_button_is_complete_on_the_frame_it_spawns() {
+        let mut app = app();
+        let entity = app
+            .world_mut()
+            .spawn(button(
+                ButtonProps::new("Save").with_variant(ButtonVariant::Active),
+            ))
+            .id();
+        app.world_mut().flush();
+
+        let world = app.world();
+        assert!(world.entity(entity).contains::<FeathersButton>());
+        assert!(has_caption(world, entity), "the caption is already there");
+        assert_eq!(
+            world
+                .get::<ThemeBackgroundColor>(entity)
+                .map(|bg| bg.0.clone()),
+            Some(BUTTON_ACTIVE_BG),
+            "and so is the look feathers has no variant for",
         );
     }
 

@@ -37,12 +37,23 @@ pub mod utils;
 pub mod variant_edit;
 pub mod vector_edit;
 
+use bevy::ecs::schedule::{IntoScheduleConfigs, SystemSet};
+
+/// The passes that fill in a widget spawned during the frame, run again ahead
+/// of layout so a widget spawned late in `Update` is whole on its first frame.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WidgetSetupSystems;
+
 use bevy::app::Plugin;
 
 pub struct EditorFeathersPlugin;
 
 impl Plugin for EditorFeathersPlugin {
     fn build(&self, app: &mut bevy::app::App) {
+        app.configure_sets(
+            bevy::app::PostUpdate,
+            WidgetSetupSystems.before(bevy::ui::UiSystems::Prepare),
+        );
         app.add_plugins((
             jackdaw_widgets::EditorWidgetsPlugins,
             split_panel::SplitPanelPlugin,
