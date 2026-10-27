@@ -351,6 +351,17 @@ pub fn sprite_contains(
     }
 }
 
+/// The smallest rect holding every one of `points`, `None` when there are none.
+pub(crate) fn bounds_of(points: impl IntoIterator<Item = Vec2>) -> Option<Rect> {
+    let mut points = points.into_iter();
+    let first = points.next()?;
+    Some(
+        points.fold(Rect::from_corners(first, first), |rect, point| {
+            rect.union_point(point)
+        }),
+    )
+}
+
 /// Whether `entity` sits under an open [`Scene2dRoot`].
 pub(crate) fn in_2d_scene(entity: Entity, parents: &Query<&ChildOf>, roots: &Scene2dRoots) -> bool {
     parents

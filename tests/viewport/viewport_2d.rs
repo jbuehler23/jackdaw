@@ -30,11 +30,12 @@ use jackdaw::{
     ui_stage::UiSelectionOverlay,
     viewport::{ActiveViewport, VIEWPORT_WINDOW_ID, ViewportPanelHost},
     viewport_2d::{
-        DEFAULT_UI_GRID, MAX_UI_GRID, MAX_ZOOM, MIN_UI_GRID, MIN_ZOOM, Scene2dViewport, Ui2dView,
-        Viewport2dCamera, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dMode,
+        DEFAULT_UI_GRID, MAX_UI_GRID, MAX_ZOOM, MIN_UI_GRID, MIN_ZOOM, PixelGrid, Scene2dViewport,
+        Ui2dView, Viewport2dCamera, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dMode,
         Viewport2dModeSegment, Viewport2dPanelHost, Viewport2dTitle, Viewport2dZoomReadout,
-        build_viewport_2d_panel, cursor_area_offset, cursor_stage_offset, fit_view, pan_by,
-        request_2d_fit, stepped_ui_grid, target_pixels_per_stage_pixel, world_at, zoom_toward,
+        build_viewport_2d_panel, cursor_area_offset, cursor_stage_offset, fit_view, fit_world_rect,
+        pan_by, pixel_perfect_view, request_2d_fit, stepped_ui_grid, target_pixels_per_stage_pixel,
+        world_at, zoom_toward,
     },
     viewport_host::{ViewportHost, ViewportMode},
 };
@@ -1870,6 +1871,175 @@ fn fitting_sizes_the_canvas_to_the_smaller_axis_of_the_area() {
     );
     assert!(fit_view(Ui2dView::default(), UVec2::ONE, Vec2::splat(100_000.0)).zoom <= MAX_ZOOM);
     assert!(fit_view(Ui2dView::default(), UVec2::new(1600, 900), Vec2::ZERO).zoom >= MIN_ZOOM);
+}
+
+/// A world fit centres on the rect and zooms to the tighter axis.
+#[test]
+fn fitting_a_world_rect_centres_it_and_zooms_to_the_tighter_axis() {
+    let rect = Rect::from_corners(Vec2::new(-100.0, 0.0), Vec2::new(300.0, 100.0));
+    let view = fit_world_rect(Ui2dView::default(), rect, Vec2::new(800.0, 800.0));
+    assert_eq!(view.pan, Vec2::new(100.0, 50.0));
+    assert!(view.zoom < 2.0, "width binds and leaves a margin");
+    assert!(
+        view.zoom > 1.8,
+        "and the margin is small, got {}",
+        view.zoom
+    );
+
+    let tall = fit_world_rect(Ui2dView::default(), rect, Vec2::new(8000.0, 200.0));
+    assert!(tall.zoom < 2.0, "height binds when the area is short");
+
+    let kept = fit_world_rect(
+        Ui2dView {
+            grid: 16.0,
+            ..default()
+        },
+        rect,
+        Vec2::splat(800.0),
+    );
+    assert_eq!(kept.grid, 16.0, "the grid rides through a fit");
+}
+
+#[test]
+fn fitting_a_world_rect_stays_inside_the_zoom_range() {
+    let point = Rect::from_corners(Vec2::splat(5.0), Vec2::splat(5.0));
+    assert_eq!(
+        fit_world_rect(Ui2dView::default(), point, Vec2::splat(800.0)).zoom,
+        MAX_ZOOM,
+        "a lone point frames at the closest zoom, not an infinite one",
+    );
+    let vast = Rect::from_corners(Vec2::splat(-1.0e7), Vec2::splat(1.0e7));
+    assert_eq!(
+        fit_world_rect(Ui2dView::default(), vast, Vec2::splat(800.0)).zoom,
+        MIN_ZOOM,
+    );
+    assert!(fit_world_rect(Ui2dView::default(), vast, Vec2::ZERO).zoom >= MIN_ZOOM);
+}
+
+fn grid(texels_per_unit: f32, scale_factor: f32) -> PixelGrid {
+    PixelGrid {
+        texels_per_unit,
+        scale_factor,
+        ..default()
+    }
+}
+
+fn zoomed(zoom: f32) -> Ui2dView {
+    Ui2dView { zoom, ..default() }
+}
+
+#[test]
+fn pixel_perfect_snaps_zoom_to_whole_texel_multiples_and_pan_to_texels() {
+    let view = Ui2dView {
+        pan: Vec2::new(10.4, -3.6),
+        zoom: 2.6,
+        grid: 8.0,
+    };
+    let snapped = pixel_perfect_view(view, PixelGrid::default());
+    assert_eq!(snapped.zoom, 3.0);
+    assert_eq!(snapped.pan, Vec2::new(10.0, -4.0));
+    assert_eq!(snapped.grid, 8.0);
+
+    let sixteen = pixel_perfect_view(
+        Ui2dView {
+            pan: Vec2::new(1.01, 0.03),
+            zoom: 26.0,
+            ..default()
+        },
+        grid(16.0, 1.0),
+    );
+    assert_eq!(sixteen.zoom, 32.0, "two pixels a texel at 16 to the unit");
+    assert_eq!(sixteen.pan, Vec2::new(1.0, 0.0), "pan lands on 1/16 steps");
+
+    assert_eq!(
+        pixel_perfect_view(zoomed(0.2), PixelGrid::default()).zoom,
+        1.0,
+        "zoomed out snaps up to one pixel per texel",
+    );
+}
+
+#[test]
+fn pixel_perfect_zoom_stays_a_multiple_inside_the_range() {
+    let over = pixel_perfect_view(zoomed(40.0), grid(16.0, 1.0));
+    assert_eq!(
+        over.zoom, 32.0,
+        "the largest multiple in range, not the first past it"
+    );
+
+    let tiny = pixel_perfect_view(zoomed(1.0), grid(0.01, 1.0));
+    assert!((tiny.zoom - 1.0).abs() < 1e-3, "got {}", tiny.zoom);
+    assert!(
+        ((tiny.zoom / 0.01).round() * 0.01 - tiny.zoom).abs() < 1e-3,
+        "still whole texels"
+    );
+
+    let huge = pixel_perfect_view(zoomed(1.0), grid(100.0, 1.0));
+    assert_eq!(huge.zoom, MAX_ZOOM, "no multiple fits, so the range wins");
+}
+
+#[test]
+fn pixel_perfect_zoom_is_whole_physical_pixels_per_texel() {
+    for scale in [1.0_f32, 1.25, 2.0] {
+        for zoom in [0.7_f32, 1.3, 2.6, 5.1] {
+            let snapped = pixel_perfect_view(zoomed(zoom), grid(1.0, scale));
+            let pixels = snapped.zoom * scale;
+            assert!(
+                (pixels - pixels.round()).abs() < 1e-4 && pixels >= 1.0,
+                "zoom {zoom} at {scale}x gave {pixels} physical pixels a texel",
+            );
+        }
+    }
+    assert_eq!(pixel_perfect_view(zoomed(1.3), grid(1.0, 2.0)).zoom, 1.5);
+    assert_eq!(pixel_perfect_view(zoomed(2.6), grid(1.0, 1.25)).zoom, 2.4);
+    assert_eq!(pixel_perfect_view(zoomed(32.0), grid(1.0, 2.0)).zoom, 32.0);
+}
+
+#[test]
+fn pixel_perfect_pan_puts_texel_edges_on_pixel_edges_for_odd_sizes() {
+    let view = Ui2dView {
+        pan: Vec2::new(10.4, -3.6),
+        zoom: 3.0,
+        ..default()
+    };
+    let odd = pixel_perfect_view(
+        view,
+        PixelGrid {
+            area_odd: BVec2::new(true, false),
+            ..default()
+        },
+    );
+    assert!(
+        (odd.pan.x - (10.0 + 1.0 / 6.0)).abs() < 1e-5,
+        "got {}",
+        odd.pan.x
+    );
+    assert_eq!(odd.pan.y, -4.0, "an even axis stays on the texel");
+    assert_eq!(
+        pixel_perfect_view(
+            odd,
+            PixelGrid {
+                area_odd: BVec2::new(true, false),
+                ..default()
+            }
+        ),
+        odd
+    );
+
+    let canvas = pixel_perfect_view(
+        Ui2dView {
+            pan: Vec2::new(0.4, 0.0),
+            ..default()
+        },
+        PixelGrid {
+            canvas_odd: BVec2::new(true, false),
+            ..default()
+        },
+    );
+    assert_eq!(
+        canvas.pan,
+        Vec2::new(0.5, 0.0),
+        "an odd canvas has edges at halves"
+    );
 }
 
 /// Shown at 100% instead, a 1920x1080 reference in a small dock leaf gives
