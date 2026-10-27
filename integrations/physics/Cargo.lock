@@ -4479,6 +4479,7 @@ dependencies = [
  "nom",
  "path-slash",
  "pathdiff",
+ "serde",
  "smol_str",
  "thiserror 2.0.21",
 ]
