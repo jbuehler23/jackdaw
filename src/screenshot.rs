@@ -275,6 +275,9 @@ impl CaptureRegion {
             RegionSpace::Pixels => (self.rect.min, self.rect.max),
             RegionSpace::World => match surface {
                 CaptureSurface::World2d { view, target } => {
+                    // The image can hold more pixels than the target measures,
+                    // one per physical pixel of the panel.
+                    let image_per_target = image.as_vec2() / target.max(UVec2::ONE).as_vec2();
                     let top_left = world_to_target_pixel(
                         view,
                         target,
@@ -285,7 +288,7 @@ impl CaptureRegion {
                         target,
                         Vec2::new(self.rect.max.x, self.rect.min.y),
                     );
-                    (top_left, bottom_right)
+                    (top_left * image_per_target, bottom_right * image_per_target)
                 }
                 CaptureSurface::Plain => return Err(CaptureError::WorldRegionWithoutView),
                 CaptureSurface::UiScene => return Err(CaptureError::WorldRegionOnUiScene),
@@ -923,6 +926,19 @@ mod tests {
         let half = region(-48.0, -44.0, 96.0, 88.0, Some(RegionSpace::World));
         let kept = half.resolve(zoomed, odd).expect("inside the image");
         assert_eq!((kept.width(), kept.height()), (192, 176));
+    }
+
+    #[test]
+    fn a_world_region_on_a_physical_image_covers_its_physical_pixels() {
+        let surface = CaptureSurface::World2d {
+            view: Ui2dView::default(),
+            target: IMAGE,
+        };
+        let centred = region(-10.0, -10.0, 20.0, 20.0, Some(RegionSpace::World));
+        assert_eq!(
+            centred.resolve(surface, IMAGE * 2),
+            Ok(URect::new(80, 80, 120, 120)),
+        );
     }
 
     #[test]
