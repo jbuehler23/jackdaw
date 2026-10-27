@@ -17,6 +17,7 @@ mod enum_menu;
 mod enum_rows;
 mod inspector_panel_width;
 mod inspector_preview_guard;
+mod inspector_rebuilds;
 mod inspector_val;
 mod map_fields;
 mod material_row;

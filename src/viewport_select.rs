@@ -301,12 +301,12 @@ pub(crate) fn handle_viewport_click(
         let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
         if ctrl {
             selection.toggle(&mut commands, entity);
-        } else {
+        } else if !selection.is_only(entity) {
             selection.select_single(&mut commands, entity);
         }
     } else {
         let ctrl = keyboard.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-        if !ctrl {
+        if !ctrl && !selection.entities.is_empty() {
             selection.clear(&mut commands);
         }
     }

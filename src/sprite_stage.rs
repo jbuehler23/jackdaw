@@ -472,7 +472,11 @@ fn on_sprite_press(
         }
         Some(entity) if extend => selection.extend(&mut commands, entity),
         Some(entity) if toggle => selection.toggle(&mut commands, entity),
-        Some(entity) => selection.select_single(&mut commands, entity),
+        Some(entity) => {
+            if !selection.is_only(entity) {
+                selection.select_single(&mut commands, entity);
+            }
+        }
         None if !extend && !toggle => selection.clear(&mut commands),
         None => {}
     }

@@ -22,7 +22,7 @@ pub struct InspectorCategory {
 ///
 /// Spawned by [`crate::ExtensionContext::register_inspector_chip`] as a child
 /// of the extension, so the toggle goes away when the extension unloads.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub struct InspectorChip {
     /// The category whose header shows the toggle.
     pub category: Cow<'static, str>,

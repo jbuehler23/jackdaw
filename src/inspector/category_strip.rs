@@ -264,8 +264,10 @@ pub(super) fn resolve_active_on_rebuild(
     let applicable = applicable_categories(&registry, cards.iter().map(|t| t.0.as_str()));
     let chip_categories: Vec<&str> = chips.iter().map(|chip| chip.category.as_ref()).collect();
     let shown = shown_categories(&registry, &applicable, &chip_categories);
-    let resolved = resolve_active_category(active.0.as_ref(), &shown).to_string();
-    active.0 = std::borrow::Cow::Owned(resolved);
+    let resolved = resolve_active_category(active.0.as_ref(), &shown);
+    if resolved != active.0.as_ref() {
+        active.0 = std::borrow::Cow::Owned(resolved.to_string());
+    }
 }
 
 #[cfg(test)]
