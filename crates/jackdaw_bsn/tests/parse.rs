@@ -333,3 +333,68 @@ fn duplicate_field_names_are_rejected() {
     // Nested struct values are checked too.
     assert!(parse_bsn("Foo { t: Bar { x: 1, x: 2 } }").is_err());
 }
+
+/// The fields of the one struct patch `text` holds.
+fn struct_fields(text: &str) -> Vec<(String, BsnValue)> {
+    let (ast, patches) = parse(text);
+    match patch(&ast, patches[0]) {
+        BsnPatch::Struct(data) => data
+            .fields
+            .0
+            .iter()
+            .map(|field| (field.name.clone(), field.value.clone()))
+            .collect(),
+        other => panic!("expected a struct patch, got {other:?}"),
+    }
+}
+
+#[test]
+fn fields_named_like_special_floats_parse_as_fields() {
+    let fields = struct_fields("game::Limits { inf: 1.0, nan: 2.0, NaN: 3.0, Infinity: 4.0 }");
+    let names: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["inf", "nan", "NaN", "Infinity"]);
+}
+
+#[test]
+fn a_variant_named_like_a_special_float_parses_as_a_variant() {
+    let fields = struct_fields("game::Aim { reach: game::Reach::Infinity, other: Infinity }");
+    assert_eq!(
+        fields[0].1,
+        BsnValue::Type("game::Reach::Infinity".to_string())
+    );
+    assert!(
+        matches!(fields[1].1, BsnValue::Float(f) if f.is_infinite() && f > 0.0),
+        "a word standing alone is still the float: {:?}",
+        fields[1].1
+    );
+}
+
+#[test]
+fn special_floats_standing_alone_parse_as_floats() {
+    let fields = struct_fields("Foo { a: inf, b: -inf, c: NaN, d: [nan, Infinity] }");
+    assert!(matches!(fields[0].1, BsnValue::Float(f) if f == f64::INFINITY));
+    assert!(matches!(fields[1].1, BsnValue::Float(f) if f == f64::NEG_INFINITY));
+    assert!(matches!(fields[2].1, BsnValue::Float(f) if f.is_nan()));
+    assert!(
+        matches!(&fields[3].1, BsnValue::List(items) if matches!(items[..], [BsnValue::Float(a), BsnValue::Float(b)] if a.is_nan() && b == f64::INFINITY)),
+        "{:?}",
+        fields[3].1
+    );
+}
+
+#[test]
+fn a_const_generic_argument_stays_on_its_type_path() {
+    let (ast, patches) = parse("game::Grid<16> { size: 2 } game::Flag<true> game::Signed<-3>");
+    let paths: Vec<&str> = patches
+        .iter()
+        .map(|&id| match patch(&ast, id) {
+            BsnPatch::Struct(data) => data.type_path.as_str(),
+            BsnPatch::Type(path) => path.as_str(),
+            other => panic!("expected a type patch, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        ["game::Grid<16>", "game::Flag<true>", "game::Signed<-3>"]
+    );
+}

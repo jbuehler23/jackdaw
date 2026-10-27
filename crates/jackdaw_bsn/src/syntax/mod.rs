@@ -8,9 +8,9 @@
 //!
 //! Where jackdaw reads more than that PR does, the item says so. The
 //! additions are: comments; `#"quoted names"`; `@"path"` and `@Type { ... }`
-//! entries ([`types::BsnEntry::UncachedScene`]); generic type arguments
-//! ([`types::PathSegment::arguments`]); list and `map[...]` values; signed
-//! numbers and the `inf`/`NaN` floats; and a multi-entity root
+//! entries ([`types::BsnEntry::UncachedScene`]); generic type arguments, const
+//! ones included ([`types::PathSegment::arguments`]); list and `map[...]`
+//! values; signed numbers and the `inf`/`NaN` floats; and a multi-entity root
 //! ([`types::BsnListRoot`]).
 
 /// Lexing and Tokens
