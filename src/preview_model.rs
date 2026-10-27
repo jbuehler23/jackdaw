@@ -178,7 +178,7 @@ fn unique_child(parent: &Path, stem: &str, ext: Option<&str>) -> PathBuf {
     }
 }
 
-fn relative_to_assets(assets_dir: &Path, path: &Path) -> Option<String> {
+pub(crate) fn relative_to_assets(assets_dir: &Path, path: &Path) -> Option<String> {
     let path = dunce::simplified(path);
     let assets = dunce::simplified(assets_dir);
     path.strip_prefix(assets).ok().and_then(|rel| {

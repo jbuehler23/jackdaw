@@ -624,6 +624,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         crate::status_bar::notify_error(world, reason);
         return;
     }
+    let run = run_with_open_scene(world, run);
 
     // If the game binary is built AND still current, spawn from it
     // immediately. A source edit since the last build invalidates the
@@ -669,6 +670,40 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             );
         }
     }
+}
+
+/// The scene a game loads as its main one, inside the asset folder: what the
+/// game template loads and what the editor opens for a project with no
+/// remembered tabs. No project setting names another.
+const MAIN_SCENE: &str = "scene.bsn";
+
+/// `run` launching the scene open in front in place of the game's main scene:
+/// the game loads `JACKDAW_PIE_SCENE` wherever it asks for
+/// `JACKDAW_PIE_REPLACES`, both paths inside the asset folder. Nothing is
+/// named when the main scene is in front, when the scene in front has no file
+/// in the asset folder, or when the run configuration already names a scene.
+pub fn run_with_open_scene(world: &World, mut run: RunConfig) -> RunConfig {
+    let Some(scene) = open_scene_asset_path(world) else {
+        return run;
+    };
+    if scene == MAIN_SCENE || run.env.contains_key("JACKDAW_PIE_SCENE") {
+        return run;
+    }
+    run.env.insert("JACKDAW_PIE_SCENE".to_string(), scene);
+    run.env
+        .entry("JACKDAW_PIE_REPLACES".to_string())
+        .or_insert_with(|| MAIN_SCENE.to_string());
+    run
+}
+
+fn open_scene_asset_path(world: &World) -> Option<String> {
+    let scenes = world.get_resource::<crate::scenes::Scenes>()?;
+    let tab = scenes.tabs.get(scenes.active)?;
+    if tab.kind != crate::scenes::TabKind::Scene {
+        return None;
+    }
+    let assets = crate::asset_index::assets_dir(world)?;
+    crate::preview_model::relative_to_assets(&assets, tab.path.as_deref()?)
 }
 
 /// Save the modified scenes the game may load, unless the project turned

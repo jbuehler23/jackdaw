@@ -35,6 +35,7 @@ mod module_extensions;
 mod new_asset;
 mod new_project;
 mod play_controls;
+mod play_open_scene;
 mod positionable_mirror_plane;
 mod project_definitions;
 mod project_startup;

@@ -1115,6 +1115,7 @@ const STARTER_SCENE_2D: &str = "\
 // Starter scene. Authored by the jackdaw editor; safe to edit by hand.
 
 #Root
+jackdaw_scene_types::Scene2dRoot
 bevy_transform::components::transform::Transform
 bevy_camera::visibility::Visibility::Visible
 bevy_ecs::hierarchy::Children [
@@ -2714,6 +2715,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_2d_starter_scene_is_a_2d_scene_that_keeps_its_camera() {
+        let dest = temp_dir("starter_2d");
+        std::fs::create_dir_all(dest.join("assets")).unwrap();
+
+        write_starter_scene(&dest, StarterScene::TwoD).unwrap();
+
+        let scene = std::fs::read_to_string(dest.join("assets/scene.bsn")).unwrap();
+        let root = scene.split("bevy_ecs::hierarchy::Children").next().unwrap();
+        assert!(
+            root.contains("jackdaw_scene_types::Scene2dRoot"),
+            "the root says the scene is 2D:\n{scene}"
+        );
+        assert!(
+            scene.contains("bevy_camera::components::Camera2d"),
+            "{scene}"
+        );
+        let _ = std::fs::remove_dir_all(&dest);
     }
 
     #[test]

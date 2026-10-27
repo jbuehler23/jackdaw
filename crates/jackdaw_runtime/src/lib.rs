@@ -133,7 +133,11 @@ mod navmesh;
 #[cfg(feature = "navmesh")]
 pub use navmesh::JackdawNavmesh;
 
+mod fallback_camera;
+pub use fallback_camera::FallbackCamera2d;
 mod hidden_in_game;
+mod play_scene;
+pub use play_scene::PieSceneOverride;
 #[cfg(feature = "render")]
 pub mod texture_import;
 mod twin;
@@ -283,6 +287,8 @@ impl Plugin for JackdawPlugin {
                 .chain(),
         );
         app.add_observer(hidden_in_game::hide_on_add);
+        app.add_observer(fallback_camera::yield_to_game_camera)
+            .add_observer(fallback_camera::leave_with_last_2d_scene);
 
         #[cfg(feature = "render")]
         app.add_plugins((
@@ -322,6 +328,14 @@ impl Plugin for JackdawPlugin {
         // When `JACKDAW_PIE` is set, open the ipc-channel link to the editor
         // and attach the PIE stream / control systems. A connect failure logs
         // and leaves the runtime untouched.
+        #[cfg(feature = "pie")]
+        if let Some(play_scene) = play_scene::override_from_env() {
+            app.insert_resource(play_scene);
+        }
+        if app.world().contains_resource::<PieSceneOverride>() {
+            app.add_observer(play_scene::redirect_scene_root);
+        }
+
         #[cfg(feature = "pie")]
         if let Some(cfg) = pie::pie_config() {
             match jackdaw_pie_protocol::connect(&cfg.server) {
@@ -886,6 +900,7 @@ fn spawn_scene_entities(
     #[cfg(not(feature = "terrain"))]
     let _ = parent_path;
 
+    fallback_camera::spawn_for_2d_scene(world, &spawned);
     members
 }
 
