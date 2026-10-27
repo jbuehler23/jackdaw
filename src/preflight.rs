@@ -9,7 +9,7 @@
 
 use std::process::Command;
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::{sdk_toolchain_command, user_toolchain_command};
 
 pub use jackdaw_project_build::build_tools::CheckStatus;
 
@@ -52,20 +52,13 @@ pub fn run_all_checks() -> Vec<CheckResult> {
 /// `rustup` and `rustc` present. Extensions build with the toolchain that
 /// built this editor, which jackdaw installs through rustup on first use.
 pub fn check_rust_toolchain() -> CheckResult {
-    let rustup = first_line("rustup", &["--version"]).is_some();
-    let editor = first_line("rustc", &["--version"]);
-    let ambient = jackdaw_env::without_console_window(&mut Command::new("rustc"))
-        .env_remove("RUSTUP_TOOLCHAIN")
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| {
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()
-                .map(|l| l.trim().to_string())
-        });
+    let rustup = first_line(&mut user_toolchain_command("rustup"), &["--version"]).is_some();
+    // Asked only once rustup lists it: running a toolchain that is not
+    // installed has rustup download it on the spot.
+    let editor = (jackdaw_env::sdk_toolchain_installed() != Some(false))
+        .then(|| first_line(&mut sdk_toolchain_command("rustc"), &["--version"]))
+        .flatten();
+    let ambient = first_line(&mut user_toolchain_command("rustc"), &["--version"]);
     let (status, detail, fix) =
         rust_toolchain_status(rustup, editor, ambient, jackdaw_env::RUSTUP_TOOLCHAIN);
     CheckResult::new("Rust toolchain", status, detail, fix.as_deref())
@@ -102,9 +95,10 @@ fn rust_toolchain_status(
     }
 }
 
-/// Run `cmd args` and return its first stdout line, or `None` if it cannot run.
-fn first_line(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = rust_env_command(cmd).args(args).output().ok()?;
+/// Run `command args` and return its first stdout line, or `None` if it
+/// cannot run.
+fn first_line(command: &mut Command, args: &[&str]) -> Option<String> {
+    let out = command.args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }

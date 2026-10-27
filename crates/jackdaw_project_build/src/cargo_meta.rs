@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::user_toolchain_command;
 use serde::Deserialize;
 
 /// A project's cargo metadata: packages and their targets.
@@ -150,13 +150,14 @@ impl CargoMeta {
     }
 
     /// As [`CargoMeta::load`], keeping cargo's diagnostics so an import
-    /// can tell the user why their manifest was rejected.
+    /// can tell the user why their manifest was rejected. Runs under the
+    /// project's own toolchain, which need not be the editor's.
     pub fn load_or_error(project_dir: &Path) -> Result<Self, ResolveError> {
         let fail = |detail: String| ResolveError::NoMetadata {
             root: project_dir.to_path_buf(),
             detail,
         };
-        let out = rust_env_command("cargo")
+        let out = user_toolchain_command("cargo")
             .current_dir(project_dir)
             .args(["metadata", "--no-deps", "--format-version", "1"])
             .output()
@@ -305,6 +306,28 @@ pub fn resolve_project_package(
     let mut package = CargoMeta::load_or_error(root)?.resolve_package(preferred)?;
     package.dir = spelled_under(root, package.dir);
     Ok(package)
+}
+
+/// Whether cargo can resolve the full dependency graph of the project at
+/// `root`, reporting its first error line. Unlike the `--no-deps` call that
+/// finds the package, this one does the version solving, which is where an
+/// unpublished or mistyped requirement surfaces.
+pub fn resolve_dependencies(root: &Path) -> Result<(), String> {
+    let output = user_toolchain_command("cargo")
+        .current_dir(root)
+        .args(["metadata", "--format-version", "1"])
+        .output()
+        .map_err(|error| format!("could not run cargo: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("error"))
+        .unwrap_or("cargo could not resolve this project's dependencies")
+        .to_string())
 }
 
 /// `dir` spelled under `root` the way the caller spelled `root`.
