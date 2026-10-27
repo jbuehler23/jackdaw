@@ -566,3 +566,101 @@ fn a_mixed_selection_frames_the_group_and_the_sprite_together() {
     frame(&mut app).assert_finished();
     assert_eq!(view_of(&app, scene.panel).pan, Vec2::new(300.0, 250.0));
 }
+
+fn at_scale_factor_two(app: &mut App) {
+    use bevy::window::{PrimaryWindow, WindowScaleFactorChanged};
+
+    let mut windows = app
+        .world_mut()
+        .query_filtered::<(Entity, &mut Window), With<PrimaryWindow>>();
+    let (window_entity, mut window) = windows
+        .single_mut(app.world_mut())
+        .expect("a primary window");
+    window.resolution.set_scale_factor_override(Some(2.0));
+    app.world_mut().write_message(WindowScaleFactorChanged {
+        window: window_entity,
+        scale_factor: 2.0,
+    });
+    settle(app);
+}
+
+/// The panel's target size, its image's size and sampler, the camera's
+/// logical viewport and the stage's physical size.
+fn panel_target(app: &App, panel: Entity) -> (UVec2, UVec2, bool, Vec2, Vec2) {
+    use bevy::camera::RenderTarget;
+
+    let host = app.world().get::<Viewport2dPanelHost>(panel).unwrap();
+    let Some(RenderTarget::Image(target)) = app.world().get::<RenderTarget>(host.camera) else {
+        panic!("the panel camera renders into an image");
+    };
+    assert_eq!(target.scale_factor, 2.0);
+    let image = app
+        .world()
+        .resource::<Assets<Image>>()
+        .get(&target.handle)
+        .expect("the panel image");
+    let camera = app.world().get::<Camera>(host.camera).unwrap();
+    let stage = app.world().get::<ComputedNode>(host.stage).unwrap();
+    (
+        host.target_size,
+        image.size(),
+        image.sampler == bevy::image::ImageSampler::nearest(),
+        camera.logical_viewport_size().expect("a laid-out viewport"),
+        stage.size(),
+    )
+}
+
+#[test]
+fn a_world_panel_renders_one_image_pixel_per_physical_pixel_at_scale_factor_two() {
+    let (mut app, scene) = world_app_sized(1200.0);
+    at_scale_factor_two(&mut app);
+
+    let (target, image, nearest, viewport, stage) = panel_target(&app, scene.panel);
+    assert_eq!(target, UVec2::new(1200, 600), "measured in logical pixels");
+    assert_eq!(image, UVec2::new(2400, 1200));
+    assert!(nearest, "the panel image is shown pixel for pixel");
+    assert_eq!(viewport, target.as_vec2());
+    assert_eq!(stage, image.as_vec2());
+}
+
+#[test]
+fn an_odd_physical_area_keeps_the_camera_and_the_target_in_step() {
+    let (mut app, _) = world_app_sized(1200.0);
+    let panel = add_panel(&mut app, 600.5);
+    at_scale_factor_two(&mut app);
+
+    let (target, image, _, viewport, stage) = panel_target(&app, panel);
+    assert_eq!(
+        target.x, 601,
+        "the 1201 physical pixels round to whole logical ones"
+    );
+    assert_eq!(image, target * 2);
+    assert_eq!(
+        viewport,
+        target.as_vec2(),
+        "the camera centres where the view does"
+    );
+    assert_eq!(
+        stage,
+        image.as_vec2(),
+        "the stage shows the image pixel for pixel"
+    );
+
+    app.world_mut()
+        .get_mut::<Viewport2dPanelHost>(panel)
+        .unwrap()
+        .set_view(Ui2dView {
+            pan: Vec2::new(10.4, -3.6),
+            zoom: 2.6,
+            grid: 8.0,
+        });
+    run_pixel_perfect(&mut app, Some(panel));
+    let host = app.world().get::<Viewport2dPanelHost>(panel).unwrap();
+    let edge =
+        jackdaw::viewport_2d::world_to_target_pixel(host.view, host.target_size, Vec2::ZERO) * 2.0;
+    let miss = (edge - edge.round()).abs();
+    assert!(
+        miss.x < 1e-3 && miss.y < 1e-3,
+        "texel edges off image pixels by {miss}"
+    );
+}

@@ -429,9 +429,11 @@ pub struct Viewport2dPanelHost {
     /// withdraws this on restore, so the default never outranks a chosen
     /// framing.
     pub fit_pending: bool,
-    /// Size of the camera's render-target image, in its own pixels: the
-    /// reference size of the active UI scene, or the stage's logical size when none
-    /// is open. Cached here so the pan/zoom pass need not touch `Assets<Image>`.
+    /// Size of the camera's render target in the pixels the view is measured
+    /// in: the reference size of the active UI scene, or the stage's logical
+    /// size rounded to whole pixels when none is open, the image itself then
+    /// holding one pixel per physical pixel. Cached here so the pan/zoom pass need not touch
+    /// `Assets<Image>`.
     pub target_size: UVec2,
     /// Whether the panel is showing a UI scene's canvas rather than the 2D
     /// world, so [`Self::view`] does not map the render target to world
@@ -892,8 +894,8 @@ pub fn size_targets_to_reference(
     roots: Query<(&UiSceneRoot, Option<&UiTargetCamera>), AuthoredUiSceneRoot>,
     worlds: crate::sprite_stage::Scene2dRoots,
     mut hosts: Query<&mut Viewport2dPanelHost>,
-    targets: Query<&RenderTarget, With<Viewport2dCamera>>,
-    mut stages: Query<(&mut Node, &ComputedNode), With<Scene2dViewport>>,
+    mut targets: Query<&mut RenderTarget, With<Viewport2dCamera>>,
+    mut stages: Query<&mut Node, With<Scene2dViewport>>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -903,7 +905,7 @@ pub fn size_targets_to_reference(
         .map(|(root, _)| root.reference_size.max(UVec2::ONE));
 
     for mut host in &mut hosts {
-        let Ok((mut node, computed)) = stages.get_mut(host.stage) else {
+        let Ok(mut node) = stages.get_mut(host.stage) else {
             continue;
         };
         // A panel showing the 2D world beside an open UI scene is a plain
@@ -914,10 +916,14 @@ pub fn size_targets_to_reference(
 
         // The area's logical size, because a `Node` is written in logical
         // pixels and so is the view's zoom.
-        let area = areas
+        let (area, scale_factor) = areas
             .get(host.area)
-            .map(|area| area.size() * area.inverse_scale_factor())
-            .unwrap_or(Vec2::ZERO);
+            .ok()
+            .filter(|area| area.inverse_scale_factor() > 0.0)
+            .map_or((Vec2::ZERO, 1.0), |area| {
+                let inverse = area.inverse_scale_factor();
+                (area.size() * inverse, 1.0 / inverse)
+            });
 
         // The first point in the frame where both numbers a fit needs are
         // settled. A request outlives a frame with nothing to fit, because
@@ -933,32 +939,40 @@ pub fn size_targets_to_reference(
         }
         let view = host.view;
 
-        let target_size = match reference {
-            Some(reference) => {
-                if let Ok(RenderTarget::Image(target)) = targets.get(host.camera)
-                    && let Some(mut image) = images.get_mut(&target.handle)
-                    && image.size() != reference
-                {
-                    image.resize(reference.to_extents());
-                }
-                reference
-            }
-            // Logical pixels, the measure the view is driven in, so one
-            // target pixel is one stage logical pixel at any scale factor.
+        // A UI canvas renders at its reference size. The 2D world renders one
+        // image pixel per physical pixel of the stage, so pixel art is not
+        // resampled on its way to the screen. The stage is sized to the
+        // target's whole logical pixels, clipped by the area where that runs
+        // a pixel past it, so the camera's logical viewport, the stage and
+        // every target pixel measure agree exactly at a whole scale factor.
+        let (target_size, image_size, scale_factor, sampler) = match reference {
+            Some(reference) => (reference, reference, 1.0, ImageSampler::linear()),
             None => {
-                let size = (computed.size() * computed.inverse_scale_factor())
-                    .round()
-                    .as_uvec2()
-                    .max(UVec2::ONE);
-                if let Ok(RenderTarget::Image(target)) = targets.get(host.camera)
-                    && let Some(mut image) = images.get_mut(&target.handle)
-                    && image.size() != size
-                {
-                    image.resize(size.to_extents());
-                }
-                size
+                let logical = area.round().max(Vec2::ONE);
+                (
+                    logical.as_uvec2(),
+                    (logical * scale_factor).round().as_uvec2(),
+                    scale_factor,
+                    ImageSampler::nearest(),
+                )
             }
         };
+        if let Ok(mut target) = targets.get_mut(host.camera)
+            && let RenderTarget::Image(image_target) = &*target
+        {
+            let handle = image_target.handle.clone();
+            if image_target.scale_factor != scale_factor
+                && let RenderTarget::Image(image_target) = &mut *target
+            {
+                image_target.scale_factor = scale_factor;
+            }
+            if let Some(mut image) = images.get_mut(&handle)
+                && (image.size() != image_size || image.sampler != sampler)
+            {
+                image.resize(image_size.to_extents());
+                image.sampler = sampler;
+            }
+        }
         if host.target_size != target_size {
             host.target_size = target_size;
         }
@@ -966,19 +980,26 @@ pub fn size_targets_to_reference(
             host.shows_ui_scene = reference.is_some();
         }
 
-        place_stage(&mut node, reference, view, area);
+        place_stage(&mut node, reference, view, area, target_size);
     }
 }
 
 /// Place a panel's stage inside its area for the current view: the canvas at
 /// `reference_size * zoom` logical pixels, positioned so the authored point the
-/// view is panned to lands at the centre of the area.
+/// view is panned to lands at the centre of the area. A 2D world scene's stage
+/// is its `target_size` render target, from the area's top-left corner.
 ///
 /// Pan and zoom are this placement, not a camera move (see [`Ui2dView`]).
 /// Placing rather than transforming keeps the zoom inside
 /// `ComputedNode::size()`, where the cursor mapping and the selection overlay
 /// pick it up without naming it.
-fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: Vec2) {
+fn place_stage(
+    node: &mut Node,
+    reference: Option<UVec2>,
+    view: Ui2dView,
+    area: Vec2,
+    target_size: UVec2,
+) {
     let (left, top, width, height) = match reference {
         Some(reference) => {
             let canvas = reference.as_vec2().max(Vec2::ONE);
@@ -991,7 +1012,12 @@ fn place_stage(node: &mut Node, reference: Option<UVec2>, view: Ui2dView, area: 
                 px(size.y.max(1.0)),
             )
         }
-        None => (px(0), px(0), percent(100), percent(100)),
+        None => (
+            px(0),
+            px(0),
+            px(target_size.x as f32),
+            px(target_size.y as f32),
+        ),
     };
 
     if node.position_type != PositionType::Absolute {
@@ -2679,11 +2705,17 @@ pub(crate) fn viewport_2d_pixel_perfect(
             grid.canvas_odd = BVec2::new(canvas.x % 2 == 1, canvas.y % 2 == 1);
         }
         if let Ok(area) = areas.get(host.area) {
-            let physical = area.size().round();
-            grid.area_odd = BVec2::new(physical.x % 2.0 == 1.0, physical.y % 2.0 == 1.0);
             if area.inverse_scale_factor() > 0.0 {
                 grid.scale_factor = 1.0 / area.inverse_scale_factor();
             }
+            // The view's centre is the stage's: the target on a world scene,
+            // the area on a canvas.
+            let physical = if world {
+                (host.target_size.as_vec2() * grid.scale_factor).round()
+            } else {
+                area.size().round()
+            };
+            grid.area_odd = BVec2::new(physical.x % 2.0 == 1.0, physical.y % 2.0 == 1.0);
         }
         let view = pixel_perfect_view(host.view, grid);
         host.set_view(view);
