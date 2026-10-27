@@ -137,6 +137,23 @@ fn lift_scene_node_id(
     }
 }
 
+/// The entities whose state streams to the editor. Derived face meshes are
+/// left out (the editor regenerates faces from the streamed `Brush`), as are
+/// the cameras the runtime adds for itself: the frame-capture camera and the
+/// fallback 2D camera.
+fn streamed_entities(world: &mut World) -> Vec<Entity> {
+    type StreamFilter = (
+        With<Transform>,
+        Without<jackdaw_scene_types::DerivedFaceMesh>,
+        Without<crate::pie_frames::FrameCaptureCamera>,
+        Without<crate::FallbackCamera2d>,
+    );
+    world
+        .query_filtered::<Entity, StreamFilter>()
+        .iter(world)
+        .collect()
+}
+
 /// Stream the scene's ECS state to the editor.
 ///
 /// On the first run, ships a full `EntitySpawned` snapshot for every entity
@@ -155,18 +172,7 @@ fn stream_state(world: &mut World) {
 
     let sent_initial = world.resource::<PieStreamState>().sent_initial;
 
-    // Derived face meshes are excluded (the editor regenerates faces from the
-    // streamed `Brush`), as is the frame-capture camera (pure capture
-    // infrastructure the editor must never project).
-    type StreamFilter = (
-        With<Transform>,
-        Without<jackdaw_scene_types::DerivedFaceMesh>,
-        Without<crate::pie_frames::FrameCaptureCamera>,
-    );
-    let entities: Vec<Entity> = world
-        .query_filtered::<Entity, StreamFilter>()
-        .iter(world)
-        .collect();
+    let entities = streamed_entities(world);
     let registry = world.resource::<AppTypeRegistry>().clone();
 
     if !sent_initial {
@@ -804,6 +810,16 @@ mod tests {
             .id();
         attach_pie(&mut app, transport);
         (app, entity)
+    }
+
+    #[test]
+    fn the_cameras_the_runtime_adds_for_itself_never_stream_to_the_editor() {
+        let mut world = World::new();
+        let authored = world.spawn(Transform::default()).id();
+        world.spawn((Transform::default(), crate::FallbackCamera2d));
+        world.spawn((Transform::default(), crate::pie_frames::FrameCaptureCamera));
+
+        assert_eq!(streamed_entities(&mut world), vec![authored]);
     }
 
     /// Build a minimal app with `SceneNodeId` registered, spawn one entity that
