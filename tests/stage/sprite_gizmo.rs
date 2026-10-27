@@ -199,7 +199,7 @@ pub(crate) fn select(app: &mut App, at: Vec2, tool: ActiveTool) {
 }
 
 /// Where to grab the gizmo's `kind` handle, in world units.
-fn handle(app: &mut App, kind: SpriteHandle) -> Vec2 {
+pub(crate) fn handle(app: &mut App, kind: SpriteHandle) -> Vec2 {
     app.world_mut()
         .query::<&SpriteGizmoHandle>()
         .iter(app.world())

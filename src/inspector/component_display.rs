@@ -221,18 +221,20 @@ fn short_type_name(type_path: &str) -> &str {
 /// quantization / channel / generation sections; `CanvasGuides` is where
 /// a canvas guide's exact position is typed. `HiddenInGame` and
 /// `NavmeshExclude` are marker tags an author adds by hand, so they need
-/// a card even though they have no fields.
+/// a card even though they have no fields, as is `YSort`, which an author
+/// should see on a sprite and be able to take off.
 ///
 /// [`hidden_by_namespace`] exists to keep jackdaw's own bookkeeping
 /// components out of the generic list. These are not bookkeeping -- they
 /// are the scene data the user selected the entity to edit -- so culling
 /// them takes their inspector surface with them.
-const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 5] = [
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 6] = [
     "jackdaw_scene_types::types::Brush",
     "jackdaw_scene_types::types::Terrain",
     "jackdaw_scene_types::CanvasGuides",
     jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH,
     jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH,
+    jackdaw_scene_types::Y_SORT_TYPE_PATH,
 ];
 
 /// Whether a `jackdaw*` type is editor bookkeeping rather than something

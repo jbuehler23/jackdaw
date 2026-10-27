@@ -573,11 +573,11 @@ pub fn place_entity(
         return;
     }
     let current_world = (transform == WorldTransform::Keep)
-        .then(|| world.get::<GlobalTransform>(entity).copied())
+        .then(|| jackdaw_scene_types::unsorted_global(world, entity))
         .flatten();
     let new_parent_world = location
         .parent
-        .and_then(|parent| world.get::<GlobalTransform>(parent).copied());
+        .and_then(|parent| jackdaw_scene_types::unsorted_global(world, parent));
 
     jackdaw_bsn::sync_hierarchy_to_ast_at(world, entity, location.parent, location.index);
 

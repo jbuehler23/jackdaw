@@ -137,9 +137,8 @@ fn snap_to_ground(world: &mut World, targets: &[Entity]) {
     let mut moves: Vec<Box<dyn EditorCommand>> = Vec::new();
     let mut missed = Vec::new();
     for &entity in targets {
-        let Some(here) = world
-            .get::<GlobalTransform>(entity)
-            .map(GlobalTransform::translation)
+        let Some(here) =
+            jackdaw_scene_types::unsorted_global(world, entity).map(|global| global.translation())
         else {
             missed.push(entity);
             continue;
@@ -198,7 +197,7 @@ fn local_for(world: &World, entity: Entity, point: Vec3) -> Vec3 {
     world
         .get::<ChildOf>(entity)
         .map(ChildOf::parent)
-        .and_then(|parent| world.get::<GlobalTransform>(parent))
+        .and_then(|parent| jackdaw_scene_types::unsorted_global(world, parent))
         .map_or(point, |parent| {
             parent.affine().inverse().transform_point3(point)
         })

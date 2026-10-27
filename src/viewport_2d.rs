@@ -2223,6 +2223,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     // Home frames the canvas the way it jumps the playhead in the timeline;
     // `viewport_2d_is_current` keeps the two apart.
     ctx.bind_operator_host::<Viewport2dFrameOp>([PresetInput::key("Home")]);
+    ctx.bind_operator_host::<crate::sprite_props::SpriteZUpOp>([PresetInput::key("PageUp")]);
+    ctx.bind_operator_host::<crate::sprite_props::SpriteZDownOp>([PresetInput::key("PageDown")]);
 
     crate::screenshot::add_2d_to_extension(ctx);
 }

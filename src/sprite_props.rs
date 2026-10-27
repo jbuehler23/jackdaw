@@ -1,11 +1,13 @@
-//! A sprite's anchor, and sizing a sprite from the pixels per unit its art
-//! was drawn at, each set by an operator as one history entry.
+//! A sprite's anchor, its draw order, and sizing a sprite from the pixels
+//! per unit its art was drawn at, each set by an operator as one history
+//! entry.
 
 use bevy::{prelude::*, sprite::Anchor};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::warn_caller;
+use jackdaw_scene_types::{Y_SORT_TYPE_PATH, YSort};
 
-use crate::commands::FieldEditSkip;
+use crate::commands::{CommandGroup, CommandHistory, FieldEditSkip};
 
 /// The anchor presets by the names `sprite.set_anchor` takes, in the order
 /// the inspector lists them.
@@ -159,6 +161,92 @@ pub(crate) fn sprite_set_anchor(
         },
         writes,
     )
+}
+
+/// Draw the selected sprites one z step further in front, as one history entry.
+#[operator(
+    id = "sprite.z_up",
+    label = "Bring Forward",
+    description = "Step the selected sprites' z up by one, drawing them in front.",
+    allows_undo = false,
+    is_available = can_step_z
+)]
+pub(crate) fn sprite_z_up(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    crate::sprite_gizmo::step_sprites_z(world, 1.0);
+    OperatorResult::Finished
+}
+
+/// Draw the selected sprites one z step further back, as one history entry.
+#[operator(
+    id = "sprite.z_down",
+    label = "Send Backward",
+    description = "Step the selected sprites' z down by one, drawing them behind.",
+    allows_undo = false,
+    is_available = can_step_z
+)]
+pub(crate) fn sprite_z_down(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    crate::sprite_gizmo::step_sprites_z(world, -1.0);
+    OperatorResult::Finished
+}
+
+/// Whether the page keys step z: the primary selection is a sprite the
+/// canvas may move, as for a nudge, and no other modifier is held.
+fn can_step_z(
+    gate: crate::sprite_ops::SpriteAddGate,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    world: &World,
+) -> bool {
+    !crate::keybinds::unwanted_modifier(&keyboard, crate::keybinds::ChordModifiers::default())
+        && world
+            .get_resource::<crate::selection::Selection>()
+            .and_then(crate::selection::Selection::primary)
+            .is_some_and(|primary| crate::sprite_gizmo::movable_sprite(world, primary))
+        && gate.allows()
+}
+
+/// Sort sprites by world y within their z layer, or stop, as one history
+/// entry. The sort point is the transform origin, so a sprite that stands on
+/// the ground anchors at its feet: `sprite.set_anchor preset=bottom_center`.
+#[operator(
+    id = "sprite.y_sort",
+    label = "Y-Sort",
+    description = "Draw sprites lower on screen in front of those above them in the same z layer.",
+    allows_undo = false,
+    is_available = has_scene_sprite,
+    params(
+        entity(Entity, doc = "Sprite to sort. Left out, every selected sprite."),
+        on(bool, doc = "Sort by y when true (the default), stop when false."),
+    )
+)]
+pub(crate) fn sprite_y_sort(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    let id = SpriteYSortOp::ID;
+    let Some(targets) = target_sprites(world, &params, id) else {
+        return OperatorResult::Cancelled;
+    };
+    let on = params.as_bool("on").unwrap_or(true);
+    let mut edits = Vec::new();
+    for entity in targets {
+        if world.get::<YSort>(entity).is_some() == on {
+            continue;
+        }
+        let path = Y_SORT_TYPE_PATH.to_owned();
+        let edit = if on {
+            crate::inspector::ops::add_component_edit(world, entity, path)
+        } else {
+            crate::inspector::ops::remove_component_edit(world, entity, path)
+        };
+        edits.extend(edit);
+    }
+    if !edits.is_empty() {
+        let label = if on { "Y-Sort On" } else { "Y-Sort Off" };
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(CommandGroup {
+                commands: edits,
+                label: label.to_owned(),
+            }));
+    }
+    OperatorResult::Finished
 }
 
 /// The field an operator writes on each of its targets, and the history label

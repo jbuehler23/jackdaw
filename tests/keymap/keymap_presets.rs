@@ -206,6 +206,19 @@ fn home_and_escape_are_preset_entries() {
     );
 }
 
+/// Page Up and Page Down step a sprite's z on a 2D world scene.
+#[test]
+fn the_page_keys_step_sprite_z() {
+    let mut app = crate::headless_app();
+    let defaults = classic(&mut app);
+    for (key, operator) in [("PageUp", "sprite.z_up"), ("PageDown", "sprite.z_down")] {
+        assert!(
+            operators_on(&defaults, &PresetInput::key(key)).contains(&operator.to_string()),
+            "{key} runs {operator}",
+        );
+    }
+}
+
 /// Two actions on one chord co-fire and let `is_available` arbitrate, so a shared
 /// chord is reported rather than resolved.
 #[test]
