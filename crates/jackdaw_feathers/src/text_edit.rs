@@ -20,6 +20,12 @@ use crate::tokens::{
 pub fn plugin(app: &mut App) {
     app.add_systems(Update, setup_text_edit_input)
         .add_systems(
+            PostUpdate,
+            setup_text_edit_input
+                .in_set(crate::WidgetSetupSystems)
+                .before(apply_default_value),
+        )
+        .add_systems(
             Update,
             (
                 handle_numeric_increment,
