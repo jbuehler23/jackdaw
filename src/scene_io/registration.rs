@@ -37,7 +37,17 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let skip_ids = doc_skip_type_ids();
-    let values: Vec<Box<dyn bevy::reflect::PartialReflect>> = {
+    let asset_server = world.get_resource::<AssetServer>().cloned();
+    // Asset paths in the document are relative to the assets folder, which is
+    // what a handle's own path already is.
+    let ctx = asset_server
+        .as_ref()
+        .map(|asset_server| jackdaw_bsn::BsnAssetContext {
+            asset_server,
+            parent_path: std::path::Path::new(""),
+            asset_names: None,
+        });
+    let patches: Vec<(String, jackdaw_bsn::BsnPatch)> = {
         let reg = registry.read();
         let entity_ref = world.entity(entity);
         reg.iter()
@@ -45,13 +55,24 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
             .filter(|registration| {
                 !should_skip_component(registration.type_info().type_path_table().path())
             })
-            .filter_map(|registration| registration.data::<ReflectComponent>())
-            .filter_map(|reflect_component| reflect_component.reflect(entity_ref))
-            .filter_map(|value| value.to_dynamic().ok())
+            .filter_map(|registration| {
+                let value = registration
+                    .data::<ReflectComponent>()?
+                    .reflect(entity_ref)?;
+                let patch = match &ctx {
+                    Some(ctx) => jackdaw_bsn::component_to_bsn_patch_with_assets(
+                        value.as_partial_reflect(),
+                        &reg,
+                        ctx,
+                    ),
+                    None => jackdaw_bsn::component_to_bsn_patch(value.as_partial_reflect(), &reg),
+                };
+                Some((registration.type_info().type_path().to_string(), patch))
+            })
             .collect()
     };
-    for value in values {
-        crate::commands::sync_component_to_bsn_doc(world, entity, &*value);
+    for (type_path, patch) in patches {
+        crate::commands::upsert_bsn_patch(world, entity, &type_path, patch);
     }
 }
 

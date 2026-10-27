@@ -9,6 +9,7 @@ mod util;
 
 mod authoring_ops;
 mod dialog_answer;
+mod field_edits;
 mod light_defaults;
 mod operator_availability;
 mod operator_entity_params;
