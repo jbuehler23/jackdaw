@@ -2376,7 +2376,9 @@ pub(crate) fn selection_select(
         });
         return OperatorResult::Cancelled;
     };
-    selection.select_single(&mut commands, entity);
+    if !selection.is_only(entity) {
+        selection.select_single(&mut commands, entity);
+    }
     OperatorResult::Finished
 }
 

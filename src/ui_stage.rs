@@ -1529,7 +1529,11 @@ fn on_stage_press(
     match pick {
         StagePick::Hit(entity) if extend => selection.extend(&mut commands, entity),
         StagePick::Hit(entity) if toggle => selection.toggle(&mut commands, entity),
-        StagePick::Hit(entity) => selection.select_single(&mut commands, entity),
+        StagePick::Hit(entity) => {
+            if !selection.is_only(entity) {
+                selection.select_single(&mut commands, entity);
+            }
+        }
         StagePick::Miss if !extend && !toggle => selection.clear(&mut commands),
         StagePick::Miss | StagePick::Empty => {}
     }
