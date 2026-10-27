@@ -2359,7 +2359,11 @@ fn set_project_field(
             jackdaw_bsn::BsnValue::TupleStruct(data) => {
                 *patch = jackdaw_bsn::BsnPatch::TupleStruct(data);
             }
-            _ => {}
+            // A unit variant of a project enum.
+            jackdaw_bsn::BsnValue::Type(type_path) => {
+                *patch = jackdaw_bsn::BsnPatch::Type(type_path);
+            }
+            other => warn!("`{type_path}` cannot be written as {other:?}"),
         }
         return;
     }

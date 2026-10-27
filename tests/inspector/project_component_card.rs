@@ -723,3 +723,106 @@ fn a_named_project_component_still_saves_its_fields_by_name() {
         "the field is written by name, got:\n{written}"
     );
 }
+
+const STANCE: &str = "definition_project::markers::Stance";
+
+/// An enum component with a unit variant besides its default and one carrying
+/// a value.
+fn schema_with_stances() -> jackdaw_schema::ProjectSchema {
+    serde_json::from_value(serde_json::json!({
+        "components": [{
+            "type_path": STANCE,
+            "short_name": "Stance",
+            "module_path": "definition_project::markers",
+            "category": "",
+            "description": "",
+            "editor_description": "",
+            "hidden": false,
+            "preview": "",
+            "default_constructible": true,
+            "fields": [],
+            "kind": "Enum",
+            "default": { STANCE: "Guard" },
+            "variants": [
+                { "name": "Guard", "fields": [] },
+                { "name": "Rest", "fields": [] },
+                { "name": "Hold", "fields": [{ "name": "0", "type_path": "f32" }] }
+            ],
+            "entity_fields": [],
+            "fills_gaps": true,
+            "asset": false
+        }],
+        "resources": [],
+        "events": [],
+        "functions": [],
+        "assets": []
+    }))
+    .expect("the schema reads")
+}
+
+fn app_with_stances() -> (App, tempfile::TempDir, PathBuf, Entity) {
+    let (mut app, tmp) = app_with_project_schema();
+    let native = jackdaw::project_types::native_type_paths(
+        &app.world().resource::<AppTypeRegistry>().read(),
+    );
+    app.world_mut()
+        .resource_mut::<jackdaw::project_types::ProjectTypes>()
+        .update(&schema_with_stances(), &native);
+    jackdaw::project_types::publish_document_only_types(app.world_mut());
+    let scene = tmp.path().join("assets/stance.bsn");
+    call(
+        &mut app,
+        "scene.new",
+        &[
+            ("kind", "3d".into()),
+            ("path", PropertyValue::from(scene.display().to_string())),
+        ],
+    );
+    call(&mut app, "entity.add.group", &[("name", "Camp".into())]);
+    let group = named_entity(&mut app, "Camp");
+    add_component(&mut app, group, STANCE);
+    (app, tmp, scene, group)
+}
+
+#[test]
+fn a_project_enum_switched_to_a_unit_variant_saves_that_variant() {
+    let (mut app, _tmp, scene, group) = app_with_stances();
+    set_field(&mut app, group, STANCE, "", "Rest");
+
+    let (written, group) = save_and_reopen(&mut app, &scene);
+    assert!(
+        written
+            .lines()
+            .any(|line| line.trim() == format!("{STANCE}::Rest")),
+        "the variant is written, got:\n{written}"
+    );
+    assert!(matches!(
+        authored(&app, group, STANCE, ""),
+        Some(BsnValue::Type(path)) if path == format!("{STANCE}::Rest")
+    ));
+}
+
+#[test]
+fn a_project_enum_switched_to_a_tuple_variant_saves_that_variant() {
+    let (mut app, _tmp, scene, group) = app_with_stances();
+    set_field(&mut app, group, STANCE, "", r#"{"Hold":[2.5]}"#);
+
+    let (written, _) = save_and_reopen(&mut app, &scene);
+    assert!(
+        written.contains(&format!("{STANCE}::Hold(2.5)")),
+        "the variant and its value are written, got:\n{written}"
+    );
+}
+
+#[test]
+fn undoing_a_project_enum_variant_change_puts_the_patch_back() {
+    let (mut app, _tmp, scene, group) = app_with_stances();
+    set_field(&mut app, group, STANCE, "", "Rest");
+    call(&mut app, "history.undo", &[]);
+
+    let (written, _) = save_and_reopen(&mut app, &scene);
+    assert!(
+        !written.contains("Stance::Rest") && written.contains(STANCE),
+        "the component is back as it was added, got:\n{written}"
+    );
+}

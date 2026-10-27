@@ -1,5 +1,5 @@
 use crate::syntax::{
-    lex::Token,
+    lex::{Token, special_float},
     parse_stream::{Parse, ParseError, ParseStream},
     types::{
         At, Bool, Colon, Comma, DoubleColon, DoubleMinus, Float, Greater, Hash, Ident, Int, LBrace,
@@ -199,6 +199,9 @@ impl Parse for BsnValue {
             // allowed `@` before a value's type; it means nothing there.
             let _ = input.parse::<At>()?;
             BsnValue::Type(input.parse::<BsnType>()?)
+        } else if let Some(value) = standalone_special_float(input) {
+            let _ = input.parse::<Ident>()?;
+            BsnValue::Float(value)
         } else if input.peek::<Ident>() {
             let value = input.parse::<BsnType>()?;
             BsnValue::Type(value)
@@ -206,6 +209,20 @@ impl Parse for BsnValue {
             return Err(input.error("Expected a value type"));
         })
     }
+}
+
+/// `inf`, `Infinity`, `NaN` or `nan` standing alone as a value, which is a
+/// float; followed by `::`, `<`, `{` or `(` the word starts a type path.
+fn standalone_special_float(input: &mut ParseStream<'_>) -> Option<f64> {
+    let Some(Token::Ident(word)) = input.peek_token().map(|t| &t.token) else {
+        return None;
+    };
+    let value = special_float(word)?;
+    let starts_a_path = matches!(
+        input.peek_nth_token(1).map(|t| &t.token),
+        Some(Token::DoubleColon | Token::Less | Token::LBrace | Token::LParen)
+    );
+    (!starts_a_path).then_some(value)
 }
 
 /// `map` is a keyword only right before `[`; anywhere else it is a name.
@@ -287,7 +304,14 @@ impl Parse for PathSegment {
         if input.peek::<Less>() {
             let _ = input.parse::<Less>()?;
             loop {
-                arguments.push(input.parse::<Path>()?);
+                // A const generic argument, `Grid<16>`, is spelled as written.
+                if input.peek::<Int>() {
+                    arguments.push(Path::from([input.parse::<Int>()?.0.to_string()]));
+                } else if input.peek::<Bool>() {
+                    arguments.push(Path::from([input.parse::<Bool>()?.0.to_string()]));
+                } else {
+                    arguments.push(input.parse::<Path>()?);
+                }
                 if input.peek::<Greater>() {
                     break;
                 }
