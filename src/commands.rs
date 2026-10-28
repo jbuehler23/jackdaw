@@ -284,7 +284,18 @@ pub(crate) fn set_bsn_field_command(
 
 /// Execute `edits` and push them as one history entry.
 pub(crate) fn push_field_edits(world: &mut World, edits: Vec<SetBsnField>, group_label: &str) {
-    let mut done: Vec<Box<dyn EditorCommand>> = Vec::new();
+    push_executed_edits(world, Vec::new(), edits, group_label);
+}
+
+/// Execute `edits` and push them after the already executed `done` as one
+/// history entry: alone when there is one, grouped under `group_label` when
+/// there are more, and nothing when there are none.
+pub(crate) fn push_executed_edits(
+    world: &mut World,
+    mut done: Vec<Box<dyn EditorCommand>>,
+    edits: Vec<SetBsnField>,
+    group_label: &str,
+) {
     for mut edit in edits {
         edit.execute(world);
         done.push(Box::new(edit));

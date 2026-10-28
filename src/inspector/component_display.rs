@@ -1159,6 +1159,15 @@ fn build_inspector_cards(
                 continue;
             }
 
+            if let Some(canvas) = reflected.downcast_ref::<jackdaw_scene_types::PixelCanvas>() {
+                crate::pixel_camera::spawn_preset_row(
+                    commands,
+                    body_entity,
+                    source_entity,
+                    canvas.resolution,
+                );
+            }
+
             if type_id == TypeId::of::<Sprite>() {
                 let body = body_entity;
                 commands.queue(move |world: &mut World| {

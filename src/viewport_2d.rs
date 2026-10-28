@@ -34,8 +34,8 @@ use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 
 use crate::{
     canvas_snap::{
-        CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp, GuideScene,
-        GuideSpace,
+        CanvasGameFrameOp, CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind,
+        CanvasSnapOp, GuideScene, GuideSpace,
     },
     image_sampling::{ProjectSet2dSamplingOp, Sampling},
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
@@ -2068,6 +2068,15 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         "Show Guides",
     ));
     if world_scene {
+        rows.push(checked_row(
+            snap.show_game_frame,
+            format!(
+                "{OP_ACTION_PREFIX}{}?on={}",
+                CanvasGameFrameOp::ID,
+                !snap.show_game_frame
+            ),
+            "Show Game Frame",
+        ));
         let sampling = world
             .get_resource::<crate::image_sampling::ProjectSampling2d>()
             .map(|sampling| sampling.0)

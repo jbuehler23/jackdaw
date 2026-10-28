@@ -254,6 +254,11 @@ fn two_d(taxonomy: &mut CreationTaxonomy, world: &mut World) {
     taxonomy.entries.extend([
         entry(TWO_D_GROUP, SpriteAddOp::LABEL, op_action::<SpriteAddOp>()),
         entry(TWO_D_GROUP, "Empty 2D", op_action::<EntityAddEmptyOp>()),
+        entry(
+            TWO_D_GROUP,
+            "Pixel Camera",
+            op_action::<crate::entity_ops::EntityAddPixelCameraOp>(),
+        ),
     ]);
 }
 

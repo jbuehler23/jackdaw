@@ -19,6 +19,7 @@ mod operator_smoke;
 mod operator_tooltip;
 mod operator_undo;
 mod param_declarations;
+mod pixel_canvas_ops;
 mod prefab_ops;
 mod remote_coverage;
 mod scatter_ops;

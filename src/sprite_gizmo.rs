@@ -614,7 +614,7 @@ pub(crate) fn movable_sprite(world: &World, entity: Entity) -> bool {
 }
 
 /// Whether `entity` sits under the open 2D world scene's root.
-fn in_open_2d_scene(world: &World, entity: Entity) -> bool {
+pub(crate) fn in_open_2d_scene(world: &World, entity: Entity) -> bool {
     let mut current = entity;
     while let Some(parent) = world.get::<ChildOf>(current) {
         current = parent.parent();

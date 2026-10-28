@@ -262,10 +262,7 @@ struct FieldWrite {
 }
 
 /// Write each target's value through the shared field edit path, as one
-/// history entry. Every target is checked before anything is written: one the
-/// running preview drives, or a value that does not convert, refuses the whole
-/// call. A target projected from the running game in Live view takes the edit
-/// there instead, as the inspector's own rows do.
+/// history entry, by [`field_edits`].
 fn write_fields(
     world: &mut World,
     id: &str,
@@ -277,29 +274,52 @@ fn write_fields(
         field_path,
         label,
     } = field;
+    let writes = writes
+        .into_iter()
+        .map(|(entity, json)| (entity, field_path, json))
+        .collect();
+    let Some(edits) = field_edits(world, id, type_path, writes) else {
+        return OperatorResult::Cancelled;
+    };
+    crate::commands::push_field_edits(world, edits, label);
+    OperatorResult::Finished
+}
+
+/// The unexecuted edits writing each `(entity, field, value)` of `type_path`
+/// through the shared field edit path, or `None` after telling the caller.
+/// Every target is checked before anything is written: one the running
+/// preview drives, or a value that does not convert, refuses the whole call.
+/// A target projected from the running game in Live view takes its write
+/// there instead, as the inspector's own rows do.
+pub(crate) fn field_edits(
+    world: &mut World,
+    id: &str,
+    type_path: &str,
+    writes: Vec<(Entity, &str, serde_json::Value)>,
+) -> Option<Vec<crate::commands::SetBsnField>> {
     let mut routed = Vec::new();
     let mut authored = Vec::new();
-    for (entity, json) in writes {
+    for (entity, field_path, json) in writes {
         if crate::preview_context::preview_writes_type_path(world, entity, type_path) {
             warn_caller(
                 world,
                 format!("{id}: the running preview drives this on {entity}"),
             );
-            return OperatorResult::Cancelled;
+            return None;
         }
         if goes_to_the_game(world, entity) {
-            routed.push((entity, json));
+            routed.push((entity, field_path, json));
             continue;
         }
         let Some((path, value)) =
             crate::commands::field_edit_to_bsn_value(world, entity, type_path, field_path, &json)
         else {
             warn_caller(world, format!("{id}: {entity} cannot take {json}"));
-            return OperatorResult::Cancelled;
+            return None;
         };
         authored.push((entity, path, value));
     }
-    for (entity, json) in routed {
+    for (entity, field_path, json) in routed {
         crate::inspector::reflect_fields::try_route_pie_live_field_edit(
             world, entity, type_path, field_path, json,
         );
@@ -314,13 +334,12 @@ fn write_fields(
             Err(FieldEditSkip::Previewed) => {}
         }
     }
-    crate::commands::push_field_edits(world, edits, label);
-    OperatorResult::Finished
+    Some(edits)
 }
 
 /// Whether an edit of `entity` goes to the running game: Live view shows it
 /// projected from a game entity.
-fn goes_to_the_game(world: &World, entity: Entity) -> bool {
+pub(crate) fn goes_to_the_game(world: &World, entity: Entity) -> bool {
     world
         .get_resource::<crate::pie_mirror::PieViewMode>()
         .is_some_and(|mode| *mode == crate::pie_mirror::PieViewMode::Live)
