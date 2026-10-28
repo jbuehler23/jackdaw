@@ -135,7 +135,23 @@ pub use navmesh::JackdawNavmesh;
 
 mod fallback_camera;
 pub use fallback_camera::FallbackCamera2d;
+
+/// Marks what the runtime spawns for itself, such as the fallback camera and
+/// the pixel canvas helpers: never saved, never streamed to the editor and
+/// never taken for the game's own camera.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct RuntimeOnly;
+
+/// Where pixel canvases expand, so cameras are retargeted after it.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CanvasExpansionSystems;
 mod hidden_in_game;
+#[cfg(feature = "render")]
+mod pixel_canvas;
+#[cfg(feature = "render")]
+pub use pixel_canvas::{
+    CANVAS_ORDER, CanvasCursor, PixelCanvasExpanded, PixelCanvasHelper, PixelCanvasPlugin,
+};
 mod play_scene;
 pub use play_scene::PieSceneOverride;
 #[cfg(feature = "render")]
@@ -308,6 +324,7 @@ impl Plugin for JackdawPlugin {
             jackdaw_surface::ShadowViewCleanupPlugin,
             MaterialOverridesPlugin,
             LodPlugin,
+            PixelCanvasPlugin,
         ));
 
         // Game code may add a model to an entity long after the scene it lives

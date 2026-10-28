@@ -107,6 +107,7 @@ const _: () = assert!(MAX_DIM.is_multiple_of(64));
 
 /// Marker for the offscreen capture camera.
 #[derive(Component)]
+#[require(crate::RuntimeOnly)]
 pub(crate) struct FrameCaptureCamera;
 
 /// Live capture state. Present only while a stream is active.
@@ -188,16 +189,23 @@ fn start_capture_camera_stream(world: &mut World, size: UVec2) {
     let camera = world
         .spawn((
             FrameCaptureCamera,
-            Camera3d::default(),
             Camera {
                 is_active: false,
                 ..default()
             },
             RenderTarget::Image(target.clone().into()),
-            Transform::default(),
-            ChildOf(rig),
         ))
         .id();
+    // A rig drawn through a pixel canvas is captured as its window shows it.
+    #[cfg(feature = "render")]
+    let shows_canvas = crate::pixel_canvas::capture_canvas(world, camera, rig);
+    #[cfg(not(feature = "render"))]
+    let shows_canvas = false;
+    if !shows_canvas {
+        world
+            .entity_mut(camera)
+            .insert((Camera3d::default(), Transform::default(), ChildOf(rig)));
+    }
 
     // The Readback component itself is attached per pace tick; only the
     // completion observer lives on the entity permanently.

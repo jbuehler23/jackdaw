@@ -139,14 +139,12 @@ fn lift_scene_node_id(
 
 /// The entities whose state streams to the editor. Derived face meshes are
 /// left out (the editor regenerates faces from the streamed `Brush`), as are
-/// the cameras the runtime adds for itself: the frame-capture camera and the
-/// fallback 2D camera.
+/// everything the runtime adds for itself ([`crate::RuntimeOnly`]).
 fn streamed_entities(world: &mut World) -> Vec<Entity> {
     type StreamFilter = (
         With<Transform>,
         Without<jackdaw_scene_types::DerivedFaceMesh>,
-        Without<crate::pie_frames::FrameCaptureCamera>,
-        Without<crate::FallbackCamera2d>,
+        Without<crate::RuntimeOnly>,
     );
     world
         .query_filtered::<Entity, StreamFilter>()
@@ -818,6 +816,7 @@ mod tests {
         let authored = world.spawn(Transform::default()).id();
         world.spawn((Transform::default(), crate::FallbackCamera2d));
         world.spawn((Transform::default(), crate::pie_frames::FrameCaptureCamera));
+        world.spawn((Transform::default(), crate::RuntimeOnly));
 
         assert_eq!(streamed_entities(&mut world), vec![authored]);
     }
