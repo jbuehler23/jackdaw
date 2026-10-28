@@ -69,7 +69,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -134,7 +134,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -200,7 +200,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -301,7 +301,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -390,7 +390,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install nextest
         run: cargo binstall cargo-nextest --locked --force
@@ -480,7 +480,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -538,7 +538,7 @@ jobs:
 
       - name: Install Wild
         if: steps.availability.outputs.available == 'true'
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         if: steps.availability.outputs.available == 'true'
@@ -611,7 +611,7 @@ jobs:
 
       - name: Install Wild
         if: steps.availability.outputs.available == 'true'
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         if: steps.availability.outputs.available == 'true'
@@ -683,7 +683,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -728,7 +728,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       # Bevy 0.20 states rust-version 1.97.1, newer than any nightly a
       # bevy_lint revision builds on yet.
