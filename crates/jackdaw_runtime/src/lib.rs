@@ -144,7 +144,7 @@ pub struct RuntimeOnly;
 
 /// Where pixel canvases expand, so cameras are retargeted after it.
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CanvasExpansion;
+pub(crate) struct CanvasExpansionSystems;
 mod hidden_in_game;
 #[cfg(feature = "render")]
 mod pixel_canvas;

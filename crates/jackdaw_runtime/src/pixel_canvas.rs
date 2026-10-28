@@ -16,7 +16,7 @@ use bevy::transform::TransformSystems;
 use bevy::window::PrimaryWindow;
 use jackdaw_scene_types::PixelCanvas;
 
-use crate::{CanvasExpansion, RuntimeOnly};
+use crate::{CanvasExpansionSystems, RuntimeOnly};
 
 /// The order an expanded canvas camera draws its canvas at, ahead of every
 /// camera that shows one. Its view camera takes over its authored order.
@@ -75,7 +75,7 @@ impl Plugin for PixelCanvasPlugin {
                 (
                     (expand_canvases, sync_views)
                         .chain()
-                        .in_set(CanvasExpansion)
+                        .in_set(CanvasExpansionSystems)
                         .before(CameraUpdateSystems),
                     fit_displays
                         .after(CameraUpdateSystems)
