@@ -1719,7 +1719,9 @@ fn on_tree_row_clicked(
         let target = selected_entity;
         commands.queue(move |world: &mut World| select_row_range(world, clicked, target));
     } else {
-        selection.select_single(&mut commands, selected_entity);
+        if !selection.is_only(selected_entity) {
+            selection.select_single(&mut commands, selected_entity);
+        }
         anchor.0 = Some(selected_entity);
     }
 

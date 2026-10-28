@@ -18,8 +18,16 @@ pub fn plugin(app: &mut App) {
 #[derive(Component, Default, Clone, Copy, Debug)]
 pub struct Selected;
 
-/// Make `entity` the whole selection, from an exclusive-world caller.
+/// Make `entity` the whole selection, from an exclusive-world caller. A
+/// selection that already is `entity` alone is left untouched, so nothing
+/// watching it sees a change.
 pub fn select_only(world: &mut World, entity: Entity) {
+    if world
+        .get_resource::<Selection>()
+        .is_some_and(|selection| selection.is_only(entity))
+    {
+        return;
+    }
     let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
         bevy::ecs::system::SystemState::new(world);
     let Ok((mut commands, mut selection)) = state.get_mut(world) else {
@@ -29,8 +37,15 @@ pub fn select_only(world: &mut World, entity: Entity) {
     state.apply(world);
 }
 
-/// Put `entities` back as the selection, in the order given.
+/// Put `entities` back as the selection, in the order given. A selection
+/// that already holds them in that order is left untouched.
 pub fn select_many(world: &mut World, entities: &[Entity]) {
+    if world
+        .get_resource::<Selection>()
+        .is_some_and(|selection| selection.entities == entities)
+    {
+        return;
+    }
     let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
         bevy::ecs::system::SystemState::new(world);
     let Ok((mut commands, mut selection)) = state.get_mut(world) else {
@@ -134,6 +149,13 @@ impl Selection {
             ec.insert(Selected);
             self.entities.push(entity);
         }
+    }
+
+    /// Whether `entity` is the one and only selected entity. Callers holding a
+    /// `ResMut<Selection>` check this before [`Self::select_single`], which
+    /// would otherwise mark the selection changed for a reselect.
+    pub fn is_only(&self, entity: Entity) -> bool {
+        self.entities.as_slice() == [entity]
     }
 
     /// Get the primary (last) selected entity.

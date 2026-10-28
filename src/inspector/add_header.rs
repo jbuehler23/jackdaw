@@ -38,14 +38,15 @@ pub(crate) fn on_add_header_mount_added(
     });
 }
 
-/// Replace the add-header children when the active category, selection,
-/// card set, material registry or registered chips change, or when a mount
-/// is added so a late-spawned inspector catches up to the current selection.
+/// Refresh the add-header when the active category, selection, card set,
+/// material registry or registered chips change, or when a mount is added so
+/// a late-spawned inspector catches up to the current selection. The header's
+/// controls are put up again only when what they show differs.
 pub(crate) fn rebuild_add_header(
     active: Res<ActiveInspectorCategory>,
     selection: Res<Selection>,
     material_registry: Option<Res<MaterialRegistry>>,
-    mounts: Query<(Entity, Option<&Children>), With<InspectorAddHeaderMount>>,
+    mounts: Query<Entity, With<InspectorAddHeaderMount>>,
     added_mounts: Query<(), Added<InspectorAddHeaderMount>>,
     added_cards: Query<(), Added<super::ComponentDisplay>>,
     mut removed_cards: RemovedComponents<super::ComponentDisplay>,
@@ -56,79 +57,132 @@ pub(crate) fn rebuild_add_header(
     let cards_changed = !added_cards.is_empty() || removed_cards.read().next().is_some();
     let chips_changed = !added_chips.is_empty() || removed_chips.read().next().is_some();
     let registry_changed = material_registry.is_some_and(|r| r.is_changed());
-    let should_rebuild = active.is_changed()
+    let should_refresh = active.is_changed()
         || selection.is_changed()
         || cards_changed
         || chips_changed
         || registry_changed
         || !added_mounts.is_empty();
-    if !should_rebuild {
+    if !should_refresh {
         return;
     }
 
-    for (host, children) in &mounts {
-        if let Some(children) = children {
-            let old: Vec<Entity> = children.iter().collect();
-            commands.queue(move |world: &mut World| {
-                for child in old {
-                    if let Ok(ec) = world.get_entity_mut(child) {
-                        ec.despawn();
-                    }
-                }
-            });
-        }
-        build_add_header_children(&mut commands, host, active.0.as_ref());
+    for host in &mounts {
+        let category = active.0.to_string();
+        commands.queue(move |world: &mut World| {
+            refresh_add_header(world, host, &category);
+        });
     }
 }
 
-/// Spawn the appropriate add-UI children under `host` for `category`.
-fn build_add_header_children(commands: &mut Commands, host: Entity, category: &str) {
-    match category {
-        "modifiers" => {
-            commands.spawn((
+/// What an add-header shows, kept on its mount so a refresh that would put up
+/// the same controls leaves the ones standing in place.
+#[derive(Component, PartialEq)]
+enum AddHeaderShown {
+    Modifiers,
+    Material {
+        entries: Vec<(String, Handle<StandardMaterial>)>,
+        selected: usize,
+    },
+    AddComponent,
+    Chips(Vec<(InspectorChip, bool)>),
+}
+
+fn refresh_add_header(world: &mut World, host: Entity, category: &str) {
+    if world.get_entity(host).is_err() {
+        return;
+    }
+    let shown = add_header_content(world, category);
+    if world.get::<AddHeaderShown>(host) == Some(&shown) {
+        return;
+    }
+    let old: Vec<Entity> = world
+        .get::<Children>(host)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    for child in old {
+        if let Ok(ec) = world.get_entity_mut(child) {
+            ec.despawn();
+        }
+    }
+    match &shown {
+        AddHeaderShown::Modifiers => {
+            world.spawn((
                 button(ButtonProps::new("Add Modifier").align_left()),
                 ButtonOperatorCall::new("modifier.add").with_param("kind", "mirror"),
                 ChildOf(host),
             ));
         }
+        AddHeaderShown::Material { entries, selected } => {
+            spawn_material_header(world, host, entries.clone(), *selected);
+        }
+        AddHeaderShown::AddComponent => {
+            world.spawn((
+                button(ButtonProps::new("Add Component").align_left()),
+                InspectorAddComponentButton,
+                ChildOf(host),
+            ));
+        }
+        AddHeaderShown::Chips(chips) => spawn_chip_row(world, host, chips.clone()),
+    }
+    world.entity_mut(host).insert(shown);
+}
+
+/// What the header for `category` shows given the world as it stands: the
+/// toggles extensions registered for it, or the Add Component button when it
+/// has none.
+fn add_header_content(world: &mut World, category: &str) -> AddHeaderShown {
+    match category {
+        "modifiers" => AddHeaderShown::Modifiers,
         "material" => {
-            // Defer so we can read `MaterialRegistry` from the world.
-            let host_captured = host;
-            commands.queue(move |world: &mut World| {
-                spawn_material_header(world, host_captured);
-            });
+            let entries: Vec<(String, Handle<StandardMaterial>)> = world
+                .get_resource::<MaterialRegistry>()
+                .map(|reg| {
+                    reg.entries
+                        .iter()
+                        .map(|e| (e.name.clone(), e.handle.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            // The registry seeds a `Handle::default()` "None" entry at index 0,
+            // so an unassigned brush lands there.
+            let current = world
+                .get_resource::<Selection>()
+                .and_then(Selection::primary)
+                .and_then(|entity| {
+                    super::material_card_routing::resolve_brush_material_handle(world, entity)
+                });
+            let selected = material_combobox_selected_index(&entries, current.as_ref());
+            AddHeaderShown::Material { entries, selected }
         }
         _ => {
-            let category = category.to_string();
-            commands.queue(move |world: &mut World| {
-                spawn_category_header(world, host, &category);
-            });
+            let mut chips_query = world.query::<(Entity, &InspectorChip)>();
+            let mut chips: Vec<(Entity, InspectorChip)> = chips_query
+                .iter(world)
+                .filter(|(_, chip)| chip.category == category)
+                .map(|(entity, chip)| (entity, chip.clone()))
+                .collect();
+            if chips.is_empty() {
+                return AddHeaderShown::AddComponent;
+            }
+            chips.sort_by_key(|(entity, _)| *entity);
+            let primary = world.resource::<Selection>().primary();
+            AddHeaderShown::Chips(
+                chips
+                    .into_iter()
+                    .map(|(_, chip)| {
+                        let present = primary.is_some_and(|entity| {
+                            has_component_at_path(world, entity, &chip.type_path)
+                        });
+                        (chip, present)
+                    })
+                    .collect(),
+            )
         }
     }
 }
 
-/// A category's header: the toggles extensions registered for it, or the
-/// Add Component button when it has none.
-fn spawn_category_header(world: &mut World, host: Entity, category: &str) {
-    if world.get_entity(host).is_err() {
-        return;
-    }
-    let mut chips_query = world.query::<(Entity, &InspectorChip)>();
-    let mut chips: Vec<(Entity, InspectorChip)> = chips_query
-        .iter(world)
-        .filter(|(_, chip)| chip.category == category)
-        .map(|(entity, chip)| (entity, chip.clone()))
-        .collect();
-    if chips.is_empty() {
-        world.spawn((
-            button(ButtonProps::new("Add Component").align_left()),
-            InspectorAddComponentButton,
-            ChildOf(host),
-        ));
-        return;
-    }
-    chips.sort_by_key(|(entity, _)| *entity);
-    let primary = world.resource::<Selection>().primary();
+fn spawn_chip_row(world: &mut World, host: Entity, chips: Vec<(InspectorChip, bool)>) {
     let row = world
         .spawn((
             Node {
@@ -140,9 +194,7 @@ fn spawn_category_header(world: &mut World, host: Entity, category: &str) {
             ChildOf(host),
         ))
         .id();
-    for (_, chip) in chips {
-        let present =
-            primary.is_some_and(|entity| has_component_at_path(world, entity, &chip.type_path));
+    for (chip, present) in chips {
         spawn_component_chip(world, row, chip, present);
     }
 }
@@ -249,40 +301,15 @@ pub(crate) fn on_component_chip_click(
 
 // -- Material header ---------------------------------------------------------
 
-/// Spawn the material-tab add-header inside `host`. Reads `MaterialRegistry`
-/// from the world so it runs as a deferred world-exclusive command.
-fn spawn_material_header(world: &mut World, host: Entity) {
-    // A panel relayout/teardown may have despawned the host between queueing
-    // this closure and its flush; bail rather than parenting children under a
-    // dead entity (the "ChildOf relates to an entity that does not exist" class).
-    if world.get_entity(host).is_err() {
-        return;
-    }
-
-    // Collect the material names and handles up front.
-    let entries: Vec<(String, Handle<StandardMaterial>)> = world
-        .get_resource::<MaterialRegistry>()
-        .map(|reg| {
-            reg.entries
-                .iter()
-                .map(|e| (e.name.clone(), e.handle.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Resolve the material currently assigned to the primary selection so the
-    // combobox opens on it instead of defaulting to the "None" entry. The
-    // registry seeds a `Handle::default()` "None" entry at index 0, so an
-    // unassigned brush lands there.
-    let primary = world
-        .get_resource::<Selection>()
-        .and_then(Selection::primary);
-    let current = primary.and_then(|entity| {
-        super::material_card_routing::resolve_brush_material_handle(world, entity)
-    });
-
-    let selected = material_combobox_selected_index(&entries, current.as_ref());
-
+/// Spawn the material-tab add-header inside `host`: the combobox assigning a
+/// registry material to the selection, opened on `selected`, and the New
+/// button.
+fn spawn_material_header(
+    world: &mut World,
+    host: Entity,
+    entries: Vec<(String, Handle<StandardMaterial>)>,
+    selected: usize,
+) {
     let mut commands = world.commands();
 
     // ---- Row container -------------------------------------------------

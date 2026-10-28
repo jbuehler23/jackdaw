@@ -22,7 +22,8 @@ pub fn plugin(app: &mut App) {
                 apply_selected_index.before(sync_combobox_selection),
                 sync_combobox_selection,
             ),
-        );
+        )
+        .add_systems(PostUpdate, setup_combobox.in_set(crate::WidgetSetupSystems));
 }
 
 #[derive(Component)]
@@ -212,7 +213,7 @@ pub fn combobox_icon_with_selected(
     )
 }
 
-fn setup_combobox(
+pub(crate) fn setup_combobox(
     mut commands: Commands,
     icon_font: Res<crate::icons::IconFont>,
     mut configs: Query<(Entity, &mut ComboBoxConfig)>,

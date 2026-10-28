@@ -30,7 +30,6 @@ pub mod val_field;
 
 use crate::EditorEntity;
 
-use bevy::ecs::archetype::ArchetypeId;
 use bevy::prelude::*;
 
 const MAX_REFLECT_DEPTH: usize = 4;
@@ -107,7 +106,6 @@ impl Plugin for InspectorPlugin {
             .add_plugins(sprite_card::plugin)
             .add_plugins(prefab_menu::plugin)
             .add_plugins(type_metadata_pane::plugin)
-            .add_observer(component_display::on_inspector_dirty)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)
             .add_observer(component_picker::on_add_component_button_click)
             .add_observer(reflect_fields::on_checkbox_commit)
@@ -139,7 +137,12 @@ impl Plugin for InspectorPlugin {
             .add_observer(asset_row::on_asset_row_button)
             .add_systems(
                 Update,
-                component_display::sync_inspector_to_selection
+                (
+                    apply_pending_inspector_rebuild,
+                    flag_inspector_dirty_on_modifier_stack_change,
+                    component_display::sync_inspector_to_selection,
+                )
+                    .chain()
                     .before(category_strip::resolve_active_on_rebuild),
             )
             .add_systems(
@@ -153,7 +156,6 @@ impl Plugin for InspectorPlugin {
             .add_systems(
                 Update,
                 (
-                    apply_pending_inspector_rebuild,
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
                     val_field::refresh_val_fields,
@@ -187,16 +189,12 @@ impl Plugin for InspectorPlugin {
                         .after(prefab_field_dots::decorate_prefab_field_rows)
                         .after(live_edit_dots::refresh_live_edit_field_dots),
                     refresh_name_field,
-                    // Ahead of the variant refresh: a rebuild between its pass and
-                    // its spawns would take down the row those spawns attach to.
-                    flag_inspector_dirty_on_archetype_change
-                        .before(reflect_fields::refresh_enum_variants),
-                    flag_inspector_dirty_on_modifier_stack_change
-                        .before(reflect_fields::refresh_enum_variants),
-                    category_strip::paint_category_tabs,
-                    add_header::rebuild_add_header,
+                    category_strip::paint_category_tabs
+                        .after(category_strip::resolve_active_on_rebuild),
+                    add_header::rebuild_add_header.after(category_strip::resolve_active_on_rebuild),
                     persist_inspector_collapse,
                 )
+                    .after(component_display::sync_inspector_to_selection)
                     .run_if(in_state(crate::AppState::Editor)),
             );
     }
@@ -573,8 +571,8 @@ fn apply_pending_inspector_rebuild(
 
 /// Flag the inspector dirty when the displayed entity's `ModifierStack`
 /// changes in-place. Mutations such as adding or removing modifiers do not
-/// change the archetype, so `flag_inspector_dirty_on_archetype_change` misses
-/// them. This system catches those in-place `Changed` ticks and inserts
+/// change the entity's components, which is all the inspector watches for
+/// itself. This system catches those in-place `Changed` ticks and inserts
 /// `InspectorDirty` so the inspector rebuilds on the same frame.
 fn flag_inspector_dirty_on_modifier_stack_change(
     inspectors: Query<&InspectorTarget, With<Inspector>>,
@@ -586,48 +584,6 @@ fn flag_inspector_dirty_on_modifier_stack_change(
             commands.entity(target.0).insert(InspectorDirty);
         }
     }
-}
-
-/// Rebuild the inspector when the displayed entity's archetype changes.
-///
-/// Some component picks pull in extra components asynchronously (e.g. a
-/// collider component an extension turns into a physics engine's own
-/// collider, after which the engine inserts its position, bounds and mass
-/// components). Without this
-/// watcher the panel built by `sync_inspector_to_selection` keeps showing
-/// only the originally-added component until the user reselects.
-///
-/// Comparing the cached `ArchetypeId` to the live one is O(1) and only
-/// fires on real archetype transitions, so the rebuild cost matches
-/// the user's edit rate, not the framerate.
-fn flag_inspector_dirty_on_archetype_change(
-    world: &mut World,
-    mut last: Local<Option<(Entity, ArchetypeId)>>,
-) {
-    let mut targets = world.query_filtered::<&InspectorTarget, With<Inspector>>();
-    let target = targets.iter(world).next().map(|t| t.0);
-
-    let Some(target) = target else {
-        *last = None;
-        return;
-    };
-
-    let current = world.get_entity(target).ok().map(|e| e.archetype().id());
-
-    let stored = last.as_ref().filter(|(e, _)| *e == target).map(|(_, a)| *a);
-
-    if stored == current {
-        return;
-    }
-
-    if stored.is_some()
-        && current.is_some()
-        && let Ok(mut e) = world.get_entity_mut(target)
-    {
-        e.insert(InspectorDirty);
-    }
-
-    *last = current.map(|arch| (target, arch));
 }
 
 /// When an `InspectorCategoryStripMount` entity is added to the world,
