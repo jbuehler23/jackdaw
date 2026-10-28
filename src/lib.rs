@@ -141,6 +141,7 @@ pub mod render_diagnostics;
 pub mod restart;
 pub mod run_config;
 pub use jackdaw_scaffold as scaffold;
+pub mod pixel_camera;
 pub mod scene_io;
 pub mod scene_nodes;
 pub mod scene_ops;
@@ -487,6 +488,7 @@ impl Plugin for EditorCorePlugin {
                 material_preview::MaterialPreviewPlugin,
                 material_ui::plugin,
                 canvas_snap::plugin,
+                pixel_camera::plugin,
                 image_sampling::plugin,
                 world_units::plugin,
                 sprite_ops::plugin,

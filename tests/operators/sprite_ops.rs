@@ -268,7 +268,11 @@ fn the_add_menu_shows_the_2d_group_only_with_a_2d_scene_open() {
         .collect();
     assert_eq!(
         labels,
-        [("Sprite", wanted), ("Empty 2D", "op:entity.add.empty")]
+        [
+            ("Sprite", wanted),
+            ("Empty 2D", "op:entity.add.empty"),
+            ("Pixel Camera", "op:entity.add.pixel_camera"),
+        ]
     );
 }
 

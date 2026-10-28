@@ -274,6 +274,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
 /// being left out, so a clause without one is complete rather than short of a
 /// target.
 pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
+    ("camera.pixel_canvas", "entity"),
     ("clip.track.enable", "track"),
     ("clip.track.interpolation", "track"),
     ("entity.add.group", "parent"),

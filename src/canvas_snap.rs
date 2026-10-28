@@ -36,6 +36,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<CanvasSnapOp>()
         .register_operator::<CanvasRulersOp>()
         .register_operator::<CanvasGuidesOp>()
+        .register_operator::<CanvasGameFrameOp>()
         .register_operator::<CanvasGuideAddOp>()
         .register_operator::<CanvasGuideRemoveOp>();
 }
@@ -171,6 +172,8 @@ pub struct CanvasSnap {
     pub show_rulers: bool,
     /// Draw the scene's guides over the stage.
     pub show_guides: bool,
+    /// Outline what each pixel canvas camera of a 2D world scene shows.
+    pub show_game_frame: bool,
 }
 
 impl Default for CanvasSnap {
@@ -188,6 +191,7 @@ impl Default for CanvasSnap {
             sprite_edges: true,
             show_rulers: true,
             show_guides: true,
+            show_game_frame: true,
         }
     }
 }
@@ -335,6 +339,24 @@ pub(crate) fn canvas_guides(
     project: Option<Res<ProjectRoot>>,
 ) -> OperatorResult {
     snap.show_guides = params.as_bool("on").unwrap_or(!snap.show_guides);
+    persist(project.as_deref(), &snap);
+    OperatorResult::Finished
+}
+
+/// Show or hide the outline of each pixel canvas camera's view.
+#[operator(
+    id = "canvas.game_frame",
+    label = "Show Game Frame",
+    description = "Show or hide what each pixel canvas camera of a 2D world scene shows.",
+    allows_undo = false,
+    params(on(bool, doc = "On or off. Omit to flip whichever way it currently is."))
+)]
+pub(crate) fn canvas_game_frame(
+    params: In<OperatorParameters>,
+    mut snap: ResMut<CanvasSnap>,
+    project: Option<Res<ProjectRoot>>,
+) -> OperatorResult {
+    snap.show_game_frame = params.as_bool("on").unwrap_or(!snap.show_game_frame);
     persist(project.as_deref(), &snap);
     OperatorResult::Finished
 }

@@ -1,0 +1,156 @@
+//! The `PixelCanvas` card: a resolution preset combo above the reflected
+//! fields, writing through `camera.pixel_canvas`.
+
+use crate::util;
+
+use bevy::prelude::*;
+use jackdaw::commands::CommandHistory;
+use jackdaw::pixel_camera::{CANVAS_PRESETS, CUSTOM_PRESET, CanvasPresetCombo};
+use jackdaw_feathers::button::ButtonContentText;
+use jackdaw_feathers::combobox::{ComboBoxChangeEvent, ComboBoxSelectedIndex};
+use jackdaw_scene_types::PixelCanvas;
+
+fn app_with_canvas(canvas: PixelCanvas) -> (App, Entity) {
+    app_with(canvas, true)
+}
+
+/// A selected entity carrying `canvas` with the inspector open, a 2D camera
+/// when `camera`.
+fn app_with(canvas: PixelCanvas, camera: bool) -> (App, Entity) {
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .spawn(jackdaw::layout::inspector_components_content(default()));
+    let root = jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
+    let entity = app
+        .world_mut()
+        .spawn((Name::new("Game Camera"), canvas, ChildOf(root)))
+        .id();
+    if camera {
+        app.world_mut().entity_mut(entity).insert(Camera2d);
+    }
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    jackdaw::selection::select_only(app.world_mut(), entity);
+    for _ in 0..4 {
+        app.update();
+    }
+    (app, entity)
+}
+
+fn combo(app: &mut App) -> Entity {
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<CanvasPresetCombo>>()
+        .iter(app.world())
+        .collect();
+    assert_eq!(found.len(), 1, "one preset combo");
+    found[0]
+}
+
+/// The option the combo's trigger draws, by its index.
+fn shown(app: &mut App) -> usize {
+    let mut stack = vec![combo(app)];
+    while let Some(entity) = stack.pop() {
+        if app.world().get::<ButtonContentText>(entity).is_some()
+            && let Some(text) = app.world().get::<Text>(entity)
+        {
+            return CANVAS_PRESETS
+                .iter()
+                .position(|preset| text.0 == format!("{} x {}", preset.x, preset.y))
+                .unwrap_or_else(|| {
+                    assert_eq!(text.0, "Custom");
+                    CUSTOM_PRESET
+                });
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    panic!("the combo draws a label");
+}
+
+fn resolution(app: &App, camera: Entity) -> Option<UVec2> {
+    app.world()
+        .get::<PixelCanvas>(camera)
+        .map(|canvas| canvas.resolution)
+}
+
+#[test]
+fn a_preset_pick_sets_the_resolution_and_undo_moves_the_combo_back() {
+    let (mut app, camera) = app_with_canvas(PixelCanvas::new(320, 180));
+    assert_eq!(shown(&mut app), 0);
+    assert!(
+        app.world_mut()
+            .query::<Entity>()
+            .iter(app.world())
+            .any(
+                |entity| jackdaw::inspector::field_edited_by(app.world(), entity)
+                    .is_some_and(|(_, path)| path.starts_with("resolution"))
+            ),
+        "the reflected fields stay below for a custom size"
+    );
+
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+    pick(&mut app, 2);
+    assert_eq!(resolution(&app, camera), Some(UVec2::new(480, 270)));
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        before + 1
+    );
+    assert_eq!(shown(&mut app), 2);
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(resolution(&app, camera), Some(UVec2::new(320, 180)));
+    assert_eq!(shown(&mut app), 0, "the combo follows the undo");
+}
+
+/// Pick option `selected` of the card's preset combo, as the widget does: its
+/// own index first, then the change.
+fn pick(app: &mut App, selected: usize) {
+    let entity = combo(app);
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(ComboBoxSelectedIndex(selected));
+    app.world_mut().trigger(ComboBoxChangeEvent {
+        entity,
+        selected,
+        label: String::new(),
+        value: None,
+    });
+    for _ in 0..3 {
+        app.update();
+    }
+}
+
+#[test]
+fn a_refused_pick_leaves_the_combo_on_the_canvas_size() {
+    let (mut app, entity) = app_with(PixelCanvas::new(320, 180), false);
+    pick(&mut app, 2);
+    assert_eq!(
+        resolution(&app, entity),
+        Some(UVec2::new(320, 180)),
+        "the operator refuses an entity that is no 2D camera"
+    );
+    assert_eq!(shown(&mut app), 0, "the combo goes back to what it holds");
+}
+
+#[test]
+fn custom_on_a_preset_size_snaps_back_to_the_preset() {
+    let (mut app, camera) = app_with_canvas(PixelCanvas::new(384, 216));
+    pick(&mut app, CUSTOM_PRESET);
+    assert_eq!(resolution(&app, camera), Some(UVec2::new(384, 216)));
+    assert_eq!(
+        shown(&mut app),
+        1,
+        "Custom only names a size off the presets"
+    );
+}
+
+#[test]
+fn a_size_off_the_presets_reads_custom() {
+    let (mut app, _camera) = app_with_canvas(PixelCanvas::new(256, 144));
+    assert_eq!(shown(&mut app), CUSTOM_PRESET);
+}
