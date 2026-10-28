@@ -15,6 +15,7 @@ mod region_text;
 mod report;
 mod setup;
 mod setup_edit;
+mod setup_layout;
 mod sidecar;
 mod slice;
 mod solver;
@@ -43,6 +44,7 @@ pub use setup::{
     CollisionMode, Provenance, Scope, SetupSet, SetupTerrain, SetupTile, TilesetSetup, Tracked,
     rerun, reset_to_auto,
 };
+pub use setup_layout::Coverage;
 pub use sidecar::{
     LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
     encode,

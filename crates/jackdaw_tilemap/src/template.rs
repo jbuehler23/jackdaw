@@ -50,6 +50,17 @@ impl LayoutTemplate {
         }
     }
 
+    /// Columns of the block its tiles are laid out in, row by row; `Blob47`
+    /// takes rows of eight.
+    pub const fn columns(self) -> u32 {
+        match self {
+            LayoutTemplate::Corner16 | LayoutTemplate::Side16 => 4,
+            LayoutTemplate::Minimal3x3 => 3,
+            LayoutTemplate::Corner2x2 => 2,
+            LayoutTemplate::Blob47 => 8,
+        }
+    }
+
     /// Peer terrains of each tile in grid order; see the module docs.
     pub fn tiles(self, inner: TerrainId, outer: TerrainId) -> Vec<TileTerrains> {
         let masked = |peers: [Peer; 4], mask: usize| {

@@ -50,10 +50,20 @@ pub enum SetupError {
     SetExists(TerrainId, TerrainId),
     /// A tile that holds no peer of the terrain.
     NotOnTile(TileAddress, TerrainId),
+    /// A block of tiles that leaves its sheet's grid.
+    OutsideSheet {
+        origin: UVec2,
+        size: UVec2,
+    },
     /// A tile that belongs to the stamp at this origin.
     InObject {
         tile: TileAddress,
         origin: UVec2,
+    },
+    /// No stamp covers this cell of the sheet.
+    NoStamp {
+        sheet: usize,
+        cell: UVec2,
     },
 }
 
@@ -80,10 +90,20 @@ impl fmt::Display for SetupError {
                     at.tile, at.sheet
                 )
             }
+            SetupError::OutsideSheet { origin, size } => write!(
+                f,
+                "{}x{} tiles at column {} row {} leave the sheet",
+                size.x, size.y, origin.x, origin.y
+            ),
             SetupError::InObject { tile, origin } => write!(
                 f,
                 "tile {} of sheet {} is part of the object at column {} row {}",
                 tile.tile, tile.sheet, origin.x, origin.y
+            ),
+            SetupError::NoStamp { sheet, cell } => write!(
+                f,
+                "no object covers column {} row {} of sheet {sheet}",
+                cell.x, cell.y
             ),
         }
     }

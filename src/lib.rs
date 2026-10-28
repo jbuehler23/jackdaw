@@ -167,6 +167,7 @@ pub mod texture_import;
 pub mod thumbnail;
 pub mod tileset_edit;
 pub mod tileset_import;
+pub mod tileset_layout_ops;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod toolbar_overflow;
