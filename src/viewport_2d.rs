@@ -36,6 +36,7 @@ use crate::{
     canvas_snap::{
         CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp, GuideScene,
     },
+    image_sampling::{ProjectSet2dSamplingOp, Sampling},
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
     prelude::*,
     selection::Selection,
@@ -2037,6 +2038,30 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
         ),
         "Show Guides",
     ));
+    if world_scene {
+        let sampling = world
+            .get_resource::<crate::image_sampling::ProjectSampling2d>()
+            .map(|sampling| sampling.0)
+            .unwrap_or_default();
+        rows.push((
+            format!("{SECTION_ACTION_PREFIX}Project 2D Sampling"),
+            String::new(),
+        ));
+        for (mode, label) in [
+            (Sampling::Linear, "Linear"),
+            (Sampling::Nearest, "Nearest (Pixel Art)"),
+        ] {
+            rows.push(checked_row(
+                sampling == mode,
+                format!(
+                    "{OP_ACTION_PREFIX}{}?mode={}",
+                    ProjectSet2dSamplingOp::ID,
+                    mode.id()
+                ),
+                label,
+            ));
+        }
+    }
     rows.push((
         format!("{SECTION_ACTION_PREFIX}Grid: {}", grid_label(grid)),
         String::new(),

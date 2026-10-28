@@ -21,6 +21,7 @@ mod extension_app_plugin;
 mod extension_reload;
 mod foliage;
 mod gltf_authoring;
+mod image_sampling;
 mod launcher;
 mod layered_surface;
 mod live_levels;

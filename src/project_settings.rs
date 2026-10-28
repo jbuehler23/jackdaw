@@ -29,7 +29,7 @@ pub enum Section<'a> {
 /// section and an unreadable one all give `T::default()`, so a project
 /// that has never had these settings written opens on the defaults.
 pub fn load_section<T: DeserializeOwned + Default>(root: &Path, section: Section<'_>) -> T {
-    let Some(document) = read_document(root) else {
+    let Some(document) = read_document(&settings_path(root)) else {
         return T::default();
     };
     let value = match section {
@@ -42,6 +42,11 @@ pub fn load_section<T: DeserializeOwned + Default>(root: &Path, section: Section
 /// Write one section of the project's settings, leaving every other
 /// section as it was on disk.
 pub fn store_section<T: Serialize>(root: &Path, section: Section<'_>, settings: &T) {
+    store_section_at(&settings_path(root), section, settings);
+}
+
+/// [`store_section`] into the JSON settings file at `path`.
+pub fn store_section_at<T: Serialize>(path: &Path, section: Section<'_>, settings: &T) {
     let value = match serde_json::to_value(settings) {
         Ok(value) => value,
         Err(error) => {
@@ -49,7 +54,7 @@ pub fn store_section<T: Serialize>(root: &Path, section: Section<'_>, settings: 
             return;
         }
     };
-    let mut document = read_document(root).unwrap_or_default();
+    let mut document = read_document(path).unwrap_or_default();
     match section {
         Section::TopLevel => {
             let Some(fields) = value.as_object() else {
@@ -64,11 +69,11 @@ pub fn store_section<T: Serialize>(root: &Path, section: Section<'_>, settings: 
             document.insert(key.to_string(), value);
         }
     }
-    write_document(root, &document);
+    write_document(path, &document);
 }
 
-fn read_document(root: &Path) -> Option<Map<String, Value>> {
-    let bytes = std::fs::read(settings_path(root)).ok()?;
+fn read_document(path: &Path) -> Option<Map<String, Value>> {
+    let bytes = std::fs::read(path).ok()?;
     match serde_json::from_slice::<Value>(&bytes) {
         Ok(Value::Object(document)) => Some(document),
         Ok(_) => {
@@ -82,8 +87,7 @@ fn read_document(root: &Path) -> Option<Map<String, Value>> {
     }
 }
 
-fn write_document(root: &Path, document: &Map<String, Value>) {
-    let path = settings_path(root);
+fn write_document(path: &Path, document: &Map<String, Value>) {
     if let Some(parent) = path.parent()
         && let Err(error) = std::fs::create_dir_all(parent)
     {
@@ -92,7 +96,7 @@ fn write_document(root: &Path, document: &Map<String, Value>) {
     }
     match serde_json::to_vec_pretty(document) {
         Ok(bytes) => {
-            if let Err(error) = std::fs::write(&path, bytes) {
+            if let Err(error) = std::fs::write(path, bytes) {
                 warn!("could not persist the project settings: {error}");
             }
         }

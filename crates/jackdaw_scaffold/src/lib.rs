@@ -2823,6 +2823,11 @@ mod tests {
         let lib = std::fs::read_to_string(dest.join("src/lib.rs")).unwrap();
         assert!(lib.contains("pub struct GamePlugin"));
         assert!(!lib.contains("{{"));
+        let main = std::fs::read_to_string(dest.join("src/main.rs")).unwrap();
+        assert!(
+            main.contains("DefaultPlugins.set(jackdaw_runtime::image_plugin())"),
+            "the game reads the project's 2D sampling: {main}"
+        );
     }
 
     /// The templates state the whole jackdaw requirement rather than a

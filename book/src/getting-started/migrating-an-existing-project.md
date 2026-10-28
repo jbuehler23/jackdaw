@@ -77,6 +77,23 @@ If the game builds its `App` somewhere other than `src/main.rs`, pass
 `DefaultPlugins` through `maybe_windowless` there; `jd doctor` then reports
 embedded Play as `[warn] not checked`.
 
+### 2D sampling
+
+The project's 2D sampling (the 2D view's snap menu, or `project.set_2d_sampling`)
+is kept in `assets/jackdaw_game.json` under the project root, which the game
+reads at startup from its default `assets` folder. A game
+applies it by taking its `ImagePlugin` from the runtime; projects made before
+the setting existed need this one line in `src/main.rs`, and keep linear
+sampling without it:
+
+```rust
+let default_plugins = DefaultPlugins.set(jackdaw_runtime::image_plugin());
+```
+
+The game then applies it to every image it loads, 3D textures included, while
+the editor applies it to 2D images only; an image whose own `.meta` sets a
+sampler keeps that one.
+
 ## Cargo workspaces
 
 Point the import at the workspace root. Jackdaw resolves the member that

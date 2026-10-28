@@ -327,6 +327,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::model_lod::add_to_extension(ctx);
         crate::lod_bar::add_to_extension(ctx);
         crate::texture_import::add_to_extension(ctx);
+        crate::image_sampling::add_to_extension(ctx);
         crate::project_window::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);
         crate::inspector::ops::add_to_extension(ctx);

@@ -1,6 +1,6 @@
 //! The `Sprite` card: the sprite's own fields, its anchor as a preset with a
-//! custom offset beside it, and a row that sizes it from the pixels per unit
-//! its art was drawn at.
+//! custom offset beside it, a row that sizes it from the pixels per unit its
+//! art was drawn at, and how its image is sampled.
 
 use bevy::{ecs::system::SystemState, prelude::*, sprite::Anchor, ui_widgets::ValueChange};
 use jackdaw_api::prelude::*;
@@ -15,6 +15,7 @@ use jackdaw_feathers::{
 };
 
 use crate::commands::FieldWritten;
+use crate::image_sampling::{ImageSetSamplingOp, ProjectSampling2d, Sampling, sampling_target};
 use crate::remote::entity_browser::RemoteEntityProxy;
 use crate::sprite_props::{ANCHOR_PRESETS, SpriteSetAnchorOp, SpriteSetPixelsPerUnitOp};
 
@@ -30,11 +31,14 @@ enum CardRow<'a> {
     Anchor,
     /// Size from pixels per unit.
     SizeFromPpu,
+    /// How the sprite's image is sampled.
+    Sampling,
 }
 
 /// The card's rows top to bottom; `Sprite` fields it does not name follow.
-const ROW_ORDER: [CardRow<'static>; 10] = [
+const ROW_ORDER: [CardRow<'static>; 11] = [
     CardRow::Field("image"),
+    CardRow::Sampling,
     CardRow::Anchor,
     CardRow::Field("flip_x"),
     CardRow::Field("flip_y"),
@@ -75,6 +79,17 @@ pub struct SpritePpuApply {
     pub source: Entity,
 }
 
+/// The sampling combo of the card showing `source`, built while its sprite
+/// drew `image`.
+#[derive(Component)]
+pub struct SpriteSamplingCombo {
+    pub source: Entity,
+    pub image: AssetId<Image>,
+}
+
+/// The sampling combo's choices, in order, as `image.set_sampling` names them.
+const SAMPLING_CHOICES: [&str; 3] = ["project", "linear", "nearest"];
+
 /// Pixels per unit the size row starts at: one image pixel per world unit.
 const DEFAULT_PPU: f64 = 1.0;
 
@@ -84,7 +99,9 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(mark_own_offset_edit)
         .add_observer(follow_anchor_write)
         .add_observer(on_ppu_number)
-        .add_observer(on_ppu_apply);
+        .add_observer(on_ppu_apply)
+        .add_observer(on_sampling_pick)
+        .add_observer(follow_image_write);
 }
 
 fn anchor_type_path() -> &'static str {
@@ -143,6 +160,7 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
         .cloned()
         .unwrap_or_default();
     let sprite_path = <Sprite as bevy::reflect::TypePath>::type_path();
+    let (project, own) = sampling_state(world, source, &sprite);
 
     let mut state: SystemState<(Commands, Query<&Name>)> = SystemState::new(world);
     if let Ok((mut commands, names)) = state.get_mut(world) {
@@ -187,6 +205,12 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
                 }
             } else if card_row == CardRow::SizeFromPpu {
                 spawn_ppu_row(&mut commands, body, source);
+            } else if card_row == CardRow::Sampling {
+                let combo = SpriteSamplingCombo {
+                    source,
+                    image: sprite.image.id(),
+                };
+                spawn_sampling_row(&mut commands, body, combo, project, own);
             } else if let CardRow::Field(name) = card_row
                 && let Some(value) = sprite.field(name)
             {
@@ -364,4 +388,116 @@ fn on_ppu_apply(
         .param("entity", apply.source)
         .param("ppu", ppu)
         .call();
+}
+
+/// The project's 2D sampling, and the override of the image `sprite` draws:
+/// `None` when that image's sampling cannot be set here, or the sprite is a
+/// running game's.
+fn sampling_state(
+    world: &World,
+    source: Entity,
+    sprite: &Sprite,
+) -> (Sampling, Option<Option<Sampling>>) {
+    let project = world
+        .get_resource::<ProjectSampling2d>()
+        .map(|sampling| sampling.0)
+        .unwrap_or_default();
+    let target = sprite
+        .image
+        .path()
+        .zip(world.get_resource::<crate::project::ProjectRoot>())
+        .filter(|_| world.get::<RemoteEntityProxy>(source).is_none())
+        .and_then(|(path, root)| sampling_target(&root.assets_dir(), path));
+    (project, target.map(|target| target.own_sampling()))
+}
+
+/// The sampling row, hidden while the sprite draws no image `image.set_sampling`
+/// can set: none at all, a labelled part of a file, another asset source, a
+/// path outside the assets, or a file whose meta is another loader's; and for
+/// a running game's sprite. It stays built so a later change of image rebuilds
+/// the card.
+fn spawn_sampling_row(
+    commands: &mut Commands,
+    body: Entity,
+    combo: SpriteSamplingCombo,
+    project: Sampling,
+    own: Option<Option<Sampling>>,
+) {
+    let row = spawn_field_row(commands, body, FieldRowProps::new("sampling"));
+    if own.is_none() {
+        commands
+            .entity(row.row)
+            .entry::<Node>()
+            .and_modify(|mut node| node.display = Display::None);
+    }
+    let index = match own.flatten() {
+        None => 0,
+        Some(Sampling::Linear) => 1,
+        Some(Sampling::Nearest) => 2,
+    };
+    let project_label = match project {
+        Sampling::Linear => "Project (Linear)",
+        Sampling::Nearest => "Project (Nearest)",
+    };
+    let options = [project_label, "Linear", "Nearest"]
+        .map(ComboBoxOptionData::new)
+        .to_vec();
+    commands
+        .spawn((combobox_with_selected(options, index), ChildOf(row.control)))
+        .insert((combo, ComboBoxSelectedIndex(index)));
+}
+
+/// A pick on the sampling combo sets the override of the image the sprite
+/// draws now through `image.set_sampling`. The card is rebuilt after, so the
+/// combo shows what the meta holds whether the operator took the pick or not.
+fn on_sampling_pick(
+    pick: On<ComboBoxChangeEvent>,
+    combos: Query<&SpriteSamplingCombo>,
+    sprites: Query<&Sprite>,
+    proxies: Query<(), With<RemoteEntityProxy>>,
+    mut rebuild: ResMut<super::PendingInspectorRebuild>,
+    mut commands: Commands,
+) {
+    let Ok(combo) = combos.get(pick.entity) else {
+        return;
+    };
+    rebuild.0 = Some(combo.source);
+    if proxies.contains(combo.source) {
+        return;
+    }
+    let Some(mode) = SAMPLING_CHOICES.get(pick.selected) else {
+        return;
+    };
+    let Some(path) = sprites
+        .get(combo.source)
+        .ok()
+        .and_then(|sprite| sprite.image.path())
+    else {
+        warn!("the sprite draws no image file to set the sampling of");
+        return;
+    };
+    commands
+        .operator(ImageSetSamplingOp::ID)
+        .param("path", path.to_string())
+        .param("mode", *mode)
+        .call();
+}
+
+/// Rebuild the card once its sprite draws another image, so the sampling row
+/// reads that image's.
+fn follow_image_write(
+    written: On<FieldWritten>,
+    combos: Query<&SpriteSamplingCombo>,
+    sprites: Query<&Sprite>,
+    mut rebuild: ResMut<super::PendingInspectorRebuild>,
+) {
+    let Ok(sprite) = sprites.get(written.entity) else {
+        return;
+    };
+    if combos
+        .iter()
+        .any(|combo| combo.source == written.entity && combo.image != sprite.image.id())
+    {
+        rebuild.0 = Some(written.entity);
+    }
 }
