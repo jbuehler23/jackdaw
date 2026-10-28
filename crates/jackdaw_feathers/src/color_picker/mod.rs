@@ -20,12 +20,12 @@ pub fn plugin(app: &mut App) {
         .add_observer(input_fields::handle_input_mode_change)
         .add_observer(on_color_plane_change)
         .add_observer(on_color_slider_change)
+        .add_observer(setup::setup_color_picker)
+        .add_observer(setup::setup_trigger_swatch)
+        .add_observer(setup::setup_color_picker_content)
         .add_systems(
             Update,
             (
-                setup::setup_color_picker,
-                setup::setup_trigger_swatch,
-                setup::setup_color_picker_content,
                 setup::despawn_orphaned_color_picker_popovers,
                 setup::despawn_orphaned_color_picker_roots,
                 visuals::update_color_picker_visuals,
