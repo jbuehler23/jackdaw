@@ -4065,6 +4065,8 @@ dependencies = [
  "jackdaw_snap",
  "jackdaw_surface",
  "jackdaw_terrain",
+ "jackdaw_tilemap",
+ "jackdaw_tileset",
  "jackdaw_uv",
  "jackdaw_widgets",
  "jackdaw_widgets_runtime",
@@ -4565,6 +4567,21 @@ dependencies = [
  "noise",
  "path-slash",
  "rand 0.10.3",
+]
+
+[[package]]
+name = "jackdaw_tilemap"
+version = "0.21.0-dev"
+dependencies = [
+ "glam",
+]
+
+[[package]]
+name = "jackdaw_tileset"
+version = "0.21.0-dev"
+dependencies = [
+ "bevy",
+ "jackdaw_tilemap",
 ]
 
 [[package]]
