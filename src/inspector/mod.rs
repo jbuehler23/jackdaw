@@ -159,6 +159,7 @@ impl Plugin for InspectorPlugin {
                 (
                     reflect_fields::refresh_inspector_fields,
                     reflect_fields::refresh_enum_variants,
+                    reflect_fields::refresh_enum_menus,
                     val_field::refresh_val_fields,
                     // The structured cards' refresh passes, which pull each
                     // card back in line with the component behind it.

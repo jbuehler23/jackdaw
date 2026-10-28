@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::ui_widgets::{Activate, ValueChange};
+use bevy::ui_widgets::ValueChange;
 use jackdaw::definition_assets::OpenDefinition;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
@@ -123,13 +123,13 @@ fn widget_writing(app: &mut App, type_path: &'static str, field_path: &str) -> E
     })
 }
 
-/// Every menu item caption on the card, with the entity carrying it.
+/// Every dropdown row caption on the card, with the row carrying it.
 fn menu_items(app: &mut App) -> Vec<(Entity, String)> {
     let mut items = Vec::new();
     for entity in all_entities(app) {
         if app
             .world()
-            .get::<bevy::ui_widgets::MenuItem>(entity)
+            .get::<bevy::ui_widgets::ListItem>(entity)
             .is_none()
         {
             continue;
@@ -193,7 +193,7 @@ fn the_enum_row_offers_the_variants_the_schema_reports() {
         .find(|(_, caption)| caption == "Rare")
         .map(|(entity, _)| *entity)
         .expect("the menu offers Rare");
-    app.world_mut().trigger(Activate { entity: rare });
+    choose(&mut app, rare);
     for _ in 0..4 {
         app.update();
     }
@@ -302,7 +302,7 @@ fn removing_one_row_leaves_the_rest_holding_what_they_held() {
     );
 }
 
-/// The menu item on the card carrying this caption.
+/// The dropdown row on the card carrying this caption.
 fn menu_item(app: &mut App, caption: &str) -> Entity {
     let items = menu_items(app);
     items
@@ -313,6 +313,26 @@ fn menu_item(app: &mut App, caption: &str) -> Entity {
             let shown: Vec<&String> = items.iter().map(|(_, caption)| caption).collect();
             panic!("no menu item says '{caption}'; the card offers {shown:?}")
         })
+}
+
+/// Choose a dropdown row the way the list does on a click.
+fn choose(app: &mut App, row: Entity) {
+    let mut select = row;
+    while app
+        .world()
+        .get::<bevy::feathers::controls::FeathersSelect>(select)
+        .is_none()
+    {
+        select = app
+            .world()
+            .get::<ChildOf>(select)
+            .expect("the row sits in a dropdown")
+            .parent();
+    }
+    app.world_mut().trigger(bevy::ui_widgets::SetSelected {
+        entity: select,
+        row,
+    });
 }
 
 fn settle(app: &mut App) {
@@ -367,7 +387,7 @@ fn choosing_a_variant_that_carries_fields_gives_the_row_its_fields() {
     settle(&mut app);
 
     let kill = menu_item(&mut app, "Kill");
-    app.world_mut().trigger(Activate { entity: kill });
+    choose(&mut app, kill);
     settle(&mut app);
 
     assert_eq!(

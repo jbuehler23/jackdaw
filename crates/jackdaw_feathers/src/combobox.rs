@@ -1,53 +1,60 @@
-use bevy::feathers::controls::{FeathersMenuItem, FeathersMenuPopup};
+//! Dropdowns.
+//!
+//! A combobox is a [`FeathersSelect`]: the trigger is its menu button, the list
+//! is its popup of [`FeathersListRow`]s, and the picked row is the list's
+//! [`Selected`] row. What the editor adds on top is the option data (values and
+//! icons), a caption that can stay fixed for a combobox used as a menu, and the
+//! [`ComboBoxChangeEvent`] callers listen for.
+
+use bevy::app::PropagateOver;
+use bevy::feathers::controls::{
+    FeathersListRow, FeathersMenuButton, FeathersMenuPopup, FeathersSelect, OptionIndex,
+};
+use bevy::feathers::display::caption;
+use bevy::feathers::font_styles::InheritableFont;
 use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
-use bevy::ui_widgets::Activate;
+use bevy::scene::SceneList;
+use bevy::text::{FontSize, FontSourceTemplate, LineBreak};
+use bevy::ui::Selected;
+use bevy::ui_widgets::ValueChange;
 use lucide_icons::Icon;
 
-use crate::button::{
-    ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, IconButtonProps, button, icon_button,
-    spawn_inert_checkbox,
-};
-use crate::popover::{EditorPopover, PopoverPlacement, PopoverProps, popover_shell};
-use crate::utils::is_descendant_of;
+use crate::icons::font_paths;
+use crate::tokens;
 
 pub fn plugin(app: &mut App) {
-    app.add_observer(handle_trigger_click)
-        .add_observer(handle_option_activate)
+    app.add_observer(setup_combobox)
+        .add_observer(emit_change_on_pick)
         .add_systems(
-            Update,
-            (
-                setup_combobox,
-                handle_combobox_popover_closed,
-                apply_selected_index.before(sync_combobox_selection),
-                sync_combobox_selection,
-            ),
-        )
-        .add_systems(PostUpdate, setup_combobox.in_set(crate::WidgetSetupSystems));
+            PostUpdate,
+            (apply_selected_index, release_menu_picks, paint_triggers)
+                .chain()
+                .in_set(crate::WidgetSetupSystems),
+        );
 }
 
 #[derive(Component)]
 pub struct EditorComboBox;
 
+/// The menu button that opens the list, naming the combobox it belongs to.
 #[derive(Component)]
 pub struct ComboBoxTrigger(pub Entity);
 
+/// The popup holding the list, naming the combobox it belongs to.
 #[derive(Component)]
 pub struct ComboBoxPopover(pub Entity);
 
-#[derive(Component, Default)]
-struct ComboBoxState {
-    popover: Option<Entity>,
-    last_synced_selected: Option<usize>,
+/// The text and icon the trigger draws, found once when the combobox is built.
+#[derive(Component)]
+struct ComboBoxParts {
+    caption: Entity,
+    glyph: Option<Entity>,
 }
 
-#[derive(Component, Clone)]
-struct ComboBoxOption {
-    combobox: Entity,
-    index: usize,
-    label: String,
-    value: Option<String>,
-}
+/// Marks the trigger's caption text with the combobox it belongs to.
+#[derive(Component)]
+struct ComboBoxCaption(Entity);
 
 #[derive(Clone)]
 pub struct ComboBoxOptionData {
@@ -82,21 +89,29 @@ impl<T: Into<String>> From<T> for ComboBoxOptionData {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
-enum ComboBoxStyle {
-    #[default]
-    Default,
-    IconOnly,
-}
-
 #[derive(Component)]
 pub(crate) struct ComboBoxConfig {
     options: Vec<ComboBoxOptionData>,
     pub(crate) selected: usize,
-    style: ComboBoxStyle,
+    /// A caption the trigger keeps whatever is picked, for a combobox used as
+    /// a menu. Such a combobox never holds a selected row.
     label_override: Option<String>,
-    highlight_selected: bool,
-    initialized: bool,
+}
+
+impl ComboBoxConfig {
+    fn caption(&self) -> String {
+        self.label_override
+            .clone()
+            .or_else(|| self.options.get(self.selected).map(|o| o.label.clone()))
+            .unwrap_or_default()
+    }
+
+    fn glyph(&self) -> Option<Icon> {
+        if self.label_override.is_some() {
+            return None;
+        }
+        self.options.get(self.selected).and_then(|o| o.icon)
+    }
 }
 
 #[derive(EntityEvent)]
@@ -115,21 +130,6 @@ pub struct ComboBoxChangeEvent {
 #[derive(Component)]
 pub struct ComboBoxSelectedIndex(pub usize);
 
-/// Push an externally-set index into the widget's own config, where
-/// [`sync_combobox_selection`] picks it up and repaints the label.
-fn apply_selected_index(
-    mut combos: Query<
-        (&ComboBoxSelectedIndex, &mut ComboBoxConfig),
-        Changed<ComboBoxSelectedIndex>,
-    >,
-) {
-    for (index, mut config) in &mut combos {
-        if index.0 < config.options.len() && config.selected != index.0 {
-            config.selected = index.0;
-        }
-    }
-}
-
 pub fn combobox(options: Vec<impl Into<ComboBoxOptionData>>) -> impl Bundle {
     combobox_with_selected(options, 0)
 }
@@ -138,490 +138,669 @@ pub fn combobox_with_selected(
     options: Vec<impl Into<ComboBoxOptionData>>,
     selected: usize,
 ) -> impl Bundle {
-    (
-        EditorComboBox,
-        ComboBoxConfig {
-            options: options.into_iter().map(Into::into).collect(),
-            selected,
-            style: ComboBoxStyle::Default,
-            label_override: None,
-            highlight_selected: true,
-            initialized: false,
-        },
-        ComboBoxState::default(),
-        Node {
-            width: percent(100),
-            ..default()
-        },
-    )
+    combobox_bundle(options, selected, None, percent(100))
 }
 
+/// A combobox whose trigger always reads `label`, for a list of actions rather
+/// than a choice of value.
 pub fn combobox_with_label(
     options: Vec<impl Into<ComboBoxOptionData>>,
     label: impl Into<String>,
 ) -> impl Bundle {
-    (
-        EditorComboBox,
-        ComboBoxConfig {
-            options: options.into_iter().map(Into::into).collect(),
-            selected: 0,
-            style: ComboBoxStyle::Default,
-            label_override: Some(label.into()),
-            highlight_selected: false,
-            initialized: false,
-        },
-        ComboBoxState::default(),
-        Node {
-            width: percent(100),
-            ..default()
-        },
-    )
+    combobox_bundle(options, 0, Some(label.into()), percent(100))
 }
 
-pub fn combobox_icon(options: Vec<impl Into<ComboBoxOptionData>>) -> impl Bundle {
-    (
-        EditorComboBox,
-        ComboBoxConfig {
-            options: options.into_iter().map(Into::into).collect(),
-            selected: 0,
-            style: ComboBoxStyle::IconOnly,
-            label_override: None,
-            highlight_selected: false,
-            initialized: false,
-        },
-        ComboBoxState::default(),
-        Node::default(),
-    )
-}
-
-pub fn combobox_icon_with_selected(
+/// A combobox as wide as the option it shows, for a row with no width to give.
+pub fn combobox_compact_with_selected(
     options: Vec<impl Into<ComboBoxOptionData>>,
     selected: usize,
+) -> impl Bundle {
+    combobox_bundle(options, selected, None, Val::Auto)
+}
+
+fn combobox_bundle(
+    options: Vec<impl Into<ComboBoxOptionData>>,
+    selected: usize,
+    label_override: Option<String>,
+    width: Val,
 ) -> impl Bundle {
     (
         EditorComboBox,
         ComboBoxConfig {
             options: options.into_iter().map(Into::into).collect(),
             selected,
-            style: ComboBoxStyle::IconOnly,
-            label_override: None,
-            highlight_selected: true,
-            initialized: false,
+            label_override,
         },
-        ComboBoxState::default(),
-        Node::default(),
+        Node { width, ..default() },
     )
 }
 
-pub(crate) fn setup_combobox(
-    mut commands: Commands,
-    icon_font: Res<crate::icons::IconFont>,
-    mut configs: Query<(Entity, &mut ComboBoxConfig)>,
-) {
-    for (entity, mut config) in &mut configs {
-        if config.initialized {
-            continue;
-        }
-        config.initialized = true;
-
-        // The previous flow spawned the trigger via `commands.spawn`,
-        // then best-effort attached it as a child of `entity` with
-        // `commands.get_entity(entity).add_child(...)`. `get_entity`
-        // only guards at *queue* time, not flush time; if the
-        // combobox was cascade-despawned before the spawn + add_child
-        // commands drained, the trigger ended up orphaned with a
-        // `ChildOf` pointing at a dead parent, producing the
-        // `Entity despawned ... is invalid` errors. Wrap the whole
-        // setup in a queued closure that runs with `&mut World`, do
-        // a single synchronous liveness check, and spawn the trigger
-        // inside `with_children` so parent + child land atomically.
-        let style = config.style;
-        let icon_font_handle = icon_font.0.clone();
-        let selected_option = config.options.get(config.selected).cloned();
-        let label_override = config.label_override.clone();
-        commands.queue(move |world: &mut World| {
-            let Ok(mut ec) = world.get_entity_mut(entity) else {
-                return;
-            };
-            match style {
-                ComboBoxStyle::IconOnly => {
-                    ec.with_children(|parent| {
-                        parent.spawn((
-                            ComboBoxTrigger(entity),
-                            icon_button(
-                                IconButtonProps::new(Icon::Ellipsis).variant(ButtonVariant::Ghost),
-                                &icon_font_handle,
-                            ),
-                        ));
-                    });
-                }
-                ComboBoxStyle::Default => {
-                    let label = label_override
-                        .or_else(|| selected_option.as_ref().map(|o| o.label.clone()))
-                        .unwrap_or_default();
-                    let selected_icon = selected_option.and_then(|o| o.icon);
-
-                    let mut button_props = ButtonProps::new(label)
-                        .with_size(ButtonSize::MD)
-                        .align_left()
-                        .with_right_icon(Icon::ChevronDown);
-
-                    if let Some(icon) = selected_icon {
-                        button_props = button_props.with_left_icon(icon);
-                    }
-
-                    ec.with_children(|parent| {
-                        parent.spawn((ComboBoxTrigger(entity), button(button_props)));
-                    });
-                }
-            }
-        });
-    }
+/// Build the select the moment the combobox is spawned, so its first frame
+/// draws the trigger with its caption rather than an empty node.
+fn setup_combobox(add: On<Add<ComboBoxConfig>>, mut commands: Commands) {
+    let entity = add.entity;
+    commands.queue(move |world: &mut World| build_combobox(world, entity));
 }
 
-fn handle_trigger_click(
-    trigger: On<ButtonClickEvent>,
-    mut commands: Commands,
-    triggers: Query<&ComboBoxTrigger>,
-    configs: Query<&ComboBoxConfig>,
-    mut states: Query<&mut ComboBoxState>,
-    existing_popovers: Query<(Entity, &ComboBoxPopover)>,
-    all_popovers: Query<Entity, With<EditorPopover>>,
-    mut button_styles: Query<&mut ButtonVariant>,
-    parents: Query<&ChildOf>,
-) {
-    let Ok(combo_trigger) = triggers.get(trigger.entity) else {
+fn build_combobox(world: &mut World, entity: Entity) {
+    let Ok(combobox) = world.get_entity(entity) else {
         return;
     };
-    let Ok(config) = configs.get(combo_trigger.0) else {
+    let Some(config) = combobox.get::<ComboBoxConfig>() else {
         return;
     };
-    let Ok(mut state) = states.get_mut(combo_trigger.0) else {
+    let width = combobox.get::<Node>().map(|node| node.width);
+    let selected = combobox
+        .get::<ComboBoxSelectedIndex>()
+        .map(|index| index.0)
+        .filter(|index| *index < config.options.len())
+        .unwrap_or(config.selected);
+    let rows: Vec<Box<dyn SceneList>> = config
+        .options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| option_row(index, option))
+        .collect();
+    let rows: Box<dyn SceneList> = Box::new(rows);
+    let with_glyph =
+        config.label_override.is_none() && config.options.iter().any(|o| o.icon.is_some());
+
+    let applied = world
+        .entity_mut(entity)
+        .apply_scene(bsn! { @FeathersSelect { @options: {rows} } });
+    if let Err(error) = applied {
+        error!("a combobox did not spawn: {error}");
+        return;
+    }
+
+    let parts = descendants_of(world, entity);
+    let Some(trigger) = parts
+        .iter()
+        .copied()
+        .find(|part| world.get::<FeathersMenuButton>(*part).is_some())
+    else {
+        return;
+    };
+    let Some(popup) = parts
+        .iter()
+        .copied()
+        .find(|part| world.get::<FeathersMenuPopup>(*part).is_some())
+    else {
+        return;
+    };
+    let Some(caption) = descendants_of(world, trigger)
+        .into_iter()
+        .find(|part| world.get::<Text>(*part).is_some())
+    else {
         return;
     };
 
-    // If popover is already open, close it
-    for (popover_entity, popover_ref) in &existing_popovers {
-        if popover_ref.0 == combo_trigger.0 {
-            commands.entity(popover_entity).try_despawn();
-            state.popover = None;
-            let base = if config.style == ComboBoxStyle::IconOnly {
-                ButtonVariant::Ghost
-            } else {
-                ButtonVariant::Default
-            };
-            if let Ok(mut variant) = button_styles.get_mut(trigger.entity) {
-                *variant = base;
-            }
-            return;
-        }
-    }
-
-    // Don't open if another non-nested popover is open
-    let any_popover_open = !all_popovers.is_empty();
-    if any_popover_open {
-        let is_nested = all_popovers
-            .iter()
-            .any(|pop| is_descendant_of(combo_trigger.0, pop, &parents));
-        if !is_nested {
-            return;
-        }
-    }
-
-    let combobox_entity = combo_trigger.0;
-
-    // Activate the trigger button
-    if let Ok(mut variant) = button_styles.get_mut(trigger.entity) {
-        *variant = ButtonVariant::ActiveAlt;
-    }
-
-    // The list is a feathers menu popup of menu items; the editor's
-    // popover shell is what places it against the trigger and what
-    // dismisses it on a click outside.
-    let popover_entity = commands
-        .spawn_scene(bsn! { @FeathersMenuPopup })
-        .insert((
-            ComboBoxPopover(combobox_entity),
-            popover_shell(
-                &PopoverProps::new(trigger.entity)
-                    .with_placement(PopoverPlacement::BottomStart)
-                    .with_z_index(200),
-            ),
+    // The caption sits in a slot of its own that cuts it at its edge, so a
+    // narrow row shrinks the trigger instead of the trigger overhanging the
+    // row. A node cannot cut its own text.
+    let slot = world
+        .spawn((
             Node {
-                position_type: PositionType::Absolute,
-                flex_direction: FlexDirection::Column,
-                min_width: px(120.0),
-                padding: UiRect::axes(px(0.0), px(4.0)),
-                border: UiRect::all(px(1.0)),
+                flex_shrink: 1.0,
+                min_width: px(0),
+                overflow: Overflow::clip_x(),
                 ..default()
             },
+            ThemedText,
         ))
         .id();
-
-    state.popover = Some(popover_entity);
-
-    for (index, option) in config.options.iter().enumerate() {
-        let label = option.label.clone();
-        let row = commands
-            .spawn_scene(bsn! {
-                @FeathersMenuItem {
-                    @caption: bsn! { Text({label}) ThemedText },
-                }
-            })
-            .insert((
-                ComboBoxOption {
-                    combobox: combobox_entity,
-                    index,
-                    label: option.label.clone(),
-                    value: option.value.clone(),
-                },
-                ChildOf(popover_entity),
-            ))
-            .id();
-
-        // The picked option's row shows a ticked box, which is the only
-        // state a feathers menu item has for "this is the one".
-        if config.highlight_selected && index == config.selected {
-            commands.queue(move |world: &mut World| {
-                if world.get_entity(row).is_ok() {
-                    spawn_inert_checkbox(world, row, true);
-                }
-            });
-        }
+    let mut trigger_entity = world.entity_mut(trigger);
+    trigger_entity
+        .insert(ComboBoxTrigger(entity))
+        .insert_children(0, &[slot]);
+    if let Some(mut node) = trigger_entity.get_mut::<Node>() {
+        node.min_width = px(0);
     }
-}
-
-fn handle_combobox_popover_closed(
-    _commands: Commands,
-    mut states: Query<(&mut ComboBoxState, &ComboBoxConfig, &Children), With<EditorComboBox>>,
-    popovers: Query<Entity, With<EditorPopover>>,
-    triggers: Query<Entity, With<ComboBoxTrigger>>,
-    mut button_styles: Query<&mut ButtonVariant>,
-) {
-    for (mut state, config, combobox_children) in &mut states {
-        let Some(popover_entity) = state.popover else {
-            continue;
-        };
-
-        if popovers.get(popover_entity).is_ok() {
-            continue;
-        }
-
-        state.popover = None;
-
-        let base = if config.style == ComboBoxStyle::IconOnly {
-            ButtonVariant::Ghost
-        } else {
-            ButtonVariant::Default
-        };
-
-        for child in combobox_children.iter() {
-            if triggers.get(child).is_ok() {
-                if let Ok(mut variant) = button_styles.get_mut(child) {
-                    *variant = base;
-                }
-                break;
+    // The menu button hands its caption feathers' own size; the editor's text
+    // is smaller. Inserted again rather than edited, since the font reaches
+    // the caption on insert.
+    if let Some(font) = trigger_entity.get::<InheritableFont>().cloned() {
+        trigger_entity.insert(InheritableFont {
+            font_size: tokens::TEXT_SIZE,
+            ..font
+        });
+    }
+    world.entity_mut(slot).add_child(caption);
+    world.entity_mut(caption).insert((
+        ComboBoxCaption(entity),
+        TextLayout {
+            linebreak: LineBreak::NoWrap,
+            ..default()
+        },
+    ));
+    world.entity_mut(popup).insert(ComboBoxPopover(entity));
+    let glyph = if with_glyph {
+        let spawned = world.spawn_scene(bsn! {
+            @glyph(Icon::Circle)
+            Node { margin: UiRect::right(px(6)) }
+        });
+        match spawned {
+            Ok(spawned) => Some(spawned.id()),
+            Err(error) => {
+                error!("a combobox icon did not spawn: {error}");
+                None
             }
         }
+    } else {
+        None
+    };
+    if let Some(glyph) = glyph {
+        world.entity_mut(trigger).insert_children(0, &[glyph]);
+    }
+
+    let mut combobox = world.entity_mut(entity);
+    combobox.insert(ComboBoxParts { caption, glyph });
+    if let Some(width) = width
+        && let Some(mut node) = combobox.get_mut::<Node>()
+    {
+        node.width = width;
+    }
+    if let Some(mut config) = combobox.get_mut::<ComboBoxConfig>() {
+        config.selected = selected;
+    }
+
+    select_row(world, entity);
+    paint_trigger(world, entity);
+}
+
+/// One row of the list: the option's icon, if it has one, then its label.
+/// The icon sits a level below the label, so the select's own caption sync,
+/// which takes a row's first text, reads the label.
+fn option_row(index: usize, option: &ComboBoxOptionData) -> Box<dyn SceneList> {
+    let label = option.label.clone();
+    match option.icon {
+        Some(icon) => Box::new(bsn_list! {
+            @FeathersListRow
+            InheritableFont { font_size: {tokens::TEXT_SIZE} }
+            OptionIndex(index)
+            Children [
+                Node { margin: UiRect::right(px(6)) }
+                ThemedText
+                Children [ @glyph(icon) ]
+                --
+                @caption(label)
+            ]
+        }),
+        None => Box::new(bsn_list! {
+            @FeathersListRow
+            InheritableFont { font_size: {tokens::TEXT_SIZE} }
+            OptionIndex(index)
+            Children [ @caption(label) ]
+        }),
     }
 }
 
-fn handle_option_activate(
-    trigger: On<Activate>,
-    mut commands: Commands,
-    options: Query<&ComboBoxOption>,
+/// A Lucide glyph coloured like the text beside it, in its own font.
+fn glyph(icon: Icon) -> impl Scene {
+    let glyph = String::from(icon.unicode());
+    bsn! {
+        Text(glyph)
+        TextFont {
+            font: FontSourceTemplate::Handle(font_paths::LUCIDE),
+            font_size: FontSize::Px(tokens::ICON_SM_PX),
+        }
+        ~{PropagateOver::<TextFont>::default()}
+        ThemedText
+    }
+}
+
+fn descendants_of(world: &World, root: Entity) -> Vec<Entity> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        if let Some(children) = world.get::<Children>(entity) {
+            out.extend(children.iter());
+            stack.extend(children.iter().rev());
+        }
+    }
+    out
+}
+
+/// Mark the configured option's row as the list's selected row, clearing the
+/// rest. A combobox used as a menu keeps no row selected.
+fn select_row(world: &mut World, combobox: Entity) {
+    let Some(config) = world.get::<ComboBoxConfig>(combobox) else {
+        return;
+    };
+    let selected = config.label_override.is_none().then_some(config.selected);
+    for row in descendants_of(world, combobox) {
+        let Some(index) = world.get::<OptionIndex>(row).map(|index| index.0) else {
+            continue;
+        };
+        let is_selected = world.get::<Selected>(row).is_some();
+        if Some(index) == selected && !is_selected {
+            world.entity_mut(row).insert(Selected);
+        } else if Some(index) != selected && is_selected {
+            world.entity_mut(row).remove::<Selected>();
+        }
+    }
+}
+
+fn paint_trigger(world: &mut World, combobox: Entity) {
+    let Some(config) = world.get::<ComboBoxConfig>(combobox) else {
+        return;
+    };
+    let Some(parts) = world.get::<ComboBoxParts>(combobox) else {
+        return;
+    };
+    let caption = config.caption();
+    let glyph = config.glyph();
+    let (caption_entity, glyph_entity) = (parts.caption, parts.glyph);
+    if let Some(mut text) = world.get_mut::<Text>(caption_entity)
+        && text.0 != caption
+    {
+        text.0 = caption;
+    }
+    if let Some(glyph_entity) = glyph_entity {
+        paint_glyph(world, glyph_entity, glyph);
+    }
+}
+
+fn paint_glyph(world: &mut World, entity: Entity, icon: Option<Icon>) {
+    let display = if icon.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if let Some(mut node) = world.get_mut::<Node>(entity)
+        && node.display != display
+    {
+        node.display = display;
+    }
+    if let Some(icon) = icon
+        && let Some(mut text) = world.get_mut::<Text>(entity)
+    {
+        let glyph = String::from(icon.unicode());
+        if text.0 != glyph {
+            text.0 = glyph;
+        }
+    }
+}
+
+/// The select reports a pick as the row it chose; callers hear it as the
+/// option's index, label and value.
+fn emit_change_on_pick(
+    pick: On<ValueChange<Entity>>,
     mut configs: Query<&mut ComboBoxConfig>,
-    popovers: Query<(Entity, &ComboBoxPopover)>,
-    triggers: Query<(Entity, &ComboBoxTrigger)>,
-    children: Query<&Children>,
-    captions: Query<(), With<crate::button::ButtonContentText>>,
-    mut texts: Query<&mut Text>,
+    indices: Query<&OptionIndex>,
+    mut commands: Commands,
 ) {
-    let Ok(option) = options.get(trigger.entity) else {
+    let combobox = pick.source;
+    let Ok(mut config) = configs.get_mut(combobox) else {
         return;
     };
-
-    let Ok(mut config) = configs.get_mut(option.combobox) else {
+    let Ok(&OptionIndex(index)) = indices.get(pick.value) else {
         return;
     };
-
-    let has_label_override = config.label_override.is_some();
-    let is_icon_only = config.style == ComboBoxStyle::IconOnly;
-    config.selected = option.index;
-    // Keep the outside-visible index on the user's own pick too, so a
-    // reader never sees a stale selection and a later write of the same
-    // index is not mistaken for a no-op.
+    let Some(option) = config.options.get(index).cloned() else {
+        return;
+    };
+    config.selected = index;
+    // Keep the outside-visible index on the user's own pick too, so a reader
+    // never sees a stale selection and a later write of the same index is not
+    // mistaken for a no-op.
     commands
-        .entity(option.combobox)
-        .insert(ComboBoxSelectedIndex(option.index));
-
+        .entity(combobox)
+        .insert(ComboBoxSelectedIndex(index));
     commands.trigger(ComboBoxChangeEvent {
-        entity: option.combobox,
-        selected: option.index,
-        label: option.label.clone(),
-        value: option.value.clone(),
+        entity: combobox,
+        selected: index,
+        label: option.label,
+        value: option.value,
     });
+}
 
-    // Update trigger button text
-    if !is_icon_only && !has_label_override {
-        for (trigger_entity, combo_trigger) in &triggers {
-            if combo_trigger.0 != option.combobox {
-                continue;
-            }
-            if let Some(caption) =
-                crate::button::button_caption(trigger_entity, &children, &captions)
-                && let Ok(mut text) = texts.get_mut(caption)
-            {
-                **text = option.label.clone();
-            }
-        }
-    }
-
-    // Close popover
-    for (popover_entity, popover_ref) in &popovers {
-        if popover_ref.0 == option.combobox {
-            commands.entity(popover_entity).try_despawn();
+/// Push an externally-set index into the widget, selecting its row.
+fn apply_selected_index(
+    mut commands: Commands,
+    mut combos: Query<
+        (Entity, &ComboBoxSelectedIndex, &mut ComboBoxConfig),
+        Changed<ComboBoxSelectedIndex>,
+    >,
+) {
+    for (entity, index, mut config) in &mut combos {
+        if index.0 < config.options.len() && config.selected != index.0 {
+            config.selected = index.0;
+            commands.queue(move |world: &mut World| select_row(world, entity));
         }
     }
 }
 
-fn sync_combobox_selection(
-    mut combos: Query<(Entity, &ComboBoxConfig, &mut ComboBoxState)>,
-    triggers: Query<(Entity, &ComboBoxTrigger)>,
-    children: Query<&Children>,
-    captions: Query<(), With<crate::button::ButtonContentText>>,
-    mut texts: Query<&mut Text>,
+/// A combobox used as a menu offers the same entry again next time, so the row
+/// the list selected on a pick is let go.
+fn release_menu_picks(
+    mut commands: Commands,
+    picked: Query<Entity, (With<OptionIndex>, Added<Selected>)>,
+    parents: Query<&ChildOf>,
+    configs: Query<&ComboBoxConfig>,
 ) {
-    for (entity, config, mut state) in &mut combos {
-        if !config.initialized {
-            continue;
+    for row in &picked {
+        let menu = parents
+            .iter_ancestors(row)
+            .find_map(|ancestor| configs.get(ancestor).ok())
+            .is_some_and(|config| config.label_override.is_some());
+        if menu {
+            commands.entity(row).remove::<Selected>();
         }
-        // A combobox given a caption of its own keeps it: the button is a
-        // menu the user opens, not a readout of what it last opened.
-        if config.label_override.is_some() {
-            state.last_synced_selected = Some(config.selected);
-            continue;
-        }
-        let Some(option) = config.options.get(config.selected) else {
-            continue;
-        };
-        let index_changed = state.last_synced_selected != Some(config.selected);
-        for (trigger_entity, trigger_ref) in &triggers {
-            if trigger_ref.0 != entity {
-                continue;
-            }
-            if let Some(caption) =
-                crate::button::button_caption(trigger_entity, &children, &captions)
-                && let Ok(mut text) = texts.get_mut(caption)
-                && (index_changed || **text != option.label)
-            {
-                **text = option.label.clone();
-                state.last_synced_selected = Some(config.selected);
-            }
-            break;
-        }
+    }
+}
+
+/// Keep the trigger reading the combobox's own caption: after a pick or an
+/// outside index change, and over the select's sync, which copies the picked
+/// row's text even for a combobox used as a menu.
+fn paint_triggers(
+    mut commands: Commands,
+    changed: Query<Entity, (With<ComboBoxParts>, Changed<ComboBoxConfig>)>,
+    captions: Query<&ComboBoxCaption, Changed<Text>>,
+) {
+    let combos = changed
+        .iter()
+        .chain(captions.iter().map(|caption| caption.0));
+    for combobox in combos {
+        commands.queue(move |world: &mut World| paint_trigger(world, combobox));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::icons::{EditorFont, IconFont};
+    use bevy::ui_widgets::ListBox;
 
-    /// A combobox with three options, ticked far enough for its trigger
-    /// button (and the label text inside it) to exist. The button draws its
-    /// own label, so its setup pass has to be here too.
-    fn app_with_combobox() -> (App, Entity) {
+    fn app() -> App {
         let mut app = App::new();
         app.add_plugins((
             bevy::app::TaskPoolPlugin::default(),
             bevy::asset::AssetPlugin::default(),
             bevy::scene::ScenePlugin,
-            crate::button::plugin,
+            plugin,
         ));
         app.init_asset::<bevy::text::Font>();
-        app.init_resource::<bevy::input_focus::InputFocus>();
-        app.insert_resource(IconFont(Handle::default()));
-        app.insert_resource(EditorFont(Handle::default()));
-        app.add_systems(
-            Update,
-            (
-                setup_combobox,
-                apply_selected_index.before(sync_combobox_selection),
-                sync_combobox_selection,
-            ),
-        );
+        app.init_asset::<Image>();
+        app.configure_sets(PostUpdate, crate::WidgetSetupSystems);
+        app
+    }
+
+    fn app_with_combobox() -> (App, Entity) {
+        let mut app = app();
         let entity = app
             .world_mut()
             .spawn(combobox_with_selected(vec!["px", "%", "auto"], 0))
             .id();
         app.update();
-        app.update();
         (app, entity)
     }
 
-    /// The same app, for a combobox that carries a caption of its own.
-    fn app_with_captioned_combobox(caption: &str) -> (App, Entity) {
-        let (mut app, _) = app_with_combobox();
-        let entity = app
+    /// The label the trigger is currently drawing.
+    fn label(app: &App, combobox: Entity) -> String {
+        let caption = app
+            .world()
+            .get::<ComboBoxParts>(combobox)
+            .expect("the combobox is built")
+            .caption;
+        app.world()
+            .get::<Text>(caption)
+            .expect("the caption is text")
+            .0
+            .clone()
+    }
+
+    fn rows(app: &App, combobox: Entity) -> Vec<Entity> {
+        descendants_of(app.world(), combobox)
+            .into_iter()
+            .filter(|entity| app.world().get::<OptionIndex>(*entity).is_some())
+            .collect()
+    }
+
+    fn selected_rows(app: &App, combobox: Entity) -> Vec<usize> {
+        rows(app, combobox)
+            .into_iter()
+            .filter(|row| app.world().get::<Selected>(*row).is_some())
+            .filter_map(|row| app.world().get::<OptionIndex>(row).map(|index| index.0))
+            .collect()
+    }
+
+    /// The list a pick is made in, as the select's list box.
+    fn list(app: &App, combobox: Entity) -> Entity {
+        descendants_of(app.world(), combobox)
+            .into_iter()
+            .find(|entity| app.world().get::<ListBox>(*entity).is_some())
+            .expect("the select holds a list")
+    }
+
+    /// The list box reports a pick on a row the way a click or Enter does.
+    fn pick(app: &mut App, combobox: Entity, index: usize) {
+        let list = list(app, combobox);
+        let row = rows(app, combobox)[index];
+        app.world_mut().trigger(ValueChange {
+            source: list,
+            value: row,
+            is_final: true,
+        });
+        app.world_mut().flush();
+    }
+
+    /// A dropdown is a feathers select with its caption, rows and selection in
+    /// place as soon as the spawn lands, before any frame has run.
+    #[test]
+    fn a_dropdown_is_complete_on_the_frame_it_spawns() {
+        let mut app = app();
+        let combobox = app
             .world_mut()
-            .spawn(combobox_with_label(vec!["Field", "Action"], caption))
+            .spawn(combobox_with_selected(vec!["px", "%", "auto"], 1))
+            .id();
+        app.world_mut().flush();
+
+        let world = app.world();
+        assert!(world.get::<FeathersSelect>(combobox).is_some());
+        assert_eq!(
+            world.get::<Node>(combobox).map(|node| node.width),
+            Some(percent(100)),
+            "the select keeps the width it was spawned with",
+        );
+        let parts: Vec<Entity> = descendants_of(world, combobox);
+        assert!(
+            parts
+                .iter()
+                .any(|e| world.get::<ComboBoxTrigger>(*e).is_some()
+                    && world.get::<FeathersMenuButton>(*e).is_some()),
+            "the trigger is the select's menu button",
+        );
+        assert!(
+            parts
+                .iter()
+                .any(|e| world.get::<ComboBoxPopover>(*e).is_some()
+                    && world.get::<FeathersMenuPopup>(*e).is_some()),
+            "the list is the select's menu popup",
+        );
+        assert_eq!(label(&app, combobox), "%");
+        assert_eq!(rows(&app, combobox).len(), 3, "one row per option");
+        assert_eq!(selected_rows(&app, combobox), vec![1]);
+    }
+
+    /// The trigger and the rows set their text at the editor's size, not at
+    /// the larger size feathers gives a menu.
+    #[test]
+    fn a_dropdown_reads_at_the_editor_text_size() {
+        let (app, combobox) = app_with_combobox();
+        let world = app.world();
+        let sized: Vec<Entity> = descendants_of(world, combobox)
+            .into_iter()
+            .filter(|e| {
+                world.get::<FeathersMenuButton>(*e).is_some()
+                    || world.get::<OptionIndex>(*e).is_some()
+            })
+            .collect();
+        assert_eq!(sized.len(), 4, "the trigger and three rows");
+        for entity in sized {
+            assert_eq!(
+                world
+                    .get::<InheritableFont>(entity)
+                    .map(|font| font.font_size),
+                Some(tokens::TEXT_SIZE),
+            );
+        }
+    }
+
+    /// Choosing a row sends the change event with that option, and the trigger
+    /// reads the new option.
+    #[test]
+    fn choosing_an_option_sends_the_change_event() {
+        let mut app = app();
+        let combobox = app
+            .world_mut()
+            .spawn(combobox_with_selected(
+                vec![
+                    ComboBoxOptionData::new("Linear").with_value("linear"),
+                    ComboBoxOptionData::new("Step").with_value("step"),
+                ],
+                0,
+            ))
             .id();
         app.update();
+
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        app.world_mut()
+            .add_observer(move |change: On<ComboBoxChangeEvent>| {
+                sink.lock().expect("no other thread holds it").push((
+                    change.entity,
+                    change.selected,
+                    change.label.clone(),
+                    change.value.clone(),
+                ));
+            });
+
+        pick(&mut app, combobox, 1);
         app.update();
-        (app, entity)
+
+        assert_eq!(
+            heard.lock().expect("no other thread holds it").as_slice(),
+            [(combobox, 1, "Step".to_string(), Some("step".to_string()))],
+        );
+        assert_eq!(label(&app, combobox), "Step");
+        assert_eq!(selected_rows(&app, combobox), vec![1]);
+        assert_eq!(
+            app.world()
+                .get::<ComboBoxSelectedIndex>(combobox)
+                .map(|index| index.0),
+            Some(1),
+        );
     }
 
-    /// A combobox used as a menu keeps the caption it was given: the
-    /// selection sync must not write the picked option over it.
+    /// An option's icon is drawn on its row and, once picked, on the trigger.
     #[test]
-    fn a_caption_of_its_own_survives_the_selection_sync() {
-        let (mut app, combobox) = app_with_captioned_combobox("Add Binding");
-        assert_eq!(label(&mut app, combobox), "Add Binding");
+    fn an_option_icon_shows_on_its_row_and_on_the_trigger() {
+        let mut app = app();
+        let combobox = app
+            .world_mut()
+            .spawn(combobox_with_selected(
+                vec![
+                    ComboBoxOptionData::new("Plain"),
+                    ComboBoxOptionData::new("Box").with_icon(Icon::Box),
+                ],
+                0,
+            ))
+            .id();
+        app.update();
+
+        let glyph = String::from(Icon::Box.unicode());
+        let row = rows(&app, combobox)[1];
+        assert!(
+            descendants_of(app.world(), row)
+                .iter()
+                .any(|e| app.world().get::<Text>(*e).is_some_and(|t| t.0 == glyph)),
+            "the row draws its option's icon",
+        );
+        let trigger_glyph = app
+            .world()
+            .get::<ComboBoxParts>(combobox)
+            .and_then(|parts| parts.glyph)
+            .expect("a combobox with icons has a trigger glyph");
+        assert_eq!(
+            app.world().get::<Node>(trigger_glyph).map(|n| n.display),
+            Some(Display::None),
+            "an option without an icon shows none",
+        );
+
+        pick(&mut app, combobox, 1);
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Node>(trigger_glyph).map(|n| n.display),
+            Some(Display::Flex),
+        );
+        assert_eq!(
+            app.world().get::<Text>(trigger_glyph).map(|t| t.0.clone()),
+            Some(glyph),
+        );
+        assert_eq!(label(&app, combobox), "Box");
+    }
+
+    /// A combobox used as a menu keeps the caption it was given, and the same
+    /// entry can be picked twice.
+    #[test]
+    fn a_caption_of_its_own_survives_a_pick() {
+        let mut app = app();
+        let combobox = app
+            .world_mut()
+            .spawn(combobox_with_label(vec!["Field", "Action"], "Add Binding"))
+            .id();
+        app.update();
+        assert_eq!(label(&app, combobox), "Add Binding");
+        assert!(selected_rows(&app, combobox).is_empty());
+
+        let picks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = picks.clone();
+        app.world_mut()
+            .add_observer(move |change: On<ComboBoxChangeEvent>| {
+                sink.lock()
+                    .expect("no other thread holds it")
+                    .push(change.selected);
+            });
+
+        pick(&mut app, combobox, 1);
+        app.update();
+        // The select's caption sync writes the picked row's text over the
+        // caption; the combobox puts its own back before layout.
+        let caption = app.world().get::<ComboBoxParts>(combobox).unwrap().caption;
+        app.world_mut().get_mut::<Text>(caption).unwrap().0 = "Action".into();
+        app.update();
+        assert_eq!(label(&app, combobox), "Add Binding");
+        assert!(selected_rows(&app, combobox).is_empty());
+
+        pick(&mut app, combobox, 1);
+        app.update();
+        assert_eq!(
+            picks.lock().expect("no other thread holds it").as_slice(),
+            [1, 1],
+        );
 
         app.world_mut()
             .entity_mut(combobox)
-            .insert(ComboBoxSelectedIndex(1));
+            .insert(ComboBoxSelectedIndex(0));
         app.update();
-        app.update();
-
-        assert_eq!(label(&mut app, combobox), "Add Binding");
-    }
-
-    /// The label the trigger button is currently drawing, told apart from
-    /// the chevron beside it by the button's own content marker.
-    fn label(app: &mut App, combobox: Entity) -> String {
-        let mut stack = vec![combobox];
-        while let Some(entity) = stack.pop() {
-            if app
-                .world()
-                .get::<crate::button::ButtonContentText>(entity)
-                .is_some()
-                && let Some(text) = app.world().get::<Text>(entity)
-            {
-                return text.0.clone();
-            }
-            if let Some(children) = app.world().get::<Children>(entity) {
-                stack.extend(children.iter());
-            }
-        }
-        panic!("the trigger button draws a label");
+        assert_eq!(label(&app, combobox), "Add Binding");
     }
 
     /// The label follows a selection written from outside, not only a
-    /// click, so the inspector can put a combobox back where an undo left
-    /// it.
+    /// pick, so the inspector can put a combobox back where an undo left it.
     #[test]
     fn an_externally_set_index_repaints_the_label() {
         let (mut app, combobox) = app_with_combobox();
-        assert_eq!(label(&mut app, combobox), "px");
+        assert_eq!(label(&app, combobox), "px");
 
         app.world_mut()
             .entity_mut(combobox)
             .insert(ComboBoxSelectedIndex(2));
         app.update();
 
-        assert_eq!(label(&mut app, combobox), "auto");
+        assert_eq!(label(&app, combobox), "auto");
+        assert_eq!(selected_rows(&app, combobox), vec![2]);
     }
 
     /// An index that names no option is a caller bug; the widget keeps
@@ -635,6 +814,7 @@ mod tests {
             .insert(ComboBoxSelectedIndex(9));
         app.update();
 
-        assert_eq!(label(&mut app, combobox), "px");
+        assert_eq!(label(&app, combobox), "px");
+        assert_eq!(selected_rows(&app, combobox), vec![0]);
     }
 }
