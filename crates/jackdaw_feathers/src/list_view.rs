@@ -13,7 +13,7 @@ use bevy::ui_widgets::ListBox;
 use crate::tokens;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, setup_list_rows);
+    app.add_observer(setup_list_row);
 }
 
 /// A list container: a column of rows the list widget owns.
@@ -35,26 +35,16 @@ pub fn list_view() -> impl Bundle {
 /// entity and puts the layout the caller spawned it with back
 /// afterwards.
 pub fn list_row() -> impl Bundle {
-    EditorListRow { applied: false }
+    EditorListRow
 }
 
 /// Marks an entity that is to become a `FeathersListRow`.
 #[derive(Component)]
-pub struct EditorListRow {
-    applied: bool,
-}
+pub struct EditorListRow;
 
-fn setup_list_rows(
-    mut commands: Commands,
-    mut rows: Query<(Entity, &mut EditorListRow), Added<EditorListRow>>,
-) {
-    for (entity, mut row) in &mut rows {
-        if row.applied {
-            continue;
-        }
-        row.applied = true;
-        commands.queue(move |world: &mut World| apply_list_row(world, entity));
-    }
+fn setup_list_row(add: On<Add<EditorListRow>>, mut commands: Commands) {
+    let entity = add.entity;
+    commands.queue(move |world: &mut World| apply_list_row(world, entity));
 }
 
 /// Put the row's scene on `entity`, keeping the layout it was spawned
@@ -77,5 +67,40 @@ fn apply_list_row(world: &mut World, entity: Entity) {
     };
     if let Some(node) = node {
         row.insert(node);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A list row is a feathers list row on the frame it is spawned, and
+    /// keeps the layout it was spawned with.
+    #[test]
+    fn a_list_row_is_complete_on_the_frame_it_spawns() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            plugin,
+        ));
+        app.init_asset::<Font>();
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                list_row(),
+                Node {
+                    height: px(30),
+                    ..default()
+                },
+            ))
+            .id();
+        app.world_mut().flush();
+
+        let row = app.world().entity(entity);
+        assert!(row.contains::<FeathersListRow>());
+        assert_eq!(row.get::<Node>().map(|node| node.height), Some(px(30)));
     }
 }

@@ -129,6 +129,16 @@ impl Plugin for HierarchyPlugin {
                     rebuild_hierarchy_on_container_added,
                     spawn_rows_for_new_roots,
                     spawn_rows_for_late_registrations,
+                    crate::outliner_rows::build_rows_in_view
+                        .run_if(crate::outliner_rows::rows_were_added),
+                )
+                    .chain()
+                    .after(jackdaw_widgets::tree_view::maintain_tree_index)
+                    .before(bevy::ui::UiSystems::Prepare),
+            )
+            .add_systems(
+                PostUpdate,
+                (
                     refresh_chevrons_on_document_change,
                     refresh_icons_on_node_change,
                     sync_row_lock_glyphs.run_if(row_lock_glyphs_are_stale),
