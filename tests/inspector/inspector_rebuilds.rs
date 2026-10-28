@@ -1,14 +1,17 @@
 //! When the inspector rebuilds its cards.
 //!
-//! The panel is put up again only when what it shows has changed, and then
-//! once: a reselect of the shown entity leaves it standing, and an added
-//! component brings one new set of cards rather than two.
+//! The panel changes only when what it shows has changed, and then once: a
+//! reselect of the shown entity leaves it standing, and a component added to
+//! or taken from it brings or takes only that component's card.
 
 use bevy::prelude::*;
-use jackdaw::inspector::ComponentDisplay;
+use bevy::ui_widgets::ValueChange;
 use jackdaw::inspector::component_picker::InspectorAddComponentButton;
+use jackdaw::inspector::{ComponentDisplay, Inspector};
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
+use jackdaw_feathers::panel_card::DisclosureSection;
+use jackdaw_widgets::collapsible::CollapsibleSection;
 
 use crate::util;
 
@@ -17,6 +20,7 @@ struct Tally {
     nodes_added: usize,
     nodes_removed: usize,
     cards_added: usize,
+    cards_removed: usize,
 }
 
 fn settle(app: &mut App) {
@@ -83,7 +87,12 @@ fn app_with_two_entities() -> (App, Entity, Entity) {
         })
         .add_observer(|_: On<Add<ComponentDisplay>>, mut tally: ResMut<Tally>| {
             tally.cards_added += 1;
-        });
+        })
+        .add_observer(
+            |_: On<Remove<ComponentDisplay>>, mut tally: ResMut<Tally>| {
+                tally.cards_removed += 1;
+            },
+        );
     (app, first, second)
 }
 
@@ -101,6 +110,72 @@ fn cards_showing(app: &mut App) -> usize {
         .count()
 }
 
+fn inspectors(app: &mut App) -> usize {
+    app.world_mut()
+        .query_filtered::<(), With<Inspector>>()
+        .iter(app.world())
+        .count()
+}
+
+/// The component cards of each panel, top to bottom, with their type paths.
+fn cards_in_order(app: &mut App) -> Vec<(Entity, String)> {
+    let inspectors: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<Inspector>>()
+        .iter(app.world())
+        .collect();
+    let world = app.world();
+    inspectors
+        .into_iter()
+        .filter_map(|inspector| world.get::<Children>(inspector))
+        .flat_map(Children::iter)
+        .filter_map(|card| {
+            jackdaw::inspector::component_card_type_path(world, card)
+                .map(|type_path| (card, type_path.to_string()))
+        })
+        .collect()
+}
+
+fn card_for(app: &mut App, type_path: &str) -> Entity {
+    cards_in_order(app)
+        .into_iter()
+        .find(|(_, shown)| shown == type_path)
+        .map(|(card, _)| card)
+        .unwrap_or_else(|| panic!("a card for {type_path}"))
+}
+
+fn add_component(app: &mut App, entity: Entity, type_path: &str) {
+    let result = app
+        .world_mut()
+        .operator("component.add")
+        .param("entity", entity)
+        .param("type_path", type_path.to_string())
+        .call()
+        .expect("the operator dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    settle(app);
+}
+
+fn remove_component(app: &mut App, entity: Entity, type_path: &str) {
+    let result = app
+        .world_mut()
+        .operator("component.remove")
+        .param("entity", entity)
+        .param("type_path", type_path.to_string())
+        .call()
+        .expect("the operator dispatched");
+    assert_eq!(result, OperatorResult::Finished);
+    settle(app);
+}
+
+fn visibility_path() -> &'static str {
+    <Visibility as bevy::reflect::TypePath>::type_path()
+}
+
+fn transform_path() -> &'static str {
+    <Transform as bevy::reflect::TypePath>::type_path()
+}
+
 #[test]
 fn reselecting_the_shown_entity_leaves_the_inspector_standing() {
     let (mut app, first, _second) = app_with_two_entities();
@@ -116,29 +191,125 @@ fn reselecting_the_shown_entity_leaves_the_inspector_standing() {
 }
 
 #[test]
-fn adding_a_component_rebuilds_the_inspector_once() {
+fn adding_a_component_puts_up_only_its_card() {
     let (mut app, first, _second) = app_with_two_entities();
     select(&mut app, first);
+    let before: Vec<Entity> = cards_in_order(&mut app)
+        .into_iter()
+        .map(|(card, _)| card)
+        .collect();
+    assert!(!before.is_empty(), "the entity's cards are up");
+    let panels = inspectors(&mut app);
     reset(&mut app);
 
-    let result = app
-        .world_mut()
-        .operator("component.add")
-        .param("entity", first)
-        .param(
-            "type_path",
-            <Visibility as bevy::reflect::TypePath>::type_path().to_string(),
-        )
-        .call()
-        .expect("the operator dispatched");
-    assert_eq!(result, OperatorResult::Finished);
-    settle(&mut app);
+    add_component(&mut app, first, visibility_path());
 
-    let showing = cards_showing(&mut app);
+    let tally = app.world().resource::<Tally>();
+    assert_eq!(tally.cards_added, panels, "one card per panel is put up");
+    assert_eq!(tally.cards_removed, 0, "and none is taken down");
+    assert_eq!(tally.nodes_removed, 0, "no UI node is taken down");
+    let after = cards_in_order(&mut app);
+    for card in &before {
+        assert!(
+            after.iter().any(|(shown, _)| shown == card),
+            "the card {card} still stands",
+        );
+    }
+    assert!(
+        after
+            .iter()
+            .any(|(_, type_path)| type_path == visibility_path()),
+        "the new component has its card",
+    );
+}
+
+#[test]
+fn removing_a_component_takes_down_only_its_card() {
+    let (mut app, first, _second) = app_with_two_entities();
+    select(&mut app, first);
+    add_component(&mut app, first, visibility_path());
+    let staying: Vec<Entity> = cards_in_order(&mut app)
+        .into_iter()
+        .filter(|(_, type_path)| type_path != visibility_path())
+        .map(|(card, _)| card)
+        .collect();
+    let panels = inspectors(&mut app);
+    reset(&mut app);
+
+    remove_component(&mut app, first, visibility_path());
+
+    let tally = app.world().resource::<Tally>();
     assert_eq!(
-        app.world().resource::<Tally>().cards_added,
-        showing,
-        "every card showing was put up once, and none twice",
+        tally.cards_removed, panels,
+        "one card per panel is taken down"
+    );
+    assert_eq!(tally.cards_added, 0, "and none is put up");
+    assert_eq!(tally.nodes_added, 0, "no UI node is put up");
+    let after: Vec<Entity> = cards_in_order(&mut app)
+        .into_iter()
+        .map(|(card, _)| card)
+        .collect();
+    assert_eq!(after, staying, "the other cards stand, in their order");
+}
+
+#[test]
+fn a_card_put_up_for_an_added_component_takes_the_place_a_fresh_build_gives_it() {
+    let (mut app, first, second) = app_with_two_entities();
+    select(&mut app, first);
+
+    add_component(&mut app, first, visibility_path());
+    let added: Vec<String> = cards_in_order(&mut app)
+        .into_iter()
+        .map(|(_, type_path)| type_path)
+        .collect();
+
+    select(&mut app, second);
+    select(&mut app, first);
+    let fresh: Vec<String> = cards_in_order(&mut app)
+        .into_iter()
+        .map(|(_, type_path)| type_path)
+        .collect();
+
+    assert_eq!(added, fresh);
+}
+
+#[test]
+fn an_expanded_card_stays_expanded_when_another_component_is_added() {
+    let (mut app, first, _second) = app_with_two_entities();
+    select(&mut app, first);
+    let transform = card_for(&mut app, transform_path());
+    let disclosure = app
+        .world_mut()
+        .query::<(Entity, &DisclosureSection)>()
+        .iter(app.world())
+        .find(|(_, link)| link.0 == transform)
+        .map(|(toggle, _)| toggle)
+        .expect("the card has a disclosure");
+    app.world_mut().trigger(ValueChange {
+        source: disclosure,
+        value: true,
+        is_final: true,
+    });
+    settle(&mut app);
+    assert!(
+        app.world()
+            .get::<CollapsibleSection>(transform)
+            .is_some_and(|section| !section.collapsed),
+        "the card is expanded",
+    );
+
+    add_component(&mut app, first, visibility_path());
+
+    assert_eq!(
+        card_for(&mut app, transform_path()),
+        transform,
+        "the card is the one that was expanded",
+    );
+    assert!(
+        app.world()
+            .get::<CollapsibleSection>(transform)
+            .is_some_and(|section| !section.collapsed),
+        "and it is still expanded",
     );
 }
 
@@ -202,21 +373,23 @@ fn a_new_selection_whose_cardless_components_arrive_a_frame_later_is_built_once(
 }
 
 #[test]
-fn a_component_that_gets_a_card_arriving_later_puts_the_cards_up_again() {
+fn a_component_that_gets_a_card_arriving_later_puts_up_its_card() {
     let (mut app, first, _second) = app_with_two_entities();
     app.register_type::<Stamina>();
     select(&mut app, first);
     let before = cards_showing(&mut app);
+    let panels = inspectors(&mut app);
     reset(&mut app);
 
     app.world_mut().entity_mut(first).insert(Stamina(1.0));
     settle(&mut app);
 
-    let showing = cards_showing(&mut app);
-    assert!(showing > before, "the new component has a card");
     assert_eq!(
-        app.world().resource::<Tally>().cards_added,
-        showing,
-        "and the cards were put up once",
+        cards_showing(&mut app),
+        before + panels,
+        "the new component has a card in each panel",
     );
+    let tally = app.world().resource::<Tally>();
+    assert_eq!(tally.cards_added, panels, "and only it was put up");
+    assert_eq!(tally.cards_removed, 0);
 }
