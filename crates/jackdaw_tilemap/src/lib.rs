@@ -14,6 +14,7 @@ mod path;
 mod region_text;
 mod report;
 mod setup;
+mod setup_edit;
 mod sidecar;
 mod slice;
 mod solver;

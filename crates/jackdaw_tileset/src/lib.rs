@@ -183,6 +183,8 @@ pub enum TilesetError {
     NoSheet(u32),
     /// A tile or object on a sheet that terrain setup does not cover.
     OutsideSetup(u32),
+    /// A tile past the end of its sheet.
+    NoTile { sheet: u32, tile: u32 },
 }
 
 impl fmt::Display for TilesetError {
@@ -192,6 +194,9 @@ impl fmt::Display for TilesetError {
             TilesetError::NoSheet(index) => write!(f, "the tileset has no sheet {index}"),
             TilesetError::OutsideSetup(index) => {
                 write!(f, "sheet {index} is not covered by terrain setup")
+            }
+            TilesetError::NoTile { sheet, tile } => {
+                write!(f, "sheet {sheet} has no tile {tile}")
             }
         }
     }
@@ -204,6 +209,33 @@ impl Tileset {
     pub fn layer(&self, sheet: u32, tile: u32) -> Option<u32> {
         let sheet = self.sheets.get(sheet as usize)?;
         (tile < sheet.columns * sheet.rows).then_some(sheet.first_layer + tile)
+    }
+
+    /// Sheet and tile of packed layer `layer`.
+    pub fn tile_of_layer(&self, layer: u32) -> Option<(u32, u32)> {
+        (self.sheets.iter().zip(0..)).find_map(|(sheet, index)| {
+            let tile = layer.checked_sub(sheet.first_layer)?;
+            (tile < sheet.columns * sheet.rows).then_some((index, tile))
+        })
+    }
+
+    /// Index of sheet `sheet` in the terrain setup.
+    pub fn setup_sheet(&self, sheet: u32) -> Result<usize, TilesetError> {
+        if sheet as usize >= self.sheets.len() {
+            return Err(TilesetError::NoSheet(sheet));
+        }
+        (self.setup_sheets.iter().position(|&s| s == sheet))
+            .ok_or(TilesetError::OutsideSetup(sheet))
+    }
+
+    /// The setup address of tile `tile` of sheet `sheet`.
+    pub fn setup_address(&self, sheet: u32, tile: u32) -> Result<TileAddress, TilesetError> {
+        self.layer(sheet, tile)
+            .ok_or(TilesetError::NoTile { sheet, tile })?;
+        Ok(TileAddress {
+            sheet: self.setup_sheet(sheet)?,
+            tile,
+        })
     }
 
     /// The terrain setup the tileset holds, for the kernel to edit or re-run.

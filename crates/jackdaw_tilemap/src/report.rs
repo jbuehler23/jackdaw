@@ -44,6 +44,17 @@ pub enum SetupError {
     TooManyTerrains,
     /// The input at this index repeats an earlier sheet name.
     DuplicateSheet(usize),
+    /// A set of a terrain over itself.
+    SameTerrain(TerrainId),
+    /// A terrain set with this inner and outer terrain already exists.
+    SetExists(TerrainId, TerrainId),
+    /// A tile that holds no peer of the terrain.
+    NotOnTile(TileAddress, TerrainId),
+    /// A tile that belongs to the stamp at this origin.
+    InObject {
+        tile: TileAddress,
+        origin: UVec2,
+    },
 }
 
 impl fmt::Display for SetupError {
@@ -58,6 +69,22 @@ impl fmt::Display for SetupError {
             }
             SetupError::TooManyTerrains => write!(f, "no terrain ids left"),
             SetupError::DuplicateSheet(i) => write!(f, "input {i} repeats a sheet name"),
+            SetupError::SameTerrain(id) => write!(f, "terrain {id} cannot border itself"),
+            SetupError::SetExists(inner, outer) => {
+                write!(f, "terrain set {inner} over {outer} already exists")
+            }
+            SetupError::NotOnTile(at, id) => {
+                write!(
+                    f,
+                    "tile {} of sheet {} holds no terrain {id}",
+                    at.tile, at.sheet
+                )
+            }
+            SetupError::InObject { tile, origin } => write!(
+                f,
+                "tile {} of sheet {} is part of the object at column {} row {}",
+                tile.tile, tile.sheet, origin.x, origin.y
+            ),
         }
     }
 }
