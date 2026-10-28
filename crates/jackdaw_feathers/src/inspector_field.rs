@@ -11,9 +11,7 @@ use crate::vector_edit::{VectorEditProps, VectorSuffixes, vector_edit};
 pub fn plugin(app: &mut App) {
     app.add_systems(Update, setup_combobox_fields).add_systems(
         PostUpdate,
-        setup_combobox_fields
-            .in_set(crate::WidgetSetupSystems)
-            .before(crate::combobox::setup_combobox),
+        setup_combobox_fields.in_set(crate::WidgetSetupSystems),
     );
 }
 

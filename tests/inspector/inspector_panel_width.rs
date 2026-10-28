@@ -129,11 +129,18 @@ fn descendants(app: &mut App, root: Entity) -> Vec<Entity> {
 
 /// How far past `leaf`'s right edge anything under `root` reaches. The scan
 /// starts at the card, not the leaf: the stand-in title overhangs by
-/// construction, and what must not overhang is the card it widens.
+/// construction, and what must not overhang is the card it widens. A dropdown's
+/// closed list is hidden and is placed against the window when it opens, so
+/// only what is drawn counts.
 fn overhang(app: &mut App, leaf: Entity, root: Entity) -> f32 {
     let leaf_right = right_edge(app, leaf);
     descendants(app, root)
         .into_iter()
+        .filter(|entity| {
+            app.world()
+                .get::<InheritedVisibility>(*entity)
+                .is_none_or(|visibility| visibility.get())
+        })
         .map(|entity| right_edge(app, entity) - leaf_right)
         .fold(0.0, f32::max)
 }

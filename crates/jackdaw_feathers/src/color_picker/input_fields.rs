@@ -7,7 +7,7 @@ use super::{
     ColorInputMode, ColorInputRow, ColorPickerChangeEvent, ColorPickerCommitEvent, ColorPickerState,
 };
 
-use crate::combobox::{ComboBoxChangeEvent, combobox_icon_with_selected};
+use crate::combobox::{ComboBoxChangeEvent, combobox_compact_with_selected};
 use crate::text_edit::{
     EditorTextEdit, TextEditPrefix, TextEditProps, set_text_input_value, text_edit,
 };
@@ -251,7 +251,7 @@ pub(super) fn spawn_input_fields(
                 ..default()
             },
         ))
-        .with_child(combobox_icon_with_selected(
+        .with_child(combobox_compact_with_selected(
             vec!["Hex", "RGB", "HSB", "RAW"],
             state.input_mode.index(),
         ));
