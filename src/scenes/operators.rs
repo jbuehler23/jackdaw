@@ -92,18 +92,19 @@ impl SceneKind {
         path(String, doc = "File the new scene saves to. Untitled when omitted."),
     )
 )]
-pub fn scene_new(In(params): In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub fn scene_new(In(params): In<OperatorParameters>, world: &mut World) -> OperatorResult {
     // `ui=true` is a deprecated alias, and only speaks when `kind` is absent.
     let kind = match params.as_str("kind") {
         Some(kind) => SceneKind::from_clause(kind),
         None if params.as_bool("ui").unwrap_or(false) => SceneKind::Ui,
         None => SceneKind::ThreeD,
     };
-    let path = params.as_str("path").map(std::path::PathBuf::from);
-    commands.queue(move |world: &mut World| {
-        scene_new_configured(world, kind, path.as_deref());
-    });
-    OperatorResult::Finished
+    let path = params.as_str("path").map(std::path::Path::new);
+    let Err(why) = try_scene_new(world, kind, path) else {
+        return OperatorResult::Finished;
+    };
+    jackdaw_api_internal::operator::warn_caller(world, format!("scene.new: {why}"));
+    OperatorResult::Cancelled
 }
 
 /// Sync system body. Public so tests can run it directly.
@@ -117,6 +118,21 @@ pub fn scene_new_system(world: &mut World) {
 /// so a root spawned first would be despawned with the previous scene. Each
 /// kind seeds its own root and nothing else.
 pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&std::path::Path>) {
+    if let Err(why) = try_scene_new(world, kind, path) {
+        warn!("{why}");
+    }
+}
+
+/// [`scene_new_configured`], refused when the path leaves the open project.
+pub fn try_scene_new(
+    world: &mut World,
+    kind: SceneKind,
+    path: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let path = path
+        .map(|path| project_scene_path(world, path))
+        .transpose()?;
+    let path = path.as_deref();
     let n = {
         let mut c = world.resource_mut::<UntitledCounter>();
         c.0 += 1;
@@ -160,6 +176,7 @@ pub fn scene_new_configured(world: &mut World, kind: SceneKind, path: Option<&st
         SceneKind::TwoD | SceneKind::Ui => crate::viewport_host::focus_viewport(world, mode),
         SceneKind::ThreeD => crate::viewport_host::set_viewport_mode(world, mode, false),
     }
+    Ok(())
 }
 
 /// Activate a tab that was just appended. The first tab cannot go through
@@ -197,7 +214,7 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
     let path = params.as_str("path").map(std::path::PathBuf::from);
     let reload = params.as_bool("reload").unwrap_or(false);
     commands.queue(move |world: &mut World| {
-        let path = match path.map(|path| resolve_scene_path(world, path)) {
+        let path = match path.map(|path| resolve_scene_path(world, &path)) {
             Some(Ok(path)) => Some(path),
             Some(Err(refusal)) => {
                 warn!("scene.open: {refusal}");
@@ -220,30 +237,35 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
-/// Where a `scene.open path=` lands. A relative path is tried under the
-/// project's `assets/`, then the project root, then the working directory.
+/// Where a scene path given by name lands. A relative path names a file under
+/// the project's `assets/`, else under the project root; a new file goes under
+/// `assets/` unless the path already starts with that folder.
 ///
 /// With a project open the file has to be inside it, since `path=` is reachable
 /// from the remote surface. The File > Open dialog does not come through here,
 /// so opening a scene from outside the project by hand still works.
-fn resolve_scene_path(
+pub(crate) fn resolve_scene_path(
     world: &World,
-    path: std::path::PathBuf,
+    path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
     let Some(project) = world.get_resource::<crate::project::ProjectRoot>() else {
-        return Ok(path);
+        return Ok(path.to_path_buf());
+    };
+    let assets = project.assets_dir();
+    let in_assets = assets.join(path);
+    let in_root = project.root.join(path);
+    let names_assets = assets
+        .strip_prefix(&project.root)
+        .is_ok_and(|folder| path.starts_with(folder));
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else if !in_assets.is_file() && (names_assets || in_root.is_file()) {
+        in_root
+    } else {
+        in_assets
     };
     let root = dunce::canonicalize(&project.root).unwrap_or_else(|_| project.root.clone());
-    let candidate = if path.is_absolute() {
-        path
-    } else {
-        [project.assets_dir(), project.root.clone()]
-            .into_iter()
-            .map(|base| base.join(&path))
-            .find(|candidate| candidate.is_file())
-            .unwrap_or_else(|| project.root.join(&path))
-    };
-    let resolved = dunce::canonicalize(&candidate).unwrap_or(candidate);
+    let resolved = settled_path(&candidate);
     if resolved.starts_with(&root) {
         Ok(resolved)
     } else {
@@ -253,6 +275,48 @@ fn resolve_scene_path(
             root.display()
         ))
     }
+}
+
+/// [`resolve_scene_path`] for a relative path; an absolute one, as a file
+/// dialog picks it, stays as it is. Every scene path a tab takes by name comes
+/// through here, so no tab holds a path read against the working directory.
+pub(crate) fn project_scene_path(
+    world: &World,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    resolve_scene_path(world, path)
+}
+
+/// `path` with its `..` steps taken out and its deepest existing folder made
+/// canonical, so a file that does not exist yet still resolves.
+fn settled_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+
+    let mut normal = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                normal.pop();
+            }
+            Component::CurDir => {}
+            part => normal.push(part),
+        }
+    }
+    let existing = normal.ancestors().find(|folder| folder.exists());
+    existing
+        .and_then(|folder| {
+            let rest = normal.strip_prefix(folder).ok()?;
+            let base = dunce::canonicalize(folder).ok()?;
+            Some(if rest.as_os_str().is_empty() {
+                base
+            } else {
+                base.join(rest)
+            })
+        })
+        .unwrap_or_else(|| normal.clone())
 }
 
 /// Does this document describe a prefab rather than a scene?

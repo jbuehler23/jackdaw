@@ -119,3 +119,101 @@ fn an_edited_scene_never_saved_is_not_played_and_says_why() {
         "no other scene was written in its place"
     );
 }
+
+#[test]
+fn a_new_scene_at_a_relative_path_saves_under_the_assets_folder() {
+    let (mut app, tmp, _scene) = edited_scene();
+    run_op_clause(app.world_mut(), "scene.new path=scenes/fresh.bsn")
+        .expect("a new scene opens")
+        .assert_finished();
+    app.update();
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let held = scenes.tabs[scenes.active]
+        .path
+        .clone()
+        .expect("the tab has a path");
+    assert!(
+        held.is_absolute(),
+        "the tab holds an absolute path: {}",
+        held.display()
+    );
+
+    run_op_clause(app.world_mut(), "scene.save")
+        .expect("the save dispatches")
+        .assert_finished();
+    app.update();
+    assert!(
+        tmp.path().join("assets/scenes/fresh.bsn").is_file(),
+        "the scene lands under the project's assets"
+    );
+}
+
+#[test]
+fn play_saves_a_new_scene_made_at_a_relative_path() {
+    let (mut app, tmp, _scene) = edited_scene();
+    run_op_clause(app.world_mut(), "scene.new path=scenes/played.bsn")
+        .expect("a new scene opens")
+        .assert_finished();
+    app.update();
+    run_op_clause_as_user(app.world_mut(), "entity.add.group name=Crates")
+        .expect("the group dispatched")
+        .assert_finished();
+    app.update();
+
+    play(&mut app);
+
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(
+        !notice.contains("Not playing"),
+        "save-before-play went through: {notice}"
+    );
+    let saved = std::fs::read_to_string(tmp.path().join("assets/scenes/played.bsn"))
+        .expect("the scene was saved under assets");
+    assert!(saved.contains("Crates"), "with the edit:\n{saved}");
+}
+
+#[test]
+fn a_path_under_assets_is_not_doubled_and_reopens_by_the_same_path() {
+    let (mut app, tmp, _scene) = edited_scene();
+    run_op_clause(app.world_mut(), "scene.new path=assets/levels/a.bsn")
+        .expect("a new scene opens")
+        .assert_finished();
+    app.update();
+    run_op_clause(app.world_mut(), "scene.save")
+        .expect("the save dispatches")
+        .assert_finished();
+    app.update();
+    let saved = tmp.path().join("assets/levels/a.bsn");
+    assert!(saved.is_file(), "the scene lands at {}", saved.display());
+    assert!(
+        !tmp.path().join("assets/assets").exists(),
+        "no doubled assets folder"
+    );
+
+    let tabs = |app: &App| app.world().resource::<jackdaw::scenes::Scenes>().tabs.len();
+    let open = tabs(&app);
+    run_op_clause(app.world_mut(), "scene.open path=assets/levels/a.bsn")
+        .expect("the open dispatches")
+        .assert_finished();
+    app.update();
+    assert_eq!(tabs(&app), open, "the open tab answers to the same path");
+}
+
+#[test]
+fn a_scene_path_that_leaves_the_project_is_refused() {
+    let (mut app, _tmp, _scene) = edited_scene();
+    let tabs = |app: &App| app.world().resource::<jackdaw::scenes::Scenes>().tabs.len();
+    let open = tabs(&app);
+    let result =
+        run_op_clause(app.world_mut(), "scene.new path=../../x.bsn").expect("scene.new dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+    assert_eq!(tabs(&app), open, "no tab was made");
+
+    let result = run_op_clause(app.world_mut(), "scene.save path=../../x.bsn")
+        .expect("scene.save dispatches");
+    assert_eq!(result, OperatorResult::Cancelled);
+}

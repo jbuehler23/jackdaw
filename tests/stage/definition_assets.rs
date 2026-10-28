@@ -301,6 +301,44 @@ fn a_scene_entity_edit_still_lands_while_a_definition_is_open() {
 }
 
 #[test]
+fn a_definition_field_refuses_a_value_of_the_wrong_shape() {
+    let (mut app, _tmp) = editor_with_items();
+    call(
+        &mut app,
+        "asset.new",
+        &[("type", "item".into()), ("name", "torch".into())],
+    );
+    let depth = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "rarity".into()), ("value", "Mythic".into())],
+    );
+    call(
+        &mut app,
+        "asset.set",
+        &[("field", "stack_size".into()), ("value", "-5".into())],
+    );
+
+    let warned = std::mem::take(
+        &mut app
+            .world_mut()
+            .get_resource_or_init::<jackdaw_api_internal::operator::OperatorWarnings>()
+            .0,
+    );
+    assert_eq!(warned.len(), 2, "each refusal is told: {warned:?}");
+    let item = open_item(&app);
+    assert_eq!(item.rarity, Rarity::Common);
+    assert_eq!(item.stack_size, 0);
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        depth,
+        "a refused value records nothing"
+    );
+}
+
+#[test]
 fn a_definition_saves_back_to_the_file_it_was_opened_from() {
     let (mut app, tmp) = editor_with_items();
     let handle = app

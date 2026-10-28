@@ -578,10 +578,7 @@ fn write_asset_field(
     };
     match spelled {
         Some(spelled) => field.try_apply(spelled.as_ref()).is_ok(),
-        None => {
-            crate::commands::apply_json_to_reflect(field, json, &registry);
-            true
-        }
+        None => crate::commands::apply_json_to_reflect(field, json, &registry),
     }
 }
 

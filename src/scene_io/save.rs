@@ -139,9 +139,10 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
 /// Point the active tab, and the global scene path, at `path`.
 ///
 /// The tab keeps its contents and its history and takes the new file. The next
-/// save writes there, and everything that lives beside a scene follows it.
-pub fn retarget_active_scene(world: &mut World, path: &str) {
-    let path = PathBuf::from(path);
+/// save writes there, and everything that lives beside a scene follows it. A
+/// relative path names a file in the project and is refused when it leaves it.
+pub fn retarget_active_scene(world: &mut World, path: &str) -> Result<(), String> {
+    let path = crate::scenes::operators::project_scene_path(world, Path::new(path))?;
     let display_name = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -157,6 +158,7 @@ pub fn retarget_active_scene(world: &mut World, path: &str) {
         }
     }
     world.trigger(jackdaw_api_internal::document::SceneRenamed { path });
+    Ok(())
 }
 
 pub fn save_scene_as(world: &mut World) {
@@ -326,6 +328,15 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     // cross-file rollback if the scene text write fails after sidecars
     // already landed -- the sidecars stay updated and the tab stays dirty,
     // so the next save retries the scene text with the same sidecars.
+    // A folder that cannot be made fails the writes below, which say which.
+    // Only a project's own folders are made.
+    if let Some(folder) = Path::new(&path).parent()
+        && world.contains_resource::<crate::project::ProjectRoot>()
+        && crate::scenes::operators::resolve_scene_path(world, folder).is_ok()
+        && let Err(err) = std::fs::create_dir_all(folder)
+    {
+        warn!("cannot make the folder for {path}: {err}");
+    }
     export_terrain_sidecars(world, &path)?;
 
     // A redirected save renames the legacy source to `.jsn.bak` first so a
@@ -1521,7 +1532,7 @@ mod tests {
         scenes.push_tab(SceneTab::new_untitled(1));
         world.insert_resource(scenes);
 
-        retarget_active_scene(&mut world, "/tmp/zones/harbour.bsn");
+        retarget_active_scene(&mut world, "/tmp/zones/harbour.bsn").expect("an absolute path");
 
         assert_eq!(
             world.resource::<SceneFilePath>().path.as_deref(),

@@ -403,23 +403,21 @@ fn param_json(params: &OperatorParameters, key: &str) -> Option<serde_json::Valu
 )]
 pub(crate) fn field_set(
     params: In<OperatorParameters>,
-    mut commands: Commands,
+    world: &mut World,
 ) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
-    let type_path = params.as_str("type_path").map(str::to_string)?;
-    let field_path = params.as_str("field").map(str::to_string)?;
+    let type_path = params.as_str("type_path")?;
+    let field_path = params.as_str("field")?;
     let value = param_json(&params, "value")?;
-    commands.queue(move |world: &mut World| {
-        crate::selection::select_for_edit(world, entity);
-        crate::commands::field_edit_commit(
-            world,
-            &type_path,
-            &field_path,
-            &value,
-            "Set field on multiple entities",
-        );
-    });
-    Some(OperatorResult::Finished)
+    crate::selection::select_for_edit(world, entity);
+    let label = "Set field on multiple entities";
+    let Err(why) =
+        crate::commands::try_field_edit_commit(world, type_path, field_path, &value, label)
+    else {
+        return Some(OperatorResult::Finished);
+    };
+    jackdaw_api_internal::operator::warn_caller(world, format!("{}: {why}", FieldSetOp::ID));
+    Some(OperatorResult::Cancelled)
 }
 
 /// Restore an overridden component on a prefab instance to the prefab's

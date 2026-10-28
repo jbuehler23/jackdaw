@@ -203,11 +203,12 @@ pub(crate) fn camera_pixel_canvas(
         if current.is_none() {
             return refuse(world, format!("{camera} has no pixel canvas"));
         }
+        let zoom = zoom_edit(world, id, camera, false);
         let edit = crate::inspector::ops::remove_component_edit(world, camera, path);
         push_executed_edits(
             world,
             edit.into_iter().collect(),
-            vec![],
+            zoom.into_iter().collect(),
             "Remove Pixel Canvas",
         );
         return OperatorResult::Finished;
@@ -226,15 +227,89 @@ pub(crate) fn camera_pixel_canvas(
         .into_iter()
         .map(|(field, json)| (camera, field, json))
         .collect();
-    let Some(fields) = crate::sprite_props::field_edits(world, id, PIXEL_CANVAS_TYPE_PATH, writes)
+    let Some(mut fields) =
+        crate::sprite_props::field_edits(world, id, PIXEL_CANVAS_TYPE_PATH, writes)
     else {
         for edit in edits.iter_mut().rev() {
             edit.undo(world);
         }
         return OperatorResult::Cancelled;
     };
+    if current.is_none() {
+        fields.extend(zoom_edit(world, id, camera, true));
+    }
     push_executed_edits(world, edits, fields, "Set Pixel Canvas");
     OperatorResult::Finished
+}
+
+const PROJECTION_TYPE_PATH: &str = "bevy_camera::projection::Projection";
+
+/// The orthographic scale a camera takes as its pixel canvas comes or goes.
+/// The game does not know the project's pixels per unit, so a new canvas
+/// zooms a camera at the default scale of 1 to `1 / ppu`, one sprite pixel to
+/// one canvas pixel, and removing it zooms one still at `1 / ppu` back to 1.
+/// `None` at a ppu of 1, or when the scale is anything else: its author chose
+/// it.
+fn canvas_zoom(world: &World, camera: Entity, adding: bool) -> Option<f32> {
+    let ppu = world
+        .get_resource::<crate::world_units::WorldUnits>()?
+        .ppu();
+    let Some(Projection::Orthographic(ortho)) = world.get::<Projection>(camera) else {
+        return None;
+    };
+    let (from, to) = if adding {
+        (1.0, 1.0 / ppu)
+    } else {
+        (1.0 / ppu, 1.0)
+    };
+    (ppu != 1.0 && ortho.scale == from).then_some(to)
+}
+
+/// Zoom a camera the Pixel Camera entry just spawned, before the document
+/// records it.
+pub(crate) fn zoom_new_camera(world: &mut World, camera: Entity) {
+    if let Some(scale) = canvas_zoom(world, camera, true)
+        && let Some(mut projection) = world.get_mut::<Projection>(camera)
+        && let Projection::Orthographic(ortho) = projection.as_mut()
+    {
+        ortho.scale = scale;
+    }
+}
+
+/// The edit that zooms `camera` as its canvas comes or goes, if
+/// [`canvas_zoom`] calls for one. The zoom is a convenience, so one that
+/// cannot be authored leaves the canvas edit to land alone and tells the
+/// caller.
+fn zoom_edit(
+    world: &mut World,
+    id: &str,
+    camera: Entity,
+    adding: bool,
+) -> Option<crate::commands::SetBsnField> {
+    let scale = canvas_zoom(world, camera, adding)?;
+    world
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .ast_for(camera)?;
+    let json = serde_json::json!(scale);
+    let edit = crate::commands::field_edit_to_bsn_value(
+        world,
+        camera,
+        PROJECTION_TYPE_PATH,
+        "0.scale",
+        &json,
+    )
+    .ok()
+    .and_then(|(path, value)| {
+        crate::commands::set_bsn_field_command(world, camera, PROJECTION_TYPE_PATH, &path, value)
+            .ok()
+    });
+    if edit.is_none() {
+        warn_caller(
+            world,
+            format!("{id}: could not set the camera's projection scale to {scale}"),
+        );
+    }
+    edit
 }
 
 /// The camera `entity=` names, else the selected 2D camera, else the open 2D

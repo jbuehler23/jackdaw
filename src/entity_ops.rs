@@ -705,19 +705,25 @@ pub fn create_entity(
         // no rule that turns an authored camera on, so a saved inactive one
         // stays dark in Play. `deactivate_document_cameras` keeps it out of
         // the editor's window.
-        EntityTemplate::PixelCamera => commands
-            .spawn((
-                Name::new("Pixel Camera"),
-                SceneCamera,
-                Camera2d,
-                jackdaw_scene_types::PixelCanvas {
-                    resolution: crate::pixel_camera::CANVAS_PRESETS[0],
-                    ..default()
-                },
-                Transform::default(),
-                Visibility::default(),
-            ))
-            .id(),
+        EntityTemplate::PixelCamera => {
+            let camera = commands
+                .spawn((
+                    Name::new("Pixel Camera"),
+                    SceneCamera,
+                    Camera2d,
+                    jackdaw_scene_types::PixelCanvas {
+                        resolution: crate::pixel_camera::CANVAS_PRESETS[0],
+                        ..default()
+                    },
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(move |world: &mut World| {
+                crate::pixel_camera::zoom_new_camera(world, camera);
+            });
+            camera
+        }
         #[cfg(feature = "camera_rig")]
         EntityTemplate::CameraRig => commands
             .spawn((

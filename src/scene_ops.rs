@@ -36,20 +36,17 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
                and asks when it does not live anywhere yet."
     ))
 )]
-pub fn scene_save(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+pub fn scene_save(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
     // A named destination stands in for the Save As dialog. It renames the tab first, so
     // everything the save writes beside the scene (terrain sidecars, extensions' files)
     // lands beside the new name.
-    let path = params
-        .as_str("path")
-        .filter(|path| !path.is_empty())
-        .map(str::to_owned);
-    commands.queue(move |world: &mut World| {
-        if let Some(path) = path {
-            crate::scene_io::retarget_active_scene(world, &path);
-        }
-        crate::scene_io::save_scene(world);
-    });
+    if let Some(path) = params.as_str("path").filter(|path| !path.is_empty())
+        && let Err(why) = crate::scene_io::retarget_active_scene(world, path)
+    {
+        jackdaw_api_internal::operator::warn_caller(world, format!("scene.save: {why}"));
+        return OperatorResult::Cancelled;
+    }
+    crate::scene_io::save_scene(world);
     OperatorResult::Finished
 }
 

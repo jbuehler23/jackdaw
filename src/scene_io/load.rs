@@ -968,7 +968,12 @@ pub(super) fn poll_scene_dialog(world: &mut World) {
                 // dirty-state and display name reflect "saved scene"
                 // instead of "untitled-N". One function moves everything that follows a
                 // scene to a new name, so a rename cannot take part of it.
-                crate::scene_io::retarget_active_scene(world, &path.to_string_lossy());
+                if let Err(why) =
+                    crate::scene_io::retarget_active_scene(world, &path.to_string_lossy())
+                {
+                    error!("Cannot save to {}: {why}", path.display());
+                    return;
+                }
                 world.resource_mut::<SceneFilePath>().last_directory = last_dir;
                 crate::native_dialog::remember_pick(
                     world,

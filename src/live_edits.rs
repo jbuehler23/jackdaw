@@ -347,7 +347,8 @@ fn build_save_command(
                 &key.type_path,
                 &key.field_path,
                 &entry.live_value,
-            )?;
+            )
+            .ok()?;
             let old_value = {
                 let ast = world.resource::<SceneBsnAst>();
                 ast.ast_for(entity).and_then(|node| {
@@ -369,7 +370,7 @@ fn build_save_command(
                 return None;
             }
             let (_, new_value) =
-                crate::commands::json_field_edit(world, entity, &key.type_path, "", &full)?;
+                crate::commands::json_field_edit(world, entity, &key.type_path, "", &full).ok()?;
             Some(Box::new(SetBsnField {
                 entity,
                 type_path: key.type_path.clone(),

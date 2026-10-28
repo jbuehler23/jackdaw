@@ -243,3 +243,162 @@ fn a_camera_outside_the_scene_document_is_refused() {
     assert_eq!(canvas(&app, camera), None);
     assert_eq!(history_len(&app), before);
 }
+
+fn set_project_ppu(app: &mut App, ppu: f64) {
+    app.world_mut()
+        .operator("project.set_pixels_per_unit")
+        .param("value", ppu)
+        .call()
+        .expect("project.set_pixels_per_unit dispatches")
+        .assert_finished();
+    app.update();
+}
+
+fn ortho_scale(app: &App, camera: Entity) -> Option<f32> {
+    match app.world().get::<Projection>(camera) {
+        Some(Projection::Orthographic(ortho)) => Some(ortho.scale),
+        _ => None,
+    }
+}
+
+fn saved_text(app: &mut App) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), dir.path())
+        .expect("the scene emits")
+}
+
+#[test]
+fn a_new_canvas_zooms_the_camera_to_the_project_pixels_per_unit_in_the_same_entry() {
+    let (mut app, camera) = with_camera();
+    set_project_ppu(&mut app, 16.0);
+    let before = history_len(&app);
+
+    call(&mut app, &[]).assert_finished();
+    assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
+    assert_eq!(history_len(&app), before + 1, "one history entry");
+    let text = saved_text(&mut app);
+    assert!(text.contains("0.0625"), "the game reads the scale:\n{text}");
+
+    if let Some(mut projection) = app.world_mut().get_mut::<Projection>(camera)
+        && let Projection::Orthographic(ortho) = projection.as_mut()
+    {
+        ortho.scale = 0.5;
+    }
+    call(&mut app, &[("width", PropertyValue::Int(480))]).assert_finished();
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(0.5),
+        "a later update leaves the scale"
+    );
+
+    undo(&mut app);
+    undo(&mut app);
+    assert_eq!(canvas(&app, camera), None);
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(1.0),
+        "undo takes the zoom back with the canvas"
+    );
+}
+
+#[test]
+fn a_new_canvas_keeps_the_scale_at_one_pixel_per_unit_or_once_the_author_set_it() {
+    let (mut app, camera) = with_camera();
+    set_project_ppu(&mut app, 1.0);
+    call(&mut app, &[]).assert_finished();
+    assert_eq!(ortho_scale(&app, camera), Some(1.0));
+
+    let (mut app, camera) = with_camera();
+    set_project_ppu(&mut app, 16.0);
+    if let Some(mut projection) = app.world_mut().get_mut::<Projection>(camera)
+        && let Projection::Orthographic(ortho) = projection.as_mut()
+    {
+        ortho.scale = 0.25;
+    }
+    call(&mut app, &[]).assert_finished();
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(0.25),
+        "the author's scale stays"
+    );
+}
+
+#[test]
+fn the_pixel_camera_entry_starts_at_the_project_pixels_per_unit() {
+    let (mut app, _root) = two_d_app();
+    set_project_ppu(&mut app, 16.0);
+    let before = history_len(&app);
+    app.world_mut()
+        .operator("entity.add.pixel_camera")
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    for _ in 0..3 {
+        app.update();
+    }
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<PixelCanvas>>()
+        .single(app.world())
+        .expect("one pixel camera");
+    assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
+    assert_eq!(history_len(&app), before + 1);
+    let text = saved_text(&mut app);
+    assert!(text.contains("0.0625"), "the game reads the scale:\n{text}");
+}
+
+#[test]
+fn the_pixel_camera_entry_keeps_the_scale_at_one_pixel_per_unit() {
+    let (mut app, _root) = two_d_app();
+    set_project_ppu(&mut app, 1.0);
+    app.world_mut()
+        .operator("entity.add.pixel_camera")
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    for _ in 0..3 {
+        app.update();
+    }
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, With<PixelCanvas>>()
+        .single(app.world())
+        .expect("one pixel camera");
+    assert_eq!(ortho_scale(&app, camera), Some(1.0));
+}
+
+#[test]
+fn removing_a_canvas_zooms_back_only_from_the_scale_it_set() {
+    let (mut app, camera) = with_camera();
+    set_project_ppu(&mut app, 16.0);
+    call(&mut app, &[]).assert_finished();
+    let before = history_len(&app);
+    call(&mut app, &[("remove", PropertyValue::Bool(true))]).assert_finished();
+    assert_eq!(canvas(&app, camera), None);
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(1.0),
+        "the zoom goes with the canvas"
+    );
+    assert_eq!(history_len(&app), before + 1, "in one entry");
+    undo(&mut app);
+    assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
+
+    app.world_mut()
+        .operator("component.set")
+        .param("entity", camera)
+        .param("type_path", "bevy_camera::projection::Projection")
+        .param("field", "0.scale")
+        .param("value", "0.5")
+        .call()
+        .expect("component.set dispatches")
+        .assert_finished();
+    app.update();
+    call(&mut app, &[("remove", PropertyValue::Bool(true))]).assert_finished();
+    assert_eq!(canvas(&app, camera), None);
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(0.5),
+        "the author's scale stays"
+    );
+}

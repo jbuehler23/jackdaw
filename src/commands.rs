@@ -187,25 +187,60 @@ pub(crate) fn field_edit_commit(
     new_json: &serde_json::Value,
     group_label: &str,
 ) {
+    if let Err(refused) = try_field_edit_commit(world, type_path, field_path, new_json, group_label)
+    {
+        warn!("{refused}");
+    }
+}
+
+/// [`field_edit_commit`], refused when no target took the value: it does not
+/// read as the field's type, the path names no field, or the running preview
+/// drives the component. A refusal records nothing.
+pub(crate) fn try_field_edit_commit(
+    world: &mut World,
+    type_path: &str,
+    field_path: &str,
+    new_json: &serde_json::Value,
+    group_label: &str,
+) -> Result<(), FieldEditRefused> {
     if crate::definition_assets::commit_definition_field(world, type_path, field_path, new_json) {
-        return;
+        return Ok(());
     }
     // Immediate commits (no prior preview) still need a derived baseline.
     field_edit_begin(world, type_path, field_path);
     let targets = field_edit_session_targets(world);
+    if targets.is_empty() {
+        return Err(FieldEditRefused(format!(
+            "{type_path}: nothing selected to set `{field_path}` on"
+        )));
+    }
     let mut edits = Vec::new();
+    let mut refused = None;
+    let mut unchanged = false;
     for &target in &targets {
-        let Some((path, new_value)) =
-            field_edit_to_bsn_value(world, target, type_path, field_path, new_json)
-        else {
-            continue;
-        };
-        if let Ok(edit) = set_bsn_field_command(world, target, type_path, &path, new_value) {
-            edits.push(edit);
+        let (path, new_value) =
+            match field_edit_to_bsn_value(world, target, type_path, field_path, new_json) {
+                Ok(edit) => edit,
+                Err(why) => {
+                    refused.get_or_insert(why);
+                    continue;
+                }
+            };
+        match set_bsn_field_command(world, target, type_path, &path, new_value) {
+            Ok(edit) => edits.push(edit),
+            Err(FieldEditSkip::Unchanged) => unchanged = true,
+            Err(FieldEditSkip::Previewed) => {
+                refused.get_or_insert(previewed(type_path));
+            }
         }
     }
+    let taken = unchanged || !edits.is_empty();
     clear_field_edit_session(world, type_path, field_path);
     push_field_edits(world, edits, group_label);
+    match refused {
+        Some(why) if !taken => Err(why),
+        _ => Ok(()),
+    }
 }
 
 /// Set one field on one entity's component, as one undo entry. Unlike
@@ -221,24 +256,39 @@ pub(crate) fn field_edit_commit_on(
     field_path: &str,
     new_json: &serde_json::Value,
 ) -> bool {
-    let Some((path, new_value)) =
-        field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)
-    else {
-        return false;
-    };
+    try_field_edit_commit_on(world, entity, type_path, field_path, new_json).is_ok()
+}
+
+/// [`field_edit_commit_on`], saying why when the value was not taken.
+pub(crate) fn try_field_edit_commit_on(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    new_json: &serde_json::Value,
+) -> Result<(), FieldEditRefused> {
+    let (path, new_value) =
+        field_edit_to_bsn_value(world, entity, type_path, field_path, new_json)?;
     match set_bsn_field_command(world, entity, type_path, &path, new_value) {
         Ok(edit) => {
             push_field_edits(world, vec![edit], "Set field");
-            true
+            Ok(())
         }
         Err(FieldEditSkip::Unchanged) => {
             // Nothing to record, but the live component may have drifted
             // from the document; put the document's value back on it.
             mirror_document_component(world, entity, type_path);
-            true
+            Ok(())
         }
-        Err(FieldEditSkip::Previewed) => false,
+        Err(FieldEditSkip::Previewed) => Err(previewed(type_path)),
     }
+}
+
+fn previewed(type_path: &str) -> FieldEditRefused {
+    FieldEditRefused(format!(
+        "{}: `{type_path}`",
+        crate::preview_context::PREVIEW_EDIT_REFUSED
+    ))
 }
 
 /// Why [`set_bsn_field_command`] built no command.
@@ -1832,34 +1882,35 @@ fn entity_has_reflected_component(world: &World, entity: Entity, type_path: &str
     reflect_component.reflect(entity_ref).is_some()
 }
 
-/// A JSON number as a signed integer. `as_i64` is `None` for a float even
-/// when it is a whole value, which is what a drag-scrub widget writes.
-fn json_number_as_i64(n: &serde_json::Number) -> i64 {
-    n.as_i64()
-        .or_else(|| n.as_f64().map(|value| value as i64))
-        .unwrap_or_default()
-}
-
-/// A JSON number as an unsigned integer. Same float case as
-/// [`json_number_as_i64`].
-fn json_number_as_u64(n: &serde_json::Number) -> u64 {
-    n.as_u64()
+/// Write a JSON number into an integer field when it holds the number exactly:
+/// a whole value, as a drag-scrub widget writes `3.0`, inside `T`'s range.
+/// Whether it did.
+fn set_whole<T: TryFrom<i128>>(slot: &mut T, n: &serde_json::Number) -> bool {
+    let whole = n
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| n.as_u64().map(i128::from))
         .or_else(|| {
             n.as_f64()
-                .filter(|value| *value >= 0.0)
-                .map(|value| value as u64)
-        })
-        .unwrap_or_default()
+                .filter(|value| value.is_finite() && value.fract() == 0.0)
+                .map(|value| value as i128)
+        });
+    let Some(value) = whole.and_then(|whole| T::try_from(whole).ok()) else {
+        return false;
+    };
+    *slot = value;
+    true
 }
 
 /// Convert a `serde_json::Value` into the matching reflect primitive and apply it.
 /// Falls back to Bevy's typed deserialization for complex types (enums, structs)
-/// that can't be handled by simple primitive downcasts.
+/// that can't be handled by simple primitive downcasts. Whether the value was
+/// taken.
 pub(crate) fn apply_json_to_reflect(
     field: &mut dyn bevy::reflect::PartialReflect,
     value: &serde_json::Value,
     registry: &bevy::reflect::TypeRegistry,
-) {
+) -> bool {
     match value {
         serde_json::Value::Number(n) => {
             if let Some(f) = field.try_downcast_mut::<f32>() {
@@ -1867,68 +1918,72 @@ pub(crate) fn apply_json_to_reflect(
             } else if let Some(f) = field.try_downcast_mut::<f64>() {
                 *f = n.as_f64().unwrap_or_default();
             } else if let Some(i) = field.try_downcast_mut::<i32>() {
-                *i = json_number_as_i64(n) as i32;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<u32>() {
-                *i = json_number_as_u64(n) as u32;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<usize>() {
-                *i = json_number_as_u64(n) as usize;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<i8>() {
-                *i = json_number_as_i64(n) as i8;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<i16>() {
-                *i = json_number_as_i64(n) as i16;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<i64>() {
-                *i = json_number_as_i64(n);
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<u8>() {
-                *i = json_number_as_u64(n) as u8;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<u16>() {
-                *i = json_number_as_u64(n) as u16;
+                return set_whole(i, n);
             } else if let Some(i) = field.try_downcast_mut::<u64>() {
-                *i = json_number_as_u64(n);
+                return set_whole(i, n);
             } else {
                 // A number can still be the whole of an `Option<f32>` or a
                 // `NonZero`, which reflect takes through serde's own paths.
-                try_typed_deserialize(field, value, registry);
+                return try_typed_deserialize(field, value, registry);
             }
+            true
         }
         serde_json::Value::Bool(b) => {
             if let Some(f) = field.try_downcast_mut::<bool>() {
                 *f = *b;
+                return true;
             }
+            try_typed_deserialize(field, value, registry)
         }
         serde_json::Value::String(s) => {
             if let Some(f) = field.try_downcast_mut::<String>() {
                 *f = s.clone();
-                return;
+                return true;
             }
             // Unit enum variants serialize as a bare string  -- fall through to the
             // typed-deserializer path below.
-            try_typed_deserialize(field, value, registry);
+            try_typed_deserialize(field, value, registry)
         }
         serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
             // Structs, tuple structs, enum struct/tuple variants, lists, etc.
-            try_typed_deserialize(field, value, registry);
+            try_typed_deserialize(field, value, registry)
         }
         serde_json::Value::Null => try_typed_deserialize(field, value, registry),
     }
 }
 
 /// Look up the field's `TypeRegistration` via its represented type info and run
-/// `TypedReflectDeserializer` on the JSON, then apply the result.
+/// `TypedReflectDeserializer` on the JSON, then apply the result. Whether the
+/// JSON read as the field's type.
 fn try_typed_deserialize(
     field: &mut dyn bevy::reflect::PartialReflect,
     value: &serde_json::Value,
     registry: &bevy::reflect::TypeRegistry,
-) {
-    let Some(type_info) = field.get_represented_type_info() else {
-        return;
-    };
-    let Some(registration) = registry.get(type_info.type_id()) else {
-        return;
+) -> bool {
+    let Some(registration) = field
+        .get_represented_type_info()
+        .and_then(|info| registry.get(info.type_id()))
+    else {
+        return false;
     };
     let deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, registry);
-    if let Ok(reflected) = deserializer.deserialize(value) {
-        field.apply(reflected.as_ref());
-    }
+    deserializer
+        .deserialize(value)
+        .is_ok_and(|reflected| field.try_apply(reflected.as_ref()).is_ok())
 }
 
 /// The authored value of one field on `entity`'s document node, read from the
@@ -1956,9 +2011,9 @@ pub(crate) fn field_edit_to_bsn_value(
     type_path: &str,
     field_path: &str,
     value: &serde_json::Value,
-) -> Option<(String, jackdaw_bsn::BsnValue)> {
+) -> Result<(String, jackdaw_bsn::BsnValue), FieldEditRefused> {
     if let Some(edit) = map_entry_edit(world, entity, type_path, field_path, value) {
-        return Some(edit);
+        return Ok(edit);
     }
     json_field_edit(world, entity, type_path, field_path, value)
 }
@@ -2160,10 +2215,12 @@ pub(crate) fn json_field_edit(
     type_path: &str,
     field_path: &str,
     value: &serde_json::Value,
-) -> Option<(String, jackdaw_bsn::BsnValue)> {
+) -> Result<(String, jackdaw_bsn::BsnValue), FieldEditRefused> {
     use bevy::reflect::GetPath;
     use serde::de::DeserializeSeed;
 
+    let refused = |why: String| FieldEditRefused(format!("{type_path}: {why}"));
+    let unsaveable = || refused(format!("`{field_path}` has no form the scene can save"));
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     let Some(registration) = registry.get_with_type_path(type_path) else {
@@ -2171,37 +2228,54 @@ pub(crate) fn json_field_edit(
         // field's authored value comes straight from the extracted schema type.
         drop(registry);
         return project_field_edit_to_bsn_value(world, entity, type_path, field_path, value)
-            .map(|new_value| (field_path.to_string(), new_value));
+            .map(|new_value| (field_path.to_string(), new_value))
+            .ok_or_else(|| refused(format!("`{field_path}` does not take {value}")));
     };
     if field_path.is_empty() {
         let deserializer =
             bevy::reflect::serde::TypedReflectDeserializer::new(registration, &registry);
-        let reflected = deserializer.deserialize(value).ok()?;
-        return Some((String::new(), authorable(reflected.as_ref(), &registry)?));
+        let reflected = deserializer
+            .deserialize(value)
+            .map_err(|err| refused(format!("{value} does not read as the component: {err}")))?;
+        let authored = authorable(reflected.as_ref(), &registry).ok_or_else(unsaveable)?;
+        return Ok((String::new(), authored));
     }
-    let reflect_component = registration.data::<ReflectComponent>()?;
-    let entity_ref = world.get_entity(entity).ok()?;
-    let component = reflect_component.reflect(entity_ref)?;
+    let component = registration
+        .data::<ReflectComponent>()
+        .zip(world.get_entity(entity).ok())
+        .and_then(|(reflect, held)| reflect.reflect(held))
+        .ok_or_else(|| refused("the entity does not hold it".to_owned()))?;
     // Path navigation needs a concrete (`Reflect`) clone of the component.
     let mut merged: Box<dyn Reflect> = registration
-        .data::<bevy::reflect::ReflectFromReflect>()?
-        .from_reflect(component.as_partial_reflect())?;
+        .data::<bevy::reflect::ReflectFromReflect>()
+        .and_then(|from| from.from_reflect(component.as_partial_reflect()))
+        .ok_or_else(|| refused("cannot be copied to edit".to_owned()))?;
+    let Ok(field) = merged.reflect_path_mut(field_path) else {
+        return Err(refused(missing_field(
+            merged.as_partial_reflect(),
+            field_path,
+        )));
+    };
     // A field naming an asset is authored as the path itself.
     if let Some(text) = value.as_str()
-        && let Ok(field) = merged.reflect_path(field_path)
         && field
             .get_represented_type_info()
             .is_some_and(|info| crate::typed_values::takes_asset_path(&registry, info.type_id()))
     {
-        return Some((
+        return Ok((
             field_path.to_string(),
             jackdaw_bsn::BsnValue::String(text.to_string()),
         ));
     }
-    if let Ok(field) = merged.reflect_path_mut(field_path) {
-        apply_json_to_reflect(field, value, &registry);
+    if !apply_json_to_reflect(field, value, &registry) {
+        let shape = expected_shape(field, &registry);
+        return Err(refused(format!(
+            "`{field_path}` does not take {value}; it takes {shape}"
+        )));
     }
-    let field = merged.reflect_path(field_path).ok()?;
+    let field = merged
+        .reflect_path(field_path)
+        .map_err(|_| refused(missing_field(merged.as_partial_reflect(), field_path)))?;
     let whole = world
         .get_resource::<jackdaw_bsn::SceneBsnAst>()
         .and_then(|ast| {
@@ -2215,7 +2289,111 @@ pub(crate) fn json_field_edit(
             )
         });
     let (path, authored) = whole.unwrap_or((field_path.to_string(), field));
-    Some((path, authorable(authored, &registry)?))
+    Ok((
+        path,
+        authorable(authored, &registry).ok_or_else(unsaveable)?,
+    ))
+}
+
+/// Why a field edit wrote nothing, worded for whoever asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FieldEditRefused(pub String);
+
+impl std::fmt::Display for FieldEditRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A refusal for `field_path`, which does not resolve under `root`: the
+/// fields the deepest step that does resolve holds.
+fn missing_field(root: &dyn bevy::reflect::PartialReflect, field_path: &str) -> String {
+    use bevy::reflect::{ReflectPath, ReflectRef};
+
+    let steps: Vec<&str> = field_path.split('.').collect();
+    let (prefix, holder) = (0..steps.len())
+        .rev()
+        .find_map(|n| {
+            let prefix = steps[..n].join(".");
+            let holder = if n == 0 {
+                Some(root)
+            } else {
+                prefix.as_str().reflect_element(root).ok()
+            };
+            holder.map(|holder| (prefix, holder))
+        })
+        .unwrap_or((String::new(), root));
+    let names: Vec<String> = match holder.reflect_ref() {
+        ReflectRef::Struct(value) => (0..value.field_len())
+            .filter_map(|i| value.name_at(i).map(str::to_owned))
+            .collect(),
+        ReflectRef::TupleStruct(value) => (0..value.field_len()).map(|i| i.to_string()).collect(),
+        ReflectRef::Tuple(value) => (0..value.field_len()).map(|i| i.to_string()).collect(),
+        ReflectRef::Enum(value) => (0..value.field_len())
+            .map(|i| {
+                value
+                    .name_at(i)
+                    .map_or_else(|| i.to_string(), str::to_owned)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let at = if prefix.is_empty() {
+        "the component".to_owned()
+    } else {
+        format!("`{prefix}`")
+    };
+    if names.is_empty() {
+        format!("no field `{field_path}`; {at} has no fields")
+    } else {
+        format!("no field `{field_path}`; {at} has: {}", names.join(", "))
+    }
+}
+
+/// How a value for `field` is written, for a refusal: its type, and an
+/// example in the JSON an edit reads. An `Option` takes its inner value bare.
+fn expected_shape(
+    field: &dyn bevy::reflect::PartialReflect,
+    registry: &bevy::reflect::TypeRegistry,
+) -> String {
+    use bevy::reflect::{TypeInfo, enums::VariantInfo, prelude::ReflectDefault};
+
+    let example = |value: &dyn bevy::reflect::PartialReflect| {
+        serde_json::to_string(&bevy::reflect::serde::TypedReflectSerializer::new(
+            value, registry,
+        ))
+        .ok()
+    };
+    let Some(info) = field.get_represented_type_info() else {
+        return "a value of its own type".to_owned();
+    };
+    let type_path = info.type_path();
+    let inner = match info {
+        TypeInfo::Enum(info) if type_path.starts_with("core::option::Option<") => {
+            match info.variant("Some") {
+                Some(VariantInfo::Tuple(some)) => {
+                    some.field_at(0).map(bevy::reflect::UnnamedField::type_id)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some(inner) = inner else {
+        return match example(field) {
+            Some(json) => format!("{type_path}, like {json}"),
+            None => type_path.to_owned(),
+        };
+    };
+    let like = registry
+        .get(inner)
+        .and_then(|inner| inner.data::<ReflectDefault>())
+        .and_then(|default| example(default.default().as_partial_reflect()))
+        .map(|json| format!(", like {json},"))
+        .unwrap_or_default();
+    format!(
+        "{type_path}: the inner value bare{like} or null for none; {{\"Some\": ...}} is not read"
+    )
 }
 
 /// A value as the document writes it, or `None`, logged, when it has no
@@ -3453,6 +3631,27 @@ mod set_bsn_field_tests {
 
         assert_eq!(reloaded::<Cooldown>(&app), cooldown);
     }
+
+    #[test]
+    fn a_commit_with_nothing_selected_is_refused() {
+        let mut app = field_app();
+        app.register_type::<Reach>();
+        let refused = try_field_edit_commit(
+            app.world_mut(),
+            Reach::type_path(),
+            "range.0",
+            &serde_json::json!(1.0),
+            "Set field",
+        )
+        .expect_err("no target took it");
+        assert!(refused.0.contains("nothing selected"), "{refused}");
+        assert!(
+            app.world()
+                .resource::<CommandHistory>()
+                .undo_stack
+                .is_empty()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3614,5 +3813,48 @@ mod bsn_doc_coherence_tests {
                 .is_some(),
             "and the document links what it put back"
         );
+    }
+}
+
+#[cfg(test)]
+mod whole_number_tests {
+    use super::*;
+
+    #[test]
+    fn integer_fields_refuse_values_they_cannot_hold_exactly() {
+        let registry = bevy::reflect::TypeRegistry::new();
+        let mut unsigned: u32 = 7;
+        assert!(!apply_json_to_reflect(
+            &mut unsigned,
+            &serde_json::json!(-5),
+            &registry
+        ));
+        assert_eq!(unsigned, 7, "a negative is not clamped to 0");
+
+        let mut signed: i32 = 7;
+        assert!(!apply_json_to_reflect(
+            &mut signed,
+            &serde_json::json!(1.5),
+            &registry
+        ));
+        assert!(!apply_json_to_reflect(
+            &mut signed,
+            &serde_json::json!(3e9),
+            &registry
+        ));
+        assert_eq!(signed, 7, "neither truncated nor wrapped");
+
+        assert!(apply_json_to_reflect(
+            &mut signed,
+            &serde_json::json!(3.0),
+            &registry
+        ));
+        assert_eq!(signed, 3, "a whole float is the number it spells");
+        assert!(apply_json_to_reflect(
+            &mut unsigned,
+            &serde_json::json!(4_000_000_000u64),
+            &registry
+        ));
+        assert_eq!(unsigned, 4_000_000_000);
     }
 }

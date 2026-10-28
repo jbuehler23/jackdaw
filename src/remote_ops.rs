@@ -276,21 +276,19 @@ pub(crate) fn entity_set_transform(
 )]
 pub(crate) fn component_set(
     params: In<OperatorParameters>,
-    mut commands: Commands,
+    world: &mut World,
 ) -> Option<OperatorResult> {
     let entity = params.as_entity("entity")?;
-    let type_path = params.as_str("type_path").map(str::to_string)?;
-    let field_path = params.as_str("field").unwrap_or_default().to_string();
+    let type_path = params.as_str("type_path")?;
+    let field_path = params.as_str("field").unwrap_or_default();
     let value = param_json(&params, "value")?;
-    commands.queue(move |world: &mut World| {
-        if !crate::commands::field_edit_commit_on(world, entity, &type_path, &field_path, &value) {
-            warn_caller(
-                world,
-                format!("component.set: {value} is not a value for {type_path}.{field_path}"),
-            );
-        }
-    });
-    Some(OperatorResult::Finished)
+    let Err(why) =
+        crate::commands::try_field_edit_commit_on(world, entity, type_path, field_path, &value)
+    else {
+        return Some(OperatorResult::Finished);
+    };
+    warn_caller(world, format!("component.set: {why}"));
+    Some(OperatorResult::Cancelled)
 }
 
 /// A parameter as JSON. A string parses as JSON when it can and stands for
