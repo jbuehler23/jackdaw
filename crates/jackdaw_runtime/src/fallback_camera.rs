@@ -6,12 +6,8 @@ use jackdaw_scene_types::Scene2dRoot;
 /// game adds a camera of its own or the last 2D scene leaves, and the editor
 /// never sees it.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(crate::RuntimeOnly)]
 pub struct FallbackCamera2d;
-
-#[cfg(feature = "pie")]
-type NotCaptureCamera = Without<crate::pie_frames::FrameCaptureCamera>;
-#[cfg(not(feature = "pie"))]
-type NotCaptureCamera = ();
 
 /// Spawn the fallback camera when one of the `spawned` scene entities is a
 /// [`Scene2dRoot`] and the world holds no camera, a fallback included.
@@ -23,7 +19,10 @@ pub(crate) fn spawn_for_2d_scene(world: &mut World, spawned: &[Entity]) {
         return;
     }
     let has_camera = world
-        .query_filtered::<(), (With<Camera>, NotCaptureCamera)>()
+        .query_filtered::<(), (
+            With<Camera>,
+            Or<(Without<crate::RuntimeOnly>, With<FallbackCamera2d>)>,
+        )>()
         .iter(world)
         .next()
         .is_some();
@@ -39,7 +38,7 @@ pub(crate) fn spawn_for_2d_scene(world: &mut World, spawned: &[Entity]) {
 
 pub(crate) fn yield_to_game_camera(
     add: On<Add<Camera>>,
-    game_cameras: Query<(), (NotCaptureCamera, Without<FallbackCamera2d>)>,
+    game_cameras: Query<(), Without<crate::RuntimeOnly>>,
     fallbacks: Query<Entity, With<FallbackCamera2d>>,
     mut commands: Commands,
 ) -> Result {

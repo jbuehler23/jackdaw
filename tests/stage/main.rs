@@ -35,6 +35,7 @@ mod modeling_essentials;
 mod module_extensions;
 mod new_asset;
 mod new_project;
+mod pixel_canvas;
 mod play_controls;
 mod play_open_scene;
 mod positionable_mirror_plane;

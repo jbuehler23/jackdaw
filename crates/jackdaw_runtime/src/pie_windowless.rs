@@ -148,7 +148,7 @@ pub(crate) fn retarget_cameras(
 /// the editor requested a windowless launch.
 pub(crate) fn setup_windowless(app: &mut App) {
     app.add_systems(PreStartup, install_windowless_world);
-    app.add_systems(PostUpdate, retarget_cameras);
+    app.add_systems(PostUpdate, retarget_cameras.after(crate::CanvasExpansion));
 }
 
 #[cfg(test)]

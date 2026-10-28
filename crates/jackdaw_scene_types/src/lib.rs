@@ -29,6 +29,7 @@ pub mod model_import;
 #[cfg(feature = "render")]
 pub mod model_parts;
 pub mod node_id;
+pub mod pixel_canvas;
 #[cfg(feature = "render")]
 pub mod render_assets;
 pub mod types;
@@ -43,6 +44,7 @@ pub use environment::{
 #[cfg(feature = "render")]
 pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
+pub use pixel_canvas::{CanvasScale, PIXEL_CANVAS_TYPE_PATH, PixelCanvas};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
     DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, HIDDEN_IN_GAME_TYPE_PATH,
@@ -140,7 +142,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<UiSceneRoot>()
             .register_type::<Scene2dRoot>()
             .register_type::<CanvasGuides>()
-            .register_type::<Locked>();
+            .register_type::<Locked>()
+            .register_type::<PixelCanvas>();
 
         app.init_resource::<SceneWind>()
             .add_systems(First, follow_the_scene_wind)
