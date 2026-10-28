@@ -171,7 +171,7 @@ mod tests {
             Some("Careful:")
         );
         assert_eq!(
-            world.get::<Children>(text).map(|spans| spans.len()),
+            world.get::<Children>(text).map(RelationshipTarget::len),
             Some(1),
             "and the span after it",
         );
