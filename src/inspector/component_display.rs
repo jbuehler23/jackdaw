@@ -29,7 +29,7 @@ use jackdaw_project_build::modules::ModuleCatalog;
 use jackdaw_widgets::collapsible::{CollapsibleBody, CollapsibleHeader, CollapsibleSection};
 
 use jackdaw_feathers::text_edit::TextEditValue;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
@@ -80,20 +80,26 @@ pub(crate) struct CardBuildInputs<'w, 's> {
 }
 
 /// What a panel's cards were last built for: how many entities were selected,
-/// for the multi-selection header, and the components of the entity shown that
-/// have a card, so a component that gets one puts the cards up again while one
-/// that never shows does not.
+/// for the multi-selection header, the components of the entity shown that
+/// have a card, so a component that gets one brings the cards in line while
+/// one that never shows does not, and the keys of the cards in panel order.
 #[derive(Component)]
 pub(crate) struct InspectorShown {
     selection_count: usize,
     shape: Option<(ArchetypeId, Vec<ComponentId>)>,
+    cards: Vec<String>,
 }
 
 impl InspectorShown {
-    fn new(selection_count: usize, shape: Option<(ArchetypeId, Vec<ComponentId>)>) -> Self {
+    fn new(
+        selection_count: usize,
+        shape: Option<(ArchetypeId, Vec<ComponentId>)>,
+        cards: Vec<String>,
+    ) -> Self {
         Self {
             selection_count,
             shape,
+            cards,
         }
     }
 
@@ -120,10 +126,15 @@ impl InspectorShown {
     }
 }
 
-/// Keep each inspector's cards pointed at [`Selection::primary`], and put them
-/// up again when what they show has changed: another entity or selection size,
-/// an [`InspectorDirty`] marker on the entity shown, or a component added to or
-/// taken from it. However many of those land in a frame, a panel is rebuilt at
+/// Keep each inspector's cards pointed at [`Selection::primary`], and bring
+/// them in line when what they show has changed: another entity or selection
+/// size, an [`InspectorDirty`] marker on the entity shown, or a component added
+/// to or taken from it. Another entity or selection size puts the whole panel
+/// up again. On the same entity only the cards that came or went are put up or
+/// taken down, and the ones that stay keep their place in the panel and their
+/// state. A marker that changes no card puts the panel up again, since its
+/// callers mark the entity when a card's own layout has to follow its
+/// component. However many of those land in a frame, a panel is rebuilt at
 /// most once. A reselect of the entity already shown leaves the panel
 /// standing. An empty selection takes an open file or definition card down
 /// with it.
@@ -181,6 +192,42 @@ pub(crate) fn sync_inspector_to_selection(
             continue;
         }
 
+        if !retarget
+            && let Some(current) = current
+            && let Some(shown) = shown.as_mut().filter(|shown| shown.shape.is_some())
+            && let Ok((archetype, entity_ref)) = entity_query.get(current)
+        {
+            let authored_type_paths = inspector_type_paths_for(
+                &inputs.asts.bsn,
+                &inputs.prefab_cache,
+                current,
+                entity_ref,
+                &lineage.child_of,
+                &lineage.is_a,
+            );
+            let cards = EntityCards {
+                inputs: &inputs,
+                source: current,
+                archetype,
+                entity_ref,
+                inspector,
+                selection_count: sel_count,
+                authored_type_paths: &authored_type_paths,
+            };
+            let rebuild = marked && cards.build(&mut commands, &|_| true) == shown.cards;
+            if !rebuild {
+                let standing: HashSet<&str> = shown.cards.iter().map(String::as_str).collect();
+                let planned = cards.build(&mut commands, &|key| standing.contains(key));
+                arrange_cards(&mut commands, inspector, planned.clone());
+                shown.shape = Some((
+                    archetype.id(),
+                    carded_components(archetype, &inputs, &authored_type_paths),
+                ));
+                shown.cards = planned;
+                continue;
+            }
+        }
+
         if let Some(primary) = desired
             && current.is_none()
             && entity_query.get(primary).is_err()
@@ -204,7 +251,7 @@ pub(crate) fn sync_inspector_to_selection(
             });
             commands.entity(inspector).insert((
                 InspectorTarget(primary),
-                InspectorShown::new(sel_count, None),
+                InspectorShown::new(sel_count, None, Vec::new()),
             ));
             continue;
         }
@@ -214,7 +261,7 @@ pub(crate) fn sync_inspector_to_selection(
             });
             commands.entity(inspector).insert((
                 InspectorTarget(primary),
-                InspectorShown::new(sel_count, None),
+                InspectorShown::new(sel_count, None, Vec::new()),
             ));
             continue;
         }
@@ -232,27 +279,16 @@ pub(crate) fn sync_inspector_to_selection(
             &lineage.is_a,
         );
 
-        build_inspector_displays(
-            &mut commands,
-            inputs.components,
-            &inputs.type_registry,
-            source_entity,
+        let cards = EntityCards {
+            inputs: &inputs,
+            source: source_entity,
             archetype,
             entity_ref,
             inspector,
-            sel_count,
-            &inputs.names,
-            &inputs.icon_font,
-            &inputs.editor_font,
-            false,
-            &inputs.materials,
-            &authored_type_paths,
-            Some(&inputs.asts.bsn),
-            Some(&inputs.prefab_cache),
-            &inputs.collapse_state,
-            &inputs.asts.project_types,
-            &inputs.asts.type_metadata,
-        );
+            selection_count: sel_count,
+            authored_type_paths: &authored_type_paths,
+        }
+        .build(&mut commands, &|_| false);
 
         commands.entity(inspector).insert((
             InspectorTarget(primary),
@@ -262,6 +298,7 @@ pub(crate) fn sync_inspector_to_selection(
                     archetype.id(),
                     carded_components(archetype, &inputs, &authored_type_paths),
                 )),
+                cards,
             ),
         ));
     }
@@ -269,6 +306,170 @@ pub(crate) fn sync_inspector_to_selection(
     for marked in &dirty {
         commands.entity(marked).try_remove::<InspectorDirty>();
     }
+}
+
+/// The entity a panel shows its cards for, with everything they are built
+/// from.
+struct EntityCards<'a, 'w, 's> {
+    inputs: &'a CardBuildInputs<'w, 's>,
+    source: Entity,
+    archetype: &'a Archetype,
+    entity_ref: EntityRef<'a>,
+    inspector: Entity,
+    selection_count: usize,
+    authored_type_paths: &'a HashSet<String>,
+}
+
+impl EntityCards<'_, '_, '_> {
+    /// Put up the cards `standing` does not name, and return the keys of all
+    /// of them in panel order. See [`build_inspector_cards`].
+    fn build(&self, commands: &mut Commands, standing: &dyn Fn(&str) -> bool) -> Vec<String> {
+        let inputs = self.inputs;
+        build_inspector_cards(
+            commands,
+            inputs.components,
+            &inputs.type_registry,
+            self.source,
+            self.archetype,
+            self.entity_ref,
+            self.inspector,
+            self.selection_count,
+            &inputs.names,
+            &inputs.icon_font,
+            &inputs.editor_font,
+            &inputs.materials,
+            self.authored_type_paths,
+            Some(&inputs.asts.bsn),
+            Some(&inputs.prefab_cache),
+            &inputs.collapse_state,
+            &inputs.asts.project_types,
+            &inputs.asts.type_metadata,
+            standing,
+        )
+    }
+}
+
+/// Names a card directly under the inspector, so a card that stays when the
+/// cards around it change is told apart from one that has to be put up again.
+/// Two cards share a key only when they would be built the same.
+#[derive(Component)]
+struct InspectorCardKey(String);
+
+/// The order of a panel's cards by key, and which of them already stand.
+struct CardPlan<'a> {
+    keys: Vec<String>,
+    repeats: HashMap<String, usize>,
+    standing: &'a dyn Fn(&str) -> bool,
+}
+
+impl<'a> CardPlan<'a> {
+    fn new(standing: &'a dyn Fn(&str) -> bool) -> Self {
+        Self {
+            keys: Vec::new(),
+            repeats: HashMap::new(),
+            standing,
+        }
+    }
+
+    /// Place the card `key` next in the panel. Returns its key, numbered when
+    /// it repeats an earlier one, when the card has to be put up, and `None`
+    /// when it stands already.
+    fn place(&mut self, key: String) -> Option<String> {
+        let repeat = self.repeats.entry(key.clone()).or_default();
+        let key = if *repeat == 0 {
+            key
+        } else {
+            format!("{key}#{repeat}")
+        };
+        *repeat += 1;
+        self.keys.push(key.clone());
+        (!(self.standing)(&key)).then_some(key)
+    }
+}
+
+/// The key of a component's card: its type path, and whatever about the
+/// component that the card draws once, when it is put up.
+fn component_card_key(
+    type_path: &str,
+    is_overridden: bool,
+    revert_through_prefab: bool,
+    is_derived: bool,
+) -> String {
+    let mut key = type_path.to_string();
+    if is_overridden {
+        key.push_str(if revert_through_prefab {
+            " overridden in prefab"
+        } else {
+            " overridden"
+        });
+    }
+    if is_derived {
+        key.push_str(" derived");
+    }
+    key
+}
+
+/// Key the cards a spawner just put under `inspector` without one, for
+/// spawners that do not hand their cards back.
+fn key_new_cards(commands: &mut Commands, inspector: Entity, key: String) {
+    commands.queue(move |world: &mut World| {
+        let Some(children) = world.get::<Children>(inspector) else {
+            return;
+        };
+        let new: Vec<Entity> = children
+            .iter()
+            .filter(|&child| {
+                world.get::<ComponentDisplay>(child).is_some()
+                    && world.get::<InspectorCardKey>(child).is_none()
+            })
+            .collect();
+        for card in new {
+            world.entity_mut(card).insert(InspectorCardKey(key.clone()));
+        }
+    });
+}
+
+/// Take down the cards under `inspector` that `planned` does not name, and put
+/// the rest in its order. Cards that stay are moved, not put up again.
+fn arrange_cards(commands: &mut Commands, inspector: Entity, planned: Vec<String>) {
+    commands.queue(move |world: &mut World| {
+        let Some(children) = world.get::<Children>(inspector) else {
+            return;
+        };
+        let position: HashMap<&str, usize> = planned
+            .iter()
+            .enumerate()
+            .map(|(index, key)| (key.as_str(), index))
+            .collect();
+        let mut gone = Vec::new();
+        let mut places = HashMap::new();
+        for child in children.iter() {
+            if world.get::<ComponentDisplay>(child).is_none() {
+                continue;
+            }
+            match world
+                .get::<InspectorCardKey>(child)
+                .and_then(|key| position.get(key.0.as_str()))
+            {
+                Some(&place) => {
+                    places.insert(child, place);
+                }
+                None => gone.push(child),
+            }
+        }
+        for card in gone {
+            if let Ok(card) = world.get_entity_mut(card) {
+                card.despawn();
+            }
+        }
+        let place = |child: &Entity| places.get(child).copied().unwrap_or(usize::MAX);
+        let Some(mut children) = world.get_mut::<Children>(inspector) else {
+            return;
+        };
+        if !children.is_sorted_by_key(place) {
+            children.sort_by_key(place);
+        }
+    });
 }
 
 /// Whether the editor has a registration for the type the document names, or
@@ -545,10 +746,62 @@ pub(crate) fn build_inspector_displays(
     project_types: &crate::project_types::ProjectTypes,
     type_metadata: &TypeMetadata,
 ) {
+    build_inspector_cards(
+        commands,
+        components,
+        type_registry,
+        source_entity,
+        archetype,
+        entity_ref,
+        inspector_entity,
+        selection_count,
+        names,
+        icon_font,
+        editor_font,
+        materials,
+        authored_type_paths,
+        scene_ast,
+        prefab_cache,
+        collapse_state,
+        project_types,
+        type_metadata,
+        &|_| false,
+    );
+}
+
+/// Put up the cards for `source_entity` under `inspector_entity`, leaving out
+/// those whose key `standing` names, and return the keys of every card in the
+/// order the panel shows them.
+fn build_inspector_cards(
+    commands: &mut Commands,
+    components: &Components,
+    type_registry: &Res<AppTypeRegistry>,
+    source_entity: Entity,
+    archetype: &Archetype,
+    entity_ref: EntityRef,
+    inspector_entity: Entity,
+    selection_count: usize,
+    names: &Query<&Name>,
+    icon_font: &IconFont,
+    editor_font: &EditorFont,
+    materials: &Assets<StandardMaterial>,
+    authored_type_paths: &HashSet<String>,
+    scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
+    prefab_cache: Option<&PrefabAstCache>,
+    collapse_state: &super::InspectorCollapseState,
+    project_types: &crate::project_types::ProjectTypes,
+    type_metadata: &TypeMetadata,
+    standing: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut plan = CardPlan::new(standing);
+
     // Show multi-selection header when multiple entities are selected
-    if selection_count > 1 {
+    if selection_count > 1
+        && let Some(key) = plan.place(format!("{selection_count} selected"))
+    {
         commands.spawn((
             ComponentDisplay,
+            InspectorCardKey(key),
             Node {
                 padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
                 width: Val::Percent(100.0),
@@ -599,9 +852,12 @@ pub(crate) fn build_inspector_displays(
         })
     });
 
-    if let Some(ctx) = prefab_ctx.as_ref().filter(|ctx| !ctx.has_cached_prefab) {
+    if let Some(ctx) = prefab_ctx.as_ref().filter(|ctx| !ctx.has_cached_prefab)
+        && let Some(key) = plan.place(format!("source note {}", ctx.prefab_path.display()))
+    {
         commands.spawn((
             ComponentDisplay,
+            InspectorCardKey(key),
             Node {
                 padding: UiRect::axes(Val::Px(tokens::SPACING_MD), Val::Px(tokens::SPACING_SM)),
                 width: Val::Percent(100.0),
@@ -740,6 +996,17 @@ pub(crate) fn build_inspector_displays(
                 && let Some(reflect_component) = registration.data::<ReflectComponent>()
                 && let Some(reflected) = reflect_component.reflect(entity_ref)
                 && let Some(stack) = reflected.downcast_ref::<jackdaw_geometry::ModifierStack>()
+                && let Some(key) = plan.place(
+                    std::iter::once(type_path.as_str())
+                        .chain(
+                            stack
+                                .modifiers
+                                .iter()
+                                .map(|entry| entry.modifier.kind_str()),
+                        )
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
             {
                 modifier_display::spawn_modifier_display(
                     commands,
@@ -752,6 +1019,7 @@ pub(crate) fn build_inspector_displays(
                     &icon_font.0,
                     collapse_state,
                 );
+                key_new_cards(commands, inspector_entity, key);
             }
             continue;
         }
@@ -761,16 +1029,27 @@ pub(crate) fn build_inspector_displays(
         // single generic wrapper. Skip the generic card and inject the four
         // cards directly.
         if crate::worn_material::material_component_paths().contains(&type_path.as_str()) {
-            material_display::inject_material_cards(
-                commands,
-                source_entity,
-                inspector_entity,
-                &icon_font.0,
-                collapse_state,
-            );
+            if let Some(key) = plan.place("material".to_string()) {
+                material_display::inject_material_cards(
+                    commands,
+                    source_entity,
+                    inspector_entity,
+                    &icon_font.0,
+                    collapse_state,
+                );
+                key_new_cards(commands, inspector_entity, key);
+            }
             continue;
         }
 
+        let Some(key) = plan.place(component_card_key(
+            type_path,
+            is_overridden,
+            revert_through_prefab,
+            is_derived,
+        )) else {
+            continue;
+        };
         let card = spawn_component_display(
             commands,
             ComponentDisplaySpec {
@@ -787,6 +1066,7 @@ pub(crate) fn build_inspector_displays(
                 collapse_state,
             },
         );
+        commands.entity(card.section).insert(InspectorCardKey(key));
         super::type_metadata_pane::spawn_type_metadata_ui(
             commands,
             &card,
@@ -958,6 +1238,16 @@ pub(crate) fn build_inspector_displays(
                 }
                 (None, None) => short_type_name(&type_path).to_string(),
             };
+            let Some(key) = plan.place(format!(
+                "{type_path} {}",
+                if schema.is_some() {
+                    "project"
+                } else {
+                    "document"
+                }
+            )) else {
+                continue;
+            };
             let card = spawn_component_display(
                 commands,
                 ComponentDisplaySpec {
@@ -974,6 +1264,7 @@ pub(crate) fn build_inspector_displays(
                     collapse_state,
                 },
             );
+            commands.entity(card.section).insert(InspectorCardKey(key));
             super::type_metadata_pane::spawn_type_metadata_ui(
                 commands,
                 &card,
@@ -999,17 +1290,22 @@ pub(crate) fn build_inspector_displays(
                 ),
             }
         }
-        spawn_unavailable_group(
-            commands,
-            inspector_entity,
-            source_entity,
-            ast,
-            node,
-            &unavailable,
-            &icon_font.0,
-            &editor_font.0,
-            collapse_state,
-        );
+        if !unavailable.is_empty()
+            && let Some(key) = plan.place(format!("not loaded {}", unavailable.join(" ")))
+        {
+            spawn_unavailable_group(
+                commands,
+                inspector_entity,
+                source_entity,
+                ast,
+                node,
+                &unavailable,
+                &icon_font.0,
+                &editor_font.0,
+                collapse_state,
+            );
+            key_new_cards(commands, inspector_entity, key);
+        }
     }
 
     // Add Component button is in the static layout header (layout.rs entity_inspector)
@@ -1020,7 +1316,9 @@ pub(crate) fn build_inspector_displays(
     // data carries the handles. Shells are spawned synchronously (same flush as
     // every other card) so the "material" category is present on the rebuild
     // frame before `resolve_active_on_rebuild` runs. Body fills are deferred.
-    if entity_ref.contains::<crate::brush::Brush>() {
+    if entity_ref.contains::<crate::brush::Brush>()
+        && let Some(key) = plan.place("material".to_string())
+    {
         material_display::inject_material_cards(
             commands,
             source_entity,
@@ -1028,15 +1326,20 @@ pub(crate) fn build_inspector_displays(
             &icon_font.0,
             collapse_state,
         );
+        key_new_cards(commands, inspector_entity, key);
     }
 
     if selection_count == 1
         && entity_ref.contains::<jackdaw_scene_types::model_import::ModelLevels>()
+        && let Some(key) = plan.place("lod placement".to_string())
     {
         commands.queue(move |world: &mut World| {
             crate::lod_bar::spawn_placement_card(world, inspector_entity, source_entity);
         });
+        key_new_cards(commands, inspector_entity, key);
     }
+
+    plan.keys
 }
 
 /// The components on `node` the editor cannot load, as one group of read-only
