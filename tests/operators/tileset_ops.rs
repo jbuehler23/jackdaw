@@ -18,11 +18,11 @@ use jackdaw_scene_types::PropertyValue;
 use jackdaw_tilemap::{RgbaImage, TilesetSetup, auto_setup};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
-const SHEET: &str = "tilemap_packed.png";
+pub(crate) const SHEET: &str = "tilemap_packed.png";
 const SPACED_SHEET: &str = "tilemap.png";
 
 /// An editor on a temp project whose assets hold the two Tiny Farm sheets.
-fn project_app() -> (App, tempfile::TempDir) {
+pub(crate) fn project_app() -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let assets = dir.path().join("assets");
     std::fs::create_dir_all(&assets).expect("assets");
@@ -57,7 +57,7 @@ fn fixture(name: &str) -> String {
 }
 
 #[track_caller]
-fn import(app: &mut App, params: &[(&'static str, &str)]) {
+pub(crate) fn import(app: &mut App, params: &[(&'static str, &str)]) {
     assert_eq!(call_import(app, params), OperatorResult::Finished);
 }
 
@@ -79,19 +79,19 @@ fn call_import(app: &mut App, params: &[(&'static str, &str)]) -> OperatorResult
     result
 }
 
-fn reports(app: &App) -> Vec<String> {
+pub(crate) fn reports(app: &App) -> Vec<String> {
     app.world().resource::<OperatorReports>().0.clone()
 }
 
-fn warnings(app: &App) -> Vec<String> {
+pub(crate) fn warnings(app: &App) -> Vec<String> {
     app.world().resource::<OperatorWarnings>().0.clone()
 }
 
-fn asset_file(dir: &tempfile::TempDir, relative: &str) -> PathBuf {
+pub(crate) fn asset_file(dir: &tempfile::TempDir, relative: &str) -> PathBuf {
     dir.path().join("assets").join(relative)
 }
 
-fn read_tileset(path: &Path) -> Tileset {
+pub(crate) fn read_tileset(path: &Path) -> Tileset {
     jackdaw_bsn::read_asset_file::<Tileset>(path).expect("the tileset reads back")
 }
 

@@ -1212,7 +1212,7 @@ pub fn kind_of_file(world: &World, path: &Path) -> Option<AssetKind> {
 
 /// The entry for a file, reading and indexing it if the walk has not reached it
 /// yet.
-fn entry_for_file(world: &mut World, path: &Path) -> Option<AssetEntry> {
+pub(crate) fn entry_for_file(world: &mut World, path: &Path) -> Option<AssetEntry> {
     let indexed = indexed_path(world, path)?;
     if crate::asset_index::is_catalog_file(&indexed) {
         return None;

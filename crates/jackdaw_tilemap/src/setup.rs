@@ -717,13 +717,13 @@ fn within((a, b): Pair, peers: &TileTerrains) -> bool {
     peers.peers.iter().all(|&p| p == 0 || p == a || p == b)
 }
 
-fn transition(pair: Pair, peers: &TileTerrains) -> bool {
+pub(crate) fn transition(pair: Pair, peers: &TileTerrains) -> bool {
     within(pair, peers) && peers.peers.contains(&pair.0) && peers.peers.contains(&pair.1)
 }
 
 /// Whether the set of `pair` holds a tile with `peers`: a transition between
 /// its terrains, or a pure tile of one of them no other set in `sets` uses.
-fn set_holds(pair: Pair, peers: &TileTerrains, sets: &[SetupSet]) -> bool {
+pub(crate) fn set_holds(pair: Pair, peers: &TileTerrains, sets: &[SetupSet]) -> bool {
     if !within(pair, peers) {
         return false;
     }

@@ -165,6 +165,7 @@ pub mod test_input;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
+pub mod tileset_edit;
 pub mod tileset_import;
 pub(crate) mod timestamps;
 pub mod tool_ops;
