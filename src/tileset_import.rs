@@ -109,16 +109,16 @@ pub fn tileset_import(params: In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
-struct Sheet {
+pub(crate) struct Sheet {
     file: PathBuf,
-    name: String,
+    pub(crate) name: String,
     width: u32,
     height: u32,
     pixels: Vec<u8>,
 }
 
 impl Sheet {
-    fn image(&self) -> Result<RgbaImage<'_>, String> {
+    pub(crate) fn image(&self) -> Result<RgbaImage<'_>, String> {
         RgbaImage::new(self.width, self.height, &self.pixels)
             .ok_or_else(|| format!("{} decodes to the wrong size", self.name))
     }
@@ -264,7 +264,7 @@ fn sheet_name(world: &World, path: &Path) -> Result<String, String> {
     Ok(name)
 }
 
-fn decode_sheet(assets: &Path, name: String) -> Result<Sheet, String> {
+pub(crate) fn decode_sheet(assets: &Path, name: String) -> Result<Sheet, String> {
     let file = assets.join(&name);
     let decoded = image::open(&file).map_err(|err| format!("{name} is not an image: {err}"))?;
     let decoded = decoded.to_rgba8();

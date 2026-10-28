@@ -8,6 +8,8 @@ use jackdaw_tilemap::{
     TileAddress, TileShape, TileTerrains, TilesetSetup, Tracked,
 };
 
+mod describe;
+
 /// Registers [`Tileset`] as a reflected asset.
 pub struct TilesetPlugin;
 
