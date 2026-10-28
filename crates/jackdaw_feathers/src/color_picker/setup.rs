@@ -22,10 +22,12 @@ use crate::popover::{
 };
 
 pub(super) fn setup_color_picker(
+    add: On<Add<EditorColorPicker>>,
     mut commands: Commands,
-    mut pickers: Query<(Entity, &ColorPickerConfig, &ColorPickerState), Added<EditorColorPicker>>,
+    pickers: Query<(&ColorPickerConfig, &ColorPickerState)>,
 ) {
-    for (entity, config, state) in &mut pickers {
+    let entity = add.entity;
+    if let Ok((config, state)) = pickers.get(entity) {
         if config.inline {
             // Spawn the inline content through a liveness-checked world closure so
             // it cannot be parented to a despawned picker. A plain deferred
@@ -77,20 +79,20 @@ pub(super) fn setup_color_picker(
     }
 }
 
+/// Put the swatch on the trigger and mark its caption as the hex readout. The
+/// config is inserted after the trigger is spawned, by which time the button
+/// has built its caption.
 pub(super) fn setup_trigger_swatch(
+    add: On<Add<TriggerSwatchConfig>>,
     mut commands: Commands,
-    triggers: Query<(Entity, &TriggerSwatchConfig)>,
+    triggers: Query<&TriggerSwatchConfig>,
     children: Query<&Children>,
     captions: Query<(), With<ButtonContentText>>,
 ) {
-    for (trigger_entity, config) in &triggers {
-        // The hex readout is the button's caption. The button builds its
-        // children a tick after the trigger is spawned, so the whole pass
-        // waits for the caption: consuming the config before then would
-        // leave the readout unmarked, frozen at its spawn colour and
-        // without the margin that clears the swatch.
+    let trigger_entity = add.entity;
+    if let Ok(config) = triggers.get(trigger_entity) {
         let Some(caption) = button_caption(trigger_entity, &children, &captions) else {
-            continue;
+            return;
         };
 
         commands
@@ -184,14 +186,16 @@ pub(super) fn handle_trigger_click(
 }
 
 pub(super) fn setup_color_picker_content(
+    add: On<Add<ColorPickerContent>>,
     mut commands: Commands,
     states: Query<&ColorPickerState>,
-    contents: Query<(Entity, &ColorPickerContent), Added<ColorPickerContent>>,
+    contents: Query<&ColorPickerContent>,
 ) {
-    for (content_entity, content) in &contents {
+    let content_entity = add.entity;
+    if let Ok(content) = contents.get(content_entity) {
         let picker = content.0;
         let Ok(state) = states.get(picker) else {
-            continue;
+            return;
         };
         let rgba = state.to_rgba();
         let color = Color::Srgba(state.to_srgba());
@@ -348,11 +352,10 @@ mod tests {
     use crate::color_picker::{ColorPickerProps, color_picker};
     use crate::icons::{EditorFont, IconFont};
 
-    /// A picker with its trigger built, ticked far enough for the button
-    /// (and the caption inside it) to exist. The render-side material
+    /// An app with the picker's setup passes. The render-side material
     /// plugins the widget's own plugin adds are not needed to read a
-    /// label, so the systems under test are registered by hand.
-    fn app_with_picker(color: [f32; 4]) -> (App, Entity) {
+    /// label, so the passes under test are registered by hand.
+    fn app() -> App {
         let mut app = App::new();
         app.add_plugins((
             bevy::app::TaskPoolPlugin::default(),
@@ -364,24 +367,21 @@ mod tests {
         app.init_resource::<bevy::input_focus::InputFocus>();
         app.insert_resource(IconFont(Handle::default()));
         app.insert_resource(EditorFont(Handle::default()));
-        app.add_systems(
-            Update,
-            (
-                setup_color_picker,
-                setup_trigger_swatch,
-                update_trigger_display,
-            )
-                .chain(),
-        );
+        app.add_observer(setup_color_picker)
+            .add_observer(setup_trigger_swatch)
+            .add_observer(setup_color_picker_content)
+            .add_systems(Update, update_trigger_display);
+        app
+    }
+
+    /// A picker with its trigger built.
+    fn app_with_picker(color: [f32; 4]) -> (App, Entity) {
+        let mut app = app();
         let entity = app
             .world_mut()
             .spawn(color_picker(ColorPickerProps::new().with_color(color)))
             .id();
-        // Three: the trigger lands, the button builds its caption, the
-        // swatch pass finds it.
-        app.update();
-        app.update();
-        app.update();
+        app.world_mut().flush();
         (app, entity)
     }
 
@@ -414,6 +414,54 @@ mod tests {
         app.update();
 
         assert_eq!(readout(&app), "0000FF");
+    }
+
+    /// The trigger has its swatch and readout on the frame the picker is
+    /// spawned, before any update has run.
+    #[test]
+    fn a_picker_trigger_is_complete_on_the_frame_it_spawns() {
+        let (app, picker) = app_with_picker([0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(readout(&app), "00FF00");
+        let swatch = app
+            .world()
+            .iter_entities()
+            .find(EntityRef::contains::<TriggerSwatch>)
+            .expect("the trigger has its swatch");
+        let trigger = swatch.get::<ChildOf>().expect("on the trigger").parent();
+        assert_eq!(
+            app.world().get::<ChildOf>(trigger).map(ChildOf::parent),
+            Some(picker),
+        );
+    }
+
+    /// An inline picker shows its plane, sliders and fields on the frame it
+    /// is spawned.
+    #[test]
+    fn an_inline_picker_is_complete_on_the_frame_it_spawns() {
+        let mut app = app();
+        let picker = app
+            .world_mut()
+            .spawn(color_picker(ColorPickerProps::new().inline()))
+            .id();
+        app.world_mut().flush();
+
+        let world = app.world_mut();
+        let mut parts = world.query::<&ColorSubWidget>();
+        let parts: Vec<Option<usize>> = parts
+            .iter(world)
+            .filter(|part| part.picker == picker)
+            .map(|part| part.part.channel())
+            .collect();
+        assert!(parts.contains(&None), "the plane and swatch are there");
+        for channel in 0..4 {
+            assert!(parts.contains(&Some(channel)), "slider {channel} is there");
+        }
+        let mut rows = world.query::<&ColorInputRow>();
+        assert_eq!(
+            rows.iter(world).filter(|row| row.0 == picker).count(),
+            1,
+            "and so is the row of fields",
+        );
     }
 
     /// The readout keeps clear of the swatch drawn over the button's left

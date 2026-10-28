@@ -1039,15 +1039,70 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                process_pickers,
                 picker_keyboard_navigation,
                 scroll_to_picker_item,
                 paint_picker_item_highlight,
             )
                 .chain(),
         )
+        .add_systems(
+            PostUpdate,
+            process_pickers.in_set(crate::WidgetSetupSystems),
+        )
         .add_observer(on_text_edit_submit)
         .add_observer(on_picker_selected)
         .add_observer(on_picker_dismissed)
         .add_observer(on_dismiss_activated);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spawn_item(input: In<SpawnItemInput>, mut commands: Commands) -> Result {
+        commands
+            .entity(input.entities.list)
+            .with_child(picker_item(0));
+        Ok(())
+    }
+
+    fn on_select(_: In<SelectInput>) -> Result {
+        Ok(())
+    }
+
+    /// A picker opened during a frame lists its items in that frame, so
+    /// it is never drawn empty.
+    #[test]
+    fn a_picker_lists_its_items_on_the_frame_it_opens() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            bevy::input::InputPlugin,
+            crate::button::plugin,
+            plugin,
+        ));
+        app.init_asset::<Font>();
+        app.init_resource::<InputFocus>();
+        app.init_resource::<Time>();
+        app.insert_resource(IconFont(Handle::default()));
+        app.insert_resource(EditorFont(Handle::default()));
+        app.add_systems(
+            Update,
+            (|mut commands: Commands| {
+                commands.spawn(
+                    PickerProps::new(spawn_item, on_select)
+                        .items(["Cube".to_string(), "Sphere".to_string()]),
+                );
+            })
+            .run_if(bevy::ecs::schedule::common_conditions::run_once),
+        );
+
+        app.update();
+
+        let world = app.world_mut();
+        let mut items = world.query::<&PickerItem>();
+        assert_eq!(items.iter(world).count(), 2);
+    }
 }

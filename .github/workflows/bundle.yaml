@@ -104,7 +104,7 @@ jobs:
 
       - name: Install Wild (Linux)
         if: runner.os == 'Linux'
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install zig (Linux)
         if: matrix.glibc_target

@@ -96,7 +96,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Check the dependency sources
         run: cargo xtask git-deps
@@ -153,7 +153,7 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Wild
-        run: cargo binstall wild-linker --locked --force
+        run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
