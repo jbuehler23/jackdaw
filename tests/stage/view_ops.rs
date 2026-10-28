@@ -97,6 +97,7 @@ fn frame_fits_every_sprite_when_none_is_selected() {
         view_of(&app, scene.panel),
         all_rect(),
         area_of(&app, scene.panel),
+        1.0,
     );
     let view = view_of(&app, scene.panel);
     assert_eq!(view.pan, Vec2::new(5.0, 30.0), "centred on the sprites");
@@ -119,7 +120,8 @@ fn frame_fits_the_selection_when_a_sprite_is_selected() {
         fit_world_rect(
             view,
             Rect::from_center_size(Vec2::new(100.0, 0.0), Vec2::splat(20.0)),
-            area_of(&app, scene.panel)
+            area_of(&app, scene.panel),
+            1.0
         )
         .zoom
     );

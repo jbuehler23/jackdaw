@@ -680,10 +680,29 @@ fn set_pixels_per_unit_sizes_the_sprite_in_one_undoable_entry_and_stores_nothing
 }
 
 #[test]
-fn set_pixels_per_unit_refuses_a_missing_zero_negative_or_infinite_ppu() {
+fn set_pixels_per_unit_defaults_to_the_project_ppu() {
+    let (mut app, _dir, sprite) = sheet_app();
+    set_ppu(&mut app, sprite, None).assert_finished();
+    assert_eq!(
+        custom_size(&app, sprite),
+        Some(SHEET_SIZE),
+        "ppu 1 by default"
+    );
+    app.world_mut()
+        .operator("project.set_pixels_per_unit")
+        .param("value", 16.0)
+        .call()
+        .expect("project.set_pixels_per_unit dispatches")
+        .assert_finished();
+    set_ppu(&mut app, sprite, None).assert_finished();
+    assert_eq!(custom_size(&app, sprite), Some(SHEET_SIZE / 16.0));
+}
+
+#[test]
+fn set_pixels_per_unit_refuses_a_zero_negative_or_infinite_ppu() {
     let (mut app, _dir, sprite) = sheet_app();
     let depth = history_len(&app);
-    for ppu in [None, Some(0.0), Some(-4.0), Some(f64::INFINITY)] {
+    for ppu in [Some(0.0), Some(-4.0), Some(f64::INFINITY)] {
         warnings(&mut app);
         set_ppu(&mut app, sprite, ppu).assert_cancelled();
         assert!(
@@ -959,4 +978,80 @@ fn set_pixels_per_unit_does_not_read_a_file_of_another_asset_source() {
         "the default source's file of the same name is not measured"
     );
     assert_eq!(custom_size(&app, sprite), None);
+}
+
+#[test]
+fn set_pixels_per_unit_refuses_a_malformed_ppu() {
+    let (mut app, _dir, sprite) = sheet_app();
+    for ppu in [
+        PropertyValue::String("many".into()),
+        PropertyValue::Bool(true),
+    ] {
+        warnings(&mut app);
+        let result = app
+            .world_mut()
+            .operator("sprite.set_pixels_per_unit")
+            .param("entity", sprite)
+            .param("ppu", ppu.clone())
+            .call()
+            .expect("sprite.set_pixels_per_unit dispatches");
+        app.update();
+        result.assert_cancelled();
+        assert!(
+            warnings(&mut app).iter().any(|w| w.contains("above 0")),
+            "the caller hears why for {ppu:?}"
+        );
+    }
+    assert_eq!(custom_size(&app, sprite), None);
+}
+
+/// A 2D scene of a project whose assets hold a 16x16 `tile.png`, at `ppu`.
+fn tile_app(ppu: f64) -> (App, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let assets = assets_of(&dir);
+    std::fs::create_dir_all(&assets).expect("assets");
+    image::RgbaImage::new(16, 16)
+        .save(assets.join("tile.png"))
+        .expect("a 16x16 image");
+    let mut app = util::editor_test_app_reading(&assets);
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: dir.path().to_path_buf(),
+            config: default(),
+        });
+    jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+    app.world_mut()
+        .operator("project.set_pixels_per_unit")
+        .param("value", ppu)
+        .call()
+        .expect("project.set_pixels_per_unit dispatches")
+        .assert_finished();
+    app.update();
+    (app, dir)
+}
+
+#[test]
+fn a_new_sprite_comes_in_at_the_project_ppu() {
+    let (mut app, _dir) = tile_app(16.0);
+    add(&mut app, &[("path", "tile.png".into())]);
+    let sprite = only_sprite(&mut app);
+    assert_eq!(
+        custom_size(&app, sprite),
+        Some(Vec2::ONE),
+        "16 px at 16 to the unit"
+    );
+    let text = jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), &std::env::temp_dir())
+        .expect("the scene emits");
+    assert!(text.contains("custom_size"), "the size is authored: {text}");
+
+    let (mut app, _dir) = tile_app(1.0);
+    add(&mut app, &[("path", "tile.png".into())]);
+    let sprite = only_sprite(&mut app);
+    assert_eq!(
+        custom_size(&app, sprite),
+        None,
+        "at ppu 1 the image sizes it"
+    );
 }

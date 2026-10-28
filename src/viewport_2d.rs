@@ -35,6 +35,7 @@ use jackdaw_scene_types::{CanvasGuides, UiSceneRoot};
 use crate::{
     canvas_snap::{
         CanvasGuidesOp, CanvasRulersOp, CanvasSnap, CanvasSnapKind, CanvasSnapOp, GuideScene,
+        GuideSpace,
     },
     image_sampling::{ProjectSet2dSamplingOp, Sampling},
     prefab::{AuthoredUiSceneRoot, ImportedUiSceneRoot},
@@ -45,16 +46,32 @@ use crate::{
         DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, InteractionGuards, UiCursorPos,
         ViewportLayerCounter,
     },
+    world_units::{
+        LengthUnit, PPU_PRESETS, ProjectSetLengthUnitOp, ProjectSetPixelsPerUnitOp, WorldUnits,
+    },
 };
 
 use crate::viewport_host::{ViewportHost, ViewportMode, ViewportModeIntent};
 
 /// Furthest out the user can zoom, in stage logical pixels per authored
-/// pixel.
+/// pixel or sprite pixel. See [`zoom_range`].
 pub const MIN_ZOOM: f32 = 0.05;
 /// Furthest in the user can zoom, in stage logical pixels per authored
-/// pixel.
+/// pixel or sprite pixel. See [`zoom_range`].
 pub const MAX_ZOOM: f32 = 32.0;
+
+/// The zoom range, in stage logical pixels per view unit, of a view with
+/// `texels_per_unit` texels to a view unit: [`MIN_ZOOM`] to [`MAX_ZOOM`] per
+/// texel. A UI canvas passes 1 and a 2D world scene the project's pixels per
+/// unit, so both zoom over the same range of screen pixels per texel.
+pub fn zoom_range(texels_per_unit: f32) -> (f32, f32) {
+    let texels = if texels_per_unit.is_finite() && texels_per_unit > 0.0 {
+        texels_per_unit
+    } else {
+        1.0
+    };
+    (MIN_ZOOM * texels, MAX_ZOOM * texels)
+}
 
 /// Zoom factor applied per wheel tick.
 const ZOOM_PER_TICK: f32 = 1.1;
@@ -193,8 +210,15 @@ pub fn world_to_target_pixel(view: Ui2dView, target_size: UVec2, world: Vec2) ->
 
 /// Zoom by `ticks` wheel steps about the point under the cursor: the pan is
 /// re-solved so [`world_at`] returns the same authored point before and after.
-pub fn zoom_toward(view: Ui2dView, area_offset: Vec2, ticks: f32) -> Ui2dView {
-    let zoom = (view.zoom * ZOOM_PER_TICK.powf(ticks)).clamp(MIN_ZOOM, MAX_ZOOM);
+/// The zoom stays inside [`zoom_range`] of `texels_per_unit`.
+pub fn zoom_toward(
+    view: Ui2dView,
+    area_offset: Vec2,
+    ticks: f32,
+    texels_per_unit: f32,
+) -> Ui2dView {
+    let (least, most) = zoom_range(texels_per_unit);
+    let zoom = (view.zoom * ZOOM_PER_TICK.powf(ticks)).clamp(least, most);
     let anchor = world_at(view, area_offset);
     Ui2dView {
         pan: anchor - Vec2::new(area_offset.x, -area_offset.y) / zoom,
@@ -221,20 +245,16 @@ pub fn fit_view(view: Ui2dView, reference: UVec2, area: Vec2) -> Ui2dView {
 /// The view that shows the world rect `rect` inside an `area`-sized window,
 /// centred on it, with `FIT_MARGIN` to spare on each edge. A rect thinner than
 /// a world unit is floored at one, so a lone point frames at a finite zoom.
-pub fn fit_world_rect(view: Ui2dView, rect: Rect, area: Vec2) -> Ui2dView {
+/// The zoom stays inside [`zoom_range`] of `texels_per_unit`.
+pub fn fit_world_rect(view: Ui2dView, rect: Rect, area: Vec2, texels_per_unit: f32) -> Ui2dView {
     let size = rect.size().max(Vec2::ONE);
     let usable = (area - Vec2::splat(FIT_MARGIN * 2.0)).max(Vec2::ONE);
+    let (least, most) = zoom_range(texels_per_unit);
     Ui2dView {
         pan: rect.center(),
-        zoom: (usable / size).min_element().clamp(MIN_ZOOM, MAX_ZOOM),
+        zoom: (usable / size).min_element().clamp(least, most),
         ..view
     }
-}
-
-/// Texels per world unit of a 2D world scene. One world unit is one texel
-/// until the project says otherwise.
-fn world_pixels_per_unit() -> f32 {
-    1.0
 }
 
 /// What a pixel-perfect snap lands the view on.
@@ -269,7 +289,7 @@ impl Default for PixelGrid {
 /// one) and every texel edge on a physical pixel edge.
 ///
 /// The zoom becomes a whole multiple of `texels_per_unit / scale_factor`, kept
-/// within the zoom range. When no multiple fits the range (a texel wider than
+/// within [`zoom_range`]. When no multiple fits the range (a texel wider than
 /// the largest zoom allows), the zoom is clamped to the range instead and the
 /// texels are no longer whole pixels. The pan goes to the texel grid, then
 /// half a physical pixel further on an axis whose area is odd, so the grid
@@ -284,9 +304,10 @@ pub fn pixel_perfect_view(view: Ui2dView, grid: PixelGrid) -> Ui2dView {
     };
     let texels = positive(grid.texels_per_unit);
     let scale = positive(grid.scale_factor);
-    let most = (MAX_ZOOM * scale / texels).floor().max(1.0);
+    let (least, most_zoom) = zoom_range(texels);
+    let most = (most_zoom * scale / texels).floor().max(1.0);
     let steps = (view.zoom * scale / texels).round().clamp(1.0, most);
-    let zoom = (steps * texels / scale).clamp(MIN_ZOOM, MAX_ZOOM);
+    let zoom = (steps * texels / scale).clamp(least, most_zoom);
 
     let half_pixel = 0.5 / (zoom * scale);
     let snap = |pan: f32, canvas_odd: bool, area_odd: bool| {
@@ -533,6 +554,8 @@ fn viewport_2d_pan_zoom(
     areas: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dStageArea>>,
     mut hosts: Query<(Entity, &ViewportHost, &mut Viewport2dPanelHost)>,
     mut panning: ResMut<Ui2dPanActive>,
+    scene: GuideScene,
+    units: Res<WorldUnits>,
 ) {
     // Both streams are read whatever becomes of them below, so a reader
     // cannot back up while the cursor is elsewhere or while the scene
@@ -584,7 +607,8 @@ fn viewport_2d_pan_zoom(
         && let Some((entity, offset)) = hovered
         && let Ok((_, _, mut host)) = hosts.get_mut(entity)
     {
-        let view = zoom_toward(host.view, offset, ticks);
+        let texels = grid_pixels(&scene, &units, &host);
+        let view = zoom_toward(host.view, offset, ticks, texels);
         if view != host.view {
             host.set_view(view);
         }
@@ -1296,6 +1320,7 @@ mod world_mapping_tests {
 /// measures against the same area size the canvas was laid into.
 fn sync_rulers(
     snap: Res<CanvasSnap>,
+    units: Res<WorldUnits>,
     scene: GuideScene,
     hosts: Query<&Viewport2dPanelHost>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
@@ -1340,6 +1365,10 @@ fn sync_rulers(
         };
         let scale = crate::ui_stage::stage_scale(stage, host.target_size);
         let (origin, step) = space.ruler_axis(host, area, scale, ruler.axis);
+        let step = match space {
+            GuideSpace::World => step / units.shown_per_unit(),
+            GuideSpace::Canvas(_) => step,
+        };
         // Adding zero turns a negated zero into the "0" the label prints.
         let marks: Vec<RulerMark> = ruler_marks(
             origin,
@@ -2062,8 +2091,44 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
             ));
         }
     }
+    let units = *world.resource::<WorldUnits>();
+    let grid_pixels = if world_scene { units.ppu() } else { 1.0 };
+    if world_scene {
+        rows.push((
+            format!("{SECTION_ACTION_PREFIX}Pixels Per Unit: {}", units.ppu()),
+            String::new(),
+        ));
+        for ppu in PPU_PRESETS {
+            rows.push(checked_row(
+                units.ppu() == ppu,
+                format!(
+                    "{OP_ACTION_PREFIX}{}?value={ppu}",
+                    ProjectSetPixelsPerUnitOp::ID
+                ),
+                ppu.to_string(),
+            ));
+        }
+        rows.push((
+            format!("{SECTION_ACTION_PREFIX}Show Lengths In"),
+            String::new(),
+        ));
+        for unit in LengthUnit::ALL {
+            rows.push(checked_row(
+                units.display == unit,
+                format!(
+                    "{OP_ACTION_PREFIX}{}?unit={}",
+                    ProjectSetLengthUnitOp::ID,
+                    unit.id()
+                ),
+                unit.label(),
+            ));
+        }
+    }
     rows.push((
-        format!("{SECTION_ACTION_PREFIX}Grid: {}", grid_label(grid)),
+        format!(
+            "{SECTION_ACTION_PREFIX}Grid: {}",
+            grid_label(grid, world_scene.then_some(&units))
+        ),
         String::new(),
     ));
     for (steps, label) in [(-1, "Finer"), (1, "Coarser")] {
@@ -2073,7 +2138,7 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
             format!(
                 "{OP_ACTION_PREFIX}{}?size={}&panel={}",
                 Viewport2dGridOp::ID,
-                stepped_ui_grid(grid, steps),
+                stepped_ui_grid(grid * grid_pixels, steps),
                 host.to_bits(),
             ),
             label.to_string(),
@@ -2099,7 +2164,7 @@ fn viewport_2d_grid_stepper(host: Entity) -> impl Bundle {
             viewport_2d_grid_step(host, -1, Icon::Minus, "Finer canvas grid"),
             (
                 Viewport2dGridReadout { host },
-                Text::new(grid_label(Ui2dView::default().grid)),
+                Text::new(grid_label(Ui2dView::default().grid, None)),
                 TextFont {
                     font_size: tokens::TEXT_SIZE_XS,
                     ..default()
@@ -2141,9 +2206,13 @@ fn viewport_2d_grid_step(
         ),
         jackdaw_feathers::tooltip::Tooltip::title(tooltip),
         observe(
-            move |_: On<PointerClick>, mut hosts: Query<&mut Viewport2dPanelHost>| {
+            move |_: On<PointerClick>,
+                  mut hosts: Query<&mut Viewport2dPanelHost>,
+                  scene: GuideScene,
+                  units: Res<WorldUnits>| {
                 if let Ok(mut panel) = hosts.get_mut(host) {
-                    let grid = stepped_ui_grid(panel.view.grid, steps);
+                    let pixels = grid_pixels(&scene, &units, &panel);
+                    let grid = stepped_ui_grid(panel.view.grid * pixels, steps) / pixels;
                     if grid != panel.view.grid {
                         let view = Ui2dView { grid, ..panel.view };
                         panel.set_view(view);
@@ -2170,22 +2239,29 @@ pub struct Viewport2dGridReadout {
     pub host: Entity,
 }
 
-/// A canvas grid as the user reads it: authored pixels, with the unit spelled
-/// out so it cannot be mistaken for the zoom percentage beside it.
-fn grid_label(grid: f32) -> String {
-    format!("{grid:.0} px")
+/// A canvas grid as the user reads it, with the unit spelled out so it cannot
+/// be mistaken for the zoom percentage beside it: a UI canvas's authored
+/// pixels, or a 2D world scene's lengths in the project's unit.
+fn grid_label(grid: f32, world: Option<&WorldUnits>) -> String {
+    match world {
+        Some(units) => units.label(grid),
+        None => format!("{grid:.0} px"),
+    }
 }
 
 /// Report each panel's canvas grid in its header.
 fn update_viewport_2d_grid_readout(
     hosts: Query<&Viewport2dPanelHost>,
+    scene: GuideScene,
+    units: Res<WorldUnits>,
     mut readouts: Query<(&Viewport2dGridReadout, &mut Text)>,
 ) {
     for (readout, mut text) in &mut readouts {
         let Ok(host) = hosts.get(readout.host) else {
             continue;
         };
-        let label = grid_label(host.view.grid);
+        let world = matches!(scene.open(Some(host)), Some((_, GuideSpace::World)));
+        let label = grid_label(host.view.grid, world.then_some(&*units));
         if text.0 != label {
             text.0 = label;
         }
@@ -2210,6 +2286,17 @@ pub struct Viewport2dZoomReadout {
 /// A zoom as the percentage the user reads it at. `1.0` is 100%.
 fn zoom_percent(zoom: f32) -> String {
     format!("{:.0}%", zoom * 100.0)
+}
+
+/// Pixels per stored grid unit on `host`: the project's pixels per unit on a
+/// 2D world scene, whose grid and zoom count world units, else 1. The grid
+/// stepper and `viewport2d.grid` speak pixels, and the zoom readout counts
+/// screen pixels per sprite pixel.
+fn grid_pixels(scene: &GuideScene, units: &WorldUnits, host: &Viewport2dPanelHost) -> f32 {
+    match scene.open(Some(host)) {
+        Some((_, GuideSpace::World)) => units.ppu(),
+        _ => 1.0,
+    }
 }
 
 /// Name the scene each 2D viewport is editing, falling back to the panel's own
@@ -2238,13 +2325,15 @@ fn update_viewport_2d_title(
 /// Report each panel's zoom in its header.
 fn update_viewport_2d_zoom_readout(
     hosts: Query<&Viewport2dPanelHost>,
+    scene: GuideScene,
+    units: Res<WorldUnits>,
     mut readouts: Query<(&Viewport2dZoomReadout, &mut Text)>,
 ) {
     for (readout, mut text) in &mut readouts {
         let Ok(host) = hosts.get(readout.host) else {
             continue;
         };
-        let percent = zoom_percent(host.view.zoom);
+        let percent = zoom_percent(host.view.zoom / grid_pixels(&scene, &units, host));
         if text.0 != percent {
             text.0 = percent;
         }
@@ -2422,7 +2511,8 @@ fn fronted_viewport_hosts<'a>(
 /// Frame the open scene in the 2D viewport. A UI scene is fitted whole. A 2D
 /// world scene is framed on its selected sprites (a selected group stands for
 /// the sprites under it), or on every sprite when none is selected, and an
-/// empty one goes back to the origin at zoom 1. A sprite whose image has not
+/// empty one goes back to the origin at 100%, one screen pixel per sprite
+/// pixel. A sprite whose image has not
 /// loaded counts as its origin point. Every open 2D panel is framed, an
 /// operator having no panel to be called on. The fit lands on the next frame
 /// the panel has a laid-out size.
@@ -2452,6 +2542,7 @@ pub fn fit_world_views(
     sprites: Query<WorldSpriteParts, Without<crate::EditorEntity>>,
     parents: Query<&ChildOf>,
     pixels: crate::sprite_stage::SpritePixels,
+    units: Res<WorldUnits>,
 ) {
     let area_of = |host: &Viewport2dPanelHost| {
         areas
@@ -2475,10 +2566,10 @@ pub fn fit_world_views(
             continue;
         }
         let view = match rect {
-            Some(rect) => fit_world_rect(host.view, rect, area_of(&host)),
+            Some(rect) => fit_world_rect(host.view, rect, area_of(&host), units.ppu()),
             None => Ui2dView {
                 pan: Vec2::ZERO,
-                zoom: 1.0,
+                zoom: units.ppu(),
                 ..host.view
             },
         };
@@ -2562,14 +2653,20 @@ pub(crate) fn viewport_2d_mode(
 
 /// Set the canvas grid the 2D viewport snaps and nudges on, on every open panel.
 /// A size off the power-of-two ladder is taken as given; the header's stepper
-/// pulls it back onto the ladder from there. See [`stepped_ui_grid`].
+/// pulls it back onto the ladder from there. See [`stepped_ui_grid`]. On a 2D
+/// world scene the size is in sprite pixels, kept as world units at the
+/// project's pixels per unit.
 #[operator(
     id = "viewport2d.grid",
     label = "Set 2D Canvas Grid",
-    description = "Set the lattice the 2D viewport's gestures land on, in authored pixels.",
+    description = "Set the lattice the 2D viewport's gestures land on, in authored pixels \
+                   (sprite pixels on a 2D world scene).",
     allows_undo = false,
     params(
-        size(f64, doc = "Grid size in authored pixels."),
+        size(
+            f64,
+            doc = "Grid size in authored pixels, or on a 2D world scene in sprite pixels at the project's pixels per unit; 1 to 64."
+        ),
         panel(
             i64,
             doc = "Bits of the panel content Entity to set. Omit to set every open 2D panel."
@@ -2579,6 +2676,8 @@ pub(crate) fn viewport_2d_mode(
 pub(crate) fn viewport_2d_grid(
     params: In<OperatorParameters>,
     mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
+    scene: GuideScene,
+    units: Res<WorldUnits>,
 ) -> Option<OperatorResult> {
     let size = params.as_float("size")? as f32;
     if !size.is_finite() || size <= 0.0 {
@@ -2591,11 +2690,12 @@ pub(crate) fn viewport_2d_grid(
         return None;
     }
     let wanted = named_panels(&params, "viewport2d.grid", &open);
-    let grid = size.clamp(MIN_UI_GRID, MAX_UI_GRID);
+    let size = size.clamp(MIN_UI_GRID, MAX_UI_GRID);
     for (entity, mut host) in &mut hosts {
         if !wanted.contains(&entity) {
             continue;
         }
+        let grid = size / grid_pixels(&scene, &units, &host);
         let view = Ui2dView { grid, ..host.view };
         host.set_view(view);
     }
@@ -2611,7 +2711,10 @@ pub(crate) fn viewport_2d_grid(
     description = "Set the 2D viewport's zoom, in stage pixels per authored pixel.",
     allows_undo = false,
     params(
-        zoom(f64, doc = "Stage logical pixels per authored pixel."),
+        zoom(
+            f64,
+            doc = "Stage logical pixels per authored pixel, or per world unit on a 2D world scene."
+        ),
         panel(
             i64,
             doc = "Bits of the panel content Entity to zoom. Omit to zoom every open 2D panel."
@@ -2621,6 +2724,8 @@ pub(crate) fn viewport_2d_grid(
 pub(crate) fn viewport_2d_zoom(
     params: In<OperatorParameters>,
     mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
+    scene: GuideScene,
+    units: Res<WorldUnits>,
 ) -> Option<OperatorResult> {
     let zoom = params.as_float("zoom")? as f32;
     if !zoom.is_finite() || zoom <= 0.0 {
@@ -2635,11 +2740,12 @@ pub(crate) fn viewport_2d_zoom(
         return None;
     }
     let wanted = named_panels(&params, "viewport2d.zoom", &open);
-    let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     for (entity, mut host) in &mut hosts {
         if !wanted.contains(&entity) {
             continue;
         }
+        let (least, most) = zoom_range(grid_pixels(&scene, &units, &host));
+        let zoom = zoom.clamp(least, most);
         let view = Ui2dView { zoom, ..host.view };
         host.set_view(view);
         host.fit_pending = false;
@@ -2709,6 +2815,7 @@ pub(crate) fn viewport_2d_pixel_perfect(
     roots: Query<(&UiSceneRoot, Option<&UiTargetCamera>), AuthoredUiSceneRoot>,
     areas: Query<&ComputedNode, With<Scene2dStageArea>>,
     scene_roots: crate::sprite_stage::Scene2dRoots,
+    units: Res<WorldUnits>,
 ) -> Option<OperatorResult> {
     let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
     if open.is_empty() {
@@ -2725,7 +2832,7 @@ pub(crate) fn viewport_2d_pixel_perfect(
         let world = crate::sprite_stage::shows_2d_world(&host, routed, &scene_roots);
         let mut grid = PixelGrid::default();
         if world {
-            grid.texels_per_unit = world_pixels_per_unit();
+            grid.texels_per_unit = units.ppu();
         } else if let Some(canvas) = canvas {
             grid.canvas_odd = BVec2::new(canvas.x % 2 == 1, canvas.y % 2 == 1);
         }

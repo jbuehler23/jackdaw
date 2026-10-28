@@ -16,10 +16,6 @@ use jackdaw_scene_types::CanvasGuides;
 
 use crate::canvas_snap::CanvasSnap;
 
-/// World units per sprite pixel. No project setting names another density
-/// yet, so a pixel is one world unit.
-pub const WORLD_UNITS_PER_PIXEL: f32 = 1.0;
-
 /// How far, in world units, a scaled edge may stop short of the line it
 /// landed on and still count as on it.
 const REACH_TOLERANCE: f32 = 1e-3;
@@ -73,12 +69,13 @@ pub struct SpriteSnapRules {
 
 impl SpriteSnapRules {
     /// The rules `kinds` set for a drag with the magnet `magnet`, on a panel
-    /// whose grid is `grid` world units.
-    pub fn new(kinds: &CanvasSnap, magnet: bool, grid: f32, radius: f32) -> Self {
+    /// whose grid is `grid` world units, with a sprite pixel `pixel` world
+    /// units across.
+    pub fn new(kinds: &CanvasSnap, magnet: bool, grid: f32, pixel: f32, radius: f32) -> Self {
         Self {
             magnet,
             grid: (kinds.grid && grid > 0.0 && grid.is_finite()).then_some(grid),
-            pixel: kinds.pixel.then_some(WORLD_UNITS_PER_PIXEL),
+            pixel: (kinds.pixel && pixel > 0.0 && pixel.is_finite()).then_some(pixel),
             edges: kinds.sprite_edges,
             guides: kinds.snaps_to_guides(),
             radius,
@@ -329,14 +326,19 @@ mod tests {
     #[test]
     fn the_rules_follow_the_canvas_settings() {
         let kinds = CanvasSnap::default();
-        let on = SpriteSnapRules::new(&kinds, kinds.magnet(false), 8.0, 4.0);
+        let on = SpriteSnapRules::new(&kinds, kinds.magnet(false), 8.0, 1.0, 4.0);
         assert!(on.magnet);
         assert_eq!(on.grid, Some(8.0));
-        assert_eq!(on.pixel, Some(WORLD_UNITS_PER_PIXEL));
+        assert_eq!(on.pixel, Some(1.0));
+        assert_eq!(
+            SpriteSnapRules::new(&kinds, true, 8.0, 1.0 / 16.0, 4.0).pixel,
+            Some(0.0625),
+            "a pixel at ppu 16 is a sixteenth of a unit"
+        );
         assert_eq!(on.radius, 4.0);
         assert!(on.edges && on.guides);
         assert!(
-            !SpriteSnapRules::new(&kinds, kinds.magnet(true), 8.0, 4.0).magnet,
+            !SpriteSnapRules::new(&kinds, kinds.magnet(true), 8.0, 1.0, 4.0).magnet,
             "the magnet modifier suspends snapping"
         );
         let off = CanvasSnap {
@@ -346,7 +348,7 @@ mod tests {
             guides: false,
             ..kinds
         };
-        let inverted = SpriteSnapRules::new(&off, off.magnet(true), 8.0, 4.0);
+        let inverted = SpriteSnapRules::new(&off, off.magnet(true), 8.0, 1.0, 4.0);
         assert!(inverted.magnet, "and turns it on while the master is off");
         assert_eq!(inverted.grid, None);
         assert!(!inverted.edges && !inverted.guides);
@@ -360,7 +362,7 @@ mod tests {
             ..kinds
         };
         assert!(
-            !SpriteSnapRules::new(&hidden, true, 8.0, 4.0).guides,
+            !SpriteSnapRules::new(&hidden, true, 8.0, 1.0, 4.0).guides,
             "a hidden guide is not offered"
         );
     }

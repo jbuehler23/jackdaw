@@ -486,8 +486,15 @@ impl GuideSpace {
 
     /// The step a dragged guide lands on, if any. On a UI canvas it is the
     /// panel's grid while the magnet is on, else a whole pixel; on a 2D world
-    /// scene it is the grid or pixel a sprite drag would land on.
-    pub(crate) fn lattice(self, kinds: &CanvasSnap, ctrl: bool, grid: f32) -> Option<f32> {
+    /// scene it is the grid or the `pixel`-wide sprite pixel a sprite drag
+    /// would land on.
+    pub(crate) fn lattice(
+        self,
+        kinds: &CanvasSnap,
+        ctrl: bool,
+        grid: f32,
+        pixel: f32,
+    ) -> Option<f32> {
         let magnet = kinds.magnet(ctrl);
         match self {
             Self::Canvas(_) => Some(if magnet && grid > 0.0 && grid.is_finite() {
@@ -496,7 +503,7 @@ impl GuideSpace {
                 1.0
             }),
             Self::World => {
-                let rules = SpriteSnapRules::new(kinds, magnet, grid, 0.0);
+                let rules = SpriteSnapRules::new(kinds, magnet, grid, pixel, 0.0);
                 rules.magnet.then_some(rules.grid.or(rules.pixel)).flatten()
             }
         }

@@ -35,7 +35,7 @@ use jackdaw::{
         Viewport2dModeSegment, Viewport2dPanelHost, Viewport2dTitle, Viewport2dZoomReadout,
         build_viewport_2d_panel, cursor_area_offset, cursor_stage_offset, fit_view, fit_world_rect,
         pan_by, pixel_perfect_view, request_2d_fit, stepped_ui_grid, target_pixels_per_stage_pixel,
-        world_at, zoom_toward,
+        world_at, zoom_range, zoom_toward,
     },
     viewport_host::{ViewportHost, ViewportMode},
 };
@@ -148,7 +148,7 @@ fn zoom_steps_scale_the_projection_and_keep_the_cursor_point_fixed() {
     let view = Ui2dView::default();
     let cursor = Vec2::new(100.0, 50.0);
 
-    let after = zoom_toward(view, cursor, 1.0);
+    let after = zoom_toward(view, cursor, 1.0, 1.0);
     assert!(
         after.zoom > view.zoom,
         "a positive tick zooms in: {} -> {}",
@@ -163,7 +163,7 @@ fn zoom_steps_scale_the_projection_and_keep_the_cursor_point_fixed() {
         "the world point under the cursor must not move: {before:?} -> {anchored:?}",
     );
 
-    let out = zoom_toward(view, cursor, -1.0);
+    let out = zoom_toward(view, cursor, -1.0, 1.0);
     assert!(out.zoom < view.zoom, "a negative tick zooms out");
     assert!((world_at(view, cursor) - world_at(out, cursor)).length() < 1e-3);
 }
@@ -323,7 +323,7 @@ fn the_zoom_anchor_holds_over_repeated_ticks_at_a_non_unit_scale_factor() {
 
     let mut zoomed = view;
     for _ in 0..8 {
-        zoomed = zoom_toward(zoomed, offset, 1.0);
+        zoomed = zoom_toward(zoomed, offset, 1.0, 1.0);
         let now = world_at(zoomed, offset);
         assert!(
             (now - anchored).length() < 1e-3,
@@ -336,9 +336,9 @@ fn the_zoom_anchor_holds_over_repeated_ticks_at_a_non_unit_scale_factor() {
 #[test]
 fn zoom_is_clamped_to_the_usable_range() {
     let cursor = Vec2::new(-30.0, 12.0);
-    let far_in = zoom_toward(Ui2dView::default(), cursor, 1000.0);
+    let far_in = zoom_toward(Ui2dView::default(), cursor, 1000.0, 1.0);
     assert_eq!(far_in.zoom, MAX_ZOOM);
-    let far_out = zoom_toward(Ui2dView::default(), cursor, -1000.0);
+    let far_out = zoom_toward(Ui2dView::default(), cursor, -1000.0, 1.0);
     assert_eq!(far_out.zoom, MIN_ZOOM);
 }
 
@@ -1877,7 +1877,7 @@ fn fitting_sizes_the_canvas_to_the_smaller_axis_of_the_area() {
 #[test]
 fn fitting_a_world_rect_centres_it_and_zooms_to_the_tighter_axis() {
     let rect = Rect::from_corners(Vec2::new(-100.0, 0.0), Vec2::new(300.0, 100.0));
-    let view = fit_world_rect(Ui2dView::default(), rect, Vec2::new(800.0, 800.0));
+    let view = fit_world_rect(Ui2dView::default(), rect, Vec2::new(800.0, 800.0), 1.0);
     assert_eq!(view.pan, Vec2::new(100.0, 50.0));
     assert!(view.zoom < 2.0, "width binds and leaves a margin");
     assert!(
@@ -1886,7 +1886,7 @@ fn fitting_a_world_rect_centres_it_and_zooms_to_the_tighter_axis() {
         view.zoom
     );
 
-    let tall = fit_world_rect(Ui2dView::default(), rect, Vec2::new(8000.0, 200.0));
+    let tall = fit_world_rect(Ui2dView::default(), rect, Vec2::new(8000.0, 200.0), 1.0);
     assert!(tall.zoom < 2.0, "height binds when the area is short");
 
     let kept = fit_world_rect(
@@ -1896,6 +1896,7 @@ fn fitting_a_world_rect_centres_it_and_zooms_to_the_tighter_axis() {
         },
         rect,
         Vec2::splat(800.0),
+        1.0,
     );
     assert_eq!(kept.grid, 16.0, "the grid rides through a fit");
 }
@@ -1904,16 +1905,16 @@ fn fitting_a_world_rect_centres_it_and_zooms_to_the_tighter_axis() {
 fn fitting_a_world_rect_stays_inside_the_zoom_range() {
     let point = Rect::from_corners(Vec2::splat(5.0), Vec2::splat(5.0));
     assert_eq!(
-        fit_world_rect(Ui2dView::default(), point, Vec2::splat(800.0)).zoom,
+        fit_world_rect(Ui2dView::default(), point, Vec2::splat(800.0), 1.0).zoom,
         MAX_ZOOM,
         "a lone point frames at the closest zoom, not an infinite one",
     );
     let vast = Rect::from_corners(Vec2::splat(-1.0e7), Vec2::splat(1.0e7));
     assert_eq!(
-        fit_world_rect(Ui2dView::default(), vast, Vec2::splat(800.0)).zoom,
+        fit_world_rect(Ui2dView::default(), vast, Vec2::splat(800.0), 1.0).zoom,
         MIN_ZOOM,
     );
-    assert!(fit_world_rect(Ui2dView::default(), vast, Vec2::ZERO).zoom >= MIN_ZOOM);
+    assert!(fit_world_rect(Ui2dView::default(), vast, Vec2::ZERO, 1.0).zoom >= MIN_ZOOM);
 }
 
 fn grid(texels_per_unit: f32, scale_factor: f32) -> PixelGrid {
@@ -1960,21 +1961,38 @@ fn pixel_perfect_snaps_zoom_to_whole_texel_multiples_and_pan_to_texels() {
 
 #[test]
 fn pixel_perfect_zoom_stays_a_multiple_inside_the_range() {
-    let over = pixel_perfect_view(zoomed(40.0), grid(16.0, 1.0));
+    let four = pixel_perfect_view(zoomed(60.0), grid(16.0, 1.0));
+    assert_eq!(four.zoom, 64.0, "four pixels a texel at 16 to the unit");
+
+    let over = pixel_perfect_view(zoomed(600.0), grid(16.0, 1.0));
     assert_eq!(
-        over.zoom, 32.0,
+        over.zoom,
+        MAX_ZOOM * 16.0,
         "the largest multiple in range, not the first past it"
     );
 
-    let tiny = pixel_perfect_view(zoomed(1.0), grid(0.01, 1.0));
-    assert!((tiny.zoom - 1.0).abs() < 1e-3, "got {}", tiny.zoom);
+    let tiny = pixel_perfect_view(zoomed(0.2), grid(0.01, 1.0));
+    assert!((tiny.zoom - 0.2).abs() < 1e-3, "got {}", tiny.zoom);
     assert!(
         ((tiny.zoom / 0.01).round() * 0.01 - tiny.zoom).abs() < 1e-3,
         "still whole texels"
     );
 
     let huge = pixel_perfect_view(zoomed(1.0), grid(100.0, 1.0));
-    assert_eq!(huge.zoom, MAX_ZOOM, "no multiple fits, so the range wins");
+    assert_eq!(huge.zoom, 100.0, "one pixel a texel at the least");
+}
+
+#[test]
+fn the_zoom_range_counts_screen_pixels_per_texel() {
+    assert_eq!(zoom_range(1.0), (MIN_ZOOM, MAX_ZOOM));
+    assert_eq!(zoom_range(16.0), (MIN_ZOOM * 16.0, MAX_ZOOM * 16.0));
+    assert_eq!(
+        zoom_range(0.0),
+        (MIN_ZOOM, MAX_ZOOM),
+        "a bad ppu reads as 1"
+    );
+    let far_in = zoom_toward(Ui2dView::default(), Vec2::ZERO, 1000.0, 16.0);
+    assert_eq!(far_in.zoom, MAX_ZOOM * 16.0);
 }
 
 #[test]
