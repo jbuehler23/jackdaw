@@ -1048,9 +1048,10 @@ mod tests {
     }
 
     fn forwarded(app: &App) -> Vec<PointerInput> {
-        app.world()
-            .resource::<Messages<PointerInput>>()
-            .iter_current_update_messages()
+        let messages = app.world().resource::<Messages<PointerInput>>();
+        messages
+            .get_cursor()
+            .read(messages)
             .filter(|input| is_forwarded(input.pointer_id))
             .cloned()
             .collect()
