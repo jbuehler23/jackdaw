@@ -285,8 +285,26 @@ fn drawn_text(app: &mut App, caption: &str) -> Option<Entity> {
 fn a_picked_variant_is_what_the_dropdown_reads() {
     let mut app = util::editor_test_app();
     app.register_type::<Facing>();
-    app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+    // The editor's own layout may already fill the window, so the inspector
+    // under test sits above it, and below the dropdown's popup, where the
+    // pointer reaches it.
+    let panel = app
+        .world_mut()
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(320),
+                height: percent(100),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            GlobalZIndex(50),
+        ))
+        .id();
+    app.world_mut().spawn((
+        jackdaw::layout::inspector_components_content(default()),
+        ChildOf(panel),
+    ));
     app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
