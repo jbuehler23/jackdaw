@@ -19,15 +19,16 @@ const POPOVER_GAP: f32 = 4.0;
 const WINDOW_MARGIN: f32 = 4.0;
 
 pub fn plugin(app: &mut App) {
-    app.add_observer(handle_popover_close_click).add_systems(
-        Update,
-        (
-            anchor_popovers,
-            reveal_positioned_popovers,
-            handle_popover_dismiss,
-            cleanup_tracked_popovers,
-        ),
-    );
+    app.add_observer(handle_popover_close_click)
+        .add_observer(anchor_popover)
+        .add_systems(
+            Update,
+            (
+                reveal_positioned_popovers,
+                handle_popover_dismiss,
+                cleanup_tracked_popovers,
+            ),
+        );
 }
 
 #[derive(Component)]
@@ -224,14 +225,16 @@ pub fn popover(props: PopoverProps) -> impl Bundle {
     )
 }
 
-/// Hang each popover off what it points at, which is where the widget
+/// Hang a popover off what it points at, which is where the widget
 /// reads the rectangle to place it against. A popover asked for at a
 /// free position gets a zero-size node there to point at instead.
-fn anchor_popovers(
+fn anchor_popover(
+    add: On<Add<PopoverAnchor>>,
     mut commands: Commands,
-    popovers: Query<(Entity, &PopoverAnchor), Added<PopoverAnchor>>,
+    popovers: Query<&PopoverAnchor>,
 ) {
-    for (entity, anchor) in &popovers {
+    let entity = add.entity;
+    if let Ok(anchor) = popovers.get(entity) {
         let parent = match anchor.position {
             Some(position) => commands
                 .spawn((
@@ -463,6 +466,40 @@ fn handle_popover_close_click(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A popover hangs off its anchor from the frame it is spawned, and one
+    /// opened at a free position off a point placed there.
+    #[test]
+    fn a_popover_is_anchored_on_the_frame_it_spawns() {
+        let mut world = World::new();
+        world.add_observer(anchor_popover);
+        let anchor = world.spawn(Node::default()).id();
+
+        let anchored = world.spawn(popover(PopoverProps::new(anchor))).id();
+        let free = world
+            .spawn(popover(
+                PopoverProps::new(anchor).with_position(Vec2::new(40.0, 60.0)),
+            ))
+            .id();
+        world.flush();
+
+        assert_eq!(
+            world.get::<ChildOf>(anchored).map(ChildOf::parent),
+            Some(anchor)
+        );
+        let point = world
+            .get::<ChildOf>(free)
+            .map(ChildOf::parent)
+            .expect("the free popover hangs off something");
+        assert_eq!(
+            world.get::<PopoverPoint>(point).map(|point| point.0),
+            Some(free)
+        );
+        assert_eq!(
+            world.get::<Node>(point).map(|node| node.left),
+            Some(px(40.0))
+        );
+    }
 
     /// Escape dismisses an open popover, and Escape is also a chord somebody
     /// may be recording. The popover a recorder has open is often the thing

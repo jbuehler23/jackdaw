@@ -6,7 +6,7 @@ use crate::icons::IconFont;
 use crate::tokens::{BORDER_COLOR, TEXT_DISPLAY_COLOR, TEXT_SIZE};
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, setup_panel_section_buttons);
+    app.add_observer(setup_panel_section_buttons);
 }
 
 #[derive(Component)]
@@ -136,58 +136,57 @@ pub fn panel_section(props: PanelSectionProps, editor_font: &Handle<Font>) -> im
     )
 }
 
+/// The header's button row is the last part of a section to spawn, so the
+/// buttons are put in it as it arrives, two levels under the section.
 fn setup_panel_section_buttons(
+    add: On<Add<PanelSectionButtonsContainer>>,
     mut commands: Commands,
     icon_font: Res<IconFont>,
-    new_sections: Query<(Entity, &PanelSectionState, &Children), Added<EditorPanelSection>>,
-    headers: Query<&Children, With<PanelSectionHeader>>,
-    containers: Query<Entity, With<PanelSectionButtonsContainer>>,
+    parents: Query<&ChildOf>,
+    sections: Query<&PanelSectionState, With<EditorPanelSection>>,
 ) {
-    for (section_entity, state, section_children) in &new_sections {
-        let Some(&header_entity) = section_children.first() else {
-            continue;
-        };
-        let Ok(header_children) = headers.get(header_entity) else {
-            continue;
-        };
-        let Some(&container_entity) = header_children.get(1) else {
-            continue;
-        };
-        if containers.get(container_entity).is_err() {
-            continue;
-        }
+    let container_entity = add.entity;
+    let Ok(section_entity) = parents
+        .get(container_entity)
+        .and_then(|header| parents.get(header.parent()))
+        .map(ChildOf::parent)
+    else {
+        return;
+    };
+    let Ok(state) = sections.get(section_entity) else {
+        return;
+    };
 
-        if state.has_add_button {
-            let add_entity = commands
-                .spawn((
-                    PanelSectionAddButton(section_entity),
-                    icon_button(
-                        IconButtonProps::new(Icon::Plus).variant(ButtonVariant::Ghost),
-                        &icon_font.0,
-                    ),
-                ))
-                .observe(on_add_click)
-                .id();
-            crate::utils::attach_or_despawn(&mut commands, container_entity, add_entity);
-        }
+    if state.has_add_button {
+        let add_entity = commands
+            .spawn((
+                PanelSectionAddButton(section_entity),
+                icon_button(
+                    IconButtonProps::new(Icon::Plus).variant(ButtonVariant::Ghost),
+                    &icon_font.0,
+                ),
+            ))
+            .observe(on_add_click)
+            .id();
+        crate::utils::attach_or_despawn(&mut commands, container_entity, add_entity);
+    }
 
-        if state.collapsible {
-            let collapse_entity = commands
-                .spawn((
-                    PanelSectionCollapseButton(section_entity),
-                    UiTransform {
-                        rotation: Rot2::degrees(180.0),
-                        ..default()
-                    },
-                    icon_button(
-                        IconButtonProps::new(Icon::ChevronDown).variant(ButtonVariant::Ghost),
-                        &icon_font.0,
-                    ),
-                ))
-                .observe(on_collapse_click)
-                .id();
-            crate::utils::attach_or_despawn(&mut commands, container_entity, collapse_entity);
-        }
+    if state.collapsible {
+        let collapse_entity = commands
+            .spawn((
+                PanelSectionCollapseButton(section_entity),
+                UiTransform {
+                    rotation: Rot2::degrees(180.0),
+                    ..default()
+                },
+                icon_button(
+                    IconButtonProps::new(Icon::ChevronDown).variant(ButtonVariant::Ghost),
+                    &icon_font.0,
+                ),
+            ))
+            .observe(on_collapse_click)
+            .id();
+        crate::utils::attach_or_despawn(&mut commands, container_entity, collapse_entity);
     }
 }
 
@@ -242,5 +241,57 @@ fn on_collapse_click(
         } else {
             Rot2::degrees(180.0)
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::EditorFont;
+
+    /// A section's header buttons are there on the frame it is spawned.
+    #[test]
+    fn a_section_has_its_header_buttons_on_the_frame_it_spawns() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            crate::button::plugin,
+            plugin,
+        ));
+        app.init_asset::<Font>();
+        app.insert_resource(IconFont(Handle::default()));
+        app.insert_resource(EditorFont(Handle::default()));
+
+        let section = app
+            .world_mut()
+            .spawn(panel_section(
+                PanelSectionProps::new("Layers")
+                    .with_add_button()
+                    .collapsible(),
+                &Handle::default(),
+            ))
+            .id();
+        app.world_mut().flush();
+
+        let world = app.world_mut();
+        let mut adds = world.query::<(&PanelSectionAddButton, &ChildOf)>();
+        let (add, row) = adds
+            .single(world)
+            .map(|(add, parent)| (add.0, parent.parent()))
+            .expect("the add button is there");
+        assert_eq!(add, section);
+        let mut collapses = world.query::<(&PanelSectionCollapseButton, &ChildOf)>();
+        let (collapse, collapse_row) = collapses
+            .single(world)
+            .map(|(collapse, parent)| (collapse.0, parent.parent()))
+            .expect("and so is the collapse button");
+        assert_eq!(collapse, section);
+        assert_eq!(collapse_row, row);
+        assert!(
+            world.get::<PanelSectionButtonsContainer>(row).is_some(),
+            "both in the header's button row",
+        );
     }
 }

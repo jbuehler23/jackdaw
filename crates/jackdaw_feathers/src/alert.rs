@@ -57,7 +57,7 @@ struct AlertConfig {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, setup_alert);
+    app.add_observer(setup_alert);
 }
 
 pub fn alert(variant: AlertVariant, spans: Vec<AlertSpan>) -> impl Bundle {
@@ -80,17 +80,19 @@ pub fn alert(variant: AlertVariant, spans: Vec<AlertSpan>) -> impl Bundle {
 }
 
 fn setup_alert(
+    add: On<Add<AlertConfig>>,
     mut commands: Commands,
     editor_font: Res<EditorFont>,
-    alerts: Query<(Entity, &AlertConfig), Added<AlertConfig>>,
+    alerts: Query<&AlertConfig>,
 ) {
     let font = editor_font.0.clone();
+    let entity = add.entity;
 
-    for (entity, config) in &alerts {
+    if let Ok(config) = alerts.get(entity) {
         let text_color = config.variant.text_color();
 
         let Some(first) = config.spans.first() else {
-            continue;
+            return;
         };
 
         let (first_text, first_weight, first_alpha) = span_props(first);
@@ -132,5 +134,46 @@ fn span_props(span: &AlertSpan) -> (&str, FontWeight, f32) {
     match span {
         AlertSpan::Text(t) => (t.as_str(), FontWeight::NORMAL, TEXT_ALPHA),
         AlertSpan::Bold(t) => (t.as_str(), FontWeight::MEDIUM, BOLD_ALPHA),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An alert carries its text on the frame it is spawned, so the first
+    /// frame that draws it is not an empty box.
+    #[test]
+    fn an_alert_has_its_text_on_the_frame_it_spawns() {
+        let mut app = App::new();
+        app.add_plugins(plugin);
+        app.insert_resource(EditorFont(Handle::default()));
+
+        let entity = app
+            .world_mut()
+            .spawn(alert(
+                AlertVariant::Warning,
+                vec![
+                    AlertSpan::Bold("Careful:".into()),
+                    AlertSpan::Text(" this cannot be undone".into()),
+                ],
+            ))
+            .id();
+        app.world_mut().flush();
+
+        let world = app.world();
+        let text = world
+            .get::<Children>(entity)
+            .and_then(|children| children.first().copied())
+            .expect("the alert holds its text");
+        assert_eq!(
+            world.get::<Text>(text).map(|text| text.0.as_str()),
+            Some("Careful:")
+        );
+        assert_eq!(
+            world.get::<Children>(text).map(|spans| spans.len()),
+            Some(1),
+            "and the span after it",
+        );
     }
 }
