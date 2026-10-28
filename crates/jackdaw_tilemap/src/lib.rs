@@ -36,7 +36,7 @@ pub use region_text::{
 };
 pub use report::{
     AutoSetup, CollisionReport, SetReport, SetupError, SetupReport, SheetReport, StampReport,
-    StripReport, TerrainReport, auto_setup,
+    StripReport, TerrainReport, auto_setup, auto_setup_on_grid,
 };
 pub use setup::{
     CollisionMode, Provenance, Scope, SetupSet, SetupTerrain, SetupTile, TilesetSetup, Tracked,

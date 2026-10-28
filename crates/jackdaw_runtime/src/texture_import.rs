@@ -165,13 +165,15 @@ impl TextureImportReader {
 }
 
 /// The settings a processed texture loads with: the Basis file Bevy's saver
-/// wrote, read with the source's colour space, sampler and usage.
+/// wrote, read with the source's colour space, sampler, usage and array
+/// layout.
 fn processed_loader_settings(loader: &ImageLoaderSettings) -> ImageLoaderSettings {
     ImageLoaderSettings {
         format: ImageFormatSetting::Format(ImageFormat::Basis),
         is_srgb: loader.is_srgb,
         sampler: loader.sampler.clone(),
         asset_usage: loader.asset_usage,
+        array_layout: loader.array_layout,
         ..default()
     }
 }
@@ -239,4 +241,29 @@ pub(crate) fn register_texture_import_processor(app: &mut App) {
     use bevy::asset::AssetApp as _;
 
     app.register_asset_processor(TextureImportProcessor::from(CompressedImageSaver::default()));
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::image::ImageArrayLayout;
+
+    use super::*;
+
+    #[test]
+    fn a_processed_tile_sheet_still_loads_as_an_array() {
+        let loader = ImageLoaderSettings {
+            array_layout: Some(ImageArrayLayout::GridSize {
+                tile_width_pixels: 16,
+                tile_height_pixels: 16,
+            }),
+            ..default()
+        };
+        assert!(matches!(
+            processed_loader_settings(&loader).array_layout,
+            Some(ImageArrayLayout::GridSize {
+                tile_width_pixels: 16,
+                tile_height_pixels: 16
+            })
+        ));
+    }
 }

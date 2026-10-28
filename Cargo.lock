@@ -4243,6 +4243,8 @@ dependencies = [
  "jackdaw_snap",
  "jackdaw_surface",
  "jackdaw_terrain",
+ "jackdaw_tilemap",
+ "jackdaw_tileset",
  "jackdaw_uv",
  "jackdaw_widgets",
  "jackdaw_widgets_runtime",

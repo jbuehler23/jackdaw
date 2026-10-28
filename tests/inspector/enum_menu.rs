@@ -286,8 +286,6 @@ fn a_picked_variant_is_what_the_dropdown_reads() {
     let mut app = util::editor_test_app();
     app.register_type::<Facing>();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
-    app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
     app.update();
