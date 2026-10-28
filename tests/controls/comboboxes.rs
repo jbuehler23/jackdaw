@@ -218,6 +218,29 @@ fn a_combobox_is_a_feathers_select_of_list_rows() {
     assert_eq!(selected, vec![1], "only the shown option's row is selected");
     assert_eq!(caption(&mut app, combobox), "%");
     assert!(!list_is_open(&mut app, combobox), "the list starts closed");
+
+    let mut sizes: Vec<FontSize> = Vec::new();
+    let mut stack = vec![combobox];
+    while let Some(entity) = stack.pop() {
+        if app.world().get::<Text>(entity).is_some() {
+            sizes.push(
+                app.world()
+                    .get::<TextFont>(entity)
+                    .expect("text has a font")
+                    .font_size,
+            );
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    assert_eq!(sizes.len(), 4, "the caption and three row labels");
+    assert!(
+        sizes
+            .iter()
+            .all(|size| *size == jackdaw_feathers::tokens::TEXT_SIZE),
+        "the dropdown reads at the editor's text size: {sizes:?}",
+    );
 }
 
 /// A click on the trigger opens the list, and a click on a row picks that

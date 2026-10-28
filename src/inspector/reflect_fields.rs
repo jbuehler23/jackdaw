@@ -8,8 +8,7 @@ use bevy::{
         controls::{
             ColorChannel, ColorPlaneValue, ColorSwatchValue, FeathersCheckbox, FeathersColorPlane,
             FeathersColorSlider, FeathersColorSwatch, FeathersListRow, FeathersListView,
-            FeathersListViewProps, FeathersMenu, FeathersMenuButton, FeathersMenuItem,
-            FeathersMenuPopup, FeathersTextInput, FeathersTextInputContainer, SliderBaseColor,
+            FeathersListViewProps, FeathersTextInput, FeathersTextInputContainer, SliderBaseColor,
         },
         theme::ThemedText,
     },
@@ -20,10 +19,11 @@ use bevy::{
     reflect::ReflectRef,
     text::{EditableText, TextEdit},
     ui::Checked,
-    ui_widgets::{Activate, Checkbox, SliderValue, ValueChange, observe},
+    ui_widgets::{Checkbox, SliderValue, ValueChange, observe},
 };
 use jackdaw_feathers::{
     button::{ButtonProps, ButtonSize, ButtonVariant, button},
+    combobox::{ComboBoxChangeEvent, ComboBoxSelectedIndex, combobox_with_selected},
     icons::Icon,
     number_input::{
         NumberInputPrecision, NumberInputStep, ScrubNumberInput, ScrubNumberInputValue,
@@ -3307,11 +3307,19 @@ fn spawn_enum_field(
     }
 }
 
-/// Spawn a select menu for an enum field: a `FeathersMenu` holding a
-/// `FeathersMenuButton` (caption = `current_variant`) and a `FeathersMenuPopup`
-/// with one `FeathersMenuItem` per name in `variant_names`. Picking an item
-/// fires `Activate`, whose observer captures that item's variant name and calls
-/// `apply_enum_variant_with_undo`. The menu is parented to `parent`.
+/// Which enum field a variant dropdown edits, so the dropdown can follow the
+/// field when something other than a pick changes it, such as an undo.
+#[derive(Component)]
+pub(crate) struct EnumMenuBinding {
+    source: Entity,
+    type_path: String,
+    field_path: String,
+    variants: Vec<String>,
+}
+
+/// Spawn a variant dropdown for an enum field, parented to `parent` and
+/// showing `current_variant`. A pick writes the variant through
+/// `apply_enum_variant_with_undo`.
 pub(super) fn spawn_enum_menu(
     commands: &mut Commands,
     parent: Entity,
@@ -3321,48 +3329,83 @@ pub(super) fn spawn_enum_menu(
     source_entity: Entity,
     type_path: &str,
 ) {
-    let menu = commands
-        .spawn_scene(bsn! { @FeathersMenu })
-        .insert(ChildOf(parent))
-        .id();
-
-    // Button caption shows the current variant. The struct/tuple refresh path
-    // rebuilds the whole menu, so the caption tracks the live variant without a
-    // separate text rewrite.
+    let selected = variant_names
+        .iter()
+        .position(|name| name == current_variant)
+        .unwrap_or(0);
+    let variants = variant_names.to_vec();
+    let path = field_path.to_string();
+    let tp = type_path.to_string();
     commands
-        .spawn_scene(bsn! {
-            @FeathersMenuButton {
-                @caption: bsn! { Text({current_variant.to_string()}) ThemedText },
-            }
-        })
-        .insert(ChildOf(menu));
-
-    let popup = commands
-        .spawn_scene(bsn! { @FeathersMenuPopup })
-        .insert(ChildOf(menu))
-        .id();
-
-    // One item per variant. Each closure owns its variant name so `Activate`
-    // writes back the picked variant.
-    for name in variant_names {
-        let variant_name = name.clone();
-        let path = field_path.to_string();
-        let tp = type_path.to_string();
-        commands
-            .spawn_scene(bsn! {
-                @FeathersMenuItem {
-                    @caption: bsn! { Text({name.clone()}) ThemedText },
-                }
-            })
-            .insert(ChildOf(popup))
-            .observe(move |_activate: On<Activate>, mut commands: Commands| {
-                let variant_name = variant_name.clone();
+        .spawn((
+            combobox_with_selected(variants.clone(), selected),
+            ComboBoxSelectedIndex(selected),
+            EnumMenuBinding {
+                source: source_entity,
+                type_path: tp.clone(),
+                field_path: path.clone(),
+                variants: variants.clone(),
+            },
+            ChildOf(parent),
+        ))
+        .observe(
+            move |pick: On<ComboBoxChangeEvent>, mut commands: Commands| {
+                let Some(variant) = variants.get(pick.selected).cloned() else {
+                    return;
+                };
                 let path = path.clone();
                 let tp = tp.clone();
                 commands.queue(move |world: &mut World| {
-                    apply_enum_variant_with_undo(world, source_entity, &tp, &path, &variant_name);
+                    apply_enum_variant_with_undo(world, source_entity, &tp, &path, &variant);
                 });
-            });
+            },
+        );
+}
+
+/// Keep each variant dropdown on the variant its field holds: after an undo,
+/// redo or outside edit, and after a pick the write refused.
+pub(crate) fn refresh_enum_menus(
+    type_registry: Res<AppTypeRegistry>,
+    sources: Query<bevy::ecs::world::EntityRef>,
+    menus: Query<(Entity, &EnumMenuBinding, Ref<ComboBoxSelectedIndex>)>,
+    system_ticks: bevy::ecs::system::SystemChangeTick,
+    mut commands: Commands,
+) {
+    let registry = type_registry.read();
+    for (menu, binding, shown) in &menus {
+        let Ok(source) = sources.get(binding.source) else {
+            continue;
+        };
+        if !shown.is_changed()
+            && !entity_components_changed(source, system_ticks.last_run(), system_ticks.this_run())
+        {
+            continue;
+        }
+        let Some(reflected) = registry
+            .get_with_type_path(&binding.type_path)
+            .and_then(|registration| registration.data::<ReflectComponent>())
+            .and_then(|component| component.reflect(source))
+        else {
+            continue;
+        };
+        let field = if binding.field_path.is_empty() {
+            Some(reflected.as_partial_reflect())
+        } else {
+            reflected.reflect_path(binding.field_path.as_str()).ok()
+        };
+        let Some(ReflectRef::Enum(value)) = field.map(PartialReflect::reflect_ref) else {
+            continue;
+        };
+        let Some(live) = binding
+            .variants
+            .iter()
+            .position(|name| name == value.variant_name())
+        else {
+            continue;
+        };
+        if live != shown.0 {
+            commands.entity(menu).insert(ComboBoxSelectedIndex(live));
+        }
     }
 }
 

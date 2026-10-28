@@ -11,6 +11,7 @@ use bevy::feathers::controls::{
     FeathersListRow, FeathersMenuButton, FeathersMenuPopup, FeathersSelect, OptionIndex,
 };
 use bevy::feathers::display::caption;
+use bevy::feathers::font_styles::InheritableFont;
 use bevy::feathers::theme::ThemedText;
 use bevy::prelude::*;
 use bevy::scene::SceneList;
@@ -255,6 +256,15 @@ fn build_combobox(world: &mut World, entity: Entity) {
     if let Some(mut node) = trigger_entity.get_mut::<Node>() {
         node.min_width = px(0);
     }
+    // The menu button hands its caption feathers' own size; the editor's text
+    // is smaller. Inserted again rather than edited, since the font reaches
+    // the caption on insert.
+    if let Some(font) = trigger_entity.get::<InheritableFont>().cloned() {
+        trigger_entity.insert(InheritableFont {
+            font_size: tokens::TEXT_SIZE,
+            ..font
+        });
+    }
     world.entity_mut(slot).add_child(caption);
     world.entity_mut(caption).insert((
         ComboBoxCaption(entity),
@@ -306,6 +316,7 @@ fn option_row(index: usize, option: &ComboBoxOptionData) -> Box<dyn SceneList> {
     match option.icon {
         Some(icon) => Box::new(bsn_list! {
             @FeathersListRow
+            InheritableFont { font_size: {tokens::TEXT_SIZE} }
             OptionIndex(index)
             Children [
                 Node { margin: UiRect::right(px(6)) }
@@ -317,6 +328,7 @@ fn option_row(index: usize, option: &ComboBoxOptionData) -> Box<dyn SceneList> {
         }),
         None => Box::new(bsn_list! {
             @FeathersListRow
+            InheritableFont { font_size: {tokens::TEXT_SIZE} }
             OptionIndex(index)
             Children [ @caption(label) ]
         }),
@@ -608,6 +620,30 @@ mod tests {
         assert_eq!(label(&app, combobox), "%");
         assert_eq!(rows(&app, combobox).len(), 3, "one row per option");
         assert_eq!(selected_rows(&app, combobox), vec![1]);
+    }
+
+    /// The trigger and the rows set their text at the editor's size, not at
+    /// the larger size feathers gives a menu.
+    #[test]
+    fn a_dropdown_reads_at_the_editor_text_size() {
+        let (app, combobox) = app_with_combobox();
+        let world = app.world();
+        let sized: Vec<Entity> = descendants_of(world, combobox)
+            .into_iter()
+            .filter(|e| {
+                world.get::<FeathersMenuButton>(*e).is_some()
+                    || world.get::<OptionIndex>(*e).is_some()
+            })
+            .collect();
+        assert_eq!(sized.len(), 4, "the trigger and three rows");
+        for entity in sized {
+            assert_eq!(
+                world
+                    .get::<InheritableFont>(entity)
+                    .map(|font| font.font_size),
+                Some(tokens::TEXT_SIZE),
+            );
+        }
     }
 
     /// Choosing a row sends the change event with that option, and the trigger
