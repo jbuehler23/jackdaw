@@ -1,0 +1,23 @@
+[package]
+name = "jackdaw_tileset"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Tileset asset for jackdaw tilemaps: a packed array image plus its terrains and objects"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+include = ["src/**/*", "Cargo.toml", "LICENSE*"]
+
+[dependencies]
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = [
+    "std",
+    "bevy_asset",
+    "bevy_color",
+] }
+jackdaw_tilemap.workspace = true
+
+[dev-dependencies]
+image.workspace = true
+
+[lints]
+workspace = true

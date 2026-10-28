@@ -4817,6 +4817,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_tileset"
+version = "0.21.0-dev"
+dependencies = [
+ "bevy",
+ "image",
+ "jackdaw_tilemap",
+]
+
+[[package]]
 name = "jackdaw_uv"
 version = "0.21.0-dev"
 dependencies = [
