@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::sdk_toolchain_command;
 
 use crate::sdk_paths::SdkPaths;
 
@@ -133,29 +133,30 @@ impl SdkManifest {
         sdk: &SdkPaths,
         build_args: &[&str],
     ) -> Result<Self, PlanError> {
-        // Capture stdout (the JSON artifact stream) but let cargo's own
-        // progress reach the terminal, so this step never looks hung on a
-        // cold cache.
-        let mut cargo = rust_env_command("cargo");
-        let child = without_package_env(&mut cargo)
+        // Capture stdout (the JSON artifact stream) and echo cargo's own
+        // progress to the terminal, so this step never looks hung on a cold
+        // cache, keeping it for the error if the build fails.
+        let mut cargo = sdk_toolchain_command("cargo");
+        let mut child = without_package_env(&mut cargo)
             .arg("build")
             .args(build_args)
             .args(["--target", &sdk.triple, "--message-format=json"])
             .current_dir(workspace_root)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::piped())
             .spawn()?;
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            return Err(PlanError::Cargo(
-                "SDK build for manifest generation failed".into(),
-            ));
+        let stderr = jackdaw_env::process::StderrCapture::echoed(&mut child);
+        let mut stdout = Vec::new();
+        if let Some(mut pipe) = child.stdout.take() {
+            std::io::Read::read_to_end(&mut pipe, &mut stdout)?;
         }
-        Self::from_build_messages(
-            workspace_root,
-            sdk,
-            &String::from_utf8_lossy(&output.stdout),
-        )
+        if !child.wait()?.success() {
+            return Err(PlanError::Cargo(format!(
+                "SDK build for manifest generation failed:\n{}",
+                stderr.finish().trim()
+            )));
+        }
+        Self::from_build_messages(workspace_root, sdk, &String::from_utf8_lossy(&stdout))
     }
 
     /// Enumerate the SDK's runtime-closure artifacts from the JSON messages
@@ -811,7 +812,7 @@ fn sdk_runtime_closure(
     workspace_root: &Path,
     triple: &str,
 ) -> Result<BTreeSet<(String, String)>, PlanError> {
-    let output = rust_env_command("cargo")
+    let output = sdk_toolchain_command("cargo")
         .args([
             "tree",
             "-p",
@@ -843,7 +844,7 @@ fn sdk_runtime_closure(
 }
 
 fn cargo_metadata(dir: &Path) -> Result<serde_json::Value, PlanError> {
-    let output = rust_env_command("cargo")
+    let output = sdk_toolchain_command("cargo")
         .args(["metadata", "--format-version", "1"])
         .current_dir(dir)
         .output()?;

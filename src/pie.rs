@@ -645,9 +645,12 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         world.non_send_mut::<PieSession>().builds.remove(&root);
     }
 
-    let Some(spec) = crate::project_build::shim_spec_for_project(&root).ok() else {
-        warn!("PIE: no lib crate found in {}", root.display());
-        return;
+    let spec = match crate::project_build::shim_spec_for_project(&root) {
+        Ok(spec) => spec,
+        Err(error) => {
+            report_unbuildable(world, &root, &error);
+            return;
+        }
     };
 
     // Join an in-flight build's pending list, or start a new build.
@@ -1451,8 +1454,12 @@ fn spawn_project_build(world: &mut World, root: &Path, load: BuildLoad) {
     ) {
         return;
     }
-    let Some(spec) = crate::project_build::shim_spec_for_project(root).ok() else {
-        return;
+    let spec = match crate::project_build::shim_spec_for_project(root) {
+        Ok(spec) => spec,
+        Err(error) => {
+            report_unbuildable(world, root, &error);
+            return;
+        }
     };
     info!("PIE: building the game");
     let (task, progress) = spawn_game_build(root, spec, load);
@@ -1464,6 +1471,18 @@ fn spawn_project_build(world: &mut World, root: &Path, load: BuildLoad) {
             progress,
         },
     );
+}
+
+/// Put the reason `root` cannot be built in front of the user. Cargo could
+/// not resolve the project, so nothing compiles, and a log line alone would
+/// leave Play or Rebuild doing nothing visible.
+fn report_unbuildable(world: &mut World, root: &Path, error: &impl std::fmt::Display) {
+    let reason = error.to_string();
+    warn!("PIE: cannot build {}: {reason}", root.display());
+    crate::status_bar::notify_error(world, format!("Cannot build the game: {reason}"));
+    if let Some(mut status) = world.get_resource_mut::<BuildStatus>() {
+        status.state = crate::build_status::BuildState::Blocked { reason };
+    }
 }
 
 /// While editing (not playing) and only when auto-build is enabled,

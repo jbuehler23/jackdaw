@@ -7,10 +7,10 @@
 //! reads, so a bootstrapped SDK is discovered with no env var.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use jackdaw_env::paths::{data_dir, local_data_dir};
-use jackdaw_env::rust_env_command;
+use jackdaw_env::process::StderrCapture;
+use jackdaw_env::{sdk_toolchain_command, user_toolchain_command};
 use serde::{Deserialize, Serialize};
 
 use crate::build_tools::{self, CheckStatus};
@@ -279,14 +279,25 @@ pub struct Prereq {
 pub fn check_prerequisites() -> Vec<Prereq> {
     let mut out = Vec::new();
 
-    out.push(match tool_version("cargo", "--version") {
-        Some(version) => Prereq {
+    let rustup = tool_version("rustup", "--version");
+    out.push(match (tool_version("cargo", "--version"), &rustup) {
+        (Some(version), _) => Prereq {
             name: "cargo",
             status: CheckStatus::Ok,
             detail: version,
             fix: None,
         },
-        None => Prereq {
+        // rustup with no default toolchain runs no cargo of its own, and
+        // setup brings one with the toolchain it installs.
+        (None, Some(_)) => Prereq {
+            name: "cargo",
+            status: CheckStatus::Warn,
+            detail: format!(
+                "no default toolchain; setup installs {SDK_TOOLCHAIN_CHANNEL}, which includes cargo"
+            ),
+            fix: None,
+        },
+        (None, None) => Prereq {
             name: "cargo",
             status: CheckStatus::Fail,
             detail: "not found on PATH".to_string(),
@@ -294,7 +305,6 @@ pub fn check_prerequisites() -> Vec<Prereq> {
         },
     });
 
-    let rustup = tool_version("rustup", "--version");
     out.push(match &rustup {
         Some(version) => Prereq {
             name: "rustup",
@@ -329,11 +339,7 @@ pub fn check_prerequisites() -> Vec<Prereq> {
     // The pinned toolchain is not a hard failure: setup installs it on demand.
     // Report its state so `doctor` can preview a toolchain download.
     if rustup.is_some() {
-        let installed = rust_env_command("rustup")
-            .args(["toolchain", "list"])
-            .output()
-            .ok()
-            .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains(SDK_TOOLCHAIN_CHANNEL));
+        let installed = jackdaw_env::sdk_toolchain_installed() == Some(true);
         out.push(Prereq {
             name: "SDK toolchain",
             status: CheckStatus::Ok,
@@ -361,8 +367,11 @@ pub fn check_prerequisites() -> Vec<Prereq> {
 
 /// First line of `<cmd> <arg>` stdout, or `None` if the tool is absent or
 /// exits non-zero.
+///
+/// Asked of the user's own toolchain: the pinned one may not be installed
+/// yet, and installing it is what setup does once these checks pass.
 fn tool_version(cmd: &str, arg: &str) -> Option<String> {
-    let output = rust_env_command(cmd).arg(arg).output().ok()?;
+    let output = user_toolchain_command(cmd).arg(arg).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -377,7 +386,7 @@ fn tool_version(cmd: &str, arg: &str) -> Option<String> {
 }
 
 /// Structured progress from [`ensure_sdk`], consumed by the CLI (which
-/// prints phase lines and lets cargo's inherited stderr show its own
+/// prints phase lines and lets cargo's echoed stderr show its own
 /// progress) and the editor's launcher (which drives a progress
 /// bar from the per-crate counts). Phase strings are static literals.
 pub enum SetupProgress {
@@ -504,7 +513,7 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     }
 
     report(SetupProgress::Phase("Installing the pinned Rust toolchain"));
-    install_toolchain()?;
+    jackdaw_env::ensure_sdk_toolchain()?;
 
     let build_dir = cache.join("build");
     report(SetupProgress::Phase("Unpacking SDK sources"));
@@ -547,25 +556,6 @@ pub fn ensure_sdk(mut report: impl FnMut(SetupProgress)) -> Result<PathBuf, Stri
     Ok(cache)
 }
 
-fn install_toolchain() -> Result<(), String> {
-    let status = jackdaw_env::without_console_window(&mut Command::new("rustup"))
-        .args([
-            "toolchain",
-            "install",
-            SDK_TOOLCHAIN_CHANNEL,
-            "--profile",
-            "minimal",
-        ])
-        .status()
-        .map_err(|e| format!("rustup is required to build the SDK but could not run: {e}"))?;
-    if !status.success() {
-        return Err(format!(
-            "failed to install the {SDK_TOOLCHAIN_CHANNEL} toolchain"
-        ));
-    }
-    Ok(())
-}
-
 fn build_recipe(
     build_dir: &Path,
     triple: &str,
@@ -606,11 +596,12 @@ fn build_recipe(
     )
 }
 
-/// Run one cargo build, streaming progress. cargo's status lines and its
-/// TTY progress bar go to inherited stderr, so a CLI user keeps the
-/// familiar live output; the machine-readable artifact stream on stdout is
-/// parsed into [`SetupProgress`] events so the editor (which has no
-/// terminal) can drive its own bar. `done` accumulates across calls.
+/// Run one cargo build, streaming progress. cargo's status lines and
+/// rendered diagnostics are echoed to this process's stderr, so a CLI user
+/// keeps the live output, and kept for the error on a failure, so the editor
+/// (which has no terminal) can show why; the machine-readable artifact stream
+/// on stdout is parsed into [`SetupProgress`] events to drive the editor's
+/// bar. `done` accumulates across calls.
 fn run_cargo(
     build_dir: &Path,
     args: &[&str],
@@ -619,17 +610,18 @@ fn run_cargo(
 ) -> Result<(), String> {
     use std::io::BufRead;
 
-    let mut child = rust_env_command("cargo")
+    let mut child = sdk_toolchain_command("cargo")
         .args(args)
         .arg("--message-format=json-render-diagnostics")
         .env("CARGO_INCREMENTAL", "0")
         .current_dir(build_dir)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("cargo build: {e}"))?;
 
     let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = StderrCapture::echoed(&mut child);
     for line in std::io::BufReader::new(stdout)
         .lines()
         .map_while(Result::ok)
@@ -639,9 +631,34 @@ fn run_cargo(
 
     let status = child.wait().map_err(|e| format!("cargo build: {e}"))?;
     if !status.success() {
-        return Err("SDK build failed (see the cargo output above)".to_string());
+        let stderr = stderr.finish();
+        for line in stderr.lines() {
+            report(SetupProgress::Log(line.to_string()));
+        }
+        return Err(format!("SDK build failed:\n{}", error_summary(&stderr)));
     }
     Ok(())
+}
+
+/// The part of a failed build's stderr worth showing in a message: from the
+/// first error on, so warnings rendered before it do not push it out of view,
+/// and bounded. The whole of it goes to the setup log.
+fn error_summary(stderr: &str) -> String {
+    const MAX_LINES: usize = 40;
+    let lines: Vec<&str> = stderr.lines().collect();
+    let first_error = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("error"))
+        .unwrap_or(0);
+    let shown = &lines[first_error..];
+    let mut summary = shown[..shown.len().min(MAX_LINES)].join("\n");
+    if shown.len() > MAX_LINES {
+        summary.push_str("\n...");
+    }
+    if summary.trim().is_empty() {
+        summary.push_str("cargo reported no error");
+    }
+    summary
 }
 
 /// Turn one line of `cargo --message-format=json-render-diagnostics` into
@@ -685,7 +702,7 @@ fn report_cargo_line(line: &str, done: &mut u32, report: &mut impl FnMut(SetupPr
 /// denominator for the progress bar; `None` on any failure, and the UI
 /// then shows a running count instead of a filled bar.
 fn estimate_units(build_dir: &Path, triple: &str) -> Option<u32> {
-    let output = rust_env_command("cargo")
+    let output = sdk_toolchain_command("cargo")
         .args([
             "tree",
             "-p",
@@ -798,6 +815,23 @@ mod tests {
             "it names the toolchain: {}",
             toolchain.detail
         );
+    }
+
+    #[test]
+    fn a_failed_sdk_build_reports_its_errors_ahead_of_its_warnings() {
+        let stderr = "warning: unused variable: `x`\n --> src/lib.rs:1:1\n\
+                      error[E0433]: failed to resolve: use of undeclared crate\n\
+                      error: could not compile `jackdaw_sdk`";
+        let summary = error_summary(stderr);
+        assert!(summary.starts_with("error[E0433]"), "got {summary}");
+        assert!(summary.contains("could not compile"), "got {summary}");
+        assert!(!summary.contains("unused variable"), "got {summary}");
+    }
+
+    #[test]
+    fn a_failed_sdk_build_with_no_errors_says_so() {
+        assert_eq!(error_summary(""), "cargo reported no error");
+        assert_eq!(error_summary("note: something"), "note: something");
     }
 
     fn fixture(name: &str, lib: &str) -> PathBuf {

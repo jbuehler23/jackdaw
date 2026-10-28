@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::user_toolchain_command;
 
 use crate::{BEVY_REV, BEVY_VERSION};
 
@@ -74,7 +74,7 @@ pub fn pin_project(root: &Path) -> Result<Option<String>, String> {
         },
         Err(_) => None,
     };
-    let mut command = rust_env_command("cargo");
+    let mut command = user_toolchain_command("cargo");
     command
         .args(["update", "--package", "bevy", "--precise", rev])
         .current_dir(root)
@@ -100,7 +100,7 @@ pub fn pin_project(root: &Path) -> Result<Option<String>, String> {
 
 /// The lockfile of the workspace `root` belongs to.
 fn workspace_lockfile(root: &Path) -> Result<PathBuf, String> {
-    let output = rust_env_command("cargo")
+    let output = user_toolchain_command("cargo")
         .args(["locate-project", "--workspace", "--message-format", "plain"])
         .current_dir(root)
         .output()

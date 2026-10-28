@@ -26,7 +26,7 @@
 
 use std::path::Path;
 
-use jackdaw_env::rust_env_command;
+use jackdaw_env::user_toolchain_command;
 use proc_macro2::LineColumn;
 use syn::spanned::Spanned;
 
@@ -138,7 +138,7 @@ fn rustfmt(source: String) -> String {
     use std::io::Write as _;
     use std::process::Stdio;
 
-    let Ok(mut child) = rust_env_command("rustfmt")
+    let Ok(mut child) = user_toolchain_command("rustfmt")
         .args(["--emit", "stdout", "--edition", "2024", "--quiet"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
