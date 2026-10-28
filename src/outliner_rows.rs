@@ -307,8 +307,9 @@ fn open_child_list(world: &World, row: Entity) -> Option<Entity> {
 /// it is built and whether it stays laid out, from where it would sit. The
 /// first row the list shows always stays laid out, and the rest are placed
 /// from it; so does the last, which holds the room of the rows parked above it
-/// and so keeps the full length of the list scrollable.
-fn plan_list(world: &World, list: Entity, view: &View, pass: &mut RowPass) {
+/// and so keeps the full length of the list scrollable. A first row not laid
+/// out yet is placed at `start`, where the list begins.
+fn plan_list(world: &World, list: Entity, view: &View, pass: &mut RowPass, start: f32) {
     let rows: Vec<Entity> = rows_of(world, list)
         .into_iter()
         .filter(|&row| !row_is_hidden(world.get::<Node>(row), world.get::<TreeRowParked>(row)))
@@ -320,9 +321,7 @@ fn plan_list(world: &World, list: Entity, view: &View, pass: &mut RowPass) {
         pass.to_unpark.push(first);
         return;
     }
-    let Some((mut top, _)) = span(world, first) else {
-        return;
-    };
+    let mut top = span(world, first).map_or(start, |(top, _)| top);
     let last = rows.len() - 1;
     let mut room_above = 0.0;
     for (position, row) in rows.into_iter().enumerate() {
@@ -361,7 +360,7 @@ fn plan_list(world: &World, list: Entity, view: &View, pass: &mut RowPass) {
                 pass.to_unbuild.push(row);
             }
             if built && let Some(children) = open_child_list(world, row) {
-                plan_list(world, children, view, pass);
+                plan_list(world, children, view, pass, top + view.row_height);
             }
         } else {
             if !parked {
@@ -404,9 +403,15 @@ fn set_room_above(world: &mut World, row: Entity, room: f32) {
     }
 }
 
+/// Whether a row joined an Outliner since the last check, so the rows near the
+/// view are built before the frame's layout rather than after it.
+pub(crate) fn rows_were_added(added: Query<(), Added<TreeNode>>) -> bool {
+    !added.is_empty()
+}
+
 /// Build the rows near each scrolling Outliner's view, take far ones back to
 /// frames, and park the frames further out.
-fn build_rows_in_view(world: &mut World) {
+pub(crate) fn build_rows_in_view(world: &mut World) {
     let containers: Vec<Entity> = world
         .query_filtered::<Entity, With<HierarchyTreeContainer>>()
         .iter(world)
@@ -434,8 +439,11 @@ fn build_rows_in_view(world: &mut World) {
             focused,
             may_unbuild,
         };
+        let scrolled = world
+            .get::<ScrollPosition>(container)
+            .map_or(0.0, |scroll| scroll.y);
         let mut pass = RowPass::default();
-        plan_list(world, container, &view, &mut pass);
+        plan_list(world, container, &view, &mut pass, top - scrolled);
 
         let held_frames: Vec<Entity> = world
             .resource::<TreeIndex>()

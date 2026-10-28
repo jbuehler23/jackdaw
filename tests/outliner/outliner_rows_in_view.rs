@@ -43,6 +43,14 @@ fn run(app: &mut App, clause: &str) {
 /// last of which holds a child. Returns the app, the panel and the roots in
 /// the order the outliner lists them.
 fn long_outliner() -> (App, Entity, Vec<Entity>) {
+    let (mut app, panel) = scrolling_outliner();
+    let roots = spawn_roots(&mut app);
+    settle(&mut app);
+    (app, panel, roots)
+}
+
+/// An empty outliner panel that scrolls, laid out.
+fn scrolling_outliner() -> (App, Entity) {
     let mut app = util::editor_test_app();
     {
         let mut windows = app
@@ -76,9 +84,8 @@ fn long_outliner() -> (App, Entity, Vec<Entity>) {
             BackgroundColor(Color::NONE),
         ))
         .id();
-    let roots = spawn_roots(&mut app);
     settle(&mut app);
-    (app, panel, roots)
+    (app, panel)
 }
 
 /// `ROOTS` named top-level nodes, the last of which holds a child, in the
@@ -514,4 +521,45 @@ fn the_filter_finds_a_node_far_down_and_builds_its_row() {
         .filter(|(_, node)| node.display != Display::None)
         .count();
     assert_eq!(shown_rows, 1, "the filter shows only the match");
+}
+
+/// The row of a new entity is built and laid out in the frame the entity
+/// arrives, rather than drawn as an empty frame first.
+#[test]
+fn a_new_entity_has_a_laid_out_row_on_the_frame_it_arrives() {
+    let (mut app, panel) = scrolling_outliner();
+    let first = app
+        .world_mut()
+        .spawn((Name::new("First"), Transform::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), first);
+    settle(&mut app);
+
+    for name in ["Second", "Third"] {
+        let arrival = app
+            .world_mut()
+            .spawn((Name::new(name), Transform::default()))
+            .id();
+        jackdaw::scene_io::register_entity_in_ast(app.world_mut(), arrival);
+        app.update();
+
+        let row = row(&app, panel, arrival).expect("the new entity has a row");
+        let line = app
+            .world()
+            .get::<Children>(row)
+            .and_then(|parts| {
+                parts
+                    .iter()
+                    .find(|&part| app.world().get::<TreeRowContent>(part).is_some())
+            })
+            .expect("the row is built");
+        let size = app
+            .world()
+            .get::<ComputedNode>(line)
+            .map_or(Vec2::ZERO, ComputedNode::size);
+        assert!(
+            size.y > 0.0,
+            "the row of {name} went through that frame's layout, got {size}"
+        );
+    }
 }
