@@ -356,6 +356,21 @@ fn apply_sizes_the_sprite_from_the_typed_ppu_and_keeps_no_state() {
 }
 
 #[test]
+fn the_row_starts_at_the_project_ppu() {
+    let (mut app, _dir, sprite) = app_with_sprite();
+    let set = app
+        .world_mut()
+        .operator("project.set_pixels_per_unit")
+        .param("value", 16.0)
+        .call()
+        .expect("project.set_pixels_per_unit dispatches");
+    assert_eq!(set, OperatorResult::Finished);
+    settle(&mut app);
+    reselect(&mut app, sprite);
+    assert_eq!(ppu_shown(&mut app), 16.0);
+}
+
+#[test]
 fn apply_takes_the_operators_whole_range() {
     let (mut app, _dir, sprite) = app_with_sprite();
     for ppu in [0.001_f64, 50_000.0] {

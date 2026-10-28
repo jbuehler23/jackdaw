@@ -90,9 +90,6 @@ pub struct SpriteSamplingCombo {
 /// The sampling combo's choices, in order, as `image.set_sampling` names them.
 const SAMPLING_CHOICES: [&str; 3] = ["project", "linear", "nearest"];
 
-/// Pixels per unit the size row starts at: one image pixel per world unit.
-const DEFAULT_PPU: f64 = 1.0;
-
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<OwnOffsetEdits>()
         .add_observer(on_anchor_pick)
@@ -161,6 +158,7 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
         .unwrap_or_default();
     let sprite_path = <Sprite as bevy::reflect::TypePath>::type_path();
     let (project, own) = sampling_state(world, source, &sprite);
+    let ppu = f64::from(world.resource::<crate::world_units::WorldUnits>().ppu());
 
     let mut state: SystemState<(Commands, Query<&Name>)> = SystemState::new(world);
     if let Ok((mut commands, names)) = state.get_mut(world) {
@@ -204,7 +202,7 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
                     );
                 }
             } else if card_row == CardRow::SizeFromPpu {
-                spawn_ppu_row(&mut commands, body, source);
+                spawn_ppu_row(&mut commands, body, source, ppu);
             } else if card_row == CardRow::Sampling {
                 let combo = SpriteSamplingCombo {
                     source,
@@ -335,12 +333,12 @@ fn follow_anchor_write(
     }
 }
 
-fn spawn_ppu_row(commands: &mut Commands, body: Entity, source: Entity) {
+fn spawn_ppu_row(commands: &mut Commands, body: Entity, source: Entity, ppu: f64) {
     let row = spawn_field_row(commands, body, FieldRowProps::new("size from ppu"));
     let input = commands
         .spawn_scene(bsn! { @ScrubNumberInput })
         .insert((
-            ScrubNumberInputValue::F64(DEFAULT_PPU),
+            ScrubNumberInputValue::F64(ppu),
             NumberInputPrecision(3),
             SpritePpuInput,
             ChildOf(row.control),
@@ -379,15 +377,13 @@ fn on_ppu_apply(
     if proxies.contains(apply.source) {
         return;
     }
-    let ppu = match values.get(apply.input) {
-        Ok(ScrubNumberInputValue::F64(ppu)) => *ppu,
-        _ => DEFAULT_PPU,
-    };
-    commands
+    let mut call = commands
         .operator(SpriteSetPixelsPerUnitOp::ID)
-        .param("entity", apply.source)
-        .param("ppu", ppu)
-        .call();
+        .param("entity", apply.source);
+    if let Ok(ScrubNumberInputValue::F64(ppu)) = values.get(apply.input) {
+        call = call.param("ppu", *ppu);
+    }
+    call.call();
 }
 
 /// The project's 2D sampling, and the override of the image `sprite` draws:

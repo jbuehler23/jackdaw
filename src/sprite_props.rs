@@ -33,7 +33,8 @@ fn anchor_type_path() -> &'static str {
 
 /// Size sprites so `ppu` of their image pixels make one world unit: each
 /// one's `custom_size` becomes its image's pixel size (its rect or atlas cell
-/// when it has one) over `ppu`, all as one history entry. Nothing else is
+/// when it has one) over `ppu`, the project's pixels per unit when left out,
+/// all as one history entry. Nothing else is
 /// stored; the size is the sprite's own from then on.
 #[operator(
     id = "sprite.set_pixels_per_unit",
@@ -46,7 +47,10 @@ fn anchor_type_path() -> &'static str {
             Entity,
             doc = "Sprite to size. Left out, every selected sprite."
         ),
-        ppu(f64, doc = "Image pixels per world unit, above 0."),
+        ppu(
+            f64,
+            doc = "Image pixels per world unit, above 0. Left out, the project's pixels per unit."
+        ),
     )
 )]
 pub(crate) fn sprite_set_pixels_per_unit(
@@ -57,11 +61,11 @@ pub(crate) fn sprite_set_pixels_per_unit(
     let Some(targets) = target_sprites(world, &params, id) else {
         return OperatorResult::Cancelled;
     };
-    let Some(ppu) = params
-        .as_float("ppu")
-        .map(|ppu| ppu as f32)
-        .filter(|ppu| *ppu > 0.0 && ppu.is_finite())
-    else {
+    let ppu = match params.get("ppu") {
+        None => Some(world.resource::<crate::world_units::WorldUnits>().ppu()),
+        Some(_) => params.as_float("ppu").map(|ppu| ppu as f32),
+    };
+    let Some(ppu) = ppu.filter(|ppu| *ppu > 0.0 && ppu.is_finite()) else {
         warn_caller(world, format!("{id}: ppu is a number above 0"));
         return OperatorResult::Cancelled;
     };
@@ -374,6 +378,18 @@ fn measured_size(world: &World, entity: Entity) -> Result<Vec2, &'static str> {
         return Err("has no image to measure");
     }
     source_size(world, sprite).ok_or("has an image that is still loading or missing")
+}
+
+/// The size a new sprite drawing `sprite`'s image takes at the project's pixels
+/// per unit: the image's pixel size over the ppu, as `sprite.set_pixels_per_unit`
+/// sizes one. `None` at a ppu of 1, where a sprite already draws one world unit
+/// per pixel, or while the size is unknown.
+pub(crate) fn project_size(world: &World, sprite: &Sprite) -> Option<Vec2> {
+    let ppu = world.resource::<crate::world_units::WorldUnits>().ppu();
+    if ppu == 1.0 {
+        return None;
+    }
+    source_size(world, sprite).map(|size| size / ppu)
 }
 
 /// The pixel size of what `sprite` draws: its rect, the atlas cell, the

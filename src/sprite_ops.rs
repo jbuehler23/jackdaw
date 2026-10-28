@@ -41,6 +41,9 @@ pub(crate) fn plugin(app: &mut App) {
 /// A new sprite's z is one above the highest sprite already in the scene, or 0
 /// in an empty scene, so it draws over whatever it was dropped on. Sorting
 /// proper is defined by issue 03.
+///
+/// At a project pixels per unit other than 1, an image sprite is sized to its
+/// image's pixels over the ppu, as `sprite.set_pixels_per_unit` sizes one.
 #[operator(
     id = "sprite.add",
     label = "Sprite",
@@ -185,7 +188,12 @@ fn spawn_sprite(
     parent: Entity,
 ) -> Entity {
     let sprite = match path {
-        Some(path) => Sprite::from_image(world.resource::<AssetServer>().load(path.to_owned())),
+        Some(path) => {
+            let mut sprite =
+                Sprite::from_image(world.resource::<AssetServer>().load(path.to_owned()));
+            sprite.custom_size = crate::sprite_props::project_size(world, &sprite);
+            sprite
+        }
         None => Sprite::from_color(Color::WHITE, Vec2::splat(PLACEHOLDER_SIZE)),
     };
     let entity = world

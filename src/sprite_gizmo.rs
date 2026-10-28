@@ -834,10 +834,14 @@ fn drag_to(world: &mut World, target: Entity, from: Vec2, now: Vec2) {
             _ => kinds.magnet(ctrl),
         };
         let ui_scale = world.get_resource::<UiScale>().map_or(1.0, |scale| scale.0);
+        let pixel = world
+            .resource::<crate::world_units::WorldUnits>()
+            .pixel_size();
         let rules = SpriteSnapRules::new(
             &kinds,
             magnet,
             host.view.grid,
+            pixel,
             snap_radius(host, computed, ui_scale),
         );
         let mut landing = drag.landing(from, now, shift, &rules);
@@ -1269,7 +1273,8 @@ fn finish_drag(world: &mut World, commit: bool) {
 }
 
 /// Step the selected sprites of the open 2D world scene along `direction`
-/// (screen axes, y down): one world unit, or the 2D grid with Shift held. The
+/// (screen axes, y down): one sprite pixel at the project's pixels per unit,
+/// or the 2D grid with Shift held. The
 /// same sprites a body drag takes, each offset in its parent's space, as one
 /// history entry. Says whether the selection was sprites; `None` (the page
 /// keys) moves nothing here, as on a sprite they step z through
@@ -1294,7 +1299,9 @@ pub(crate) fn nudge_sprites(world: &mut World, direction: Option<Vec2>) -> bool 
             .find(|host| host.mode == Viewport2dMode::Edit)
             .map_or(1.0, |host| host.view.grid)
     } else {
-        1.0
+        world
+            .resource::<crate::world_units::WorldUnits>()
+            .pixel_size()
     };
     let delta = Vec3::new(direction.x, -direction.y, 0.0) * step;
     move_selected_sprites(world, "Nudge", |item| {

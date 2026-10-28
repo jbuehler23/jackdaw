@@ -111,6 +111,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(reflect_fields::on_checkbox_commit)
             .add_observer(reflect_fields::on_text_edit_commit)
             .add_observer(reflect_fields::on_numeric_value_change_f64)
+            .add_observer(reflect_fields::mark_length_fields)
             .add_observer(reflect_fields::on_numeric_value_change_i64)
             .add_observer(reflect_fields::on_color_plane_change)
             .add_observer(reflect_fields::on_color_slider_change)
@@ -384,6 +385,12 @@ pub(super) struct FieldBinding {
     pub(super) type_path: String,
     pub(super) field_path: String,
 }
+
+/// Marks a number field that holds a length shown in the project's length
+/// unit, one of [`crate::world_units::LENGTH_FIELDS`]. The scale is read live
+/// from the entity's place in the scene each time the field is read or written.
+#[derive(Component, Clone, Copy)]
+pub(super) struct LengthField;
 
 /// The component path and field path a widget edits, or `None` when it
 /// edits nothing. Addresses a control by the field it writes rather than

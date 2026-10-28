@@ -193,6 +193,7 @@ pub mod viewport_settings_menu;
 pub mod viewport_util;
 pub mod windowing;
 pub mod workspace_dropdown;
+pub mod world_units;
 pub mod worn_material;
 
 use bevy::{
@@ -487,6 +488,7 @@ impl Plugin for EditorCorePlugin {
                 material_ui::plugin,
                 canvas_snap::plugin,
                 image_sampling::plugin,
+                world_units::plugin,
                 sprite_ops::plugin,
                 undo_snapshot::plugin,
                 migrate_dialog::plugin,

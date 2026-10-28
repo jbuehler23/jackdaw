@@ -1559,6 +1559,7 @@ fn on_stage_press(
 #[derive(SystemParam)]
 struct WorldDropSnap<'w, 's> {
     snap: Res<'w, CanvasSnap>,
+    units: Res<'w, crate::world_units::WorldUnits>,
     keys: Option<Res<'w, ButtonInput<KeyCode>>>,
     scene: GuideScene<'w, 's>,
     guides: Query<'w, 's, &'static jackdaw_scene_types::CanvasGuides>,
@@ -1581,6 +1582,7 @@ impl WorldDropSnap<'_, '_> {
             &self.snap,
             self.snap.magnet(ctrl),
             host.view.grid,
+            self.units.pixel_size(),
             crate::sprite_gizmo::snap_radius(host, stage, ui_scale),
         );
         let guides = self
@@ -3573,7 +3575,10 @@ fn guide_landing(
         .get_resource::<CanvasSnap>()
         .copied()
         .unwrap_or_default();
-    Some(match space.lattice(&kinds, ctrl, panel.view.grid) {
+    let pixel = world
+        .resource::<crate::world_units::WorldUnits>()
+        .pixel_size();
+    Some(match space.lattice(&kinds, ctrl, panel.view.grid, pixel) {
         Some(step) => (raw / step).round() * step,
         None => raw,
     })

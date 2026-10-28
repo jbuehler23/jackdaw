@@ -61,7 +61,7 @@ fn scrub_value_as_f64(value: &ScrubNumberInputValue) -> f64 {
     }
 }
 
-use super::{FieldBinding, InspectorFieldRow, MAX_REFLECT_DEPTH};
+use super::{FieldBinding, InspectorFieldRow, LengthField, MAX_REFLECT_DEPTH};
 
 pub(crate) fn spawn_reflected_fields(
     commands: &mut Commands,
@@ -2757,12 +2757,12 @@ fn apply_field_value_live(
 /// per drag.
 pub(crate) fn on_numeric_value_change_f64(
     event: On<ValueChange<f64>>,
-    bindings: Query<&FieldBinding>,
+    bindings: Query<(&FieldBinding, Has<LengthField>)>,
     mut commands: Commands,
     remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
 ) {
     let source = event.source;
-    let Ok(binding) = bindings.get(source) else {
+    let Ok((binding, length)) = bindings.get(source) else {
         return;
     };
     let target = binding.source_entity;
@@ -2780,14 +2780,70 @@ pub(crate) fn on_numeric_value_change_f64(
         .entity(source)
         .insert(ScrubNumberInputValue::F64(value));
 
-    let value_str = format!("{value}");
     commands.queue(move |world: &mut World| {
+        let stored = if length {
+            value / f64::from(crate::world_units::length_scale(world, target))
+        } else {
+            value
+        };
+        let value_str = format!("{stored}");
         if is_final {
             apply_field_json_with_undo(world, target, &tp, &path, parse_to_json_value(&value_str));
         } else {
             apply_field_value_live(world, target, &tp, &path, &value_str);
         }
     });
+}
+
+/// Mark a number field that edits one of the lengths the inspector shows in
+/// the project's length unit, and show its value in that unit.
+pub(crate) fn mark_length_fields(
+    add: On<Add<FieldBinding>>,
+    bindings: Query<&FieldBinding, With<ScrubNumberInputValue>>,
+    mut commands: Commands,
+) {
+    let field = add.event_target();
+    let Ok(binding) = bindings.get(field) else {
+        return;
+    };
+    if !crate::world_units::is_length_field(&binding.type_path, &binding.field_path) {
+        return;
+    }
+    let (source, type_path, field_path) = (
+        binding.source_entity,
+        binding.type_path.clone(),
+        binding.field_path.clone(),
+    );
+    commands.entity(field).insert(LengthField);
+    commands.queue(move |world: &mut World| {
+        let scale = f64::from(crate::world_units::length_scale(world, source));
+        let Some(stored) = stored_f64(world, source, &type_path, &field_path) else {
+            return;
+        };
+        if scale != 1.0
+            && let Ok(mut field) = world.get_entity_mut(field)
+        {
+            field.insert(ScrubNumberInputValue::F64(round_numeric_display(
+                stored * scale,
+            )));
+        }
+    });
+}
+
+/// The number `field_path` of `type_path` holds on `entity`.
+fn stored_f64(world: &World, entity: Entity, type_path: &str, field_path: &str) -> Option<f64> {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let registration = registry.get_with_type_path(type_path)?;
+    let reflected = inspected_value(
+        world,
+        world.get_entity(entity).ok()?,
+        registration,
+        &registry,
+    )?;
+    reflect_field_to_f64(crate::commands::read_field_path(
+        reflected.as_partial_reflect(),
+        field_path,
+    )?)
 }
 
 /// Write path for integer drag-scrub fields, handling the `ValueChange<i64>`
@@ -2925,17 +2981,22 @@ pub(crate) fn refresh_inspector_fields(
     // vector component inputs (both carry `ScrubNumberInput` + `FieldBinding`).
     // Refresh re-inserts the value when the reflected ECS value diverges, as
     // after an undo/redo, gizmo edit, or external edit.
-    let mut scrub_lookups: Vec<(Entity, String, String, ScrubNumberInputValue)> = Vec::new();
-    let mut scrub_query = world
-        .query_filtered::<(Entity, &FieldBinding, &ScrubNumberInputValue), With<ScrubNumberInput>>(
-        );
-    for (entity, binding, value) in scrub_query.iter(world) {
+    let length_scale = f64::from(crate::world_units::length_scale(world, primary));
+    let mut scrub_lookups: Vec<(Entity, String, String, ScrubNumberInputValue, f64)> = Vec::new();
+    let mut scrub_query = world.query_filtered::<(
+        Entity,
+        &FieldBinding,
+        &ScrubNumberInputValue,
+        Has<LengthField>,
+    ), With<ScrubNumberInput>>();
+    for (entity, binding, value, length) in scrub_query.iter(world) {
         if binding.source_entity == primary {
             scrub_lookups.push((
                 entity,
                 binding.type_path.clone(),
                 binding.field_path.clone(),
                 *value,
+                if length { length_scale } else { 1.0 },
             ));
         }
     }
@@ -3007,7 +3068,7 @@ pub(crate) fn refresh_inspector_fields(
         return;
     };
 
-    for (ui_entity, comp_type_path, field_path, current) in &scrub_lookups {
+    for (ui_entity, comp_type_path, field_path, current, scale) in &scrub_lookups {
         let Some(registration) = registry.get_with_type_path(comp_type_path) else {
             continue;
         };
@@ -3019,7 +3080,7 @@ pub(crate) fn refresh_inspector_fields(
         else {
             continue;
         };
-        let Some(value) = reflect_field_to_f64(field) else {
+        let Some(value) = reflect_field_to_f64(field).map(|value| value * scale) else {
             continue;
         };
 
