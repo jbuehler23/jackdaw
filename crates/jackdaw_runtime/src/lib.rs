@@ -139,7 +139,14 @@ mod hidden_in_game;
 mod play_scene;
 pub use play_scene::PieSceneOverride;
 #[cfg(feature = "render")]
+mod sampling;
+#[cfg(feature = "render")]
 pub mod texture_import;
+#[cfg(feature = "render")]
+pub use sampling::{
+    GAME_SETTINGS_FILE, SAMPLING_KEY, Sampling, default_image_sampler, game_settings_file,
+    image_plugin,
+};
 mod twin;
 pub use twin::{DocumentTwinReader, JackdawAssetSourcePlugin, with_document_twins};
 
@@ -1815,16 +1822,22 @@ fn asset_folder(app: &App) -> Option<PathBuf> {
         .get_added_plugins::<AssetPlugin>()
         .first()
         .map_or_else(|| AssetPlugin::default().file_path, |p| p.file_path.clone());
-    let base = if let Ok(p) = std::env::var("BEVY_ASSET_ROOT") {
-        PathBuf::from(p)
-    } else if let Ok(p) = std::env::var("CARGO_MANIFEST_DIR") {
-        PathBuf::from(p)
-    } else {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(ToOwned::to_owned))?
-    };
+    let base = asset_base(|key| std::env::var(key).ok(), std::env::current_exe().ok())?;
     Some(base.join(file_path))
+}
+
+/// The folder Bevy's file reader resolves an asset folder against:
+/// `BEVY_ASSET_ROOT`, else `CARGO_MANIFEST_DIR`, else the executable's
+/// directory. Play sets `BEVY_ASSET_ROOT`, `cargo run` sets
+/// `CARGO_MANIFEST_DIR`, and a shipped game has its assets beside it.
+pub(crate) fn asset_base(
+    var: impl Fn(&str) -> Option<String>,
+    executable: Option<PathBuf>,
+) -> Option<PathBuf> {
+    var("BEVY_ASSET_ROOT")
+        .or_else(|| var("CARGO_MANIFEST_DIR"))
+        .map(PathBuf::from)
+        .or_else(|| executable?.parent().map(Path::to_path_buf))
 }
 
 #[cfg(test)]

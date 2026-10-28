@@ -46,6 +46,7 @@ pub mod gizmos;
 pub mod grid_ops;
 pub mod hierarchy;
 pub mod history_ops;
+pub mod image_sampling;
 pub mod input_contexts;
 pub mod inspector;
 pub mod io_pool;
@@ -485,6 +486,7 @@ impl Plugin for EditorCorePlugin {
                 material_preview::MaterialPreviewPlugin,
                 material_ui::plugin,
                 canvas_snap::plugin,
+                image_sampling::plugin,
                 sprite_ops::plugin,
                 undo_snapshot::plugin,
                 migrate_dialog::plugin,
