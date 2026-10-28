@@ -165,6 +165,7 @@ pub mod test_input;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
+pub mod tileset_import;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod toolbar_overflow;
@@ -454,6 +455,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::ReflectionProbePlugin)
         .add_plugins(jackdaw_surface::ShadowViewCleanupPlugin)
         .add_plugins(probe_bake::plugin)
+        .add_plugins(tileset_import::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins((

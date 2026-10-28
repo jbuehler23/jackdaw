@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::asset::meta::{AssetAction, AssetMetaDyn};
 use bevy::asset::{AssetPath, RenderAssetUsages, io::AssetSourceId};
-use bevy::image::{ImageLoader, ImageLoaderSettings, ImageSampler};
+use bevy::image::{ImageArrayLayout, ImageLoader, ImageLoaderSettings, ImageSampler};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
@@ -331,24 +331,44 @@ pub fn overridden_meta(held: Option<&[u8]>, own: Option<Sampling>) -> Option<Met
     })
 }
 
-/// `fresh`, an image meta about to replace `held`, carrying `held`'s sampler,
-/// so a rewrite of the meta for another reason keeps the image's sampling.
-pub fn keep_sampler(fresh: Vec<u8>, held: Option<&[u8]>) -> Vec<u8> {
-    let sampler = held
-        .and_then(image_meta)
-        .as_mut()
-        .and_then(loader_settings)
-        .map(|settings| settings.sampler.clone());
-    let (Some(sampler), Some(mut meta)) = (sampler, image_meta(&fresh)) else {
+/// The meta of an image whose meta reads `held` (`None` without one) loading
+/// it as an array of `tile`-sized layers, row by row, sampled nearest. Every
+/// other setting is carried over. `None` when `held` is not an image meta.
+pub fn tile_array_meta(held: Option<&[u8]>, tile: UVec2) -> Option<Vec<u8>> {
+    let mut meta = match held {
+        Some(bytes) => image_meta(bytes)?,
+        None => plain_meta(),
+    };
+    loader_settings(&mut meta)?.array_layout = Some(ImageArrayLayout::GridSize {
+        tile_width_pixels: tile.x,
+        tile_height_pixels: tile.y,
+    });
+    let bytes = AssetMetaDyn::serialize(&meta);
+    match overridden_meta(Some(&bytes), Some(Sampling::Nearest))? {
+        MetaWrite::Write(sampled) => Some(sampled),
+        MetaWrite::Keep | MetaWrite::Remove => Some(bytes),
+    }
+}
+
+/// `fresh`, an image meta about to replace `held`, carrying `held`'s sampler
+/// and array layout, so a rewrite of the meta for another reason keeps the
+/// image's sampling and keeps a tile sheet an array texture.
+pub fn keep_own_settings(fresh: Vec<u8>, held: Option<&[u8]>) -> Vec<u8> {
+    let Some(mut held) = held.and_then(image_meta) else {
         return fresh;
     };
-    match loader_settings(&mut meta) {
-        Some(settings) if settings.sampler != sampler => {
-            settings.sampler = sampler;
-            AssetMetaDyn::serialize(&meta)
-        }
-        _ => fresh,
-    }
+    let Some(own) = loader_settings(&mut held) else {
+        return fresh;
+    };
+    let Some(mut meta) = image_meta(&fresh) else {
+        return fresh;
+    };
+    let Some(settings) = loader_settings(&mut meta) else {
+        return fresh;
+    };
+    settings.sampler = own.sampler.clone();
+    settings.array_layout = own.array_layout;
+    AssetMetaDyn::serialize(&meta)
 }
 
 /// An image whose sampling can be set.
@@ -549,7 +569,7 @@ mod tests {
     #[test]
     fn project_keeps_an_import_and_its_settings() {
         let own = written(None, Some(Sampling::Nearest));
-        let import = keep_sampler(texture_import_meta(false), Some(&own));
+        let import = keep_own_settings(texture_import_meta(false), Some(&own));
         assert!(matches!(sampler(&import), ImageSampler::Descriptor(_)));
         let cleared = written(Some(&import), None);
         let loader = read_texture_import_meta(&cleared).expect("still an import meta");

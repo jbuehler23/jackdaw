@@ -276,7 +276,7 @@ impl ProjectWindowState {
         self.expanded.contains(directory)
     }
 
-    fn rebuild(&mut self) {
+    pub(crate) fn rebuild(&mut self) {
         self.needs_refresh = true;
         self.needs_tree_refresh = true;
     }

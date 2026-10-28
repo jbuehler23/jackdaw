@@ -10,9 +10,9 @@ use glam::UVec2;
 
 use crate::{
     AnimationStrip, FitError, GridLayout, LOOSE_FRAME_MATCH, LayoutTemplate, MatchMode, RgbaImage,
-    SheetInput, Stamp, TerrainAnalysis, TerrainId, TileAddress, TileKind, TileShape,
-    TilesetProposal, detect_grid_shared, find_stamps, find_terrains, fit_layouts, pair_animations,
-    reconcile, trace_proposal,
+    SharedDetection, SheetInput, Stamp, TerrainAnalysis, TerrainId, TileAddress, TileKind,
+    TileShape, TilesetProposal, detect_grid_shared, find_stamps, find_terrains, fit_layouts,
+    pair_animations, reconcile, trace_proposal,
 };
 
 /// Everything auto setup proposes for one import.
@@ -149,6 +149,16 @@ pub fn auto_setup(
 ) -> Result<AutoSetup, SetupError> {
     let images: Vec<RgbaImage> = inputs.iter().map(|(_, image)| *image).collect();
     let shared = detect_grid_shared(&images).ok_or(SetupError::NoGrid)?;
+    auto_setup_on_grid(inputs, &shared, solid)
+}
+
+/// [`auto_setup`] over the grid [`detect_grid_shared`] already found in
+/// `inputs`, in input order.
+pub fn auto_setup_on_grid(
+    inputs: &[(&str, RgbaImage)],
+    shared: &SharedDetection,
+    solid: &[TerrainId],
+) -> Result<AutoSetup, SetupError> {
     let layout = |i: usize| shared.layouts.get(i).copied().flatten();
     let (gridded, gridded_inputs): (Vec<usize>, Vec<SheetInput>) = (inputs.iter().enumerate())
         .filter_map(|(i, &(name, image))| {

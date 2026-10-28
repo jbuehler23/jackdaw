@@ -86,7 +86,7 @@ pub fn sanitize_definition_name(name: &str) -> String {
 }
 
 /// Whether a path names a file to write rather than the folder to write in.
-fn names_a_file(path: &Path) -> bool {
+pub(crate) fn names_a_file(path: &Path) -> bool {
     !path.is_dir()
         && path
             .extension()
@@ -252,7 +252,7 @@ pub fn write_asset_file(
 /// The text one asset saves as: the stamp and the header naming its type, then
 /// an asset catalog entry for a compiled type or the patch it holds for a
 /// schema-backed one.
-fn asset_text(world: &World, name: &str, value: &AssetValue) -> Option<String> {
+pub(crate) fn asset_text(world: &World, name: &str, value: &AssetValue) -> Option<String> {
     let body = match value {
         AssetValue::Handle(handle) => jackdaw_bsn::serialize_assets_to_bsn(
             world,

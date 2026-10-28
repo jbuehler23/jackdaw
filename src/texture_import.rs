@@ -63,7 +63,7 @@ fn is_resolution_tag(part: &str) -> bool {
 }
 
 /// Write the import meta for one texture, or remove it, reporting whether the
-/// file changed. The image's sampler survives either way.
+/// file changed. The image's sampler and array layout survive either way.
 pub fn write_import_meta(texture: &Path, imported: bool) -> std::io::Result<bool> {
     let meta = meta_path(texture);
     let held = std::fs::read(&meta).ok();
@@ -72,7 +72,7 @@ pub fn write_import_meta(texture: &Path, imported: bool) -> std::io::Result<bool
             return Ok(false);
         }
         let plain = crate::image_sampling::plain_meta_bytes();
-        let kept = crate::image_sampling::keep_sampler(plain.clone(), held.as_deref());
+        let kept = crate::image_sampling::keep_own_settings(plain.clone(), held.as_deref());
         if kept == plain {
             std::fs::remove_file(meta)?;
         } else {
@@ -80,7 +80,7 @@ pub fn write_import_meta(texture: &Path, imported: bool) -> std::io::Result<bool
         }
         return Ok(true);
     }
-    let bytes = crate::image_sampling::keep_sampler(
+    let bytes = crate::image_sampling::keep_own_settings(
         texture_import_meta(is_colour(texture)),
         held.as_deref(),
     );

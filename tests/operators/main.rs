@@ -25,4 +25,5 @@ mod remote_coverage;
 mod scatter_ops;
 mod scene_op_ids;
 mod sprite_ops;
+mod tileset_ops;
 mod view_camera_ops;
