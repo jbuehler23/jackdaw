@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::ui_widgets::{Activate, MenuItem};
+use bevy::ui_widgets::ListItem;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
@@ -410,6 +410,26 @@ fn scene_with_a_trigger(app: &mut App, tmp: &tempfile::TempDir) -> Entity {
     group
 }
 
+/// Choose a dropdown row the way the list does on a click.
+fn choose(app: &mut App, row: Entity) {
+    let mut select = row;
+    while app
+        .world()
+        .get::<bevy::feathers::controls::FeathersSelect>(select)
+        .is_none()
+    {
+        select = app
+            .world()
+            .get::<ChildOf>(select)
+            .expect("the row sits in a dropdown")
+            .parent();
+    }
+    app.world_mut().trigger(bevy::ui_widgets::SetSelected {
+        entity: select,
+        row,
+    });
+}
+
 fn menu_items(app: &mut App) -> Vec<(Entity, String)> {
     let mut items = Vec::new();
     for entity in app
@@ -418,7 +438,7 @@ fn menu_items(app: &mut App) -> Vec<(Entity, String)> {
         .iter(app.world())
         .collect::<Vec<_>>()
     {
-        if app.world().get::<MenuItem>(entity).is_none() {
+        if app.world().get::<ListItem>(entity).is_none() {
             continue;
         }
         let mut stack = vec![entity];
@@ -480,7 +500,7 @@ fn an_enum_field_on_a_project_component_is_editable() {
         .find(|(_, caption)| caption == "PlayerEnter")
         .map(|(entity, _)| *entity)
         .expect("the menu offers PlayerEnter");
-    app.world_mut().trigger(Activate { entity: enter });
+    choose(&mut app, enter);
     settle(&mut app);
 
     assert_eq!(
