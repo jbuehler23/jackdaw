@@ -311,11 +311,14 @@ pub(crate) fn field_edits(
             routed.push((entity, field_path, json));
             continue;
         }
-        let Some((path, value)) =
-            crate::commands::field_edit_to_bsn_value(world, entity, type_path, field_path, &json)
-        else {
-            warn_caller(world, format!("{id}: {entity} cannot take {json}"));
-            return None;
+        let (path, value) = match crate::commands::field_edit_to_bsn_value(
+            world, entity, type_path, field_path, &json,
+        ) {
+            Ok(edit) => edit,
+            Err(why) => {
+                warn_caller(world, format!("{id}: {entity}: {why}"));
+                return None;
+            }
         };
         authored.push((entity, path, value));
     }
