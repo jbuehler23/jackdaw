@@ -68,6 +68,7 @@ pub use inspector::{
 pub mod camera_capture;
 pub mod camera_preview;
 pub mod camera_settings;
+pub mod canvas_grid;
 pub mod canvas_snap;
 pub mod core_extension;
 pub mod dock_ops;
@@ -492,6 +493,7 @@ impl Plugin for EditorCorePlugin {
                 material_preview::MaterialPreviewPlugin,
                 material_ui::plugin,
                 canvas_snap::plugin,
+                canvas_grid::plugin,
                 pixel_camera::plugin,
                 image_sampling::plugin,
                 world_units::plugin,

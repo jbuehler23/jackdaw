@@ -425,6 +425,8 @@ pub fn cursor_area_offset(
 #[derive(Component)]
 pub struct Viewport2dPanelHost {
     pub camera: Entity,
+    /// The grid drawn behind a 2D world scene on this panel's own layer.
+    pub grid: Entity,
     pub stage: Entity,
     /// The clipping area the stage is placed inside: the panel's fixed
     /// window onto a canvas that pans and zooms behind it.
@@ -1814,6 +1816,7 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
     // content still draws here.
     let viewport_layer = world.resource_mut::<ViewportLayerCounter>().next();
     let camera_layers = RenderLayers::from_layers(&[0, viewport_layer.get_layer()]);
+    let grid = crate::canvas_grid::spawn_canvas_grid(world, parent, viewport_layer.get_layer());
 
     let camera = world
         .spawn((
@@ -1915,6 +1918,7 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
 
     world.entity_mut(parent).insert(Viewport2dPanelHost {
         camera,
+        grid,
         stage,
         area: stage_area,
         pointer,
@@ -2076,6 +2080,16 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
                 !snap.show_game_frame
             ),
             "Show Game Frame",
+        ));
+        rows.push(checked_row(
+            world
+                .get_resource::<crate::viewport_overlays::OverlaySettings>()
+                .is_none_or(|overlays| overlays.show_grid),
+            format!(
+                "{OP_ACTION_PREFIX}{}",
+                crate::view_ops::ViewToggleGridOp::ID
+            ),
+            "Show Grid",
         ));
         let sampling = world
             .get_resource::<crate::image_sampling::ProjectSampling2d>()
@@ -3095,7 +3109,7 @@ pub(crate) fn on_viewport_2d_panel_despawn(
     let Ok(host) = hosts.get(entity) else {
         return;
     };
-    for owned in [host.camera, host.pointer] {
+    for owned in [host.camera, host.grid, host.pointer] {
         if let Ok(mut ec) = commands.get_entity(owned) {
             ec.despawn();
         }
