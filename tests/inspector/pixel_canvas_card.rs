@@ -6,8 +6,7 @@ use crate::util;
 use bevy::prelude::*;
 use jackdaw::commands::CommandHistory;
 use jackdaw::pixel_camera::{CANVAS_PRESETS, CUSTOM_PRESET, CanvasPresetCombo};
-use jackdaw_feathers::button::ButtonContentText;
-use jackdaw_feathers::combobox::{ComboBoxChangeEvent, ComboBoxSelectedIndex};
+use jackdaw_feathers::combobox::{ComboBoxChangeEvent, ComboBoxSelectedIndex, ComboBoxTrigger};
 use jackdaw_scene_types::PixelCanvas;
 
 fn app_with_canvas(canvas: PixelCanvas) -> (App, Entity) {
@@ -48,11 +47,17 @@ fn combo(app: &mut App) -> Entity {
 
 /// The option the combo's trigger draws, by its index.
 fn shown(app: &mut App) -> usize {
-    let mut stack = vec![combo(app)];
+    let combo = combo(app);
+    let trigger = app
+        .world_mut()
+        .query::<(Entity, &ComboBoxTrigger)>()
+        .iter(app.world())
+        .find(|(_, trigger)| trigger.0 == combo)
+        .map(|(entity, _)| entity)
+        .expect("the combo has a trigger");
+    let mut stack = vec![trigger];
     while let Some(entity) = stack.pop() {
-        if app.world().get::<ButtonContentText>(entity).is_some()
-            && let Some(text) = app.world().get::<Text>(entity)
-        {
+        if let Some(text) = app.world().get::<Text>(entity) {
             return CANVAS_PRESETS
                 .iter()
                 .position(|preset| text.0 == format!("{} x {}", preset.x, preset.y))
@@ -62,7 +67,7 @@ fn shown(app: &mut App) -> usize {
                 });
         }
         if let Some(children) = app.world().get::<Children>(entity) {
-            stack.extend(children.iter());
+            stack.extend(children.iter().rev());
         }
     }
     panic!("the combo draws a label");
