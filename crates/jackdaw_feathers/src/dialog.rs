@@ -1,31 +1,35 @@
+use bevy::feathers::controls::{
+    FeathersButton, FeathersDialog, FeathersDialogBody, FeathersDialogClose, FeathersDialogFooter,
+    FeathersDialogHeader,
+};
+use bevy::feathers::display::{caption, label_dim};
+use bevy::feathers::theme::ThemeBackgroundColor;
 use bevy::prelude::*;
+use bevy::ui_widgets::RequestClose;
 use jackdaw_commands::KeymapCapture;
-use lucide_icons::Icon;
 
-use crate::button::{
-    ButtonClickEvent, ButtonProps, ButtonVariant, IconButtonProps, button, icon_button,
-};
-use crate::icons::EditorFont;
-use crate::tokens::{
-    BACKGROUND_COLOR, BORDER_COLOR, TEXT_DISPLAY_COLOR, TEXT_MUTED_COLOR, TEXT_SIZE_LG,
-    TEXT_SIZE_XL,
-};
+use crate::button::{ButtonClickEvent, ButtonVariant, EditorButton};
+use crate::tokens::DIALOG_BACKDROP;
 
-const BACKDROP_OPACITY: f32 = 0.8;
+const DEFAULT_WIDTH: Val = Val::Px(448.0);
 
 pub fn plugin(app: &mut App) {
     app.add_observer(on_open_dialog)
         .add_observer(on_open_confirmation_dialog)
-        .add_observer(on_action_button_click)
-        .add_observer(on_secondary_action_button_click)
-        .add_observer(on_cancel_button_click)
-        .add_observer(on_close_button_click)
+        .add_observer(on_dialog_button_click)
+        .add_observer(on_close_button)
         .add_observer(on_close_dialog)
         .add_observer(handle_backdrop_click)
-        .add_systems(Update, (sync_children_slot_visibility, handle_esc_key));
+        .add_systems(Update, handle_esc_key)
+        .add_systems(
+            PostUpdate,
+            sync_children_slot_visibility.in_set(crate::WidgetSetupSystems),
+        );
 }
 
-#[derive(Component)]
+/// The root of an open dialog: the feathers modal barrier, which holds the
+/// dialog panel.
+#[derive(Component, Default, Clone)]
 pub struct EditorDialog;
 
 /// What a dialog is asking and what it will take for an answer.
@@ -157,25 +161,16 @@ pub fn answer_dialog(commands: &mut Commands, dialog: Entity, choice: DialogChoi
     }
 }
 
-#[derive(Component)]
-struct DialogBackdrop;
+/// A footer button, and the answer pressing it gives.
+#[derive(Component, Clone)]
+struct DialogButton(DialogChoice);
 
-#[derive(Component)]
-struct DialogPanel;
-
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct DialogCloseButton;
 
-#[derive(Component)]
-struct DialogCancelButton;
-
-#[derive(Component)]
-struct DialogActionButton;
-
-#[derive(Component)]
-struct DialogSecondaryActionButton;
-
-#[derive(Component)]
+/// The body section a caller fills with the dialog's own content. Hidden
+/// while empty.
+#[derive(Component, Default, Clone)]
 pub struct DialogChildrenSlot;
 
 #[derive(Component, Default, Clone, Copy)]
@@ -194,7 +189,7 @@ impl DialogVariant {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 struct DialogConfig {
     close_on_click_outside: bool,
     close_on_esc: bool,
@@ -231,8 +226,11 @@ pub struct OpenDialogEvent {
     pub has_close_button: bool,
     pub close_on_click_outside: bool,
     pub close_on_esc: bool,
+    /// The panel's width; the editor's default dialog width when `None`.
     pub max_width: Option<Val>,
-    pub content_padding: UiRect,
+    /// Padding around the caller's content; the feathers body padding when
+    /// `None`.
+    pub content_padding: Option<UiRect>,
 }
 
 impl OpenDialogEvent {
@@ -248,7 +246,7 @@ impl OpenDialogEvent {
             close_on_click_outside: true,
             close_on_esc: true,
             max_width: None,
-            content_padding: UiRect::all(px(24)),
+            content_padding: None,
         }
     }
 
@@ -288,7 +286,7 @@ impl OpenDialogEvent {
     }
 
     pub fn without_content_padding(mut self) -> Self {
-        self.content_padding = UiRect::ZERO;
+        self.content_padding = Some(UiRect::ZERO);
         self
     }
 }
@@ -329,230 +327,152 @@ impl From<&OpenConfirmationDialogEvent> for OpenDialogEvent {
 fn on_open_dialog(
     event: On<OpenDialogEvent>,
     mut commands: Commands,
-    editor_font: Res<EditorFont>,
-    icon_font: Res<crate::icons::IconFont>,
-    existing: Query<Entity, With<EditorDialog>>,
+    existing: Query<(), With<EditorDialog>>,
 ) {
     if !existing.is_empty() {
         return;
     }
-    spawn_dialog(&mut commands, &editor_font.0, &icon_font.0, &event);
+    commands.spawn_scene(dialog_scene(&event));
 }
 
 fn on_open_confirmation_dialog(
     event: On<OpenConfirmationDialogEvent>,
     mut commands: Commands,
-    editor_font: Res<EditorFont>,
-    icon_font: Res<crate::icons::IconFont>,
-    existing: Query<Entity, With<EditorDialog>>,
+    existing: Query<(), With<EditorDialog>>,
 ) {
     if !existing.is_empty() {
         return;
     }
     let dialog_event: OpenDialogEvent = event.event().into();
-    spawn_dialog(&mut commands, &editor_font.0, &icon_font.0, &dialog_event);
+    commands.spawn_scene(dialog_scene(&dialog_event));
 }
 
-fn spawn_dialog(
-    commands: &mut Commands,
-    editor_font: &Handle<Font>,
-    icon_font: &Handle<Font>,
-    event: &OpenDialogEvent,
-) {
-    let font = editor_font.clone();
+/// A [`FeathersDialog`] holding a header, the caller's content slot and a
+/// footer of feathers buttons.
+///
+/// The editor keeps its own layer and backdrop: dialogs sit above the editor's
+/// popovers and drag previews, and feathers leaves the barrier unpainted.
+fn dialog_scene(event: &OpenDialogEvent) -> impl Scene {
+    let mut contents: Vec<Box<dyn SceneList>> = Vec::new();
+    if event.title.is_some() || event.has_close_button {
+        contents.push(Box::new(header(
+            event.title.clone().unwrap_or_default(),
+            event.has_close_button,
+        )));
+    }
+    if let Some(description) = event.description.clone() {
+        contents.push(Box::new(bsn_list! {
+            @FeathersDialogBody
+            Children [ @{label_dim(description)} ]
+        }));
+    }
+    contents.push(Box::new(children_slot(event.content_padding)));
 
-    let backdrop_id = commands
-        .spawn((
-            DialogBackdrop,
-            Node {
-                width: percent(100),
-                height: percent(100),
-                position_type: PositionType::Absolute,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::BLACK.with_alpha(BACKDROP_OPACITY)),
-        ))
-        .id();
-
-    let has_header = event.title.is_some() || event.description.is_some();
-    let has_footer =
-        event.action.is_some() || event.cancel.is_some() || event.secondary_action.is_some();
-
-    let header_id = if has_header {
-        let mut header = commands.spawn((
-            Node {
-                padding: UiRect::all(px(24)),
-                border: UiRect::bottom(px(1)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6),
-                ..default()
-            },
-            BorderColor::all(BORDER_COLOR),
-        ));
-
-        if let Some(title) = &event.title {
-            header.with_child((
-                Text::new(title),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: TEXT_SIZE_XL,
-                    weight: FontWeight::SEMIBOLD,
-                    ..default()
-                },
-                TextColor(TEXT_DISPLAY_COLOR.into()),
-            ));
-        }
-
-        if let Some(desc) = &event.description {
-            header.with_child((
-                Text::new(desc),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: TEXT_SIZE_LG,
-                    ..default()
-                },
-                TextColor(TEXT_MUTED_COLOR.into()),
-            ));
-        }
-
-        Some(header.id())
-    } else {
-        None
-    };
-
-    let footer_id = if has_footer {
-        let mut footer = commands.spawn(Node {
-            padding: UiRect::all(px(24)),
-            column_gap: px(6),
-            justify_content: JustifyContent::End,
-            ..default()
-        });
-
-        if let Some(cancel) = &event.cancel {
-            footer.with_child((DialogCancelButton, button(ButtonProps::new(cancel))));
-        }
-
-        if let Some(action) = &event.action {
-            footer.with_child((
-                DialogActionButton,
-                button(
-                    ButtonProps::new(action).with_variant(event.variant.action_button_variant()),
-                ),
-            ));
-        }
-
-        let footer_id = footer.id();
-
-        // Secondary action on the far left (margin-right: auto pushes it left),
-        // wrapped in a layout node to avoid a duplicate `Node` component.
-        if let Some(secondary) = &event.secondary_action {
-            let btn = commands
-                .spawn((
-                    DialogSecondaryActionButton,
-                    button(ButtonProps::new(secondary)),
-                ))
-                .id();
-            let wrapper = commands
-                .spawn(Node {
-                    margin: UiRect {
-                        right: Val::Auto,
-                        ..default()
-                    },
-                    ..default()
-                })
-                .id();
-            commands.entity(wrapper).add_child(btn);
-            commands.entity(footer_id).insert_child(0, wrapper);
-        }
-
-        Some(footer_id)
-    } else {
-        None
-    };
-
-    let mut panel = commands.spawn((
-        DialogPanel,
-        Node {
-            width: percent(100),
-            max_width: event.max_width.unwrap_or(px(448)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(6)),
-            flex_direction: FlexDirection::Column,
-            ..default()
-        },
-        BackgroundColor(BACKGROUND_COLOR.into()),
-        BorderColor::all(BORDER_COLOR),
-    ));
-
-    if let Some(header_id) = header_id {
-        panel.add_child(header_id);
+    let buttons: Vec<Box<dyn SceneList>> = [
+        (
+            &event.secondary_action,
+            DialogChoice::Secondary,
+            ButtonVariant::Default,
+        ),
+        (&event.cancel, DialogChoice::Cancel, ButtonVariant::Default),
+        (
+            &event.action,
+            DialogChoice::Action,
+            event.variant.action_button_variant(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(label, choice, variant)| {
+        label.clone().map(|label| {
+            Box::new(bsn_list! { @{dialog_button(label, choice, variant)} }) as Box<dyn SceneList>
+        })
+    })
+    .collect();
+    if !buttons.is_empty() {
+        contents.push(Box::new(bsn_list! {
+            @FeathersDialogFooter
+            Children [ {buttons} ]
+        }));
     }
 
-    panel.with_child((
-        DialogChildrenSlot,
+    let contents: Box<dyn SceneList> = Box::new(contents);
+    let width = event.max_width.unwrap_or(DEFAULT_WIDTH);
+    let choices = DialogChoices {
+        title: event.title.clone(),
+        description: event.description.clone(),
+        action: event.action.clone(),
+        secondary: event.secondary_action.clone(),
+        cancel: event.cancel.clone(),
+    };
+    let config = DialogConfig {
+        close_on_click_outside: event.close_on_click_outside,
+        close_on_esc: event.close_on_esc,
+    };
+    let variant = event.variant;
+    bsn! {
+        @FeathersDialog {
+            @width: {width},
+            @contents: {contents},
+        }
+        EditorDialog
+        ~{choices}
+        ~{variant}
+        ~{config}
+        GlobalZIndex(200)
+        BackgroundColor(DIALOG_BACKDROP)
+    }
+}
+
+fn header(title: String, close_button: bool) -> impl SceneList {
+    let close: Box<dyn SceneList> = if close_button {
+        Box::new(bsn_list! { @FeathersDialogClose DialogCloseButton })
+    } else {
+        Box::new(bsn_list! {})
+    };
+    bsn_list! {
+        @FeathersDialogHeader
+        Children [
+            @{caption(title)}
+            --
+            {close}
+        ]
+    }
+}
+
+fn children_slot(padding: Option<UiRect>) -> impl SceneList {
+    let padding = padding.map(|padding| bsn! { Node { padding: {padding} } });
+    bsn_list! {
+        @FeathersDialogBody
+        @{padding}
+        DialogChildrenSlot
         Node {
             display: Display::None,
-            padding: event.content_padding,
-            border: UiRect::bottom(px(1)),
-            flex_direction: FlexDirection::Column,
             row_gap: px(12),
-            ..default()
-        },
-        BorderColor::all(BORDER_COLOR),
-    ));
-
-    if let Some(footer_id) = footer_id {
-        panel.add_child(footer_id);
+        }
     }
+}
 
-    if event.has_close_button {
-        panel.with_child((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(20),
-                right: px(20),
-                ..default()
-            },
-            children![(
-                DialogCloseButton,
-                icon_button(
-                    IconButtonProps::new(Icon::X).variant(ButtonVariant::Ghost),
-                    icon_font,
-                ),
-            )],
-        ));
+/// A footer button. A secondary action stands apart at the far left.
+fn dialog_button(label: String, choice: DialogChoice, variant: ButtonVariant) -> impl Scene {
+    let margin = if choice == DialogChoice::Secondary {
+        UiRect::right(Val::Auto)
+    } else {
+        UiRect::ZERO
+    };
+    let background = variant
+        .background_token(false)
+        .map(|token| bsn! { ~{ThemeBackgroundColor(token)} });
+    bsn! {
+        @FeathersButton {
+            @caption: bsn! { @{caption(label)} },
+            @variant: {variant.feathers()},
+        }
+        @{background}
+        Node { margin: {margin} }
+        EditorButton
+        ~{variant}
+        ~{DialogButton(choice)}
     }
-
-    let panel_id = panel.id();
-    commands.entity(backdrop_id).add_child(panel_id);
-
-    commands
-        .spawn((
-            EditorDialog,
-            DialogChoices {
-                title: event.title.clone(),
-                description: event.description.clone(),
-                action: event.action.clone(),
-                secondary: event.secondary_action.clone(),
-                cancel: event.cancel.clone(),
-            },
-            event.variant,
-            DialogConfig {
-                close_on_click_outside: event.close_on_click_outside,
-                close_on_esc: event.close_on_esc,
-            },
-            Node {
-                width: percent(100),
-                height: percent(100),
-                position_type: PositionType::Absolute,
-                ..default()
-            },
-            GlobalZIndex(200),
-            Pickable::IGNORE,
-        ))
-        .add_child(backdrop_id);
 }
 
 fn dismiss_dialog(commands: &mut Commands, entity: Entity) {
@@ -563,6 +483,16 @@ fn dismiss_dialog(commands: &mut Commands, entity: Entity) {
 fn cancel_dialog(commands: &mut Commands, entity: Entity) {
     commands.trigger(DialogDismissEvent { entity });
     dismiss_dialog(commands, entity);
+}
+
+fn dialog_of(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    dialogs: &Query<(), With<EditorDialog>>,
+) -> Option<Entity> {
+    parents
+        .iter_ancestors(entity)
+        .find(|ancestor| dialogs.contains(*ancestor))
 }
 
 fn sync_children_slot_visibility(
@@ -577,31 +507,30 @@ fn sync_children_slot_visibility(
     }
 }
 
-/// A primary press on the backdrop itself, not on the panel above it, cancels
+/// A primary press on the barrier itself, not on the panel above it, cancels
 /// a dialog that closes on a click outside.
 fn handle_backdrop_click(
     press: On<PointerPress>,
-    backdrops: Query<&ChildOf, With<DialogBackdrop>>,
     dialogs: Query<&DialogConfig, With<EditorDialog>>,
     mut commands: Commands,
 ) {
     if press.button != PointerButton::Primary || press.original_event_target() != press.entity {
         return;
     }
-    let Ok(child_of) = backdrops.get(press.entity) else {
-        return;
-    };
-    let Ok(config) = dialogs.get(child_of.parent()) else {
+    let Ok(config) = dialogs.get(press.entity) else {
         return;
     };
     if config.close_on_click_outside {
-        cancel_dialog(&mut commands, child_of.parent());
+        cancel_dialog(&mut commands, press.entity);
     }
 }
 
 /// Escape closes a dialog -- except while the keybind settings are recording, when
 /// the press belongs to the recorder. Without this Escape could never be bound to
 /// anything.
+///
+/// The feathers barrier also asks to close on Escape and on a click outside; that
+/// request is left unanswered so these two rules, and the recorder, decide.
 fn handle_esc_key(
     keyboard: Res<ButtonInput<KeyCode>>,
     capture: Option<Res<KeymapCapture>>,
@@ -632,89 +561,244 @@ fn on_close_dialog(
     }
 }
 
-fn on_action_button_click(
+fn on_dialog_button_click(
     event: On<ButtonClickEvent>,
-    action_buttons: Query<&ChildOf, With<DialogActionButton>>,
+    buttons: Query<&DialogButton>,
     parents: Query<&ChildOf>,
-    dialogs: Query<Entity, With<EditorDialog>>,
+    dialogs: Query<(), With<EditorDialog>>,
     mut commands: Commands,
 ) {
-    let Ok(button_parent) = action_buttons.get(event.entity) else {
+    let Ok(DialogButton(choice)) = buttons.get(event.entity) else {
         return;
     };
+    if let Some(dialog) = dialog_of(event.entity, &parents, &dialogs) {
+        answer_dialog(&mut commands, dialog, *choice);
+    }
+}
 
-    if let Some(dialog_entity) = find_dialog_ancestor(button_parent.parent(), &parents, &dialogs) {
-        commands.trigger(DialogActionEvent {
-            entity: dialog_entity,
+/// The header's close cross asks to close through feathers; that is a cancel.
+fn on_close_button(
+    close: On<RequestClose>,
+    close_buttons: Query<(), With<DialogCloseButton>>,
+    parents: Query<&ChildOf>,
+    dialogs: Query<(), With<EditorDialog>>,
+    mut commands: Commands,
+) {
+    let button = close.event_target();
+    if !close_buttons.contains(button) {
+        return;
+    }
+    if let Some(dialog) = dialog_of(button, &parents, &dialogs) {
+        cancel_dialog(&mut commands, dialog);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::feathers::tokens;
+    use bevy::ui_widgets::{Activate, ModalDialog, ModalDialogBarrier};
+
+    #[derive(Resource, Default)]
+    struct Answers {
+        actions: usize,
+        dismissals: usize,
+    }
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::scene::ScenePlugin,
+            crate::button::plugin,
+            plugin,
+        ));
+        app.init_asset::<Font>();
+        app.init_asset::<Image>();
+        app.init_resource::<Answers>();
+        app.add_observer(|_: On<DialogActionEvent>, mut answers: ResMut<Answers>| {
+            answers.actions += 1;
         });
-        dismiss_dialog(&mut commands, dialog_entity);
-    }
-}
-
-fn on_secondary_action_button_click(
-    event: On<ButtonClickEvent>,
-    secondary_buttons: Query<&ChildOf, With<DialogSecondaryActionButton>>,
-    parents: Query<&ChildOf>,
-    dialogs: Query<Entity, With<EditorDialog>>,
-    mut commands: Commands,
-) {
-    let Ok(button_parent) = secondary_buttons.get(event.entity) else {
-        return;
-    };
-
-    if let Some(dialog_entity) = find_dialog_ancestor(button_parent.parent(), &parents, &dialogs) {
-        commands.trigger(DialogSecondaryActionEvent {
-            entity: dialog_entity,
+        app.add_observer(|_: On<DialogDismissEvent>, mut answers: ResMut<Answers>| {
+            answers.dismissals += 1;
         });
-        dismiss_dialog(&mut commands, dialog_entity);
+        app
     }
-}
 
-fn on_cancel_button_click(
-    event: On<ButtonClickEvent>,
-    cancel_buttons: Query<&ChildOf, With<DialogCancelButton>>,
-    parents: Query<&ChildOf>,
-    dialogs: Query<Entity, With<EditorDialog>>,
-    mut commands: Commands,
-) {
-    let Ok(button_parent) = cancel_buttons.get(event.entity) else {
-        return;
-    };
-
-    if let Some(dialog_entity) = find_dialog_ancestor(button_parent.parent(), &parents, &dialogs) {
-        cancel_dialog(&mut commands, dialog_entity);
+    fn open(app: &mut App, event: OpenDialogEvent) -> Entity {
+        app.world_mut().trigger(event);
+        app.world_mut().flush();
+        dialogs(app).first().copied().expect("a dialog is up")
     }
-}
 
-fn on_close_button_click(
-    event: On<ButtonClickEvent>,
-    close_buttons: Query<&ChildOf, With<DialogCloseButton>>,
-    parents: Query<&ChildOf>,
-    dialogs: Query<Entity, With<EditorDialog>>,
-    mut commands: Commands,
-) {
-    let Ok(button_parent) = close_buttons.get(event.entity) else {
-        return;
-    };
-
-    if let Some(dialog_entity) = find_dialog_ancestor(button_parent.parent(), &parents, &dialogs) {
-        cancel_dialog(&mut commands, dialog_entity);
+    fn dialogs(app: &mut App) -> Vec<Entity> {
+        app.world_mut()
+            .query_filtered::<Entity, With<EditorDialog>>()
+            .iter(app.world())
+            .collect()
     }
-}
 
-fn find_dialog_ancestor(
-    start: Entity,
-    parents: &Query<&ChildOf>,
-    dialogs: &Query<Entity, With<EditorDialog>>,
-) -> Option<Entity> {
-    let mut current = start;
-    loop {
-        if dialogs.get(current).is_ok() {
-            return Some(current);
+    fn find<C: Component>(world: &World, root: Entity) -> Vec<Entity> {
+        let mut found = Vec::new();
+        let mut pending = vec![root];
+        while let Some(entity) = pending.pop() {
+            if world.get::<C>(entity).is_some() {
+                found.push(entity);
+            }
+            if let Some(children) = world.get::<Children>(entity) {
+                pending.extend(children.iter().rev());
+            }
         }
-        let Ok(child_of) = parents.get(current) else {
-            return None;
-        };
-        current = child_of.parent();
+        found
+    }
+
+    fn texts(world: &World, root: Entity) -> Vec<String> {
+        find::<Text>(world, root)
+            .into_iter()
+            .filter_map(|entity| world.get::<Text>(entity).map(|text| text.0.clone()))
+            .collect()
+    }
+
+    fn action_button(world: &World, root: Entity) -> Entity {
+        find::<DialogButton>(world, root)
+            .into_iter()
+            .find(|button| {
+                matches!(
+                    world.get::<DialogButton>(*button),
+                    Some(DialogButton(DialogChoice::Action))
+                )
+            })
+            .expect("the dialog has an action button")
+    }
+
+    #[test]
+    fn a_dialog_is_built_from_feathers_parts_on_the_frame_it_opens() {
+        let mut app = app();
+        let root = open(
+            &mut app,
+            OpenDialogEvent::new("Scene Changed on Disk", "Reload")
+                .with_description("level.bsn changed on disk.")
+                .with_secondary_action("Keep Both"),
+        );
+        let world = app.world();
+
+        let dialog = world.entity(root);
+        assert!(dialog.contains::<FeathersDialog>());
+        assert!(dialog.contains::<ModalDialogBarrier>());
+
+        let panel = find::<ModalDialog>(world, root);
+        assert_eq!(panel.len(), 1, "one feathers panel");
+        assert_eq!(
+            world
+                .get::<ThemeBackgroundColor>(panel[0])
+                .map(|bg| bg.0.clone()),
+            Some(tokens::DIALOG_BG),
+            "painted from the feathers dialog token",
+        );
+
+        let header = find::<FeathersDialogHeader>(world, root);
+        assert_eq!(header.len(), 1);
+        assert_eq!(texts(world, header[0]), vec!["Scene Changed on Disk"]);
+        let close = find::<DialogCloseButton>(world, header[0]);
+        assert_eq!(close.len(), 1, "the header holds the close cross");
+        assert!(world.entity(close[0]).contains::<FeathersDialogClose>());
+
+        let bodies = find::<FeathersDialogBody>(world, root);
+        assert_eq!(bodies.len(), 2, "the description and the content slot");
+        assert_eq!(texts(world, bodies[0]), vec!["level.bsn changed on disk."]);
+        assert!(world.entity(bodies[1]).contains::<DialogChildrenSlot>());
+        assert_eq!(
+            world.get::<Node>(bodies[1]).map(|node| node.display),
+            Some(Display::None),
+            "the slot is hidden until a caller fills it",
+        );
+
+        let footer = find::<FeathersDialogFooter>(world, root);
+        assert_eq!(footer.len(), 1);
+        let buttons = find::<FeathersButton>(world, footer[0]);
+        let captions: Vec<String> = buttons
+            .iter()
+            .flat_map(|button| texts(world, *button))
+            .collect();
+        assert_eq!(captions, vec!["Keep Both", "Cancel", "Reload"]);
+        let nodes: Vec<&Node> = buttons
+            .iter()
+            .filter_map(|button| world.get::<Node>(*button))
+            .collect();
+        assert_eq!(
+            nodes[0].margin.right,
+            Val::Auto,
+            "the secondary stands apart"
+        );
+        assert!(
+            nodes
+                .iter()
+                .all(|node| node.height == nodes[1].height && node.height != Val::Auto),
+            "every button keeps the feathers frame",
+        );
+    }
+
+    #[test]
+    fn a_destructive_action_is_painted_red_from_its_first_frame() {
+        let mut app = app();
+        let root = open(
+            &mut app,
+            (&OpenConfirmationDialogEvent::new("Delete Scene", "Delete")).into(),
+        );
+        let world = app.world();
+        let action = action_button(world, root);
+        assert_eq!(
+            world
+                .get::<ThemeBackgroundColor>(action)
+                .map(|bg| bg.0.clone()),
+            Some(crate::button::BUTTON_DESTRUCTIVE_BG),
+        );
+    }
+
+    #[test]
+    fn pressing_the_primary_button_answers_with_the_action() {
+        let mut app = app();
+        let root = open(&mut app, OpenDialogEvent::new("Save Changes", "Save"));
+        let world = app.world();
+        let action = action_button(world, root);
+
+        app.world_mut().trigger(Activate { entity: action });
+        app.world_mut().flush();
+
+        assert!(dialogs(&mut app).is_empty());
+        let answers = app.world().resource::<Answers>();
+        assert_eq!((answers.actions, answers.dismissals), (1, 0));
+    }
+
+    #[test]
+    fn the_close_cross_cancels_the_dialog() {
+        let mut app = app();
+        let root = open(&mut app, OpenDialogEvent::new("Save Changes", "Save"));
+        let close = find::<DialogCloseButton>(app.world(), root)[0];
+
+        app.world_mut().trigger(RequestClose { source: close });
+        app.world_mut().flush();
+
+        assert!(dialogs(&mut app).is_empty());
+        let answers = app.world().resource::<Answers>();
+        assert_eq!((answers.actions, answers.dismissals), (0, 1));
+    }
+
+    /// The barrier asks to close on Escape and on a click outside. A dialog that
+    /// must be answered stays up through both.
+    #[test]
+    fn the_barrier_asking_to_close_leaves_a_dialog_that_must_be_answered() {
+        let mut app = app();
+        let root = open(
+            &mut app,
+            (&OpenConfirmationDialogEvent::new("Delete Scene", "Delete")).into(),
+        );
+
+        app.world_mut().trigger(RequestClose { source: root });
+        app.world_mut().flush();
+
+        assert_eq!(dialogs(&mut app), vec![root]);
+        assert_eq!(app.world().resource::<Answers>().dismissals, 0);
     }
 }

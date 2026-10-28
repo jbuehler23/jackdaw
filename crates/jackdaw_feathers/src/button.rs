@@ -187,7 +187,7 @@ fn register_button_theme_tokens(theme: Option<ResMut<UiTheme>>) {
     set(BUTTON_ACTIVE_ALT_BG, TEXT_BODY_COLOR.with_alpha(0.05));
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct EditorButton;
 
 /// Marker on the text entity that holds a button's main content string, so an
