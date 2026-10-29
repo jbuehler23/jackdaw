@@ -586,8 +586,8 @@ impl EntityTemplate {
             Self::PointLight => "Point Light",
             Self::DirectionalLight => "Directional Light",
             Self::SpotLight => "Spot Light",
-            Self::Camera3d => "Camera",
-            Self::Camera2d => "Camera",
+            Self::Camera3d => "3D Camera",
+            Self::Camera2d => "2D Camera",
             #[cfg(feature = "camera_rig")]
             Self::CameraRig => "Camera Rig",
             Self::Plane => "Plane",
@@ -692,15 +692,21 @@ pub fn create_entity(
                 Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             ))
             .id(),
-        EntityTemplate::Camera2d => commands
-            .spawn((
-                Name::new("Camera"),
-                SceneCamera,
-                Camera2d,
-                Transform::default(),
-                Visibility::default(),
-            ))
-            .id(),
+        EntityTemplate::Camera2d => {
+            let camera = commands
+                .spawn((
+                    Name::new("Camera"),
+                    SceneCamera,
+                    Camera2d,
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            commands.queue(move |world: &mut World| {
+                crate::pixel_camera::zoom_new_camera(world, camera);
+            });
+            camera
+        }
         #[cfg(feature = "camera_rig")]
         EntityTemplate::CameraRig => commands
             .spawn((
@@ -2709,7 +2715,11 @@ pub(crate) fn entity_add_spot_light(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.camera", label = "Camera")]
+#[operator(
+    id = "entity.add.camera",
+    label = "3D Camera",
+    description = "Add a 3D camera the game draws through. A camera saved inactive by an earlier editor stays off: set its Camera is_active to true to use it."
+)]
 pub(crate) fn entity_add_camera(
     _: In<OperatorParameters>,
     mut commands: Commands,
@@ -2741,7 +2751,7 @@ pub fn entity_add_image(_: In<OperatorParameters>, mut commands: Commands) -> Op
 /// Add a 2D camera to the open 2D world scene.
 #[operator(
     id = "entity.add.camera_2d",
-    label = "Camera",
+    label = "2D Camera",
     is_available = can_add_camera_2d
 )]
 pub(crate) fn entity_add_camera_2d(

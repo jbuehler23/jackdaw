@@ -53,7 +53,9 @@ pub(crate) fn plugin(app: &mut App) {
     )
     .add_observer(on_preset_pick)
     .add_observer(follow_canvas_write)
-    .add_observer(on_canvas_toggle);
+    .add_observer(on_canvas_toggle)
+    .add_observer(on_canvas_added)
+    .add_observer(on_canvas_removed);
 }
 
 /// The corners of the world area a camera shows through `canvas`, counter
@@ -269,6 +271,17 @@ fn canvas_zoom(world: &World, camera: Entity, adding: bool) -> Option<f32> {
     (ppu != 1.0 && ortho.scale == from).then_some(to)
 }
 
+/// Zoom a 2D camera the Add menu just spawned by the [`canvas_zoom`] rule,
+/// before the document records it, so Play frames it as the editor does.
+pub(crate) fn zoom_new_camera(world: &mut World, camera: Entity) {
+    if let Some(scale) = canvas_zoom(world, camera, true)
+        && let Some(mut projection) = world.get_mut::<Projection>(camera)
+        && let Projection::Orthographic(ortho) = projection.as_mut()
+    {
+        ortho.scale = scale;
+    }
+}
+
 /// The edit that zooms `camera` as its canvas comes or goes, if
 /// [`canvas_zoom`] calls for one. The zoom is a convenience, so one that
 /// cannot be authored leaves the canvas edit to land alone and tells the
@@ -430,34 +443,54 @@ pub(crate) fn spawn_canvas_toggle(commands: &mut Commands, body: Entity, source:
     }
 }
 
-/// Add or remove the canvas through `camera.pixel_canvas`, then show what the
-/// camera holds.
+/// Add or remove the canvas through `camera.pixel_canvas` when the request
+/// differs from what the camera holds. The checkbox follows the component.
 fn on_canvas_toggle(
     change: On<ValueChange<bool>>,
     toggles: Query<&PixelCanvasToggle>,
+    canvases: Query<(), With<PixelCanvas>>,
     mut commands: Commands,
 ) {
     let Ok(toggle) = toggles.get(change.source) else {
         return;
     };
-    let (checkbox, source) = (change.source, toggle.source);
+    if canvases.contains(toggle.source) == change.value {
+        return;
+    }
     let mut call = commands
         .operator(CameraPixelCanvasOp::ID)
-        .param("entity", source);
+        .param("entity", toggle.source);
     if !change.value {
         call = call.param("remove", true);
     }
     call.call();
-    commands.queue(move |world: &mut World| {
-        let on = world.get::<PixelCanvas>(source).is_some();
-        if let Ok(mut entity) = world.get_entity_mut(checkbox) {
-            if on {
-                entity.insert(Checked);
-            } else {
-                entity.remove::<Checked>();
-            }
-        }
-    });
+}
+
+fn check_canvas_toggles(
+    commands: &mut Commands,
+    toggles: &Query<(Entity, &PixelCanvasToggle)>,
+    source: Entity,
+    on: bool,
+) {
+    for (checkbox, _) in toggles.iter().filter(|(_, toggle)| toggle.source == source) {
+        jackdaw_feathers::utils::set_marker_if_alive::<Checked>(commands, checkbox, on);
+    }
+}
+
+fn on_canvas_added(
+    add: On<Add<PixelCanvas>>,
+    toggles: Query<(Entity, &PixelCanvasToggle)>,
+    mut commands: Commands,
+) {
+    check_canvas_toggles(&mut commands, &toggles, add.entity, true);
+}
+
+fn on_canvas_removed(
+    remove: On<Remove<PixelCanvas>>,
+    toggles: Query<(Entity, &PixelCanvasToggle)>,
+    mut commands: Commands,
+) {
+    check_canvas_toggles(&mut commands, &toggles, remove.entity, false);
 }
 
 /// The resolution preset row heading the `PixelCanvas` card; the reflected

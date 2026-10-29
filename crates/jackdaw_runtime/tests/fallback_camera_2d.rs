@@ -157,3 +157,45 @@ fn the_fallback_camera_goes_with_its_scene() {
         "the camera left with the scene"
     );
 }
+
+const SCENE_2D_WITH_TWO_CAMERAS: &str = "
+#Scene2d
+jackdaw_scene_types::Scene2dRoot
+bevy_transform::components::transform::Transform
+bevy_ecs::hierarchy::Children [
+    #First
+    bevy_camera::components::Camera2d
+    bevy_transform::components::transform::Transform
+    --
+    #Second
+    bevy_camera::components::Camera2d
+    bevy_transform::components::transform::Transform
+    --
+    #Overlay
+    bevy_camera::components::Camera2d
+    bevy_camera::camera::Camera { order: 1 }
+    bevy_transform::components::transform::Transform
+]
+";
+
+#[test]
+fn two_authored_cameras_at_one_window_order_leave_the_first_drawing() {
+    let mut app = headless_app();
+    spawn_scene(&mut app, SCENE_2D_WITH_TWO_CAMERAS);
+    let mut active: Vec<(String, bool)> = app
+        .world_mut()
+        .query::<(&Name, &Camera)>()
+        .iter(app.world())
+        .map(|(name, camera)| (name.to_string(), camera.is_active))
+        .collect();
+    active.sort();
+    assert_eq!(
+        active,
+        [
+            ("First".to_string(), true),
+            ("Overlay".to_string(), true),
+            ("Second".to_string(), false),
+        ],
+        "one camera per window order, the first in scene order"
+    );
+}

@@ -924,6 +924,7 @@ fn spawn_scene_entities(
     #[cfg(not(feature = "terrain"))]
     let _ = parent_path;
 
+    fallback_camera::one_camera_per_window_order(world, &spawned);
     fallback_camera::spawn_for_2d_scene(world, &spawned);
     members
 }

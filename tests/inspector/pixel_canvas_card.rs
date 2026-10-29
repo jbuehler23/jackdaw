@@ -229,3 +229,27 @@ fn the_2d_camera_card_toggles_the_pixel_canvas_one_entry_each_way() {
     assert_eq!(resolution(&app, camera), None);
     assert_eq!(history_len(&app), before + 2);
 }
+
+#[test]
+fn undo_after_toggling_on_clears_the_checkbox_and_a_matching_request_does_nothing() {
+    let (mut app, camera) = app_with_plain_camera();
+    let before = history_len(&app);
+    flip(&mut app, camera, false);
+    assert_eq!(history_len(&app), before, "already off: no call");
+
+    flip(&mut app, camera, true);
+    flip(&mut app, camera, true);
+    assert_eq!(history_len(&app), before + 1, "already on: no second entry");
+
+    app.world_mut()
+        .resource_scope(|world, mut history: Mut<CommandHistory>| history.undo(world));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(resolution(&app, camera), None);
+    let toggle = canvas_toggle(&mut app, camera);
+    assert!(
+        app.world().get::<Checked>(toggle).is_none(),
+        "the checkbox follows the undo"
+    );
+}

@@ -398,15 +398,25 @@ fn a_new_canvas_keeps_the_scale_at_one_pixel_per_unit_or_once_the_author_set_it(
 }
 
 #[test]
-fn a_canvas_on_a_new_2d_camera_starts_at_the_project_pixels_per_unit() {
+fn a_new_2d_camera_and_its_canvas_start_at_the_project_pixels_per_unit() {
     let (mut app, _root) = two_d_app();
     set_project_ppu(&mut app, 16.0);
     let camera = add_2d_camera(&mut app);
-    assert_eq!(ortho_scale(&app, camera), Some(1.0), "a plain camera");
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(1.0 / 16.0),
+        "a plain camera frames as the editor does"
+    );
+    let text = saved_text(&mut app);
+    assert!(text.contains("0.0625"), "the game reads the scale:\n{text}");
     let before = history_len(&app);
     call(&mut app, &[]).assert_finished();
     assert_eq!(canvas(&app, camera), Some(PixelCanvas::new(320, 180)));
-    assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
+    assert_eq!(
+        ortho_scale(&app, camera),
+        Some(1.0 / 16.0),
+        "no double zoom"
+    );
     assert_eq!(history_len(&app), before + 1);
     let text = saved_text(&mut app);
     assert!(
