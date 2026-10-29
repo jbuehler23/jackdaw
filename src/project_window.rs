@@ -18,6 +18,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use bevy::ui::Checked;
 use bevy::ui_widgets::ValueChange;
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::operator::warn_caller;
 use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::combobox::{
     ComboBoxChangeEvent, ComboBoxSelectedIndex, combobox_with_selected,
@@ -926,6 +927,8 @@ fn rebuild_tiles(
     kinds: Res<AssetKinds>,
     icon_font: Res<IconFont>,
     mut thumbnails: ImageThumbnails,
+    index: Option<Res<crate::asset_index::AssetIndex>>,
+    tilesets: Res<Assets<jackdaw_tileset::Tileset>>,
     grids: Query<(Entity, Option<&Children>), With<ProjectFileGrid>>,
     path_bars: Query<(Entity, Option<&Children>), With<ProjectPathBar>>,
 ) {
@@ -947,14 +950,24 @@ fn rebuild_tiles(
     let selected = state.selected_file.clone();
     let renaming = state.renaming.clone();
     let drawn = entries.len().min(MAX_TILES);
+    let mut pictured = HashSet::new();
     for entry in entries[..drawn].iter_mut() {
-        if !entry.is_directory && is_image_file_path(&entry.path) {
-            entry.texture_info = Some(thumbnails.info(&entry.path));
-        } else if let Some(packed) = packed_copy(entry) {
-            entry.texture_info =
-                Some(thumbnails.info(&packed)).filter(|i| i.image_handle.is_some());
+        let image = if !entry.is_directory && is_image_file_path(&entry.path) {
+            entry.path.clone()
+        } else if let Some(packed) =
+            packed_copy(entry, &state.root_directory, index.as_deref(), &tilesets)
+        {
+            packed
+        } else {
+            continue;
+        };
+        let info = thumbnails.info(&image);
+        if image == entry.path || info.image_handle.is_some() {
+            entry.texture_info = Some(info);
         }
+        pictured.insert(image);
     }
+    thumbnails.retain(&pictured);
     for entry in &entries[..drawn] {
         let tile = spawn_tile(
             &mut commands,
@@ -1023,6 +1036,10 @@ fn spawn_tile(
     is_selected: bool,
     is_renaming: bool,
 ) -> Entity {
+    let definition = entry
+        .kind
+        .type_path()
+        .and_then(|type_path| kinds.by_type_path(type_path));
     let tile = match &entry.texture_info {
         Some(info) => spawn_image_tile(commands, entry, info, is_renaming),
         None => {
@@ -1031,10 +1048,6 @@ fn spawn_tile(
                 is_directory: entry.is_directory,
                 file_name: entry.file_name.clone(),
             };
-            let definition = entry
-                .kind
-                .type_path()
-                .and_then(|type_path| kinds.by_type_path(type_path));
             let icon = definition
                 .map(|kind| kind.icon)
                 .or_else(|| entry.is_prefab().then_some(icons::Icon::Package));
@@ -1054,17 +1067,17 @@ fn spawn_tile(
                     ))
                     .id(),
             };
-            if let Some(definition) = definition {
-                commands
-                    .entity(tile)
-                    .insert((Hovered::default(), Tooltip::title(definition.label.clone())));
-            }
             if is_renaming {
                 commands.spawn((rename_field(&entry.path), ChildOf(tile)));
             }
             tile
         }
     };
+    if let Some(definition) = definition {
+        commands
+            .entity(tile)
+            .insert((Hovered::default(), Tooltip::title(definition.label.clone())));
+    }
 
     if let Some(folder) = &entry.folder {
         attach_folder_caption(commands, tile, &entry.path, folder);
@@ -1175,14 +1188,25 @@ fn spawn_image_tile(
 }
 
 /// The packed copy beside a tileset file, which its tile is pictured with.
-fn packed_copy(entry: &DirEntry) -> Option<PathBuf> {
+/// The loaded tileset's image, or while it loads the name the import gives it.
+fn packed_copy(
+    entry: &DirEntry,
+    assets: &Path,
+    index: Option<&crate::asset_index::AssetIndex>,
+    tilesets: &Assets<jackdaw_tileset::Tileset>,
+) -> Option<PathBuf> {
     if entry.kind.type_path() != Some(jackdaw_tileset::Tileset::type_path()) {
         return None;
     }
-    let stem = entry
-        .file_name
-        .strip_suffix(crate::tileset_import::TILESET_SUFFIX)?;
-    Some(entry.path.with_file_name(format!("{stem}.tiles.png"))).filter(|p| p.is_file())
+    let loaded = (entry.path.strip_prefix(assets).ok())
+        .and_then(|relative| index?.get(relative)?.value.handle().cloned())
+        .and_then(|handle| tilesets.get(handle.id().typed::<jackdaw_tileset::Tileset>()))
+        .map(|tileset| assets.join(&tileset.image));
+    let guessed = || {
+        let stem = (entry.file_name).strip_suffix(crate::tileset_import::TILESET_SUFFIX)?;
+        Some(entry.path.with_file_name(format!("{stem}.tiles.png")))
+    };
+    loaded.or_else(guessed).filter(|p| p.is_file())
 }
 
 /// What a file's tile is pictured with, or `None` for one that keeps its
@@ -1597,16 +1621,14 @@ fn open_path(world: &mut World, path: &Path, is_directory: bool) {
         return;
     }
 
-    let holds_an_asset = {
+    let (holds_an_asset, is_tileset) = {
         let kinds = world.resource::<AssetKinds>();
-        crate::asset_files::read_asset_kind(&path, kinds)
-            .type_path()
-            .is_some_and(|type_path| kinds.by_type_path(type_path).is_some())
-    };
-    let is_tileset = {
-        let kinds = world.resource::<AssetKinds>();
-        crate::asset_files::read_asset_kind(&path, kinds).type_path()
-            == Some(jackdaw_tileset::Tileset::type_path())
+        let kind = crate::asset_files::read_asset_kind(&path, kinds);
+        let type_path = kind.type_path();
+        (
+            type_path.is_some_and(|type_path| kinds.by_type_path(type_path).is_some()),
+            type_path == Some(jackdaw_tileset::Tileset::type_path()),
+        )
     };
     if is_tileset {
         crate::tileset_dock::edit_tileset(world, &path.to_string_lossy());
@@ -1626,12 +1648,25 @@ fn open_path(world: &mut World, path: &Path, is_directory: bool) {
         return;
     }
 
+    if crate::texture_files::array_layout_of(&path).is_some() {
+        match crate::tileset_import::tileset_of_image(world, &path) {
+            Some(tileset) => crate::tileset_dock::edit_tileset(world, &tileset),
+            None => warn_caller(
+                world,
+                format!(
+                    "project.open: {} is an array texture; open its tileset",
+                    path.display()
+                ),
+            ),
+        }
+        return;
+    }
     if crate::texture_files::is_image_file_path(&path) {
         let plain_2d = !path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("ktx2"))
             || !crate::texture_files::is_ktx2_non_2d(&path);
-        if plain_2d && crate::texture_files::array_layers(&path).is_none() {
+        if plain_2d {
             let call = world
                 .operator("material.apply_texture")
                 .param("path", path.to_string_lossy().into_owned())
@@ -1708,7 +1743,7 @@ pub fn context_items(path: &Path, is_directory: bool) -> Vec<(&'static str, &'st
             false => (CONVERT_TO_BINARY_ACTION, "Convert to Binary"),
         });
     }
-    if !is_directory && is_image_file_path(path) {
+    if !is_directory && crate::texture_files::imports_as_tileset(path) {
         items.push((IMPORT_TILESET_ACTION, "Import as Tileset"));
     }
     if !is_directory {
@@ -1733,7 +1768,7 @@ fn on_context_action(
         state.needs_refresh = true;
     } else if action == IMPORT_TILESET_ACTION {
         (commands.operator(crate::tileset_import::TilesetImportOp::ID))
-            .param("paths", target.path.to_string_lossy().into_owned())
+            .param("path", target.path.to_string_lossy().into_owned())
             .param("setup", "auto")
             .param("edit", true)
             .call();

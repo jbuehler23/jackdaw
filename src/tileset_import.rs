@@ -64,6 +64,10 @@ enum SetupChoice {
             String,
             doc = "Comma-separated image paths under the project's assets."
         ),
+        path(
+            String,
+            doc = "One image path, taken whole even with a comma in it; wins over paths."
+        ),
         out(
             String,
             doc = "Tileset file, or folder to write it in. A name not ending in .tileset.bsn \
@@ -84,11 +88,15 @@ enum SetupChoice {
     )
 )]
 pub fn tileset_import(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    let paths: Vec<PathBuf> = (params.as_str("paths").unwrap_or_default().split(','))
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .collect();
+    let one = (params.as_str("path").map(str::trim)).filter(|path| !path.is_empty());
+    let paths: Vec<PathBuf> = match one {
+        Some(path) => vec![PathBuf::from(path)],
+        None => (params.as_str("paths").unwrap_or_default().split(','))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+    };
     if paths.is_empty() {
         warn!("tileset.import: no paths given");
         return OperatorResult::Cancelled;
@@ -249,6 +257,23 @@ fn import(
         state.rebuild();
     }
     Ok((summary, out_name))
+}
+
+/// The tileset whose packed copy is the image at `path`, as the index keys it.
+pub(crate) fn tileset_of_image(world: &World, path: &Path) -> Option<String> {
+    let image = under_assets(world, path)
+        .ok()?
+        .to_slash_lossy()
+        .into_owned();
+    let tilesets = world.resource::<Assets<Tileset>>();
+    let index = world.get_resource::<crate::asset_index::AssetIndex>()?;
+    (index.of_kind(TILESET_KIND))
+        .find(|entry| {
+            (entry.value.handle())
+                .and_then(|handle| tilesets.get(handle.id().typed::<Tileset>()))
+                .is_some_and(|tileset| tileset.image == image)
+        })
+        .map(|entry| entry.path.to_slash_lossy().into_owned())
 }
 
 /// `path` as the index keys it, when it lies under the project's assets.

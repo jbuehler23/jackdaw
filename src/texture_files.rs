@@ -127,12 +127,18 @@ pub fn load_thumbnail(path: &Path, asset_server: &AssetServer) -> Option<Handle<
     Some(asset_server.load(asset_path))
 }
 
-/// The layers the meta beside an image cuts it into, when it loads as an
-/// array texture; 0 when the image's size cannot be read.
-pub fn array_layers(path: &Path) -> Option<u32> {
+/// How the meta beside an image cuts it into array layers, if it does.
+pub fn array_layout_of(path: &Path) -> Option<ImageArrayLayout> {
     let meta = std::fs::read(crate::texture_import::meta_path(path)).ok()?;
-    let layout = crate::image_sampling::array_layout(&meta)?;
-    let layers = image::image_dimensions(path).map(|(width, height)| match layout {
+    crate::image_sampling::array_layout(&meta)
+}
+
+/// The layers the meta beside an image cuts it into, when it loads as an
+/// array texture and its size can be read.
+pub fn array_layers(path: &Path) -> Option<u32> {
+    let layout = array_layout_of(path)?;
+    let (width, height) = image::image_dimensions(path).ok()?;
+    Some(match layout {
         ImageArrayLayout::RowCount { rows } => rows,
         ImageArrayLayout::RowHeight { pixels } => height / pixels.max(1),
         ImageArrayLayout::GridCount { columns, rows } => columns * rows,
@@ -140,14 +146,37 @@ pub fn array_layers(path: &Path) -> Option<u32> {
             tile_width_pixels,
             tile_height_pixels,
         } => (width / tile_width_pixels.max(1)) * (height / tile_height_pixels.max(1)),
-    });
-    Some(layers.unwrap_or_default())
+    })
 }
 
-/// Whole-sheet copies of images that load as array textures, which the UI
-/// cannot draw, keyed by file with the time it was modified.
+fn is_ktx2(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ktx2"))
+}
+
+/// The image and meta modification times a [`FlatSheet`] was read at.
+type Stamp = (Option<SystemTime>, Option<SystemTime>);
+
+fn stamp(path: &Path) -> Stamp {
+    let modified = |file: &Path| std::fs::metadata(file).and_then(|m| m.modified()).ok();
+    (
+        modified(path),
+        modified(&crate::texture_import::meta_path(path)),
+    )
+}
+
+/// What an image's meta said when last read: its array layers, if it loads
+/// as an array texture, and a whole-sheet copy the UI can draw.
+#[derive(Clone)]
+pub struct FlatSheet {
+    stamp: Stamp,
+    pub layers: Option<u32>,
+    pub handle: Option<Handle<Image>>,
+}
+
+/// [`FlatSheet`]s by image file, pruned to the files the Project window shows.
 #[derive(Resource, Default)]
-pub struct FlatSheets(pub HashMap<PathBuf, (Option<SystemTime>, Handle<Image>)>);
+pub struct FlatSheets(pub HashMap<PathBuf, FlatSheet>);
 
 /// What an image file holds and a picture the UI can draw of it.
 #[derive(SystemParam)]
@@ -159,13 +188,33 @@ pub struct ImageThumbnails<'w> {
 
 impl ImageThumbnails<'_> {
     /// As [`TextureInfo::read`], with an image its meta loads as an array
-    /// texture pictured as the whole sheet.
+    /// texture pictured as the whole sheet. The first look at such a sheet
+    /// decodes it on the calling thread.
     pub fn info(&mut self, path: &Path) -> TextureInfo {
-        let Some(layer_count) = array_layers(path) else {
+        if is_ktx2(path) {
+            return TextureInfo::read(path, &self.server);
+        }
+        let stamp = stamp(path);
+        let held = (self.sheets.0.get(path)).filter(|sheet| sheet.stamp == stamp);
+        let sheet = match held {
+            Some(sheet) => sheet.clone(),
+            None => {
+                let layers = array_layers(path);
+                let handle = layers.and_then(|_| self.decode(path));
+                let sheet = FlatSheet {
+                    stamp,
+                    layers,
+                    handle,
+                };
+                (self.sheets.0).insert(path.to_path_buf(), sheet.clone());
+                sheet
+            }
+        };
+        let Some(layer_count) = sheet.layers else {
             return TextureInfo::read(path, &self.server);
         };
         TextureInfo {
-            image_handle: self.flat_sheet(path),
+            image_handle: sheet.handle,
             is_cubemap: false,
             is_array: true,
             layer_count,
@@ -173,14 +222,12 @@ impl ImageThumbnails<'_> {
         }
     }
 
-    /// The image at `path` decoded as one 2D layer, whatever its meta says.
-    pub fn flat_sheet(&mut self, path: &Path) -> Option<Handle<Image>> {
-        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        if let Some((at, handle)) = self.sheets.0.get(path)
-            && *at == modified
-        {
-            return Some(handle.clone());
-        }
+    /// Forget every sheet but those of `keep`.
+    pub fn retain(&mut self, keep: &std::collections::HashSet<PathBuf>) {
+        self.sheets.0.retain(|path, _| keep.contains(path));
+    }
+
+    fn decode(&mut self, path: &Path) -> Option<Handle<Image>> {
         let decoded = image::open(path).ok()?.to_rgba8();
         let size = Extent3d {
             width: decoded.width(),
@@ -195,15 +242,23 @@ impl ImageThumbnails<'_> {
             RenderAssetUsages::default(),
         );
         sheet.sampler = ImageSampler::nearest();
-        let handle = self.images.add(sheet);
-        (self.sheets.0).insert(path.to_path_buf(), (modified, handle.clone()));
-        Some(handle)
+        Some(self.images.add(sheet))
     }
 }
 
 /// The [`TextureInfo`] of the image at `path`, as [`ImageThumbnails::info`].
 pub fn image_info(In(path): In<PathBuf>, mut thumbnails: ImageThumbnails) -> TextureInfo {
     thumbnails.info(&path)
+}
+
+/// Whether "Import as Tileset" can take the image at `path`: one the import
+/// decodes, and not already an array texture such as a packed copy.
+pub fn imports_as_tileset(path: &Path) -> bool {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    is_image_file_path(path)
+        && !is_ktx2(path)
+        && !name.to_ascii_lowercase().ends_with(".tiles.png")
+        && array_layout_of(path).is_none()
 }
 
 /// The image the inspector is showing a card for, and the layers it has split
