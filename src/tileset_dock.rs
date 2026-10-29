@@ -188,7 +188,10 @@ pub fn flagged(tileset: &Tileset) -> Vec<(u32, u32)> {
 }
 
 /// The tileset at `path` and its asset id; `None` while it loads.
-fn load(world: &mut World, path: &str) -> Result<(AssetId<Tileset>, Option<Tileset>), String> {
+pub(crate) fn load(
+    world: &mut World,
+    path: &str,
+) -> Result<(AssetId<Tileset>, Option<Tileset>), String> {
     let file = resolve_project_path(world, Path::new(path));
     let entry = entry_for_file(world, &file)
         .ok_or_else(|| format!("{path} is not an asset file of this project"))?;

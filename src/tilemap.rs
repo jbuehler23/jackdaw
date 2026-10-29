@@ -2,7 +2,7 @@
 //! each map's `.jdtiles` sidecar sits and recording which document owns each
 //! key, read from and written to the folder of that document.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use jackdaw_api_internal::document::SceneResource;
 use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer};
-use jackdaw_tilemap::{TerrainSet, TilemapData};
+use jackdaw_tilemap::{CellCoord, ChunkCoord, TerrainSet, TileRef, TilemapData};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
 use crate::prefab::{IsA, Prefab, PrefabEntityId};
@@ -40,6 +40,10 @@ pub struct TilemapDocument {
 /// Decoded tilemap sidecars of every open tab, keyed by [`store_key_of`]: the
 /// sidecar's path under the project, or absolute; `unsaved-N/...` for a tab
 /// with no file.
+///
+/// Every write goes through [`insert`](Self::insert), [`remove`](Self::remove)
+/// or [`get_mut`](Self::get_mut), which record what the drawn chunks of the
+/// key must catch up on.
 #[derive(Resource, Default)]
 pub struct TilemapDataStore {
     entries: HashMap<String, TilemapData>,
@@ -52,6 +56,17 @@ pub struct TilemapDataStore {
     /// The document whose maps live at each key.
     owners: HashMap<String, String>,
     next_unsaved: u64,
+    /// Keys whose cells changed since their maps were last drawn.
+    redraw: HashMap<String, Redraw>,
+}
+
+/// What the drawn chunks of a key must catch up on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Redraw {
+    /// The cells were put or dropped whole.
+    Whole,
+    /// Only these chunks, by layer index, were edited.
+    Chunks(BTreeSet<(usize, ChunkCoord)>),
 }
 
 impl TilemapDataStore {
@@ -59,28 +74,52 @@ impl TilemapDataStore {
         self.entries.get(key)
     }
 
-    /// The map for editing; the next save of its owner writes it.
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut TilemapData> {
+    /// The map for editing; the next save of its owner writes it, and the
+    /// chunks the edit touched are drawn again once the edit is dropped.
+    pub fn get_mut(&mut self, key: &str) -> Option<TilemapEdit<'_>> {
+        let data = self.entries.get_mut(key)?;
         self.changed.insert(key.to_string());
-        self.entries.get_mut(key)
+        let redraw =
+            (self.redraw.entry(key.to_string())).or_insert_with(|| Redraw::Chunks(BTreeSet::new()));
+        Some(TilemapEdit::new(data, redraw))
     }
 
     pub fn contains(&self, key: &str) -> bool {
         self.entries.contains_key(key)
     }
 
-    /// Puts an edited map in place; the next save of its owner writes it.
-    pub fn insert(&mut self, key: impl Into<String>, data: TilemapData) {
+    /// Puts an edited map in place; the next save of its owner writes it. Its
+    /// maps draw it whole, so the layers' dirty chunks are dropped.
+    pub fn insert(&mut self, key: impl Into<String>, mut data: TilemapData) {
         let key = key.into();
+        for layer in &mut data.layers {
+            layer.tiles.take_dirty();
+            if let Some(authoring) = &mut layer.authoring {
+                authoring.terrain.take_dirty();
+                authoring.links.take_dirty();
+            }
+        }
         self.changed.insert(key.clone());
+        self.redraw.insert(key.clone(), Redraw::Whole);
         self.entries.insert(key, data);
     }
 
     pub fn remove(&mut self, key: &str) -> Option<TilemapData> {
+        self.redraw.insert(key.to_string(), Redraw::Whole);
         self.read_mtimes.remove(key);
         self.load_failed.remove(key);
         self.changed.remove(key);
         self.entries.remove(key)
+    }
+
+    /// Whether the cells at `key` changed since its maps were last drawn.
+    pub fn needs_redraw(&self, key: &str) -> bool {
+        self.redraw.contains_key(key)
+    }
+
+    /// What the maps at `key` must draw again, clearing it.
+    pub fn take_redraw(&mut self, key: &str) -> Option<Redraw> {
+        self.redraw.remove(key)
     }
 
     pub fn load_failed_reason(&self, key: &str) -> Option<&str> {
@@ -101,9 +140,14 @@ impl TilemapDataStore {
         self.entries.contains_key(key) || self.load_failed.contains_key(key)
     }
 
-    fn quarantine(&mut self, key: &str, reason: String) {
-        self.entries.remove(key);
+    /// Puts cells just read from or written to the file at `key`.
+    fn put_unchanged(&mut self, key: &str, data: TilemapData) {
+        self.insert(key, data);
         self.changed.remove(key);
+    }
+
+    fn quarantine(&mut self, key: &str, reason: String) {
+        self.remove(key);
         self.load_failed.insert(key.to_string(), reason);
     }
 
@@ -121,6 +165,79 @@ impl TilemapDataStore {
             return false;
         };
         self.read_mtimes.get(key).is_none_or(|read| *read != mtime)
+    }
+}
+
+/// A map open for editing. Dropping it records the chunks the edit touched,
+/// from the layers' dirty chunks and the overrides it changed.
+pub struct TilemapEdit<'a> {
+    data: &'a mut TilemapData,
+    redraw: &'a mut Redraw,
+    /// Each layer's overrides as the edit found them.
+    overrides: Vec<Option<BTreeMap<CellCoord, TileRef>>>,
+}
+
+impl<'a> TilemapEdit<'a> {
+    fn new(data: &'a mut TilemapData, redraw: &'a mut Redraw) -> Self {
+        let overrides = (data.layers.iter())
+            .map(|layer| (layer.authoring.as_ref()).map(|a| a.overrides.clone()))
+            .collect();
+        Self {
+            data,
+            redraw,
+            overrides,
+        }
+    }
+}
+
+impl std::ops::Deref for TilemapEdit<'_> {
+    type Target = TilemapData;
+    fn deref(&self) -> &TilemapData {
+        self.data
+    }
+}
+
+impl std::ops::DerefMut for TilemapEdit<'_> {
+    fn deref_mut(&mut self) -> &mut TilemapData {
+        self.data
+    }
+}
+
+impl Drop for TilemapEdit<'_> {
+    fn drop(&mut self) {
+        let mut whole = self.data.layers.len() != self.overrides.len();
+        let mut touched = BTreeSet::new();
+        for (index, layer) in self.data.layers.iter_mut().enumerate() {
+            let mut dirty = layer.tiles.take_dirty();
+            let before = self.overrides.get(index).and_then(Option::as_ref);
+            match layer.authoring.as_mut() {
+                Some(authoring) => {
+                    dirty.extend(authoring.terrain.take_dirty());
+                    dirty.extend(authoring.links.take_dirty());
+                    let Some(before) = before else {
+                        whole = true;
+                        continue;
+                    };
+                    let after = &authoring.overrides;
+                    let moved = (before
+                        .iter()
+                        .filter(|(cell, tile)| after.get(cell) != Some(tile)))
+                    .chain(
+                        after
+                            .iter()
+                            .filter(|(cell, tile)| before.get(cell) != Some(tile)),
+                    );
+                    dirty.extend(moved.map(|(cell, _)| cell.chunk()));
+                }
+                None => whole |= before.is_some(),
+            }
+            touched.extend(dirty.into_iter().map(|chunk| (index, chunk)));
+        }
+        match self.redraw {
+            Redraw::Whole => {}
+            Redraw::Chunks(_) if whole => *self.redraw = Redraw::Whole,
+            Redraw::Chunks(chunks) => chunks.extend(touched),
+        }
     }
 }
 
@@ -297,6 +414,14 @@ pub fn store_key_of(world: &mut World, entity: Entity) -> Option<String> {
     (live_maps(world, &doc).into_iter())
         .find(|map| map.entity == entity)
         .and_then(|map| map.located.map(|(_, key)| key))
+}
+
+/// The store key of every live map with a valid data path.
+pub fn store_keys(world: &mut World) -> HashMap<Entity, String> {
+    let doc = current_doc(world);
+    (live_maps(world, &doc).into_iter())
+        .filter_map(|map| Some((map.entity, map.located?.1)))
+        .collect()
 }
 
 /// A data path for a map of `doc` that no other document owns, no map or
@@ -551,14 +676,13 @@ pub(crate) fn finish_save(world: &mut World, renames: SaveRenames, written: bool
             store.owners.insert(to_key.clone(), doc.id.clone());
             continue;
         }
-        if let Some(cells) = store.entries.remove(from_key) {
-            store.entries.insert(to_key.clone(), cells);
+        let reason = store.load_failed.remove(from_key);
+        if let Some(cells) = store.remove(from_key) {
+            store.put_unchanged(to_key, cells);
         }
-        if let Some(reason) = store.load_failed.remove(from_key) {
+        if let Some(reason) = reason {
             store.load_failed.insert(to_key.clone(), reason);
         }
-        store.changed.remove(from_key);
-        store.read_mtimes.remove(from_key);
         if store
             .owner(from_key)
             .is_some_and(|owner| owner.starts_with("unsaved-"))
@@ -623,13 +747,12 @@ pub(crate) fn import_tilemap_sidecars(
         let read = std::fs::read(&full);
         match read.map(|bytes| jackdaw_tilemap::decode(&bytes)) {
             Ok(Ok(data)) => {
-                store.entries.insert(key.clone(), data);
-                store.changed.remove(&key);
+                store.put_unchanged(&key, data);
                 store.clear_load_failed(&key);
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 store.clear_load_failed(&key);
-                store.entries.insert(key.clone(), TilemapData::default());
+                store.put_unchanged(&key, TilemapData::default());
                 warnings.push(format!(
                     "Tilemap data {} is missing; loading an empty map",
                     full.display()
