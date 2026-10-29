@@ -28,7 +28,8 @@ impl TileRef {
 
     pub const FLIP_X: u8 = 1 << 0;
     pub const FLIP_Y: u8 = 1 << 1;
-    /// Swap x and y (flip across the main diagonal), applied before the flips.
+    /// Swap x and y in the tile image (x right, y down): a flip across the
+    /// diagonal from its top-left corner. Applied before the flips.
     pub const TRANSPOSE: u8 = 1 << 2;
     pub const HIDDEN: u8 = 1 << 3;
     pub const ORIENTATION_MASK: u8 = Self::FLIP_X | Self::FLIP_Y | Self::TRANSPOSE | Self::HIDDEN;

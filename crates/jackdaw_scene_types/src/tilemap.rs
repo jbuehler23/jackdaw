@@ -7,6 +7,8 @@ use bevy::prelude::*;
 /// follow [`Tilemap::layers`] in order.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Component, Default, @crate::EditorCategory::new("2D"))]
+#[cfg_attr(feature = "render", require(Transform, Visibility))]
+#[cfg_attr(not(feature = "render"), require(Transform))]
 pub struct Tilemap {
     /// Cell size in world units.
     pub cell_size: UVec2,

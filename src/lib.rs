@@ -167,6 +167,7 @@ pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
 pub mod tilemap;
+pub mod tilemap_render;
 pub mod tileset_dock;
 pub mod tileset_edit;
 pub mod tileset_import;
@@ -462,6 +463,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(probe_bake::plugin)
         .add_plugins(tileset_import::plugin)
         .add_plugins(tilemap::plugin)
+        .add_plugins(tilemap_render::plugin)
         .add_plugins(tileset_dock::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
