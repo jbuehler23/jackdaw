@@ -2690,7 +2690,10 @@ mod tests {
         std::fs::create_dir_all(&assets).expect("the assets folder is made");
         let world = set_up(Some(project));
         assert!(world.contains_resource::<ProjectWatcher>());
-        assert_eq!(world.resource::<ProjectWindowState>().root_directory, assets);
+        assert_eq!(
+            world.resource::<ProjectWindowState>().root_directory,
+            assets
+        );
     }
 
     #[test]
