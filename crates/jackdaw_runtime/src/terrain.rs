@@ -13,7 +13,7 @@
 //! building ground from partial data. A missing sidecar is the flat-ground
 //! case and is not an error.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bevy::asset::LoadState;
@@ -179,33 +179,21 @@ struct UntexturedTerrain(Handle<StandardMaterial>);
 
 /// Record the sidecar each freshly spawned terrain draws.
 ///
-/// Called from the scene spawn, the only place the scene's directory is known:
-/// `data_path` is relative to it and the entity keeps no other trace of where
-/// it came from. A path that names nothing loadable is logged and the terrain
+/// Called from the scene spawn with each terrain's document folder, the scene's
+/// or the prefab's it inherits from: `data_path` is relative to it and the
+/// entity keeps no other trace of where it came from. A path that names nothing loadable is logged and the terrain
 /// draws flat.
-pub(crate) fn attach_sidecars(world: &mut World, spawned: &[Entity], parent_path: &Path) {
-    let terrains: Vec<(Entity, String)> = spawned
-        .iter()
-        .filter_map(|&entity| {
-            world
-                .get::<Terrain>(entity)
-                .filter(|terrain| !terrain.data_path.is_empty())
-                .map(|terrain| (entity, terrain.data_path.clone()))
-        })
-        .collect();
-    if terrains.is_empty() {
-        return;
-    }
-    let Some(root) = crate::assets_root(world) else {
-        warn!("no asset root found; terrain sidecars cannot be located");
-        return;
-    };
-
-    let scene_dir = root.join(parent_path);
-    for (entity, data_path) in terrains {
-        match sidecar::resolve_path(&scene_dir, &data_path) {
+pub(crate) fn attach_sidecars(world: &mut World, dirs: &[(Entity, PathBuf)]) {
+    for (entity, dir) in dirs {
+        let Some(data_path) = (world.get::<Terrain>(*entity))
+            .filter(|terrain| !terrain.data_path.is_empty())
+            .map(|terrain| terrain.data_path.clone())
+        else {
+            continue;
+        };
+        match sidecar::resolve_path(dir, &data_path) {
             Ok(path) => {
-                world.entity_mut(entity).insert(TerrainSidecar(path));
+                world.entity_mut(*entity).insert(TerrainSidecar(path));
             }
             Err(err) => warn!("terrain data path {data_path:?} is unusable: {err}"),
         }
@@ -244,7 +232,16 @@ fn load_sidecars(
                     }
                 },
                 // A missing file is the flat-ground case, not a fault.
-                Err(_) => RegionTerrainData::default(),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    RegionTerrainData::default()
+                }
+                Err(err) => {
+                    warn!(
+                        "terrain data {} cannot be read ({err}); this terrain draws flat",
+                        path.display()
+                    );
+                    RegionTerrainData::default()
+                }
             },
             None => RegionTerrainData::default(),
         };
@@ -707,6 +704,7 @@ mod tests {
     use super::*;
     use bevy::asset::{AssetApp, AssetPlugin};
     use jackdaw_terrain::sidecar::{AutoTerrainSettings, RegionTerrainData};
+    use std::path::Path;
 
     const GRASS: &str = "#grass\nbevy_pbr::pbr_material::StandardMaterial {\n    \
         base_color_texture: \"textures/grass_basecolor.png\",\n    \

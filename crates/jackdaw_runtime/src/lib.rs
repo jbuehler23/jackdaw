@@ -64,11 +64,7 @@
 //! - `pie`: play-in-editor, streaming this world to a running editor.
 
 use std::any::TypeId;
-use std::collections::{BTreeMap, HashMap};
-// Only the texture-format promotion pass gathers bound image ids, and that is
-// a rendering build's concern.
-#[cfg(feature = "render")]
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{AssetLoader, LoadContext, ReflectAsset, UntypedHandle, io::Reader};
@@ -127,6 +123,13 @@ mod terrain;
 pub use jackdaw_terrain::render::{DetailPressers, DetailSettings, DetailViewer};
 #[cfg(feature = "terrain")]
 pub use terrain::{TerrainHeights, TerrainViewer};
+
+#[cfg(feature = "tilemap")]
+mod tilemap;
+#[cfg(feature = "tilemap")]
+pub use jackdaw_tileset::chunk::TilemapChunkOf;
+#[cfg(feature = "tilemap")]
+pub use tilemap::TilemapSidecarMissing;
 
 #[cfg(feature = "navmesh")]
 mod navmesh;
@@ -343,6 +346,9 @@ impl Plugin for JackdawPlugin {
 
         #[cfg(feature = "terrain")]
         app.add_plugins(terrain::plugin);
+
+        #[cfg(feature = "tilemap")]
+        app.add_plugins(tilemap::plugin);
 
         // Registers the authored animation types as well as playing them, so
         // a set survives a load in the same build that runs it.
@@ -671,7 +677,7 @@ pub(crate) fn spawn_loaded_scenes(
                 .to_string(),
             None => "a scene built in memory".to_string(),
         };
-        let ast = resolve_prefab_references(world, ast, &scene_name, &parent_path);
+        let (ast, expanded) = resolve_prefab_references(world, ast, &scene_name, &parent_path);
 
         // Spawning is the one place every route meets, including in-memory
         // text through `JackdawScene::new`, and it reads the resolved document
@@ -685,7 +691,7 @@ pub(crate) fn spawn_loaded_scenes(
             continue;
         }
 
-        let members = spawn_scene_entities(world, root_entity, &ast, &parent_path);
+        let members = spawn_scene_entities(world, root_entity, &ast, &parent_path, &expanded);
         world
             .entity_mut(root_entity)
             .insert(SceneInstanceMembers(members));
@@ -729,24 +735,27 @@ pub(crate) fn spawn_loaded_scenes(
 /// with the reason and the scene named. A game follows references only inside
 /// its own asset root, since a reference is an instruction to open whatever it
 /// names and a scene file is content a player can replace.
+///
+/// Also returns the prefab files the instances really inherited from, so
+/// sidecars resolve against the document that wrote them.
 fn resolve_prefab_references(
     world: &World,
     mut ast: SceneBsnAst,
     scene_name: &str,
     scene_dir: &Path,
-) -> SceneBsnAst {
+) -> (SceneBsnAst, HashSet<PathBuf>) {
     if ast
         .entities_with_component(jackdaw_prefab::ISA_TYPE)
         .is_empty()
     {
-        return ast;
+        return (ast, HashSet::new());
     }
     let Some(assets_root) = assets_root(world) else {
         warn!(
             "Scene '{scene_name}' references a prefab but no asset root was found; \
              spawning it as authored"
         );
-        return ast;
+        return (ast, HashSet::new());
     };
     let assets_root = jackdaw_prefab::normalize_path(&assets_root);
     let document_dir = jackdaw_prefab::normalize_path(&assets_root.join(scene_dir));
@@ -761,17 +770,17 @@ fn resolve_prefab_references(
                 outside.display(),
                 assets_root.display()
             );
-            return ast;
+            return (ast, HashSet::new());
         }
     };
     let get_prefab = |path: &Path| sources.get(path);
     match jackdaw_prefab::resolve_scene(&ast, &get_prefab) {
-        Ok(resolved) => resolved,
+        Ok(resolved) => (resolved, sources.into_keys().collect()),
         Err(err) => {
             warn!(
                 "Prefab resolution failed for scene '{scene_name}': {err}; spawning it as authored"
             );
-            ast
+            (ast, HashSet::new())
         }
     }
 }
@@ -831,6 +840,7 @@ fn spawn_scene_entities(
     root_entity: Entity,
     ast: &SceneBsnAst,
     parent_path: &Path,
+    expanded: &HashSet<PathBuf>,
 ) -> Vec<Entity> {
     let registry = world.resource::<AppTypeRegistry>().clone();
 
@@ -916,17 +926,62 @@ fn spawn_scene_entities(
             }
         }
     }
-    // A terrain's sidecar is named relative to the scene file, whose
-    // directory is known here.
-    #[cfg(feature = "terrain")]
-    terrain::attach_sidecars(world, &spawned, parent_path);
+    // Sidecars are named relative to the document that wrote them, the scene
+    // or a prefab, which is known here.
+    #[cfg(any(feature = "terrain", feature = "tilemap"))]
+    if let Some(dirs) = sidecar_dirs(world, &spawned, parent_path, expanded) {
+        #[cfg(feature = "terrain")]
+        terrain::attach_sidecars(world, &dirs);
+        #[cfg(feature = "tilemap")]
+        tilemap::attach_sidecars(world, &dirs);
+    }
 
-    #[cfg(not(feature = "terrain"))]
-    let _ = parent_path;
+    #[cfg(not(any(feature = "terrain", feature = "tilemap")))]
+    let _ = (parent_path, expanded);
 
     fallback_camera::one_camera_per_window_order(world, &spawned);
     fallback_camera::spawn_for_2d_scene(world, &spawned);
     members
+}
+
+/// The folder each spawned terrain or tilemap names its sidecar against: the
+/// prefab it inherits from when that prefab really expanded, else the scene's.
+#[cfg(any(feature = "terrain", feature = "tilemap"))]
+fn sidecar_dirs(
+    world: &World,
+    spawned: &[Entity],
+    parent_path: &Path,
+    expanded: &HashSet<PathBuf>,
+) -> Option<Vec<(Entity, PathBuf)>> {
+    let has_sidecar = |entity: Entity| {
+        world.get::<jackdaw_scene_types::Terrain>(entity).is_some()
+            || world.get::<jackdaw_scene_types::Tilemap>(entity).is_some()
+    };
+    if !spawned.iter().any(|&entity| has_sidecar(entity)) {
+        return None;
+    }
+    let Some(root) = assets_root(world) else {
+        warn!("no asset root found; terrain and tilemap sidecars cannot be located");
+        return None;
+    };
+    let scene_dir = root.join(parent_path);
+    let inherited = |source: &Path| expanded.contains(&jackdaw_prefab::normalize_path(source));
+    let dirs = (spawned
+        .iter()
+        .copied()
+        .filter(|&entity| has_sidecar(entity)))
+    .map(|entity| {
+        let dir = match jackdaw_prefab::owning_source(world, entity, inherited) {
+            Some(source) => jackdaw_prefab::source_path(source, &root, &scene_dir)
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            None => scene_dir.clone(),
+        };
+        (entity, dir)
+    })
+    .collect();
+    Some(dirs)
 }
 
 /// The glTF scene an authored [`GltfSource`] names, as the handle the

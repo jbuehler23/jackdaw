@@ -8,6 +8,8 @@ use jackdaw_tilemap::{
     TileAddress, TileShape, TileTerrains, TilesetSetup, Tracked,
 };
 
+#[cfg(feature = "render")]
+pub mod chunk;
 mod describe;
 mod terrain_set;
 

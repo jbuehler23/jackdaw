@@ -17,7 +17,9 @@ pub mod model;
 pub mod resolve;
 pub mod source;
 
-pub use components::{ISA_TYPE, IsA, PREFAB_ENTITY_ID_TYPE, PREFAB_TYPE, Prefab, PrefabEntityId};
+pub use components::{
+    ISA_TYPE, IsA, PREFAB_ENTITY_ID_TYPE, PREFAB_TYPE, Prefab, PrefabEntityId, owning_source,
+};
 pub use model::{PrefabModel, prefab_model};
 pub use resolve::{
     CycleError, MAX_PREFAB_DEPTH, PrefabLookup, ResolveError, clone_scene, read_isa_deleted,

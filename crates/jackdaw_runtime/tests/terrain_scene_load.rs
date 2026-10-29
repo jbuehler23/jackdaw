@@ -165,3 +165,46 @@ fn a_legacy_scene_draws_the_same_ground_as_a_current_one() {
     assert!(!drawn.is_empty(), "the current scene draws its ground");
     assert_eq!(drawn, surfaces(&mut legacy));
 }
+
+#[test]
+fn an_inherited_terrain_reads_the_prefab_sidecar() {
+    let project = project(None);
+    let assets = project.path().join("assets");
+    std::fs::create_dir_all(assets.join("prefabs")).expect("prefabs");
+    std::fs::write(
+        assets.join("prefabs/hill.bsn"),
+        "#Hill\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_ecs::hierarchy::Children [\n\
+         #Ground\n\
+         jackdaw::prefab::components::PrefabEntityId(1)\n\
+         jackdaw_scene_types::types::Terrain {\n    \
+         cell_size: 1.0,\n    \
+         data_path: \"zone.terrain-0.jdterrain\",\n\
+         }\n\
+         ]\n",
+    )
+    .expect("prefab");
+    std::fs::write(
+        assets.join("prefabs/zone.terrain-0.jdterrain"),
+        authored_sidecar(),
+    )
+    .expect("sidecar");
+
+    let mut app = game_with(
+        &assets,
+        "jackdaw::prefab::components::IsA { source: \"prefabs/hill.bsn\", deleted: [] }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n",
+    );
+
+    let heights = app
+        .world_mut()
+        .query::<&jackdaw_runtime::TerrainHeights>()
+        .single(app.world())
+        .expect("the inherited terrain published its heights");
+    assert!(
+        heights.0.heights.iter().any(|height| height.abs() > 0.1),
+        "the prefab's hill, not flat ground"
+    );
+}

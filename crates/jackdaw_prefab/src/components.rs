@@ -45,6 +45,30 @@ pub const PREFAB_ENTITY_ID_TYPE: &str = "jackdaw::prefab::components::PrefabEnti
 /// Reflect type path of [`IsA`], as scene documents spell it.
 pub const ISA_TYPE: &str = "jackdaw::prefab::components::IsA";
 
+/// The prefab file `entity`'s authored data comes from: the source of the
+/// nearest instance at or above an inherited entity, when `expanded` says
+/// that instance really inherited from it. `None` when the entity belongs
+/// to the document it was spawned from. The walk stops at a prefab's own
+/// root, whose document owns it.
+pub fn owning_source<'w>(
+    world: &'w World,
+    entity: Entity,
+    expanded: impl Fn(&std::path::Path) -> bool,
+) -> Option<&'w std::path::Path> {
+    world.get::<PrefabEntityId>(entity)?;
+    let mut current = Some(entity);
+    while let Some(at) = current {
+        if world.get::<Prefab>(at).is_some() {
+            return None;
+        }
+        if let Some(isa) = world.get::<IsA>(at) {
+            return expanded(&isa.source).then_some(isa.source.as_path());
+        }
+        current = world.get::<ChildOf>(at).map(ChildOf::parent);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

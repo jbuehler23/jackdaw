@@ -2505,10 +2505,10 @@ fn replace_line(text: &str, placeholder: &str, lines: &str) -> String {
 }
 
 /// The runtime features a new game enables: its modules' features, then
-/// terrain drawing and the editor link.
+/// terrain and tilemap drawing and the editor link.
 fn template_runtime_features(modules: &ModuleSet) -> String {
     let mut features = module_runtime_features(modules);
-    for always in ["terrain", PIE_FEATURE] {
+    for always in ["terrain", "tilemap", PIE_FEATURE] {
         if !features.iter().any(|feature| feature == always) {
             features.push(always.to_string());
         }
@@ -3868,7 +3868,7 @@ mod tests {
         .unwrap();
         let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains("features = [\"navmesh\", \"terrain\", \"pie\"] }"),
+            cargo.contains("features = [\"navmesh\", \"terrain\", \"tilemap\", \"pie\"] }"),
             "got:\n{cargo}"
         );
         assert!(!cargo.contains("avian3d"), "got:\n{cargo}");
@@ -3883,7 +3883,7 @@ mod tests {
             .unwrap();
         let cargo = std::fs::read_to_string(bare.join("Cargo.toml")).unwrap();
         assert!(
-            cargo.contains("features = [\"terrain\", \"pie\"] }"),
+            cargo.contains("features = [\"terrain\", \"tilemap\", \"pie\"] }"),
             "got:\n{cargo}"
         );
         assert!(!cargo.contains("avian3d"), "got:\n{cargo}");
@@ -3989,7 +3989,7 @@ mod tests {
         apply_import_plan(&plan).unwrap();
         let cargo = std::fs::read_to_string(&cargo_path).unwrap();
         assert!(
-            cargo.contains("features = [\"terrain\", \"pie\", \"navmesh\"]"),
+            cargo.contains("features = [\"terrain\", \"tilemap\", \"pie\", \"navmesh\"]"),
             "got:\n{cargo}"
         );
         assert!(cargo.contains("jackdaw_multiplayer = {"), "got:\n{cargo}");
@@ -4010,7 +4010,7 @@ mod tests {
         apply_import_plan(&plan).unwrap();
         let cargo = std::fs::read_to_string(&cargo_path).unwrap();
         assert!(
-            cargo.contains("features = [\"terrain\", \"pie\"]"),
+            cargo.contains("features = [\"terrain\", \"tilemap\", \"pie\"]"),
             "got:\n{cargo}"
         );
         assert!(cargo.contains("jackdaw_multiplayer = {"), "got:\n{cargo}");
