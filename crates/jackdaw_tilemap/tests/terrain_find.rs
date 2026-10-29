@@ -159,15 +159,9 @@ fn tiny_farm_has_grass_and_two_path_terrains() {
         .flat_map(|t| t.pure_tiles.iter().map(|p| p.tile))
         .collect();
     assert_eq!(pure, [91]);
-    assert_eq!(grass.name, "tilemap_packed green");
-    assert_eq!(
-        found.terrain(farm.dry).expect("dry").name,
-        "tilemap_packed sand"
-    );
-    assert_eq!(
-        found.terrain(farm.tilled).expect("tilled").name,
-        "tilemap_packed brown"
-    );
+    assert_eq!(grass.name, "grass");
+    assert_eq!(found.terrain(farm.dry).expect("dry").name, "sand");
+    assert_eq!(found.terrain(farm.tilled).expect("tilled").name, "dirt");
 }
 
 /// The fixture's logical peers: grass everywhere but the centre and the

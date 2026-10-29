@@ -1,4 +1,4 @@
-//! The terrain, set and bits operators over an auto-imported Tiny Farm
+//! The terrain, set and bits operators over an auto-imported fixture farm
 //! tileset: each one's effect on the file, its single undo entry, and its
 //! refusals.
 
@@ -197,7 +197,7 @@ fn terrain_remove_empties_its_peers_and_drops_its_sets() {
         &mut app,
         &dir,
         "tileset.terrain.remove",
-        &[("terrain", "tilemap_packed sand")],
+        &[("terrain", "sand path")],
     );
     let sand_tile = tile_of(&before, SAND);
     assert!(after.terrains.iter().all(|t| t.id != SAND));
@@ -220,15 +220,15 @@ fn terrain_rename_sets_a_name_by_hand() {
         &mut app,
         &dir,
         "tileset.terrain.rename",
-        &[("terrain", "1"), ("name", "grass")],
+        &[("terrain", "1"), ("name", "meadow")],
     );
     let grass = &after.terrains[0];
-    assert_eq!((grass.name.as_str(), grass.name_by_user), ("grass", true));
+    assert_eq!((grass.name.as_str(), grass.name_by_user), ("meadow", true));
     refused(
         &mut app,
         &dir,
         "tileset.terrain.rename",
-        &[("terrain", "2"), ("name", "grass")],
+        &[("terrain", "2"), ("name", "meadow")],
         "already named",
     );
 }
@@ -276,7 +276,7 @@ fn terrain_merge_folds_one_terrain_into_another() {
         &mut app,
         &dir,
         "tileset.terrain.merge",
-        &[("from", "3"), ("into", "tilemap_packed sand")],
+        &[("from", "3"), ("into", "sand path")],
     );
     assert_eq!(after.terrains.len(), 2);
     assert_eq!(pairs(&after), [(SAND, GRASS)]);
@@ -382,10 +382,7 @@ fn set_bits_takes_nine_peers_or_one() {
         &mut app,
         &dir,
         "tileset.tile.set_bits",
-        &[
-            ("tile", "0:5"),
-            ("peers", "1,1,1,1,tilemap_packed brown,1,,0,empty"),
-        ],
+        &[("tile", "0:5"), ("peers", "1,1,1,1,dirt path,1,,0,empty")],
     );
     assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 3, 1, 0, 0, 0]));
     let tile = after.tiles.iter().find(|t| t.tile == 5).expect("set");

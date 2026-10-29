@@ -1,5 +1,5 @@
 //! The template, reset, property, object and describe operators over an
-//! auto-imported Tiny Farm tileset.
+//! auto-imported fixture farm tileset.
 
 use crate::tileset_edit_ops::{
     DIRT, SAND, call, edit, entries, farm, on_disk, over_the_remote, pairs, peers_of, refused,
@@ -180,7 +180,7 @@ fn objects_are_added_with_a_pivot_and_removed_by_any_tile() {
 }
 
 #[test]
-fn describe_reports_the_tiny_farm_tileset_without_history() {
+fn describe_reports_the_fixture_farm_tileset_without_history() {
     let (mut app, dir) = farm();
     let (before, count) = (on_disk(&dir), entries(&app));
     call(&mut app, "tileset.describe", &[]);
@@ -190,9 +190,9 @@ fn describe_reports_the_tiny_farm_tileset_without_history() {
         "tileset \"tilemap_packed.tileset.bsn\"",
         "image \"tilemap_packed.tiles.png\": tile 16x16, 12x11 layers",
         "terrains: 3",
-        "  terrain 1 \"tilemap_packed green\": swatch #84c669, background, collision passable",
-        "  terrain 2 \"tilemap_packed sand\": swatch #e7a16a, collision passable",
-        "  terrain 3 \"tilemap_packed brown\": swatch #cb7c51, collision passable",
+        "  terrain 1 \"grass\": swatch #84c669, background, collision passable",
+        "  terrain 2 \"sand path\": swatch #e7a16a, collision passable",
+        "  terrain 3 \"dirt path\": swatch #cb7c51, collision passable",
         "terrain sets: 2",
         "  set 2 over 1: Sides, 7/16 shapes, missing ",
         "  set 3 over 1: Sides, 7/16 shapes, missing ",
