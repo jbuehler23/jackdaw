@@ -18,17 +18,17 @@ use jackdaw_scene_types::PropertyValue;
 use jackdaw_tilemap::{RgbaImage, TilesetSetup, auto_setup};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
-pub(crate) const SHEET: &str = "tilemap_packed.png";
-const SPACED_SHEET: &str = "tilemap.png";
+pub(crate) const SHEET: &str = "overworld.png";
+const SPACED_SHEET: &str = "overworld_spaced.png";
 
-/// An editor on a temp project whose assets hold the two Tiny Farm sheets.
+/// An editor on a temp project whose assets hold the overworld sheet, packed
+/// and spaced.
 pub(crate) fn project_app() -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let assets = dir.path().join("assets");
     std::fs::create_dir_all(&assets).expect("assets");
-    for name in [SHEET, SPACED_SHEET] {
-        std::fs::copy(fixture(name), assets.join(name)).expect("copy a sheet");
-    }
+    std::fs::copy(util::OVERWORLD_SHEET, assets.join(SHEET)).expect("copy the sheet");
+    util::write_spaced_overworld_sheet(&assets.join(SPACED_SHEET));
     let app = editor_on(&dir);
     (app, dir)
 }
@@ -49,11 +49,10 @@ fn editor_on(dir: &tempfile::TempDir) -> App {
     app
 }
 
-fn fixture(name: &str) -> String {
-    format!(
-        "{}/crates/jackdaw_tilemap/tests/data/tiny_farm/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
+/// The sheet down to its last row of art: the tiles an import packs.
+fn art_rows() -> image::RgbaImage {
+    let sheet = decoded(util::OVERWORLD_SHEET);
+    image::imageops::crop_imm(&sheet, 0, 0, 432, 38 * 16).to_image()
 }
 
 #[track_caller]
@@ -122,10 +121,10 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     import(&mut app, &[("paths", SHEET), ("setup", "auto")]);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
 
-    let packed = asset_file(&dir, "tilemap_packed.tiles.png");
-    assert_eq!(decoded(&packed), decoded(fixture(SHEET)));
+    let packed = asset_file(&dir, "overworld.tiles.png");
+    assert_eq!(decoded(&packed), art_rows());
 
-    let meta = std::fs::read(asset_file(&dir, "tilemap_packed.tiles.png.meta")).expect("a meta");
+    let meta = std::fs::read(asset_file(&dir, "overworld.tiles.png.meta")).expect("a meta");
     let meta = TextureImportMeta::deserialize(&meta).expect("an image meta");
     let AssetAction::Load { settings, .. } = &meta.asset else {
         panic!("the packed copy loads unprocessed");
@@ -146,21 +145,35 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     };
     assert_eq!(sampler.mag_filter, bevy::image::ImageFilterMode::Nearest);
 
-    let tileset = read_tileset(&asset_file(&dir, "tilemap_packed.tileset.bsn"));
-    assert_eq!(tileset.image, "tilemap_packed.tiles.png");
+    let tileset = read_tileset(&asset_file(&dir, "overworld.tileset.bsn"));
+    assert_eq!(tileset.image, "overworld.tiles.png");
     assert_eq!(tileset.tile_size, UVec2::splat(16));
-    assert_eq!(tileset.grid, UVec2::new(12, 11));
+    assert_eq!(tileset.grid, UVec2::new(27, 38));
     assert_eq!(tileset.setup_sheets, vec![0]);
-    assert_eq!(tileset.terrains.len(), 3);
+    assert_eq!(tileset.terrains.len(), 8);
     let background: Vec<u8> = (tileset.terrains.iter())
         .filter(|t| t.background)
         .map(|t| t.id)
         .collect();
-    assert_eq!(background, vec![1], "the green grass is the background");
-    assert_eq!(tileset.terrain_sets.len(), 2);
-    assert!((tileset.terrain_sets.iter()).all(|s| s.mode == TerrainMatch::Sides && s.outer == 1));
-    assert_eq!(tileset.objects.len(), 9);
-    let sheet = decoded(fixture(SHEET));
+    // Grass has pure tiles, so the background is the dark ground the cliff
+    // set sits on.
+    assert_eq!(background, vec![6]);
+    let sets: Vec<(u8, u8, TerrainMatch)> = (tileset.terrain_sets.iter())
+        .map(|s| (s.inner, s.outer, s.mode))
+        .collect();
+    assert_eq!(
+        sets,
+        [
+            (2, 1, TerrainMatch::CornersAndSides),
+            (5, 6, TerrainMatch::Corners),
+            (9, 2, TerrainMatch::Corners),
+            (11, 1, TerrainMatch::CornersAndSides),
+            (11, 9, TerrainMatch::Corners),
+            (12, 11, TerrainMatch::Corners),
+        ]
+    );
+    assert_eq!(tileset.objects.len(), 34);
+    let sheet = decoded(util::OVERWORLD_SHEET);
     let image = RgbaImage::new(sheet.width(), sheet.height(), sheet.as_raw()).expect("sized");
     let fresh = auto_setup(&[(SHEET, image)], &[]).expect("auto setup runs");
     assert_eq!(
@@ -170,19 +183,19 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     );
     let report = reports(&app).join("\n");
     assert_eq!(
-        report.matches("Sides, 7/16 shapes").count(),
-        2,
-        "the report covers both sets: {report}"
+        report.matches("Corners, 14/16 shapes").count(),
+        3,
+        "the report covers the sea sets: {report}"
     );
 
     assert_eq!(
-        layers_once_loaded(&mut app, "tilemap_packed.tiles.png"),
-        (UVec2::splat(16), 132)
+        layers_once_loaded(&mut app, "overworld.tiles.png"),
+        (UVec2::splat(16), 1026)
     );
-    assert!(!asset_file(&dir, "tilemap_packed.png.meta").exists());
+    assert!(!asset_file(&dir, "overworld.png.meta").exists());
     assert_eq!(
         layers_once_loaded(&mut app, SHEET),
-        (UVec2::new(192, 176), 1),
+        (UVec2::new(432, 1040), 1),
         "a sprite of the source sheet still draws it whole"
     );
 }
@@ -194,15 +207,15 @@ fn a_spaced_sheet_packs_to_the_same_tiles() {
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
 
     assert_eq!(
-        decoded(asset_file(&dir, "tilemap.tiles.png")),
-        decoded(fixture(SHEET))
+        decoded(asset_file(&dir, "overworld_spaced.tiles.png")),
+        art_rows()
     );
-    let tileset = read_tileset(&asset_file(&dir, "tilemap.tileset.bsn"));
-    assert_eq!(tileset.grid, UVec2::new(12, 11));
+    let tileset = read_tileset(&asset_file(&dir, "overworld_spaced.tileset.bsn"));
+    assert_eq!(tileset.grid, UVec2::new(27, 38));
     let sheet = &tileset.sheets[0];
     assert_eq!(sheet.source, SPACED_SHEET);
     assert_eq!(sheet.spacing, UVec2::ONE);
-    assert_eq!((sheet.columns, sheet.rows), (12, 11));
+    assert_eq!((sheet.columns, sheet.rows), (27, 38));
     assert!(
         tileset.setup_sheets.is_empty(),
         "none leaves out terrain setup"
@@ -235,22 +248,35 @@ fn manual_setup_covers_the_sheets_with_no_terrains() {
 #[test]
 fn several_sheets_each_start_a_row_of_the_packed_copy() {
     let (mut app, dir) = project_app();
+    // Both copies of the sheet would need 2052 layers, past the array limit.
     import(
         &mut app,
         &[
-            ("paths", "tilemap_packed.png, tilemap.png"),
+            ("paths", "overworld.png, overworld_spaced.png"),
             ("setup", "none"),
         ],
     );
+    assert!(
+        warnings(&app).join("\n").contains("2052 layers"),
+        "{:?}",
+        warnings(&app)
+    );
+    // The sheet's first four rows as a second, shorter sheet.
+    let rows = image::imageops::crop_imm(&art_rows(), 0, 0, 432, 64).to_image();
+    rows.save(asset_file(&dir, "rows.png")).expect("save");
+    import(
+        &mut app,
+        &[("paths", "overworld.png, rows.png"), ("setup", "none")],
+    );
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
 
-    let tileset = read_tileset(&asset_file(&dir, "tilemap_packed.tileset.bsn"));
-    assert_eq!(tileset.grid, UVec2::new(12, 22));
+    let tileset = read_tileset(&asset_file(&dir, "overworld.tileset.bsn"));
+    assert_eq!(tileset.grid, UVec2::new(27, 42));
     let firsts: Vec<u32> = tileset.sheets.iter().map(|s| s.first_layer).collect();
-    assert_eq!(firsts, vec![0, 132]);
-    assert_eq!(tileset.layer(1, 0), Some(132));
-    let packed = decoded(asset_file(&dir, "tilemap_packed.tiles.png"));
-    assert_eq!(packed.dimensions(), (192, 352));
+    assert_eq!(firsts, vec![0, 1026]);
+    assert_eq!(tileset.layer(1, 0), Some(1026));
+    let packed = decoded(asset_file(&dir, "overworld.tiles.png"));
+    assert_eq!(packed.dimensions(), (432, 672));
 }
 
 /// Names of the files under the assets that an import wrote.
@@ -270,7 +296,7 @@ fn tile_files(dir: &tempfile::TempDir) -> Vec<String> {
 #[test]
 fn imports_it_cannot_make_are_refused_and_leave_nothing_behind() {
     let (mut app, dir) = project_app();
-    std::fs::copy(fixture(SHEET), dir.path().join("outside.png")).expect("copy");
+    std::fs::copy(util::OVERWORLD_SHEET, dir.path().join("outside.png")).expect("copy");
     std::fs::write(asset_file(&dir, "notes.txt"), "not an image").expect("write");
     image::RgbaImage::from_pixel(40, 24, image::Rgba([10, 200, 30, 255]))
         .save(asset_file(&dir, "flat.png"))
@@ -281,17 +307,17 @@ fn imports_it_cannot_make_are_refused_and_leave_nothing_behind() {
         ("notes.txt", "auto", "not an image"),
         ("missing.png", "auto", "nothing at"),
         ("flat.png", "auto", "no tile grid"),
+        ("overworld.png, ./overworld.png", "auto", "more than once"),
         (
-            "tilemap_packed.png, ./tilemap_packed.png",
-            "auto",
-            "more than once",
-        ),
-        (
-            "tilemap_packed.png, assets/tilemap_packed.png",
+            "overworld.png, assets/overworld.png",
             "manual",
             "more than once",
         ),
-        ("tilemap.png,tilemap.png", "none", "more than once"),
+        (
+            "overworld_spaced.png,overworld_spaced.png",
+            "none",
+            "more than once",
+        ),
     ] {
         import(&mut app, &[("paths", paths), ("setup", setup)]);
         let told = warnings(&app).join("\n");
@@ -310,12 +336,12 @@ fn imports_it_cannot_make_are_refused_and_leave_nothing_behind() {
         warnings(&app).join("\n").contains("already there"),
         "a second import does not overwrite the first"
     );
-    std::fs::remove_file(asset_file(&dir, "tilemap_packed.tileset.bsn")).expect("remove");
+    std::fs::remove_file(asset_file(&dir, "overworld.tileset.bsn")).expect("remove");
     import(&mut app, &[("paths", SHEET)]);
     assert!(
         warnings(&app)
             .join("\n")
-            .contains("tilemap_packed.tiles.png or its meta"),
+            .contains("overworld.tiles.png or its meta"),
         "a packed copy left behind is not replaced: {:?}",
         warnings(&app)
     );
@@ -326,7 +352,7 @@ fn imports_it_cannot_make_are_refused_and_leave_nothing_behind() {
     );
     assert_eq!(
         tile_files(&dir),
-        vec!["tilemap_packed.tiles.png", "tilemap_packed.tiles.png.meta"]
+        vec!["overworld.tiles.png", "overworld.tiles.png.meta"]
     );
 }
 
@@ -334,7 +360,7 @@ fn imports_it_cannot_make_are_refused_and_leave_nothing_behind() {
 fn packed_copies_are_named_by_the_whole_tileset_stem() {
     let (mut app, dir) = project_app();
     for name in ["grass.png", "grass.winter.png", "x.tiles.png"] {
-        std::fs::copy(fixture(SHEET), asset_file(&dir, name)).expect("copy");
+        std::fs::copy(util::OVERWORLD_SHEET, asset_file(&dir, name)).expect("copy");
     }
     import(&mut app, &[("paths", "grass.png"), ("setup", "none")]);
     import(
@@ -357,7 +383,7 @@ fn packed_copies_are_named_by_the_whole_tileset_stem() {
     );
     assert_eq!(
         decoded(asset_file(&dir, "x.tiles.png")),
-        decoded(fixture(SHEET))
+        decoded(util::OVERWORLD_SHEET)
     );
     assert!(!asset_file(&dir, "x.tiles.png.meta").exists());
     import(&mut app, &[("paths", "x.tiles.png"), ("setup", "none")]);
@@ -369,9 +395,9 @@ fn out_names_a_file_a_folder_or_a_stem() {
     let (mut app, dir) = project_app();
     std::fs::create_dir_all(asset_file(&dir, "farm")).expect("folder");
     for (out, written) in [
-        ("", "tilemap_packed.tileset.bsn"),
-        ("farm", "farm/tilemap_packed.tileset.bsn"),
-        ("meadow/", "meadow/tilemap_packed.tileset.bsn"),
+        ("", "overworld.tileset.bsn"),
+        ("farm", "farm/overworld.tileset.bsn"),
+        ("meadow/", "meadow/overworld.tileset.bsn"),
         ("ground.tileset", "ground.tileset.bsn"),
         ("hills", "hills.tileset.bsn"),
         ("assets/x.tileset.bsn", "x.tileset.bsn"),
@@ -391,7 +417,7 @@ fn out_names_a_file_a_folder_or_a_stem() {
 fn texture_import_keeps_a_packed_copy_an_array() {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET), ("setup", "none")]);
-    let packed = "tilemap_packed.tiles.png";
+    let packed = "overworld.tiles.png";
     let layout = |dir: &tempfile::TempDir| {
         let bytes = std::fs::read(asset_file(dir, &format!("{packed}.meta"))).expect("a meta");
         let meta = TextureImportMeta::deserialize(&bytes).expect("an image meta");
@@ -425,7 +451,7 @@ fn texture_import_keeps_a_packed_copy_an_array() {
 fn the_imported_tileset_is_listed_and_opens_from_the_index() {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET)]);
-    let indexed = Path::new("tilemap_packed.tileset.bsn");
+    let indexed = Path::new("overworld.tileset.bsn");
     let entry = app.world().resource::<AssetIndex>().get(indexed).cloned();
     assert!(matches!(
         entry.map(|e| e.value),
@@ -443,7 +469,7 @@ fn the_imported_tileset_is_listed_and_opens_from_the_index() {
         .expect("asset.list dispatches")
         .assert_finished();
     app.update();
-    assert_eq!(reports(&app), vec!["tileset: tilemap_packed.tileset.bsn"]);
+    assert_eq!(reports(&app), vec!["tileset: overworld.tileset.bsn"]);
     drop(app);
 
     let mut reopened = editor_on(&dir);
@@ -466,9 +492,9 @@ fn the_imported_tileset_is_listed_and_opens_from_the_index() {
         .get(handle.id().typed::<Tileset>())
         .cloned()
         .expect("in the store");
-    assert_eq!(tileset.terrains.len(), 3);
+    assert_eq!(tileset.terrains.len(), 8);
     assert!(jackdaw::definition_assets::open_definition_file(
         reopened.world_mut(),
-        &asset_file(&dir, "tilemap_packed.tileset.bsn"),
+        &asset_file(&dir, "overworld.tileset.bsn"),
     ));
 }

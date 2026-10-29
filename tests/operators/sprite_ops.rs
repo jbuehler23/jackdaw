@@ -432,34 +432,24 @@ fn a_new_sprite_draws_above_the_scene_sprites() {
     );
 }
 
-const SHEET: &str = "tilemap_packed.png";
-const SHEET_SIZE: Vec2 = Vec2::new(192.0, 176.0);
-
-/// A 2D scene reading a temp assets folder that holds the Tiny Farm sheet,
-/// with one sprite of the sheet whose image has loaded.
-const OTHER_SHEET: &str = "tilemap.png";
-const OTHER_SHEET_SIZE: Vec2 = Vec2::new(203.0, 186.0);
+const SHEET: &str = "overworld.png";
+const SHEET_SIZE: Vec2 = Vec2::new(432.0, 1040.0);
+const OTHER_SHEET: &str = "overworld_spaced.png";
+const OTHER_SHEET_SIZE: Vec2 = Vec2::new(458.0, 1104.0);
 
 fn assets_of(dir: &tempfile::TempDir) -> std::path::PathBuf {
     dir.path().join("assets")
 }
 
-/// A 2D scene of a project in a temp folder whose assets hold the two Tiny
-/// Farm sheets, with one sprite of the packed sheet whose image has loaded.
+/// A 2D scene of a project in a temp folder whose assets hold the overworld
+/// sheet packed and spaced, with one sprite of the packed sheet whose image
+/// has loaded.
 fn sheet_app() -> (App, tempfile::TempDir, Entity) {
     let dir = tempfile::tempdir().expect("tempdir");
     let assets = assets_of(&dir);
     std::fs::create_dir_all(&assets).expect("assets");
-    for name in [SHEET, OTHER_SHEET] {
-        std::fs::copy(
-            format!(
-                "{}/crates/jackdaw_tilemap/tests/data/tiny_farm/{name}",
-                env!("CARGO_MANIFEST_DIR")
-            ),
-            assets.join(name),
-        )
-        .expect("copy a sheet");
-    }
+    std::fs::copy(util::OVERWORLD_SHEET, assets.join(SHEET)).expect("copy the sheet");
+    util::write_spaced_overworld_sheet(&assets.join(OTHER_SHEET));
     let mut app = util::editor_test_app_reading(&assets);
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot {

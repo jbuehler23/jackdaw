@@ -5,8 +5,9 @@ use jackdaw_tilemap::{
 };
 use jackdaw_tileset::{Tileset, TilesetError, TilesetObject, TilesetSheet};
 
-const SHEET: &str = "tiles/tilemap_packed.png";
-const DRY_PATH: u8 = 2;
+const SHEET: &str = "tiles/overworld.png";
+const GROUND: u8 = 2;
+const WATER: u8 = 11;
 
 struct Sheet {
     width: u32,
@@ -17,7 +18,7 @@ struct Sheet {
 impl Sheet {
     fn load() -> Self {
         let path = format!(
-            "{}/../jackdaw_tilemap/tests/data/tiny_farm/tilemap_packed.png",
+            "{}/../jackdaw_tilemap/tests/data/punyworld/punyworld-overworld-tileset.png",
             env!("CARGO_MANIFEST_DIR")
         );
         let image = image::open(path).expect("fixture decodes").to_rgba8();
@@ -36,36 +37,36 @@ impl Sheet {
 
 fn tileset() -> Tileset {
     Tileset {
-        image: "tiles/tilemap_packed.tiles.png".into(),
+        image: "tiles/overworld.tiles.png".into(),
         tile_size: UVec2::splat(16),
-        grid: UVec2::new(12, 11),
+        grid: UVec2::new(27, 38),
         sheets: vec![TilesetSheet {
             source: SHEET.into(),
-            columns: 12,
-            rows: 11,
+            columns: 27,
+            rows: 38,
             ..Default::default()
         }],
         ..Default::default()
     }
 }
 
-/// Auto setup over Tiny Farm with traced shapes, then a hand edit of every
+/// Auto setup over the overworld sheet with traced shapes, then a hand edit of every
 /// kind the setup tracks.
 fn edited_setup(sheet: &Sheet) -> TilesetSetup {
-    let fresh = auto_setup(&sheet.inputs(), &[DRY_PATH]).expect("auto setup runs");
+    let fresh = auto_setup(&sheet.inputs(), &[GROUND]).expect("auto setup runs");
     let mut setup = TilesetSetup::from_auto(&fresh);
     assert!(setup.tiles.values().any(|t| t.shape.value.is_some()));
     let tile = TileAddress { sheet: 0, tile: 1 };
-    setup.set_peer(tile, Peer::Top, DRY_PATH).expect("peer");
+    setup.set_peer(tile, Peer::Top, GROUND).expect("peer");
     setup.rename_terrain(1, "Grass").expect("rename");
-    (setup.set_collision_mode(3, CollisionMode::Solid)).expect("collision");
-    (setup.set_match_mode(2, 1, MatchMode::CornersAndSides)).expect("mode");
-    setup.lock_set(3, 1, true).expect("lock");
+    (setup.set_collision_mode(WATER, CollisionMode::Solid)).expect("collision");
+    (setup.set_match_mode(GROUND, 1, MatchMode::Sides)).expect("mode");
+    setup.lock_set(WATER, 1, true).expect("lock");
     setup.put_stamp(Stamp {
         sheet: 0,
-        origin: UVec2::new(0, 10),
+        origin: UVec2::new(0, 30),
         size: UVec2::new(2, 1),
-        cells: vec![(UVec2::ZERO, 120), (UVec2::new(1, 0), 121)],
+        cells: vec![(UVec2::ZERO, 810), (UVec2::new(1, 0), 811)],
     });
     setup
 }
@@ -79,8 +80,8 @@ fn a_setup_survives_the_tileset_unchanged() {
         .set_setup(&setup)
         .expect("the setup's sheets are the tileset's");
 
-    assert_eq!(tileset.terrains.len(), 3);
-    assert_eq!(tileset.terrain_sets.len(), 2);
+    assert_eq!(tileset.terrains.len(), 8);
+    assert_eq!(tileset.terrain_sets.len(), 6);
     assert_eq!(tileset.setup().expect("converts back"), setup);
 }
 
@@ -108,7 +109,7 @@ fn objects_keep_their_pivot_and_new_ones_pivot_at_the_bottom_centre() {
         (tileset.objects.iter()).all(|o| o.pivot == TilesetObject::BOTTOM_CENTRE),
         "a fresh object stands on its bottom centre"
     );
-    let moved = UVec2::new(0, 10);
+    let moved = UVec2::new(0, 30);
     let at = |t: &Tileset| t.objects.iter().position(|o| o.origin == moved);
     let index = at(&tileset).expect("the hand-made object");
     tileset.objects[index].pivot = bevy::math::Vec2::new(0.25, 0.5);
@@ -165,11 +166,11 @@ fn a_tile_layer_is_its_sheet_offset_plus_its_index() {
         source: "b.png".into(),
         columns: 4,
         rows: 2,
-        first_layer: 132,
+        first_layer: 1026,
         ..Default::default()
     });
-    assert_eq!(tileset.layer(0, 131), Some(131));
-    assert_eq!(tileset.layer(1, 3), Some(135));
+    assert_eq!(tileset.layer(0, 1025), Some(1025));
+    assert_eq!(tileset.layer(1, 3), Some(1029));
     assert_eq!(tileset.layer(1, 8), None);
     assert_eq!(tileset.layer(2, 0), None);
 }

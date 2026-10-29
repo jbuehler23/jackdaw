@@ -1,4 +1,4 @@
-//! The terrain, set and bits operators over an auto-imported fixture farm
+//! The terrain, set and bits operators over an auto-imported overworld
 //! tileset: each one's effect on the file, its single undo entry, and its
 //! refusals.
 
@@ -14,12 +14,12 @@ use jackdaw_scene_types::PropertyValue;
 use jackdaw_tileset::{TerrainCollision, TerrainMatch, Tileset};
 use serde_json::json;
 
-pub(crate) const FILE: &str = "tilemap_packed.tileset.bsn";
+pub(crate) const FILE: &str = "overworld.tileset.bsn";
 pub(crate) const GRASS: u8 = 1;
-pub(crate) const SAND: u8 = 2;
-pub(crate) const DIRT: u8 = 3;
+pub(crate) const GROUND: u8 = 2;
+pub(crate) const WATER: u8 = 11;
 
-pub(crate) fn farm() -> (App, tempfile::TempDir) {
+pub(crate) fn overworld() -> (App, tempfile::TempDir) {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET), ("setup", "auto")]);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
@@ -153,21 +153,21 @@ pub(crate) fn over_the_remote(app: &mut App, calls: Vec<(&str, serde_json::Value
 
 #[test]
 fn terrain_add_takes_the_next_id_and_refuses_taken_names_and_spent_ids() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain.add",
-        &[("name", "water"), ("swatch", "#3366ff")],
+        &[("name", "marsh"), ("swatch", "#3366ff")],
     );
-    let water = after.terrains.last().expect("added");
-    assert_eq!((water.id, water.name.as_str()), (4, "water"));
-    assert_eq!(water.swatch.to_u8_array(), [0x33, 0x66, 0xff, 0xff]);
-    assert!(!water.background && water.name_by_user);
-    assert_eq!(after.next_terrain_id, 5);
+    let marsh = after.terrains.last().expect("added");
+    assert_eq!((marsh.id, marsh.name.as_str()), (13, "marsh"));
+    assert_eq!(marsh.swatch.to_u8_array(), [0x33, 0x66, 0xff, 0xff]);
+    assert!(!marsh.background && marsh.name_by_user);
+    assert_eq!(after.next_terrain_id, 14);
 
     let add = "tileset.terrain.add";
-    refused(&mut app, &dir, add, &[("name", "water")], "already named");
+    refused(&mut app, &dir, add, &[("name", "marsh")], "already named");
     refused(&mut app, &dir, add, &[("name", "7")], "cannot name");
     refused(
         &mut app,
@@ -192,18 +192,21 @@ fn terrain_add_takes_the_next_id_and_refuses_taken_names_and_spent_ids() {
 
 #[test]
 fn terrain_remove_empties_its_peers_and_drops_its_sets() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (before, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain.remove",
-        &[("terrain", "sand path")],
+        &[("terrain", "grass 2")],
     );
-    let sand_tile = tile_of(&before, SAND);
-    assert!(after.terrains.iter().all(|t| t.id != SAND));
-    assert_eq!(pairs(&after), [(DIRT, GRASS)]);
-    assert!(after.tiles.iter().all(|t| !t.peers.contains(&SAND)));
-    assert!(peers_of(&after, sand_tile).expect("kept").contains(&0));
+    let ground_tile = tile_of(&before, GROUND);
+    assert!(after.terrains.iter().all(|t| t.id != GROUND));
+    assert_eq!(
+        pairs(&after),
+        [(5, 6), (WATER, GRASS), (WATER, 9), (12, WATER)]
+    );
+    assert!(after.tiles.iter().all(|t| !t.peers.contains(&GROUND)));
+    assert!(peers_of(&after, ground_tile).expect("kept").contains(&0));
     refused(
         &mut app,
         &dir,
@@ -215,7 +218,7 @@ fn terrain_remove_empties_its_peers_and_drops_its_sets() {
 
 #[test]
 fn terrain_rename_sets_a_name_by_hand() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
@@ -235,8 +238,8 @@ fn terrain_rename_sets_a_name_by_hand() {
 
 #[test]
 fn terrain_split_moves_the_listed_tiles_to_a_new_terrain() {
-    let (mut app, dir) = farm();
-    let tile = tile_of(&on_disk(&dir), SAND);
+    let (mut app, dir) = overworld();
+    let tile = tile_of(&on_disk(&dir), GROUND);
     let (before, after) = edit(
         &mut app,
         &dir,
@@ -248,48 +251,57 @@ fn terrain_split_moves_the_listed_tiles_to_a_new_terrain() {
         ],
     );
     let wet = after.terrains.last().expect("new");
-    assert_eq!((wet.id, wet.name.as_str()), (4, "wet sand"));
+    assert_eq!((wet.id, wet.name.as_str()), (13, "wet sand"));
     let moved = before.tiles.iter().find(|t| t.tile == tile).expect("there");
-    let expected = moved.peers.map(|p| if p == SAND { 4 } else { p });
+    let expected = moved.peers.map(|p| if p == GROUND { 13 } else { p });
     assert_eq!(peers_of(&after, tile), Some(expected));
-    assert!(pairs(&after).contains(&(4, GRASS)));
+    assert!(pairs(&after).contains(&(13, GRASS)));
     refused(
         &mut app,
         &dir,
         "tileset.terrain.split",
-        &[("terrain", "3"), ("tiles", "0:0")],
-        "holds no terrain 3",
+        &[("terrain", "11"), ("tiles", "0:0")],
+        "holds no terrain 11",
     );
     refused(
         &mut app,
         &dir,
         "tileset.terrain.split",
-        &[("terrain", "3"), ("tiles", "999")],
+        &[("terrain", "11"), ("tiles", "5000")],
         "out of range",
     );
 }
 
 #[test]
 fn terrain_merge_folds_one_terrain_into_another() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain.merge",
-        &[("from", "3"), ("into", "sand path")],
+        &[("from", "11"), ("into", "grass 2")],
     );
-    assert_eq!(after.terrains.len(), 2);
-    assert_eq!(pairs(&after), [(SAND, GRASS)]);
-    assert!(after.tiles.iter().all(|t| !t.peers.contains(&DIRT)));
+    assert_eq!(after.terrains.len(), 7);
+    assert_eq!(
+        pairs(&after),
+        [
+            (GROUND, GRASS),
+            (GROUND, 9),
+            (5, 6),
+            (9, GROUND),
+            (12, GROUND)
+        ]
+    );
+    assert!(after.tiles.iter().all(|t| !t.peers.contains(&WATER)));
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain.merge",
-        &[("from", "1"), ("into", "2")],
+        &[("from", "6"), ("into", "5")],
     );
-    assert_eq!(after.terrains.len(), 1);
+    assert_eq!(after.terrains.len(), 6);
     assert!(
-        after.terrains[0].background,
+        (after.terrains.iter()).any(|t| t.id == 5 && t.background),
         "the background moves to the kept terrain"
     );
     refused(
@@ -303,36 +315,38 @@ fn terrain_merge_folds_one_terrain_into_another() {
 
 #[test]
 fn terrain_set_collision_chooses_the_mode() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain.set_collision",
-        &[("terrain", "3"), ("mode", "solid")],
+        &[("terrain", "11"), ("mode", "solid")],
     );
-    let dirt = &after.terrains[2];
-    assert_eq!(dirt.collision, TerrainCollision::Solid);
-    assert!(dirt.collision_by_user);
+    let water = (after.terrains.iter())
+        .find(|t| t.id == WATER)
+        .expect("water");
+    assert_eq!(water.collision, TerrainCollision::Solid);
+    assert!(water.collision_by_user);
     refused(
         &mut app,
         &dir,
         "tileset.terrain.set_collision",
-        &[("terrain", "3"), ("mode", "sticky")],
+        &[("terrain", "11"), ("mode", "sticky")],
         "solid, trigger or passable",
     );
 }
 
 #[test]
 fn terrain_sets_are_added_and_their_mode_changed() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain_set.add",
-        &[("inner", "3"), ("outer", "2"), ("mode", "corners")],
+        &[("inner", "11"), ("outer", "2"), ("mode", "corners")],
     );
     let set = (after.terrain_sets.iter())
-        .find(|s| (s.inner, s.outer) == (DIRT, SAND))
+        .find(|s| (s.inner, s.outer) == (WATER, GROUND))
         .expect("added");
     assert_eq!(set.mode, TerrainMatch::Corners);
     let add = "tileset.terrain_set.add";
@@ -340,32 +354,25 @@ fn terrain_sets_are_added_and_their_mode_changed() {
         &mut app,
         &dir,
         add,
-        &[("inner", "3"), ("outer", "2")],
+        &[("inner", "11"), ("outer", "2")],
         "already exists",
     );
     refused(
         &mut app,
         &dir,
         add,
-        &[("inner", "9"), ("outer", "2")],
-        "no terrain is `9`",
+        &[("inner", "4"), ("outer", "2")],
+        "no terrain is `4`",
     );
 
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.terrain_set.set",
-        &[
-            ("inner", "2"),
-            ("outer", "1"),
-            ("mode", "corners_and_sides"),
-        ],
+        &[("inner", "2"), ("outer", "1"), ("mode", "sides")],
     );
     let set = &after.terrain_sets[0];
-    assert_eq!(
-        (set.mode, set.mode_by_user),
-        (TerrainMatch::CornersAndSides, true)
-    );
+    assert_eq!((set.mode, set.mode_by_user), (TerrainMatch::Sides, true));
     refused(
         &mut app,
         &dir,
@@ -377,14 +384,14 @@ fn terrain_sets_are_added_and_their_mode_changed() {
 
 #[test]
 fn set_bits_takes_nine_peers_or_one() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.tile.set_bits",
-        &[("tile", "0:5"), ("peers", "1,1,1,1,dirt path,1,,0,empty")],
+        &[("tile", "0:5"), ("peers", "1,1,1,1,water,1,,0,empty")],
     );
-    assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 3, 1, 0, 0, 0]));
+    assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 11, 1, 0, 0, 0]));
     let tile = after.tiles.iter().find(|t| t.tile == 5).expect("set");
     assert_eq!(tile.peers_by_user, [true; 9]);
 
@@ -394,9 +401,9 @@ fn set_bits_takes_nine_peers_or_one() {
         "tileset.tile.set_bits",
         &[("tile", "5"), ("peer", "bottom"), ("terrain", "2")],
     );
-    assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 3, 1, 0, 2, 0]));
+    assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 11, 1, 0, 2, 0]));
 
-    let auto = tile_of(&on_disk(&dir), SAND);
+    let auto = tile_of(&on_disk(&dir), GROUND);
     let (_, after) = edit(
         &mut app,
         &dir,
@@ -404,7 +411,7 @@ fn set_bits_takes_nine_peers_or_one() {
         &[
             ("tile", &auto.to_string()),
             ("peer", "top_left"),
-            ("terrain", "3"),
+            ("terrain", "11"),
         ],
     );
     let tile = after.tiles.iter().find(|t| t.tile == auto).expect("set");
@@ -424,14 +431,14 @@ fn set_bits_takes_nine_peers_or_one() {
         &mut app,
         &dir,
         bits,
-        &[("tile", "2"), ("peer", "top"), ("terrain", "1")],
-        "part of the object at column 2 row 0",
+        &[("tile", "108"), ("peer", "top"), ("terrain", "1")],
+        "part of the object at column 0 row 4",
     );
     refused(
         &mut app,
         &dir,
         bits,
-        &[("tile", "132"), ("peers", "1")],
+        &[("tile", "1026"), ("peers", "1")],
         "out of range",
     );
     refused(
@@ -447,7 +454,7 @@ fn set_bits_takes_nine_peers_or_one() {
 fn a_failed_write_changes_nothing_and_mints_no_history() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let assets = dir.path().join("assets");
     let (before, count) = (on_disk(&dir), entries(&app));
     let stored = |app: &App| {
@@ -476,18 +483,18 @@ fn a_failed_write_changes_nothing_and_mints_no_history() {
 /// Every terrain, set and bits operator, as an agent drives it.
 #[test]
 fn the_terrain_operators_run_over_the_remote() {
-    let (mut app, dir) = farm();
-    let tile = tile_of(&on_disk(&dir), SAND).to_string();
+    let (mut app, dir) = overworld();
+    let tile = tile_of(&on_disk(&dir), GROUND).to_string();
     over_the_remote(
         &mut app,
         vec![
             (
                 "tileset.terrain.add",
-                json!({ "name": "water", "swatch": "#3366ff" }),
+                json!({ "name": "marsh", "swatch": "#3366ff" }),
             ),
             (
                 "tileset.terrain.rename",
-                json!({ "terrain": "water", "name": "pond" }),
+                json!({ "terrain": "marsh", "name": "pond" }),
             ),
             (
                 "tileset.terrain.set_collision",

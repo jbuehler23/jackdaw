@@ -148,6 +148,30 @@ pub fn editor_test_app_reading(assets: &std::path::Path) -> App {
     app
 }
 
+/// The CC0 overworld tile sheet: 16 px tiles, 27 columns, 432 x 1040.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub const OVERWORLD_SHEET: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/crates/jackdaw_tilemap/tests/data/punyworld/punyworld-overworld-tileset.png"
+);
+
+/// Write [`OVERWORLD_SHEET`] to `to` re-packed with a transparent pixel
+/// between neighbouring tiles: 458 x 1104.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
+pub fn write_spaced_overworld_sheet(to: &std::path::Path) {
+    let packed = image::open(OVERWORLD_SHEET)
+        .expect("the sheet decodes")
+        .to_rgba8();
+    let (w, h) = packed.dimensions();
+    let mut spaced = image::RgbaImage::new(w / 16 * 17 - 1, h / 16 * 17 - 1);
+    for (x, y, pixel) in packed.enumerate_pixels() {
+        spaced.put_pixel(x + x / 16, y + y / 16, *pixel);
+    }
+    spaced.save(to).expect("write the spaced sheet");
+}
+
 /// Run frames until `done` holds, failing the test once `limit` has passed
 /// without it. `what` names the awaited state in the failure.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
