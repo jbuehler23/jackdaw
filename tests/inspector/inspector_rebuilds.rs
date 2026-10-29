@@ -21,6 +21,69 @@ struct Tally {
     nodes_removed: usize,
     cards_added: usize,
     cards_removed: usize,
+    added: Vec<Entity>,
+    removed: Vec<String>,
+}
+
+fn diag_label(world: &World, e: Entity) -> String {
+    let Ok(entity) = world.get_entity(e) else {
+        return format!("<{e}>");
+    };
+    if let Some(name) = entity.get::<Name>() {
+        return format!("'{}'", name.as_str());
+    }
+    let skip = [
+        "Node", "ChildOf", "Children", "ComputedNode", "ComputedUiTargetCamera",
+        "ComputedUiRenderTargetInfo", "UiTransform", "UiGlobalTransform", "Visibility",
+        "InheritedVisibility", "ViewVisibility", "Transform", "GlobalTransform", "ZIndex",
+        "FocusPolicy", "ScrollPosition", "BackgroundColor", "BorderColor", "BorderRadius",
+        "Outline", "TransformTreeChanged", "Pickable", "RelativeCursorPosition", "Interaction",
+        "TextLayoutInfo", "TextNodeFlags", "ContentSize", "TextLayout", "TextFont", "TextColor",
+        "LineHeight", "LineBreak", "ComputedTextBlock", "TextBackgroundColor", "TextShadow",
+        "Hovered", "Hovering", "BoxShadow", "SyncToRenderWorld", "Cursor", "EmSize",
+        "UiTreeDirty", "ThemeContext", "CalculatedClip", "FontHinting", "InheritableFont",
+    ];
+    entity
+        .archetype()
+        .components()
+        .iter()
+        .filter_map(|id| world.components().get_info(*id))
+        .map(|info| info.name().shortname().to_string())
+        .filter(|name| {
+            !skip.contains(&name.as_str())
+                && !["Inherited<", "Propagate<", "Computed", "Taffy", "Accessibility", "Focusable"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+        })
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+fn diag_chain(world: &World, mut e: Entity) -> String {
+    let mut out = vec![diag_label(world, e)];
+    while let Some(parent) = world.get::<ChildOf>(e).map(ChildOf::parent) {
+        e = parent;
+        out.push(diag_label(world, e));
+    }
+    out.reverse();
+    out.into_iter().take(10).collect::<Vec<_>>().join(" > ")
+}
+
+fn diag_report(app: &mut App) {
+    let added = app.world().resource::<Tally>().added.clone();
+    let removed = app.world().resource::<Tally>().removed.clone();
+    let world = app.world();
+    let mut groups: std::collections::BTreeMap<String, usize> = default();
+    for e in added {
+        *groups.entry(format!("ADD {}", diag_chain(world, e))).or_default() += 1;
+    }
+    for chain in removed {
+        *groups.entry(format!("REM {chain}")).or_default() += 1;
+    }
+    for (chain, count) in groups {
+        eprintln!("DIAG {count:>4} {chain}");
+    }
 }
 
 fn settle(app: &mut App) {
@@ -79,12 +142,18 @@ fn app_with_two_entities() -> (App, Entity, Entity) {
     let second = spawn_one("second", 2.0);
     settle(&mut app);
     app.init_resource::<Tally>()
-        .add_observer(|_: On<Add<Node>>, mut tally: ResMut<Tally>| {
+        .add_observer(|add: On<Add<Node>>, mut tally: ResMut<Tally>| {
             tally.nodes_added += 1;
+            tally.added.push(add.event_target());
         })
-        .add_observer(|_: On<Remove<Node>>, mut tally: ResMut<Tally>| {
-            tally.nodes_removed += 1;
-        })
+        .add_observer(
+            |remove: On<Remove<Node>>, mut world: bevy::ecs::world::DeferredWorld| {
+                let chain = diag_chain(&world, remove.event_target());
+                let mut tally = world.resource_mut::<Tally>();
+                tally.nodes_removed += 1;
+                tally.removed.push(chain);
+            },
+        )
         .add_observer(|_: On<Add<ComponentDisplay>>, mut tally: ResMut<Tally>| {
             tally.cards_added += 1;
         })
@@ -185,6 +254,7 @@ fn reselecting_the_shown_entity_leaves_the_inspector_standing() {
 
     select(&mut app, first);
 
+    diag_report(&mut app);
     let tally = app.world().resource::<Tally>();
     assert_eq!(tally.nodes_added, 0, "no UI node is put up again");
     assert_eq!(tally.nodes_removed, 0, "and none is taken down");
@@ -204,6 +274,7 @@ fn adding_a_component_puts_up_only_its_card() {
 
     add_component(&mut app, first, visibility_path());
 
+    diag_report(&mut app);
     let tally = app.world().resource::<Tally>();
     assert_eq!(tally.cards_added, panels, "one card per panel is put up");
     assert_eq!(tally.cards_removed, 0, "and none is taken down");
@@ -238,6 +309,7 @@ fn removing_a_component_takes_down_only_its_card() {
 
     remove_component(&mut app, first, visibility_path());
 
+    diag_report(&mut app);
     let tally = app.world().resource::<Tally>();
     assert_eq!(
         tally.cards_removed, panels,
@@ -389,6 +461,7 @@ fn a_component_that_gets_a_card_arriving_later_puts_up_its_card() {
         before + panels,
         "the new component has a card in each panel",
     );
+    diag_report(&mut app);
     let tally = app.world().resource::<Tally>();
     assert_eq!(tally.cards_added, panels, "and only it was put up");
     assert_eq!(tally.cards_removed, 0);
