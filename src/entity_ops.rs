@@ -2074,7 +2074,7 @@ fn paste_components(world: &mut World) {
 }
 
 /// Paste clipboard entities as the sibling straight after the selection.
-fn paste_entities_after_selection(world: &mut World) {
+pub fn paste_entities_after_selection(world: &mut World) {
     let target = paste_target(world);
     paste_clipboard(world, target);
 }
@@ -2101,7 +2101,7 @@ fn paste_clipboard(world: &mut World, target: PasteTarget) {
 }
 
 /// Copy the selection to the clipboard as BSN text.
-fn copy_selected_entities(world: &mut World) {
+pub fn copy_selected_entities(world: &mut World) {
     let Some(text) = selection_as_bsn(world) else {
         return;
     };

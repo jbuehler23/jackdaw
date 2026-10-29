@@ -9,6 +9,9 @@ use jackdaw_tilemap::{
 };
 
 mod describe;
+mod terrain_set;
+
+pub use terrain_set::TerrainSetError;
 
 /// Registers [`Tileset`] as a reflected asset.
 pub struct TilesetPlugin;
@@ -121,6 +124,10 @@ pub struct TilesetTile {
     pub peers_by_user: [bool; 9],
     pub shape: Option<TilesetShape>,
     pub shape_by_user: bool,
+    /// Inner terrain of the set the tile was laid out for, 0 for none; see
+    /// [`jackdaw_tilemap::SetupTile::set`].
+    pub set_inner: TerrainId,
+    pub set_outer: TerrainId,
 }
 
 /// Collision polygons of one tile.
@@ -402,6 +409,7 @@ fn setup_tile(tile: &TilesetTile) -> SetupTile {
             }
         }),
         shape: tracked(shape, tile.shape_by_user),
+        set: (tile.set_inner != 0).then_some((tile.set_inner, tile.set_outer)),
     }
 }
 
@@ -417,6 +425,8 @@ fn tileset_tile(sheet: u32, tile: u32, from: &SetupTile) -> TilesetTile {
         peers_by_user: from.provenance.map(by_user),
         shape,
         shape_by_user: from.shape.is_user(),
+        set_inner: from.set.map_or(0, |(inner, _)| inner),
+        set_outer: from.set.map_or(0, |(_, outer)| outer),
     }
 }
 

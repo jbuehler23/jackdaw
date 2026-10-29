@@ -4402,6 +4402,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "jackdaw_data_path"
+version = "0.21.0-dev"
+
+[[package]]
 name = "jackdaw_dylib"
 version = "0.21.0-dev"
 dependencies = [
@@ -4803,6 +4807,7 @@ dependencies = [
  "bevy",
  "bevy_math",
  "bytemuck",
+ "jackdaw_data_path",
  "jackdaw_scene_types",
  "noise",
  "path-slash",
@@ -4816,6 +4821,7 @@ version = "0.21.0-dev"
 dependencies = [
  "glam",
  "image",
+ "jackdaw_data_path",
 ]
 
 [[package]]

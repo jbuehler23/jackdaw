@@ -2278,3 +2278,739 @@ fn saving_a_scene_whose_text_does_not_parse_back_leaves_the_file_and_stays_dirty
         status_text(&app)
     );
 }
+
+const TILEMAP_TYPE_PATH: &str = "jackdaw_scene_types::tilemap::Tilemap";
+
+fn tilemap_app(tabs: usize) -> bevy::app::App {
+    let mut app = make_app_with_n_tabs(tabs);
+    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::status_bar::StatusNotice>();
+    app.init_resource::<jackdaw::entity_ops::EntityClipboard>();
+    jackdaw::tilemap::plugin(&mut app);
+    app
+}
+
+/// A terrain layer `side` cells square, painted with terrain 1 and `tile`.
+fn painted_map(side: i32, tile: u16) -> jackdaw_tilemap::TilemapData {
+    use jackdaw_tilemap::{
+        CellCoord, ChunkedLayer, LayerData, LayerKind, TerrainAuthoring, TileRef,
+    };
+    let mut tiles = ChunkedLayer::new();
+    let mut terrain = ChunkedLayer::new();
+    for y in -side / 2..side - side / 2 {
+        for x in -side / 2..side - side / 2 {
+            tiles.set(CellCoord::new(x, y), TileRef::new(tile));
+            terrain.set(CellCoord::new(x, y), 1);
+        }
+    }
+    jackdaw_tilemap::TilemapData {
+        layers: vec![LayerData {
+            kind: LayerKind::Terrain,
+            tiles,
+            authoring: Some(TerrainAuthoring {
+                terrain,
+                ..Default::default()
+            }),
+        }],
+    }
+}
+
+/// Spawn a named tilemap linked into the live document.
+fn spawn_tilemap(app: &mut bevy::app::App, name: &str, data_path: &str) -> bevy::prelude::Entity {
+    use jackdaw_scene_types::{Tilemap, TilemapLayer};
+    let tilemap = Tilemap {
+        data_path: data_path.to_string(),
+        layers: vec![TilemapLayer {
+            name: "Ground".to_string(),
+            tileset: "tiles/overworld.tileset.bsn".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let entity = app
+        .world_mut()
+        .spawn((tilemap.clone(), Name::new(name.to_string())))
+        .id();
+    let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Name(name.to_string())]);
+    ast.add_to_roots(node);
+    ast.link(entity, node);
+    jackdaw::commands::sync_component_to_ast(app.world_mut(), entity, TILEMAP_TYPE_PATH, &tilemap);
+    entity
+}
+
+fn tilemap_entities(app: &mut bevy::app::App) -> Vec<bevy::prelude::Entity> {
+    app.world_mut()
+        .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<jackdaw_scene_types::Tilemap>>(
+        )
+        .iter(app.world())
+        .collect()
+}
+
+fn live_tilemaps(app: &mut bevy::app::App) -> Vec<jackdaw_scene_types::Tilemap> {
+    app.world_mut()
+        .query::<&jackdaw_scene_types::Tilemap>()
+        .iter(app.world())
+        .cloned()
+        .collect()
+}
+
+fn named(app: &mut bevy::app::App, name: &str) -> bevy::prelude::Entity {
+    entity_named(app, name).unwrap_or_else(|| panic!("no {name}"))
+}
+
+fn key_of(app: &mut bevy::app::App, name: &str) -> String {
+    let entity = named(app, name);
+    jackdaw::tilemap::store_key_of(app.world_mut(), entity).expect("a valid data path")
+}
+
+fn data_path_of(app: &mut bevy::app::App, name: &str) -> String {
+    let entity = named(app, name);
+    app.world()
+        .get::<jackdaw_scene_types::Tilemap>(entity)
+        .expect("a tilemap")
+        .data_path
+        .clone()
+}
+
+/// Put `data` in the store as the cells of the map named `name`.
+fn put_map(app: &mut bevy::app::App, name: &str, data: jackdaw_tilemap::TilemapData) {
+    let key = key_of(app, name);
+    app.world_mut()
+        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .insert(key, data);
+}
+
+fn stored(app: &mut bevy::app::App, name: &str) -> Option<jackdaw_tilemap::TilemapData> {
+    let key = key_of(app, name);
+    app.world()
+        .resource::<jackdaw::tilemap::TilemapDataStore>()
+        .get(&key)
+        .cloned()
+}
+
+fn quarantined(app: &mut bevy::app::App, name: &str) -> bool {
+    let key = key_of(app, name);
+    app.world()
+        .resource::<jackdaw::tilemap::TilemapDataStore>()
+        .load_failed_reason(&key)
+        .is_some()
+}
+
+fn ensure(app: &mut bevy::app::App) {
+    app.world_mut()
+        .run_system_cached(jackdaw::tilemap::ensure_tilemap_data_path)
+        .expect("ensure runs");
+}
+
+/// Bind the tab at `tab` to `scene` and mark it unsaved.
+fn bind(app: &mut bevy::app::App, tab: usize, scene: &std::path::Path) {
+    let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+    scenes.tabs[tab].path = Some(scene.to_path_buf());
+    scenes.tabs[tab].dirty = true;
+}
+
+/// Point the tab in front at `scene` and save it there.
+fn save_as(app: &mut bevy::app::App, scene: &std::path::Path) {
+    jackdaw::scene_io::retarget_active_scene(app.world_mut(), &scene.to_string_lossy())
+        .expect("retarget");
+    assert!(jackdaw::scene_io::save_scene(app.world_mut()));
+}
+
+fn save_all(app: &mut bevy::app::App) {
+    assert!(jackdaw::scenes::operators::scene_save_all_system(
+        app.world_mut()
+    ));
+}
+
+fn decoded(path: &std::path::Path) -> jackdaw_tilemap::TilemapData {
+    jackdaw_tilemap::decode(&std::fs::read(path).expect("sidecar written")).expect("decodes")
+}
+
+#[test]
+fn tilemap_cells_survive_a_tab_swap() {
+    let mut app = tilemap_app(2);
+    let painted = painted_map(40, 7);
+    spawn_tilemap(&mut app, "map", "zone.tilemap-0.jdtiles");
+    put_map(&mut app, "map", painted.clone());
+
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    assert!(live_tilemaps(&mut app).is_empty());
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    let maps = live_tilemaps(&mut app);
+    assert_eq!(maps.len(), 1, "the tilemap respawns from the document");
+    assert_eq!(maps[0].data_path, "zone.tilemap-0.jdtiles");
+    assert_eq!(maps[0].layers[0].name, "Ground");
+    assert_eq!(stored(&mut app, "map"), Some(painted));
+}
+
+#[test]
+fn tilemap_cells_survive_play_stop() {
+    let mut app = tilemap_app(1);
+    let painted = painted_map(40, 7);
+    let map = spawn_tilemap(&mut app, "map", "zone.tilemap-0.jdtiles");
+    put_map(&mut app, "map", painted.clone());
+
+    jackdaw::pie_projection::revert_preview(app.world_mut());
+
+    assert!(
+        app.world().get_entity(map).is_err(),
+        "stop respawns the scene"
+    );
+    assert_eq!(live_tilemaps(&mut app).len(), 1);
+    assert_eq!(stored(&mut app, "map"), Some(painted));
+}
+
+/// Write an empty scene at `scene` and open it in a new tab.
+fn open_new_scene(app: &mut bevy::app::App, scene: &std::path::Path) {
+    std::fs::write(scene, "").expect("write scene");
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), scene);
+}
+
+#[test]
+fn scene_save_all_writes_terrain_and_tile_sidecars_of_every_tab() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let mut app = tilemap_app(1);
+    open_new_scene(&mut app, &tmp.path().join("a.bsn"));
+    let terrain_path = "a.terrain-0.jdterrain";
+    app.world_mut()
+        .resource_mut::<jackdaw::terrain::TerrainDataStore>()
+        .insert(
+            terrain_path.to_string(),
+            jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
+                resolution: 2,
+                heights: vec![0.5; 4],
+                channels: vec![],
+            })
+            .expect("a power-of-two resolution migrates"),
+        );
+    app.world_mut().spawn(jackdaw_scene_types::Terrain {
+        resolution: 2,
+        data_path: terrain_path.to_string(),
+        ..Default::default()
+    });
+    let first = painted_map(8, 3);
+    spawn_tilemap(&mut app, "first", "a.tilemap-0.jdtiles");
+    put_map(&mut app, "first", first.clone());
+
+    open_new_scene(&mut app, &tmp.path().join("b.bsn"));
+    let second = painted_map(5, 9);
+    spawn_tilemap(&mut app, "second", "b.tilemap-0.jdtiles");
+    put_map(&mut app, "second", second.clone());
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[1].dirty = true;
+        scenes.tabs[2].dirty = true;
+    }
+
+    save_all(&mut app);
+
+    assert!(
+        tmp.path().join(terrain_path).exists(),
+        "terrain sidecar written"
+    );
+    assert_eq!(decoded(&tmp.path().join("a.tilemap-0.jdtiles")), first);
+    assert_eq!(decoded(&tmp.path().join("b.tilemap-0.jdtiles")), second);
+}
+
+/// Save a scene holding one tilemap named `map` whose cells are `data`.
+fn save_tilemap_scene(scene: &std::path::Path, data: jackdaw_tilemap::TilemapData) {
+    let mut app = tilemap_app(1);
+    spawn_tilemap(&mut app, "map", "");
+    ensure(&mut app);
+    put_map(&mut app, "map", data);
+    bind(&mut app, 0, scene);
+    save_all(&mut app);
+}
+
+fn reopen(app: &mut bevy::app::App, scene: &std::path::Path) {
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), scene);
+    bind(app, 0, scene);
+}
+
+#[test]
+fn a_saved_tilemap_keeps_its_cells_out_of_the_scene_text_and_round_trips() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    let painted = painted_map(100, 7);
+    save_tilemap_scene(&scene, painted.clone());
+
+    let text = std::fs::read(&scene).expect("scene written");
+    assert!(
+        text.len() < 2048,
+        "10000 cells must not reach the scene text: {} bytes",
+        text.len()
+    );
+    let written = std::fs::read(&sidecar).expect("sidecar written");
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+    let loaded = stored(&mut app, "map");
+    assert_eq!(
+        loaded.as_ref().map(jackdaw_tilemap::encode),
+        Some(written.clone()),
+        "the decoded map encodes back to the same bytes"
+    );
+    assert_eq!(loaded, Some(painted));
+    save_all(&mut app);
+    assert_eq!(std::fs::read(&sidecar).expect("sidecar kept"), written);
+}
+
+#[test]
+fn a_missing_tile_sidecar_loads_an_empty_map_with_a_warning() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    std::fs::remove_file(tmp.path().join("zone.tilemap-0.jdtiles")).expect("remove sidecar");
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+
+    assert_eq!(
+        stored(&mut app, "map"),
+        Some(jackdaw_tilemap::TilemapData::default())
+    );
+    assert!(
+        status_text(&app).contains("missing"),
+        "the user is told: {:?}",
+        status_text(&app)
+    );
+}
+
+#[test]
+fn saving_keeps_a_tile_sidecar_that_failed_to_load() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    let damaged = b"JDTILES\0 damaged".to_vec();
+    std::fs::write(&sidecar, &damaged).expect("damage sidecar");
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+    assert!(stored(&mut app, "map").is_none());
+    assert!(quarantined(&mut app, "map"));
+    assert!(status_text(&app).contains("unreadable"));
+
+    save_all(&mut app);
+    assert_eq!(std::fs::read(&sidecar).expect("still there"), damaged);
+}
+
+#[test]
+fn saving_keeps_a_tile_sidecar_that_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    let original = std::fs::read(&sidecar).expect("sidecar written");
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&sidecar).is_ok() {
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o644)).unwrap();
+        return;
+    }
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+    assert!(stored(&mut app, "map").is_none(), "not loaded as empty");
+    assert!(quarantined(&mut app, "map"));
+    assert!(status_text(&app).contains("cannot be read"));
+    save_all(&mut app);
+
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        std::fs::read(&sidecar).unwrap(),
+        original,
+        "the file is kept"
+    );
+}
+
+#[test]
+fn a_new_map_never_takes_a_quarantined_or_existing_path() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    std::fs::write(tmp.path().join("zone.tilemap-0.jdtiles"), b"damaged").unwrap();
+    std::fs::write(tmp.path().join("zone.tilemap-1.jdtiles"), b"someone's file").unwrap();
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+    put_map(&mut app, "map", painted_map(2, 1));
+    assert!(
+        quarantined(&mut app, "map"),
+        "an insert does not lift the quarantine"
+    );
+    spawn_tilemap(&mut app, "new", "");
+    ensure(&mut app);
+    assert_eq!(data_path_of(&mut app, "new"), "zone.tilemap-2.jdtiles");
+}
+
+#[test]
+fn an_invalid_tile_data_path_never_blocks_a_save() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let mut app = tilemap_app(1);
+    spawn_tilemap(&mut app, "map", "../escape.jdtiles");
+    bind(&mut app, 0, &tmp.path().join("zone.bsn"));
+
+    save_all(&mut app);
+    assert!(tmp.path().join("zone.bsn").exists());
+    assert!(!tmp.path().join("../escape.jdtiles").exists());
+}
+
+#[test]
+fn a_quarantined_sidecar_is_read_again_only_once_its_file_changes() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    let good = std::fs::read(&sidecar).unwrap();
+    std::fs::write(&sidecar, b"damaged").unwrap();
+
+    let mut app = tilemap_app(2);
+    reopen(&mut app, &scene);
+    assert!(status_text(&app).contains("unreadable"));
+    jackdaw::status_bar::notify_info(app.world_mut(), "quiet");
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert_eq!(
+        status_text(&app),
+        "quiet",
+        "an unchanged file is not warned about again"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&sidecar, &good).unwrap();
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    assert!(!quarantined(&mut app, "map"));
+    assert_eq!(stored(&mut app, "map"), Some(painted_map(4, 7)));
+}
+
+#[test]
+fn saving_leaves_an_unchanged_tile_sidecar_alone() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    let mtime = || std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+    let before = mtime();
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    save_all(&mut app);
+    assert_eq!(mtime(), before, "an unchanged map is not rewritten");
+
+    let key = key_of(&mut app, "map");
+    app.world_mut()
+        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .get_mut(&key)
+        .expect("loaded")
+        .layers
+        .clear();
+    bind(&mut app, 0, &scene);
+    save_all(&mut app);
+    assert_ne!(mtime(), before, "an edited map is");
+}
+
+fn select(app: &mut bevy::app::App, name: &str) {
+    let entity = named(app, name);
+    let mut selection = app
+        .world_mut()
+        .resource_mut::<jackdaw::selection::Selection>();
+    selection.entities = vec![entity];
+}
+
+#[test]
+fn added_duplicated_and_pasted_maps_get_paths_of_their_own() {
+    const ORIGINAL: &str = "untitled.tilemap-0.jdtiles";
+    let mut app = tilemap_app(1);
+    spawn_tilemap(&mut app, "map", "");
+    ensure(&mut app);
+    assert_eq!(data_path_of(&mut app, "map"), ORIGINAL);
+    let painted = painted_map(4, 7);
+    put_map(&mut app, "map", painted.clone());
+
+    select(&mut app, "map");
+    jackdaw::entity_ops::duplicate_selected(app.world_mut());
+    select(&mut app, "map");
+    jackdaw::entity_ops::copy_selected_entities(app.world_mut());
+    jackdaw::entity_ops::paste_entities_after_selection(app.world_mut());
+    ensure(&mut app);
+
+    let maps = live_tilemaps(&mut app);
+    assert_eq!(maps.len(), 3, "the original, its duplicate and its paste");
+    let mut paths: Vec<String> = maps.iter().map(|m| m.data_path.clone()).collect();
+    paths.sort();
+    paths.dedup();
+    assert_eq!(paths.len(), 3, "every map has its own path: {paths:?}");
+    assert_eq!(
+        data_path_of(&mut app, "map"),
+        ORIGINAL,
+        "the original keeps its path"
+    );
+    for entity in tilemap_entities(&mut app) {
+        let key = jackdaw::tilemap::store_key_of(app.world_mut(), entity).expect("a key");
+        let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+        assert_eq!(store.get(&key), Some(&painted), "{key} holds the cells");
+    }
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let text = jackdaw_bsn::emit_scene(ast);
+    for path in &paths {
+        assert!(text.contains(path.as_str()), "{path} reaches the document");
+    }
+}
+
+#[test]
+fn two_untitled_scenes_saved_into_one_folder_keep_their_own_cells() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let mut app = tilemap_app(2);
+    spawn_tilemap(&mut app, "first", "");
+    ensure(&mut app);
+    put_map(&mut app, "first", painted_map(4, 1));
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    spawn_tilemap(&mut app, "second", "");
+    ensure(&mut app);
+    put_map(&mut app, "second", painted_map(6, 2));
+    assert_ne!(
+        key_of(&mut app, "second"),
+        format!("unsaved-1/{}", data_path_of(&mut app, "second")),
+        "each unsaved tab keys its maps apart"
+    );
+
+    save_as(&mut app, &tmp.path().join("b.bsn"));
+    assert_eq!(data_path_of(&mut app, "second"), "b.tilemap-0.jdtiles");
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+    save_as(&mut app, &tmp.path().join("a.bsn"));
+
+    assert_eq!(
+        decoded(&tmp.path().join("a.tilemap-0.jdtiles")),
+        painted_map(4, 1)
+    );
+    assert_eq!(
+        decoded(&tmp.path().join("b.tilemap-0.jdtiles")),
+        painted_map(6, 2)
+    );
+}
+
+#[test]
+fn save_as_gives_the_new_scene_its_own_tile_sidecar() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let forest = tmp.path().join("forest.bsn");
+    let forest2 = tmp.path().join("forest2.bsn");
+    save_tilemap_scene(&forest, painted_map(4, 1));
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &forest);
+    let key = key_of(&mut app, "map");
+    *app.world_mut()
+        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .get_mut(&key)
+        .expect("loaded") = painted_map(6, 2);
+    bind(&mut app, 0, &forest2);
+    save_all(&mut app);
+    assert_eq!(data_path_of(&mut app, "map"), "forest2.tilemap-0.jdtiles");
+
+    let entity = named(&mut app, "map");
+    app.world_mut()
+        .get_mut::<jackdaw_scene_types::Tilemap>(entity)
+        .expect("a tilemap")
+        .data_path = "forest.tilemap-0.jdtiles".to_string();
+    ensure(&mut app);
+    let moved = data_path_of(&mut app, "map");
+    assert!(
+        moved.starts_with("forest2.") && moved != "forest2.tilemap-0.jdtiles",
+        "bringing the old path back cannot point the map at another file: {moved}"
+    );
+
+    for (scene, cells) in [(&forest, painted_map(4, 1)), (&forest2, painted_map(6, 2))] {
+        let mut app = tilemap_app(1);
+        reopen(&mut app, scene);
+        assert_eq!(stored(&mut app, "map"), Some(cells), "{}", scene.display());
+    }
+}
+
+#[test]
+fn save_as_keeps_a_quarantined_map_and_its_file() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let forest = tmp.path().join("forest.bsn");
+    save_tilemap_scene(&forest, painted_map(4, 1));
+    let damaged = b"JDTILES\0 damaged".to_vec();
+    std::fs::write(tmp.path().join("forest.tilemap-0.jdtiles"), &damaged).unwrap();
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &forest);
+    bind(&mut app, 0, &tmp.path().join("forest2.bsn"));
+    save_all(&mut app);
+
+    assert!(
+        quarantined(&mut app, "map"),
+        "still quarantined under its new path"
+    );
+    for file in ["forest.tilemap-0.jdtiles", "forest2.tilemap-0.jdtiles"] {
+        assert_eq!(
+            std::fs::read(tmp.path().join(file)).unwrap(),
+            damaged,
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn a_map_pasted_from_another_scene_takes_a_copy_of_its_cells() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let a = tmp.path().join("a.bsn");
+    save_tilemap_scene(&a, painted_map(4, 1));
+    let a_sidecar = tmp.path().join("a.tilemap-0.jdtiles");
+    let a_bytes = std::fs::read(&a_sidecar).unwrap();
+
+    let mut app = tilemap_app(1);
+    jackdaw::scenes::operators::scene_open_system(app.world_mut(), &a);
+    select(&mut app, "map");
+    jackdaw::entity_ops::copy_selected_entities(app.world_mut());
+    open_new_scene(&mut app, &tmp.path().join("b.bsn"));
+    jackdaw::entity_ops::paste_entities_after_selection(app.world_mut());
+    ensure(&mut app);
+
+    let pasted = live_tilemaps(&mut app);
+    assert_eq!(pasted.len(), 1);
+    assert_eq!(pasted[0].data_path, "b.tilemap-0.jdtiles");
+    let active = app.world().resource::<jackdaw::scenes::Scenes>().active;
+    bind(&mut app, active, &tmp.path().join("b.bsn"));
+    save_all(&mut app);
+    assert_eq!(
+        std::fs::read(&a_sidecar).unwrap(),
+        a_bytes,
+        "a's file is untouched"
+    );
+    assert_eq!(
+        decoded(&tmp.path().join("b.tilemap-0.jdtiles")),
+        painted_map(4, 1)
+    );
+}
+
+#[test]
+fn a_quarantined_sidecar_that_is_deleted_loads_empty_and_saves() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    std::fs::write(&sidecar, b"damaged").unwrap();
+
+    let mut app = tilemap_app(2);
+    reopen(&mut app, &scene);
+    assert!(quarantined(&mut app, "map"));
+    std::fs::remove_file(&sidecar).unwrap();
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1);
+    jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0);
+
+    assert!(!quarantined(&mut app, "map"));
+    assert_eq!(
+        stored(&mut app, "map"),
+        Some(jackdaw_tilemap::TilemapData::default())
+    );
+    bind(&mut app, 0, &scene);
+    save_all(&mut app);
+    assert!(sidecar.exists(), "the missing file is written again");
+}
+
+#[test]
+fn a_copy_of_a_quarantined_map_gets_no_cells() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene = tmp.path().join("zone.bsn");
+    let sidecar = tmp.path().join("zone.tilemap-0.jdtiles");
+    save_tilemap_scene(&scene, painted_map(4, 7));
+    std::fs::write(&sidecar, b"damaged").unwrap();
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &scene);
+    ensure(&mut app);
+    select(&mut app, "map");
+    jackdaw::entity_ops::duplicate_selected(app.world_mut());
+    ensure(&mut app);
+
+    let maps = live_tilemaps(&mut app);
+    assert_eq!(maps.len(), 2);
+    let copy = maps
+        .iter()
+        .find(|m| m.data_path != "zone.tilemap-0.jdtiles")
+        .expect("the copy moved to a path of its own");
+    save_all(&mut app);
+    assert!(
+        !tmp.path().join(&copy.data_path).exists(),
+        "no empty copy is written"
+    );
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"damaged");
+}
+
+#[test]
+fn a_scene_name_a_data_path_refuses_mints_a_clean_name() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    save_tilemap_scene(&tmp.path().join("level:1.bsn"), painted_map(2, 1));
+    assert_eq!(
+        decoded(&tmp.path().join("level_1.tilemap-0.jdtiles")),
+        painted_map(2, 1)
+    );
+}
+
+#[test]
+fn saving_as_and_back_settles_on_the_first_file() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let a = tmp.path().join("a.bsn");
+    save_tilemap_scene(&a, painted_map(4, 1));
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &a);
+    bind(&mut app, 0, &tmp.path().join("b.bsn"));
+    save_all(&mut app);
+    assert_eq!(data_path_of(&mut app, "map"), "b.tilemap-0.jdtiles");
+    bind(&mut app, 0, &a);
+    save_all(&mut app);
+    for _ in 0..3 {
+        ensure(&mut app);
+    }
+    assert_eq!(data_path_of(&mut app, "map"), "a.tilemap-0.jdtiles");
+    for file in ["a.tilemap-0.jdtiles", "b.tilemap-0.jdtiles"] {
+        assert_eq!(decoded(&tmp.path().join(file)), painted_map(4, 1), "{file}");
+    }
+}
+
+#[test]
+fn a_failed_save_as_changes_nothing() {
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let forest = tmp.path().join("forest.bsn");
+    save_tilemap_scene(&forest, painted_map(4, 1));
+    let blocked = tmp.path().join("blocked");
+    std::fs::write(&blocked, b"a file where a folder would go").unwrap();
+
+    let mut app = tilemap_app(1);
+    reopen(&mut app, &forest);
+    let key = key_of(&mut app, "map");
+    bind(&mut app, 0, &blocked.join("forest2.bsn"));
+    assert!(!jackdaw::scenes::operators::scene_save_all_system(
+        app.world_mut()
+    ));
+
+    assert_eq!(data_path_of(&mut app, "map"), "forest.tilemap-0.jdtiles");
+    assert_eq!(key_of(&mut app, "map"), key);
+    assert_eq!(stored(&mut app, "map"), Some(painted_map(4, 1)));
+    let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+    assert_eq!(
+        store.owner(&key).map(String::from),
+        Some(key_of_scene(&forest))
+    );
+    bind(&mut app, 0, &forest);
+    save_all(&mut app);
+    assert_eq!(
+        decoded(&tmp.path().join("forest.tilemap-0.jdtiles")),
+        painted_map(4, 1)
+    );
+}
+
+/// How the store names the document saved at `scene`, with no project open.
+fn key_of_scene(scene: &std::path::Path) -> String {
+    scene.to_string_lossy().replace('\\', "/")
+}

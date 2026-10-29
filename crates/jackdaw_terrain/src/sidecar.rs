@@ -200,7 +200,7 @@
 //! `encode_regions`/`decode_regions` pairs address one format directly.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::channel::{ChannelData, ChannelDescriptor, ChannelElement};
 use crate::control::Control;
@@ -290,92 +290,18 @@ const REGION_FLAG_PRESENT: u8 = 0b0000_0010;
 const REGION_FLAGS_KNOWN: u8 = REGION_FLAG_HAS_COLOR | REGION_FLAG_PRESENT;
 
 /// Why a terrain sidecar path could not be resolved beneath a scene.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SidecarPathError {
-    /// No sidecar path was provided.
-    Empty,
-    /// The path is absolute or carries a platform-specific prefix.
-    Absolute,
-    /// The path contains a separator or component that is not a plain name.
-    InvalidComponent,
-    /// The path does not end in the exact lowercase `.jdterrain` extension.
-    WrongExtension,
-}
-
-impl core::fmt::Display for SidecarPathError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "terrain sidecar path is empty"),
-            Self::Absolute => write!(f, "terrain sidecar path must be relative to the scene"),
-            Self::InvalidComponent => write!(
-                f,
-                "terrain sidecar path must contain only normal forward-slash-separated components"
-            ),
-            Self::WrongExtension => write!(
-                f,
-                "terrain sidecar path must end in the exact .{EXTENSION} extension"
-            ),
-        }
-    }
-}
-
-impl core::error::Error for SidecarPathError {}
-
-/// Traversal guard shared by every project-relative path string this crate
-/// accepts from a file. Stricter than the host platform: backslashes, Windows
-/// drive prefixes, and empty, `.` and `..` components are rejected everywhere.
-fn reject_path_traversal(data_path: &str) -> Result<(), SidecarPathError> {
-    if data_path.is_empty() {
-        return Err(SidecarPathError::Empty);
-    }
-    if data_path.contains('\\') {
-        return Err(SidecarPathError::InvalidComponent);
-    }
-
-    let path = Path::new(data_path);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
-    {
-        return Err(SidecarPathError::Absolute);
-    }
-
-    for (index, component) in data_path.split('/').enumerate() {
-        if component.is_empty() || matches!(component, "." | "..") {
-            return Err(SidecarPathError::InvalidComponent);
-        }
-        if index == 0
-            && component.as_bytes().get(1) == Some(&b':')
-            && component.as_bytes()[0].is_ascii_alphabetic()
-        {
-            return Err(SidecarPathError::Absolute);
-        }
-        if component.contains(':') {
-            return Err(SidecarPathError::InvalidComponent);
-        }
-    }
-
-    Ok(())
-}
+pub use jackdaw_data_path::DataPathError as SidecarPathError;
 
 /// Validate `data_path` and resolve it beneath `scene_dir`.
 pub fn resolve_path(scene_dir: &Path, data_path: &str) -> Result<PathBuf, SidecarPathError> {
-    reject_path_traversal(data_path)?;
-    let path = Path::new(data_path);
-
-    if path.extension().and_then(|extension| extension.to_str()) != Some(EXTENSION) {
-        return Err(SidecarPathError::WrongExtension);
-    }
-
-    Ok(scene_dir.join(path))
+    jackdaw_data_path::resolve(scene_dir, data_path, EXTENSION)
 }
 
 /// Validate a project-relative asset reference, resolved beneath the
 /// project root by the asset system that loads it. Same traversal guard as
 /// [`resolve_path`], minus the extension check.
 pub fn validate_asset_ref(path: &str) -> Result<(), SidecarPathError> {
-    reject_path_traversal(path)
+    jackdaw_data_path::check_relative(path)
 }
 
 /// Why a material name could not be stored on a terrain slot.

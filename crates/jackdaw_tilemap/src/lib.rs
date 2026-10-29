@@ -7,6 +7,7 @@
 //! an edge belongs to the cell whose min corner it is.
 
 mod collision_trace;
+mod data_path;
 mod grid;
 mod layer;
 mod layout_fit;
@@ -26,6 +27,7 @@ mod terrain_find;
 mod tile;
 
 pub use collision_trace::{SolidMask, TileShape, solid_mask, trace_mask, trace_proposal};
+pub use data_path::{DataPathError, EXTENSION, mint_data_path, resolve_path};
 pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
 pub use layer::{CellValue, ChunkedLayer};
 pub use layout_fit::{

@@ -44,6 +44,9 @@ impl TilesetSetup {
         let mut set = Vec::with_capacity(shapes.len());
         for (address, peers) in tiles.into_iter().zip(shapes) {
             self.set_peers(address, peers)?;
+            if let Some(tile) = self.tiles.get_mut(&address) {
+                tile.set = Some((inner, outer));
+            }
             set.push(address);
         }
         Ok(set)

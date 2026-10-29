@@ -166,6 +166,7 @@ pub mod test_input;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
+pub mod tilemap;
 pub mod tileset_dock;
 pub mod tileset_edit;
 pub mod tileset_import;
@@ -460,6 +461,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::ShadowViewCleanupPlugin)
         .add_plugins(probe_bake::plugin)
         .add_plugins(tileset_import::plugin)
+        .add_plugins(tilemap::plugin)
         .add_plugins(tileset_dock::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
@@ -2915,6 +2917,7 @@ fn cleanup_editor(world: &mut World) {
     world.insert_resource(scenes::confirm_dialog::PendingTabClose::default());
     world.remove_resource::<project_select::PendingSceneOpens>();
     world.insert_resource(terrain::TerrainDataStore::default());
+    world.insert_resource(tilemap::TilemapDataStore::default());
     scenes::reset_scene_resources(world);
     world.insert_resource(brush::BrushSelection::default());
 
