@@ -4,15 +4,19 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use bevy::ecs::change_detection::Tick;
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use jackdaw_api_internal::document::SceneResource;
-use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer};
-use jackdaw_tilemap::{CellCoord, ChunkCoord, TerrainSet, TileRef, TilemapData};
-use jackdaw_tileset::{TerrainMatch, Tileset};
+use jackdaw_scene_types::{LayerTerrainMatch, Tilemap};
+use jackdaw_tilemap::{
+    CHUNK_AREA, CellCoord, ChunkCoord, ChunkedLayer, LayerKind, TerrainSet, TileRef, TilemapData,
+    resolve_region,
+};
+use jackdaw_tileset::TerrainMatch;
 
 use crate::prefab::{IsA, Prefab, PrefabEntityId};
 use crate::scene_io::SidecarImport;
@@ -58,6 +62,16 @@ pub struct TilemapDataStore {
     next_unsaved: u64,
     /// Keys whose cells changed since their maps were last drawn.
     redraw: HashMap<String, Redraw>,
+    /// The terrain set each terrain layer resolves with, by key and layer
+    /// index. A layer listed here holds the tiles its authoring resolves to,
+    /// and an edit resolves the cells it touched with it.
+    sets: HashMap<String, BTreeMap<usize, Arc<TerrainSet>>>,
+    /// The map each key holds, by an id no other map is ever given. A save
+    /// that moves the cells to a new key moves the id with them.
+    ids: HashMap<String, u64>,
+    next_id: u64,
+    /// Terrain cells edits have resolved.
+    pub(crate) resolved_cells: usize,
 }
 
 /// What the drawn chunks of a key must catch up on.
@@ -81,7 +95,13 @@ impl TilemapDataStore {
         self.changed.insert(key.to_string());
         let redraw =
             (self.redraw.entry(key.to_string())).or_insert_with(|| Redraw::Chunks(BTreeSet::new()));
-        Some(TilemapEdit::new(data, redraw))
+        let sets = self.sets.get(key);
+        Some(TilemapEdit::new(
+            data,
+            redraw,
+            sets,
+            &mut self.resolved_cells,
+        ))
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -89,7 +109,8 @@ impl TilemapDataStore {
     }
 
     /// Puts an edited map in place; the next save of its owner writes it. Its
-    /// maps draw it whole, so the layers' dirty chunks are dropped.
+    /// maps draw it whole, so the layers' dirty chunks are dropped. The map
+    /// keeps its id: it is still the same document's map.
     pub fn insert(&mut self, key: impl Into<String>, mut data: TilemapData) {
         let key = key.into();
         for layer in &mut data.layers {
@@ -101,11 +122,28 @@ impl TilemapDataStore {
         }
         self.changed.insert(key.clone());
         self.redraw.insert(key.clone(), Redraw::Whole);
+        self.sets.remove(&key);
+        if !self.ids.contains_key(&key) {
+            self.next_id += 1;
+            self.ids.insert(key.clone(), self.next_id);
+        }
         self.entries.insert(key, data);
+    }
+
+    /// Records `doc` as the document whose map lives at `key`. A map another
+    /// document held there is a different map, so the key gets a new map id.
+    fn set_owner(&mut self, key: &str, doc: &str) {
+        let before = self.owners.insert(key.to_string(), doc.to_string());
+        if before.is_some_and(|before| before != doc) {
+            self.next_id += 1;
+            self.ids.insert(key.to_string(), self.next_id);
+        }
     }
 
     pub fn remove(&mut self, key: &str) -> Option<TilemapData> {
         self.redraw.insert(key.to_string(), Redraw::Whole);
+        self.sets.remove(key);
+        self.ids.remove(key);
         self.read_mtimes.remove(key);
         self.load_failed.remove(key);
         self.changed.remove(key);
@@ -134,6 +172,97 @@ impl TilemapDataStore {
     /// The document whose maps live at `key`, if one has claimed it.
     pub fn owner(&self, key: &str) -> Option<&str> {
         self.owners.get(key).map(String::as_str)
+    }
+
+    /// Whether the cells at `key` were edited since they were last read or
+    /// written. Tiles derived from the authoring do not count.
+    pub fn has_unsaved_edits(&self, key: &str) -> bool {
+        self.changed.contains(key)
+    }
+
+    /// Terrain cells edits have resolved since the store was made.
+    pub fn resolved_cells(&self) -> usize {
+        self.resolved_cells
+    }
+
+    /// The id of the map held at `key`.
+    pub fn map_id(&self, key: &str) -> Option<u64> {
+        self.ids.get(key).copied()
+    }
+
+    /// Where the map with id `id` is held now, if it is still open.
+    pub fn key_of_map(&self, id: u64) -> Option<&str> {
+        (self.ids.iter()).find_map(|(key, at)| (*at == id).then_some(key.as_str()))
+    }
+
+    /// The terrain set terrain layer `layer` at `key` resolves with, if its
+    /// tiles are known to be resolved.
+    pub fn resolved_with(&self, key: &str, layer: usize) -> Option<&Arc<TerrainSet>> {
+        self.sets.get(key)?.get(&layer)
+    }
+
+    pub(crate) fn note_resolved(&mut self, key: &str, layer: usize, set: Arc<TerrainSet>) {
+        (self.sets.entry(key.to_string()).or_default()).insert(layer, set);
+    }
+
+    /// Marks a layer's tiles as resolved with no known set: edits leave them
+    /// as they are, and the next refresh that has a set resolves them whole.
+    pub(crate) fn forget_resolved(&mut self, key: &str, layer: usize) {
+        if let Some(layers) = self.sets.get_mut(key) {
+            layers.remove(&layer);
+        }
+    }
+
+    /// Whether data layer `layer` at `key` differs in kind from `kind`, the
+    /// kind its scene layer has.
+    pub(crate) fn kind_differs(&self, key: &str, layer: usize, kind: LayerKind) -> bool {
+        (self.entries.get(key))
+            .and_then(|data| data.layers.get(layer))
+            .is_some_and(|data| data.kind != kind)
+    }
+
+    /// Gives data layer `layer` at `key` the kind of its scene layer. The
+    /// scene is the source of the kind, so this is no edit of the cells.
+    pub(crate) fn sync_layer_kind(&mut self, key: &str, layer: usize, kind: LayerKind) {
+        if let Some(data) = (self.entries.get_mut(key)).and_then(|data| data.layers.get_mut(layer))
+        {
+            data.kind = kind;
+        }
+    }
+
+    /// Makes a layer's tiles equal `fresh`, derived from its authoring. The
+    /// changed chunks are drawn again, but it is no edit: the key does not
+    /// become unsaved.
+    pub(crate) fn put_derived_tiles(
+        &mut self,
+        key: &str,
+        layer: usize,
+        fresh: &ChunkedLayer<TileRef>,
+    ) {
+        let Some(tiles) = (self.entries.get_mut(key))
+            .and_then(|data| data.layers.get_mut(layer))
+            .map(|layer| &mut layer.tiles)
+        else {
+            return;
+        };
+        let coords: BTreeSet<ChunkCoord> = (tiles.chunks().map(|(c, _)| c))
+            .chain(fresh.chunks().map(|(c, _)| c))
+            .collect();
+        for coord in coords {
+            let want = fresh.chunk(coord);
+            if tiles.chunk(coord) == want {
+                continue;
+            }
+            for local in 0..CHUNK_AREA {
+                tiles.set(coord.cell(local), want.map_or(TileRef::EMPTY, |c| c[local]));
+            }
+        }
+        let dirty = tiles.take_dirty();
+        let redraw =
+            (self.redraw.entry(key.to_string())).or_insert_with(|| Redraw::Chunks(BTreeSet::new()));
+        if let Redraw::Chunks(chunks) = redraw {
+            chunks.extend(dirty.into_iter().map(|chunk| (layer, chunk)));
+        }
     }
 
     fn holds(&self, key: &str) -> bool {
@@ -168,25 +297,49 @@ impl TilemapDataStore {
     }
 }
 
-/// A map open for editing. Dropping it records the chunks the edit touched,
-/// from the layers' dirty chunks and the overrides it changed.
+/// A map open for editing. Dropping it resolves the terrain cells the edit
+/// touched, and the ring around them, into the tiles of each layer that has a
+/// set, then records the chunks the edit touched, from the layers' dirty
+/// chunks and the overrides it changed.
+///
+/// The cells an edit touched are the ones it reports with
+/// [`mark_written`](Self::mark_written), or else every cell of the chunks it
+/// dirtied, plus the overrides it changed.
 pub struct TilemapEdit<'a> {
     data: &'a mut TilemapData,
     redraw: &'a mut Redraw,
+    sets: Option<&'a BTreeMap<usize, Arc<TerrainSet>>>,
+    resolved_cells: &'a mut usize,
     /// Each layer's overrides as the edit found them.
     overrides: Vec<Option<BTreeMap<CellCoord, TileRef>>>,
+    /// The authoring cells the edit reports it wrote, by layer.
+    written: BTreeMap<usize, Vec<CellCoord>>,
 }
 
 impl<'a> TilemapEdit<'a> {
-    fn new(data: &'a mut TilemapData, redraw: &'a mut Redraw) -> Self {
+    fn new(
+        data: &'a mut TilemapData,
+        redraw: &'a mut Redraw,
+        sets: Option<&'a BTreeMap<usize, Arc<TerrainSet>>>,
+        resolved_cells: &'a mut usize,
+    ) -> Self {
         let overrides = (data.layers.iter())
             .map(|layer| (layer.authoring.as_ref()).map(|a| a.overrides.clone()))
             .collect();
         Self {
             data,
             redraw,
+            sets,
+            resolved_cells,
             overrides,
+            written: BTreeMap::new(),
         }
+    }
+
+    /// Reports the authoring cells of `layer` this edit wrote, so dropping it
+    /// resolves only those and their ring rather than their whole chunks.
+    pub fn mark_written(&mut self, layer: usize, cells: impl IntoIterator<Item = CellCoord>) {
+        self.written.entry(layer).or_default().extend(cells);
     }
 }
 
@@ -208,29 +361,46 @@ impl Drop for TilemapEdit<'_> {
         let mut whole = self.data.layers.len() != self.overrides.len();
         let mut touched = BTreeSet::new();
         for (index, layer) in self.data.layers.iter_mut().enumerate() {
-            let mut dirty = layer.tiles.take_dirty();
             let before = self.overrides.get(index).and_then(Option::as_ref);
-            match layer.authoring.as_mut() {
-                Some(authoring) => {
-                    dirty.extend(authoring.terrain.take_dirty());
-                    dirty.extend(authoring.links.take_dirty());
-                    let Some(before) = before else {
-                        whole = true;
-                        continue;
-                    };
-                    let after = &authoring.overrides;
-                    let moved = (before
-                        .iter()
-                        .filter(|(cell, tile)| after.get(cell) != Some(tile)))
-                    .chain(
-                        after
-                            .iter()
-                            .filter(|(cell, tile)| before.get(cell) != Some(tile)),
-                    );
-                    dirty.extend(moved.map(|(cell, _)| cell.chunk()));
+            let mut dirty: BTreeSet<ChunkCoord> = BTreeSet::new();
+            let Some(authoring) = layer.authoring.as_mut() else {
+                whole |= before.is_some();
+                touched.extend(layer.tiles.take_dirty().into_iter().map(|c| (index, c)));
+                continue;
+            };
+            dirty.extend(authoring.terrain.take_dirty());
+            dirty.extend(authoring.links.take_dirty());
+            let mut cells: Vec<CellCoord> = match self.written.remove(&index) {
+                Some(written) => written,
+                None => (dirty.iter())
+                    .flat_map(|chunk| (0..CHUNK_AREA).map(|local| chunk.cell(local)))
+                    .collect(),
+            };
+            let after = &authoring.overrides;
+            match before {
+                Some(before) => {
+                    let moved = (before.iter().filter(|(c, t)| after.get(c) != Some(t)))
+                        .chain(after.iter().filter(|(c, t)| before.get(c) != Some(t)))
+                        .map(|(cell, _)| *cell);
+                    cells.extend(moved);
                 }
-                None => whole |= before.is_some(),
+                None => {
+                    whole = true;
+                    cells.extend(after.keys().copied());
+                }
             }
+            dirty.extend(cells.iter().map(|cell| cell.chunk()));
+            let set = (self.sets.and_then(|sets| sets.get(&index)))
+                .filter(|_| layer.kind == LayerKind::Terrain && !cells.is_empty());
+            if let Some(set) = set {
+                let (terrain, links) = (&authoring.terrain, &authoring.links);
+                let resolved = resolve_region(set, terrain, links, after, cells);
+                *self.resolved_cells += resolved.len();
+                for (cell, tile) in resolved {
+                    layer.tiles.set(cell, tile);
+                }
+            }
+            dirty.extend(layer.tiles.take_dirty());
             touched.extend(dirty.into_iter().map(|chunk| (index, chunk)));
         }
         match self.redraw {
@@ -241,18 +411,14 @@ impl Drop for TilemapEdit<'_> {
     }
 }
 
-/// The solver set terrain layer `layer` resolves with, or a message saying
-/// what the user has to fix.
-pub fn layer_terrain_set(tileset: &Tileset, layer: &TilemapLayer) -> Result<TerrainSet, String> {
-    let mode = match layer.terrain_match {
+/// The match mode a layer names, or `None` for the tileset's only one.
+pub fn layer_mode(terrain_match: LayerTerrainMatch) -> Option<TerrainMatch> {
+    match terrain_match {
         LayerTerrainMatch::Auto => None,
         LayerTerrainMatch::Corners => Some(TerrainMatch::Corners),
         LayerTerrainMatch::Sides => Some(TerrainMatch::Sides),
         LayerTerrainMatch::CornersAndSides => Some(TerrainMatch::CornersAndSides),
-    };
-    tileset
-        .terrain_set(mode)
-        .map_err(|err| format!("Tilemap layer {:?}: {err}", layer.name))
+    }
 }
 
 fn parent_dir(path: &Path) -> PathBuf {
@@ -416,6 +582,43 @@ pub fn store_key_of(world: &mut World, entity: Entity) -> Option<String> {
         .and_then(|map| map.located.map(|(_, key)| key))
 }
 
+/// The store key of `entity`'s map if the tab in front may edit its cells,
+/// or why not: its path is invalid, its file could not be read, or it is
+/// inherited from a prefab that no open tab holds, whose sidecar no save
+/// would write.
+pub fn editable_key(world: &mut World, entity: Entity) -> Result<String, String> {
+    let doc = current_doc(world);
+    let map = (live_maps(world, &doc).into_iter())
+        .find(|map| map.entity == entity)
+        .ok_or("the entity is not a tilemap")?;
+    let key = map
+        .key()
+        .ok_or("the map's data path is invalid")?
+        .to_string();
+    let store = world.resource::<TilemapDataStore>();
+    if let Some(reason) = store.load_failed_reason(&key) {
+        return Err(format!("the map's cells could not be loaded ({reason})"));
+    }
+    if !store.contains(&key) {
+        return Err("the map's cells are not loaded".into());
+    }
+    if map.inherited {
+        let tabs = world.get_resource::<crate::scenes::Scenes>();
+        let paths: Vec<PathBuf> = tabs.map_or(Vec::new(), |scenes| {
+            (scenes.tabs.iter())
+                .filter_map(|tab| tab.path.clone())
+                .collect()
+        });
+        if !(paths.iter()).any(|path| Doc::file(world, path).id == map.owner.id) {
+            return Err(format!(
+                "the map is inherited from {}; open the prefab in a tab to edit its cells",
+                map.owner.id
+            ));
+        }
+    }
+    Ok(key)
+}
+
 /// The store key of every live map with a valid data path.
 pub fn store_keys(world: &mut World) -> HashMap<Entity, String> {
     let doc = current_doc(world);
@@ -520,7 +723,7 @@ fn claim(world: &mut World, doc: &Doc, data_path: &str, cells: Option<TilemapDat
         return;
     };
     let mut store = world.resource_mut::<TilemapDataStore>();
-    store.owners.insert(key.clone(), doc.id.clone());
+    store.set_owner(&key, &doc.id);
     match cells {
         Some(cells) => store.insert(key, cells),
         None if !store.holds(&key) => store.insert(key, TilemapData::default()),
@@ -673,12 +876,22 @@ pub(crate) fn finish_save(world: &mut World, renames: SaveRenames, written: bool
     let mut store = world.resource_mut::<TilemapDataStore>();
     for (_, _, _, from_key, to_key) in &renames.renames {
         if from_key == to_key {
-            store.owners.insert(to_key.clone(), doc.id.clone());
+            store.set_owner(to_key, &doc.id);
             continue;
         }
         let reason = store.load_failed.remove(from_key);
+        let (id, sets) = (
+            store.ids.get(from_key).copied(),
+            store.sets.remove(from_key),
+        );
         if let Some(cells) = store.remove(from_key) {
             store.put_unchanged(to_key, cells);
+            if let Some(id) = id {
+                store.ids.insert(to_key.clone(), id);
+            }
+            if let Some(sets) = sets {
+                store.sets.insert(to_key.clone(), sets);
+            }
         }
         if let Some(reason) = reason {
             store.load_failed.insert(to_key.clone(), reason);
@@ -689,7 +902,7 @@ pub(crate) fn finish_save(world: &mut World, renames: SaveRenames, written: bool
         {
             store.owners.remove(from_key);
         }
-        store.owners.insert(to_key.clone(), doc.id.clone());
+        store.set_owner(to_key, &doc.id);
     }
 }
 
@@ -849,11 +1062,11 @@ pub(crate) fn export_tilemap_sidecars(
         }
         jackdaw_api_internal::document::write_atomic(&full, &bytes)
             .map_err(|err| format!("failed to write tilemap data {}: {err}", full.display()))?;
+        let mut store = world.resource_mut::<TilemapDataStore>();
+        store.note_read(&key, &full);
         if !renamed {
-            let mut store = world.resource_mut::<TilemapDataStore>();
             store.changed.remove(&key);
-            store.owners.insert(key.clone(), doc.id.clone());
-            store.note_read(&key, &full);
+            store.set_owner(&key, &doc.id);
         }
     }
     Ok(())
@@ -862,7 +1075,7 @@ pub(crate) fn export_tilemap_sidecars(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jackdaw_tileset::TilesetTerrainSet;
+    use jackdaw_tileset::{Tileset, TilesetTerrainSet};
 
     #[test]
     fn a_layer_on_a_mixed_mode_tileset_is_told_to_pick_a_mode() {
@@ -876,13 +1089,10 @@ mod tests {
             terrain_sets: vec![set(2, TerrainMatch::Sides), set(3, TerrainMatch::Corners)],
             ..Default::default()
         };
-        let mut layer = TilemapLayer {
-            name: "Ground".into(),
-            ..Default::default()
-        };
-        let warning = layer_terrain_set(&tileset, &layer).expect_err("ambiguous");
-        assert!(warning.contains("Ground") && warning.contains("pick one match mode"));
-        layer.terrain_match = LayerTerrainMatch::Sides;
-        assert!(layer_terrain_set(&tileset, &layer).is_ok());
+        let warning = (tileset.terrain_set(layer_mode(LayerTerrainMatch::Auto)))
+            .expect_err("ambiguous")
+            .to_string();
+        assert!(warning.contains("pick one match mode"));
+        assert!((tileset.terrain_set(layer_mode(LayerTerrainMatch::Sides))).is_ok());
     }
 }

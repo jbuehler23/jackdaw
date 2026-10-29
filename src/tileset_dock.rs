@@ -192,6 +192,12 @@ pub(crate) fn load(
     world: &mut World,
     path: &str,
 ) -> Result<(AssetId<Tileset>, Option<Tileset>), String> {
+    let id = tileset_id(world, path)?;
+    Ok((id, world.resource::<Assets<Tileset>>().get(id).cloned()))
+}
+
+/// The asset id of the tileset at `path`.
+pub(crate) fn tileset_id(world: &mut World, path: &str) -> Result<AssetId<Tileset>, String> {
     let file = resolve_project_path(world, Path::new(path));
     let entry = entry_for_file(world, &file)
         .ok_or_else(|| format!("{path} is not an asset file of this project"))?;
@@ -202,7 +208,7 @@ pub(crate) fn load(
         .ok_or("the tileset cannot be loaded")?
         .id()
         .typed::<Tileset>();
-    Ok((id, world.resource::<Assets<Tileset>>().get(id).cloned()))
+    Ok(id)
 }
 
 fn build_dock(world: &mut World, parent: Entity) {

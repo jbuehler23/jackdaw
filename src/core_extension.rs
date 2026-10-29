@@ -330,6 +330,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::image_sampling::add_to_extension(ctx);
         crate::tileset_dock::add_to_extension(ctx);
         crate::tileset_edit::add_to_extension(ctx);
+        crate::tilemap_stroke::add_to_extension(ctx);
         crate::tileset_import::add_to_extension(ctx);
         crate::tileset_layout_ops::add_to_extension(ctx);
         crate::world_units::add_to_extension(ctx);
