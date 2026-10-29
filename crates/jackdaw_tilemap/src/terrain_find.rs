@@ -579,7 +579,7 @@ pub(crate) fn material(oklab: Vec3) -> &'static str {
 
 /// Names every terrain once, kept terrains in id order and then dropped
 /// ones, each unique against `reserved` and the names before it. A kept
-/// inner of a set over a background terrain is "<material> path" when it
+/// inner of a set over a background terrain is `"<material> path"` when it
 /// is sand, dirt, stone, or grass over a ground that is not grass; any
 /// other terrain is its bare material.
 pub(crate) fn name_terrains(
