@@ -252,6 +252,9 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         world
             .resource_mut::<crate::prefab::PrefabAstCache>()
             .insert(&path, bsn);
+        let sidecar_base = path.to_string_lossy();
+        export_terrain_sidecars(world, &sidecar_base)?;
+        crate::tilemap::export_tilemap_sidecars(world, &sidecar_base)?;
         crate::prefab::operators::save_prefab_to_disk(world, &path)
             .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
         write_alongside(world, &path.to_string_lossy())?;
@@ -338,6 +341,7 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         warn!("cannot make the folder for {path}: {err}");
     }
     export_terrain_sidecars(world, &path)?;
+    crate::tilemap::export_tilemap_sidecars(world, &path)?;
 
     // A redirected save renames the legacy source to `.jsn.bak` first so a
     // stale `.jsn` cannot shadow the fresh `.bsn` on the next open.

@@ -4254,3 +4254,141 @@ fn saving_a_prefab_whose_text_does_not_parse_back_leaves_the_file_and_stays_dirt
         "the refusal is shown: {notice:?}"
     );
 }
+
+#[test]
+fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefab_path = tmp.path().join("p.bsn");
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    jackdaw::tilemap::plugin(&mut app);
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(
+            &prefab_path,
+            bsn_ast(
+                "#p\n\
+                 jackdaw::prefab::components::Prefab\n\
+                 jackdaw::prefab::components::PrefabEntityId(0)\n\
+                 jackdaw_scene_types::types::Terrain { resolution: 2, data_path: \"p.terrain-0.jdterrain\" }\n\
+                 jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }",
+            ),
+        );
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let mut tab = jackdaw::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(prefab_path.clone());
+        tab.kind = jackdaw::scenes::TabKind::Prefab;
+        tab.content = jackdaw::scenes::TabContent::Prefab(jackdaw::prefab::canonical_prefab_path(
+            &prefab_path,
+        ));
+        scenes.tabs.push(tab);
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw::scene_io::SceneFilePath>()
+        .path = Some(prefab_path.to_string_lossy().into_owned());
+    jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
+
+    app.world_mut()
+        .resource_mut::<jackdaw::terrain::TerrainDataStore>()
+        .insert(
+            "p.terrain-0.jdterrain".to_string(),
+            jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
+                resolution: 2,
+                heights: vec![0.5; 4],
+                channels: vec![],
+            })
+            .expect("a power-of-two resolution migrates"),
+        );
+    let map = jackdaw_tilemap::TilemapData {
+        layers: vec![jackdaw_tilemap::LayerData {
+            kind: jackdaw_tilemap::LayerKind::Tile,
+            tiles: jackdaw_tilemap::ChunkedLayer::new(),
+            authoring: None,
+        }],
+    };
+    app.world_mut()
+        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .insert("p.tilemap-0.jdtiles", map.clone());
+
+    jackdaw::scene_io::save_scene(app.world_mut());
+
+    assert!(tmp.path().join("p.terrain-0.jdterrain").exists());
+    assert_eq!(
+        std::fs::read(tmp.path().join("p.tilemap-0.jdtiles")).expect("tile sidecar written"),
+        jackdaw_tilemap::encode(&map)
+    );
+}
+
+#[test]
+fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("levels")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("prefabs")).unwrap();
+    let prefab_sidecar = tmp.path().join("prefabs/p.tilemap-0.jdtiles");
+    let scene_path = tmp.path().join("levels/zone.bsn");
+    std::fs::write(
+        tmp.path().join("prefabs/p.bsn"),
+        "#p\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }\n",
+    )
+    .unwrap();
+    let map = jackdaw_tilemap::TilemapData {
+        layers: vec![jackdaw_tilemap::LayerData {
+            kind: jackdaw_tilemap::LayerKind::Tile,
+            tiles: jackdaw_tilemap::ChunkedLayer::new(),
+            authoring: None,
+        }],
+    };
+    let bytes = jackdaw_tilemap::encode(&map);
+    std::fs::write(&prefab_sidecar, &bytes).unwrap();
+    std::fs::write(
+        &scene_path,
+        "#instance\n\
+         jackdaw::prefab::components::IsA { source: \"../prefabs/p.bsn\", deleted: [] }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n",
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    jackdaw::tilemap::plugin(&mut app);
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::tilemap::TilemapDataStore>()
+            .get("p.tilemap-0.jdtiles"),
+        Some(&map),
+        "the instance reads the prefab's sidecar"
+    );
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let mut tab = jackdaw::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(scene_path.clone());
+        tab.dirty = true;
+        scenes.tabs = vec![tab];
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .get_mut("p.tilemap-0.jdtiles")
+        .expect("loaded")
+        .layers
+        .clear();
+    assert!(jackdaw::scenes::operators::scene_save_all_system(
+        app.world_mut()
+    ));
+
+    assert!(
+        !tmp.path().join("levels/p.tilemap-0.jdtiles").exists(),
+        "nothing is written beside the scene"
+    );
+    assert_eq!(
+        std::fs::read(&prefab_sidecar).unwrap(),
+        jackdaw_tilemap::encode(&jackdaw_tilemap::TilemapData::default())
+    );
+}

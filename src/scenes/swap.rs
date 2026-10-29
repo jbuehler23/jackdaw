@@ -328,7 +328,9 @@ pub fn activate_tab(world: &mut World, target: usize) {
         } else {
             crate::scene_io::SidecarImport::RefreshChanged
         };
-        crate::scene_io::import_terrain_sidecars(world, &path.to_string_lossy(), mode);
+        let path = path.to_string_lossy();
+        crate::scene_io::import_terrain_sidecars(world, &path, mode);
+        crate::tilemap::import_tilemap_sidecars(world, &path, mode);
     }
 
     let mut scenes = world.resource_mut::<Scenes>();

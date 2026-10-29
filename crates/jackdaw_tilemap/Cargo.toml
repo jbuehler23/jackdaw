@@ -10,6 +10,7 @@ include = ["src/**/*", "Cargo.toml", "LICENSE*"]
 
 [dependencies]
 glam.workspace = true
+jackdaw_data_path.workspace = true
 
 [dev-dependencies]
 image.workspace = true

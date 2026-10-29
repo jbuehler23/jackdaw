@@ -109,6 +109,9 @@ pub struct SetupTile {
     /// Per peer, by [`Peer::index`].
     pub provenance: [Provenance; 9],
     pub shape: Tracked<Option<TileShape>>,
+    /// The set, inner then outer, the tile was laid out for; `None` when only
+    /// its peers say which set holds it.
+    pub set: Option<(TerrainId, TerrainId)>,
 }
 
 impl SetupTile {
@@ -596,7 +599,10 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
     let mut tiles = BTreeMap::new();
     for set in &fresh.proposal.sets {
         for t in &set.tiles {
-            (tiles.entry(t.address)).or_insert_with(|| auto_tile(t.terrains));
+            (tiles.entry(t.address)).or_insert_with(|| SetupTile {
+                set: Some((set.inner, set.outer)),
+                ..auto_tile(t.terrains)
+            });
         }
     }
     for p in &fresh.proposal.terrains {
@@ -720,6 +726,9 @@ fn merge_tile(previous: Option<&SetupTile>, fresh: Option<&SetupTile>) -> SetupT
     }
     if p.shape.is_user() {
         tile.shape = p.shape.clone();
+    }
+    if p.provenance.contains(&Provenance::User) {
+        tile.set = p.set.or(tile.set);
     }
     tile
 }

@@ -424,6 +424,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
     // explicit load means disk is the truth, so this overwrites whatever
     // the store held for these paths.
     import_terrain_sidecars(world, &path, SidecarImport::Reload);
+    crate::tilemap::import_tilemap_sidecars(world, &path, SidecarImport::Reload);
 
     if let Some(hash) = loaded_hash {
         crate::scenes::external_watch::note_known_hash(world, Path::new(&path), hash);

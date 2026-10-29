@@ -17,6 +17,7 @@ bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-fe
     "bevy_asset",
 ] }
 path-slash = { workspace = true, optional = true }
+jackdaw_data_path = { version = "0.21.0-dev", path = "../jackdaw_data_path" }
 jackdaw_scene_types = { version = "0.21.0-dev", path = "../jackdaw_scene_types", default-features = false, optional = true }
 
 [features]
