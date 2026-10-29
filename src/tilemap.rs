@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use bevy::prelude::*;
+use bevy::reflect::TypePath;
 use jackdaw_api_internal::document::SceneResource;
 use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer};
 use jackdaw_tilemap::{DataPathError, TerrainSet, TilemapData};
@@ -16,7 +17,10 @@ use crate::prefab::{IsA, PrefabEntityId};
 use crate::scene_io::{SceneFilePath, SidecarImport};
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<TilemapDataStore>();
+    app.init_resource::<TilemapDataStore>().add_systems(
+        Update,
+        ensure_tilemap_data_path.run_if(in_state(crate::AppState::Editor)),
+    );
     app.world_mut()
         .spawn(SceneResource::of::<TilemapDataStore>());
 }
@@ -29,6 +33,8 @@ pub struct TilemapDataStore {
     /// files are never written and their names never minted again.
     load_failed: HashMap<String, String>,
     read_mtimes: HashMap<String, SystemTime>,
+    /// Paths edited since they were last read or written.
+    changed: HashSet<String>,
 }
 
 impl TilemapDataStore {
@@ -36,7 +42,9 @@ impl TilemapDataStore {
         self.entries.get(data_path)
     }
 
+    /// The map for editing; the next save writes it.
     pub fn get_mut(&mut self, data_path: &str) -> Option<&mut TilemapData> {
+        self.changed.insert(data_path.to_string());
         self.entries.get_mut(data_path)
     }
 
@@ -44,14 +52,17 @@ impl TilemapDataStore {
         self.entries.contains_key(data_path)
     }
 
-    /// Puts a map in place, leaving any quarantine on its path.
+    /// Puts an edited map in place; the next save writes it.
     pub fn insert(&mut self, data_path: impl Into<String>, data: TilemapData) {
-        self.entries.insert(data_path.into(), data);
+        let data_path = data_path.into();
+        self.changed.insert(data_path.clone());
+        self.entries.insert(data_path, data);
     }
 
     pub fn remove(&mut self, data_path: &str) -> Option<TilemapData> {
         self.read_mtimes.remove(data_path);
         self.load_failed.remove(data_path);
+        self.changed.remove(data_path);
         self.entries.remove(data_path)
     }
 
@@ -66,6 +77,7 @@ impl TilemapDataStore {
 
     fn quarantine(&mut self, data_path: &str, reason: String) {
         self.entries.remove(data_path);
+        self.changed.remove(data_path);
         self.load_failed.insert(data_path.to_string(), reason);
     }
 
@@ -174,6 +186,41 @@ pub fn mint_data_path(world: &mut World) -> String {
     })
 }
 
+/// Gives every scene-owned tilemap a data path of its own. A map with none
+/// gets a fresh one; a copy sharing another's path, from a duplicate or a
+/// paste, is moved to a fresh one holding a clone of the original's cells.
+/// Maps inherited from a prefab share their prefab's sidecar and are left.
+pub fn ensure_tilemap_data_path(world: &mut World) {
+    let mut query = world.query::<(Entity, &Tilemap)>();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut needs: Vec<(Entity, Option<String>)> = Vec::new();
+    {
+        let world: &World = world;
+        for (entity, tilemap) in query.iter(world) {
+            if owning_instance(world, entity).is_some() {
+                continue;
+            }
+            if tilemap.data_path.is_empty() {
+                needs.push((entity, None));
+            } else if !seen.insert(tilemap.data_path.clone()) {
+                needs.push((entity, Some(tilemap.data_path.clone())));
+            }
+        }
+    }
+    for (entity, aliased) in needs {
+        let minted = mint_data_path(world);
+        let mut store = world.resource_mut::<TilemapDataStore>();
+        let data = aliased.and_then(|from| store.get(&from).cloned());
+        store.insert(minted.clone(), data.unwrap_or_default());
+        let Some(mut tilemap) = world.get_mut::<Tilemap>(entity) else {
+            continue;
+        };
+        tilemap.data_path = minted;
+        let tilemap = tilemap.clone();
+        crate::commands::sync_component_to_ast(world, entity, Tilemap::type_path(), &tilemap);
+    }
+}
+
 /// Reads the sidecar of every tilemap in the world into the store, and
 /// returns a warning per map that loaded empty or not at all.
 ///
@@ -213,6 +260,7 @@ pub(crate) fn import_tilemap_sidecars(
         match read.map(|bytes| jackdaw_tilemap::decode(&bytes)) {
             Ok(Ok(data)) => {
                 store.entries.insert(data_path.clone(), data);
+                store.changed.remove(&data_path);
                 store.clear_load_failed(&data_path);
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -252,7 +300,8 @@ pub(crate) fn import_tilemap_sidecars(
     warnings
 }
 
-/// Writes each live map the store holds to its sidecar.
+/// Writes each live map the store holds whose cells changed since they were
+/// read or written, or whose file is missing.
 ///
 /// An invalid path and a quarantined path are skipped with a warning and never
 /// fail the save; the quarantined file is kept as it is.
@@ -280,7 +329,8 @@ pub(crate) fn export_tilemap_sidecars(
             );
             continue;
         }
-        if let Some(data) = store.get(&data_path) {
+        let unchanged = !store.changed.contains(&data_path) && full.exists();
+        if let Some(data) = store.get(&data_path).filter(|_| !unchanged) {
             writes.push((data_path, full, jackdaw_tilemap::encode(data)));
         }
     }
@@ -291,9 +341,9 @@ pub(crate) fn export_tilemap_sidecars(
         }
         jackdaw_api_internal::document::write_atomic(&full, &bytes)
             .map_err(|err| format!("failed to write tilemap data {}: {err}", full.display()))?;
-        world
-            .resource_mut::<TilemapDataStore>()
-            .note_read(&data_path, &full);
+        let mut store = world.resource_mut::<TilemapDataStore>();
+        store.changed.remove(&data_path);
+        store.note_read(&data_path, &full);
     }
     Ok(())
 }
