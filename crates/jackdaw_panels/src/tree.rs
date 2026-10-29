@@ -91,6 +91,13 @@ impl Edge {
 pub struct DockTabEntry {
     pub window_id: String,
     pub id: TabId,
+    /// Label shown in place of the window's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// What this tab shows, for a window kind that opens one tab per
+    /// document; saved with the layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
 }
 
 /// A leaf in the dock tree: an area that hosts tabbed windows.
@@ -138,6 +145,8 @@ impl DockLeaf {
             .map(|window_id| DockTabEntry {
                 window_id,
                 id: TabId::PENDING,
+                title: None,
+                payload: None,
             })
             .collect();
         self.active = self.windows.first().map(|t| t.id);
@@ -305,9 +314,27 @@ impl DockTree {
         let DockNode::Leaf(l) = self.nodes.get_mut(&leaf)? else {
             return None;
         };
-        l.windows.push(DockTabEntry { window_id, id });
+        l.windows.push(DockTabEntry {
+            window_id,
+            id,
+            title: None,
+            payload: None,
+        });
         l.active = Some(id);
         Some(id)
+    }
+
+    /// The tab `tab`, wherever it is docked.
+    pub fn tab(&self, tab: TabId) -> Option<&DockTabEntry> {
+        self.tabs().map(|(_, t)| t).find(|t| t.id == tab)
+    }
+
+    /// The tab `tab`, to change its title or payload.
+    pub fn tab_mut(&mut self, tab: TabId) -> Option<&mut DockTabEntry> {
+        self.nodes.values_mut().find_map(|node| match node {
+            DockNode::Leaf(l) => l.windows.iter_mut().find(|t| t.id == tab),
+            DockNode::Split(_) => None,
+        })
     }
 
     pub fn get(&self, id: NodeId) -> Option<&DockNode> {
@@ -446,6 +473,8 @@ impl DockTree {
                 windows: vec![DockTabEntry {
                     window_id: window,
                     id: tab_id,
+                    title: None,
+                    payload: None,
                 }],
                 active: Some(tab_id),
                 persistent: false,

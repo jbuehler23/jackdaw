@@ -11,6 +11,8 @@ pub struct DockWindowDescriptor {
     pub default_area: String,
     pub priority: i32,
     pub build: DockWindowBuildFn,
+    /// Left out of window menus and the default layout.
+    pub unlisted: bool,
 }
 
 #[derive(Resource, Default)]

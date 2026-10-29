@@ -1,5 +1,5 @@
 use bevy::math::UVec2;
-use jackdaw_tilemap::{MatchMode, Peer, TileAddress, TileTerrains};
+use jackdaw_tilemap::{MatchMode, Peer, Provenance, TileAddress, TileTerrains};
 use jackdaw_tileset::{Tileset, TilesetSheet};
 
 /// Two sheets, the second alone under terrain setup.
@@ -53,9 +53,12 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
     setup
         .set_peers(TileAddress { sheet: 0, tile: 1 }, edge)
         .expect("bits");
+    let mixed = TileAddress { sheet: 0, tile: 2 };
     setup
-        .set_peers(TileAddress { sheet: 0, tile: 2 }, edge.with(Peer::Top, 0))
+        .set_peers(mixed, edge.with(Peer::Top, 0))
         .expect("bits");
+    // Auto setup's guess, not a hand-set tile, so it stays flagged.
+    setup.tiles.get_mut(&mixed).expect("set").provenance = [Provenance::Auto; 9];
     setup
         .put_block(0, UVec2::new(4, 2), UVec2::new(2, 1), UVec2::new(2, 1))
         .expect("fits");

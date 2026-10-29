@@ -293,6 +293,7 @@ impl<'a> ExtensionContext<'a> {
             default_area: descriptor.default_area.anchor_id().to_string(),
             priority: descriptor.priority.unwrap_or(100),
             build: descriptor.build,
+            unlisted: descriptor.unlisted,
         };
         self.world
             .resource_mut::<WindowRegistry>()
@@ -797,6 +798,9 @@ pub struct WindowDescriptor {
     pub default_area: Option<DefaultArea>,
     pub priority: Option<i32>,
     pub build: Arc<dyn Fn(&mut ChildSpawner) + Send + Sync + 'static>,
+    /// Opened only for a document, by an operator; the Window menus and the
+    /// default layout leave it out.
+    pub unlisted: bool,
 }
 
 impl WindowDescriptor {
@@ -839,6 +843,14 @@ impl WindowDescriptor {
         self
     }
 
+    /// Keeps the window out of the Window menus and the default layout, for a
+    /// window that only makes sense opened on a document.
+    #[must_use]
+    pub fn unlisted(mut self) -> Self {
+        self.unlisted = true;
+        self
+    }
+
     /// Sets the build function for the window, which is used for building the window's UI.
     #[must_use]
     pub fn with_build(mut self, build: impl Fn(&mut ChildSpawner) + Send + Sync + 'static) -> Self {
@@ -856,6 +868,7 @@ impl Default for WindowDescriptor {
             default_area: None,
             priority: None,
             build: Arc::new(|_| {}),
+            unlisted: false,
         }
     }
 }
