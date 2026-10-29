@@ -1,4 +1,6 @@
+use bevy::camera::RenderTarget;
 use bevy::prelude::*;
+use bevy::window::WindowRef;
 use jackdaw_scene_types::Scene2dRoot;
 
 /// The `Camera2d` the runtime spawns at the world origin when a 2D scene
@@ -62,4 +64,45 @@ pub(crate) fn leave_with_last_2d_scene(
         }
     }
     Ok(())
+}
+
+/// The window and order an active camera draws at, when it draws into a
+/// window: `None` for the primary window.
+fn window_slot(world: &World, camera: Entity) -> Option<(Option<Entity>, isize)> {
+    let state = world
+        .get::<Camera>(camera)
+        .filter(|state| state.is_active)?;
+    let window = match world.get::<RenderTarget>(camera) {
+        None | Some(RenderTarget::Window(WindowRef::Primary)) => None,
+        Some(RenderTarget::Window(WindowRef::Entity(window))) => Some(*window),
+        Some(_) => return None,
+    };
+    Some((window, state.order))
+}
+
+/// Leave at most one active camera per window and order once a scene spawns:
+/// a camera already drawing keeps its slot, then the first authored one in
+/// scene order takes it, and the other authored ones switch off.
+pub(crate) fn one_camera_per_window_order(world: &mut World, spawned: &[Entity]) {
+    let drawing: Vec<Entity> = world
+        .query_filtered::<Entity, (With<Camera>, Without<crate::RuntimeOnly>)>()
+        .iter(world)
+        .filter(|camera| !spawned.contains(camera))
+        .collect();
+    let mut taken: Vec<_> = drawing
+        .into_iter()
+        .filter_map(|camera| window_slot(world, camera))
+        .collect();
+    for &camera in spawned {
+        let Some(slot) = window_slot(world, camera) else {
+            continue;
+        };
+        if taken.contains(&slot) {
+            if let Some(mut state) = world.get_mut::<Camera>(camera) {
+                state.is_active = false;
+            }
+        } else {
+            taken.push(slot);
+        }
+    }
 }

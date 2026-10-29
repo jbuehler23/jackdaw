@@ -98,6 +98,7 @@ impl Plugin for JackdawCameraRigPlugin {
             PostUpdate,
             drive_camera_rig.after(bevy::transform::TransformSystems::Propagate),
         );
+        app.add_observer(take_the_window_order);
     }
 }
 
@@ -172,6 +173,48 @@ fn dematerialize_inactive(
 ) {
     for rig in &rigs {
         commands.entity(rig).remove::<Camera3d>();
+    }
+}
+
+/// The window an active camera draws into, `None` for the primary one, with
+/// its order.
+fn window_slot(
+    camera: &Camera,
+    target: Option<&bevy::camera::RenderTarget>,
+) -> Option<(Option<Entity>, isize)> {
+    use bevy::{camera::RenderTarget, window::WindowRef};
+    if !camera.is_active {
+        return None;
+    }
+    let window = match target {
+        None | Some(RenderTarget::Window(WindowRef::Primary)) => None,
+        Some(RenderTarget::Window(WindowRef::Entity(window))) => Some(*window),
+        Some(_) => return None,
+    };
+    Some((window, camera.order))
+}
+
+/// The active rig's camera takes its window order: any other camera active
+/// at that window and order switches off, so only the rig draws there.
+fn take_the_window_order(
+    add: On<Add<Camera>>,
+    rigs: Query<(), With<ActiveCameraRig>>,
+    mut cameras: Query<(Entity, &mut Camera, Option<&bevy::camera::RenderTarget>)>,
+) {
+    if !rigs.contains(add.entity) {
+        return;
+    }
+    let Some(slot) = cameras
+        .get(add.entity)
+        .ok()
+        .and_then(|(_, camera, target)| window_slot(camera, target))
+    else {
+        return;
+    };
+    for (entity, mut camera, target) in &mut cameras {
+        if entity != add.entity && window_slot(&camera, target) == Some(slot) {
+            camera.is_active = false;
+        }
     }
 }
 
@@ -455,5 +498,35 @@ mod tests {
             "a gate owns activation; the lone-rig convenience must not fight it"
         );
         assert!(!app.world().entity(only).contains::<Camera3d>());
+    }
+
+    #[test]
+    fn the_active_rig_switches_off_a_camera_at_its_window_order() {
+        let mut app = App::new();
+        app.add_plugins((bevy::transform::TransformPlugin, JackdawCameraRigPlugin));
+        let authored = app.world_mut().spawn(Camera3d::default()).id();
+        let other_order = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Camera {
+                    order: 1,
+                    ..default()
+                },
+            ))
+            .id();
+        let parent = app.world_mut().spawn(Transform::default()).id();
+        let rig = app
+            .world_mut()
+            .spawn((CameraRig::default(), ChildOf(parent)))
+            .id();
+        app.update();
+        let active = |app: &App, e| app.world().get::<Camera>(e).is_some_and(|c| c.is_active);
+        assert!(active(&app, rig), "the rig draws");
+        assert!(
+            !active(&app, authored),
+            "the camera at its order steps aside"
+        );
+        assert!(active(&app, other_order), "another order keeps drawing");
     }
 }

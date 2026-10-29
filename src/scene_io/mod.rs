@@ -313,11 +313,18 @@ impl Plugin for SceneIoPlugin {
 /// whose defaults target the primary window at order 0, the same window
 /// the editor UI camera composites into, so an authored game camera
 /// drew the scene on top of the docks. The components stay on the
-/// entity for inspection and save; only rendering is suppressed.
+/// entity for inspection and save; only rendering is suppressed. A
+/// `SceneCamera` the document has not registered yet is covered too.
 fn deactivate_document_cameras(
     mut cameras: Query<
         &mut bevy::camera::Camera,
-        (With<jackdaw_bsn::AstNodeRef>, Without<crate::EditorEntity>),
+        (
+            Or<(
+                With<jackdaw_bsn::AstNodeRef>,
+                With<crate::entity_ops::SceneCamera>,
+            )>,
+            Without<crate::EditorEntity>,
+        ),
     >,
 ) {
     for mut camera in &mut cameras {
@@ -371,6 +378,12 @@ mod camera_tests {
             ))
             .id();
         let editor = world.spawn(bevy::camera::Camera::default()).id();
+        let unregistered = world
+            .spawn((
+                bevy::camera::Camera::default(),
+                crate::entity_ops::SceneCamera,
+            ))
+            .id();
 
         world
             .run_system_cached(deactivate_document_cameras)
@@ -380,6 +393,10 @@ mod camera_tests {
         assert!(
             !is_active(&world, authored),
             "a document camera must not render in the editor"
+        );
+        assert!(
+            !is_active(&world, unregistered),
+            "nor a scene camera the document has not registered"
         );
         assert!(
             is_active(&world, editor),

@@ -271,8 +271,19 @@ fn the_add_menu_shows_the_2d_group_only_with_a_2d_scene_open() {
         [
             ("Sprite", wanted),
             ("Empty 2D", "op:entity.add.empty"),
-            ("Pixel Camera", "op:entity.add.pixel_camera"),
+            ("Camera", "op:entity.add.camera_2d"),
         ]
+    );
+    let cameras: Vec<(&str, &str)> = taxonomy
+        .entries_of("cameras")
+        .map(|entry| (entry.label.as_str(), entry.action.as_str()))
+        .collect();
+    assert_eq!(cameras.first(), Some(&("Camera", "op:entity.add.camera")));
+    assert!(
+        !rows
+            .iter()
+            .any(|(action, _)| action.contains("pixel_camera")),
+        "no Pixel Camera entry: {rows:?}"
     );
 }
 
