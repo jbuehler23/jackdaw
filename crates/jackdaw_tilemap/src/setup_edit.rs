@@ -152,6 +152,7 @@ impl TilesetSetup {
         let entry = self.tiles.entry(tile).or_default();
         entry.terrains = peers;
         entry.provenance = [Provenance::User; 9];
+        entry.drop_set_it_left();
         Ok(())
     }
 
@@ -215,6 +216,7 @@ impl TilesetSetup {
                     tile.provenance[peer.index()] = Provenance::User;
                 }
             }
+            tile.drop_set_it_left();
         }
     }
 }
@@ -260,6 +262,31 @@ pub(crate) mod tests {
             setup.tiles.insert(at(tile), auto);
         }
         setup
+    }
+
+    #[test]
+    fn a_hand_edit_that_leaves_a_tiles_set_forgets_it() {
+        let mut setup = farm();
+        let water = setup
+            .add_terrain("water", [0, 0, 255], false)
+            .expect("an id");
+        setup.tiles.get_mut(&at(1)).expect("tile").set = Some((SAND, GRASS));
+        setup.set_peer(at(1), Peer::Top, SAND).expect("peer");
+        assert_eq!(setup.tiles[&at(1)].set, Some((SAND, GRASS)), "still within");
+        setup.set_peer(at(1), Peer::Top, water).expect("peer");
+        assert_eq!(setup.tiles[&at(1)].set, None);
+        setup.tiles.get_mut(&at(2)).expect("tile").set = Some((SAND, GRASS));
+        setup
+            .set_peers(at(2), TileTerrains::filled(water))
+            .expect("peers");
+        assert_eq!(setup.tiles[&at(2)].set, None);
+        setup.tiles.get_mut(&at(0)).expect("tile").set = Some((SAND, GRASS));
+        setup.merge_terrains(GRASS, water).expect("merged");
+        assert_eq!(
+            setup.tiles[&at(0)].set,
+            None,
+            "a merge that moves it off its set"
+        );
     }
 
     #[test]

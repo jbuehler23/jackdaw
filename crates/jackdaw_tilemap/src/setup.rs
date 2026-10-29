@@ -115,6 +115,13 @@ pub struct SetupTile {
 }
 
 impl SetupTile {
+    /// Forgets the recorded set once the peers hold a terrain outside it.
+    pub(crate) fn drop_set_it_left(&mut self) {
+        if self.set.is_some_and(|pair| !within(pair, &self.terrains)) {
+            self.set = None;
+        }
+    }
+
     fn has_user(&self) -> bool {
         self.shape.is_user() || self.provenance.contains(&Provenance::User)
     }
@@ -230,6 +237,7 @@ impl TilesetSetup {
         let entry = self.tiles.entry(tile).or_default();
         entry.terrains = entry.terrains.with(peer, terrain);
         entry.provenance[peer.index()] = Provenance::User;
+        entry.drop_set_it_left();
         Ok(())
     }
 
@@ -730,6 +738,7 @@ fn merge_tile(previous: Option<&SetupTile>, fresh: Option<&SetupTile>) -> SetupT
     if p.provenance.contains(&Provenance::User) {
         tile.set = p.set.or(tile.set);
     }
+    tile.drop_set_it_left();
     tile
 }
 

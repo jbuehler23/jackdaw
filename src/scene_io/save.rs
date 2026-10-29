@@ -246,17 +246,10 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let text = emit_bsn_scene_with_inline_assets(world, &parent);
-        let bsn = jackdaw_bsn::parse_emitted(&text)
-            .map_err(|err| BevyError::from(format!("cannot save {}: {err}", path.display())))?;
-        world
-            .resource_mut::<crate::prefab::PrefabAstCache>()
-            .insert(&path, bsn);
-        let sidecar_base = path.to_string_lossy();
-        export_terrain_sidecars(world, &sidecar_base)?;
-        crate::tilemap::export_tilemap_sidecars(world, &sidecar_base)?;
-        crate::prefab::operators::save_prefab_to_disk(world, &path)
-            .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
+        let renames = crate::tilemap::begin_save(world, &path.to_string_lossy());
+        let written = write_prefab_files(world, &path, &parent, &renames);
+        crate::tilemap::finish_save(world, renames, written.is_ok());
+        written?;
         write_alongside(world, &path.to_string_lossy())?;
         // Clear dirty bit + sync history depth so the tab stops showing
         // as unsaved.
@@ -307,61 +300,10 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         scene_path.metadata.name = "Untitled".to_string();
     }
 
-    let contents = {
-        let parent_path = Path::new(&path)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
-        let body = emit_bsn_scene_for_file(world, &parent_path)
-            .map_err(|refusal| BevyError::from(format!("cannot save {path}: {refusal}")))?;
-        jackdaw_bsn::parse_emitted(&body)
-            .map_err(|err| BevyError::from(format!("cannot save {path}: {err}")))?;
-        // Record the jackdaw + Bevy version at the disk boundary only, so
-        // the in-memory undo / tab-swap snapshots from the same emitter stay
-        // stamp-free.
-        crate::scene_io::stamp::with_stamp(&body)
-    };
-
-    // Terrain heights and paint channels are authoritative authored data.
-    // Complete those writes before the scene text is committed and before
-    // the tab is marked clean, so failures remain visible and repeated saves
-    // cannot finish out of order. Each write lands via write_atomic, so a
-    // sidecar failure partway through never truncates one that already
-    // landed; the scene text below is written the same way. There is no
-    // cross-file rollback if the scene text write fails after sidecars
-    // already landed -- the sidecars stay updated and the tab stays dirty,
-    // so the next save retries the scene text with the same sidecars.
-    // A folder that cannot be made fails the writes below, which say which.
-    // Only a project's own folders are made.
-    if let Some(folder) = Path::new(&path).parent()
-        && world.contains_resource::<crate::project::ProjectRoot>()
-        && crate::scenes::operators::resolve_scene_path(world, folder).is_ok()
-        && let Err(err) = std::fs::create_dir_all(folder)
-    {
-        warn!("cannot make the folder for {path}: {err}");
-    }
-    export_terrain_sidecars(world, &path)?;
-    crate::tilemap::export_tilemap_sidecars(world, &path)?;
-
-    // A redirected save renames the legacy source to `.jsn.bak` first so a
-    // stale `.jsn` cannot shadow the fresh `.bsn` on the next open.
-    if let Some(old_path) = legacy_backup.as_ref() {
-        let backup = format!("{old_path}.bak");
-        std::fs::rename(old_path, &backup).map_err(|err| {
-            BevyError::from(format!(
-                "could not back up legacy scene {old_path} to {backup}: {err}"
-            ))
-        })?;
-    }
-    let contents = jackdaw_bsn::document_bytes(Path::new(&path), &contents)
-        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
-    write_atomic(Path::new(&path), &contents)
-        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
-    info!("Scene saved to {path}");
-
-    // Record the written bytes so the open-tab watcher does not read this
-    // write back as an outside edit.
-    crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
+    let renames = crate::tilemap::begin_save(world, &path);
+    let written = write_scene_files(world, &path, legacy_backup.as_deref(), &renames);
+    crate::tilemap::finish_save(world, renames, written.is_ok());
+    written?;
 
     world.trigger(jackdaw_api_internal::document::SceneSaved {
         path: PathBuf::from(&path),
@@ -395,6 +337,93 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
 
     crate::thumbnail::capture_scene_thumbnail(world, Path::new(&path));
 
+    Ok(())
+}
+
+/// The prefab tab's document, sidecars and file, for [`save_scene_inner`].
+fn write_prefab_files(
+    world: &mut World,
+    path: &Path,
+    parent: &Path,
+    renames: &crate::tilemap::SaveRenames,
+) -> Result<(), BevyError> {
+    let text = emit_bsn_scene_with_inline_assets(world, parent);
+    let bsn = jackdaw_bsn::parse_emitted(&text)
+        .map_err(|err| BevyError::from(format!("cannot save {}: {err}", path.display())))?;
+    world
+        .resource_mut::<crate::prefab::PrefabAstCache>()
+        .insert(path, bsn);
+    let sidecar_base = path.to_string_lossy();
+    export_terrain_sidecars(world, &sidecar_base)?;
+    crate::tilemap::export_tilemap_sidecars(world, &sidecar_base, renames)?;
+    crate::prefab::operators::save_prefab_to_disk(world, path)
+        .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
+    Ok(())
+}
+
+/// The scene's sidecars and text, for [`save_scene_inner`]. Sidecars land
+/// first so a failed one leaves the tab dirty.
+fn write_scene_files(
+    world: &mut World,
+    path: &str,
+    legacy_backup: Option<&str>,
+    renames: &crate::tilemap::SaveRenames,
+) -> Result<(), BevyError> {
+    let contents = {
+        let parent_path = Path::new(&path)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let body = emit_bsn_scene_for_file(world, &parent_path)
+            .map_err(|refusal| BevyError::from(format!("cannot save {path}: {refusal}")))?;
+        jackdaw_bsn::parse_emitted(&body)
+            .map_err(|err| BevyError::from(format!("cannot save {path}: {err}")))?;
+        // Record the jackdaw + Bevy version at the disk boundary only, so
+        // the in-memory undo / tab-swap snapshots from the same emitter stay
+        // stamp-free.
+        crate::scene_io::stamp::with_stamp(&body)
+    };
+
+    // Terrain heights and paint channels are authoritative authored data.
+    // Complete those writes before the scene text is committed and before
+    // the tab is marked clean, so failures remain visible and repeated saves
+    // cannot finish out of order. Each write lands via write_atomic, so a
+    // sidecar failure partway through never truncates one that already
+    // landed; the scene text below is written the same way. There is no
+    // cross-file rollback if the scene text write fails after sidecars
+    // already landed -- the sidecars stay updated and the tab stays dirty,
+    // so the next save retries the scene text with the same sidecars.
+    // A folder that cannot be made fails the writes below, which say which.
+    // Only a project's own folders are made.
+    if let Some(folder) = Path::new(&path).parent()
+        && world.contains_resource::<crate::project::ProjectRoot>()
+        && crate::scenes::operators::resolve_scene_path(world, folder).is_ok()
+        && let Err(err) = std::fs::create_dir_all(folder)
+    {
+        warn!("cannot make the folder for {path}: {err}");
+    }
+    export_terrain_sidecars(world, path)?;
+    crate::tilemap::export_tilemap_sidecars(world, path, renames)?;
+
+    // A redirected save renames the legacy source to `.jsn.bak` first so a
+    // stale `.jsn` cannot shadow the fresh `.bsn` on the next open.
+    if let Some(old_path) = legacy_backup.as_ref() {
+        let backup = format!("{old_path}.bak");
+        std::fs::rename(old_path, &backup).map_err(|err| {
+            BevyError::from(format!(
+                "could not back up legacy scene {old_path} to {backup}: {err}"
+            ))
+        })?;
+    }
+    let contents = jackdaw_bsn::document_bytes(Path::new(&path), &contents)
+        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
+    write_atomic(Path::new(&path), &contents)
+        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
+    info!("Scene saved to {path}");
+
+    // Record the written bytes so the open-tab watcher does not read this
+    // write back as an outside edit.
+    crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
     Ok(())
 }
 

@@ -1448,6 +1448,18 @@ pub fn open_instance_source(world: &mut World, instance_root: Entity) -> bool {
     true
 }
 
+/// Whether `root` or anything under it carries a tilemap.
+fn holds_a_tilemap(world: &World, root: Entity) -> bool {
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        if world.get::<jackdaw_scene_types::Tilemap>(entity).is_some() {
+            return true;
+        }
+        stack.extend(world.get::<Children>(entity).into_iter().flatten());
+    }
+    false
+}
+
 /// The prefab document a baseline lookup must read, with the prefab's own
 /// `IsA` chain already expanded: the raw file carries only the ids the prefab
 /// itself authors, not the ones it inherits.
@@ -1700,6 +1712,12 @@ pub fn revert_all(world: &mut World, instance_root_node: Entity) -> RevertReport
 /// inherits from the original while carrying the instance's current overrides
 /// as its own base. The source scene's instance is rewired to the variant.
 pub fn save_as_variant(world: &mut World, instance_root: Entity, target_path: &Path) {
+    if holds_a_tilemap(world, instance_root) {
+        let message = "Not saved: variants of prefabs with tilemaps are not supported yet";
+        warn!("save_as_variant: {message}");
+        crate::status_bar::notify_error(world, message);
+        return;
+    }
     let (source, deleted, root_patches, descendant_data) = {
         let live = world.resource::<SceneBsnAst>();
         let Some(instance_node) = live.ast_for(instance_root) else {

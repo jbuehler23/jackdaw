@@ -241,3 +241,26 @@ fn sets_of_two_modes_over_the_same_terrains_keep_their_own_tiles() {
         "an unrecorded transition tile could be either set's, so neither takes it"
     );
 }
+
+#[test]
+fn a_tile_edited_off_its_recorded_set_is_placed_by_its_peers() {
+    let tileset = Tileset {
+        sheets: vec![TilesetSheet {
+            columns: 2,
+            rows: 1,
+            ..Default::default()
+        }],
+        terrain_sets: vec![
+            pair(2, 1, TerrainMatch::Sides),
+            pair(3, 1, TerrainMatch::Sides),
+        ],
+        tiles: vec![tile(0, [1, 3, 1, 1, 3, 1, 1, 3, 1], (2, 1))],
+        ..Default::default()
+    };
+    let set = tileset.terrain_set(None).expect("one mode");
+    assert_eq!(
+        set.tiles.len(),
+        1,
+        "its peers fit the other set, so it joins instead of dropping out"
+    );
+}

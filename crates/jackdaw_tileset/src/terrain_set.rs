@@ -39,9 +39,10 @@ impl Tileset {
     /// mode when `None`. Every terrain set of that mode joins one solver set;
     /// sets of other modes do not resolve on the layer and need a layer of
     /// their own. A tile joins by the set it was laid out for when it records
-    /// one. Otherwise it joins when its peers lie within one joined set's
-    /// two terrains and, unless it is a pure tile, within no other mode's
-    /// set, since its peers alone cannot say which of those it was made for.
+    /// one its peers still fit. Otherwise it joins when its peers lie within
+    /// one joined set's two terrains and, unless it is a pure tile, within no
+    /// other mode's set, since its peers alone cannot say which of those it
+    /// was made for.
     /// Terrains stack background first, then each set's outer below its
     /// inner, then by id.
     pub fn terrain_set(&self, mode: Option<TerrainMatch>) -> Result<TerrainSet, TerrainSetError> {
@@ -94,12 +95,15 @@ impl Tileset {
         };
         for tile in &self.tiles {
             let pure = tile.peers.iter().all(|&p| p == tile.peers[0]);
-            let joins = if tile.set_inner != 0 {
-                let pair = (tile.set_inner, tile.set_outer);
-                joined.contains(&pair) && within(pair, &tile.peers)
-            } else {
-                joined.iter().any(|p| within(*p, &tile.peers))
-                    && (pure || !others.iter().any(|p| within(*p, &tile.peers)))
+            let recorded = (tile.set_inner != 0)
+                .then_some((tile.set_inner, tile.set_outer))
+                .filter(|pair| within(*pair, &tile.peers));
+            let joins = match recorded {
+                Some(pair) => joined.contains(&pair),
+                None => {
+                    joined.iter().any(|p| within(*p, &tile.peers))
+                        && (pure || !others.iter().any(|p| within(*p, &tile.peers)))
+                }
             };
             let layer = self.layer(tile.sheet, tile.tile);
             let index = layer.and_then(|layer| u16::try_from(layer).ok());
