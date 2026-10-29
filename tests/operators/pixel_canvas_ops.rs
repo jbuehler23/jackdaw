@@ -426,37 +426,21 @@ fn a_new_2d_camera_and_its_canvas_start_at_the_project_pixels_per_unit() {
 }
 
 #[test]
-fn removing_a_canvas_zooms_back_only_from_the_scale_it_set() {
+fn removing_a_canvas_leaves_the_camera_framing_alone() {
     let (mut app, camera) = with_camera();
     set_project_ppu(&mut app, 16.0);
     call(&mut app, &[]).assert_finished();
+    assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
     let before = history_len(&app);
     call(&mut app, &[("remove", PropertyValue::Bool(true))]).assert_finished();
     assert_eq!(canvas(&app, camera), None);
     assert_eq!(
         ortho_scale(&app, camera),
-        Some(1.0),
-        "the zoom goes with the canvas"
+        Some(1.0 / 16.0),
+        "the scale stays with the camera"
     );
     assert_eq!(history_len(&app), before + 1, "in one entry");
     undo(&mut app);
+    assert!(canvas(&app, camera).is_some());
     assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
-
-    app.world_mut()
-        .operator("component.set")
-        .param("entity", camera)
-        .param("type_path", "bevy_camera::projection::Projection")
-        .param("field", "0.scale")
-        .param("value", "0.5")
-        .call()
-        .expect("component.set dispatches")
-        .assert_finished();
-    app.update();
-    call(&mut app, &[("remove", PropertyValue::Bool(true))]).assert_finished();
-    assert_eq!(canvas(&app, camera), None);
-    assert_eq!(
-        ortho_scale(&app, camera),
-        Some(0.5),
-        "the author's scale stays"
-    );
 }
