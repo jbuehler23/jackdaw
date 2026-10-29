@@ -39,7 +39,7 @@ use path_slash::PathExt as _;
 use crate::EditorEntity;
 use crate::asset_drag::ActiveAssetDrag;
 use crate::asset_files::AssetFileKind;
-use crate::texture_files::{TextureInfo, is_image_file_path};
+use crate::texture_files::{ImageThumbnails, TextureInfo, is_image_file_path};
 
 /// The window the project's files are shown in.
 pub const PROJECT_WINDOW_ID: &str = "jackdaw.project";
@@ -342,8 +342,8 @@ struct ProjectFolderTask(Task<Option<rfd::FileHandle>>);
 /// Where the context menu was opened, so the action observer can resolve the
 /// click against the row rather than the selection.
 #[derive(Resource, Default)]
-struct MenuTarget {
-    path: PathBuf,
+pub struct MenuTarget {
+    pub path: PathBuf,
 }
 
 pub struct ProjectWindowPlugin;
@@ -925,7 +925,7 @@ fn rebuild_tiles(
     mut commands: Commands,
     kinds: Res<AssetKinds>,
     icon_font: Res<IconFont>,
-    asset_server: Res<AssetServer>,
+    mut thumbnails: ImageThumbnails,
     grids: Query<(Entity, Option<&Children>), With<ProjectFileGrid>>,
     path_bars: Query<(Entity, Option<&Children>), With<ProjectPathBar>>,
 ) {
@@ -949,7 +949,10 @@ fn rebuild_tiles(
     let drawn = entries.len().min(MAX_TILES);
     for entry in entries[..drawn].iter_mut() {
         if !entry.is_directory && is_image_file_path(&entry.path) {
-            entry.texture_info = Some(TextureInfo::read(&entry.path, &asset_server));
+            entry.texture_info = Some(thumbnails.info(&entry.path));
+        } else if let Some(packed) = packed_copy(entry) {
+            entry.texture_info =
+                Some(thumbnails.info(&packed)).filter(|i| i.image_handle.is_some());
         }
     }
     for entry in &entries[..drawn] {
@@ -1169,6 +1172,17 @@ fn spawn_image_tile(
         label.insert((Hovered::default(), Tooltip::title(entry.file_name.clone())));
     }
     tile
+}
+
+/// The packed copy beside a tileset file, which its tile is pictured with.
+fn packed_copy(entry: &DirEntry) -> Option<PathBuf> {
+    if entry.kind.type_path() != Some(jackdaw_tileset::Tileset::type_path()) {
+        return None;
+    }
+    let stem = entry
+        .file_name
+        .strip_suffix(crate::tileset_import::TILESET_SUFFIX)?;
+    Some(entry.path.with_file_name(format!("{stem}.tiles.png"))).filter(|p| p.is_file())
 }
 
 /// What a file's tile is pictured with, or `None` for one that keeps its
@@ -1589,6 +1603,15 @@ fn open_path(world: &mut World, path: &Path, is_directory: bool) {
             .type_path()
             .is_some_and(|type_path| kinds.by_type_path(type_path).is_some())
     };
+    let is_tileset = {
+        let kinds = world.resource::<AssetKinds>();
+        crate::asset_files::read_asset_kind(&path, kinds).type_path()
+            == Some(jackdaw_tileset::Tileset::type_path())
+    };
+    if is_tileset {
+        crate::tileset_dock::edit_tileset(world, &path.to_string_lossy());
+        return;
+    }
     if holds_an_asset {
         crate::definition_assets::open_definition_file(world, &path);
         return;
@@ -1608,7 +1631,7 @@ fn open_path(world: &mut World, path: &Path, is_directory: bool) {
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("ktx2"))
             || !crate::texture_files::is_ktx2_non_2d(&path);
-        if plain_2d {
+        if plain_2d && crate::texture_files::array_layers(&path).is_none() {
             let call = world
                 .operator("material.apply_texture")
                 .param("path", path.to_string_lossy().into_owned())
@@ -1643,6 +1666,7 @@ const REVEAL_ACTION: &str = "project.reveal";
 const DELETE_ACTION: &str = "project.delete";
 const CONVERT_TO_BINARY_ACTION: &str = "project.convert_to_binary";
 const CONVERT_TO_TEXT_ACTION: &str = "project.convert_to_text";
+pub const IMPORT_TILESET_ACTION: &str = "project.import_tileset";
 
 fn open_context_menu(
     commands: &mut Commands,
@@ -1662,6 +1686,16 @@ fn open_context_menu(
         entity.despawn();
     }
 
+    let items = context_items(path, is_directory);
+    let entity = jackdaw_feathers::context_menu::spawn_context_menu(commands, cursor, None, &items);
+    menu.menu_entity = Some(entity);
+    commands.insert_resource(MenuTarget {
+        path: path.to_path_buf(),
+    });
+}
+
+/// The actions the context menu offers on `path`, as action and label.
+pub fn context_items(path: &Path, is_directory: bool) -> Vec<(&'static str, &'static str)> {
     let mut items: Vec<(&str, &str)> = Vec::new();
     if is_directory {
         items.push((NEW_FOLDER_ACTION, "New Folder"));
@@ -1674,18 +1708,16 @@ fn open_context_menu(
             false => (CONVERT_TO_BINARY_ACTION, "Convert to Binary"),
         });
     }
+    if !is_directory && is_image_file_path(path) {
+        items.push((IMPORT_TILESET_ACTION, "Import as Tileset"));
+    }
     if !is_directory {
         items.push((DUPLICATE_ACTION, "Duplicate"));
     }
     items.push((RENAME_ACTION, "Rename"));
     items.push((REVEAL_ACTION, "Reveal in File Manager"));
     items.push((DELETE_ACTION, "Delete"));
-
-    let entity = jackdaw_feathers::context_menu::spawn_context_menu(commands, cursor, None, &items);
-    menu.menu_entity = Some(entity);
-    commands.insert_resource(MenuTarget {
-        path: path.to_path_buf(),
-    });
+    items
 }
 
 fn on_context_action(
@@ -1699,6 +1731,12 @@ fn on_context_action(
     if action == RENAME_ACTION {
         state.renaming = Some(target.path.clone());
         state.needs_refresh = true;
+    } else if action == IMPORT_TILESET_ACTION {
+        (commands.operator(crate::tileset_import::TilesetImportOp::ID))
+            .param("paths", target.path.to_string_lossy().into_owned())
+            .param("setup", "auto")
+            .param("edit", true)
+            .call();
     } else {
         let Some(operator) = operator_for_action(action) else {
             return;

@@ -2,13 +2,16 @@
 //! its layers and faces, load a thumbnail for it, step through an array
 //! texture, and apply it to the selection as a material.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use bevy::{
     asset::RenderAssetUsages,
-    image::{CompressedImageFormats, ImageSampler, ImageType},
+    ecs::system::SystemParam,
+    image::{CompressedImageFormats, ImageArrayLayout, ImageSampler, ImageType},
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureSampleType},
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureSampleType},
 };
 use jackdaw_api::prelude::*;
 use path_slash::PathExt as _;
@@ -124,6 +127,85 @@ pub fn load_thumbnail(path: &Path, asset_server: &AssetServer) -> Option<Handle<
     Some(asset_server.load(asset_path))
 }
 
+/// The layers the meta beside an image cuts it into, when it loads as an
+/// array texture; 0 when the image's size cannot be read.
+pub fn array_layers(path: &Path) -> Option<u32> {
+    let meta = std::fs::read(crate::texture_import::meta_path(path)).ok()?;
+    let layout = crate::image_sampling::array_layout(&meta)?;
+    let layers = image::image_dimensions(path).map(|(width, height)| match layout {
+        ImageArrayLayout::RowCount { rows } => rows,
+        ImageArrayLayout::RowHeight { pixels } => height / pixels.max(1),
+        ImageArrayLayout::GridCount { columns, rows } => columns * rows,
+        ImageArrayLayout::GridSize {
+            tile_width_pixels,
+            tile_height_pixels,
+        } => (width / tile_width_pixels.max(1)) * (height / tile_height_pixels.max(1)),
+    });
+    Some(layers.unwrap_or_default())
+}
+
+/// Whole-sheet copies of images that load as array textures, which the UI
+/// cannot draw, keyed by file with the time it was modified.
+#[derive(Resource, Default)]
+pub struct FlatSheets(pub HashMap<PathBuf, (Option<SystemTime>, Handle<Image>)>);
+
+/// What an image file holds and a picture the UI can draw of it.
+#[derive(SystemParam)]
+pub struct ImageThumbnails<'w> {
+    server: Res<'w, AssetServer>,
+    images: ResMut<'w, Assets<Image>>,
+    sheets: ResMut<'w, FlatSheets>,
+}
+
+impl ImageThumbnails<'_> {
+    /// As [`TextureInfo::read`], with an image its meta loads as an array
+    /// texture pictured as the whole sheet.
+    pub fn info(&mut self, path: &Path) -> TextureInfo {
+        let Some(layer_count) = array_layers(path) else {
+            return TextureInfo::read(path, &self.server);
+        };
+        TextureInfo {
+            image_handle: self.flat_sheet(path),
+            is_cubemap: false,
+            is_array: true,
+            layer_count,
+            face_count: 1,
+        }
+    }
+
+    /// The image at `path` decoded as one 2D layer, whatever its meta says.
+    pub fn flat_sheet(&mut self, path: &Path) -> Option<Handle<Image>> {
+        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let Some((at, handle)) = self.sheets.0.get(path)
+            && *at == modified
+        {
+            return Some(handle.clone());
+        }
+        let decoded = image::open(path).ok()?.to_rgba8();
+        let size = Extent3d {
+            width: decoded.width(),
+            height: decoded.height(),
+            depth_or_array_layers: 1,
+        };
+        let mut sheet = Image::new(
+            size,
+            TextureDimension::D2,
+            decoded.into_raw(),
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        sheet.sampler = ImageSampler::nearest();
+        let handle = self.images.add(sheet);
+        (self.sheets.0).insert(path.to_path_buf(), (modified, handle.clone()));
+        Some(handle)
+    }
+}
+
+/// The [`TextureInfo`] of the image at `path`, as [`ImageThumbnails::info`].
+pub fn image_info(In(path): In<PathBuf>, mut thumbnails: ImageThumbnails) -> TextureInfo {
+    thumbnails.info(&path)
+}
+
 /// The image the inspector is showing a card for, and the layers it has split
 /// out of an array texture.
 #[derive(Resource, Default)]
@@ -155,11 +237,13 @@ pub struct TextureFilesPlugin;
 
 impl Plugin for TextureFilesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<AssetPreviewState>().add_systems(
-            Update,
-            (extract_array_layers, remove_incompatible_image_nodes)
-                .run_if(in_state(crate::AppState::Editor)),
-        );
+        app.init_resource::<AssetPreviewState>()
+            .init_resource::<FlatSheets>()
+            .add_systems(
+                Update,
+                (extract_array_layers, remove_incompatible_image_nodes)
+                    .run_if(in_state(crate::AppState::Editor)),
+            );
     }
 }
 
@@ -189,7 +273,7 @@ fn extract_array_layers(
     let wanted = preview_state
         .selected_info
         .as_ref()
-        .is_some_and(|info| info.is_array)
+        .is_some_and(|info| info.is_array && info.image_handle.is_none())
         && preview_state.layer_images.is_empty()
         && preview_state.selected_path.is_some();
     if !wanted {

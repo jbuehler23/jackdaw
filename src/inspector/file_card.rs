@@ -22,7 +22,7 @@ use jackdaw_feathers::tokens;
 
 use crate::EditorEntity;
 use crate::asset_files::AssetFileKind;
-use crate::texture_files::{AssetPreviewState, TextureInfo, is_image_file_path};
+use crate::texture_files::{AssetPreviewState, is_image_file_path};
 
 use super::definition_card::DefinitionCard;
 use super::{ComponentDisplay, ComponentDisplayTypePath, ComponentName};
@@ -82,11 +82,11 @@ pub fn show_file(world: &mut World, path: &Path) {
         return;
     };
     if is_image_file_path(path) {
-        let info = {
-            let server = world.resource::<AssetServer>();
-            TextureInfo::read(path, server)
-        };
-        if let Some(mut preview) = world.get_resource_mut::<AssetPreviewState>() {
+        let info =
+            world.run_system_cached_with(crate::texture_files::image_info, path.to_path_buf());
+        if let Ok(info) = info
+            && let Some(mut preview) = world.get_resource_mut::<AssetPreviewState>()
+        {
             preview.show(path.to_path_buf(), info);
         }
     } else if let Some(mut preview) = world.get_resource_mut::<AssetPreviewState>() {
