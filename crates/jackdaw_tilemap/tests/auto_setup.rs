@@ -1,4 +1,4 @@
-//! Auto setup over the Tiny Farm sheets: the full report is a golden file.
+//! Auto setup over the fixture farm sheets: the full report is a golden file.
 
 use std::collections::BTreeSet;
 
@@ -50,9 +50,7 @@ fn packed_report_matches_golden() {
 #[test]
 fn spaced_report_matches_golden_but_its_grid_line() {
     let spaced = setup("tilemap.png").report.to_string();
-    let renamed = spaced
-        .replace("\"tilemap.png\"", "\"tilemap_packed.png\"")
-        .replace("\"tilemap ", "\"tilemap_packed ");
+    let renamed = spaced.replace("\"tilemap.png\"", "\"tilemap_packed.png\"");
     let golden = golden();
     let (got, want): (Vec<&str>, Vec<&str>) = (renamed.lines().collect(), golden.lines().collect());
     assert_eq!(got.len(), want.len());
@@ -100,6 +98,16 @@ fn absorbed_terrains_leave_the_proposal() {
     let found = setup("tilemap_packed.png");
     let kept: Vec<u8> = found.proposal.terrains.iter().map(|t| t.id).collect();
     assert_eq!(kept, [1, 2, 3]);
+    assert!(found.analysis.terrains.len() > 3);
+    let names: Vec<&str> = found
+        .analysis
+        .terrains
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names[..3], ["grass", "sand path", "dirt path"]);
+    let distinct: BTreeSet<&str> = names.iter().copied().collect();
+    assert_eq!(distinct.len(), names.len(), "{names:?}");
     assert_eq!(found.sheets, [0]);
     let unassigned: Vec<u32> = found.proposal.unassigned.iter().map(|a| a.tile).collect();
     assert_eq!(
@@ -339,7 +347,7 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
     assert_eq!(reordered.sheets, setup.sheets);
     assert_eq!(reordered.tiles, setup.tiles);
     let sand = reordered.terrain(DRY_PATH).map(|t| t.name.value.as_str());
-    assert_eq!(sand, Some("tilemap sand"));
+    assert_eq!(sand, Some("sand path"));
     let added = check(&[("copy.png", &packed), (PACKED, &packed), (SPACED, &spaced)]);
     assert_eq!(added.sheets, [PACKED, SPACED, "copy.png"]);
     assert_eq!(added.tiles[&on_spaced], setup.tiles[&on_spaced]);
@@ -363,4 +371,46 @@ fn reruns_are_deterministic() {
     let b = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
     assert_eq!(a, b);
     assert_eq!(rerun_over(&a, &[(PACKED, &sheet)], &Scope::All), a);
+}
+
+#[test]
+fn auto_names_step_around_user_names_and_stay_put() {
+    let sheet = Sheet::load(PACKED);
+    let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
+    setup
+        .rename_terrain(DRY_PATH, "grass")
+        .expect("known terrain");
+    let name = |s: &TilesetSetup, id| s.terrain(id).map(|t| t.name.clone());
+    let once = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
+    assert_eq!(
+        name(&once, GRASS),
+        Some(Tracked::auto("grass 2".to_string()))
+    );
+    assert_eq!(
+        name(&once, DRY_PATH),
+        Some(Tracked::user("grass".to_string()))
+    );
+    let twice = rerun_over(&once, &[(PACKED, &sheet)], &Scope::All);
+    assert_eq!(name(&twice, GRASS), name(&once, GRASS));
+
+    let partial = Scope::Set {
+        inner: DRY_PATH,
+        outer: DIRT_PATH,
+    };
+    let kept = rerun_over(&once, &[(PACKED, &sheet)], &partial);
+    assert_eq!(
+        name(&kept, GRASS),
+        Some(Tracked::auto("grass 2".to_string()))
+    );
+    let mut out_of_scope = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
+    out_of_scope.terrains[0].name = Tracked::auto("grass 2".to_string());
+    let after = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &partial);
+    let names: Vec<String> = after
+        .terrains
+        .iter()
+        .map(|t| t.name.value.clone())
+        .collect();
+    assert_eq!(names, ["grass 2", "sand path", "dirt path"]);
+    let all = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &Scope::All);
+    assert_eq!(name(&all, GRASS), Some(Tracked::auto("grass".to_string())));
 }

@@ -8,6 +8,7 @@ use std::fmt;
 
 use glam::UVec2;
 
+use crate::terrain_find::name_terrains;
 use crate::{
     AnimationStrip, FitError, GridLayout, LOOSE_FRAME_MATCH, LayoutTemplate, MatchMode, RgbaImage,
     SharedDetection, SheetInput, Stamp, TerrainAnalysis, TerrainId, TileAddress, TileKind,
@@ -194,9 +195,18 @@ pub fn auto_setup(
     inputs: &[(&str, RgbaImage)],
     solid: &[TerrainId],
 ) -> Result<AutoSetup, SetupError> {
+    auto_setup_reserving(inputs, solid, &[])
+}
+
+/// [`auto_setup`] naming no terrain one of `reserved`.
+pub(crate) fn auto_setup_reserving(
+    inputs: &[(&str, RgbaImage)],
+    solid: &[TerrainId],
+    reserved: &[String],
+) -> Result<AutoSetup, SetupError> {
     let images: Vec<RgbaImage> = inputs.iter().map(|(_, image)| *image).collect();
     let shared = detect_grid_shared(&images).ok_or(SetupError::NoGrid)?;
-    auto_setup_on_grid(inputs, &shared, solid)
+    setup_on_grid(inputs, &shared, solid, reserved)
 }
 
 /// [`auto_setup`] over the grid [`detect_grid_shared`] already found in
@@ -205,6 +215,15 @@ pub fn auto_setup_on_grid(
     inputs: &[(&str, RgbaImage)],
     shared: &SharedDetection,
     solid: &[TerrainId],
+) -> Result<AutoSetup, SetupError> {
+    setup_on_grid(inputs, shared, solid, &[])
+}
+
+fn setup_on_grid(
+    inputs: &[(&str, RgbaImage)],
+    shared: &SharedDetection,
+    solid: &[TerrainId],
+    reserved: &[String],
 ) -> Result<AutoSetup, SetupError> {
     let layout = |i: usize| shared.layouts.get(i).copied().flatten();
     let (gridded, gridded_inputs): (Vec<usize>, Vec<SheetInput>) = (inputs.iter().enumerate())
@@ -231,10 +250,18 @@ pub fn auto_setup_on_grid(
         .zip(gridded_inputs)
         .filter(|(i, _)| !strips.contains_key(i))
         .unzip();
-    let analysis = find_terrains(&sheet_inputs);
+    let mut analysis = find_terrains(&sheet_inputs);
     let proposal = fit_layouts(&analysis, &sheet_inputs)?;
     let stamps = find_stamps(&analysis, &sheet_inputs, &proposal)?;
     let proposal = reconcile(proposal, &stamps);
+    let kept: Vec<TerrainId> = proposal.terrains.iter().map(|t| t.id).collect();
+    let background: Vec<TerrainId> = (proposal.terrains.iter())
+        .filter(|t| t.background)
+        .map(|t| t.id)
+        .collect();
+    let sets: Vec<(TerrainId, TerrainId)> =
+        (proposal.sets.iter()).map(|s| (s.inner, s.outer)).collect();
+    name_terrains(&mut analysis.terrains, &kept, &background, &sets, reserved);
     let shapes = if solid.is_empty() {
         BTreeMap::new()
     } else {

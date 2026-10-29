@@ -1,9 +1,9 @@
 sheets: 1
   sheet "tilemap_packed.png": tile 16x16, margin 0x0, spacing 0x0, 12 columns, 11 rows, confidence 0.37
 terrains: 3
-  terrain 1 "tilemap_packed green": swatch #84c669, background, pure tiles 0
-  terrain 2 "tilemap_packed sand": swatch #e7a16a, pure tiles 0
-  terrain 3 "tilemap_packed brown": swatch #cb7c51, pure tiles 0
+  terrain 1 "grass": swatch #84c669, background, pure tiles 0
+  terrain 2 "sand path": swatch #e7a16a, pure tiles 0
+  terrain 3 "dirt path": swatch #cb7c51, pure tiles 0
 terrain sets: 2
   set 2 over 1: Sides, 7/16 shapes, 9 missing, template none
   set 3 over 1: Sides, 7/16 shapes, 9 missing, template none

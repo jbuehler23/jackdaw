@@ -71,6 +71,8 @@ pub struct FoundTerrain {
     /// Mean variance of its seed regions.
     pub variance: f32,
     pub pure_tiles: Vec<TileAddress>,
+    /// Its bare ground material from [`find_terrains`], so not unique;
+    /// auto setup gives every terrain its final, unique name.
     pub name: String,
 }
 
@@ -196,13 +198,7 @@ pub fn find_terrains(inputs: &[SheetInput]) -> TerrainAnalysis {
         .collect();
     let mut terrains: Vec<FoundTerrain> = Vec::with_capacity(clusters.len());
     for (i, c) in clusters.iter().enumerate() {
-        let mut terrain = summarise(i, c, inputs, &tiles);
-        let base = terrain.name.clone();
-        let mut n = 1;
-        while terrains.iter().any(|t| t.name == terrain.name) {
-            n += 1;
-            terrain.name = format!("{base} {n}");
-        }
+        let terrain = summarise(i, c, &tiles);
         terrains.push(terrain);
     }
     TerrainAnalysis { terrains, tiles }
@@ -532,21 +528,12 @@ fn tile_labels(regions: &Regions, labels: [Label; 9]) -> TileLabels {
     }
 }
 
-fn summarise(
-    index: usize,
-    cluster: &Cluster,
-    inputs: &[SheetInput],
-    tiles: &[Vec<Option<TileLabels>>],
-) -> FoundTerrain {
+fn summarise(index: usize, cluster: &Cluster, tiles: &[Vec<Option<TileLabels>>]) -> FoundTerrain {
     let id = (index + 1) as TerrainId;
-    let mut first_sheet = None;
     let mut pure_tiles = Vec::new();
     for (sheet, labels) in tiles.iter().enumerate() {
         for (tile, l) in labels.iter().enumerate() {
             let Some(l) = l else { continue };
-            if first_sheet.is_none() && l.terrains.peers.contains(&id) {
-                first_sheet = Some(sheet);
-            }
             if l.kind == TileKind::Terrain && l.terrains.peers.iter().all(|&p| p == id) {
                 pure_tiles.push(TileAddress {
                     sheet,
@@ -556,49 +543,90 @@ fn summarise(
         }
     }
     let oklab = cluster.feature.truncate();
-    let stem = first_sheet
-        .and_then(|s| inputs.get(s))
-        .map_or("terrain", |i| file_stem(i.name));
     FoundTerrain {
         id,
         oklab,
         swatch: cluster.rgb.round().to_array().map(|c| c as u8),
         variance: cluster.variance,
         pure_tiles,
-        name: format!("{stem} {}", colour_word(oklab)),
+        name: material(oklab).to_string(),
     }
 }
 
-fn file_stem(name: &str) -> &str {
-    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    match file.rsplit_once('.') {
-        Some((stem, _)) if !stem.is_empty() => stem,
-        _ => file,
-    }
-}
-
-/// Dark below lightness 0.35, grey below chroma 0.03, then by hue: green
-/// 90..200 degrees, blue 200..290, sand (lightness 0.72 up) or brown 20..90,
-/// red otherwise.
-fn colour_word(oklab: Vec3) -> &'static str {
+/// Ground material of a colour: dark below lightness 0.35; snow from
+/// lightness 0.85 under chroma 0.06; stone under chroma 0.03; then by hue
+/// in degrees: grass 90..200, water 200..290, purple 290..20, and sand
+/// (lightness 0.72 up) or dirt 20..90.
+pub(crate) fn material(oklab: Vec3) -> &'static str {
     let chroma = oklab.y.hypot(oklab.z);
     let hue = oklab.z.atan2(oklab.y).to_degrees().rem_euclid(360.0);
-    let earth = (20.0..90.0).contains(&hue);
     if oklab.x < 0.35 {
         "dark"
+    } else if oklab.x >= 0.85 && chroma < 0.06 {
+        "snow"
     } else if chroma < 0.03 {
-        "grey"
+        "stone"
     } else if (90.0..200.0).contains(&hue) {
-        "green"
+        "grass"
     } else if (200.0..290.0).contains(&hue) {
-        "blue"
-    } else if earth && oklab.x >= 0.72 {
-        "sand"
-    } else if earth {
-        "brown"
+        "water"
+    } else if (20.0..90.0).contains(&hue) {
+        if oklab.x >= 0.72 { "sand" } else { "dirt" }
     } else {
-        "red"
+        "purple"
     }
+}
+
+/// Names every terrain once, kept terrains in id order and then dropped
+/// ones, each unique against `reserved` and the names before it. A kept
+/// inner of a set over a background terrain is `"<material> path"` when it
+/// is sand, dirt, stone, or grass over a ground that is not grass; any
+/// other terrain is its bare material.
+pub(crate) fn name_terrains(
+    terrains: &mut [FoundTerrain],
+    kept: &[TerrainId],
+    background: &[TerrainId],
+    sets: &[(TerrainId, TerrainId)],
+    reserved: &[String],
+) {
+    let materials: Vec<(TerrainId, &str)> =
+        terrains.iter().map(|t| (t.id, material(t.oklab))).collect();
+    let material_of = |id: TerrainId| materials.iter().find(|(i, _)| *i == id).map(|(_, m)| *m);
+    let mut taken = reserved.to_vec();
+    for kept_pass in [true, false] {
+        for t in terrains
+            .iter_mut()
+            .filter(|t| kept.contains(&t.id) == kept_pass)
+        {
+            let own = material(t.oklab);
+            let ground = (sets.iter())
+                .filter(|&&(inner, outer)| inner == t.id && background.contains(&outer))
+                .find_map(|&(_, outer)| material_of(outer));
+            let path = ground.is_some_and(|g| match own {
+                "sand" | "dirt" | "stone" => true,
+                "grass" => g != "grass",
+                _ => false,
+            });
+            let base = if kept_pass && path && !background.contains(&t.id) {
+                format!("{own} path")
+            } else {
+                own.to_string()
+            };
+            t.name = unique(&base, &taken);
+            taken.push(t.name.clone());
+        }
+    }
+}
+
+/// `base`, or `base` with the first free " 2", " 3" and so on.
+pub(crate) fn unique(base: &str, taken: &[String]) -> String {
+    let mut name = base.to_string();
+    let mut n = 1;
+    while taken.contains(&name) {
+        n += 1;
+        name = format!("{base} {n}");
+    }
+    name
 }
 
 pub(crate) fn srgb_to_oklab(p: [u8; 4]) -> Vec3 {
@@ -712,8 +740,8 @@ mod tests {
         let confidence = labels(&found, 2).confidence;
         assert!(confidence.iter().all(|&c| c > 0.5), "{confidence:?}");
         let grass = found.terrain(g).expect("grass");
-        assert_eq!(grass.name, "meadow green");
-        assert_eq!(found.terrain(s).expect("sand").name, "meadow sand");
+        assert_eq!(grass.name, "grass");
+        assert_eq!(found.terrain(s).expect("sand").name, "sand");
         assert!(
             grass
                 .swatch
@@ -938,5 +966,108 @@ mod tests {
         assert_eq!(rects[Peer::Centre.index()], [6, 6, 4, 4]);
         assert_eq!(rects[Peer::Right.index()], [15, 2, 1, 12]);
         assert_eq!(rects[Peer::BottomRight.index()], [14, 14, 2, 2]);
+    }
+
+    fn material_of(hex: u32) -> &'static str {
+        let [_, r, g, b] = hex.to_be_bytes();
+        material(srgb_to_oklab([r, g, b, 255]))
+    }
+
+    #[test]
+    fn colours_name_ground_materials() {
+        assert_eq!(material_of(0x84c669), "grass");
+        assert_eq!(material_of(0x2f6b2a), "grass");
+        assert_eq!(material_of(0x3a7bd5), "water");
+        assert_eq!(material_of(0x787882), "stone");
+        assert_eq!(material_of(0xf0f0f0), "snow");
+        assert_eq!(material_of(0xdde4ee), "snow");
+        assert_eq!(material_of(0x101010), "dark");
+        assert_eq!(material_of(0x1a3a1a), "dark");
+        assert_eq!(material_of(0x2a1a10), "dark");
+        assert_eq!(material_of(0xe7a16a), "sand");
+        assert_eq!(material_of(0xe1b978), "sand");
+        assert_eq!(material_of(0xcb7c51), "dirt");
+        assert_eq!(material_of(0x5c4033), "dirt");
+        assert_eq!(material_of(0xc040c0), "purple");
+        assert_eq!(material_of(0xc03050), "purple");
+    }
+
+    fn found(id: TerrainId, hex: u32) -> FoundTerrain {
+        let [_, r, g, b] = hex.to_be_bytes();
+        FoundTerrain {
+            id,
+            oklab: srgb_to_oklab([r, g, b, 255]),
+            swatch: [r, g, b],
+            variance: 0.0,
+            pure_tiles: Vec::new(),
+            name: "old".into(),
+        }
+    }
+
+    fn named(colours: &[u32], kept: &[TerrainId], sets: &[(TerrainId, TerrainId)]) -> Vec<String> {
+        let mut terrains: Vec<FoundTerrain> =
+            (1..).zip(colours).map(|(id, &c)| found(id, c)).collect();
+        name_terrains(&mut terrains, kept, &[1], sets, &[]);
+        terrains.into_iter().map(|t| t.name).collect()
+    }
+
+    const FARM: [u32; 5] = [0x84c669, 0xe7a16a, 0xcb7c51, 0x787882, 0xe1b978];
+
+    #[test]
+    fn path_materials_over_the_background_are_paths() {
+        let sets = [(2, 1), (3, 1), (4, 1), (5, 1)];
+        let names = named(&FARM, &[1, 2, 3, 4, 5], &sets);
+        let want = [
+            "grass",
+            "sand path",
+            "dirt path",
+            "stone path",
+            "sand path 2",
+        ];
+        assert_eq!(names, want);
+        let names = named(&FARM, &[1, 2, 3, 4], &[(4, 2)]);
+        assert_eq!(names[3], "stone");
+    }
+
+    #[test]
+    fn a_pond_over_grass_and_snow_over_dirt_keep_their_materials() {
+        let pond = named(
+            &[0x84c669, 0x3a7bd5, 0x2f6b2a],
+            &[1, 2, 3],
+            &[(2, 1), (3, 1)],
+        );
+        assert_eq!(pond, ["grass", "water", "grass 2"]);
+        let snow = named(
+            &[0x5c4033, 0xf0f0f0, 0x84c669],
+            &[1, 2, 3],
+            &[(2, 1), (3, 1)],
+        );
+        assert_eq!(snow, ["dirt", "snow", "grass path"]);
+    }
+
+    #[test]
+    fn dropped_terrains_are_named_after_the_kept_ones() {
+        let names = named(&FARM, &[1, 3, 5], &[(5, 1)]);
+        assert_eq!(names, ["grass", "sand", "dirt", "stone", "sand path"]);
+        let names = named(&[0x84c669, 0x2f6b2a], &[2], &[]);
+        assert_eq!(names, ["grass 2", "grass"]);
+    }
+
+    #[test]
+    fn reserved_names_are_stepped_around() {
+        let mut terrains = [found(1, 0x84c669), found(2, 0xe7a16a)];
+        let reserved = ["grass".to_string(), "grass 3".to_string()];
+        name_terrains(&mut terrains, &[1, 2], &[1], &[(2, 1)], &reserved);
+        assert_eq!(
+            [&terrains[0].name, &terrains[1].name],
+            ["grass 2", "sand path"]
+        );
+    }
+
+    #[test]
+    fn unique_suffixes_from_two() {
+        let taken = ["sand".to_string(), "sand 2".to_string()];
+        assert_eq!(unique("sand", &taken), "sand 3");
+        assert_eq!(unique("dirt", &taken), "dirt");
     }
 }

@@ -30,10 +30,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::Vec3;
 
 use crate::collision_trace::{TileTrace, trace_tile};
+use crate::report::auto_setup_reserving;
 use crate::terrain_find::CLUSTER_RADIUS;
 use crate::{
     AutoSetup, MatchMode, Peer, RgbaImage, SetupError, SheetInput, Stamp, TerrainId, TileAddress,
-    TileShape, TileTerrains, auto_setup,
+    TileShape, TileTerrains,
 };
 
 /// Inner and outer terrain of a set.
@@ -321,8 +322,17 @@ pub fn rerun(
     inputs: &[(&str, RgbaImage)],
     scope: &Scope,
 ) -> Result<TilesetSetup, SetupError> {
-    let fresh = auto_setup(inputs, &[])?;
+    let fresh = auto_setup_reserving(inputs, &[], &kept_names(previous, scope))?;
     merge(previous, &fresh, inputs, scope, false)
+}
+
+/// Names a re-run in `scope` leaves as they are: user names and the names
+/// of terrains outside it.
+fn kept_names(previous: &TilesetSetup, scope: &Scope) -> Vec<String> {
+    (previous.terrains.iter())
+        .filter(|t| t.name.is_user() || !scope.covers_terrain(t.id))
+        .map(|t| t.name.value.clone())
+        .collect()
 }
 
 /// Runs auto setup over `inputs` and hands the bits and shapes of `tiles`
@@ -334,7 +344,8 @@ pub fn reset_to_auto(
     inputs: &[(&str, RgbaImage)],
     tiles: &BTreeSet<TileAddress>,
 ) -> Result<TilesetSetup, SetupError> {
-    let fresh = auto_setup(inputs, &[])?;
+    let scope = Scope::Tiles(tiles.clone());
+    let fresh = auto_setup_reserving(inputs, &[], &kept_names(setup, &scope))?;
     reset(setup, &fresh, inputs, tiles)
 }
 
