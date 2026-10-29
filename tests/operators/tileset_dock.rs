@@ -9,7 +9,7 @@ use crate::util::OperatorResultExt as _;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use jackdaw::tileset_dock::{
-    CollisionCombo, DockAction, DockControl, DockView, TILESET_WINDOW_ID, TilesetDock,
+    CollisionCombo, DockAction, DockControl, DockPage, DockView, TILESET_WINDOW_ID, TilesetDock,
     TilesetDockViews,
 };
 use jackdaw_api::prelude::*;
@@ -288,6 +288,7 @@ fn review_opens_on_the_first_flagged_tile() {
     let (mut app, _dir, flagged, _) = docked();
     let (_, root) = opened(&mut app);
     let view = view(&app);
+    assert_eq!(view.page, DockPage::Review);
     assert_eq!(view.selected, Some((0, flagged)));
     let shown = texts(&mut app, root);
     assert!(shown.contains(&format!("tile 0:{flagged}")), "{shown:?}");
@@ -381,4 +382,46 @@ fn the_collision_combo_sets_the_terrain_collision() {
     let dirt = (on_disk(&dir).terrains.into_iter()).find(|t| t.id == DIRT);
     assert_eq!(dirt.map(|t| t.collision), Some(TerrainCollision::Solid));
     assert_eq!(entries(&app), count + 1);
+}
+
+#[test]
+fn objects_are_added_from_a_rectangle_and_removed() {
+    let (mut app, dir, _, _) = docked();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Page(DockPage::Objects));
+    // Two tiles of the bottom row, which no found object covers.
+    let columns = on_disk(&dir).sheets[0].columns;
+    let last = on_disk(&dir).sheets[0].rows - 1;
+    press(&mut app, root, DockAction::Tile(0, last * columns));
+    press(&mut app, root, DockAction::Tile(0, last * columns + 1));
+
+    let count = entries(&app);
+    press(&mut app, root, DockAction::AddObject);
+    let added = on_disk(&dir);
+    let object = (added.objects.iter())
+        .find(|o| o.origin == UVec2::new(0, last))
+        .expect("the object is added");
+    assert_eq!(object.size, UVec2::new(2, 1));
+    assert_eq!(entries(&app), count + 1);
+
+    let count = entries(&app);
+    press(
+        &mut app,
+        root,
+        DockAction::RemoveObject(0, UVec2::new(0, last)),
+    );
+    let left = on_disk(&dir).objects;
+    assert!(!left.iter().any(|o| o.origin == UVec2::new(0, last)));
+    assert_eq!(entries(&app), count + 1);
+}
+
+#[test]
+fn the_terrains_page_lists_the_missing_shapes() {
+    let (mut app, _dir, _, _) = docked();
+    let (_, root) = opened(&mut app);
+    assert!(!texts(&mut app, root).iter().any(|t| t.contains("missing")));
+    press(&mut app, root, DockAction::Page(DockPage::Terrains));
+    assert_eq!(view(&app).page, DockPage::Terrains);
+    let shown = texts(&mut app, root);
+    assert!(shown.iter().any(|t| t.contains("missing")), "{shown:?}");
 }

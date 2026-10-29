@@ -7,13 +7,13 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::input_focus::{FocusCause, FocusedInput, InputFocus};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::ui_widgets::{Activate, Button};
+use bevy::ui_widgets::{Activate, Button, ValueChange};
 use jackdaw_api::DefaultArea;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, combobox_compact_with_selected};
-use jackdaw_feathers::tokens;
+use jackdaw_feathers::{segmented, tokens};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
 use jackdaw_tilemap::{TerrainId, TilesetSetup};
@@ -40,6 +40,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<SheetImages>()
         .add_systems(Update, refresh_on_tileset_events)
         .add_observer(on_activate)
+        .add_observer(on_page_change)
         .add_observer(on_collision_pick)
         .add_observer(prune_views);
 }
@@ -59,13 +60,24 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetEditOp>();
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DockPage {
+    #[default]
+    Review,
+    Terrains,
+    Objects,
+}
+
 /// What one tileset tab shows; kept across rebuilds of its content.
 #[derive(Clone, Debug, Default)]
 pub struct DockView {
+    pub page: DockPage,
     /// Sheet and tile.
     pub selected: Option<(u32, u32)>,
     /// Terrain a peer click paints; 0 is empty.
     pub brush: TerrainId,
+    /// First corner of the object rectangle; `selected` is the other.
+    pub anchor: Option<(u32, u32)>,
 }
 
 /// The view of each open tileset, by its path. A tileset has one tab, so the
@@ -89,11 +101,14 @@ pub struct TilesetDock {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DockAction {
+    Page(DockPage),
     Tile(u32, u32),
     Brush(TerrainId),
     Peer(usize),
     Accept,
     Reset,
+    AddObject,
+    RemoveObject(u32, UVec2),
 }
 
 /// A control of the tileset dock `root`.
@@ -255,6 +270,7 @@ fn fill_tileset(
     let header = spawn_row(world, root, tokens::SPACING_MD);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     spawn_text(world, header, name, tokens::TEXT_PRIMARY);
+    spawn_pages(world, header, root, view.page);
     let count = format!("flagged: {} of {}", flagged.len(), setup.tiles.len());
     spawn_text(world, header, count, tokens::TEXT_SECONDARY);
 
@@ -274,8 +290,14 @@ fn fill_tileset(
         ))
         .id();
     let left = spawn_column(world, columns, Val::Px(220.0));
-    spawn_terrains(world, left, root, tileset, &setup, view);
-    spawn_flagged(world, left, root, &flagged, view);
+    match view.page {
+        DockPage::Review => {
+            spawn_terrains(world, left, root, tileset, &setup, view, false);
+            spawn_flagged(world, left, root, &flagged, view);
+        }
+        DockPage::Terrains => spawn_terrains(world, left, root, tileset, &setup, view, true),
+        DockPage::Objects => spawn_objects(world, left, root, tileset),
+    }
     let centre = world
         .spawn((
             Node {
@@ -293,8 +315,42 @@ fn fill_tileset(
         spawn_sheet(world, centre, root, tileset, &setup, *sheet, view, &flagged);
     }
     let right = spawn_column(world, columns, Val::Px(200.0));
-    spawn_tile_editor(world, right, root, tileset, &setup, view);
+    match view.page {
+        DockPage::Objects => spawn_object_pick(world, right, root, view),
+        DockPage::Review | DockPage::Terrains => {
+            spawn_tile_editor(world, right, root, tileset, &setup, view);
+        }
+    }
     Ok(())
+}
+
+fn spawn_pages(world: &mut World, parent: Entity, root: Entity, current: DockPage) {
+    let bar = world
+        .spawn((segmented::segmented_bar(), ChildOf(parent)))
+        .id();
+    for (page, label) in [
+        (DockPage::Review, "Review"),
+        (DockPage::Terrains, "Terrains"),
+        (DockPage::Objects, "Objects"),
+    ] {
+        let segment = world
+            .spawn((
+                segmented::segment(label),
+                DockControl {
+                    root,
+                    action: DockAction::Page(page),
+                },
+                ChildOf(bar),
+            ))
+            .id();
+        let checked = page == current;
+        world
+            .entity_mut(segment)
+            .insert(BackgroundColor(segmented::segment_background(checked)));
+        if checked {
+            world.entity_mut(segment).insert(bevy::ui::Checked);
+        }
+    }
 }
 
 fn spawn_terrains(
@@ -304,6 +360,7 @@ fn spawn_terrains(
     tileset: &Tileset,
     setup: &TilesetSetup,
     view: &DockView,
+    missing: bool,
 ) {
     spawn_text(world, parent, "TERRAINS", tokens::TEXT_SECONDARY);
     let empty = TilesetTerrain {
@@ -355,6 +412,13 @@ fn spawn_terrains(
             set.inner, set.outer, set.mode, coverage.covered, coverage.total
         );
         spawn_text(world, parent, line, tokens::TEXT_SECONDARY);
+        if missing {
+            for shape in &coverage.missing {
+                let peers: Vec<String> = shape.peers.iter().map(u8::to_string).collect();
+                let line = format!("  missing {}", peers.join(","));
+                spawn_text(world, parent, line, FLAGGED);
+            }
+        }
     }
 }
 
@@ -376,6 +440,31 @@ fn spawn_flagged(
             view.selected == Some((sheet, tile)),
         );
         spawn_text(world, row, format!("tile {sheet}:{tile}"), FLAGGED);
+    }
+}
+
+fn spawn_objects(world: &mut World, parent: Entity, root: Entity, tileset: &Tileset) {
+    let title = format!("OBJECTS ({})", tileset.objects.len());
+    spawn_text(world, parent, title, tokens::TEXT_SECONDARY);
+    for object in &tileset.objects {
+        let row = spawn_row(world, parent, tokens::SPACING_SM);
+        let line = format!(
+            "{},{} {}x{}",
+            object.origin.x, object.origin.y, object.size.x, object.size.y
+        );
+        let label = spawn_text(world, row, line, tokens::TEXT_PRIMARY);
+        world.entity_mut(label).insert(Node {
+            flex_grow: 1.0,
+            ..default()
+        });
+        world.spawn((
+            button(ButtonProps::new("Remove").with_variant(ButtonVariant::Ghost)),
+            DockControl {
+                root,
+                action: DockAction::RemoveObject(object.sheet, object.origin),
+            },
+            ChildOf(row),
+        ));
     }
 }
 
@@ -410,6 +499,7 @@ fn spawn_sheet(
             ChildOf(parent),
         ))
         .id();
+    let rect = view.selected.zip(view.anchor.or(view.selected));
     let at = |tile_index: u32| {
         let cell = UVec2::new(tile_index % sheet.columns, tile_index / sheet.columns);
         (sheet.margin.as_vec2() + cell.as_vec2() * step) * SCALE
@@ -419,7 +509,10 @@ fn spawn_sheet(
             .and_then(|a| setup.tiles.get(&a))
             .map(|found| found.terrains.peers);
         let centre = peers.map_or(0, |p| p[4]);
-        let outline = if view.selected == Some((index, t)) {
+        let picked = view.selected == Some((index, t))
+            || (view.page == DockPage::Objects
+                && rect.is_some_and(|(a, b)| in_rect(sheet.columns, a, b, (index, t))));
+        let outline = if picked {
             tokens::SELECTED_BORDER
         } else if flagged.contains(&(index, t)) {
             FLAGGED
@@ -482,6 +575,18 @@ fn spawn_sheet(
             ChildOf(frame),
         ));
     }
+}
+
+fn in_rect(columns: u32, a: (u32, u32), b: (u32, u32), tile: (u32, u32)) -> bool {
+    let (lo, hi) = rect_cells(columns, a, b);
+    let cell = UVec2::new(tile.1 % columns, tile.1 / columns);
+    a.0 == tile.0 && cell.cmpge(lo).all() && cell.cmple(hi).all()
+}
+
+fn rect_cells(columns: u32, a: (u32, u32), b: (u32, u32)) -> (UVec2, UVec2) {
+    let a = UVec2::new(a.1 % columns, a.1 / columns);
+    let b = UVec2::new(b.1 % columns, b.1 / columns);
+    (a.min(b), a.max(b))
 }
 
 fn spawn_tile_editor(
@@ -573,6 +678,23 @@ fn spawn_tile_editor(
             ChildOf(row),
         ));
     }
+}
+
+fn spawn_object_pick(world: &mut World, parent: Entity, root: Entity, view: &DockView) {
+    spawn_text(world, parent, "NEW OBJECT", tokens::TEXT_SECONDARY);
+    let hint = match (view.anchor, view.selected) {
+        (Some(a), Some(b)) => format!("tiles {}:{} to {}:{}", a.0, a.1, b.0, b.1),
+        _ => "click two corner tiles".to_string(),
+    };
+    spawn_text(world, parent, hint, tokens::TEXT_PRIMARY);
+    world.spawn((
+        button(ButtonProps::new("Add object").with_variant(ButtonVariant::Primary)),
+        DockControl {
+            root,
+            action: DockAction::AddObject,
+        },
+        ChildOf(parent),
+    ));
 }
 
 /// A row that picks something when clicked, highlighted while it is the pick.
@@ -693,6 +815,16 @@ fn on_activate(activate: On<Activate>, controls: Query<&DockControl>, mut comman
     }
 }
 
+fn on_page_change(
+    change: On<ValueChange<Entity>>,
+    controls: Query<&DockControl>,
+    mut commands: Commands,
+) {
+    if let Ok(control) = controls.get(change.value).copied() {
+        commands.queue(move |world: &mut World| act(world, control));
+    }
+}
+
 fn on_collision_pick(
     change: On<ComboBoxChangeEvent>,
     combos: Query<&CollisionCombo>,
@@ -806,11 +938,22 @@ fn act(world: &mut World, control: DockControl) {
     let tile_ref = view.selected.map(|(s, t)| format!("{s}:{t}"));
     let set_bits = "tileset.tile.set_bits";
     let call = match control.action {
+        DockAction::Page(page) => {
+            view.page = page;
+            view.anchor = None;
+            None
+        }
         DockAction::Brush(brush) => {
             view.brush = brush;
             None
         }
         DockAction::Tile(sheet, tile) => {
+            let extend = view.page == DockPage::Objects
+                && view.anchor.is_some_and(|a| a.0 == sheet)
+                && view.anchor == view.selected;
+            if !extend {
+                view.anchor = Some((sheet, tile));
+            }
             view.selected = Some((sheet, tile));
             None
         }
@@ -834,6 +977,16 @@ fn act(world: &mut World, control: DockControl) {
         DockAction::Reset => {
             tile_ref.map(|tile| ("tileset.tile.reset_to_auto", vec![("tiles", tile)]))
         }
+        DockAction::AddObject => {
+            object_rect(&tileset, &view).map(|params| ("tileset.object.add", params))
+        }
+        DockAction::RemoveObject(sheet, origin) => Some((
+            "tileset.object.remove",
+            vec![
+                ("sheet", sheet.to_string()),
+                ("origin", format!("{},{}", origin.x, origin.y)),
+            ],
+        )),
     };
     (world.resource_mut::<TilesetDockViews>().0).insert(path.clone(), view);
     if let Some(mut focus) = world.get_resource_mut::<InputFocus>() {
@@ -875,4 +1028,16 @@ fn next_flagged(tileset: &Tileset, from: Option<(u32, u32)>) -> Option<(u32, u32
     (others.iter().copied())
         .find(|t| after.is_none_or(|a| order(*t).is_some_and(|o| o > a)))
         .or_else(|| others.first().copied())
+}
+
+fn object_rect(tileset: &Tileset, view: &DockView) -> Option<Vec<(&'static str, String)>> {
+    let (a, b) = view.anchor.zip(view.selected)?;
+    let columns = tileset.sheets.get(a.0 as usize)?.columns;
+    let (lo, hi) = rect_cells(columns, a, b);
+    let size = hi - lo + UVec2::ONE;
+    Some(vec![
+        ("sheet", a.0.to_string()),
+        ("origin", format!("{},{}", lo.x, lo.y)),
+        ("size", format!("{},{}", size.x, size.y)),
+    ])
 }
