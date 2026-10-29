@@ -12,7 +12,7 @@ use path_slash::PathExt as _;
 
 const SPRITE: &str = "bevy_sprite::sprite::Sprite";
 const IMAGE_NODE: &str = "bevy_ui::widget::image::ImageNode";
-const SHEET: &str = "tilemap_packed.png";
+const SHEET: &str = "overworld.png";
 
 fn history_len(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
@@ -65,14 +65,7 @@ fn image_path(handle: &Handle<Image>) -> Option<String> {
 #[test]
 fn a_registered_entity_records_its_image_paths_and_keeps_them_through_an_edit() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::copy(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/crates/jackdaw_tilemap/tests/data/tiny_farm/tilemap_packed.png"
-        ),
-        dir.path().join(SHEET),
-    )
-    .expect("copy the sheet");
+    std::fs::copy(util::OVERWORLD_SHEET, dir.path().join(SHEET)).expect("copy the sheet");
     let mut app = util::editor_test_app_reading(dir.path());
     let image = app.world().resource::<AssetServer>().load::<Image>(SHEET);
     let sprite = app

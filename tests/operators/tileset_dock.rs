@@ -2,7 +2,7 @@
 //! controls, each a call of a tileset operator.
 
 use crate::tileset_edit_ops::{
-    DIRT, FILE, SAND, call, entries, farm, on_disk, peers_of, run, tile_of,
+    FILE, GROUND, WATER, call, entries, on_disk, overworld, peers_of, run, tile_of,
 };
 use crate::util::OperatorResultExt as _;
 
@@ -20,11 +20,11 @@ use jackdaw_tileset::{TerrainCollision, Tileset};
 
 const SECOND: &str = "second.tileset.bsn";
 
-/// The farm tileset with one tile made flagged by a peer of dirt, in the
+/// The overworld tileset with one tile made flagged by a peer of water, in the
 /// editor's default dock, and that peer's terrain before.
 fn docked() -> (App, tempfile::TempDir, u32, u8) {
-    let (mut app, dir) = farm();
-    let tile = tile_of(&on_disk(&dir), SAND);
+    let (mut app, dir) = overworld();
+    let tile = tile_of(&on_disk(&dir), GROUND);
     let was = peers_of(&on_disk(&dir), tile).expect("bits")[1];
     call(
         &mut app,
@@ -32,7 +32,7 @@ fn docked() -> (App, tempfile::TempDir, u32, u8) {
         &[
             ("tile", &format!("0:{tile}")),
             ("peer", "1"),
-            ("terrain", &DIRT.to_string()),
+            ("terrain", &WATER.to_string()),
         ],
     );
     settle(&mut app);
@@ -319,7 +319,7 @@ fn a_peer_click_paints_the_brush_and_the_view_follows_undo() {
 
     run(&mut app, "history.undo");
     settle(&mut app);
-    assert_eq!(peers(&dir).map(|p| p[1]), Some(DIRT));
+    assert_eq!(peers(&dir).map(|p| p[1]), Some(WATER));
     let shown = texts(&mut app, root);
     assert!(shown.iter().any(|t| t == "FLAGGED (1)"), "{shown:?}");
 }
@@ -368,7 +368,7 @@ fn the_collision_combo_sets_the_terrain_collision() {
         .world_mut()
         .query::<(Entity, &CollisionCombo)>()
         .iter(app.world())
-        .filter(|(_, c)| c.root == root && c.terrain == DIRT)
+        .filter(|(_, c)| c.root == root && c.terrain == WATER)
         .map(|(e, _)| e)
         .collect();
     let count = entries(&app);
@@ -379,8 +379,8 @@ fn the_collision_combo_sets_the_terrain_collision() {
         value: None,
     });
     settle(&mut app);
-    let dirt = (on_disk(&dir).terrains.into_iter()).find(|t| t.id == DIRT);
-    assert_eq!(dirt.map(|t| t.collision), Some(TerrainCollision::Solid));
+    let water = (on_disk(&dir).terrains.into_iter()).find(|t| t.id == WATER);
+    assert_eq!(water.map(|t| t.collision), Some(TerrainCollision::Solid));
     assert_eq!(entries(&app), count + 1);
 }
 

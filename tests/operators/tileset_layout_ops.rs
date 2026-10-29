@@ -1,9 +1,9 @@
 //! The template, reset, property, object and describe operators over an
-//! auto-imported fixture farm tileset.
+//! auto-imported overworld tileset.
 
 use crate::tileset_edit_ops::{
-    DIRT, SAND, call, edit, entries, farm, on_disk, over_the_remote, pairs, peers_of, refused,
-    tile_of,
+    GROUND, WATER, call, edit, entries, on_disk, over_the_remote, overworld, pairs, peers_of,
+    refused, tile_of,
 };
 use crate::tileset_ops::{SHEET, reports, warnings};
 
@@ -14,52 +14,55 @@ use serde_json::json;
 
 #[test]
 fn apply_template_lays_its_shapes_from_the_origin() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
         "tileset.apply_template",
         &[
-            ("inner", "3"),
+            ("inner", "11"),
             ("outer", "2"),
             ("template", "corner2x2"),
             ("origin", "10,0"),
         ],
     );
-    let shapes = LayoutTemplate::Corner2x2.tiles(DIRT, SAND);
-    for (tile, shape) in [10, 11, 22, 23].into_iter().zip(shapes) {
+    let shapes = LayoutTemplate::Corner2x2.tiles(WATER, GROUND);
+    for (tile, shape) in [10, 11, 37, 38].into_iter().zip(shapes) {
         assert_eq!(peers_of(&after, tile), Some(shape.peers), "tile {tile}");
     }
-    assert!(pairs(&after).contains(&(DIRT, SAND)));
+    assert!(pairs(&after).contains(&(WATER, GROUND)));
     let apply = "tileset.apply_template";
     let at = |origin| {
         [
-            ("inner", "3"),
+            ("inner", "11"),
             ("outer", "2"),
             ("template", "side16"),
             ("origin", origin),
         ]
     };
-    refused(&mut app, &dir, apply, &at("10,8"), "leave the sheet");
+    refused(&mut app, &dir, apply, &at("24,0"), "leave the sheet");
     refused(&mut app, &dir, apply, &at("1"), "two numbers");
     refused(
         &mut app,
         &dir,
         apply,
-        &at("2,0"),
-        "part of the object at column 2 row 0",
+        &at("0,4"),
+        "part of the object at column 0 row 4",
     );
 }
 
 #[test]
 fn reset_to_auto_hands_a_tile_back_to_the_proposal() {
-    let (mut app, dir) = farm();
-    let tile = tile_of(&on_disk(&dir), SAND);
+    let (mut app, dir) = overworld();
+    let tile = tile_of(&on_disk(&dir), GROUND);
     let imported = on_disk(&dir);
     call(
         &mut app,
         "tileset.tile.set_bits",
-        &[("tile", &tile.to_string()), ("peers", "3,3,3,3,3,3,3,3,3")],
+        &[
+            ("tile", &tile.to_string()),
+            ("peers", "11,11,11,11,11,11,11,11,11"),
+        ],
     );
     let (_, after) = edit(
         &mut app,
@@ -72,7 +75,7 @@ fn reset_to_auto_hands_a_tile_back_to_the_proposal() {
 
 #[test]
 fn paint_property_sets_and_clears_a_value() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (_, after) = edit(
         &mut app,
         &dir,
@@ -110,7 +113,7 @@ fn paint_property_sets_and_clears_a_value() {
 
 #[test]
 fn objects_are_added_with_a_pivot_and_removed_by_any_tile() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let (before, after) = edit(
         &mut app,
         &dir,
@@ -140,7 +143,7 @@ fn objects_are_added_with_a_pivot_and_removed_by_any_tile() {
         "tileset.object.remove",
         &[("sheet", SHEET), ("origin", "10,8")],
     );
-    assert!(after.objects.iter().all(|o| o.origin != UVec2::new(9, 6)));
+    assert!(after.objects.iter().all(|o| o.origin != UVec2::new(9, 7)));
     assert!(
         (after.objects.iter()).all(|o| o.pivot == TilesetObject::BOTTOM_CENTRE || o.by_user),
         "the others keep their pivots"
@@ -158,7 +161,7 @@ fn objects_are_added_with_a_pivot_and_removed_by_any_tile() {
         &mut app,
         &dir,
         add,
-        &[("origin", "11,10"), ("size", "2,1")],
+        &[("origin", "26,10"), ("size", "2,1")],
         "leave the sheet",
     );
     refused(
@@ -180,35 +183,36 @@ fn objects_are_added_with_a_pivot_and_removed_by_any_tile() {
 }
 
 #[test]
-fn describe_reports_the_fixture_farm_tileset_without_history() {
-    let (mut app, dir) = farm();
+fn describe_reports_the_overworld_tileset_without_history() {
+    let (mut app, dir) = overworld();
     let (before, count) = (on_disk(&dir), entries(&app));
     call(&mut app, "tileset.describe", &[]);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
     let text = reports(&app).join("\n");
     for line in [
-        "tileset \"tilemap_packed.tileset.bsn\"",
-        "image \"tilemap_packed.tiles.png\": tile 16x16, 12x11 layers",
-        "terrains: 3",
-        "  terrain 1 \"grass\": swatch #84c669, background, collision passable",
-        "  terrain 2 \"sand path\": swatch #e7a16a, collision passable",
-        "  terrain 3 \"dirt path\": swatch #cb7c51, collision passable",
-        "terrain sets: 2",
-        "  set 2 over 1: Sides, 7/16 shapes, missing ",
-        "  set 3 over 1: Sides, 7/16 shapes, missing ",
+        "tileset \"overworld.tileset.bsn\"",
+        "image \"overworld.tiles.png\": tile 16x16, 27x38 layers",
+        "terrains: 8",
+        "  terrain 1 \"grass\": swatch #8aa744, collision passable",
+        "  terrain 2 \"grass 2\": swatch #c6b15d, collision passable",
+        "  terrain 6 \"grass 4\": swatch #555d47, background, collision passable",
+        "  terrain 11 \"water\": swatch #06a1b3, collision passable",
+        "terrain sets: 6",
+        "  set 2 over 1: CornersAndSides, 34/47 shapes, missing ",
+        "  set 11 over 1: CornersAndSides, 29/47 shapes, missing ",
         "flagged tiles: 0",
-        "objects: 9",
-        "  object on sheet 0 at 9,6: 3x5, 13 tiles, pivot 0.5,0",
+        "objects: 34",
+        "  object on sheet 0 at 0,4: 5x3, 14 tiles, pivot 0.5,0",
         "properties: 0 layers",
-        "sheet 0 \"tilemap_packed.png\": 12x11 tiles from layer 0",
+        "sheet 0 \"overworld.png\": 27x38 tiles from layer 0",
     ] {
         assert!(text.contains(line), "missing {line:?} in\n{text}");
     }
     let grid_rows = text
         .lines()
-        .filter(|l| l.len() == 14 && l.starts_with("  "))
+        .filter(|l| l.len() == 29 && l.starts_with("  "))
         .count();
-    assert!(grid_rows >= 11, "a row of symbols per sheet row:\n{text}");
+    assert!(grid_rows >= 38, "a row of symbols per sheet row:\n{text}");
     assert_eq!((on_disk(&dir), entries(&app)), (before, count));
     refused(
         &mut app,
@@ -223,18 +227,18 @@ fn describe_reports_the_fixture_farm_tileset_without_history() {
 /// drives it.
 #[test]
 fn the_layout_operators_run_over_the_remote() {
-    let (mut app, dir) = farm();
-    let tile = tile_of(&on_disk(&dir), SAND).to_string();
+    let (mut app, dir) = overworld();
+    let tile = tile_of(&on_disk(&dir), GROUND).to_string();
     over_the_remote(
         &mut app,
         vec![
             (
                 "tileset.apply_template",
-                json!({ "inner": "3", "outer": "2", "template": "corner2x2", "origin": "10,0" }),
+                json!({ "inner": "11", "outer": "2", "template": "corner2x2", "origin": "10,0" }),
             ),
             (
                 "tileset.tile.set_bits",
-                json!({ "tile": &tile, "peer": "centre", "terrain": "3" }),
+                json!({ "tile": &tile, "peer": "centre", "terrain": "11" }),
             ),
             ("tileset.tile.reset_to_auto", json!({ "tiles": &tile })),
             (

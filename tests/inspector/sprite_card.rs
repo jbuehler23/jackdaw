@@ -17,20 +17,13 @@ use jackdaw_feathers::number_input::ScrubNumberInputValue;
 
 const SPRITE: &str = "bevy_sprite::sprite::Sprite";
 const ANCHOR: &str = "bevy_sprite::sprite::Anchor";
-const SHEET: &str = "tilemap_packed.png";
+const SHEET: &str = "overworld.png";
 
-/// A selected sprite with the inspector open: of the Tiny Farm sheet, loaded,
+/// A selected sprite with the inspector open: of the overworld sheet, loaded,
 /// or with no `path` a placeholder square.
 fn app_with(path: Option<&'static str>) -> (App, tempfile::TempDir, Entity) {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::copy(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/crates/jackdaw_tilemap/tests/data/tiny_farm/tilemap_packed.png"
-        ),
-        dir.path().join(SHEET),
-    )
-    .expect("copy the sheet");
+    std::fs::copy(util::OVERWORLD_SHEET, dir.path().join(SHEET)).expect("copy the sheet");
     let mut app = util::editor_test_app_reading(dir.path());
     app.world_mut()
         .spawn(jackdaw::layout::inspector_components_content(default()));
@@ -346,7 +339,7 @@ fn apply_sizes_the_sprite_from_the_typed_ppu_and_keeps_no_state() {
     assert_eq!(ppu_shown(&mut app), 1.0, "the row starts at one");
     let depth = app.world().resource::<CommandHistory>().undo_stack.len();
     apply_ppu(&mut app, 16.0);
-    assert_eq!(custom_size(&app, sprite), Some(Vec2::new(12.0, 11.0)));
+    assert_eq!(custom_size(&app, sprite), Some(Vec2::new(27.0, 65.0)));
     assert_eq!(
         app.world().resource::<CommandHistory>().undo_stack.len() - depth,
         1
@@ -377,7 +370,7 @@ fn apply_takes_the_operators_whole_range() {
         apply_ppu(&mut app, ppu);
         assert_eq!(
             custom_size(&app, sprite),
-            Some(Vec2::new(192.0, 176.0) / ppu as f32),
+            Some(Vec2::new(432.0, 1040.0) / ppu as f32),
             "{ppu} is applied unclamped"
         );
     }
@@ -485,7 +478,7 @@ fn apply_sizes_only_the_sprite_the_card_shows() {
     app.world_mut().resource_mut::<Selection>().entities = vec![other, shown];
     settle(&mut app);
     apply_ppu(&mut app, 16.0);
-    assert_eq!(custom_size(&app, shown), Some(Vec2::new(12.0, 11.0)));
+    assert_eq!(custom_size(&app, shown), Some(Vec2::new(27.0, 65.0)));
     assert_eq!(custom_size(&app, other), None, "the other selected sprite");
 }
 

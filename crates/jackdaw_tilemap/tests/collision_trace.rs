@@ -15,7 +15,7 @@ struct Sheet {
 impl Sheet {
     fn packed() -> Self {
         let path = format!(
-            "{}/tests/data/tiny_farm/tilemap_packed.png",
+            "{}/tests/data/punyworld/punyworld-overworld-tileset.png",
             env!("CARGO_MANIFEST_DIR")
         );
         let image = image::open(&path).expect("fixture decodes").to_rgba8();
@@ -28,25 +28,26 @@ impl Sheet {
 
     fn input(&self) -> SheetInput<'_> {
         SheetInput {
-            name: "tilemap_packed.png",
+            name: "overworld.png",
             image: RgbaImage::new(self.width, self.height, &self.pixels).expect("sized"),
             layout: GridLayout {
                 tile: UVec2::splat(16),
                 margin: UVec2::ZERO,
                 spacing: UVec2::ZERO,
-                columns: 12,
-                rows: 11,
+                columns: 27,
+                rows: 38,
             },
         }
     }
 }
 
-const TOP_CAP: u32 = 12;
-const HORIZONTAL: u32 = 61;
-/// Partial decor that terrain finding labels as a terrain tile.
-const STUMP: u32 = 14;
-/// Rounded decor.
-const BUSH: u32 = 15;
+/// Dirt path tiles: the top end of a vertical run and a four-way crossing.
+const TOP_CAP: u32 = 3;
+const CROSSING: u32 = 32;
+/// Part of an object that terrain finding labels as a terrain tile.
+const PROP: u32 = 723;
+/// A small sprite on a transparent background.
+const SPRITE: u32 = 818;
 /// Largest difference between a shape's area and its solid pixels' area.
 const AREA_TOLERANCE: f32 = 0.05;
 
@@ -77,13 +78,13 @@ fn snapped_to_eighths(shape: &TileShape) -> bool {
     shape.polygons.iter().flatten().all(|v| on(v.x) && on(v.y))
 }
 
-/// The packed sheet traced with the dry path Solid (for this test only) and
-/// the two decor tiles marked Solid.
+/// The packed sheet traced with the dirt and sand ground Solid (for this
+/// test only) and the two decor tiles marked Solid.
 struct Traced<'a> {
     sheet: &'a Sheet,
     analysis: TerrainAnalysis,
     proposal: TilesetProposal,
-    dry: TerrainId,
+    ground: TerrainId,
     shapes: BTreeMap<TileAddress, TileShape>,
 }
 
@@ -92,19 +93,19 @@ impl<'a> Traced<'a> {
         let input = sheet.input();
         let analysis = find_terrains(&[input]);
         let proposal = fit_layouts(&analysis, &[input]).expect("matching inputs");
-        let dry = analysis
-            .tile(at(0))
-            .expect("dry path tile")
+        let ground = analysis
+            .tile(at(TOP_CAP))
+            .expect("ground path tile")
             .terrains
             .centre();
-        let decor = [at(STUMP), at(BUSH)];
-        let shapes = trace_proposal(&analysis, &[input], &proposal, |id| id == dry, &decor)
+        let decor = [at(PROP), at(SPRITE)];
+        let shapes = trace_proposal(&analysis, &[input], &proposal, |id| id == ground, &decor)
             .expect("matching inputs");
         Self {
             sheet,
             analysis,
             proposal,
-            dry,
+            ground,
             shapes,
         }
     }
@@ -113,15 +114,15 @@ impl<'a> Traced<'a> {
     fn shape(&self, tile: u32) -> (&TileShape, SolidMask) {
         let mut fitted = self.proposal.sets.iter().flat_map(|s| &s.tiles);
         let peers = fitted.find(|t| t.address == at(tile)).map(|t| &t.terrains);
-        let decor = [STUMP, BUSH].contains(&tile);
+        let decor = [PROP, SPRITE].contains(&tile);
         let input = [self.sheet.input()];
-        let dry = self.dry;
+        let ground = self.ground;
         let mask = solid_mask(
             &self.analysis,
             &input,
             at(tile),
             peers,
-            |id| id == dry,
+            |id| id == ground,
             decor,
         );
         let shape = self.shapes.get(&at(tile));
@@ -162,32 +163,31 @@ fn check_simple(tile: u32, shape: &TileShape, mask: &SolidMask) {
 }
 
 #[test]
-fn tiny_farm_dry_path_traces_to_snapped_simple_shapes() {
+fn overworld_dirt_path_traces_to_snapped_simple_shapes() {
     let sheet = Sheet::packed();
     let traced = Traced::new(&sheet);
-    for tile in [TOP_CAP, HORIZONTAL] {
+    for tile in [TOP_CAP, CROSSING] {
         let (shape, mask) = traced.shape(tile);
         check_simple(tile, shape, &mask);
     }
-    // The cap's rounded end keeps two vertices; the horizontal strip, lip
-    // included (the fitted peers leave it no tilled terrain to fall to), is
-    // the lower three quarters of the tile.
-    assert_eq!(traced.shape(TOP_CAP).0.vertex_count(), 6);
-    let (strip, _) = traced.shape(HORIZONTAL);
-    assert_eq!(strip.vertex_count(), 4);
-    assert_eq!(strip.area(), 0.75);
+    // The cap's ragged hand-drawn end simplifies from a 50 vertex pixel
+    // outline to 15; the crossing's grass corners leave it 8.
+    assert_eq!(traced.shape(TOP_CAP).0.vertex_count(), 15);
+    let (crossing, _) = traced.shape(CROSSING);
+    assert_eq!(crossing.vertex_count(), 8);
+    assert_eq!(crossing.area(), 0.921875);
 }
 
 #[test]
-fn tiny_farm_decor_marked_solid_traces_its_opaque_pixels() {
+fn overworld_decor_marked_solid_traces_its_opaque_pixels() {
     let sheet = Sheet::packed();
     let traced = Traced::new(&sheet);
     let kind = |tile| traced.analysis.tile(at(tile)).map(|l| l.kind);
-    assert_eq!(kind(STUMP), Some(TileKind::Terrain));
-    assert_eq!(kind(BUSH), Some(TileKind::Decor));
-    // Pixel-precise outlines: 32 vertices for the stump (13 at a 2 px
-    // simplification tolerance), 28 for the bush (10 at 2 px).
-    for (tile, outline, most) in [(STUMP, 32, 12), (BUSH, 28, 10)] {
+    assert_eq!(kind(PROP), Some(TileKind::Terrain));
+    assert_eq!(kind(SPRITE), Some(TileKind::Decor));
+    // Pixel-precise outlines: 16 vertices for the prop (8 at a 2 px
+    // simplification tolerance), 32 for the sprite (10 at 2 px).
+    for (tile, outline, most) in [(PROP, 16, 8), (SPRITE, 32, 10)] {
         let (shape, mask) = traced.shape(tile);
         check_simple(tile, shape, &mask);
         assert_eq!(pixel_corners(&mask), outline, "tile {tile}");
@@ -196,17 +196,17 @@ fn tiny_farm_decor_marked_solid_traces_its_opaque_pixels() {
 }
 
 #[test]
-fn tiny_farm_tiles_without_solid_pixels_have_no_shape() {
+fn overworld_tiles_without_solid_pixels_have_no_shape() {
     let sheet = Sheet::packed();
     let traced = Traced::new(&sheet);
-    // Tilled path tiles stay passable, as does unmarked decor.
-    for tile in [1, 13, 26] {
+    // Water edged with grass stays passable, as does unmarked decor.
+    for tile in [278, 331, 811] {
         assert!(!traced.shapes.contains_key(&at(tile)), "tile {tile}");
     }
 }
 
 #[test]
-fn tiny_farm_trace_is_deterministic() {
+fn overworld_trace_is_deterministic() {
     let sheet = Sheet::packed();
     assert_eq!(Traced::new(&sheet).shapes, Traced::new(&sheet).shapes);
 }

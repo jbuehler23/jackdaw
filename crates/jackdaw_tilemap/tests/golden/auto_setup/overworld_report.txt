@@ -1,0 +1,58 @@
+sheets: 1
+  sheet "overworld.png": tile 16x16, margin 0x0, spacing 0x0, 27 columns, 38 rows, confidence 0.56
+terrains: 8
+  terrain 1 "grass": swatch #8aa744, pure tiles 11
+  terrain 2 "grass 2": swatch #c6b15d, pure tiles 4
+  terrain 5 "grass 3": swatch #9ca688, pure tiles 0
+  terrain 6 "grass 4": swatch #555d47, background, pure tiles 0
+  terrain 7 "dirt": swatch #fc0803, pure tiles 1
+  terrain 9 "grass 5": swatch #2cc3a9, pure tiles 4
+  terrain 11 "water": swatch #06a1b3, pure tiles 8
+  terrain 12 "water 2": swatch #038cac, pure tiles 4
+terrain sets: 6
+  set 2 over 1: CornersAndSides, 35/47 shapes, 12 missing, template Minimal3x3
+  set 11 over 1: CornersAndSides, 30/47 shapes, 17 missing, template Corner2x2
+  set 9 over 2: Corners, 14/16 shapes, 2 missing, template none
+  set 5 over 6: Corners, 6/16 shapes, 10 missing, template none
+  set 11 over 9: Corners, 14/16 shapes, 2 missing, template none
+  set 12 over 11: Corners, 14/16 shapes, 2 missing, template none
+stamps: 34
+  stamp "overworld.png" at column 0 row 4: 5x3, 14 tiles
+  stamp "overworld.png" at column 11 row 4: 3x3, 8 tiles
+  stamp "overworld.png" at column 14 row 4: 2x2, 4 tiles
+  stamp "overworld.png" at column 19 row 4: 2x2, 4 tiles
+  stamp "overworld.png" at column 14 row 6: 2x1, 2 tiles
+  stamp "overworld.png" at column 0 row 7: 3x3, 9 tiles
+  stamp "overworld.png" at column 3 row 7: 3x3, 9 tiles
+  stamp "overworld.png" at column 6 row 7: 3x3, 7 tiles
+  stamp "overworld.png" at column 9 row 7: 3x3, 9 tiles
+  stamp "overworld.png" at column 12 row 7: 3x3, 9 tiles
+  stamp "overworld.png" at column 15 row 7: 3x3, 7 tiles
+  stamp "overworld.png" at column 5 row 10: 1x2, 2 tiles
+  stamp "overworld.png" at column 5 row 13: 1x2, 2 tiles
+  stamp "overworld.png" at column 5 row 16: 1x2, 2 tiles
+  stamp "overworld.png" at column 5 row 19: 1x2, 2 tiles
+  stamp "overworld.png" at column 5 row 26: 1x2, 2 tiles
+  stamp "overworld.png" at column 6 row 26: 1x2, 2 tiles
+  stamp "overworld.png" at column 9 row 26: 1x3, 3 tiles
+  stamp "overworld.png" at column 12 row 26: 2x2, 3 tiles
+  stamp "overworld.png" at column 21 row 26: 1x3, 3 tiles
+  stamp "overworld.png" at column 22 row 26: 3x3, 9 tiles
+  stamp "overworld.png" at column 7 row 27: 1x2, 2 tiles
+  stamp "overworld.png" at column 8 row 27: 1x2, 2 tiles
+  stamp "overworld.png" at column 10 row 28: 2x2, 4 tiles
+  stamp "overworld.png" at column 12 row 28: 2x1, 2 tiles
+  stamp "overworld.png" at column 22 row 29: 3x1, 3 tiles
+  stamp "overworld.png" at column 10 row 30: 1x4, 4 tiles
+  stamp "overworld.png" at column 11 row 30: 2x3, 4 tiles
+  stamp "overworld.png" at column 12 row 33: 2x2, 4 tiles
+  stamp "overworld.png" at column 22 row 33: 2x1, 2 tiles
+  stamp "overworld.png" at column 10 row 35: 2x2, 4 tiles
+  stamp "overworld.png" at column 12 row 35: 2x2, 3 tiles
+  stamp "overworld.png" at column 20 row 35: 2x2, 4 tiles
+  stamp "overworld.png" at column 22 row 35: 2x2, 3 tiles
+unassigned tiles: 39
+  "overworld.png": 114 125 140 142 151 153 168 179 324 432 598 601 709 710 712 713 721 733 760 761 762 775 787 788 789 790 791 792 799 877 896 902 906 911 912 940 941 985 995
+decor tiles: 111
+low confidence tiles: 73
+  "overworld.png": 270 273 279 282 284 287 289 292 294 336 338 341 343 346 348 351 352 354 360 368 370 373 375 378 381 414 422 424 427 429 435 445 449 451 454 456 459 460 462 471 473 493 499 503 505 508 510 522 530 532 535 537 540 541 567 568 570 576 584 586 589 591 594 597 599 648 651 675 676 678 740 929 939

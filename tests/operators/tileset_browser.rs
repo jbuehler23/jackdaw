@@ -2,7 +2,7 @@
 //! imports as one from its context menu, and the packed copy's array texture
 //! is pictured as a plain sheet.
 
-use crate::tileset_edit_ops::{FILE, farm};
+use crate::tileset_edit_ops::{FILE, overworld};
 use crate::tileset_ops::{SHEET, asset_file, project_app};
 use crate::util::OperatorResultExt as _;
 
@@ -21,7 +21,7 @@ use jackdaw_scene_types::PropertyValue;
 use jackdaw_widgets::context_menu::ContextMenuAction;
 use jackdaw_widgets::file_browser::FileItemDoubleClicked;
 
-const PACKED: &str = "tilemap_packed.tiles.png";
+const PACKED: &str = "overworld.tiles.png";
 
 fn settle(app: &mut App) {
     for _ in 0..4 {
@@ -48,7 +48,7 @@ fn opens_the_dock_only(app: &App) {
 
 #[test]
 fn double_clicking_a_tileset_opens_its_dock_tab() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     let path = asset_file(&dir, FILE).to_string_lossy().into_owned();
     app.world_mut().trigger(FileItemDoubleClicked {
         path,
@@ -60,7 +60,7 @@ fn double_clicking_a_tileset_opens_its_dock_tab() {
 
 #[test]
 fn project_open_on_a_tileset_opens_the_dock() {
-    let (mut app, _dir) = farm();
+    let (mut app, _dir) = overworld();
     app.world_mut()
         .operator("project.open")
         .param("path", PropertyValue::from(FILE))
@@ -139,7 +139,7 @@ fn import_as_tileset_takes_a_path_with_a_comma_whole() {
 
 #[test]
 fn opening_a_packed_copy_opens_the_tileset_that_owns_it() {
-    let (mut app, _dir) = farm();
+    let (mut app, _dir) = overworld();
     app.world_mut()
         .operator("project.open")
         .param("path", PropertyValue::from(PACKED))
@@ -162,7 +162,7 @@ fn plain_2d(app: &App, handle: &Handle<Image>) -> bool {
 
 #[test]
 fn the_packed_copy_and_its_tileset_are_pictured_as_a_plain_sheet() {
-    let (mut app, dir) = farm();
+    let (mut app, dir) = overworld();
     settle(&mut app);
 
     let packed = asset_file(&dir, PACKED);
@@ -176,7 +176,7 @@ fn the_packed_copy_and_its_tileset_are_pictured_as_a_plain_sheet() {
         .resource::<Assets<Image>>()
         .get(&sheet)
         .map(Image::size);
-    assert_eq!(size, Some(UVec2::new(192, 176)), "the whole packed sheet");
+    assert_eq!(size, Some(UVec2::new(432, 608)), "the whole packed sheet");
     let mut nodes = app.world_mut().query::<&ImageNode>();
     let pictured = (nodes.iter(app.world()))
         .filter(|node| node.image == sheet)
@@ -212,7 +212,7 @@ fn the_packed_copy_and_its_tileset_are_pictured_as_a_plain_sheet() {
     let preview = app.world().resource::<AssetPreviewState>();
     let info = preview.selected_info.clone().expect("the preview shows it");
     assert!(info.is_array, "read as an array texture");
-    assert_eq!(info.layer_count, 12 * 11);
+    assert_eq!(info.layer_count, 27 * 38);
     assert_eq!(info.image_handle.as_ref(), Some(&sheet), "pictured flat");
     assert!(preview.layer_images.is_empty(), "not cut into strips");
 
