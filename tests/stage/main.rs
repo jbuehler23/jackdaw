@@ -14,6 +14,7 @@ mod animation_markers;
 mod animation_timeline;
 mod asset_references;
 mod brush_ops;
+mod canvas_grid;
 mod canvas_guides;
 mod canvas_snap;
 mod definition_assets;

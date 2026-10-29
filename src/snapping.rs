@@ -52,7 +52,10 @@ impl Default for GridSettings {
 pub(crate) fn sync_grid_settings(
     snap: Res<SnapSettings>,
     mut grid: ResMut<GridSettings>,
-    mut grids: Query<&mut InfiniteGridSettings, With<InfiniteGrid>>,
+    mut grids: Query<
+        &mut InfiniteGridSettings,
+        (With<InfiniteGrid>, Without<crate::canvas_grid::CanvasGrid>),
+    >,
 ) {
     // Sync grid scale from snap settings whenever snap changes.
     // InfiniteGrid scale is lines-per-unit (density), so use the reciprocal of cell size.
