@@ -58,6 +58,12 @@ pub trait EditorCommand: Send + Sync + 'static {
     fn heap_bytes(&self) -> usize {
         0
     }
+
+    /// Why the entry can never apply again, if what it edits is gone. Undo
+    /// and redo drop such an entry and go on to the next one.
+    fn gone(&self, _world: &World) -> Option<String> {
+        None
+    }
 }
 
 /// Bytes of entry payload the history may hold before its oldest entries
@@ -168,18 +174,26 @@ impl CommandHistory {
         }
     }
 
-    pub fn undo(&mut self, world: &mut World) {
+    /// Undoes the newest entry. Entries whose target is gone are dropped on
+    /// the way, and the first reason is returned for the caller to report.
+    pub fn undo(&mut self, world: &mut World) -> Option<String> {
+        let dropped = drop_gone(&mut self.undo_stack, world);
         if let Some(mut command) = self.undo_stack.pop() {
             command.undo(world);
             self.redo_stack.push(command);
         }
+        dropped
     }
 
-    pub fn redo(&mut self, world: &mut World) {
+    /// Redoes the next entry, dropping the ones whose target is gone as
+    /// [`undo`](Self::undo) does.
+    pub fn redo(&mut self, world: &mut World) -> Option<String> {
+        let dropped = drop_gone(&mut self.redo_stack, world);
         if let Some(mut command) = self.redo_stack.pop() {
             command.execute(world);
             self.undo_stack.push(command);
         }
+        dropped
     }
 
     pub fn push_executed(&mut self, command: Box<dyn EditorCommand>) {
@@ -188,6 +202,17 @@ impl CommandHistory {
         self.redo_stack.clear();
         self.trim_to_budget();
     }
+}
+
+/// Pops the entries on top of `stack` whose target is gone, returning the
+/// first reason.
+fn drop_gone(stack: &mut Vec<Box<dyn EditorCommand>>, world: &World) -> Option<String> {
+    let mut dropped = None;
+    while let Some(why) = stack.last().and_then(|command| command.gone(world)) {
+        stack.pop();
+        dropped.get_or_insert(why);
+    }
+    dropped
 }
 
 /// Warn once per process that history is being dropped to stay inside its
@@ -245,6 +270,12 @@ impl EditorCommand for CommandGroup {
             .map(|command| command.heap_bytes())
             .sum()
     }
+
+    fn gone(&self, world: &World) -> Option<String> {
+        let mut reasons = self.commands.iter().map(|command| command.gone(world));
+        let first = reasons.next()??;
+        reasons.all(|reason| reason.is_some()).then_some(first)
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +293,36 @@ mod tests {
         fn heap_bytes(&self) -> usize {
             self.0
         }
+    }
+
+    struct Gone;
+
+    impl EditorCommand for Gone {
+        fn execute(&mut self, _world: &mut World) {}
+        fn undo(&mut self, _world: &mut World) {}
+        fn description(&self) -> &str {
+            "gone"
+        }
+        fn gone(&self, _world: &World) -> Option<String> {
+            Some("its target closed".into())
+        }
+    }
+
+    #[test]
+    fn undo_drops_entries_whose_target_is_gone_and_undoes_the_next() {
+        let mut world = World::new();
+        let mut history = CommandHistory::default();
+        history.push_executed(Box::new(Weighty(1)));
+        history.push_executed(Box::new(Gone));
+        history.push_executed(Box::new(Gone));
+        let dropped = history.undo(&mut world);
+        assert_eq!(dropped.as_deref(), Some("its target closed"));
+        assert!(
+            history.undo_stack.is_empty(),
+            "the earlier entry was undone"
+        );
+        assert_eq!(history.redo_stack.len(), 1);
+        assert_eq!(history.redo(&mut world), None);
     }
 
     #[test]

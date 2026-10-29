@@ -62,9 +62,13 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
         }
         cancel_active_modal_if_any(world);
         crate::ui_stage::cancel_canvas_gestures(world);
-        world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
-            history.undo(world);
-        });
+        let dropped =
+            world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
+                history.undo(world)
+            });
+        if let Some(why) = dropped {
+            jackdaw_api_internal::operator::warn_caller(world, why);
+        }
         // Undo restores components without re-triggering the outliner's
         // targeted rebuilds, so a row can keep a stale icon (e.g. a brush whose
         // `Brush` component was briefly absent). Rebuild so each row re-resolves
@@ -85,9 +89,13 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
         }
         cancel_active_modal_if_any(world);
         crate::ui_stage::cancel_canvas_gestures(world);
-        world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
-            history.redo(world);
-        });
+        let dropped =
+            world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
+                history.redo(world)
+            });
+        if let Some(why) = dropped {
+            jackdaw_api_internal::operator::warn_caller(world, why);
+        }
         refresh_views_after_history(world);
     });
     OperatorResult::Finished

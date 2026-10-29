@@ -21,11 +21,11 @@ use jackdaw_tilemap::{
 use jackdaw_tileset::Tileset;
 
 const TILEMAP_TYPE_PATH: &str = "jackdaw_scene_types::tilemap::Tilemap";
-const TILESET: &str = "overworld.tileset.bsn";
+pub(crate) const TILESET: &str = "overworld.tileset.bsn";
 
 /// An editor on a temp project holding the overworld sheet imported as
 /// `overworld.tileset.bsn` with auto setup.
-fn project_app() -> (App, tempfile::TempDir) {
+pub(crate) fn project_app() -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let assets = dir.path().join("assets");
     std::fs::create_dir_all(&assets).expect("assets");
@@ -57,13 +57,13 @@ fn project_app() -> (App, tempfile::TempDir) {
     (app, dir)
 }
 
-fn settle(app: &mut App) {
+pub(crate) fn settle(app: &mut App) {
     for _ in 0..4 {
         app.update();
     }
 }
 
-fn layer(kind: TilemapLayerKind, terrain_match: LayerTerrainMatch) -> TilemapLayer {
+pub(crate) fn layer(kind: TilemapLayerKind, terrain_match: LayerTerrainMatch) -> TilemapLayer {
     TilemapLayer {
         name: "Ground".to_string(),
         tileset: TILESET.to_string(),
@@ -73,7 +73,7 @@ fn layer(kind: TilemapLayerKind, terrain_match: LayerTerrainMatch) -> TilemapLay
 }
 
 /// Spawn a map linked into the live document and fill its cells with `data`.
-fn spawn_map(app: &mut App, layers: Vec<TilemapLayer>, data: TilemapData) -> Entity {
+pub(crate) fn spawn_map(app: &mut App, layers: Vec<TilemapLayer>, data: TilemapData) -> Entity {
     let tilemap = Tilemap {
         data_path: "zone.tilemap-0.jdtiles".to_string(),
         layers,
@@ -97,7 +97,7 @@ fn spawn_map(app: &mut App, layers: Vec<TilemapLayer>, data: TilemapData) -> Ent
     entity
 }
 
-fn key_of(app: &mut App, map: Entity) -> String {
+pub(crate) fn key_of(app: &mut App, map: Entity) -> String {
     jackdaw::tilemap::store_key_of(app.world_mut(), map).expect("a valid data path")
 }
 
@@ -108,7 +108,7 @@ fn edit(app: &mut App, map: Entity, change: impl FnOnce(&mut TilemapData)) {
     settle(app);
 }
 
-fn tile_layer(cells: &[(i32, i32, TileRef)]) -> TilemapData {
+pub(crate) fn tile_layer(cells: &[(i32, i32, TileRef)]) -> TilemapData {
     let mut tiles = ChunkedLayer::new();
     for &(x, y, tile) in cells {
         tiles.set(CellCoord::new(x, y), tile);
@@ -122,7 +122,7 @@ fn tile_layer(cells: &[(i32, i32, TileRef)]) -> TilemapData {
     }
 }
 
-fn the_map(app: &mut App) -> Entity {
+pub(crate) fn the_map(app: &mut App) -> Entity {
     app.world_mut()
         .query_filtered::<Entity, With<Tilemap>>()
         .single(app.world())
@@ -130,7 +130,7 @@ fn the_map(app: &mut App) -> Entity {
 }
 
 /// Each drawn chunk of `map` by its layer and chunk coordinate.
-fn chunks(app: &mut App, map: Entity) -> Vec<(usize, IVec2, Entity)> {
+pub(crate) fn chunks(app: &mut App, map: Entity) -> Vec<(usize, IVec2, Entity)> {
     let mut found: Vec<_> = app
         .world_mut()
         .query::<(Entity, &TilemapChunkOf, &ChildOf)>()
@@ -142,14 +142,14 @@ fn chunks(app: &mut App, map: Entity) -> Vec<(usize, IVec2, Entity)> {
     found
 }
 
-fn chunk_at(app: &mut App, map: Entity, layer: usize, chunk: IVec2) -> Entity {
+pub(crate) fn chunk_at(app: &mut App, map: Entity, layer: usize, chunk: IVec2) -> Entity {
     (chunks(app, map).into_iter())
         .find(|(l, c, _)| *l == layer && *c == chunk)
         .map(|(.., entity)| entity)
         .unwrap_or_else(|| panic!("no chunk {chunk} on layer {layer}"))
 }
 
-fn index_at(app: &App, chunk: Entity, local: (i32, i32)) -> Option<u16> {
+pub(crate) fn index_at(app: &App, chunk: Entity, local: (i32, i32)) -> Option<u16> {
     let data = app
         .world()
         .get::<TilemapChunkTileData>(chunk)
@@ -158,7 +158,7 @@ fn index_at(app: &App, chunk: Entity, local: (i32, i32)) -> Option<u16> {
     data.0[index].map(|tile| tile.tileset_index)
 }
 
-fn data_tick(app: &App, chunk: Entity) -> bevy::ecs::change_detection::Tick {
+pub(crate) fn data_tick(app: &App, chunk: Entity) -> bevy::ecs::change_detection::Tick {
     app.world()
         .entity(chunk)
         .get_ref::<TilemapChunkTileData>()
@@ -340,7 +340,7 @@ fn a_new_tileset_image_re_inserts_the_chunks() {
 
 /// A 6 x 6 patch of grass: terrain 1, which pairs with 2 in a corners and
 /// sides set of the overworld tileset.
-fn grass_patch() -> TilemapData {
+pub(crate) fn grass_patch() -> TilemapData {
     let mut terrain = ChunkedLayer::new();
     for y in 0..6 {
         for x in 0..6 {
@@ -463,7 +463,7 @@ fn the_saved_scene_holds_no_chunk() {
 }
 
 /// Grass over cells 0..70 x 0..20: three chunks in a row.
-fn grass_strip() -> TilemapData {
+pub(crate) fn grass_strip() -> TilemapData {
     let mut data = grass_patch();
     let terrain = &mut data.layers[0]
         .authoring
@@ -478,53 +478,11 @@ fn grass_strip() -> TilemapData {
     data
 }
 
-fn ground_terrain() -> TilemapLayer {
+pub(crate) fn ground_terrain() -> TilemapLayer {
     layer(
         TilemapLayerKind::Terrain,
         LayerTerrainMatch::CornersAndSides,
     )
-}
-
-fn resolved_cells(app: &App) -> usize {
-    app.world()
-        .resource::<jackdaw::tilemap_render::TilemapDrawStats>()
-        .resolved_cells
-}
-
-#[test]
-fn a_one_cell_terrain_edit_resolves_a_bounded_region_and_writes_one_chunk() {
-    let (mut app, _dir) = project_app();
-    let map = spawn_map(&mut app, vec![ground_terrain()], grass_strip());
-    let slots: Vec<Entity> = (chunks(&mut app, map).into_iter())
-        .map(|(.., entity)| entity)
-        .collect();
-    assert_eq!(slots.len(), 3);
-    let ticks: Vec<_> = slots.iter().map(|&c| data_tick(&app, c)).collect();
-
-    edit(&mut app, map, |data| {
-        let authoring = data.layers[0].authoring.as_mut().expect("authoring");
-        authoring.terrain.set(CellCoord::new(40, 3), 2);
-    });
-    let ring = 4 * 32 + 4;
-    assert!(
-        resolved_cells(&app) <= 1024 + ring,
-        "resolved {} cells for one edited chunk",
-        resolved_cells(&app)
-    );
-    let now: Vec<_> = slots.iter().map(|&c| data_tick(&app, c)).collect();
-    assert_eq!(now[0], ticks[0]);
-    assert_ne!(now[1], ticks[1], "the edited chunk is written");
-    assert_eq!(now[2], ticks[2]);
-
-    let patched = now;
-    app.world_mut()
-        .get_mut::<Tilemap>(map)
-        .expect("the map")
-        .set_changed();
-    settle(&mut app);
-    assert!(resolved_cells(&app) > 1024 + ring, "a whole redraw");
-    let redrawn: Vec<_> = slots.iter().map(|&c| data_tick(&app, c)).collect();
-    assert_eq!(redrawn, patched, "the patch matches a whole redraw");
 }
 
 #[test]
@@ -569,4 +527,44 @@ fn a_layer_that_draws_again_forgets_its_warning() {
     settle(&mut app);
     assert!(!warned(&app));
     assert_eq!(chunks(&mut app, map).len(), 1);
+}
+
+#[test]
+fn a_direct_terrain_edit_resolves_a_bounded_region_and_writes_one_chunk() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_strip());
+    let slots: Vec<Entity> = (chunks(&mut app, map).into_iter())
+        .map(|(.., entity)| entity)
+        .collect();
+    assert_eq!(slots.len(), 3);
+    let ticks: Vec<_> = slots.iter().map(|&c| data_tick(&app, c)).collect();
+    let resolved = |app: &App| app.world().resource::<TilemapDataStore>().resolved_cells();
+    let start = resolved(&app);
+
+    edit(&mut app, map, |data| {
+        let authoring = data.layers[0].authoring.as_mut().expect("authoring");
+        authoring.terrain.set(CellCoord::new(40, 3), 2);
+    });
+    let ring = 4 * 32 + 4;
+    let count = resolved(&app) - start;
+    assert!(
+        count > 0 && count <= 1024 + ring,
+        "resolved {count} cells for one edited chunk"
+    );
+    let now: Vec<_> = slots.iter().map(|&c| data_tick(&app, c)).collect();
+    assert_eq!(now[0], ticks[0]);
+    assert_ne!(now[1], ticks[1], "the edited chunk is written");
+    assert_eq!(now[2], ticks[2]);
+
+    let key = key_of(&mut app, map);
+    let set = (app.world().resource::<Assets<Tileset>>().iter())
+        .next()
+        .map(|(_, t)| t.terrain_set(Some(jackdaw_tileset::TerrainMatch::CornersAndSides)))
+        .expect("the tileset")
+        .expect("a set");
+    let store = app.world().resource::<TilemapDataStore>();
+    let data = store.get(&key).expect("the map");
+    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let fresh = jackdaw::tilemap_resolve::full_resolve(&set, authoring).0;
+    assert_eq!(data.layers[0].tiles, fresh, "the edit left no stale tile");
 }

@@ -8,14 +8,12 @@ use bevy::prelude::*;
 use bevy::sprite_render::{
     AlphaMode2d, TileData, TileOrientation, TilemapChunk, TilemapChunkTileData,
 };
-use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{
-    CHUNK_AREA, CHUNK_SIZE, CellCoord, ChunkCoord, ChunkedLayer, TerrainAuthoring, TerrainSet,
-    TileRef, resolve_region,
-};
+use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
+use jackdaw_tilemap::{CHUNK_SIZE, ChunkCoord, TileRef};
 use jackdaw_tileset::Tileset;
 
-use crate::tilemap::{Redraw, TilemapDataStore, layer_terrain_set, store_keys};
+use crate::tilemap::{Redraw, TilemapDataStore, store_keys};
+use crate::tilemap_resolve::cached_set;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<TilemapDrawWarnings>()
@@ -25,6 +23,7 @@ pub fn plugin(app: &mut App) {
             Update,
             queue_tilemap_draws
                 .after(crate::tilemap::ensure_tilemap_data_path)
+                .after(crate::tilemap_resolve::queue_terrain_refresh)
                 .run_if(in_state(crate::AppState::Editor)),
         );
 }
@@ -48,8 +47,6 @@ struct TilemapDrawn {
     /// Some layer's tileset could not be found.
     missing: bool,
     chunks: HashMap<(usize, ChunkCoord), Entity>,
-    /// Each terrain layer's tiles as last resolved, patched by later edits.
-    resolved: HashMap<usize, ChunkedLayer<TileRef>>,
 }
 
 /// Warnings shown, by map (its store key, or its entity without one), layer
@@ -67,8 +64,8 @@ impl TilemapDrawWarnings {
 /// What the last batch of tilemap draws did.
 #[derive(Resource, Default, Debug)]
 pub struct TilemapDrawStats {
-    /// Terrain cells resolved.
-    pub resolved_cells: usize,
+    /// Chunks whose tile data was written.
+    pub chunks_written: usize,
 }
 
 /// The tile a cell's [`TileRef`] draws, or `None` for an empty cell.
@@ -150,7 +147,6 @@ struct Prepared {
     image: Handle<Image>,
     /// The packed layers the tileset has a tile in.
     known: HashSet<u16>,
-    sets: Vec<(LayerTerrainMatch, Result<TerrainSet, String>)>,
 }
 
 /// The tilesets of one batch, each loaded once.
@@ -177,32 +173,10 @@ impl Tilesets {
                     tileset,
                     image,
                     known,
-                    sets: Vec::new(),
                 }
             });
             Ok((id, prepared))
         })
-    }
-}
-
-impl Prepared {
-    fn terrain_set(
-        &mut self,
-        layer: &jackdaw_scene_types::TilemapLayer,
-    ) -> &Result<TerrainSet, String> {
-        let at = match self
-            .sets
-            .iter()
-            .position(|(mode, _)| *mode == layer.terrain_match)
-        {
-            Some(at) => at,
-            None => {
-                let set = layer_terrain_set(&self.tileset, layer);
-                self.sets.push((layer.terrain_match, set));
-                self.sets.len() - 1
-            }
-        };
-        &self.sets[at].1
     }
 }
 
@@ -263,17 +237,12 @@ fn draw_map(
         return Ok(());
     };
     let mut chunks = std::mem::take(&mut drawn.chunks);
-    let mut resolved = std::mem::take(&mut drawn.resolved);
-    if edited.is_none() {
-        resolved.clear();
-    }
     let owner = key.cloned().unwrap_or_else(|| format!("{map}"));
     let mut warnings = Vec::new();
     let mut drew = Vec::new();
     let (mut ids, mut missing) = (Vec::new(), false);
     let mut wanted: HashMap<(usize, ChunkCoord), Wanted> = HashMap::new();
     let mut touched: HashSet<(usize, ChunkCoord)> = HashSet::new();
-    let mut resolved_cells = 0;
 
     for (index, layer) in tilemap.layers.iter().enumerate() {
         let prepared = match tilesets.get(world, &layer.tileset) {
@@ -302,6 +271,13 @@ fn draw_map(
             warnings.push((index, "its tileset has no image".to_string()));
             continue;
         }
+        if layer.kind == TilemapLayerKind::Terrain
+            && let Some(&id) = ids.last()
+            && let Some(Err(why)) = cached_set(world, id, layer.terrain_match)
+        {
+            warnings.push((index, why));
+            continue;
+        }
         let store = world.resource::<TilemapDataStore>();
         let Some(cells) = (key.and_then(|key| store.get(key))).and_then(|d| d.layers.get(index))
         else {
@@ -314,41 +290,8 @@ fn draw_map(
                 .map(|(_, chunk)| *chunk)
                 .collect()
         });
-        let authoring =
-            (cells.authoring.as_ref()).filter(|_| layer.kind == TilemapLayerKind::Terrain);
-        let (tiles, coords) = match authoring {
-            Some(authoring) => {
-                let set = match prepared.terrain_set(layer) {
-                    Ok(set) => set,
-                    Err(why) => {
-                        warnings.push((index, why.clone()));
-                        resolved.remove(&index);
-                        continue;
-                    }
-                };
-                let tiles = resolved.entry(index).or_default();
-                let (coords, count) = match scope.filter(|_| !tiles.is_empty()) {
-                    Some(scope) => {
-                        let cells = (scope.iter())
-                            .flat_map(|chunk| (0..CHUNK_AREA).map(|local| chunk.cell(local)));
-                        resolve_into(set, authoring, tiles, cells)
-                    }
-                    None => {
-                        *tiles = ChunkedLayer::new();
-                        let painted = (authoring.terrain.cells().map(|(cell, _)| cell))
-                            .chain(authoring.overrides.keys().copied());
-                        resolve_into(set, authoring, tiles, painted)
-                    }
-                };
-                resolved_cells += count;
-                (&*tiles, coords)
-            }
-            None => {
-                let coords =
-                    scope.unwrap_or_else(|| cells.tiles.chunks().map(|(c, _)| c).collect());
-                (&cells.tiles, coords)
-            }
-        };
+        let tiles = &cells.tiles;
+        let coords = scope.unwrap_or_else(|| tiles.chunks().map(|(c, _)| c).collect());
         drew.push(index);
         let tile_size = match prepared.tileset.tile_size.min_element() {
             0 => tilemap.cell_size,
@@ -373,6 +316,7 @@ fn draw_map(
         }
     }
 
+    world.resource_mut::<TilemapDrawStats>().chunks_written += wanted.len();
     chunks.retain(|slot, entity| {
         if edited.is_some() && !touched.contains(slot) {
             return true;
@@ -402,14 +346,12 @@ fn draw_map(
     }
     if let Some(mut drawn) = world.get_mut::<TilemapDrawn>(map) {
         drawn.chunks = chunks;
-        drawn.resolved = resolved;
         drawn.key = key.cloned();
         if edited.is_none() {
             drawn.tilesets = ids;
             drawn.missing = missing;
         }
     }
-    world.resource_mut::<TilemapDrawStats>().resolved_cells += resolved_cells;
 
     let mut shown = world.resource_mut::<TilemapDrawWarnings>();
     if edited.is_none() {
@@ -424,26 +366,6 @@ fn draw_map(
         }
     }
     Ok(())
-}
-
-/// Resolves `cells`, and the ring of cells around them since a cell's tile
-/// depends on its neighbours, into `tiles`. Returns the chunks those cells
-/// fall in and how many cells were resolved.
-fn resolve_into(
-    set: &TerrainSet,
-    authoring: &TerrainAuthoring,
-    tiles: &mut ChunkedLayer<TileRef>,
-    cells: impl IntoIterator<Item = CellCoord>,
-) -> (Vec<ChunkCoord>, usize) {
-    let (terrain, links, overrides) = (&authoring.terrain, &authoring.links, &authoring.overrides);
-    let resolved = resolve_region(set, terrain, links, overrides, cells);
-    let mut coords = BTreeSet::new();
-    for &(cell, tile) in &resolved {
-        tiles.set(cell, tile);
-        coords.insert(cell.chunk());
-    }
-    tiles.take_dirty();
-    (coords.into_iter().collect(), resolved.len())
 }
 
 fn update_chunk(world: &mut World, entity: Entity, (chunk, data, transform): Wanted) {

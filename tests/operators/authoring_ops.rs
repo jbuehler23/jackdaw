@@ -577,6 +577,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("sprite.set_pixels_per_unit", &["entity"], true),
     ("sprite.y_sort", &["entity"], true),
     ("terrain.scatter.adopt", &["entity"], true),
+    ("tilemap.set_cells", &["entity"], false),
     ("viewport.capture", &["camera"], false),
     ("viewport.look_through", &["entity"], true),
     ("widget.add", &["parent"], false),

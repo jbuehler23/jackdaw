@@ -55,7 +55,7 @@ pub enum TilemapLayerKind {
     Tile,
 }
 
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[reflect(Default)]
 pub enum LayerTerrainMatch {
     /// The tileset's only match mode.
