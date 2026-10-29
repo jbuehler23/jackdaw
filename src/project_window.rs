@@ -179,7 +179,8 @@ impl DirEntry {
 /// What the Project window is showing.
 #[derive(Resource)]
 pub struct ProjectWindowState {
-    /// The folder the tree is rooted at: the project's assets.
+    /// The folder the tree is rooted at: the project's assets, or empty with
+    /// no project open.
     pub root_directory: PathBuf,
     /// The folder whose files fill the tiles.
     pub current_directory: PathBuf,
@@ -207,10 +208,9 @@ pub struct ProjectWindowState {
 
 impl Default for ProjectWindowState {
     fn default() -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
-            root_directory: cwd.clone(),
-            current_directory: cwd,
+            root_directory: PathBuf::new(),
+            current_directory: PathBuf::new(),
             selected_file: None,
             search: String::new(),
             kind_filter: KindFilter::default(),
@@ -384,17 +384,20 @@ fn setup_project_window(
     mut commands: Commands,
     project_root: Option<Res<crate::project::ProjectRoot>>,
 ) {
-    let root = match project_root {
-        Some(project) => project.assets_dir(),
-        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    };
+    let root = project_root
+        .map(|project| project.assets_dir())
+        .unwrap_or_default();
     state.root_directory = root.clone();
     state.current_directory = root.clone();
     state.selected_file = None;
     state.expanded.clear();
     state.expanded.insert(root.clone());
     state.rebuild();
-    watch_directory(&root, &mut commands);
+    if root.as_os_str().is_empty() {
+        commands.remove_resource::<ProjectWatcher>();
+    } else {
+        watch_directory(&root, &mut commands);
+    }
 }
 
 fn watch_directory(root: &Path, commands: &mut Commands) {
@@ -2651,6 +2654,45 @@ mod tests {
         assert_eq!(
             tile_subject(&entry("bark.png", AssetFileKind::Scene), &kinds),
             None
+        );
+    }
+
+    fn set_up(project: Option<crate::project::ProjectRoot>) -> World {
+        use bevy::ecs::system::RunSystemOnce as _;
+        let mut world = World::new();
+        world.init_resource::<ProjectWindowState>();
+        if let Some(project) = project {
+            world.insert_resource(project);
+        }
+        world
+            .run_system_once(setup_project_window)
+            .expect("the setup runs");
+        world
+    }
+
+    #[test]
+    fn with_no_project_open_nothing_is_shown_or_watched() {
+        let world = set_up(None);
+        assert!(!world.contains_resource::<ProjectWatcher>());
+        let state = world.resource::<ProjectWindowState>();
+        assert!(state.root_directory.as_os_str().is_empty());
+        assert!(state.current_directory.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn an_open_project_has_its_assets_watched() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = crate::project::ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: default(),
+        };
+        let assets = project.assets_dir();
+        std::fs::create_dir_all(&assets).expect("the assets folder is made");
+        let world = set_up(Some(project));
+        assert!(world.contains_resource::<ProjectWatcher>());
+        assert_eq!(
+            world.resource::<ProjectWindowState>().root_directory,
+            assets
         );
     }
 

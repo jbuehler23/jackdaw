@@ -4,6 +4,8 @@
 //! reselect of the shown entity leaves it standing, and a component added to
 //! or taken from it brings or takes only that component's card.
 
+use bevy::ecs::world::DeferredWorld;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::ui_widgets::ValueChange;
 use jackdaw::inspector::component_picker::InspectorAddComponentButton;
@@ -23,6 +25,48 @@ struct Tally {
     cards_removed: usize,
 }
 
+/// The UI nodes of the inspector panels as the last frame ended, and the
+/// nodes added since, not yet known to be in a panel or out of one. Only
+/// panel nodes are tallied: the rest of the editor's UI changes on its own
+/// schedule, such as the project window's folder tree rebuilt whenever a
+/// file under the watched directory comes or goes.
+#[derive(Resource, Default)]
+struct PanelNodes {
+    inside: HashSet<Entity>,
+    pending: Vec<Entity>,
+}
+
+fn in_panel(world: &World, mut entity: Entity) -> bool {
+    loop {
+        if world.get::<Inspector>(entity).is_some() {
+            return true;
+        }
+        match world.get::<ChildOf>(entity) {
+            Some(child_of) => entity = child_of.parent(),
+            None => return false,
+        }
+    }
+}
+
+fn tally_panel_nodes(world: &mut World) {
+    let pending = std::mem::take(&mut world.resource_mut::<PanelNodes>().pending);
+    let added = pending
+        .into_iter()
+        .filter(|&node| in_panel(world, node))
+        .count();
+    world.resource_mut::<Tally>().nodes_added += added;
+    let mut panels = world.query_filtered::<Entity, With<Inspector>>();
+    let mut stack: Vec<Entity> = panels.iter(world).collect();
+    let mut inside = HashSet::new();
+    while let Some(node) = stack.pop() {
+        inside.insert(node);
+        if let Some(children) = world.get::<Children>(node) {
+            stack.extend(children.iter());
+        }
+    }
+    world.resource_mut::<PanelNodes>().inside = inside;
+}
+
 fn settle(app: &mut App) {
     for _ in 0..6 {
         app.update();
@@ -39,7 +83,7 @@ fn select(app: &mut App, entity: Entity) {
     settle(app);
 }
 
-/// Run frames until one passes with no UI node coming or going, then zero the
+/// Run frames until one passes with no panel node coming or going, then zero the
 /// tally, so work that lands late, such as assets finishing loading on a slow
 /// machine, is not counted against what the test does next.
 fn reset(app: &mut App) {
@@ -55,7 +99,7 @@ fn reset(app: &mut App) {
 }
 
 /// An editor with an inspector panel and two document entities, neither
-/// selected yet, counting the UI nodes and cards that come and go.
+/// selected yet, counting the panel nodes and cards that come and go.
 fn app_with_two_entities() -> (App, Entity, Entity) {
     let mut app = util::editor_test_app();
     app.world_mut()
@@ -79,11 +123,16 @@ fn app_with_two_entities() -> (App, Entity, Entity) {
     let second = spawn_one("second", 2.0);
     settle(&mut app);
     app.init_resource::<Tally>()
-        .add_observer(|_: On<Add<Node>>, mut tally: ResMut<Tally>| {
-            tally.nodes_added += 1;
+        .init_resource::<PanelNodes>()
+        .add_systems(Last, tally_panel_nodes)
+        .add_observer(|add: On<Add<Node>>, mut panel: ResMut<PanelNodes>| {
+            panel.pending.push(add.event_target());
         })
-        .add_observer(|_: On<Remove<Node>>, mut tally: ResMut<Tally>| {
-            tally.nodes_removed += 1;
+        .add_observer(|remove: On<Remove<Node>>, mut world: DeferredWorld| {
+            let node = remove.event_target();
+            if world.resource::<PanelNodes>().inside.contains(&node) || in_panel(&world, node) {
+                world.resource_mut::<Tally>().nodes_removed += 1;
+            }
         })
         .add_observer(|_: On<Add<ComponentDisplay>>, mut tally: ResMut<Tally>| {
             tally.cards_added += 1;
