@@ -256,8 +256,8 @@ fn two_d(taxonomy: &mut CreationTaxonomy, world: &mut World) {
         entry(TWO_D_GROUP, "Empty 2D", op_action::<EntityAddEmptyOp>()),
         entry(
             TWO_D_GROUP,
-            "Pixel Camera",
-            op_action::<crate::entity_ops::EntityAddPixelCameraOp>(),
+            "Camera",
+            op_action::<crate::entity_ops::EntityAddCamera2dOp>(),
         ),
     ]);
 }

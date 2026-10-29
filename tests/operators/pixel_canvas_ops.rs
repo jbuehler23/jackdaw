@@ -1,4 +1,4 @@
-//! `camera.pixel_canvas` and the Pixel Camera entry of the 2D Add group.
+//! `camera.pixel_canvas` and the camera entries of the Add menu.
 
 use crate::util;
 use crate::util::OperatorResultExt as _;
@@ -173,27 +173,27 @@ fn the_selected_camera_wins_over_the_scene_rule() {
     assert!(canvas(&app, camera).is_none());
 }
 
-#[test]
-fn the_pixel_camera_entry_adds_a_canvas_camera_under_the_scene_root() {
-    let (mut app, root) = two_d_app();
-    let before = history_len(&app);
+fn add_2d_camera(app: &mut App) -> Entity {
     app.world_mut()
-        .operator("entity.add.pixel_camera")
+        .operator("entity.add.camera_2d")
         .call()
         .expect("dispatch")
         .assert_finished();
     for _ in 0..3 {
         app.update();
     }
-    let found: Vec<(Entity, PixelCanvas)> = app
-        .world_mut()
-        .query_filtered::<(Entity, &PixelCanvas), With<Camera2d>>()
-        .iter(app.world())
-        .map(|(entity, canvas)| (entity, *canvas))
-        .collect();
-    assert_eq!(found.len(), 1);
-    let (camera, canvas) = found[0];
-    assert_eq!(canvas, PixelCanvas::new(320, 180));
+    app.world_mut()
+        .query_filtered::<Entity, (With<Camera2d>, With<jackdaw::entity_ops::SceneCamera>)>()
+        .single(app.world())
+        .expect("one 2D camera")
+}
+
+#[test]
+fn the_2d_camera_entry_adds_a_plain_camera_under_the_scene_root() {
+    let (mut app, root) = two_d_app();
+    let before = history_len(&app);
+    let camera = add_2d_camera(&mut app);
+    assert_eq!(canvas(&app, camera), None, "no pixel canvas until asked");
     assert_eq!(
         app.world().get::<ChildOf>(camera).map(ChildOf::parent),
         Some(root)
@@ -213,13 +213,8 @@ fn the_pixel_camera_entry_adds_a_canvas_camera_under_the_scene_root() {
         "it never draws into the editor's window"
     );
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    let text = jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), dir.path())
-        .expect("the scene emits");
-    assert!(
-        text.contains("Camera2d") && text.contains("PixelCanvas"),
-        "the camera saves with its canvas:\n{text}"
-    );
+    let text = saved_text(&mut app);
+    assert!(text.contains("Camera2d"), "the camera saves:\n{text}");
     assert!(!text.contains("SubEntity"), "and nothing the renderer adds");
     assert!(
         !text.contains("is_active: false") && !text.contains("RenderTarget::None"),
@@ -228,6 +223,85 @@ fn the_pixel_camera_entry_adds_a_canvas_camera_under_the_scene_root() {
 
     undo(&mut app);
     assert!(app.world().get_entity(camera).is_err(), "undo removes it");
+}
+
+#[test]
+fn the_3d_camera_saves_active_and_stays_off_in_the_editor() {
+    let mut app = util::editor_test_app();
+    app.update();
+    app.world_mut()
+        .operator("entity.add.camera")
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    for _ in 0..3 {
+        app.update();
+    }
+    let camera = app
+        .world_mut()
+        .query_filtered::<Entity, (With<Camera3d>, With<jackdaw::entity_ops::SceneCamera>)>()
+        .single(app.world())
+        .expect("one scene camera");
+    assert_eq!(
+        app.world()
+            .get::<Camera>(camera)
+            .map(|camera| camera.is_active),
+        Some(false),
+        "it never draws into the editor's window"
+    );
+    let text = saved_text(&mut app);
+    assert!(text.contains("Camera3d"), "the camera saves:\n{text}");
+    assert!(
+        !text.contains("is_active: false") && !text.contains("RenderTarget::None"),
+        "and saves active, so the game draws through it:\n{text}"
+    );
+}
+
+#[test]
+fn a_scene_saved_with_an_inactive_camera_still_loads() {
+    let mut app = util::editor_test_app();
+    app.update();
+    let old = app
+        .world_mut()
+        .spawn((
+            Name::new("Old Camera"),
+            jackdaw::entity_ops::SceneCamera,
+            Camera3d::default(),
+            Camera {
+                is_active: false,
+                ..default()
+            },
+            bevy::camera::RenderTarget::None {
+                size: UVec2::splat(1),
+            },
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), old);
+    app.update();
+    let text = saved_text(&mut app);
+    assert!(text.contains("is_active: false"), "the old shape:\n{text}");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("old.bsn");
+    std::fs::write(&path, &text).expect("write scene");
+    let mut app = util::editor_test_app();
+    app.update();
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+    for _ in 0..8 {
+        app.update();
+    }
+    let loaded: Vec<bool> = app
+        .world_mut()
+        .query::<(&Camera, &Name)>()
+        .iter(app.world())
+        .filter(|(_, name)| name.as_str() == "Old Camera")
+        .map(|(camera, _)| camera.is_active)
+        .collect();
+    assert_eq!(loaded, [false], "the camera loads as it was saved");
 }
 
 #[test]
@@ -324,47 +398,21 @@ fn a_new_canvas_keeps_the_scale_at_one_pixel_per_unit_or_once_the_author_set_it(
 }
 
 #[test]
-fn the_pixel_camera_entry_starts_at_the_project_pixels_per_unit() {
+fn a_canvas_on_a_new_2d_camera_starts_at_the_project_pixels_per_unit() {
     let (mut app, _root) = two_d_app();
     set_project_ppu(&mut app, 16.0);
+    let camera = add_2d_camera(&mut app);
+    assert_eq!(ortho_scale(&app, camera), Some(1.0), "a plain camera");
     let before = history_len(&app);
-    app.world_mut()
-        .operator("entity.add.pixel_camera")
-        .call()
-        .expect("dispatch")
-        .assert_finished();
-    for _ in 0..3 {
-        app.update();
-    }
-    let camera = app
-        .world_mut()
-        .query_filtered::<Entity, With<PixelCanvas>>()
-        .single(app.world())
-        .expect("one pixel camera");
+    call(&mut app, &[]).assert_finished();
+    assert_eq!(canvas(&app, camera), Some(PixelCanvas::new(320, 180)));
     assert_eq!(ortho_scale(&app, camera), Some(1.0 / 16.0));
     assert_eq!(history_len(&app), before + 1);
     let text = saved_text(&mut app);
-    assert!(text.contains("0.0625"), "the game reads the scale:\n{text}");
-}
-
-#[test]
-fn the_pixel_camera_entry_keeps_the_scale_at_one_pixel_per_unit() {
-    let (mut app, _root) = two_d_app();
-    set_project_ppu(&mut app, 1.0);
-    app.world_mut()
-        .operator("entity.add.pixel_camera")
-        .call()
-        .expect("dispatch")
-        .assert_finished();
-    for _ in 0..3 {
-        app.update();
-    }
-    let camera = app
-        .world_mut()
-        .query_filtered::<Entity, With<PixelCanvas>>()
-        .single(app.world())
-        .expect("one pixel camera");
-    assert_eq!(ortho_scale(&app, camera), Some(1.0));
+    assert!(
+        text.contains("0.0625") && text.contains("PixelCanvas"),
+        "the game reads the canvas and scale:\n{text}"
+    );
 }
 
 #[test]

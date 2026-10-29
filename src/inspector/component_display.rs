@@ -1089,6 +1089,14 @@ fn build_inspector_cards(
             crate::camera_preview::spawn_camera_preview_strip(commands, body_entity);
             crate::camera_preview::spawn_look_through_button(commands, body_entity, source_entity);
         }
+        if type_id == Some(TypeId::of::<Camera2d>()) {
+            crate::pixel_camera::spawn_canvas_toggle(
+                commands,
+                body_entity,
+                source_entity,
+                entity_ref.contains::<jackdaw_scene_types::PixelCanvas>(),
+            );
+        }
 
         // A graph reference leads with the graphs the project holds, and a set
         // of clips with the way to a graph. Both are filled world-exclusive

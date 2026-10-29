@@ -4,8 +4,10 @@
 use crate::util;
 
 use bevy::prelude::*;
+use bevy::ui::Checked;
+use bevy::ui_widgets::ValueChange;
 use jackdaw::commands::CommandHistory;
-use jackdaw::pixel_camera::{CANVAS_PRESETS, CUSTOM_PRESET, CanvasPresetCombo};
+use jackdaw::pixel_camera::{CANVAS_PRESETS, CUSTOM_PRESET, CanvasPresetCombo, PixelCanvasToggle};
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, ComboBoxSelectedIndex, ComboBoxTrigger};
 use jackdaw_scene_types::PixelCanvas;
 
@@ -158,4 +160,72 @@ fn custom_on_a_preset_size_snaps_back_to_the_preset() {
 fn a_size_off_the_presets_reads_custom() {
     let (mut app, _camera) = app_with_canvas(PixelCanvas::new(256, 144));
     assert_eq!(shown(&mut app), CUSTOM_PRESET);
+}
+
+fn app_with_plain_camera() -> (App, Entity) {
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .spawn(jackdaw::layout::inspector_components_content(default()));
+    let root = jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
+    let camera = app
+        .world_mut()
+        .spawn((Name::new("Game Camera"), Camera2d, ChildOf(root)))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), camera);
+    jackdaw::selection::select_only(app.world_mut(), camera);
+    for _ in 0..4 {
+        app.update();
+    }
+    (app, camera)
+}
+
+fn canvas_toggle(app: &mut App, camera: Entity) -> Entity {
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &PixelCanvasToggle)>()
+        .iter(app.world())
+        .filter(|(_, toggle)| toggle.source == camera)
+        .map(|(entity, _)| entity)
+        .collect();
+    assert_eq!(found.len(), 1, "one pixel canvas toggle");
+    found[0]
+}
+
+fn flip(app: &mut App, camera: Entity, value: bool) {
+    let source = canvas_toggle(app, camera);
+    app.world_mut().trigger(ValueChange {
+        source,
+        value,
+        is_final: true,
+    });
+    for _ in 0..4 {
+        app.update();
+    }
+}
+
+fn history_len(app: &App) -> usize {
+    app.world().resource::<CommandHistory>().undo_stack.len()
+}
+
+#[test]
+fn the_2d_camera_card_toggles_the_pixel_canvas_one_entry_each_way() {
+    let (mut app, camera) = app_with_plain_camera();
+    let toggle = canvas_toggle(&mut app, camera);
+    assert!(
+        app.world().get::<Checked>(toggle).is_none(),
+        "off by default"
+    );
+    assert_eq!(resolution(&app, camera), None);
+
+    let before = history_len(&app);
+    flip(&mut app, camera, true);
+    assert_eq!(resolution(&app, camera), Some(CANVAS_PRESETS[0]));
+    assert_eq!(history_len(&app), before + 1);
+    let toggle = canvas_toggle(&mut app, camera);
+    assert!(app.world().get::<Checked>(toggle).is_some(), "shows on");
+    assert_eq!(shown(&mut app), 0, "the canvas card shows its presets");
+
+    flip(&mut app, camera, false);
+    assert_eq!(resolution(&app, camera), None);
+    assert_eq!(history_len(&app), before + 2);
 }

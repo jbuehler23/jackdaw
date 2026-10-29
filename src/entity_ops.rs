@@ -564,7 +564,7 @@ pub enum EntityTemplate {
     DirectionalLight,
     SpotLight,
     Camera3d,
-    PixelCamera,
+    Camera2d,
     #[cfg(feature = "camera_rig")]
     CameraRig,
     Plane,
@@ -587,7 +587,7 @@ impl EntityTemplate {
             Self::DirectionalLight => "Directional Light",
             Self::SpotLight => "Spot Light",
             Self::Camera3d => "Camera",
-            Self::PixelCamera => "Pixel Camera",
+            Self::Camera2d => "Camera",
             #[cfg(feature = "camera_rig")]
             Self::CameraRig => "Camera Rig",
             Self::Plane => "Plane",
@@ -682,48 +682,25 @@ pub fn create_entity(
                 Transform::from_xyz(0.0, 3.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
             ))
             .id(),
+        // Both camera templates save the camera active so Play draws through
+        // it; `deactivate_document_cameras` keeps it out of the editor's window.
         EntityTemplate::Camera3d => commands
             .spawn((
                 Name::new("Camera"),
                 SceneCamera,
                 Camera3d::default(),
-                Camera {
-                    // Scene cameras are authored inactive so they don't
-                    // render over the editor viewport. They become active
-                    // at play time (or via a future "preview through this
-                    // camera" operator).
-                    is_active: false,
-                    ..default()
-                },
-                bevy::camera::RenderTarget::None {
-                    size: UVec2::splat(1),
-                },
                 Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
             ))
             .id(),
-        // Left active in the document, unlike `Camera3d` above: the game has
-        // no rule that turns an authored camera on, so a saved inactive one
-        // stays dark in Play. `deactivate_document_cameras` keeps it out of
-        // the editor's window.
-        EntityTemplate::PixelCamera => {
-            let camera = commands
-                .spawn((
-                    Name::new("Pixel Camera"),
-                    SceneCamera,
-                    Camera2d,
-                    jackdaw_scene_types::PixelCanvas {
-                        resolution: crate::pixel_camera::CANVAS_PRESETS[0],
-                        ..default()
-                    },
-                    Transform::default(),
-                    Visibility::default(),
-                ))
-                .id();
-            commands.queue(move |world: &mut World| {
-                crate::pixel_camera::zoom_new_camera(world, camera);
-            });
-            camera
-        }
+        EntityTemplate::Camera2d => commands
+            .spawn((
+                Name::new("Camera"),
+                SceneCamera,
+                Camera2d,
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id(),
         #[cfg(feature = "camera_rig")]
         EntityTemplate::CameraRig => commands
             .spawn((
@@ -2351,7 +2328,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<crate::sprite_props::SpriteZDownOp>()
         .register_operator::<crate::sprite_props::SpriteYSortOp>()
         .register_operator::<crate::pixel_camera::CameraPixelCanvasOp>()
-        .register_operator::<EntityAddPixelCameraOp>()
+        .register_operator::<EntityAddCamera2dOp>()
         .register_operator::<crate::add_entity_picker::EntityAddPickerOp>();
 
     #[cfg(feature = "multiplayer")]
@@ -2761,24 +2738,23 @@ pub fn entity_add_image(_: In<OperatorParameters>, mut commands: Commands) -> Op
     OperatorResult::Finished
 }
 
-/// Add a 2D camera drawing through a pixel canvas at the first preset to the
-/// open 2D world scene.
+/// Add a 2D camera to the open 2D world scene.
 #[operator(
-    id = "entity.add.pixel_camera",
-    label = "Pixel Camera",
-    is_available = can_add_pixel_camera
+    id = "entity.add.camera_2d",
+    label = "Camera",
+    is_available = can_add_camera_2d
 )]
-pub(crate) fn entity_add_pixel_camera(
+pub(crate) fn entity_add_camera_2d(
     _: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::PixelCamera);
+        create_entity_in_world(world, EntityTemplate::Camera2d);
     });
     OperatorResult::Finished
 }
 
-fn can_add_pixel_camera(gate: crate::sprite_ops::SpriteAddGate) -> bool {
+fn can_add_camera_2d(gate: crate::sprite_ops::SpriteAddGate) -> bool {
     gate.allows()
 }
 

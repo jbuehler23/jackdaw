@@ -1,6 +1,9 @@
 use bevy::{
     camera::{CameraProjection, visibility::RenderLayers},
+    feathers::controls::FeathersCheckbox,
     prelude::*,
+    ui::Checked,
+    ui_widgets::ValueChange,
 };
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::warn_caller;
@@ -49,7 +52,8 @@ pub(crate) fn plugin(app: &mut App) {
         draw_game_frames.after(bevy::transform::TransformSystems::Propagate),
     )
     .add_observer(on_preset_pick)
-    .add_observer(follow_canvas_write);
+    .add_observer(follow_canvas_write)
+    .add_observer(on_canvas_toggle);
 }
 
 /// The corners of the world area a camera shows through `canvas`, counter
@@ -265,17 +269,6 @@ fn canvas_zoom(world: &World, camera: Entity, adding: bool) -> Option<f32> {
     (ppu != 1.0 && ortho.scale == from).then_some(to)
 }
 
-/// Zoom a camera the Pixel Camera entry just spawned, before the document
-/// records it.
-pub(crate) fn zoom_new_camera(world: &mut World, camera: Entity) {
-    if let Some(scale) = canvas_zoom(world, camera, true)
-        && let Some(mut projection) = world.get_mut::<Projection>(camera)
-        && let Projection::Orthographic(ortho) = projection.as_mut()
-    {
-        ortho.scale = scale;
-    }
-}
-
 /// The edit that zooms `camera` as its canvas comes or goes, if
 /// [`canvas_zoom`] calls for one. The zoom is a convenience, so one that
 /// cannot be authored leaves the canvas edit to land alone and tells the
@@ -418,6 +411,53 @@ pub fn preset_index(resolution: UVec2) -> usize {
         .iter()
         .position(|preset| *preset == resolution)
         .unwrap_or(CUSTOM_PRESET)
+}
+
+/// The 2D camera card's pixel canvas on/off checkbox for `source`.
+#[derive(Component)]
+pub struct PixelCanvasToggle {
+    pub source: Entity,
+}
+
+/// The "Pixel canvas" row of a 2D camera's card, checked while `source`
+/// carries a canvas.
+pub(crate) fn spawn_canvas_toggle(commands: &mut Commands, body: Entity, source: Entity, on: bool) {
+    let row = spawn_field_row(commands, body, FieldRowProps::new("Pixel canvas"));
+    let mut checkbox = commands.spawn_scene(bsn! { @FeathersCheckbox });
+    checkbox.insert((PixelCanvasToggle { source }, ChildOf(row.control)));
+    if on {
+        checkbox.insert(Checked);
+    }
+}
+
+/// Add or remove the canvas through `camera.pixel_canvas`, then show what the
+/// camera holds.
+fn on_canvas_toggle(
+    change: On<ValueChange<bool>>,
+    toggles: Query<&PixelCanvasToggle>,
+    mut commands: Commands,
+) {
+    let Ok(toggle) = toggles.get(change.source) else {
+        return;
+    };
+    let (checkbox, source) = (change.source, toggle.source);
+    let mut call = commands
+        .operator(CameraPixelCanvasOp::ID)
+        .param("entity", source);
+    if !change.value {
+        call = call.param("remove", true);
+    }
+    call.call();
+    commands.queue(move |world: &mut World| {
+        let on = world.get::<PixelCanvas>(source).is_some();
+        if let Ok(mut entity) = world.get_entity_mut(checkbox) {
+            if on {
+                entity.insert(Checked);
+            } else {
+                entity.remove::<Checked>();
+            }
+        }
+    });
 }
 
 /// The resolution preset row heading the `PixelCanvas` card; the reflected
