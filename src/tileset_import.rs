@@ -18,7 +18,7 @@ use crate::scenes::operators::resolve_scene_path;
 /// The kind a tileset file holds.
 pub const TILESET_KIND: &str = "tileset";
 
-const TILESET_SUFFIX: &str = ".tileset.bsn";
+pub(crate) const TILESET_SUFFIX: &str = ".tileset.bsn";
 
 /// Layers an array texture may hold on native backends.
 const MAX_LAYERS: u32 = 2048;
@@ -64,6 +64,10 @@ enum SetupChoice {
             String,
             doc = "Comma-separated image paths under the project's assets."
         ),
+        path(
+            String,
+            doc = "One image path, taken whole even with a comma in it; wins over paths."
+        ),
         out(
             String,
             doc = "Tileset file, or folder to write it in. A name not ending in .tileset.bsn \
@@ -76,14 +80,23 @@ enum SetupChoice {
             doc = "\"auto\" finds terrains, terrain sets and objects, \"manual\" leaves them \
                    to be set by hand, \"none\" makes a plain tile atlas."
         ),
+        edit(
+            bool,
+            default = false,
+            doc = "Open the new tileset in the Tileset window."
+        ),
     )
 )]
 pub fn tileset_import(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    let paths: Vec<PathBuf> = (params.as_str("paths").unwrap_or_default().split(','))
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .collect();
+    let one = (params.as_str("path").map(str::trim)).filter(|path| !path.is_empty());
+    let paths: Vec<PathBuf> = match one {
+        Some(path) => vec![PathBuf::from(path)],
+        None => (params.as_str("paths").unwrap_or_default().split(','))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+    };
     if paths.is_empty() {
         warn!("tileset.import: no paths given");
         return OperatorResult::Cancelled;
@@ -100,9 +113,15 @@ pub fn tileset_import(params: In<OperatorParameters>, mut commands: Commands) ->
     let out = (params.as_str("out"))
         .filter(|out| !out.trim().is_empty())
         .map(PathBuf::from);
+    let edit = params.as_bool("edit").unwrap_or(false);
     commands.queue(
         move |world: &mut World| match import(world, &paths, out.as_deref(), choice) {
-            Ok(message) => report_to_caller(world, message),
+            Ok((message, made)) => {
+                report_to_caller(world, message);
+                if edit {
+                    crate::tileset_dock::edit_tileset(world, &made.to_slash_lossy());
+                }
+            }
             Err(message) => warn_caller(world, format!("tileset.import: {message}")),
         },
     );
@@ -131,7 +150,7 @@ fn import(
     paths: &[PathBuf],
     out: Option<&Path>,
     choice: SetupChoice,
-) -> Result<String, String> {
+) -> Result<(String, PathBuf), String> {
     let assets = assets_dir(world).ok_or("no project is open")?;
     let mut names: Vec<String> = Vec::with_capacity(paths.len());
     for path in paths {
@@ -237,7 +256,24 @@ fn import(
     if let Some(mut state) = world.get_resource_mut::<crate::project_window::ProjectWindowState>() {
         state.rebuild();
     }
-    Ok(summary)
+    Ok((summary, out_name))
+}
+
+/// The tileset whose packed copy is the image at `path`, as the index keys it.
+pub(crate) fn tileset_of_image(world: &World, path: &Path) -> Option<String> {
+    let image = under_assets(world, path)
+        .ok()?
+        .to_slash_lossy()
+        .into_owned();
+    let tilesets = world.resource::<Assets<Tileset>>();
+    let index = world.get_resource::<crate::asset_index::AssetIndex>()?;
+    (index.of_kind(TILESET_KIND))
+        .find(|entry| {
+            (entry.value.handle())
+                .and_then(|handle| tilesets.get(handle.id().typed::<Tileset>()))
+                .is_some_and(|tileset| tileset.image == image)
+        })
+        .map(|entry| entry.path.to_slash_lossy().into_owned())
 }
 
 /// `path` as the index keys it, when it lies under the project's assets.

@@ -269,6 +269,11 @@ fn loader_settings(meta: &mut TextureImportMeta) -> Option<&mut ImageLoaderSetti
     }
 }
 
+/// How the image meta `bytes` cuts its image into array layers, if it does.
+pub fn array_layout(bytes: &[u8]) -> Option<ImageArrayLayout> {
+    loader_settings(&mut image_meta(bytes)?)?.array_layout
+}
+
 /// The meta of an image loaded with the default settings, as if it had none.
 /// A plain load, as the editor and the game template load assets unprocessed.
 fn plain_meta() -> TextureImportMeta {

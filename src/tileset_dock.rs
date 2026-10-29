@@ -138,11 +138,16 @@ pub struct CollisionCombo {
 )]
 pub fn tileset_edit(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let path = text(&params, "path");
-    commands.queue(move |world: &mut World| match open_tab(world, &path) {
+    commands.queue(move |world: &mut World| edit_tileset(world, &path));
+    OperatorResult::Finished
+}
+
+/// What `tileset.edit` does, for a caller already inside an operator.
+pub(crate) fn edit_tileset(world: &mut World, path: &str) {
+    match open_tab(world, path) {
         Ok(message) => report_to_caller(world, message),
         Err(err) => warn_caller(world, format!("tileset.edit: {err}")),
-    });
-    OperatorResult::Finished
+    }
 }
 
 fn open_tab(world: &mut World, path: &str) -> Result<String, String> {
