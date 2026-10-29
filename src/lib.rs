@@ -166,6 +166,7 @@ pub mod test_input;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
+pub mod tileset_dock;
 pub mod tileset_edit;
 pub mod tileset_import;
 pub mod tileset_layout_ops;
@@ -459,6 +460,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::ShadowViewCleanupPlugin)
         .add_plugins(probe_bake::plugin)
         .add_plugins(tileset_import::plugin)
+        .add_plugins(tileset_dock::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins((
@@ -2243,7 +2245,7 @@ fn populate_menu(
     let window_registry = world.resource::<jackdaw_panels::WindowRegistry>();
     let mut by_area: std::collections::BTreeMap<String, Vec<(String, String)>> =
         std::collections::BTreeMap::new();
-    for descriptor in window_registry.iter() {
+    for descriptor in window_registry.iter().filter(|d| !d.unlisted) {
         let area_key = if is_remote_window(&descriptor.id) {
             "zy_remote".to_string()
         } else if descriptor.default_area.is_empty() {
@@ -3628,20 +3630,23 @@ pub(crate) fn open_window_in_default_area_if_absent(world: &mut World, window_id
                 .set_active(leaf_id, tab_id);
         }
         Some((_, None)) => {}
-        None => open_window_in_default_area(world, window_id),
+        None => {
+            open_window_in_default_area(world, window_id);
+        }
     }
 }
 
-fn open_window_in_default_area(world: &mut World, window_id: &str) {
+/// Add a tab of `window_id` to its default area and return it.
+pub(crate) fn open_window_in_default_area(
+    world: &mut World,
+    window_id: &str,
+) -> Option<jackdaw_panels::tree::TabId> {
     use jackdaw_panels::tree::DockTree;
 
-    let Some(default_area) = world
+    let default_area = world
         .resource::<jackdaw_panels::WindowRegistry>()
         .get(window_id)
-        .map(|d| d.default_area.clone())
-    else {
-        return;
-    };
+        .map(|d| d.default_area.clone())?;
 
     let target_leaf = {
         let tree = world.resource::<DockTree>();
@@ -3673,9 +3678,7 @@ fn open_window_in_default_area(world: &mut World, window_id: &str) {
             pick
         })
     };
-    let Some(target_leaf) = target_leaf else {
-        return;
-    };
+    let target_leaf = target_leaf?;
 
     let target_is_empty = world
         .resource::<DockTree>()
@@ -3700,7 +3703,7 @@ fn open_window_in_default_area(world: &mut World, window_id: &str) {
 
     // Each Window-menu click yields a fresh tab. The reconciler picks
     // up the new entry on next tick and rebuilds the panel UI.
-    let _ = tree.add_tab(target_leaf, window_id);
+    tree.add_tab(target_leaf, window_id)
 }
 
 /// Reset the active workspace to the default seed: clear the live
@@ -3760,15 +3763,15 @@ fn build_default_tree(world: &mut World) {
     use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
     use jackdaw_panels::{DockAreaStyle, WindowRegistry};
 
-    // Remote/debug windows live in the Remote Debug workspace, not the default
-    // scene layout, so keep them out of the canonical tree.
+    // Remote/debug windows live in the Remote Debug workspace, and unlisted
+    // windows open per document, so keep them out of the default scene layout.
     let windows_for = |area: &str, world: &World| -> Vec<String> {
         world
             .resource::<WindowRegistry>()
             .by_area(area)
             .iter()
+            .filter(|d| !d.unlisted && !is_remote_window(&d.id))
             .map(|d| d.id.clone())
-            .filter(|id| !is_remote_window(id))
             .collect()
     };
 
@@ -4040,6 +4043,7 @@ mod preset_tree_tests {
                 default_area: area.to_string(),
                 priority: 0,
                 build: std::sync::Arc::new(|_| {}),
+                unlisted: false,
             });
         }
         world.insert_resource(registry);

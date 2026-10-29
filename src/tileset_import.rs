@@ -112,9 +112,9 @@ pub fn tileset_import(params: In<OperatorParameters>, mut commands: Commands) ->
 pub(crate) struct Sheet {
     file: PathBuf,
     pub(crate) name: String,
-    width: u32,
-    height: u32,
-    pixels: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pixels: Vec<u8>,
 }
 
 impl Sheet {

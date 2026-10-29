@@ -295,7 +295,7 @@ fn spawn_leaf_ui(world: &mut World, entity: Entity, leaf: &DockLeaf) {
                 Some((
                     tab.id,
                     desc.id.clone(),
-                    desc.name.clone(),
+                    tab.title.clone().unwrap_or_else(|| desc.name.clone()),
                     desc.icon.clone(),
                     desc.build.clone(),
                 ))

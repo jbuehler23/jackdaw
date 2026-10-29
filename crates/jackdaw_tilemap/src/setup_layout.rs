@@ -4,8 +4,8 @@ use glam::UVec2;
 
 use crate::setup::{set_holds, transition};
 use crate::{
-    LayoutTemplate, MatchMode, Peer, SetupError, SetupSet, Stamp, TerrainId, TileAddress,
-    TileTerrains, TilesetSetup,
+    LayoutTemplate, MatchMode, Peer, Provenance, SetupError, SetupSet, Stamp, TerrainId,
+    TileAddress, TileTerrains, TilesetSetup,
 };
 
 /// How much of its full layout a terrain set's tiles cover.
@@ -126,14 +126,16 @@ impl TilesetSetup {
         })
     }
 
-    /// Tiles of more than one terrain that are a transition of no set.
+    /// Tiles of more than one terrain that are a transition of no set, but
+    /// for tiles whose every peer was set by hand.
     pub fn flagged(&self) -> Vec<TileAddress> {
         (self.tiles.iter())
             .filter(|(_, t)| {
                 let peers = t.terrains.peers;
                 let pure = peers.iter().all(|&p| p == peers[0]);
+                let accepted = t.provenance.iter().all(|&p| p == Provenance::User);
                 let pair = |s: &SetupSet| (s.inner, s.outer);
-                !pure && !self.sets.iter().any(|s| transition(pair(s), &t.terrains))
+                !pure && !accepted && !self.sets.iter().any(|s| transition(pair(s), &t.terrains))
             })
             .map(|(a, _)| *a)
             .collect()
@@ -268,14 +270,35 @@ mod tests {
     fn flagged_tiles_mix_terrains_no_set_borders() {
         let mut setup = farm();
         assert!(setup.flagged().is_empty());
-        setup.set_peers(at(4), edge(GRASS, 0)).expect("bits");
-        setup.set_peers(at(5), edge(SAND, 0)).expect("bits");
+        for (tile, terrain) in [(4, GRASS), (5, SAND)] {
+            let mixed = SetupTile {
+                terrains: edge(terrain, 0),
+                ..SetupTile::default()
+            };
+            setup.tiles.insert(at(tile), mixed);
+        }
         let shape = SetupTile {
             shape: Tracked::user(Some(TileShape::default())),
             ..SetupTile::default()
         };
         setup.tiles.insert(at(6), shape);
         assert_eq!(setup.flagged(), [at(4), at(5)]);
+    }
+
+    #[test]
+    fn a_tile_set_wholly_by_hand_is_not_flagged() {
+        let mut setup = farm();
+        let mixed = SetupTile {
+            terrains: edge(GRASS, 0),
+            ..SetupTile::default()
+        };
+        setup.tiles.insert(at(4), mixed);
+        setup
+            .set_peer_by_hand(at(4), Peer::TopLeft, 0)
+            .expect("one peer");
+        assert_eq!(setup.flagged(), [at(4)], "one peer by hand keeps the flag");
+        setup.set_peers(at(4), edge(GRASS, 0)).expect("bits");
+        assert!(setup.flagged().is_empty(), "every peer by hand clears it");
     }
 
     #[test]

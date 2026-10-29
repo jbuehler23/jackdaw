@@ -61,6 +61,7 @@ fn on_add_button_click(
     // given kind on screen.
     let available: Vec<(String, String)> = registry
         .iter()
+        .filter(|w| !w.unlisted)
         .map(|w| (w.id.clone(), w.name.clone()))
         .collect();
 

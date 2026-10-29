@@ -569,16 +569,16 @@ fn drop_on_edge(world: &mut World, tab: TabId, target_area: Entity, edge: DropEd
         DropEdge::Right => TreeEdge::Right,
     };
     let mut tree = world.resource_mut::<DockTree>();
-    let Some(window_id) = tree.find_leaf_for_tab(tab).and_then(|leaf_id| {
-        tree.get(leaf_id)
-            .and_then(|n| n.as_leaf())
-            .and_then(|l| l.windows.iter().find(|t| t.id == tab))
-            .map(|t| t.window_id.clone())
-    }) else {
+    let Some(entry) = tree.tab(tab).cloned() else {
         return;
     };
     tree.remove_tab(tab);
-    tree.split(binding.0, tree_edge, window_id);
+    if let Some((_, moved)) = tree.split(binding.0, tree_edge, entry.window_id)
+        && let Some(moved) = tree.tab_mut(moved)
+    {
+        moved.title = entry.title;
+        moved.payload = entry.payload;
+    }
 }
 
 /// Drop the dragged tab onto the leaf bound to `tab_row` at slot
