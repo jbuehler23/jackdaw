@@ -84,7 +84,7 @@ pub enum TileTool {
 
 impl TileTool {
     /// Whether the tool writes one shape between the press and release cells.
-    fn is_shape(self) -> bool {
+    pub(crate) fn is_shape(self) -> bool {
         matches!(self, Self::Rectangle | Self::Line)
     }
 }
@@ -102,12 +102,23 @@ pub struct TileEditMode {
     pub tool: TileTool,
 }
 
+/// How a terrain stroke joins the terrain around it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StrokeMode {
+    /// Joins every neighbour of the same terrain.
+    #[default]
+    Connect,
+    /// Joins only the cells of the same stroke.
+    Path,
+}
+
 /// What the painting tools write: terrain on a terrain layer, the tile on a
 /// tile layer.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TileBrush {
     pub terrain: TerrainId,
     pub tile: TileRef,
+    pub mode: StrokeMode,
 }
 
 impl Default for TileBrush {
@@ -115,6 +126,7 @@ impl Default for TileBrush {
         Self {
             terrain: 1,
             tile: TileRef::new(0),
+            mode: StrokeMode::Connect,
         }
     }
 }
@@ -128,6 +140,13 @@ pub struct TileStrokeState {
     stroke: Option<(TilemapStrokeBuilder, TileWrite)>,
     /// The last cell a Brush or Eraser stroke wrote, or a shape's press cell.
     last: Option<CellCoord>,
+}
+
+impl TileStrokeState {
+    /// What the held stroke writes and, for a shape, its press cell.
+    pub(crate) fn held(&self) -> Option<(TileWrite, Option<CellCoord>)> {
+        (self.stroke.as_ref()).map(|(_, write)| (*write, self.last))
+    }
 }
 
 /// The cell of a map holding `point`, a world point, under the map's
@@ -252,19 +271,33 @@ fn leave_when_unselected(world: &mut World) {
     params(
         terrain(String, doc = "Terrain id or name the Brush paints on terrain layers."),
         tile(String, doc = "Tile as sheet:tile or packed layer the Brush places on tile layers."),
+        mode(
+            String,
+            doc = "connect joins every neighbour of the terrain; path joins only the cells of \
+                   the same stroke. Unset keeps the brush mode, connect at first."
+        ),
     )
 )]
 pub(crate) fn tilemap_brush(
     params: In<OperatorParameters>,
     world: &mut World,
 ) -> Option<OperatorResult> {
+    shape_or_brush(world, &params, TileTool::Brush)
+}
+
+/// Sets the brush from `params` before a stroke, then runs the stroke frame.
+fn shape_or_brush(
+    world: &mut World,
+    params: &OperatorParameters,
+    tool: TileTool,
+) -> Option<OperatorResult> {
     if world.resource::<TileStrokeState>().stroke.is_none()
-        && let Err(err) = set_brush(world, &params)
+        && let Err(err) = set_brush(world, params)
     {
-        warn_caller(world, format!("{}: {err}", TilemapBrushOp::ID));
+        warn_caller(world, format!("tile tool: {err}"));
         return Some(OperatorResult::Cancelled);
     }
-    tile_stroke(world, TileTool::Brush)
+    tile_stroke(world, tool)
 }
 
 /// Erase with the Eraser.
@@ -293,7 +326,7 @@ fn cancel_tile_stroke(world: &mut World) {
 }
 
 /// The tileset of the active layer in tile edit mode.
-fn active_tileset(world: &mut World) -> Result<AssetId<Tileset>, String> {
+pub(crate) fn active_tileset(world: &mut World) -> Result<AssetId<Tileset>, String> {
     let mode = *world.resource::<TileEditMode>();
     let path = (mode.map)
         .and_then(|map| world.get::<Tilemap>(map))
@@ -308,32 +341,37 @@ fn active_tileset(world: &mut World) -> Result<AssetId<Tileset>, String> {
 fn set_brush(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
     let text = |name: &str| params.as_str(name).unwrap_or_default().trim().to_string();
     let (terrain, tile) = (text("terrain"), text("tile"));
-    if terrain.is_empty() && tile.is_empty() {
-        return Ok(());
-    }
-    let id = active_tileset(world)?;
-    let tileset =
-        (world.resource::<Assets<Tileset>>().get(id)).ok_or("the layer's tileset is not loaded")?;
     let mut brush = *world.resource::<TileBrush>();
-    if !terrain.is_empty() {
-        brush.terrain = crate::tileset_edit::terrain(tileset, &terrain)?;
+    brush.mode = match text("mode").as_str() {
+        "" => brush.mode,
+        "connect" => StrokeMode::Connect,
+        "path" => StrokeMode::Path,
+        other => return Err(format!("mode is connect or path, not `{other}`")),
+    };
+    if !terrain.is_empty() || !tile.is_empty() {
+        let id = active_tileset(world)?;
+        let tileset = (world.resource::<Assets<Tileset>>().get(id))
+            .ok_or("the layer's tileset is not loaded")?;
+        if !terrain.is_empty() {
+            brush.terrain = crate::tileset_edit::terrain(tileset, &terrain)?;
+        }
+        if !tile.is_empty() {
+            brush.tile = packed_tile(tileset, &tile)?;
+        }
     }
-    if !tile.is_empty() {
-        brush.tile = packed_tile(tileset, &tile)?;
-    }
-    *world.resource_mut::<TileBrush>() = brush;
+    world.resource_mut::<TileBrush>().set_if_neq(brush);
     Ok(())
 }
 
 /// The layer tile edit mode paints.
-struct ActiveLayer {
-    map: Entity,
-    index: usize,
-    key: String,
-    terrain: bool,
+pub(crate) struct ActiveLayer {
+    pub map: Entity,
+    pub index: usize,
+    pub key: String,
+    pub terrain: bool,
 }
 
-fn active_layer(world: &mut World) -> Result<ActiveLayer, String> {
+pub(crate) fn active_layer(world: &mut World) -> Result<ActiveLayer, String> {
     const NO_MAP: &str = "no tilemap is in tile edit mode";
     let mode = *world.resource::<TileEditMode>();
     let map = mode.map.ok_or(NO_MAP)?;
@@ -352,7 +390,7 @@ fn active_layer(world: &mut World) -> Result<ActiveLayer, String> {
 
 /// What a stroke with `button` writes on the active layer, or why the brush
 /// cannot paint it: its terrain or tile is not in the layer's tileset.
-fn stroke_write(
+pub(crate) fn stroke_write(
     world: &mut World,
     tool: TileTool,
     button: MouseButton,
@@ -367,7 +405,10 @@ fn stroke_write(
         (world.resource::<Assets<Tileset>>().get(id)).ok_or("the layer's tileset is not loaded")?;
     if terrain_layer {
         (tileset.terrains.iter().any(|t| t.id == brush.terrain))
-            .then_some(TileWrite::Terrain(brush.terrain))
+            .then_some(match brush.mode {
+                StrokeMode::Path if tool != TileTool::Bucket => TileWrite::Path(brush.terrain),
+                _ => TileWrite::Terrain(brush.terrain),
+            })
             .ok_or_else(|| {
                 format!(
                     "the brush terrain {} is not in the layer's tileset",
@@ -416,7 +457,7 @@ fn begin_stroke(
 
 /// The cells of a Rectangle (both corners included, clipped to `bounds`) or
 /// Line from `from` to `to`, or why there are too many.
-fn shape_cells(
+pub(crate) fn shape_cells(
     tool: TileTool,
     from: CellCoord,
     to: CellCoord,
@@ -522,13 +563,18 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
     modal = true,
     allows_undo = false,
     is_available = has_tile_map,
-    cancel = cancel_tile_stroke
+    cancel = cancel_tile_stroke,
+    params(mode(
+        String,
+        doc = "connect joins every neighbour of the terrain; path joins only the cells of the \
+               same stroke. Unset keeps the brush mode, connect at first."
+    ))
 )]
 pub(crate) fn tilemap_rectangle(
-    _: In<OperatorParameters>,
+    params: In<OperatorParameters>,
     world: &mut World,
 ) -> Option<OperatorResult> {
-    tile_stroke(world, TileTool::Rectangle)
+    shape_or_brush(world, &params, TileTool::Rectangle)
 }
 
 /// Draw a line.
@@ -540,10 +586,18 @@ pub(crate) fn tilemap_rectangle(
     modal = true,
     allows_undo = false,
     is_available = has_tile_map,
-    cancel = cancel_tile_stroke
+    cancel = cancel_tile_stroke,
+    params(mode(
+        String,
+        doc = "connect joins every neighbour of the terrain; path joins only the cells of the \
+               same stroke. Unset keeps the brush mode, connect at first."
+    ))
 )]
-pub(crate) fn tilemap_line(_: In<OperatorParameters>, world: &mut World) -> Option<OperatorResult> {
-    tile_stroke(world, TileTool::Line)
+pub(crate) fn tilemap_line(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> Option<OperatorResult> {
+    shape_or_brush(world, &params, TileTool::Line)
 }
 
 /// A tool that acts on a press is available in tile edit mode while no
@@ -759,7 +813,7 @@ fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
 
 /// The map cell under a pointer on a 2D panel's stage in Edit mode, and
 /// whether the pointer is on the stage.
-fn stage_cell(
+pub(crate) fn stage_cell(
     target: Entity,
     position: Vec2,
     mode: &TileEditMode,

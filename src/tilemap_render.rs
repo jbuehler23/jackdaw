@@ -173,7 +173,7 @@ fn draw_batch(
     Ok(())
 }
 
-type Wanted = (TilemapChunk, TilemapChunkTileData, Transform);
+pub(crate) type Wanted = (TilemapChunk, TilemapChunkTileData, Transform);
 
 /// Brings `map`'s chunk children in line with its cells, all of them or only
 /// the `edited` chunks: spawns the chunks that gained cells, despawns the
@@ -316,7 +316,7 @@ fn draw_map(
     Ok(())
 }
 
-fn update_chunk(world: &mut World, entity: Entity, (chunk, data, transform): Wanted) {
+pub(crate) fn update_chunk(world: &mut World, entity: Entity, (chunk, data, transform): Wanted) {
     let mut chunk_entity = world.entity_mut(entity);
     let same_chunk = (chunk_entity.get::<TilemapChunk>()).is_some_and(|old| {
         old.tileset == chunk.tileset && old.tile_display_size == chunk.tile_display_size

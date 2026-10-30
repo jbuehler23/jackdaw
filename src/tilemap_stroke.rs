@@ -11,12 +11,13 @@ use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{
     CHUNK_AREA, CHUNK_SIZE, CellCoord, CellValue, ChunkCoord, ChunkedLayer, LayerData, LayerKind,
-    Links, TerrainAuthoring, TerrainId, TileRef, TilemapData,
+    Links, TerrainAuthoring, TerrainId, TerrainSet, TileRef, TilemapData, apply_connect_stroke,
+    apply_path_stroke,
 };
 use jackdaw_tileset::Tileset;
 
 use crate::commands::EditorCommand;
-use crate::tilemap::{TilemapDataStore, editable_key};
+use crate::tilemap::{TilemapDataStore, editable_key, resolve_into};
 use crate::tilemap_resolve::{layer_set, refresh_terrain};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -254,8 +255,12 @@ pub enum TileWrite {
     /// A tile on a tile layer, or a hand-placed tile over a terrain layer's
     /// terrain; [`TileRef::EMPTY`] erases.
     Tile(TileRef),
-    /// Terrain on a terrain layer; 0 erases.
+    /// Terrain on a terrain layer, joining every neighbour of that terrain;
+    /// 0 erases.
     Terrain(TerrainId),
+    /// Terrain on a terrain layer joining only the other cells of the same
+    /// write, so two parallel paths stay apart.
+    Path(TerrainId),
     /// Clears a cell whole: a terrain layer's terrain and hand-placed tile,
     /// or a tile layer's tile.
     Erase,
@@ -319,10 +324,7 @@ impl TilemapStrokeBuilder {
     /// Writes `write` to the cells inside the map's bounds, resolving a
     /// terrain layer's neighbourhood, and returns whether any cell changed.
     pub fn apply(&mut self, world: &mut World, cells: &[CellCoord], write: TileWrite) -> bool {
-        let bounds = self.tilemap.bounds;
-        let cells: Vec<CellCoord> = (cells.iter().copied())
-            .filter(|c| bounds.is_none_or(|b| c.0.cmpge(b.min).all() && c.0.cmplt(b.max).all()))
-            .collect();
+        let cells = in_bounds(self.tilemap.bounds, cells);
         let terrain_layer = self.tilemap.layers[self.layer].kind == TilemapLayerKind::Terrain;
         let store = world.resource::<TilemapDataStore>();
         let Some(data) = store.get(&self.key) else {
@@ -331,12 +333,7 @@ impl TilemapStrokeBuilder {
         if !changes(data.layers.get(self.layer), terrain_layer, &cells, &write) {
             return false;
         }
-        let touched: BTreeSet<ChunkCoord> = cells.iter().map(|cell| cell.chunk()).collect();
-        let fresh: BTreeSet<(usize, ChunkCoord)> = (touched.iter())
-            .flat_map(|chunk| {
-                let at = chunk.0;
-                (-1..=1).flat_map(move |y| (-1..=1).map(move |x| ChunkCoord(at + IVec2::new(x, y))))
-            })
+        let fresh: BTreeSet<(usize, ChunkCoord)> = (ring_chunks(&cells).into_iter())
             .map(|chunk| (self.layer, chunk))
             .filter(|at| !self.chunks.contains(at))
             .collect();
@@ -350,7 +347,8 @@ impl TilemapStrokeBuilder {
         let Some(mut edit) = store.get_mut(&self.key) else {
             return false;
         };
-        write_cells(&mut edit, &self.tilemap, self.layer, &cells, &write);
+        pad_layers(&mut edit, &self.tilemap);
+        write_layer(&mut edit.layers[self.layer], terrain_layer, &cells, write);
         if terrain_layer {
             edit.mark_written(self.layer, cells);
         }
@@ -519,31 +517,56 @@ fn changes(
     write: &TileWrite,
 ) -> bool {
     let authoring = layer.and_then(|layer| layer.authoring.as_ref());
+    let terrain = |cell| authoring.map_or(0, |a| a.terrain.get(cell));
+    let links = |cell| authoring.map_or(Links::EMPTY, |a| a.links.get(cell));
+    if let TileWrite::Path(id) = *write {
+        let (mut after_terrain, mut after_links) = (ChunkedLayer::new(), ChunkedLayer::new());
+        for &cell in cells {
+            after_terrain.set(cell, terrain(cell));
+            after_links.set(cell, links(cell));
+        }
+        paint_path(&mut after_terrain, &mut after_links, cells, id);
+        return (cells.iter())
+            .any(|&c| after_terrain.get(c) != terrain(c) || after_links.get(c) != links(c));
+    }
     cells.iter().any(|&cell| match *write {
-        TileWrite::Terrain(id) => authoring.map_or(0, |a| a.terrain.get(cell)) != id,
+        TileWrite::Terrain(id) => terrain(cell) != id || links(cell) != Links::EMPTY,
         TileWrite::Tile(tile) if terrain_layer => {
             let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
             placed != (!tile.is_empty()).then_some(tile)
         }
         TileWrite::Tile(tile) => layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)) != tile,
         TileWrite::Erase if terrain_layer => {
-            authoring.is_some_and(|a| a.terrain.get(cell) != 0 || a.overrides.contains_key(&cell))
+            terrain(cell) != 0
+                || links(cell) != Links::EMPTY
+                || authoring.is_some_and(|a| a.overrides.contains_key(&cell))
         }
         TileWrite::Erase => layer.is_some_and(|l| !l.tiles.get(cell).is_empty()),
+        TileWrite::Path(_) => false,
     })
 }
 
-/// Writes `write` to `cells` of layer `index`, adding the layers the map
-/// lists that the cells do not hold yet. A terrain layer, so kept by the
-/// scene, takes terrain, or tiles as overrides; a tile layer takes tiles as
-/// they are.
-fn write_cells(
-    data: &mut TilemapData,
-    tilemap: &Tilemap,
-    index: usize,
-    cells: &[CellCoord],
-    write: &TileWrite,
-) {
+/// The cells inside `bounds`, or all of them on an unbounded map.
+pub fn in_bounds(bounds: Option<IRect>, cells: &[CellCoord]) -> Vec<CellCoord> {
+    (cells.iter().copied())
+        .filter(|c| bounds.is_none_or(|b| c.0.cmpge(b.min).all() && c.0.cmplt(b.max).all()))
+        .collect()
+}
+
+/// The chunks of `cells` and the ring around each: every chunk a write to
+/// them and its resolve reads or writes.
+fn ring_chunks(cells: &[CellCoord]) -> BTreeSet<ChunkCoord> {
+    let touched: BTreeSet<ChunkCoord> = cells.iter().map(|cell| cell.chunk()).collect();
+    (touched.iter())
+        .flat_map(|chunk| {
+            let at = chunk.0;
+            (-1..=1).flat_map(move |y| (-1..=1).map(move |x| ChunkCoord(at + IVec2::new(x, y))))
+        })
+        .collect()
+}
+
+/// Adds the layers the map lists that the cells do not hold yet.
+fn pad_layers(data: &mut TilemapData, tilemap: &Tilemap) {
     for layer in tilemap.layers.iter().skip(data.layers.len()) {
         let terrain = layer.kind == TilemapLayerKind::Terrain;
         data.layers.push(LayerData {
@@ -556,37 +579,148 @@ fn write_cells(
             authoring: terrain.then(TerrainAuthoring::default),
         });
     }
-    let target = &mut data.layers[index];
-    if tilemap.layers[index].kind != TilemapLayerKind::Terrain {
-        let tile = match *write {
+}
+
+/// Paints `id` over `cells` as Path strokes that join each cell to its side
+/// neighbours among `cells` and no others: the kernel's Path stroke along
+/// every horizontal run of the cells, then along every vertical run. A
+/// cell's first run gives it the stroke's links, and its second keeps them,
+/// its terrain then being `id`.
+fn paint_path(
+    terrain: &mut ChunkedLayer<TerrainId>,
+    links: &mut ChunkedLayer<Links>,
+    cells: &[CellCoord],
+    id: TerrainId,
+) {
+    let mut sorted = cells.to_vec();
+    let keys: [fn(&CellCoord) -> (i32, i32); 2] = [|c| (c.0.y, c.0.x), |c| (c.0.x, c.0.y)];
+    for key in keys {
+        sorted.sort_unstable_by_key(key);
+        sorted.dedup();
+        let mut run: Vec<CellCoord> = Vec::new();
+        for &cell in &sorted {
+            let (line, at) = key(&cell);
+            if run
+                .last()
+                .is_some_and(|last| key(last).0 != line || key(last).1.checked_add(1) != Some(at))
+            {
+                let _ = apply_path_stroke(terrain, links, &run, id);
+                run.clear();
+            }
+            run.push(cell);
+        }
+        let _ = apply_path_stroke(terrain, links, &run, id);
+    }
+}
+
+/// Writes `write` to `cells` of `layer`: terrain, or tiles as hand-placed
+/// overrides, on a terrain layer, whose tiles are left to the resolve; tiles
+/// as they are on a tile layer. Returns the cells whose tile changed.
+fn write_layer(
+    layer: &mut LayerData,
+    terrain_layer: bool,
+    cells: &[CellCoord],
+    write: TileWrite,
+) -> Vec<(CellCoord, TileRef)> {
+    if !terrain_layer {
+        let tile = match write {
             TileWrite::Tile(tile) => tile,
             TileWrite::Erase => TileRef::EMPTY,
-            TileWrite::Terrain(_) => return,
+            TileWrite::Terrain(_) | TileWrite::Path(_) => return Vec::new(),
         };
-        for &cell in cells {
-            target.tiles.set(cell, tile);
-        }
-        return;
+        let mut changed: Vec<_> = (cells.iter())
+            .filter(|&&cell| layer.tiles.set(cell, tile) != tile)
+            .map(|&cell| (cell, tile))
+            .collect();
+        changed.sort_unstable_by_key(|(cell, _)| *cell);
+        return changed;
     }
-    target.kind = LayerKind::Terrain;
-    let authoring = target
+    layer.kind = LayerKind::Terrain;
+    let a = layer
         .authoring
         .get_or_insert_with(TerrainAuthoring::default);
-    for &cell in cells {
-        match *write {
-            TileWrite::Terrain(id) => {
-                authoring.terrain.set(cell, id);
+    match write {
+        TileWrite::Path(id) => paint_path(&mut a.terrain, &mut a.links, cells, id),
+        TileWrite::Terrain(id) => {
+            apply_connect_stroke(&mut a.terrain, &mut a.links, cells, id);
+        }
+        TileWrite::Erase => {
+            apply_connect_stroke(&mut a.terrain, &mut a.links, cells, 0);
+            for cell in cells {
+                a.overrides.remove(cell);
             }
-            TileWrite::Erase => {
-                authoring.terrain.set(cell, 0);
-                authoring.overrides.remove(&cell);
+        }
+        TileWrite::Tile(tile) => {
+            for &cell in cells {
+                if tile.is_empty() {
+                    a.overrides.remove(&cell);
+                } else {
+                    a.overrides.insert(cell, tile);
+                }
             }
-            TileWrite::Tile(tile) if tile.is_empty() => {
-                authoring.overrides.remove(&cell);
+        }
+    }
+    Vec::new()
+}
+
+/// Writes `write` to `cells` of `layer` and returns each cell whose tile
+/// changed, with its new tile: a terrain layer resolves the written cells and
+/// their ring with `set`, as the edit a stroke writes through does on drop,
+/// and keeps its tiles without one. The preview runs it on a copy.
+pub fn paint_layer(
+    layer: &mut LayerData,
+    terrain_layer: bool,
+    set: Option<&TerrainSet>,
+    cells: &[CellCoord],
+    write: TileWrite,
+) -> Vec<(CellCoord, TileRef)> {
+    let changed = write_layer(layer, terrain_layer, cells, write);
+    match set {
+        Some(set) if terrain_layer => resolve_into(layer, set, cells.iter().copied()).1,
+        _ => changed,
+    }
+}
+
+/// The tiles writing `write` to `cells` of `layer` would change, as
+/// [`paint_layer`] gives them, leaving `layer` as it is.
+pub fn preview_write(
+    layer: Option<&LayerData>,
+    terrain_layer: bool,
+    set: Option<&TerrainSet>,
+    cells: &[CellCoord],
+    write: TileWrite,
+) -> Vec<(CellCoord, TileRef)> {
+    let chunks = ring_chunks(cells);
+    let mut copy = LayerData {
+        kind: layer.map_or(LayerKind::Tile, |l| l.kind),
+        tiles: ChunkedLayer::new(),
+        authoring: None,
+    };
+    if let Some(layer) = layer {
+        let from = layer.authoring.as_ref();
+        let mut to = from.map(|_| TerrainAuthoring::default());
+        for &chunk in &chunks {
+            copy_chunk(&layer.tiles, &mut copy.tiles, chunk);
+            if let (Some(from), Some(to)) = (from, to.as_mut()) {
+                copy_chunk(&from.terrain, &mut to.terrain, chunk);
+                copy_chunk(&from.links, &mut to.links, chunk);
             }
-            TileWrite::Tile(tile) => {
-                authoring.overrides.insert(cell, tile);
-            }
+        }
+        if let (Some(from), Some(to)) = (from, to.as_mut()) {
+            to.overrides = (from.overrides.iter())
+                .filter(|(cell, _)| chunks.contains(&cell.chunk()))
+                .map(|(cell, tile)| (*cell, *tile))
+                .collect();
+        }
+        copy.authoring = to;
+    }
+    paint_layer(&mut copy, terrain_layer, set, cells, write)
+}
+
+fn copy_chunk<T: CellValue>(from: &ChunkedLayer<T>, to: &mut ChunkedLayer<T>, coord: ChunkCoord) {
+    for (local, &value) in (from.chunk(coord).into_iter().flatten()).enumerate() {
+        if !value.is_empty() {
+            to.set(coord.cell(local), value);
         }
     }
 }
