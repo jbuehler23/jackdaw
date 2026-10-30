@@ -47,6 +47,16 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
         "an inline text field; set the Name component instead",
     ),
     (
+        "tilemap.brush",
+        Some("tilemap.set_cells"),
+        "a held stroke over the cells under the pointer; named cells instead",
+    ),
+    (
+        "tilemap.eraser",
+        Some("tilemap.set_cells"),
+        "a held stroke over the cells under the pointer; named cells with value erase instead",
+    ),
+    (
         "terrain.sculpt",
         Some("terrain.sculpt.stamp"),
         "a held brush stroke; one stamp at a named place instead",

@@ -423,6 +423,33 @@ impl<'a> ExtensionContext<'a> {
         defaults: impl IntoIterator<Item = crate::keymap::PresetInput>,
     ) -> &mut Self {
         self.action_for::<C, O>();
+        self.record_defaults::<O>(defaults)
+    }
+
+    /// Like [`Self::bind_operator`], but the action belongs to `context`, an
+    /// entity of this extension carrying its own input context, so the chords
+    /// fire only while that context is active, and then hide their keys from
+    /// the contexts below it.
+    pub fn bind_operator_in<O: crate::Operator>(
+        &mut self,
+        context: Entity,
+        defaults: impl IntoIterator<Item = crate::keymap::PresetInput>,
+    ) -> &mut Self {
+        self.world.spawn((
+            ActionOf(context),
+            OperatorAction(O::ID),
+            ActionSettings {
+                require_reset: true,
+                consume_input: true,
+            },
+        ));
+        self.record_defaults::<O>(defaults)
+    }
+
+    fn record_defaults<O: crate::Operator>(
+        &mut self,
+        defaults: impl IntoIterator<Item = crate::keymap::PresetInput>,
+    ) -> &mut Self {
         let mut keymap = self
             .world
             .get_resource_or_init::<crate::keymap::DefaultKeymap>();
