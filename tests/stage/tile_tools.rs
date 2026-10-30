@@ -22,7 +22,7 @@ use jackdaw_tileset::{TerrainMatch, Tileset};
 const BRUSH: &str = "tilemap.brush";
 const ERASER: &str = "tilemap.eraser";
 
-fn enter(app: &mut App, map: Entity) {
+pub(crate) fn enter(app: &mut App, map: Entity) {
     if app.world().resource::<Selection>().primary() != Some(map) {
         app.world_mut().resource_mut::<Selection>().entities = vec![map];
     }
@@ -42,7 +42,7 @@ fn available(app: &mut App, id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn set_brush(app: &mut App, param: &'static str, value: &str) -> OperatorResult {
+pub(crate) fn set_brush(app: &mut App, param: &'static str, value: &str) -> OperatorResult {
     app.world_mut()
         .operator(BRUSH)
         .param(param, PropertyValue::from(value.to_string()))
@@ -52,7 +52,7 @@ fn set_brush(app: &mut App, param: &'static str, value: &str) -> OperatorResult 
 
 /// Presses `button` on the first cell, drags through the rest a frame each,
 /// and lets go.
-fn stroke(app: &mut App, id: &'static str, button: MouseButton, cells: &[(i32, i32)]) {
+pub(crate) fn stroke(app: &mut App, id: &'static str, button: MouseButton, cells: &[(i32, i32)]) {
     hold(app, id, button, cells);
     app.world_mut()
         .resource_mut::<ButtonInput<MouseButton>>()
@@ -60,7 +60,7 @@ fn stroke(app: &mut App, id: &'static str, button: MouseButton, cells: &[(i32, i
     settle(app);
 }
 
-fn hold(app: &mut App, id: &'static str, button: MouseButton, cells: &[(i32, i32)]) {
+pub(crate) fn hold(app: &mut App, id: &'static str, button: MouseButton, cells: &[(i32, i32)]) {
     let cell = |(x, y): (i32, i32)| Some(CellCoord::new(x, y));
     let mut state = app.world_mut().resource_mut::<TileStrokeState>();
     state.cell = cell(cells[0]);
@@ -84,7 +84,7 @@ fn hold(app: &mut App, id: &'static str, button: MouseButton, cells: &[(i32, i32
     }
 }
 
-fn run(app: &mut App, id: &'static str) {
+pub(crate) fn run(app: &mut App, id: &'static str) {
     let result = app.world_mut().operator(id).call().expect("dispatches");
     assert_eq!(result, OperatorResult::Finished, "{id}");
     settle(app);
@@ -94,7 +94,7 @@ fn entries(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
 }
 
-fn stored(app: &mut App, map: Entity) -> TilemapData {
+pub(crate) fn stored(app: &mut App, map: Entity) -> TilemapData {
     let key = key_of(app, map);
     (app.world().resource::<TilemapDataStore>().get(&key))
         .cloned()
@@ -115,7 +115,7 @@ fn tile(app: &mut App, map: Entity, x: i32, y: i32) -> TileRef {
     stored(app, map).layers[0].tiles.get(CellCoord::new(x, y))
 }
 
-fn assert_resolved(app: &mut App, map: Entity) {
+pub(crate) fn assert_resolved(app: &mut App, map: Entity) {
     let tileset = (app.world().resource::<Assets<Tileset>>().iter())
         .next()
         .map(|(_, t)| t.clone())

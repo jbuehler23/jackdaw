@@ -335,6 +335,7 @@ fn update_status_right(
     edit_mode: Res<EditMode>,
     draw_state: Res<DrawBrushState>,
     tool_status: Res<jackdaw_api_internal::tools::ToolStatus>,
+    tile_hover: Res<crate::tile_preview::TileHoverReadout>,
     build_status: Res<BuildStatus>,
     numeric: Res<NumericTransformState>,
     notice: Res<StatusNotice>,
@@ -397,6 +398,7 @@ fn update_status_right(
         && !notice.is_changed()
         && !phase.is_changed()
         && !numeric.is_changed()
+        && !tile_hover.is_changed()
     {
         return;
     }
@@ -474,6 +476,11 @@ fn update_status_right(
 
     if let Some(status) = &tool_status.0 {
         text.0 = status.clone();
+        return;
+    }
+
+    if let Some(readout) = &tile_hover.0 {
+        text.0 = readout.clone();
         return;
     }
 

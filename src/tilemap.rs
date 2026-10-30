@@ -13,8 +13,8 @@ use bevy::reflect::TypePath;
 use jackdaw_api_internal::document::SceneResource;
 use jackdaw_scene_types::{LayerTerrainMatch, Tilemap};
 use jackdaw_tilemap::{
-    CHUNK_AREA, CellCoord, ChunkCoord, ChunkedLayer, LayerKind, TerrainSet, TileRef, TilemapData,
-    resolve_region,
+    CHUNK_AREA, CellCoord, ChunkCoord, ChunkedLayer, LayerData, LayerKind, TerrainSet, TileRef,
+    TilemapData, resolve_region,
 };
 use jackdaw_tileset::TerrainMatch;
 
@@ -71,6 +71,8 @@ pub struct TilemapDataStore {
     next_id: u64,
     /// Terrain cells edits have resolved.
     pub(crate) resolved_cells: usize,
+    /// Advances on every write of any key's cells.
+    revision: u64,
 }
 
 /// What the drawn chunks of a key must catch up on.
@@ -91,6 +93,7 @@ impl TilemapDataStore {
     /// chunks the edit touched are drawn again once the edit is dropped.
     pub fn get_mut(&mut self, key: &str) -> Option<TilemapEdit<'_>> {
         let data = self.entries.get_mut(key)?;
+        self.revision += 1;
         self.changed.insert(key.to_string());
         let redraw =
             (self.redraw.entry(key.to_string())).or_insert_with(|| Redraw::Chunks(BTreeSet::new()));
@@ -119,6 +122,7 @@ impl TilemapDataStore {
                 authoring.links.take_dirty();
             }
         }
+        self.revision += 1;
         self.changed.insert(key.clone());
         self.redraw.insert(key.clone(), Redraw::Whole);
         self.sets.remove(&key);
@@ -140,6 +144,7 @@ impl TilemapDataStore {
     }
 
     pub fn remove(&mut self, key: &str) -> Option<TilemapData> {
+        self.revision += 1;
         self.redraw.insert(key.to_string(), Redraw::Whole);
         self.sets.remove(key);
         self.ids.remove(key);
@@ -177,6 +182,11 @@ impl TilemapDataStore {
     /// written. Tiles derived from the authoring do not count.
     pub fn has_unsaved_edits(&self, key: &str) -> bool {
         self.changed.contains(key)
+    }
+
+    /// A count that advances whenever any key's cells are written.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Terrain cells edits have resolved since the store was made.
@@ -244,6 +254,7 @@ impl TilemapDataStore {
         else {
             return;
         };
+        self.revision += 1;
         let coords: BTreeSet<ChunkCoord> = (tiles.chunks().map(|(c, _)| c))
             .chain(fresh.chunks().map(|(c, _)| c))
             .collect();
@@ -392,12 +403,7 @@ impl Drop for TilemapEdit<'_> {
             let set = (self.sets.and_then(|sets| sets.get(&index)))
                 .filter(|_| layer.kind == LayerKind::Terrain && !cells.is_empty());
             if let Some(set) = set {
-                let (terrain, links) = (&authoring.terrain, &authoring.links);
-                let resolved = resolve_region(set, terrain, links, after, cells);
-                *self.resolved_cells += resolved.len();
-                for (cell, tile) in resolved {
-                    layer.tiles.set(cell, tile);
-                }
+                *self.resolved_cells += resolve_into(layer, set, cells).0;
             }
             dirty.extend(layer.tiles.take_dirty());
             touched.extend(dirty.into_iter().map(|chunk| (index, chunk)));
@@ -408,6 +414,26 @@ impl Drop for TilemapEdit<'_> {
             Redraw::Chunks(chunks) => chunks.extend(touched),
         }
     }
+}
+
+/// Resolves `cells` of a terrain layer and the ring around them into its
+/// tiles with `set`. Returns how many cells were resolved and each cell whose
+/// tile changed, with its new tile. Every edit and the tile tools' preview
+/// resolve through it.
+pub fn resolve_into(
+    layer: &mut LayerData,
+    set: &TerrainSet,
+    cells: impl IntoIterator<Item = CellCoord>,
+) -> (usize, Vec<(CellCoord, TileRef)>) {
+    let Some(a) = layer.authoring.as_ref() else {
+        return (0, Vec::new());
+    };
+    let resolved = resolve_region(set, &a.terrain, &a.links, &a.overrides, cells);
+    let count = resolved.len();
+    let changed = (resolved.into_iter())
+        .filter(|&(cell, tile)| layer.tiles.set(cell, tile) != tile)
+        .collect();
+    (count, changed)
 }
 
 /// The match mode a layer names, or `None` for the tileset's only one.
