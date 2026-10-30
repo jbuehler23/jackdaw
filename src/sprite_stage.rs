@@ -405,6 +405,7 @@ fn document_path(
 /// [`Selection`] the way [`crate::ui_stage`] does.
 fn on_sprite_press(
     event: On<PointerPress>,
+    tile_mode: Option<Res<crate::tile_tools::TileEditMode>>,
     ui_scale: Res<UiScale>,
     keys: Res<ButtonInput<KeyCode>>,
     hosts: Query<&Viewport2dPanelHost>,
@@ -419,6 +420,10 @@ fn on_sprite_press(
     mut press: ResMut<SpritePress>,
     mut commands: Commands,
 ) -> Result {
+    if tile_mode.is_some_and(|mode| mode.map.is_some()) {
+        *press = SpritePress::default();
+        return Ok(());
+    }
     if event.button != PointerButton::Primary {
         return Ok(());
     }

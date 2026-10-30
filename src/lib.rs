@@ -166,6 +166,7 @@ pub mod test_input;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
+pub mod tile_tools;
 pub mod tilemap;
 pub mod tilemap_render;
 pub mod tilemap_resolve;
@@ -465,6 +466,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(probe_bake::plugin)
         .add_plugins(tileset_import::plugin)
         .add_plugins(tilemap::plugin)
+        .add_plugins(tile_tools::plugin)
         .add_plugins(tilemap_render::plugin)
         .add_plugins(tilemap_resolve::plugin)
         .add_plugins(tileset_dock::plugin)

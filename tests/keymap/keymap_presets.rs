@@ -326,3 +326,59 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
         "the shared paste chord should be reported, advisory: {conflicts:?}",
     );
 }
+
+/// The tile tool keys live on the tile edit context, which stays inactive
+/// until tile edit mode starts, and no other operator claims them. Digit1,
+/// which enters the mode, is shared with vertex mode only.
+#[test]
+fn the_tile_tool_keys_claim_only_their_tools() {
+    let mut app = crate::headless_app();
+    let defaults = classic(&mut app);
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("Digit1")),
+        vec![
+            "edit_mode.vertex".to_string(),
+            "tilemap.edit_mode".to_string()
+        ],
+        "Digit1 is shared only with vertex mode, split by is_available",
+    );
+    for (key, operator) in [("KeyB", "tilemap.brush"), ("KeyD", "tilemap.eraser")] {
+        assert_eq!(
+            operators_on(&defaults, &PresetInput::key(key)),
+            vec![operator.to_string()],
+        );
+        assert!(
+            !find_conflicts(&defaults)
+                .iter()
+                .any(|line| line.contains(operator)),
+            "{operator} collided with something already bound",
+        );
+    }
+
+    let contexts: Vec<bool> = app
+        .world_mut()
+        .query::<(
+            &jackdaw_api_internal::lifecycle::OperatorAction,
+            &jackdaw_input::ActionOf,
+        )>()
+        .iter(app.world())
+        .filter(|(action, _)| action.0 == "tilemap.brush")
+        .map(|(_, of)| of.0)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|context| {
+            app.world()
+                .get::<jackdaw::tile_tools::TileEditInputContext>(context)
+                .is_some()
+                && !app
+                    .world()
+                    .get::<jackdaw_input::ContextActivity>(context)
+                    .is_some_and(|active| active.0)
+        })
+        .collect();
+    assert_eq!(
+        contexts,
+        vec![true],
+        "one action, on the inactive tile context"
+    );
+}

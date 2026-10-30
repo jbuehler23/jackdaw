@@ -165,34 +165,30 @@ pub struct TilemapStroke {
     after: MapCells,
 }
 
-impl TilemapStroke {
-    fn put(&self, world: &mut World, cells: &MapCells) {
-        let mut store = world.resource_mut::<TilemapDataStore>();
-        let Some(key) = store.key_of_map(self.map).map(str::to_owned) else {
-            warn!("{}: {GONE}", self.label);
-            return;
-        };
-        let resolved: BTreeSet<usize> = (cells.layers.iter().enumerate())
-            .filter(|(layer, (_, authored))| {
-                *authored && store.resolved_with(&key, *layer).is_some()
-            })
-            .map(|(layer, _)| layer)
-            .collect();
-        if let Some(mut edit) = store.get_mut(&key) {
-            for (layer, cells) in cells.apply(&mut edit, &resolved) {
-                edit.mark_written(layer, cells);
-            }
+fn put_cells(world: &mut World, map: u64, label: &str, cells: &MapCells) {
+    let mut store = world.resource_mut::<TilemapDataStore>();
+    let Some(key) = store.key_of_map(map).map(str::to_owned) else {
+        warn!("{label}: {GONE}");
+        return;
+    };
+    let resolved: BTreeSet<usize> = (cells.layers.iter().enumerate())
+        .filter(|(layer, (_, authored))| *authored && store.resolved_with(&key, *layer).is_some())
+        .map(|(layer, _)| layer)
+        .collect();
+    if let Some(mut edit) = store.get_mut(&key) {
+        for (layer, cells) in cells.apply(&mut edit, &resolved) {
+            edit.mark_written(layer, cells);
         }
     }
 }
 
 impl EditorCommand for TilemapStroke {
     fn execute(&mut self, world: &mut World) {
-        self.put(world, &self.after);
+        put_cells(world, self.map, &self.label, &self.after);
     }
 
     fn undo(&mut self, world: &mut World) {
-        self.put(world, &self.before);
+        put_cells(world, self.map, &self.label, &self.before);
     }
 
     fn description(&self) -> &str {
@@ -252,10 +248,148 @@ fn parse_cells(text: &str) -> Result<Vec<CellCoord>, String> {
     Ok(cells)
 }
 
-/// What a `tilemap.set_cells` call writes.
-enum Write {
+/// What a stroke writes to the cells it touches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileWrite {
+    /// A tile on a tile layer, or a hand-placed tile over a terrain layer's
+    /// terrain; [`TileRef::EMPTY`] erases.
     Tile(TileRef),
+    /// Terrain on a terrain layer; 0 erases.
     Terrain(TerrainId),
+    /// Clears a cell whole: a terrain layer's terrain and hand-placed tile,
+    /// or a tile layer's tile.
+    Erase,
+}
+
+/// A stroke in progress on one layer of one map: cells are written live as
+/// [`Self::apply`] takes them, and [`Self::end`] pushes the whole stroke as one
+/// [`TilemapStroke`]. Every tool that paints cells, by hand or by parameters,
+/// goes through it.
+pub struct TilemapStrokeBuilder {
+    map: u64,
+    key: String,
+    tilemap: Tilemap,
+    layer: usize,
+    label: String,
+    /// The chunks captured so far: the 3 x 3 ring around each touched cell's
+    /// chunk, so the resolve ring of every written cell is held.
+    chunks: BTreeSet<(usize, ChunkCoord)>,
+    before: Option<MapCells>,
+}
+
+impl TilemapStrokeBuilder {
+    /// Opens a stroke on layer `layer` of the map `entity`, or says why the
+    /// map cannot take one.
+    pub fn begin(
+        world: &mut World,
+        entity: Entity,
+        layer: usize,
+        label: impl Into<String>,
+    ) -> Result<Self, String> {
+        let tilemap =
+            (world.get::<Tilemap>(entity).cloned()).ok_or("the entity is not a tilemap")?;
+        let key = editable_key(world, entity)?;
+        let target =
+            (tilemap.layers.get(layer)).ok_or_else(|| format!("the map has no layer {layer}"))?;
+        if target.kind == TilemapLayerKind::Terrain {
+            layer_set(world, target)
+                .ok_or("the layer's tileset is not loaded")?
+                .map_err(|err| format!("layer `{}`: {err}", target.name))?;
+            if world
+                .resource::<TilemapDataStore>()
+                .resolved_with(&key, layer)
+                .is_none()
+            {
+                refresh_terrain(world);
+            }
+        }
+        let map = (world.resource::<TilemapDataStore>().map_id(&key))
+            .ok_or("the map's cells are not loaded")?;
+        Ok(Self {
+            map,
+            key,
+            tilemap,
+            layer,
+            label: label.into(),
+            chunks: BTreeSet::new(),
+            before: None,
+        })
+    }
+
+    /// Writes `write` to the cells inside the map's bounds, resolving a
+    /// terrain layer's neighbourhood, and returns whether any cell changed.
+    pub fn apply(&mut self, world: &mut World, cells: &[CellCoord], write: TileWrite) -> bool {
+        let bounds = self.tilemap.bounds;
+        let cells: Vec<CellCoord> = (cells.iter().copied())
+            .filter(|c| bounds.is_none_or(|b| c.0.cmpge(b.min).all() && c.0.cmplt(b.max).all()))
+            .collect();
+        let terrain_layer = self.tilemap.layers[self.layer].kind == TilemapLayerKind::Terrain;
+        let store = world.resource::<TilemapDataStore>();
+        let Some(data) = store.get(&self.key) else {
+            return false;
+        };
+        if !changes(data.layers.get(self.layer), terrain_layer, &cells, &write) {
+            return false;
+        }
+        let touched: BTreeSet<ChunkCoord> = cells.iter().map(|cell| cell.chunk()).collect();
+        let fresh: BTreeSet<(usize, ChunkCoord)> = (touched.iter())
+            .flat_map(|chunk| {
+                let at = chunk.0;
+                (-1..=1).flat_map(move |y| (-1..=1).map(move |x| ChunkCoord(at + IVec2::new(x, y))))
+            })
+            .map(|chunk| (self.layer, chunk))
+            .filter(|at| !self.chunks.contains(at))
+            .collect();
+        let captured = MapCells::capture(data, &fresh);
+        match &mut self.before {
+            Some(before) => before.chunks.extend(captured.chunks),
+            None => self.before = Some(captured),
+        }
+        self.chunks.extend(fresh);
+        let mut store = world.resource_mut::<TilemapDataStore>();
+        let Some(mut edit) = store.get_mut(&self.key) else {
+            return false;
+        };
+        write_cells(&mut edit, &self.tilemap, self.layer, &cells, &write);
+        if terrain_layer {
+            edit.mark_written(self.layer, cells);
+        }
+        true
+    }
+
+    /// Closes the stroke, pushing one history entry when it changed any
+    /// cell, and returns whether it did.
+    pub fn end(self, world: &mut World) -> bool {
+        let Some(mut before) = self.before else {
+            return false;
+        };
+        let store = world.resource::<TilemapDataStore>();
+        let Some(data) = store.get(&self.key) else {
+            return false;
+        };
+        let mut after = MapCells::capture(data, &self.chunks);
+        MapCells::keep_changed(&mut before, &mut after);
+        if after.chunks.is_empty() {
+            return false;
+        }
+        let stroke = TilemapStroke {
+            map: self.map,
+            label: self.label,
+            before,
+            after,
+        };
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(stroke));
+        true
+    }
+
+    /// Puts back every cell the stroke wrote, leaving no history entry.
+    pub fn cancel(self, world: &mut World) {
+        if let Some(before) = self.before {
+            put_cells(world, self.map, &self.label, &before);
+        }
+    }
 }
 
 /// Paint, place or erase tilemap cells.
@@ -308,7 +442,7 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
         .as_entity("entity")
         .ok_or("no tilemap entity given")?;
     let tilemap = (world.get::<Tilemap>(entity).cloned()).ok_or("the entity is not a tilemap")?;
-    let key = editable_key(world, entity)?;
+    editable_key(world, entity)?;
     let named = text("layer");
     let index = (tilemap.layers.iter().position(|l| l.name == named))
         .or_else(|| named.parse().ok().filter(|i| *i < tilemap.layers.len()))
@@ -342,67 +476,25 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
     let value = text("value");
     let write = if value == "erase" {
         if terrain_kind {
-            Write::Terrain(0)
+            TileWrite::Terrain(0)
         } else {
-            Write::Tile(TileRef::EMPTY)
+            TileWrite::Tile(TileRef::EMPTY)
         }
     } else if terrain_kind {
-        Write::Terrain(crate::tileset_edit::terrain(tileset, &value)?)
+        TileWrite::Terrain(crate::tileset_edit::terrain(tileset, &value)?)
     } else {
-        let (sheet, at) = crate::tileset_edit::tile(tileset, &value)?;
-        let packed = (tileset.layer(sheet, at)).and_then(|l| u16::try_from(l).ok());
-        Write::Tile(TileRef::new(
-            packed.ok_or_else(|| format!("tile `{value}` is out of range"))?,
-        ))
+        TileWrite::Tile(packed_tile(tileset, &value)?)
     };
-    if terrain_layer {
-        layer_set(world, layer)
-            .ok_or("the layer's tileset is not loaded")?
-            .map_err(|err| format!("layer `{}`: {err}", layer.name))?;
-    }
-    let store = world.resource::<TilemapDataStore>();
-    let map = store.map_id(&key).ok_or("the map's cells are not loaded")?;
-    let current = store.get(&key).and_then(|data| data.layers.get(index));
-    if !changes(current, terrain_layer, &cells, &write) {
+    let mut stroke = TilemapStrokeBuilder::begin(
+        world,
+        entity,
+        index,
+        format!("Set {} tilemap cells", cells.len()),
+    )?;
+    if !stroke.apply(world, &cells, write) {
         return Ok("no cell changed".into());
     }
-    if terrain_layer && store.resolved_with(&key, index).is_none() {
-        refresh_terrain(world);
-    }
-
-    let around: BTreeSet<ChunkCoord> = cells.iter().map(|cell| cell.chunk()).collect();
-    let chunks: BTreeSet<(usize, ChunkCoord)> = (around.iter())
-        .flat_map(|chunk| {
-            (-1..=1)
-                .flat_map(move |y| (-1..=1).map(move |x| ChunkCoord(chunk.0 + IVec2::new(x, y))))
-        })
-        .map(|chunk| (index, chunk))
-        .collect();
-    let empty = TilemapData::default();
-    let store = world.resource::<TilemapDataStore>();
-    let mut before = MapCells::capture(store.get(&key).unwrap_or(&empty), &chunks);
-    {
-        let mut store = world.resource_mut::<TilemapDataStore>();
-        let mut edit = store
-            .get_mut(&key)
-            .ok_or("the map's cells are not loaded")?;
-        write_cells(&mut edit, &tilemap, index, &cells, &write);
-        if terrain_layer {
-            edit.mark_written(index, cells.iter().copied());
-        }
-    }
-    let store = world.resource::<TilemapDataStore>();
-    let mut after = MapCells::capture(store.get(&key).unwrap_or(&empty), &chunks);
-    MapCells::keep_changed(&mut before, &mut after);
-    let stroke = TilemapStroke {
-        map,
-        label: format!("Set {} tilemap cells", cells.len()),
-        before,
-        after,
-    };
-    world
-        .resource_mut::<CommandHistory>()
-        .push_executed(Box::new(stroke));
+    stroke.end(world);
     Ok(format!(
         "{} cells set on layer `{}`",
         cells.len(),
@@ -410,21 +502,34 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
     ))
 }
 
+/// A tile named as `sheet:tile` or a packed layer, as the tile it packs to.
+pub(crate) fn packed_tile(tileset: &Tileset, value: &str) -> Result<TileRef, String> {
+    let (sheet, at) = crate::tileset_edit::tile(tileset, value)?;
+    let packed = (tileset.layer(sheet, at)).and_then(|l| u16::try_from(l).ok());
+    Ok(TileRef::new(packed.ok_or_else(|| {
+        format!("tile `{value}` is out of range")
+    })?))
+}
+
 /// Whether writing `write` to `cells` of `layer` changes any of them.
 fn changes(
     layer: Option<&LayerData>,
     terrain_layer: bool,
     cells: &[CellCoord],
-    write: &Write,
+    write: &TileWrite,
 ) -> bool {
     let authoring = layer.and_then(|layer| layer.authoring.as_ref());
     cells.iter().any(|&cell| match *write {
-        Write::Terrain(id) => authoring.map_or(0, |a| a.terrain.get(cell)) != id,
-        Write::Tile(tile) if terrain_layer => {
+        TileWrite::Terrain(id) => authoring.map_or(0, |a| a.terrain.get(cell)) != id,
+        TileWrite::Tile(tile) if terrain_layer => {
             let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
             placed != (!tile.is_empty()).then_some(tile)
         }
-        Write::Tile(tile) => layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)) != tile,
+        TileWrite::Tile(tile) => layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)) != tile,
+        TileWrite::Erase if terrain_layer => {
+            authoring.is_some_and(|a| a.terrain.get(cell) != 0 || a.overrides.contains_key(&cell))
+        }
+        TileWrite::Erase => layer.is_some_and(|l| !l.tiles.get(cell).is_empty()),
     })
 }
 
@@ -437,7 +542,7 @@ fn write_cells(
     tilemap: &Tilemap,
     index: usize,
     cells: &[CellCoord],
-    write: &Write,
+    write: &TileWrite,
 ) {
     for layer in tilemap.layers.iter().skip(data.layers.len()) {
         let terrain = layer.kind == TilemapLayerKind::Terrain;
@@ -453,10 +558,13 @@ fn write_cells(
     }
     let target = &mut data.layers[index];
     if tilemap.layers[index].kind != TilemapLayerKind::Terrain {
-        if let Write::Tile(tile) = *write {
-            for &cell in cells {
-                target.tiles.set(cell, tile);
-            }
+        let tile = match *write {
+            TileWrite::Tile(tile) => tile,
+            TileWrite::Erase => TileRef::EMPTY,
+            TileWrite::Terrain(_) => return,
+        };
+        for &cell in cells {
+            target.tiles.set(cell, tile);
         }
         return;
     }
@@ -466,13 +574,17 @@ fn write_cells(
         .get_or_insert_with(TerrainAuthoring::default);
     for &cell in cells {
         match *write {
-            Write::Terrain(id) => {
+            TileWrite::Terrain(id) => {
                 authoring.terrain.set(cell, id);
             }
-            Write::Tile(tile) if tile.is_empty() => {
+            TileWrite::Erase => {
+                authoring.terrain.set(cell, 0);
                 authoring.overrides.remove(&cell);
             }
-            Write::Tile(tile) => {
+            TileWrite::Tile(tile) if tile.is_empty() => {
+                authoring.overrides.remove(&cell);
+            }
+            TileWrite::Tile(tile) => {
                 authoring.overrides.insert(cell, tile);
             }
         }

@@ -103,9 +103,12 @@ pub(crate) fn brush_exit_edit_mode(
 /// True when switching edit modes is safe; no text field has focus,
 /// no modal is running, and no brush sub-element drag is in flight or
 /// pending. Keybind-triggered mode changes would otherwise yank the
-/// drag target out from under the active system.
+/// drag target out from under the active system. A selected tilemap takes
+/// the same keys for tile edit mode.
 fn can_change_edit_mode(
     input_focus: Res<InputFocus>,
+    selection: Res<Selection>,
+    tilemaps: Query<(), With<jackdaw_scene_types::Tilemap>>,
     active: ActiveModalQuery,
     face_drag: Res<BrushDragState>,
     vertex_drag: Res<VertexDragState>,
@@ -113,6 +116,9 @@ fn can_change_edit_mode(
     viewport: crate::viewport_2d::FrontedViewport,
 ) -> bool {
     if input_focus.get().is_some() || active.is_modal_running() || !viewport.is_three_d() {
+        return false;
+    }
+    if selection.primary().is_some_and(|e| tilemaps.contains(e)) {
         return false;
     }
     if face_drag.active || vertex_drag.active || edge_drag.active {
