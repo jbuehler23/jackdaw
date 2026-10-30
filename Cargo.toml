@@ -101,7 +101,7 @@ jackdaw_snap.workspace = true
 jackdaw_select.workspace = true
 jackdaw_uv.workspace = true
 jackdaw_tilemap.workspace = true
-jackdaw_tileset.workspace = true
+jackdaw_tileset = { workspace = true, features = ["render"] }
 jackdaw_pick.workspace = true
 jackdaw_hull.workspace = true
 jackdaw_material.workspace = true
@@ -324,7 +324,7 @@ redundant_closure_for_method_calls = "warn"
 
 [dev-dependencies]
 bevy.workspace = true
-jackdaw_runtime = { workspace = true, features = ["terrain"] }
+jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
 libloading = "0.8"
 serde_json.workspace = true
 tempfile = "3"

@@ -16,6 +16,10 @@ bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-fe
 ] }
 jackdaw_tilemap.workspace = true
 
+[features]
+# The tilemap chunks a map draws as.
+render = ["bevy/bevy_sprite_render"]
+
 [dev-dependencies]
 image.workspace = true
 

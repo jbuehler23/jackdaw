@@ -18,7 +18,6 @@ use jackdaw_tilemap::{
 };
 use jackdaw_tileset::TerrainMatch;
 
-use crate::prefab::{IsA, Prefab, PrefabEntityId};
 use crate::scene_io::SidecarImport;
 
 pub fn plugin(app: &mut App) {
@@ -506,23 +505,6 @@ fn current_doc(world: &mut World) -> Doc {
     }
 }
 
-/// The prefab instance an inherited entity came from, if it is one. The walk
-/// stops at a prefab's own root, whose document (a variant's, say) owns it.
-fn owning_instance(world: &World, entity: Entity) -> Option<&IsA> {
-    world.get::<PrefabEntityId>(entity)?;
-    let mut current = Some(entity);
-    while let Some(e) = current {
-        if world.get::<Prefab>(e).is_some() {
-            return None;
-        }
-        if let Some(isa) = world.get::<IsA>(e) {
-            return Some(isa);
-        }
-        current = world.get::<ChildOf>(e).map(ChildOf::parent);
-    }
-    None
-}
-
 struct LiveMap {
     entity: Entity,
     data_path: String,
@@ -547,14 +529,15 @@ fn live_maps(world: &mut World, doc: &Doc) -> Vec<LiveMap> {
     let world: &World = world;
     let mut maps: Vec<LiveMap> = (query.iter(world))
         .map(|(entity, tilemap)| {
-            let owner = match owning_instance(world, entity) {
-                Some(isa) => {
+            let expanded = |source: &Path| {
+                (world.get_resource::<crate::prefab::PrefabAstCache>())
+                    .is_none_or(|cache| cache.get(source).is_some())
+            };
+            let owner = match jackdaw_prefab::owning_source(world, entity, expanded) {
+                Some(source) => {
                     let root = crate::prefab::save_load::source_root(world, &scene_dir);
-                    let source = crate::prefab::save_load::resolve_source_path(
-                        &isa.source,
-                        &root,
-                        &scene_dir,
-                    );
+                    let source =
+                        crate::prefab::save_load::resolve_source_path(source, &root, &scene_dir);
                     Doc::file(world, &source)
                 }
                 None => doc.clone(),

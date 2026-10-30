@@ -39,6 +39,7 @@ jackdaw_runtime = { workspace = true, features = [
     "terrain",
     "navmesh",
     "animation",
+    "tilemap",
 ] }
 # `approx` on Bevy's math crates, which physics engines such as avian turn
 # on: against an SDK whose `glam` lacks it, a project using one fails on

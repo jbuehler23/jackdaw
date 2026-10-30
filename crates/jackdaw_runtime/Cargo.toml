@@ -52,6 +52,10 @@ jackdaw_terrain = { version = "0.21.0-dev", path = "../jackdaw_terrain", optiona
 # Authored animation sets: the state machine a rig plays and the binding step
 # that gives a body loaded from one file the clips exported in another.
 jackdaw_animation_runtime = { version = "0.21.0-dev", path = "../jackdaw_animation_runtime", optional = true }
+# The sidecar decoder and the tileset asset with the chunk builder the editor
+# draws tilemaps with.
+jackdaw_tilemap = { version = "0.21.0-dev", path = "../jackdaw_tilemap", optional = true }
+jackdaw_tileset = { version = "0.21.0-dev", path = "../jackdaw_tileset", optional = true, features = ["render"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
@@ -103,6 +107,18 @@ terrain = ["render", "navmesh", "jackdaw_terrain/render"]
 # root. Decoding only: nothing is meshed and nothing is drawn, so a server that
 # validates moves takes this without `terrain`.
 navmesh = ["dep:jackdaw_terrain"]
+# Draw the tilemaps a scene authored. Each map's `.jdtiles` sidecar is read from
+# beside the document that names it and its stored tiles drawn as tilemap
+# chunks. Off by default, so a standalone build without it leaves out the
+# chunk renderer; new projects turn it on, and a game built against the
+# editor's SDK links that renderer either way, since the editor draws
+# tilemaps with it.
+tilemap = [
+    "render",
+    "dep:jackdaw_tilemap",
+    "dep:jackdaw_tileset",
+    "bevy/bevy_sprite_render",
+]
 # Play the animation sets a scene authored. Bevy's own animation and glTF
 # support come with it, since a set's clips are named animations in a glTF
 # file and `gltf_animation` is what puts them on the loaded file at all. Off by
@@ -130,3 +146,7 @@ jackdaw_terrain = { version = "0.21.0-dev", path = "../jackdaw_terrain" }
 # The animation test reads the components a loaded set spawned with. Optional
 # for the library, so the test target names it itself.
 jackdaw_animation_runtime = { version = "0.21.0-dev", path = "../jackdaw_animation_runtime" }
+# Tilemap tests write a sidecar and build the chunks they expect. Optional for
+# the library, so the test target names them itself.
+jackdaw_tilemap = { version = "0.21.0-dev", path = "../jackdaw_tilemap" }
+jackdaw_tileset = { version = "0.21.0-dev", path = "../jackdaw_tileset", features = ["render"] }

@@ -5,17 +5,21 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use bevy::prelude::*;
-use bevy::sprite_render::{
-    AlphaMode2d, TileData, TileOrientation, TilemapChunk, TilemapChunkTileData,
-};
+use bevy::sprite_render::{TileData, TileOrientation, TilemapChunk, TilemapChunkTileData};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{CHUNK_SIZE, ChunkCoord, TileRef};
+use jackdaw_tilemap::ChunkCoord;
 use jackdaw_tileset::Tileset;
+use jackdaw_tileset::chunk::ChunkDraw;
+pub use jackdaw_tileset::chunk::TilemapChunkOf;
 
 use crate::tilemap::{Redraw, TilemapDataStore, store_keys};
 use crate::tilemap_resolve::cached_set;
 
 pub fn plugin(app: &mut App) {
+    // Derived from the map's cells, so never saved and not listed in the
+    // outliner.
+    app.register_required_components::<TilemapChunkOf, crate::EditorHidden>()
+        .register_required_components::<TilemapChunkOf, crate::NonSerializable>();
     app.init_resource::<TilemapDrawWarnings>()
         .init_resource::<TilemapDrawStats>()
         .add_observer(clear_removed_map)
@@ -26,17 +30,6 @@ pub fn plugin(app: &mut App) {
                 .after(crate::tilemap_resolve::queue_terrain_refresh)
                 .run_if(in_state(crate::AppState::Editor)),
         );
-}
-
-/// One layer's 32 x 32 block of the tilemap it is a child of, as drawn.
-/// Derived from the map's cells, so it is never saved and not listed in the
-/// outliner.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-#[require(crate::EditorHidden, crate::NonSerializable)]
-pub struct TilemapChunkOf {
-    /// Index into [`Tilemap::layers`].
-    pub layer: usize,
-    pub chunk: ChunkCoord,
 }
 
 /// What a map's chunks were last drawn from.
@@ -66,28 +59,6 @@ impl TilemapDrawWarnings {
 pub struct TilemapDrawStats {
     /// Chunks whose tile data was written.
     pub chunks_written: usize,
-}
-
-/// The tile a cell's [`TileRef`] draws, or `None` for an empty cell.
-///
-/// Both orient the tile image the same way: transpose across its top-left
-/// diagonal, then mirror, so the bits map one to one.
-pub fn tile_data(tile: TileRef) -> Option<TileData> {
-    (!tile.is_empty()).then(|| TileData {
-        tileset_index: tile.index(),
-        visible: tile.visible(),
-        orientation: TileOrientation::from_bools(tile.flip_x(), tile.flip_y(), tile.transpose()),
-        ..default()
-    })
-}
-
-/// Where the chunk at `coord` of layer `layer` sits under its map: the chunk
-/// mesh is centred on its entity, and cell (0,0) has its min corner at the
-/// map's origin. Layers stack one whole z unit apart, so y-sorted entities,
-/// which move less than half a unit, never cross from one layer to the next.
-pub fn chunk_transform(coord: ChunkCoord, tile_size: UVec2, layer: usize) -> Transform {
-    let centre = (coord.0 * CHUNK_SIZE).as_vec2() + CHUNK_SIZE as f32 / 2.0;
-    Transform::from_translation((centre * tile_size.as_vec2()).extend(layer as f32))
 }
 
 fn queue_tilemap_draws(
@@ -144,9 +115,7 @@ fn clear_removed_map(
 /// A layer's tileset as one batch of draws uses it.
 struct Prepared {
     tileset: Tileset,
-    image: Handle<Image>,
-    /// The packed layers the tileset has a tile in.
-    known: HashSet<u16>,
+    draw: ChunkDraw,
 }
 
 /// The tilesets of one batch, each loaded once.
@@ -162,18 +131,9 @@ impl Tilesets {
         self.0.entry(path.to_string()).or_insert_with(|| {
             let (id, tileset) = crate::tileset_dock::load(world, path)?;
             let prepared = tileset.map(|tileset| {
-                let known = (tileset.sheets.iter())
-                    .flat_map(|sheet| {
-                        sheet.first_layer..sheet.first_layer + sheet.columns * sheet.rows
-                    })
-                    .filter_map(|layer| u16::try_from(layer).ok())
-                    .collect();
                 let image = world.resource::<AssetServer>().load(&tileset.image);
-                Prepared {
-                    tileset,
-                    image,
-                    known,
-                }
+                let draw = ChunkDraw::new(&tileset, image);
+                Prepared { tileset, draw }
             });
             Ok((id, prepared))
         })
@@ -213,7 +173,7 @@ fn draw_batch(
     Ok(())
 }
 
-type Wanted = (TilemapChunk, Vec<Option<TileData>>, Transform);
+type Wanted = (TilemapChunk, TilemapChunkTileData, Transform);
 
 /// Brings `map`'s chunk children in line with its cells, all of them or only
 /// the `edited` chunks: spawns the chunks that gained cells, despawns the
@@ -293,26 +253,14 @@ fn draw_map(
         let tiles = &cells.tiles;
         let coords = scope.unwrap_or_else(|| tiles.chunks().map(|(c, _)| c).collect());
         drew.push(index);
-        let tile_size = match prepared.tileset.tile_size.min_element() {
-            0 => tilemap.cell_size,
-            _ => prepared.tileset.tile_size,
-        };
-        let chunk = TilemapChunk {
-            chunk_size: UVec2::splat(CHUNK_SIZE as u32),
-            tile_display_size: tile_size,
-            tileset: prepared.image.clone(),
-            alpha_mode: AlphaMode2d::Blend,
-        };
+        let tile_size = prepared.tileset.display_size(tilemap.cell_size);
         for coord in coords {
             touched.insert((index, coord));
             let Some(cells) = tiles.chunk(coord) else {
                 continue;
             };
-            let data = (cells.iter())
-                .map(|&tile| tile_data(tile).filter(|_| prepared.known.contains(&tile.index())))
-                .collect();
-            let transform = chunk_transform(coord, tile_size, index);
-            wanted.insert((index, coord), (chunk.clone(), data, transform));
+            let bundle = (prepared.draw).bundle(coord, cells, tile_size, index);
+            wanted.insert((index, coord), bundle);
         }
     }
 
@@ -341,7 +289,7 @@ fn draw_map(
     });
     for ((layer, chunk), (tilemap_chunk, data, transform)) in wanted {
         let of = TilemapChunkOf { layer, chunk };
-        let bundle = (of, tilemap_chunk, TilemapChunkTileData(data), transform);
+        let bundle = (of, tilemap_chunk, data, transform);
         chunks.insert((layer, chunk), world.spawn((bundle, ChildOf(map))).id());
     }
     if let Some(mut drawn) = world.get_mut::<TilemapDrawn>(map) {
@@ -376,9 +324,9 @@ fn update_chunk(world: &mut World, entity: Entity, (chunk, data, transform): Wan
     let same_data = (chunk_entity.get::<TilemapChunkTileData>())
         .is_some_and(|old| old.iter().map(tile_key).eq(data.iter().map(tile_key)));
     if !same_chunk {
-        chunk_entity.insert((chunk, TilemapChunkTileData(data)));
+        chunk_entity.insert((chunk, data));
     } else if !same_data {
-        chunk_entity.insert(TilemapChunkTileData(data));
+        chunk_entity.insert(data);
     }
     if chunk_entity.get::<Transform>() != Some(&transform) {
         chunk_entity.insert(transform);
@@ -387,95 +335,4 @@ fn update_chunk(world: &mut World, entity: Entity, (chunk, data, transform): Wan
 
 fn tile_key(tile: &Option<TileData>) -> Option<(u16, bool, TileOrientation, Color)> {
     tile.map(|t| (t.tileset_index, t.visible, t.orientation, t.color))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const N: usize = 3;
-    type Pixels = [[u8; N]; N];
-
-    fn source() -> Pixels {
-        [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-    }
-
-    /// The tile as the kernel defines its bits, rows top down: transpose,
-    /// then flip x, then flip y.
-    fn kernel_oriented(tile: TileRef) -> Pixels {
-        let image = source();
-        let mut out = [[0; N]; N];
-        for (y, row) in image.iter().enumerate() {
-            for (x, &pixel) in row.iter().enumerate() {
-                let (mut tx, mut ty) = if tile.transpose() { (y, x) } else { (x, y) };
-                if tile.flip_x() {
-                    tx = N - 1 - tx;
-                }
-                if tile.flip_y() {
-                    ty = N - 1 - ty;
-                }
-                out[ty][tx] = pixel;
-            }
-        }
-        out
-    }
-
-    /// The tile as the chunk shader samples it, in uv (y down): mirror h,
-    /// then v, then swap the coordinates.
-    fn shader_oriented(orientation: TileOrientation) -> Pixels {
-        let image = source();
-        let mut out = [[0; N]; N];
-        for (y, row) in out.iter_mut().enumerate() {
-            for (x, pixel) in row.iter_mut().enumerate() {
-                let (mut u, mut v) = (x, y);
-                if orientation.mirror_h() {
-                    u = N - 1 - u;
-                }
-                if orientation.mirror_v() {
-                    v = N - 1 - v;
-                }
-                if orientation.mirror_d() {
-                    (u, v) = (v, u);
-                }
-                *pixel = image[v][u];
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn every_orientation_draws_the_tile_the_kernel_means() {
-        let mut seen = HashSet::new();
-        for bits in 0..8u8 {
-            let tile = TileRef::from_raw(5, bits);
-            let data = tile_data(tile).expect("a filled cell draws");
-            assert_eq!(data.tileset_index, 5);
-            assert!(data.visible);
-            assert_eq!(
-                shader_oriented(data.orientation),
-                kernel_oriented(tile),
-                "bits {bits:03b} as {:?}",
-                data.orientation
-            );
-            seen.insert(data.orientation);
-        }
-        assert_eq!(seen.len(), 8, "the eight orientations stay distinct");
-    }
-
-    #[test]
-    fn hidden_and_empty_cells() {
-        let hidden = tile_data(TileRef::new(2).with_visible(false)).expect("hidden still draws");
-        assert!(!hidden.visible);
-        assert!(tile_data(TileRef::EMPTY).is_none());
-    }
-
-    #[test]
-    fn cell_zero_sits_at_the_map_origin() {
-        let size = UVec2::new(16, 8);
-        let at = chunk_transform(ChunkCoord(IVec2::new(-1, 2)), size, 3);
-        let half = Vec2::new(16.0 * 16.0, 16.0 * 8.0);
-        let min = at.translation.truncate() - half;
-        assert_eq!(min, Vec2::new(-32.0 * 16.0, 64.0 * 8.0));
-        assert_eq!(at.translation.z, 3.0);
-    }
 }

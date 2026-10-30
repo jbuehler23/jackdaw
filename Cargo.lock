@@ -4701,6 +4701,8 @@ dependencies = [
  "jackdaw_schema",
  "jackdaw_surface",
  "jackdaw_terrain",
+ "jackdaw_tilemap",
+ "jackdaw_tileset",
  "jackdaw_widgets_runtime",
  "serde",
  "serde_json",

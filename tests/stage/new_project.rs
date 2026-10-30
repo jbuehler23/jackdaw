@@ -329,7 +329,7 @@ fn ticking_navmesh_gives_the_created_game_the_navmesh_feature() {
 
     let cargo = std::fs::read_to_string(project.join("Cargo.toml")).expect("a Cargo.toml");
     assert!(
-        cargo.contains("features = [\"navmesh\", \"terrain\", \"pie\"]"),
+        cargo.contains("features = [\"navmesh\", \"terrain\", \"tilemap\", \"pie\"]"),
         "the game enables the navmesh runtime feature: {cargo}"
     );
     assert!(!cargo.contains("avian3d"), "{cargo}");
