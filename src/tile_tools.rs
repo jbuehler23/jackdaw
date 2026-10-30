@@ -20,6 +20,7 @@ use jackdaw_tileset::Tileset;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::Selection;
+use crate::tile_stamp::{StampBrush, TileStamp};
 use crate::tilemap::{TilemapDataStore, editable_key};
 use crate::tilemap_stroke::{TileWrite, TilemapStrokeBuilder, packed_tile};
 use crate::viewport_2d::{Scene2dViewport, Viewport2dMode, Viewport2dPanelHost};
@@ -121,6 +122,8 @@ pub enum BrushSource {
     Terrain,
     /// The tile, hand-placed over a terrain layer's terrain.
     Tile,
+    /// The loaded [`crate::tile_stamp::StampBrush`], painted by the Brush.
+    Stamp,
 }
 
 /// What the painting tools write: terrain on a terrain layer, the tile on a
@@ -154,16 +157,55 @@ impl Default for TileBrush {
 pub struct TileStrokeState {
     pub cell: Option<CellCoord>,
     pub button: Option<MouseButton>,
-    stroke: Option<(TilemapStrokeBuilder, TileWrite)>,
+    stroke: Option<(TilemapStrokeBuilder, Paint)>,
     /// The last cell a Brush or Eraser stroke wrote, or a shape's press cell.
     last: Option<CellCoord>,
 }
 
 impl TileStrokeState {
-    /// What the held stroke writes and, for a shape, its press cell.
-    pub(crate) fn held(&self) -> Option<(TileWrite, Option<CellCoord>)> {
-        (self.stroke.as_ref()).map(|(_, write)| (*write, self.last))
+    /// What the held stroke paints and, for a shape, its press cell.
+    pub(crate) fn held(&self) -> Option<(&Paint, Option<CellCoord>)> {
+        (self.stroke.as_ref()).map(|(_, paint)| (paint, self.last))
     }
+}
+
+/// What a stroke paints: one write on every cell it reaches, or the loaded
+/// stamp placed at each.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Paint {
+    Write(TileWrite),
+    Stamp(TileStamp),
+}
+
+impl Paint {
+    /// The writes painting at each of `cells`, each with the cells it lands
+    /// on.
+    pub fn writes(&self, cells: &[CellCoord]) -> Vec<(TileWrite, Vec<CellCoord>)> {
+        match self {
+            Paint::Write(write) => vec![(*write, cells.to_vec())],
+            Paint::Stamp(stamp) => stamp.writes(cells),
+        }
+    }
+}
+
+/// What a stroke of `tool` with `button` paints: the loaded stamp for a
+/// Brush stroke while the source is a stamp of the layer's tileset, else
+/// what [`stroke_write`] gives.
+pub(crate) fn stroke_paint(
+    world: &mut World,
+    tool: TileTool,
+    button: MouseButton,
+) -> Result<Paint, String> {
+    let stamped = world.resource::<TileBrush>().source == BrushSource::Stamp;
+    if !stamped || tool != TileTool::Brush || button != MouseButton::Left {
+        return stroke_write(world, tool, button).map(Paint::Write);
+    }
+    let id = active_tileset(world)?;
+    let brush = world.resource::<StampBrush>();
+    if brush.tileset != Some(id) {
+        return Err("the brush stamp is not from the layer's tileset".to_string());
+    }
+    (brush.stamp.clone().map(Paint::Stamp)).ok_or_else(|| "no stamp is loaded".to_string())
 }
 
 /// The cell of a map holding `point`, a world point, under the map's
@@ -425,6 +467,9 @@ pub(crate) fn stroke_write(
     }
     let terrain_layer = active_layer(world)?.terrain;
     let brush = *world.resource::<TileBrush>();
+    if brush.source == BrushSource::Stamp {
+        return Err("a stamp paints with the Brush only".to_string());
+    }
     let id = active_tileset(world)?;
     let tileset =
         (world.resource::<Assets<Tileset>>().get(id)).ok_or("the layer's tileset is not loaded")?;
@@ -458,13 +503,12 @@ fn refuse(world: &mut World, err: &str) -> OperatorResult {
     OperatorResult::Cancelled
 }
 
-/// Opens a stroke of `tool` writing `write` on the active layer.
+/// Opens a stroke of `tool` on the active layer, erasing when `erase`.
 fn begin_stroke(
     world: &mut World,
     tool: TileTool,
-    write: TileWrite,
+    erase: bool,
 ) -> Result<TilemapStrokeBuilder, String> {
-    let erase = write == TileWrite::Erase;
     let label = match tool {
         TileTool::Rectangle if erase => "Erase rectangle",
         TileTool::Rectangle => "Fill rectangle",
@@ -530,8 +574,10 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
             world.resource_mut::<TileEditMode>().tool = tool;
             return Some(OperatorResult::Finished);
         };
-        let begun = stroke_write(world, tool, button)
-            .and_then(|write| Ok((begin_stroke(world, tool, write)?, write)));
+        let begun = stroke_paint(world, tool, button).and_then(|paint| {
+            let erase = paint == Paint::Write(TileWrite::Erase);
+            Ok((begin_stroke(world, tool, erase)?, paint))
+        });
         match begun {
             Ok(stroke) => state.stroke = Some(stroke),
             Err(err) => return Some(refuse(world, &err)),
@@ -543,19 +589,21 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
     if !tool.is_shape()
         && let Some(cell) = state.cell
         && state.last != Some(cell)
-        && let Some((builder, write)) = &mut state.stroke
+        && let Some((builder, paint)) = &mut state.stroke
     {
         let cells = state
             .last
             .map_or(vec![cell], |last| orthogonal_line(last, cell));
-        builder.apply(world, &cells, *write);
+        for (write, cells) in paint.writes(&cells) {
+            builder.apply(world, &cells, write);
+        }
         state.last = Some(cell);
     }
     if held.is_some() {
         *world.resource_mut::<TileStrokeState>() = state;
         return Some(OperatorResult::Running);
     }
-    let Some((mut builder, write)) = state.stroke else {
+    let Some((mut builder, paint)) = state.stroke else {
         return Some(OperatorResult::Finished);
     };
     if tool.is_shape()
@@ -567,7 +615,9 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
             .and_then(|t| t.bounds);
         match shape_cells(tool, from, to, bounds) {
             Ok(cells) => {
-                builder.apply(world, &cells, write);
+                for (write, cells) in paint.writes(&cells) {
+                    builder.apply(world, &cells, write);
+                }
             }
             Err(err) => {
                 builder.cancel(world);
@@ -692,7 +742,7 @@ fn bucket_fill(
     if cells.is_empty() {
         return Ok(());
     }
-    let mut builder = begin_stroke(world, TileTool::Bucket, write)?;
+    let mut builder = begin_stroke(world, TileTool::Bucket, write == TileWrite::Erase)?;
     builder.apply(world, &cells, write);
     builder.end(world);
     Ok(())

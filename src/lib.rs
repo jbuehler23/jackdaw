@@ -168,6 +168,7 @@ pub mod texture_import;
 pub mod thumbnail;
 pub mod tile_palette;
 pub mod tile_preview;
+pub mod tile_stamp;
 pub mod tile_tools;
 pub mod tilemap;
 pub mod tilemap_render;
@@ -471,6 +472,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(tile_tools::plugin)
         .add_plugins(tile_palette::plugin)
         .add_plugins(tile_preview::plugin)
+        .add_plugins(tile_stamp::plugin)
         .add_plugins(tilemap_render::plugin)
         .add_plugins(tilemap_resolve::plugin)
         .add_plugins(tileset_dock::plugin)
