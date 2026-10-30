@@ -90,7 +90,7 @@ pub(crate) fn run(app: &mut App, id: &'static str) {
     settle(app);
 }
 
-fn entries(app: &App) -> usize {
+pub(crate) fn entries(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
 }
 
@@ -637,7 +637,12 @@ const BUCKET: &str = "tilemap.bucket";
 const PICKER: &str = "tilemap.picker";
 
 /// A press and release on one cell with a tool that acts on the press.
-fn click(app: &mut App, id: &'static str, button: MouseButton, cell: (i32, i32)) -> OperatorResult {
+pub(crate) fn click(
+    app: &mut App,
+    id: &'static str,
+    button: MouseButton,
+    cell: (i32, i32),
+) -> OperatorResult {
     click_with(app, id, button, cell, OperatorParameters::default())
 }
 
