@@ -57,6 +57,16 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
         "a held stroke over the cells under the pointer; named cells with value erase instead",
     ),
     (
+        "tilemap.rectangle",
+        Some("tilemap.set_cells"),
+        "a rectangle dragged between two cells; one rect x0,y0,x1,y1 instead",
+    ),
+    (
+        "tilemap.line",
+        Some("tilemap.set_cells"),
+        "a line dragged between two cells; the line's cells by name instead",
+    ),
+    (
         "terrain.sculpt",
         Some("terrain.sculpt.stamp"),
         "a held brush stroke; one stamp at a named place instead",

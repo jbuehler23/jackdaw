@@ -1,6 +1,7 @@
 //! Tile edit mode on a selected tilemap: its own input context for the tool
-//! keys, the cell under the cursor, and the Brush and Eraser strokes, each one
-//! history entry through [`TilemapStrokeBuilder`].
+//! keys, the cell under the cursor, and the tools: Brush, Eraser, Rectangle,
+//! Line and Bucket write one history entry each through
+//! [`TilemapStrokeBuilder`]; the Picker loads the brush from a cell.
 
 use bevy::{
     picking::events::{PointerDrag, PointerPress},
@@ -12,11 +13,14 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::operator::warn_caller;
 use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{CellCoord, Grid, TerrainId, TileRef, orthogonal_line};
+use jackdaw_tilemap::{
+    CHUNK_SIZE, CellCoord, CellRect, Grid, LayerData, TerrainId, TileRef, orthogonal_line,
+};
 use jackdaw_tileset::Tileset;
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::selection::Selection;
+use crate::tilemap::{TilemapDataStore, editable_key};
 use crate::tilemap_stroke::{TileWrite, TilemapStrokeBuilder, packed_tile};
 use crate::viewport_2d::{Scene2dViewport, Viewport2dMode, Viewport2dPanelHost};
 
@@ -37,7 +41,11 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilemapEditModeOp>()
         .register_operator::<TilemapEditModeExitOp>()
         .register_operator::<TilemapBrushOp>()
-        .register_operator::<TilemapEraserOp>();
+        .register_operator::<TilemapEraserOp>()
+        .register_operator::<TilemapRectangleOp>()
+        .register_operator::<TilemapLineOp>()
+        .register_operator::<TilemapBucketOp>()
+        .register_operator::<TilemapPickerOp>();
     ctx.bind_operator::<CoreExtensionInputContext, TilemapEditModeOp>([PresetInput::key("Digit1")]);
     let context = ctx
         .spawn((
@@ -50,6 +58,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .id();
     ctx.bind_operator_in::<TilemapBrushOp>(context, [PresetInput::key("KeyB")])
         .bind_operator_in::<TilemapEraserOp>(context, [PresetInput::key("KeyD")])
+        .bind_operator_in::<TilemapRectangleOp>(context, [PresetInput::key("KeyU")])
+        .bind_operator_in::<TilemapLineOp>(context, [PresetInput::key("KeyL")])
+        .bind_operator_in::<TilemapBucketOp>(context, [PresetInput::key("KeyG")])
+        .bind_operator_in::<TilemapPickerOp>(context, [PresetInput::key("KeyI")])
         .bind_operator_in::<TilemapEditModeExitOp>(context, [PresetInput::key("Escape")]);
 }
 
@@ -64,7 +76,22 @@ pub enum TileTool {
     #[default]
     Brush,
     Eraser,
+    Rectangle,
+    Line,
+    Bucket,
+    Picker,
 }
+
+impl TileTool {
+    /// Whether the tool writes one shape between the press and release cells.
+    fn is_shape(self) -> bool {
+        matches!(self, Self::Rectangle | Self::Line)
+    }
+}
+
+/// The most cells one Bucket fill, Rectangle or Line writes; a larger one is
+/// refused.
+pub const MAX_FILL_CELLS: usize = 1 << 20;
 
 /// Tile edit mode: on while it names a map.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,8 +102,8 @@ pub struct TileEditMode {
     pub tool: TileTool,
 }
 
-/// What the Brush paints: terrain on a terrain layer, the tile on a tile
-/// layer.
+/// What the painting tools write: terrain on a terrain layer, the tile on a
+/// tile layer.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TileBrush {
     pub terrain: TerrainId,
@@ -99,6 +126,7 @@ pub struct TileStrokeState {
     pub cell: Option<CellCoord>,
     pub button: Option<MouseButton>,
     stroke: Option<(TilemapStrokeBuilder, TileWrite)>,
+    /// The last cell a Brush or Eraser stroke wrote, or a shape's press cell.
     last: Option<CellCoord>,
 }
 
@@ -297,6 +325,31 @@ fn set_brush(world: &mut World, params: &OperatorParameters) -> Result<(), Strin
     Ok(())
 }
 
+/// The layer tile edit mode paints.
+struct ActiveLayer {
+    map: Entity,
+    index: usize,
+    key: String,
+    terrain: bool,
+}
+
+fn active_layer(world: &mut World) -> Result<ActiveLayer, String> {
+    const NO_MAP: &str = "no tilemap is in tile edit mode";
+    let mode = *world.resource::<TileEditMode>();
+    let map = mode.map.ok_or(NO_MAP)?;
+    let layer = (world.get::<Tilemap>(map))
+        .and_then(|t| t.layers.get(mode.layer))
+        .ok_or(NO_MAP)?;
+    let terrain = layer.kind == TilemapLayerKind::Terrain;
+    let key = editable_key(world, map)?;
+    Ok(ActiveLayer {
+        map,
+        index: mode.layer,
+        key,
+        terrain,
+    })
+}
+
 /// What a stroke with `button` writes on the active layer, or why the brush
 /// cannot paint it: its terrain or tile is not in the layer's tileset.
 fn stroke_write(
@@ -307,11 +360,7 @@ fn stroke_write(
     if tool == TileTool::Eraser || button == MouseButton::Right {
         return Ok(TileWrite::Erase);
     }
-    let mode = *world.resource::<TileEditMode>();
-    let terrain_layer = (mode.map)
-        .and_then(|map| world.get::<Tilemap>(map))
-        .and_then(|map| map.layers.get(mode.layer))
-        .is_some_and(|layer| layer.kind == TilemapLayerKind::Terrain);
+    let terrain_layer = active_layer(world)?.terrain;
     let brush = *world.resource::<TileBrush>();
     let id = active_tileset(world)?;
     let tileset =
@@ -337,10 +386,75 @@ fn stroke_write(
     }
 }
 
-/// One frame of a Brush or Eraser stroke. Invoked with no press on the map,
-/// it only makes `tool` the one a press uses. The secondary button erases
-/// with either tool. The first frame paints the pressed cell even when the
-/// button is already up again.
+fn refuse(world: &mut World, err: &str) -> OperatorResult {
+    crate::status_bar::notify_warn(world, format!("Tile tool refused: {err}"));
+    warn_caller(world, format!("tile tool: {err}"));
+    OperatorResult::Cancelled
+}
+
+/// Opens a stroke of `tool` writing `write` on the active layer.
+fn begin_stroke(
+    world: &mut World,
+    tool: TileTool,
+    write: TileWrite,
+) -> Result<TilemapStrokeBuilder, String> {
+    let erase = write == TileWrite::Erase;
+    let label = match tool {
+        TileTool::Rectangle if erase => "Erase rectangle",
+        TileTool::Rectangle => "Fill rectangle",
+        TileTool::Line if erase => "Erase line",
+        TileTool::Line => "Draw line",
+        TileTool::Bucket if erase => "Erase region",
+        TileTool::Bucket => "Bucket fill",
+        _ if erase => "Erase tiles",
+        _ => "Paint tiles",
+    };
+    let mode = *world.resource::<TileEditMode>();
+    let map = mode.map.ok_or("no tilemap is in tile edit mode")?;
+    TilemapStrokeBuilder::begin(world, map, mode.layer, label)
+}
+
+/// The cells of a Rectangle (both corners included, clipped to `bounds`) or
+/// Line from `from` to `to`, or why there are too many.
+fn shape_cells(
+    tool: TileTool,
+    from: CellCoord,
+    to: CellCoord,
+    bounds: Option<IRect>,
+) -> Result<Vec<CellCoord>, String> {
+    let too_many =
+        |count: u64| format!("the shape holds {count} cells, more than {MAX_FILL_CELLS}");
+    if tool != TileTool::Rectangle {
+        let span = to.0.as_i64vec2() - from.0.as_i64vec2();
+        let count = span.x.unsigned_abs() + span.y.unsigned_abs() + 1;
+        if count > MAX_FILL_CELLS as u64 {
+            return Err(too_many(count));
+        }
+        return Ok(orthogonal_line(from, to));
+    }
+    let (mut min, mut max) = (from.0.min(to.0), from.0.max(to.0));
+    if let Some(b) = bounds {
+        min = min.max(b.min);
+        max = max.min(b.max.saturating_sub(IVec2::ONE));
+        if min.cmpgt(max).any() {
+            return Ok(Vec::new());
+        }
+    }
+    let span = (max.as_i64vec2() - min.as_i64vec2()).as_u64vec2() + 1;
+    let count = span.x.saturating_mul(span.y);
+    if count > MAX_FILL_CELLS as u64 {
+        return Err(too_many(count));
+    }
+    Ok((min.y..=max.y)
+        .flat_map(|y| (min.x..=max.x).map(move |x| CellCoord::new(x, y)))
+        .collect())
+}
+
+/// One frame of a stroke. Invoked with no press on the map, it only makes
+/// `tool` the one a press uses. The secondary button erases with any tool.
+/// Brush and Eraser write as the cursor moves, and their first frame paints
+/// the pressed cell even when the button is already up again; Rectangle and
+/// Line write their shape on release.
 fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
     let mut state = std::mem::take(&mut *world.resource_mut::<TileStrokeState>());
     let mouse = world.resource::<ButtonInput<MouseButton>>();
@@ -350,31 +464,18 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
             world.resource_mut::<TileEditMode>().tool = tool;
             return Some(OperatorResult::Finished);
         };
-        let mode = *world.resource::<TileEditMode>();
-        let begun = stroke_write(world, tool, button).and_then(|write| {
-            let label = if write == TileWrite::Erase {
-                "Erase tiles"
-            } else {
-                "Paint tiles"
-            };
-            TilemapStrokeBuilder::begin(
-                world,
-                mode.map.ok_or("no tilemap is in tile edit mode")?,
-                mode.layer,
-                label,
-            )
-            .map(|b| (b, write))
-        });
+        let begun = stroke_write(world, tool, button)
+            .and_then(|write| Ok((begin_stroke(world, tool, write)?, write)));
         match begun {
             Ok(stroke) => state.stroke = Some(stroke),
-            Err(err) => {
-                crate::status_bar::notify_warn(world, format!("Tile stroke refused: {err}"));
-                warn_caller(world, format!("tile stroke: {err}"));
-                return Some(OperatorResult::Cancelled);
-            }
+            Err(err) => return Some(refuse(world, &err)),
+        }
+        if tool.is_shape() {
+            state.last = state.cell;
         }
     }
-    if let Some(cell) = state.cell
+    if !tool.is_shape()
+        && let Some(cell) = state.cell
         && state.last != Some(cell)
         && let Some((builder, write)) = &mut state.stroke
     {
@@ -384,14 +485,276 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
         builder.apply(world, &cells, *write);
         state.last = Some(cell);
     }
-    if held.is_none() {
-        if let Some((builder, _)) = state.stroke {
-            builder.end(world);
-        }
-        return Some(OperatorResult::Finished);
+    if held.is_some() {
+        *world.resource_mut::<TileStrokeState>() = state;
+        return Some(OperatorResult::Running);
     }
-    *world.resource_mut::<TileStrokeState>() = state;
-    Some(OperatorResult::Running)
+    let Some((mut builder, write)) = state.stroke else {
+        return Some(OperatorResult::Finished);
+    };
+    if tool.is_shape()
+        && let (Some(from), Some(to)) = (state.last, state.cell)
+    {
+        let map = world.resource::<TileEditMode>().map;
+        let bounds = map
+            .and_then(|map| world.get::<Tilemap>(map))
+            .and_then(|t| t.bounds);
+        match shape_cells(tool, from, to, bounds) {
+            Ok(cells) => {
+                builder.apply(world, &cells, write);
+            }
+            Err(err) => {
+                builder.cancel(world);
+                return Some(refuse(world, &err));
+            }
+        }
+    }
+    builder.end(world);
+    Some(OperatorResult::Finished)
+}
+
+/// Draw a rectangle.
+#[operator(
+    id = "tilemap.rectangle",
+    label = "Tile Rectangle",
+    description = "Choose the Rectangle, or fill the rectangle between the press and release \
+                   cells with the brush; the secondary button erases it.",
+    modal = true,
+    allows_undo = false,
+    is_available = has_tile_map,
+    cancel = cancel_tile_stroke
+)]
+pub(crate) fn tilemap_rectangle(
+    _: In<OperatorParameters>,
+    world: &mut World,
+) -> Option<OperatorResult> {
+    tile_stroke(world, TileTool::Rectangle)
+}
+
+/// Draw a line.
+#[operator(
+    id = "tilemap.line",
+    label = "Tile Line",
+    description = "Choose the Line, or draw a line of cells from the press to the release cell \
+                   with the brush; the secondary button erases it.",
+    modal = true,
+    allows_undo = false,
+    is_available = has_tile_map,
+    cancel = cancel_tile_stroke
+)]
+pub(crate) fn tilemap_line(_: In<OperatorParameters>, world: &mut World) -> Option<OperatorResult> {
+    tile_stroke(world, TileTool::Line)
+}
+
+/// A tool that acts on a press is available in tile edit mode while no
+/// stroke is held.
+fn can_act_on_press(
+    mode: Res<TileEditMode>,
+    maps: Query<(), With<Tilemap>>,
+    state: Res<TileStrokeState>,
+    active: ActiveModalQuery,
+) -> bool {
+    mode.map.is_some_and(|map| maps.contains(map))
+        && state.stroke.is_none()
+        && !active.is_modal_running()
+}
+
+/// The press a tool acting on a press takes, or `None` when there is none.
+/// Its callers return first while a stroke is held, so no stroke is dropped.
+fn take_press(world: &mut World) -> Option<(CellCoord, MouseButton)> {
+    let state = world.resource::<TileStrokeState>();
+    let press = state.cell.zip(state.button);
+    *world.resource_mut::<TileStrokeState>() = TileStrokeState::default();
+    press
+}
+
+/// Flood fill.
+#[operator(
+    id = "tilemap.bucket",
+    label = "Tile Bucket",
+    description = "Choose the Bucket, or fill the cells matching the pressed one with the \
+                   brush; the secondary button erases them.",
+    allows_undo = false,
+    is_available = can_act_on_press,
+    params(contiguous(
+        bool,
+        default = true,
+        doc = "Fill only the matching cells joined to the pressed one; off fills every \
+               matching cell on the layer."
+    )),
+)]
+pub(crate) fn tilemap_bucket(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if world.resource::<TileStrokeState>().stroke.is_some() {
+        return OperatorResult::Cancelled;
+    }
+    let Some((cell, button)) = take_press(world) else {
+        world.resource_mut::<TileEditMode>().tool = TileTool::Bucket;
+        return OperatorResult::Finished;
+    };
+    let contiguous = params.as_bool("contiguous").unwrap_or(true);
+    match bucket_fill(world, cell, button, contiguous) {
+        Ok(()) => OperatorResult::Finished,
+        Err(err) => refuse(world, &err),
+    }
+}
+
+fn bucket_fill(
+    world: &mut World,
+    start: CellCoord,
+    button: MouseButton,
+    contiguous: bool,
+) -> Result<(), String> {
+    let active = active_layer(world)?;
+    let write = stroke_write(world, TileTool::Bucket, button)?;
+    let bounds = (world.get::<Tilemap>(active.map)).and_then(|t| t.bounds);
+    let store = world.resource::<TilemapDataStore>();
+    let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
+    let cells = fill_cells(layer, active.terrain, bounds, start, write, contiguous)?;
+    if cells.is_empty() {
+        return Ok(());
+    }
+    let mut builder = begin_stroke(world, TileTool::Bucket, write)?;
+    builder.apply(world, &cells, write);
+    builder.end(world);
+    Ok(())
+}
+
+/// The cells a fill writing `write` from `start` reaches: those matching its
+/// terrain on a terrain layer, or its tile on a tile layer, joined to it when
+/// `contiguous`. No cells when the write would leave `start` as it is. A fill
+/// stays inside the map's bounds, or on an unbounded map inside the bounds of
+/// the painted cells and `start`, grown by one chunk.
+fn fill_cells(
+    layer: Option<&LayerData>,
+    terrain_layer: bool,
+    bounds: Option<IRect>,
+    start: CellCoord,
+    write: TileWrite,
+    contiguous: bool,
+) -> Result<Vec<CellCoord>, String> {
+    let authoring = layer.and_then(|l| l.authoring.as_ref());
+    let value = |cell: CellCoord| {
+        if terrain_layer {
+            TileWrite::Terrain(authoring.map_or(0, |a| a.terrain.get(cell)))
+        } else {
+            TileWrite::Tile(layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)))
+        }
+    };
+    let target = value(start);
+    let empty = target == TileWrite::Terrain(0) || target == TileWrite::Tile(TileRef::EMPTY);
+    if write == target || (write == TileWrite::Erase && empty) {
+        return Ok(Vec::new());
+    }
+    let region = match bounds {
+        Some(b) => CellRect {
+            min: b.min,
+            max: b.max,
+        },
+        None => {
+            let painted = if terrain_layer {
+                authoring.and_then(|a| a.terrain.painted_bounds())
+            } else {
+                layer.and_then(|l| l.tiles.painted_bounds())
+            };
+            let seed = start.0;
+            let (min, max) = painted.map_or((seed, seed + 1), |p| {
+                (p.min.min(seed), p.max.max(seed.saturating_add(IVec2::ONE)))
+            });
+            CellRect {
+                min: min.saturating_sub(IVec2::splat(CHUNK_SIZE)),
+                max: max.saturating_add(IVec2::splat(CHUNK_SIZE)),
+            }
+        }
+    };
+    let inside = |cell: CellCoord| cell.0.cmpge(region.min).all() && cell.0.cmplt(region.max).all();
+    if !inside(start) {
+        return Ok(Vec::new());
+    }
+    let too_many = || format!("the fill reaches more than {MAX_FILL_CELLS} cells");
+    if contiguous {
+        let mut seen = std::collections::HashSet::from([start]);
+        let mut open = vec![start];
+        while let Some(cell) = open.pop() {
+            for step in [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
+                let next = CellCoord(cell.0.saturating_add(step));
+                if inside(next) && value(next) == target && seen.insert(next) {
+                    if seen.len() > MAX_FILL_CELLS {
+                        return Err(too_many());
+                    }
+                    open.push(next);
+                }
+            }
+        }
+        let mut cells: Vec<CellCoord> = seen.into_iter().collect();
+        cells.sort_unstable();
+        return Ok(cells);
+    }
+    let candidates: Box<dyn Iterator<Item = CellCoord>> = if empty {
+        Box::new(
+            (region.min.y..region.max.y)
+                .flat_map(move |y| (region.min.x..region.max.x).map(move |x| CellCoord::new(x, y))),
+        )
+    } else if terrain_layer {
+        Box::new((authoring.into_iter()).flat_map(|a| a.terrain.cells().map(|(c, _)| c)))
+    } else {
+        Box::new((layer.into_iter()).flat_map(|l| l.tiles.cells().map(|(c, _)| c)))
+    };
+    let mut found = Vec::new();
+    for cell in candidates.filter(|&c| inside(c) && value(c) == target) {
+        found.push(cell);
+        if found.len() > MAX_FILL_CELLS {
+            return Err(too_many());
+        }
+    }
+    Ok(found)
+}
+
+/// Pick the brush from a cell.
+#[operator(
+    id = "tilemap.picker",
+    label = "Tile Picker",
+    description = "Choose the Picker, or load the brush from the pressed cell: its terrain on a \
+                   terrain layer, and its hand-placed or resolved tile.",
+    allows_undo = false,
+    is_available = can_act_on_press
+)]
+pub(crate) fn tilemap_picker(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if world.resource::<TileStrokeState>().stroke.is_some() {
+        return OperatorResult::Cancelled;
+    }
+    let Some((cell, _)) = take_press(world) else {
+        world.resource_mut::<TileEditMode>().tool = TileTool::Picker;
+        return OperatorResult::Finished;
+    };
+    if let Err(err) = pick(world, cell) {
+        return refuse(world, &err);
+    }
+    let mut mode = world.resource_mut::<TileEditMode>();
+    if mode.tool == TileTool::Picker {
+        mode.tool = TileTool::Brush;
+    }
+    OperatorResult::Finished
+}
+
+fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
+    let active = active_layer(world)?;
+    let store = world.resource::<TilemapDataStore>();
+    let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
+    let authoring = layer.and_then(|l| l.authoring.as_ref());
+    let terrain = (authoring.filter(|_| active.terrain)).map_or(0, |a| a.terrain.get(cell));
+    let tile = (authoring.and_then(|a| a.overrides.get(&cell).copied()))
+        .unwrap_or_else(|| layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)));
+    if terrain == 0 && tile.is_empty() {
+        return Err(format!("cell {},{} is empty", cell.0.x, cell.0.y));
+    }
+    let mut brush = world.resource_mut::<TileBrush>();
+    if terrain != 0 {
+        brush.terrain = terrain;
+    }
+    if !tile.is_empty() {
+        brush.tile = tile;
+    }
+    Ok(())
 }
 
 /// The map cell under a pointer on a 2D panel's stage in Edit mode, and
@@ -415,12 +778,13 @@ fn stage_cell(
     Some((cell_at(point, map_transform, tilemap.cell_size), inside))
 }
 
-/// A press on the stage in tile edit mode starts a stroke with the active
-/// tool.
+/// A press on the stage in tile edit mode runs the active tool, or the
+/// Picker while Alt is held.
 fn on_tile_press(
     event: On<PointerPress>,
     ui_scale: Res<UiScale>,
     mode: Res<TileEditMode>,
+    keys: Res<ButtonInput<KeyCode>>,
     hosts: Query<&Viewport2dPanelHost>,
     stages: Query<(&ComputedNode, &UiGlobalTransform), With<Scene2dViewport>>,
     maps: Query<(&GlobalTransform, &Tilemap)>,
@@ -442,9 +806,15 @@ fn on_tile_press(
     };
     state.cell = Some(cell);
     state.button = Some(button);
+    let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let id = match mode.tool {
+        _ if alt => TilemapPickerOp::ID,
         TileTool::Brush => TilemapBrushOp::ID,
         TileTool::Eraser => TilemapEraserOp::ID,
+        TileTool::Rectangle => TilemapRectangleOp::ID,
+        TileTool::Line => TilemapLineOp::ID,
+        TileTool::Bucket => TilemapBucketOp::ID,
+        TileTool::Picker => TilemapPickerOp::ID,
     };
     commands.queue(move |world: &mut World| {
         let result = world
