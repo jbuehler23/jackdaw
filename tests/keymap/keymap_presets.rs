@@ -328,7 +328,7 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
 }
 
 /// The tile tool keys live on the tile edit context, which stays inactive
-/// until tile edit mode starts, and no other operator claims them. Digit1,
+/// until tile edit mode starts; only L and I are shared, with Core. Digit1,
 /// which enters the mode, is shared with vertex mode only.
 #[test]
 fn the_tile_tool_keys_claim_only_their_tools() {
@@ -342,7 +342,12 @@ fn the_tile_tool_keys_claim_only_their_tools() {
         ],
         "Digit1 is shared only with vertex mode, split by is_available",
     );
-    for (key, operator) in [("KeyB", "tilemap.brush"), ("KeyD", "tilemap.eraser")] {
+    for (key, operator) in [
+        ("KeyB", "tilemap.brush"),
+        ("KeyD", "tilemap.eraser"),
+        ("KeyU", "tilemap.rectangle"),
+        ("KeyG", "tilemap.bucket"),
+    ] {
         assert_eq!(
             operators_on(&defaults, &PresetInput::key(key)),
             vec![operator.to_string()],
@@ -353,6 +358,23 @@ fn the_tile_tool_keys_claim_only_their_tools() {
                 .any(|line| line.contains(operator)),
             "{operator} collided with something already bound",
         );
+    }
+    // L and I are shared with Core chords; the tile context sits above Core
+    // and consumes them while tile edit mode is on.
+    for (key, tile, core) in [
+        ("KeyL", "tilemap.line", "gizmo.space.toggle"),
+        ("KeyI", "tilemap.picker", "brush.mesh.inset"),
+    ] {
+        assert_eq!(
+            operators_on(&defaults, &PresetInput::key(key)),
+            vec![core.to_string(), tile.to_string()],
+        );
+        let shared: Vec<String> = find_conflicts(&defaults)
+            .into_iter()
+            .filter(|line| line.contains(tile))
+            .collect();
+        assert_eq!(shared.len(), 1, "{shared:?}");
+        assert!(shared[0].contains(core), "{shared:?}");
     }
 
     let contexts: Vec<bool> = app

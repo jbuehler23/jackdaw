@@ -548,6 +548,25 @@ mod on_the_stage {
     }
 
     #[test]
+    fn alt_picks_with_any_tool() {
+        let (mut app, _dir, map, _) = stage_app();
+        app.world_mut().resource_mut::<Selection>().entities = vec![map];
+        enter(&mut app, map);
+        pointer(&mut app, Vec2::new(8.0, 8.0), "click", "left");
+        assert_eq!(tile(&mut app, map, 0, 0), TileRef::new(0));
+        app.world_mut().resource_mut::<TileBrush>().tile = TileRef::new(7);
+        let count = entries(&app);
+
+        run(
+            &mut app,
+            "input.pointer space=world x=8 y=8 action=click button=left mods=alt",
+        );
+        assert_eq!(app.world().resource::<TileBrush>().tile, TileRef::new(0));
+        assert_eq!(entries(&app), count, "a pick leaves no entry");
+        assert_eq!(app.world().resource::<TileEditMode>().tool, TileTool::Brush);
+    }
+
+    #[test]
     fn a_second_button_mid_stroke_is_ignored() {
         let (mut app, _dir, map, _) = stage_app();
         app.world_mut().resource_mut::<Selection>().entities = vec![map];
@@ -610,4 +629,469 @@ mod on_the_stage {
             "the map took the stroke"
         );
     }
+}
+
+const RECTANGLE: &str = "tilemap.rectangle";
+const LINE: &str = "tilemap.line";
+const BUCKET: &str = "tilemap.bucket";
+const PICKER: &str = "tilemap.picker";
+
+/// A press and release on one cell with a tool that acts on the press.
+fn click(app: &mut App, id: &'static str, button: MouseButton, cell: (i32, i32)) -> OperatorResult {
+    click_with(app, id, button, cell, OperatorParameters::default())
+}
+
+fn fill(app: &mut App, cell: (i32, i32), contiguous: bool) -> OperatorResult {
+    let mut params = OperatorParameters::default();
+    (params.0).insert("contiguous".into(), PropertyValue::Bool(contiguous));
+    click_with(app, BUCKET, MouseButton::Left, cell, params)
+}
+
+fn click_with(
+    app: &mut App,
+    id: &'static str,
+    button: MouseButton,
+    (x, y): (i32, i32),
+    params: OperatorParameters,
+) -> OperatorResult {
+    {
+        let mut state = app.world_mut().resource_mut::<TileStrokeState>();
+        state.cell = Some(CellCoord::new(x, y));
+        state.button = Some(button);
+    }
+    let result = app
+        .world_mut()
+        .operator(id)
+        .params(params)
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: false,
+        })
+        .call()
+        .expect("the tool dispatches");
+    settle(app);
+    result
+}
+
+fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
+    let map = spawn_map(
+        app,
+        vec![layer(TilemapLayerKind::Tile, default())],
+        tile_layer(cells),
+    );
+    enter(app, map);
+    map
+}
+
+fn painted(app: &mut App, map: Entity) -> usize {
+    stored(app, map).layers[0].tiles.cells().count()
+}
+
+#[test]
+fn the_shape_tools_need_a_map_in_tile_edit_mode() {
+    let (mut app, _dir) = project_app();
+    for id in [RECTANGLE, LINE, BUCKET, PICKER] {
+        assert!(!available(&mut app, id), "{id} without a map");
+    }
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    enter(&mut app, map);
+    for (id, tool) in [
+        (RECTANGLE, TileTool::Rectangle),
+        (LINE, TileTool::Line),
+        (BUCKET, TileTool::Bucket),
+        (PICKER, TileTool::Picker),
+    ] {
+        assert!(available(&mut app, id), "{id}");
+        run(&mut app, id);
+        assert_eq!(app.world().resource::<TileEditMode>().tool, tool);
+    }
+}
+
+#[test]
+fn a_rectangle_fills_on_release_as_one_entry() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    enter(&mut app, map);
+    assert_eq!(
+        set_brush(&mut app, "terrain", "2"),
+        OperatorResult::Finished
+    );
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    hold(
+        &mut app,
+        RECTANGLE,
+        MouseButton::Left,
+        &[(4, 5), (9, 1), (2, 2)],
+    );
+    assert_eq!(bytes(&mut app, map), before, "nothing written while held");
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .release(MouseButton::Left);
+    settle(&mut app);
+    for y in 2..=5 {
+        for x in 2..=4 {
+            assert_eq!(terrain(&mut app, map, x, y), 2, "{x},{y}");
+        }
+    }
+    assert_eq!(terrain(&mut app, map, 5, 2), 1, "outside the final rect");
+    assert_resolved(&mut app, map);
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+#[test]
+fn the_secondary_button_rectangle_erases() {
+    let (mut app, _dir) = project_app();
+    let cells: Vec<_> = (0..4)
+        .flat_map(|y| (0..4).map(move |x| (x, y, TileRef::new(5))))
+        .collect();
+    let map = tile_map(&mut app, &cells);
+    run(&mut app, RECTANGLE);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    stroke(&mut app, RECTANGLE, MouseButton::Right, &[(1, 1), (2, 3)]);
+    for (x, y, _) in &cells {
+        let erased = (1..=2).contains(x) && (1..=3).contains(y);
+        assert_eq!(tile(&mut app, map, *x, *y).is_empty(), erased, "{x},{y}");
+    }
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+#[test]
+fn a_line_joins_the_press_and_release_cells() {
+    let (mut app, _dir) = project_app();
+    let map = tile_map(&mut app, &[]);
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    stroke(&mut app, LINE, MouseButton::Left, &[(0, 0), (2, 5), (6, 3)]);
+    let line = orthogonal_line(CellCoord::new(0, 0), CellCoord::new(6, 3));
+    assert_eq!(painted(&mut app, map), line.len());
+    for CellCoord(IVec2 { x, y }) in line {
+        assert_eq!(tile(&mut app, map, x, y), TileRef::new(7), "{x},{y}");
+    }
+    assert!(
+        tile(&mut app, map, 2, 5).is_empty(),
+        "a passing cell is not drawn"
+    );
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+fn two_islands() -> TilemapData {
+    let mut data = grass_patch();
+    let authoring = data.layers[0].authoring.as_mut().expect("authoring");
+    authoring.terrain.set(CellCoord::new(10, 10), 1);
+    data
+}
+
+#[test]
+fn the_bucket_fills_terrain_contiguous_or_across_the_layer() {
+    for contiguous in [true, false] {
+        let (mut app, _dir) = project_app();
+        let map = spawn_map(&mut app, vec![ground_terrain()], two_islands());
+        enter(&mut app, map);
+        assert_eq!(
+            set_brush(&mut app, "terrain", "2"),
+            OperatorResult::Finished
+        );
+        let (before, count) = (bytes(&mut app, map), entries(&app));
+
+        assert_eq!(fill(&mut app, (2, 2), contiguous), OperatorResult::Finished);
+        for y in 0..6 {
+            for x in 0..6 {
+                assert_eq!(terrain(&mut app, map, x, y), 2, "{x},{y}");
+            }
+        }
+        let island = if contiguous { 1 } else { 2 };
+        assert_eq!(
+            terrain(&mut app, map, 10, 10),
+            island,
+            "contiguous {contiguous}"
+        );
+        assert_eq!(terrain(&mut app, map, 7, 7), 0, "the background stays");
+        assert_resolved(&mut app, map);
+        assert_undo_redo(&mut app, map, &before, count);
+    }
+}
+
+#[test]
+fn the_bucket_replaces_matching_tiles_contiguous_or_across_the_layer() {
+    for contiguous in [true, false] {
+        let (mut app, _dir) = project_app();
+        let five = TileRef::new(5);
+        let map = tile_map(
+            &mut app,
+            &[
+                (0, 0, five),
+                (1, 0, five),
+                (3, 0, five),
+                (2, 0, TileRef::new(1)),
+            ],
+        );
+        assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+        let (before, count) = (bytes(&mut app, map), entries(&app));
+
+        assert_eq!(fill(&mut app, (0, 0), contiguous), OperatorResult::Finished);
+        assert_eq!(tile(&mut app, map, 1, 0), TileRef::new(7));
+        assert_eq!(tile(&mut app, map, 2, 0), TileRef::new(1));
+        let far = if contiguous { five } else { TileRef::new(7) };
+        assert_eq!(tile(&mut app, map, 3, 0), far, "contiguous {contiguous}");
+        assert_eq!(painted(&mut app, map), 4, "no empty cell was filled");
+        assert_undo_redo(&mut app, map, &before, count);
+    }
+}
+
+#[test]
+fn the_secondary_button_bucket_erases_the_region() {
+    let (mut app, _dir) = project_app();
+    let five = TileRef::new(5);
+    let map = tile_map(&mut app, &[(0, 0, five), (1, 0, five), (3, 0, five)]);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Right, (1, 0)),
+        OperatorResult::Finished
+    );
+    assert_eq!(painted(&mut app, map), 1);
+    assert_eq!(tile(&mut app, map, 3, 0), five);
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+/// An empty region on an unbounded map fills the bounds of the painted cells
+/// and the pressed one, grown by one chunk.
+#[test]
+fn an_empty_fill_on_an_unbounded_map_stops_a_chunk_past_the_painting() {
+    let (mut app, _dir) = project_app();
+    let map = tile_map(&mut app, &[(0, 0, TileRef::new(5))]);
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Left, (5, 5)),
+        OperatorResult::Finished
+    );
+    assert_eq!(painted(&mut app, map), 70 * 70);
+    assert_eq!(tile(&mut app, map, -32, -32), TileRef::new(7));
+    assert_eq!(tile(&mut app, map, 37, 37), TileRef::new(7));
+    assert!(tile(&mut app, map, 38, 0).is_empty());
+    assert!(tile(&mut app, map, 0, -33).is_empty());
+    assert_eq!(tile(&mut app, map, 0, 0), TileRef::new(5));
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+#[test]
+fn an_empty_fill_on_a_bounded_map_stays_in_the_bounds() {
+    let (mut app, _dir) = project_app();
+    let map = tile_map(&mut app, &[(0, 0, TileRef::new(5))]);
+    app.world_mut()
+        .get_mut::<jackdaw_scene_types::Tilemap>(map)
+        .expect("the map")
+        .bounds = Some(IRect::new(-2, -2, 6, 6));
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Left, (3, 3)),
+        OperatorResult::Finished
+    );
+    assert_eq!(painted(&mut app, map), 8 * 8);
+    assert!(tile(&mut app, map, 6, 0).is_empty());
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+#[test]
+fn a_fill_past_the_cap_is_refused() {
+    let (mut app, _dir) = project_app();
+    let five = TileRef::new(5);
+    let map = tile_map(&mut app, &[(0, 0, five), (1100, 1100, five)]);
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Left, (5, 5)),
+        OperatorResult::Cancelled
+    );
+    assert_eq!(bytes(&mut app, map), before);
+    assert_eq!(entries(&app), count);
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    let limit = jackdaw::tile_tools::MAX_FILL_CELLS.to_string();
+    assert!(notice.text().contains(&limit), "{}", notice.text());
+}
+
+#[test]
+fn the_picker_loads_the_brush_and_leaves_no_entry() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    enter(&mut app, map);
+    assert_eq!(
+        set_brush(&mut app, "terrain", "2"),
+        OperatorResult::Finished
+    );
+    run(&mut app, PICKER);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    assert_eq!(
+        click(&mut app, PICKER, MouseButton::Left, (2, 2)),
+        OperatorResult::Finished
+    );
+    let resolved = tile(&mut app, map, 2, 2);
+    let brush = *app.world().resource::<TileBrush>();
+    assert_eq!((brush.terrain, brush.tile), (1, resolved));
+    assert_eq!(app.world().resource::<TileEditMode>().tool, TileTool::Brush);
+    assert_eq!(bytes(&mut app, map), before);
+    assert_eq!(entries(&app), count);
+
+    assert_eq!(
+        click(&mut app, PICKER, MouseButton::Left, (20, 20)),
+        OperatorResult::Cancelled,
+        "an empty cell has nothing to pick"
+    );
+    assert_eq!(*app.world().resource::<TileBrush>(), brush);
+}
+
+#[test]
+fn the_picker_takes_a_tile_layers_tile() {
+    let (mut app, _dir) = project_app();
+    tile_map(&mut app, &[(1, 1, TileRef::new(5))]);
+    let count = entries(&app);
+    assert_eq!(
+        click(&mut app, PICKER, MouseButton::Left, (1, 1)),
+        OperatorResult::Finished
+    );
+    assert_eq!(app.world().resource::<TileBrush>().tile, TileRef::new(5));
+    assert_eq!(entries(&app), count);
+}
+
+/// The non-modal tools wait while a held stroke runs, and the stroke still
+/// ends as one entry.
+#[test]
+fn bucket_and_picker_wait_for_a_held_stroke() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    enter(&mut app, map);
+    assert_eq!(
+        set_brush(&mut app, "terrain", "2"),
+        OperatorResult::Finished
+    );
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+
+    hold(&mut app, BRUSH, MouseButton::Left, &[(2, 2), (3, 2)]);
+    assert!(!available(&mut app, BUCKET));
+    assert!(!available(&mut app, PICKER));
+    let _ = app.world_mut().operator(BUCKET).call();
+    let _ = app.world_mut().operator(PICKER).call();
+    app.world_mut().resource_mut::<TileStrokeState>().cell = Some(CellCoord::new(4, 2));
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .release(MouseButton::Left);
+    settle(&mut app);
+    for x in 2..=4 {
+        assert_eq!(terrain(&mut app, map, x, 2), 2, "{x},2");
+    }
+    assert_eq!(app.world().resource::<TileEditMode>().tool, TileTool::Brush);
+    assert_undo_redo(&mut app, map, &before, count);
+}
+
+#[test]
+fn a_bucket_call_without_the_param_fills_contiguous() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], two_islands());
+    enter(&mut app, map);
+    assert_eq!(
+        set_brush(&mut app, "terrain", "2"),
+        OperatorResult::Finished
+    );
+    assert_eq!(fill(&mut app, (20, 20), false), OperatorResult::Finished);
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Left, (2, 2)),
+        OperatorResult::Finished
+    );
+    assert_eq!(terrain(&mut app, map, 2, 2), 2);
+    assert_eq!(terrain(&mut app, map, 10, 10), 1, "the island stays");
+}
+
+#[test]
+fn a_background_fill_on_a_300_square_map_succeeds() {
+    let (mut app, _dir) = project_app();
+    let map = tile_map(&mut app, &[(0, 0, TileRef::new(5))]);
+    app.world_mut()
+        .get_mut::<jackdaw_scene_types::Tilemap>(map)
+        .expect("the map")
+        .bounds = Some(IRect::new(0, 0, 300, 300));
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let count = entries(&app);
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Left, (5, 5)),
+        OperatorResult::Finished
+    );
+    assert_eq!(painted(&mut app, map), 300 * 300);
+    assert_eq!(entries(&app), count + 1);
+}
+
+/// Erasing an empty cell, or filling with the value already there, reaches
+/// no cell: no entry and no notice, even where a flood would pass the cap.
+#[test]
+fn a_fill_that_writes_what_is_there_does_nothing() {
+    let (mut app, _dir) = project_app();
+    let five = TileRef::new(5);
+    let map = tile_map(&mut app, &[(0, 0, five), (1100, 1100, five)]);
+    assert_eq!(set_brush(&mut app, "tile", "5"), OperatorResult::Finished);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+    let notice = |app: &App| {
+        (app.world().resource::<jackdaw::status_bar::StatusNotice>())
+            .text()
+            .to_string()
+    };
+    let quiet = notice(&app);
+
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Right, (5, 5)),
+        OperatorResult::Finished
+    );
+    assert_eq!(
+        click(&mut app, BUCKET, MouseButton::Left, (0, 0)),
+        OperatorResult::Finished
+    );
+    assert_eq!(bytes(&mut app, map), before);
+    assert_eq!(entries(&app), count);
+    assert_eq!(notice(&app), quiet);
+}
+
+#[test]
+fn a_rectangle_past_the_bounds_is_clipped_before_the_cap() {
+    let (mut app, _dir) = project_app();
+    let map = tile_map(&mut app, &[]);
+    app.world_mut()
+        .get_mut::<jackdaw_scene_types::Tilemap>(map)
+        .expect("the map")
+        .bounds = Some(IRect::new(0, 0, 8, 8));
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let count = entries(&app);
+    stroke(
+        &mut app,
+        RECTANGLE,
+        MouseButton::Left,
+        &[(2, 2), (3000, 3000)],
+    );
+    assert_eq!(painted(&mut app, map), 6 * 6);
+    assert_eq!(entries(&app), count + 1);
+}
+
+#[test]
+fn shapes_between_extreme_cells_are_refused() {
+    let (mut app, _dir) = project_app();
+    let map = tile_map(&mut app, &[]);
+    let (before, count) = (bytes(&mut app, map), entries(&app));
+    let (lo, hi) = ((i32::MIN, i32::MIN), (i32::MAX, i32::MAX));
+    for (id, cells) in [
+        (RECTANGLE, [lo, hi]),
+        (LINE, [lo, hi]),
+        (LINE, [(i32::MIN, 0), (i32::MAX, 0)]),
+    ] {
+        stroke(&mut app, id, MouseButton::Left, &cells);
+        let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+        assert!(notice.text().contains("refused"), "{id}: {}", notice.text());
+    }
+    assert_eq!(bytes(&mut app, map), before);
+    assert_eq!(entries(&app), count);
 }
