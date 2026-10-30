@@ -48,6 +48,7 @@ pub(crate) fn plugin(app: &mut App) {
     label = "Sprite",
     description = "Add a sprite to the open 2D world scene.",
     allows_undo = false,
+    unavailable_reason = sprite_needs_2d_scene,
     is_available = can_add_sprite,
     params(
         path(
@@ -132,6 +133,34 @@ impl<'w, 's> SpriteAddGate<'w, 's> {
 
 fn can_add_sprite(gate: SpriteAddGate) -> bool {
     gate.allows()
+}
+
+fn open_2d_scene_exists(world: &World) -> bool {
+    let Some(root) = world.component_id::<Scene2dRoot>() else {
+        return false;
+    };
+    let child = world.component_id::<ChildOf>();
+    world.archetypes().iter().any(|archetype| {
+        !archetype.is_empty()
+            && archetype.contains(root)
+            && !child.is_some_and(|child| archetype.contains(child))
+    })
+}
+
+fn needs_2d_scene(world: &World, what: &str) -> Option<String> {
+    (!open_2d_scene_exists(world)).then(|| format!("Open a 2D scene to add {what}."))
+}
+
+pub(crate) fn sprite_needs_2d_scene(world: &World) -> Option<String> {
+    needs_2d_scene(world, "sprites")
+}
+
+pub(crate) fn camera_needs_2d_scene(world: &World) -> Option<String> {
+    needs_2d_scene(world, "a 2D camera")
+}
+
+pub(crate) fn empty_needs_2d_scene(world: &World) -> Option<String> {
+    needs_2d_scene(world, "an empty 2D entity")
 }
 
 fn default_name(path: Option<&str>) -> String {

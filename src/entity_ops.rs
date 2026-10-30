@@ -2335,6 +2335,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<crate::sprite_props::SpriteYSortOp>()
         .register_operator::<crate::pixel_camera::CameraPixelCanvasOp>()
         .register_operator::<EntityAddCamera2dOp>()
+        .register_operator::<EntityAddEmpty2dOp>()
         .register_operator::<crate::add_entity_picker::EntityAddPickerOp>();
 
     #[cfg(feature = "multiplayer")]
@@ -2752,6 +2753,7 @@ pub fn entity_add_image(_: In<OperatorParameters>, mut commands: Commands) -> Op
 #[operator(
     id = "entity.add.camera_2d",
     label = "2D Camera",
+    unavailable_reason = crate::sprite_ops::camera_needs_2d_scene,
     is_available = can_add_camera_2d
 )]
 pub(crate) fn entity_add_camera_2d(
@@ -2768,8 +2770,30 @@ fn can_add_camera_2d(gate: crate::sprite_ops::SpriteAddGate) -> bool {
     gate.allows()
 }
 
+fn can_add_empty_2d(gate: crate::sprite_ops::SpriteAddGate) -> bool {
+    gate.allows()
+}
+
 #[operator(id = "entity.add.empty", label = "Empty")]
 pub(crate) fn entity_add_empty(
+    _: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        create_entity_in_world(world, EntityTemplate::Empty);
+    });
+    OperatorResult::Finished
+}
+
+/// Add an empty entity to the open 2D world scene.
+#[operator(
+    id = "entity.add.empty_2d",
+    label = "Empty 2D",
+    description = "Add an empty entity to the open 2D world scene.",
+    unavailable_reason = crate::sprite_ops::empty_needs_2d_scene,
+    is_available = can_add_empty_2d
+)]
+pub(crate) fn entity_add_empty_2d(
     _: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {

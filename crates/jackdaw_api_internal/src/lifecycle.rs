@@ -95,6 +95,7 @@ pub struct OperatorEntity {
     pub(crate) modal: bool,
     pub(crate) allows_undo: bool,
     pub(crate) remote_hidden: Option<&'static str>,
+    pub(crate) unavailable_reason: Option<crate::operator::UnavailableReason>,
 }
 
 impl OperatorEntity {
@@ -141,6 +142,18 @@ impl OperatorEntity {
     /// when it is. Mirrors [`crate::Operator::REMOTE_HIDDEN`].
     pub fn remote_hidden(&self) -> Option<&'static str> {
         self.remote_hidden
+    }
+
+    /// Mirrors [`crate::Operator::UNAVAILABLE_REASON`]. Meaningful only while
+    /// the operator's availability check fails.
+    pub fn unavailable_reason(&self, world: &World) -> Option<String> {
+        self.unavailable_reason.and_then(|reason| reason(world))
+    }
+
+    /// The reason function itself, for callers that read it once and call it
+    /// per button.
+    pub fn unavailable_reason_fn(&self) -> Option<crate::operator::UnavailableReason> {
+        self.unavailable_reason
     }
 }
 

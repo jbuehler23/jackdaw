@@ -26,6 +26,10 @@ use syn::{
 ///   state. Runs before the execute system on every `World::operator`
 ///   call and via `World::is_operator_available`. If it returns
 ///   `false`, the operator returns an error without executing.
+/// - `unavailable_reason`: path to a `fn(&World) -> Option<String>` read
+///   only while the availability check fails. Its text replaces the
+///   description in the tooltip of a disabled button or menu row; `None`
+///   keeps the description.
 /// - `cancel`: path to a Bevy system invoked when the operator is
 ///   cancelled.
 /// - `name`: override the generated struct name. Default is
@@ -74,6 +78,7 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
     let mut modal: bool = false;
     let mut allows_undo: bool = true;
     let mut remote_hidden: Option<String> = None;
+    let mut unavailable_reason: Option<Path> = None;
     let mut name_override: Option<String> = None;
     let mut is_available: Option<Path> = None;
     let mut cancel: Option<Path> = None;
@@ -122,6 +127,17 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
                             .into();
                         };
                         remote_hidden = Some(reason.value());
+                    }
+                    "unavailable_reason" => {
+                        let Some(path) = as_path(&nv.value) else {
+                            return syn::Error::new(
+                                nv.value.span(),
+                                "`unavailable_reason` must be the path of a `fn(&World) -> Option<String>`",
+                            )
+                            .to_compile_error()
+                            .into();
+                        };
+                        unavailable_reason = Some(path);
                     }
                     "name" => {
                         if let Some(s) = as_lit_str(&nv.value) {
@@ -237,6 +253,13 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
         None => quote! { None },
     };
 
+    let unavailable_reason_impl = unavailable_reason.map(|path| {
+        quote! {
+            const UNAVAILABLE_REASON: ::core::option::Option<#api_crate::prelude::UnavailableReason> =
+                ::core::option::Option::Some(#path as #api_crate::prelude::UnavailableReason);
+        }
+    });
+
     let expanded = quote! {
         #[derive(::core::default::Default)]
         #vis struct #struct_name;
@@ -248,6 +271,7 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
             const MODAL: bool = #modal;
             const ALLOWS_UNDO: bool = #allows_undo;
             const REMOTE_HIDDEN: Option<&'static str> = #remote_hidden_tokens;
+            #unavailable_reason_impl
 
             #parameters_const
 

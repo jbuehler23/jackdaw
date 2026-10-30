@@ -111,7 +111,8 @@ pub fn open_add_entity_picker(
     }
 
     // The picker adds an entity to the scene, so the rows that write an asset
-    // file instead stay in the Add menu.
+    // file instead stay in the Add menu, and so do the rows whose operator
+    // cannot run now.
     let items: Vec<AddMenuItem> = collect_add_menu_items(world)
         .into_iter()
         .filter(|item| {
@@ -119,6 +120,7 @@ pub fn open_add_entity_picker(
                 .action
                 .starts_with(crate::creation_taxonomy::ASSET_ACTION_PREFIX)
         })
+        .filter(|item| operator_available(world, &item.action))
         .collect();
 
     let picker = PickerProps::new(spawn_item, on_select)
@@ -134,6 +136,13 @@ pub fn open_add_entity_picker(
         crate::BlocksCameraInput,
         picker,
     ));
+}
+
+fn operator_available(world: &mut World, action: &str) -> bool {
+    let Some(id) = action.strip_prefix("op:") else {
+        return true;
+    };
+    world.operator(id.to_owned()).is_available().unwrap_or(true)
 }
 
 fn spawn_item(

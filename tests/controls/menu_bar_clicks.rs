@@ -301,3 +301,101 @@ fn the_row_under_the_pointer_is_the_one_that_runs() {
     );
     let _ = TOGGLE_WIREFRAME;
 }
+
+const SPRITE_ROW: &str = "op:sprite.add";
+const CAMERA_2D_ROW: &str = "op:entity.add.camera_2d";
+const EMPTY_2D_ROW: &str = "op:entity.add.empty_2d";
+
+fn open_add_menu_2d_group(app: &mut App) {
+    let rows = jackdaw::add_entity_picker::add_menu_rows(app.world_mut());
+    bar_with(app, vec![("Add".to_string(), rows)]);
+    open_by_clicking(app, "Add");
+    run(app, "menu.hover name=2D");
+}
+
+fn row_state(app: &mut App, action: &str) -> (bool, String) {
+    let row = row_for(app, action);
+    let disabled = app
+        .world()
+        .get::<bevy::ui::InteractionDisabled>(row)
+        .is_some();
+    let description = app
+        .world()
+        .get::<jackdaw_feathers::tooltip::Tooltip>(row)
+        .map(|tip| tip.description.clone())
+        .unwrap_or_default();
+    (disabled, description)
+}
+
+fn world_2d_entities(app: &mut App) -> usize {
+    app.world_mut().query::<&Sprite>().iter(app.world()).count()
+        + app
+            .world_mut()
+            .query::<&Camera2d>()
+            .iter(app.world())
+            .count()
+}
+
+#[test]
+fn the_2d_rows_are_disabled_with_a_reason_and_inert_in_a_3d_scene() {
+    let mut app = menu_app();
+    open_add_menu_2d_group(&mut app);
+
+    for (row, reason) in [
+        (SPRITE_ROW, "Open a 2D scene to add sprites."),
+        (CAMERA_2D_ROW, "Open a 2D scene to add a 2D camera."),
+        (EMPTY_2D_ROW, "Open a 2D scene to add an empty 2D entity."),
+    ] {
+        let (disabled, description) = row_state(&mut app, row);
+        assert!(disabled, "{row} is disabled in a 3D scene");
+        assert_eq!(description, reason, "{row} says why");
+    }
+
+    let before = world_2d_entities(&mut app);
+    for row in [SPRITE_ROW, CAMERA_2D_ROW, EMPTY_2D_ROW] {
+        let entity = row_for(&mut app, row);
+        let at = centre_of(&app, entity);
+        click(&mut app, at);
+    }
+    assert_eq!(
+        world_2d_entities(&mut app),
+        before,
+        "clicking added nothing"
+    );
+}
+
+#[test]
+fn the_2d_rows_are_enabled_in_a_2d_scene() {
+    let mut app = menu_app();
+    jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+    open_add_menu_2d_group(&mut app);
+
+    for row in [SPRITE_ROW, CAMERA_2D_ROW, EMPTY_2D_ROW] {
+        let (disabled, description) = row_state(&mut app, row);
+        assert!(!disabled, "{row} is enabled in a 2D scene");
+        assert!(
+            !description.contains("Open a 2D scene"),
+            "{row} shows its own description: {description}"
+        );
+    }
+}
+
+#[test]
+fn a_2d_row_disabled_for_another_reason_shows_its_description() {
+    let mut app = menu_app();
+    jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    *app.world_mut().resource_mut::<jackdaw::brush::EditMode>() =
+        jackdaw::brush::EditMode::BrushEdit(jackdaw::brush::BrushEditMode::Face);
+    app.update();
+    open_add_menu_2d_group(&mut app);
+
+    let (disabled, description) = row_state(&mut app, SPRITE_ROW);
+    assert!(disabled, "brush edit mode gates the row");
+    assert_eq!(
+        description, "Add a sprite to the open 2D world scene.",
+        "a scene is open, so the 2D reason does not apply"
+    );
+}

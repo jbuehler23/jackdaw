@@ -245,15 +245,32 @@ fn sprite_add_is_one_undo_entry_and_redo_brings_the_same_node_back() {
 }
 
 #[test]
-fn the_add_menu_shows_the_2d_group_only_with_a_2d_scene_open() {
+fn the_add_menu_shows_the_2d_group_with_2d_world_entries_unavailable_without_a_2d_scene() {
     let wanted = "op:sprite.add";
     let mut app = util::editor_test_app();
     app.update();
     let rows = jackdaw::add_entity_picker::add_menu_rows(app.world_mut());
     assert!(
-        !rows.iter().any(|(action, _)| action == wanted),
-        "no 2D rows in a 3D scene: {rows:?}"
+        rows.iter().any(|(action, _)| *action
+            == format!("{}2D", jackdaw_feathers::menu_bar::SUBMENU_ACTION_PREFIX)),
+        "the 2D group is listed in a 3D scene: {rows:?}"
     );
+    let taxonomy = jackdaw::creation_taxonomy::CreationTaxonomy::collect(app.world_mut());
+    let actions: Vec<String> = taxonomy
+        .entries_of("2d")
+        .map(|entry| entry.action.clone())
+        .collect();
+    assert_eq!(actions.len(), 3);
+    for action in actions {
+        let id = action.strip_prefix("op:").unwrap();
+        assert!(
+            !app.world_mut()
+                .operator(id.to_owned())
+                .is_available()
+                .unwrap(),
+            "{id} is unavailable without a 2D scene"
+        );
+    }
 
     let (mut app, _root) = two_d_app();
     let rows = jackdaw::add_entity_picker::add_menu_rows(app.world_mut());
@@ -270,7 +287,7 @@ fn the_add_menu_shows_the_2d_group_only_with_a_2d_scene_open() {
         labels,
         [
             ("Sprite", wanted),
-            ("Empty 2D", "op:entity.add.empty"),
+            ("Empty 2D", "op:entity.add.empty_2d"),
             ("Camera", "op:entity.add.camera_2d"),
         ]
     );
@@ -1059,4 +1076,52 @@ fn a_new_sprite_comes_in_at_the_project_ppu() {
         None,
         "at ppu 1 the image sizes it"
     );
+}
+
+fn picker_actions(app: &mut App) -> Vec<String> {
+    let mut pickers = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw::add_entity_picker::AddEntityPicker>>();
+    jackdaw::add_entity_picker::open_add_entity_picker(app.world_mut(), &mut pickers);
+    app.update();
+    app.update();
+    app.world_mut()
+        .query::<&jackdaw_feathers::picker::PickerItems<jackdaw::add_entity_picker::AddMenuItem>>()
+        .single(app.world())
+        .expect("the picker is open")
+        .items()
+        .iter()
+        .map(|item| item.action.clone())
+        .collect()
+}
+
+#[test]
+fn the_add_entity_picker_lists_2d_entries_only_with_a_2d_scene_open() {
+    let two_d = [
+        "op:sprite.add",
+        "op:entity.add.camera_2d",
+        "op:entity.add.empty_2d",
+    ];
+    let mut app = util::editor_test_app();
+    app.update();
+    let actions = picker_actions(&mut app);
+    assert!(
+        actions.contains(&"op:entity.add.cube".to_string()),
+        "{actions:?}"
+    );
+    for action in two_d {
+        assert!(
+            !actions.iter().any(|a| a == action),
+            "{action} in a 3D scene"
+        );
+    }
+
+    let (mut app, _root) = two_d_app();
+    let actions = picker_actions(&mut app);
+    for action in two_d {
+        assert!(
+            actions.iter().any(|a| a == action),
+            "{action} missing in 2D"
+        );
+    }
 }
