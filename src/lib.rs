@@ -166,6 +166,7 @@ pub mod test_input;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
+pub mod tile_palette;
 pub mod tile_preview;
 pub mod tile_tools;
 pub mod tilemap;
@@ -468,6 +469,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(tileset_import::plugin)
         .add_plugins(tilemap::plugin)
         .add_plugins(tile_tools::plugin)
+        .add_plugins(tile_palette::plugin)
         .add_plugins(tile_preview::plugin)
         .add_plugins(tilemap_render::plugin)
         .add_plugins(tilemap_resolve::plugin)

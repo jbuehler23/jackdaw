@@ -4,8 +4,8 @@ use std::fmt;
 use bevy::color::Srgba;
 use bevy::prelude::*;
 use jackdaw_tilemap::{
-    CollisionMode, MatchMode, Provenance, SetupSet, SetupTerrain, SetupTile, Stamp, TerrainId,
-    TileAddress, TileShape, TileTerrains, TilesetSetup, Tracked,
+    CollisionMode, GridLayout, MatchMode, Provenance, SetupSet, SetupTerrain, SetupTile, Stamp,
+    TerrainId, TileAddress, TileShape, TileTerrains, TilesetSetup, Tracked,
 };
 
 #[cfg(feature = "render")]
@@ -220,6 +220,20 @@ impl Tileset {
     pub fn layer(&self, sheet: u32, tile: u32) -> Option<u32> {
         let sheet = self.sheets.get(sheet as usize)?;
         (tile < sheet.columns * sheet.rows).then_some(sheet.first_layer + tile)
+    }
+
+    /// Pixel origin and size of tile `tile` in the source image of sheet
+    /// `sheet`.
+    pub fn sheet_rect(&self, sheet: u32, tile: u32) -> Option<(UVec2, UVec2)> {
+        let sheet = self.sheets.get(sheet as usize)?;
+        let layout = GridLayout {
+            tile: self.tile_size,
+            margin: sheet.margin,
+            spacing: sheet.spacing,
+            columns: sheet.columns,
+            rows: sheet.rows,
+        };
+        Some(layout.tile_rect(tile))
     }
 
     /// Sheet and tile of packed layer `layer`.

@@ -55,6 +55,7 @@ mod sprite_picking;
 mod sprite_snap;
 mod sprite_sort;
 mod synthetic_input;
+mod tile_palette;
 mod tile_preview;
 mod tile_tools;
 mod tilemap_history;

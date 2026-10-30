@@ -515,8 +515,8 @@ fn spawn_sheet(
         .id();
     let rect = view.selected.zip(view.anchor.or(view.selected));
     let at = |tile_index: u32| {
-        let cell = UVec2::new(tile_index % sheet.columns, tile_index / sheet.columns);
-        (sheet.margin.as_vec2() + cell.as_vec2() * step) * SCALE
+        let origin = tileset.sheet_rect(index, tile_index).map(|(o, _)| o);
+        origin.unwrap_or_default().as_vec2() * SCALE
     };
     for t in 0..sheet.columns * sheet.rows {
         let peers = (tileset.setup_address(index, t).ok())
@@ -627,14 +627,13 @@ fn spawn_tile_editor(
         .map(|t| t.terrains.peers)
         .unwrap_or_default();
     let mut preview = ImageNode::default();
-    if let Some(source) = tileset.sheets.get(sheet as usize) {
-        let size = tileset.tile_size.as_vec2();
-        let cell = UVec2::new(tile % source.columns, tile / source.columns).as_vec2();
-        let min = source.margin.as_vec2() + cell * (size + source.spacing.as_vec2());
+    if let Some(source) = tileset.sheets.get(sheet as usize)
+        && let Some((min, size)) = tileset.sheet_rect(sheet, tile)
+    {
         preview = sheet_image(world, &source.source)
             .map(ImageNode::new)
             .unwrap_or_default();
-        preview.rect = Some(Rect::from_corners(min, min + size));
+        preview.rect = Some(Rect::from_corners(min.as_vec2(), (min + size).as_vec2()));
     }
     let grid = world
         .spawn((
@@ -764,7 +763,12 @@ fn spawn_column(world: &mut World, parent: Entity, width: Val) -> Entity {
         .id()
 }
 
-fn spawn_text(world: &mut World, parent: Entity, text: impl Into<String>, color: Color) -> Entity {
+pub(crate) fn spawn_text(
+    world: &mut World,
+    parent: Entity,
+    text: impl Into<String>,
+    color: Color,
+) -> Entity {
     world
         .spawn((
             Text::new(text.into()),
@@ -793,14 +797,14 @@ fn spawn_swatch(world: &mut World, parent: Entity, color: Color, size: f32) {
     ));
 }
 
-fn swatch(tileset: &Tileset, terrain: TerrainId, alpha: f32) -> Color {
+pub(crate) fn swatch(tileset: &Tileset, terrain: TerrainId, alpha: f32) -> Color {
     (tileset.terrains.iter())
         .find(|t| t.id == terrain)
         .map_or(Color::NONE, |t| Color::from(t.swatch.with_alpha(alpha)))
 }
 
 /// A nearest-sampled copy of the source sheet `source`, decoded once.
-fn sheet_image(world: &mut World, source: &str) -> Option<Handle<Image>> {
+pub(crate) fn sheet_image(world: &mut World, source: &str) -> Option<Handle<Image>> {
     if let Some(handle) = world.resource::<SheetImages>().0.get(source) {
         return Some(handle.clone());
     }

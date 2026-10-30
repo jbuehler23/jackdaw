@@ -359,6 +359,24 @@ fn the_tile_tool_keys_claim_only_their_tools() {
             "{operator} collided with something already bound",
         );
     }
+    // X, Y and Z turn a loaded tile; the modal axis keys share them only in
+    // the modal context, so no conflict is reported.
+    for (key, tile, modal) in [
+        ("KeyX", "tilemap.brush.flip_x", "modal.axis_x"),
+        ("KeyY", "tilemap.brush.flip_y", "modal.axis_y"),
+        ("KeyZ", "tilemap.brush.rotate", "modal.axis_z"),
+    ] {
+        assert_eq!(
+            operators_on(&defaults, &PresetInput::key(key)),
+            vec![modal.to_string(), tile.to_string()],
+        );
+        assert!(
+            !find_conflicts(&defaults)
+                .iter()
+                .any(|line| line.contains(tile)),
+            "{tile} collided with something already bound",
+        );
+    }
     // L and I are shared with Core chords; the tile context sits above Core
     // and consumes them while tile edit mode is on.
     for (key, tile, core) in [

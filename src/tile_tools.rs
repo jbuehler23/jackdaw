@@ -63,6 +63,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .bind_operator_in::<TilemapBucketOp>(context, [PresetInput::key("KeyG")])
         .bind_operator_in::<TilemapPickerOp>(context, [PresetInput::key("KeyI")])
         .bind_operator_in::<TilemapEditModeExitOp>(context, [PresetInput::key("Escape")]);
+    crate::tile_palette::add_to_extension(ctx, context);
 }
 
 /// The input context of the tile tools, active only in tile edit mode.
@@ -112,13 +113,27 @@ pub enum StrokeMode {
     Path,
 }
 
+/// What the brush paints with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BrushSource {
+    /// Terrain on a terrain layer; the tile on a tile layer.
+    #[default]
+    Terrain,
+    /// The tile, hand-placed over a terrain layer's terrain.
+    Tile,
+}
+
 /// What the painting tools write: terrain on a terrain layer, the tile on a
-/// tile layer.
+/// tile layer, or the tile when the source names it.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TileBrush {
     pub terrain: TerrainId,
+    /// With its orientation bits.
     pub tile: TileRef,
     pub mode: StrokeMode,
+    pub source: BrushSource,
+    /// Whether a Bucket press fills only the cells joined to the pressed one.
+    pub contiguous: bool,
 }
 
 impl Default for TileBrush {
@@ -127,6 +142,8 @@ impl Default for TileBrush {
             terrain: 1,
             tile: TileRef::new(0),
             mode: StrokeMode::Connect,
+            source: BrushSource::Terrain,
+            contiguous: true,
         }
     }
 }
@@ -226,7 +243,7 @@ fn can_leave_edit_mode(mode: Res<TileEditMode>, active: ActiveModalQuery) -> boo
     mode.map.is_some() && !active.is_modal_running()
 }
 
-fn has_tile_map(mode: Res<TileEditMode>, maps: Query<(), With<Tilemap>>) -> bool {
+pub(crate) fn has_tile_map(mode: Res<TileEditMode>, maps: Query<(), With<Tilemap>>) -> bool {
     mode.map.is_some_and(|map| maps.contains(map))
 }
 
@@ -349,14 +366,22 @@ fn set_brush(world: &mut World, params: &OperatorParameters) -> Result<(), Strin
         other => return Err(format!("mode is connect or path, not `{other}`")),
     };
     if !terrain.is_empty() || !tile.is_empty() {
+        let mode = *world.resource::<TileEditMode>();
+        let terrain_layer = (mode.map.and_then(|map| world.get::<Tilemap>(map)))
+            .and_then(|map| map.layers.get(mode.layer))
+            .is_some_and(|layer| layer.kind == TilemapLayerKind::Terrain);
         let id = active_tileset(world)?;
         let tileset = (world.resource::<Assets<Tileset>>().get(id))
             .ok_or("the layer's tileset is not loaded")?;
-        if !terrain.is_empty() {
-            brush.terrain = crate::tileset_edit::terrain(tileset, &terrain)?;
-        }
         if !tile.is_empty() {
             brush.tile = packed_tile(tileset, &tile)?;
+            brush.source = BrushSource::Tile;
+        }
+        if !terrain.is_empty() {
+            brush.terrain = crate::tileset_edit::terrain(tileset, &terrain)?;
+            if terrain_layer || tile.is_empty() {
+                brush.source = BrushSource::Terrain;
+            }
         }
     }
     world.resource_mut::<TileBrush>().set_if_neq(brush);
@@ -403,7 +428,7 @@ pub(crate) fn stroke_write(
     let id = active_tileset(world)?;
     let tileset =
         (world.resource::<Assets<Tileset>>().get(id)).ok_or("the layer's tileset is not loaded")?;
-    if terrain_layer {
+    if terrain_layer && brush.source == BrushSource::Terrain {
         (tileset.terrains.iter().any(|t| t.id == brush.terrain))
             .then_some(match brush.mode {
                 StrokeMode::Path if tool != TileTool::Bucket => TileWrite::Path(brush.terrain),
@@ -632,9 +657,8 @@ fn take_press(world: &mut World) -> Option<(CellCoord, MouseButton)> {
     is_available = can_act_on_press,
     params(contiguous(
         bool,
-        default = true,
         doc = "Fill only the matching cells joined to the pressed one; off fills every \
-               matching cell on the layer."
+               matching cell on the layer. Unset follows the palette's Contiguous toggle."
     )),
 )]
 pub(crate) fn tilemap_bucket(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
@@ -645,7 +669,8 @@ pub(crate) fn tilemap_bucket(params: In<OperatorParameters>, world: &mut World) 
         world.resource_mut::<TileEditMode>().tool = TileTool::Bucket;
         return OperatorResult::Finished;
     };
-    let contiguous = params.as_bool("contiguous").unwrap_or(true);
+    let contiguous =
+        (params.as_bool("contiguous")).unwrap_or_else(|| world.resource::<TileBrush>().contiguous);
     match bucket_fill(world, cell, button, contiguous) {
         Ok(()) => OperatorResult::Finished,
         Err(err) => refuse(world, &err),
@@ -674,7 +699,8 @@ fn bucket_fill(
 }
 
 /// The cells a fill writing `write` from `start` reaches: those matching its
-/// terrain on a terrain layer, or its tile on a tile layer, joined to it when
+/// terrain on a terrain layer, or the tile it shows (hand-placed, else
+/// resolved) on a tile layer or when the fill writes a tile, joined to it when
 /// `contiguous`. No cells when the write would leave `start` as it is. A fill
 /// stays inside the map's bounds, or on an unbounded map inside the bounds of
 /// the painted cells and `start`, grown by one chunk.
@@ -687,12 +713,15 @@ fn fill_cells(
     contiguous: bool,
 ) -> Result<Vec<CellCoord>, String> {
     let authoring = layer.and_then(|l| l.authoring.as_ref());
+    let by_terrain = terrain_layer && !matches!(write, TileWrite::Tile(_));
     let value = |cell: CellCoord| {
-        if terrain_layer {
-            TileWrite::Terrain(authoring.map_or(0, |a| a.terrain.get(cell)))
-        } else {
-            TileWrite::Tile(layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)))
+        if by_terrain {
+            return TileWrite::Terrain(authoring.map_or(0, |a| a.terrain.get(cell)));
         }
+        let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
+        TileWrite::Tile(
+            placed.unwrap_or_else(|| layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell))),
+        )
     };
     let target = value(start);
     let empty = target == TileWrite::Terrain(0) || target == TileWrite::Tile(TileRef::EMPTY);
@@ -748,10 +777,15 @@ fn fill_cells(
             (region.min.y..region.max.y)
                 .flat_map(move |y| (region.min.x..region.max.x).map(move |x| CellCoord::new(x, y))),
         )
-    } else if terrain_layer {
+    } else if by_terrain {
         Box::new((authoring.into_iter()).flat_map(|a| a.terrain.cells().map(|(c, _)| c)))
     } else {
-        Box::new((layer.into_iter()).flat_map(|l| l.tiles.cells().map(|(c, _)| c)))
+        let placed = (authoring.into_iter()).flat_map(|a| a.overrides.keys().copied());
+        let shown = (layer.into_iter()).flat_map(|l| l.tiles.cells().map(|(c, _)| c));
+        let mut cells: Vec<CellCoord> = shown.chain(placed).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        Box::new(cells.into_iter())
     };
     let mut found = Vec::new();
     for cell in candidates.filter(|&c| inside(c) && value(c) == target) {
@@ -796,17 +830,21 @@ fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
     let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
     let authoring = layer.and_then(|l| l.authoring.as_ref());
     let terrain = (authoring.filter(|_| active.terrain)).map_or(0, |a| a.terrain.get(cell));
-    let tile = (authoring.and_then(|a| a.overrides.get(&cell).copied()))
-        .unwrap_or_else(|| layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)));
+    let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
+    let tile = placed.unwrap_or_else(|| layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)));
     if terrain == 0 && tile.is_empty() {
         return Err(format!("cell {},{} is empty", cell.0.x, cell.0.y));
     }
     let mut brush = world.resource_mut::<TileBrush>();
-    if terrain != 0 {
-        brush.terrain = terrain;
-    }
     if !tile.is_empty() {
         brush.tile = tile;
+        brush.source = BrushSource::Tile;
+    }
+    if terrain != 0 {
+        brush.terrain = terrain;
+        if placed.is_none() {
+            brush.source = BrushSource::Terrain;
+        }
     }
     Ok(())
 }
