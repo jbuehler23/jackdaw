@@ -2539,7 +2539,7 @@ pub(crate) fn menu_open(
     label = "Expand Menu Group",
     description = "Expand the open menu's group with this label.",
     allows_undo = false,
-    params(name(String, doc = "Group label as the menu shows it, e.g. \"3D Objects\"."))
+    params(name(String, doc = "Group label as the menu shows it, e.g. \"3D\"."))
 )]
 pub(crate) fn menu_hover(
     params: In<OperatorParameters>,

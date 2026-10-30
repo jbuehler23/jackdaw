@@ -401,6 +401,7 @@ impl<'a> ExtensionContext<'a> {
                 modal: O::MODAL,
                 allows_undo: O::ALLOWS_UNDO,
                 remote_hidden: O::REMOTE_HIDDEN,
+                unavailable_reason: O::UNAVAILABLE_REASON,
             },
             ChildOf(ext),
         ));

@@ -10,9 +10,9 @@ use crate::entity_ops::EntityAddCameraRigOp;
 use crate::entity_ops::{
     EntityAddAnimationPlayerOp, EntityAddAudioSourceOp, EntityAddCameraOp, EntityAddConeOp,
     EntityAddCubeOp, EntityAddCylinderOp, EntityAddDirectionalLightOp, EntityAddEmptyOp,
-    EntityAddFogVolumeOp, EntityAddImageOp, EntityAddPlaneOp, EntityAddPointLightOp,
-    EntityAddPrefabOp, EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp,
-    EntityAddSpotLightOp, EntityAddTerrainOp, EntityAddWedgeOp,
+    EntityAddFogVolumeOp, EntityAddPlaneOp, EntityAddPointLightOp, EntityAddPrefabOp,
+    EntityAddPyramidOp, EntityAddReflectionProbeOp, EntityAddSphereOp, EntityAddSpotLightOp,
+    EntityAddTerrainOp, EntityAddWedgeOp,
 };
 #[cfg(feature = "multiplayer")]
 use crate::entity_ops::{EntityAddNetworkRoomOp, EntityAddSpawnPointOp, EntityAddZoneTransitionOp};
@@ -42,18 +42,27 @@ pub const QUALIFIED_LABEL_SEPARATOR: &str = ": ";
 const UI_CATEGORY_ORDER: [&str; 3] = ["Layout", "Display", "Controls"];
 
 /// Sort order of the UI group and of the first of its children.
-const UI_GROUP_ORDER: i32 = -8;
+const UI_GROUP_ORDER: i32 = -40;
 
 /// Sort order of a widget group whose category is not in `UI_CATEGORY_ORDER`.
 const UI_UNKNOWN_CATEGORY_ORDER: i32 = UI_GROUP_ORDER - UI_CATEGORY_ORDER.len() as i32;
 
-/// The group holding the 2D world entity kinds, present while a 2D world
-/// scene is open.
+/// The group holding the 2D world entity kinds. Always present; its entries are
+/// unavailable until a 2D world scene is open.
 pub const TWO_D_GROUP: &str = "2d";
 
-/// Sort order of [`TWO_D_GROUP`]: after General, and before 3D Objects by
-/// its label.
-const TWO_D_GROUP_ORDER: i32 = -1;
+/// The group holding the 3D entity kinds; its children are the 3D categories.
+pub const THREE_D_GROUP: &str = "3d";
+
+/// Sort order of [`TWO_D_GROUP`], after General.
+const TWO_D_GROUP_ORDER: i32 = -10;
+
+/// Sort order of [`THREE_D_GROUP`], after the 2D group.
+const THREE_D_GROUP_ORDER: i32 = -20;
+
+/// Sort order of the multiplayer group, after the 3D group and before UI.
+#[cfg(feature = "multiplayer")]
+const MULTIPLAYER_GROUP_ORDER: i32 = -30;
 
 /// The group holding one entry per asset kind.
 pub const ASSETS_GROUP: &str = "assets";
@@ -134,6 +143,13 @@ fn group(id: &str, label: &str, order: i32) -> CreationGroup {
     }
 }
 
+fn child_group(id: &str, label: &str, order: i32) -> CreationGroup {
+    CreationGroup {
+        parent: Some(String::from(THREE_D_GROUP)),
+        ..group(id, label, order)
+    }
+}
+
 fn extension_group(id: &str, label: &str) -> CreationGroup {
     CreationGroup {
         source: CreationSource::Extension,
@@ -153,12 +169,12 @@ fn entry(group: &str, label: &str, action: String) -> CreationEntry {
 fn builtin(taxonomy: &mut CreationTaxonomy) {
     taxonomy.groups.extend([
         group(GENERAL_GROUP, GENERAL_SECTION, 0),
-        group("geometry", "3D Objects", -1),
-        group("lights", "Lights", -2),
-        group("cameras", "Cameras", -3),
-        group("audio_animation", "Audio & Animation", -4),
-        group("environment", "Environment", -5),
-        group("regions", "Regions", -6),
+        group(THREE_D_GROUP, "3D", THREE_D_GROUP_ORDER),
+        child_group("geometry", "Objects", THREE_D_GROUP_ORDER - 1),
+        child_group("lights", "Lights", THREE_D_GROUP_ORDER - 2),
+        child_group("cameras", "Cameras", THREE_D_GROUP_ORDER - 3),
+        child_group("environment", "Environment", THREE_D_GROUP_ORDER - 4),
+        child_group("terrain", "Terrain", THREE_D_GROUP_ORDER - 5),
     ]);
 
     taxonomy.entries.extend([
@@ -166,8 +182,13 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
         entry(GENERAL_GROUP, "Prefab", op_action::<EntityAddPrefabOp>()),
         entry(
             GENERAL_GROUP,
-            EntityAddImageOp::LABEL,
-            op_action::<EntityAddImageOp>(),
+            "Audio Source",
+            op_action::<EntityAddAudioSourceOp>(),
+        ),
+        entry(
+            GENERAL_GROUP,
+            "Animation Player",
+            op_action::<EntityAddAnimationPlayerOp>(),
         ),
         entry("geometry", "Cube", op_action::<EntityAddCubeOp>()),
         entry("geometry", "Sphere", op_action::<EntityAddSphereOp>()),
@@ -176,7 +197,7 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
         entry("geometry", "Wedge", op_action::<EntityAddWedgeOp>()),
         entry("geometry", "Cone", op_action::<EntityAddConeOp>()),
         entry("geometry", "Pyramid", op_action::<EntityAddPyramidOp>()),
-        entry("regions", "Terrain", op_action::<EntityAddTerrainOp>()),
+        entry("terrain", "Terrain", op_action::<EntityAddTerrainOp>()),
         entry(
             "lights",
             "Point Light",
@@ -191,16 +212,6 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
         entry("cameras", "Camera", op_action::<EntityAddCameraOp>()),
         #[cfg(feature = "camera_rig")]
         entry("cameras", "Camera Rig", op_action::<EntityAddCameraRigOp>()),
-        entry(
-            "audio_animation",
-            "Audio Source",
-            op_action::<EntityAddAudioSourceOp>(),
-        ),
-        entry(
-            "audio_animation",
-            "Animation Player",
-            op_action::<EntityAddAnimationPlayerOp>(),
-        ),
         entry(
             "environment",
             "Fog Volume",
@@ -217,7 +228,7 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
     {
         taxonomy
             .groups
-            .push(group("multiplayer", "Multiplayer", -7));
+            .push(group("multiplayer", "Multiplayer", MULTIPLAYER_GROUP_ORDER));
         taxonomy.entries.extend([
             entry(
                 "multiplayer",
@@ -238,22 +249,19 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
     }
 }
 
-/// The 2D world entity kinds, offered only while a 2D world scene is open.
-fn two_d(taxonomy: &mut CreationTaxonomy, world: &mut World) {
-    let open = world
-        .query_filtered::<(), crate::sprite_stage::OpenScene2dRoot>()
-        .iter(world)
-        .next()
-        .is_some();
-    if !open {
-        return;
-    }
+/// The 2D world entity kinds. Their operators are unavailable until a 2D world
+/// scene is open.
+fn two_d(taxonomy: &mut CreationTaxonomy) {
     taxonomy
         .groups
         .push(group(TWO_D_GROUP, "2D", TWO_D_GROUP_ORDER));
     taxonomy.entries.extend([
         entry(TWO_D_GROUP, SpriteAddOp::LABEL, op_action::<SpriteAddOp>()),
-        entry(TWO_D_GROUP, "Empty 2D", op_action::<EntityAddEmptyOp>()),
+        entry(
+            TWO_D_GROUP,
+            "Empty 2D",
+            op_action::<crate::entity_ops::EntityAddEmpty2dOp>(),
+        ),
         entry(
             TWO_D_GROUP,
             "Camera",
@@ -384,18 +392,37 @@ impl CreationTaxonomy {
     pub fn collect(world: &mut World) -> Self {
         let mut taxonomy = Self::default();
         builtin(&mut taxonomy);
-        two_d(&mut taxonomy, world);
+        two_d(&mut taxonomy);
         widgets(&mut taxonomy, world);
         assets(&mut taxonomy, world);
         extensions(&mut taxonomy, world);
-        taxonomy.groups.sort_by_key(|group| {
+        taxonomy.sort_groups();
+        taxonomy
+    }
+
+    /// Order the groups greatest first, each group's children right after it
+    /// and sorted among themselves, so a flat walk keeps a parent's children
+    /// together.
+    fn sort_groups(&mut self) {
+        let orders = self
+            .groups
+            .iter()
+            .map(|group| (group.id.clone(), group.order))
+            .collect::<std::collections::HashMap<_, _>>();
+        self.groups.sort_by_key(|group| {
+            let top_order = group
+                .parent
+                .as_ref()
+                .and_then(|parent| orders.get(parent))
+                .copied()
+                .unwrap_or(group.order);
             (
+                std::cmp::Reverse(top_order),
+                group.parent.is_some(),
                 std::cmp::Reverse(group.order),
-                group.parent.clone(),
                 group.label.clone(),
             )
         });
-        taxonomy
     }
 
     /// Every group, in the order surfaces show them.
@@ -536,13 +563,8 @@ mod tests {
     fn builtin_taxonomy() -> CreationTaxonomy {
         let mut taxonomy = CreationTaxonomy::default();
         builtin(&mut taxonomy);
-        taxonomy.groups.sort_by_key(|group| {
-            (
-                std::cmp::Reverse(group.order),
-                group.parent.clone(),
-                group.label.clone(),
-            )
-        });
+        two_d(&mut taxonomy);
+        taxonomy.sort_groups();
         taxonomy
     }
 
@@ -585,6 +607,7 @@ mod tests {
                 ));
             }
         }
+        taxonomy.sort_groups();
         taxonomy
     }
 
@@ -649,7 +672,7 @@ mod tests {
                 .all(|action| action.starts_with("op:")),
             "the menu opens on the general entries themselves: {rows:?}",
         );
-        for label in ["3D Objects", "Lights", "UI"] {
+        for label in ["2D", "3D", "UI"] {
             assert!(
                 rows.iter().any(|(action, _)| *action
                     == format!(
@@ -662,20 +685,89 @@ mod tests {
     }
 
     #[test]
-    fn a_group_of_one_says_what_it_is_instead_of_expanding() {
+    fn the_three_d_group_expands_into_its_categories() {
         let taxonomy = builtin_taxonomy();
+        let children = taxonomy
+            .children_of(THREE_D_GROUP)
+            .map(|group| group.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            children,
+            ["Objects", "Lights", "Cameras", "Environment", "Terrain"],
+        );
+        assert!(
+            taxonomy
+                .entries_of("terrain")
+                .any(|entry| entry.label == "Terrain")
+        );
+    }
+
+    #[test]
+    fn the_general_group_holds_audio_and_animation_and_no_reference_image() {
+        let taxonomy = builtin_taxonomy();
+        let labels = taxonomy
+            .entries_of(GENERAL_GROUP)
+            .map(|entry| entry.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            ["Empty", "Prefab", "Audio Source", "Animation Player"],
+        );
+        assert!(
+            !taxonomy
+                .entries()
+                .iter()
+                .any(|entry| entry.action == "op:entity.add.image")
+        );
+    }
+
+    #[test]
+    fn a_group_of_one_stands_in_for_its_entry() {
+        let mut taxonomy = builtin_taxonomy();
+        taxonomy.groups.push(group("solo", "Solo", -15));
+        taxonomy
+            .entries
+            .push(entry("solo", "Lone Thing", String::from("op:lone.thing")));
+        taxonomy.sort_groups();
         let rows = taxonomy.menu_rows();
         assert!(
-            rows.iter().any(|(_, label)| label == "Terrain"),
-            "the one region kind stands on its own: {rows:?}",
+            rows.iter().any(|(action, _)| action == "op:lone.thing"),
+            "the single entry sits in the menu: {rows:?}",
         );
         assert!(
             !rows.iter().any(|(action, _)| *action
-                == format!(
-                    "{}Regions",
-                    jackdaw_feathers::menu_bar::SUBMENU_ACTION_PREFIX
-                )),
-            "a group holding one entry is not worth expanding: {rows:?}",
+                == format!("{}Solo", jackdaw_feathers::menu_bar::SUBMENU_ACTION_PREFIX)),
+            "a group of one is not worth expanding: {rows:?}",
+        );
+    }
+
+    #[test]
+    fn children_follow_their_parent_in_the_flat_order() {
+        let taxonomy = with_widgets();
+        let ids = taxonomy
+            .groups()
+            .iter()
+            .map(|group| group.id.as_str())
+            .collect::<Vec<_>>();
+        let position = |id: &str| ids.iter().position(|found| *found == id).unwrap();
+        let three_d = position(THREE_D_GROUP);
+        let children = ["geometry", "lights", "cameras", "environment", "terrain"];
+        for (offset, child) in children.iter().enumerate() {
+            assert_eq!(position(child), three_d + 1 + offset, "{ids:?}");
+        }
+        assert!(position(UI_GROUP) > three_d + children.len(), "{ids:?}");
+        let orders = taxonomy
+            .groups()
+            .iter()
+            .map(|group| group.order)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            orders
+                .iter()
+                .filter(|order| **order == THREE_D_GROUP_ORDER)
+                .count(),
+            1,
+            "no child shares the parent's order: {orders:?}",
         );
     }
 

@@ -244,26 +244,29 @@ fn the_add_menu_opens_on_entries_and_groups_the_rest() {
     );
 }
 
-/// A group of one entry says what the entry is; a bigger group keeps its name.
+/// The 3D group holds its categories as sections, Terrain among them.
 #[test]
-fn a_group_of_one_stands_in_for_its_entry() {
+fn the_3d_group_lists_its_categories_as_sections() {
     let mut app = palette_app();
     let rows = add_menu_rows(app.world_mut());
+    let three_d = group_rows(&rows, "3D");
+    for (section, entry) in [
+        ("Objects", "Cube"),
+        ("Lights", "Point Light"),
+        ("Cameras", "Camera"),
+        ("Environment", "Fog Volume"),
+        ("Terrain", "Terrain"),
+    ] {
+        assert!(
+            section_rows(&three_d, section)
+                .iter()
+                .any(|(_, label)| label == entry),
+            "`{section}` holds `{entry}`: {three_d:?}",
+        );
+    }
     assert!(
-        rows.iter().any(|(_, label)| label == "Terrain"),
-        "the one region kind is a row of its own: {rows:?}",
-    );
-    assert!(
-        !rows
-            .iter()
-            .any(|(action, _)| *action == format!("{SUBMENU_ACTION_PREFIX}Regions")),
-        "and it is not hidden behind a group holding only itself: {rows:?}",
-    );
-    assert!(
-        group_rows(&rows, "Lights")
-            .iter()
-            .any(|(_, label)| label == "Point Light"),
-        "a group with more than one entry keeps its name: {rows:?}",
+        !rows.iter().any(|(_, label)| label == "Reference Image"),
+        "the Add menu no longer offers Reference Image: {rows:?}",
     );
 }
 

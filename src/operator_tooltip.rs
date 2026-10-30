@@ -18,9 +18,13 @@
 //! `src/inspector/component_tooltip.rs` for the reflection-driven
 //! counterpart.
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
+use bevy::ui::InteractionDisabled;
 use jackdaw_api_internal::keymap::{PresetInput, ShortcutPlatform, key_code_from_name};
 use jackdaw_api_internal::lifecycle::{OperatorAction, OperatorEntity};
+use jackdaw_api_internal::operator::{RefreshOperatorButtons, UnavailableReason};
 use jackdaw_commands::keybinds::key_display_name;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::tooltip::Tooltip;
@@ -31,6 +35,9 @@ pub struct OperatorTooltipPlugin;
 impl Plugin for OperatorTooltipPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(auto_attach_button_tooltip)
+            .add_observer(describe_disabled_button)
+            .add_observer(describe_enabled_button)
+            .add_observer(refresh_disabled_descriptions)
             .add_systems(Update, refresh_keybind_on_bindings_change);
     }
 }
@@ -62,6 +69,67 @@ fn auto_attach_button_tooltip(
             .with_description(op.description())
             .with_footer(call.to_string()),
     );
+}
+
+/// Put the unavailable reason, or the operator description when it has none,
+/// on the tooltip of each of `buttons`. `disabled` fixes a button's state where
+/// the caller knows it; otherwise the button's own `InteractionDisabled` says.
+fn sync_descriptions(world: &mut World, buttons: Vec<(Entity, Option<bool>)>) {
+    let operators: HashMap<&'static str, (Option<UnavailableReason>, &'static str)> = world
+        .query::<&OperatorEntity>()
+        .iter(world)
+        .map(|op| (op.id(), (op.unavailable_reason_fn(), op.description())))
+        .collect();
+    for (entity, disabled) in buttons {
+        let Ok(button) = world.get_entity(entity) else {
+            continue;
+        };
+        let (Some(call), true) = (
+            button.get::<ButtonOperatorCall>(),
+            button.contains::<Tooltip>(),
+        ) else {
+            continue;
+        };
+        let Some((reason, description)) = operators.get(call.id.as_ref()) else {
+            continue;
+        };
+        let disabled = disabled.unwrap_or_else(|| button.contains::<InteractionDisabled>());
+        let wanted = if disabled {
+            reason.and_then(|reason| reason(world))
+        } else {
+            None
+        }
+        .unwrap_or_else(|| (*description).to_string());
+        if let Some(mut tooltip) = world.entity_mut(entity).get_mut::<Tooltip>()
+            && tooltip.description != wanted
+        {
+            tooltip.description = wanted;
+        }
+    }
+}
+
+fn describe_disabled_button(add: On<Add<InteractionDisabled>>, mut commands: Commands) {
+    let entity = add.event_target();
+    commands.queue(move |world: &mut World| sync_descriptions(world, vec![(entity, Some(true))]));
+}
+
+fn describe_enabled_button(remove: On<Remove<InteractionDisabled>>, mut commands: Commands) {
+    let entity = remove.event_target();
+    commands.queue(move |world: &mut World| sync_descriptions(world, vec![(entity, Some(false))]));
+}
+
+/// A reason can change while a button stays disabled, which neither the add nor
+/// the remove of `InteractionDisabled` announces.
+fn refresh_disabled_descriptions(
+    _: On<RefreshOperatorButtons>,
+    buttons: Query<Entity, (With<ButtonOperatorCall>, With<InteractionDisabled>)>,
+    mut commands: Commands,
+) {
+    let buttons: Vec<_> = buttons.iter().map(|entity| (entity, None)).collect();
+    if buttons.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| sync_descriptions(world, buttons));
 }
 
 /// When the bindings change for any operator's action entity (user

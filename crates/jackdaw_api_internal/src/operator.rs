@@ -63,6 +63,10 @@ pub(super) fn plugin(app: &mut App) {
 /// a global observer that, on `ButtonClickEvent`, calls
 /// [`OperatorWorldExt::operator`] with the stored id; so no per-button
 /// click handler is needed.
+/// Explains why an operator is unavailable in the current world, or `None`
+/// when it has nothing more specific to say than its description.
+pub type UnavailableReason = fn(&World) -> Option<String>;
+
 pub trait Operator: 'static {
     const ID: &'static str;
     const LABEL: &'static str;
@@ -85,6 +89,11 @@ pub trait Operator: 'static {
     /// without a person at the pointer. The reason is required so hiding one is
     /// an argument on the record.
     const REMOTE_HIDDEN: Option<&'static str> = None;
+
+    /// Why the operator is unavailable right now, read only while its
+    /// availability check fails. Shown in place of the description on a
+    /// disabled button or menu row; `None` keeps the description.
+    const UNAVAILABLE_REASON: Option<UnavailableReason> = None;
 
     /// Modal operators stay active across frames.
     ///
@@ -642,7 +651,10 @@ fn dispatch_operator(
             // we need to manually move this to `debug` on the error handler.
             // Which I leave as an exercise for the reader.
             // Until then, this erroneously returns `Ok()` :)
-            debug!("Availability check failed for operator: {id}");
+            match op.unavailable_reason(world) {
+                Some(reason) => debug!("Availability check failed for operator {id}: {reason}"),
+                None => debug!("Availability check failed for operator: {id}"),
+            }
             return Ok(OperatorResult::Cancelled);
         }
     }
