@@ -318,7 +318,7 @@ fn cancelling_a_stroke_restores_its_cells() {
     assert_eq!(entries(&app), count);
 }
 
-fn tap(app: &mut App, key_code: KeyCode, logical_key: Key) {
+pub(crate) fn tap(app: &mut App, key_code: KeyCode, logical_key: Key) {
     let window = app
         .world_mut()
         .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()

@@ -67,6 +67,11 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
         "a line dragged between two cells; the line's cells by name instead",
     ),
     (
+        "tilemap.select",
+        Some("tilemap.selection.set"),
+        "a rectangle of cells dragged on the active layer; its corners as x0,y0,x1,y1 instead",
+    ),
+    (
         "terrain.sculpt",
         Some("terrain.sculpt.stamp"),
         "a held brush stroke; one stamp at a named place instead",

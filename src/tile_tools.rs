@@ -65,6 +65,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .bind_operator_in::<TilemapPickerOp>(context, [PresetInput::key("KeyI")])
         .bind_operator_in::<TilemapEditModeExitOp>(context, [PresetInput::key("Escape")]);
     crate::tile_palette::add_to_extension(ctx, context);
+    crate::tile_select::add_to_extension(ctx, context);
 }
 
 /// The input context of the tile tools, active only in tile edit mode.
@@ -82,6 +83,7 @@ pub enum TileTool {
     Line,
     Bucket,
     Picker,
+    Select,
 }
 
 impl TileTool {
@@ -516,7 +518,7 @@ pub(crate) fn stroke_write(
     }
 }
 
-fn refuse(world: &mut World, err: &str) -> OperatorResult {
+pub(crate) fn refuse(world: &mut World, err: &str) -> OperatorResult {
     crate::status_bar::notify_warn(world, format!("Tile tool refused: {err}"));
     warn_caller(world, format!("tile tool: {err}"));
     OperatorResult::Cancelled
@@ -561,14 +563,9 @@ pub(crate) fn shape_cells(
         }
         return Ok(orthogonal_line(from, to));
     }
-    let (mut min, mut max) = (from.0.min(to.0), from.0.max(to.0));
-    if let Some(b) = bounds {
-        min = min.max(b.min);
-        max = max.min(b.max.saturating_sub(IVec2::ONE));
-        if min.cmpgt(max).any() {
-            return Ok(Vec::new());
-        }
-    }
+    let Some((min, max)) = clipped_rect(from, to, bounds) else {
+        return Ok(Vec::new());
+    };
     let span = (max.as_i64vec2() - min.as_i64vec2()).as_u64vec2() + 1;
     let count = span.x.saturating_mul(span.y);
     if count > MAX_FILL_CELLS as u64 {
@@ -577,6 +574,21 @@ pub(crate) fn shape_cells(
     Ok((min.y..=max.y)
         .flat_map(|y| (min.x..=max.x).map(move |x| CellCoord::new(x, y)))
         .collect())
+}
+
+/// The corners of the rectangle between cells `a` and `b`, both included,
+/// clipped to `bounds`; `None` when nothing is left.
+pub(crate) fn clipped_rect(
+    a: CellCoord,
+    b: CellCoord,
+    bounds: Option<IRect>,
+) -> Option<(IVec2, IVec2)> {
+    let (mut min, mut max) = (a.0.min(b.0), a.0.max(b.0));
+    if let Some(bounds) = bounds {
+        min = min.max(bounds.min);
+        max = max.min(bounds.max.saturating_sub(IVec2::ONE));
+    }
+    (!min.cmpgt(max).any()).then_some((min, max))
 }
 
 /// One frame of a stroke. Invoked with no press on the map, it only makes
@@ -899,8 +911,7 @@ fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
     let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
     let authoring = layer.and_then(|l| l.authoring.as_ref());
     let terrain = (authoring.filter(|_| active.terrain)).map_or(0, |a| a.terrain.get(cell));
-    let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
-    let tile = placed.unwrap_or_else(|| layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)));
+    let (tile, placed) = shown_tile(layer, cell);
     if terrain == 0 && tile.is_empty() {
         return Err(format!("cell {},{} is empty", cell.0.x, cell.0.y));
     }
@@ -911,11 +922,22 @@ fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
     }
     if terrain != 0 {
         brush.terrain = terrain;
-        if placed.is_none() {
+        if !placed {
             brush.source = BrushSource::Terrain;
         }
     }
     Ok(())
+}
+
+/// The tile a cell shows, its hand-placed tile else its resolved one, and
+/// whether it is hand-placed.
+pub(crate) fn shown_tile(layer: Option<&LayerData>, cell: CellCoord) -> (TileRef, bool) {
+    let placed =
+        (layer.and_then(|l| l.authoring.as_ref())).and_then(|a| a.overrides.get(&cell).copied());
+    match placed {
+        Some(tile) => (tile, true),
+        None => (layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)), false),
+    }
 }
 
 /// The map cell under a pointer on a 2D panel's stage in Edit mode, and
@@ -976,6 +998,7 @@ fn on_tile_press(
         TileTool::Line => TilemapLineOp::ID,
         TileTool::Bucket => TilemapBucketOp::ID,
         TileTool::Picker => TilemapPickerOp::ID,
+        TileTool::Select => crate::tile_select::TilemapSelectOp::ID,
     };
     commands.queue(move |world: &mut World| {
         let result = world
