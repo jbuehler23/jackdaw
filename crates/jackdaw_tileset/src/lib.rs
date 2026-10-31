@@ -310,15 +310,30 @@ impl Tileset {
     /// Pixel origin and size of tile `tile` in the source image of sheet
     /// `sheet`.
     pub fn sheet_rect(&self, sheet: u32, tile: u32) -> Option<(UVec2, UVec2)> {
+        Some(self.sheet_layout(sheet)?.tile_rect(tile))
+    }
+
+    /// The tile and the zone `mode` matches on under pixel `at` of sheet
+    /// `sheet`.
+    pub fn zone_at(
+        &self,
+        sheet: u32,
+        at: Vec2,
+        mode: MatchMode,
+    ) -> Option<(u32, jackdaw_tilemap::Peer)> {
+        let (tile, inside) = self.sheet_layout(sheet)?.tile_at(at)?;
+        Some((tile, jackdaw_tilemap::Peer::under(inside, mode)))
+    }
+
+    fn sheet_layout(&self, sheet: u32) -> Option<GridLayout> {
         let sheet = self.sheets.get(sheet as usize)?;
-        let layout = GridLayout {
+        Some(GridLayout {
             tile: self.tile_size,
             margin: sheet.margin,
             spacing: sheet.spacing,
             columns: sheet.columns,
             rows: sheet.rows,
-        };
-        Some(layout.tile_rect(tile))
+        })
     }
 
     /// Sheet and tile of packed layer `layer`.

@@ -143,6 +143,38 @@ impl TilesetSetup {
             .map(|(a, _)| *a)
             .collect()
     }
+
+    /// Whether the set of `inner` over `outer` holds a tile with `peers`, as
+    /// [`TilesetSetup::coverage`] counts it.
+    pub fn holds(&self, inner: TerrainId, outer: TerrainId, peers: &TileTerrains) -> bool {
+        set_holds((inner, outer), peers, &self.sets)
+    }
+
+    /// Paints `terrain` by hand on each zone of `zones` the mode of the set
+    /// of `inner` over `outer` matches on, skipping the rest and the tiles of
+    /// objects. Returns how many zones changed.
+    pub fn paint_zones(
+        &mut self,
+        inner: TerrainId,
+        outer: TerrainId,
+        terrain: TerrainId,
+        zones: &[(TileAddress, Peer)],
+    ) -> Result<usize, SetupError> {
+        let mode = (self.set(inner, outer))
+            .ok_or(SetupError::UnknownSet(inner, outer))?
+            .mode
+            .value;
+        let mut changed = 0;
+        for &(tile, peer) in zones {
+            let now = self.tiles.get(&tile).map_or(0, |t| t.terrains.get(peer));
+            if !mode.uses(peer) || now == terrain || self.stamp_holding(tile).is_some() {
+                continue;
+            }
+            self.set_peer_by_hand(tile, peer, terrain)?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
 }
 
 /// The tiles of the `size` block at `origin` on a sheet of `grid` columns
@@ -342,5 +374,86 @@ mod tests {
             })
         );
         assert!(!setup.tiles.contains_key(&at(8)), "nothing is laid");
+    }
+
+    #[test]
+    fn a_point_in_a_tile_picks_the_zone_its_mode_matches_on() {
+        let under = |x: f32, y: f32, mode| Peer::under(glam::Vec2::new(x, y), mode);
+        let all = MatchMode::CornersAndSides;
+        assert_eq!(under(0.1, 0.1, all), Peer::TopLeft);
+        assert_eq!(under(0.5, 0.1, all), Peer::Top);
+        assert_eq!(under(0.9, 0.5, all), Peer::Right);
+        assert_eq!(under(0.5, 0.5, all), Peer::Centre);
+        assert_eq!(under(0.2, 0.9, all), Peer::BottomLeft);
+        let corners = MatchMode::Corners;
+        assert_eq!(under(0.45, 0.1, corners), Peer::TopLeft);
+        assert_eq!(under(0.55, 0.2, corners), Peer::TopRight);
+        assert_eq!(under(0.1, 0.6, corners), Peer::BottomLeft);
+        assert_eq!(under(0.5, 0.5, corners), Peer::Centre);
+        let sides = MatchMode::Sides;
+        assert_eq!(under(0.1, 0.1 + 0.05, sides), Peer::Left);
+        assert_eq!(under(0.2, 0.1, sides), Peer::Top);
+        assert_eq!(under(0.9, 0.8, sides), Peer::Right);
+        assert_eq!(under(0.6, 0.95, sides), Peer::Bottom);
+        assert_eq!(under(0.5, 0.5, sides), Peer::Centre);
+        assert_eq!(under(1.0, 1.0, all), Peer::BottomRight, "the far edge");
+    }
+
+    #[test]
+    fn painting_zones_sets_only_the_peers_its_set_matches_on() {
+        let mut setup = farm();
+        let zones = [
+            (at(3), Peer::Top),
+            (at(3), Peer::TopLeft),
+            (at(4), Peer::Centre),
+        ];
+        assert_eq!(setup.paint_zones(SAND, GRASS, SAND, &zones), Ok(2));
+        assert_eq!(setup.tiles[&at(3)].terrains.get(Peer::Top), SAND);
+        assert_eq!(setup.tiles[&at(3)].terrains.get(Peer::TopLeft), 0);
+        assert_eq!(setup.tiles[&at(4)].terrains.centre(), SAND);
+        assert!(setup.tiles[&at(3)].provenance[Peer::Top.index()] == Provenance::User);
+        assert!(setup.holds(SAND, GRASS, &setup.tiles[&at(3)].terrains));
+        assert_eq!(
+            setup.paint_zones(SAND, GRASS, SAND, &zones),
+            Ok(0),
+            "nothing left to change"
+        );
+        assert_eq!(setup.paint_zones(SAND, GRASS, 0, &zones[..1]), Ok(1));
+        assert_eq!(setup.tiles[&at(3)].terrains.get(Peer::Top), 0, "erased");
+        assert_eq!(
+            setup.paint_zones(GRASS, SAND, GRASS, &zones),
+            Err(SetupError::UnknownSet(GRASS, SAND))
+        );
+        setup
+            .put_block(0, GRID, UVec2::new(5, 0), UVec2::ONE)
+            .expect("an object");
+        let object = [(at(5), Peer::Top)];
+        assert_eq!(setup.paint_zones(SAND, GRASS, SAND, &object), Ok(0));
+        assert!(!setup.tiles.contains_key(&at(5)), "an object tile is left");
+    }
+
+    #[test]
+    fn a_grid_finds_the_tile_and_the_point_in_it() {
+        let grid = crate::GridLayout {
+            tile: UVec2::splat(16),
+            margin: UVec2::splat(2),
+            spacing: UVec2::splat(1),
+            columns: 3,
+            rows: 2,
+        };
+        let v = glam::Vec2::new;
+        assert_eq!(grid.tile_at(v(2.0, 2.0)), Some((0, v(0.0, 0.0))));
+        assert_eq!(
+            grid.tile_at(v(19.0 + 4.0, 2.0 + 8.0)),
+            Some((1, v(0.25, 0.5)))
+        );
+        assert_eq!(
+            grid.tile_at(v(36.0 + 15.0, 19.0 + 15.0)),
+            Some((5, v(15.0 / 16.0, 15.0 / 16.0)))
+        );
+        assert_eq!(grid.tile_at(v(1.0, 5.0)), None, "the margin");
+        assert_eq!(grid.tile_at(v(18.5, 5.0)), None, "the spacing");
+        assert_eq!(grid.tile_at(v(60.0, 5.0)), None, "past the grid");
+        assert_eq!(grid.tile_at(v(-3.0, 5.0)), None);
     }
 }

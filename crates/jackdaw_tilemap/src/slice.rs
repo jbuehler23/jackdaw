@@ -50,7 +50,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use glam::UVec2;
+use glam::{UVec2, Vec2};
 
 pub const COMMON_TILE_SIZES: [u32; 8] = [8, 12, 16, 24, 32, 48, 64, 128];
 const MAX_SPACING: u32 = 4;
@@ -142,6 +142,22 @@ impl GridLayout {
         let columns = self.columns.max(1);
         let cell = UVec2::new(index % columns, index / columns);
         (self.margin + cell * (self.tile + self.spacing), self.tile)
+    }
+
+    /// The tile under pixel `at` and where in it, from (0, 0) at its top left
+    /// to (1, 1); none in the margin, the spacing or past the grid.
+    pub fn tile_at(&self, at: Vec2) -> Option<(u32, Vec2)> {
+        let step = (self.tile + self.spacing).as_vec2();
+        let from = at - self.margin.as_vec2();
+        let cell = (from / step).floor();
+        let inside = from - cell * step;
+        let columns = (0.0..self.columns as f32).contains(&cell.x);
+        let rows = (0.0..self.rows as f32).contains(&cell.y);
+        if !columns || !rows || inside.cmpge(self.tile.as_vec2()).any() {
+            return None;
+        }
+        let index = cell.y as u32 * self.columns + cell.x as u32;
+        Some((index, inside / self.tile.as_vec2()))
     }
 
     /// The far corner of the last cell.

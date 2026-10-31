@@ -178,6 +178,7 @@ pub mod tilemap_render;
 pub mod tilemap_resolve;
 pub mod tilemap_shape_ops;
 pub mod tilemap_stroke;
+pub mod tileset_bits;
 pub mod tileset_dock;
 pub mod tileset_edit;
 pub mod tileset_import;
@@ -480,7 +481,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(tile_select::plugin)
         .add_plugins(tilemap_render::plugin)
         .add_plugins(tilemap_resolve::plugin)
-        .add_plugins(tileset_dock::plugin)
+        .add_plugins((tileset_dock::plugin, tileset_bits::plugin))
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins((

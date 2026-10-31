@@ -13,6 +13,7 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use jackdaw::asset_index::AssetIndex;
+use jackdaw::tileset_bits::MissingGlyph;
 use jackdaw::tileset_dock::{
     CollisionCombo, DockAction, DockControl, DockPage, DockView, NameField, SheetPicture,
     TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext,
@@ -32,7 +33,7 @@ const WATER: u8 = 2;
 
 /// The overworld sheet imported with nothing set up, then grass and water, a
 /// water over grass set and tile 0 of grass with a water corner, by hand.
-fn handmade() -> (App, tempfile::TempDir) {
+pub(crate) fn handmade() -> (App, tempfile::TempDir) {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET)]);
     call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
@@ -46,7 +47,7 @@ fn handmade() -> (App, tempfile::TempDir) {
     (app, dir)
 }
 
-fn settle(app: &mut App) {
+pub(crate) fn settle(app: &mut App) {
     for _ in 0..3 {
         app.update();
     }
@@ -90,7 +91,7 @@ fn root(app: &mut App, tab: TabId) -> Entity {
     found[0]
 }
 
-fn view(app: &App) -> DockView {
+pub(crate) fn view(app: &App) -> DockView {
     app.world().resource::<TilesetDockViews>().0[FILE].clone()
 }
 
@@ -110,7 +111,7 @@ fn builds(app: &App) -> usize {
     app.world().resource::<Builds>().0
 }
 
-fn control(app: &mut App, root: Entity, action: DockAction) -> Entity {
+pub(crate) fn control(app: &mut App, root: Entity, action: DockAction) -> Entity {
     let found: Vec<Entity> = app
         .world_mut()
         .query::<(Entity, &DockControl)>()
@@ -122,14 +123,14 @@ fn control(app: &mut App, root: Entity, action: DockAction) -> Entity {
     found[0]
 }
 
-fn press(app: &mut App, root: Entity, action: DockAction) {
+pub(crate) fn press(app: &mut App, root: Entity, action: DockAction) {
     let entity = control(app, root, action);
     app.world_mut().trigger(Activate { entity });
     settle(app);
 }
 
 /// The texts the dock under `root` shows.
-fn texts(app: &mut App, root: Entity) -> Vec<String> {
+pub(crate) fn texts(app: &mut App, root: Entity) -> Vec<String> {
     let mut found = Vec::new();
     let mut stack = vec![root];
     while let Some(entity) = stack.pop() {
@@ -143,7 +144,7 @@ fn texts(app: &mut App, root: Entity) -> Vec<String> {
     found
 }
 
-fn opened(app: &mut App) -> (TabId, Entity) {
+pub(crate) fn opened(app: &mut App) -> (TabId, Entity) {
     open(app, FILE);
     let tab = tabs(app)[0].0;
     let root = root(app, tab);
@@ -599,11 +600,31 @@ fn the_missing_shapes_of_a_set_open_on_request() {
     let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
     let listed = |app: &mut App| {
-        (texts(app, root).into_iter())
-            .filter(|t| t.trim_start().starts_with("missing "))
-            .count()
+        let glyphs: Vec<Entity> = app
+            .world_mut()
+            .query::<(Entity, &MissingGlyph)>()
+            .iter(app.world())
+            .filter(|(_, g)| g.root == root && (g.inner, g.outer) == (WATER, GRASS))
+            .map(|(e, _)| e)
+            .collect();
+        for glyph in &glyphs {
+            let cells = app.world().get::<Children>(*glyph).expect("cells");
+            let painted = (cells.iter())
+                .filter(|c| {
+                    app.world()
+                        .get::<BackgroundColor>(*c)
+                        .is_some_and(|b| b.0.alpha() > 0.0)
+                })
+                .count();
+            assert_eq!((cells.len(), painted), (9, 5), "a corner and centre shape");
+        }
+        glyphs.len()
     };
     let shown = texts(&mut app, root);
+    assert!(
+        !shown.iter().any(|t| t.trim_start().starts_with("missing ")),
+        "{shown:?}"
+    );
     assert!(
         shown.iter().any(|t| t == "water over grass: Corners 1/16"),
         "{shown:?}"
@@ -619,7 +640,7 @@ fn the_missing_shapes_of_a_set_open_on_request() {
 }
 
 /// Run a synthetic input clause and let it drain.
-fn input(app: &mut App, clause: &str) {
+pub(crate) fn input(app: &mut App, clause: &str) {
     jackdaw::boot_ops::run_op_clause(app.world_mut(), clause)
         .expect("the clause dispatches")
         .assert_finished();
@@ -819,7 +840,7 @@ fn terrains_are_listed_by_their_icon_tile_and_sets_by_their_names() {
 }
 
 /// The screen rect of `entity`, in logical pixels.
-fn screen_rect(app: &App, entity: Entity) -> Rect {
+pub(crate) fn screen_rect(app: &App, entity: Entity) -> Rect {
     let node = app.world().get::<ComputedNode>(entity).expect("laid out");
     let at = app
         .world()
