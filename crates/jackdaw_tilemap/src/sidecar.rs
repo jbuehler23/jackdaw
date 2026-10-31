@@ -104,6 +104,20 @@ impl LayerData {
             authoring: (kind == LayerKind::Terrain).then(TerrainAuthoring::default),
         }
     }
+
+    /// Every cell holding a tile, a terrain, links or a hand-placed tile, in
+    /// order.
+    pub fn painted_cells(&self) -> Vec<CellCoord> {
+        let mut cells: Vec<CellCoord> = self.tiles.cells().map(|(c, _)| c).collect();
+        if let Some(a) = &self.authoring {
+            cells.extend(a.terrain.cells().map(|(c, _)| c));
+            cells.extend(a.links.cells().map(|(c, _)| c));
+            cells.extend(a.overrides.keys().copied());
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        cells
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

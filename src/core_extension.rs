@@ -334,6 +334,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::tile_tools::add_to_extension(ctx);
         crate::tilemap_ops::add_to_extension(ctx);
         crate::tilemap_shape_ops::add_to_extension(ctx);
+        crate::tilemap_region_ops::add_to_extension(ctx);
         crate::tileset_import::add_to_extension(ctx);
         crate::tileset_layout_ops::add_to_extension(ctx);
         crate::world_units::add_to_extension(ctx);

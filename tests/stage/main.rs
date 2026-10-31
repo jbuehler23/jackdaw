@@ -62,6 +62,7 @@ mod tile_stamps;
 mod tile_tools;
 mod tilemap_history;
 mod tilemap_layers;
+mod tilemap_region_text;
 mod tilemap_render;
 mod tilemap_shape_ops;
 mod ui_align;

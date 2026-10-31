@@ -9,8 +9,10 @@
 //!
 //! Rows run top to bottom and the origin names the top-left cell. The world
 //! is y-up, so row `r`, column `c` is cell `(origin.x + c, origin.y - r)`.
-//! Legend values are `"empty"`, `"tile:NAME"` for an exact tile, or any other
-//! name for a terrain. Resolving names to ids is the caller's job; this module
+//! Legend values are `"empty"` (or `"erase"`), `"keep"` to leave a cell as
+//! it is, `"tile:NAME"` for an exact tile, `"terrain:NAME"` for a terrain
+//! whatever its name, or any other name for a terrain.
+//! Resolving names to ids is the caller's job; this module
 //! only parses, validates and emits the text. The surrounding `legend:` and
 //! `rows:` framing is also the caller's; [`parse_rows`] takes the row block.
 
@@ -25,21 +27,32 @@ use crate::layer::{CellValue, ChunkedLayer};
 use RegionTextErrorKind as ErrorKind;
 
 const TILE_PREFIX: &str = "tile:";
+const TERRAIN_PREFIX: &str = "terrain:";
+
+/// Values that never name a terrain unless written after `terrain:`.
+const KEYWORDS: [&str; 3] = ["empty", "erase", "keep"];
 
 /// What a legend symbol stands for.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LegendEntry {
     Empty,
+    /// Leaves the cell as it is when written.
+    Keep,
     Terrain(String),
     Tile(String),
 }
 
 impl LegendEntry {
-    /// Parses a legend value. Returns `None` for an empty name (`""` or
-    /// `"tile:"`).
+    /// Parses a legend value. Returns `None` for an empty name (`""`,
+    /// `"tile:"` or `"terrain:"`).
     pub fn parse(value: &str) -> Option<Self> {
-        if value == "empty" {
-            return Some(Self::Empty);
+        match value {
+            "empty" | "erase" => return Some(Self::Empty),
+            "keep" => return Some(Self::Keep),
+            _ => {}
+        }
+        if let Some(name) = value.strip_prefix(TERRAIN_PREFIX) {
+            return (!name.is_empty()).then(|| Self::Terrain(name.to_string()));
         }
         if let Some(name) = value.strip_prefix(TILE_PREFIX) {
             if name.is_empty() {
@@ -59,10 +72,17 @@ impl fmt::Display for LegendEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => f.write_str("empty"),
+            Self::Keep => f.write_str("keep"),
+            Self::Terrain(name) if needs_prefix(name) => write!(f, "{TERRAIN_PREFIX}{name}"),
             Self::Terrain(name) => f.write_str(name),
             Self::Tile(name) => write!(f, "{TILE_PREFIX}{name}"),
         }
     }
+}
+
+/// Whether a terrain name would parse as something else written bare.
+fn needs_prefix(name: &str) -> bool {
+    KEYWORDS.contains(&name) || name.starts_with(TILE_PREFIX) || name.starts_with(TERRAIN_PREFIX)
 }
 
 /// Symbol table for region rows, ordered by symbol.
@@ -133,10 +153,12 @@ fn validate_entry(symbol: char, entry: &LegendEntry) -> Result<(), ErrorKind> {
         LegendEntry::Terrain(name) | LegendEntry::Tile(name) if name.is_empty() => {
             Err(ErrorKind::EmptyName(symbol))
         }
-        LegendEntry::Terrain(name) if name == "empty" || name.starts_with(TILE_PREFIX) => {
-            Err(ErrorKind::ReservedName(name.clone()))
+        _ if LegendEntry::parse(&entry.to_string()).as_ref() != Some(entry) => {
+            Err(ErrorKind::ReservedName(entry.to_string()))
         }
-        LegendEntry::Empty | LegendEntry::Terrain(_) | LegendEntry::Tile(_) => Ok(()),
+        LegendEntry::Empty | LegendEntry::Keep | LegendEntry::Terrain(_) | LegendEntry::Tile(_) => {
+            Ok(())
+        }
     }
 }
 
@@ -258,7 +280,7 @@ pub enum RegionTextErrorKind {
     DuplicateKey(char),
     /// A legend value of `""` or `"tile:"`.
     EmptyName(char),
-    /// A terrain named `"empty"` or starting with `"tile:"`.
+    /// An entry that would not parse back as itself.
     ReservedName(String),
     /// An entry has no symbol in the legend.
     NoSymbol(LegendEntry),
@@ -620,6 +642,28 @@ mod tests {
     }
 
     #[test]
+    fn keywords_are_never_bare_terrain_names() {
+        assert_eq!(LegendEntry::parse("keep"), Some(LegendEntry::Keep));
+        assert_eq!(LegendEntry::parse("erase"), Some(LegendEntry::Empty));
+        assert_eq!(LegendEntry::Keep.to_string(), "keep");
+        assert_eq!(LegendEntry::parse("terrain:"), None);
+        assert_eq!(LegendEntry::Terrain("grass".into()).to_string(), "grass");
+        let mut legend = Legend::default();
+        for (symbol, name) in [
+            ('a', "empty"),
+            ('b', "erase"),
+            ('c', "keep"),
+            ('d', "tile:a"),
+            ('e', "terrain:b"),
+        ] {
+            let entry = LegendEntry::Terrain(name.into());
+            assert_eq!(entry.to_string(), format!("terrain:{name}"));
+            assert_eq!(LegendEntry::parse(&entry.to_string()), Some(entry.clone()));
+            assert!(legend.insert(symbol, entry).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
     fn legend_entry_round_trips() {
         for value in ["empty", "grass", "tile:chest", "tile:a:b"] {
             let entry = LegendEntry::parse(value).unwrap();
@@ -699,14 +743,6 @@ mod tests {
         assert_eq!(
             invalid('x', LegendEntry::Tile(String::new())),
             ErrorKind::EmptyName('x')
-        );
-        assert_eq!(
-            invalid('x', LegendEntry::Terrain("empty".into())),
-            ErrorKind::ReservedName("empty".into())
-        );
-        assert_eq!(
-            invalid('x', LegendEntry::Terrain("tile:a".into())),
-            ErrorKind::ReservedName("tile:a".into())
         );
         let mut legend = Legend::default();
         for (symbol, entry) in [

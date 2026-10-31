@@ -569,8 +569,13 @@ fn changes(
 /// The cells inside `bounds`, or all of them on an unbounded map.
 pub fn in_bounds(bounds: Option<IRect>, cells: &[CellCoord]) -> Vec<CellCoord> {
     (cells.iter().copied())
-        .filter(|c| bounds.is_none_or(|b| c.0.cmpge(b.min).all() && c.0.cmplt(b.max).all()))
+        .filter(|&c| inside(bounds, c))
         .collect()
+}
+
+/// Whether `cell` is inside `bounds`, always on an unbounded map.
+pub fn inside(bounds: Option<IRect>, cell: CellCoord) -> bool {
+    bounds.is_none_or(|b| cell.0.cmpge(b.min).all() && cell.0.cmplt(b.max).all())
 }
 
 /// The chunks of `cells` and the ring around each: every chunk a write to
