@@ -336,6 +336,7 @@ fn update_status_right(
     draw_state: Res<DrawBrushState>,
     tool_status: Res<jackdaw_api_internal::tools::ToolStatus>,
     tile_hover: Res<crate::tile_preview::TileHoverReadout>,
+    tile_mode: Res<crate::tile_tools::TileEditMode>,
     build_status: Res<BuildStatus>,
     numeric: Res<NumericTransformState>,
     notice: Res<StatusNotice>,
@@ -399,6 +400,7 @@ fn update_status_right(
         && !phase.is_changed()
         && !numeric.is_changed()
         && !tile_hover.is_changed()
+        && !tile_mode.is_changed()
     {
         return;
     }
@@ -476,6 +478,15 @@ fn update_status_right(
 
     if let Some(status) = &tool_status.0 {
         text.0 = status.clone();
+        return;
+    }
+
+    if tile_mode.map.is_some() {
+        let tool = tile_mode.tool.label();
+        text.0 = match &tile_hover.0 {
+            Some(readout) => format!("{tool} | {readout}"),
+            None => tool.to_string(),
+        };
         return;
     }
 

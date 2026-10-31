@@ -24,9 +24,9 @@ use bevy::{
 };
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_feathers::{
-    button::{ButtonProps, ButtonSize, ButtonVariant, button},
     menu_bar::{
-        OP_ACTION_PREFIX, SECTION_ACTION_PREFIX, SEPARATOR_ACTION, checked_row, menu_button,
+        OP_ACTION_PREFIX, SECTION_ACTION_PREFIX, SEPARATOR_ACTION, checked_row, menu_glyph_button,
+        radio_row,
     },
     segmented, tokens,
 };
@@ -158,10 +158,10 @@ pub struct Ui2dView {
 /// usually spaced on.
 pub const DEFAULT_UI_GRID: f32 = 8.0;
 
-/// Finest [`Ui2dView::grid`] the stepper reaches: a whole authored pixel.
+/// Finest [`Ui2dView::grid`] the Finer row reaches: a whole authored pixel.
 pub const MIN_UI_GRID: f32 = 1.0;
 
-/// Coarsest [`Ui2dView::grid`] the stepper reaches.
+/// Coarsest [`Ui2dView::grid`] the Coarser row reaches.
 pub const MAX_UI_GRID: f32 = 64.0;
 
 /// `grid` stepped `steps` powers of two, clamped to the ladder's ends. The step
@@ -497,15 +497,7 @@ impl Plugin for Viewport2dPlugin {
                 First,
                 forward_pointer_into_stage.in_set(PickingSystems::PostInput),
             )
-            .add_systems(
-                Update,
-                (
-                    update_viewport_2d_mode_bar,
-                    update_viewport_2d_title,
-                    update_viewport_2d_zoom_readout,
-                    update_viewport_2d_grid_readout,
-                ),
-            )
+            .add_systems(Update, (update_viewport_2d_mode_bar,))
             .add_systems(
                 Update,
                 (viewport_2d_pan_zoom, apply_2d_view)
@@ -1911,9 +1903,11 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
                 ..default()
             },
             BackgroundColor(tokens::PANEL_BG),
-            children![viewport_2d_header(parent)],
         ))
         .id();
+    if let Err(err) = spawn_viewport_2d_header(world, column, parent) {
+        error!("failed to spawn the 2D viewport toolbar: {err}");
+    }
     world.entity_mut(column).add_child(ruler_frame);
 
     world.entity_mut(parent).insert(Viewport2dPanelHost {
@@ -1933,93 +1927,98 @@ pub(crate) fn build_2d_presentation(world: &mut World, parent: Entity) -> Entity
     column
 }
 
-/// Header row above the 2D viewport stage: what is being edited on the left,
-/// then the zoom readout, the Fit control and Edit|Interact on the right. Sized
-/// like the 3D viewport's toolbar.
-fn viewport_2d_header(host: Entity) -> impl Bundle {
-    (
-        crate::EditorEntity,
-        Node {
-            width: percent(100),
-            height: px(tokens::TOOLBAR_HEIGHT),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect {
-                left: px(tokens::TOOLBAR_PADDING_LEFT),
-                right: px(tokens::TOOLBAR_PADDING_RIGHT),
-                top: px(0),
-                bottom: px(0),
-            },
-            column_gap: px(tokens::TOOLBAR_GAP),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::top(px(tokens::TOOLBAR_RADIUS)),
-            flex_shrink: 0.0,
-            ..default()
-        },
-        BackgroundColor(tokens::PANEL_HEADER_BG),
-        BorderColor::all(tokens::TOOLBAR_BORDER),
-        children![
-            (
-                Viewport2dTitle,
-                Text::new(PANEL_TITLE_FALLBACK),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
-                    ..default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-            ),
-            // Eats the slack, putting the controls on the right edge.
+/// The 2D viewport's toolbar, built from the 3D toolbar's parts: the tool
+/// groups on the left, then the Snap and canvas view menus and the mode
+/// switches. The grid and zoom live in the canvas view menu, leaving the tools
+/// the room.
+fn spawn_viewport_2d_header(world: &mut World, column: Entity, host: Entity) -> Result {
+    let header = world
+        .spawn((
+            ChildOf(column),
+            crate::EditorEntity,
             Node {
-                flex_grow: 1.0,
+                width: percent(100),
+                height: px(tokens::TOOLBAR_HEIGHT),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                padding: UiRect {
+                    left: px(tokens::TOOLBAR_PADDING_LEFT),
+                    right: px(tokens::TOOLBAR_PADDING_RIGHT),
+                    top: px(0),
+                    bottom: px(0),
+                },
+                column_gap: px(tokens::TOOLBAR_GAP),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::top(px(tokens::TOOLBAR_RADIUS)),
+                flex_shrink: 0.0,
                 ..default()
             },
-            viewport_2d_grid_stepper(host),
-            viewport_2d_snap_menu(host),
-            (
-                Viewport2dZoomReadout { host },
-                Text::new(zoom_percent(Ui2dView::default().zoom)),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_XS,
+            BackgroundColor(tokens::PANEL_HEADER_BG),
+            BorderColor::all(tokens::TOOLBAR_BORDER),
+            children![(
+                crate::toolbar_overflow::ToolbarSpacer,
+                Node {
+                    flex_grow: 1.0,
                     ..default()
                 },
-                TextColor(tokens::TEXT_SECONDARY),
-            ),
-            (
-                button(
-                    ButtonProps::new("Fit")
-                        .with_variant(ButtonVariant::Ghost)
-                        .with_size(ButtonSize::MD)
-                        .call_operator(Viewport2dFrameOp::ID),
-                ),
-                jackdaw_feathers::tooltip::Tooltip::title(
-                    "Fit: zoom so the selected sprites, or the whole scene, are in view",
-                ),
-            ),
-            viewport_2d_mode_bar(host),
-            crate::viewport_host::viewport_mode_bar(host),
-        ],
-    )
+            )],
+        ))
+        .id();
+    world.spawn((ChildOf(header), viewport_2d_snap_menu(host)));
+    world.spawn((ChildOf(header), viewport_2d_view_menu(host)));
+    world.spawn((
+        ChildOf(header),
+        crate::EditorEntity,
+        viewport_2d_mode_bar(host),
+    ));
+    world.spawn((
+        ChildOf(header),
+        crate::EditorEntity,
+        crate::viewport_host::viewport_mode_bar(host),
+    ));
+    crate::toolbar_2d::spawn_tool_groups(world, header)
 }
 
-/// The canvas's snapping menu: what a dragged node lands on, whether the rulers
-/// and the guides are drawn, and the panel's own grid. The rows are built from
-/// the world each time the menu asks for them, so every box shows the setting it
-/// is about.
+/// The canvas's snapping menu: what a dragged node lands on. The rows are built from the world each time the menu asks for
+/// them, so every box shows the setting it is about.
 fn viewport_2d_snap_menu(host: Entity) -> impl Bundle {
     (
-        menu_button(
+        crate::EditorEntity,
+        menu_glyph_button(
             "Snap",
             Icon::Magnet,
             std::sync::Arc::new(move |world: &World| snap_menu_rows(world, host)),
         ),
+        jackdaw_feathers::tooltip::Tooltip::title("Snap: what a dragged node lands on"),
+    )
+}
+
+/// The canvas's display menu: the panel's grid and zoom, rulers, guides, the
+/// game frame and grid, and the project's pixels per unit, sampling and length
+/// unit.
+fn viewport_2d_view_menu(host: Entity) -> impl Bundle {
+    (
+        crate::EditorEntity,
+        menu_glyph_button(
+            crate::toolbar_2d::CANVAS_VIEW_MENU,
+            Icon::SlidersHorizontal,
+            std::sync::Arc::new(move |world: &World| view_menu_rows(world, host)),
+        ),
         jackdaw_feathers::tooltip::Tooltip::title(
-            "Snap: what a dragged node lands on, and the canvas's rulers and guides",
+            "Canvas view: grid, zoom, rulers, guides, pixels per unit and sampling",
         ),
     )
 }
 
+/// Whether `host` shows a 2D world scene rather than a UI canvas.
+fn shows_world(world: &World, host: Entity) -> bool {
+    world
+        .get::<Viewport2dPanelHost>(host)
+        .is_some_and(|panel| crate::sprite_stage::world_shows_2d_world(world, panel))
+}
+
 /// The rows the Snap menu shows for the world as it stands.
-fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
+pub fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
     let snap = world
         .get_resource::<CanvasSnap>()
         .copied()
@@ -2031,11 +2030,7 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
             kind.label(),
         )
     };
-    let panel = world.get::<Viewport2dPanelHost>(host);
-    let grid = panel.map_or(DEFAULT_UI_GRID, |host| host.view.grid);
-    let world_scene =
-        panel.is_some_and(|host| crate::sprite_stage::world_shows_2d_world(world, host));
-
+    let world_scene = shows_world(world, host);
     let mut rows = vec![
         kind_row(CanvasSnapKind::Enabled),
         kind_row(CanvasSnapKind::Pixel),
@@ -2052,214 +2047,133 @@ fn snap_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
             .filter(|kind| kind.applies(world_scene))
             .map(kind_row),
     );
-    rows.push((SEPARATOR_ACTION.to_string(), String::new()));
-    rows.push(checked_row(
-        snap.show_rulers,
-        format!(
-            "{OP_ACTION_PREFIX}{}?on={}",
-            CanvasRulersOp::ID,
-            !snap.show_rulers
-        ),
-        "Show Rulers",
-    ));
-    rows.push(checked_row(
-        snap.show_guides,
-        format!(
-            "{OP_ACTION_PREFIX}{}?on={}",
-            CanvasGuidesOp::ID,
-            !snap.show_guides
-        ),
-        "Show Guides",
-    ));
-    if world_scene {
-        rows.push(checked_row(
-            snap.show_game_frame,
-            format!(
-                "{OP_ACTION_PREFIX}{}?on={}",
-                CanvasGameFrameOp::ID,
-                !snap.show_game_frame
-            ),
-            "Show Game Frame",
-        ));
-        rows.push(checked_row(
-            world
-                .get_resource::<crate::viewport_overlays::OverlaySettings>()
-                .is_none_or(|overlays| overlays.show_grid),
-            format!(
-                "{OP_ACTION_PREFIX}{}",
-                crate::view_ops::ViewToggleGridOp::ID
-            ),
-            "Show Grid",
-        ));
-        let sampling = world
-            .get_resource::<crate::image_sampling::ProjectSampling2d>()
-            .map(|sampling| sampling.0)
-            .unwrap_or_default();
-        rows.push((
-            format!("{SECTION_ACTION_PREFIX}Project 2D Sampling"),
-            String::new(),
-        ));
-        for (mode, label) in [
-            (Sampling::Linear, "Linear"),
-            (Sampling::Nearest, "Nearest (Pixel Art)"),
-        ] {
-            rows.push(checked_row(
-                sampling == mode,
-                format!(
-                    "{OP_ACTION_PREFIX}{}?mode={}",
-                    ProjectSet2dSamplingOp::ID,
-                    mode.id()
-                ),
-                label,
-            ));
-        }
-    }
+    rows
+}
+
+/// The rows the canvas view menu shows for the world as it stands: the panel's
+/// grid and zoom, what is drawn, and on a 2D world scene the project's pixels
+/// per unit, sampling and length unit.
+pub fn view_menu_rows(world: &World, host: Entity) -> Vec<(String, String)> {
+    let snap = world
+        .get_resource::<CanvasSnap>()
+        .copied()
+        .unwrap_or_default();
+    let world_scene = shows_world(world, host);
     let units = *world.resource::<WorldUnits>();
-    let grid_pixels = if world_scene { units.ppu() } else { 1.0 };
-    if world_scene {
-        rows.push((
-            format!("{SECTION_ACTION_PREFIX}Pixels Per Unit: {}", units.ppu()),
-            String::new(),
-        ));
-        for ppu in PPU_PRESETS {
-            rows.push(checked_row(
-                units.ppu() == ppu,
-                format!(
-                    "{OP_ACTION_PREFIX}{}?value={ppu}",
-                    ProjectSetPixelsPerUnitOp::ID
-                ),
-                ppu.to_string(),
-            ));
-        }
-        rows.push((
-            format!("{SECTION_ACTION_PREFIX}Show Lengths In"),
-            String::new(),
-        ));
-        for unit in LengthUnit::ALL {
-            rows.push(checked_row(
-                units.display == unit,
-                format!(
-                    "{OP_ACTION_PREFIX}{}?unit={}",
-                    ProjectSetLengthUnitOp::ID,
-                    unit.id()
-                ),
-                unit.label(),
-            ));
-        }
-    }
-    rows.push((
-        format!(
-            "{SECTION_ACTION_PREFIX}Grid: {}",
-            grid_label(grid, world_scene.then_some(&units))
-        ),
-        String::new(),
-    ));
+    let pixels = if world_scene { units.ppu() } else { 1.0 };
+    let view = world
+        .get::<Viewport2dPanelHost>(host)
+        .map(|host| host.view)
+        .unwrap_or_default();
+    let section = |title: String| (format!("{SECTION_ACTION_PREFIX}{title}"), String::new());
+    let separator = || (SEPARATOR_ACTION.to_string(), String::new());
+    let panel = host.to_bits();
+
+    // Named on this panel: the grid and zoom are per panel, so a row in one
+    // panel's menu must not move another panel's view.
+    let mut rows = vec![section(format!(
+        "Grid: {}",
+        grid_label(view.grid, world_scene.then_some(&units))
+    ))];
     for (steps, label) in [(-1, "Finer"), (1, "Coarser")] {
-        // Named on this panel: the grid is per panel, so a row in one panel's
-        // header must not move another panel's lattice.
         rows.push((
             format!(
-                "{OP_ACTION_PREFIX}{}?size={}&panel={}",
+                "{OP_ACTION_PREFIX}{}?size={}&panel={panel}",
                 Viewport2dGridOp::ID,
-                stepped_ui_grid(grid * grid_pixels, steps),
-                host.to_bits(),
+                stepped_ui_grid(view.grid * pixels, steps),
             ),
             label.to_string(),
         ));
     }
-    rows
-}
-
-/// The canvas grid control: finer, the current lattice, coarser. The buttons
-/// write this panel's own [`Ui2dView`] through an observer rather than
-/// dispatching an operator, the grid being per-panel state; `viewport2d.grid` is
-/// how a scripted run says the same thing.
-fn viewport_2d_grid_stepper(host: Entity) -> impl Bundle {
-    (
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: px(2),
-            flex_shrink: 0.0,
-            ..default()
-        },
-        children![
-            viewport_2d_grid_step(host, -1, Icon::Minus, "Finer canvas grid"),
-            (
-                Viewport2dGridReadout { host },
-                Text::new(grid_label(Ui2dView::default().grid, None)),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_XS,
-                    ..default()
-                },
-                TextColor(tokens::TEXT_SECONDARY),
-                Node {
-                    align_self: AlignSelf::Center,
-                    justify_content: JustifyContent::Center,
-                    min_width: px(GRID_READOUT_WIDTH),
-                    ..default()
-                },
-                jackdaw_feathers::tooltip::Tooltip::title(
-                    "Canvas grid: what a dragged or nudged node lands on, in authored pixels",
-                ),
+    rows.push(section(format!(
+        "Zoom: {}",
+        zoom_percent(view.zoom / pixels)
+    )));
+    let zoom_row = |zoom: f32, label: &str| {
+        (
+            format!(
+                "{OP_ACTION_PREFIX}{}?zoom={zoom}&panel={panel}",
+                Viewport2dZoomOp::ID
             ),
-            viewport_2d_grid_step(host, 1, Icon::Plus, "Coarser canvas grid"),
-        ],
-    )
-}
+            label.to_string(),
+        )
+    };
+    rows.push(zoom_row(view.zoom * 2.0, "Zoom In"));
+    rows.push(zoom_row(view.zoom / 2.0, "Zoom Out"));
+    rows.push(zoom_row(pixels, "Actual Size"));
+    rows.push((
+        format!("{OP_ACTION_PREFIX}{}?panel={panel}", Viewport2dFrameOp::ID),
+        "Fit".to_string(),
+    ));
+    rows.push(separator());
 
-/// Room the readout keeps so the stepper's buttons do not shuffle
-/// sideways as the number goes from one digit to two.
-const GRID_READOUT_WIDTH: f32 = 34.0;
-
-/// One end of the grid stepper.
-fn viewport_2d_grid_step(
-    host: Entity,
-    steps: i32,
-    icon: Icon,
-    tooltip: &'static str,
-) -> impl Bundle {
-    (
-        Viewport2dGridStep { host, steps },
-        button(
-            ButtonProps::new("")
-                .with_variant(ButtonVariant::Ghost)
-                .with_size(ButtonSize::IconSM)
-                .with_left_icon(icon),
+    let toggle = |on: bool, id: &str, label: &str| {
+        checked_row(on, format!("{OP_ACTION_PREFIX}{id}?on={}", !on), label)
+    };
+    rows.push(toggle(snap.show_rulers, CanvasRulersOp::ID, "Show Rulers"));
+    rows.push(toggle(snap.show_guides, CanvasGuidesOp::ID, "Show Guides"));
+    if !world_scene {
+        return rows;
+    }
+    rows.push(toggle(
+        snap.show_game_frame,
+        CanvasGameFrameOp::ID,
+        "Show Game Frame",
+    ));
+    rows.push(checked_row(
+        world
+            .get_resource::<crate::viewport_overlays::OverlaySettings>()
+            .is_none_or(|overlays| overlays.show_grid),
+        format!(
+            "{OP_ACTION_PREFIX}{}",
+            crate::view_ops::ViewToggleGridOp::ID
         ),
-        jackdaw_feathers::tooltip::Tooltip::title(tooltip),
-        observe(
-            move |_: On<PointerClick>,
-                  mut hosts: Query<&mut Viewport2dPanelHost>,
-                  scene: GuideScene,
-                  units: Res<WorldUnits>| {
-                if let Ok(mut panel) = hosts.get_mut(host) {
-                    let pixels = grid_pixels(&scene, &units, &panel);
-                    let grid = stepped_ui_grid(panel.view.grid * pixels, steps) / pixels;
-                    if grid != panel.view.grid {
-                        let view = Ui2dView { grid, ..panel.view };
-                        panel.set_view(view);
-                    }
-                }
-            },
-        ),
-    )
-}
-
-/// Marker on one end of the grid stepper, naming the panel it steps and which
-/// way. Per panel, because the grid is per-panel state.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Viewport2dGridStep {
-    pub host: Entity,
-    /// Powers of two this end moves the grid by: `-1` finer, `1`
-    /// coarser.
-    pub steps: i32,
-}
-
-/// Marker on the header's grid readout, naming the panel it reports for.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Viewport2dGridReadout {
-    pub host: Entity,
+        "Show Grid",
+    ));
+    rows.push(separator());
+    rows.push(section(format!("Pixels Per Unit: {}", units.ppu())));
+    for ppu in PPU_PRESETS {
+        rows.push(radio_row(
+            units.ppu() == ppu,
+            format!(
+                "{OP_ACTION_PREFIX}{}?value={ppu}",
+                ProjectSetPixelsPerUnitOp::ID
+            ),
+            ppu.to_string(),
+        ));
+    }
+    let sampling = world
+        .get_resource::<crate::image_sampling::ProjectSampling2d>()
+        .map(|sampling| sampling.0)
+        .unwrap_or_default();
+    rows.push(section("Project 2D Sampling".to_string()));
+    for (mode, label) in [
+        (Sampling::Linear, "Linear"),
+        (Sampling::Nearest, "Nearest (Pixel Art)"),
+    ] {
+        rows.push(radio_row(
+            sampling == mode,
+            format!(
+                "{OP_ACTION_PREFIX}{}?mode={}",
+                ProjectSet2dSamplingOp::ID,
+                mode.id()
+            ),
+            label,
+        ));
+    }
+    rows.push(section("Show Lengths In".to_string()));
+    for unit in LengthUnit::ALL {
+        rows.push(radio_row(
+            units.display == unit,
+            format!(
+                "{OP_ACTION_PREFIX}{}?unit={}",
+                ProjectSetLengthUnitOp::ID,
+                unit.id()
+            ),
+            unit.label(),
+        ));
+    }
+    rows
 }
 
 /// A canvas grid as the user reads it, with the unit spelled out so it cannot
@@ -2272,94 +2186,19 @@ fn grid_label(grid: f32, world: Option<&WorldUnits>) -> String {
     }
 }
 
-/// Report each panel's canvas grid in its header.
-fn update_viewport_2d_grid_readout(
-    hosts: Query<&Viewport2dPanelHost>,
-    scene: GuideScene,
-    units: Res<WorldUnits>,
-    mut readouts: Query<(&Viewport2dGridReadout, &mut Text)>,
-) {
-    for (readout, mut text) in &mut readouts {
-        let Ok(host) = hosts.get(readout.host) else {
-            continue;
-        };
-        let world = matches!(scene.open(Some(host)), Some((_, GuideSpace::World)));
-        let label = grid_label(host.view.grid, world.then_some(&*units));
-        if text.0 != label {
-            text.0 = label;
-        }
-    }
-}
-
-/// What the header says when no UI scene is open: the panel's own name,
-/// as [`crate::builtin_extensions::ViewportExtension`] registers it.
-const PANEL_TITLE_FALLBACK: &str = "Viewport";
-
-/// Marker on the header text naming the UI scene the panel is editing.
-#[derive(Component)]
-pub struct Viewport2dTitle;
-
-/// Marker on the header's zoom readout, naming the panel it reports for: two
-/// viewports on the same scene are framed independently.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Viewport2dZoomReadout {
-    pub host: Entity,
-}
-
 /// A zoom as the percentage the user reads it at. `1.0` is 100%.
 fn zoom_percent(zoom: f32) -> String {
     format!("{:.0}%", zoom * 100.0)
 }
 
 /// Pixels per stored grid unit on `host`: the project's pixels per unit on a
-/// 2D world scene, whose grid and zoom count world units, else 1. The grid
-/// stepper and `viewport2d.grid` speak pixels, and the zoom readout counts
+/// 2D world scene, whose grid and zoom count world units, else 1. The canvas
+/// view menu and `viewport2d.grid` speak pixels, and its zoom heading counts
 /// screen pixels per sprite pixel.
 fn grid_pixels(scene: &GuideScene, units: &WorldUnits, host: &Viewport2dPanelHost) -> f32 {
     match scene.open(Some(host)) {
         Some((_, GuideSpace::World)) => units.ppu(),
         _ => 1.0,
-    }
-}
-
-/// Name the scene each 2D viewport is editing, falling back to the panel's own
-/// name when no UI scene is open. Taken from the scene tab rather than the root
-/// entity, so it matches what the tab strip shows.
-fn update_viewport_2d_title(
-    scenes: Option<Res<crate::scenes::Scenes>>,
-    roots: Query<(), AuthoredUiSceneRoot>,
-    mut titles: Query<&mut Text, With<Viewport2dTitle>>,
-) {
-    let name = match roots.iter().next() {
-        Some(()) => scenes
-            .as_deref()
-            .and_then(|scenes| scenes.tabs.get(scenes.active))
-            .map(|tab| tab.display_name.as_str())
-            .unwrap_or(PANEL_TITLE_FALLBACK),
-        None => PANEL_TITLE_FALLBACK,
-    };
-    for mut text in &mut titles {
-        if text.0 != name {
-            text.0 = name.to_string();
-        }
-    }
-}
-
-/// Report each panel's zoom in its header.
-fn update_viewport_2d_zoom_readout(
-    hosts: Query<&Viewport2dPanelHost>,
-    scene: GuideScene,
-    units: Res<WorldUnits>,
-    mut readouts: Query<(&Viewport2dZoomReadout, &mut Text)>,
-) {
-    for (readout, mut text) in &mut readouts {
-        let Ok(host) = hosts.get(readout.host) else {
-            continue;
-        };
-        let percent = zoom_percent(host.view.zoom / grid_pixels(&scene, &units, host));
-        if text.0 != percent {
-            text.0 = percent;
-        }
     }
 }
 
@@ -2536,21 +2375,31 @@ fn fronted_viewport_hosts<'a>(
 /// the sprites under it), or on every sprite when none is selected, and an
 /// empty one goes back to the origin at 100%, one screen pixel per sprite
 /// pixel. A sprite whose image has not
-/// loaded counts as its origin point. Every open 2D panel is framed, an
-/// operator having no panel to be called on. The fit lands on the next frame
-/// the panel has a laid-out size.
+/// loaded counts as its origin point. The named panel is framed, or every open
+/// 2D panel when none is named. The fit lands on the next frame the panel has a
+/// laid-out size.
 #[operator(
     id = "viewport2d.frame",
     label = "Fit 2D View",
     description = "Zoom the 2D viewport so the selected sprites, or the whole scene, are in view.",
     allows_undo = false,
-    is_available = viewport_2d_is_current
+    is_available = viewport_2d_is_current,
+    params(panel(
+        i64,
+        doc = "Bits of the panel content Entity to frame. Omit to frame every open 2D panel."
+    ))
 )]
 pub(crate) fn viewport_2d_frame(
-    _params: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    mut hosts: Query<(Entity, &mut Viewport2dPanelHost)>,
 ) -> OperatorResult {
-    commands.queue(request_2d_fit);
+    let open: Vec<Entity> = hosts.iter().map(|(entity, _)| entity).collect();
+    let wanted = named_panels(&params, "viewport2d.frame", &open);
+    for (entity, mut host) in &mut hosts {
+        if wanted.contains(&entity) && !host.fit_pending {
+            host.fit_pending = true;
+        }
+    }
     OperatorResult::Finished
 }
 
@@ -2675,10 +2524,10 @@ pub(crate) fn viewport_2d_mode(
 }
 
 /// Set the canvas grid the 2D viewport snaps and nudges on, on every open panel.
-/// A size off the power-of-two ladder is taken as given; the header's stepper
-/// pulls it back onto the ladder from there. See [`stepped_ui_grid`]. On a 2D
-/// world scene the size is in sprite pixels, kept as world units at the
-/// project's pixels per unit.
+/// A size off the power-of-two ladder is taken as given; the canvas view menu's
+/// Finer and Coarser rows pull it back onto the ladder from there. See
+/// [`stepped_ui_grid`]. On a 2D world scene the size is in sprite pixels, kept
+/// as world units at the project's pixels per unit.
 #[operator(
     id = "viewport2d.grid",
     label = "Set 2D Canvas Grid",

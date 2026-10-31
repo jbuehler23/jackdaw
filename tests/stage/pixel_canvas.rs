@@ -87,27 +87,27 @@ fn a_canvas_camera_saves_reopens_and_stays_unexpanded_in_the_editor() {
     assert_eq!(canvases, vec![authored()]);
 }
 
-fn snap_rows(app: &mut App) -> Vec<(String, String)> {
+fn view_rows(app: &mut App) -> Vec<(String, String)> {
     app.world_mut()
         .query::<&jackdaw_widgets::menu_bar::MenuBarItem>()
         .iter(app.world())
-        .find(|item| item.label == "Snap")
-        .expect("the 2D panel's header carries a Snap menu")
+        .find(|item| item.label == jackdaw::toolbar_2d::CANVAS_VIEW_MENU)
+        .expect("the 2D panel's toolbar carries a canvas view menu")
         .actions
         .clone()
 }
 
-/// The Snap menu's game-frame row, read by opening the menu, as the rows are
+/// The canvas view menu's game-frame row, read by opening the menu, as the rows are
 /// built when the menu is looked at.
 fn game_frame_row(app: &mut App) -> Option<String> {
     app.world_mut()
         .operator("menu.open")
-        .param("name", "Snap")
+        .param("name", jackdaw::toolbar_2d::CANVAS_VIEW_MENU)
         .call()
         .expect("menu.open dispatches")
         .assert_finished();
     app.update();
-    snap_rows(app)
+    view_rows(app)
         .into_iter()
         .find(|(_, label)| label == "Show Game Frame")
         .map(|(action, _)| action)
@@ -125,7 +125,7 @@ fn set_game_frame(app: &mut App, on: Option<bool>) {
 }
 
 #[test]
-fn the_game_frame_toggle_round_trips_through_its_snap_row() {
+fn the_game_frame_toggle_round_trips_through_its_view_row() {
     let (mut app, _scene) = world_app();
     assert!(
         app.world().resource::<CanvasSnap>().show_game_frame,

@@ -83,7 +83,7 @@ fn toggle_grid(app: &mut App) {
 fn grid_row(app: &mut App) -> Option<String> {
     app.world_mut()
         .operator("menu.open")
-        .param("name", "Snap")
+        .param("name", jackdaw::toolbar_2d::CANVAS_VIEW_MENU)
         .call()
         .expect("menu.open dispatches")
         .assert_finished();
@@ -91,8 +91,8 @@ fn grid_row(app: &mut App) -> Option<String> {
     app.world_mut()
         .query::<&jackdaw_widgets::menu_bar::MenuBarItem>()
         .iter(app.world())
-        .find(|item| item.label == "Snap")
-        .expect("the 2D panel's header carries a Snap menu")
+        .find(|item| item.label == jackdaw::toolbar_2d::CANVAS_VIEW_MENU)
+        .expect("the 2D panel's toolbar carries a canvas view menu")
         .actions
         .iter()
         .find(|(_, label)| label == "Show Grid")

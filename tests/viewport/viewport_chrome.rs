@@ -8,8 +8,8 @@ use crate::util;
 use bevy::prelude::*;
 use jackdaw::layout::Toolbar;
 use jackdaw::terrain::{TerrainOptionsBar, TerrainPalette};
+use jackdaw::toolbar_2d::Toolbar2dGroup;
 use jackdaw::viewport::build_viewport_panel;
-use jackdaw::viewport_2d::Viewport2dTitle;
 use jackdaw::viewport_host::{ViewportMode, set_viewport_mode};
 use jackdaw_feathers::button::ButtonOperatorCall;
 
@@ -104,14 +104,18 @@ fn a_viewport_panel_builds_one_terrain_palette_in(mode: ViewportMode) {
 /// The rest of the panel's chrome is single too, in either mode, the
 /// toolbar's viewport settings menu included.
 #[test]
-fn a_viewport_panel_builds_one_options_bar_toolbar_and_title() {
+fn a_viewport_panel_builds_one_options_bar_and_each_toolbar() {
     for mode in MODES {
         let mut app = util::editor_test_app();
         panel_in(&mut app, mode);
 
         assert_eq!(count::<TerrainOptionsBar>(&mut app), 1, "one options bar");
         assert_eq!(count::<Toolbar>(&mut app), 1, "one main toolbar");
-        assert_eq!(count::<Viewport2dTitle>(&mut app), 1, "one canvas title");
+        assert_eq!(
+            count::<Toolbar2dGroup>(&mut app),
+            2,
+            "one 2D toolbar, two tool groups"
+        );
         let settings_menus = app
             .world_mut()
             .query::<&jackdaw_widgets::menu_bar::MenuBarItem>()
@@ -172,10 +176,10 @@ fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(mode: ViewportM
 
     let bars = count::<TerrainOptionsBar>(&mut app);
     let toolbars = count::<Toolbar>(&mut app);
-    let titles = count::<Viewport2dTitle>(&mut app);
+    let groups = count::<Toolbar2dGroup>(&mut app);
     assert_eq!(bars, 1);
     assert_eq!(toolbars, 1);
-    assert_eq!(titles, 1);
+    assert_eq!(groups, 2);
 
     for target in [1, 0, 1, 0] {
         swap_active_tab(app.world_mut(), target);
@@ -192,9 +196,9 @@ fn swapping_tabs_does_not_multiply_the_options_bar_or_toolbar_in(mode: ViewportM
             "swapping to tab {target} must not add a toolbar",
         );
         assert_eq!(
-            count::<Viewport2dTitle>(&mut app),
-            titles,
-            "swapping to tab {target} must not add a canvas title",
+            count::<Toolbar2dGroup>(&mut app),
+            groups,
+            "swapping to tab {target} must not add a 2D tool group",
         );
     }
 }

@@ -31,7 +31,13 @@ fn sync_extension_toolbar(
     mut removed_buttons: RemovedComponents<ToolbarButton>,
     added_toolbars: Query<(), Added<ToolbarTools>>,
     buttons: Query<(Entity, &ToolbarButton)>,
-    toolbars: Query<Entity, With<ToolbarTools>>,
+    toolbars: Query<
+        Entity,
+        (
+            With<ToolbarTools>,
+            Without<crate::toolbar_2d::Toolbar2dGroup>,
+        ),
+    >,
     items: Query<Entity, With<ExtensionToolbarItem>>,
     mut commands: Commands,
 ) {

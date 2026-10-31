@@ -126,10 +126,15 @@ pub struct TileSelection {
 }
 
 /// A selection belongs to the map and layer tile edit mode paints.
-fn drop_stale_selection(mode: Res<TileEditMode>, mut selection: ResMut<TileSelection>) {
+fn drop_stale_selection(
+    mode: Res<TileEditMode>,
+    mut selection: ResMut<TileSelection>,
+    mut commands: Commands,
+) {
     let stale = (selection.area).is_some_and(|a| mode.map != Some(a.map) || mode.layer != a.layer);
     if stale || (mode.map.is_none() && selection.drag.is_some()) {
         *selection = TileSelection::default();
+        commands.trigger(jackdaw_api_internal::operator::RefreshOperatorButtons);
     }
 }
 
@@ -177,6 +182,24 @@ fn outline_selection(
         min,
     ];
     gizmos.linestrip(corners.map(at), jackdaw_feathers::tokens::TEXT_WARNING);
+}
+
+fn no_selection(world: &World) -> Option<String> {
+    let mode = world.resource::<TileEditMode>();
+    let area = world.resource::<TileSelection>().area;
+    crate::tile_tools::tile_mode_reason(world).or_else(|| {
+        Some(match area {
+            Some(a) if mode.map != Some(a.map) || mode.layer != a.layer => {
+                "The selection is on another layer; select cells on this one first".to_string()
+            }
+            _ => "Select cells with the Select tool first".to_string(),
+        })
+    })
+}
+
+fn no_stamp(world: &World) -> Option<String> {
+    crate::tile_tools::tile_mode_reason(world)
+        .or_else(|| Some("Copy cells or pick a stamp first".to_string()))
 }
 
 fn has_selection(
@@ -287,7 +310,8 @@ fn set_selection(world: &mut World, rect: &str) -> Result<(), String> {
     label = "Clear Tile Selection",
     description = "Select no cells.",
     allows_undo = false,
-    is_available = has_selection
+    is_available = has_selection,
+    unavailable_reason = no_selection
 )]
 pub(crate) fn tilemap_selection_clear(
     _: In<OperatorParameters>,
@@ -303,7 +327,8 @@ pub(crate) fn tilemap_selection_clear(
     label = "Erase Tile Selection",
     description = "Erase the selected cells, terrain and hand-placed tiles, as one undo entry.",
     allows_undo = false,
-    is_available = has_selection
+    is_available = has_selection,
+    unavailable_reason = no_selection
 )]
 pub(crate) fn tilemap_selection_erase(
     _: In<OperatorParameters>,
@@ -331,7 +356,8 @@ fn erase(world: &mut World, label: &str) -> Result<(), String> {
     description = "Load the tiles the selected cells show as a stamp and choose the Brush to \
                    paint it.",
     allows_undo = false,
-    is_available = has_selection
+    is_available = has_selection,
+    unavailable_reason = no_selection
 )]
 pub(crate) fn tilemap_selection_copy(
     _: In<OperatorParameters>,
@@ -394,7 +420,8 @@ fn copy(world: &mut World) -> Result<(), String> {
     label = "Cut Tile Selection",
     description = "Copy the selected cells into a stamp and erase them, as one undo entry.",
     allows_undo = false,
-    is_available = has_selection
+    is_available = has_selection,
+    unavailable_reason = no_selection
 )]
 pub(crate) fn tilemap_selection_cut(
     _: In<OperatorParameters>,
@@ -421,7 +448,8 @@ fn has_loaded_stamp(mode: Res<TileEditMode>, stamp: Res<StampBrush>) -> bool {
     label = "Paste Stamp",
     description = "Choose the Brush with the loaded stamp, to paint the copied cells.",
     allows_undo = false,
-    is_available = has_loaded_stamp
+    is_available = has_loaded_stamp,
+    unavailable_reason = no_stamp
 )]
 pub(crate) fn tilemap_stamp_paste(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
     world.resource_mut::<TileBrush>().source = BrushSource::Stamp;

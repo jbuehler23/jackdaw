@@ -31,8 +31,7 @@ use jackdaw::{
     viewport::{ActiveViewport, VIEWPORT_WINDOW_ID, ViewportPanelHost},
     viewport_2d::{
         DEFAULT_UI_GRID, MAX_UI_GRID, MAX_ZOOM, MIN_UI_GRID, MIN_ZOOM, PixelGrid, Scene2dViewport,
-        Ui2dView, Viewport2dCamera, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dMode,
-        Viewport2dModeSegment, Viewport2dPanelHost, Viewport2dTitle, Viewport2dZoomReadout,
+        Ui2dView, Viewport2dCamera, Viewport2dMode, Viewport2dModeSegment, Viewport2dPanelHost,
         build_viewport_2d_panel, cursor_area_offset, cursor_stage_offset, fit_view, fit_world_rect,
         pan_by, pixel_perfect_view, request_2d_fit, stepped_ui_grid, target_pixels_per_stage_pixel,
         world_at, zoom_range, zoom_toward,
@@ -1598,7 +1597,7 @@ fn the_grid_stepper_walks_the_power_of_two_ladder() {
 
 /// The grid is per panel, and rides with the tab's view state from there.
 #[test]
-fn the_header_stepper_edits_its_own_panels_grid() {
+fn the_grid_rows_edit_their_own_panels_grid() {
     let mut app = util::editor_test_app();
     let first = fit_panel(&mut app);
     let second = fit_panel(&mut app);
@@ -1612,7 +1611,7 @@ fn the_header_stepper_edits_its_own_panels_grid() {
     assert_eq!(
         view_of(&app, second).grid,
         DEFAULT_UI_GRID,
-        "one panel's stepper never moves another panel's canvas",
+        "one panel's grid row never moves another panel's canvas",
     );
     app.update();
     assert_eq!(grid_text(&mut app, first), "16 px", "the readout follows");
@@ -1710,42 +1709,41 @@ fn the_per_panel_operators_reach_every_open_panel() {
     }
 }
 
-fn grid_text(app: &mut App, panel: Entity) -> String {
-    let mut query = app.world_mut().query::<(&Viewport2dGridReadout, &Text)>();
-    let found: Vec<String> = query
-        .iter(app.world())
-        .filter(|(readout, _)| readout.host == panel)
-        .map(|(_, text)| text.0.clone())
-        .collect();
-    assert_eq!(found.len(), 1, "one grid readout per panel");
-    found[0].clone()
+/// The heading of the panel's canvas view menu that starts with `title`.
+fn view_heading(app: &App, panel: Entity, title: &str) -> String {
+    jackdaw::viewport_2d::view_menu_rows(app.world(), panel)
+        .into_iter()
+        .find_map(|(action, _)| {
+            action
+                .strip_prefix(&format!("##{title}: "))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("the canvas view menu has a {title} heading"))
 }
 
-/// Click one end of a panel's grid stepper, the way a user does.
+fn grid_text(app: &mut App, panel: Entity) -> String {
+    view_heading(app, panel, "Grid")
+}
+
+/// Run the panel's canvas view row that steps the grid finer or coarser, the
+/// way a user picks it.
 fn click_grid_step(app: &mut App, panel: Entity, steps: i32) {
-    let mut query = app.world_mut().query::<(Entity, &Viewport2dGridStep)>();
-    let found: Vec<Entity> = query
-        .iter(app.world())
-        .filter(|(_, step)| step.host == panel && step.steps == steps)
-        .map(|(entity, _)| entity)
-        .collect();
-    assert_eq!(found.len(), 1, "one stepper end per direction per panel");
-    let camera = camera_of(app, panel);
-    let target = window_target(app);
-    app.world_mut().trigger(PointerClick {
-        entity: found[0],
-        pointer: Pointer::new(
-            PointerId::Mouse,
-            Location {
-                target,
-                position: Vec2::ZERO,
-            },
-        ),
-        button: PointerButton::Primary,
-        hit: HitData::new(camera, 0.0, None, None),
-        duration: core::time::Duration::ZERO,
-        count: 1,
-    });
+    let label = if steps < 0 { "Finer" } else { "Coarser" };
+    let action = jackdaw::viewport_2d::view_menu_rows(app.world(), panel)
+        .into_iter()
+        .find(|(_, row)| row == label)
+        .map(|(action, _)| action)
+        .expect("the canvas view menu steps the grid");
+    let call = jackdaw_feathers::button::ButtonOperatorCall::try_from(action.as_str())
+        .expect("the row calls an operator");
+    let mut dispatch = app.world_mut().operator(call.id.to_string());
+    for (key, value) in &call.params {
+        dispatch = dispatch.param(key.to_string(), value.clone());
+    }
+    dispatch
+        .call()
+        .expect("the row dispatches")
+        .assert_finished();
 }
 
 fn window_target(app: &mut App) -> NormalizedRenderTarget {
@@ -2170,21 +2168,15 @@ fn the_frame_op_returns_a_panned_and_zoomed_panel_to_the_fit() {
     );
 }
 
-/// The dock tab already says "Viewport", so the header names the scene being
-/// edited and reads the zoom back instead.
+/// The header reads the zoom back, whatever scene is open.
 #[test]
-fn the_header_names_the_scene_and_reads_the_zoom_back() {
+fn the_header_reads_the_zoom_back() {
     use jackdaw::scenes::{SceneTab, Scenes};
 
     let mut app = util::editor_test_app();
     let parent = fit_panel(&mut app);
     app.update();
 
-    assert_eq!(
-        title_text(&mut app),
-        "Viewport",
-        "with no UI scene open the header falls back to the panel's name",
-    );
     assert_eq!(zoom_text(&mut app, parent), "100%");
 
     {
@@ -2216,7 +2208,6 @@ fn the_header_names_the_scene_and_reads_the_zoom_back() {
         app.update();
     }
 
-    assert_eq!(title_text(&mut app), "main-menu");
     assert_eq!(
         zoom_text(&mut app, parent),
         "250%",
@@ -3028,24 +3019,8 @@ fn stage_and_area(app: &App, panel: Entity) -> (Entity, Entity) {
         .expect("host on panel parent")
 }
 
-fn title_text(app: &mut App) -> String {
-    let mut query = app
-        .world_mut()
-        .query_filtered::<&Text, With<Viewport2dTitle>>();
-    let found: Vec<String> = query.iter(app.world()).map(|text| text.0.clone()).collect();
-    assert_eq!(found.len(), 1, "one title per panel");
-    found[0].clone()
-}
-
 fn zoom_text(app: &mut App, panel: Entity) -> String {
-    let mut query = app.world_mut().query::<(&Viewport2dZoomReadout, &Text)>();
-    let found: Vec<String> = query
-        .iter(app.world())
-        .filter(|(readout, _)| readout.host == panel)
-        .map(|(_, text)| text.0.clone())
-        .collect();
-    assert_eq!(found.len(), 1, "one zoom readout per panel");
-    found[0].clone()
+    view_heading(app, panel, "Zoom")
 }
 
 /// A view nobody moved is not a framing the tab chose. Capturing it as one

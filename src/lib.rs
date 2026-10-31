@@ -185,6 +185,7 @@ pub mod tileset_import;
 pub mod tileset_layout_ops;
 pub(crate) mod timestamps;
 pub mod tool_ops;
+pub mod toolbar_2d;
 pub mod toolbar_overflow;
 pub mod transform_ops;
 pub mod type_metadata;
@@ -547,6 +548,7 @@ impl Plugin for EditorCorePlugin {
             viewport_quality::plugin,
             viewport_redraw::plugin,
             toolbar_overflow::plugin,
+            toolbar_2d::plugin,
             extension_slots::plugin,
         ))
         .add_plugins(native_dialog::NativeDialogPlugin)
@@ -2504,7 +2506,8 @@ pub(crate) fn preview_set(
 }
 
 /// Open a top-level menu by its label, as a click on it would. Writes the
-/// menu bar's own open state and nothing else.
+/// menu bar's own open state and nothing else. Of menus sharing a label, the
+/// one in the viewport panel under the pointer opens.
 #[operator(
     id = "menu.open",
     label = "Open Menu",
@@ -2527,8 +2530,14 @@ pub(crate) fn menu_open(
         (Entity, &mut BackgroundColor),
         With<jackdaw_widgets::menu_bar::MenuBarItem>,
     >,
+    parents: Query<&ChildOf>,
+    active: Option<Res<viewport::ActiveViewport>>,
 ) -> Option<OperatorResult> {
     let name = params.as_str("name").map(str::to_string)?;
+    let in_focused_panel = |entity: Entity| {
+        let host = active.as_ref().and_then(|active| active.host);
+        host.is_some_and(|host| parents.iter_ancestors(entity).any(|parent| parent == host))
+    };
     if jackdaw_feathers::menu_bar::open_menu_named(
         &name,
         &mut commands,
@@ -2536,6 +2545,7 @@ pub(crate) fn menu_open(
         &items,
         &windows,
         &mut backgrounds,
+        in_focused_panel,
     ) {
         Some(OperatorResult::Finished)
     } else {

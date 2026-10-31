@@ -4,25 +4,13 @@
 
 use std::path::Path;
 
-use bevy::{
-    camera::RenderTarget,
-    picking::{
-        backend::HitData,
-        events::{Pointer, PointerClick},
-        pointer::{Location, PointerButton, PointerId},
-    },
-    prelude::*,
-    window::{PrimaryWindow, WindowRef},
-};
+use bevy::prelude::*;
 use jackdaw::{
     active_tool::ActiveTool,
     project::{ProjectConfig, ProjectRoot},
     project_settings::settings_path,
     ui_stage::CanvasAxis,
-    viewport_2d::{
-        CanvasRuler, Viewport2dGridReadout, Viewport2dGridStep, Viewport2dPanelHost,
-        Viewport2dZoomReadout, world_to_target_pixel,
-    },
+    viewport_2d::{CanvasRuler, Viewport2dPanelHost, world_to_target_pixel},
     world_units::{LengthUnit, WorldUnits},
 };
 use jackdaw_api::prelude::*;
@@ -187,13 +175,45 @@ fn the_rulers_read_pixels_or_units_at_the_project_ppu() {
     );
 }
 
+/// The heading of the panel's canvas view menu that starts with `title`.
+fn view_heading(app: &App, panel: Entity, title: &str) -> String {
+    jackdaw::viewport_2d::view_menu_rows(app.world(), panel)
+        .into_iter()
+        .find_map(|(action, _)| {
+            action
+                .strip_prefix(&format!("##{title}: "))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("the canvas view menu has a {title} heading"))
+}
+
 fn grid_readout(app: &mut App, panel: Entity) -> String {
-    app.world_mut()
-        .query::<(&Viewport2dGridReadout, &Text)>()
-        .iter(app.world())
-        .find(|(readout, _)| readout.host == panel)
-        .map(|(_, text)| text.0.clone())
-        .expect("the panel has a grid readout")
+    view_heading(app, panel, "Grid")
+}
+
+fn zoom_readout(app: &mut App, panel: Entity) -> String {
+    view_heading(app, panel, "Zoom")
+}
+
+/// Run the panel's canvas view row that steps the grid finer or coarser.
+fn click_grid_step(app: &mut App, panel: Entity, steps: i32) {
+    let label = if steps < 0 { "Finer" } else { "Coarser" };
+    let action = jackdaw::viewport_2d::view_menu_rows(app.world(), panel)
+        .into_iter()
+        .find(|(_, row)| row == label)
+        .map(|(action, _)| action)
+        .expect("the canvas view menu steps the grid");
+    let call = jackdaw_feathers::button::ButtonOperatorCall::try_from(action.as_str())
+        .expect("the row calls an operator");
+    let mut dispatch = app.world_mut().operator(call.id.to_string());
+    for (key, value) in &call.params {
+        dispatch = dispatch.param(key.to_string(), value.clone());
+    }
+    dispatch
+        .call()
+        .expect("the row dispatches")
+        .assert_finished();
+    settle_quick(app);
 }
 
 #[test]
@@ -235,15 +255,6 @@ fn view(app: &App, panel: Entity) -> jackdaw::viewport_2d::Ui2dView {
         .view
 }
 
-fn zoom_readout(app: &mut App, panel: Entity) -> String {
-    app.world_mut()
-        .query::<(&Viewport2dZoomReadout, &Text)>()
-        .iter(app.world())
-        .find(|(readout, _)| readout.host == panel)
-        .map(|(_, text)| text.0.clone())
-        .expect("the panel has a zoom readout")
-}
-
 fn panel_op(app: &mut App, id: &'static str, panel: Entity, key: &'static str, value: f64) {
     app.world_mut()
         .operator(id)
@@ -273,45 +284,6 @@ fn the_zoom_readout_counts_screen_pixels_per_sprite_pixel() {
         "four screen pixels a texel"
     );
     assert_eq!(zoom_readout(&mut app, scene.panel), "400%");
-}
-
-/// Click one end of the panel's grid stepper.
-fn click_grid_step(app: &mut App, panel: Entity, steps: i32) {
-    let step = app
-        .world_mut()
-        .query::<(Entity, &Viewport2dGridStep)>()
-        .iter(app.world())
-        .find(|(_, step)| step.host == panel && step.steps == steps)
-        .map(|(entity, _)| entity)
-        .expect("the stepper end");
-    let window = app
-        .world_mut()
-        .query_filtered::<Entity, With<PrimaryWindow>>()
-        .single(app.world())
-        .expect("a primary window");
-    let target = RenderTarget::Window(WindowRef::Primary)
-        .normalize(Some(window))
-        .expect("the primary window normalizes");
-    let camera = app
-        .world()
-        .get::<Viewport2dPanelHost>(panel)
-        .expect("the panel has a host")
-        .camera;
-    app.world_mut().trigger(PointerClick {
-        entity: step,
-        pointer: Pointer::new(
-            PointerId::Mouse,
-            Location {
-                target,
-                position: Vec2::ZERO,
-            },
-        ),
-        button: PointerButton::Primary,
-        hit: HitData::new(camera, 0.0, None, None),
-        duration: core::time::Duration::ZERO,
-        count: 1,
-    });
-    settle_quick(app);
 }
 
 #[test]

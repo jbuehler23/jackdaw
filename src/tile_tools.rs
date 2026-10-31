@@ -87,6 +87,18 @@ pub enum TileTool {
 }
 
 impl TileTool {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Brush => "Brush",
+            Self::Eraser => "Eraser",
+            Self::Rectangle => "Rectangle",
+            Self::Line => "Line",
+            Self::Bucket => "Bucket",
+            Self::Picker => "Picker",
+            Self::Select => "Select",
+        }
+    }
+
     /// Whether the tool writes one shape between the press and release cells.
     pub(crate) fn is_shape(self) -> bool {
         matches!(self, Self::Rectangle | Self::Line)
@@ -231,6 +243,7 @@ pub fn cell_at(point: Vec2, map: &GlobalTransform, cell_size: UVec2) -> CellCoor
     description = "Paint the selected tilemap's cells with the tile tools.",
     allows_undo = false,
     is_available = can_enter_edit_mode,
+    unavailable_reason = edit_mode_unavailable,
     params(layer(i64, doc = "Index of the layer to paint; defaults to 0.")),
 )]
 pub(crate) fn tilemap_edit_mode(
@@ -261,6 +274,35 @@ pub(crate) fn tilemap_edit_mode(
             OperatorResult::Cancelled
         }
     }
+}
+
+/// Whether a modal operator is running, read from a world without a system.
+pub(crate) fn modal_running(world: &World) -> bool {
+    world
+        .try_query_filtered::<(), With<jackdaw_api_internal::lifecycle::ActiveModalOperator>>()
+        .is_some_and(|mut modals| modals.iter(world).next().is_some())
+}
+
+/// Why a tile tool waits: a running tool, or no map in tile edit mode.
+pub(crate) fn tile_mode_reason(world: &World) -> Option<String> {
+    if modal_running(world) {
+        Some("Finish the running tool first".to_string())
+    } else if world.resource::<TileEditMode>().map.is_none() {
+        Some("Enter tile edit mode first".to_string())
+    } else {
+        None
+    }
+}
+
+fn edit_mode_unavailable(world: &World) -> Option<String> {
+    let reason = if modal_running(world) {
+        "Finish the running tool first"
+    } else if world.resource::<TileEditMode>().map.is_some() {
+        "Tile edit mode is already on"
+    } else {
+        "Select a tilemap to edit its tiles"
+    };
+    Some(reason.to_string())
 }
 
 fn can_enter_edit_mode(
@@ -321,6 +363,9 @@ pub(crate) fn leave_edit_mode(world: &mut World) {
     cancel_tile_stroke(world);
     world.resource_mut::<TileEditMode>().map = None;
     set_context_active(world, false);
+    // The mode also ends on a deselect or a removed map, which no dispatch
+    // announces.
+    world.trigger(jackdaw_api_internal::operator::RefreshOperatorButtons);
 }
 
 fn set_context_active(world: &mut World, active: bool) {

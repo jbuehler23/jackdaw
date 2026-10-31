@@ -195,10 +195,8 @@ fn the_snap_kinds_stay_out_of_undo_snapshots() {
 
 #[test]
 fn the_header_snap_menu_lists_every_kind_with_its_state() {
-    let (mut app, panel) = snap_menu_app();
+    let (mut app, _panel) = snap_menu_app();
 
-    let finer = format!("op:viewport2d.grid?size=4&panel={}", panel.to_bits());
-    let coarser = format!("op:viewport2d.grid?size=16&panel={}", panel.to_bits());
     assert_eq!(
         snap_menu_rows(&mut app)
             .iter()
@@ -215,12 +213,6 @@ fn the_header_snap_menu_lists_every_kind_with_its_state() {
             ("[x]op:canvas.snap?kind=sibling_centers", "Sibling Centers"),
             ("[ ]op:canvas.snap?kind=other_nodes", "Other Nodes"),
             ("[x]op:canvas.snap?kind=guides", "Guides"),
-            ("---", ""),
-            ("[x]op:canvas.rulers?on=false", "Show Rulers"),
-            ("[x]op:canvas.guides?on=false", "Show Guides"),
-            ("##Grid: 8 px", ""),
-            (finer.as_str(), "Finer"),
-            (coarser.as_str(), "Coarser"),
         ],
         "the menu reads the canvas's settings, and every row calls what it shows",
     );
@@ -268,6 +260,13 @@ fn clicking_a_snap_row_flips_the_kind_and_leaves_the_menu_open() {
         checked_rows(&mut app),
     );
 
+    app.world_mut()
+        .operator("menu.open")
+        .param("name", jackdaw::toolbar_2d::CANVAS_VIEW_MENU)
+        .call()
+        .expect("menu.open dispatches")
+        .assert_finished();
+    app.update();
     click_row(
         &mut app,
         &format!("op:viewport2d.grid?size=4&panel={}", panel.to_bits()),
@@ -511,15 +510,15 @@ fn checked_rows(app: &mut App) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// The stepper beside the menu is per panel, and the row saying the same thing
-/// has to mean the same thing: two panels open on one scene are two framings
+/// The grid is per panel, and the canvas view row stepping it has to mean the
+/// same thing: two panels open on one scene are two framings
 /// of it.
 #[test]
 fn a_grid_row_moves_the_panel_whose_menu_it_is_in() {
     let (mut app, first) = snap_menu_app();
     let second = build_panel(&mut app);
 
-    let rows = snap_menu_rows_of(&mut app, first);
+    let rows = view_menu_rows_of(&mut app, first);
     let finer = rows
         .iter()
         .find(|(_, label)| label == "Finer")
@@ -545,29 +544,25 @@ fn a_grid_row_moves_the_panel_whose_menu_it_is_in() {
     );
 }
 
-/// The grid one 2D panel is on.
-fn grid_of(app: &App, panel: Entity) -> f32 {
-    app.world()
-        .get::<jackdaw::viewport_2d::Viewport2dPanelHost>(panel)
-        .expect("host on panel parent")
-        .view
-        .grid
-}
-
-/// The rows the Snap menu in `panel`'s header would open with.
-fn snap_menu_rows_of(app: &mut App, panel: Entity) -> Vec<(String, String)> {
-    let items: Vec<(Entity, Vec<(String, String)>)> = app
+/// The rows the canvas view menu in `panel`'s header would open with, built by
+/// that menu item itself.
+fn view_menu_rows_of(app: &mut App, panel: Entity) -> Vec<(String, String)> {
+    let items: Vec<Entity> = app
         .world_mut()
         .query::<(Entity, &jackdaw_widgets::menu_bar::MenuBarItem)>()
         .iter(app.world())
-        .filter(|(_, item)| item.label == "Snap")
-        .map(|(entity, item)| (entity, item.actions.clone()))
+        .filter(|(_, item)| item.label == jackdaw::toolbar_2d::CANVAS_VIEW_MENU)
+        .map(|(entity, _)| entity)
         .collect();
-    items
+    let item = items
         .into_iter()
-        .find(|(entity, _)| descends_from(app, *entity, panel))
-        .map(|(_, actions)| actions)
-        .expect("the panel's header carries a Snap menu")
+        .find(|entity| descends_from(app, *entity, panel))
+        .expect("the panel's header carries a canvas view menu");
+    let rows = app
+        .world()
+        .get::<jackdaw_feathers::menu_bar::DynamicMenuRows>(item)
+        .expect("the menu builds its rows from the world");
+    (rows.0)(app.world())
 }
 
 fn descends_from(app: &App, entity: Entity, ancestor: Entity) -> bool {
@@ -579,6 +574,15 @@ fn descends_from(app: &App, entity: Entity, ancestor: Entity) -> bool {
         cursor = parent;
     }
     false
+}
+
+/// The grid one 2D panel is on.
+fn grid_of(app: &App, panel: Entity) -> f32 {
+    app.world()
+        .get::<jackdaw::viewport_2d::Viewport2dPanelHost>(panel)
+        .expect("host on panel parent")
+        .view
+        .grid
 }
 
 /// The canvas's two view toggles are in the top bar's View menu as

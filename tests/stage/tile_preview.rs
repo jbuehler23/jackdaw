@@ -336,7 +336,11 @@ fn the_hover_readout_names_the_cell_terrain_tile_and_override() {
         Some(expected.as_str())
     );
     if let Some(text) = status_text(&mut app) {
-        assert_eq!(text, expected, "the status bar shows it");
+        assert_eq!(
+            text,
+            format!("Brush | {expected}"),
+            "the status bar shows it beside the tool"
+        );
     }
 
     let placed = app

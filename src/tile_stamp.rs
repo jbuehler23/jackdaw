@@ -197,6 +197,7 @@ fn drop_stale_stamp(world: &mut World) {
         if brush.source == BrushSource::Stamp {
             brush.source = BrushSource::Terrain;
         }
+        world.trigger(jackdaw_api_internal::operator::RefreshOperatorButtons);
     }
 }
 

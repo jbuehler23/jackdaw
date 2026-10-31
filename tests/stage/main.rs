@@ -65,6 +65,7 @@ mod tilemap_layers;
 mod tilemap_region_text;
 mod tilemap_render;
 mod tilemap_shape_ops;
+mod toolbar_2d;
 mod ui_align;
 mod ui_asset_drop;
 mod ui_drag_readout;
