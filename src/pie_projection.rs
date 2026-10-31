@@ -66,7 +66,8 @@ fn projection_skips(type_path: &str) -> bool {
     if PROJECTION_ALLOW_PATHS.contains(&type_path) {
         return false;
     }
-    type_path == CHILDREN_PATH
+    jackdaw_pie_protocol::snapshot::is_process_local_light_probe(type_path)
+        || type_path == CHILDREN_PATH
         || crate::scene_io::should_skip_component(type_path)
         || PROJECTION_SKIP_PREFIXES
             .iter()
@@ -969,6 +970,67 @@ mod tests {
     }
 
     // ---- projection skip tests ----
+
+    #[test]
+    fn gpu_light_probes_do_not_cross_process_boundaries() {
+        use bevy::light::{EnvironmentMapLight, GeneratedEnvironmentMapLight, Skybox};
+        use jackdaw_pie_protocol::build_snapshot;
+
+        let mut app = App::new();
+        app.register_type::<Name>()
+            .register_type::<GeneratedEnvironmentMapLight>()
+            .register_type::<EnvironmentMapLight>()
+            .register_type::<Skybox>();
+        let game_entity = app
+            .world_mut()
+            .spawn((
+                Name::new("procedural HDR sky"),
+                GeneratedEnvironmentMapLight::default(),
+                EnvironmentMapLight::default(),
+                Skybox::default(),
+            ))
+            .id();
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        let snapshot = build_snapshot(app.world(), &registry, &[game_entity]);
+        assert!(
+            snapshot[0]
+                .components
+                .keys()
+                .any(|key| key.ends_with("::Name"))
+        );
+        assert!(
+            !snapshot[0]
+                .components
+                .keys()
+                .any(|key| key.starts_with("bevy_light::probe::"))
+        );
+
+        // A legacy sender may still send these with null asset handles. Neither
+        // spawn nor change may install a GPU filtering job into the editor.
+        let (mut world, _, _) = build_projection_world();
+        world
+            .resource::<AppTypeRegistry>()
+            .write()
+            .register::<GeneratedEnvironmentMapLight>();
+        let path = "bevy_light::probe::GeneratedEnvironmentMapLight".to_string();
+        let value = serde_json::json!({"environment_map":null,"intensity":1500.0,
+            "rotation":[0.0,0.0,0.0,1.0],"affects_lightmapped_mesh_diffuse":true});
+        project_event(
+            &mut world,
+            spawn_event(99, vec![(path.clone(), value.clone())]),
+        );
+        let preview = world.resource::<PieProjection>().by_bits[&99];
+        assert!(world.get::<GeneratedEnvironmentMapLight>(preview).is_none());
+        project_event(
+            &mut world,
+            StateEvent::ComponentChanged {
+                entity: 99,
+                type_path: path,
+                value,
+            },
+        );
+        assert!(world.get::<GeneratedEnvironmentMapLight>(preview).is_none());
+    }
 
     #[test]
     fn camera_components_are_never_projected() {

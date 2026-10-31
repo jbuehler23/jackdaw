@@ -69,7 +69,26 @@ const SKIP_PATHS: &[&str] = &[
     "avian3d::collision::collider::constructor::ColliderConstructor",
 ];
 
+/// GPU light probes refer to process-local image assets. Snapshot handles become
+/// null, so replaying these components in another renderer can dispatch texture
+/// filtering against its default image (wrong format and missing storage usage).
+/// Both the sender and the editor projection use this guard; the receiver also
+/// needs to reject snapshots from older game binaries.
+pub fn is_process_local_light_probe(type_path: &str) -> bool {
+    matches!(
+        type_path,
+        "bevy_light::probe::GeneratedEnvironmentMapLight"
+            | "bevy_light::probe::EnvironmentMapLight"
+            | "bevy_light::probe::AtmosphereEnvironmentMapLight"
+            | "bevy_light::probe::IrradianceVolume"
+            | "bevy_light::probe::Skybox"
+    )
+}
+
 fn should_skip(type_path: &str) -> bool {
+    if is_process_local_light_probe(type_path) {
+        return true;
+    }
     for prefix in SKIP_PREFIXES {
         if type_path.starts_with(prefix) {
             return true;
