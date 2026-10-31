@@ -407,6 +407,15 @@ fn the_parametric_authoring_operators_are_registered() {
             "tilemap.clear",
             &["entity", "layer", "x0", "y0", "x1", "y1"][..],
         ),
+        ("tilemap.describe", &["entity"][..]),
+        (
+            "tilemap.read_region",
+            &["entity", "layer", "x0", "y0", "x1", "y1", "tiles"][..],
+        ),
+        (
+            "tilemap.write_region",
+            &["entity", "layer", "x0", "y0", "text", "mode"][..],
+        ),
     ] {
         let op = all
             .iter()

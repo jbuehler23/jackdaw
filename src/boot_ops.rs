@@ -268,6 +268,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "sprite.y_sort",
     "terrain.scatter.adopt",
     "tilemap.clear",
+    "tilemap.describe",
     "tilemap.draw_line",
     "tilemap.fill",
     "tilemap.fill_rect",
@@ -275,6 +276,8 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "tilemap.layer.add",
     "tilemap.layer.remove",
     "tilemap.layer.set",
+    "tilemap.read_region",
+    "tilemap.write_region",
     "viewport.look_through",
 ];
 

@@ -186,7 +186,10 @@ pub(crate) fn terrain_or_empty(tileset: &Tileset, text: &str) -> Result<TerrainI
 }
 
 fn free_name(tileset: &Tileset, name: &str) -> Result<(), String> {
-    if name.is_empty() || name.parse::<u32>().is_ok() || ["empty", "none"].contains(&name) {
+    if name.is_empty()
+        || name.parse::<u32>().is_ok()
+        || ["empty", "erase", "keep", "none"].contains(&name)
+    {
         return Err(format!("`{name}` cannot name a terrain"));
     }
     if tileset.terrains.iter().any(|t| t.name == name) {
@@ -701,4 +704,17 @@ pub fn tileset_tile_set_bits(
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legend_keywords_cannot_name_a_terrain() {
+        for name in ["empty", "erase", "keep", "none", "3", ""] {
+            assert!(free_name(&Tileset::default(), name).is_err(), "{name}");
+        }
+        assert!(free_name(&Tileset::default(), "grass").is_ok());
+    }
 }

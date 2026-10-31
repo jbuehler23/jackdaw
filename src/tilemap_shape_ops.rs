@@ -132,13 +132,13 @@ pub(crate) fn tilemap_clear(params: In<OperatorParameters>, world: &mut World) -
 /// The map and layer a call names: the `entity` param or the selected map,
 /// and the `layer` param, else the layer tile edit mode paints on that map,
 /// else 0.
-struct Target {
-    map: Entity,
-    layer: usize,
-    name: String,
+pub(crate) struct Target {
+    pub(crate) map: Entity,
+    pub(crate) layer: usize,
+    pub(crate) name: String,
 }
 
-fn target(world: &mut World, params: &OperatorParameters) -> Result<Target, String> {
+pub(crate) fn target(world: &mut World, params: &OperatorParameters) -> Result<Target, String> {
     let map =
         crate::tilemap_ops::target_entity(world, params).ok_or("no tilemap given or selected")?;
     let tilemap = world
@@ -195,7 +195,7 @@ fn write(
 
 /// The cell coordinate param `name`: `None` when left out, refused when it is
 /// not an integer or past the cell range.
-fn coord(params: &OperatorParameters, name: &str) -> Result<Option<i32>, String> {
+pub(crate) fn coord(params: &OperatorParameters, name: &str) -> Result<Option<i32>, String> {
     if params.get(name).is_none() {
         return Ok(None);
     }
@@ -203,7 +203,7 @@ fn coord(params: &OperatorParameters, name: &str) -> Result<Option<i32>, String>
     (i32::try_from(value).map(Some)).map_err(|_| format!("{name} is out of range"))
 }
 
-fn cell(params: &OperatorParameters, x: &str, y: &str) -> Result<CellCoord, String> {
+pub(crate) fn cell(params: &OperatorParameters, x: &str, y: &str) -> Result<CellCoord, String> {
     let get = |name: &str| coord(params, name)?.ok_or_else(|| format!("{name} is required"));
     Ok(CellCoord::new(get(x)?, get(y)?))
 }
@@ -264,18 +264,10 @@ fn painted(world: &mut World, target: &Target) -> Result<Vec<CellCoord>, String>
     let Some(layer) = (store.get(&key)).and_then(|data| data.layers.get(target.layer)) else {
         return Ok(Vec::new());
     };
-    let mut cells: Vec<CellCoord> = layer.tiles.cells().map(|(c, _)| c).collect();
-    if let Some(a) = &layer.authoring {
-        cells.extend(a.terrain.cells().map(|(c, _)| c));
-        cells.extend(a.links.cells().map(|(c, _)| c));
-        cells.extend(a.overrides.keys().copied());
-    }
-    cells.sort_unstable();
-    cells.dedup();
-    Ok(cells)
+    Ok(layer.painted_cells())
 }
 
-fn written(count: usize, target: &Target) -> String {
+pub(crate) fn written(count: usize, target: &Target) -> String {
     match count {
         0 => "no cell changed".to_string(),
         n => format!("{n} cells written on layer `{}`", target.name),

@@ -25,9 +25,13 @@ const FILL: &str = "tilemap.fill";
 const CLEAR: &str = "tilemap.clear";
 const TWINS: [&str; 4] = [FILL_RECT, DRAW_LINE, FILL, CLEAR];
 
-type Params = Vec<(&'static str, PropertyValue)>;
+pub(crate) type Params = Vec<(&'static str, PropertyValue)>;
 
-fn call(app: &mut App, id: &str, params: &[(&'static str, PropertyValue)]) -> OperatorResult {
+pub(crate) fn call(
+    app: &mut App,
+    id: &str,
+    params: &[(&'static str, PropertyValue)],
+) -> OperatorResult {
     app.world_mut()
         .get_resource_or_init::<OperatorWarnings>()
         .0
@@ -45,15 +49,15 @@ fn call(app: &mut App, id: &str, params: &[(&'static str, PropertyValue)]) -> Op
     result
 }
 
-fn text(value: &str) -> PropertyValue {
+pub(crate) fn text(value: &str) -> PropertyValue {
     PropertyValue::from(value.to_string())
 }
 
-fn int(value: i64) -> PropertyValue {
+pub(crate) fn int(value: i64) -> PropertyValue {
     PropertyValue::Int(value)
 }
 
-fn rect(x0: i64, y0: i64, x1: i64, y1: i64) -> Params {
+pub(crate) fn rect(x0: i64, y0: i64, x1: i64, y1: i64) -> Params {
     vec![
         ("x0", int(x0)),
         ("y0", int(y0)),
@@ -62,16 +66,16 @@ fn rect(x0: i64, y0: i64, x1: i64, y1: i64) -> Params {
     ]
 }
 
-fn with(mut params: Params, more: &[(&'static str, PropertyValue)]) -> Params {
+pub(crate) fn with(mut params: Params, more: &[(&'static str, PropertyValue)]) -> Params {
     params.extend(more.iter().cloned());
     params
 }
 
-fn warnings(app: &App) -> String {
+pub(crate) fn warnings(app: &App) -> String {
     (app.world().get_resource::<OperatorWarnings>()).map_or(String::new(), |w| w.0.join("\n"))
 }
 
-fn last_label(app: &App) -> String {
+pub(crate) fn last_label(app: &App) -> String {
     let history = app.world().resource::<CommandHistory>();
     (history.undo_stack.last()).map_or(String::new(), |entry| entry.description().to_string())
 }
@@ -90,7 +94,7 @@ fn terrain_name(app: &App, id: u8) -> String {
         .expect("the terrain")
 }
 
-fn terrain_at(app: &mut App, map: Entity, x: i32, y: i32) -> u8 {
+pub(crate) fn terrain_at(app: &mut App, map: Entity, x: i32, y: i32) -> u8 {
     let data = stored(app, map);
     (data.layers[0].authoring.as_ref()).map_or(0, |a| a.terrain.get(CellCoord::new(x, y)))
 }
@@ -144,7 +148,7 @@ fn assert_parity(
 }
 
 #[track_caller]
-fn assert_refused(
+pub(crate) fn assert_refused(
     app: &mut App,
     map: Entity,
     id: &str,
