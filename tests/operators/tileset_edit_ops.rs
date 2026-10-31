@@ -191,6 +191,31 @@ fn terrain_add_takes_the_next_id_and_refuses_taken_names_and_spent_ids() {
 }
 
 #[test]
+fn new_terrains_take_the_first_free_palette_hue() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    for name in ["grass", "dirt"] {
+        call(&mut app, "tileset.terrain.add", &[("name", name)]);
+    }
+    let swatches = |dir: &tempfile::TempDir| -> Vec<[u8; 4]> {
+        (on_disk(dir).terrains.iter())
+            .map(|t| t.swatch.to_u8_array())
+            .collect()
+    };
+    let first = swatches(&dir);
+    assert_ne!(first[0], first[1]);
+    assert!(first.iter().all(|s| s[..3] != [0x80; 3]), "{first:?}");
+    call(&mut app, "tileset.terrain.remove", &[("terrain", "grass")]);
+    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    assert_eq!(
+        swatches(&dir),
+        [first[1], first[0]],
+        "the freed hue comes back"
+    );
+    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
+}
+
+#[test]
 fn terrain_remove_empties_its_peers_and_drops_its_sets() {
     let (mut app, dir) = overworld();
     let (before, after) = edit(

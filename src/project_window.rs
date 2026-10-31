@@ -1772,7 +1772,6 @@ fn on_context_action(
     } else if action == IMPORT_TILESET_ACTION {
         (commands.operator(crate::tileset_import::TilesetImportOp::ID))
             .param("path", target.path.to_string_lossy().into_owned())
-            .param("setup", "auto")
             .param("edit", true)
             .call();
     } else {

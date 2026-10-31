@@ -191,11 +191,9 @@ impl TilesetSetup {
     }
 
     fn take_id(&mut self) -> Result<TerrainId, SetupError> {
-        let id = TerrainId::try_from(self.next_id).map_err(|_| SetupError::TooManyTerrains)?;
-        if id == 0 {
-            return Err(SetupError::TooManyTerrains);
-        }
-        self.next_id += 1;
+        let next = self.next_id.max(1);
+        let id = TerrainId::try_from(next).map_err(|_| SetupError::TooManyTerrains)?;
+        self.next_id = next + 1;
         Ok(id)
     }
 
@@ -304,6 +302,13 @@ pub(crate) mod tests {
             setup.add_terrain("one more", [0; 3], false),
             Err(SetupError::TooManyTerrains)
         );
+        let mut fresh = TilesetSetup::default();
+        assert_eq!(
+            fresh.add_terrain("first", [0; 3], false),
+            Ok(1),
+            "0 is the empty terrain"
+        );
+        assert_eq!(fresh.next_id, 2);
     }
 
     #[test]

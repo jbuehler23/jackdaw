@@ -1,13 +1,18 @@
-//! The Tileset window: one tab per tileset carrying its path, and the review
-//! controls, each a call of a tileset operator.
+//! The Tileset window: one tab per tileset carrying its path, its plain sheet
+//! page and controls, each a call of a tileset operator, and the clearing of
+//! automatic setup on open.
 
-use crate::tileset_edit_ops::{
-    FILE, GROUND, WATER, call, entries, on_disk, overworld, peers_of, run, tile_of,
-};
+use crate::tileset_edit_ops::{FILE, call, entries, on_disk, overworld, run};
+use crate::tileset_ops::{SHEET, editor_on, import, project_app, warnings};
+use crate::util;
 use crate::util::OperatorResultExt as _;
+
+use std::path::Path;
+use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
+use jackdaw::asset_index::AssetIndex;
 use jackdaw::tileset_dock::{
     CollisionCombo, DockAction, DockControl, DockPage, DockView, TILESET_WINDOW_ID, TilesetDock,
     TilesetDockViews,
@@ -16,27 +21,28 @@ use jackdaw_api::prelude::*;
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
 use jackdaw_panels::tree::{DockTree, Edge, TabId};
 use jackdaw_scene_types::PropertyValue;
+use jackdaw_scene_types::tilemap::{Tilemap, TilemapLayer};
 use jackdaw_tileset::{TerrainCollision, Tileset};
 
 const SECOND: &str = "second.tileset.bsn";
 
-/// The overworld tileset with one tile made flagged by a peer of water, in the
-/// editor's default dock, and that peer's terrain before.
-fn docked() -> (App, tempfile::TempDir, u32, u8) {
-    let (mut app, dir) = overworld();
-    let tile = tile_of(&on_disk(&dir), GROUND);
-    let was = peers_of(&on_disk(&dir), tile).expect("bits")[1];
-    call(
-        &mut app,
-        "tileset.tile.set_bits",
-        &[
-            ("tile", &format!("0:{tile}")),
-            ("peer", "1"),
-            ("terrain", &WATER.to_string()),
-        ],
-    );
+const GRASS: u8 = 1;
+const WATER: u8 = 2;
+
+/// The overworld sheet imported with nothing set up, then grass and water, a
+/// water over grass set and tile 0 of grass with a water corner, by hand.
+fn handmade() -> (App, tempfile::TempDir) {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    call(&mut app, "tileset.terrain.add", &[("name", "water")]);
+    let set = [("inner", "2"), ("outer", "1"), ("mode", "corners")];
+    call(&mut app, "tileset.terrain_set.add", &set);
+    let bits = [("tile", "0:0"), ("peers", "1,1,1,1,1,1,1,1,2")];
+    call(&mut app, "tileset.tile.set_bits", &bits);
+    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
     settle(&mut app);
-    (app, dir, tile, was)
+    (app, dir)
 }
 
 fn settle(app: &mut App) {
@@ -145,7 +151,7 @@ fn opened(app: &mut App) -> (TabId, Entity) {
 
 #[test]
 fn tileset_edit_opens_focuses_adds_and_closes_tabs() {
-    let (mut app, dir, _, _) = docked();
+    let (mut app, dir) = handmade();
     std::fs::copy(
         dir.path().join("assets").join(FILE),
         dir.path().join("assets").join(SECOND),
@@ -189,7 +195,7 @@ fn tileset_edit_opens_focuses_adds_and_closes_tabs() {
 
 #[test]
 fn the_open_tabs_survive_the_saved_layout() {
-    let (mut app, _dir, _, _) = docked();
+    let (mut app, _dir) = handmade();
     open(&mut app, FILE);
     let before = tabs(&app);
     jackdaw::scene_io::save_layout_to_project(app.world_mut());
@@ -209,7 +215,7 @@ fn the_open_tabs_survive_the_saved_layout() {
 /// A layout restored before its tileset has loaded waits for it.
 #[test]
 fn a_restored_tab_shows_its_tileset_once_it_loads() {
-    let (mut app, _dir, _, _) = docked();
+    let (mut app, _dir) = handmade();
     let (tab, first) = opened(&mut app);
     jackdaw::scene_io::save_layout_to_project(app.world_mut());
     let id = app.world().get::<TilesetDock>(first).and_then(|d| d.asset);
@@ -237,7 +243,7 @@ fn a_restored_tab_shows_its_tileset_once_it_loads() {
 /// A tab dragged to an edge is a new tab, and keeps what it showed.
 #[test]
 fn a_moved_tab_keeps_its_view_and_a_closed_one_drops_it() {
-    let (mut app, _dir, _, _) = docked();
+    let (mut app, _dir) = handmade();
     let (tab, dock) = opened(&mut app);
     press(&mut app, dock, DockAction::Tile(0, 100));
     let moved = {
@@ -269,7 +275,7 @@ fn a_moved_tab_keeps_its_view_and_a_closed_one_drops_it() {
 
 #[test]
 fn the_window_menus_leave_the_tileset_window_out() {
-    let (app, _dir, _, _) = docked();
+    let (app, _dir) = handmade();
     let registry = app.world().resource::<jackdaw_panels::WindowRegistry>();
     assert!(
         registry
@@ -283,86 +289,257 @@ fn the_window_menus_leave_the_tileset_window_out() {
     );
 }
 
+fn actions(app: &mut App, root: Entity) -> Vec<DockAction> {
+    app.world_mut()
+        .query::<&DockControl>()
+        .iter(app.world())
+        .filter(|c| c.root == root)
+        .map(|c| c.action)
+        .collect()
+}
+
 #[test]
-fn review_opens_on_the_first_flagged_tile() {
-    let (mut app, _dir, flagged, _) = docked();
+fn the_dock_opens_on_a_plain_sheet_page() {
+    let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    let view = view(&app);
-    assert_eq!(view.page, DockPage::Review);
-    assert_eq!(view.selected, Some((0, flagged)));
+    assert_eq!(view(&app).page, DockPage::Sheet);
+    let pages: Vec<DockAction> = (actions(&mut app, root).into_iter())
+        .filter(|a| matches!(a, DockAction::Page(_)))
+        .collect();
+    assert_eq!(
+        pages,
+        [
+            DockAction::Page(DockPage::Sheet),
+            DockAction::Page(DockPage::Objects)
+        ]
+    );
     let shown = texts(&mut app, root);
-    assert!(shown.contains(&format!("tile 0:{flagged}")), "{shown:?}");
-    assert!(shown.iter().any(|t| t == "FLAGGED (1)"), "{shown:?}");
+    for gone in ["Review", "Accept", "Reset to auto"] {
+        assert!(!shown.iter().any(|t| t == gone), "{gone}: {shown:?}");
+    }
+    assert!(
+        !shown.iter().any(|t| t.to_lowercase().contains("flagged")),
+        "{shown:?}"
+    );
+
+    let sheet = &on_disk(&dir).sheets[0];
+    let cells: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &DockControl)>()
+        .iter(app.world())
+        .filter(|(_, c)| c.root == root && matches!(c.action, DockAction::Tile(..)))
+        .map(|(e, _)| e)
+        .collect();
+    assert_eq!(cells.len() as u32, sheet.columns * sheet.rows);
+    for cell in cells {
+        let tint = app.world().get::<BackgroundColor>(cell).map(|c| c.0);
+        assert!(tint.is_none_or(|c| c.alpha() == 0.0), "{tint:?}");
+        let marks = (app.world().get::<Children>(cell)).map_or(0, |c| c.iter().count());
+        assert_eq!(marks, 0, "a sheet tile carries no marks");
+    }
 }
 
 #[test]
 fn a_peer_click_paints_the_brush_and_the_view_follows_undo() {
-    let (mut app, dir, flagged, was) = docked();
+    let (mut app, dir) = handmade();
     count_builds(&mut app);
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Brush(was));
+    press(&mut app, root, DockAction::Tile(0, 0));
+    press(&mut app, root, DockAction::Brush(WATER));
     let count = entries(&app);
     let built = builds(&app);
     press(&mut app, root, DockAction::Peer(1));
 
     let peers = |dir: &tempfile::TempDir| {
         (on_disk(dir).tiles.iter())
-            .find(|t| t.sheet == 0 && t.tile == flagged)
+            .find(|t| t.sheet == 0 && t.tile == 0)
             .map(|t| t.peers)
     };
-    assert_eq!(peers(&dir).map(|p| p[1]), Some(was));
+    assert_eq!(peers(&dir).map(|p| p[1]), Some(WATER));
     assert_eq!(entries(&app), count + 1, "one undo entry");
     let terrains = on_disk(&dir).terrains.len();
     assert_eq!(builds(&app) - built, terrains, "the dock is built once");
-    let shown = texts(&mut app, root);
-    assert!(shown.iter().any(|t| t == "FLAGGED (0)"), "{shown:?}");
 
     run(&mut app, "history.undo");
     settle(&mut app);
-    assert_eq!(peers(&dir).map(|p| p[1]), Some(WATER));
-    let shown = texts(&mut app, root);
-    assert!(shown.iter().any(|t| t == "FLAGGED (1)"), "{shown:?}");
+    assert_eq!(peers(&dir).map(|p| p[1]), Some(GRASS));
+    assert_eq!(view(&app).selected, Some((0, 0)));
+}
+
+/// An editor opened again on `dir`, once its tileset is indexed and loaded.
+fn reopened(dir: &tempfile::TempDir) -> App {
+    let mut app = editor_on(dir);
+    util::update_until(
+        &mut app,
+        "the tileset to load",
+        Duration::from_secs(20),
+        |app| {
+            app.world()
+                .resource::<AssetIndex>()
+                .get(Path::new(FILE))
+                .is_some()
+                && app
+                    .world()
+                    .resource::<Assets<Tileset>>()
+                    .iter()
+                    .next()
+                    .is_some()
+        },
+    );
+    settle(&mut app);
+    app
+}
+
+/// The overworld set up automatically in an earlier session.
+fn auto_from_before() -> (App, tempfile::TempDir) {
+    let (app, dir) = overworld();
+    drop(app);
+    (reopened(&dir), dir)
+}
+
+#[track_caller]
+fn assert_cleared(before: &Tileset, after: &Tileset) {
+    assert!(after.terrains.is_empty() && after.terrain_sets.is_empty());
+    assert!(after.tiles.is_empty() && after.objects.is_empty());
+    assert_eq!(after.setup_sheets, before.setup_sheets, "the slicing stays");
+    assert_eq!(after.next_terrain_id, before.next_terrain_id);
+    assert!(!after.auto_setup);
 }
 
 #[test]
-fn accept_and_reset_go_through_their_operators() {
-    let (mut app, dir, flagged, _) = docked();
-    let (_, root) = opened(&mut app);
+fn opening_clears_untouched_auto_setup_once_as_one_undo_entry() {
+    let (mut app, dir) = auto_from_before();
+    let (before, count) = (on_disk(&dir), entries(&app));
+    assert!(before.auto_setup && !before.terrains.is_empty());
 
-    let auto = (on_disk(&dir).tiles.into_iter())
-        .find(|t| t.sheet == 0 && t.tile != flagged)
-        .map(|t| t.tile)
-        .expect("an auto tile");
-    press(&mut app, root, DockAction::Tile(0, auto));
-    let count = entries(&app);
-    press(&mut app, root, DockAction::Accept);
-    let tile = (on_disk(&dir).tiles.into_iter()).find(|t| t.sheet == 0 && t.tile == auto);
-    assert_eq!(tile.map(|t| t.peers_by_user), Some([true; 9]));
-    assert_eq!(entries(&app), count + 1, "accept is one undo entry");
-    assert_eq!(
-        view(&app).selected,
-        Some((0, flagged)),
-        "accept moves to the flagged tile"
-    );
+    open(&mut app, FILE);
+    assert_cleared(&before, &on_disk(&dir));
+    assert_eq!(entries(&app), count + 1, "the clear is one undo entry");
+    assert_eq!(view(&app).page, DockPage::Sheet);
 
-    press(&mut app, root, DockAction::Accept);
-    let shown = texts(&mut app, root);
-    assert!(shown.iter().any(|t| t == "FLAGGED (0)"), "{shown:?}");
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before);
+    open(&mut app, FILE);
+    assert_eq!(on_disk(&dir), before, "once a session, so undo sticks");
+}
+
+#[test]
+fn an_auto_tileset_with_one_mark_by_hand_is_left_whole() {
+    let (mut app, dir) = overworld();
+    let rename = [("terrain", "1"), ("name", "meadow")];
+    call(&mut app, "tileset.terrain.rename", &rename);
+    drop(app);
+    let mut app = reopened(&dir);
+    let (before, count) = (on_disk(&dir), entries(&app));
+    open(&mut app, FILE);
+    assert_eq!(on_disk(&dir), before);
+    assert_eq!(entries(&app), count);
+}
+
+#[test]
+fn an_auto_import_keeps_its_setup_when_it_opens_the_tileset() {
+    let (mut app, dir) = project_app();
+    app.world_mut()
+        .operator("tileset.import")
+        .param("path", PropertyValue::from(SHEET))
+        .param("setup", PropertyValue::from("auto"))
+        .param("edit", PropertyValue::from(true))
+        .call()
+        .expect("dispatches")
+        .assert_finished();
+    settle(&mut app);
+    assert_eq!(tabs(&app).len(), 1, "the import opens its tab");
+    let kept = on_disk(&dir);
+    assert!(kept.auto_setup && kept.terrains.len() == 8);
+    open(&mut app, FILE);
+    assert_eq!(on_disk(&dir), kept);
+}
+
+#[test]
+fn a_restored_tab_clears_untouched_auto_setup_when_it_first_fills() {
+    let (mut app, dir) = overworld();
+    open(&mut app, FILE);
+    let before = on_disk(&dir);
+    assert!(!before.terrains.is_empty(), "made this session, so kept");
+    jackdaw::scene_io::save_layout_to_project(app.world_mut());
+    let saved = (app
+        .world()
+        .resource::<jackdaw::project::ProjectRoot>()
+        .config)
+        .clone();
+    drop(app);
+
+    let mut app = reopened(&dir);
+    app.world_mut()
+        .resource_mut::<jackdaw::project::ProjectRoot>()
+        .config = saved;
+    *app.world_mut().resource_mut::<DockTree>() = DockTree::default();
+    jackdaw::init_layout(app.world_mut());
+    settle(&mut app);
+    assert_eq!(tabs(&app).len(), 1);
+    assert_cleared(&before, &on_disk(&dir));
+}
+
+#[test]
+fn an_auto_tileset_a_map_paints_with_is_kept_with_a_notice() {
+    let notice = |app: &App| {
+        let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+        notice.text().to_string()
+    };
+    let (mut app, dir) = auto_from_before();
+    app.world_mut().spawn(Tilemap {
+        layers: vec![TilemapLayer {
+            name: "ground".into(),
+            tileset: FILE.into(),
+            ..default()
+        }],
+        ..default()
+    });
+    let before = on_disk(&dir);
+    open(&mut app, FILE);
+    assert_eq!(on_disk(&dir), before, "an open map paints with it");
     assert!(
-        shown.iter().any(|t| t.starts_with("flagged: 0 of")),
-        "{shown:?}"
+        notice(&app).contains("automatic terrains"),
+        "{}",
+        notice(&app)
     );
 
-    let count = entries(&app);
-    press(&mut app, root, DockAction::Reset);
-    let tile = (on_disk(&dir).tiles.into_iter()).find(|t| t.sheet == 0 && t.tile == flagged);
-    assert_eq!(tile.map(|t| t.peers_by_user), Some([false; 9]));
-    assert_eq!(entries(&app), count + 1, "reset is one undo entry");
+    let (app, dir) = overworld();
+    drop(app);
+    let scene = format!("Tilemap {{ layers: [TilemapLayer {{ tileset: \"{FILE}\" }}] }}\n");
+    std::fs::write(dir.path().join("assets/level.bsn"), scene).expect("a scene");
+    let mut app = reopened(&dir);
+    let before = on_disk(&dir);
+    open(&mut app, FILE);
+    assert_eq!(
+        on_disk(&dir),
+        before,
+        "a scene of the project paints with it"
+    );
+    assert!(
+        notice(&app).contains("automatic terrains"),
+        "{}",
+        notice(&app)
+    );
+}
+
+#[test]
+fn opening_leaves_a_hand_made_tileset_as_it_is() {
+    let (mut app, dir) = handmade();
+    let (before, count) = (on_disk(&dir), entries(&app));
+    opened(&mut app);
+    assert_eq!(on_disk(&dir), before);
+    assert_eq!(
+        entries(&app),
+        count,
+        "no history for a tileset with nothing to clear"
+    );
 }
 
 #[test]
 fn the_collision_combo_sets_the_terrain_collision() {
-    let (mut app, dir, _, _) = docked();
+    let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     let combo: Vec<Entity> = app
         .world_mut()
@@ -386,7 +563,7 @@ fn the_collision_combo_sets_the_terrain_collision() {
 
 #[test]
 fn objects_are_added_from_a_rectangle_and_removed() {
-    let (mut app, dir, _, _) = docked();
+    let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Page(DockPage::Objects));
     // Two tiles of the bottom row, which no found object covers.
@@ -416,12 +593,11 @@ fn objects_are_added_from_a_rectangle_and_removed() {
 }
 
 #[test]
-fn the_terrains_page_lists_the_missing_shapes() {
-    let (mut app, _dir, _, _) = docked();
+fn the_sheet_page_lists_the_missing_shapes() {
+    let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
-    assert!(!texts(&mut app, root).iter().any(|t| t.contains("missing")));
-    press(&mut app, root, DockAction::Page(DockPage::Terrains));
-    assert_eq!(view(&app).page, DockPage::Terrains);
     let shown = texts(&mut app, root);
     assert!(shown.iter().any(|t| t.contains("missing")), "{shown:?}");
+    press(&mut app, root, DockAction::Page(DockPage::Objects));
+    assert!(!texts(&mut app, root).iter().any(|t| t.contains("missing")));
 }
