@@ -147,7 +147,7 @@ fn open_2d_scene_exists(world: &World) -> bool {
     })
 }
 
-fn needs_2d_scene(world: &World, what: &str) -> Option<String> {
+pub(crate) fn needs_2d_scene(world: &World, what: &str) -> Option<String> {
     (!open_2d_scene_exists(world)).then(|| format!("Open a 2D scene to add {what}."))
 }
 

@@ -267,6 +267,11 @@ fn two_d(taxonomy: &mut CreationTaxonomy) {
             "Camera",
             op_action::<crate::entity_ops::EntityAddCamera2dOp>(),
         ),
+        entry(
+            TWO_D_GROUP,
+            "Tilemap",
+            op_action::<crate::tilemap_ops::TilemapCreateOp>(),
+        ),
     ]);
 }
 

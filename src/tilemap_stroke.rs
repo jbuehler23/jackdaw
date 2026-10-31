@@ -17,7 +17,7 @@ use jackdaw_tilemap::{
 use jackdaw_tileset::Tileset;
 
 use crate::commands::EditorCommand;
-use crate::tilemap::{TilemapDataStore, editable_key, resolve_into};
+use crate::tilemap::{TilemapDataStore, data_kind, editable_key, resolve_into};
 use crate::tilemap_resolve::{layer_set, refresh_terrain};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -310,6 +310,18 @@ impl TilemapStrokeBuilder {
         }
         let map = (world.resource::<TilemapDataStore>().map_id(&key))
             .ok_or("the map's cells are not loaded")?;
+        let held = (world.resource::<TilemapDataStore>().get(&key)).map_or(0, |d| d.layers.len());
+        if held != 0 && held != tilemap.layers.len() {
+            let why = format!(
+                "the map lists {} layers but its cells hold {held}; edit layers through the \
+                 layer operators",
+                tilemap.layers.len()
+            );
+            if (world.resource_mut::<TilemapDataStore>().mismatch_warned).insert(map) {
+                warn!("Tilemap {entity}: {why}");
+            }
+            return Err(why);
+        }
         Ok(Self {
             map,
             key,
@@ -568,16 +580,7 @@ fn ring_chunks(cells: &[CellCoord]) -> BTreeSet<ChunkCoord> {
 /// Adds the layers the map lists that the cells do not hold yet.
 fn pad_layers(data: &mut TilemapData, tilemap: &Tilemap) {
     for layer in tilemap.layers.iter().skip(data.layers.len()) {
-        let terrain = layer.kind == TilemapLayerKind::Terrain;
-        data.layers.push(LayerData {
-            kind: if terrain {
-                LayerKind::Terrain
-            } else {
-                LayerKind::Tile
-            },
-            tiles: ChunkedLayer::new(),
-            authoring: terrain.then(TerrainAuthoring::default),
-        });
+        data.layers.push(LayerData::empty(data_kind(layer.kind)));
     }
 }
 

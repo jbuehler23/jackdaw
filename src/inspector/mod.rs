@@ -24,6 +24,7 @@ pub(crate) mod project_component_display;
 pub(crate) mod reflect_fields;
 pub(crate) mod schema_fields;
 pub mod sprite_card;
+pub mod tilemap_card;
 pub(crate) mod type_metadata_pane;
 pub mod unavailable;
 pub mod val_field;
@@ -104,6 +105,7 @@ impl Plugin for InspectorPlugin {
             .add_plugins(component_tooltip::plugin)
             .add_plugins(file_card::plugin)
             .add_plugins(sprite_card::plugin)
+            .add_plugins(tilemap_card::plugin)
             .add_plugins(prefab_menu::plugin)
             .add_plugins(type_metadata_pane::plugin)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)

@@ -95,6 +95,17 @@ pub struct LayerData {
     pub authoring: Option<TerrainAuthoring>,
 }
 
+impl LayerData {
+    /// A layer of `kind` holding no cells.
+    pub fn empty(kind: LayerKind) -> Self {
+        Self {
+            kind,
+            tiles: ChunkedLayer::new(),
+            authoring: (kind == LayerKind::Terrain).then(TerrainAuthoring::default),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TilemapData {
     pub layers: Vec<LayerData>,

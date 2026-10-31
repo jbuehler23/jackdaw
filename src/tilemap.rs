@@ -73,6 +73,8 @@ pub struct TilemapDataStore {
     pub(crate) resolved_cells: usize,
     /// Advances on every write of any key's cells.
     revision: u64,
+    /// Maps whose layer count and cells were found to disagree, warned once.
+    pub(crate) mismatch_warned: HashSet<u64>,
 }
 
 /// What the drawn chunks of a key must catch up on.
@@ -115,13 +117,7 @@ impl TilemapDataStore {
     /// keeps its id: it is still the same document's map.
     pub fn insert(&mut self, key: impl Into<String>, mut data: TilemapData) {
         let key = key.into();
-        for layer in &mut data.layers {
-            layer.tiles.take_dirty();
-            if let Some(authoring) = &mut layer.authoring {
-                authoring.terrain.take_dirty();
-                authoring.links.take_dirty();
-            }
-        }
+        data.layers.iter_mut().for_each(clear_dirty);
         self.revision += 1;
         self.changed.insert(key.clone());
         self.redraw.insert(key.clone(), Redraw::Whole);
@@ -152,6 +148,52 @@ impl TilemapDataStore {
         self.load_failed.remove(key);
         self.changed.remove(key);
         self.entries.remove(key)
+    }
+
+    /// Takes data layer `index` out when `remove`, then puts `insert` in its
+    /// place, keeping each other layer's resolved set under its new index.
+    /// Returns the layer taken out. A layer past the end of the data is left
+    /// for padding to add.
+    pub(crate) fn splice_layer(
+        &mut self,
+        key: &str,
+        index: usize,
+        remove: bool,
+        insert: Option<LayerData>,
+    ) -> Option<LayerData> {
+        let data = self.entries.get_mut(key)?;
+        let remove = remove && index < data.layers.len();
+        let insert = insert.filter(|_| index <= data.layers.len() - usize::from(remove));
+        if !remove && insert.is_none() {
+            return None;
+        }
+        let removed = remove.then(|| data.layers.remove(index));
+        let added = insert.is_some();
+        if let Some(mut layer) = insert {
+            clear_dirty(&mut layer);
+            data.layers.insert(index, layer);
+        }
+        if let Some(sets) = self.sets.get_mut(key) {
+            *sets = std::mem::take(sets)
+                .into_iter()
+                .filter(|(at, _)| *at != index || !remove)
+                .map(|(at, set)| {
+                    let shift = isize::from(added) - isize::from(remove);
+                    (
+                        if at < index {
+                            at
+                        } else {
+                            at.saturating_add_signed(shift)
+                        },
+                        set,
+                    )
+                })
+                .collect();
+        }
+        self.revision += 1;
+        self.changed.insert(key.to_string());
+        self.redraw.insert(key.to_string(), Redraw::Whole);
+        removed
     }
 
     /// Whether the cells at `key` changed since its maps were last drawn.
@@ -722,6 +764,58 @@ fn ensure_paths(world: &mut World, batch: &[Entity]) {
             Err(why) => warn!("Copied tilemap {:?} gets no cells: {why}", map.data_path),
         }
         set_data_path(world, map.entity, &minted, &mut taken, &doc);
+    }
+}
+
+fn clear_dirty(layer: &mut LayerData) {
+    layer.tiles.take_dirty();
+    if let Some(authoring) = &mut layer.authoring {
+        authoring.terrain.take_dirty();
+        authoring.links.take_dirty();
+    }
+}
+
+/// A data path no map, entry or file of the tab in front holds.
+pub(crate) fn mint_map_path(world: &mut World) -> String {
+    let doc = current_doc(world);
+    let taken = (live_maps(world, &doc).iter())
+        .filter_map(|map| map.key().map(String::from))
+        .collect();
+    mint(world, &doc, &taken)
+}
+
+/// Puts the cells of a new map at `data_path` of the tab in front: `held`
+/// with its id when a redo brings them back, else an empty map. Returns the
+/// map id.
+pub(crate) fn claim_map(
+    world: &mut World,
+    data_path: &str,
+    held: Option<(TilemapData, u64)>,
+) -> Option<u64> {
+    let doc = current_doc(world);
+    let (_, key) = doc.locate(world, data_path)?;
+    let mut store = world.resource_mut::<TilemapDataStore>();
+    store.set_owner(&key, &doc.id);
+    let (cells, id) = held.unzip();
+    store.insert(key.clone(), cells.unwrap_or_default());
+    if let Some(id) = id {
+        store.ids.insert(key.clone(), id);
+    }
+    store.map_id(&key)
+}
+
+/// Drops the cells of map `id` wherever they are held now, returning them.
+pub(crate) fn release_map(world: &mut World, id: u64) -> Option<(TilemapData, u64)> {
+    let mut store = world.resource_mut::<TilemapDataStore>();
+    let key = store.key_of_map(id)?.to_owned();
+    Some((store.remove(&key)?, id))
+}
+
+/// The cells kind of a scene layer kind.
+pub(crate) fn data_kind(kind: jackdaw_scene_types::TilemapLayerKind) -> LayerKind {
+    match kind {
+        jackdaw_scene_types::TilemapLayerKind::Terrain => LayerKind::Terrain,
+        jackdaw_scene_types::TilemapLayerKind::Tile => LayerKind::Tile,
     }
 }
 

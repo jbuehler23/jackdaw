@@ -289,7 +289,26 @@ pub(crate) fn has_tile_map(mode: Res<TileEditMode>, maps: Query<(), With<Tilemap
     mode.map.is_some_and(|map| maps.contains(map))
 }
 
-fn leave_edit_mode(world: &mut World) {
+/// Paints `layer` of `map`, entering tile edit mode on it when the mode is
+/// off or on another map; the tool stays when only the layer changes.
+pub(crate) fn enter_layer(world: &mut World, map: Entity, layer: usize) {
+    let mode = *world.resource::<TileEditMode>();
+    if mode.map == Some(map) {
+        world.resource_mut::<TileEditMode>().layer = layer;
+        return;
+    }
+    if mode.map.is_some() {
+        leave_edit_mode(world);
+    }
+    *world.resource_mut::<TileEditMode>() = TileEditMode {
+        map: Some(map),
+        layer,
+        tool: TileTool::Brush,
+    };
+    set_context_active(world, true);
+}
+
+pub(crate) fn leave_edit_mode(world: &mut World) {
     cancel_tile_stroke(world);
     world.resource_mut::<TileEditMode>().map = None;
     set_context_active(world, false);

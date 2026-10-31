@@ -260,7 +260,7 @@ fn the_add_menu_shows_the_2d_group_with_2d_world_entries_unavailable_without_a_2
         .entries_of("2d")
         .map(|entry| entry.action.clone())
         .collect();
-    assert_eq!(actions.len(), 3);
+    assert_eq!(actions.len(), 4);
     for action in actions {
         let id = action.strip_prefix("op:").unwrap();
         assert!(
@@ -289,6 +289,7 @@ fn the_add_menu_shows_the_2d_group_with_2d_world_entries_unavailable_without_a_2
             ("Sprite", wanted),
             ("Empty 2D", "op:entity.add.empty_2d"),
             ("Camera", "op:entity.add.camera_2d"),
+            ("Tilemap", "op:tilemap.create"),
         ]
     );
     let cameras: Vec<(&str, &str)> = taxonomy
