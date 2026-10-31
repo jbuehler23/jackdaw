@@ -63,7 +63,10 @@ pub fn set_progress_fill(
     let clamped = fraction.clamp(0.0, 1.0);
     for child in children.iter() {
         if let Ok(mut node) = fill_q.get_mut(child) {
-            node.width = Val::Percent(clamped * 100.0);
+            let width = Val::Percent(clamped * 100.0);
+            if node.width != width {
+                node.width = width;
+            }
         }
     }
 }

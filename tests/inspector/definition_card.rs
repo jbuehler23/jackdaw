@@ -262,6 +262,48 @@ fn the_list_controls_add_a_row_to_the_definitions_list() {
     );
 }
 
+/// A definition holding hundreds of list items shows a bounded number of rows
+/// and says how many it left out, so selecting it cannot build a card of tens
+/// of thousands of nodes.
+#[test]
+fn a_long_list_on_the_card_shows_a_bounded_number_of_rows() {
+    let (mut app, _tmp) = app_with_open_definition();
+    let handle = jackdaw::definition_assets::open_definition_value(app.world())
+        .expect("a definition is open")
+        .handle()
+        .expect("a compiled definition")
+        .clone()
+        .typed::<MobDef>();
+    app.world_mut()
+        .resource_mut::<Assets<MobDef>>()
+        .get_mut(&handle)
+        .expect("the definition is in its store")
+        .loot = vec![LootRoll::default(); 200];
+
+    let add = add_button(&mut app);
+    app.world_mut().trigger(ButtonClickEvent { entity: add });
+    for _ in 0..10 {
+        app.update();
+    }
+    assert_eq!(open_mob(&app).loot.len(), 201);
+
+    let type_path = MobDef::type_path();
+    let rows = all_entities(&mut app)
+        .into_iter()
+        .filter_map(|entity| jackdaw::inspector::field_edited_by(app.world(), entity))
+        .filter(|(known, field)| *known == type_path && field.ends_with("].weight"))
+        .map(|(_, field)| field.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(rows.len(), 32, "only the first rows are built: {rows:?}");
+    assert!(rows.contains("loot[31].weight"));
+    assert!(
+        app.world().iter_entities().any(|entity| entity
+            .get::<Text>()
+            .is_some_and(|text| text.0 == "and 169 more")),
+        "the card says how many rows it left out"
+    );
+}
+
 /// The card says what the file is used by, so a change to it is a change to
 /// everything named there.
 #[test]

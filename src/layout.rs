@@ -1109,11 +1109,15 @@ pub fn update_save_to_scene_button(world: &mut World) {
         if let Ok(mut e) = world.get_entity_mut(button)
             && let Some(mut node) = e.get_mut::<Node>()
         {
-            node.display = if live { Display::Flex } else { Display::None };
+            let display = if live { Display::Flex } else { Display::None };
+            if node.display != display {
+                node.display = display;
+            }
         }
         for child in children {
             if let Ok(mut e) = world.get_entity_mut(child)
                 && let Some(mut tc) = e.get_mut::<TextColor>()
+                && tc.0 != text_color
             {
                 tc.0 = text_color;
             }
