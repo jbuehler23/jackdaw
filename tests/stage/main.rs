@@ -63,6 +63,7 @@ mod tile_tools;
 mod tilemap_history;
 mod tilemap_layers;
 mod tilemap_render;
+mod tilemap_shape_ops;
 mod ui_align;
 mod ui_asset_drop;
 mod ui_drag_readout;

@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{
@@ -334,16 +333,17 @@ impl TilemapStrokeBuilder {
     }
 
     /// Writes `write` to the cells inside the map's bounds, resolving a
-    /// terrain layer's neighbourhood, and returns whether any cell changed.
-    pub fn apply(&mut self, world: &mut World, cells: &[CellCoord], write: TileWrite) -> bool {
+    /// terrain layer's neighbourhood, and returns how many of them changed.
+    pub fn apply(&mut self, world: &mut World, cells: &[CellCoord], write: TileWrite) -> usize {
         let cells = in_bounds(self.tilemap.bounds, cells);
         let terrain_layer = self.tilemap.layers[self.layer].kind == TilemapLayerKind::Terrain;
         let store = world.resource::<TilemapDataStore>();
         let Some(data) = store.get(&self.key) else {
-            return false;
+            return 0;
         };
-        if !changes(data.layers.get(self.layer), terrain_layer, &cells, &write) {
-            return false;
+        let changed = changes(data.layers.get(self.layer), terrain_layer, &cells, &write);
+        if changed == 0 {
+            return 0;
         }
         let fresh: BTreeSet<(usize, ChunkCoord)> = (ring_chunks(&cells).into_iter())
             .map(|chunk| (self.layer, chunk))
@@ -357,14 +357,14 @@ impl TilemapStrokeBuilder {
         self.chunks.extend(fresh);
         let mut store = world.resource_mut::<TilemapDataStore>();
         let Some(mut edit) = store.get_mut(&self.key) else {
-            return false;
+            return 0;
         };
         pad_layers(&mut edit, &self.tilemap);
         write_layer(&mut edit.layers[self.layer], terrain_layer, &cells, write);
         if terrain_layer {
             edit.mark_written(self.layer, cells);
         }
-        true
+        changed
     }
 
     /// Closes the stroke, pushing one history entry when it changed any
@@ -434,16 +434,8 @@ pub(crate) fn tilemap_set_cells(
     params: In<OperatorParameters>,
     world: &mut World,
 ) -> OperatorResult {
-    match set_cells(world, &params) {
-        Ok(message) => {
-            report_to_caller(world, message);
-            OperatorResult::Finished
-        }
-        Err(err) => {
-            warn_caller(world, format!("{}: {err}", TilemapSetCellsOp::ID));
-            OperatorResult::Cancelled
-        }
-    }
+    let result = set_cells(world, &params);
+    crate::tilemap_ops::finish(world, TilemapSetCellsOp::ID, result)
 }
 
 fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, String> {
@@ -453,10 +445,7 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
         .ok_or("no tilemap entity given")?;
     let tilemap = (world.get::<Tilemap>(entity).cloned()).ok_or("the entity is not a tilemap")?;
     editable_key(world, entity)?;
-    let named = text("layer");
-    let index = (tilemap.layers.iter().position(|l| l.name == named))
-        .or_else(|| named.parse().ok().filter(|i| *i < tilemap.layers.len()))
-        .ok_or_else(|| format!("the map has no layer `{named}`"))?;
+    let index = layer_named(&tilemap, &text("layer"))?;
     let layer = &tilemap.layers[index];
     let terrain_layer = layer.kind == TilemapLayerKind::Terrain;
     let terrain_kind = match text("kind").as_str() {
@@ -501,36 +490,52 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
         index,
         format!("Set {} tilemap cells", cells.len()),
     )?;
-    if !stroke.apply(world, &cells, write) {
+    let changed = stroke.apply(world, &cells, write);
+    if changed == 0 || !stroke.end(world) {
         return Ok("no cell changed".into());
     }
-    stroke.end(world);
-    Ok(format!(
-        "{} cells set on layer `{}`",
-        cells.len(),
-        layer.name
-    ))
+    Ok(format!("{changed} cells set on layer `{}`", layer.name))
 }
 
-/// A tile named as `sheet:tile` or a packed layer, as the tile it packs to.
+/// The index of the layer named `named`, or at index `named`.
+pub(crate) fn layer_named(tilemap: &Tilemap, named: &str) -> Result<usize, String> {
+    (tilemap.layers.iter().position(|l| l.name == named))
+        .or_else(|| named.parse().ok().filter(|i| *i < tilemap.layers.len()))
+        .ok_or_else(|| format!("the map has no layer `{named}`"))
+}
+
+/// A tile named as `sheet:tile`, a packed layer or the `name` property the
+/// tileset gives it, as the tile it packs to.
 pub(crate) fn packed_tile(tileset: &Tileset, value: &str) -> Result<TileRef, String> {
-    let (sheet, at) = crate::tileset_edit::tile(tileset, value)?;
-    let packed = (tileset.layer(sheet, at)).and_then(|l| u16::try_from(l).ok());
+    let layer = match crate::tileset_edit::tile(tileset, value) {
+        Ok((sheet, at)) => tileset.layer(sheet, at),
+        Err(err) => Some(
+            (tileset.properties.iter())
+                .find(|(_, p)| p.get("name").is_some_and(|name| name == value))
+                .map(|(layer, _)| *layer)
+                .ok_or(err)?,
+        )
+        .filter(|&layer| tileset.tile_of_layer(layer).is_some()),
+    };
+    let packed = layer.and_then(|l| u16::try_from(l).ok());
     Ok(TileRef::new(packed.ok_or_else(|| {
         format!("tile `{value}` is out of range")
     })?))
 }
 
-/// Whether writing `write` to `cells` of `layer` changes any of them.
+/// How many of `cells` writing `write` to `layer` changes.
 fn changes(
     layer: Option<&LayerData>,
     terrain_layer: bool,
     cells: &[CellCoord],
     write: &TileWrite,
-) -> bool {
+) -> usize {
     let authoring = layer.and_then(|layer| layer.authoring.as_ref());
     let terrain = |cell| authoring.map_or(0, |a| a.terrain.get(cell));
     let links = |cell| authoring.map_or(Links::EMPTY, |a| a.links.get(cell));
+    let mut unique = cells.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
     if let TileWrite::Path(id) = *write {
         let (mut after_terrain, mut after_links) = (ChunkedLayer::new(), ChunkedLayer::new());
         for &cell in cells {
@@ -538,24 +543,27 @@ fn changes(
             after_links.set(cell, links(cell));
         }
         paint_path(&mut after_terrain, &mut after_links, cells, id);
-        return (cells.iter())
-            .any(|&c| after_terrain.get(c) != terrain(c) || after_links.get(c) != links(c));
+        return (unique.into_iter())
+            .filter(|&c| after_terrain.get(c) != terrain(c) || after_links.get(c) != links(c))
+            .count();
     }
-    cells.iter().any(|&cell| match *write {
-        TileWrite::Terrain(id) => terrain(cell) != id || links(cell) != Links::EMPTY,
-        TileWrite::Tile(tile) if terrain_layer => {
-            let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
-            placed != (!tile.is_empty()).then_some(tile)
-        }
-        TileWrite::Tile(tile) => layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)) != tile,
-        TileWrite::Erase if terrain_layer => {
-            terrain(cell) != 0
-                || links(cell) != Links::EMPTY
-                || authoring.is_some_and(|a| a.overrides.contains_key(&cell))
-        }
-        TileWrite::Erase => layer.is_some_and(|l| !l.tiles.get(cell).is_empty()),
-        TileWrite::Path(_) => false,
-    })
+    (unique.into_iter())
+        .filter(|&cell| match *write {
+            TileWrite::Terrain(id) => terrain(cell) != id || links(cell) != Links::EMPTY,
+            TileWrite::Tile(tile) if terrain_layer => {
+                let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
+                placed != (!tile.is_empty()).then_some(tile)
+            }
+            TileWrite::Tile(tile) => layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)) != tile,
+            TileWrite::Erase if terrain_layer => {
+                terrain(cell) != 0
+                    || links(cell) != Links::EMPTY
+                    || authoring.is_some_and(|a| a.overrides.contains_key(&cell))
+            }
+            TileWrite::Erase => layer.is_some_and(|l| !l.tiles.get(cell).is_empty()),
+            TileWrite::Path(_) => false,
+        })
+        .count()
 }
 
 /// The cells inside `bounds`, or all of them on an unbounded map.

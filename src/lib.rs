@@ -175,6 +175,7 @@ pub mod tilemap;
 pub mod tilemap_ops;
 pub mod tilemap_render;
 pub mod tilemap_resolve;
+pub mod tilemap_shape_ops;
 pub mod tilemap_stroke;
 pub mod tileset_dock;
 pub mod tileset_edit;

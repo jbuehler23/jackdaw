@@ -19,7 +19,7 @@ use jackdaw_scene_types::{PropertyValue, TilemapLayerKind};
 use jackdaw_tilemap::{CellCoord, TileRef, TilemapData, orthogonal_line};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
-const BRUSH: &str = "tilemap.brush";
+pub(crate) const BRUSH: &str = "tilemap.brush";
 const ERASER: &str = "tilemap.eraser";
 
 pub(crate) fn enter(app: &mut App, map: Entity) {
@@ -35,7 +35,7 @@ pub(crate) fn enter(app: &mut App, map: Entity) {
     settle(app);
 }
 
-fn available(app: &mut App, id: &str) -> bool {
+pub(crate) fn available(app: &mut App, id: &str) -> bool {
     app.world_mut()
         .operator(id.to_string())
         .is_available()
@@ -631,9 +631,9 @@ mod on_the_stage {
     }
 }
 
-const RECTANGLE: &str = "tilemap.rectangle";
-const LINE: &str = "tilemap.line";
-const BUCKET: &str = "tilemap.bucket";
+pub(crate) const RECTANGLE: &str = "tilemap.rectangle";
+pub(crate) const LINE: &str = "tilemap.line";
+pub(crate) const BUCKET: &str = "tilemap.bucket";
 const PICKER: &str = "tilemap.picker";
 
 /// A press and release on one cell with a tool that acts on the press.
@@ -646,7 +646,7 @@ pub(crate) fn click(
     click_with(app, id, button, cell, OperatorParameters::default())
 }
 
-fn fill(app: &mut App, cell: (i32, i32), contiguous: bool) -> OperatorResult {
+pub(crate) fn fill(app: &mut App, cell: (i32, i32), contiguous: bool) -> OperatorResult {
     let mut params = OperatorParameters::default();
     (params.0).insert("contiguous".into(), PropertyValue::Bool(contiguous));
     click_with(app, BUCKET, MouseButton::Left, cell, params)
@@ -678,7 +678,7 @@ fn click_with(
     result
 }
 
-fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
+pub(crate) fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
     let map = spawn_map(
         app,
         vec![layer(TilemapLayerKind::Tile, default())],
@@ -782,7 +782,7 @@ fn a_line_joins_the_press_and_release_cells() {
     assert_undo_redo(&mut app, map, &before, count);
 }
 
-fn two_islands() -> TilemapData {
+pub(crate) fn two_islands() -> TilemapData {
     let mut data = grass_patch();
     let authoring = data.layers[0].authoring.as_mut().expect("authoring");
     authoring.terrain.set(CellCoord::new(10, 10), 1);
