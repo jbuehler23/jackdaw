@@ -511,3 +511,46 @@ fn the_tile_selection_keys_sit_above_core() {
         assert!(priority > Some(0), "{operator} sits above Core");
     }
 }
+
+/// N names a new terrain from the selected sheet tile. It lives on the
+/// Tileset window's own context, inactive until a tileset tab has the
+/// keyboard, and no other command claims a bare N.
+#[test]
+fn n_in_the_tileset_window_claims_only_the_new_terrain_command() {
+    let mut app = crate::headless_app();
+    let defaults = classic(&mut app);
+    let operator = "tileset.terrain.from_tile";
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyN")),
+        vec![operator.to_string()],
+    );
+    let conflicts = find_conflicts(&defaults);
+    assert!(
+        !conflicts.iter().any(|line| line.contains(operator)),
+        "{conflicts:?}"
+    );
+
+    let world = app.world_mut();
+    let contexts: Vec<Entity> = world
+        .query::<(
+            &jackdaw_api_internal::lifecycle::OperatorAction,
+            &jackdaw_input::ActionOf,
+        )>()
+        .iter(world)
+        .filter(|(action, _)| action.0 == operator)
+        .map(|(_, of)| of.0)
+        .collect();
+    assert_eq!(contexts.len(), 1, "{contexts:?}");
+    let context = contexts[0];
+    assert!(
+        world
+            .get::<jackdaw::tileset_dock::TilesetDockInputContext>(context)
+            .is_some()
+    );
+    assert!(
+        !world
+            .get::<jackdaw_input::ContextActivity>(context)
+            .is_some_and(|active| active.0),
+        "inactive while no tileset tab has the keyboard"
+    );
+}

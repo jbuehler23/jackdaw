@@ -10,12 +10,12 @@ terrains: 8
   terrain 11 "water": swatch #06a1b3, pure tiles 8
   terrain 12 "water 2": swatch #038cac, pure tiles 4
 terrain sets: 6
-  set 2 over 1: CornersAndSides, 35/47 shapes, 12 missing, template Minimal3x3
-  set 11 over 1: CornersAndSides, 30/47 shapes, 17 missing, template Corner2x2
-  set 9 over 2: Corners, 14/16 shapes, 2 missing, template none
-  set 5 over 6: Corners, 6/16 shapes, 10 missing, template none
-  set 11 over 9: Corners, 14/16 shapes, 2 missing, template none
-  set 12 over 11: Corners, 14/16 shapes, 2 missing, template none
+  set "grass 2" over "grass": CornersAndSides, 35/47 shapes, 12 missing, template Minimal3x3
+  set "water" over "grass": CornersAndSides, 30/47 shapes, 17 missing, template Corner2x2
+  set "grass 5" over "grass 2": Corners, 14/16 shapes, 2 missing, template none
+  set "grass 3" over "grass 4": Corners, 6/16 shapes, 10 missing, template none
+  set "water" over "grass 5": Corners, 14/16 shapes, 2 missing, template none
+  set "water 2" over "water": Corners, 14/16 shapes, 2 missing, template none
 stamps: 34
   stamp "overworld.png" at column 0 row 4: 5x3, 14 tiles
   stamp "overworld.png" at column 11 row 4: 3x3, 8 tiles

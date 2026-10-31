@@ -492,7 +492,7 @@ fn a_failed_write_changes_nothing_and_mints_no_history() {
     call(
         &mut app,
         "tileset.terrain.rename",
-        &[("terrain", "1"), ("name", "grass")],
+        &[("terrain", "1"), ("name", "meadow")],
     );
     std::fs::set_permissions(&assets, std::fs::Permissions::from_mode(0o755)).expect("unlock");
     assert!(
@@ -515,7 +515,7 @@ fn the_terrain_operators_run_over_the_remote() {
         vec![
             (
                 "tileset.terrain.add",
-                json!({ "name": "marsh", "swatch": "#3366ff" }),
+                json!({ "name": "marsh", "swatch": "#3366ff", "icon": "0:5" }),
             ),
             (
                 "tileset.terrain.rename",
@@ -550,4 +550,179 @@ fn the_terrain_operators_run_over_the_remote() {
     );
     let tileset = on_disk(&dir);
     assert!((tileset.terrains.iter()).all(|t| t.name != "pond" && t.name != "wet"));
+}
+
+#[test]
+fn terrain_add_takes_an_icon_tile_that_survives_a_reload() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain.add",
+        &[("name", "dirt"), ("icon", "0:5")],
+    );
+    let icons: Vec<_> = (after.terrains.iter()).map(|t| t.icon).collect();
+    assert_eq!(icons, [None, Some((0, 5))]);
+    let layer = after.layer(0, 7).expect("a tile").to_string();
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "water"), ("icon", &layer)],
+    );
+    assert_eq!(
+        on_disk(&dir).terrains[2].icon,
+        Some((0, 7)),
+        "a packed layer"
+    );
+    call(
+        &mut app,
+        "tileset.terrain_set.add",
+        &[("inner", "dirt"), ("outer", "grass")],
+    );
+    assert_eq!(
+        on_disk(&dir).terrains[1].icon,
+        Some((0, 5)),
+        "kept by an edit"
+    );
+
+    refused(
+        &mut app,
+        &dir,
+        "tileset.terrain.add",
+        &[("name", "sand"), ("icon", "0:99999")],
+        "out of range",
+    );
+    drop(app);
+    let reloaded = read_tileset(&asset_file(&dir, FILE));
+    assert_eq!(reloaded.terrains[1].icon, Some((0, 5)));
+}
+
+/// `text` without its `field: value` entries, as a file written before the
+/// field existed.
+fn without_field(text: &str, field: &str) -> String {
+    let key = format!("{field}:");
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(&key) {
+        out.push_str(&rest[..at]);
+        let mut depth = 0i32;
+        let mut end = at + key.len();
+        for (offset, c) in rest[end..].char_indices() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' if depth > 0 => depth -= 1,
+                ')' | ']' | '}' | ',' | '\n' if depth == 0 => {
+                    end += offset + usize::from(c == ',');
+                    break;
+                }
+                _ => {}
+            }
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn a_tileset_from_before_icons_loads_without_them() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "grass"), ("icon", "0:5")],
+    );
+    drop(app);
+    let file = asset_file(&dir, FILE);
+    let text = std::fs::read_to_string(&file).expect("written");
+    assert!(text.contains("icon:"), "{text}");
+    let old = without_field(&text, "icon");
+    assert!(!old.contains("icon"), "{old}");
+    std::fs::write(&file, old).expect("rewritten");
+    let loaded = read_tileset(&file);
+    assert_eq!(loaded.terrains.len(), 1);
+    assert_eq!(
+        (loaded.terrains[0].name.as_str(), loaded.terrains[0].icon),
+        ("grass", None)
+    );
+}
+
+#[test]
+fn an_icon_belongs_to_one_terrain_and_can_be_changed() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "grass"), ("icon", "0:5")],
+    );
+    refused(
+        &mut app,
+        &dir,
+        "tileset.terrain.add",
+        &[("name", "dirt"), ("icon", "0:5")],
+        "tile 0:5 is already the icon of `grass`",
+    );
+    call(&mut app, "tileset.terrain.add", &[("name", "dirt")]);
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain.set_icon",
+        &[("terrain", "dirt"), ("icon", "0:7")],
+    );
+    assert_eq!(after.terrains[1].icon, Some((0, 7)));
+    refused(
+        &mut app,
+        &dir,
+        "tileset.terrain.set_icon",
+        &[("terrain", "dirt"), ("icon", "0:5")],
+        "already the icon of `grass`",
+    );
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain.set_icon",
+        &[("terrain", "grass"), ("icon", "")],
+    );
+    assert_eq!(after.terrains[0].icon, None, "an empty icon clears it");
+    refused(
+        &mut app,
+        &dir,
+        "tileset.terrain.set_icon",
+        &[("terrain", "sand"), ("icon", "0:1")],
+        "no terrain is `sand`",
+    );
+}
+
+#[test]
+fn renaming_a_terrain_to_its_own_name_changes_nothing() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    let (before, count) = (on_disk(&dir), entries(&app));
+    call(
+        &mut app,
+        "tileset.terrain.rename",
+        &[("terrain", "grass"), ("name", "grass")],
+    );
+    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
+    assert_eq!((on_disk(&dir), entries(&app)), (before, count));
+}
+
+#[test]
+fn quotes_and_control_characters_cannot_name_a_terrain() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    for name in ["say \"hi\"", "tab\there", "line\nbreak"] {
+        refused(
+            &mut app,
+            &dir,
+            "tileset.terrain.add",
+            &[("name", name)],
+            "cannot name a terrain",
+        );
+    }
 }

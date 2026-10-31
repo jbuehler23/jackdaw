@@ -14,7 +14,8 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use jackdaw::asset_index::AssetIndex;
 use jackdaw::tileset_dock::{
-    CollisionCombo, DockAction, DockControl, DockPage, DockView, TILESET_WINDOW_ID, TilesetDock,
+    CollisionCombo, DockAction, DockControl, DockPage, DockView, NameField, SheetPicture,
+    TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext,
     TilesetDockViews,
 };
 use jackdaw_api::prelude::*;
@@ -303,9 +304,10 @@ fn the_dock_opens_on_a_plain_sheet_page() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     assert_eq!(view(&app).page, DockPage::Sheet);
-    let pages: Vec<DockAction> = (actions(&mut app, root).into_iter())
+    let mut pages: Vec<DockAction> = (actions(&mut app, root).into_iter())
         .filter(|a| matches!(a, DockAction::Page(_)))
         .collect();
+    pages.sort_by_key(|a| *a != DockAction::Page(DockPage::Sheet));
     assert_eq!(
         pages,
         [
@@ -593,11 +595,351 @@ fn objects_are_added_from_a_rectangle_and_removed() {
 }
 
 #[test]
-fn the_sheet_page_lists_the_missing_shapes() {
+fn the_missing_shapes_of_a_set_open_on_request() {
     let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
+    let listed = |app: &mut App| {
+        (texts(app, root).into_iter())
+            .filter(|t| t.trim_start().starts_with("missing "))
+            .count()
+    };
     let shown = texts(&mut app, root);
-    assert!(shown.iter().any(|t| t.contains("missing")), "{shown:?}");
+    assert!(
+        shown.iter().any(|t| t == "water over grass: Corners 1/16"),
+        "{shown:?}"
+    );
+    assert_eq!(listed(&mut app), 0, "collapsed: {shown:?}");
+    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    assert_eq!(listed(&mut app), 15);
+    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    assert_eq!(listed(&mut app), 0);
+    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
     press(&mut app, root, DockAction::Page(DockPage::Objects));
     assert!(!texts(&mut app, root).iter().any(|t| t.contains("missing")));
+}
+
+/// Run a synthetic input clause and let it drain.
+fn input(app: &mut App, clause: &str) {
+    jackdaw::boot_ops::run_op_clause(app.world_mut(), clause)
+        .expect("the clause dispatches")
+        .assert_finished();
+    for _ in 0..600 {
+        app.update();
+        let input = app
+            .world()
+            .resource::<jackdaw::test_input::SyntheticInput>();
+        if input.is_idle() {
+            break;
+        }
+    }
+    settle(app);
+}
+
+/// The open name field of the dock under `root`: its kind, its editable
+/// entity and its text.
+fn name_field(app: &mut App, root: Entity) -> Option<(NameField, Entity, String)> {
+    let fields: Vec<(Entity, NameField)> = app
+        .world_mut()
+        .query::<(Entity, &TerrainNameField)>()
+        .iter(app.world())
+        .filter(|(_, f)| f.root == root)
+        .map(|(e, f)| (e, f.field))
+        .collect();
+    assert!(fields.len() <= 1, "{fields:?}");
+    let (outer, field) = fields.first().copied()?;
+    let mut stack = vec![outer];
+    while let Some(entity) = stack.pop() {
+        if let Some(editable) = app.world().get::<bevy::text::EditableText>(entity) {
+            return Some((field, entity, editable.value().into_owned()));
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    None
+}
+
+fn focused(app: &App) -> Option<Entity> {
+    app.world()
+        .resource::<bevy::input_focus::InputFocus>()
+        .get()
+}
+
+#[test]
+fn n_on_a_selected_tile_names_a_new_terrain_shown_by_it() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    input(&mut app, "input.key key=KeyN");
+    assert_eq!(name_field(&mut app, root), None, "no tile, no field");
+
+    press(&mut app, root, DockAction::Tile(0, 5));
+    let count = entries(&app);
+    input(&mut app, "input.key key=KeyN");
+    assert_eq!(view(&app).naming, Some(NameField::New));
+    let (_, field, prefill) = name_field(&mut app, root).expect("the field opens");
+    assert_eq!(prefill, "Terrain 3");
+    assert_eq!(focused(&app), Some(field), "it has the keyboard");
+    assert_eq!(entries(&app), count, "opening it is no edit");
+
+    input(&mut app, "input.text text=dirt");
+    input(&mut app, "input.key key=Enter");
+    let terrains = on_disk(&dir).terrains;
+    assert_eq!(terrains.len(), 3, "{terrains:?}");
+    let dirt = &terrains[2];
+    assert_eq!((dirt.name.as_str(), dirt.icon), ("dirt", Some((0, 5))));
+    assert_eq!(entries(&app), count + 1, "one undo entry");
+    assert_eq!(view(&app).naming, None);
+    assert_eq!(name_field(&mut app, root), None);
+
+    let brush = view(&app).brush;
+    press(&mut app, root, DockAction::Tile(0, 9));
+    press(&mut app, root, DockAction::Tile(0, 5));
+    assert_eq!(
+        view(&app).brush,
+        brush,
+        "an icon tile is a tile, not a pick"
+    );
+
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).terrains.len(), 2);
+}
+
+#[test]
+fn escape_closes_the_name_field_and_adds_nothing() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Tile(0, 5));
+    let (before, count) = (on_disk(&dir), entries(&app));
+    input(&mut app, "input.key key=KeyN");
+    assert!(name_field(&mut app, root).is_some());
+    input(&mut app, "input.text text=dirt");
+    input(&mut app, "input.key key=Escape");
+    assert_eq!(view(&app).naming, None);
+    assert_eq!(name_field(&mut app, root), None);
+    assert_eq!((on_disk(&dir), entries(&app)), (before, count));
+}
+
+#[test]
+fn the_new_terrain_button_opens_the_same_field() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    assert!(
+        !actions(&mut app, root).contains(&DockAction::NewTerrain),
+        "no tile, no button"
+    );
+    press(&mut app, root, DockAction::Tile(0, 6));
+    press(&mut app, root, DockAction::NewTerrain);
+    let (field, _, prefill) = name_field(&mut app, root).expect("the field opens");
+    assert_eq!((field, prefill.as_str()), (NameField::New, "Terrain 3"));
+    input(&mut app, "input.key key=Enter");
+    let added = on_disk(&dir).terrains.pop().expect("added");
+    assert_eq!(
+        (added.name.as_str(), added.icon),
+        ("Terrain 3", Some((0, 6)))
+    );
+}
+
+#[test]
+fn the_brush_terrain_is_renamed_and_removed_from_the_list() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    assert!(!actions(&mut app, root).contains(&DockAction::RenameTerrain(WATER)));
+    press(&mut app, root, DockAction::Brush(WATER));
+    press(&mut app, root, DockAction::RenameTerrain(WATER));
+    let (field, _, prefill) = name_field(&mut app, root).expect("the field opens");
+    assert_eq!(
+        (field, prefill.as_str()),
+        (NameField::Rename(WATER), "water")
+    );
+    let count = entries(&app);
+    input(&mut app, "input.text text=lake");
+    input(&mut app, "input.key key=Enter");
+    let names: Vec<String> = (on_disk(&dir).terrains.into_iter())
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["grass", "lake"]);
+    assert_eq!(entries(&app), count + 1);
+
+    press(&mut app, root, DockAction::RemoveTerrain(WATER));
+    let names: Vec<String> = (on_disk(&dir).terrains.into_iter())
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(names, ["grass"]);
+    assert_eq!(entries(&app), count + 2);
+}
+
+#[test]
+fn terrains_are_listed_by_their_icon_tile_and_sets_by_their_names() {
+    let (mut app, dir) = handmade();
+    call(
+        &mut app,
+        "tileset.terrain.add",
+        &[("name", "dirt"), ("icon", "0:5")],
+    );
+    let (_, root) = opened(&mut app);
+    let swatches: Vec<(Entity, u8)> = app
+        .world_mut()
+        .query::<(Entity, &TerrainSwatch)>()
+        .iter(app.world())
+        .filter(|(_, s)| s.root == root)
+        .map(|(e, s)| (e, s.terrain))
+        .collect();
+    let of = |terrain: u8| {
+        (swatches.iter())
+            .find(|(_, t)| *t == terrain)
+            .map(|(e, _)| *e)
+            .expect("listed")
+    };
+    let tileset = on_disk(&dir);
+    let dirt = tileset.terrains[2].id;
+    let rect = app
+        .world()
+        .get::<ImageNode>(of(dirt))
+        .and_then(|image| image.rect);
+    let (min, size) = tileset.sheet_rect(0, 5).expect("a tile");
+    assert_eq!(
+        rect,
+        Some(Rect::from_corners(min.as_vec2(), (min + size).as_vec2()))
+    );
+    let grass = of(GRASS);
+    assert!(app.world().get::<ImageNode>(grass).is_none());
+    let colour = app.world().get::<BackgroundColor>(grass).map(|c| c.0);
+    assert!(colour.is_some_and(|c| c.alpha() == 1.0), "{colour:?}");
+
+    let shown = texts(&mut app, root);
+    assert!(
+        shown.iter().any(|t| t.starts_with("water over grass:")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|t| t.contains("set 2 over 1")),
+        "{shown:?}"
+    );
+}
+
+/// The screen rect of `entity`, in logical pixels.
+fn screen_rect(app: &App, entity: Entity) -> Rect {
+    let node = app.world().get::<ComputedNode>(entity).expect("laid out");
+    let at = app
+        .world()
+        .get::<bevy::ui::UiGlobalTransform>(entity)
+        .expect("placed");
+    let scale = node.inverse_scale_factor();
+    let centre = at.translation * scale;
+    let size = node.size() * scale;
+    Rect::from_center_size(centre, size)
+}
+
+fn set_width(app: &mut App, width: u32) {
+    let mut windows = app
+        .world_mut()
+        .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>();
+    let mut window = windows.single_mut(app.world_mut()).expect("a window");
+    window.resolution = bevy::window::WindowResolution::new(width, 1000);
+    settle(app);
+}
+
+#[test]
+fn the_sheet_image_and_its_tile_grid_share_one_layout() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let tileset = on_disk(&dir);
+    let sheet = &tileset.sheets[0];
+    let last = sheet.columns * sheet.rows - 1;
+    for width in [950, 1800] {
+        set_width(&mut app, width);
+        let pictures: Vec<(Entity, Handle<Image>)> = app
+            .world_mut()
+            .query::<(Entity, &SheetPicture, &ImageNode)>()
+            .iter(app.world())
+            .filter(|(_, p, _)| p.root == root && p.sheet == 0)
+            .map(|(e, _, i)| (e, i.image.clone()))
+            .collect();
+        assert_eq!(pictures.len(), 1, "one picture of the sheet");
+        let (picture, image) = pictures[0].clone();
+        let pixels = (app.world().resource::<Assets<Image>>().get(&image))
+            .expect("decoded")
+            .size()
+            .as_vec2();
+        let drawn = screen_rect(&app, picture);
+        let zoom = drawn.size() / pixels;
+        assert_eq!(zoom.x, zoom.y, "{width}: one scale");
+        assert!(zoom.x >= 1.0 && zoom.x.fract() == 0.0, "{width}: {zoom}");
+        for tile in [0, 27, last / 2, last] {
+            let cell = control(&mut app, root, DockAction::Tile(0, tile));
+            let (min, size) = tileset.sheet_rect(0, tile).expect("a tile");
+            let expected = Rect::from_corners(
+                drawn.min + min.as_vec2() * zoom,
+                drawn.min + (min + size).as_vec2() * zoom,
+            );
+            let got = screen_rect(&app, cell);
+            assert!(
+                (got.min - expected.min).abs().max_element() < 0.5
+                    && (got.max - expected.max).abs().max_element() < 0.5,
+                "{width}: tile {tile} is drawn at {expected:?}, its cell is at {got:?}",
+            );
+        }
+    }
+}
+
+fn dock_context_active(app: &mut App) -> bool {
+    app.world_mut()
+        .query_filtered::<&jackdaw_input::ContextActivity, With<TilesetDockInputContext>>()
+        .iter(app.world())
+        .any(|a| a.0)
+}
+
+#[test]
+fn the_keys_leave_with_the_tab_that_had_them() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    assert!(!dock_context_active(&mut app));
+    press(&mut app, root, DockAction::Tile(0, 5));
+    assert!(
+        dock_context_active(&mut app),
+        "a click gives the tab the keys"
+    );
+    input(&mut app, "input.key key=KeyN");
+    assert!(name_field(&mut app, root).is_some());
+    app.world_mut().entity_mut(root).despawn();
+    settle(&mut app);
+    assert!(!dock_context_active(&mut app), "the focused field is gone");
+}
+
+#[test]
+fn the_new_terrain_button_builds_the_dock_once() {
+    let (mut app, _dir) = handmade();
+    count_builds(&mut app);
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Tile(0, 6));
+    let built = builds(&app);
+    press(&mut app, root, DockAction::NewTerrain);
+    assert!(name_field(&mut app, root).is_some());
+    assert_eq!(builds(&app) - built, 2, "one build of two terrain rows");
+}
+
+#[test]
+fn the_selected_tile_becomes_the_brush_terrains_icon() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    assert!(
+        !actions(&mut app, root).contains(&DockAction::SetIcon(WATER)),
+        "no tile yet"
+    );
+    press(&mut app, root, DockAction::Tile(0, 9));
+    let count = entries(&app);
+    press(&mut app, root, DockAction::SetIcon(WATER));
+    let water = (on_disk(&dir).terrains.into_iter()).find(|t| t.id == WATER);
+    assert_eq!(water.and_then(|t| t.icon), Some((0, 9)));
+    assert_eq!(entries(&app), count + 1);
+
+    call(&mut app, "tileset.terrain.remove", &[("terrain", "grass")]);
+    settle(&mut app);
+    assert_eq!(
+        view(&app).brush,
+        WATER,
+        "another terrain's removal keeps the brush"
+    );
 }

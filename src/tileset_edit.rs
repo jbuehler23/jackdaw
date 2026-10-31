@@ -31,6 +31,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainAddOp>();
     ctx.register_operator::<TilesetTerrainRemoveOp>();
     ctx.register_operator::<TilesetTerrainRenameOp>();
+    ctx.register_operator::<TilesetTerrainSetIconOp>();
     ctx.register_operator::<TilesetTerrainSplitOp>();
     ctx.register_operator::<TilesetTerrainMergeOp>();
     ctx.register_operator::<TilesetTerrainSetCollisionOp>();
@@ -199,9 +200,40 @@ pub(crate) fn terrain_or_empty(tileset: &Tileset, text: &str) -> Result<TerrainI
     terrain(tileset, text)
 }
 
+/// The tile `text` names as an icon for terrain `owner`, refused when another
+/// terrain already shows it; none for an empty `text`.
+fn free_icon(
+    tileset: &Tileset,
+    text: &str,
+    owner: TerrainId,
+) -> Result<Option<(u32, u32)>, String> {
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let icon = tile(tileset, text)?;
+    let taken = (tileset.terrains.iter()).find(|t| t.id != owner && t.icon == Some(icon));
+    if let Some(other) = taken {
+        let (sheet, index) = icon;
+        return Err(format!(
+            "tile {sheet}:{index} is already the icon of `{}`",
+            other.name
+        ));
+    }
+    Ok(Some(icon))
+}
+
+/// The first free `Terrain n`, counting on from the terrains there are.
+pub(crate) fn suggested_name(tileset: &Tileset) -> String {
+    (tileset.terrains.len() + 1..)
+        .map(|n| format!("Terrain {n}"))
+        .find(|name| free_name(tileset, name).is_ok())
+        .unwrap_or_default()
+}
+
 fn free_name(tileset: &Tileset, name: &str) -> Result<(), String> {
     if name.is_empty()
         || name.parse::<u32>().is_ok()
+        || name.chars().any(|c| c == '"' || c.is_control())
         || ["empty", "erase", "keep", "none"].contains(&name)
     {
         return Err(format!("`{name}` cannot name a terrain"));
@@ -319,6 +351,11 @@ fn peer(text: &str) -> Result<Peer, String> {
                    terrain has yet."
         ),
         background(bool, default = false, doc = "Whether it is the background terrain."),
+        icon(
+            String,
+            doc = "Tile the terrain is shown by, as `sheet:tile` or a packed layer; none by \
+                   default."
+        ),
     )
 )]
 pub fn tileset_terrain_add(
@@ -328,12 +365,14 @@ pub fn tileset_terrain_add(
     let name = text(&params, "name");
     let swatch = text(&params, "swatch");
     let background = params.as_bool("background").unwrap_or(false);
+    let icon = text(&params, "icon");
     queue_edit(
         &mut commands,
         "tileset.terrain.add",
         text(&params, "path"),
         move |_, tileset| {
             free_name(tileset, &name)?;
+            let icon = free_icon(tileset, &icon, 0)?;
             let [r, g, b] = if swatch.is_empty() {
                 next_hue(tileset)
             } else {
@@ -342,11 +381,14 @@ pub fn tileset_terrain_add(
                 let [r, g, b, _] = colour.to_u8_array();
                 [r, g, b]
             };
-            with_setup(tileset, |_, setup| {
-                let id = (setup.add_terrain(name.clone(), [r, g, b], background))
+            let mut added = 0;
+            let message = with_setup(tileset, |_, setup| {
+                added = (setup.add_terrain(name.clone(), [r, g, b], background))
                     .map_err(|e| e.to_string())?;
-                Ok(format!("terrain {id} \"{name}\" added"))
-            })
+                Ok(format!("terrain {added} \"{name}\" added"))
+            })?;
+            terrain_mut(tileset, added)?.icon = icon;
+            Ok(message)
         },
     )
 }
@@ -384,6 +426,46 @@ pub fn tileset_terrain_remove(
     )
 }
 
+/// Show a terrain by a tile.
+#[operator(
+    id = "tileset.terrain.set_icon",
+    label = "Set Tileset Terrain Icon",
+    description = "Show a terrain by a tile of the sheet, which no other terrain shows.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Tileset file under the project's assets; defaults to the open tileset."
+        ),
+        terrain(String, doc = "Terrain id or name."),
+        icon(
+            String,
+            doc = "Tile as `sheet:tile` or a packed layer; empty shows the terrain by its \
+                   colour."
+        ),
+    )
+)]
+pub fn tileset_terrain_set_icon(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (name, icon) = (text(&params, "terrain"), text(&params, "icon"));
+    queue_edit(
+        &mut commands,
+        "tileset.terrain.set_icon",
+        text(&params, "path"),
+        move |_, tileset| {
+            let id = terrain(tileset, &name)?;
+            let icon = free_icon(tileset, &icon, id)?;
+            terrain_mut(tileset, id)?.icon = icon;
+            Ok(match icon {
+                Some((sheet, tile)) => format!("terrain {id} is shown by tile {sheet}:{tile}"),
+                None => format!("terrain {id} is shown by its colour"),
+            })
+        },
+    )
+}
+
 /// Rename a terrain of a tileset.
 #[operator(
     id = "tileset.terrain.rename",
@@ -410,6 +492,10 @@ pub fn tileset_terrain_rename(
         text(&params, "path"),
         move |_, tileset| {
             let id = terrain(tileset, &from)?;
+            let renamed = terrain_mut(tileset, id)?;
+            if renamed.name == name {
+                return Ok(format!("terrain {id} is already \"{name}\""));
+            }
             free_name(tileset, &name)?;
             let renamed = terrain_mut(tileset, id)?;
             renamed.name.clone_from(&name);
