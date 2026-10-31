@@ -893,7 +893,10 @@ fn sync_placeholder_visibility(
         };
 
         let show = editable_text_string(editable).is_empty();
-        node.display = if show { Display::Flex } else { Display::None };
+        let display = if show { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
@@ -918,8 +921,14 @@ fn handle_suffix(
         let offset = WRAPPER_PADDING + if has_prefix { PREFIX_EXTRA } else { 0.0 };
 
         let show = focus.get() != Some(entity) && !editable_text_string(editable).is_empty();
-        node.left = px(layout_info.size.x + offset);
-        node.display = if show { Display::Flex } else { Display::None };
+        let left = px(layout_info.size.x + offset);
+        if node.left != left {
+            node.left = left;
+        }
+        let display = if show { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
@@ -1276,6 +1285,31 @@ fn sync_multiline_content_size(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A placeholder whose visibility already matches its input is left
+    /// untouched, so an idle text field does not relayout the UI every frame.
+    #[test]
+    fn a_settled_placeholder_is_not_rewritten() {
+        let mut world = World::new();
+        let input = world.spawn(EditableText::default()).id();
+        let placeholder = world
+            .spawn((TextEditPlaceholderNode(input), Node::default()))
+            .id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_placeholder_visibility);
+        schedule.run(&mut world);
+
+        world.increment_change_tick();
+        let before = world.change_tick();
+        schedule.run(&mut world);
+        let node = world.entity(placeholder).get_ref::<Node>().expect("a node");
+        assert!(
+            !node
+                .last_changed()
+                .is_newer_than(before, world.change_tick()),
+            "an unchanged placeholder must not be marked changed"
+        );
+    }
 
     /// Integer-typed reflect fields (e.g. `u32` bitmasks like
     /// `CollisionLayers::filters`) flow through `format_numeric_value`

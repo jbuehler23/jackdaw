@@ -42,6 +42,11 @@ use bevy::feathers::tokens as feathers_tokens;
 /// and to derive drag speed.
 const NUMERIC_DISPLAY_PRECISION: i32 = 2;
 
+/// Rows a list or array field spawns before it summarises the rest. Every row
+/// is a subtree of field widgets, so an asset holding hundreds of items would
+/// otherwise build tens of thousands of UI nodes.
+pub(super) const MAX_LIST_ROWS: usize = 32;
+
 /// Round an `f64` to [`NUMERIC_DISPLAY_PRECISION`] for display, scrubbing the
 /// `f32 -> f64` widening noise out of values read back via reflection so the
 /// field shows e.g. `0.1` rather than `0.10000000149011612`.
@@ -386,7 +391,7 @@ pub(crate) fn spawn_field_row(
                 .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
                 .insert(ChildOf(parent))
                 .id();
-            for i in 0..list.len() {
+            for i in 0..list.len().min(MAX_LIST_ROWS) {
                 if let Some(item) = list.get(i) {
                     let item_entity = commands
                         .spawn_scene(FeathersListRow::scene())
@@ -422,6 +427,7 @@ pub(crate) fn spawn_field_row(
                     );
                 }
             }
+            spawn_hidden_rows_note(commands, lv, list.len(), depth + 1);
         }
         spawn_list_add_button(commands, parent, source_entity, type_path, &field_path);
         return;
@@ -438,7 +444,7 @@ pub(crate) fn spawn_field_row(
                 .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
                 .insert(ChildOf(parent))
                 .id();
-            for i in 0..array.len() {
+            for i in 0..array.len().min(MAX_LIST_ROWS) {
                 if let Some(item) = array.get(i) {
                     let item_entity = commands
                         .spawn_scene(FeathersListRow::scene())
@@ -465,6 +471,7 @@ pub(crate) fn spawn_field_row(
                     );
                 }
             }
+            spawn_hidden_rows_note(commands, lv, array.len(), depth + 1);
         }
         return;
     }
@@ -2331,7 +2338,7 @@ fn spawn_list_expansion<'a>(
         .spawn_scene(FeathersListView::scene(FeathersListViewProps::default()))
         .insert(ChildOf(parent))
         .id();
-    for i in 0..len {
+    for i in 0..len.min(MAX_LIST_ROWS) {
         if let Some(item) = get_item(i) {
             let item_entity = commands
                 .spawn_scene(FeathersListRow::scene())
@@ -2357,6 +2364,16 @@ fn spawn_list_expansion<'a>(
                 icon_font,
             );
         }
+    }
+    spawn_hidden_rows_note(commands, lv, len, depth + 1);
+}
+
+/// A collection with more rows than [`MAX_LIST_ROWS`] says how many it left
+/// out instead of spawning them.
+fn spawn_hidden_rows_note(commands: &mut Commands, list: Entity, len: usize, depth: usize) {
+    let hidden = len.saturating_sub(MAX_LIST_ROWS);
+    if hidden > 0 {
+        spawn_text_row(commands, list, &format!("and {hidden} more"), depth);
     }
 }
 

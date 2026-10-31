@@ -1019,9 +1019,13 @@ fn draw_coordinate_indicator(
                 let tip_pos = indicator_pos + axes[i] * size * 1.35;
                 if let Ok(vp_coords) = camera.world_to_viewport(cam_tf, tip_pos) {
                     let ui_pos = vp_coords * vp_node_size / render_target_size;
-                    node.left = Val::Px(ui_pos.x - 4.0);
-                    node.top = Val::Px(ui_pos.y - 7.0);
-                    *vis = Visibility::Inherited;
+                    let left = Val::Px(ui_pos.x - 4.0);
+                    let top = Val::Px(ui_pos.y - 7.0);
+                    if node.left != left || node.top != top {
+                        node.left = left;
+                        node.top = top;
+                    }
+                    vis.set_if_neq(Visibility::Inherited);
                 } else {
                     *vis = Visibility::Hidden;
                 }

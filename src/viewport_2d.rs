@@ -1021,7 +1021,7 @@ pub fn size_targets_to_reference(
 /// `ComputedNode::size()`, where the cursor mapping and the selection overlay
 /// pick it up without naming it.
 fn place_stage(
-    node: &mut Node,
+    node: &mut Mut<Node>,
     reference: Option<UVec2>,
     view: Ui2dView,
     area: Vec2,
