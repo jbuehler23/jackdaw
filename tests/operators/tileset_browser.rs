@@ -116,7 +116,11 @@ fn import_as_tileset_imports_the_image_and_opens_it() {
     assert!(asset_file(&dir, FILE).is_file(), "the tileset is written");
     assert!(asset_file(&dir, PACKED).is_file(), "with its packed copy");
     let tileset = crate::tileset_ops::read_tileset(&asset_file(&dir, FILE));
-    assert!(!tileset.terrains.is_empty(), "set up automatically");
+    assert!(
+        tileset.terrains.is_empty(),
+        "nothing is set up automatically"
+    );
+    assert_eq!(tileset.setup_sheets, vec![0]);
     opens_the_dock_only(&app);
 }
 

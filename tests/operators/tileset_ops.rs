@@ -33,7 +33,7 @@ pub(crate) fn project_app() -> (App, tempfile::TempDir) {
     (app, dir)
 }
 
-fn editor_on(dir: &tempfile::TempDir) -> App {
+pub(crate) fn editor_on(dir: &tempfile::TempDir) -> App {
     let mut app = util::editor_test_app_reading(&dir.path().join("assets"));
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot {
@@ -198,6 +198,19 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
         (UVec2::new(432, 1040), 1),
         "a sprite of the source sheet still draws it whole"
     );
+}
+
+#[test]
+fn an_import_slices_the_sheet_and_sets_nothing_up_by_default() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET)]);
+    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
+    let tileset = read_tileset(&asset_file(&dir, "overworld.tileset.bsn"));
+    assert_eq!(tileset.grid, UVec2::new(27, 38));
+    assert_eq!(tileset.setup_sheets, vec![0], "ready for terrains by hand");
+    assert!(tileset.terrains.is_empty() && tileset.terrain_sets.is_empty());
+    assert!(tileset.tiles.is_empty() && tileset.objects.is_empty());
+    assert_eq!(tileset.next_terrain_id, 1, "0 is the empty terrain");
 }
 
 #[test]
@@ -492,7 +505,10 @@ fn the_imported_tileset_is_listed_and_opens_from_the_index() {
         .get(handle.id().typed::<Tileset>())
         .cloned()
         .expect("in the store");
-    assert_eq!(tileset.terrains.len(), 8);
+    assert!(
+        tileset.terrains.is_empty(),
+        "an import sets nothing up by default"
+    );
     assert!(jackdaw::definition_assets::open_definition_file(
         reopened.world_mut(),
         &asset_file(&dir, "overworld.tileset.bsn"),

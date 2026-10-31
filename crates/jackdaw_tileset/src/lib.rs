@@ -27,7 +27,7 @@ impl Plugin for TilesetPlugin {
 
 /// Tiles of one or more source images packed into one array image, one layer
 /// per tile, with the terrains, terrain sets and objects authored over them.
-#[derive(Asset, Reflect, Clone, Debug, Default, PartialEq)]
+#[derive(Asset, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Default)]
 pub struct Tileset {
     /// The packed image, as an asset path.
@@ -55,6 +55,29 @@ pub struct Tileset {
     /// Blocks of tiles saved from the Tile Palette.
     #[reflect(default)]
     pub stamps: Vec<TilesetStamp>,
+    /// Set by an import that ran auto setup, and cleared with what it made.
+    #[reflect(default)]
+    pub auto_setup: bool,
+}
+
+impl Default for Tileset {
+    fn default() -> Self {
+        Self {
+            image: String::new(),
+            tile_size: UVec2::ZERO,
+            grid: UVec2::ZERO,
+            sheets: Vec::new(),
+            setup_sheets: Vec::new(),
+            terrains: Vec::new(),
+            terrain_sets: Vec::new(),
+            tiles: Vec::new(),
+            objects: Vec::new(),
+            next_terrain_id: 1,
+            properties: BTreeMap::new(),
+            stamps: Vec::new(),
+            auto_setup: false,
+        }
+    }
 }
 
 /// One source image and where its tiles sit in the packed image.
@@ -241,6 +264,33 @@ impl fmt::Display for TilesetError {
 impl std::error::Error for TilesetError {}
 
 impl Tileset {
+    /// Whether this is auto setup's output with no mark made by hand: an
+    /// import ran auto setup, and no terrain, set, tile, object, property or
+    /// stamp has been set by the user since.
+    pub fn untouched_auto(&self) -> bool {
+        let terrains = (self.terrains.iter()).all(|t| !t.name_by_user && !t.collision_by_user);
+        let sets = (self.terrain_sets.iter()).all(|s| !s.mode_by_user && !s.locked_manual);
+        let tiles =
+            (self.tiles.iter()).all(|t| !t.shape_by_user && !t.peers_by_user.contains(&true));
+        let objects = self.objects.iter().all(|o| !o.by_user);
+        self.auto_setup
+            && terrains
+            && sets
+            && tiles
+            && objects
+            && self.properties.is_empty()
+            && self.stamps.is_empty()
+    }
+
+    /// Drops what auto setup made, keeping the slicing and the spent ids.
+    pub fn clear_auto_setup(&mut self) {
+        self.terrains.clear();
+        self.terrain_sets.clear();
+        self.tiles.clear();
+        self.objects.clear();
+        self.auto_setup = false;
+    }
+
     /// Packed layer of tile `tile` of sheet `sheet`.
     pub fn layer(&self, sheet: u32, tile: u32) -> Option<u32> {
         let sheet = self.sheets.get(sheet as usize)?;

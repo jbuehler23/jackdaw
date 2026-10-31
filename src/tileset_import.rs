@@ -76,9 +76,9 @@ enum SetupChoice {
         ),
         setup(
             String,
-            default = "auto",
-            doc = "\"auto\" finds terrains, terrain sets and objects, \"manual\" leaves them \
-                   to be set by hand, \"none\" makes a plain tile atlas."
+            default = "manual",
+            doc = "\"manual\" slices the sheets for terrains set by hand, \"auto\" also finds \
+                   terrains, terrain sets and objects, \"none\" makes a plain tile atlas."
         ),
         edit(
             bool,
@@ -101,7 +101,7 @@ pub fn tileset_import(params: In<OperatorParameters>, mut commands: Commands) ->
         warn!("tileset.import: no paths given");
         return OperatorResult::Cancelled;
     }
-    let choice = match params.as_str("setup").unwrap_or("auto") {
+    let choice = match params.as_str("setup").unwrap_or("manual") {
         "auto" => SetupChoice::Auto,
         "manual" => SetupChoice::Manual,
         "none" => SetupChoice::None,
@@ -233,6 +233,7 @@ fn import(
             let fresh =
                 auto_setup_on_grid(&inputs, &detected, &[]).map_err(|err| err.to_string())?;
             (tileset.set_setup(&TilesetSetup::from_auto(&fresh))).map_err(|e| e.to_string())?;
+            tileset.auto_setup = true;
             summary = format!("{summary}\n{}", fresh.report);
         }
         SetupChoice::Manual => tileset.setup_sheets = (0..sheets.len() as u32).collect(),
@@ -253,6 +254,10 @@ fn import(
     write_all(&[(&meta_file, &meta), (&packed_file, &png), (&out, &document)])
         .map_err(|err| format!("nothing was kept: {err}"))?;
     index_written(world, &out, &kind, value);
+    // What an import makes is kept: the clear on first show is for older files.
+    if let Some(mut shown) = world.get_resource_mut::<crate::tileset_dock::ShownTilesets>() {
+        shown.0.insert(out_name.to_slash_lossy().into_owned());
+    }
     if let Some(mut state) = world.get_resource_mut::<crate::project_window::ProjectWindowState>() {
         state.rebuild();
     }

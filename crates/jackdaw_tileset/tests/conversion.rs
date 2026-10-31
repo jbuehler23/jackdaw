@@ -174,3 +174,45 @@ fn a_tile_layer_is_its_sheet_offset_plus_its_index() {
     assert_eq!(tileset.layer(1, 8), None);
     assert_eq!(tileset.layer(2, 0), None);
 }
+
+#[test]
+fn only_auto_output_nobody_touched_is_cleared() {
+    let sheet = Sheet::load();
+    let fresh = auto_setup(&sheet.inputs(), &[GROUND]).expect("auto setup runs");
+    let mut auto = tileset();
+    auto.set_setup(&TilesetSetup::from_auto(&fresh))
+        .expect("converts");
+    assert!(
+        !auto.untouched_auto(),
+        "terrains alone do not say auto setup made them"
+    );
+    auto.auto_setup = true;
+    assert!(auto.untouched_auto());
+
+    let mut touched = tileset();
+    touched.set_setup(&edited_setup(&sheet)).expect("converts");
+    touched.auto_setup = true;
+    assert!(!touched.untouched_auto(), "one mark by hand keeps it all");
+    let mut painted = auto.clone();
+    painted
+        .properties
+        .entry(3)
+        .or_default()
+        .insert("solid".into(), "1".into());
+    assert!(!painted.untouched_auto());
+
+    let spent = auto.next_terrain_id;
+    auto.clear_auto_setup();
+    assert!(auto.terrains.is_empty() && auto.terrain_sets.is_empty());
+    assert!(auto.tiles.is_empty() && auto.objects.is_empty());
+    assert_eq!(
+        (auto.setup_sheets.clone(), auto.next_terrain_id),
+        (vec![0], spent)
+    );
+    assert!(!auto.auto_setup && !auto.untouched_auto());
+    assert_eq!(
+        Tileset::default().next_terrain_id,
+        1,
+        "0 is the empty terrain"
+    );
+}

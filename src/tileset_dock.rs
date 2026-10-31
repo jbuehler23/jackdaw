@@ -3,8 +3,7 @@ use std::path::Path;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
-use bevy::input::keyboard::KeyboardInput;
-use bevy::input_focus::{FocusCause, FocusedInput, InputFocus};
+use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui_widgets::{Activate, Button, ValueChange};
@@ -16,27 +15,26 @@ use jackdaw_feathers::combobox::{ComboBoxChangeEvent, combobox_compact_with_sele
 use jackdaw_feathers::{segmented, tokens};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
+use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{TerrainId, TilesetSetup};
 use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain};
 
 use crate::asset_index::assets_dir;
 use crate::definition_assets::{entry_for_file, resolve_project_path};
-use crate::tileset_edit::{open_tileset, text};
-use crate::tileset_import::decode_sheet;
+use crate::tileset_edit::{apply_edit, clear_auto, open_tileset, text};
+use crate::tileset_import::{TILESET_SUFFIX, decode_sheet};
 
 pub const TILESET_WINDOW_ID: &str = "jackdaw.tileset";
 
-/// On-screen pixels per sheet pixel.
-const SCALE: f32 = 2.0;
+/// On-screen size a sheet tile is drawn at, at the least.
+const READABLE_TILE: f32 = 32.0;
 /// On-screen size of the selected tile's preview.
 const PREVIEW: f32 = 96.0;
-/// Opacity of the terrain swatch laid over each sheet tile.
-const TINT: f32 = 0.35;
-const FLAGGED: Color = tokens::TEXT_WARNING;
 const COLLISIONS: [&str; 3] = ["solid", "trigger", "passable"];
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<TilesetDockViews>()
+        .init_resource::<ShownTilesets>()
         .init_resource::<SheetImages>()
         .add_systems(Update, refresh_on_tileset_events)
         .add_observer(on_activate)
@@ -63,8 +61,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DockPage {
     #[default]
-    Review,
-    Terrains,
+    Sheet,
     Objects,
 }
 
@@ -84,6 +81,11 @@ pub struct DockView {
 /// view follows the tab wherever it is docked.
 #[derive(Resource, Default)]
 pub struct TilesetDockViews(pub HashMap<String, DockView>);
+
+/// Tilesets a dock has shown this session, by path: each is checked for
+/// automatic setup to clear once, so an undo of the clear sticks.
+#[derive(Resource, Default)]
+pub(crate) struct ShownTilesets(pub(crate) HashSet<String>);
 
 /// Nearest-sampled copies of the source sheets the docks draw, by path.
 #[derive(Resource, Default)]
@@ -105,8 +107,6 @@ pub enum DockAction {
     Tile(u32, u32),
     Brush(TerrainId),
     Peer(usize),
-    Accept,
-    Reset,
     AddObject,
     RemoveObject(u32, UVec2),
 }
@@ -129,7 +129,9 @@ pub struct CollisionCombo {
 #[operator(
     id = "tileset.edit",
     label = "Edit Tileset",
-    description = "Open a tileset in its own Tileset window tab, or bring its tab to the front.",
+    description = "Open a tileset in its own Tileset window tab, or bring its tab to the front. \
+                   The first time a tileset is shown in a session, automatic setup nobody has \
+                   touched is cleared as one undo entry, unless a map paints with its terrains.",
     allows_undo = false,
     params(path(
         String,
@@ -151,7 +153,7 @@ pub(crate) fn edit_tileset(world: &mut World, path: &str) {
 }
 
 fn open_tab(world: &mut World, path: &str) -> Result<String, String> {
-    let (path, tileset) = open_tileset(world, path)?;
+    let (path, _) = open_tileset(world, path)?;
     let payload = path.to_string_lossy().into_owned();
     let open = (world.resource::<DockTree>().tabs())
         .find(|(_, t)| t.window_id == TILESET_WINDOW_ID && t.payload.as_deref() == Some(&payload))
@@ -166,25 +168,8 @@ fn open_tab(world: &mut World, path: &str) -> Result<String, String> {
     let entry = tree.tab_mut(tab).ok_or("the new tab is gone")?;
     entry.title = path.file_name().map(|n| n.to_string_lossy().into_owned());
     entry.payload = Some(payload.clone());
-    (world.resource_mut::<TilesetDockViews>().0).insert(payload.clone(), first_view(&tileset));
+    (world.resource_mut::<TilesetDockViews>().0).insert(payload.clone(), DockView::default());
     Ok(format!("{payload} opened"))
-}
-
-fn first_view(tileset: &Tileset) -> DockView {
-    DockView {
-        selected: flagged(tileset).first().copied(),
-        ..default()
-    }
-}
-
-/// Flagged tiles as sheet and tile, in setup order.
-pub fn flagged(tileset: &Tileset) -> Vec<(u32, u32)> {
-    let Ok(setup) = tileset.setup() else {
-        return Vec::new();
-    };
-    (setup.flagged().into_iter())
-        .filter_map(|a| Some((*tileset.setup_sheets.get(a.sheet)?, a.tile)))
-        .collect()
 }
 
 /// The tileset at `path` and its asset id; `None` while it loads.
@@ -232,7 +217,6 @@ fn build_dock(world: &mut World, parent: Entity) {
             BackgroundColor(tokens::PANEL_BG),
             ChildOf(parent),
         ))
-        .observe(on_dock_key)
         .id();
     fill(world, root);
 }
@@ -248,10 +232,15 @@ fn fill(world: &mut World, root: Entity) {
         return;
     };
     match load(world, &path) {
-        Ok((id, Some(tileset))) => {
+        Ok((id, Some(mut tileset))) => {
             set_asset(world, root, id);
-            let view = (world.resource::<TilesetDockViews>().0.get(&path).cloned())
-                .unwrap_or_else(|| first_view(&tileset));
+            if clear_once(world, &path, &tileset)
+                && let Ok((_, Some(cleared))) = load(world, &path)
+            {
+                tileset = cleared;
+            }
+            let view =
+                (world.resource::<TilesetDockViews>().0.get(&path).cloned()).unwrap_or_default();
             (world.resource_mut::<TilesetDockViews>().0).insert(path.clone(), view.clone());
             if let Err(err) = fill_tileset(world, root, Path::new(&path), &tileset, &view) {
                 spawn_text(world, root, err, tokens::TEXT_ERROR);
@@ -267,6 +256,42 @@ fn fill(world: &mut World, root: Entity) {
     }
 }
 
+/// Clear automatic setup nobody has touched from the tileset at `path` the
+/// first time a dock shows it this session, unless a map paints with it.
+/// Returns whether it was cleared.
+fn clear_once(world: &mut World, path: &str, tileset: &Tileset) -> bool {
+    let first = (world.resource_mut::<ShownTilesets>().0).insert(path.to_string());
+    if !first || !tileset.untouched_auto() {
+        return false;
+    }
+    if painted_with(world, path) {
+        let notice = format!("{path} still has automatic terrains a map paints with; kept");
+        crate::status_bar::notify_info(world, notice);
+        return false;
+    }
+    let cleared = apply_edit(world, "tileset.clear_auto", path, |_, t| clear_auto(t));
+    if let Err(err) = &cleared {
+        warn!("tileset.clear_auto: {err}");
+    }
+    cleared.is_ok()
+}
+
+/// Whether an open map, or a scene of the project, has a terrain layer over
+/// the tileset at `path`. A scene file counts when it names the tileset at
+/// all, since its cells live in a sidecar.
+fn painted_with(world: &mut World, path: &str) -> bool {
+    let open = (world.query::<&Tilemap>().iter(world)).any(|map| {
+        (map.layers.iter()).any(|l| l.kind == TilemapLayerKind::Terrain && l.tileset == path)
+    });
+    let Some(assets) = assets_dir(world).filter(|_| !open) else {
+        return open;
+    };
+    let quoted = format!("\"{path}\"");
+    (jackdaw_bsn::walk_files_with_extensions(&assets, &["bsn"]).iter())
+        .filter(|file| !file.to_string_lossy().ends_with(TILESET_SUFFIX))
+        .any(|file| std::fs::read_to_string(file).is_ok_and(|text| text.contains(&quoted)))
+}
+
 fn set_asset(world: &mut World, root: Entity, id: AssetId<Tileset>) {
     if let Some(mut dock) = world.get_mut::<TilesetDock>(root) {
         dock.asset = Some(id);
@@ -280,13 +305,10 @@ fn fill_tileset(
     view: &DockView,
 ) -> Result<(), String> {
     let setup = tileset.setup().map_err(|e| e.to_string())?;
-    let flagged = flagged(tileset);
     let header = spawn_row(world, root, tokens::SPACING_MD);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     spawn_text(world, header, name, tokens::TEXT_PRIMARY);
     spawn_pages(world, header, root, view.page);
-    let count = format!("flagged: {} of {}", flagged.len(), setup.tiles.len());
-    spawn_text(world, header, count, tokens::TEXT_SECONDARY);
 
     let columns = world
         .spawn((
@@ -305,11 +327,7 @@ fn fill_tileset(
         .id();
     let left = spawn_column(world, columns, Val::Px(220.0));
     match view.page {
-        DockPage::Review => {
-            spawn_terrains(world, left, root, tileset, &setup, view, false);
-            spawn_flagged(world, left, root, &flagged, view);
-        }
-        DockPage::Terrains => spawn_terrains(world, left, root, tileset, &setup, view, true),
+        DockPage::Sheet => spawn_terrains(world, left, root, tileset, &setup, view),
         DockPage::Objects => spawn_objects(world, left, root, tileset),
     }
     let centre = world
@@ -326,12 +344,12 @@ fn fill_tileset(
         ))
         .id();
     for sheet in &tileset.setup_sheets {
-        spawn_sheet(world, centre, root, tileset, &setup, *sheet, view, &flagged);
+        spawn_sheet(world, centre, root, tileset, *sheet, view);
     }
     let right = spawn_column(world, columns, Val::Px(200.0));
     match view.page {
         DockPage::Objects => spawn_object_pick(world, right, root, view),
-        DockPage::Review | DockPage::Terrains => {
+        DockPage::Sheet => {
             spawn_tile_editor(world, right, root, tileset, &setup, view);
         }
     }
@@ -342,11 +360,7 @@ fn spawn_pages(world: &mut World, parent: Entity, root: Entity, current: DockPag
     let bar = world
         .spawn((segmented::segmented_bar(), ChildOf(parent)))
         .id();
-    for (page, label) in [
-        (DockPage::Review, "Review"),
-        (DockPage::Terrains, "Terrains"),
-        (DockPage::Objects, "Objects"),
-    ] {
+    for (page, label) in [(DockPage::Sheet, "Sheet"), (DockPage::Objects, "Objects")] {
         let segment = world
             .spawn((
                 segmented::segment(label),
@@ -374,7 +388,6 @@ fn spawn_terrains(
     tileset: &Tileset,
     setup: &TilesetSetup,
     view: &DockView,
-    missing: bool,
 ) {
     spawn_text(world, parent, "TERRAINS", tokens::TEXT_SECONDARY);
     let empty = TilesetTerrain {
@@ -426,34 +439,11 @@ fn spawn_terrains(
             set.inner, set.outer, set.mode, coverage.covered, coverage.total
         );
         spawn_text(world, parent, line, tokens::TEXT_SECONDARY);
-        if missing {
-            for shape in &coverage.missing {
-                let peers: Vec<String> = shape.peers.iter().map(u8::to_string).collect();
-                let line = format!("  missing {}", peers.join(","));
-                spawn_text(world, parent, line, FLAGGED);
-            }
+        for shape in &coverage.missing {
+            let peers: Vec<String> = shape.peers.iter().map(u8::to_string).collect();
+            let line = format!("  missing {}", peers.join(","));
+            spawn_text(world, parent, line, tokens::TEXT_WARNING);
         }
-    }
-}
-
-fn spawn_flagged(
-    world: &mut World,
-    parent: Entity,
-    root: Entity,
-    flagged: &[(u32, u32)],
-    view: &DockView,
-) {
-    let title = format!("FLAGGED ({})", flagged.len());
-    spawn_text(world, parent, title, tokens::TEXT_SECONDARY);
-    for &(sheet, tile) in flagged {
-        let row = spawn_pick(
-            world,
-            parent,
-            root,
-            DockAction::Tile(sheet, tile),
-            view.selected == Some((sheet, tile)),
-        );
-        spawn_text(world, row, format!("tile {sheet}:{tile}"), FLAGGED);
     }
 }
 
@@ -482,24 +472,22 @@ fn spawn_objects(world: &mut World, parent: Entity, root: Entity, tileset: &Tile
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "one sheet of one view")]
 fn spawn_sheet(
     world: &mut World,
     parent: Entity,
     root: Entity,
     tileset: &Tileset,
-    setup: &TilesetSetup,
     index: u32,
     view: &DockView,
-    flagged: &[(u32, u32)],
 ) {
     let Some(sheet) = tileset.sheets.get(index as usize) else {
         return;
     };
     let tile = tileset.tile_size.as_vec2();
+    let scale = zoom(tile);
     let step = tile + sheet.spacing.as_vec2();
     let cells = UVec2::new(sheet.columns, sheet.rows).as_vec2();
-    let size = (sheet.margin.as_vec2() * 2.0 + cells * step - sheet.spacing.as_vec2()) * SCALE;
+    let size = (sheet.margin.as_vec2() * 2.0 + cells * step - sheet.spacing.as_vec2()) * scale;
     let image = sheet_image(world, &sheet.source);
     let frame = world
         .spawn((
@@ -516,64 +504,40 @@ fn spawn_sheet(
     let rect = view.selected.zip(view.anchor.or(view.selected));
     let at = |tile_index: u32| {
         let origin = tileset.sheet_rect(index, tile_index).map(|(o, _)| o);
-        origin.unwrap_or_default().as_vec2() * SCALE
+        origin.unwrap_or_default().as_vec2() * scale
     };
     for t in 0..sheet.columns * sheet.rows {
-        let peers = (tileset.setup_address(index, t).ok())
-            .and_then(|a| setup.tiles.get(&a))
-            .map(|found| found.terrains.peers);
-        let centre = peers.map_or(0, |p| p[4]);
         let picked = view.selected == Some((index, t))
             || (view.page == DockPage::Objects
                 && rect.is_some_and(|(a, b)| in_rect(sheet.columns, a, b, (index, t))));
-        let outline = if picked {
-            tokens::SELECTED_BORDER
-        } else if flagged.contains(&(index, t)) {
-            FLAGGED
+        let (outline, border) = if picked {
+            (tokens::SELECTED_BORDER, 2.0)
         } else {
-            Color::NONE
+            (tokens::BORDER_SUBTLE.with_alpha(0.3), 1.0)
         };
         let corner = at(t);
-        let cell = world
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(corner.x),
-                    top: px(corner.y),
-                    width: px(tile.x * SCALE),
-                    height: px(tile.y * SCALE),
-                    border: UiRect::all(px(2.0)),
-                    ..default()
-                },
-                BackgroundColor(swatch(tileset, centre, TINT)),
-                BorderColor::all(outline),
-                Button,
-                DockControl {
-                    root,
-                    action: DockAction::Tile(index, t),
-                },
-                ChildOf(frame),
-            ))
-            .id();
-        if centre != 0 {
-            // The overlay alone vanishes on a tile of its own colour.
-            world.spawn((
-                Node {
-                    width: px(8.0),
-                    height: px(8.0),
-                    border: UiRect::all(px(1.0)),
-                    ..default()
-                },
-                BackgroundColor(swatch(tileset, centre, 1.0)),
-                BorderColor::all(tokens::WINDOW_BG),
-                Pickable::IGNORE,
-                ChildOf(cell),
-            ));
-        }
+        world.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(corner.x),
+                top: px(corner.y),
+                width: px(tile.x * scale),
+                height: px(tile.y * scale),
+                border: UiRect::all(px(border)),
+                ..default()
+            },
+            BorderColor::all(outline),
+            Button,
+            DockControl {
+                root,
+                action: DockAction::Tile(index, t),
+            },
+            ChildOf(frame),
+        ));
     }
     for object in tileset.objects.iter().filter(|o| o.sheet == index) {
         let corner = at(object.origin.y * sheet.columns + object.origin.x);
-        let span = (object.size.as_vec2() * step - sheet.spacing.as_vec2()) * SCALE;
+        let span = (object.size.as_vec2() * step - sheet.spacing.as_vec2()) * scale;
         world.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -589,6 +553,13 @@ fn spawn_sheet(
             ChildOf(frame),
         ));
     }
+}
+
+/// Screen pixels per sheet pixel: whole, and enough for a tile to read.
+fn zoom(tile: Vec2) -> f32 {
+    (READABLE_TILE / tile.max_element().max(1.0))
+        .ceil()
+        .max(1.0)
 }
 
 fn in_rect(columns: u32, a: (u32, u32), b: (u32, u32), tile: (u32, u32)) -> bool {
@@ -680,17 +651,6 @@ fn spawn_tile_editor(
         format!("brush: {brush}"),
         tokens::TEXT_PRIMARY,
     );
-    let row = spawn_row(world, parent, tokens::SPACING_SM);
-    for (label, action, variant) in [
-        ("Accept", DockAction::Accept, ButtonVariant::Primary),
-        ("Reset to auto", DockAction::Reset, ButtonVariant::Default),
-    ] {
-        world.spawn((
-            button(ButtonProps::new(label).with_variant(variant)),
-            DockControl { root, action },
-            ChildOf(row),
-        ));
-    }
 }
 
 fn spawn_object_pick(world: &mut World, parent: Entity, root: Entity, view: &DockView) {
@@ -917,29 +877,6 @@ fn prune_views(
     });
 }
 
-/// Enter accepts the selected tile and moves to the next flagged one, while
-/// the dock itself holds focus rather than a field inside it.
-fn on_dock_key(mut key: On<FocusedInput<KeyboardInput>>, mut commands: Commands) {
-    let input = &key.input;
-    if input.key_code != KeyCode::Enter || !input.state.is_pressed() || input.repeat {
-        return;
-    }
-    let root = key.event_target();
-    if key.original_event_target() != root {
-        return;
-    }
-    key.propagate(false);
-    commands.queue(move |world: &mut World| {
-        act(
-            world,
-            DockControl {
-                root,
-                action: DockAction::Accept,
-            },
-        );
-    });
-}
-
 /// The path and tileset of the dock `root`, once loaded.
 fn dock_tileset(world: &mut World, root: Entity) -> Option<(String, Tileset)> {
     let path = world.get::<TilesetDock>(root)?.path.clone()?;
@@ -954,7 +891,6 @@ fn act(world: &mut World, control: DockControl) {
     };
     let mut view = (world.resource::<TilesetDockViews>().0.get(&path).cloned()).unwrap_or_default();
     let tile_ref = view.selected.map(|(s, t)| format!("{s}:{t}"));
-    let set_bits = "tileset.tile.set_bits";
     let call = match control.action {
         DockAction::Page(page) => {
             view.page = page;
@@ -981,20 +917,8 @@ fn act(world: &mut World, control: DockControl) {
                 ("peer", peer.to_string()),
                 ("terrain", view.brush.to_string()),
             ];
-            (set_bits, params)
+            ("tileset.tile.set_bits", params)
         }),
-        DockAction::Accept => {
-            let peers = view.selected.and_then(|(s, t)| peers_of(&tileset, s, t));
-            let next = next_flagged(&tileset, view.selected);
-            view.selected = next.or(view.selected);
-            tile_ref.zip(peers).map(|(tile, peers)| {
-                let peers: Vec<String> = peers.iter().map(u8::to_string).collect();
-                (set_bits, vec![("tile", tile), ("peers", peers.join(","))])
-            })
-        }
-        DockAction::Reset => {
-            tile_ref.map(|tile| ("tileset.tile.reset_to_auto", vec![("tiles", tile)]))
-        }
         DockAction::AddObject => {
             object_rect(&tileset, &view).map(|params| ("tileset.object.add", params))
         }
@@ -1027,25 +951,6 @@ fn act(world: &mut World, control: DockControl) {
     if world.get_entity(root).is_ok() {
         fill(world, root);
     }
-}
-
-fn peers_of(tileset: &Tileset, sheet: u32, tile: u32) -> Option<[TerrainId; 9]> {
-    (tileset.tiles.iter())
-        .find(|t| t.sheet == sheet && t.tile == tile)
-        .map(|t| t.peers)
-}
-
-/// The flagged tile after `from` in setup order, wrapping, other than
-/// `from` itself.
-fn next_flagged(tileset: &Tileset, from: Option<(u32, u32)>) -> Option<(u32, u32)> {
-    let order = |(sheet, tile): (u32, u32)| tileset.setup_sheet(sheet).ok().map(|s| (s, tile));
-    let after = from.and_then(order);
-    let others: Vec<(u32, u32)> = (flagged(tileset).into_iter())
-        .filter(|t| Some(*t) != from)
-        .collect();
-    (others.iter().copied())
-        .find(|t| after.is_none_or(|a| order(*t).is_some_and(|o| o > a)))
-        .or_else(|| others.first().copied())
 }
 
 fn object_rect(tileset: &Tileset, view: &DockView) -> Option<Vec<(&'static str, String)>> {

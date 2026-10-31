@@ -14,6 +14,19 @@ use crate::definition_assets::{
     entry_for_file, open_definition_path, rebuild_open_card, resolve_project_path, write_asset_file,
 };
 
+/// Hues new terrains take, in order: far apart so the bits of neighbouring
+/// terrains read apart.
+const PALETTE: [[u8; 3]; 8] = [
+    [94, 168, 72],
+    [176, 118, 64],
+    [58, 124, 214],
+    [224, 196, 92],
+    [150, 96, 200],
+    [208, 72, 72],
+    [64, 190, 170],
+    [222, 120, 180],
+];
+
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainAddOp>();
     ctx.register_operator::<TilesetTerrainRemoveOp>();
@@ -24,6 +37,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainSetAddOp>();
     ctx.register_operator::<TilesetTerrainSetSetOp>();
     ctx.register_operator::<TilesetTileSetBitsOp>();
+    ctx.register_operator::<TilesetClearAutoOp>();
 }
 
 /// Replace a tileset with a new value, as one undo entry. Keyed by the file,
@@ -299,7 +313,11 @@ fn peer(text: &str) -> Result<Peer, String> {
             doc = "Tileset file under the project's assets; defaults to the open tileset."
         ),
         name(String, doc = "Name of the new terrain; unique, not a number."),
-        swatch(String, default = "#808080", doc = "Swatch colour as #rrggbb."),
+        swatch(
+            String,
+            doc = "Swatch colour as #rrggbb; defaults to the next hue of a fixed palette no \
+                   terrain has yet."
+        ),
         background(bool, default = false, doc = "Whether it is the background terrain."),
     )
 )]
@@ -316,13 +334,14 @@ pub fn tileset_terrain_add(
         text(&params, "path"),
         move |_, tileset| {
             free_name(tileset, &name)?;
-            let colour = Srgba::hex(if swatch.is_empty() {
-                "#808080"
+            let [r, g, b] = if swatch.is_empty() {
+                next_hue(tileset)
             } else {
-                &swatch
-            })
-            .map_err(|_| format!("swatch is #rrggbb, not `{swatch}`"))?;
-            let [r, g, b, _] = colour.to_u8_array();
+                let colour = Srgba::hex(&swatch)
+                    .map_err(|_| format!("swatch is #rrggbb, not `{swatch}`"))?;
+                let [r, g, b, _] = colour.to_u8_array();
+                [r, g, b]
+            };
             with_setup(tileset, |_, setup| {
                 let id = (setup.add_terrain(name.clone(), [r, g, b], background))
                     .map_err(|e| e.to_string())?;
@@ -704,6 +723,49 @@ pub fn tileset_tile_set_bits(
             })
         },
     )
+}
+
+/// Clear what auto setup made in a tileset.
+#[operator(
+    id = "tileset.clear_auto",
+    label = "Clear Automatic Setup",
+    description = "Clear a tileset that holds automatic setup nobody has touched: its terrains, \
+                   terrain sets, bits, collision shapes and objects go and the slicing stays. A \
+                   tileset with any mark made by hand is left as it is.",
+    allows_undo = false,
+    params(path(
+        String,
+        doc = "Tileset file under the project's assets; defaults to the open tileset."
+    ))
+)]
+pub fn tileset_clear_auto(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    queue_edit(
+        &mut commands,
+        "tileset.clear_auto",
+        text(&params, "path"),
+        |_, tileset| clear_auto(tileset),
+    )
+}
+
+/// Clear what auto setup made in `tileset`, leaving it untouched when there
+/// is nothing to clear.
+pub(crate) fn clear_auto(tileset: &mut Tileset) -> Result<String, String> {
+    if !tileset.untouched_auto() {
+        return Ok("nothing was set up automatically".to_string());
+    }
+    tileset.clear_auto_setup();
+    Ok("automatic setup cleared".to_string())
+}
+
+/// The first palette hue no terrain of `tileset` has, in order.
+fn next_hue(tileset: &Tileset) -> [u8; 3] {
+    let used =
+        |hue: &[u8; 3]| (tileset.terrains.iter()).any(|t| t.swatch.to_u8_array()[..3] == *hue);
+    (PALETTE.iter().find(|hue| !used(hue)).copied())
+        .unwrap_or(PALETTE[tileset.terrains.len() % PALETTE.len()])
 }
 
 #[cfg(test)]
