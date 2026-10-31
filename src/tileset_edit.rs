@@ -72,8 +72,16 @@ impl EditorCommand for SetTileset {
 /// tileset when `path` is empty.
 pub(crate) fn open_tileset(world: &mut World, path: &str) -> Result<(PathBuf, Tileset), String> {
     let file = if path.trim().is_empty() {
-        let open = open_definition_path(world).ok_or("no path given and no tileset is open")?;
-        absolute_path(world, &open)
+        let open =
+            (open_definition_path(world).map(|open| absolute_path(world, &open))).filter(|file| {
+                entry_for_file(world, file).is_some_and(|e| e.type_path == Tileset::type_path())
+            });
+        let focused = || {
+            let path = crate::tileset_dock::focused_tileset(world)?;
+            Some(resolve_project_path(world, Path::new(&path)))
+        };
+        open.or_else(focused)
+            .ok_or("no path given and no tileset is open")?
     } else {
         resolve_project_path(world, Path::new(path.trim()))
     };
@@ -322,7 +330,7 @@ const PEER_NAMES: [&str; 9] = [
     "bottom_right",
 ];
 
-fn peer(text: &str) -> Result<Peer, String> {
+pub(crate) fn peer(text: &str) -> Result<Peer, String> {
     let index = (PEER_NAMES.iter().position(|p| *p == text))
         .or_else(|| text.parse::<usize>().ok().filter(|i| *i < 9));
     index.map(|i| Peer::ALL[i]).ok_or_else(|| {

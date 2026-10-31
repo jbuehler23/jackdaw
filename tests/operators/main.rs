@@ -25,6 +25,7 @@ mod remote_coverage;
 mod scatter_ops;
 mod scene_op_ids;
 mod sprite_ops;
+mod tileset_bits;
 mod tileset_browser;
 mod tileset_dock;
 mod tileset_edit_ops;

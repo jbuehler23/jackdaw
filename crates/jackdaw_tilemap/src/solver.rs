@@ -28,7 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use glam::IVec2;
+use glam::{IVec2, Vec2};
 
 use crate::path::links_join;
 use crate::{CellCoord, ChunkedLayer, Links, TerrainId, TileRef};
@@ -66,6 +66,27 @@ impl Peer {
         Peer::BottomRight,
     ];
     pub const SIDES: [Peer; 4] = [Peer::Top, Peer::Left, Peer::Right, Peer::Bottom];
+
+    /// The peer `mode` matches on under `at`, a point of the tile from (0, 0)
+    /// at its top left to (1, 1). The centre is the middle third; the rest
+    /// goes to the nearest corner, the nearest side, or the third it is in.
+    pub fn under(at: Vec2, mode: MatchMode) -> Peer {
+        let third = |v: f32| ((v * 3.0).floor().clamp(0.0, 2.0)) as usize;
+        let (column, row) = (third(at.x), third(at.y));
+        if (column, row) == (1, 1) {
+            return Peer::Centre;
+        }
+        let (right, below) = (at.x >= 0.5, at.y >= 0.5);
+        let (column, row) = match mode {
+            MatchMode::CornersAndSides => (column, row),
+            MatchMode::Corners => (2 * usize::from(right), 2 * usize::from(below)),
+            MatchMode::Sides if (at.x - 0.5).abs() > (at.y - 0.5).abs() => {
+                (2 * usize::from(right), 1)
+            }
+            MatchMode::Sides => (1, 2 * usize::from(below)),
+        };
+        Peer::ALL[row * 3 + column]
+    }
 
     pub const fn index(self) -> usize {
         self as usize
