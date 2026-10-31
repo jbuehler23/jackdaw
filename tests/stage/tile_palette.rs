@@ -23,7 +23,7 @@ use jackdaw_tileset::{TerrainMatch, Tileset};
 
 const PICK: &str = "tilemap.palette.pick";
 
-fn call(
+pub(crate) fn call(
     app: &mut App,
     id: &'static str,
     params: &[(&'static str, PropertyValue)],
@@ -38,38 +38,38 @@ fn call(
 }
 
 #[track_caller]
-fn ok(app: &mut App, id: &'static str, params: &[(&'static str, PropertyValue)]) {
+pub(crate) fn ok(app: &mut App, id: &'static str, params: &[(&'static str, PropertyValue)]) {
     assert_eq!(call(app, id, params), OperatorResult::Finished, "{id}");
 }
 
-fn text(value: &str) -> PropertyValue {
+pub(crate) fn text(value: &str) -> PropertyValue {
     PropertyValue::from(value.to_string())
 }
 
-fn available(app: &mut App, id: &str) -> bool {
+pub(crate) fn available(app: &mut App, id: &str) -> bool {
     app.world_mut()
         .operator(id.to_string())
         .is_available()
         .unwrap_or(false)
 }
 
-fn brush(app: &App) -> TileBrush {
+pub(crate) fn brush(app: &App) -> TileBrush {
     *app.world().resource::<TileBrush>()
 }
 
-fn tileset(app: &App) -> Tileset {
+pub(crate) fn tileset(app: &App) -> Tileset {
     (app.world().resource::<Assets<Tileset>>().iter())
         .next()
         .map(|(_, t)| t.clone())
         .expect("the tileset")
 }
 
-fn packed(app: &App, sheet: u32, tile: u32) -> TileRef {
+pub(crate) fn packed(app: &App, sheet: u32, tile: u32) -> TileRef {
     let layer = tileset(app).layer(sheet, tile).expect("a tile");
     TileRef::new(u16::try_from(layer).expect("fits"))
 }
 
-fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
+pub(crate) fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
     let map = spawn_map(
         app,
         vec![layer(TilemapLayerKind::Tile, default())],
@@ -234,7 +234,7 @@ fn the_contiguous_toggle_reaches_a_bucket_press() {
     assert!(brush(&app).contiguous);
 }
 
-fn open_palette(app: &mut App) -> Entity {
+pub(crate) fn open_palette(app: &mut App) -> Entity {
     ok(
         app,
         "window.open",
@@ -246,7 +246,7 @@ fn open_palette(app: &mut App) -> Entity {
         .expect("one palette")
 }
 
-fn sections(app: &mut App) -> Vec<PaletteSection> {
+pub(crate) fn sections(app: &mut App) -> Vec<PaletteSection> {
     app.world_mut()
         .query::<&PaletteSection>()
         .iter(app.world())
@@ -254,7 +254,7 @@ fn sections(app: &mut App) -> Vec<PaletteSection> {
         .collect()
 }
 
-fn cells(app: &mut App) -> Vec<(Entity, PaletteItem)> {
+pub(crate) fn cells(app: &mut App) -> Vec<(Entity, PaletteItem)> {
     let mut found: Vec<(Entity, PaletteItem)> = app
         .world_mut()
         .query::<(Entity, &PaletteCell)>()
@@ -265,7 +265,7 @@ fn cells(app: &mut App) -> Vec<(Entity, PaletteItem)> {
     found
 }
 
-fn selected(app: &mut App) -> Vec<PaletteItem> {
+pub(crate) fn selected(app: &mut App) -> Vec<PaletteItem> {
     app.world_mut()
         .query_filtered::<&PaletteCell, With<PaletteSelected>>()
         .iter(app.world())
@@ -283,7 +283,14 @@ fn the_palette_shows_the_active_layers_terrains_and_tiles() {
     enter(&mut app, map);
     let mut shown = sections(&mut app);
     shown.sort();
-    assert_eq!(shown, vec![PaletteSection::Terrains, PaletteSection::Tiles]);
+    assert_eq!(
+        shown,
+        vec![
+            PaletteSection::Terrains,
+            PaletteSection::Tiles,
+            PaletteSection::Stamps
+        ]
+    );
     let set = tileset(&app);
     let all = cells(&mut app);
     let terrains = all
@@ -362,7 +369,9 @@ fn a_tile_layer_shows_tiles_only_and_highlights_the_tile() {
     let (mut app, _dir) = project_app();
     open_palette(&mut app);
     tile_map(&mut app, &[]);
-    assert_eq!(sections(&mut app), vec![PaletteSection::Tiles]);
+    let mut shown = sections(&mut app);
+    shown.sort();
+    assert_eq!(shown, vec![PaletteSection::Tiles, PaletteSection::Stamps]);
     let held = tileset(&app)
         .tile_of_layer(u32::from(brush(&app).tile.index()))
         .expect("a tile");

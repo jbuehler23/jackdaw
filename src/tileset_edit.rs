@@ -112,30 +112,39 @@ pub(crate) fn queue_edit<F>(
 where
     F: FnOnce(&World, &mut Tileset) -> Result<String, String> + Send + 'static,
 {
-    commands.queue(move |world: &mut World| {
-        let edited = open_tileset(world, &path).and_then(|(path, before)| {
-            let mut after = before.clone();
-            let message = edit(world, &mut after)?;
-            if after != before {
-                put_tileset(world, &path, after.clone())?;
-                let command = SetTileset {
-                    path,
-                    before,
-                    after,
-                    label: op.to_string(),
-                };
-                world
-                    .resource_mut::<CommandHistory>()
-                    .push_executed(Box::new(command));
-            }
-            Ok(message)
-        });
-        match edited {
+    commands.queue(
+        move |world: &mut World| match apply_edit(world, op, &path, edit) {
             Ok(message) => report_to_caller(world, message),
             Err(err) => warn_caller(world, format!("{op}: {err}")),
-        }
-    });
+        },
+    );
     OperatorResult::Finished
+}
+
+/// Run `edit` on the tileset `path` names now: a change is stored, written
+/// and pushed as one undo entry labelled `op`.
+pub(crate) fn apply_edit(
+    world: &mut World,
+    op: &str,
+    path: &str,
+    edit: impl FnOnce(&World, &mut Tileset) -> Result<String, String>,
+) -> Result<String, String> {
+    let (path, before) = open_tileset(world, path)?;
+    let mut after = before.clone();
+    let message = edit(world, &mut after)?;
+    if after != before {
+        put_tileset(world, &path, after.clone())?;
+        let command = SetTileset {
+            path,
+            before,
+            after,
+            label: op.to_string(),
+        };
+        world
+            .resource_mut::<CommandHistory>()
+            .push_executed(Box::new(command));
+    }
+    Ok(message)
 }
 
 /// Run `edit` on the tileset's terrain setup and take the result back.

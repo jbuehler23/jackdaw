@@ -17,12 +17,13 @@ use jackdaw_tilemap::{CHUNK_AREA, CellCoord, ChunkCoord, LayerData, TileRef};
 use jackdaw_tileset::Tileset;
 use jackdaw_tileset::chunk::ChunkDraw;
 
+use crate::tile_stamp::StampBrush;
 use crate::tile_tools::{
-    TileBrush, TileEditMode, TileStrokeState, TileTool, active_layer, active_tileset, shape_cells,
-    stage_cell, stroke_write,
+    Paint, TileBrush, TileEditMode, TileStrokeState, TileTool, active_layer, active_tileset,
+    shape_cells, stage_cell, stroke_paint,
 };
 use crate::tilemap::TilemapDataStore;
-use crate::tilemap_stroke::{TileWrite, in_bounds, preview_write};
+use crate::tilemap_stroke::{in_bounds, preview_write};
 use crate::viewport_2d::{Scene2dViewport, Viewport2dPanelHost};
 
 /// The most cells a preview lists and resolves; a larger shape is outlined
@@ -115,7 +116,7 @@ struct PreviewInputs {
     map: Entity,
     layer: usize,
     shape: Shape,
-    write: Option<TileWrite>,
+    paint: Option<Paint>,
     hover: Option<CellCoord>,
     cells_revision: u64,
     tileset_revision: u64,
@@ -129,8 +130,10 @@ fn preview_inputs_changed(
     mode: Res<TileEditMode>,
     store: Res<TilemapDataStore>,
     tileset: Res<TilesetRevision>,
+    stamp: Res<StampBrush>,
 ) -> bool {
-    hover.is_changed()
+    stamp.is_changed()
+        || hover.is_changed()
         || state.is_changed()
         || brush.is_changed()
         || mode.is_changed()
@@ -199,22 +202,22 @@ fn on_hover_out(
 /// shape, or the hover cell before a press. A Brush or Eraser stroke writes
 /// as it goes, and the Bucket, the Picker and a held Alt act on a press, so
 /// they only outline the hover cell.
-fn shape_and_write(world: &mut World, hover: TileHover) -> (Shape, Option<TileWrite>) {
+fn shape_and_write(world: &mut World, hover: TileHover) -> (Shape, Option<Paint>) {
     let mode = *world.resource::<TileEditMode>();
     let state = world.resource::<TileStrokeState>();
     let (held, drag) = (state.held(), state.cell);
-    if let Some((write, Some(from))) = held
+    if let Some((paint, Some(from))) = held
         && mode.tool.is_shape()
         && let Some(to) = drag
     {
-        return (Shape::Drag(mode.tool, from, to), Some(write));
+        return (Shape::Drag(mode.tool, from, to), Some(paint.clone()));
     }
-    let write = match mode.tool {
+    let paint = match mode.tool {
         _ if held.is_some() || hover.alt || hover.cell.is_none() => None,
         TileTool::Bucket | TileTool::Picker => None,
-        tool => stroke_write(world, tool, MouseButton::Left).ok(),
+        tool => stroke_paint(world, tool, MouseButton::Left).ok(),
     };
-    (Shape::Cell(hover.cell), write)
+    (Shape::Cell(hover.cell), paint)
 }
 
 /// The cells of `shape` inside `bounds`, unless there are more than
@@ -276,14 +279,14 @@ fn build_preview(world: &mut World) {
         }
         return;
     };
-    let (shape, write) = shape_and_write(world, hover);
+    let (shape, paint) = shape_and_write(world, hover);
     let store = world.resource::<TilemapDataStore>();
     let set = store.resolved_with(&active.key, active.index).cloned();
     let inputs = PreviewInputs {
         map: active.map,
         layer: active.index,
         shape,
-        write,
+        paint,
         hover: hover.cell,
         cells_revision: store.revision(),
         tileset_revision: world.resource::<TilesetRevision>().0,
@@ -293,16 +296,31 @@ fn build_preview(world: &mut World) {
         return;
     }
     let bounds = world.get::<Tilemap>(active.map).and_then(|t| t.bounds);
-    let (cells, edges) = footprint(shape, bounds);
+    let (mut cells, mut edges) = footprint(shape, bounds);
     let tileset_id = active_tileset(world).ok();
     let store = world.resource::<TilemapDataStore>();
     let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
-    let tiles = match write {
-        Some(write) if !cells.is_empty() => {
-            preview_write(layer, active.terrain, set.as_deref(), &cells, write)
+    let mut tiles = Vec::new();
+    if let Some(paint) = inputs.paint.as_ref().filter(|_| !cells.is_empty()) {
+        let writes = paint.writes(&cells);
+        if let Paint::Stamp(_) = paint {
+            cells = (writes.iter())
+                .flat_map(|(_, c)| in_bounds(bounds, c))
+                .collect();
+            cells.sort_unstable();
+            edges = outline(&cells);
         }
-        _ => Vec::new(),
-    };
+        for (write, c) in writes {
+            let c = in_bounds(bounds, &c);
+            tiles.extend(preview_write(
+                layer,
+                active.terrain,
+                set.as_deref(),
+                &c,
+                write,
+            ));
+        }
+    }
     let tileset = tileset_id.and_then(|id| world.resource::<Assets<Tileset>>().get(id));
     let readout = hover
         .cell

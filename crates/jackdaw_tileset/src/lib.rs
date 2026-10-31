@@ -52,6 +52,9 @@ pub struct Tileset {
     pub next_terrain_id: u16,
     /// Named values per packed layer.
     pub properties: BTreeMap<u32, BTreeMap<String, String>>,
+    /// Blocks of tiles saved from the Tile Palette.
+    #[reflect(default)]
+    pub stamps: Vec<TilesetStamp>,
 }
 
 /// One source image and where its tiles sit in the packed image.
@@ -162,6 +165,28 @@ pub struct TilesetObject {
 
 impl TilesetObject {
     pub const BOTTOM_CENTRE: Vec2 = Vec2::new(0.5, 0.0);
+}
+
+/// A named block of tiles saved for the Brush to place as one.
+#[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(Default)]
+pub struct TilesetStamp {
+    pub name: String,
+    /// Columns and rows.
+    pub size: UVec2,
+    pub cells: Vec<StampTile>,
+}
+
+/// One tile of a [`TilesetStamp`].
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[reflect(Default)]
+pub struct StampTile {
+    /// Column and row from the stamp's top-left, rows downward.
+    pub offset: UVec2,
+    /// Packed layer.
+    pub layer: u32,
+    /// Orientation bits of a `jackdaw_tilemap::TileRef`.
+    pub orientation: u8,
 }
 
 impl Default for TilesetObject {

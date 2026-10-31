@@ -1,11 +1,13 @@
-//! The Tile Palette window and the brush it loads: the terrains and tiles of
-//! the active layer's tileset, flip and rotate of a loaded tile, and the
-//! Bucket's Contiguous toggle. Every change goes through an operator.
+//! The Tile Palette window and the brush it loads: the terrains, tiles and
+//! saved stamps of the active layer's tileset, a dragged rectangle of tiles as
+//! a stamp, flip and rotate of a loaded tile or stamp, and the Bucket's
+//! Contiguous toggle. Every change goes through an operator.
 
 use std::path::Path;
 
 use bevy::feathers::controls::FeathersCheckbox;
 use bevy::feathers::theme::ThemedText;
+use bevy::picking::events::{PointerDragEnd, PointerDragEnter, PointerDragStart};
 use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{Button, ValueChange};
@@ -13,7 +15,7 @@ use jackdaw_api::DefaultArea;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::operator::warn_caller;
-use jackdaw_feathers::button::ButtonOperatorCall;
+use jackdaw_feathers::button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::scroll::{scroll_area, scrollbar};
 use jackdaw_feathers::tokens;
 use jackdaw_panels::area::DockWindow;
@@ -21,6 +23,7 @@ use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{TerrainId, TileRef};
 use jackdaw_tileset::{TerrainMatch, Tileset, TilesetTile};
 
+use crate::tile_stamp::{StampBrush, TileStamp, flipped_x, flipped_y, rectangle_tiles, rotated};
 use crate::tile_tools::{BrushSource, TileBrush, TileEditMode, TileTool, has_tile_map};
 use crate::tilemap_stroke::packed_tile;
 use crate::tileset_dock::{sheet_image, spawn_text, swatch};
@@ -35,12 +38,18 @@ pub(crate) fn plugin(app: &mut App) {
         Update,
         (
             refresh_on_tileset_events,
-            refresh_on_state.run_if(|mode: Res<TileEditMode>, brush: Res<TileBrush>| {
-                mode.is_changed() || brush.is_changed()
-            }),
+            refresh_on_state.run_if(
+                |mode: Res<TileEditMode>, brush: Res<TileBrush>, stamp: Res<StampBrush>| {
+                    mode.is_changed() || brush.is_changed() || stamp.is_changed()
+                },
+            ),
         ),
     )
-    .add_observer(on_contiguous_change);
+    .init_resource::<PaletteDrag>()
+    .add_observer(on_contiguous_change)
+    .add_observer(on_tile_drag_start)
+    .add_observer(on_tile_drag_enter)
+    .add_observer(on_tile_drag_end);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, context: Entity) {
@@ -59,25 +68,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, context: Entity) {
         .register_operator::<TilemapBrushFlipYOp>()
         .register_operator::<TilemapBrushRotateOp>()
         .register_operator::<TilemapBucketContiguousOp>();
+    crate::tile_stamp::add_to_extension(ctx);
     ctx.bind_operator_in::<TilemapBrushFlipXOp>(context, [PresetInput::key("KeyX")])
         .bind_operator_in::<TilemapBrushFlipYOp>(context, [PresetInput::key("KeyY")])
         .bind_operator_in::<TilemapBrushRotateOp>(context, [PresetInput::key("KeyZ")]);
-}
-
-fn flipped_x(tile: TileRef) -> TileRef {
-    tile.with_flip_x(!tile.flip_x())
-}
-
-fn flipped_y(tile: TileRef) -> TileRef {
-    tile.with_flip_y(!tile.flip_y())
-}
-
-/// A quarter turn clockwise: the tile is transposed, then flipped across.
-fn rotated(tile: TileRef) -> TileRef {
-    let (x, y) = (tile.flip_x(), tile.flip_y());
-    (tile.with_transpose(!tile.transpose()))
-        .with_flip_x(!y)
-        .with_flip_y(x)
 }
 
 /// The content of one Tile Palette window, and what it was last built from.
@@ -106,6 +100,7 @@ pub enum PaletteSection {
     Empty,
     Terrains,
     Tiles,
+    Stamps,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +108,8 @@ pub enum PaletteItem {
     Terrain(TerrainId),
     /// Sheet and tile.
     Tile(u32, u32),
+    /// Index into the tileset's stamps.
+    Stamp(usize),
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -123,6 +120,13 @@ pub struct PaletteCell {
 /// Marks the palette cells the brush holds.
 #[derive(Component)]
 pub struct PaletteSelected;
+
+/// The first and current tile of a drag over the palette tiles.
+#[derive(Resource, Default)]
+struct PaletteDrag {
+    from: Option<(u32, u32)>,
+    to: Option<(u32, u32)>,
+}
 
 /// The Bucket's Contiguous checkbox.
 #[derive(Component)]
@@ -139,6 +143,13 @@ pub struct ContiguousToggle;
     params(
         terrain(String, doc = "Terrain id or name."),
         tile(String, doc = "Tile as sheet:tile or packed layer, placed unturned."),
+        to(
+            String,
+            doc = "Opposite corner from `tile` as sheet:tile on the same sheet: the \
+                   rectangle between them becomes a stamp."
+        ),
+        stamp(String, doc = "Name of a stamp saved with the tileset."),
+        stamp_index(i64, doc = "Index of a stamp saved with the tileset."),
     )
 )]
 pub(crate) fn tilemap_palette_pick(
@@ -160,68 +171,112 @@ fn pick(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
     let tileset =
         (world.resource::<Assets<Tileset>>().get(id)).ok_or("the layer's tileset is not loaded")?;
     let mut brush = *world.resource::<TileBrush>();
-    let (terrain, tile) = (text("terrain"), text("tile"));
+    let mut stamp = StampBrush {
+        tileset: Some(id),
+        ..default()
+    };
+    let (terrain, tile, to, saved) = (text("terrain"), text("tile"), text("to"), text("stamp"));
+    let index = params.as_int("stamp_index");
     if !terrain.is_empty() {
         brush.terrain = crate::tileset_edit::terrain(tileset, &terrain)?;
         brush.source = BrushSource::Terrain;
+    } else if !saved.is_empty() || index.is_some() {
+        let at = index.and_then(|i| usize::try_from(i).ok());
+        let found = match at {
+            Some(at) => tileset.stamps.get(at),
+            None => tileset.stamps.iter().find(|s| s.name == saved),
+        };
+        let found = found.ok_or("no such stamp is saved with the tileset")?;
+        stamp.stamp = Some(TileStamp::from_saved(found)?);
+        stamp.name = Some(found.name.clone());
+        brush.source = BrushSource::Stamp;
     } else if !tile.is_empty() {
-        brush.tile = packed_tile(tileset, &tile)?;
-        brush.source = BrushSource::Tile;
+        let (sheet, from) = crate::tileset_edit::tile(tileset, &tile)?;
+        let corner = match to.as_str() {
+            "" => (sheet, from),
+            to => crate::tileset_edit::tile(tileset, to)?,
+        };
+        if corner.0 != sheet {
+            return Err("a rectangle of tiles stays on one sheet".to_string());
+        }
+        if corner.1 == from {
+            brush.tile = packed_tile(tileset, &tile)?;
+            brush.source = BrushSource::Tile;
+        } else {
+            let (block, tiles) = TileStamp::rectangle(tileset, sheet, from, corner.1)?;
+            (stamp.stamp, stamp.tiles) = (Some(block), tiles);
+            brush.source = BrushSource::Stamp;
+        }
     } else {
-        return Err("name a terrain or a tile".to_string());
+        return Err("name a terrain, a tile or a stamp".to_string());
     }
     world.resource_mut::<TileEditMode>().tool = TileTool::Brush;
     world.resource_mut::<TileBrush>().set_if_neq(brush);
+    world.resource_mut::<StampBrush>().set_if_neq(stamp);
     Ok(())
 }
 
-/// A tile brush is loaded: the Tile source, or any brush on a tile layer.
+/// A tile or stamp brush is loaded: either source, or any brush on a tile
+/// layer.
 fn turns_brush(mode: Res<TileEditMode>, brush: Res<TileBrush>, maps: Query<&Tilemap>) -> bool {
     let layer =
         (mode.map.and_then(|map| maps.get(map).ok())).and_then(|t| t.layers.get(mode.layer));
-    layer.is_some_and(|l| l.kind == TilemapLayerKind::Tile || brush.source == BrushSource::Tile)
+    layer.is_some_and(|l| l.kind == TilemapLayerKind::Tile || brush.source != BrushSource::Terrain)
 }
 
-fn turn(world: &mut World, change: fn(TileRef) -> TileRef) -> OperatorResult {
-    let mut brush = world.resource_mut::<TileBrush>();
-    brush.tile = change(brush.tile);
+/// Applies `tile` to the loaded tile, or `stamp` to the loaded stamp.
+fn turn(
+    world: &mut World,
+    tile: fn(TileRef) -> TileRef,
+    stamp: fn(&mut TileStamp),
+) -> OperatorResult {
+    if world.resource::<TileBrush>().source != BrushSource::Stamp {
+        let mut brush = world.resource_mut::<TileBrush>();
+        brush.tile = tile(brush.tile);
+    } else {
+        let mut loaded = world.resource_mut::<StampBrush>();
+        loaded.name = None;
+        if let Some(block) = loaded.stamp.as_mut() {
+            stamp(block);
+        }
+    }
     OperatorResult::Finished
 }
 
-/// Flip the loaded tile left to right.
+/// Flip the loaded tile or stamp left to right.
 #[operator(
     id = "tilemap.brush.flip_x",
     label = "Flip Brush Horizontally",
-    description = "Flip the loaded tile left to right.",
+    description = "Flip the loaded tile or stamp left to right.",
     allows_undo = false,
     is_available = turns_brush
 )]
 pub(crate) fn tilemap_brush_flip_x(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
-    turn(world, flipped_x)
+    turn(world, flipped_x, TileStamp::flip_x)
 }
 
-/// Flip the loaded tile top to bottom.
+/// Flip the loaded tile or stamp top to bottom.
 #[operator(
     id = "tilemap.brush.flip_y",
     label = "Flip Brush Vertically",
-    description = "Flip the loaded tile top to bottom.",
+    description = "Flip the loaded tile or stamp top to bottom.",
     allows_undo = false,
     is_available = turns_brush
 )]
 pub(crate) fn tilemap_brush_flip_y(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
-    turn(world, flipped_y)
+    turn(world, flipped_y, TileStamp::flip_y)
 }
 
-/// Turn the loaded tile a quarter clockwise.
+/// Turn the loaded tile or stamp a quarter clockwise.
 #[operator(
     id = "tilemap.brush.rotate",
     label = "Rotate Brush",
-    description = "Turn the loaded tile a quarter clockwise.",
+    description = "Turn the loaded tile or stamp a quarter clockwise.",
     allows_undo = false,
     is_available = turns_brush
 )]
 pub(crate) fn tilemap_brush_rotate(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
-    turn(world, rotated)
+    turn(world, rotated, TileStamp::rotate)
 }
 
 /// Set whether a Bucket press fills only the joined cells.
@@ -320,23 +375,50 @@ fn refresh_on_tileset_events(
 /// Outlines the cells the brush holds and sets the Contiguous toggle.
 fn mark(world: &mut World) {
     let now = shown(world);
-    let brush = *world.resource::<TileBrush>();
-    let tile_source = !now.terrain_layer || brush.source == BrushSource::Tile;
-    let tileset = (now.tileset.ok()).and_then(|id| world.resource::<Assets<Tileset>>().get(id));
-    let held = tileset.and_then(|t| t.tile_of_layer(u32::from(brush.tile.index())));
-    let selected = |item: PaletteItem| match item {
-        PaletteItem::Terrain(id) => !tile_source && brush.terrain == id,
-        PaletteItem::Tile(sheet, tile) => tile_source && held == Some((sheet, tile)),
-    };
-    let cells: Vec<(Entity, bool, bool)> = (world
+    let cells: Vec<(Entity, PaletteItem, bool)> = (world
         .query::<(Entity, &PaletteCell, Has<PaletteSelected>)>()
         .iter(world))
-    .map(|(e, cell, was)| (e, was, selected(cell.item)))
+    .map(|(e, cell, was)| (e, cell.item, was))
     .collect();
-    for (cell, was, now) in cells {
-        if was == now {
-            continue;
+    let brush = *world.resource::<TileBrush>();
+    let stamp = world.resource::<StampBrush>();
+    let drag = world.resource::<PaletteDrag>();
+    let tileset =
+        (now.tileset.as_ref().ok()).and_then(|id| world.resource::<Assets<Tileset>>().get(*id));
+    let held = tileset.and_then(|t| t.tile_of_layer(u32::from(brush.tile.index())));
+    let saved = tileset.and_then(|t| stamp.saved_index(t));
+    let dragging = drag.from.zip(drag.to).filter(|(a, b)| a != b);
+    let lit: Vec<u32> = (dragging.zip(tileset))
+        .and_then(|((a, b), t)| {
+            Some(rectangle_tiles(
+                t.sheets.get(a.0 as usize)?.columns,
+                a.1,
+                b.1,
+            ))
+        })
+        .map_or(Vec::new(), |block| {
+            block.into_iter().map(|(_, tile)| tile).collect()
+        });
+    let selected = |item: PaletteItem| match item {
+        PaletteItem::Tile(sheet, tile) => {
+            if let Some((from, _)) = dragging {
+                sheet == from.0 && lit.contains(&tile)
+            } else if brush.source == BrushSource::Stamp {
+                saved.is_none() && stamp.tiles.contains(&(sheet, tile))
+            } else {
+                (!now.terrain_layer || brush.source == BrushSource::Tile)
+                    && held == Some((sheet, tile))
+            }
         }
+        PaletteItem::Terrain(id) => {
+            now.terrain_layer && brush.source == BrushSource::Terrain && brush.terrain == id
+        }
+        PaletteItem::Stamp(index) => brush.source == BrushSource::Stamp && saved == Some(index),
+    };
+    let changed: Vec<(Entity, bool)> = (cells.into_iter())
+        .filter_map(|(cell, item, was)| (selected(item) != was).then_some((cell, !was)))
+        .collect();
+    for (cell, now) in changed {
         let outline = if now {
             tokens::SELECTED_BORDER
         } else {
@@ -368,16 +450,17 @@ fn mark(world: &mut World) {
 fn fill(world: &mut World, root: Entity) {
     let now = shown(world);
     world.entity_mut(root).despawn_related::<Children>();
+    *world.resource_mut::<PaletteDrag>() = PaletteDrag::default();
     if let Some(mut palette) = world.get_mut::<TilePalette>(root) {
         palette.built = Some(now.clone());
     }
-    let id = match (&now.map, &now.tileset) {
-        (None, _) => Err((
+    let id = if now.map.is_none() {
+        Err((
             "Select a tilemap and enter tile edit mode to paint.".to_string(),
             false,
-        )),
-        (Some(_), Err(err)) => Err((format!("The layer's tileset: {err}."), true)),
-        (Some(_), Ok(id)) => Ok(*id),
+        ))
+    } else {
+        (now.tileset.clone()).map_err(|err| (format!("The layer's tileset: {err}."), true))
     };
     let tileset = id.and_then(|id| {
         (world.resource::<Assets<Tileset>>().get(id).cloned())
@@ -412,6 +495,11 @@ fn fill(world: &mut World, root: Entity) {
         .map_or(now.path.clone(), |n| n.to_string_lossy().into_owned());
     spawn_text(world, header, name, tokens::TEXT_PRIMARY);
     spawn_contiguous(world, header);
+    world.spawn((
+        button(ButtonProps::new("Save Stamp").with_variant(ButtonVariant::Ghost)),
+        ButtonOperatorCall::new(crate::tile_stamp::TilemapStampSaveOp::ID),
+        ChildOf(header),
+    ));
     let row = world
         .spawn((
             Node {
@@ -484,6 +572,23 @@ fn fill(world: &mut World, root: Entity) {
             world.entity_mut(cell).insert(call);
             tile_image(world, cell, &tileset, &images, sheet, tile);
         }
+    }
+    let stamps = section(world, body, PaletteSection::Stamps, "Stamps");
+    if tileset.stamps.is_empty() {
+        let hint = "Drag over tiles for a stamp, then save it.";
+        spawn_text(world, stamps, hint, tokens::TEXT_SECONDARY);
+    }
+    for (index, saved) in tileset.stamps.iter().enumerate() {
+        world.spawn((
+            button(ButtonProps::new(saved.name.clone())),
+            BorderColor::all(Color::NONE),
+            PaletteCell {
+                item: PaletteItem::Stamp(index),
+            },
+            ButtonOperatorCall::new(TilemapPalettePickOp::ID)
+                .with_param("stamp_index", i64::try_from(index).unwrap_or(i64::MAX)),
+            ChildOf(stamps),
+        ));
     }
 }
 
@@ -614,5 +719,62 @@ fn on_contiguous_change(
         if let Err(err) = called {
             warn!("{}: {err}", TilemapBucketContiguousOp::ID);
         }
+    });
+}
+
+fn on_tile_drag_start(
+    start: On<PointerDragStart>,
+    cells: Query<&PaletteCell>,
+    mut drag: ResMut<PaletteDrag>,
+) {
+    if start.button == PointerButton::Primary
+        && let Ok(PaletteCell {
+            item: PaletteItem::Tile(sheet, tile),
+        }) = cells.get(start.event_target())
+    {
+        *drag = PaletteDrag {
+            from: Some((*sheet, *tile)),
+            to: Some((*sheet, *tile)),
+        };
+    }
+}
+
+/// A drag from a palette tile over another of its sheet lights the
+/// rectangle between them.
+fn on_tile_drag_enter(
+    enter: On<PointerDragEnter>,
+    cells: Query<&PaletteCell>,
+    mut drag: ResMut<PaletteDrag>,
+    mut commands: Commands,
+) {
+    if let Ok(PaletteCell {
+        item: PaletteItem::Tile(sheet, tile),
+    }) = cells.get(enter.event_target())
+        && drag.from.is_some_and(|from| from.0 == *sheet)
+        && drag.to != Some((*sheet, *tile))
+    {
+        drag.to = Some((*sheet, *tile));
+        commands.queue(mark);
+    }
+}
+
+/// The end of a drag over the palette tiles loads their rectangle as a
+/// stamp.
+fn on_tile_drag_end(_: On<PointerDragEnd>, mut drag: ResMut<PaletteDrag>, mut commands: Commands) {
+    let (Some(from), Some(to)) = (drag.from.take(), drag.to.take()) else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        if from != to {
+            let called = world
+                .operator(TilemapPalettePickOp::ID)
+                .param("tile", format!("{}:{}", from.0, from.1))
+                .param("to", format!("{}:{}", to.0, to.1))
+                .call();
+            if let Err(err) = called {
+                warn!("{}: {err}", TilemapPalettePickOp::ID);
+            }
+        }
+        mark(world);
     });
 }

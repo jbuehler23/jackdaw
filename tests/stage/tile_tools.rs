@@ -101,7 +101,7 @@ pub(crate) fn stored(app: &mut App, map: Entity) -> TilemapData {
         .expect("the map has cells")
 }
 
-fn bytes(app: &mut App, map: Entity) -> Vec<u8> {
+pub(crate) fn bytes(app: &mut App, map: Entity) -> Vec<u8> {
     jackdaw_tilemap::encode(&stored(app, map))
 }
 
