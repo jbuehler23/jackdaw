@@ -58,13 +58,18 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "tilemap.rectangle",
-        Some("tilemap.set_cells"),
-        "a rectangle dragged between two cells; one rect x0,y0,x1,y1 instead",
+        Some("tilemap.fill_rect"),
+        "a rectangle dragged between two cells; its corners as x0,y0,x1,y1 instead",
     ),
     (
         "tilemap.line",
-        Some("tilemap.set_cells"),
-        "a line dragged between two cells; the line's cells by name instead",
+        Some("tilemap.draw_line"),
+        "a line dragged between two cells; its ends as x0,y0,x1,y1 instead",
+    ),
+    (
+        "tilemap.bucket",
+        Some("tilemap.fill"),
+        "a press on the cell the fill starts from; the seed cell as x,y instead",
     ),
     (
         "tilemap.select",
@@ -373,6 +378,35 @@ fn the_parametric_authoring_operators_are_registered() {
         ("view.set_axis", &["axis", "sign"][..]),
         ("viewport2d.pan", &["x", "y", "panel"][..]),
         ("viewport2d.pixel_perfect", &["panel"][..]),
+        (
+            "tilemap.fill_rect",
+            &[
+                "entity", "layer", "x0", "y0", "x1", "y1", "terrain", "tile", "erase", "mode",
+            ][..],
+        ),
+        (
+            "tilemap.draw_line",
+            &[
+                "entity", "layer", "x0", "y0", "x1", "y1", "terrain", "tile", "erase", "mode",
+            ][..],
+        ),
+        (
+            "tilemap.fill",
+            &[
+                "entity",
+                "layer",
+                "x",
+                "y",
+                "terrain",
+                "tile",
+                "erase",
+                "contiguous",
+            ][..],
+        ),
+        (
+            "tilemap.clear",
+            &["entity", "layer", "x0", "y0", "x1", "y1"][..],
+        ),
     ] {
         let op = all
             .iter()

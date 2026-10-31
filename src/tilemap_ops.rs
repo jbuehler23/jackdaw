@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalQuery;
-use jackdaw_api_internal::operator::warn_caller;
+use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_feathers::picker::{
     PickerItems, PickerProps, SelectInput, SpawnItemInput, match_text, picker_item,
 };
@@ -67,7 +67,7 @@ fn create_unavailable(world: &World) -> Option<String> {
         .or_else(|| (project_tilesets(world).is_empty()).then(|| NO_TILESET.to_string()))
 }
 
-fn no_modal(active: ActiveModalQuery) -> bool {
+pub(crate) fn no_modal(active: ActiveModalQuery) -> bool {
     !active.is_modal_running()
 }
 
@@ -76,12 +76,25 @@ fn text(params: &OperatorParameters, name: &str) -> Option<String> {
     Some(params.as_str(name)?.trim().to_string()).filter(|text| !text.is_empty())
 }
 
-fn finish(world: &mut World, id: &str, result: Result<(), String>) -> OperatorResult {
-    let Err(err) = result else {
-        return OperatorResult::Finished;
-    };
-    warn_caller(world, format!("{id}: {err}"));
-    OperatorResult::Cancelled
+/// Ends a call of operator `id`: a message goes back to the caller, empty for
+/// none, and an error is warned as the reason the call was refused.
+pub(crate) fn finish(
+    world: &mut World,
+    id: &str,
+    result: Result<String, String>,
+) -> OperatorResult {
+    match result {
+        Ok(message) => {
+            if !message.is_empty() {
+                report_to_caller(world, message);
+            }
+            OperatorResult::Finished
+        }
+        Err(err) => {
+            warn_caller(world, format!("{id}: {err}"));
+            OperatorResult::Cancelled
+        }
+    }
 }
 
 /// Add a tilemap of a tileset to the open 2D world scene.
@@ -104,7 +117,7 @@ pub(crate) fn tilemap_create(params: In<OperatorParameters>, world: &mut World) 
         return OperatorResult::Finished;
     }
     let result = create(world, &params);
-    finish(world, TilemapCreateOp::ID, result)
+    finish(world, TilemapCreateOp::ID, result.map(|()| String::new()))
 }
 
 fn create(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
@@ -389,7 +402,7 @@ fn keep_active_layer(world: &mut World, map: Entity, index: usize, removed: bool
 }
 
 /// The map `params` name, or the selected one.
-fn target_entity(world: &World, params: &OperatorParameters) -> Option<Entity> {
+pub(crate) fn target_entity(world: &World, params: &OperatorParameters) -> Option<Entity> {
     (params.as_entity("entity"))
         .or_else(|| world.resource::<crate::selection::Selection>().primary())
 }
@@ -435,7 +448,7 @@ pub(crate) fn tilemap_layer_add(
     world: &mut World,
 ) -> OperatorResult {
     let result = add_layer(world, &params).map(|edit| push(world, edit));
-    finish(world, TilemapLayerAddOp::ID, result)
+    finish(world, TilemapLayerAddOp::ID, result.map(|()| String::new()))
 }
 
 fn add_layer(world: &mut World, params: &OperatorParameters) -> Result<EditTilemapLayers, String> {
@@ -481,7 +494,11 @@ pub(crate) fn tilemap_layer_remove(
     world: &mut World,
 ) -> OperatorResult {
     let result = remove_layer(world, &params).map(|edit| push(world, edit));
-    finish(world, TilemapLayerRemoveOp::ID, result)
+    finish(
+        world,
+        TilemapLayerRemoveOp::ID,
+        result.map(|()| String::new()),
+    )
 }
 
 fn remove_layer(
@@ -535,7 +552,7 @@ pub(crate) fn tilemap_layer_set(
     {
         rebuild_card(world, entity);
     }
-    finish(world, TilemapLayerSetOp::ID, result)
+    finish(world, TilemapLayerSetOp::ID, result.map(|()| String::new()))
 }
 
 fn set_layer(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
@@ -604,7 +621,11 @@ pub(crate) fn tilemap_layer_activate(
     world: &mut World,
 ) -> OperatorResult {
     let result = activate_layer(world, &params);
-    finish(world, TilemapLayerActivateOp::ID, result)
+    finish(
+        world,
+        TilemapLayerActivateOp::ID,
+        result.map(|()| String::new()),
+    )
 }
 
 fn activate_layer(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
