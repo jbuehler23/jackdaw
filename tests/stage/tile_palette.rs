@@ -551,3 +551,39 @@ fn brush_params_naming_both_follow_the_layer() {
     assert_eq!(both(&mut app), OperatorResult::Finished);
     assert_eq!(brush(&app).source, BrushSource::Tile, "tile wins on tiles");
 }
+
+#[test]
+fn a_terrain_with_an_icon_shows_that_tile() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    ok(
+        &mut app,
+        "tileset.terrain.add",
+        &[
+            ("path", text(crate::tilemap_render::TILESET)),
+            ("name", text("marsh")),
+            ("icon", text("0:5")),
+        ],
+    );
+    let set = tileset(&app);
+    let marsh = set.terrains.last().expect("added");
+    assert_eq!((marsh.name.as_str(), marsh.icon), ("marsh", Some((0, 5))));
+    let (min, size) = set.sheet_rect(0, 5).expect("a tile");
+    let rects: Vec<Option<Rect>> = app
+        .world_mut()
+        .query::<(&PaletteCell, &Children)>()
+        .iter(app.world())
+        .filter(|(cell, _)| cell.item == PaletteItem::Terrain(marsh.id))
+        .flat_map(|(_, children)| children.iter().collect::<Vec<_>>())
+        .map(|child| app.world().get::<ImageNode>(child).and_then(|i| i.rect))
+        .collect();
+    assert_eq!(
+        rects,
+        [Some(Rect::from_corners(
+            min.as_vec2(),
+            (min + size).as_vec2()
+        ))]
+    );
+}

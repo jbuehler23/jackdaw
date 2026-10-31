@@ -55,9 +55,12 @@ impl Tileset {
         for t in &self.terrains {
             let [r, g, b, _] = t.swatch.to_u8_array();
             let background = if t.background { ", background" } else { "" };
+            let icon = (t.icon).map_or(String::new(), |(sheet, tile)| {
+                format!(", icon {sheet}:{tile}")
+            });
             let _ = writeln!(
                 out,
-                "  terrain {} \"{}\": swatch #{r:02x}{g:02x}{b:02x}{background}, collision {}",
+                "  terrain {} \"{}\": swatch #{r:02x}{g:02x}{b:02x}{background}, collision {}{icon}",
                 t.id,
                 t.name,
                 collision_name(t.collision)
@@ -68,8 +71,10 @@ impl Tileset {
             let locked = if s.locked_manual { ", locked" } else { "" };
             let _ = write!(
                 out,
-                "  set {} over {}: {:?}{locked}",
-                s.inner, s.outer, s.mode
+                "  set \"{}\" over \"{}\": {:?}{locked}",
+                self.terrain_name(s.inner),
+                self.terrain_name(s.outer),
+                s.mode
             );
             if let Ok(c) = setup.coverage(s.inner, s.outer) {
                 let _ = write!(out, ", {}/{} shapes", c.covered, c.total);

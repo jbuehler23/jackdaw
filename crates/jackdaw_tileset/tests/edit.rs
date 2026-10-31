@@ -67,13 +67,14 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
         .expect("bits");
     tileset.set_setup(&setup).expect("converts");
     tileset.paint_property(&[5], "slow", "yes");
+    tileset.terrains[1].icon = Some((1, 3));
 
     let text = tileset.describe().expect("describes");
     for line in [
         "image \"farm.tiles.png\": tile 16x16, 4x3 layers",
         "  terrain 1 \"grass\": swatch #84c669, background, collision passable",
-        "  terrain 2 \"sand\": swatch #e7a16a, collision passable",
-        "  set 2 over 1: Sides, 1/16 shapes, missing 1,2,1,2,2,2,1,2,1;",
+        "  terrain 2 \"sand\": swatch #e7a16a, collision passable, icon 1:3",
+        "  set \"sand\" over \"grass\": Sides, 1/16 shapes, missing 1,2,1,2,2,2,1,2,1;",
         "flagged tiles: 1",
         "  sheet 1: 2",
         "  object on sheet 1 at 2,1: 2x1, 2 tiles, pivot 0.5,0, by hand",
@@ -86,4 +87,24 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
     ] {
         assert!(text.contains(line), "missing {line:?} in\n{text}");
     }
+}
+
+#[test]
+fn an_icon_stays_with_its_terrain_through_a_setup_edit() {
+    let mut tileset = tileset();
+    let mut setup = tileset.setup().expect("converts");
+    let grass = setup.add_terrain("grass", [1, 2, 3], false).expect("id");
+    let sand = setup.add_terrain("sand", [4, 5, 6], false).expect("id");
+    tileset.set_setup(&setup).expect("converts");
+    tileset.terrains[1].icon = Some((1, 2));
+
+    let mut setup = tileset.setup().expect("converts");
+    setup.remove_terrain(grass).expect("removed");
+    setup.add_terrain("dirt", [7, 8, 9], false).expect("id");
+    tileset.set_setup(&setup).expect("converts");
+    let icons: Vec<_> = (tileset.terrains.iter())
+        .map(|t| (t.name.as_str(), t.icon))
+        .collect();
+    assert_eq!(icons, [("sand", Some((1, 2))), ("dirt", None)]);
+    assert_eq!(tileset.terrains[0].id, sand);
 }

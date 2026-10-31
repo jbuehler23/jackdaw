@@ -107,6 +107,9 @@ pub struct TilesetTerrain {
     pub background: bool,
     pub collision: TerrainCollision,
     pub collision_by_user: bool,
+    /// Sheet and tile the terrain is shown by.
+    #[reflect(default)]
+    pub icon: Option<(u32, u32)>,
 }
 
 #[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -291,6 +294,13 @@ impl Tileset {
         self.auto_setup = false;
     }
 
+    /// The name of terrain `id`, or the id itself when no terrain has it.
+    pub fn terrain_name(&self, id: TerrainId) -> String {
+        (self.terrains.iter())
+            .find(|t| t.id == id)
+            .map_or_else(|| id.to_string(), |t| t.name.clone())
+    }
+
     /// Packed layer of tile `tile` of sheet `sheet`.
     pub fn layer(&self, sheet: u32, tile: u32) -> Option<u32> {
         let sheet = self.sheets.get(sheet as usize)?;
@@ -419,7 +429,15 @@ impl Tileset {
             });
         }
         self.setup_sheets = setup_sheets;
-        self.terrains = setup.terrains.iter().map(tileset_terrain).collect();
+        let icons: BTreeMap<TerrainId, (u32, u32)> = (self.terrains.iter())
+            .filter_map(|t| t.icon.map(|icon| (t.id, icon)))
+            .collect();
+        self.terrains = (setup.terrains.iter())
+            .map(|t| TilesetTerrain {
+                icon: icons.get(&t.id).copied(),
+                ..tileset_terrain(t)
+            })
+            .collect();
         self.terrain_sets = setup.sets.iter().map(tileset_set).collect();
         self.tiles = tiles;
         self.objects = objects;
@@ -463,6 +481,7 @@ fn tileset_terrain(terrain: &SetupTerrain) -> TilesetTerrain {
         background: terrain.background,
         collision: terrain_collision(terrain.collision.value),
         collision_by_user: terrain.collision.is_user(),
+        icon: None,
     }
 }
 

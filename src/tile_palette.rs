@@ -26,7 +26,7 @@ use jackdaw_tileset::{TerrainMatch, Tileset, TilesetTile};
 use crate::tile_stamp::{StampBrush, TileStamp, flipped_x, flipped_y, rectangle_tiles, rotated};
 use crate::tile_tools::{BrushSource, TileBrush, TileEditMode, TileTool, has_tile_map};
 use crate::tilemap_stroke::packed_tile;
-use crate::tileset_dock::{sheet_image, spawn_text, swatch};
+use crate::tileset_dock::{spawn_text, swatch, tile_image};
 
 pub const TILE_PALETTE_WINDOW_ID: &str = "jackdaw.tile_palette";
 
@@ -526,9 +526,6 @@ fn fill(world: &mut World, root: Entity) {
         ))
         .id();
     world.spawn((scrollbar(body), ChildOf(row)));
-    let images: Vec<Option<Handle<Image>>> = (tileset.sheets.iter())
-        .map(|sheet| sheet_image(world, &sheet.source))
-        .collect();
     if now.terrain_layer {
         let terrains = section(world, body, PaletteSection::Terrains, "Terrains");
         for terrain in &tileset.terrains {
@@ -536,8 +533,8 @@ fn fill(world: &mut World, root: Entity) {
             let call = ButtonOperatorCall::new(TilemapPalettePickOp::ID)
                 .with_param("terrain", terrain.id.to_string());
             world.entity_mut(cell).insert(call);
-            match centre_tile(&tileset, terrain.id) {
-                Some((sheet, tile)) => tile_image(world, cell, &tileset, &images, sheet, tile),
+            match terrain.icon.or_else(|| centre_tile(&tileset, terrain.id)) {
+                Some((sheet, tile)) => spawn_tile(world, cell, &tileset, sheet, tile),
                 None => {
                     let color = swatch(&tileset, terrain.id, 1.0);
                     world.entity_mut(cell).insert(BackgroundColor(color));
@@ -570,7 +567,7 @@ fn fill(world: &mut World, root: Entity) {
             let call = ButtonOperatorCall::new(TilemapPalettePickOp::ID)
                 .with_param("tile", format!("{sheet}:{tile}"));
             world.entity_mut(cell).insert(call);
-            tile_image(world, cell, &tileset, &images, sheet, tile);
+            spawn_tile(world, cell, &tileset, sheet, tile);
         }
     }
     let stamps = section(world, body, PaletteSection::Stamps, "Stamps");
@@ -636,18 +633,9 @@ fn spawn_cell(world: &mut World, parent: Entity, item: PaletteItem) -> Entity {
         .id()
 }
 
-/// Draws tile `tile` of sheet `sheet` inside `cell`, cut from that sheet's
-/// image in `images`.
-fn tile_image(
-    world: &mut World,
-    cell: Entity,
-    tileset: &Tileset,
-    images: &[Option<Handle<Image>>],
-    sheet: u32,
-    tile: u32,
-) {
-    let image = images.get(sheet as usize).cloned().flatten();
-    let (Some(image), Some((min, size))) = (image, tileset.sheet_rect(sheet, tile)) else {
+/// Draws tile `tile` of sheet `sheet` inside `cell`.
+fn spawn_tile(world: &mut World, cell: Entity, tileset: &Tileset, sheet: u32, tile: u32) {
+    let Some(image) = tile_image(world, tileset, sheet, tile) else {
         return;
     };
     world.spawn((
@@ -656,11 +644,7 @@ fn tile_image(
             height: percent(100.0),
             ..default()
         },
-        ImageNode {
-            image,
-            rect: Some(Rect::from_corners(min.as_vec2(), (min + size).as_vec2())),
-            ..default()
-        },
+        image,
         Pickable::IGNORE,
         ChildOf(cell),
     ));

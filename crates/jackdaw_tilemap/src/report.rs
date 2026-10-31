@@ -427,7 +427,8 @@ impl fmt::Display for SetupReport {
             let template = s.template.map_or("none".to_string(), |t| format!("{t:?}"));
             let terrain = |id: TerrainId| match id {
                 0 => "empty".to_string(),
-                id => id.to_string(),
+                id => (self.terrains.iter().find(|t| t.id == id))
+                    .map_or_else(|| id.to_string(), |t| format!("\"{}\"", t.name)),
             };
             writeln!(
                 f,
