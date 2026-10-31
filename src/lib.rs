@@ -171,6 +171,7 @@ pub mod tile_preview;
 pub mod tile_stamp;
 pub mod tile_tools;
 pub mod tilemap;
+pub mod tilemap_ops;
 pub mod tilemap_render;
 pub mod tilemap_resolve;
 pub mod tilemap_stroke;

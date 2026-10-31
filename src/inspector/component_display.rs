@@ -1176,6 +1176,14 @@ fn build_inspector_cards(
                 );
             }
 
+            if type_id == TypeId::of::<jackdaw_scene_types::Tilemap>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    super::tilemap_card::fill_tilemap_card_body(world, source_entity, body);
+                });
+                continue;
+            }
+
             if type_id == TypeId::of::<Sprite>() {
                 let body = body_entity;
                 commands.queue(move |world: &mut World| {

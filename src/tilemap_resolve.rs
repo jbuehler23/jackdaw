@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer, TilemapLayerKind};
+use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer};
 use jackdaw_tilemap::{
     ChunkedLayer, LayerKind, TerrainAuthoring, TerrainSet, TileRef, resolve_region,
 };
@@ -119,12 +119,8 @@ pub(crate) fn refresh_terrain(world: &mut World) {
 /// terrain layer the set it resolves with and the tiles that set gives. The
 /// store is borrowed mutably only for a change.
 fn refresh_layer(world: &mut World, key: &str, index: usize, layer: &TilemapLayer) {
-    let terrain = layer.kind == TilemapLayerKind::Terrain;
-    let kind = if terrain {
-        LayerKind::Terrain
-    } else {
-        LayerKind::Tile
-    };
+    let kind = crate::tilemap::data_kind(layer.kind);
+    let terrain = kind == LayerKind::Terrain;
     if world
         .resource::<TilemapDataStore>()
         .kind_differs(key, index, kind)

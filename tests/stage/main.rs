@@ -60,6 +60,7 @@ mod tile_preview;
 mod tile_stamps;
 mod tile_tools;
 mod tilemap_history;
+mod tilemap_layers;
 mod tilemap_render;
 mod ui_align;
 mod ui_asset_drop;

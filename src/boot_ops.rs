@@ -267,6 +267,10 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "sprite.set_pixels_per_unit",
     "sprite.y_sort",
     "terrain.scatter.adopt",
+    "tilemap.layer.activate",
+    "tilemap.layer.add",
+    "tilemap.layer.remove",
+    "tilemap.layer.set",
     "viewport.look_through",
 ];
 
