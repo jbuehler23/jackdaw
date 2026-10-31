@@ -9,7 +9,8 @@ use jackdaw_widgets::menu_bar::{
 };
 
 use crate::button::{
-    ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonVariant, LeadingMark, button,
+    ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonSize, ButtonVariant, LeadingMark,
+    button,
 };
 use crate::icons::Icon;
 use crate::tokens;
@@ -405,6 +406,8 @@ fn window_height(windows: &Query<&Window>) -> f32 {
 /// same path a click on it takes. Nothing here touches document state, only the
 /// menu's own open and highlight state.
 ///
+/// Several items can share a label, one per panel: an item laid out to nothing
+/// is passed over, and among the rest one that `prefer` picks comes first.
 /// Returns whether an item with that label was found.
 pub fn open_menu_named(
     label: &str,
@@ -413,9 +416,19 @@ pub fn open_menu_named(
     items: &Query<(Entity, &MenuBarItem, &ComputedNode, &UiGlobalTransform)>,
     windows: &Query<&Window>,
     backgrounds: &mut Query<(Entity, &mut BackgroundColor), With<MenuBarItem>>,
+    prefer: impl Fn(Entity) -> bool,
 ) -> bool {
-    let Some((entity, item, computed, global_tf)) =
-        items.iter().find(|(_, item, _, _)| item.label == label)
+    let named: Vec<_> = items
+        .iter()
+        .filter(|(_, item, _, _)| item.label == label)
+        .collect();
+    let laid_out = |computed: &ComputedNode| computed.size().min_element() > 0.0;
+    let Some((entity, item, computed, global_tf)) = named
+        .iter()
+        .find(|(entity, _, computed, _)| laid_out(computed) && prefer(*entity))
+        .or_else(|| named.iter().find(|(_, _, computed, _)| laid_out(computed)))
+        .or_else(|| named.first())
+        .copied()
     else {
         return false;
     };
@@ -978,18 +991,39 @@ pub struct DynamicMenuRows(pub MenuRowsFn);
 /// `name` is the item's label for lookups and is not drawn. Otherwise as
 /// [`menu_button`].
 pub fn menu_icon_button(name: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> impl Bundle {
+    icon_menu(
+        name,
+        rows,
+        ButtonProps::new("")
+            .with_variant(ButtonVariant::Ghost)
+            .with_left_icon(icon)
+            .with_right_icon(Icon::ChevronDown),
+    )
+}
+
+/// A menu that opens from a button showing only `icon`, sized like a toolbar
+/// icon, with no dropdown arrow. Otherwise as [`menu_icon_button`].
+pub fn menu_glyph_button(name: impl Into<String>, icon: Icon, rows: MenuRowsFn) -> impl Bundle {
+    icon_menu(
+        name,
+        rows,
+        ButtonProps::new("")
+            .with_variant(ButtonVariant::Ghost)
+            .with_size(ButtonSize::Icon)
+            .with_left_icon(icon),
+    )
+}
+
+/// A menu item named `name` whose rows `rows` builds, opening from a button
+/// drawn from `props`.
+fn icon_menu(name: impl Into<String>, rows: MenuRowsFn, props: ButtonProps) -> impl Bundle {
     (
         MenuBarItem {
             label: name.into(),
             actions: Vec::new(),
         },
         DynamicMenuRows(rows),
-        button(
-            ButtonProps::new("")
-                .with_variant(ButtonVariant::Ghost)
-                .with_left_icon(icon)
-                .with_right_icon(Icon::ChevronDown),
-        ),
+        button(props),
     )
 }
 

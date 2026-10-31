@@ -4,6 +4,7 @@
 
 use crate::util;
 use crate::util::OperatorResultExt as _;
+use jackdaw_api::op::OperatorWorldExt as _;
 
 use bevy::{
     prelude::*,
@@ -405,10 +406,19 @@ fn a_narrow_viewport_cuts_the_tools_and_keeps_the_settings_and_mode_controls() {
 }
 
 fn overflow_button(app: &mut App) -> Entity {
-    app.world_mut()
-        .query_filtered::<Entity, With<ToolbarOverflow>>()
-        .single(app.world())
-        .expect("the toolbar carries one overflow menu")
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<(Entity, &ChildOf), With<ToolbarOverflow>>()
+        .iter(app.world())
+        .filter(|(_, parent)| {
+            (app.world())
+                .get::<jackdaw::layout::Toolbar>(parent.parent())
+                .is_some()
+        })
+        .map(|(entity, _)| entity)
+        .collect();
+    assert_eq!(found.len(), 1, "the 3D toolbar carries one overflow menu");
+    found[0]
 }
 
 fn displayed(app: &App, entity: Entity) -> Display {
@@ -485,4 +495,27 @@ fn a_narrow_viewport_lists_the_cut_tools_in_the_overflow_menu() {
         })
         .expect("the query runs");
     assert!(running, "the row dispatches the tool's operator");
+}
+
+/// The panel also holds the 2D presentation's own "More tools" menus, laid
+/// out to nothing while the panel shows the 3D world; a scripted open finds the
+/// one the user can see.
+#[test]
+fn opening_more_tools_by_name_opens_the_visible_overflow_menu() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_panel(dir.path());
+    narrow_the_toolbar(&mut app, 420.0);
+    let button = overflow_button(&mut app);
+    app.world_mut()
+        .operator("menu.open")
+        .param("name", jackdaw::toolbar_overflow::TOOLBAR_OVERFLOW_MENU)
+        .call()
+        .expect("menu.open dispatches")
+        .assert_finished();
+    app.update();
+    assert_eq!(
+        app.world().resource::<MenuBarState>().open_menu,
+        Some(button),
+        "the 3D toolbar's overflow menu opens"
+    );
 }

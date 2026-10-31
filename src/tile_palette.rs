@@ -216,6 +216,11 @@ fn pick(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
     Ok(())
 }
 
+fn no_turnable_brush(world: &World) -> Option<String> {
+    crate::tile_tools::tile_mode_reason(world)
+        .or_else(|| Some("Pick a tile or stamp first; terrain does not turn".to_string()))
+}
+
 /// A tile or stamp brush is loaded: either source, or any brush on a tile
 /// layer.
 fn turns_brush(mode: Res<TileEditMode>, brush: Res<TileBrush>, maps: Query<&Tilemap>) -> bool {
@@ -249,7 +254,8 @@ fn turn(
     label = "Flip Brush Horizontally",
     description = "Flip the loaded tile or stamp left to right.",
     allows_undo = false,
-    is_available = turns_brush
+    is_available = turns_brush,
+    unavailable_reason = no_turnable_brush
 )]
 pub(crate) fn tilemap_brush_flip_x(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
     turn(world, flipped_x, TileStamp::flip_x)
@@ -261,7 +267,8 @@ pub(crate) fn tilemap_brush_flip_x(_: In<OperatorParameters>, world: &mut World)
     label = "Flip Brush Vertically",
     description = "Flip the loaded tile or stamp top to bottom.",
     allows_undo = false,
-    is_available = turns_brush
+    is_available = turns_brush,
+    unavailable_reason = no_turnable_brush
 )]
 pub(crate) fn tilemap_brush_flip_y(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
     turn(world, flipped_y, TileStamp::flip_y)
@@ -273,7 +280,8 @@ pub(crate) fn tilemap_brush_flip_y(_: In<OperatorParameters>, world: &mut World)
     label = "Rotate Brush",
     description = "Turn the loaded tile or stamp a quarter clockwise.",
     allows_undo = false,
-    is_available = turns_brush
+    is_available = turns_brush,
+    unavailable_reason = no_turnable_brush
 )]
 pub(crate) fn tilemap_brush_rotate(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
     turn(world, rotated, TileStamp::rotate)
