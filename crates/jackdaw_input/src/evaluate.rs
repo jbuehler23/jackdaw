@@ -136,7 +136,7 @@ impl Devices<'_> {
                         value: if held { Vec2::X } else { Vec2::ZERO },
                     };
                 }
-                let trigger = Trigger::Key(key);
+                let trigger = Trigger::Key(key).canonical();
                 let Some(keys) = self.keys.filter(|_| self.sources.keyboard) else {
                     return idle(trigger);
                 };
@@ -187,6 +187,18 @@ impl Devices<'_> {
     }
 }
 
+impl Trigger {
+    /// One trigger per key: a letter key reads as its letter, so a chord
+    /// matched by the typed character and one matched by the key compare
+    /// equal when hiding or outranking one another.
+    fn canonical(self) -> Self {
+        match self {
+            Trigger::Key(key) => key_letter(key).map_or(self, Trigger::Letter),
+            other => other,
+        }
+    }
+}
+
 /// The letter a shortcut on `key` matches by layout: a letter key chorded
 /// with Ctrl or Super and not Alt, which on some layouts types another
 /// character.
@@ -194,6 +206,11 @@ fn layout_letter(key: KeyCode, mod_keys: ModKeys) -> Option<char> {
     if !mod_keys.intersects(ModKeys::CONTROL | ModKeys::SUPER) || mod_keys.contains(ModKeys::ALT) {
         return None;
     }
+    key_letter(key)
+}
+
+/// The letter on a letter key.
+fn key_letter(key: KeyCode) -> Option<char> {
     let letter = match key {
         KeyCode::KeyA => 'a',
         KeyCode::KeyB => 'b',
@@ -685,6 +702,91 @@ mod tests {
 
         press(&mut app, KeyCode::KeyS);
         assert_eq!(frame(&mut app), [scale]);
+    }
+
+    /// A Ctrl chord on a letter reads the character the layout types, and
+    /// still silences the bare key.
+    #[test]
+    fn the_longer_chord_on_a_typed_letter_silences_the_bare_key() {
+        let mut app = app();
+        let ctx = context(&mut app, 0);
+        let cut = action(&mut app, ctx, ActionSettings::default());
+        let flip = action(&mut app, ctx, ActionSettings::default());
+        bind(
+            &mut app,
+            cut,
+            KeyCode::KeyX.with_mod_keys(ModKeys::CONTROL),
+            Condition::Press,
+        );
+        bind(&mut app, flip, KeyCode::KeyX, Condition::Press);
+        frame(&mut app);
+
+        press(&mut app, KeyCode::ControlLeft);
+        press(&mut app, KeyCode::KeyX);
+        app.world_mut()
+            .resource_mut::<ButtonInput<Key>>()
+            .press(Key::Character("x".into()));
+        assert_eq!(frame(&mut app), [cut]);
+    }
+
+    #[test]
+    fn a_held_chord_does_not_silence_another_key() {
+        let mut app = app();
+        let ctx = context(&mut app, 0);
+        let move_up = action(&mut app, ctx, ActionSettings::default());
+        let cancel = action(&mut app, ctx, ActionSettings::default());
+        bind(
+            &mut app,
+            move_up,
+            KeyCode::ArrowUp.with_mod_keys(ModKeys::CONTROL),
+            Condition::Down,
+        );
+        bind(&mut app, cancel, KeyCode::Escape, Condition::Press);
+        frame(&mut app);
+
+        press(&mut app, KeyCode::ControlLeft);
+        press(&mut app, KeyCode::ArrowUp);
+        press(&mut app, KeyCode::Escape);
+        let fired = frame(&mut app);
+        assert!(fired.contains(&cancel), "{fired:?}");
+    }
+
+    /// One consuming context reads X as the typed letter and the other as the
+    /// key; consuming either hides the other.
+    #[test]
+    fn a_consumed_letter_and_its_key_are_one_input() {
+        for high_reads_letter in [true, false] {
+            let mut app = app();
+            let (low, high) = (context(&mut app, 0), context(&mut app, 10));
+            let consuming = ActionSettings {
+                consume_input: true,
+                ..default()
+            };
+            let first = action(&mut app, high, consuming);
+            let second = action(&mut app, low, ActionSettings::default());
+            let letter = KeyCode::KeyX.with_mod_keys(ModKeys::CONTROL);
+            let key = KeyCode::KeyX.with_mod_keys(ModKeys::ALT);
+            let (high_input, low_input) = if high_reads_letter {
+                (letter, key)
+            } else {
+                (key, letter)
+            };
+            bind(&mut app, first, high_input, Condition::Press);
+            bind(&mut app, second, low_input, Condition::Press);
+            frame(&mut app);
+
+            press(&mut app, KeyCode::ControlLeft);
+            press(&mut app, KeyCode::AltLeft);
+            press(&mut app, KeyCode::KeyX);
+            app.world_mut()
+                .resource_mut::<ButtonInput<Key>>()
+                .press(Key::Character("x".into()));
+            assert_eq!(
+                frame(&mut app),
+                [first],
+                "letter first: {high_reads_letter}"
+            );
+        }
     }
 
     #[test]

@@ -20,7 +20,7 @@ use jackdaw_tileset::chunk::ChunkDraw;
 use crate::tile_stamp::StampBrush;
 use crate::tile_tools::{
     Paint, TileBrush, TileEditMode, TileStrokeState, TileTool, active_layer, active_tileset,
-    shape_cells, stage_cell, stroke_paint,
+    clipped_rect, shape_cells, stage_cell, stroke_paint,
 };
 use crate::tilemap::TilemapDataStore;
 use crate::tilemap_stroke::{in_bounds, preview_write};
@@ -214,7 +214,7 @@ fn shape_and_write(world: &mut World, hover: TileHover) -> (Shape, Option<Paint>
     }
     let paint = match mode.tool {
         _ if held.is_some() || hover.alt || hover.cell.is_none() => None,
-        TileTool::Bucket | TileTool::Picker => None,
+        TileTool::Bucket | TileTool::Picker | TileTool::Select => None,
         tool => stroke_paint(world, tool, MouseButton::Left).ok(),
     };
     (Shape::Cell(hover.cell), paint)
@@ -232,14 +232,9 @@ fn footprint(shape: Shape, bounds: Option<IRect>) -> (Vec<CellCoord>, Vec<(IVec2
         Shape::Drag(tool, from, to) => (tool, from, to),
     };
     if tool == TileTool::Rectangle {
-        let (mut min, mut max) = (from.0.min(to.0), from.0.max(to.0));
-        if let Some(b) = bounds {
-            min = min.max(b.min);
-            max = max.min(b.max.saturating_sub(IVec2::ONE));
-        }
-        if min.cmpgt(max).any() {
+        let Some((min, max)) = clipped_rect(from, to, bounds) else {
             return (Vec::new(), Vec::new());
-        }
+        };
         let span = (max.as_i64vec2() - min.as_i64vec2()).as_u64vec2() + 1;
         let cells = if span.x.saturating_mul(span.y) <= MAX_PREVIEW_CELLS as u64 {
             shape_cells(tool, from, to, bounds).unwrap_or_default()

@@ -156,13 +156,18 @@ fn the_clipboard_chord_is_shared_by_the_entity_and_keyframe_operators() {
 
     assert_eq!(
         operators_on(&defaults, &PresetInput::key("KeyC").ctrl_or_super()),
-        vec!["clip.copy_keyframes".to_string(), "entity.copy".to_string()],
+        vec![
+            "clip.copy_keyframes".to_string(),
+            "entity.copy".to_string(),
+            "tilemap.selection.copy".to_string()
+        ],
     );
     assert_eq!(
         operators_on(&defaults, &PresetInput::key("KeyV").ctrl_or_super()),
         vec![
             "clip.paste_keyframes".to_string(),
-            "entity.paste".to_string()
+            "entity.paste".to_string(),
+            "tilemap.stamp.paste".to_string()
         ],
     );
     assert_eq!(
@@ -277,8 +282,16 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
     let mut app = crate::headless_app();
     let defaults = classic(&mut app);
 
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyX").ctrl_or_super()),
+        vec![
+            "entity.cut".to_string(),
+            "tilemap.selection.cut".to_string()
+        ],
+        "cut is shared only with the tile selection",
+    );
+
     for (input, operator) in [
-        (PresetInput::key("KeyX").ctrl_or_super(), "entity.cut"),
         (
             PresetInput::key("ArrowUp").ctrl_or_super(),
             "entity.move_up",
@@ -302,7 +315,6 @@ fn the_authoring_chords_claim_what_they_were_meant_to() {
 
     let conflicts = find_conflicts(&defaults);
     for operator in [
-        "entity.cut",
         "entity.move_up",
         "entity.move_down",
         "ui.group_into",
@@ -421,4 +433,81 @@ fn the_tile_tool_keys_claim_only_their_tools() {
         vec![true],
         "one action, on the inactive tile context"
     );
+}
+
+/// M chooses the Select tool on the tile edit context, shared with Core's grid
+/// snap. Delete, Escape and the Ctrl clipboard chords act on a tile selection
+/// from a context above Core that is active only while cells are selected, so
+/// they hide the same chords from the entity operators.
+#[test]
+fn the_tile_selection_keys_sit_above_core() {
+    let mut app = crate::headless_app();
+    let defaults = classic(&mut app);
+    assert_eq!(
+        operators_on(&defaults, &PresetInput::key("KeyM")),
+        vec!["snap.toggle".to_string(), "tilemap.select".to_string()],
+    );
+    let shared: Vec<String> = find_conflicts(&defaults)
+        .into_iter()
+        .filter(|line| line.contains("tilemap.select,") || line.ends_with("tilemap.select"))
+        .collect();
+    assert_eq!(shared.len(), 1, "{shared:?}");
+    assert!(shared[0].contains("snap.toggle"), "{shared:?}");
+
+    for (input, tile, core) in [
+        (
+            PresetInput::key("Delete"),
+            "tilemap.selection.erase",
+            "entity.delete",
+        ),
+        (
+            PresetInput::key("Escape"),
+            "tilemap.selection.clear",
+            "selection.clear",
+        ),
+        (
+            PresetInput::key("KeyC").ctrl_or_super(),
+            "tilemap.selection.copy",
+            "entity.copy",
+        ),
+        (
+            PresetInput::key("KeyX").ctrl_or_super(),
+            "tilemap.selection.cut",
+            "entity.cut",
+        ),
+    ] {
+        let on = operators_on(&defaults, &input);
+        assert!(on.contains(&tile.to_string()), "{input:?}: {on:?}");
+        assert!(on.contains(&core.to_string()), "{input:?}: {on:?}");
+    }
+
+    let world = app.world_mut();
+    let contexts: Vec<(String, Entity)> = world
+        .query::<(
+            &jackdaw_api_internal::lifecycle::OperatorAction,
+            &jackdaw_input::ActionOf,
+        )>()
+        .iter(world)
+        .filter(|(action, _)| action.0.starts_with("tilemap.selection."))
+        .map(|(action, of)| (action.0.to_string(), of.0))
+        .collect();
+    assert_eq!(contexts.len(), 4, "{contexts:?}");
+    for (operator, context) in contexts {
+        assert!(
+            world
+                .get::<jackdaw::tile_select::TileSelectionInputContext>(context)
+                .is_some(),
+            "{operator} is on the selection context"
+        );
+        assert!(
+            !world
+                .get::<jackdaw_input::ContextActivity>(context)
+                .is_some_and(|active| active.0),
+            "inactive with nothing selected"
+        );
+        let priority = world
+            .get::<jackdaw_input::ContextPriority>(context)
+            .map(|p| p.0);
+        assert!(priority > Some(0), "{operator} sits above Core");
+    }
 }

@@ -168,6 +168,7 @@ pub mod texture_import;
 pub mod thumbnail;
 pub mod tile_palette;
 pub mod tile_preview;
+pub mod tile_select;
 pub mod tile_stamp;
 pub mod tile_tools;
 pub mod tilemap;
@@ -474,6 +475,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(tile_palette::plugin)
         .add_plugins(tile_preview::plugin)
         .add_plugins(tile_stamp::plugin)
+        .add_plugins(tile_select::plugin)
         .add_plugins(tilemap_render::plugin)
         .add_plugins(tilemap_resolve::plugin)
         .add_plugins(tileset_dock::plugin)
@@ -3203,6 +3205,15 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
     });
 
     registry.register(jackdaw_panels::WorkspaceDescriptor {
+        id: "2d".into(),
+        name: "2D".into(),
+        icon: Some(String::from(Icon::Grid2x2.unicode())),
+        accent_color: Color::srgba(0.95, 0.75, 0.3, 0.8),
+        layout: jackdaw_panels::LayoutState::default(),
+        tree: build_two_d_tree(),
+    });
+
+    registry.register(jackdaw_panels::WorkspaceDescriptor {
         id: "debug".into(),
         name: "Remote Debug".into(),
         icon: Some(String::from(Icon::CalendarSearch.unicode())),
@@ -3210,6 +3221,55 @@ fn register_workspaces(mut registry: ResMut<jackdaw_panels::WorkspaceRegistry>) 
         layout: jackdaw_panels::LayoutState::default(),
         tree: build_debug_tree(),
     });
+}
+
+/// 2D workspace: a large viewport over the Tile Palette beside the Project
+/// window, the Outliner on the left and the Inspector on the right.
+fn build_two_d_tree() -> jackdaw_panels::tree::DockTree {
+    use jackdaw_panels::DockAreaStyle;
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockSplit, DockTree, SplitAxis};
+
+    let mut tree = DockTree::default();
+    let leaf = |tree: &mut DockTree, area: &str, window: &str| {
+        tree.insert(DockNode::Leaf(
+            DockLeaf::new(area, DockAreaStyle::TabBar)
+                .with_windows(vec![window.into()])
+                .persistent(),
+        ))
+    };
+    let left = leaf(&mut tree, "left", "jackdaw.hierarchy");
+    let viewport = leaf(&mut tree, "center", crate::viewport::VIEWPORT_WINDOW_ID);
+    let palette = leaf(
+        &mut tree,
+        "bottom_dock",
+        crate::tile_palette::TILE_PALETTE_WINDOW_ID,
+    );
+    let project = leaf(
+        &mut tree,
+        "split.jackdaw.project.two_d",
+        crate::project_window::PROJECT_WINDOW_ID,
+    );
+    let right = leaf(&mut tree, "right_sidebar", "jackdaw.inspector.components");
+    let split = |tree: &mut DockTree, axis, fraction, a, b| {
+        tree.insert(DockNode::Split(DockSplit {
+            axis,
+            fraction,
+            a,
+            b,
+        }))
+    };
+    let bottom = split(&mut tree, SplitAxis::Horizontal, 0.55, palette, project);
+    let center = split(&mut tree, SplitAxis::Vertical, 0.72, viewport, bottom);
+    let center_and_right = split(&mut tree, SplitAxis::Horizontal, 0.82, center, right);
+    let root = split(
+        &mut tree,
+        SplitAxis::Horizontal,
+        0.16,
+        left,
+        center_and_right,
+    );
+    tree.root = Some(root);
+    tree
 }
 
 /// Remote debug workspace: the streamed entity browser on the left, the live
@@ -4035,6 +4095,11 @@ mod preset_tree_tests {
     #[test]
     fn the_level_design_preset_docks_one_viewport_panel_in_the_center() {
         assert_one_viewport_panel(&build_level_design_tree(), "level design");
+    }
+
+    #[test]
+    fn the_2d_preset_docks_one_viewport_panel_in_the_center() {
+        assert_one_viewport_panel(&build_two_d_tree(), "2d");
     }
 
     #[test]
