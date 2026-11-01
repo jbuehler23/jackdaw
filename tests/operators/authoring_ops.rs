@@ -580,6 +580,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("tilemap.clear", &["entity"], true),
     ("tilemap.describe", &["entity"], true),
     ("tilemap.draw_line", &["entity"], true),
+    ("tilemap.edit_mode", &["entity"], true),
     ("tilemap.fill", &["entity"], true),
     ("tilemap.fill_rect", &["entity"], true),
     ("tilemap.layer.activate", &["entity"], true),

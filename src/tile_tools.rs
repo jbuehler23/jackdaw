@@ -246,14 +246,17 @@ pub fn cell_at(point: Vec2, map: &GlobalTransform, cell_size: UVec2) -> CellCoor
     allows_undo = false,
     is_available = can_enter_edit_mode,
     unavailable_reason = edit_mode_unavailable,
-    params(layer(i64, doc = "Index of the layer to paint; defaults to the painted layer, or 0.")),
+    params(
+        entity(Entity, doc = "The tilemap; the selection when left out."),
+        layer(i64, doc = "Index of the layer to paint; defaults to the painted layer, or 0."),
+    ),
 )]
 pub(crate) fn tilemap_edit_mode(
     params: In<OperatorParameters>,
     world: &mut World,
 ) -> OperatorResult {
     let id = TilemapEditModeOp::ID;
-    let selected = world.resource::<Selection>().primary();
+    let selected = crate::tilemap_ops::target_entity(world, &params);
     let Some((map, layers)) =
         selected.and_then(|m| world.get::<Tilemap>(m).map(|t| (m, t.layers.len())))
     else {
@@ -269,6 +272,9 @@ pub(crate) fn tilemap_edit_mode(
         warn_caller(world, format!("{id}: the map has no layer {layer}"));
         return OperatorResult::Cancelled;
     };
+    if world.resource::<Selection>().primary() != Some(map) {
+        crate::selection::select_only(world, map);
+    }
     enter_layer(world, map, index);
     OperatorResult::Finished
 }
