@@ -23,7 +23,7 @@ use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{Coverage, LayoutTemplate, Placement, TerrainId, TilesetSetup};
+use jackdaw_tilemap::{Coverage, LayoutTemplate, Placement, Suggestion, TerrainId, TilesetSetup};
 use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain};
 
 use crate::asset_index::assets_dir;
@@ -37,6 +37,9 @@ use crate::tileset_bits::{
 use crate::tileset_edit::{apply_edit, clear_auto, open_tileset, suggested_name, text};
 use crate::tileset_import::{TILESET_SUFFIX, decode_sheet};
 use crate::tileset_layout::{LayoutDraft, TilesetLayoutApplyOp, spawn_draft};
+use crate::tileset_suggest::{
+    TilesetSuggestOp, spawn_outline, spawn_suggest_button, spawn_suggestions,
+};
 
 pub const TILESET_WINDOW_ID: &str = "jackdaw.tileset";
 
@@ -97,7 +100,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<TilesetTerrainFromTileOp>()
         .register_operator::<TilesetBitsOverlayOp>()
         .register_operator::<TilesetPaintModeOp>()
-        .register_operator::<TilesetLayoutApplyOp>();
+        .register_operator::<TilesetLayoutApplyOp>()
+        .register_operator::<TilesetSuggestOp>();
     let context = ctx
         .spawn((
             TilesetDockInputContext,
@@ -149,6 +153,12 @@ pub struct DockView {
     pub active: Option<(TerrainId, TerrainId)>,
     /// The block whose layout the layout popover is picking.
     pub layout: Option<LayoutDraft>,
+    /// Blocks and objects `tileset.suggest` found, while its list is open.
+    pub suggestions: Option<Vec<Suggestion>>,
+    /// The suggestion outlined on the sheet, as an index of `suggestions`.
+    pub shown: Option<usize>,
+    /// Whether the suggested objects are listed one by one.
+    pub objects_open: bool,
 }
 
 /// What a press on the sheet does.
@@ -271,6 +281,16 @@ pub enum DockAction {
     LayoutCheck(u32),
     /// Put the cell being checked in this template tile.
     LayoutSlot(usize),
+    Suggest,
+    SuggestionsClose,
+    /// Outline the suggestion at this index of the list and scroll to it.
+    SuggestionShow(usize),
+    SuggestionDismiss(usize),
+    /// Open the layout popover on the suggested block.
+    SuggestionLayOut(usize),
+    SuggestionAddObject(usize),
+    /// Show or hide the suggested objects.
+    SuggestionObjects,
 }
 
 /// The drawn image of sheet `sheet` in the dock `root`.
@@ -463,6 +483,7 @@ fn fill_path(world: &mut World, root: Entity, path: Option<String>) {
                 view.brush = 0;
             }
             view.active = brush_set(&tileset, view.brush, view.active);
+            crate::tileset_suggest::prune(&mut view, &tileset);
             (world.resource_mut::<TilesetDockViews>().0).insert(path.clone(), view.clone());
             if let Err(err) = fill_tileset(world, root, &tileset, &view) {
                 spawn_text(world, root, err, tokens::TEXT_ERROR);
@@ -559,6 +580,7 @@ fn fill_tileset(
         node.flex_shrink = 0.0;
         node.max_height = percent(50);
     }
+    spawn_suggestions(world, detail, root, tileset, view);
     match view.page {
         DockPage::Sheet => {
             spawn_terrains(world, list, root, tileset, view);
@@ -643,6 +665,8 @@ fn spawn_header(world: &mut World, root: Entity, setup: &TilesetSetup, view: &Do
         None,
     );
     if view.page != DockPage::Sheet {
+        let actions = spawn_row(world, header, tokens::SPACING_MD);
+        spawn_suggest_button(world, actions, root);
         return;
     }
     let tools = [
@@ -681,6 +705,7 @@ fn spawn_header(world: &mut World, root: Entity, setup: &TilesetSetup, view: &Do
     }
     let count = spawn_text(world, actions, painted_count(setup), tokens::TEXT_SECONDARY);
     world.entity_mut(count).insert(BitsCount { root });
+    spawn_suggest_button(world, actions, root);
     let variant = if view.selected.is_some() {
         ButtonVariant::Default
     } else {
@@ -740,7 +765,7 @@ fn spawn_segments(
     }
 }
 
-fn spawn_heading(world: &mut World, parent: Entity, text: &str) {
+pub(crate) fn spawn_heading(world: &mut World, parent: Entity, text: &str) {
     let heading = spawn_text(world, parent, text, tokens::TEXT_SECONDARY);
     world.entity_mut(heading).insert(Node {
         margin: UiRect::axes(px(tokens::SPACING_SM), px(tokens::SPACING_XS)),
@@ -1005,7 +1030,7 @@ fn spawn_button(world: &mut World, parent: Entity, root: Entity, label: &str, ac
     ));
 }
 
-fn spawn_icon_button(
+pub(crate) fn spawn_icon_button(
     world: &mut World,
     parent: Entity,
     root: Entity,
@@ -1113,14 +1138,11 @@ fn spawn_sheet(
     };
     let tile = tileset.tile_size.as_vec2();
     let scale = zoom(tile);
-    let step = tile + sheet.spacing.as_vec2();
-    let cells = UVec2::new(sheet.columns, sheet.rows).as_vec2();
-    let grid = (sheet.margin.as_vec2() * 2.0 + cells * step - sheet.spacing.as_vec2()) * scale;
     let image = sheet_image(world, &sheet.source);
     let pixels = (image.as_ref())
         .and_then(|handle| world.resource::<Assets<Image>>().get(handle))
         .map_or(Vec2::ZERO, |image| image.size().as_vec2());
-    let size = grid.max(pixels * scale);
+    let size = frame_size(tileset, index, pixels);
     let frame = world
         .spawn((
             Node {
@@ -1177,8 +1199,9 @@ fn spawn_sheet(
         ));
     }
     for object in tileset.objects.iter().filter(|o| o.sheet == index) {
-        let corner = at(object.origin.y * sheet.columns + object.origin.x);
-        let span = (object.size.as_vec2() * step - sheet.spacing.as_vec2()) * scale;
+        let Some((corner, span)) = block_rect(tileset, index, object.origin, object.size) else {
+            continue;
+        };
         world.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -1198,6 +1221,36 @@ fn spawn_sheet(
         spawn_marks(world, frame, root, tileset, setup, index, view);
         spawn_draft(world, frame, root, tileset, index, view);
     }
+    spawn_outline(world, frame, root, tileset, index, view);
+}
+
+/// On-screen size of the frame sheet `index` is drawn in, for its image of
+/// `pixels`.
+pub(crate) fn frame_size(tileset: &Tileset, index: u32, pixels: Vec2) -> Vec2 {
+    let Some(sheet) = tileset.sheets.get(index as usize) else {
+        return Vec2::ZERO;
+    };
+    let scale = zoom(tileset.tile_size.as_vec2());
+    let step = tileset.tile_size.as_vec2() + sheet.spacing.as_vec2();
+    let cells = UVec2::new(sheet.columns, sheet.rows).as_vec2();
+    let grid = (sheet.margin.as_vec2() * 2.0 + cells * step - sheet.spacing.as_vec2()) * scale;
+    grid.max(pixels * scale)
+}
+
+/// The on-screen corner and size of the `size` block at `origin` of sheet
+/// `index`, in its frame.
+pub(crate) fn block_rect(
+    tileset: &Tileset,
+    index: u32,
+    origin: UVec2,
+    size: UVec2,
+) -> Option<(Vec2, Vec2)> {
+    let columns = tileset.sheets.get(index as usize)?.columns;
+    let last = origin + size - UVec2::ONE;
+    let (min, _) = tileset.sheet_rect(index, origin.y * columns + origin.x)?;
+    let (max, tile) = tileset.sheet_rect(index, last.y * columns + last.x)?;
+    let scale = zoom(tileset.tile_size.as_vec2());
+    Some((min.as_vec2() * scale, (max + tile - min).as_vec2() * scale))
 }
 
 /// Screen pixels per sheet pixel: whole, and enough for a tile to read.
@@ -1352,7 +1405,7 @@ fn spawn_pick(
     row
 }
 
-fn spawn_row(world: &mut World, parent: Entity, gap: f32) -> Entity {
+pub(crate) fn spawn_row(world: &mut World, parent: Entity, gap: f32) -> Entity {
     world
         .spawn((
             Node {
@@ -1555,7 +1608,7 @@ pub(crate) fn dock_tileset(world: &mut World, root: Entity) -> Option<(String, T
 type DockCall = (&'static str, Vec<(&'static str, String)>);
 
 fn act(world: &mut World, control: DockControl) {
-    if crate::tileset_layout::act(world, control) {
+    if crate::tileset_layout::act(world, control) || crate::tileset_suggest::act(world, control) {
         return;
     }
     let root = control.root;
@@ -1643,7 +1696,14 @@ fn act(world: &mut World, control: DockControl) {
         | DockAction::LayoutApply
         | DockAction::LayoutCancel
         | DockAction::LayoutCheck(_)
-        | DockAction::LayoutSlot(_) => None,
+        | DockAction::LayoutSlot(_)
+        | DockAction::Suggest
+        | DockAction::SuggestionsClose
+        | DockAction::SuggestionShow(_)
+        | DockAction::SuggestionDismiss(_)
+        | DockAction::SuggestionLayOut(_)
+        | DockAction::SuggestionAddObject(_)
+        | DockAction::SuggestionObjects => None,
         DockAction::RenameTerrain(terrain) => {
             view.naming = Some(NameField::Rename(terrain));
             None
@@ -1721,7 +1781,12 @@ pub(crate) fn dispatch(
     }
 }
 
-fn call_operator(world: &mut World, path: &str, id: &str, params: Vec<(&'static str, String)>) {
+pub(crate) fn call_operator(
+    world: &mut World,
+    path: &str,
+    id: &str,
+    params: Vec<(&'static str, String)>,
+) {
     let mut call = world
         .operator(id.to_string())
         .param("path", path.to_string());

@@ -184,6 +184,7 @@ pub mod tileset_edit;
 pub mod tileset_import;
 pub mod tileset_layout;
 pub mod tileset_layout_ops;
+pub mod tileset_suggest;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod toolbar_2d;
@@ -487,6 +488,7 @@ impl Plugin for EditorCorePlugin {
             tileset_dock::plugin,
             tileset_bits::plugin,
             tileset_layout::plugin,
+            tileset_suggest::plugin,
         ))
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)

@@ -25,8 +25,8 @@ use crate::operator_tooltip::OperatorTooltip;
 use crate::tileset_bits::{BitMark, spawn_mark};
 use crate::tileset_dock::{
     DockAction, DockControl, DockPage, DockTool, DockView, TilesetDock, TilesetDockViews,
-    dock_tileset, focused_dock, in_rect, rect_cells, refill, sheet_image, spawn_text, swatch,
-    take_keyboard, tile_image, tile_outline, zoom,
+    block_rect, dock_tileset, focused_dock, in_rect, rect_cells, refill, sheet_image, spawn_text,
+    swatch, take_keyboard, tile_image, tile_outline, zoom,
 };
 use crate::tileset_edit::apply_edit;
 use crate::tileset_layout_ops::{PLACEMENTS, TEMPLATES, order_text, template_edit};
@@ -623,20 +623,12 @@ pub(crate) fn spawn_draft(
     let Some(draft) = view.layout.as_ref().filter(|d| d.sheet == index) else {
         return;
     };
-    let Some(columns) = tileset.sheets.get(index as usize).map(|s| s.columns) else {
+    let Some((min, span)) = block_rect(tileset, index, draft.origin, draft.size) else {
         return;
     };
-    let last = draft.origin + draft.size - UVec2::ONE;
-    let first = tileset.sheet_rect(index, draft.origin.y * columns + draft.origin.x);
-    let end = tileset.sheet_rect(index, last.y * columns + last.x);
-    let Some(((min, _), (max, size))) = first.zip(end) else {
-        return;
-    };
-    let scale = zoom(tileset.tile_size.as_vec2());
-    let span = (max + size - min).as_vec2() * scale;
     let anchor = world
         .spawn((
-            absolute(min.as_vec2() * scale, span),
+            absolute(min, span),
             BorderColor::all(tokens::SELECTED_BORDER),
             LayoutAnchor { root },
             Pickable::IGNORE,
@@ -1215,19 +1207,55 @@ fn finish_drag(world: &mut World) {
         return;
     };
     let (lo, hi) = rect_cells(columns, (sheet, first), (sheet, last));
-    let mut views = world.resource_mut::<TilesetDockViews>();
-    let Some(view) = views.0.get_mut(&path) else {
+    if let Some(view) = world.resource_mut::<TilesetDockViews>().0.get_mut(&path) {
+        view.anchor = Some((sheet, first));
+        view.selected = Some((sheet, last));
+    }
+    open_block(
+        world,
+        root,
+        (&path, &tileset),
+        (sheet, lo, hi - lo + UVec2::ONE),
+        None,
+    );
+}
+
+/// A layout and terrains to preselect in the layout popover.
+pub(crate) type BlockGuess = (
+    Option<(LayoutTemplate, Placement)>,
+    (Option<TerrainId>, Option<TerrainId>),
+);
+
+/// Open the layout popover over the `size` block at `origin` of sheet
+/// `sheet`: with `guess` preselected, else with the layout that fits best.
+/// A layout of two placements still asks which one it is.
+pub(crate) fn open_block(
+    world: &mut World,
+    root: Entity,
+    (path, tileset): (&str, &Tileset),
+    (sheet, origin, size): (u32, UVec2, UVec2),
+    guess: Option<BlockGuess>,
+) {
+    let views = world.resource::<TilesetDockViews>();
+    let Some(brush) = views.0.get(path).map(|v| v.brush) else {
         return;
     };
-    view.anchor = Some((sheet, first));
-    view.selected = Some((sheet, last));
-    let brush = view.brush;
-    let mut draft = LayoutDraft::new(&tileset, brush, sheet, lo, hi - lo + UVec2::ONE);
-    draft.refit(world, &tileset, Fitting::Choose);
-    if let Some(view) = world.resource_mut::<TilesetDockViews>().0.get_mut(&path) {
+    let mut draft = LayoutDraft::new(tileset, brush, sheet, origin, size);
+    let fitting = match guess {
+        None => Fitting::Choose,
+        Some((pick, (inner, outer))) => {
+            draft.inner = inner.filter(|i| *i != 0).unwrap_or(draft.inner);
+            draft.outer = outer.unwrap_or(draft.outer);
+            draft.pick = pick.filter(|(t, _)| t.placements().len() == 1);
+            draft.preselect(tileset);
+            Fitting::Refit
+        }
+    };
+    draft.refit(world, tileset, fitting);
+    if let Some(view) = world.resource_mut::<TilesetDockViews>().0.get_mut(path) {
         view.layout = Some(draft);
     }
-    refill(world, &path);
+    refill(world, path);
     take_keyboard(world, root);
 }
 
