@@ -23,7 +23,7 @@ use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{Coverage, TerrainId, TilesetSetup};
+use jackdaw_tilemap::{Coverage, LayoutTemplate, Placement, TerrainId, TilesetSetup};
 use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain};
 
 use crate::asset_index::assets_dir;
@@ -36,6 +36,7 @@ use crate::tileset_bits::{
 };
 use crate::tileset_edit::{apply_edit, clear_auto, open_tileset, suggested_name, text};
 use crate::tileset_import::{TILESET_SUFFIX, decode_sheet};
+use crate::tileset_layout::{LayoutDraft, TilesetLayoutApplyOp, spawn_draft};
 
 pub const TILESET_WINDOW_ID: &str = "jackdaw.tileset";
 
@@ -95,7 +96,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetEditOp>()
         .register_operator::<TilesetTerrainFromTileOp>()
         .register_operator::<TilesetBitsOverlayOp>()
-        .register_operator::<TilesetPaintModeOp>();
+        .register_operator::<TilesetPaintModeOp>()
+        .register_operator::<TilesetLayoutApplyOp>();
     let context = ctx
         .spawn((
             TilesetDockInputContext,
@@ -108,6 +110,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.bind_operator_in::<TilesetTerrainFromTileOp>(context, [PresetInput::key("KeyN")]);
     ctx.bind_operator_in::<TilesetBitsOverlayOp>(context, [PresetInput::key("KeyO")]);
     ctx.bind_operator_in::<TilesetPaintModeOp>(context, [PresetInput::key("KeyP")]);
+    ctx.bind_operator_in::<TilesetLayoutApplyOp>(context, [PresetInput::key("Enter")]);
 }
 
 /// The input context of the Tileset window, active while a tileset tab has
@@ -144,6 +147,8 @@ pub struct DockView {
     pub new_set: Option<[usize; 3]>,
     /// The terrain set, as inner and outer, a stroke paints in.
     pub active: Option<(TerrainId, TerrainId)>,
+    /// The block whose layout the layout popover is picking.
+    pub layout: Option<LayoutDraft>,
 }
 
 /// What a press on the sheet does.
@@ -161,12 +166,21 @@ impl DockTool {
 }
 
 impl DockView {
-    /// Painting shows the bits overlay if it is off.
+    /// Painting shows the bits overlay if it is off. A switch drops the
+    /// layout being picked.
     pub fn set_tool(&mut self, tool: DockTool) {
         self.tool = tool;
+        self.layout = None;
         if tool == DockTool::Paint && self.bits == BitsOverlay::Off {
             self.bits = BitsOverlay::Set;
         }
+    }
+
+    /// A page switch drops the object rectangle and the layout being picked.
+    pub fn set_page(&mut self, page: DockPage) {
+        self.page = page;
+        self.anchor = None;
+        self.layout = None;
     }
 }
 
@@ -249,6 +263,10 @@ pub enum DockAction {
     CreateSet,
     /// Remove the set `inner` over `outer`.
     RemoveSet(TerrainId, TerrainId),
+    /// Read the dragged block as this layout drawn at this placement.
+    LayoutPick(LayoutTemplate, Placement),
+    LayoutApply,
+    LayoutCancel,
 }
 
 /// The drawn image of sheet `sheet` in the dock `root`.
@@ -1133,11 +1151,7 @@ fn spawn_sheet(
         let picked = view.selected == Some((index, t))
             || (view.page == DockPage::Objects
                 && rect.is_some_and(|(a, b)| in_rect(sheet.columns, a, b, (index, t))));
-        let (outline, border) = if picked {
-            (tokens::SELECTED_BORDER, 2.0)
-        } else {
-            (tokens::BORDER_SUBTLE.with_alpha(0.3), 1.0)
-        };
+        let (outline, border) = tile_outline(picked);
         let corner = at(t);
         world.spawn((
             Node {
@@ -1178,6 +1192,7 @@ fn spawn_sheet(
     }
     if view.page == DockPage::Sheet {
         spawn_marks(world, frame, root, tileset, setup, index, view);
+        spawn_draft(world, frame, root, tileset, index, view);
     }
 }
 
@@ -1188,13 +1203,22 @@ pub(crate) fn zoom(tile: Vec2) -> f32 {
         .max(1.0)
 }
 
-fn in_rect(columns: u32, a: (u32, u32), b: (u32, u32), tile: (u32, u32)) -> bool {
+/// The border colour and width of a sheet tile, picked or not.
+pub(crate) fn tile_outline(picked: bool) -> (Color, f32) {
+    if picked {
+        (tokens::SELECTED_BORDER, 2.0)
+    } else {
+        (tokens::BORDER_SUBTLE.with_alpha(0.3), 1.0)
+    }
+}
+
+pub(crate) fn in_rect(columns: u32, a: (u32, u32), b: (u32, u32), tile: (u32, u32)) -> bool {
     let (lo, hi) = rect_cells(columns, a, b);
     let cell = UVec2::new(tile.1 % columns, tile.1 / columns);
     a.0 == tile.0 && cell.cmpge(lo).all() && cell.cmple(hi).all()
 }
 
-fn rect_cells(columns: u32, a: (u32, u32), b: (u32, u32)) -> (UVec2, UVec2) {
+pub(crate) fn rect_cells(columns: u32, a: (u32, u32), b: (u32, u32)) -> (UVec2, UVec2) {
     let a = UVec2::new(a.1 % columns, a.1 / columns);
     let b = UVec2::new(b.1 % columns, b.1 / columns);
     (a.min(b), a.max(b))
@@ -1527,6 +1551,9 @@ pub(crate) fn dock_tileset(world: &mut World, root: Entity) -> Option<(String, T
 type DockCall = (&'static str, Vec<(&'static str, String)>);
 
 fn act(world: &mut World, control: DockControl) {
+    if crate::tileset_layout::act(world, control) {
+        return;
+    }
     let root = control.root;
     if let Some((field, name)) = typed_name(world, root) {
         name_terrain(world, field, Some(name));
@@ -1537,17 +1564,14 @@ fn act(world: &mut World, control: DockControl) {
     let mut view = (world.resource::<TilesetDockViews>().0.get(&path).cloned()).unwrap_or_default();
     let painting = view.tool == DockTool::Paint && view.page == DockPage::Sheet;
     if painting && matches!(control.action, DockAction::Tile(..)) {
-        if let Some(mut focus) = world.get_resource_mut::<InputFocus>() {
-            focus.set(root, FocusCause::Pressed);
-        }
+        take_keyboard(world, root);
         return;
     }
     view.naming = None;
     let tile_ref = view.selected.map(|(s, t)| format!("{s}:{t}"));
     let call = match control.action {
         DockAction::Page(page) => {
-            view.page = page;
-            view.anchor = None;
+            view.set_page(page);
             None
         }
         DockAction::Brush(brush) => {
@@ -1610,7 +1634,10 @@ fn act(world: &mut World, control: DockControl) {
                 ("origin", format!("{},{}", origin.x, origin.y)),
             ],
         )),
-        DockAction::NewTerrain => None,
+        DockAction::NewTerrain
+        | DockAction::LayoutPick(..)
+        | DockAction::LayoutApply
+        | DockAction::LayoutCancel => None,
         DockAction::RenameTerrain(terrain) => {
             view.naming = Some(NameField::Rename(terrain));
             None
@@ -1635,9 +1662,7 @@ fn act(world: &mut World, control: DockControl) {
         }
     };
     (world.resource_mut::<TilesetDockViews>().0).insert(path.clone(), view);
-    if let Some(mut focus) = world.get_resource_mut::<InputFocus>() {
-        focus.set(root, FocusCause::Pressed);
-    }
+    take_keyboard(world, root);
     if control.action == DockAction::NewTerrain {
         call_operator(world, &path, TilesetTerrainFromTileOp::ID, Vec::new());
         return;
@@ -1645,6 +1670,13 @@ fn act(world: &mut World, control: DockControl) {
     dispatch(world, root, &path, &tileset, call);
     if let DockAction::RemoveSet(inner, outer) = control.action {
         forget_removed_set(world, root, &path, (inner, outer));
+    }
+}
+
+/// Give the dock `root` the keyboard, so its keys apply to it.
+pub(crate) fn take_keyboard(world: &mut World, root: Entity) {
+    if let Some(mut focus) = world.get_resource_mut::<InputFocus>() {
+        focus.set(root, FocusCause::Pressed);
     }
 }
 
@@ -1778,7 +1810,7 @@ pub(crate) fn focused_tileset(world: &World) -> Option<String> {
 }
 
 /// The tileset dock holding the keyboard focus.
-fn focused_dock(world: &World) -> Option<Entity> {
+pub(crate) fn focused_dock(world: &World) -> Option<Entity> {
     let focused = world.get_resource::<InputFocus>()?.get()?;
     dock_holding(
         focused,
@@ -1874,4 +1906,25 @@ fn name_terrain(world: &mut World, field: TerrainNameField, name: Option<String>
         NameField::Rename(_) => None,
     });
     dispatch(world, field.root, &path, &tileset, call);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dock_fills_with_only_its_own_plugin() {
+        let mut app = App::new();
+        app.add_plugins(plugin);
+        let world = app.world_mut();
+        let root = (world.spawn(TilesetDock {
+            tab: TabId(1),
+            path: None,
+            asset: None,
+        }))
+        .id();
+        world.spawn((Node::default(), ChildOf(root)));
+        fill(world, root);
+        assert_eq!(world.get::<Children>(root).map(|c| c.len()), Some(1));
+    }
 }

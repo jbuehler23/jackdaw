@@ -66,6 +66,10 @@ pub enum SetupError {
         sheet: usize,
         cell: UVec2,
     },
+    /// A layout that cannot be drawn at this placement.
+    Placement(crate::LayoutTemplate, crate::Placement),
+    /// A set drawn in this mode that has this many tiles outside a block.
+    SetDrawn(MatchMode, usize),
 }
 
 impl fmt::Display for SetupError {
@@ -106,6 +110,19 @@ impl fmt::Display for SetupError {
                 "no object covers column {} row {} of sheet {sheet}",
                 cell.x, cell.y
             ),
+            SetupError::Placement(template, placement) => {
+                write!(f, "a {template:?} layout is not drawn {placement:?}")
+            }
+            SetupError::SetDrawn(mode, tiles) => {
+                let placed = match mode.placement() {
+                    crate::Placement::BetweenCells => "between cells",
+                    crate::Placement::OnCells => "on cells",
+                };
+                write!(
+                    f,
+                    "this pair already draws {placed}; it has {tiles} tiles elsewhere"
+                )
+            }
         }
     }
 }

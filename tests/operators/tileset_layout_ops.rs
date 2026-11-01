@@ -52,6 +52,46 @@ fn apply_template_lays_its_shapes_from_the_origin() {
 }
 
 #[test]
+fn apply_template_takes_a_block_size_and_a_placement() {
+    let (mut app, dir) = overworld();
+    let params = [
+        ("inner", "11"),
+        ("outer", "2"),
+        ("template", "corner16"),
+        ("origin", "10,0"),
+        ("size", "8,2"),
+    ];
+    let (_, after) = edit(&mut app, &dir, "tileset.apply_template", &params);
+    let shapes = LayoutTemplate::Corner16.tiles(WATER, GROUND);
+    assert_eq!(peers_of(&after, 17), Some(shapes[7].peers), "row by row");
+    assert_eq!(
+        peers_of(&after, 37),
+        Some(shapes[8].peers),
+        "then the next row"
+    );
+    assert!(reports(&app).iter().any(|r| r.contains("laid on 16 tiles")));
+
+    let apply = "tileset.apply_template";
+    let walls = [
+        ("inner", "11"),
+        ("outer", "2"),
+        ("template", "corner16"),
+        ("origin", "10,0"),
+        ("placement", "on_cells"),
+    ];
+    refused(&mut app, &dir, apply, &walls, "not drawn");
+    let mut short = params;
+    short[4] = ("size", "4,3");
+    call(&mut app, apply, &short);
+    assert!(
+        reports(&app)
+            .iter()
+            .any(|r| r.contains("4 template tiles fall past")),
+        "{:?}",
+        reports(&app)
+    );
+}
+#[test]
 fn reset_to_auto_hands_a_tile_back_to_the_proposal() {
     let (mut app, dir) = overworld();
     let tile = tile_of(&on_disk(&dir), GROUND);

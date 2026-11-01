@@ -63,7 +63,7 @@ pub use solver::{
 };
 pub use stamp::{Stamp, find_stamps, reconcile};
 pub use strip::{AnimationStrip, FrameRun, LOOSE_FRAME_MATCH, detect_animation, pair_animations};
-pub use template::LayoutTemplate;
+pub use template::{LayoutTemplate, PaintPreview};
 pub use terrain_find::{
     FoundTerrain, SheetInput, TerrainAnalysis, TileAddress, TileKind, TileLabels, find_terrains,
 };

@@ -4,8 +4,8 @@ use glam::UVec2;
 
 use crate::setup::transition;
 use crate::{
-    LayoutTemplate, MatchMode, Peer, Provenance, SetupError, SetupSet, SetupTile, Stamp, TerrainId,
-    TileAddress, TileTerrains, TilesetSetup, fits, solver_takes,
+    LayoutTemplate, MatchMode, Peer, Placement, Provenance, SetupError, SetupSet, SetupTile, Stamp,
+    TerrainId, TileAddress, TileTerrains, TilesetSetup, fits, solver_takes,
 };
 
 /// How much of its full layout a terrain set's tiles cover.
@@ -19,38 +19,68 @@ pub struct Coverage {
 }
 
 impl TilesetSetup {
-    /// Lays `template`'s tiles of `inner` over `outer` by hand on the tiles
-    /// of sheet `sheet`, a grid of `grid` columns and rows, from `origin`
-    /// row by row in rows of [`LayoutTemplate::columns`], adding the set
-    /// when it is missing. Returns the tiles it set.
+    /// Lays `template`'s tiles of `inner` over `outer`, read at `placement`,
+    /// by hand on the `size` block of sheet `sheet` (a grid of `grid` columns
+    /// and rows) at `origin`, each in its [`LayoutTemplate::slots`] cell.
+    /// Adds the set when it is missing. A set of another mode takes the
+    /// placement's only while it draws no tile outside the block.
+    /// Returns the tiles it set and the template tiles the block has no
+    /// cell for.
     pub fn apply_template(
         &mut self,
-        template: LayoutTemplate,
-        inner: TerrainId,
-        outer: TerrainId,
+        (template, placement): (LayoutTemplate, Placement),
+        (inner, outer): (TerrainId, TerrainId),
         sheet: usize,
         grid: UVec2,
-        origin: UVec2,
-    ) -> Result<Vec<TileAddress>, SetupError> {
-        let shapes = template.tiles(inner, outer);
-        let columns = template.columns();
-        let size = UVec2::new(columns, (shapes.len() as u32).div_ceil(columns));
-        let tiles = block(sheet, grid, origin, size)?;
-        for tile in &tiles {
-            self.check_loose(*tile)?;
+        (origin, size): (UVec2, UVec2),
+    ) -> Result<(Vec<TileAddress>, usize), SetupError> {
+        if !template.placements().contains(&placement) {
+            return Err(SetupError::Placement(template, placement));
         }
-        if self.set(inner, outer).is_none() {
-            self.add_set(inner, outer, template.mode())?;
+        let shapes = template.placed_tiles(placement, inner, outer);
+        let slots = template.slots(size);
+        let tiles = block(sheet, grid, origin, size)?;
+        let at = |cell: UVec2| tiles[(cell.y * size.x + cell.x) as usize];
+        for cell in slots.iter().flatten() {
+            self.check_loose(at(*cell))?;
+        }
+        let mode = template.mode_at(placement);
+        match self.set(inner, outer).map(|s| s.mode.value) {
+            None => self.add_set(inner, outer, mode)?,
+            Some(had) if had != mode => match self.drawn_elsewhere((inner, outer), &tiles) {
+                0 => self.set_match_mode(inner, outer, mode)?,
+                n => return Err(SetupError::SetDrawn(had, n)),
+            },
+            Some(_) => {}
         }
         let mut set = Vec::with_capacity(shapes.len());
-        for (address, peers) in tiles.into_iter().zip(shapes) {
+        for (cell, peers) in slots.iter().zip(shapes) {
+            let Some(address) = cell.map(at) else {
+                continue;
+            };
             self.set_peers(address, peers)?;
             if let Some(tile) = self.tiles.get_mut(&address) {
                 tile.set = Some((inner, outer));
             }
             set.push(address);
         }
-        Ok(set)
+        let skipped = slots.iter().filter(|s| s.is_none()).count();
+        Ok((set, skipped))
+    }
+
+    /// Tiles outside `block` the set of the pair draws with its inner terrain.
+    pub fn drawn_elsewhere(
+        &self,
+        (inner, outer): (TerrainId, TerrainId),
+        block: &[TileAddress],
+    ) -> usize {
+        (self.tiles.iter())
+            .filter(|(address, tile)| {
+                !block.contains(address)
+                    && tile.terrains.peers.contains(&inner)
+                    && self.holds(inner, outer, tile)
+            })
+            .count()
     }
 
     /// Marks the `size` block of sheet `sheet` at `origin` as one object by
@@ -211,30 +241,22 @@ mod tests {
     fn a_template_lays_its_shapes_row_by_row_and_adds_its_set() {
         let mut setup = farm();
         let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
-        let tiles = (setup.apply_template(
-            LayoutTemplate::Corner2x2,
-            water,
-            GRASS,
-            0,
-            GRID,
-            UVec2::new(6, 3),
-        ))
-        .expect("fits");
-        assert_eq!(tiles, [at(30), at(31), at(38), at(39)]);
-        let shapes = LayoutTemplate::Corner2x2.tiles(water, GRASS);
+        let on = |t: LayoutTemplate| (t, Placement::OnCells);
+        let block = |origin: UVec2, t: LayoutTemplate| (origin, t.shape());
+        let corners = LayoutTemplate::Corner2x2;
+        let pair = (water, GRASS);
+        let (tiles, skipped) =
+            (setup.apply_template(on(corners), pair, 0, GRID, block(UVec2::new(6, 3), corners)))
+                .expect("fits");
+        assert_eq!((tiles, skipped), (vec![at(30), at(31), at(38), at(39)], 0));
+        let shapes = corners.tiles(water, GRASS);
         assert_eq!(setup.tiles[&at(39)].terrains, shapes[3]);
         let set = setup.set(water, GRASS).expect("added");
         assert_eq!(set.mode.value, MatchMode::CornersAndSides);
         assert_eq!(setup.coverage(water, GRASS).expect("set").covered, 4);
 
-        let refused = setup.apply_template(
-            LayoutTemplate::Side16,
-            water,
-            GRASS,
-            0,
-            GRID,
-            UVec2::new(5, 0),
-        );
+        let side = LayoutTemplate::Side16;
+        let refused = setup.apply_template(on(side), pair, 0, GRID, block(UVec2::X * 5, side));
         assert_eq!(
             refused,
             Err(SetupError::OutsideSheet {
@@ -243,16 +265,79 @@ mod tests {
             })
         );
         let blob = LayoutTemplate::Blob47;
-        assert!(
-            setup
-                .apply_template(blob, water, GRASS, 0, GRID, UVec2::ZERO)
-                .is_ok()
+        let laid = setup.apply_template(on(blob), pair, 0, GRID, block(UVec2::ZERO, blob));
+        assert!(laid.is_ok());
+        let past = setup.apply_template(on(blob), pair, 0, GRID, block(UVec2::Y * 3, blob));
+        assert!(past.is_err());
+        let between = (LayoutTemplate::Side16, Placement::BetweenCells);
+        let wrong = setup.apply_template(between, pair, 0, GRID, block(UVec2::ZERO, side));
+        assert!(matches!(wrong, Err(SetupError::Placement(..))));
+    }
+
+    #[test]
+    fn a_set_drawing_tiles_elsewhere_keeps_its_placement() {
+        let mut setup = farm();
+        let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
+        let minimal = LayoutTemplate::Minimal3x3;
+        let block = |x: u32| (UVec2::new(x, 0), UVec2::splat(3));
+        let pair = (water, GRASS);
+        let ground = (minimal, Placement::BetweenCells);
+        setup
+            .apply_template(ground, pair, 0, GRID, block(0))
+            .expect("laid");
+        let walls = (minimal, Placement::OnCells);
+        let refused = setup.apply_template(walls, pair, 0, GRID, block(4));
+        assert_eq!(refused, Err(SetupError::SetDrawn(MatchMode::Corners, 9)));
+        assert_eq!(
+            refused.map(|_| ()).unwrap_err().to_string(),
+            "this pair already draws between cells; it has 9 tiles elsewhere"
         );
-        assert!(
-            setup
-                .apply_template(blob, water, GRASS, 0, GRID, UVec2::Y * 3)
-                .is_err()
-        );
+        let again = setup.apply_template(walls, pair, 0, GRID, block(0));
+        assert!(again.is_ok(), "nothing else is drawn, so it may switch");
+    }
+
+    #[test]
+    fn a_ground_3x3_lays_corners_only_and_turns_its_set_to_corners() {
+        let mut setup = farm();
+        let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
+        let minimal = LayoutTemplate::Minimal3x3;
+        let ground = (minimal, Placement::BetweenCells);
+        let size = UVec2::splat(3);
+        setup
+            .apply_template(
+                (minimal, Placement::OnCells),
+                (water, GRASS),
+                0,
+                GRID,
+                (UVec2::ZERO, size),
+            )
+            .expect("on cells");
+        let (tiles, _) =
+            (setup.apply_template(ground, (water, GRASS), 0, GRID, (UVec2::ZERO, size)))
+                .expect("fits");
+        assert_eq!(tiles.len(), 9);
+        let set = setup.set(water, GRASS).expect("kept");
+        assert_eq!(set.mode.value, MatchMode::Corners, "the placement's mode");
+        let top_left = setup.tiles[&at(0)].terrains;
+        let expected = TileTerrains::filled(GRASS)
+            .with(Peer::Centre, water)
+            .with(Peer::BottomRight, water);
+        assert_eq!(top_left, expected, "one inner corner, sides outer");
+        let centre = setup.tiles[&at(9)].terrains;
+        assert!(Peer::CORNERS.iter().all(|c| centre.get(*c) == water));
+    }
+
+    #[test]
+    fn a_blob_in_a_wide_block_flows_row_by_row_and_reports_what_it_skips() {
+        let mut setup = farm();
+        let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
+        let blob = (LayoutTemplate::Blob47, Placement::OnCells);
+        let size = UVec2::new(8, 5);
+        let (tiles, skipped) =
+            (setup.apply_template(blob, (water, GRASS), 0, GRID, (UVec2::ZERO, size)))
+                .expect("fits");
+        assert_eq!((tiles.len(), skipped), (40, 7));
+        assert_eq!(tiles[39], at(39));
     }
 
     #[test]
@@ -398,8 +483,13 @@ mod tests {
         setup
             .put_block(0, GRID, UVec2::new(1, 1), UVec2::ONE)
             .expect("fits");
-        let refused =
-            setup.apply_template(LayoutTemplate::Corner2x2, SAND, GRASS, 0, GRID, UVec2::ZERO);
+        let refused = setup.apply_template(
+            (LayoutTemplate::Corner2x2, Placement::OnCells),
+            (SAND, GRASS),
+            0,
+            GRID,
+            (UVec2::ZERO, UVec2::splat(2)),
+        );
         assert_eq!(
             refused,
             Err(SetupError::InObject {
