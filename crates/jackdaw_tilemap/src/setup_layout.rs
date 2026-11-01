@@ -28,17 +28,32 @@ impl TilesetSetup {
     /// cell for.
     pub fn apply_template(
         &mut self,
+        layout: (LayoutTemplate, Placement),
+        pair: (TerrainId, TerrainId),
+        sheet: usize,
+        grid: UVec2,
+        (origin, size): (UVec2, UVec2),
+    ) -> Result<(Vec<TileAddress>, usize), SetupError> {
+        let order = layout.0.canonical_order(size);
+        self.apply_template_ordered(layout, pair, sheet, grid, (origin, size), &order)
+    }
+
+    /// [`Self::apply_template`] with tile `i` on block cell `order[i]`, row
+    /// by row; see [`LayoutTemplate::ordered_slots`].
+    pub fn apply_template_ordered(
+        &mut self,
         (template, placement): (LayoutTemplate, Placement),
         (inner, outer): (TerrainId, TerrainId),
         sheet: usize,
         grid: UVec2,
         (origin, size): (UVec2, UVec2),
+        order: &[Option<u32>],
     ) -> Result<(Vec<TileAddress>, usize), SetupError> {
         if !template.placements().contains(&placement) {
             return Err(SetupError::Placement(template, placement));
         }
         let shapes = template.placed_tiles(placement, inner, outer);
-        let slots = template.slots(size);
+        let slots = (template.ordered_slots(size, order)).ok_or(SetupError::Order)?;
         let tiles = block(sheet, grid, origin, size)?;
         let at = |cell: UVec2| tiles[(cell.y * size.x + cell.x) as usize];
         for cell in slots.iter().flatten() {

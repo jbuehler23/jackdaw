@@ -16,7 +16,8 @@ use jackdaw_feathers::popover::{PopoverDismissed, PopoverPlacement, PopoverProps
 use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_tilemap::{
-    LayoutTemplate, PaintPreview, Peer, Placement, SetupError, TerrainId, TileAddress,
+    BlockEvidence, BlockFit, LayoutTemplate, PaintPreview, Peer, Placement, RgbaImage, SetupError,
+    SheetInput, TerrainId, TerrainLook, TileAddress,
 };
 use jackdaw_tileset::Tileset;
 
@@ -24,11 +25,11 @@ use crate::operator_tooltip::OperatorTooltip;
 use crate::tileset_bits::{BitMark, spawn_mark};
 use crate::tileset_dock::{
     DockAction, DockControl, DockPage, DockTool, DockView, TilesetDock, TilesetDockViews,
-    dock_tileset, focused_dock, in_rect, rect_cells, refill, spawn_text, swatch, take_keyboard,
-    tile_image, tile_outline, zoom,
+    dock_tileset, focused_dock, in_rect, rect_cells, refill, sheet_image, spawn_text, swatch,
+    take_keyboard, tile_image, tile_outline, zoom,
 };
 use crate::tileset_edit::apply_edit;
-use crate::tileset_layout_ops::{PLACEMENTS, TEMPLATES, template_edit};
+use crate::tileset_layout_ops::{PLACEMENTS, TEMPLATES, order_text, template_edit};
 
 /// Each placement's heading, its tooltip and its layouts in the order shown.
 const GROUPS: [(Placement, &str, &str, &[LayoutTemplate]); 2] = [
@@ -60,6 +61,14 @@ const GROUPS: [(Placement, &str, &str, &[LayoutTemplate]); 2] = [
 ];
 /// Layouts a block of their size reads as without asking.
 const PRESELECT: [LayoutTemplate; 2] = [LayoutTemplate::Corner16, LayoutTemplate::Blob47];
+/// Layouts of one placement a block of their exact shape reads as when it fits best.
+const BY_FIT: [(LayoutTemplate, Placement); 3] = [
+    (LayoutTemplate::Corner16, Placement::BetweenCells),
+    (LayoutTemplate::Side16, Placement::OnCells),
+    (LayoutTemplate::Blob47, Placement::OnCells),
+];
+/// On-screen size of a tile in the unsure list and the slot grid.
+const SLOT: f32 = 20.0;
 const POPOVER_WIDTH: f32 = 360.0;
 /// On-screen size a layout thumbnail fits in.
 const THUMB: f32 = 56.0;
@@ -104,6 +113,18 @@ pub struct LayoutDraft {
     pub blocked: Option<String>,
     /// Why the last apply failed.
     pub error: Option<String>,
+    /// The block cell, row by row, each template tile takes when the block
+    /// is not in the template's own order.
+    pub order: Option<Vec<Option<u32>>>,
+    /// Block cells whose template tile the fit is unsure of.
+    pub unsure: Vec<u32>,
+    /// The unsure cell being placed by hand.
+    pub checking: Option<u32>,
+    /// Whether the layout was picked by hand, so terrain changes keep it.
+    pub by_hand: bool,
+    /// Template tiles and the cells put in them by hand, kept across refits
+    /// of the same layout.
+    pub placed: Vec<(usize, u32)>,
 }
 
 impl LayoutDraft {
@@ -145,7 +166,9 @@ impl LayoutDraft {
                 .or_else(|| PRESELECT.iter().find(|t| t.fits(size)))
                 .map(|t| (*t, t.placements()[0]))
         };
-        self.pick = existing.or(self.pick).or_else(by_size);
+        if !self.by_hand {
+            self.pick = existing.or(self.pick).or_else(by_size);
+        }
         self.error = None;
         self.blocked = self.conflict(tileset);
     }
@@ -186,16 +209,47 @@ impl LayoutDraft {
         let Some((template, _)) = self.pick else {
             return Vec::new();
         };
-        (template.slots(self.size).into_iter())
-            .map(|slot| slot.map(|c| (self.origin.y + c.y) * columns + self.origin.x + c.x))
+        let order = (self.order.clone()).unwrap_or_else(|| template.canonical_order(self.size));
+        (order.into_iter())
+            .map(|cell| cell.map(|c| self.cell_tile(c, columns)))
             .collect()
+    }
+
+    /// The sheet tile of block cell `cell`, counted row by row.
+    fn cell_tile(&self, cell: u32, columns: u32) -> u32 {
+        let at = self.origin + UVec2::new(cell % self.size.x, cell / self.size.x);
+        at.y * columns + at.x
+    }
+
+    /// Put the cell being checked in template tile `slot`, swapping it with
+    /// the cell there, which becomes unsure; a stale cell or slot changes
+    /// nothing.
+    fn place(&mut self, slot: usize) {
+        let (Some(cell), Some((template, _))) = (self.checking.take(), self.pick) else {
+            return;
+        };
+        let mut order = (self.order.clone()).unwrap_or_else(|| template.canonical_order(self.size));
+        let from = order.iter().position(|c| *c == Some(cell));
+        let Some(from) = from.filter(|_| slot < order.len()) else {
+            return;
+        };
+        let displaced = order[slot].filter(|d| *d != cell);
+        order.swap(from, slot);
+        self.order = Some(order);
+        self.unsure.retain(|c| *c != cell);
+        self.unsure
+            .extend(displaced.filter(|d| !self.unsure.contains(d)));
+        self.placed
+            .retain(|(s, c)| *s != slot && *c != cell && Some(*c) != displaced);
+        self.placed.push((slot, cell));
     }
 
     /// The `tileset.apply_template` parameters of a ready draft.
     fn params(&self) -> Option<Vec<(&'static str, String)>> {
         let (template, placement) = self.pick.filter(|_| self.ready())?;
         let name = |found: Option<&'static str>| found.unwrap_or_default().to_string();
-        Some(vec![
+        let order = self.order.as_deref().map(|o| ("order", order_text(o)));
+        let params = vec![
             ("inner", self.inner.to_string()),
             ("outer", self.outer.to_string()),
             (
@@ -209,8 +263,97 @@ impl LayoutDraft {
             ("origin", format!("{},{}", self.origin.x, self.origin.y)),
             ("size", format!("{},{}", self.size.x, self.size.y)),
             ("sheet", self.sheet.to_string()),
-        ])
+        ];
+        Some(params.into_iter().chain(order).collect())
     }
+
+    /// Fit the pick to the block's pixels as `fitting` asks; choosing, with
+    /// no set of the pair yet, it first picks the best fitting layout of the
+    /// block's exact shape when it fits well. Tiles placed by hand keep their
+    /// place while the layout stays. Without icon tiles the template's own
+    /// order stays.
+    fn refit(&mut self, world: &mut World, tileset: &Tileset, fitting: Fitting) {
+        if fitting == Fitting::Keep {
+            return;
+        }
+        let (before, choose) = (self.pick, fitting == Fitting::Choose);
+        self.checking = None;
+        let evidence = block_evidence(world, tileset, self);
+        let free = (tileset.setup().ok()).is_none_or(|s| s.set(self.inner, self.outer).is_none());
+        let shaped = BY_FIT.into_iter().filter(|(t, _)| t.shape() == self.size);
+        let others = shaped.filter(|l| choose && free && self.pick != Some(*l));
+        let mut fits: Vec<((LayoutTemplate, Placement), BlockFit)> = (self.pick.into_iter())
+            .chain(others)
+            .filter_map(|layout| Some((layout, evidence.as_ref()?.fit(layout)?)))
+            .collect();
+        let mean = |f: &BlockFit| f.confidence.iter().sum::<f32>() / f.confidence.len() as f32;
+        if choose && free {
+            fits.sort_by(|a, b| mean(&b.1).total_cmp(&mean(&a.1)));
+            fits.retain(|(l, f)| f.good() || self.pick == Some(*l));
+        }
+        let fit = fits.into_iter().next();
+        if let Some((layout, _)) = &fit {
+            self.pick = Some(*layout);
+        }
+        if self.pick != before {
+            self.placed.clear();
+        }
+        let Some((template, _)) = self.pick else {
+            (self.order, self.unsure) = (None, Vec::new());
+            return;
+        };
+        let canonical = template.canonical_order(self.size);
+        let (mut order, mut unsure) = match fit {
+            Some((_, fit)) => (fit.order, fit.unsure),
+            None => (canonical.clone(), Vec::new()),
+        };
+        for (slot, cell) in &self.placed {
+            let from = order.iter().position(|c| *c == Some(*cell));
+            if let Some(from) = from.filter(|_| *slot < order.len()) {
+                order.swap(from, *slot);
+            }
+            unsure.retain(|c| c != cell);
+        }
+        self.order = (order != canonical).then_some(order);
+        self.unsure = unsure;
+        self.blocked = self.conflict(tileset);
+    }
+}
+
+/// The block of `draft` measured against the terrains' icon tiles.
+fn block_evidence(
+    world: &mut World,
+    tileset: &Tileset,
+    draft: &LayoutDraft,
+) -> Option<BlockEvidence> {
+    let icon = |id: TerrainId| (tileset.terrains.iter()).find(|t| t.id == id)?.icon;
+    let inner = icon(draft.inner)?;
+    let outer = match draft.outer {
+        0 => None,
+        id => Some(icon(id)?),
+    };
+    let mut handles = HashMap::new();
+    for sheet in [draft.sheet, inner.0].into_iter().chain(outer.map(|o| o.0)) {
+        let source = &tileset.sheets.get(sheet as usize)?.source;
+        handles.insert(sheet, sheet_image(world, source)?);
+    }
+    let images = world.resource::<Assets<Image>>();
+    let input = |sheet: u32| {
+        let image = images.get(handles.get(&sheet)?)?;
+        let pixels = image.data.as_deref()?;
+        Some(SheetInput {
+            name: "",
+            image: RgbaImage::new(image.width(), image.height(), pixels)?,
+            layout: tileset.sheet_layout(sheet)?,
+        })
+    };
+    let look = |(sheet, tile): (u32, u32)| TerrainLook::of_tile(&input(sheet)?, tile);
+    let outer = match outer {
+        Some(icon) => look(icon)?,
+        None => TerrainLook::empty(tileset.tile_size),
+    };
+    let block = (draft.origin, draft.size);
+    BlockEvidence::measure(&input(draft.sheet)?, block, (&look(inner)?, &outer))
 }
 
 /// The layout popover of the dock `root`.
@@ -232,6 +375,13 @@ pub struct GhostMark {
     pub tile: u32,
     pub peer: usize,
     pub terrain: TerrainId,
+}
+
+/// The outline of a block tile whose place the fit is unsure of.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct UnsureMark {
+    pub root: Entity,
+    pub tile: u32,
 }
 
 /// The inner or outer terrain picker of the layout popover.
@@ -297,7 +447,27 @@ pub(crate) fn act(world: &mut World, control: DockControl) -> bool {
     match control.action {
         DockAction::LayoutPick(template, placement) => {
             take_keyboard(world, root);
-            edit_draft(world, root, |d| d.pick = Some((template, placement)));
+            edit_draft(world, root, |d| {
+                if d.pick == Some((template, placement)) {
+                    return Fitting::Keep;
+                }
+                (d.pick, d.by_hand) = (Some((template, placement)), true);
+                Fitting::Refit
+            });
+        }
+        DockAction::LayoutCheck(cell) => {
+            take_keyboard(world, root);
+            edit_draft(world, root, |d| {
+                d.checking = (d.checking != Some(cell)).then_some(cell);
+                Fitting::Keep
+            });
+        }
+        DockAction::LayoutSlot(slot) => {
+            take_keyboard(world, root);
+            edit_draft(world, root, |d| {
+                d.place(slot);
+                Fitting::Keep
+            });
         }
         DockAction::LayoutApply => {
             take_keyboard(world, root);
@@ -363,17 +533,35 @@ fn close(world: &mut World, root: Entity) {
     }
 }
 
-fn edit_draft(world: &mut World, root: Entity, edit: impl FnOnce(&mut LayoutDraft)) {
+/// What a draft edit asks of the fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fitting {
+    /// Keep the order as it is.
+    Keep,
+    /// Fit the order of the picked layout again.
+    Refit,
+    /// Pick the best fitting layout too.
+    Choose,
+}
+
+/// Edit the draft of `root`, then fit it again as the edit asks.
+fn edit_draft(world: &mut World, root: Entity, edit: impl FnOnce(&mut LayoutDraft) -> Fitting) {
     let Some((path, tileset)) = dock_tileset(world, root) else {
         return;
     };
+    let views = world.resource::<TilesetDockViews>();
+    let Some(mut draft) = views.0.get(&path).and_then(|v| v.layout.clone()) else {
+        return;
+    };
+    let fitting = edit(&mut draft);
+    draft.error = None;
+    draft.blocked = draft.conflict(&tileset);
+    draft.refit(world, &tileset, fitting);
     let mut views = world.resource_mut::<TilesetDockViews>();
-    if let Some(draft) = views.0.get_mut(&path).and_then(|v| v.layout.as_mut()) {
-        edit(draft);
-        draft.error = None;
-        draft.blocked = draft.conflict(&tileset);
-        refresh(world, root, &path, &tileset);
+    if let Some(view) = views.0.get_mut(&path) {
+        view.layout = Some(draft);
     }
+    refresh(world, root, &path, &tileset);
 }
 
 /// Build the popover and the ghost marks of `root` again in place.
@@ -388,15 +576,21 @@ fn refresh(world: &mut World, root: Entity, path: &str, tileset: &Tileset) {
         .get(draft.sheet as usize)
         .map_or(1, |s| s.columns);
     let picked = draft.pick.is_some();
-    let stale: Vec<Entity> = (world.query::<(Entity, Option<&GhostMark>, Option<&BitMark>)>())
-        .iter(world)
-        .filter(|(_, ghost, bit)| {
+    let mut marks = world.query::<(
+        Entity,
+        Option<&GhostMark>,
+        Option<&BitMark>,
+        Option<&UnsureMark>,
+    )>();
+    let stale: Vec<Entity> = (marks.iter(world))
+        .filter(|(_, ghost, bit, unsure)| {
             ghost.is_some_and(|g| g.root == root)
+                || unsure.is_some_and(|u| u.root == root)
                 || bit.is_some_and(|b| {
                     b.root == root && picked && draft.holds(b.sheet, b.tile, columns)
                 })
         })
-        .map(|(e, _, _)| e)
+        .map(|(e, ..)| e)
         .collect();
     for entity in stale {
         world.entity_mut(entity).despawn();
@@ -514,6 +708,123 @@ fn spawn_ghosts(
             spawn_mark(world, frame, at, ghost, (tileset, scale), color);
         }
     }
+    for cell in &draft.unsure {
+        let tile = draft.cell_tile(*cell, columns);
+        let Some((min, size)) = tileset.sheet_rect(draft.sheet, tile) else {
+            continue;
+        };
+        let mut node = absolute(min.as_vec2() * scale, size.as_vec2() * scale);
+        node.border = UiRect::all(px(2.0));
+        let outline = unsure_outline(draft.checking == Some(*cell));
+        let mark = UnsureMark { root, tile };
+        let bundle = (node, BorderColor::all(outline), mark, Pickable::IGNORE);
+        world.spawn((bundle, ChildOf(frame)));
+    }
+}
+
+fn unsure_outline(checking: bool) -> Color {
+    if checking {
+        tokens::SELECTED_BORDER
+    } else {
+        tokens::TEXT_WARNING
+    }
+}
+
+/// The note on unsure tiles, a button per unsure tile, and once one is
+/// picked the template's tiles as drawn to put it in.
+fn spawn_unsure(
+    world: &mut World,
+    popover: Entity,
+    root: Entity,
+    tileset: &Tileset,
+    draft: &LayoutDraft,
+) {
+    let Some((template, _)) = draft.pick.filter(|_| !draft.unsure.is_empty()) else {
+        return;
+    };
+    let note = match draft.unsure.len() {
+        1 => "1 tile unsure, check it".to_string(),
+        n => format!("{n} tiles unsure, check them"),
+    };
+    spawn_text(world, popover, note, tokens::TEXT_WARNING);
+    let columns = (tileset.sheets.get(draft.sheet as usize)).map_or(1, |s| s.columns);
+    let row = spawn_wrap(world, popover);
+    for cell in &draft.unsure {
+        let tile = Some(draft.cell_tile(*cell, columns));
+        let outline = unsure_outline(draft.checking == Some(*cell));
+        let button = spawn_tile_button(world, row, (root, DockAction::LayoutCheck(*cell)), outline);
+        fill_tile(world, button, tileset, draft.sheet, tile);
+        let tip = Tooltip::title("Check this tile").with_description("Pick where it goes below.");
+        world.entity_mut(button).insert(tip);
+    }
+    let Some(checking) = draft.checking else {
+        return;
+    };
+    let words = "Click where it belongs";
+    spawn_text(world, popover, words, tokens::TEXT_SECONDARY);
+    let shape = template.shape().as_vec2() * SLOT;
+    let grid = Node {
+        width: px(shape.x),
+        height: px(shape.y),
+        ..default()
+    };
+    let grid = world.spawn((grid, ChildOf(popover))).id();
+    let tiles = draft.slot_tiles(columns);
+    let checked = Some(draft.cell_tile(checking, columns));
+    for (slot, at) in template.slots(template.shape()).into_iter().enumerate() {
+        let Some(at) = at else {
+            continue;
+        };
+        let tile = tiles.get(slot).copied().flatten();
+        let unsure = (draft.unsure.iter()).any(|c| Some(draft.cell_tile(*c, columns)) == tile);
+        let outline = if tile == checked || unsure {
+            unsure_outline(tile == checked)
+        } else {
+            tokens::BORDER_SUBTLE
+        };
+        let button = spawn_tile_button(world, grid, (root, DockAction::LayoutSlot(slot)), outline);
+        let mut node = absolute(at.as_vec2() * SLOT, Vec2::splat(SLOT));
+        node.border = UiRect::all(px(1.0));
+        world.entity_mut(button).insert(node);
+        fill_tile(world, button, tileset, draft.sheet, tile);
+    }
+}
+
+/// A bordered button of `SLOT` size for `control`.
+fn spawn_tile_button(
+    world: &mut World,
+    parent: Entity,
+    (root, action): (Entity, DockAction),
+    outline: Color,
+) -> Entity {
+    let node = Node {
+        width: px(SLOT),
+        height: px(SLOT),
+        border: UiRect::all(px(1.0)),
+        ..default()
+    };
+    let control = DockControl { root, action };
+    let bundle = (
+        node,
+        BorderColor::all(outline),
+        Button,
+        Hovered::default(),
+        control,
+    );
+    world.spawn((bundle, ChildOf(parent))).id()
+}
+
+/// The image of `tile` filling `button`.
+fn fill_tile(world: &mut World, button: Entity, tileset: &Tileset, sheet: u32, tile: Option<u32>) {
+    let Some(image) = tile.and_then(|t| tile_image(world, tileset, sheet, t)) else {
+        return;
+    };
+    let node = Node {
+        width: percent(100.0),
+        height: percent(100.0),
+        ..default()
+    };
+    world.spawn((node, image, Pickable::IGNORE, ChildOf(button)));
 }
 
 fn fill_popover(
@@ -557,6 +868,7 @@ fn fill_popover(
             spawn_preview(world, row, root, tileset, draft, (pick, preview));
         }
     }
+    spawn_unsure(world, popover, root, tileset, draft);
     for problem in [&draft.blocked, &draft.error].into_iter().flatten() {
         spawn_text(world, popover, problem.clone(), tokens::TEXT_ERROR);
     }
@@ -909,8 +1221,12 @@ fn finish_drag(world: &mut World) {
     };
     view.anchor = Some((sheet, first));
     view.selected = Some((sheet, last));
-    let size = hi - lo + UVec2::ONE;
-    view.layout = Some(LayoutDraft::new(&tileset, view.brush, sheet, lo, size));
+    let brush = view.brush;
+    let mut draft = LayoutDraft::new(&tileset, brush, sheet, lo, hi - lo + UVec2::ONE);
+    draft.refit(world, &tileset, Fitting::Choose);
+    if let Some(view) = world.resource_mut::<TilesetDockViews>().0.get_mut(&path) {
+        view.layout = Some(draft);
+    }
     refill(world, &path);
     take_keyboard(world, root);
 }
@@ -936,6 +1252,7 @@ fn on_terrain_pick(
                 draft.inner = id(selected);
             }
             draft.preselect(&tileset);
+            Fitting::Refit
         });
     });
 }

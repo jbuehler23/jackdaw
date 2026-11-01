@@ -70,6 +70,8 @@ pub enum SetupError {
     Placement(crate::LayoutTemplate, crate::Placement),
     /// A set drawn in this mode that has this many tiles outside a block.
     SetDrawn(MatchMode, usize),
+    /// A tile order that does not name block cells once each, one per tile.
+    Order,
 }
 
 impl fmt::Display for SetupError {
@@ -123,6 +125,10 @@ impl fmt::Display for SetupError {
                     "this pair already draws {placed}; it has {tiles} tiles elsewhere"
                 )
             }
+            SetupError::Order => write!(
+                f,
+                "the order names one block cell per template tile, each at most once"
+            ),
         }
     }
 }

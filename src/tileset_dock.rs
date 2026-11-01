@@ -267,6 +267,10 @@ pub enum DockAction {
     LayoutPick(LayoutTemplate, Placement),
     LayoutApply,
     LayoutCancel,
+    /// Pick or drop the unsure block cell to place by hand.
+    LayoutCheck(u32),
+    /// Put the cell being checked in this template tile.
+    LayoutSlot(usize),
 }
 
 /// The drawn image of sheet `sheet` in the dock `root`.
@@ -1637,7 +1641,9 @@ fn act(world: &mut World, control: DockControl) {
         DockAction::NewTerrain
         | DockAction::LayoutPick(..)
         | DockAction::LayoutApply
-        | DockAction::LayoutCancel => None,
+        | DockAction::LayoutCancel
+        | DockAction::LayoutCheck(_)
+        | DockAction::LayoutSlot(_) => None,
         DockAction::RenameTerrain(terrain) => {
             view.naming = Some(NameField::Rename(terrain));
             None
