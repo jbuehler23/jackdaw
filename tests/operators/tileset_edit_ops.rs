@@ -726,3 +726,80 @@ fn quotes_and_control_characters_cannot_name_a_terrain() {
         );
     }
 }
+
+#[test]
+fn terrain_set_remove_drops_the_set_and_keeps_the_bits() {
+    let (mut app, dir) = overworld();
+    let start = on_disk(&dir);
+    let first = (start.terrain_sets[0].inner, start.terrain_sets[0].outer);
+    let held: Vec<u32> = (start.tiles.iter())
+        .filter(|t| (t.set_inner, t.set_outer) == first)
+        .map(|t| t.tile)
+        .collect();
+    assert!(!held.is_empty(), "the first set holds tiles");
+
+    let (before, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain_set.remove",
+        &[("index", "0")],
+    );
+    assert!(!pairs(&after).contains(&first));
+    assert_eq!(pairs(&after).len(), pairs(&before).len() - 1);
+    for tile in &held {
+        let was = before.tiles.iter().find(|t| t.tile == *tile).expect("was");
+        let now = after.tiles.iter().find(|t| t.tile == *tile).expect("kept");
+        assert_eq!(now.peers, was.peers, "tile {tile} keeps its bits");
+        assert_eq!((now.set_inner, now.set_outer), (0, 0), "tile {tile}");
+    }
+    assert_eq!(after.removed_terrain_sets, vec![[first.0, first.1]]);
+
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain_set.remove",
+        &[("inner", "11"), ("outer", "1")],
+    );
+    assert!(!pairs(&after).contains(&(WATER, GRASS)));
+
+    let remove = "tileset.terrain_set.remove";
+    refused(
+        &mut app,
+        &dir,
+        remove,
+        &[("inner", "1"), ("outer", "2")],
+        "no terrain set 1 over 2",
+    );
+    refused(
+        &mut app,
+        &dir,
+        remove,
+        &[("index", "99")],
+        "no terrain set at 99",
+    );
+    refused(&mut app, &dir, remove, &[], "name a terrain set");
+}
+
+#[test]
+fn adding_a_removed_terrain_set_again_forgets_the_removal() {
+    let (mut app, dir) = overworld();
+    let first = {
+        let set = &on_disk(&dir).terrain_sets[0];
+        (set.inner, set.outer)
+    };
+    edit(
+        &mut app,
+        &dir,
+        "tileset.terrain_set.remove",
+        &[("index", "0")],
+    );
+    let (inner, outer) = (first.0.to_string(), first.1.to_string());
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.terrain_set.add",
+        &[("inner", &inner), ("outer", &outer)],
+    );
+    assert!(pairs(&after).contains(&first));
+    assert!(after.removed_terrain_sets.is_empty());
+}

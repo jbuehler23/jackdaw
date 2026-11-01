@@ -80,7 +80,7 @@ pub(crate) fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
 }
 
 #[test]
-fn picking_a_terrain_loads_it_and_selects_the_brush() {
+fn picking_a_terrain_loads_it_and_keeps_a_painting_tool() {
     let (mut app, _dir) = project_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     enter(&mut app, map);
@@ -91,7 +91,24 @@ fn picking_a_terrain_loads_it_and_selects_the_brush() {
     );
     let picked = brush(&app);
     assert_eq!((picked.source, picked.terrain), (BrushSource::Terrain, 2));
-    assert_eq!(app.world().resource::<TileEditMode>().tool, TileTool::Brush);
+    assert_eq!(
+        app.world().resource::<TileEditMode>().tool,
+        TileTool::Rectangle,
+        "a pick keeps the Rectangle"
+    );
+    stroke(
+        &mut app,
+        "tilemap.rectangle",
+        MouseButton::Left,
+        &[(5, 5), (6, 6)],
+    );
+    let data = stored(&mut app, map);
+    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    assert_eq!(
+        authoring.terrain.get(CellCoord::new(6, 6)),
+        2,
+        "the Rectangle paints the picked terrain"
+    );
 
     assert_eq!(
         call(&mut app, PICK, &[("terrain", text("lava"))]),
@@ -99,13 +116,38 @@ fn picking_a_terrain_loads_it_and_selects_the_brush() {
     );
     assert_eq!(brush(&app), picked, "a refused pick leaves the brush");
 
-    run(&mut app, "tilemap.line");
-    ok(&mut app, PICK, &[("tile", text("0:5"))]);
-    assert_eq!(
-        app.world().resource::<TileEditMode>().tool,
-        TileTool::Brush,
-        "a tile pick chooses the Brush too"
-    );
+    for (id, kept) in [
+        ("tilemap.line", TileTool::Line),
+        ("tilemap.bucket", TileTool::Bucket),
+        ("tilemap.brush", TileTool::Brush),
+    ] {
+        run(&mut app, id);
+        ok(&mut app, PICK, &[("tile", text("0:5"))]);
+        assert_eq!(app.world().resource::<TileEditMode>().tool, kept, "{id}");
+    }
+    for id in ["tilemap.eraser", "tilemap.picker", "tilemap.select"] {
+        run(&mut app, id);
+        ok(&mut app, PICK, &[("terrain", text("2"))]);
+        assert_eq!(
+            app.world().resource::<TileEditMode>().tool,
+            TileTool::Brush,
+            "{id} gives way to the Brush"
+        );
+    }
+    for id in ["tilemap.rectangle", "tilemap.line", "tilemap.bucket"] {
+        run(&mut app, id);
+        ok(
+            &mut app,
+            PICK,
+            &[("tile", text("0:5")), ("to", text("0:33"))],
+        );
+        assert_eq!(brush(&app).source, BrushSource::Stamp);
+        assert_eq!(
+            app.world().resource::<TileEditMode>().tool,
+            TileTool::Brush,
+            "a stamp pick after {id} chooses the Brush"
+        );
+    }
 }
 
 #[test]

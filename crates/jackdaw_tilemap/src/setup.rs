@@ -207,6 +207,8 @@ pub struct TilesetSetup {
     pub stamps: Vec<Tracked<Stamp>>,
     /// Id the next new terrain takes; ids are never reused.
     pub next_id: u16,
+    /// Sets removed by hand, inner then outer; a re-run does not propose them.
+    pub removed_sets: BTreeSet<(TerrainId, TerrainId)>,
 }
 
 impl TilesetSetup {
@@ -455,7 +457,7 @@ fn merge(
         terrains.entry(*id).or_insert_with(|| f.clone());
     }
 
-    let mut sets = merge_sets(&prev.sets, &auto.sets, &scope);
+    let mut sets = merge_sets(&prev, &auto.sets, &scope);
     let locked: Vec<Pair> = (prev.sets.iter())
         .filter(|s| !reset && s.locked_manual)
         .map(|s| (s.inner, s.outer))
@@ -575,6 +577,7 @@ fn merge(
         tiles,
         stamps,
         next_id,
+        removed_sets: prev.removed_sets.clone(),
     })
 }
 
@@ -647,6 +650,7 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
         tiles,
         stamps,
         next_id: next_id.unwrap_or(1),
+        removed_sets: BTreeSet::new(),
     }
 }
 
@@ -702,9 +706,9 @@ fn user_terrains(setup: &TilesetSetup) -> BTreeSet<TerrainId> {
     named.chain(sets).chain(peers).collect()
 }
 
-fn merge_sets(previous: &[SetupSet], fresh: &[SetupSet], scope: &Scope) -> Vec<SetupSet> {
+fn merge_sets(previous: &TilesetSetup, fresh: &[SetupSet], scope: &Scope) -> Vec<SetupSet> {
     let key = |s: &SetupSet| (s.inner, s.outer);
-    let before: BTreeMap<_, &SetupSet> = previous.iter().map(|s| (key(s), s)).collect();
+    let before: BTreeMap<_, &SetupSet> = previous.sets.iter().map(|s| (key(s), s)).collect();
     let after: BTreeMap<_, &SetupSet> = fresh.iter().map(|s| (key(s), s)).collect();
     let keys: BTreeSet<_> = before.keys().chain(after.keys()).copied().collect();
     let mut sets = Vec::new();
@@ -712,7 +716,8 @@ fn merge_sets(previous: &[SetupSet], fresh: &[SetupSet], scope: &Scope) -> Vec<S
         let in_scope = scope.covers_set(k);
         let kept =
             (before.get(&k).copied()).filter(|s| !in_scope || s.locked_manual || s.mode.is_user());
-        let taken = after.get(&k).copied().filter(|_| in_scope);
+        let taken =
+            (after.get(&k).copied()).filter(|_| in_scope && !previous.removed_sets.contains(&k));
         if let Some(s) = kept.or(taken) {
             sets.push(s.clone());
         }

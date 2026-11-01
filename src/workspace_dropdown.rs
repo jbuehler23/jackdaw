@@ -6,8 +6,8 @@
 //! Each popover row is itself a [`WorkspaceTab`] entity, so
 //! `handle_workspace_tab_double_click` (double-click renames) in
 //! `jackdaw_panels` keeps working without duplication. The rows are
-//! feathers buttons, so switching and adding run off their click event
-//! rather than the dock strip's `Interaction` systems.
+//! feathers buttons: a row calls `workspace.switch` and adding runs off their
+//! click events rather than the dock strip's `Interaction` systems.
 //!
 //! Workspace deletion lives in `jackdaw_panels` but is intentionally
 //! NOT surfaced here; per user request, workspaces are views you
@@ -16,6 +16,8 @@
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::operator::warn_caller;
 use jackdaw_feathers::button::{ButtonClickEvent, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
 use jackdaw_feathers::tokens;
@@ -449,26 +451,71 @@ where
     None
 }
 
-/// Switch to the workspace a popover row names.
+/// Switch to a workspace.
 ///
 /// `WorkspaceChanged`'s observer is the sole owner of
 /// `registry.active`; setting it here would race with auto-save.
+#[operator(
+    id = "workspace.switch",
+    label = "Switch Workspace",
+    description = "Show another workspace, named by id or by name.",
+    allows_undo = false,
+    params(
+        id(String, doc = "Workspace id, e.g. \"2d\"."),
+        name(String, doc = "Workspace name as the dropdown shows it, e.g. \"2D\"."),
+    )
+)]
+pub(crate) fn workspace_switch(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    let wanted = params
+        .as_str("id")
+        .or_else(|| params.as_str("name"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let registry = world.resource::<WorkspaceRegistry>();
+    let found = (registry.iter())
+        .find(|w| w.id == wanted)
+        .or_else(|| (registry.iter()).find(|w| w.name.eq_ignore_ascii_case(&wanted)))
+        .map(|w| w.id.clone());
+    let Some(new) = found else {
+        let valid: Vec<String> = (registry.iter())
+            .map(|w| format!("{} ({})", w.id, w.name))
+            .collect();
+        let message = format!(
+            "{}: no workspace `{wanted}`; the workspaces are {}",
+            WorkspaceSwitchOp::ID,
+            valid.join(", ")
+        );
+        warn_caller(world, message);
+        return OperatorResult::Cancelled;
+    };
+    let old = registry.active.clone();
+    if old.as_ref() != Some(&new) {
+        world.trigger(WorkspaceChanged { old, new });
+    }
+    OperatorResult::Finished
+}
+
+/// Switch to the workspace a popover row names. The call skips the cancel an
+/// operator button makes first, so a running tool survives the switch.
 fn on_workspace_row_click(
     click: On<ButtonClickEvent>,
     rows: Query<&WorkspaceTab>,
-    registry: Res<WorkspaceRegistry>,
     mut commands: Commands,
 ) {
-    let Ok(row) = rows.get(click.entity) else {
-        return;
-    };
-    if registry.active.as_ref() == Some(&row.workspace_id) {
-        return;
+    if let Ok(row) = rows.get(click.entity) {
+        commands
+            .operator(WorkspaceSwitchOp::ID)
+            .param("id", row.workspace_id.clone())
+            .call();
     }
-    commands.trigger(WorkspaceChanged {
-        old: registry.active.clone(),
-        new: row.workspace_id.clone(),
-    });
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<WorkspaceSwitchOp>();
 }
 
 /// Add a workspace from the popover's last row.

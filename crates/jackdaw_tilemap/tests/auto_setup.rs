@@ -453,3 +453,18 @@ fn auto_names_step_around_user_names_and_stay_put() {
     let all = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &Scope::All);
     assert_eq!(name(&all, GRASS), Some(Tracked::auto("grass".to_string())));
 }
+
+#[test]
+fn a_rerun_does_not_propose_a_set_removed_by_hand() {
+    let sheet = Sheet::packed();
+    let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
+    let set = &setup.sets[0];
+    let pair = (set.inner, set.outer);
+    setup.remove_set(pair.0, pair.1).expect("a known set");
+    let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
+    assert!(
+        after.set(pair.0, pair.1).is_none(),
+        "{pair:?} stays removed"
+    );
+    assert!(after.removed_sets.contains(&pair));
+}

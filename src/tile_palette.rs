@@ -136,8 +136,9 @@ pub struct ContiguousToggle;
 #[operator(
     id = "tilemap.palette.pick",
     label = "Pick From Tile Palette",
-    description = "Load the brush with a terrain or a tile of the active layer's tileset, and \
-                   choose the Brush.",
+    description = "Load the brush with a terrain, a tile or a stamp of the active layer's tileset. \
+                   After a terrain or tile, Rectangle, Line and Bucket stay chosen and paint \
+                   with it; a stamp, or any other tool, chooses the Brush.",
     allows_undo = false,
     is_available = has_tile_map,
     params(
@@ -210,7 +211,14 @@ fn pick(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
     } else {
         return Err("name a terrain, a tile or a stamp".to_string());
     }
-    world.resource_mut::<TileEditMode>().tool = TileTool::Brush;
+    let mut mode = world.resource_mut::<TileEditMode>();
+    let shapes = matches!(
+        mode.tool,
+        TileTool::Rectangle | TileTool::Line | TileTool::Bucket
+    );
+    if brush.source == BrushSource::Stamp || !shapes {
+        mode.tool = TileTool::Brush;
+    }
     world.resource_mut::<TileBrush>().set_if_neq(brush);
     world.resource_mut::<StampBrush>().set_if_neq(stamp);
     Ok(())

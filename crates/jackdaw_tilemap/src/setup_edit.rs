@@ -131,6 +131,7 @@ impl TilesetSetup {
         if self.set(inner, outer).is_some() {
             return Err(SetupError::SetExists(inner, outer));
         }
+        self.removed_sets.remove(&(inner, outer));
         self.sets.push(SetupSet {
             inner,
             outer,
@@ -138,6 +139,22 @@ impl TilesetSetup {
             locked_manual: false,
         });
         self.sets.sort_by_key(|s| (s.inner, s.outer));
+        Ok(())
+    }
+
+    /// Removes a terrain set, remembered so a re-run does not propose it again;
+    /// tiles laid out for it keep their peers and leave it.
+    pub fn remove_set(&mut self, inner: TerrainId, outer: TerrainId) -> Result<(), SetupError> {
+        if self.set(inner, outer).is_none() {
+            return Err(SetupError::UnknownSet(inner, outer));
+        }
+        self.sets.retain(|s| (s.inner, s.outer) != (inner, outer));
+        self.removed_sets.insert((inner, outer));
+        for tile in self.tiles.values_mut() {
+            if tile.set == Some((inner, outer)) {
+                tile.set = None;
+            }
+        }
         Ok(())
     }
 

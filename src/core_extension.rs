@@ -254,6 +254,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::ui_align::add_to_extension(ctx);
         crate::ui_grouping::add_to_extension(ctx);
         crate::ui_layout_presets::add_to_extension(ctx);
+        crate::workspace_dropdown::add_to_extension(ctx);
         crate::transform_ops::add_to_extension(ctx);
         crate::hierarchy::add_to_extension(ctx);
         crate::file_ops::add_to_extension(ctx);

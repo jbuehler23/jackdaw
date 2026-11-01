@@ -69,6 +69,10 @@ pub struct Tileset {
     /// Set by an import that ran auto setup, and cleared with what it made.
     #[reflect(default)]
     pub auto_setup: bool,
+    /// Terrain sets removed by hand, inner then outer, which a re-run of auto
+    /// setup does not propose again.
+    #[reflect(default)]
+    pub removed_terrain_sets: Vec<[TerrainId; 2]>,
 }
 
 impl Default for Tileset {
@@ -87,6 +91,7 @@ impl Default for Tileset {
             properties: BTreeMap::new(),
             stamps: Vec::new(),
             auto_setup: false,
+            removed_terrain_sets: Vec::new(),
         }
     }
 }
@@ -413,6 +418,9 @@ impl Tileset {
             tiles,
             stamps,
             next_id: self.next_terrain_id,
+            removed_sets: (self.removed_terrain_sets.iter())
+                .map(|&[inner, outer]| (inner, outer))
+                .collect(),
         })
     }
 
@@ -465,6 +473,9 @@ impl Tileset {
             })
             .collect();
         self.terrain_sets = setup.sets.iter().map(tileset_set).collect();
+        self.removed_terrain_sets = (setup.removed_sets.iter())
+            .map(|&(inner, outer)| [inner, outer])
+            .collect();
         self.tiles = tiles;
         self.objects = objects;
         self.next_terrain_id = setup.next_id;
