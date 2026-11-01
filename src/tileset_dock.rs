@@ -1925,6 +1925,6 @@ mod tests {
         .id();
         world.spawn((Node::default(), ChildOf(root)));
         fill(world, root);
-        assert_eq!(world.get::<Children>(root).map(|c| c.len()), Some(1));
+        assert_eq!(world.get::<Children>(root).map(Children::len), Some(1));
     }
 }
