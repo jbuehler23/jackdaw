@@ -777,11 +777,7 @@ mod tests {
 
     fn tile_map() -> TilemapData {
         TilemapData {
-            layers: vec![LayerData {
-                kind: LayerKind::Tile,
-                tiles: ChunkedLayer::new(),
-                authoring: None,
-            }],
+            layers: vec![LayerData::empty(LayerKind::Tile)],
         }
     }
 
