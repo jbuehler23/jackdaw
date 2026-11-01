@@ -32,5 +32,6 @@ mod tileset_edit_ops;
 mod tileset_layout_ops;
 mod tileset_layout_popover;
 mod tileset_ops;
+mod tileset_suggest;
 mod view_camera_ops;
 mod workspace_switch;

@@ -23,6 +23,7 @@ mod slice;
 mod solver;
 mod stamp;
 mod strip;
+mod suggest;
 mod template;
 mod terrain_find;
 mod tile;
@@ -65,6 +66,9 @@ pub use solver::{
 };
 pub use stamp::{Stamp, find_stamps, reconcile};
 pub use strip::{AnimationStrip, FrameRun, LOOSE_FRAME_MATCH, detect_animation, pair_animations};
+pub use suggest::{
+    LayoutGuess, MIN_OBJECT, Suggestion, SuggestionKind, suggest_blocks, taken_tiles,
+};
 pub use template::{LayoutTemplate, PaintPreview};
 pub use terrain_find::{
     FoundTerrain, SheetInput, TerrainAnalysis, TileAddress, TileKind, TileLabels, find_terrains,
