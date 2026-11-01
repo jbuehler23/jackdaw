@@ -697,8 +697,9 @@ fn finish(mode: MatchMode, halves: Vec<Half>) -> Option<ProposedSet> {
         let hits = shapes.iter().filter(|t| present.contains(&key(t))).count();
         hits as f32 / shapes.len().max(1) as f32
     };
+    let named = |t: &LayoutTemplate| *t != LayoutTemplate::Minimal3x3Inner;
     let template = (LayoutTemplate::ALL.into_iter())
-        .filter(|t| t.mode() == mode && share(*t) >= TEMPLATE_SHARE)
+        .filter(|t| named(t) && t.mode() == mode && share(*t) >= TEMPLATE_SHARE)
         .max_by_key(|t| t.tile_count());
     Some(ProposedSet {
         mode,

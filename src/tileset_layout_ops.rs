@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
-use jackdaw_tilemap::{LayoutTemplate, RgbaImage, reset_to_auto};
+use jackdaw_tilemap::{
+    LayoutTemplate, Placement, RgbaImage, TerrainId, TileTerrains, TilesetSetup, reset_to_auto,
+};
 use jackdaw_tileset::{Tileset, TilesetObject};
 
 use crate::asset_index::assets_dir;
@@ -44,17 +46,38 @@ fn cell(text: &str, what: &str) -> Result<UVec2, String> {
     Ok(UVec2::new(x as u32, y as u32))
 }
 
+pub(crate) const TEMPLATES: [(LayoutTemplate, &str); 6] = [
+    (LayoutTemplate::Corner16, "corner16"),
+    (LayoutTemplate::Side16, "side16"),
+    (LayoutTemplate::Minimal3x3, "minimal3x3"),
+    (LayoutTemplate::Corner2x2, "corner2x2"),
+    (LayoutTemplate::Blob47, "blob47"),
+    (LayoutTemplate::Minimal3x3Inner, "minimal3x3_inner"),
+];
+
+pub(crate) const PLACEMENTS: [(Placement, &str); 2] = [
+    (Placement::BetweenCells, "between_cells"),
+    (Placement::OnCells, "on_cells"),
+];
+
 fn layout_template(text: &str) -> Result<LayoutTemplate, String> {
-    match text {
-        "corner16" => Ok(LayoutTemplate::Corner16),
-        "side16" => Ok(LayoutTemplate::Side16),
-        "minimal3x3" => Ok(LayoutTemplate::Minimal3x3),
-        "corner2x2" => Ok(LayoutTemplate::Corner2x2),
-        "blob47" => Ok(LayoutTemplate::Blob47),
-        other => Err(format!(
-            "template is corner16, side16, minimal3x3, corner2x2 or blob47, not `{other}`"
-        )),
+    (TEMPLATES.iter().find(|(_, name)| *name == text))
+        .map(|(t, _)| *t)
+        .ok_or_else(|| {
+            let names: Vec<&str> = TEMPLATES.iter().map(|(_, n)| *n).collect();
+            format!("template is one of {}, not `{text}`", names.join(", "))
+        })
+}
+
+/// The placement `text` names, by default on cells where the template can be.
+fn placement(template: LayoutTemplate, text: &str) -> Result<Placement, String> {
+    if text.is_empty() {
+        let all = template.placements();
+        return Ok(*all.last().unwrap_or(&Placement::OnCells));
     }
+    (PLACEMENTS.iter().find(|(_, name)| *name == text))
+        .map(|(p, _)| *p)
+        .ok_or_else(|| format!("placement is between_cells or on_cells, not `{text}`"))
 }
 
 /// Lay a layout template's bits onto a block of tiles.
@@ -62,8 +85,12 @@ fn layout_template(text: &str) -> Result<LayoutTemplate, String> {
     id = "tileset.apply_template",
     label = "Apply Tileset Template",
     description = "Set the bits of a block of tiles to a common layout of an inner terrain over \
-                   an outer one, adding their terrain set when missing. corner16 and side16 are \
-                   4x4, minimal3x3 3x3, corner2x2 2x2 and blob47 rows of 8.",
+                   an outer one, adding their terrain set when missing and giving it the \
+                   placement's match mode. corner16 and side16 are 4x4, minimal3x3 3x3, \
+                   corner2x2 2x2, minimal3x3_inner a 3x3 with the 2x2 inner corners to its \
+                   right, and blob47 rows of 8. A block of another size takes the tiles row \
+                   by row; tiles past it are skipped and reported. Each terrain's icon tile \
+                   with no bits yet gets full bits of its terrain.",
     allows_undo = false,
     params(
         path(
@@ -72,10 +99,24 @@ fn layout_template(text: &str) -> Result<LayoutTemplate, String> {
         ),
         inner(String, doc = "Inner terrain id or name."),
         outer(String, doc = "Outer terrain id or name, or empty."),
-        template(String, doc = "corner16, side16, minimal3x3, corner2x2 or blob47."),
+        template(
+            String,
+            doc = "corner16, side16, minimal3x3, corner2x2, blob47 or minimal3x3_inner."
+        ),
         origin(
             String,
             doc = "Column and row of the block's top-left tile, as col,row."
+        ),
+        size(
+            String,
+            doc = "Width and height of the block in tiles, as w,h; defaults to the \
+                   template's own."
+        ),
+        placement(
+            String,
+            doc = "between_cells (ground: a corner set whose tiles sit between cells) or \
+                   on_cells (walls and paths); defaults to on_cells where the template \
+                   allows it. Only minimal3x3, corner2x2 and minimal3x3_inner take both."
         ),
         sheet(
             String,
@@ -87,37 +128,93 @@ pub fn tileset_apply_template(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let (inner, outer) = (text(&params, "inner"), text(&params, "outer"));
-    let (template, origin, on) = (
-        text(&params, "template"),
-        text(&params, "origin"),
-        text(&params, "sheet"),
-    );
+    let keys = [
+        "inner",
+        "outer",
+        "template",
+        "placement",
+        "origin",
+        "size",
+        "sheet",
+    ];
+    let args: Vec<(&'static str, String)> = keys.map(|k| (k, text(&params, k))).to_vec();
     queue_edit(
         &mut commands,
         "tileset.apply_template",
         text(&params, "path"),
-        move |_, tileset| {
-            with_setup(tileset, |tileset, setup| {
-                let (inner, outer) = (
-                    terrain(tileset, &inner)?,
-                    terrain_or_empty(tileset, &outer)?,
-                );
-                let template = layout_template(&template)?;
-                let origin = cell(&origin, "origin")?;
-                let on = sheet_or_first(tileset, &on)?;
-                let index = tileset.setup_sheet(on).map_err(|e| e.to_string())?;
-                let source = &tileset.sheets[on as usize];
-                let grid = UVec2::new(source.columns, source.rows);
-                let tiles = (setup.apply_template(template, inner, outer, index, grid, origin))
-                    .map_err(|e| e.to_string())?;
-                Ok(format!(
-                    "{template:?} laid on {} tiles of sheet {on}",
-                    tiles.len()
-                ))
-            })
-        },
+        template_edit(&args),
     )
+}
+
+/// The edit `tileset.apply_template` makes with the parameters `args`, for
+/// a caller already inside an operator.
+pub(crate) fn template_edit(
+    args: &[(&'static str, String)],
+) -> impl FnOnce(&World, &mut Tileset) -> Result<String, String> + Send + 'static {
+    let arg = |key: &str| {
+        (args.iter().find(|(k, _)| *k == key)).map_or(String::new(), |(_, v)| v.clone())
+    };
+    let (inner, outer, template) = (arg("inner"), arg("outer"), arg("template"));
+    let (placed, origin, size, on) = (arg("placement"), arg("origin"), arg("size"), arg("sheet"));
+    move |_, tileset| {
+        with_setup(tileset, |tileset, setup| {
+            let (inner, outer) = (
+                terrain(tileset, &inner)?,
+                terrain_or_empty(tileset, &outer)?,
+            );
+            let template = layout_template(&template)?;
+            let placement = placement(template, &placed)?;
+            let origin = cell(&origin, "origin")?;
+            let size = match size.as_str() {
+                "" => template.shape(),
+                size => cell(size, "size")?,
+            };
+            let on = sheet_or_first(tileset, &on)?;
+            let index = tileset.setup_sheet(on).map_err(|e| e.to_string())?;
+            let source = &tileset.sheets[on as usize];
+            let grid = UVec2::new(source.columns, source.rows);
+            let layout = (template, placement);
+            let block = (origin, size);
+            let (tiles, skipped) =
+                (setup.apply_template(layout, (inner, outer), index, grid, block))
+                    .map_err(|e| e.to_string())?;
+            let icons = bare_icons(tileset, setup, [inner, outer]);
+            let past = match skipped {
+                0 => String::new(),
+                n => format!("; {n} template tiles fall past the block and were skipped"),
+            };
+            Ok(format!(
+                "{template:?} laid on {} tiles of sheet {on}{past}{icons}",
+                tiles.len()
+            ))
+        })
+    }
+}
+
+/// Give the icon tile of each of `terrains` full bits of its terrain when it
+/// has none yet: an icon is a plain tile, so open ground draws plain.
+fn bare_icons(tileset: &Tileset, setup: &mut TilesetSetup, terrains: [TerrainId; 2]) -> String {
+    let mut given = 0;
+    for terrain in terrains.into_iter().filter(|t| *t != 0) {
+        let icon = (tileset.terrains.iter())
+            .find(|t| t.id == terrain)
+            .and_then(|t| t.icon);
+        let Some(address) = icon.and_then(|(s, t)| tileset.setup_address(s, t).ok()) else {
+            continue;
+        };
+        let bare = (setup.tiles.get(&address)).is_none_or(|t| t.terrains.peers == [0; 9]);
+        if bare
+            && setup
+                .set_peers(address, TileTerrains::filled(terrain))
+                .is_ok()
+        {
+            given += 1;
+        }
+    }
+    match given {
+        0 => String::new(),
+        n => format!("; {n} icon tiles given full bits of their terrain"),
+    }
 }
 
 /// Hand tiles back to auto setup.

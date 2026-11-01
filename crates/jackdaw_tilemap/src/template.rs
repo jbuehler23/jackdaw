@@ -8,9 +8,20 @@
 //! - `Corner2x2` (4): one outer corner each, TL, TR, BL, BR.
 //! - `Blob47` (47): per `Side16` side mask, a mask over the enclosed corners
 //!   (both sides inner) in TL, TR, BL, BR order.
+//! - `Minimal3x3Inner` (13): `Minimal3x3`, then `Corner2x2` as a 2x2 block to
+//!   its right.
+//!
+//! `Minimal3x3`, `Corner2x2` and `Minimal3x3Inner` read either way: on cells
+//! as drawn, or between cells by their four corners alone.
 
-use crate::solver::{MatchMode, Peer, TerrainSet, TerrainTile, TileTerrains};
-use crate::{TerrainId, TileRef};
+use std::collections::BTreeMap;
+
+use glam::{IVec2, UVec2};
+
+use crate::solver::{
+    MatchMode, Peer, TerrainSet, TerrainTile, TileTerrains, resolve_region_within,
+};
+use crate::{CellCoord, CellRect, ChunkedLayer, Links, Placement, TerrainId, TileRef};
 
 /// A tile sheet layout for an inner terrain over an outer terrain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -20,24 +31,27 @@ pub enum LayoutTemplate {
     Minimal3x3,
     Corner2x2,
     Blob47,
+    Minimal3x3Inner,
 }
 
 impl LayoutTemplate {
-    pub const ALL: [LayoutTemplate; 5] = [
+    pub const ALL: [LayoutTemplate; 6] = [
         LayoutTemplate::Corner16,
         LayoutTemplate::Side16,
         LayoutTemplate::Minimal3x3,
         LayoutTemplate::Corner2x2,
         LayoutTemplate::Blob47,
+        LayoutTemplate::Minimal3x3Inner,
     ];
 
     pub const fn mode(self) -> MatchMode {
         match self {
             LayoutTemplate::Corner16 => MatchMode::Corners,
             LayoutTemplate::Side16 => MatchMode::Sides,
-            LayoutTemplate::Minimal3x3 | LayoutTemplate::Corner2x2 | LayoutTemplate::Blob47 => {
-                MatchMode::CornersAndSides
-            }
+            LayoutTemplate::Minimal3x3
+            | LayoutTemplate::Corner2x2
+            | LayoutTemplate::Blob47
+            | LayoutTemplate::Minimal3x3Inner => MatchMode::CornersAndSides,
         }
     }
 
@@ -47,18 +61,106 @@ impl LayoutTemplate {
             LayoutTemplate::Minimal3x3 => 9,
             LayoutTemplate::Corner2x2 => 4,
             LayoutTemplate::Blob47 => 47,
+            LayoutTemplate::Minimal3x3Inner => 13,
         }
     }
 
-    /// Columns of the block its tiles are laid out in, row by row; `Blob47`
-    /// takes rows of eight.
-    pub const fn columns(self) -> u32 {
+    /// Columns and rows of the block its tiles are drawn in; `Blob47` takes
+    /// rows of eight.
+    pub const fn shape(self) -> UVec2 {
         match self {
-            LayoutTemplate::Corner16 | LayoutTemplate::Side16 => 4,
-            LayoutTemplate::Minimal3x3 => 3,
-            LayoutTemplate::Corner2x2 => 2,
-            LayoutTemplate::Blob47 => 8,
+            LayoutTemplate::Corner16 | LayoutTemplate::Side16 => UVec2::new(4, 4),
+            LayoutTemplate::Minimal3x3 => UVec2::new(3, 3),
+            LayoutTemplate::Corner2x2 => UVec2::new(2, 2),
+            LayoutTemplate::Blob47 => UVec2::new(8, 6),
+            LayoutTemplate::Minimal3x3Inner => UVec2::new(5, 3),
         }
+    }
+
+    /// Where its tiles can be drawn: corner layouts between cells, edge and
+    /// blob layouts on cells, the 3x3 and 2x2 blocks either way.
+    pub const fn placements(self) -> &'static [Placement] {
+        match self {
+            LayoutTemplate::Corner16 => &[Placement::BetweenCells],
+            LayoutTemplate::Side16 | LayoutTemplate::Blob47 => &[Placement::OnCells],
+            LayoutTemplate::Minimal3x3
+            | LayoutTemplate::Corner2x2
+            | LayoutTemplate::Minimal3x3Inner => &[Placement::BetweenCells, Placement::OnCells],
+        }
+    }
+
+    /// The match mode of a set of its tiles drawn at `placement`.
+    pub const fn mode_at(self, placement: Placement) -> MatchMode {
+        match placement {
+            Placement::BetweenCells => MatchMode::Corners,
+            Placement::OnCells => self.mode(),
+        }
+    }
+
+    /// Whether a block of `size` holds its tiles: in its own shape, or for
+    /// layouts of 16 or more, row by row over two rows or more with only the
+    /// last row short.
+    pub fn fits(self, size: UVec2) -> bool {
+        let (area, count) = (size.x * size.y, self.tile_count() as u32);
+        let flows = count >= 16 && size.y > 1 && area >= count && area - count < size.x;
+        size == self.shape() || flows
+    }
+
+    /// The cell of each tile in a block of `size`: in its own shape as drawn,
+    /// otherwise row by row; `None` past the block.
+    pub fn slots(self, size: UVec2) -> Vec<Option<UVec2>> {
+        let width = size.x.max(1);
+        (0..self.tile_count() as u32)
+            .map(|i| {
+                if size == self.shape() && self == LayoutTemplate::Minimal3x3Inner {
+                    return Some(match i {
+                        0..9 => UVec2::new(i % 3, i / 3),
+                        _ => UVec2::new(3 + (i - 9) % 2, (i - 9) / 2),
+                    });
+                }
+                let cell = UVec2::new(i % width, i / width);
+                cell.cmplt(size).all().then_some(cell)
+            })
+            .collect()
+    }
+
+    /// Its tiles read at `placement`: between cells only the corners count,
+    /// so the centre is inner and the sides outer, as in `Corner16`.
+    pub fn placed_tiles(
+        self,
+        placement: Placement,
+        inner: TerrainId,
+        outer: TerrainId,
+    ) -> Vec<TileTerrains> {
+        let tiles = self.tiles(inner, outer);
+        if placement == Placement::OnCells {
+            return tiles;
+        }
+        (tiles.into_iter())
+            .map(|t| {
+                let corners = TileTerrains::filled(outer).with(Peer::Centre, inner);
+                (Peer::CORNERS.into_iter()).fold(corners, |c, p| c.with(p, t.get(p)))
+            })
+            .collect()
+    }
+
+    /// A set of the tiles a block of `size` holds read at `placement`, tile
+    /// index = template index, weight 1.
+    pub fn placed_set(
+        self,
+        placement: Placement,
+        inner: TerrainId,
+        outer: TerrainId,
+        size: UVec2,
+    ) -> TerrainSet {
+        let mut set = TerrainSet::new(self.mode_at(placement));
+        set.tiles = (self.placed_tiles(placement, inner, outer).into_iter())
+            .zip(self.slots(size))
+            .enumerate()
+            .filter(|(_, (_, slot))| slot.is_some())
+            .map(|(i, (terrains, _))| TerrainTile::new(TileRef::new(i as u16), terrains, 1))
+            .collect();
+        set
     }
 
     /// Peer terrains of each tile in grid order; see the module docs.
@@ -117,6 +219,11 @@ impl LayoutTemplate {
                 }
                 tiles
             }
+            LayoutTemplate::Minimal3x3Inner => {
+                let mut tiles = LayoutTemplate::Minimal3x3.tiles(inner, outer);
+                tiles.extend(LayoutTemplate::Corner2x2.tiles(inner, outer));
+                tiles
+            }
         }
     }
 
@@ -130,6 +237,84 @@ impl LayoutTemplate {
             .map(|(i, terrains)| TerrainTile::new(TileRef::new(i as u16), terrains, 1))
             .collect();
         set
+    }
+}
+
+/// A small map a set is shown painting: one inner cell, a thin path, a turn
+/// or an area, on a square of outer [`PaintPreview::SIZE`] cells across.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PaintPreview {
+    Spot,
+    ThinPath,
+    Turn,
+    Area,
+}
+
+impl PaintPreview {
+    pub const ALL: [PaintPreview; 4] = [
+        PaintPreview::Spot,
+        PaintPreview::ThinPath,
+        PaintPreview::Turn,
+        PaintPreview::Area,
+    ];
+    pub const SIZE: i32 = 5;
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            PaintPreview::Spot => "spot",
+            PaintPreview::ThinPath => "thin path",
+            PaintPreview::Turn => "turn",
+            PaintPreview::Area => "area",
+        }
+    }
+
+    /// The inner cells, y up.
+    pub fn cells(self) -> Vec<IVec2> {
+        let line = |cells: &[(i32, i32)]| cells.iter().map(|&(x, y)| IVec2::new(x, y)).collect();
+        match self {
+            PaintPreview::Spot => line(&[(2, 2)]),
+            PaintPreview::ThinPath => line(&[(1, 2), (2, 2), (3, 2)]),
+            PaintPreview::Turn => line(&[(1, 3), (1, 2), (1, 1), (2, 1), (3, 1)]),
+            PaintPreview::Area => (1..4)
+                .flat_map(|y| (1..4).map(move |x| IVec2::new(x, y)))
+                .collect(),
+        }
+    }
+
+    /// The tiles `set` draws for it with `inner` painted over `outer`, by
+    /// key, bounded by the square. Plain outer ground draws nothing, as a
+    /// layout holds no tile for it.
+    pub fn resolve(
+        self,
+        set: &TerrainSet,
+        inner: TerrainId,
+        outer: TerrainId,
+    ) -> Vec<(CellCoord, TileRef)> {
+        let mut terrain = ChunkedLayer::new();
+        let all: Vec<CellCoord> = (0..Self::SIZE)
+            .flat_map(|y| (0..Self::SIZE).map(move |x| CellCoord::new(x, y)))
+            .collect();
+        for cell in &all {
+            terrain.set(*cell, outer);
+        }
+        for cell in self.cells() {
+            terrain.set(CellCoord(cell), inner);
+        }
+        let bounds = CellRect {
+            min: IVec2::ZERO,
+            max: IVec2::splat(Self::SIZE),
+        };
+        let inside = self.cells();
+        let touches = |key: CellCoord| {
+            let corners = [IVec2::ZERO, IVec2::X, IVec2::Y, IVec2::ONE];
+            corners.iter().any(|c| inside.contains(&(key.0 + *c)))
+        };
+        let between = set.mode.placement() == Placement::BetweenCells;
+        let links = ChunkedLayer::<Links>::new();
+        (resolve_region_within(set, &terrain, &links, &BTreeMap::new(), all, Some(bounds)))
+            .into_iter()
+            .filter(|(key, tile)| !tile.is_empty() && (!between || touches(*key)))
+            .collect()
     }
 }
 
@@ -398,5 +583,69 @@ mod tests {
                 assert_eq!(r.score, 0);
             }
         }
+    }
+
+    fn fitting(size: UVec2) -> Vec<LayoutTemplate> {
+        (LayoutTemplate::ALL.into_iter())
+            .filter(|t| t.fits(size))
+            .collect()
+    }
+
+    #[test]
+    fn a_block_size_fits_the_layouts_it_can_hold() {
+        use LayoutTemplate::*;
+        assert_eq!(fitting(UVec2::splat(4)), [Corner16, Side16]);
+        assert_eq!(fitting(UVec2::splat(3)), [Minimal3x3]);
+        assert_eq!(fitting(UVec2::new(12, 4)), [Blob47]);
+        assert_eq!(fitting(UVec2::new(8, 6)), [Blob47]);
+        assert_eq!(fitting(UVec2::new(5, 3)), [Minimal3x3Inner]);
+        assert!(fitting(UVec2::new(3, 2)).is_empty());
+        assert!(fitting(UVec2::new(47, 1)).is_empty(), "a strip is no blob");
+        assert!(fitting(UVec2::new(16, 1)).is_empty());
+    }
+
+    #[test]
+    fn the_inner_corners_sit_beside_the_3x3() {
+        let slots = LayoutTemplate::Minimal3x3Inner.slots(UVec2::new(5, 3));
+        assert_eq!(slots[8], Some(UVec2::new(2, 2)));
+        assert_eq!(
+            slots[9..],
+            [
+                Some(UVec2::new(3, 0)),
+                Some(UVec2::new(4, 0)),
+                Some(UVec2::new(3, 1)),
+                Some(UVec2::new(4, 1))
+            ]
+        );
+        let flowed = LayoutTemplate::Blob47.slots(UVec2::new(12, 4));
+        assert_eq!(flowed[13], Some(UVec2::new(1, 1)));
+        let short = LayoutTemplate::Corner16.slots(UVec2::new(4, 3));
+        assert_eq!(short.iter().filter(|s| s.is_none()).count(), 4);
+    }
+
+    #[test]
+    fn ground_draws_a_thin_path_that_walls_cannot() {
+        let size = UVec2::splat(3);
+        let minimal = LayoutTemplate::Minimal3x3;
+        let exact = |placement: Placement| {
+            let set = minimal.placed_set(placement, 2, 1, size);
+            let drawn = PaintPreview::ThinPath.resolve(&set, 2, 1);
+            let mut terrain = ChunkedLayer::new();
+            for y in 0..PaintPreview::SIZE {
+                for x in 0..PaintPreview::SIZE {
+                    terrain.set(CellCoord::new(x, y), 1);
+                }
+            }
+            for cell in PaintPreview::ThinPath.cells() {
+                terrain.set(CellCoord(cell), 2);
+            }
+            assert!(!drawn.is_empty());
+            (drawn.iter()).all(|(key, tile)| {
+                resolve_cell(&set, &terrain, &ChunkedLayer::new(), *key).is_exact()
+                    && !tile.is_empty()
+            })
+        };
+        assert!(exact(Placement::BetweenCells), "ground draws it");
+        assert!(!exact(Placement::OnCells), "walls lack a 1-wide tile");
     }
 }

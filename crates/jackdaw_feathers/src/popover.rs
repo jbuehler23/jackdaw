@@ -34,6 +34,13 @@ pub fn plugin(app: &mut App) {
 #[derive(Component)]
 pub struct EditorPopover;
 
+/// A popover closed by Escape or a press outside it, sent just before it is
+/// despawned.
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct PopoverDismissed {
+    pub entity: Entity,
+}
+
 #[derive(Component, Default)]
 pub struct PopoverTracker {
     pub popover: Option<Entity>,
@@ -319,6 +326,7 @@ fn handle_popover_dismiss(
         }
 
         if esc_pressed || !any_hovered {
+            commands.trigger(PopoverDismissed { entity });
             commands.entity(entity).try_despawn();
             continue;
         }
@@ -334,6 +342,7 @@ fn handle_popover_dismiss(
         });
 
         if !has_hovered_nested_popover {
+            commands.trigger(PopoverDismissed { entity });
             commands.entity(entity).try_despawn();
         }
     }

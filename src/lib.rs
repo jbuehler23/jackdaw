@@ -182,6 +182,7 @@ pub mod tileset_bits;
 pub mod tileset_dock;
 pub mod tileset_edit;
 pub mod tileset_import;
+pub mod tileset_layout;
 pub mod tileset_layout_ops;
 pub(crate) mod timestamps;
 pub mod tool_ops;
@@ -482,7 +483,11 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(tile_select::plugin)
         .add_plugins(tilemap_render::plugin)
         .add_plugins(tilemap_resolve::plugin)
-        .add_plugins((tileset_dock::plugin, tileset_bits::plugin))
+        .add_plugins((
+            tileset_dock::plugin,
+            tileset_bits::plugin,
+            tileset_layout::plugin,
+        ))
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins((

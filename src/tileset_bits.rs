@@ -437,7 +437,11 @@ pub(crate) fn spawn_marks(
         .active
         .and_then(|(inner, outer)| setup.set(inner, outer));
     let scale = zoom(tileset.tile_size.as_vec2());
-    for (address, tile) in setup.tiles.iter().filter(|(a, _)| a.sheet == on) {
+    let columns = tileset.sheets.get(sheet as usize).map_or(1, |s| s.columns);
+    let drafted = |tile: u32| {
+        (view.layout.as_ref()).is_some_and(|d| d.pick.is_some() && d.holds(sheet, tile, columns))
+    };
+    for (address, tile) in (setup.tiles.iter()).filter(|(a, _)| a.sheet == on && !drafted(a.tile)) {
         let peers = &tile.terrains;
         let holding = if view.bits == BitsOverlay::Set {
             let Some(set) = active.filter(|s| setup.holds(s.inner, s.outer, tile)) else {
@@ -460,7 +464,9 @@ pub(crate) fn spawn_marks(
                 tile: address.tile,
                 peer: peer.index(),
             };
-            spawn_mark(world, frame, mark, tileset, scale, swatch(tileset, id, 0.8));
+            let at = (sheet, address.tile, peer.index());
+            let color = swatch(tileset, id, 0.8);
+            spawn_mark(world, frame, at, mark, (tileset, scale), color);
         }
     }
 }
@@ -472,20 +478,21 @@ fn mark_square(third: Vec2) -> (Vec2, Vec2) {
     ((third - side) / 2.0, side)
 }
 
-fn spawn_mark(
+/// A mark of peer `peer` of sheet tile `tile` over `frame`, tagged with `tag`.
+pub(crate) fn spawn_mark(
     world: &mut World,
     frame: Entity,
-    mark: BitMark,
-    tileset: &Tileset,
-    scale: f32,
+    (sheet, tile, peer): (u32, u32, usize),
+    tag: impl Bundle,
+    (tileset, scale): (&Tileset, f32),
     color: Color,
 ) {
-    let Some((origin, size)) = tileset.sheet_rect(mark.sheet, mark.tile) else {
+    let Some((origin, size)) = tileset.sheet_rect(sheet, tile) else {
         return;
     };
     let third = size.as_vec2() * scale / 3.0;
     let (offset, side) = mark_square(third);
-    let cell = Vec2::new((mark.peer % 3) as f32, (mark.peer / 3) as f32);
+    let cell = Vec2::new((peer % 3) as f32, (peer / 3) as f32);
     let at = origin.as_vec2() * scale + cell * third + offset;
     world.spawn((
         Node {
@@ -499,7 +506,7 @@ fn spawn_mark(
         },
         BackgroundColor(color),
         BorderColor::all(Color::BLACK.with_alpha(0.6)),
-        mark,
+        tag,
         Pickable::IGNORE,
         ChildOf(frame),
     ));
@@ -660,7 +667,8 @@ fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Pe
             tile: *tile,
             peer: peer.index(),
         };
-        spawn_mark(world, frame, mark, &stroke.tileset, scale, color);
+        let at = (stroke.sheet, *tile, peer.index());
+        spawn_mark(world, frame, at, mark, (&stroke.tileset, scale), color);
     }
     let zones: Vec<(TileAddress, Peer)> = (fresh.iter())
         .map(|(tile, peer)| {
