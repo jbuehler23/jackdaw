@@ -63,7 +63,7 @@ const LOW_CONFIDENCE: f32 = 0.5;
 const MIN_SHAPES: usize = 4;
 /// Share of a template's shapes present to name it.
 const TEMPLATE_SHARE: f32 = 0.9;
-const BORDER: [Peer; 8] = [
+pub(crate) const BORDER: [Peer; 8] = [
     Peer::TopLeft,
     Peer::Top,
     Peer::TopRight,
@@ -81,7 +81,7 @@ const MODES: [MatchMode; 3] = [
 
 /// Edge pixels in Oklab, `None` when transparent, in [`Peer::SIDES`] order;
 /// rows run left to right and columns top to bottom.
-type Edges = [Vec<Option<Vec3>>; 4];
+pub(crate) type Edges = [Vec<Option<Vec3>>; 4];
 /// Distinct partner edges by the partner's inner peer and the side it lies on.
 type Partners<'a> = HashMap<(Peer, usize), Vec<&'a [Option<Vec3>]>>;
 
@@ -328,7 +328,7 @@ fn outer_of(
     best.map(|(t, _)| t)
 }
 
-fn tile_edges(input: &SheetInput, tile: u32) -> Option<Edges> {
+pub(crate) fn tile_edges(input: &SheetInput, tile: u32) -> Option<Edges> {
     let side = |slot: usize| side_pixels(input, tile, slot);
     Some([side(0)?, side(1)?, side(2)?, side(3)?])
 }
@@ -495,7 +495,7 @@ fn best_seam(own: &Edges, partners: &Partners, peer: Peer) -> Option<f32> {
 }
 
 /// Whether `peer` lies on `side` of the tile.
-fn touches(peer: Peer, side: Peer) -> bool {
+pub(crate) fn touches(peer: Peer, side: Peer) -> bool {
     let (at, across) = (peer.offset(), side.offset());
     if across.y != 0 {
         at.y == across.y
@@ -517,7 +517,7 @@ fn mirror(peer: Peer, side: Peer) -> Option<Peer> {
 /// The pixels along `side` of a `w x h` tile that decide `peer`: a corner
 /// region's span, or for a side the centre region's, where a joined centre
 /// must cross the edge.
-fn segment(peer: Peer, side: Peer, w: u32, h: u32) -> Range<usize> {
+pub(crate) fn segment(peer: Peer, side: Peer, w: u32, h: u32) -> Range<usize> {
     let region = if peer.corner_sides().is_some() {
         peer
     } else {
@@ -617,7 +617,7 @@ fn low_confidence(mode: MatchMode, tile: &FittedTile) -> bool {
 
 /// Whether `mode` reads peer `p` of a normalised tile: sides when it uses
 /// them, corners in `Corners` and enclosed corners in `CornersAndSides`.
-fn reads(mode: MatchMode, t: &TileTerrains, p: Peer) -> bool {
+pub(crate) fn reads(mode: MatchMode, t: &TileTerrains, p: Peer) -> bool {
     if p.corner_sides().is_none() {
         return p != Peer::Centre && mode.uses_sides();
     }

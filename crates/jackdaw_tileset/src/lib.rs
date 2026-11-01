@@ -341,7 +341,7 @@ impl Tileset {
         Some((tile, jackdaw_tilemap::Peer::under(inside, mode)))
     }
 
-    fn sheet_layout(&self, sheet: u32) -> Option<GridLayout> {
+    pub fn sheet_layout(&self, sheet: u32) -> Option<GridLayout> {
         let sheet = self.sheets.get(sheet as usize)?;
         Some(GridLayout {
             tile: self.tile_size,

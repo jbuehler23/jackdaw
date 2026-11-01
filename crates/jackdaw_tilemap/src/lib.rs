@@ -6,6 +6,7 @@
 //! layer origin, and cells are half-open `[min, max)` so a point exactly on
 //! an edge belongs to the cell whose min corner it is.
 
+mod block_fit;
 mod collision_trace;
 mod data_path;
 mod grid;
@@ -26,6 +27,7 @@ mod template;
 mod terrain_find;
 mod tile;
 
+pub use block_fit::{BlockEvidence, BlockFit, TerrainLook, fit_block};
 pub use collision_trace::{SolidMask, TileShape, solid_mask, trace_mask, trace_proposal};
 pub use data_path::{DataPathError, EXTENSION, mint_data_path, resolve_path};
 pub use grid::{

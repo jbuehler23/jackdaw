@@ -46,6 +46,25 @@ fn cell(text: &str, what: &str) -> Result<UVec2, String> {
     Ok(UVec2::new(x as u32, y as u32))
 }
 
+/// Block cells by template tile, `-` for a skipped tile.
+fn cell_order(text: &str) -> Result<Vec<Option<u32>>, String> {
+    (text.split(',').map(str::trim))
+        .map(|part| match part {
+            "-" => Ok(None),
+            part => (part.parse::<u32>().map(Some))
+                .map_err(|_| format!("order is block cells like 0,4,-,2, not `{text}`")),
+        })
+        .collect()
+}
+
+/// `order` as `tileset.apply_template` takes it.
+pub(crate) fn order_text(order: &[Option<u32>]) -> String {
+    let cells = order
+        .iter()
+        .map(|c| c.map_or("-".into(), |c| c.to_string()));
+    cells.collect::<Vec<String>>().join(",")
+}
+
 pub(crate) const TEMPLATES: [(LayoutTemplate, &str); 6] = [
     (LayoutTemplate::Corner16, "corner16"),
     (LayoutTemplate::Side16, "side16"),
@@ -118,6 +137,12 @@ fn placement(template: LayoutTemplate, text: &str) -> Result<Placement, String> 
                    on_cells (walls and paths); defaults to on_cells where the template \
                    allows it. Only minimal3x3, corner2x2 and minimal3x3_inner take both."
         ),
+        order(
+            String,
+            doc = "The block cell each template tile takes, as comma-separated indices \
+                   counted row by row from 0 at the top left, `-` skipping a tile; \
+                   defaults to the template's own order."
+        ),
         sheet(
             String,
             doc = "Sheet index or source path; defaults to the first setup sheet."
@@ -136,6 +161,7 @@ pub fn tileset_apply_template(
         "origin",
         "size",
         "sheet",
+        "order",
     ];
     let args: Vec<(&'static str, String)> = keys.map(|k| (k, text(&params, k))).to_vec();
     queue_edit(
@@ -156,6 +182,7 @@ pub(crate) fn template_edit(
     };
     let (inner, outer, template) = (arg("inner"), arg("outer"), arg("template"));
     let (placed, origin, size, on) = (arg("placement"), arg("origin"), arg("size"), arg("sheet"));
+    let order = arg("order");
     move |_, tileset| {
         with_setup(tileset, |tileset, setup| {
             let (inner, outer) = (
@@ -175,9 +202,14 @@ pub(crate) fn template_edit(
             let grid = UVec2::new(source.columns, source.rows);
             let layout = (template, placement);
             let block = (origin, size);
-            let (tiles, skipped) =
-                (setup.apply_template(layout, (inner, outer), index, grid, block))
-                    .map_err(|e| e.to_string())?;
+            let order = match order.as_str() {
+                "" => template.canonical_order(size),
+                order => cell_order(order)?,
+            };
+            let pair = (inner, outer);
+            let (tiles, skipped) = (setup
+                .apply_template_ordered(layout, pair, index, grid, block, &order))
+            .map_err(|e| e.to_string())?;
             let icons = bare_icons(tileset, setup, [inner, outer]);
             let past = match skipped {
                 0 => String::new(),

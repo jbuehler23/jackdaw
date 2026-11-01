@@ -124,6 +124,33 @@ impl LayoutTemplate {
             .collect()
     }
 
+    /// The block cell, row by row, each tile takes in [`Self::slots`].
+    pub fn canonical_order(self, size: UVec2) -> Vec<Option<u32>> {
+        (self.slots(size).into_iter())
+            .map(|slot| slot.map(|c| c.y * size.x + c.x))
+            .collect()
+    }
+
+    /// The cell of each tile when tile `i` takes block cell `order[i]`, row
+    /// by row; `None` unless `order` has one entry per tile and names each
+    /// cell of a block of `size` at most once.
+    pub fn ordered_slots(self, size: UVec2, order: &[Option<u32>]) -> Option<Vec<Option<UVec2>>> {
+        let area = size.x * size.y;
+        let mut seen = vec![false; area as usize];
+        if order.len() != self.tile_count() {
+            return None;
+        }
+        (order.iter())
+            .map(|cell| match *cell {
+                None => Some(None),
+                Some(c) if c < area && !std::mem::replace(&mut seen[c as usize], true) => {
+                    Some(Some(UVec2::new(c % size.x, c / size.x)))
+                }
+                Some(_) => None,
+            })
+            .collect()
+    }
+
     /// Its tiles read at `placement`: between cells only the corners count,
     /// so the centre is inner and the sides outer, as in `Corner16`.
     pub fn placed_tiles(

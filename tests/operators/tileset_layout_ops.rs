@@ -52,6 +52,46 @@ fn apply_template_lays_its_shapes_from_the_origin() {
 }
 
 #[test]
+fn apply_template_lays_each_shape_on_the_cell_its_order_names() {
+    let (mut app, dir) = overworld();
+    let params = [
+        ("inner", "11"),
+        ("outer", "2"),
+        ("template", "corner2x2"),
+        ("origin", "10,0"),
+        ("order", "3,-,0,2"),
+    ];
+    let (before, after) = edit(&mut app, &dir, "tileset.apply_template", &params);
+    let shapes = LayoutTemplate::Corner2x2.tiles(WATER, GROUND);
+    for (tile, shape) in [(38, 0), (10, 2), (37, 3)] {
+        assert_eq!(
+            peers_of(&after, tile),
+            Some(shapes[shape].peers),
+            "tile {tile}"
+        );
+    }
+    assert_eq!(
+        peers_of(&after, 11),
+        peers_of(&before, 11),
+        "a skipped tile is kept"
+    );
+    let apply = "tileset.apply_template";
+    let at = |order| {
+        [
+            ("inner", "11"),
+            ("outer", "2"),
+            ("template", "corner2x2"),
+            ("origin", "10,0"),
+            ("order", order),
+        ]
+    };
+    refused(&mut app, &dir, apply, &at("0,1,2"), "one block cell per");
+    refused(&mut app, &dir, apply, &at("0,0,1,2"), "each at most once");
+    refused(&mut app, &dir, apply, &at("0,1,2,4"), "one block cell per");
+    refused(&mut app, &dir, apply, &at("a,1,2,3"), "block cells like");
+}
+
+#[test]
 fn apply_template_takes_a_block_size_and_a_placement() {
     let (mut app, dir) = overworld();
     let params = [
