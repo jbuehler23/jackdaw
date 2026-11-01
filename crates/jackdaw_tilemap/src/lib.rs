@@ -46,7 +46,7 @@ pub use report::{
 };
 pub use setup::{
     CollisionMode, Provenance, Scope, SetupSet, SetupTerrain, SetupTile, TilesetSetup, Tracked,
-    rerun, reset_to_auto,
+    fits, rerun, reset_to_auto, solver_takes,
 };
 pub use setup_layout::Coverage;
 pub use sidecar::{

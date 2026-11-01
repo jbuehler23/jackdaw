@@ -2,15 +2,16 @@ use std::collections::BTreeSet;
 
 use glam::UVec2;
 
-use crate::setup::{set_holds, transition};
+use crate::setup::transition;
 use crate::{
-    LayoutTemplate, MatchMode, Peer, Provenance, SetupError, SetupSet, Stamp, TerrainId,
-    TileAddress, TileTerrains, TilesetSetup,
+    LayoutTemplate, MatchMode, Peer, Provenance, SetupError, SetupSet, SetupTile, Stamp, TerrainId,
+    TileAddress, TileTerrains, TilesetSetup, fits, solver_takes,
 };
 
 /// How much of its full layout a terrain set's tiles cover.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Coverage {
+    pub mode: MatchMode,
     pub covered: usize,
     pub total: usize,
     /// Shapes of the full layout no tile of the set has.
@@ -89,27 +90,17 @@ impl TilesetSetup {
         Ok(self.stamps.remove(at).value)
     }
 
-    /// The shapes of the set's full layout that its tiles have, read under
-    /// its mode: corners for `Corners`, sides and centre for `Sides`.
+    /// The shapes of the set's full layout that the tiles it holds have, each
+    /// read by the peers its mode tells tiles apart by.
     pub fn coverage(&self, inner: TerrainId, outer: TerrainId) -> Result<Coverage, SetupError> {
         let mode = (self.set(inner, outer))
             .ok_or(SetupError::UnknownSet(inner, outer))?
             .mode
             .value;
-        let read: &[Peer] = match mode {
-            MatchMode::Corners => &Peer::CORNERS,
-            MatchMode::Sides => &[
-                Peer::Top,
-                Peer::Left,
-                Peer::Centre,
-                Peer::Right,
-                Peer::Bottom,
-            ],
-            MatchMode::CornersAndSides => &Peer::ALL,
-        };
+        let read: Vec<Peer> = Peer::ALL.into_iter().filter(|p| mode.reads(*p)).collect();
         let key = |t: &TileTerrains| read.iter().map(|p| t.get(*p)).collect::<Vec<_>>();
         let present: BTreeSet<Vec<TerrainId>> = (self.tiles.values())
-            .filter(|t| set_holds((inner, outer), &t.terrains, &self.sets))
+            .filter(|t| self.holds(inner, outer, t))
             .map(|t| key(&t.terrains))
             .collect();
         let full = match mode {
@@ -123,6 +114,7 @@ impl TilesetSetup {
             .copied()
             .collect();
         Ok(Coverage {
+            mode,
             covered: universe.len() - missing.len(),
             total: universe.len(),
             missing,
@@ -144,10 +136,18 @@ impl TilesetSetup {
             .collect()
     }
 
-    /// Whether the set of `inner` over `outer` holds a tile with `peers`, as
+    /// Whether the set of `inner` over `outer` holds `tile`: its peers are
+    /// the set's terrains and the solver takes it for the set's mode, as
     /// [`TilesetSetup::coverage`] counts it.
-    pub fn holds(&self, inner: TerrainId, outer: TerrainId, peers: &TileTerrains) -> bool {
-        set_holds((inner, outer), peers, &self.sets)
+    pub fn holds(&self, inner: TerrainId, outer: TerrainId, tile: &SetupTile) -> bool {
+        let Some(set) = self.set(inner, outer) else {
+            return false;
+        };
+        let sets: Vec<_> = (self.sets.iter())
+            .map(|s| ((s.inner, s.outer), s.mode.value))
+            .collect();
+        let peers = &tile.terrains.peers;
+        fits((inner, outer), peers) && solver_takes(set.mode.value, peers, tile.set, &sets)
     }
 
     /// Paints `terrain` by hand on each zone of `zones` the mode of the set
@@ -302,6 +302,40 @@ mod tests {
     }
 
     #[test]
+    fn corner_coverage_counts_the_sixteen_corner_patterns_with_shared_plain_tiles() {
+        let mut setup = farm();
+        let dirt = setup.add_terrain("dirt", [120, 80, 40], false).expect("id");
+        setup.add_set(dirt, GRASS, MatchMode::Corners).expect("set");
+        let shapes = LayoutTemplate::Corner16.tiles(dirt, GRASS);
+        for (tile, shape) in (40..).zip(&shapes) {
+            let corners = (Peer::CORNERS.iter())
+                .fold(TileTerrains::default(), |t, p| t.with(*p, shape.get(*p)));
+            setup.set_peers(at(tile), corners).expect("bits");
+        }
+        let coverage = setup.coverage(dirt, GRASS).expect("set");
+        assert_eq!(
+            (coverage.covered, coverage.total),
+            (16, 16),
+            "{:?}",
+            coverage.missing
+        );
+
+        setup.tiles.remove(&at(0));
+        let plain_corners = setup.tiles[&at(55)].clone();
+        assert!(
+            !setup.holds(dirt, GRASS, &plain_corners),
+            "grass corners alone also fit the sides set, so the solver leaves the tile out"
+        );
+        let coverage = setup.coverage(dirt, GRASS).expect("set");
+        assert_eq!(coverage.covered, 15, "only the whole grass tile served it");
+        setup
+            .set_peers(at(0), TileTerrains::filled(GRASS))
+            .expect("bits");
+        assert!(setup.holds(dirt, GRASS, &setup.tiles[&at(0)]));
+        assert!(setup.holds(SAND, GRASS, &setup.tiles[&at(0)]));
+    }
+
+    #[test]
     fn flagged_tiles_mix_terrains_no_set_borders() {
         let mut setup = farm();
         assert!(setup.flagged().is_empty());
@@ -412,7 +446,7 @@ mod tests {
         assert_eq!(setup.tiles[&at(3)].terrains.get(Peer::TopLeft), 0);
         assert_eq!(setup.tiles[&at(4)].terrains.centre(), SAND);
         assert!(setup.tiles[&at(3)].provenance[Peer::Top.index()] == Provenance::User);
-        assert!(setup.holds(SAND, GRASS, &setup.tiles[&at(3)].terrains));
+        assert!(setup.holds(SAND, GRASS, &setup.tiles[&at(3)]));
         assert_eq!(
             setup.paint_zones(SAND, GRASS, SAND, &zones),
             Ok(0),

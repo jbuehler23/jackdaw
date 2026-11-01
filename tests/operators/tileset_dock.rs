@@ -15,12 +15,13 @@ use bevy::ui_widgets::Activate;
 use jackdaw::asset_index::AssetIndex;
 use jackdaw::tileset_bits::MissingGlyph;
 use jackdaw::tileset_dock::{
-    CollisionCombo, DockAction, DockControl, DockPage, DockView, NameField, SheetPicture,
-    TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext,
-    TilesetDockViews,
+    BitsOverlay, CollisionCombo, DockAction, DockControl, DockPage, DockPane, DockTool, DockView,
+    NameField, Pane, SheetPicture, TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock,
+    TilesetDockInputContext, TilesetDockViews,
 };
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_panels::tree::{DockTree, Edge, TabId};
 use jackdaw_scene_types::PropertyValue;
 use jackdaw_scene_types::tilemap::{Tilemap, TilemapLayer};
@@ -211,7 +212,7 @@ fn the_open_tabs_survive_the_saved_layout() {
     assert_eq!(after.len(), 1, "{after:?}");
     assert_eq!((&after[0].1, &after[0].2), (&before[0].1, &before[0].2));
     let root = root(&mut app, after[0].0);
-    assert!(texts(&mut app, root).iter().any(|t| t == FILE));
+    assert!(texts(&mut app, root).iter().any(|t| t == "Terrains"));
 }
 
 /// A layout restored before its tileset has loaded waits for it.
@@ -239,7 +240,7 @@ fn a_restored_tab_shows_its_tileset_once_it_loads() {
         tilesets.insert(id, value).expect("stored");
     }
     settle(&mut app);
-    assert!(texts(&mut app, root).iter().any(|t| t == FILE));
+    assert!(texts(&mut app, root).iter().any(|t| t == "Terrains"));
 }
 
 /// A tab dragged to an edge is a new tab, and keeps what it showed.
@@ -262,7 +263,7 @@ fn a_moved_tab_keeps_its_view_and_a_closed_one_drops_it() {
     settle(&mut app);
     let dock = root(&mut app, moved);
     assert_eq!(view(&app).selected, Some((0, 100)));
-    assert!(texts(&mut app, dock).contains(&"tile 0:100".to_string()));
+    assert!(texts(&mut app, dock).contains(&"Tile 100".to_string()));
 
     app.world_mut()
         .operator("dock.close_tab")
@@ -616,7 +617,11 @@ fn the_missing_shapes_of_a_set_open_on_request() {
                         .is_some_and(|b| b.0.alpha() > 0.0)
                 })
                 .count();
-            assert_eq!((cells.len(), painted), (9, 5), "a corner and centre shape");
+            assert_eq!(
+                (cells.len(), painted),
+                (9, 4),
+                "the four corners of a corner shape"
+            );
         }
         glyphs.len()
     };
@@ -626,7 +631,9 @@ fn the_missing_shapes_of_a_set_open_on_request() {
         "{shown:?}"
     );
     assert!(
-        shown.iter().any(|t| t == "water over grass: Corners 1/16"),
+        shown
+            .iter()
+            .any(|t| t == "water over grass: 1 of 16 shapes"),
         "{shown:?}"
     );
     assert_eq!(listed(&mut app), 0, "collapsed: {shown:?}");
@@ -745,11 +752,11 @@ fn escape_closes_the_name_field_and_adds_nothing() {
 fn the_new_terrain_button_opens_the_same_field() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    assert!(
-        !actions(&mut app, root).contains(&DockAction::NewTerrain),
-        "no tile, no button"
-    );
+    let button = control(&mut app, root, DockAction::NewTerrain);
+    assert!(disabled(&app, button), "no tile, a disabled button");
     press(&mut app, root, DockAction::Tile(0, 6));
+    let button = control(&mut app, root, DockAction::NewTerrain);
+    assert!(!disabled(&app, button));
     press(&mut app, root, DockAction::NewTerrain);
     let (field, _, prefill) = name_field(&mut app, root).expect("the field opens");
     assert_eq!((field, prefill.as_str()), (NameField::New, "Terrain 3"));
@@ -945,10 +952,8 @@ fn the_selected_tile_becomes_the_brush_terrains_icon() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Brush(WATER));
-    assert!(
-        !actions(&mut app, root).contains(&DockAction::SetIcon(WATER)),
-        "no tile yet"
-    );
+    let button = control(&mut app, root, DockAction::SetIcon(WATER));
+    assert!(disabled(&app, button), "no tile yet");
     press(&mut app, root, DockAction::Tile(0, 9));
     let count = entries(&app);
     press(&mut app, root, DockAction::SetIcon(WATER));
@@ -1065,5 +1070,254 @@ fn a_set_row_keeps_its_remove_button_inside_a_narrow_dock() {
         (node.min_width, node.flex_shrink > 0.0),
         (Val::Px(0.0), true),
         "the set line gives way before the button"
+    );
+}
+
+fn disabled(app: &App, entity: Entity) -> bool {
+    app.world()
+        .get::<bevy::ui::InteractionDisabled>(entity)
+        .is_some()
+}
+
+fn pane(app: &mut App, root: Entity, pane: Pane) -> Rect {
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &DockPane)>()
+        .iter(app.world())
+        .filter(|(_, p)| p.root == root && p.pane == pane)
+        .map(|(e, _)| e)
+        .collect();
+    assert_eq!(found.len(), 1, "one {pane:?} pane");
+    screen_rect(app, found[0])
+}
+
+#[test]
+fn the_terrains_column_sits_beside_the_sheet() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    let mut widths = Vec::new();
+    for width in [954, 1920] {
+        set_width(&mut app, width);
+        let dock = screen_rect(&app, root);
+        let list = pane(&mut app, root, Pane::List);
+        let sheet = pane(&mut app, root, Pane::Sheet);
+        assert!(
+            list.max.x <= sheet.min.x + 0.5,
+            "{width}: {list:?} {sheet:?}"
+        );
+        assert!(
+            (list.min.y - sheet.min.y).abs() < 0.5,
+            "{width}: tops align"
+        );
+        assert!(
+            sheet.max.x <= dock.max.x + 0.5,
+            "{width}: {sheet:?} {dock:?}"
+        );
+        assert!(
+            sheet.max.y <= dock.max.y + 0.5,
+            "{width}: {sheet:?} {dock:?}"
+        );
+        assert!(sheet.width() >= 200.0, "{width}: the sheet keeps room");
+        let first = control(&mut app, root, DockAction::Tile(0, 0));
+        let first = screen_rect(&app, first);
+        assert!(
+            (first.min.y - sheet.min.y).abs() < 20.0,
+            "{width}: the sheet starts at the top, {first:?} in {sheet:?}"
+        );
+        widths.push(list.width());
+    }
+    assert_eq!(widths[0], widths[1], "a fixed column width");
+}
+
+#[test]
+fn picking_a_terrain_or_a_set_keeps_every_row_in_place() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let rows = [
+        DockAction::Brush(0),
+        DockAction::Brush(GRASS),
+        DockAction::Brush(WATER),
+        DockAction::ActiveSet(WATER, GRASS),
+    ];
+    let places = |app: &mut App| -> Vec<Rect> {
+        (rows.iter())
+            .map(|a| {
+                let row = control(app, root, *a);
+                screen_rect(app, row)
+            })
+            .collect()
+    };
+    let before = places(&mut app);
+    for action in [
+        DockAction::Brush(WATER),
+        DockAction::Tile(0, 5),
+        DockAction::ToggleMissing(WATER, GRASS),
+        DockAction::RenameTerrain(WATER),
+        DockAction::Brush(GRASS),
+    ] {
+        press(&mut app, root, action);
+        let after = places(&mut app);
+        for (row, (a, b)) in rows.iter().zip(before.iter().zip(&after)) {
+            assert!(
+                (a.min - b.min).abs().max_element() < 0.5,
+                "{row:?} moved from {a:?} to {b:?} after {action:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_header_names_no_keys_and_its_tooltips_do() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let shown = texts(&mut app, root);
+    for label in ["Select", "Paint", "Off", "Set", "All", "New terrain"] {
+        assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
+    }
+    assert!(
+        !shown.iter().any(|t| t.contains(" (")),
+        "no key in a label: {shown:?}"
+    );
+    for (action, key) in [
+        (DockAction::Tool(DockTool::Paint), "P"),
+        (DockAction::Tool(DockTool::Select), "P"),
+        (DockAction::Bits(BitsOverlay::Set), "O"),
+        (DockAction::NewTerrain, "N"),
+    ] {
+        let entity = control(&mut app, root, action);
+        let tip = app.world().get::<Tooltip>(entity).cloned();
+        let tip = tip.unwrap_or_else(|| panic!("{action:?} has a tooltip"));
+        assert_eq!(tip.keybind, key, "{action:?}");
+        assert!(!tip.title.is_empty(), "{action:?}");
+    }
+}
+
+#[test]
+fn match_modes_and_coverage_read_as_words() {
+    let (mut app, _dir) = handmade();
+    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    settle(&mut app);
+    let (_, root) = opened(&mut app);
+    let shown = texts(&mut app, root);
+    assert!(
+        shown.iter().any(|t| t == "Corners and sides"),
+        "the default mode pick: {shown:?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "water over grass: 1 of 16 shapes"),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|t| t == "Corners: 15 shapes missing"),
+        "{shown:?}"
+    );
+    for raw in ["corners_and_sides", "CornersAndSides", "1/16", "TERRAINS"] {
+        assert!(!shown.iter().any(|t| t.contains(raw)), "{raw}: {shown:?}");
+    }
+}
+
+#[test]
+fn the_name_field_commits_when_it_loses_the_keyboard() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Tile(0, 5));
+    press(&mut app, root, DockAction::NewTerrain);
+    assert!(name_field(&mut app, root).is_some());
+    let count = entries(&app);
+    input(&mut app, "input.text text=dirt");
+    app.world_mut()
+        .resource_mut::<bevy::input_focus::InputFocus>()
+        .clear();
+    settle(&mut app);
+    let terrains = on_disk(&dir).terrains;
+    assert_eq!(
+        terrains.last().map(|t| t.name.as_str()),
+        Some("dirt"),
+        "{terrains:?}"
+    );
+    assert_eq!(entries(&app), count + 1);
+    assert_eq!(name_field(&mut app, root), None);
+}
+
+#[test]
+fn a_click_elsewhere_commits_the_typed_name_first() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Tile(0, 5));
+    press(&mut app, root, DockAction::NewTerrain);
+    input(&mut app, "input.text text=dirt");
+    let count = entries(&app);
+    press(&mut app, root, DockAction::Tile(0, 9));
+    let terrains = on_disk(&dir).terrains;
+    let dirt = terrains.last().map(|t| (t.name.as_str(), t.icon));
+    assert_eq!(dirt, Some(("dirt", Some((0, 5)))), "{terrains:?}");
+    assert_eq!(entries(&app), count + 1);
+    assert_eq!(view(&app).selected, Some((0, 9)), "then the click");
+    assert_eq!(name_field(&mut app, root), None);
+}
+
+#[test]
+fn dock_tooltips_follow_a_rebound_key() {
+    use jackdaw_api_internal::lifecycle::OperatorAction;
+    use jackdaw_input::{Binding, BindingOf, ModKeys};
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let actions: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &OperatorAction)>()
+        .iter(app.world())
+        .filter(|(_, a)| a.0 == "tileset.paint_mode")
+        .map(|(e, _)| e)
+        .collect();
+    assert!(!actions.is_empty(), "the paint mode key has an action");
+    let old: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &BindingOf)>()
+        .iter(app.world())
+        .filter(|(_, b)| actions.contains(&b.0))
+        .map(|(e, _)| e)
+        .collect();
+    for binding in old {
+        app.world_mut().entity_mut(binding).despawn();
+    }
+    let key = Binding::Keyboard {
+        key: KeyCode::KeyQ,
+        mod_keys: ModKeys::empty(),
+    };
+    app.world_mut().spawn((key, BindingOf(actions[0])));
+    settle(&mut app);
+    let paint = control(&mut app, root, DockAction::Tool(DockTool::Paint));
+    let tip = app.world().get::<Tooltip>(paint).map(|t| t.keybind.clone());
+    assert_eq!(tip.as_deref(), Some("Q"));
+}
+
+#[test]
+fn the_object_hint_names_the_sheet_of_a_tileset_with_several() {
+    let (mut app, dir) = project_app();
+    let rows = image::imageops::crop_imm(&crate::tileset_ops::art_rows(), 0, 0, 432, 64).to_image();
+    rows.save(dir.path().join("assets/rows.png")).expect("save");
+    import(&mut app, &[("paths", "overworld.png, rows.png")]);
+    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
+    util::update_until(
+        &mut app,
+        "the tileset to load",
+        Duration::from_secs(20),
+        |app| {
+            let tilesets = app.world().resource::<Assets<Tileset>>();
+            tilesets.iter().any(|(_, t)| t.sheets.len() == 2)
+        },
+    );
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Page(DockPage::Objects));
+    press(&mut app, root, DockAction::Tile(1, 0));
+    press(&mut app, root, DockAction::Tile(1, 1));
+    let shown = texts(&mut app, root);
+    assert!(
+        shown.iter().any(|t| t == "Sheet 2, tiles 0 to 1"),
+        "{shown:?}"
     );
 }

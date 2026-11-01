@@ -35,6 +35,7 @@ pub struct OperatorTooltipPlugin;
 impl Plugin for OperatorTooltipPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(auto_attach_button_tooltip)
+            .add_observer(attach_operator_tooltip)
             .add_observer(describe_disabled_button)
             .add_observer(describe_enabled_button)
             .add_observer(refresh_disabled_descriptions)
@@ -63,12 +64,41 @@ fn auto_attach_button_tooltip(
         return;
     };
     let keybind = display_keybind(call.id.as_ref(), &actions, &binding_components);
-    commands.entity(entity).insert(
-        Tooltip::title(op.label())
-            .with_keybind(keybind)
-            .with_description(op.description())
-            .with_footer(call.to_string()),
-    );
+    let tip = operator_tooltip(op, keybind).with_footer(call.to_string());
+    commands.entity(entity).insert(tip);
+}
+
+/// The tooltip of a control that dispatches operator `.0` itself rather than
+/// through a [`ButtonOperatorCall`]; it shows the operator and its live key.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct OperatorTooltip(pub &'static str);
+
+fn attach_operator_tooltip(
+    add: On<Add<OperatorTooltip>>,
+    tips: Query<&OperatorTooltip>,
+    operators: Query<&OperatorEntity>,
+    actions: Query<(&OperatorAction, &Bindings)>,
+    binding_components: Query<&Binding>,
+    mut commands: Commands,
+) {
+    let entity = add.event_target();
+    let Ok(OperatorTooltip(id)) = tips.get(entity).copied() else {
+        return;
+    };
+    let Some(op) = operators.iter().find(|o| o.id() == id) else {
+        return;
+    };
+    let keybind = display_keybind(id, &actions, &binding_components);
+    commands
+        .entity(entity)
+        .insert(operator_tooltip(op, keybind));
+}
+
+/// The tooltip naming operator `op`, what it does and the key it is bound to.
+fn operator_tooltip(op: &OperatorEntity, keybind: String) -> Tooltip {
+    Tooltip::title(op.label())
+        .with_keybind(keybind)
+        .with_description(op.description())
 }
 
 /// Put the unavailable reason, or the operator description when it has none,
@@ -139,19 +169,23 @@ fn refresh_keybind_on_bindings_change(
     changed_actions: Query<&OperatorAction, Changed<Bindings>>,
     actions: Query<(&OperatorAction, &Bindings)>,
     binding_components: Query<&Binding>,
-    mut tooltips: Query<(&ButtonOperatorCall, &mut Tooltip)>,
+    mut tooltips: Query<(
+        Option<&ButtonOperatorCall>,
+        Option<&OperatorTooltip>,
+        &mut Tooltip,
+    )>,
 ) {
     if changed_actions.is_empty() {
         return;
     }
-    for (call, mut tip) in &mut tooltips {
-        if !changed_actions
-            .iter()
-            .any(|action| action.0 == call.id.as_ref())
-        {
+    for (call, tip_of, mut tip) in &mut tooltips {
+        let Some(id) = call.map(|c| c.id.as_ref()).or(tip_of.map(|t| t.0)) else {
+            continue;
+        };
+        if !changed_actions.iter().any(|action| action.0 == id) {
             continue;
         }
-        let new_keybind = display_keybind(call.id.as_ref(), &actions, &binding_components);
+        let new_keybind = display_keybind(id, &actions, &binding_components);
         if tip.keybind != new_keybind {
             tip.keybind = new_keybind;
         }

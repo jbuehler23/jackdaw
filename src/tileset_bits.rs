@@ -21,6 +21,8 @@ use crate::tileset_edit::{peer, queue_edit, terrain, terrain_or_empty, text, til
 
 /// On-screen size of a missing shape's glyph.
 const GLYPH: f32 = 21.0;
+/// On-screen size an overlay mark keeps however small its tile is drawn.
+const MARK_MIN: f32 = 10.0;
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<BitStroke>()
@@ -93,6 +95,28 @@ pub struct CoverageLine {
     pub root: Entity,
     pub inner: TerrainId,
     pub outer: TerrainId,
+}
+
+/// The missing shape summary of the active set of `inner` over `outer`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct CoverageSummary {
+    pub root: Entity,
+    pub inner: TerrainId,
+    pub outer: TerrainId,
+}
+
+/// The row of missing shape glyphs of the set of `inner` over `outer`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MissingShapes {
+    pub root: Entity,
+    pub inner: TerrainId,
+    pub outer: TerrainId,
+}
+
+/// The count of painted tiles in the header of the dock `root`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BitsCount {
+    pub root: Entity,
 }
 
 /// The stroke a pointer is painting on a sheet, applied when it lifts.
@@ -301,16 +325,59 @@ pub(crate) fn coverage_line(
     setup: &TilesetSetup,
     (inner, outer): (TerrainId, TerrainId),
 ) -> Option<(String, Coverage)> {
-    let mode = setup.set(inner, outer)?.mode.value;
     let coverage = setup.coverage(inner, outer).ok()?;
     let line = format!(
-        "{} over {}: {mode:?} {}/{}",
+        "{} over {}: {} of {} shapes",
         tileset.terrain_name(inner),
         tileset.terrain_name(outer),
         coverage.covered,
         coverage.total
     );
     Some((line, coverage))
+}
+
+/// How many shapes of its layout a set misses, with its mode.
+pub(crate) fn summary_line(coverage: &Coverage) -> String {
+    let mode = mode_word(coverage.mode);
+    match coverage.missing.len() {
+        0 => format!("{mode}: all {} shapes", coverage.total),
+        missing => format!("{mode}: {missing} shapes missing"),
+    }
+}
+
+/// A glyph in `row` for each shape `coverage` misses.
+pub(crate) fn spawn_missing(
+    world: &mut World,
+    row: Entity,
+    shapes: MissingShapes,
+    tileset: &Tileset,
+    coverage: &Coverage,
+) {
+    let MissingShapes { root, inner, outer } = shapes;
+    for shape in &coverage.missing {
+        let glyph = MissingGlyph { root, inner, outer };
+        spawn_glyph(world, row, glyph, tileset, coverage.mode, shape);
+    }
+}
+
+/// A match mode as the dock names it.
+pub(crate) fn mode_word(mode: MatchMode) -> &'static str {
+    match mode {
+        MatchMode::Corners => "Corners",
+        MatchMode::Sides => "Sides",
+        MatchMode::CornersAndSides => "Corners and sides",
+    }
+}
+
+/// How many tiles of `setup` have painted bits, as the dock header says it.
+pub(crate) fn painted_count(setup: &TilesetSetup) -> String {
+    let count = (setup.tiles.values())
+        .filter(|t| t.terrains.peers.iter().any(|p| *p != 0))
+        .count();
+    match count {
+        1 => "1 tile painted".to_string(),
+        n => format!("{n} tiles painted"),
+    }
 }
 
 /// A missing shape as a 3x3 glyph of the peers `mode` matches on.
@@ -340,7 +407,7 @@ pub(crate) fn spawn_glyph(
         ))
         .id();
     for peer in Peer::ALL {
-        let color = if mode.uses(peer) {
+        let color = if mode.reads(peer) {
             swatch(tileset, shape.get(peer), 1.0)
         } else {
             Color::NONE
@@ -373,18 +440,18 @@ pub(crate) fn spawn_marks(
     for (address, tile) in setup.tiles.iter().filter(|(a, _)| a.sheet == on) {
         let peers = &tile.terrains;
         let holding = if view.bits == BitsOverlay::Set {
-            let Some(set) = active.filter(|s| of_set(s.inner, s.outer, peers)) else {
+            let Some(set) = active.filter(|s| setup.holds(s.inner, s.outer, tile)) else {
                 continue;
             };
             Some(set.mode.value)
         } else {
             (setup.sets.iter())
-                .find(|s| setup.holds(s.inner, s.outer, peers))
+                .find(|s| setup.holds(s.inner, s.outer, tile))
                 .map(|s| s.mode.value)
         };
         for peer in Peer::ALL {
             let id = peers.get(peer);
-            if id == 0 || holding.is_some_and(|mode| !mode.uses(peer)) {
+            if id == 0 || holding.is_some_and(|mode| !mode.reads(peer)) {
                 continue;
             }
             let mark = BitMark {
@@ -396,6 +463,13 @@ pub(crate) fn spawn_marks(
             spawn_mark(world, frame, mark, tileset, scale, swatch(tileset, id, 0.8));
         }
     }
+}
+
+/// Where a mark sits in a zone `third` across, and its size: it keeps
+/// [`MARK_MIN`] by spilling past a zone too small for it.
+fn mark_square(third: Vec2) -> (Vec2, Vec2) {
+    let side = (third - 2.0).max(Vec2::splat(MARK_MIN));
+    ((third - side) / 2.0, side)
 }
 
 fn spawn_mark(
@@ -410,15 +484,16 @@ fn spawn_mark(
         return;
     };
     let third = size.as_vec2() * scale / 3.0;
+    let (offset, side) = mark_square(third);
     let cell = Vec2::new((mark.peer % 3) as f32, (mark.peer / 3) as f32);
-    let at = origin.as_vec2() * scale + cell * third + 1.0;
+    let at = origin.as_vec2() * scale + cell * third + offset;
     world.spawn((
         Node {
             position_type: PositionType::Absolute,
             left: px(at.x),
             top: px(at.y),
-            width: px((third.x - 2.0).max(1.0)),
-            height: px((third.y - 2.0).max(1.0)),
+            width: px(side.x),
+            height: px(side.y),
             border: UiRect::all(px(1.0)),
             ..default()
         },
@@ -605,17 +680,46 @@ fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Pe
     {
         return;
     }
-    let lines: Vec<Entity> = (world.query::<(Entity, &CoverageLine)>())
-        .iter(world)
-        .filter(|(_, l)| l.root == stroke.root && (l.inner, l.outer) == stroke.set)
-        .map(|(e, _)| e)
-        .collect();
-    let Some((text, _)) = coverage_line(&stroke.tileset, &stroke.setup, stroke.set) else {
+    let root = stroke.root;
+    let count = painted_count(&stroke.setup);
+    retext::<BitsCount>(world, |c| c.root == root, &count);
+    let Some((text, coverage)) = coverage_line(&stroke.tileset, &stroke.setup, stroke.set) else {
         return;
     };
-    for entity in lines {
-        if let Some(mut node) = world.get_mut::<Text>(entity) {
-            node.0.clone_from(&text);
+    let set = stroke.set;
+    retext::<CoverageLine>(
+        world,
+        |l| l.root == root && (l.inner, l.outer) == set,
+        &text,
+    );
+    let summary = summary_line(&coverage);
+    retext::<CoverageSummary>(
+        world,
+        |l| l.root == root && (l.inner, l.outer) == set,
+        &summary,
+    );
+    let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())
+        .iter(world)
+        .filter(|(_, m)| m.root == root && (m.inner, m.outer) == set)
+        .map(|(e, m)| (e, *m))
+        .collect();
+    for (row, shapes) in rows {
+        world.entity_mut(row).despawn_related::<Children>();
+        spawn_missing(world, row, shapes, &stroke.tileset, &coverage);
+    }
+}
+
+/// Show `text` in each text carrying a `C` that `pick` takes.
+fn retext<C: Component>(world: &mut World, pick: impl Fn(&C) -> bool, text: &str) {
+    let found: Vec<Entity> = (world.query::<(Entity, &C)>().iter(world))
+        .filter(|(_, c)| pick(c))
+        .map(|(e, _)| e)
+        .collect();
+    for entity in found {
+        if let Some(mut node) = world.get_mut::<Text>(entity)
+            && node.0 != text
+        {
+            text.clone_into(&mut node.0);
         }
     }
 }
@@ -642,8 +746,16 @@ fn finish(world: &mut World, button: PointerButton) {
     dispatch(world, stroke.root, &stroke.path, &stroke.tileset, call);
 }
 
-/// Whether `peers` has bits and all of them are of `inner` or `outer`.
-fn of_set(inner: TerrainId, outer: TerrainId, peers: &TileTerrains) -> bool {
-    let bits = || peers.peers.iter().filter(|p| **p != 0);
-    bits().next().is_some() && bits().all(|p| *p == inner || *p == outer)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mark_keeps_its_least_size_in_a_tiny_zone() {
+        let (offset, side) = mark_square(Vec2::splat(3.0));
+        assert_eq!(side, Vec2::splat(MARK_MIN), "it spills past the zone");
+        assert_eq!(offset, Vec2::splat((3.0 - MARK_MIN) / 2.0), "centred on it");
+        let (offset, side) = mark_square(Vec2::splat(30.0));
+        assert_eq!((offset, side), (Vec2::ONE, Vec2::splat(28.0)));
+    }
 }

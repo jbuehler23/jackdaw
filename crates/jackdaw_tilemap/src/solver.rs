@@ -221,6 +221,12 @@ impl MatchMode {
             self.uses_sides()
         }
     }
+
+    /// Whether tiles of this mode are told apart by `peer`: the peers it
+    /// uses, less the centre of a `Corners` tile, which sits between cells.
+    pub const fn reads(self, peer: Peer) -> bool {
+        self.uses(peer) && !(matches!(self, MatchMode::Corners) && matches!(peer, Peer::Centre))
+    }
 }
 
 /// A tile in a terrain set with its peer terrains and variant weight.

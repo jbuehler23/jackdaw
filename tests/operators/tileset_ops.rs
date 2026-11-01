@@ -50,7 +50,7 @@ pub(crate) fn editor_on(dir: &tempfile::TempDir) -> App {
 }
 
 /// The sheet down to its last row of art: the tiles an import packs.
-fn art_rows() -> image::RgbaImage {
+pub(crate) fn art_rows() -> image::RgbaImage {
     let sheet = decoded(util::OVERWORLD_SHEET);
     image::imageops::crop_imm(&sheet, 0, 0, 432, 38 * 16).to_image()
 }
