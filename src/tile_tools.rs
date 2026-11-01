@@ -241,40 +241,36 @@ pub fn cell_at(point: Vec2, map: &GlobalTransform, cell_size: UVec2) -> CellCoor
 #[operator(
     id = "tilemap.edit_mode",
     label = "Tile Edit Mode",
-    description = "Paint the selected tilemap's cells with the tile tools.",
+    description = "Paint the selected tilemap's cells with the tile tools; while the mode is on, \
+                   move to another layer.",
     allows_undo = false,
     is_available = can_enter_edit_mode,
     unavailable_reason = edit_mode_unavailable,
-    params(layer(i64, doc = "Index of the layer to paint; defaults to 0.")),
+    params(layer(i64, doc = "Index of the layer to paint; defaults to the painted layer, or 0.")),
 )]
 pub(crate) fn tilemap_edit_mode(
     params: In<OperatorParameters>,
     world: &mut World,
 ) -> OperatorResult {
-    let map = world.resource::<Selection>().primary();
-    let layers = map
-        .and_then(|m| world.get::<Tilemap>(m))
-        .map(|t| t.layers.len());
-    let layer = params.as_int("layer").unwrap_or(0);
-    match usize::try_from(layer)
-        .ok()
-        .filter(|l| *l < layers.unwrap_or(0))
-    {
-        Some(layer) => {
-            *world.resource_mut::<TileEditMode>() = TileEditMode {
-                map,
-                layer,
-                tool: TileTool::Brush,
-            };
-            set_context_active(world, true);
-            OperatorResult::Finished
-        }
-        None => {
-            let id = TilemapEditModeOp::ID;
-            warn_caller(world, format!("{id}: the map has no layer {layer}"));
-            OperatorResult::Cancelled
-        }
-    }
+    let id = TilemapEditModeOp::ID;
+    let selected = world.resource::<Selection>().primary();
+    let Some((map, layers)) =
+        selected.and_then(|m| world.get::<Tilemap>(m).map(|t| (m, t.layers.len())))
+    else {
+        warn_caller(world, format!("{id}: no tilemap is selected"));
+        return OperatorResult::Cancelled;
+    };
+    let mode = *world.resource::<TileEditMode>();
+    let current = if mode.map == Some(map) { mode.layer } else { 0 };
+    let layer = params
+        .as_int("layer")
+        .unwrap_or_else(|| i64::try_from(current).unwrap_or(0));
+    let Some(index) = usize::try_from(layer).ok().filter(|l| *l < layers) else {
+        warn_caller(world, format!("{id}: the map has no layer {layer}"));
+        return OperatorResult::Cancelled;
+    };
+    enter_layer(world, map, index);
+    OperatorResult::Finished
 }
 
 /// Whether a modal operator is running, read from a world without a system.
@@ -296,10 +292,15 @@ pub(crate) fn tile_mode_reason(world: &World) -> Option<String> {
 }
 
 fn edit_mode_unavailable(world: &World) -> Option<String> {
+    let selected = world.resource::<Selection>().primary();
+    let on = world.resource::<TileEditMode>().map;
     let reason = if modal_running(world) {
         "Finish the running tool first"
-    } else if world.resource::<TileEditMode>().map.is_some() {
-        "Tile edit mode is already on"
+    } else if on.is_some()
+        && on != selected
+        && selected.is_some_and(|m| world.get::<Tilemap>(m).is_some())
+    {
+        "Tile edit mode is on another map"
     } else {
         "Select a tilemap to edit its tiles"
     };
@@ -312,9 +313,10 @@ fn can_enter_edit_mode(
     maps: Query<(), With<Tilemap>>,
     active: ActiveModalQuery,
 ) -> bool {
-    mode.map.is_none()
+    let primary = selection.primary();
+    (mode.map.is_none() || mode.map == primary)
         && !active.is_modal_running()
-        && selection.primary().is_some_and(|e| maps.contains(e))
+        && primary.is_some_and(|e| maps.contains(e))
 }
 
 /// Leave tile edit mode.

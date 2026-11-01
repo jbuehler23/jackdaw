@@ -11,9 +11,11 @@ use jackdaw_api::DefaultArea;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
-use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
+use jackdaw_feathers::button::{ButtonProps, ButtonSize, ButtonVariant, button};
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, combobox_compact_with_selected};
+use jackdaw_feathers::icons::Icon;
 use jackdaw_feathers::text_edit::{TextEditCommitEvent, TextEditProps, text_edit};
+use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_feathers::{segmented, tokens};
 use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_panels::area::DockWindow;
@@ -229,6 +231,8 @@ pub enum DockAction {
     Tool(DockTool),
     /// Add the set picked in the new set control.
     CreateSet,
+    /// Remove the set `inner` over `outer`.
+    RemoveSet(TerrainId, TerrainId),
 }
 
 /// The drawn image of sheet `sheet` in the dock `root`.
@@ -644,13 +648,42 @@ fn spawn_terrains(
             continue;
         };
         let active = view.active == Some((inner, outer));
+        let holder = world
+            .spawn((
+                Node {
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                ChildOf(parent),
+            ))
+            .id();
         let row = spawn_pick(
             world,
-            parent,
+            holder,
             root,
             DockAction::ActiveSet(inner, outer),
             active,
         );
+        if let Some(mut node) = world.get_mut::<Node>(row) {
+            node.flex_grow = 1.0;
+            node.flex_shrink = 1.0;
+            node.min_width = px(0.0);
+            node.overflow = Overflow::clip_x();
+        }
+        world.spawn((
+            button(
+                ButtonProps::new("")
+                    .with_left_icon(Icon::X)
+                    .with_size(ButtonSize::IconSM)
+                    .with_variant(ButtonVariant::Ghost),
+            ),
+            Tooltip::title("Remove terrain set"),
+            DockControl {
+                root,
+                action: DockAction::RemoveSet(inner, outer),
+            },
+            ChildOf(holder),
+        ));
         let label = spawn_text(world, row, line, tokens::TEXT_SECONDARY);
         let line = CoverageLine { root, inner, outer };
         world.entity_mut(label).insert(line);
@@ -1383,6 +1416,10 @@ fn act(world: &mut World, control: DockControl) {
             let params = vec![("terrain", terrain.to_string())];
             Some(("tileset.terrain.remove", params))
         }
+        DockAction::RemoveSet(inner, outer) => {
+            let params = vec![("inner", inner.to_string()), ("outer", outer.to_string())];
+            Some(("tileset.terrain_set.remove", params))
+        }
     };
     (world.resource_mut::<TilesetDockViews>().0).insert(path.clone(), view);
     if let Some(mut focus) = world.get_resource_mut::<InputFocus>() {
@@ -1393,6 +1430,23 @@ fn act(world: &mut World, control: DockControl) {
         return;
     }
     dispatch(world, root, &path, &tileset, call);
+    if let DockAction::RemoveSet(inner, outer) = control.action {
+        forget_removed_set(world, root, &path, (inner, outer));
+    }
+}
+
+/// Drop the view state of the set `pair` once it is gone from the tileset.
+fn forget_removed_set(world: &mut World, root: Entity, path: &str, pair: (TerrainId, TerrainId)) {
+    let gone = dock_tileset(world, root).is_some_and(|(_, tileset)| {
+        !(tileset.terrain_sets.iter()).any(|s| (s.inner, s.outer) == pair)
+    });
+    let mut views = world.resource_mut::<TilesetDockViews>();
+    if let Some(view) = views.0.get_mut(path).filter(|_| gone) {
+        if view.active == Some(pair) {
+            view.active = None;
+        }
+        view.expanded.remove(&pair);
+    }
 }
 
 /// Run `call` on the tileset at `path`, then build `root` again unless the

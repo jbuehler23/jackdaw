@@ -37,6 +37,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainSetCollisionOp>();
     ctx.register_operator::<TilesetTerrainSetAddOp>();
     ctx.register_operator::<TilesetTerrainSetSetOp>();
+    ctx.register_operator::<TilesetTerrainSetRemoveOp>();
     ctx.register_operator::<TilesetTileSetBitsOp>();
     ctx.register_operator::<TilesetClearAutoOp>();
 }
@@ -691,6 +692,58 @@ pub fn tileset_terrain_set_add(
                     .add_set(inner, outer, mode)
                     .map_err(|e| e.to_string())?;
                 Ok(format!("terrain set {inner} over {outer} added"))
+            })
+        },
+    )
+}
+
+/// Remove a terrain set from a tileset.
+#[operator(
+    id = "tileset.terrain_set.remove",
+    label = "Remove Terrain Set",
+    description = "Remove a terrain set; tiles laid out for it keep their terrain bits.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Tileset file under the project's assets; defaults to the open tileset."
+        ),
+        index(i64, doc = "Index of the set in the tileset's list."),
+        inner(String, doc = "Inner terrain id or name, when no index is given."),
+        outer(String, doc = "Outer terrain id or name, or empty."),
+    )
+)]
+pub fn tileset_terrain_set_remove(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (index, inner, outer) = (
+        params.as_int("index"),
+        text(&params, "inner"),
+        text(&params, "outer"),
+    );
+    queue_edit(
+        &mut commands,
+        "tileset.terrain_set.remove",
+        text(&params, "path"),
+        move |_, tileset| {
+            let (inner, outer) = match index {
+                Some(index) => usize::try_from(index)
+                    .ok()
+                    .and_then(|i| tileset.terrain_sets.get(i))
+                    .map(|s| (s.inner, s.outer))
+                    .ok_or_else(|| format!("no terrain set at {index}"))?,
+                None if inner.is_empty() => {
+                    return Err("name a terrain set by index or inner and outer".to_string());
+                }
+                None => (
+                    terrain(tileset, &inner)?,
+                    terrain_or_empty(tileset, &outer)?,
+                ),
+            };
+            with_setup(tileset, |_, setup| {
+                setup.remove_set(inner, outer).map_err(|e| e.to_string())?;
+                Ok(format!("terrain set {inner} over {outer} removed"))
             })
         },
     )

@@ -163,7 +163,10 @@ fn the_tools_need_a_map_in_tile_edit_mode() {
     assert!(available(&mut app, "tilemap.edit_mode"));
     assert!(!available(&mut app, BRUSH), "not in tile edit mode yet");
     enter(&mut app, map);
-    assert!(!available(&mut app, "tilemap.edit_mode"), "already on");
+    assert!(
+        available(&mut app, "tilemap.edit_mode"),
+        "entering again while on is harmless"
+    );
     assert!(available(&mut app, BRUSH));
     assert!(available(&mut app, ERASER));
 
@@ -1104,4 +1107,74 @@ fn shapes_between_extreme_cells_are_refused() {
     }
     assert_eq!(bytes(&mut app, map), before);
     assert_eq!(entries(&app), count);
+}
+
+#[test]
+fn entering_tile_edit_mode_over_the_remote_reports_finished() {
+    let (mut app, _dir) = project_app();
+    let mut data = grass_patch();
+    data.layers.extend(tile_layer(&[]).layers);
+    let map = spawn_map(
+        &mut app,
+        vec![ground_terrain(), layer(TilemapLayerKind::Tile, default())],
+        data,
+    );
+    let remote = |app: &mut App, call: serde_json::Value| {
+        let outcome = app
+            .world_mut()
+            .run_system_cached_with(jackdaw::remote::server::call_operator_handler, Some(call))
+            .expect("the handler ran")
+            .unwrap_or_else(|err| panic!("refused: {}", err.message));
+        settle(app);
+        outcome
+    };
+    let select = serde_json::json!({
+        "id": "selection.select",
+        "params": { "entity": map.to_bits() },
+    });
+    assert_eq!(remote(&mut app, select)["result"], "finished");
+    let enter = serde_json::json!({ "id": "tilemap.edit_mode", "params": { "layer": 0 } });
+    let outcome = remote(&mut app, enter);
+    assert_eq!(outcome["result"], "finished", "{outcome}");
+    assert_eq!(app.world().resource::<TileEditMode>().map, Some(map));
+
+    run(&mut app, "tilemap.line");
+    let again = serde_json::json!({ "id": "tilemap.edit_mode", "params": { "layer": 1 } });
+    let outcome = remote(&mut app, again);
+    assert_eq!(
+        outcome["result"], "finished",
+        "a second call while on: {outcome}"
+    );
+    let mode = *app.world().resource::<TileEditMode>();
+    assert_eq!(
+        (mode.map, mode.layer),
+        (Some(map), 1),
+        "it moves to the layer"
+    );
+    assert_eq!(mode.tool, TileTool::Line, "and keeps the tool");
+
+    let missing = serde_json::json!({ "id": "tilemap.edit_mode", "params": { "layer": 5 } });
+    let outcome = remote(&mut app, missing);
+    assert_eq!(outcome["result"], "cancelled");
+    assert_eq!(
+        outcome["warnings"],
+        serde_json::json!(["tilemap.edit_mode: the map has no layer 5"])
+    );
+}
+
+#[test]
+fn edit_mode_on_another_map_says_so() {
+    let (mut app, _dir) = project_app();
+    let first = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    let second = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    enter(&mut app, first);
+    app.world_mut().resource_mut::<Selection>().entities = vec![second];
+    assert!(!available(&mut app, "tilemap.edit_mode"));
+    let mut ops = app
+        .world_mut()
+        .query::<&jackdaw_api_internal::lifecycle::OperatorEntity>();
+    let reason = (ops.iter(app.world()))
+        .find(|op| op.id() == "tilemap.edit_mode")
+        .and_then(|op| op.unavailable_reason(app.world()));
+    assert_eq!(reason.as_deref(), Some("Tile edit mode is on another map"));
 }
