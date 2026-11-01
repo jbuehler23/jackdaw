@@ -270,6 +270,7 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
     "tilemap.clear",
     "tilemap.describe",
     "tilemap.draw_line",
+    "tilemap.edit_mode",
     "tilemap.fill",
     "tilemap.fill_rect",
     "tilemap.layer.activate",

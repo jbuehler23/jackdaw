@@ -572,6 +572,25 @@ pub(crate) fn spawn_field_row(
             type_path,
             depth,
             false,
+            false,
+        );
+        return;
+    }
+
+    let whole = (value.try_downcast_ref::<UVec2>().map(|v| v.as_vec2()))
+        .or_else(|| value.try_downcast_ref::<IVec2>().map(|v| v.as_vec2()));
+    if let Some(vec2) = whole {
+        spawn_vec2_row(
+            commands,
+            parent,
+            name,
+            &vec2,
+            field_path,
+            source_entity,
+            type_path,
+            depth,
+            false,
+            true,
         );
         return;
     }
@@ -1130,6 +1149,7 @@ fn spawn_vec2_row(
     type_path: &str,
     depth: usize,
     disabled: bool,
+    integer: bool,
 ) {
     let left_padding = depth as f32 * tokens::SPACING_MD;
     let col = commands
@@ -1170,7 +1190,7 @@ fn spawn_vec2_row(
         ))
         .id();
 
-    spawn_axis_input(
+    let x = spawn_axis_input(
         commands,
         axes_row,
         "X",
@@ -1181,7 +1201,7 @@ fn spawn_vec2_row(
         type_path,
         disabled,
     );
-    spawn_axis_input(
+    let y = spawn_axis_input(
         commands,
         axes_row,
         "Y",
@@ -1192,6 +1212,14 @@ fn spawn_vec2_row(
         type_path,
         disabled,
     );
+    if integer {
+        for (axis, value) in [(x, vec2.x), (y, vec2.y)] {
+            commands.entity(axis).insert((
+                ScrubNumberInputValue::I64(value as i64),
+                NumberInputStep(1.0),
+            ));
+        }
+    }
 }
 
 fn spawn_vec4_row(
@@ -1310,7 +1338,7 @@ fn spawn_axis_input(
     source_entity: Entity,
     type_path: &str,
     disabled: bool,
-) {
+) -> Entity {
     // One float input per vector component. The widget draws the colored sigil
     // stripe and the X/Y/Z/W label; `ScrubNumberInputValue::F64` holds the
     // component value. The `FieldBinding` carries the `.x`/`.y`/`.z`/`.w`
@@ -1331,6 +1359,7 @@ fn spawn_axis_input(
     if disabled {
         field.insert(bevy::ui::InteractionDisabled);
     }
+    field.id()
 }
 
 fn spawn_bool_toggle(
@@ -2465,7 +2494,7 @@ struct PendingFieldText(String);
 /// `FieldBinding` and initial text ride on the container entity; the inner
 /// text entry emits `ValueChange<String>` on Enter or blur, which
 /// `on_text_edit_commit` writes back as a JSON string.
-fn spawn_string_input(
+pub(super) fn spawn_string_input(
     commands: &mut Commands,
     parent: Entity,
     current_value: &str,
