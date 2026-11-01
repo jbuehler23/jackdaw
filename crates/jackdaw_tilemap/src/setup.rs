@@ -747,6 +747,29 @@ fn merge_tile(previous: Option<&SetupTile>, fresh: Option<&SetupTile>) -> SetupT
     tile
 }
 
+/// Whether the terrain solver of `mode` takes a tile with `peers` laid out
+/// for `recorded`: by that set while the peers fit it, else when the peers fit
+/// a set of `mode` and, unless one terrain fills the tile, no set of another
+/// mode. `sets` are the inner and outer terrain and the mode of each set.
+pub fn solver_takes(
+    mode: MatchMode,
+    peers: &[TerrainId; 9],
+    recorded: Option<Pair>,
+    sets: &[(Pair, MatchMode)],
+) -> bool {
+    if let Some(pair) = recorded.filter(|p| fits(*p, peers)) {
+        return sets.contains(&(pair, mode));
+    }
+    let pure = peers.iter().all(|&p| p == peers[0]);
+    let fit = |same: bool| (sets.iter()).any(|(p, m)| (*m == mode) == same && fits(*p, peers));
+    fit(true) && (pure || !fit(false))
+}
+
+/// Whether `peers` has a terrain and all of them are of `pair`.
+pub fn fits((a, b): Pair, peers: &[TerrainId; 9]) -> bool {
+    peers.iter().all(|&p| p == 0 || p == a || p == b) && peers.iter().any(|&p| p != 0)
+}
+
 fn within((a, b): Pair, peers: &TileTerrains) -> bool {
     peers.peers.iter().all(|&p| p == 0 || p == a || p == b)
 }

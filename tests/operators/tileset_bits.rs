@@ -210,7 +210,7 @@ fn a_brush_no_set_holds_paints_nothing_and_says_why() {
 fn the_coverage_line_follows_the_stroke_as_it_paints() {
     let (mut app, _dir) = handmade();
     let root = painting(&mut app);
-    assert_eq!(coverage(&mut app, root), "water over grass: Corners 1/16");
+    assert_eq!(coverage(&mut app, root), "water over grass: 1 of 16 shapes");
     call(
         &mut app,
         "tileset.tile.set_bits",
@@ -230,14 +230,14 @@ fn the_coverage_line_follows_the_stroke_as_it_paints() {
     );
     assert_eq!(
         coverage(&mut app, root),
-        "water over grass: Corners 2/16",
+        "water over grass: 2 of 16 shapes",
         "live, before the stroke ends"
     );
     input(
         &mut app,
         &format!("input.pointer x={} y={} action=release", to.x, to.y),
     );
-    assert_eq!(coverage(&mut app, root), "water over grass: Corners 2/16");
+    assert_eq!(coverage(&mut app, root), "water over grass: 2 of 16 shapes");
 }
 
 #[test]
@@ -261,13 +261,13 @@ fn the_overlay_draws_off_the_active_set_or_all() {
         BTreeSet::from([0, 20]),
         "a pure grass tile of two sets shows in each"
     );
-    let corners_and_centre = BTreeSet::from([(0, 0), (0, 2), (0, 4), (0, 6), (0, 8)]);
+    let corners = BTreeSet::from([(0, 0), (0, 2), (0, 6), (0, 8)]);
     assert_eq!(
         (marks(&mut app, root).into_iter())
             .filter(|(t, _)| *t == 0)
             .collect::<BTreeSet<_>>(),
-        corners_and_centre,
-        "the mode's zones"
+        corners,
+        "a corners set draws no centre mark"
     );
     press(&mut app, root, DockAction::ActiveSet(SAND, GRASS));
     assert_eq!(tiles(&mut app), BTreeSet::from([10, 20]));
@@ -497,4 +497,102 @@ fn tileset_operators_without_a_path_edit_the_focused_tab() {
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
     let pairs = crate::tileset_edit_ops::pairs(&on_disk(&dir));
     assert!(pairs.contains(&(SAND, GRASS)), "{pairs:?}");
+}
+
+fn bits_count(app: &mut App, root: Entity) -> String {
+    (texts(app, root).into_iter())
+        .find(|t| t.ends_with("painted"))
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_header_counts_the_tiles_with_bits_as_they_are_painted() {
+    let (mut app, _dir) = handmade();
+    let root = painting(&mut app);
+    assert_eq!(bits_count(&mut app, root), "1 tile painted");
+    press(&mut app, root, DockAction::Brush(WATER));
+    let from = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.15));
+    let to = on_tile(&mut app, root, 3, Vec2::new(0.85, 0.15));
+    drag(&mut app, from, to, "primary");
+    assert_eq!(bits_count(&mut app, root), "4 tiles painted");
+}
+
+#[test]
+fn overlay_marks_keep_a_readable_size() {
+    let (mut app, _dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &BitMark)>()
+        .iter(app.world())
+        .filter(|(_, m)| m.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    assert!(!found.is_empty(), "tile 0 shows its bits");
+    for mark in found {
+        let size = screen_rect(&app, mark).size();
+        assert!(size.min_element() >= 10.0, "{size}");
+    }
+}
+
+#[test]
+fn the_overlay_marks_only_tiles_the_coverage_counts() {
+    let (mut app, _dir) = handmade();
+    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    let set = [("inner", "sand"), ("outer", "grass"), ("mode", "sides")];
+    call(&mut app, "tileset.terrain_set.add", &set);
+    let corners = [("tile", "0:30"), ("peers", "1,0,1,0,0,0,1,0,1")];
+    call(&mut app, "tileset.tile.set_bits", &corners);
+    settle(&mut app);
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::ActiveSet(WATER, GRASS));
+    let tiles: BTreeSet<u32> = marks(&mut app, root).into_iter().map(|(t, _)| t).collect();
+    assert_eq!(
+        tiles,
+        BTreeSet::from([0]),
+        "grass corners alone also fit the sides set, so neither the solver nor the coverage takes them"
+    );
+    assert_eq!(coverage(&mut app, root), "water over grass: 1 of 16 shapes");
+}
+
+fn summary(app: &mut App, root: Entity) -> String {
+    (texts(app, root).into_iter())
+        .find(|t| t.starts_with("Corners:"))
+        .unwrap_or_default()
+}
+
+fn glyphs(app: &mut App, root: Entity) -> usize {
+    app.world_mut()
+        .query::<&jackdaw::tileset_bits::MissingGlyph>()
+        .iter(app.world())
+        .filter(|g| g.root == root)
+        .count()
+}
+
+#[test]
+fn the_missing_shapes_follow_the_stroke_as_it_paints() {
+    let (mut app, _dir) = handmade();
+    let root = painting(&mut app);
+    call(
+        &mut app,
+        "tileset.tile.set_bits",
+        &[("tile", "0:1"), ("peers", "2,0,2,0,2,0,0,0,0")],
+    );
+    settle(&mut app);
+    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    press(&mut app, root, DockAction::Brush(GRASS));
+    assert_eq!(summary(&mut app, root), "Corners: 15 shapes missing");
+    assert_eq!(glyphs(&mut app, root), 15);
+    let from = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.85));
+    let to = on_tile(&mut app, root, 1, Vec2::new(0.85, 0.85));
+    pointer(&mut app, from, "press", "primary");
+    pointer(&mut app, to, "move", "primary");
+    assert_eq!(
+        summary(&mut app, root),
+        "Corners: 14 shapes missing",
+        "live, before the stroke ends"
+    );
+    assert_eq!(glyphs(&mut app, root), 14, "live, before the stroke ends");
+    pointer(&mut app, to, "release", "primary");
+    assert_eq!(summary(&mut app, root), "Corners: 14 shapes missing");
 }

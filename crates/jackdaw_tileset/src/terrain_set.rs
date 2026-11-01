@@ -1,6 +1,8 @@
 use std::fmt;
 
-use jackdaw_tilemap::{Placement, TerrainId, TerrainSet, TerrainTile, TileRef, TileTerrains};
+use jackdaw_tilemap::{
+    Placement, TerrainId, TerrainSet, TerrainTile, TileRef, TileTerrains, solver_takes,
+};
 
 use crate::{TerrainMatch, Tileset, match_mode};
 
@@ -83,28 +85,12 @@ impl Tileset {
 
         let mut set =
             TerrainSet::new(match_mode(mode)).with_order(order.into_iter().map(|(.., id)| id));
-        let pairs = |joined: bool| -> Vec<(TerrainId, TerrainId)> {
-            (self.terrain_sets.iter())
-                .filter(|set| (set.mode == mode) == joined)
-                .map(|set| (set.inner, set.outer))
-                .collect()
-        };
-        let (joined, others) = (pairs(true), pairs(false));
-        let within = |(a, b): (TerrainId, TerrainId), peers: &[TerrainId; 9]| {
-            peers.iter().all(|&p| p == 0 || p == a || p == b) && peers.iter().any(|&p| p != 0)
-        };
+        let sets: Vec<_> = (self.terrain_sets.iter())
+            .map(|s| ((s.inner, s.outer), match_mode(s.mode)))
+            .collect();
         for tile in &self.tiles {
-            let pure = tile.peers.iter().all(|&p| p == tile.peers[0]);
-            let recorded = (tile.set_inner != 0)
-                .then_some((tile.set_inner, tile.set_outer))
-                .filter(|pair| within(*pair, &tile.peers));
-            let joins = match recorded {
-                Some(pair) => joined.contains(&pair),
-                None => {
-                    joined.iter().any(|p| within(*p, &tile.peers))
-                        && (pure || !others.iter().any(|p| within(*p, &tile.peers)))
-                }
-            };
+            let recorded = (tile.set_inner != 0).then_some((tile.set_inner, tile.set_outer));
+            let joins = solver_takes(match_mode(mode), &tile.peers, recorded, &sets);
             let layer = self.layer(tile.sheet, tile.tile);
             let index = layer.and_then(|layer| u16::try_from(layer).ok());
             if let Some(index) = index.filter(|i| joins && *i != TileRef::EMPTY_INDEX) {
