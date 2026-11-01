@@ -4,9 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::tile_tools::{bytes, entries, run, stored, tile_map};
+use crate::tile_tools::{bytes, enter, entries, run, set_brush, stored, tile_map};
 use crate::tilemap_render::{
-    TILESET, grass_patch, ground_terrain, layer, project_app, settle, spawn_map, tile_layer,
+    TILESET, corner_pair, corner_patch, grass_patch, ground_terrain, layer, project_app, settle,
+    spawn_map, tile_layer,
 };
 use crate::tilemap_shape_ops::{
     Params, assert_refused, call, int, last_label, rect, terrain_at, text, warnings, with,
@@ -528,4 +529,68 @@ fn the_map_and_layer_are_named_or_taken_from_the_selection() {
         ("mode", text("spiral")),
     ];
     assert_refused(&mut app, map, WRITE, &mode, "mode is connect or path");
+}
+
+const BETWEEN: &str = "hand-placed tiles are not supported on layers whose tiles sit between cells";
+
+fn corner_map(app: &mut App) -> Entity {
+    let ground = layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Corners);
+    let patch = corner_patch(corner_pair(app), &[]);
+    spawn_map(app, vec![ground], patch)
+}
+
+#[test]
+fn a_corner_layer_refuses_hand_placed_tiles_from_every_writer() {
+    let (mut app, _dir) = project_app();
+    let map = corner_map(&mut app);
+    let entity = ("entity", PropertyValue::Entity(map));
+    let set_cells = [
+        entity.clone(),
+        ("layer", text("0")),
+        ("cells", text("2,2")),
+        ("kind", text("tile")),
+        ("value", text("0:5")),
+    ];
+    assert_refused(&mut app, map, "tilemap.set_cells", &set_cells, BETWEEN);
+    let region = "legend: {\"F\": \"tile:0:5\"}\nrows:\nF\n";
+    assert_refused(&mut app, map, WRITE, &at(map, 2, 2, region), BETWEEN);
+    let fill = with(rect(1, 1, 3, 3), &[entity.clone(), ("tile", text("7"))]);
+    assert_refused(&mut app, map, "tilemap.fill_rect", &fill, BETWEEN);
+
+    enter(&mut app, map);
+    assert_eq!(set_brush(&mut app, "tile", "7"), OperatorResult::Finished);
+    let before = bytes(&mut app, map);
+    let mut state = app
+        .world_mut()
+        .resource_mut::<jackdaw::tile_tools::TileStrokeState>();
+    state.cell = Some(CellCoord::new(2, 2));
+    state.button = Some(MouseButton::Left);
+    let result = call(&mut app, "tilemap.brush", &[]);
+    settle(&mut app);
+    assert_eq!(result, OperatorResult::Cancelled);
+    assert_eq!(bytes(&mut app, map), before, "the brush placed nothing");
+}
+
+#[test]
+fn a_corner_layer_reads_terrain_back_unchanged_and_tiles_by_their_corner_cell() {
+    let (mut app, _dir) = project_app();
+    let map = corner_map(&mut app);
+    let rows = finished(&mut app, READ, &read(map, 0, 5, 5, 0));
+    let before = bytes(&mut app, map);
+    let wrote = finished(&mut app, WRITE, &at(map, 0, 5, &rows));
+    assert_eq!(wrote, "no cell changed", "{rows}");
+    assert_eq!(bytes(&mut app, map), before);
+
+    let tiles = with(
+        read(map, 2, 2, 2, 2),
+        &[("tiles", PropertyValue::Bool(true))],
+    );
+    let said = finished(&mut app, READ, &tiles);
+    let key = stored(&mut app, map).layers[0]
+        .tiles
+        .get(CellCoord::new(2, 2));
+    assert!(
+        said.contains(&format!("\"tile:0:{}\"", key.index())),
+        "{said}"
+    );
 }

@@ -14,7 +14,8 @@ use jackdaw_api_internal::operator::warn_caller;
 use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{
-    CHUNK_SIZE, CellCoord, CellRect, Grid, LayerData, TerrainId, TileRef, orthogonal_line,
+    CHUNK_SIZE, CellCoord, CellRect, Grid, LayerData, Placement, TerrainId, TileRef,
+    orthogonal_line,
 };
 use jackdaw_tileset::Tileset;
 
@@ -179,7 +180,7 @@ pub struct TileStrokeState {
 /// A held stroke: Brush and Eraser write as they go; a shape paints the map
 /// and layer it was pressed on when released.
 enum Held {
-    Stroke(TilemapStrokeBuilder),
+    Stroke(Box<TilemapStrokeBuilder>),
     Shape(Entity, usize),
 }
 
@@ -664,10 +665,20 @@ pub(crate) fn paint_cells(
     cells: &[CellCoord],
 ) -> Result<usize, String> {
     let mut builder = TilemapStrokeBuilder::begin(world, map, layer, label)?;
+    check_paint(&builder, paint)?;
     let changed: usize = (paint.writes(cells).into_iter())
         .map(|(write, cells)| builder.apply(world, &cells, write))
         .sum();
     Ok(if builder.end(world) { changed } else { 0 })
+}
+
+/// Refuses `paint` when the stroke's layer cannot take what it writes; a
+/// stamp always writes hand-placed tiles.
+fn check_paint(builder: &TilemapStrokeBuilder, paint: &Paint) -> Result<(), String> {
+    match paint {
+        Paint::Write(write) => builder.check(write),
+        Paint::Stamp(_) => builder.check(&TileWrite::Tile(TileRef::new(0))),
+    }
 }
 
 /// The cells of a Rectangle (both corners included, clipped to `bounds`) or
@@ -733,10 +744,11 @@ fn tile_stroke(world: &mut World, tool: TileTool) -> Option<OperatorResult> {
         let begun = stroke_paint(world, tool, button).and_then(|paint| {
             let erase = paint == Paint::Write(TileWrite::Erase);
             let builder = begin_stroke(world, tool, erase)?;
+            check_paint(&builder, &paint)?;
             let mode = *world.resource::<TileEditMode>();
             let held = match mode.map {
                 Some(map) if tool.is_shape() => Held::Shape(map, mode.layer),
-                _ => Held::Stroke(builder),
+                _ => Held::Stroke(Box::new(builder)),
             };
             Ok((held, paint))
         });
@@ -968,11 +980,8 @@ fn fill_cells(
     if write == target || (write == TileWrite::Erase && empty) {
         return Ok(Vec::new());
     }
-    let region = match bounds {
-        Some(b) => CellRect {
-            min: b.min,
-            max: b.max,
-        },
+    let region = match jackdaw_tileset::map_bounds(bounds) {
+        Some(b) => b,
         None => {
             let painted = if terrain_layer {
                 authoring.and_then(|a| a.terrain.painted_bounds())
@@ -1070,7 +1079,12 @@ fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
     let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
     let authoring = layer.and_then(|l| l.authoring.as_ref());
     let terrain = (authoring.filter(|_| active.terrain)).map_or(0, |a| a.terrain.get(cell));
-    let (tile, placed) = shown_tile(layer, cell);
+    let between = layer.is_some_and(|l| l.placement == Placement::BetweenCells);
+    let (tile, placed) = if between {
+        (TileRef::EMPTY, false)
+    } else {
+        shown_tile(layer, cell)
+    };
     if terrain == 0 && tile.is_empty() {
         return Err(format!("cell {},{} is empty", cell.0.x, cell.0.y));
     }
@@ -1089,10 +1103,13 @@ fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
 }
 
 /// The tile a cell shows, its hand-placed tile else its resolved one, and
-/// whether it is hand-placed.
+/// whether it is hand-placed. On a layer whose tiles sit between cells it is
+/// the tile keyed at the cell, the one whose bottom-left corner is the cell,
+/// and hand-placed tiles are not shown.
 pub(crate) fn shown_tile(layer: Option<&LayerData>, cell: CellCoord) -> (TileRef, bool) {
-    let placed =
-        (layer.and_then(|l| l.authoring.as_ref())).and_then(|a| a.overrides.get(&cell).copied());
+    let placed = (layer.filter(|l| l.placement == Placement::OnCells))
+        .and_then(|l| l.authoring.as_ref())
+        .and_then(|a| a.overrides.get(&cell).copied());
     match placed {
         Some(tile) => (tile, true),
         None => (layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)), false),

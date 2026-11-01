@@ -101,7 +101,12 @@ fn fresh_tiles(app: &mut App, map: Entity) -> jackdaw_tilemap::ChunkedLayer<Tile
         .terrain_set(Some(TerrainMatch::CornersAndSides))
         .expect("a corners and sides set");
     let data = stored(app, map);
-    full_resolve(&set, data.layers[0].authoring.as_ref().expect("authoring")).0
+    full_resolve(
+        &set,
+        data.layers[0].authoring.as_ref().expect("authoring"),
+        None,
+    )
+    .0
 }
 
 fn resolved_cells(app: &App) -> usize {

@@ -8,8 +8,8 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{
-    CellCoord, LayerData, Legend, LegendEntry, Links, Region, TerrainId, TileRef, emit_rows,
-    parse_rows,
+    CellCoord, LayerData, Legend, LegendEntry, Links, Placement, Region, TerrainId, TileRef,
+    emit_rows, parse_rows,
 };
 use jackdaw_tileset::Tileset;
 use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
@@ -64,7 +64,8 @@ pub(crate) fn tilemap_describe(
         x1(i64, doc = "Column of the second corner."),
         y1(i64, doc = "Row of the second corner."),
         tiles(bool, doc = "On a terrain layer, read the tiles cells show instead of their \
-                           terrain."),
+                           terrain. Where tiles sit between cells, a cell reads the tile \
+                           whose bottom-left corner is that cell."),
     )
 )]
 pub(crate) fn tilemap_read_region(
@@ -151,6 +152,11 @@ fn describe(world: &mut World, params: &OperatorParameters) -> Result<String, St
                 .find(|(_, m)| *m == layer.terrain_match)
                 .map_or("auto", |(name, _)| name);
             let _ = write!(out, ", match {mode}");
+        }
+        let store = world.resource::<TilemapDataStore>();
+        let held = (store.get(&key)).and_then(|data| data.layers.get(index));
+        if held.is_some_and(|l| l.placement == Placement::BetweenCells) {
+            let _ = write!(out, ", tiles between cells");
         }
         let count = painted.get(index).map_or(0, Vec::len);
         let _ = writeln!(out, ", {count} cells painted");
@@ -586,6 +592,9 @@ fn write(world: &mut World, params: &OperatorParameters) -> Result<String, Strin
     }
     let mut stroke =
         TilemapStrokeBuilder::begin(world, target.map, target.layer, "Write tilemap region")?;
+    for (write, _) in &writes {
+        stroke.check(write)?;
+    }
     let count = (writes.into_iter())
         .map(|(write, cells)| stroke.apply(world, &cells, write))
         .sum();

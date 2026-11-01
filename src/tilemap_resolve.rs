@@ -10,7 +10,8 @@ use std::sync::Arc;
 use bevy::prelude::*;
 use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer};
 use jackdaw_tilemap::{
-    ChunkedLayer, LayerKind, TerrainAuthoring, TerrainSet, TileRef, resolve_region,
+    CellRect, ChunkedLayer, LayerKind, Placement, TerrainAuthoring, TerrainSet, TileRef,
+    resolve_region_within,
 };
 use jackdaw_tileset::Tileset;
 
@@ -94,31 +95,55 @@ pub(crate) fn layer_set(
 }
 
 /// Gives every terrain layer of the live maps the set it resolves with, and
-/// resolves whole each layer whose tiles were resolved with another set or
-/// none. A layer whose set cannot be built keeps its tiles until it can; a
-/// tile layer resolves nothing.
-pub(crate) fn refresh_terrain(world: &mut World) {
+/// resolves whole each layer whose tiles were resolved with another set,
+/// other bounds or none. A layer whose set cannot be built keeps its tiles
+/// until it can; a tile layer resolves nothing. Maps sharing one key resolve
+/// it with the bounds of the first by entity; when the others' bounds differ
+/// the key is noted and a warning logged once.
+pub fn refresh_terrain(world: &mut World) {
     world.resource_mut::<TilemapResolveStats>().refreshes += 1;
     let mut keys: Vec<(Entity, String)> = store_keys(world).into_iter().collect();
     keys.sort();
-    let mut seen = HashSet::new();
+    let mut first: HashMap<String, Option<CellRect>> = HashMap::new();
+    let mut diverging = HashSet::new();
     for (entity, key) in keys {
-        if !seen.insert(key.clone()) {
-            continue;
-        }
         let Some(tilemap) = world.get::<Tilemap>(entity).cloned() else {
             continue;
         };
-        for (index, layer) in tilemap.layers.iter().enumerate() {
-            refresh_layer(world, &key, index, layer);
+        let bounds = jackdaw_tileset::map_bounds(tilemap.bounds);
+        if let Some(resolved) = first.get(&key) {
+            if *resolved != bounds {
+                diverging.insert(key);
+            }
+            continue;
         }
+        first.insert(key.clone(), bounds);
+        for (index, layer) in tilemap.layers.iter().enumerate() {
+            refresh_layer(world, &key, index, layer, bounds);
+        }
+    }
+    let mut store = world.resource_mut::<TilemapDataStore>();
+    for key in diverging.difference(&store.diverging_bounds) {
+        warn!(
+            "Tilemaps sharing the cells {key:?} have different bounds; their terrain resolves \
+             with the first map's"
+        );
+    }
+    if store.diverging_bounds != diverging {
+        store.diverging_bounds = diverging;
     }
 }
 
 /// Brings one data layer in line with its scene layer: its kind, and for a
-/// terrain layer the set it resolves with and the tiles that set gives. The
-/// store is borrowed mutably only for a change.
-fn refresh_layer(world: &mut World, key: &str, index: usize, layer: &TilemapLayer) {
+/// terrain layer the set it resolves with and the tiles that set gives
+/// within `bounds`. The store is borrowed mutably only for a change.
+fn refresh_layer(
+    world: &mut World,
+    key: &str,
+    index: usize,
+    layer: &TilemapLayer,
+    bounds: Option<CellRect>,
+) {
     let kind = crate::tilemap::data_kind(layer.kind);
     let terrain = kind == LayerKind::Terrain;
     if world
@@ -143,35 +168,48 @@ fn refresh_layer(world: &mut World, key: &str, index: usize, layer: &TilemapLaye
         }
         return;
     };
-    if current.is_some_and(|at| Arc::ptr_eq(at, &set)) {
+    let placement = set.mode.placement();
+    let cropped =
+        placement == Placement::BetweenCells && store.resolved_bounds(key, index) != bounds;
+    if current.is_some_and(|at| Arc::ptr_eq(at, &set)) && !cropped {
         return;
     }
-    let same = current.is_some_and(|at| **at == *set);
+    let same = current.is_some_and(|at| **at == *set) && !cropped;
     let authoring = (store.get(key))
         .and_then(|data| data.layers.get(index))
         .and_then(|cells| cells.authoring.as_ref());
     let fresh = authoring
         .filter(|_| !same)
-        .map(|authoring| full_resolve(&set, authoring));
+        .map(|authoring| full_resolve(&set, authoring, bounds));
+    let placed = (store.get(key))
+        .and_then(|data| data.layers.get(index))
+        .is_some_and(|cells| cells.placement == placement);
+    let moved_bounds = cropped && current.is_some();
     let mut store = world.resource_mut::<TilemapDataStore>();
     if let Some((fresh, count)) = fresh {
         store.resolved_cells += count;
-        store.put_derived_tiles(key, index, &fresh);
+        store.put_derived_tiles(key, index, placement, &fresh);
+        if moved_bounds {
+            store.mark_changed(key);
+        }
+    } else if !placed {
+        store.place_layer(key, index, placement);
     }
-    store.note_resolved(key, index, set);
+    store.note_resolved(key, index, set, bounds);
 }
 
-/// A terrain layer's tiles resolved from nothing: every painted and
-/// overridden cell and the ring around them. Returns the tiles and how many
-/// cells were resolved.
+/// A terrain layer's tiles resolved from nothing on a map within `bounds`:
+/// every tile that reads a painted or overridden cell. Returns the tiles and
+/// how many were resolved.
 pub fn full_resolve(
     set: &TerrainSet,
     authoring: &TerrainAuthoring,
+    bounds: Option<CellRect>,
 ) -> (ChunkedLayer<TileRef>, usize) {
     let painted = (authoring.terrain.cells().map(|(cell, _)| cell))
         .chain(authoring.overrides.keys().copied());
     let (terrain, links, overrides) = (&authoring.terrain, &authoring.links, &authoring.overrides);
-    let resolved = resolve_region(set, terrain, links, overrides, painted);
+    let resolved = resolve_region_within(set, terrain, links, overrides, painted, bounds);
     let mut tiles = ChunkedLayer::new();
     for &(cell, tile) in &resolved {
         tiles.set(cell, tile);

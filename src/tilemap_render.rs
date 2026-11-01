@@ -1,6 +1,8 @@
 //! Draws each tilemap's layers as Bevy tilemap chunks: children of the map,
 //! derived from its cells in the store. An edit draws again only the chunks
-//! it touched; a change to the map or its tilesets draws the whole map.
+//! it touched; a change to the map or its tilesets draws the whole map. A
+//! layer whose tiles sit between cells draws half a cell up and right, its
+//! tiles cut by the map's bounds as cropped sprites under their chunk.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -9,8 +11,8 @@ use bevy::sprite_render::{TileData, TileOrientation, TilemapChunk, TilemapChunkT
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::ChunkCoord;
 use jackdaw_tileset::Tileset;
-use jackdaw_tileset::chunk::ChunkDraw;
 pub use jackdaw_tileset::chunk::TilemapChunkOf;
+use jackdaw_tileset::chunk::{ChunkDraw, TileLayout, TilemapEdgePiece};
 
 use crate::tilemap::{Redraw, TilemapDataStore, store_keys};
 use crate::tilemap_resolve::cached_set;
@@ -19,7 +21,10 @@ pub fn plugin(app: &mut App) {
     // Derived from the map's cells, so never saved and not listed in the
     // outliner.
     app.register_required_components::<TilemapChunkOf, crate::EditorHidden>()
-        .register_required_components::<TilemapChunkOf, crate::NonSerializable>();
+        .register_required_components::<TilemapChunkOf, crate::NonSerializable>()
+        .register_required_components::<TilemapEdgePiece, crate::EditorHidden>()
+        .register_required_components::<TilemapEdgePiece, crate::NonSerializable>()
+        .register_required_components_with::<TilemapEdgePiece, Pickable>(|| Pickable::IGNORE);
     app.init_resource::<TilemapDrawWarnings>()
         .init_resource::<TilemapDrawStats>()
         .add_observer(clear_removed_map)
@@ -173,7 +178,11 @@ fn draw_batch(
     Ok(())
 }
 
-pub(crate) type Wanted = (TilemapChunk, TilemapChunkTileData, Transform);
+/// A chunk as drawn, and its cropped tiles.
+pub(crate) type Wanted = (
+    (TilemapChunk, TilemapChunkTileData, Transform),
+    Vec<(TilemapEdgePiece, Sprite, Transform)>,
+);
 
 /// Brings `map`'s chunk children in line with its cells, all of them or only
 /// the `edited` chunks: spawns the chunks that gained cells, despawns the
@@ -239,6 +248,18 @@ fn draw_map(
             continue;
         }
         let store = world.resource::<TilemapDataStore>();
+        let placement = (key.and_then(|key| store.get(key)))
+            .and_then(|d| d.layers.get(index))
+            .map(|l| l.placement);
+        let crops = TileLayout {
+            placement: placement.unwrap_or_default(),
+            bounds: jackdaw_tileset::map_bounds(tilemap.bounds),
+        }
+        .crops();
+        if crops && prepared.draw.strip.is_none() {
+            prepared.draw.strip = jackdaw_tileset::chunk::strip_for(world, &prepared.draw.image);
+        }
+        let store = world.resource::<TilemapDataStore>();
         let Some(cells) = (key.and_then(|key| store.get(key))).and_then(|d| d.layers.get(index))
         else {
             drew.push(index);
@@ -251,6 +272,10 @@ fn draw_map(
                 .collect()
         });
         let tiles = &cells.tiles;
+        let layout = TileLayout {
+            placement: cells.placement,
+            bounds: jackdaw_tileset::map_bounds(tilemap.bounds),
+        };
         let coords = scope.unwrap_or_else(|| tiles.chunks().map(|(c, _)| c).collect());
         drew.push(index);
         let tile_size = prepared.tileset.display_size(tilemap.cell_size);
@@ -259,8 +284,9 @@ fn draw_map(
             let Some(cells) = tiles.chunk(coord) else {
                 continue;
             };
-            let bundle = (prepared.draw).bundle(coord, cells, tile_size, index);
-            wanted.insert((index, coord), bundle);
+            let bundle = (prepared.draw).bundle(coord, cells, tile_size, index, layout);
+            let pieces = (prepared.draw).edge_pieces(coord, cells, tile_size, layout);
+            wanted.insert((index, coord), (bundle, pieces));
         }
     }
 
@@ -287,10 +313,11 @@ fn draw_map(
             }
         }
     });
-    for ((layer, chunk), (tilemap_chunk, data, transform)) in wanted {
+    for ((layer, chunk), (bundle, pieces)) in wanted {
         let of = TilemapChunkOf { layer, chunk };
-        let bundle = (of, tilemap_chunk, data, transform);
-        chunks.insert((layer, chunk), world.spawn((bundle, ChildOf(map))).id());
+        let entity = world.spawn((of, bundle, ChildOf(map))).id();
+        put_edge_pieces(world, entity, pieces);
+        chunks.insert((layer, chunk), entity);
     }
     if let Some(mut drawn) = world.get_mut::<TilemapDrawn>(map) {
         drawn.chunks = chunks;
@@ -316,7 +343,12 @@ fn draw_map(
     Ok(())
 }
 
-pub(crate) fn update_chunk(world: &mut World, entity: Entity, (chunk, data, transform): Wanted) {
+pub(crate) fn update_chunk(
+    world: &mut World,
+    entity: Entity,
+    ((chunk, data, transform), pieces): Wanted,
+) {
+    put_edge_pieces(world, entity, pieces);
     let mut chunk_entity = world.entity_mut(entity);
     let same_chunk = (chunk_entity.get::<TilemapChunk>()).is_some_and(|old| {
         old.tileset == chunk.tileset && old.tile_display_size == chunk.tile_display_size
@@ -330,6 +362,45 @@ pub(crate) fn update_chunk(world: &mut World, entity: Entity, (chunk, data, tran
     }
     if chunk_entity.get::<Transform>() != Some(&transform) {
         chunk_entity.insert(transform);
+    }
+}
+
+/// Makes the cropped tiles under `chunk` equal `pieces`, leaving them be
+/// when they already are.
+pub(crate) fn put_edge_pieces(
+    world: &mut World,
+    chunk: Entity,
+    pieces: Vec<(TilemapEdgePiece, Sprite, Transform)>,
+) {
+    let held: Vec<Entity> = (world.get::<Children>(chunk).into_iter().flatten())
+        .copied()
+        .filter(|&child| world.get::<TilemapEdgePiece>(child).is_some())
+        .collect();
+    let same = held.len() == pieces.len()
+        && held
+            .iter()
+            .zip(&pieces)
+            .all(|(&entity, (_, sprite, transform))| {
+                let held = world.get::<Sprite>(entity);
+                held.is_some_and(|s| {
+                    (s.rect, s.custom_size, s.flip_x, s.flip_y)
+                        == (
+                            sprite.rect,
+                            sprite.custom_size,
+                            sprite.flip_x,
+                            sprite.flip_y,
+                        )
+                        && s.image == sprite.image
+                }) && world.get::<Transform>(entity) == Some(transform)
+            });
+    if same {
+        return;
+    }
+    for entity in held {
+        world.entity_mut(entity).despawn();
+    }
+    for piece in pieces {
+        world.spawn((piece, ChildOf(chunk)));
     }
 }
 

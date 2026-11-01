@@ -9,9 +9,9 @@ use jackdaw_api::prelude::*;
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{
-    CHUNK_AREA, CHUNK_SIZE, CellCoord, CellValue, ChunkCoord, ChunkedLayer, LayerData, LayerKind,
-    Links, TerrainAuthoring, TerrainId, TerrainSet, TileRef, TilemapData, apply_connect_stroke,
-    apply_path_stroke,
+    CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, CellValue, ChunkCoord, ChunkedLayer, LayerData,
+    LayerKind, Links, Placement, TerrainAuthoring, TerrainId, TerrainSet, TileRef, TilemapData,
+    apply_connect_stroke, apply_path_stroke,
 };
 use jackdaw_tileset::Tileset;
 
@@ -92,6 +92,7 @@ impl MapCells {
         while let Some(&(kind, _)) = self.layers.get(data.layers.len()) {
             data.layers.push(LayerData {
                 kind,
+                placement: Placement::OnCells,
                 tiles: ChunkedLayer::new(),
                 authoring: None,
             });
@@ -279,7 +280,13 @@ pub struct TilemapStrokeBuilder {
     /// chunk, so the resolve ring of every written cell is held.
     chunks: BTreeSet<(usize, ChunkCoord)>,
     before: Option<MapCells>,
+    /// The layer's tiles sit between cells, so it takes no hand-placed tile.
+    between: bool,
 }
+
+/// Why a hand-placed tile is refused on a layer whose tiles sit between cells.
+pub const BETWEEN_CELLS_TILES: &str =
+    "hand-placed tiles are not supported on layers whose tiles sit between cells";
 
 impl TilemapStrokeBuilder {
     /// Opens a stroke on layer `layer` of the map `entity`, or says why the
@@ -295,10 +302,12 @@ impl TilemapStrokeBuilder {
         let key = editable_key(world, entity)?;
         let target =
             (tilemap.layers.get(layer)).ok_or_else(|| format!("the map has no layer {layer}"))?;
+        let mut between = false;
         if target.kind == TilemapLayerKind::Terrain {
-            layer_set(world, target)
+            let set = layer_set(world, target)
                 .ok_or("the layer's tileset is not loaded")?
                 .map_err(|err| format!("layer `{}`: {err}", target.name))?;
+            between = set.mode.placement() == Placement::BetweenCells;
             if world
                 .resource::<TilemapDataStore>()
                 .resolved_with(&key, layer)
@@ -329,12 +338,28 @@ impl TilemapStrokeBuilder {
             label: label.into(),
             chunks: BTreeSet::new(),
             before: None,
+            between,
         })
+    }
+
+    /// Refuses `write` when the layer cannot take it: a hand-placed tile on a
+    /// layer whose tiles sit between cells.
+    pub fn check(&self, write: &TileWrite) -> Result<(), String> {
+        match write {
+            TileWrite::Tile(tile) if self.between && !tile.is_empty() => {
+                Err(BETWEEN_CELLS_TILES.to_string())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Writes `write` to the cells inside the map's bounds, resolving a
     /// terrain layer's neighbourhood, and returns how many of them changed.
+    /// A write [`check`](Self::check) refuses changes nothing.
     pub fn apply(&mut self, world: &mut World, cells: &[CellCoord], write: TileWrite) -> usize {
+        if self.check(&write).is_err() {
+            return 0;
+        }
         let cells = in_bounds(self.tilemap.bounds, cells);
         let terrain_layer = self.tilemap.layers[self.layer].kind == TilemapLayerKind::Terrain;
         let store = world.resource::<TilemapDataStore>();
@@ -490,6 +515,7 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
         index,
         format!("Set {} tilemap cells", cells.len()),
     )?;
+    stroke.check(&write)?;
     let changed = stroke.apply(world, &cells, write);
     if changed == 0 || !stroke.end(world) {
         return Ok("no cell changed".into());
@@ -679,20 +705,22 @@ fn write_layer(
     Vec::new()
 }
 
-/// Writes `write` to `cells` of `layer` and returns each cell whose tile
-/// changed, with its new tile: a terrain layer resolves the written cells and
-/// their ring with `set`, as the edit a stroke writes through does on drop,
-/// and keeps its tiles without one. The preview runs it on a copy.
+/// Writes `write` to `cells` of `layer` and returns each tile that changed,
+/// with its new tile, by key: a terrain layer resolves the tiles reading the
+/// written cells with `set` within `bounds`, as the edit a stroke writes
+/// through does on drop, and keeps its tiles without one. The preview runs it
+/// on a copy.
 pub fn paint_layer(
     layer: &mut LayerData,
     terrain_layer: bool,
     set: Option<&TerrainSet>,
+    bounds: Option<CellRect>,
     cells: &[CellCoord],
     write: TileWrite,
 ) -> Vec<(CellCoord, TileRef)> {
     let changed = write_layer(layer, terrain_layer, cells, write);
     match set {
-        Some(set) if terrain_layer => resolve_into(layer, set, cells.iter().copied()).1,
+        Some(set) if terrain_layer => resolve_into(layer, set, bounds, cells.iter().copied()).1,
         _ => changed,
     }
 }
@@ -703,12 +731,14 @@ pub fn preview_write(
     layer: Option<&LayerData>,
     terrain_layer: bool,
     set: Option<&TerrainSet>,
+    bounds: Option<CellRect>,
     cells: &[CellCoord],
     write: TileWrite,
 ) -> Vec<(CellCoord, TileRef)> {
     let chunks = ring_chunks(cells);
     let mut copy = LayerData {
         kind: layer.map_or(LayerKind::Tile, |l| l.kind),
+        placement: layer.map_or(Placement::OnCells, |l| l.placement),
         tiles: ChunkedLayer::new(),
         authoring: None,
     };
@@ -730,7 +760,7 @@ pub fn preview_write(
         }
         copy.authoring = to;
     }
-    paint_layer(&mut copy, terrain_layer, set, cells, write)
+    paint_layer(&mut copy, terrain_layer, set, bounds, cells, write)
 }
 
 fn copy_chunk<T: CellValue>(from: &ChunkedLayer<T>, to: &mut ChunkedLayer<T>, coord: ChunkCoord) {
@@ -747,11 +777,7 @@ mod tests {
 
     fn tile_map() -> TilemapData {
         TilemapData {
-            layers: vec![LayerData {
-                kind: LayerKind::Tile,
-                tiles: ChunkedLayer::new(),
-                authoring: None,
-            }],
+            layers: vec![LayerData::empty(LayerKind::Tile)],
         }
     }
 

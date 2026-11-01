@@ -28,7 +28,9 @@ mod tile;
 
 pub use collision_trace::{SolidMask, TileShape, solid_mask, trace_mask, trace_proposal};
 pub use data_path::{DataPathError, EXTENSION, mint_data_path, resolve_path};
-pub use grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, WorldRect};
+pub use grid::{
+    CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, Placement, WorldRect,
+};
 pub use layer::{CellValue, ChunkedLayer};
 pub use layout_fit::{
     FitError, FittedTile, ProposedSet, ProposedTerrain, TilesetProposal, fit_layouts,
@@ -57,7 +59,7 @@ pub use slice::{
 };
 pub use solver::{
     MatchMode, Peer, RequiredPeers, Requirement, Resolved, TerrainSet, TerrainTile, TileTerrains,
-    match_score, required_peers, resolve_cell, resolve_region,
+    match_score, required_peers, resolve_cell, resolve_region, resolve_region_within,
 };
 pub use stamp::{Stamp, find_stamps, reconcile};
 pub use strip::{AnimationStrip, FrameRun, LOOSE_FRAME_MATCH, detect_animation, pair_animations};

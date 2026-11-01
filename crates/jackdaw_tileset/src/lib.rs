@@ -15,6 +15,14 @@ mod terrain_set;
 
 pub use terrain_set::TerrainSetError;
 
+/// A map's authored bounds as the kernel's cell rectangle.
+pub fn map_bounds(bounds: Option<IRect>) -> Option<jackdaw_tilemap::CellRect> {
+    bounds.map(|b| jackdaw_tilemap::CellRect {
+        min: b.min,
+        max: b.max,
+    })
+}
+
 /// Registers [`Tileset`] as a reflected asset.
 pub struct TilesetPlugin;
 
@@ -22,6 +30,9 @@ impl Plugin for TilesetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<Tileset>()
             .register_asset_reflect::<Tileset>();
+        #[cfg(feature = "render")]
+        app.init_resource::<chunk::TileStrips>()
+            .add_systems(Update, chunk::fill_strips);
     }
 }
 

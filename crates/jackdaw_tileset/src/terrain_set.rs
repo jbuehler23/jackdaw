@@ -1,6 +1,6 @@
 use std::fmt;
 
-use jackdaw_tilemap::{TerrainId, TerrainSet, TerrainTile, TileRef, TileTerrains};
+use jackdaw_tilemap::{Placement, TerrainId, TerrainSet, TerrainTile, TileRef, TileTerrains};
 
 use crate::{TerrainMatch, Tileset, match_mode};
 
@@ -113,6 +113,16 @@ impl Tileset {
             }
         }
         Ok(set)
+    }
+
+    /// Where a terrain layer solving under `mode`, or the tileset's only
+    /// mode when `None`, draws its tiles; `None` when there is no such mode.
+    pub fn placement(&self, mode: Option<TerrainMatch>) -> Option<Placement> {
+        let mode = match mode {
+            Some(mode) => mode,
+            None => self.only_mode().ok()?,
+        };
+        Some(match_mode(mode).placement())
     }
 
     fn only_mode(&self) -> Result<TerrainMatch, TerrainSetError> {
