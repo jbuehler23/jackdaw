@@ -214,7 +214,7 @@ pub(super) fn spawn_custom_properties_display(
                     commands,
                     row,
                     rgba,
-                    prop_name,
+                    super::reflect_fields::ColorLabel::Inline(prop_name),
                     0.0,
                     None,
                     move |world, rgba, is_final| {

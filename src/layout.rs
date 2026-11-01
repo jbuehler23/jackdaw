@@ -869,7 +869,7 @@ pub fn update_tab_strip_highlights(
 
 /// Custom status bar that wraps the feathers status bar sections and adds
 /// a connection indicator on the far right.
-fn editor_status_bar() -> impl Bundle {
+pub fn editor_status_bar() -> impl Bundle {
     (
         status_bar::StatusBar,
         Node {
@@ -893,14 +893,29 @@ fn editor_status_bar() -> impl Bundle {
                 },
                 bevy::feathers::theme::ThemedText,
             ),
+            // Gives up room before the right side does, cutting the path off.
             (
-                status_bar::StatusBarCenter,
-                Text::default(),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE_SM,
+                crate::status_bar::StatusBarCenterSlot,
+                Node {
+                    flex_shrink: 1.0,
+                    min_width: Val::Px(0.0),
+                    margin: UiRect::horizontal(Val::Px(tokens::SPACING_MD)),
+                    overflow: Overflow::clip(),
                     ..Default::default()
                 },
-                TextColor(tokens::TEXT_SECONDARY),
+                children![(
+                    status_bar::StatusBarCenter,
+                    Text::default(),
+                    TextLayout {
+                        linebreak: bevy::text::LineBreak::NoWrap,
+                        ..Default::default()
+                    },
+                    TextFont {
+                        font_size: tokens::TEXT_SIZE_SM,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                )],
             ),
             (
                 crate::status_bar::StatusBarInspected,

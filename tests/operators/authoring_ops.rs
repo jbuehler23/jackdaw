@@ -576,6 +576,8 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("sprite.set_anchor", &["entity"], true),
     ("sprite.set_pixels_per_unit", &["entity"], true),
     ("sprite.y_sort", &["entity"], true),
+    ("sprite.z_down", &["entity"], false),
+    ("sprite.z_up", &["entity"], false),
     ("terrain.scatter.adopt", &["entity"], true),
     ("tilemap.clear", &["entity"], true),
     ("tilemap.describe", &["entity"], true),

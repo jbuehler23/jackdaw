@@ -566,9 +566,12 @@ fn authored_widget_components() -> [&'static str; 10] {
 
 /// Cards another card shows inside itself, as (absorbed, host) type paths.
 /// An absorbed card is left out whenever its host's card is listed.
-fn folded_cards() -> [(&'static str, &'static str); 1] {
+fn folded_cards() -> [(&'static str, &'static str); 2] {
     use bevy::reflect::TypePath;
-    [(bevy::sprite::Anchor::type_path(), Sprite::type_path())]
+    [
+        (bevy::sprite::Anchor::type_path(), Sprite::type_path()),
+        (jackdaw_scene_types::Y_SORT_TYPE_PATH, Sprite::type_path()),
+    ]
 }
 
 struct ListedComponent {
@@ -691,7 +694,8 @@ fn listed_component(
 
     // Unreflected components fall back to the `Components` name.
     let name = components.get_name(component_id)?;
-    if hidden_by_namespace(&name) {
+    // An unreflected engine component holds nothing an author can set.
+    if hidden_by_namespace(&name) || name.starts_with("bevy_") {
         return None;
     }
     Some(ListedComponent {
@@ -1167,13 +1171,16 @@ fn build_inspector_cards(
                 continue;
             }
 
-            if let Some(canvas) = reflected.downcast_ref::<jackdaw_scene_types::PixelCanvas>() {
-                crate::pixel_camera::spawn_preset_row(
-                    commands,
-                    body_entity,
-                    source_entity,
-                    canvas.resolution,
-                );
+            if type_id == TypeId::of::<jackdaw_scene_types::PixelCanvas>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    super::pixel_canvas_card::fill_pixel_canvas_card_body(
+                        world,
+                        source_entity,
+                        body,
+                    );
+                });
+                continue;
             }
 
             if type_id == TypeId::of::<jackdaw_scene_types::Tilemap>() {

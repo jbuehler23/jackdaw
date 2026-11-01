@@ -253,3 +253,103 @@ fn undo_after_toggling_on_clears_the_checkbox_and_a_matching_request_does_nothin
         "the checkbox follows the undo"
     );
 }
+
+#[test]
+fn a_2d_camera_shows_no_render_plumbing_cards() {
+    let (mut app, camera) = app_with_plain_camera();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert(bevy::extract::sync_world::SyncToSubWorld::<
+            bevy::render::RenderApp,
+        >::default());
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+    jackdaw::selection::select_only(app.world_mut(), camera);
+    for _ in 0..4 {
+        app.update();
+    }
+    assert!(
+        app.world()
+            .get::<bevy::camera::CameraMainTextureUsages>(camera)
+            .is_some()
+    );
+    let cards = jackdaw::inspector::component_cards_showing(app.world_mut());
+    assert!(
+        cards.iter().any(|path| path.ends_with("Camera2d")),
+        "{cards:?}"
+    );
+    for internal in ["SyncToSubWorld", "SubEntity", "CameraMainTextureUsages"] {
+        assert!(
+            !cards.iter().any(|path| path.contains(internal)),
+            "{internal} is plumbing: {cards:?}"
+        );
+    }
+}
+
+#[test]
+fn the_canvas_card_rows_read_in_sentence_case() {
+    let (mut app, _camera) = app_with_canvas(PixelCanvas::new(320, 180));
+    let text = jackdaw::inspector::component_card_text(
+        app.world_mut(),
+        jackdaw_scene_types::PIXEL_CANVAS_TYPE_PATH,
+    );
+    for label in ["Preset", "Size", "Scale", "Letterbox", "Pixel snap"] {
+        assert!(text.iter().any(|line| line == label), "{label}: {text:?}");
+    }
+    assert!(
+        !text
+            .iter()
+            .any(|line| line.contains('_') || line.ends_with(':') || line == "resolution"),
+        "{text:?}"
+    );
+}
+
+#[test]
+fn the_canvas_card_has_a_row_for_every_canvas_field() {
+    let canvas = PixelCanvas::new(320, 180);
+    let (mut app, _camera) = app_with_canvas(canvas);
+    let text = jackdaw::inspector::component_card_text(
+        app.world_mut(),
+        jackdaw_scene_types::PIXEL_CANVAS_TYPE_PATH,
+    );
+    for name in (0..canvas.field_len()).filter_map(|index| canvas.name_at(index)) {
+        let label = if name == "resolution" {
+            "Size".to_string()
+        } else {
+            let words = name.replace('_', " ");
+            let mut letters = words.chars();
+            letters
+                .next()
+                .map(|first| first.to_uppercase().chain(letters).collect())
+                .unwrap_or_default()
+        };
+        assert!(text.contains(&label), "a `{label}` row: {text:?}");
+    }
+    assert!(
+        !text.iter().any(String::is_empty),
+        "no empty caption: {text:?}"
+    );
+}
+
+#[test]
+fn an_unreflected_engine_marker_gets_no_card() {
+    let (mut app, camera) = app_with_plain_camera();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert(bevy::camera::visibility::NoCpuCulling);
+    jackdaw::selection::clear_selection_in_world(app.world_mut());
+    app.update();
+    jackdaw::selection::select_only(app.world_mut(), camera);
+    for _ in 0..4 {
+        app.update();
+    }
+    let cards = jackdaw::inspector::component_cards_showing(app.world_mut());
+    assert!(
+        cards.iter().any(|path| path.ends_with("Camera2d")),
+        "{cards:?}"
+    );
+    assert!(
+        !cards.iter().any(|path| path.contains("NoCpuCulling")),
+        "{cards:?}"
+    );
+}

@@ -54,6 +54,7 @@ mod sprite_gizmo;
 mod sprite_picking;
 mod sprite_snap;
 mod sprite_sort;
+mod status_line;
 mod synthetic_input;
 mod tile_palette;
 mod tile_preview;

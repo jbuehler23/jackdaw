@@ -3273,7 +3273,7 @@ fn build_two_d_tree() -> jackdaw_panels::tree::DockTree {
     };
     let bottom = split(&mut tree, SplitAxis::Horizontal, 0.55, palette, project);
     let center = split(&mut tree, SplitAxis::Vertical, 0.72, viewport, bottom);
-    let center_and_right = split(&mut tree, SplitAxis::Horizontal, 0.82, center, right);
+    let center_and_right = split(&mut tree, SplitAxis::Horizontal, 0.70, center, right);
     let root = split(
         &mut tree,
         SplitAxis::Horizontal,
@@ -3904,7 +3904,7 @@ fn build_default_tree(world: &mut World) {
     }));
     let center_and_right = tree.insert(DockNode::Split(DockSplit {
         axis: SplitAxis::Horizontal,
-        fraction: 0.85,
+        fraction: 0.71,
         a: center_over_bottom,
         b: right,
     }));
@@ -4067,7 +4067,7 @@ mod dock_open_tests {
 
 #[cfg(test)]
 mod preset_tree_tests {
-    use jackdaw_panels::tree::{DockLeaf, DockTree};
+    use jackdaw_panels::tree::{DockLeaf, DockNode, DockTree, NodeId, SplitAxis};
     use jackdaw_panels::{DockWindowDescriptor, WindowRegistry};
 
     use super::*;
@@ -4146,6 +4146,45 @@ mod preset_tree_tests {
         build_default_tree(&mut world);
 
         assert_one_viewport_panel(world.resource::<DockTree>(), "the default tree");
+    }
+
+    fn default_tree() -> DockTree {
+        let mut world = World::new();
+        world.init_resource::<DockTree>();
+        world.insert_resource(WindowRegistry::default());
+        build_default_tree(&mut world);
+        world.resource::<DockTree>().clone()
+    }
+
+    /// The width the leaf of `area` gets in a window `width` wide, from the
+    /// split fractions alone.
+    fn area_width(tree: &DockTree, node: NodeId, width: f32, area: &str) -> Option<f32> {
+        match tree.get(node)? {
+            DockNode::Leaf(leaf) => (leaf.area_id == area).then_some(width),
+            DockNode::Split(split) => {
+                let (a, b) = match split.axis {
+                    SplitAxis::Horizontal => {
+                        (width * split.fraction, width * (1.0 - split.fraction))
+                    }
+                    SplitAxis::Vertical => (width, width),
+                };
+                area_width(tree, split.a, a, area).or_else(|| area_width(tree, split.b, b, area))
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_layouts_give_the_inspector_room_at_1280_wide() {
+        for (name, tree) in [("default", default_tree()), ("2d", build_two_d_tree())] {
+            let root = tree.root.expect("a root");
+            let inspector = area_width(&tree, root, 1280.0, "right_sidebar").expect("an inspector");
+            assert!(
+                (280.0..=340.0).contains(&inspector),
+                "{name}: the inspector gets {inspector} px"
+            );
+            let viewport = area_width(&tree, root, 1280.0, "center").expect("a viewport");
+            assert!(viewport >= 600.0, "{name}: the viewport gets {viewport} px");
+        }
     }
 }
 

@@ -18,6 +18,7 @@ pub(crate) mod material_row;
 mod modifier_display;
 pub mod node_card;
 pub(crate) mod ops;
+mod pixel_canvas_card;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
@@ -427,6 +428,15 @@ pub fn asset_field_shown_by(world: &World, row: Entity) -> Option<(&str, &str)> 
     world
         .get::<asset_row::AssetFieldRow>(row)
         .map(|row| (row.asset_type_path.as_str(), row.field_path.as_str()))
+}
+
+/// A field name as a row label: `cell_size` reads "Cell size".
+pub(crate) fn sentence(name: &str) -> String {
+    let words = name.replace('_', " ");
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// The components the inspector is showing a card for, as their type paths.

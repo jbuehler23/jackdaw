@@ -264,7 +264,7 @@ fn two_d(taxonomy: &mut CreationTaxonomy) {
         ),
         entry(
             TWO_D_GROUP,
-            "Camera",
+            "2D Camera",
             op_action::<crate::entity_ops::EntityAddCamera2dOp>(),
         ),
         entry(

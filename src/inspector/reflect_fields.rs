@@ -655,7 +655,7 @@ pub(crate) fn spawn_field_row(
         spawn_color_field(
             commands,
             parent,
-            name,
+            ColorLabel::Inline(name),
             *color,
             field_path,
             source_entity,
@@ -1401,19 +1401,117 @@ fn spawn_bool_toggle(
 
     // The `FieldBinding` sits on the checkbox entity, so
     // `on_checkbox_commit` reads it from the `ValueChange` source directly.
-    let mut cb = commands.spawn_scene(bsn! { @FeathersCheckbox });
-    cb.insert((
-        FieldBinding {
+    spawn_bound_checkbox(
+        commands,
+        row,
+        None,
+        value,
+        &field_path,
+        source_entity,
+        type_path,
+    );
+}
+
+/// A checkbox, with `caption` beside it when there is one. The checkbox does
+/// not manage `Checked` itself, so `checked` seeds it.
+pub(crate) fn spawn_checkbox(
+    commands: &mut Commands,
+    parent: Entity,
+    caption: Option<&str>,
+    checked: bool,
+) -> Entity {
+    let mut checkbox = match caption {
+        Some(caption) => {
+            let caption = caption.to_string();
+            commands.spawn_scene(bsn! {
+                @FeathersCheckbox {
+                    @caption: bsn! { Text({caption.clone()}) bevy::feathers::theme::ThemedText }
+                }
+            })
+        }
+        None => commands.spawn_scene(bsn! { @FeathersCheckbox }),
+    };
+    checkbox.insert(ChildOf(parent));
+    if checked {
+        checkbox.insert(Checked);
+    }
+    checkbox.id()
+}
+
+/// A checkbox editing the bool at `field_path`.
+pub(super) fn spawn_bound_checkbox(
+    commands: &mut Commands,
+    parent: Entity,
+    caption: Option<&str>,
+    value: bool,
+    field_path: &str,
+    source_entity: Entity,
+    type_path: &str,
+) -> Entity {
+    let checkbox = spawn_checkbox(commands, parent, caption, value);
+    commands.entity(checkbox).insert(FieldBinding {
+        source_entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.to_string(),
+    });
+    checkbox
+}
+
+/// A field of a card laid out as label-left rows: a colour or a bool in that
+/// row shape, anything else as the generic rows show it.
+pub(super) fn spawn_card_field_row(
+    commands: &mut Commands,
+    parent: Entity,
+    label: &str,
+    value: &dyn PartialReflect,
+    field_path: &str,
+    source_entity: Entity,
+    type_path: &str,
+    entity_names: &Query<&Name>,
+    type_registry: &AppTypeRegistry,
+    editor_font: &Handle<Font>,
+    icon_font: &Handle<Font>,
+) {
+    if let Some(&color) = value.try_downcast_ref::<Color>() {
+        let path = field_path.to_string();
+        let label = ColorLabel::Column(label);
+        spawn_color_field(
+            commands,
+            parent,
+            label,
+            color,
+            path,
             source_entity,
-            type_path: type_path.to_string(),
+            type_path,
+            0,
+        );
+    } else if let Some(&on) = value.try_downcast_ref::<bool>() {
+        let props = jackdaw_feathers::field_row::FieldRowProps::new(label);
+        let row = jackdaw_feathers::field_row::spawn_field_row(commands, parent, props);
+        spawn_bound_checkbox(
+            commands,
+            row.control,
+            None,
+            on,
             field_path,
-        },
-        ChildOf(row),
-    ));
-    // The checkbox does not self-manage `Checked`; seed the initial state.
-    // `on_checkbox_commit` and the refresh path keep it in sync thereafter.
-    if value {
-        cb.insert(Checked);
+            source_entity,
+            type_path,
+        );
+    } else {
+        spawn_field_row(
+            commands,
+            parent,
+            label,
+            value,
+            0,
+            field_path.to_string(),
+            source_entity,
+            type_path,
+            entity_names,
+            type_registry,
+            editor_font,
+            icon_font,
+        );
     }
 }
 
@@ -1487,11 +1585,20 @@ pub(crate) struct HexColorInput {
 /// A picker given a `collapse` key shows only its label, hex and swatch until
 /// the swatch is clicked, the way a colour row reads in the other cards, and
 /// stays open across rebuilds while [`OpenColorRows`] holds the key.
+/// How a colour field shows its name.
+#[derive(Clone, Copy)]
+pub(crate) enum ColorLabel<'a> {
+    /// `name:` at the size of its text, as the generic rows label themselves.
+    Inline(&'a str),
+    /// In the label column of a card laid out as label-left field rows.
+    Column(&'a str),
+}
+
 pub(crate) fn spawn_color_picker(
     commands: &mut Commands,
     parent: Entity,
     initial: [f32; 4],
-    name: &str,
+    label: ColorLabel,
     left_padding: f32,
     collapse: Option<ColorRowKey>,
     commit: impl Fn(&mut World, [f32; 4], bool) + Send + Sync + 'static,
@@ -1516,13 +1623,17 @@ pub(crate) fn spawn_color_picker(
         ))
         .id();
 
-    // Label + swatch preview on one row.
+    let column = matches!(label, ColorLabel::Column(_));
     let header = commands
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
+                justify_content: if column {
+                    JustifyContent::FlexStart
+                } else {
+                    JustifyContent::SpaceBetween
+                },
                 column_gap: px(tokens::SPACING_SM),
                 width: Val::Percent(100.0),
                 ..Default::default()
@@ -1531,15 +1642,46 @@ pub(crate) fn spawn_color_picker(
         ))
         .id();
 
-    commands.spawn((
-        Text::new(format!("{name}:")),
-        TextFont {
-            font_size: tokens::TEXT_SIZE_SM,
-            ..Default::default()
-        },
-        TextColor(tokens::TEXT_TERTIARY),
-        ChildOf(header),
-    ));
+    let font = TextFont {
+        font_size: tokens::TEXT_SIZE_SM,
+        ..Default::default()
+    };
+    match label {
+        ColorLabel::Inline(name) => {
+            commands.spawn((
+                Text::new(format!("{name}:")),
+                font,
+                TextColor(tokens::TEXT_TERTIARY),
+                ChildOf(header),
+            ));
+        }
+        ColorLabel::Column(name) => {
+            commands.spawn((
+                Text::new(name),
+                font,
+                TextColor(tokens::TEXT_SECONDARY),
+                Node {
+                    width: px((tokens::FIELD_LABEL_WIDTH - left_padding).max(0.0)),
+                    min_width: px(tokens::FIELD_LABEL_MIN_WIDTH),
+                    flex_shrink: 1.0,
+                    overflow: Overflow::clip(),
+                    ..Default::default()
+                },
+                ChildOf(header),
+            ));
+        }
+    }
+
+    let swatch = commands
+        .spawn_scene(bsn! { @FeathersColorSwatch })
+        .insert((
+            ColorSwatchValue(Color::Srgba(srgba)),
+            ColorSubWidget {
+                root,
+                part: ColorPart::Plane,
+            },
+        ))
+        .id();
 
     // Hex entry mirrors the current color as a 6- or 8-digit hex string and
     // parses one back on commit. `HexColorInput` lands on the inner text entry
@@ -1548,10 +1690,15 @@ pub(crate) fn spawn_color_picker(
         .spawn_scene(hex_input_scene())
         .insert((
             PendingFieldText(srgba.to_hex()),
-            ChildOf(header),
             BackgroundColor(tokens::ELEVATED_BG),
         ))
         .id();
+    let order = if column {
+        [swatch, hex_container]
+    } else {
+        [hex_container, swatch]
+    };
+    commands.entity(header).add_children(&order);
     commands.queue(move |world: &mut World| {
         let mut descendants: Vec<Entity> = Vec::new();
         if let Ok(children) = world.query::<&Children>().get(world, hex_container) {
@@ -1568,17 +1715,6 @@ pub(crate) fn spawn_color_picker(
         }
     });
 
-    let swatch = commands
-        .spawn_scene(bsn! { @FeathersColorSwatch })
-        .insert((
-            ColorSwatchValue(Color::Srgba(srgba)),
-            ColorSubWidget {
-                root,
-                part: ColorPart::Plane,
-            },
-            ChildOf(header),
-        ))
-        .id();
     let detail = if let Some(key) = collapse {
         let detail = commands
             .spawn((
@@ -1678,7 +1814,7 @@ pub(crate) struct OpenColorRows(pub(crate) std::collections::HashSet<ColorRowKey
 fn spawn_color_field(
     commands: &mut Commands,
     parent: Entity,
-    name: &str,
+    label: ColorLabel,
     color: Color,
     field_path: String,
     source_entity: Entity,
@@ -1711,7 +1847,7 @@ fn spawn_color_field(
         commands,
         parent,
         rgba,
-        name,
+        label,
         left_padding,
         Some(key),
         commit,
