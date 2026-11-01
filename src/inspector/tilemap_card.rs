@@ -447,7 +447,7 @@ fn spawn_combo(
     tip: Option<Tooltip>,
 ) {
     let labels = combo.values.iter().map(|value| match combo.param {
-        "tileset" => tileset_label(value),
+        "tileset" => crate::tileset_import::tileset_label(value),
         _ => sentence(value),
     });
     let options: Vec<ComboBoxOptionData> = labels.map(ComboBoxOptionData::new).collect();
@@ -490,14 +490,6 @@ fn spawn_hint(commands: &mut Commands, lines: Entity, hint: &str, tileset: &str)
         ButtonOperatorCall::new(TilesetEditOp::ID).with_param("path", tileset.to_string()),
         ChildOf(line),
     ));
-}
-
-/// A tileset path as the combo shows it: its file name less the extension.
-fn tileset_label(path: &str) -> String {
-    let file = path.rsplit('/').next().unwrap_or(path);
-    file.strip_suffix(crate::tileset_import::TILESET_SUFFIX)
-        .unwrap_or(file)
-        .to_string()
 }
 
 fn set_layer(

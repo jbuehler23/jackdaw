@@ -7,16 +7,18 @@ use crate::tilemap_render::{
     grass_patch, ground_terrain, layer, project_app, settle, spawn_map, tile_layer,
 };
 
+use bevy::feathers::controls::ButtonVariant;
 use bevy::prelude::*;
-use bevy::ui::Checked;
+use bevy::ui::{Checked, ComputedNode, InteractionDisabled, UiGlobalTransform};
 use bevy::ui_widgets::Activate;
 use jackdaw::selection::Selection;
 use jackdaw::tile_palette::{
-    ContiguousToggle, PaletteBody, PaletteCell, PaletteItem, PaletteSection, PaletteSelected,
-    TILE_PALETTE_WINDOW_ID, TilePalette,
+    ContiguousToggle, MIN_TILE_PX, PaletteBody, PaletteCell, PaletteHeader, PaletteItem,
+    PaletteSection, PaletteSelected, TILE_PALETTE_WINDOW_ID, TilePalette,
 };
 use jackdaw::tile_tools::{BrushSource, TileBrush, TileEditMode, TileTool};
 use jackdaw_api::prelude::*;
+use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_scene_types::{PropertyValue, TilemapLayerKind};
 use jackdaw_tilemap::{CellCoord, TileRef};
 use jackdaw_tileset::{TerrainMatch, Tileset};
@@ -627,5 +629,310 @@ fn a_terrain_with_an_icon_shows_that_tile() {
             min.as_vec2(),
             (min + size).as_vec2()
         ))]
+    );
+}
+
+const TURNS: [&str; 3] = [
+    "tilemap.brush.flip_x",
+    "tilemap.brush.flip_y",
+    "tilemap.brush.rotate",
+];
+
+/// The header's name, operator buttons and toggles, in order.
+fn header_controls(app: &mut App) -> Vec<String> {
+    fn walk(world: &World, entity: Entity, out: &mut Vec<String>) {
+        if let Some(call) = world.get::<ButtonOperatorCall>(entity) {
+            out.push(call.id.to_string());
+        } else if world.get::<ContiguousToggle>(entity).is_some() {
+            out.push("contiguous".to_string());
+        } else if let Some(text) = world.get::<Text>(entity) {
+            out.push(text.0.clone());
+        } else if let Some(children) = world.get::<Children>(entity) {
+            for child in children.iter() {
+                walk(world, child, out);
+            }
+        }
+    }
+    let header = app
+        .world_mut()
+        .query_filtered::<Entity, With<PaletteHeader>>()
+        .single(app.world())
+        .expect("one palette header");
+    let mut out = Vec::new();
+    walk(app.world(), header, &mut out);
+    out
+}
+
+/// The operator button calling `id` somewhere under `root`.
+fn op_button_under(app: &mut App, root: Entity, id: &str) -> Option<Entity> {
+    let found: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &ButtonOperatorCall)>()
+        .iter(app.world())
+        .filter(|(_, call)| call.id == id)
+        .map(|(e, _)| e)
+        .collect();
+    found.into_iter().find(|&e| {
+        let mut at = e;
+        while let Some(parent) = app.world().get::<ChildOf>(at) {
+            at = parent.parent();
+            if at == root {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+fn header_button(app: &mut App, id: &str) -> Entity {
+    let header = app
+        .world_mut()
+        .query_filtered::<Entity, With<PaletteHeader>>()
+        .single(app.world())
+        .expect("one palette header");
+    op_button_under(app, header, id).unwrap_or_else(|| panic!("a header button for {id}"))
+}
+
+#[test]
+fn the_header_holds_the_name_the_turns_save_and_contiguous_in_order() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    run(&mut app, "tilemap.bucket");
+    let mut expected = vec!["overworld".to_string()];
+    expected.extend(TURNS.iter().map(ToString::to_string));
+    expected.extend(["tilemap.stamp.save".to_string(), "contiguous".to_string()]);
+    assert_eq!(header_controls(&mut app), expected);
+}
+
+#[test]
+fn the_turn_buttons_show_the_brush_and_wait_for_a_tile() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    for id in TURNS {
+        let button = header_button(&mut app, id);
+        assert!(
+            app.world().get::<InteractionDisabled>(button).is_some(),
+            "{id} waits for a tile"
+        );
+    }
+    ok(&mut app, PICK, &[("tile", text("0:5"))]);
+    run(&mut app, "tilemap.brush.flip_x");
+    let variant = |app: &mut App, id: &str| {
+        let button = header_button(app, id);
+        assert!(
+            app.world().get::<InteractionDisabled>(button).is_none(),
+            "{id}"
+        );
+        app.world()
+            .get::<ButtonVariant>(button)
+            .cloned()
+            .expect("a variant")
+    };
+    assert_eq!(variant(&mut app, TURNS[0]), ButtonVariant::Primary);
+    assert_eq!(variant(&mut app, TURNS[1]), ButtonVariant::Plain);
+    run(&mut app, "tilemap.brush.flip_x");
+    assert_eq!(variant(&mut app, TURNS[0]), ButtonVariant::Plain);
+}
+
+#[test]
+fn contiguous_shows_only_while_the_bucket_is_active() {
+    let (mut app, _dir) = project_app();
+    open_palette(&mut app);
+    tile_map(&mut app, &[]);
+    let display = |app: &mut App| {
+        app.world_mut()
+            .query_filtered::<&Node, With<ContiguousToggle>>()
+            .single(app.world())
+            .expect("one toggle")
+            .display
+    };
+    assert_eq!(
+        display(&mut app),
+        Display::None,
+        "the Brush has no Contiguous"
+    );
+    run(&mut app, "tilemap.bucket");
+    assert_eq!(display(&mut app), Display::Flex);
+    run(&mut app, "tilemap.line");
+    assert_eq!(display(&mut app), Display::None);
+}
+
+#[test]
+fn the_tiles_fit_the_dock_width() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    let palette = open_palette(&mut app);
+    if let Some(mut node) = app.world_mut().get_mut::<Node>(palette) {
+        node.max_width = px(500.0);
+    }
+    enter(&mut app, map);
+    let edges = |app: &App, entity: Entity| {
+        let node = app.world().get::<ComputedNode>(entity).expect("laid out");
+        let at = app
+            .world()
+            .get::<UiGlobalTransform>(entity)
+            .expect("placed");
+        let half = node.size().x / 2.0;
+        (at.translation.x - half, at.translation.x + half)
+    };
+    let scrolled = body(&mut app);
+    let (_, right) = edges(&app, scrolled);
+    assert!(right > 0.0, "the body is laid out");
+    let tiles: Vec<Entity> = cells(&mut app)
+        .into_iter()
+        .filter(|(_, item)| matches!(item, PaletteItem::Tile(..)))
+        .map(|(e, _)| e)
+        .collect();
+    let widest = tiles
+        .iter()
+        .map(|&t| edges(&app, t).1)
+        .fold(f32::MIN, f32::max);
+    assert!(
+        widest <= right + 0.5,
+        "a tile at {widest} past the body at {right}"
+    );
+    let narrowest = tiles
+        .iter()
+        .map(|&t| {
+            app.world()
+                .get::<ComputedNode>(t)
+                .map_or(0.0, |n| n.size().x)
+        })
+        .fold(f32::MAX, f32::min);
+    assert!(narrowest >= 8.0, "tiles stay visible: {narrowest}");
+}
+
+#[test]
+fn the_palette_tab_has_an_icon() {
+    let (app, _dir) = project_app();
+    let registry = app.world().resource::<jackdaw_panels::WindowRegistry>();
+    let window = registry.get(TILE_PALETTE_WINDOW_ID).expect("registered");
+    assert!(
+        window
+            .icon
+            .as_deref()
+            .is_some_and(|i| !i.is_empty() && i != "?"),
+        "{:?}",
+        window.icon
+    );
+}
+
+fn palette_button(app: &mut App, id: &str) -> Option<Entity> {
+    let palette = app
+        .world_mut()
+        .query_filtered::<Entity, With<TilePalette>>()
+        .single(app.world())
+        .expect("one palette");
+    op_button_under(app, palette, id)
+}
+
+#[test]
+fn the_empty_palette_enters_tile_edit_mode() {
+    let (mut app, _dir) = project_app();
+    open_palette(&mut app);
+    assert!(
+        palette_button(&mut app, "tilemap.create").is_some(),
+        "no tilemap yet offers one"
+    );
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    app.world_mut().resource_mut::<Selection>().entities.clear();
+    settle(&mut app);
+    assert_eq!(
+        palette_button(&mut app, "tilemap.create"),
+        None,
+        "a tilemap exists"
+    );
+    let edit = palette_button(&mut app, "tilemap.edit_mode").expect("an edit button");
+    assert!(
+        app.world().get::<InteractionDisabled>(edit).is_some(),
+        "waits for a selected tilemap"
+    );
+    app.world_mut().resource_mut::<Selection>().entities = vec![map];
+    settle(&mut app);
+    let edit = palette_button(&mut app, "tilemap.edit_mode").expect("an edit button");
+    assert!(app.world().get::<InteractionDisabled>(edit).is_none());
+    app.world_mut().trigger(Activate { entity: edit });
+    settle(&mut app);
+    assert_eq!(app.world().resource::<TileEditMode>().map, Some(map));
+}
+
+#[test]
+fn tile_and_terrain_cells_share_the_selection_outline() {
+    let (mut app, _dir) = project_app();
+    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
+    open_palette(&mut app);
+    enter(&mut app, map);
+    let border = |app: &mut App, tile: bool| {
+        let (cell, _) = *cells(app)
+            .iter()
+            .find(|(_, i)| matches!(i, PaletteItem::Tile(..)) == tile)
+            .expect("a cell");
+        app.world().get::<Node>(cell).expect("a node").border
+    };
+    assert_eq!(border(&mut app, true), border(&mut app, false));
+}
+
+#[test]
+fn a_sheet_wider_than_the_dock_scrolls_sideways_at_the_smallest_tiles() {
+    let (mut app, dir) = project_app();
+    let overworld = image::open(crate::util::OVERWORLD_SHEET)
+        .expect("the sheet decodes")
+        .to_rgba8();
+    let mut wide = image::RgbaImage::new(64 * 16, 4 * 16);
+    for (x, y, pixel) in wide.enumerate_pixels_mut() {
+        *pixel = *overworld.get_pixel((x / 16 % 27) * 16 + x % 16, y);
+    }
+    wide.save(dir.path().join("assets/wide.png"))
+        .expect("write the wide sheet");
+    ok(
+        &mut app,
+        "tileset.import",
+        &[("path", text("wide.png")), ("setup", text("none"))],
+    );
+    let mut wide_layer = layer(TilemapLayerKind::Tile, default());
+    wide_layer.tileset = "wide.tileset.bsn".to_string();
+    let map = spawn_map(&mut app, vec![wide_layer], tile_layer(&[]));
+    let palette = open_palette(&mut app);
+    if let Some(mut node) = app.world_mut().get_mut::<Node>(palette) {
+        node.max_width = px(300.0);
+    }
+    enter(&mut app, map);
+    let tiles: Vec<Entity> = cells(&mut app)
+        .into_iter()
+        .filter(|(_, item)| matches!(item, PaletteItem::Tile(..)))
+        .map(|(e, _)| e)
+        .collect();
+    assert_eq!(tiles.len(), 64 * 4, "one sheet of 64 columns");
+    for &tile in &tiles {
+        let node = app.world().get::<ComputedNode>(tile).expect("laid out");
+        let width = node.size().x * node.inverse_scale_factor();
+        assert!(width >= MIN_TILE_PX - 0.5, "a tile {width} wide");
+    }
+    let mut at = tiles[0];
+    let scroller = loop {
+        let parent = app
+            .world()
+            .get::<ChildOf>(at)
+            .expect("inside a scroller")
+            .parent();
+        if app
+            .world()
+            .get::<Node>(parent)
+            .is_some_and(|n| n.overflow.x == OverflowAxis::Scroll)
+        {
+            break parent;
+        }
+        at = parent;
+    };
+    let node = app.world().get::<ComputedNode>(scroller).expect("laid out");
+    assert!(
+        node.content_size().x > node.size().x + 1.0,
+        "the sheet overflows sideways: {:?} in {:?}",
+        node.content_size(),
+        node.size()
     );
 }

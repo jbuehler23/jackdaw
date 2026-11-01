@@ -20,6 +20,16 @@ pub const TILESET_KIND: &str = "tileset";
 
 pub(crate) const TILESET_SUFFIX: &str = ".tileset.bsn";
 
+/// A tileset path as the editor names it: `overworld` for
+/// `maps/overworld.tileset.bsn`.
+pub(crate) fn tileset_label(path: &str) -> String {
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let stem = (file.strip_suffix(TILESET_SUFFIX))
+        .or_else(|| file.rsplit_once('.').map(|(stem, _)| stem))
+        .unwrap_or(file);
+    stem.to_string()
+}
+
 /// Layers an array texture may hold on native backends.
 const MAX_LAYERS: u32 = 2048;
 

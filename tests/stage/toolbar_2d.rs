@@ -226,6 +226,28 @@ fn flip_and_rotate_buttons_turn_the_brush_and_show_it() {
 }
 
 #[test]
+fn a_half_turn_lights_rotate_and_not_the_flips() {
+    let (mut app, _dir) = project_app();
+    tile_map(&mut app, &[]);
+    click(&mut app, "tilemap.brush.rotate");
+    click(&mut app, "tilemap.brush.rotate");
+    assert!(highlighted(&mut app, "tilemap.brush.rotate"));
+    assert!(!highlighted(&mut app, "tilemap.brush.flip_x"));
+    assert!(!highlighted(&mut app, "tilemap.brush.flip_y"));
+    click(&mut app, "tilemap.brush.rotate");
+    assert!(
+        highlighted(&mut app, "tilemap.brush.rotate"),
+        "three quarter turns"
+    );
+    assert!(!highlighted(&mut app, "tilemap.brush.flip_y"));
+    click(&mut app, "tilemap.brush.rotate");
+    assert!(
+        !highlighted(&mut app, "tilemap.brush.rotate"),
+        "a full turn"
+    );
+}
+
+#[test]
 fn selection_buttons_wait_for_a_selection_and_a_stamp() {
     let (mut app, _dir) = project_app();
     let tile = packed(&app, 0, 3);
