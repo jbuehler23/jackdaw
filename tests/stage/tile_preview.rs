@@ -4,7 +4,9 @@
 use std::collections::BTreeSet;
 
 use crate::tile_tools::{assert_resolved, enter, hold, run, set_brush, stored, stroke};
-use crate::tilemap_render::{grass_patch, ground_terrain, project_app, settle, spawn_map};
+use crate::tilemap_render::{
+    corner_pair, corner_patch, grass_patch, ground_terrain, layer, project_app, settle, spawn_map,
+};
 
 use bevy::prelude::*;
 use jackdaw::tile_preview::{
@@ -15,7 +17,7 @@ use jackdaw::tilemap::TilemapDataStore;
 use jackdaw::tilemap_stroke::{TileWrite, paint_layer};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::status_bar::StatusBarRight;
-use jackdaw_scene_types::PropertyValue;
+use jackdaw_scene_types::{LayerTerrainMatch, PropertyValue, TilemapLayerKind};
 use jackdaw_tilemap::{
     CellCoord, ChunkedLayer, LayerData, LayerKind, Links, MatchMode, Peer, TerrainAuthoring,
     TerrainSet, TerrainTile, TileRef, TileTerrains, TilemapData,
@@ -85,6 +87,42 @@ fn the_hover_preview_shows_what_a_brush_press_writes() {
     stroke(&mut app, BRUSH, MouseButton::Left, &[(2, 2)]);
     assert_eq!(diff(&before, &stored(&mut app, map)), shown);
     assert_resolved(&mut app, map);
+}
+
+#[test]
+fn a_corner_layer_previews_the_tiles_between_cells_a_press_writes() {
+    let (mut app, _dir) = project_app();
+    let (inner, outer) = corner_pair(&app);
+    let ground = layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Corners);
+    let map = spawn_map(&mut app, vec![ground], corner_patch((inner, outer), &[]));
+    enter(&mut app, map);
+    assert_eq!(
+        set_brush(&mut app, "terrain", &inner.to_string()),
+        OperatorResult::Finished
+    );
+    hover(&mut app, Some((4, 4)));
+    let shown = preview(&app);
+    let keys: Vec<IVec2> = shown.iter().map(|(c, _)| c.0).collect();
+    let around = [
+        IVec2::new(3, 3),
+        IVec2::new(4, 3),
+        IVec2::new(3, 4),
+        IVec2::new(4, 4),
+    ];
+    assert_eq!(keys, around, "the four tiles the cell is a corner of");
+    let drawn: Vec<Vec2> = (app.world_mut().query::<(&TilePreviewChunk, &Transform)>())
+        .iter(app.world())
+        .map(|(_, t)| t.translation.truncate())
+        .collect();
+    assert_eq!(
+        drawn,
+        [Vec2::splat(264.0)],
+        "drawn half a cell up and right"
+    );
+
+    let before = stored(&mut app, map);
+    stroke(&mut app, BRUSH, MouseButton::Left, &[(4, 4)]);
+    assert_eq!(diff(&before, &stored(&mut app, map)), shown);
 }
 
 #[test]
@@ -253,6 +291,7 @@ fn mask_set() -> TerrainSet {
 fn terrain_layer() -> LayerData {
     LayerData {
         kind: LayerKind::Terrain,
+        placement: Default::default(),
         tiles: ChunkedLayer::new(),
         authoring: Some(TerrainAuthoring::default()),
     }
@@ -267,8 +306,8 @@ fn path_writes_join_only_their_own_cells() {
     let set = mask_set();
     let joined = |write: fn(u8) -> TileWrite| {
         let mut layer = terrain_layer();
-        paint_layer(&mut layer, true, Some(&set), &row(0), write(1));
-        paint_layer(&mut layer, true, Some(&set), &row(1), write(1));
+        paint_layer(&mut layer, true, Some(&set), None, &row(0), write(1));
+        paint_layer(&mut layer, true, Some(&set), None, &row(1), write(1));
         u8::try_from(layer.tiles.get(CellCoord::new(1, 0)).index() - 1).expect("a mask")
     };
     let path = joined(TileWrite::Path);
@@ -281,14 +320,29 @@ fn path_writes_join_only_their_own_cells() {
 fn painting_returns_exactly_the_tiles_it_changes() {
     let set = mask_set();
     let mut layer = terrain_layer();
-    let first = paint_layer(&mut layer, true, Some(&set), &row(0), TileWrite::Terrain(1));
+    let first = paint_layer(
+        &mut layer,
+        true,
+        Some(&set),
+        None,
+        &row(0),
+        TileWrite::Terrain(1),
+    );
     assert_eq!(first.len(), 4);
-    let again = paint_layer(&mut layer, true, Some(&set), &row(0), TileWrite::Terrain(1));
+    let again = paint_layer(
+        &mut layer,
+        true,
+        Some(&set),
+        None,
+        &row(0),
+        TileWrite::Terrain(1),
+    );
     assert!(again.is_empty(), "nothing changes the second time");
     let erased = paint_layer(
         &mut layer,
         true,
         Some(&set),
+        None,
         &[CellCoord::new(3, 0)],
         TileWrite::Erase,
     );

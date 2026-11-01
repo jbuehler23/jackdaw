@@ -116,6 +116,42 @@ impl CellRect {
     }
 }
 
+/// Where a layer's tiles sit over its cells.
+///
+/// `BetweenCells` tiles are keyed by the cell at their bottom-left corner:
+/// the tile at `(x, y)` covers the centres of cells `(x, y)` to `(x+1, y+1)`,
+/// so it is drawn half a cell up and right of cell `(x, y)`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Placement {
+    #[default]
+    OnCells,
+    BetweenCells,
+}
+
+impl Placement {
+    /// How far a tile is drawn from its key cell, in cells.
+    pub const fn offset(self) -> Vec2 {
+        match self {
+            Placement::OnCells => Vec2::ZERO,
+            Placement::BetweenCells => Vec2::splat(0.5),
+        }
+    }
+
+    /// The part of the tile keyed at `key` drawn inside `bounds`, as tile
+    /// fractions from (0, 0) at its bottom-left to (1, 1); `None` when none
+    /// of it is. Tiles on cells are always drawn whole.
+    pub fn visible_part(self, key: CellCoord, bounds: Option<CellRect>) -> Option<(Vec2, Vec2)> {
+        let whole = (Vec2::ZERO, Vec2::ONE);
+        let Some(bounds) = bounds.filter(|_| self == Placement::BetweenCells) else {
+            return Some(whole);
+        };
+        let at = key.0.as_vec2() + self.offset();
+        let min = (bounds.min.as_vec2() - at).clamp(Vec2::ZERO, Vec2::ONE);
+        let max = (bounds.max.as_vec2() - at).clamp(Vec2::ZERO, Vec2::ONE);
+        (min.cmplt(max).all()).then_some((min, max))
+    }
+}
+
 fn row_major(a: IVec2, b: IVec2) -> Ordering {
     a.y.cmp(&b.y).then(a.x.cmp(&b.x))
 }
@@ -154,6 +190,31 @@ mod tests {
 
     fn cell_x(world_x: f32) -> i32 {
         G16.world_to_cell(Vec2::new(world_x, 0.0)).0.x
+    }
+
+    #[test]
+    fn tiles_between_cells_crop_at_the_bounds() {
+        let bounds = Some(CellRect {
+            min: IVec2::new(0, 0),
+            max: IVec2::new(4, 3),
+        });
+        let between = Placement::BetweenCells;
+        let part = |x, y| between.visible_part(CellCoord::new(x, y), bounds);
+        let half = Vec2::splat(0.5);
+        assert_eq!(part(1, 1), Some((Vec2::ZERO, Vec2::ONE)));
+        assert_eq!(part(-1, 1), Some((Vec2::new(0.5, 0.0), Vec2::ONE)));
+        assert_eq!(part(3, 1), Some((Vec2::ZERO, Vec2::new(0.5, 1.0))));
+        assert_eq!(part(-1, -1), Some((half, Vec2::ONE)));
+        assert_eq!(part(3, 2), Some((Vec2::ZERO, half)));
+        assert_eq!(part(-2, 1), None);
+        assert_eq!(part(4, 1), None);
+        assert_eq!(
+            between.visible_part(CellCoord::new(-9, 0), None),
+            part(1, 1)
+        );
+        let on = Placement::OnCells.visible_part(CellCoord::new(-9, 0), bounds);
+        assert_eq!(on, Some((Vec2::ZERO, Vec2::ONE)));
+        assert_eq!(between.offset(), half);
     }
 
     #[test]

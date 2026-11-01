@@ -2306,6 +2306,7 @@ fn painted_map(side: i32, tile: u16) -> jackdaw_tilemap::TilemapData {
     jackdaw_tilemap::TilemapData {
         layers: vec![LayerData {
             kind: LayerKind::Terrain,
+            placement: Default::default(),
             tiles,
             authoring: Some(TerrainAuthoring {
                 terrain,

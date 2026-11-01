@@ -2,8 +2,9 @@
 //!
 //! A `Tilemap` names a `.jdtiles` sidecar relative to the document it was
 //! authored in: the scene, or the prefab an inherited map comes from. The
-//! sidecar holds each layer's resolved tiles, so the game draws them as they
-//! are, with the chunk builder the editor uses, and never resolves terrain.
+//! sidecar holds each layer's resolved tiles and where they sit, so the game
+//! draws them as they are, with the chunk builder the editor uses, and never
+//! resolves terrain.
 //!
 //! The sidecar is read from disk when the map first draws, as terrain
 //! sidecars are. A missing sidecar draws an empty map, with a warning. A map
@@ -14,10 +15,10 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunkMaterial, TilemapChunkMeshCache};
-use jackdaw_scene_types::Tilemap;
-use jackdaw_tilemap::TilemapData;
-use jackdaw_tileset::chunk::{ChunkDraw, TilemapChunkOf};
-use jackdaw_tileset::{Tileset, TilesetPlugin};
+use jackdaw_scene_types::{LayerTerrainMatch, Tilemap, TilemapLayer, TilemapLayerKind};
+use jackdaw_tilemap::{Placement, TilemapData};
+use jackdaw_tileset::chunk::{ChunkDraw, TileLayout, TilemapChunkOf, TilemapEdgePiece};
+use jackdaw_tileset::{TerrainMatch, Tileset, TilesetPlugin};
 
 use crate::{JackdawCatalog, RuntimeOnly};
 
@@ -26,6 +27,7 @@ pub(crate) fn plugin(app: &mut App) {
         app.add_plugins(TilesetPlugin);
     }
     app.register_required_components::<TilemapChunkOf, RuntimeOnly>()
+        .register_required_components::<TilemapEdgePiece, RuntimeOnly>()
         .add_systems(Update, queue_draws.after(crate::spawn_loaded_scenes));
 }
 
@@ -174,19 +176,48 @@ fn draw_map(world: &mut World, map: Entity, tilesets: &mut Tilesets) {
                 continue;
             }
         };
+        let layout = TileLayout {
+            placement: placement(layer, &prepared.tileset).unwrap_or(cells.placement),
+            bounds: jackdaw_tileset::map_bounds(tilemap.bounds),
+        };
+        if layout.crops() && prepared.draw.strip.is_none() {
+            prepared.draw.strip = jackdaw_tileset::chunk::strip_for(world, &prepared.draw.image);
+        }
         let tile_size = prepared.tileset.display_size(tilemap.cell_size);
         for (coord, chunk_cells) in cells.tiles.chunks() {
-            let bundle = prepared.draw.bundle(coord, chunk_cells, tile_size, index);
+            let bundle = prepared
+                .draw
+                .bundle(coord, chunk_cells, tile_size, index, layout);
+            let pieces = (prepared.draw).edge_pieces(coord, chunk_cells, tile_size, layout);
             let of = TilemapChunkOf {
                 layer: index,
                 chunk: coord,
             };
-            world.spawn((of, bundle, ChildOf(map)));
+            let chunk = world.spawn((of, bundle, ChildOf(map))).id();
+            for piece in pieces {
+                world.spawn((piece, ChildOf(chunk)));
+            }
         }
     }
     source.tilesets = ids;
     source.missing = missing;
     world.entity_mut(map).insert(source);
+}
+
+/// Where a layer's tiles sit by its tileset: a terrain layer's set match
+/// mode decides, so a sidecar written before the placement was stored draws
+/// like a fresh one. `None` for a tile layer or a mode the tileset lacks.
+fn placement(layer: &TilemapLayer, tileset: &Tileset) -> Option<Placement> {
+    if layer.kind != TilemapLayerKind::Terrain {
+        return None;
+    }
+    let mode = match layer.terrain_match {
+        LayerTerrainMatch::Auto => None,
+        LayerTerrainMatch::Corners => Some(TerrainMatch::Corners),
+        LayerTerrainMatch::Sides => Some(TerrainMatch::Sides),
+        LayerTerrainMatch::CornersAndSides => Some(TerrainMatch::CornersAndSides),
+    };
+    tileset.placement(mode)
 }
 
 fn read_sidecar(

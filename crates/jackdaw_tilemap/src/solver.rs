@@ -1,7 +1,14 @@
 //! Terrain solver: turns the terrain ids around a cell into a tile.
 //!
-//! Tiles carry nine peers, row-major with the top (+y) row first. Required
-//! peers come from the cell's 3x3 block; cells off the map or unpainted read 0.
+//! Tiles carry nine peers, row-major with the top (+y) row first. A `Sides`
+//! or `CornersAndSides` set draws one tile on each painted cell, its required
+//! peers from the cells around it. A `Corners` set draws its tiles between
+//! cells ([`Placement::BetweenCells`]): the tile keyed at a cell takes its
+//! four corners from that cell and its +x, +y and +xy neighbours, and only
+//! corners are matched. A neighbour off the map or unpainted reads as the
+//! set's lowest drawn terrain, or 0 when the set has tiles carrying 0, so the
+//! edge of a map closes like a border with it; a tile between cells exists
+//! only while one of its four cells is painted.
 //! - Centre: the cell's terrain. Side: the neighbour across that side, or "not
 //!   the centre" when the neighbour has the centre's terrain but the two cells
 //!   are not joined by their [`Links`]: once either is a Path cell, both must
@@ -10,28 +17,36 @@
 //!   joined. Then the centre when the diagonal neighbour joins both side
 //!   neighbours, "not the centre" when it has the centre's terrain but does not,
 //!   otherwise the diagonal neighbour.
-//! - Corner, `Corners`: the vertex terrain, the lowest of the four cells
-//!   sharing that vertex by [`TerrainSet::rank`]. Links do not apply in this mode.
+//! - Corner, `Corners`: the terrain of the cell at that corner of the tile.
+//!   Links do not apply in this mode.
+//!
+//! With bounds, a `Corners` set reads a cell past them as the nearest cell
+//! inside, so terrain runs off the edge, and draws tiles one ring past them,
+//! which [`Placement::visible_part`] crops. Other sets ignore bounds.
 //!
 //! In-between terrains are visual only. When A and B have no transition tiles
 //! either way on that peer class (side or corner), a cell of A matches peer B
-//! as the terrain next to A in the order towards B, if A has tiles for it.
-//! Cells sharing a vertex agree on its terrain before this per-cell step, so
-//! in `Corners` mode only the higher cell draws the band.
+//! as the terrain next to A in the order towards B, if A has tiles for it. A
+//! tile between cells reads as a cell of its highest corner terrain, so only
+//! that terrain draws the band.
 //!
-//! Candidates share the cell's centre and score one point per matched required
-//! peer. Ties go to more matched sides, then a positive weight, then no joined
-//! side (side equal to centre) the cell does not join, then a straight tile
-//! along a joined run, then set order; tiles with that exact shape are then
+//! Candidates share the cell's centre, except between cells, and score one
+//! point per matched required peer. Between cells, ties go to more corners
+//! holding a higher terrain than required, so a missing inner corner shows
+//! the higher terrain rather than a seam. On cells, ties go to more matched
+//! sides. Then a positive weight, then no joined side (side equal to centre)
+//! the cell does not join, then a straight tile along a joined run, then set
+//! order; tiles with that exact shape (corners only, between cells) are then
 //! picked by weight from a cell hash.
-//! Hand overrides are returned unchanged by [`resolve_region`].
+//! Hand overrides are returned unchanged by [`resolve_region`] for tiles on
+//! cells and ignored for tiles between cells.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{IVec2, Vec2};
 
 use crate::path::links_join;
-use crate::{CellCoord, ChunkedLayer, Links, TerrainId, TileRef};
+use crate::{CellCoord, CellRect, ChunkedLayer, Links, Placement, TerrainId, TileRef};
 
 /// One of the nine peer positions of a tile, row-major with the top (+y) row first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -189,6 +204,14 @@ impl MatchMode {
         matches!(self, MatchMode::Corners | MatchMode::CornersAndSides)
     }
 
+    /// Where a set of this mode draws its tiles.
+    pub const fn placement(self) -> Placement {
+        match self {
+            MatchMode::Corners => Placement::BetweenCells,
+            MatchMode::Sides | MatchMode::CornersAndSides => Placement::OnCells,
+        }
+    }
+
     pub const fn uses(self, peer: Peer) -> bool {
         if peer.corner_sides().is_some() {
             self.uses_corners()
@@ -300,6 +323,8 @@ struct Lookup<'a> {
     transitions: BTreeSet<(TerrainId, TerrainId, PeerClass)>,
     /// Per tile, indexed like `set.tiles`; all zero when sides are not matched.
     links: Vec<SideLinks>,
+    /// What an empty neighbour reads as; see the module docs.
+    outer: TerrainId,
 }
 
 /// Side masks over [`Peer::SIDES`], one bit per side.
@@ -331,12 +356,21 @@ impl<'a> Lookup<'a> {
         for (i, terrain) in set.order.iter().enumerate() {
             positions.entry(*terrain).or_insert(i);
         }
+        let between = set.mode.placement() == Placement::BetweenCells;
         let mut transitions = BTreeSet::new();
         for tile in &set.tiles {
             for peer in Peer::ALL {
                 if peer != Peer::Centre && set.mode.uses(peer) {
-                    let centre = tile.terrains.centre();
-                    transitions.insert((centre, tile.terrains.get(peer), PeerClass::of(peer)));
+                    let carried = tile.terrains.get(peer);
+                    if between {
+                        for corner in Peer::CORNERS {
+                            let other = tile.terrains.get(corner);
+                            transitions.insert((other, carried, PeerClass::Corner));
+                        }
+                    } else {
+                        let centre = tile.terrains.centre();
+                        transitions.insert((centre, carried, PeerClass::of(peer)));
+                    }
                 }
             }
         }
@@ -358,12 +392,27 @@ impl<'a> Lookup<'a> {
                 SideLinks { joined, straight }
             })
             .collect();
-        Self {
+        let mut drawn = BTreeSet::new();
+        for tile in &set.tiles {
+            for peer in Peer::ALL {
+                if set.mode.uses(peer) && !(between && peer == Peer::Centre) {
+                    drawn.insert(tile.terrains.get(peer));
+                }
+            }
+        }
+        let mut lookup = Self {
             set,
             positions,
             transitions,
             links,
+            outer: 0,
+        };
+        if !drawn.contains(&0) {
+            lookup.outer = (drawn.into_iter())
+                .min_by_key(|t| lookup.rank(*t))
+                .unwrap_or(0);
         }
+        lookup
     }
 
     fn rank(&self, terrain: TerrainId) -> usize {
@@ -440,28 +489,47 @@ impl Resolved {
     }
 }
 
-/// Required peers for `cell`; see the module docs for the rules. Builds the
-/// set's lookups per call; [`resolve_region`] builds them once.
+/// Required peers for the tile keyed at `cell`, unbounded; see the module
+/// docs for the rules. A tile between cells with none of its cells painted
+/// requires nothing. Builds the set's lookups per call; [`resolve_region`]
+/// builds them once.
 pub fn required_peers(
     set: &TerrainSet,
     terrain: &ChunkedLayer<TerrainId>,
     links: &ChunkedLayer<Links>,
     cell: CellCoord,
 ) -> RequiredPeers {
-    let block = read_block(terrain, cell);
-    required_from_block(&Lookup::new(set), &block, &Joins::read(&block, links, cell))
+    let lookup = Lookup::new(set);
+    if set.mode.placement() == Placement::BetweenCells {
+        return between_required(&lookup, terrain, cell, None).unwrap_or([Requirement::Any; 9]);
+    }
+    let block = read_block(&lookup, terrain, cell);
+    required_from_block(&lookup, &block, &Joins::read(&block, links, cell))
 }
 
 fn neighbour(cell: CellCoord, offset: IVec2) -> Option<CellCoord> {
     cell.0.checked_add(offset).map(CellCoord)
 }
 
-/// The 3x3 block around `cell`, indexed by [`Peer::index`].
-fn read_block(terrain: &ChunkedLayer<TerrainId>, cell: CellCoord) -> TileTerrains {
-    let mut block = TileTerrains::filled(0);
+/// The terrain at `offset` from `cell`, an empty cell reading as `lookup.outer`.
+fn read_cell(
+    lookup: &Lookup,
+    terrain: &ChunkedLayer<TerrainId>,
+    cell: CellCoord,
+    offset: IVec2,
+) -> TerrainId {
+    match neighbour(cell, offset).map_or(0, |n| terrain.get(n)) {
+        0 => lookup.outer,
+        t => t,
+    }
+}
+
+/// The 3x3 block around `cell`, indexed by [`Peer::index`]; the centre is read as is.
+fn read_block(lookup: &Lookup, terrain: &ChunkedLayer<TerrainId>, cell: CellCoord) -> TileTerrains {
+    let mut block = TileTerrains::filled(terrain.get(cell));
     for peer in Peer::ALL {
-        if let Some(n) = neighbour(cell, peer.offset()) {
-            block = block.with(peer, terrain.get(n));
+        if peer != Peer::Centre {
+            block = block.with(peer, read_cell(lookup, terrain, cell, peer.offset()));
         }
     }
     block
@@ -498,14 +566,47 @@ const fn side_joined(joined: u8, side: Peer) -> bool {
     joined & Links::side_bit(side) != 0
 }
 
-/// Terrain of the vertex at `corner`: the lowest ranked of the four cells sharing it.
-fn vertex_terrain(lookup: &Lookup, block: &TileTerrains, corner: Peer) -> TerrainId {
-    let sides = corner.corner_sides().unwrap_or([corner; 2]);
-    [Peer::Centre, sides[0], sides[1], corner]
-        .into_iter()
-        .map(|p| block.get(p))
-        .min_by_key(|t| lookup.rank(*t))
-        .unwrap_or(0)
+/// The cell at `corner` of the tile between cells keyed at `key`.
+fn corner_cell(key: CellCoord, corner: Peer) -> Option<CellCoord> {
+    neighbour(key, (corner.offset() + IVec2::ONE) / 2)
+}
+
+/// Required corners of the tile between cells keyed at `key`, `None` when
+/// none of its cells is painted or it lies past the ring around `bounds`.
+fn between_required(
+    lookup: &Lookup,
+    terrain: &ChunkedLayer<TerrainId>,
+    key: CellCoord,
+    bounds: Option<CellRect>,
+) -> Option<RequiredPeers> {
+    let clamp = |cell: CellCoord| match bounds {
+        Some(b) => CellCoord(cell.0.clamp(b.min, b.max.saturating_sub(IVec2::ONE))),
+        None => cell,
+    };
+    if let Some(b) = bounds {
+        let ring = CellRect {
+            min: b.min.saturating_sub(IVec2::ONE),
+            max: b.max,
+        };
+        if !ring.contains(key) || b.min.cmpge(b.max).any() {
+            return None;
+        }
+    }
+    let read = |corner: Peer| corner_cell(key, corner).map_or(0, |c| terrain.get(clamp(c)));
+    let corners = Peer::CORNERS.map(read);
+    if corners.iter().all(|t| *t == 0) {
+        return None;
+    }
+    let corners = corners.map(|t| if t == 0 { lookup.outer } else { t });
+    let top = (corners.iter().copied())
+        .max_by_key(|t| lookup.rank(*t))
+        .unwrap_or(0);
+    let mut required = [Requirement::Any; 9];
+    for (corner, t) in Peer::CORNERS.into_iter().zip(corners) {
+        let substituted = lookup.substitute(top, t, PeerClass::Corner);
+        required[corner.index()] = Requirement::Is(substituted);
+    }
+    Some(required)
 }
 
 fn required_from_block(lookup: &Lookup, block: &TileTerrains, joins: &Joins) -> RequiredPeers {
@@ -529,20 +630,14 @@ fn required_from_block(lookup: &Lookup, block: &TileTerrains, joins: &Joins) -> 
             .is_some_and(|[a, b]| side_joined(joins.sides, a) && side_joined(joins.sides, b));
         let diagonal = block.get(corner);
         let substituted = |t| Requirement::Is(lookup.substitute(centre, t, PeerClass::Corner));
-        required[corner.index()] = match mode {
-            MatchMode::Sides => Requirement::Any,
-            MatchMode::Corners => substituted(vertex_terrain(lookup, block, corner)),
-            MatchMode::CornersAndSides => {
-                if !sides_joined {
-                    Requirement::Any
-                } else if diagonal_joined {
-                    Requirement::Is(centre)
-                } else if diagonal == centre {
-                    Requirement::Not(centre)
-                } else {
-                    substituted(diagonal)
-                }
-            }
+        required[corner.index()] = if !mode.uses_corners() || !sides_joined {
+            Requirement::Any
+        } else if diagonal_joined {
+            Requirement::Is(centre)
+        } else if diagonal == centre {
+            Requirement::Not(centre)
+        } else {
+            substituted(diagonal)
         };
     }
     required
@@ -561,15 +656,15 @@ fn count_matches(required: &RequiredPeers, tile: &TileTerrains, peers: &[Peer]) 
     hits as u8
 }
 
-/// Resolves one cell from its neighbourhood. Builds the set's lookups per
-/// call; [`resolve_region`] builds them once.
+/// Resolves the tile keyed at `cell`, unbounded. Builds the set's lookups
+/// per call; [`resolve_region`] builds them once.
 pub fn resolve_cell(
     set: &TerrainSet,
     terrain: &ChunkedLayer<TerrainId>,
     links: &ChunkedLayer<Links>,
     cell: CellCoord,
 ) -> Resolved {
-    resolve_with(&Lookup::new(set), terrain, links, cell)
+    resolve_with(&Lookup::new(set), terrain, links, cell, None)
 }
 
 fn resolve_with(
@@ -577,9 +672,13 @@ fn resolve_with(
     terrain: &ChunkedLayer<TerrainId>,
     links: &ChunkedLayer<Links>,
     cell: CellCoord,
+    bounds: Option<CellRect>,
 ) -> Resolved {
+    if lookup.set.mode.placement() == Placement::BetweenCells {
+        return resolve_between(lookup, terrain, cell, bounds);
+    }
     let set = lookup.set;
-    let block = read_block(terrain, cell);
+    let block = read_block(lookup, terrain, cell);
     let centre = block.centre();
     if centre == 0 {
         return Resolved {
@@ -614,22 +713,74 @@ fn resolve_with(
             max_score,
         };
     };
-    let variants = || set.tiles.iter().filter(|t| t.terrains == shape.terrains);
-    let total: u64 = variants().map(|t| u64::from(t.weight)).sum();
-    let mut tile = shape.tile;
-    if total > 0 {
-        let mut roll = cell_hash(cell) % total;
-        for variant in variants() {
-            let weight = u64::from(variant.weight);
-            if roll < weight {
-                tile = variant.tile;
-                break;
-            }
-            roll -= weight;
+    let variants = set.tiles.iter().filter(|t| t.terrains == shape.terrains);
+    Resolved {
+        tile: pick_variant(variants, shape.tile, cell),
+        score,
+        max_score,
+    }
+}
+
+/// One of `variants` by weight from a hash of `cell`, `first` when none
+/// weighs anything.
+fn pick_variant<'a>(
+    variants: impl Iterator<Item = &'a TerrainTile> + Clone,
+    first: TileRef,
+    cell: CellCoord,
+) -> TileRef {
+    let total: u64 = variants.clone().map(|t| u64::from(t.weight)).sum();
+    if total == 0 {
+        return first;
+    }
+    let mut roll = cell_hash(cell) % total;
+    for variant in variants {
+        let weight = u64::from(variant.weight);
+        if roll < weight {
+            return variant.tile;
+        }
+        roll -= weight;
+    }
+    first
+}
+
+/// Resolves the tile between cells keyed at `key` by its four corners.
+fn resolve_between(
+    lookup: &Lookup,
+    terrain: &ChunkedLayer<TerrainId>,
+    key: CellCoord,
+    bounds: Option<CellRect>,
+) -> Resolved {
+    let empty = |max_score| Resolved {
+        tile: TileRef::EMPTY,
+        score: 0,
+        max_score,
+    };
+    let Some(required) = between_required(lookup, terrain, key, bounds) else {
+        return empty(0);
+    };
+    let max_score = Peer::CORNERS.len() as u8;
+    let mut best: Option<(&TerrainTile, (u8, u8, bool))> = None;
+    for tile in &lookup.set.tiles {
+        let score = count_matches(&required, &tile.terrains, &Peer::CORNERS);
+        let raised = (Peer::CORNERS.iter())
+            .filter(|c| match required[c.index()] {
+                Requirement::Is(t) => lookup.rank(tile.terrains.get(**c)) > lookup.rank(t),
+                Requirement::Any | Requirement::Not(_) => false,
+            })
+            .count() as u8;
+        let rank = (score, raised, tile.weight > 0);
+        if best.is_none_or(|(_, k)| rank > k) {
+            best = Some((tile, rank));
         }
     }
+    let Some((shape, (score, ..))) = best else {
+        return empty(max_score);
+    };
+    let corners = |t: &TileTerrains| Peer::CORNERS.map(|c| t.get(c));
+    let variants =
+        (lookup.set.tiles.iter()).filter(|t| corners(&t.terrains) == corners(&shape.terrains));
     Resolved {
-        tile,
+        tile: pick_variant(variants, shape.tile, key),
         score,
         max_score,
     }
@@ -644,8 +795,11 @@ fn cell_hash(cell: CellCoord) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Resolves every dirty cell and its eight neighbours, deduplicated and sorted.
-/// Neighbours past the coordinate range are skipped; override cells return the override.
+/// Resolves, unbounded, every tile whose peers can read a dirty cell: for
+/// tiles on cells the dirty cell and the ring around it, for tiles between
+/// cells the four keyed at the dirty cell and its -x, -y and -xy neighbours.
+/// Returns them deduplicated and sorted by key. Keys past the coordinate
+/// range are skipped; override cells return the override, on cells only.
 pub fn resolve_region(
     set: &TerrainSet,
     terrain: &ChunkedLayer<TerrainId>,
@@ -653,20 +807,35 @@ pub fn resolve_region(
     overrides: &BTreeMap<CellCoord, TileRef>,
     dirty: impl IntoIterator<Item = CellCoord>,
 ) -> Vec<(CellCoord, TileRef)> {
+    resolve_region_within(set, terrain, links, overrides, dirty, None)
+}
+
+/// [`resolve_region`] on a map bounded by `bounds`; see the module docs.
+pub fn resolve_region_within(
+    set: &TerrainSet,
+    terrain: &ChunkedLayer<TerrainId>,
+    links: &ChunkedLayer<Links>,
+    overrides: &BTreeMap<CellCoord, TileRef>,
+    dirty: impl IntoIterator<Item = CellCoord>,
+    bounds: Option<CellRect>,
+) -> Vec<(CellCoord, TileRef)> {
     let lookup = Lookup::new(set);
+    let between = set.mode.placement() == Placement::BetweenCells;
+    let reach = if between { -1..=0 } else { -1..=1 };
     let mut cells = BTreeSet::new();
     for cell in dirty {
-        for peer in Peer::ALL {
-            cells.extend(neighbour(cell, peer.offset()));
+        for y in reach.clone() {
+            for x in reach.clone() {
+                cells.extend(neighbour(cell, IVec2::new(x, y)));
+            }
         }
     }
     cells
         .into_iter()
         .map(|cell| {
-            let tile = overrides
-                .get(&cell)
-                .copied()
-                .unwrap_or_else(|| resolve_with(&lookup, terrain, links, cell).tile);
+            let placed = overrides.get(&cell).copied().filter(|_| !between);
+            let tile =
+                placed.unwrap_or_else(|| resolve_with(&lookup, terrain, links, cell, bounds).tile);
             (cell, tile)
         })
         .collect()
@@ -676,6 +845,7 @@ pub fn resolve_region(
 mod tests {
     use super::Requirement::{Any, Is, Not};
     use super::*;
+    use crate::CellRect;
     use crate::{
         LayoutTemplate, Legend, Region, apply_connect_stroke, apply_path_stroke, parse_rows,
         write_region,
@@ -801,55 +971,95 @@ mod tests {
     }
 
     #[test]
-    fn corners_take_the_vertex_minimum() {
-        let terrain = layer(&[
-            (0, 0, 3),
-            (0, 1, 3),
-            (1, 1, 3),
-            (1, 0, 3),
-            (-1, 0, 4),
-            (-1, 1, 5),
-            (0, -1, 2),
-            (-1, -1, 4),
-        ]);
-        let req = required_peers(
-            &TerrainSet::new(MatchMode::Corners),
-            &terrain,
-            &no_links(),
-            CellCoord::new(0, 0),
-        );
-        assert_eq!(req[Peer::TopRight.index()], Is(3));
-        assert_eq!(req[Peer::TopLeft.index()], Is(3));
-        assert_eq!(req[Peer::BottomLeft.index()], Is(2));
-        assert_eq!(req[Peer::BottomRight.index()], Is(0));
+    fn corners_read_the_four_cells_of_the_tile() {
+        let terrain = layer(&[(0, 0, 3), (1, 0, 2), (0, 1, 4), (1, 1, 5)]);
+        let set = TerrainSet::new(MatchMode::Corners);
+        let req = required_peers(&set, &terrain, &no_links(), CellCoord::new(0, 0));
+        assert_eq!(req[Peer::BottomLeft.index()], Is(3));
+        assert_eq!(req[Peer::BottomRight.index()], Is(2));
+        assert_eq!(req[Peer::TopLeft.index()], Is(4));
+        assert_eq!(req[Peer::TopRight.index()], Is(5));
+        assert_eq!(req[Peer::Centre.index()], Any);
         assert_eq!(req[Peer::Top.index()], Any);
+        let unpainted = required_peers(&set, &terrain, &no_links(), CellCoord::new(5, 5));
+        assert_eq!(unpainted, [Any; 9]);
+    }
+
+    /// The outer-corner mask of a `Corner16` tile, bits TL, TR, BL, BR.
+    fn corner_mask(set: &TerrainSet, tile: TileRef, outer: TerrainId) -> Option<usize> {
+        let found = set.tiles.iter().find(|t| t.tile == tile)?;
+        let bits = Peer::CORNERS.iter().enumerate();
+        Some(bits.fold(0, |mask, (bit, corner)| {
+            mask | (usize::from(found.terrains.get(*corner) == outer) << bit)
+        }))
     }
 
     #[test]
-    fn cells_sharing_a_vertex_agree_on_its_terrain() {
-        let mut cells = Vec::new();
-        for y in 0..8 {
-            for x in 0..8 {
-                cells.push((x, y, ((x * 7 + y * 13 + x * y) % 4) as TerrainId));
-            }
+    fn a_lone_corner_cell_draws_the_four_tiles_around_it() {
+        let set = LayoutTemplate::Corner16
+            .terrain_set(2, 1)
+            .with_order([1, 2]);
+        let terrain = layer(&[(0, 0, 2)]);
+        let out = resolve_region(
+            &set,
+            &terrain,
+            &no_links(),
+            &BTreeMap::new(),
+            [CellCoord::new(0, 0)],
+        );
+        let masks: Vec<_> = (out.iter())
+            .map(|(key, tile)| (key.0, corner_mask(&set, *tile, 1)))
+            .collect();
+        let expected = [
+            (IVec2::new(-1, -1), Some(0b1101)),
+            (IVec2::new(0, -1), Some(0b1110)),
+            (IVec2::new(-1, 0), Some(0b0111)),
+            (IVec2::new(0, 0), Some(0b1011)),
+        ];
+        assert_eq!(masks, expected);
+        for (key, _) in &out {
+            assert!(resolve_cell(&set, &terrain, &no_links(), *key).is_exact());
         }
+        let away = resolve_cell(&set, &terrain, &no_links(), CellCoord::new(1, 1));
+        assert_eq!(away.tile, TileRef::EMPTY);
+    }
+
+    #[test]
+    fn bounded_corner_tiles_run_off_the_edge_one_ring_out() {
+        let set = LayoutTemplate::Corner16
+            .terrain_set(2, 1)
+            .with_order([1, 2]);
+        let mut cells: Vec<_> = (0..3)
+            .flat_map(|y| (0..3).map(move |x| (x, y, 1)))
+            .collect();
+        cells.push((0, 1, 2));
         let terrain = layer(&cells);
-        let corner = |x: i32, y: i32, peer: Peer| {
-            required_peers(
-                &TerrainSet::new(MatchMode::Corners),
-                &terrain,
-                &no_links(),
-                CellCoord::new(x, y),
-            )[peer.index()]
+        let bounds = CellRect {
+            min: IVec2::ZERO,
+            max: IVec2::splat(3),
         };
-        for y in -1..8 {
-            for x in -1..8 {
-                let v = corner(x, y, Peer::TopRight);
-                assert_eq!(corner(x + 1, y, Peer::TopLeft), v);
-                assert_eq!(corner(x, y + 1, Peer::BottomRight), v);
-                assert_eq!(corner(x + 1, y + 1, Peer::BottomLeft), v);
-            }
-        }
+        let dirty = [CellCoord::new(0, 1), CellCoord::new(0, 2)];
+        let resolve = |bounds| {
+            let out =
+                resolve_region_within(&set, &terrain, &no_links(), &BTreeMap::new(), dirty, bounds);
+            let at = |x, y| {
+                let found = out.iter().find(|(k, _)| *k == CellCoord::new(x, y));
+                found.and_then(|(_, tile)| corner_mask(&set, *tile, 1))
+            };
+            (at(-1, 1), at(-1, 0))
+        };
+        assert_eq!(resolve(Some(bounds)), (Some(0b0011), Some(0b1100)));
+        assert_eq!(resolve(None).0, Some(0b0111));
+        let outside = resolve_region_within(
+            &set,
+            &terrain,
+            &no_links(),
+            &BTreeMap::new(),
+            [CellCoord::new(-1, 1)],
+            Some(bounds),
+        );
+        let key = outside.iter().find(|(k, _)| *k == CellCoord::new(-2, 1));
+        assert_eq!(key.map(|o| o.1), Some(TileRef::EMPTY));
     }
 
     #[test]
@@ -1122,16 +1332,52 @@ mod tests {
     }
 
     #[test]
-    fn corners_seam_draws_sand_in_the_upper_cell() {
+    fn corners_seam_draws_sand_on_the_higher_side() {
         let set = banded(LayoutTemplate::Corner16);
-        let dirt = LayoutTemplate::Corner16.tiles(DIRT, SAND)[0];
-        let water = LayoutTemplate::Corner16.tiles(WATER, SAND)[0b0101];
-        assert_band(&set, dirt, water);
-        let req = required_peers(&set, &seam(), &no_links(), CellCoord::new(0, 0));
-        assert_eq!(req[Peer::TopRight.index()], Is(DIRT));
-        let req = required_peers(&set, &seam(), &no_links(), CellCoord::new(1, 0));
-        assert_eq!(req[Peer::TopLeft.index()], Is(SAND));
-        assert_eq!(req[Peer::TopRight.index()], Is(WATER));
+        let corners = |key: CellCoord| {
+            let r = resolve_cell(&set, &seam(), &no_links(), key);
+            assert!(r.is_exact(), "{r:?}");
+            let tile = set.tiles.iter().find(|t| t.tile == r.tile).expect("in set");
+            Peer::CORNERS.map(|c| tile.terrains.get(c))
+        };
+        assert_eq!(corners(CellCoord::new(-1, 0)), [DIRT; 4]);
+        assert_eq!(corners(CellCoord::new(0, 0)), [SAND, WATER, SAND, WATER]);
+        assert_eq!(corners(CellCoord::new(1, 0)), [WATER; 4]);
+    }
+
+    #[test]
+    fn a_missing_inner_corner_falls_back_to_the_tile_that_keeps_the_higher_terrain() {
+        let mut set = LayoutTemplate::Corner16
+            .terrain_set(2, 1)
+            .with_order([1, 2]);
+        set.tiles.retain(|t| {
+            let inner = Peer::CORNERS
+                .iter()
+                .filter(|c| t.terrains.get(**c) == 2)
+                .count();
+            inner != 3
+        });
+        set.tiles.rotate_left(1);
+        let terrain = layer(&[(0, 0, 2), (1, 0, 2), (0, 1, 2), (1, 1, 1)]);
+        let r = resolve_cell(&set, &terrain, &no_links(), CellCoord::new(0, 0));
+        assert_eq!((r.score, r.max_score), (3, 4));
+        assert_eq!(corner_mask(&set, r.tile, 1), Some(0), "the full inner tile");
+    }
+
+    #[test]
+    fn overrides_are_ignored_between_cells() {
+        let set = LayoutTemplate::Corner16.terrain_set(2, 1);
+        let terrain = layer(&[(0, 0, 2)]);
+        let overrides = BTreeMap::from([(CellCoord::new(0, 0), TileRef::new(42))]);
+        let out = resolve_region(
+            &set,
+            &terrain,
+            &no_links(),
+            &overrides,
+            [CellCoord::new(0, 0)],
+        );
+        assert!(out.iter().all(|(_, t)| *t != TileRef::new(42)));
+        assert_eq!(out.len(), 4);
     }
 
     #[test]
@@ -1237,14 +1483,22 @@ mod tests {
     }
 
     #[test]
-    fn unordered_and_empty_neighbours_are_left_as_is() {
+    fn unordered_neighbours_are_left_as_is() {
         let set = banded(LayoutTemplate::Side16).with_order([DIRT, SAND]);
         let req = required_peers(&set, &seam(), &no_links(), CellCoord::new(0, 0));
         assert_eq!(req[Peer::Right.index()], Is(WATER));
-        let terrain = layer(&[(0, 0, DIRT)]);
+    }
+
+    #[test]
+    fn empty_neighbours_read_as_the_lowest_drawn_terrain() {
+        let terrain = layer(&[(0, 0, WATER)]);
         let set = banded(LayoutTemplate::Side16);
         let req = required_peers(&set, &terrain, &no_links(), CellCoord::new(0, 0));
-        assert_eq!(req[Peer::Right.index()], Is(0));
+        assert_eq!(req[Peer::Right.index()], Is(SAND));
+        let set = variant_set(&[1]);
+        let terrain = layer(&[(0, 0, 1)]);
+        let req = required_peers(&set, &terrain, &no_links(), CellCoord::new(0, 0));
+        assert_eq!(req[Peer::Top.index()], Is(0));
     }
 
     #[test]
@@ -1254,38 +1508,6 @@ mod tests {
         assert!(ranks.windows(2).all(|w| w[0] < w[1]), "{ranks:?}");
         let plain = TerrainSet::new(MatchMode::Corners);
         assert!(plain.rank(0) < plain.rank(1) && plain.rank(1) < plain.rank(2));
-    }
-
-    #[test]
-    fn cells_sharing_a_vertex_agree_under_a_custom_order() {
-        let mut set = TerrainSet::new(MatchMode::Corners).with_order([3, 1, 2]);
-        for a in 1..=3 {
-            for b in 0..=3 {
-                let shape = TileTerrains::filled(b).with(Peer::Centre, a);
-                set = set.with_tile(TerrainTile::new(TileRef::new(0), shape, 1));
-            }
-        }
-        let mut cells = Vec::new();
-        for y in 0..8 {
-            for x in 0..8 {
-                cells.push((x, y, ((x * 7 + y * 13 + x * y) % 4) as TerrainId));
-            }
-        }
-        let terrain = layer(&cells);
-        let corner = |x: i32, y: i32, peer: Peer| {
-            required_peers(&set, &terrain, &no_links(), CellCoord::new(x, y))[peer.index()]
-        };
-        for y in -1..8 {
-            for x in -1..8 {
-                let v = corner(x, y, Peer::TopRight);
-                assert_eq!(corner(x + 1, y, Peer::TopLeft), v);
-                assert_eq!(corner(x, y + 1, Peer::BottomRight), v);
-                assert_eq!(corner(x + 1, y + 1, Peer::BottomLeft), v);
-            }
-        }
-        let terrain = layer(&[(0, 0, 1), (1, 0, 3), (0, 1, 1), (1, 1, 1)]);
-        let req = required_peers(&set, &terrain, &no_links(), CellCoord::new(0, 0));
-        assert_eq!(req[Peer::TopRight.index()], Is(3));
     }
 
     #[test]

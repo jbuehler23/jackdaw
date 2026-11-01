@@ -13,8 +13,8 @@ use bevy::reflect::TypePath;
 use jackdaw_api_internal::document::SceneResource;
 use jackdaw_scene_types::{LayerTerrainMatch, Tilemap};
 use jackdaw_tilemap::{
-    CHUNK_AREA, CellCoord, ChunkCoord, ChunkedLayer, LayerData, LayerKind, TerrainSet, TileRef,
-    TilemapData, resolve_region,
+    CHUNK_AREA, CellCoord, CellRect, ChunkCoord, ChunkedLayer, LayerData, LayerKind, Placement,
+    TerrainSet, TileRef, TilemapData, resolve_region_within,
 };
 use jackdaw_tileset::TerrainMatch;
 
@@ -61,10 +61,13 @@ pub struct TilemapDataStore {
     next_unsaved: u64,
     /// Keys whose cells changed since their maps were last drawn.
     redraw: HashMap<String, Redraw>,
-    /// The terrain set each terrain layer resolves with, by key and layer
-    /// index. A layer listed here holds the tiles its authoring resolves to,
-    /// and an edit resolves the cells it touched with it.
-    sets: HashMap<String, BTreeMap<usize, Arc<TerrainSet>>>,
+    /// The terrain set and map bounds each terrain layer resolves with, by
+    /// key and layer index. A layer listed here holds the tiles its authoring
+    /// resolves to, and an edit resolves the cells it touched with them.
+    sets: HashMap<String, BTreeMap<usize, LayerResolve>>,
+    /// Keys whose maps disagree on their bounds; see
+    /// [`refresh_terrain`](crate::tilemap_resolve::refresh_terrain).
+    pub(crate) diverging_bounds: HashSet<String>,
     /// The map each key holds, by an id no other map is ever given. A save
     /// that moves the cells to a new key moves the id with them.
     ids: HashMap<String, u64>,
@@ -75,6 +78,13 @@ pub struct TilemapDataStore {
     revision: u64,
     /// Maps whose layer count and cells were found to disagree, warned once.
     pub(crate) mismatch_warned: HashSet<u64>,
+}
+
+/// The terrain set a layer's tiles were resolved with, and the map bounds.
+#[derive(Clone)]
+pub(crate) struct LayerResolve {
+    set: Arc<TerrainSet>,
+    bounds: Option<CellRect>,
 }
 
 /// What the drawn chunks of a key must catch up on.
@@ -249,11 +259,34 @@ impl TilemapDataStore {
     /// The terrain set terrain layer `layer` at `key` resolves with, if its
     /// tiles are known to be resolved.
     pub fn resolved_with(&self, key: &str, layer: usize) -> Option<&Arc<TerrainSet>> {
-        self.sets.get(key)?.get(&layer)
+        Some(&self.sets.get(key)?.get(&layer)?.set)
     }
 
-    pub(crate) fn note_resolved(&mut self, key: &str, layer: usize, set: Arc<TerrainSet>) {
-        (self.sets.entry(key.to_string()).or_default()).insert(layer, set);
+    /// The map bounds terrain layer `layer` at `key` was last resolved
+    /// within; `None` when unbounded or not resolved.
+    pub fn resolved_bounds(&self, key: &str, layer: usize) -> Option<CellRect> {
+        self.sets.get(key)?.get(&layer)?.bounds
+    }
+
+    /// Whether the maps sharing `key` disagree on their bounds.
+    pub fn bounds_diverge(&self, key: &str) -> bool {
+        self.diverging_bounds.contains(key)
+    }
+
+    pub(crate) fn note_resolved(
+        &mut self,
+        key: &str,
+        layer: usize,
+        set: Arc<TerrainSet>,
+        bounds: Option<CellRect>,
+    ) {
+        let resolve = LayerResolve { set, bounds };
+        (self.sets.entry(key.to_string()).or_default()).insert(layer, resolve);
+    }
+
+    /// Marks `key` edited, so the next save of its owner writes it.
+    pub(crate) fn mark_changed(&mut self, key: &str) {
+        self.changed.insert(key.to_string());
     }
 
     /// Marks a layer's tiles as resolved with no known set: edits leave them
@@ -279,17 +312,22 @@ impl TilemapDataStore {
         {
             data.kind = kind;
         }
+        if kind == LayerKind::Tile {
+            self.place_layer(key, layer, Placement::OnCells);
+        }
     }
 
-    /// Makes a layer's tiles equal `fresh`, derived from its authoring. The
-    /// changed chunks are drawn again, but it is no edit: the key does not
-    /// become unsaved.
+    /// Makes a layer's tiles equal `fresh`, derived from its authoring, and
+    /// sit at `placement`. The changed chunks are drawn again, but it is no
+    /// edit: the key does not become unsaved.
     pub(crate) fn put_derived_tiles(
         &mut self,
         key: &str,
         layer: usize,
+        placement: Placement,
         fresh: &ChunkedLayer<TileRef>,
     ) {
+        self.place_layer(key, layer, placement);
         let Some(tiles) = (self.entries.get_mut(key))
             .and_then(|data| data.layers.get_mut(layer))
             .map(|layer| &mut layer.tiles)
@@ -314,6 +352,22 @@ impl TilemapDataStore {
             (self.redraw.entry(key.to_string())).or_insert_with(|| Redraw::Chunks(BTreeSet::new()));
         if let Redraw::Chunks(chunks) = redraw {
             chunks.extend(dirty.into_iter().map(|chunk| (layer, chunk)));
+        }
+    }
+
+    /// Makes a layer's tiles sit at `placement`, as derived data; a move
+    /// draws the map again whole. Hand-placed tiles are kept: tiles between
+    /// cells ignore them, and they show again once the layer is back on
+    /// cells.
+    pub(crate) fn place_layer(&mut self, key: &str, layer: usize, placement: Placement) {
+        let Some(data) = (self.entries.get_mut(key)).and_then(|data| data.layers.get_mut(layer))
+        else {
+            return;
+        };
+        if data.placement != placement {
+            data.placement = placement;
+            self.revision += 1;
+            self.redraw.insert(key.to_string(), Redraw::Whole);
         }
     }
 
@@ -360,7 +414,7 @@ impl TilemapDataStore {
 pub struct TilemapEdit<'a> {
     data: &'a mut TilemapData,
     redraw: &'a mut Redraw,
-    sets: Option<&'a BTreeMap<usize, Arc<TerrainSet>>>,
+    sets: Option<&'a BTreeMap<usize, LayerResolve>>,
     resolved_cells: &'a mut usize,
     /// Each layer's overrides as the edit found them.
     overrides: Vec<Option<BTreeMap<CellCoord, TileRef>>>,
@@ -372,7 +426,7 @@ impl<'a> TilemapEdit<'a> {
     fn new(
         data: &'a mut TilemapData,
         redraw: &'a mut Redraw,
-        sets: Option<&'a BTreeMap<usize, Arc<TerrainSet>>>,
+        sets: Option<&'a BTreeMap<usize, LayerResolve>>,
         resolved_cells: &'a mut usize,
     ) -> Self {
         let overrides = (data.layers.iter())
@@ -444,8 +498,10 @@ impl Drop for TilemapEdit<'_> {
             dirty.extend(cells.iter().map(|cell| cell.chunk()));
             let set = (self.sets.and_then(|sets| sets.get(&index)))
                 .filter(|_| layer.kind == LayerKind::Terrain && !cells.is_empty());
-            if let Some(set) = set {
-                *self.resolved_cells += resolve_into(layer, set, cells).0;
+            if let Some(at) = set {
+                let placed = layer.placement;
+                *self.resolved_cells += resolve_into(layer, &at.set, at.bounds, cells).0;
+                whole |= layer.placement != placed;
             }
             dirty.extend(layer.tiles.take_dirty());
             touched.extend(dirty.into_iter().map(|chunk| (index, chunk)));
@@ -458,19 +514,21 @@ impl Drop for TilemapEdit<'_> {
     }
 }
 
-/// Resolves `cells` of a terrain layer and the ring around them into its
-/// tiles with `set`. Returns how many cells were resolved and each cell whose
-/// tile changed, with its new tile. Every edit and the tile tools' preview
-/// resolve through it.
+/// Resolves the tiles of a terrain layer that read `cells` with `set`, on a
+/// map within `bounds`. Returns how many tiles were resolved and each one
+/// that changed, with its new tile, by key. Every edit and the tile tools'
+/// preview resolve through it.
 pub fn resolve_into(
     layer: &mut LayerData,
     set: &TerrainSet,
+    bounds: Option<CellRect>,
     cells: impl IntoIterator<Item = CellCoord>,
 ) -> (usize, Vec<(CellCoord, TileRef)>) {
+    layer.placement = set.mode.placement();
     let Some(a) = layer.authoring.as_ref() else {
         return (0, Vec::new());
     };
-    let resolved = resolve_region(set, &a.terrain, &a.links, &a.overrides, cells);
+    let resolved = resolve_region_within(set, &a.terrain, &a.links, &a.overrides, cells, bounds);
     let count = resolved.len();
     let changed = (resolved.into_iter())
         .filter(|&(cell, tile)| layer.tiles.set(cell, tile) != tile)

@@ -18,10 +18,10 @@ use jackdaw_runtime::{
 };
 use jackdaw_scene_types::Tilemap;
 use jackdaw_tilemap::{
-    CellCoord, ChunkCoord, ChunkedLayer, LayerData, LayerKind, TileRef, TilemapData,
+    CellCoord, ChunkCoord, ChunkedLayer, LayerData, LayerKind, Placement, TileRef, TilemapData,
 };
 use jackdaw_tileset::Tileset;
-use jackdaw_tileset::chunk::{ChunkDraw, chunk_transform, tile_data};
+use jackdaw_tileset::chunk::{ChunkDraw, TileLayout, TilemapEdgePiece, chunk_transform, tile_data};
 
 const SHEET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -70,6 +70,7 @@ fn layer(cells: &[(i32, i32, TileRef)]) -> LayerData {
     }
     LayerData {
         kind: LayerKind::Tile,
+        placement: Placement::OnCells,
         tiles,
         authoring: None,
     }
@@ -96,7 +97,11 @@ fn project() -> tempfile::TempDir {
     std::fs::create_dir_all(&assets).expect("assets");
     std::fs::write(assets.join("catalog.bsn"), "// no catalog entries\n").expect("catalog");
     std::fs::copy(SHEET, assets.join("overworld.png")).expect("sheet");
-    std::fs::write(assets.join("overworld.tileset.bsn"), TILESET).expect("tileset");
+    std::fs::write(
+        assets.join("overworld.tileset.bsn"),
+        TILESET.replace("source: \"overworld.png\"", "source: \"source.png\""),
+    )
+    .expect("tileset");
     let other = TILESET
         .replace("#overworld", "#other")
         .replace("overworld.png", "other.png");
@@ -247,8 +252,13 @@ fn a_painted_map_draws_the_chunks_the_editor_builds() {
     );
     for ((layer, at, chunk, tiles, transform), (_, _, cells)) in drawn.iter().zip(&expected) {
         let draw = ChunkDraw::new(&tileset, chunk.tileset.clone());
-        let (want_chunk, want_tiles, want_transform) =
-            draw.bundle(ChunkCoord(*at), cells, tile_size, *layer);
+        let (want_chunk, want_tiles, want_transform) = draw.bundle(
+            ChunkCoord(*at),
+            cells,
+            tile_size,
+            *layer,
+            TileLayout::default(),
+        );
         assert_eq!(chunk.tile_display_size, want_chunk.tile_display_size);
         assert_eq!(chunk.chunk_size, UVec2::splat(32));
         assert_eq!(tiles.len(), 1024);
@@ -262,7 +272,7 @@ fn a_painted_map_draws_the_chunks_the_editor_builds() {
     let (_, _, _, ground, at_origin) = &drawn[1];
     assert_eq!(
         *at_origin,
-        chunk_transform(ChunkCoord(IVec2::ZERO), tile_size, 0)
+        chunk_transform(ChunkCoord(IVec2::ZERO), tile_size, 0, Placement::OnCells)
     );
     assert_eq!(at_origin.translation, Vec3::new(256.0, 256.0, 0.0));
     let flipped = ground[7 * 32 + 5].expect("cell (5, 7) draws");
@@ -274,6 +284,137 @@ fn a_painted_map_draws_the_chunks_the_editor_builds() {
     let (_, _, _, _, decor) = &drawn[2];
     assert_eq!(decor.translation.z, 1.0, "the second layer stacks above");
     assert!(app.world().get::<TilemapSidecarMissing>(map).is_none());
+}
+
+#[test]
+fn tiles_between_cells_draw_half_a_tile_up_and_crop_at_the_bounds() {
+    let project = project();
+    let assets = project.path().join("assets");
+    let mut between = layer(&[(-1, 0, TileRef::new(3)), (0, 0, TileRef::new(4))]);
+    between.placement = Placement::BetweenCells;
+    let data = TilemapData {
+        layers: vec![layer(&[(0, 0, TileRef::new(3))]), between],
+    };
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &data);
+    let mut app = game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"));
+    let map = map_named(&mut app, "Map");
+    let drawn = chunks_of(&mut app, map);
+    let offset = |layer: usize| {
+        let (.., at) = drawn
+            .iter()
+            .find(|(l, at, ..)| *l == layer && *at == IVec2::ZERO)?;
+        Some(at.translation.truncate() - Vec2::splat(256.0))
+    };
+    assert_eq!(offset(0), Some(Vec2::ZERO));
+    assert_eq!(offset(1), Some(Vec2::splat(8.0)));
+    let pieces = |app: &mut App| {
+        app.world_mut()
+            .query::<(&TilemapEdgePiece, &Sprite, Has<RuntimeOnly>)>()
+            .iter(app.world())
+            .map(|(_, sprite, runtime_only)| {
+                assert!(runtime_only);
+                sprite.custom_size
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        pieces(&mut app).is_empty(),
+        "an unbounded map crops nothing"
+    );
+
+    let mut tilemap = app.world_mut().get_mut::<Tilemap>(map).expect("a map");
+    tilemap.bounds = Some(IRect::new(0, 0, 4, 4));
+    app.update();
+    app.update();
+    assert_eq!(pieces(&mut app), vec![Some(Vec2::new(8.0, 16.0))]);
+    let drawn = chunks_of(&mut app, map);
+    let (.., left, _) = drawn
+        .iter()
+        .find(|(l, at, ..)| *l == 1 && *at == IVec2::new(-1, 0))
+        .expect("the chunk of the cropped tile");
+    assert!(
+        left.iter().all(Option::is_none),
+        "the cropped tile draws as a sprite"
+    );
+    let (_, _, packed, ..) = drawn
+        .iter()
+        .find(|(l, at, ..)| *l == 1 && *at == IVec2::new(-1, 0))
+        .expect("the chunk of the cropped tile");
+    let packed = packed.tileset.clone();
+    let strip = jackdaw_tileset::chunk::strip_for(app.world_mut(), &packed).expect("a strip");
+    let sprite = (app.world_mut().query::<(&TilemapEdgePiece, &Sprite)>())
+        .iter(app.world())
+        .map(|(_, sprite)| sprite.clone())
+        .next()
+        .expect("a piece");
+    assert_eq!(sprite.image, strip, "drawn from the packed image's strip");
+    assert_eq!(
+        sprite.rect,
+        Some(Rect::new(8.0, 48.0, 16.0, 64.0)),
+        "layer 3"
+    );
+    let server = app.world().resource::<AssetServer>();
+    assert!(
+        server.get_path_id("source.png").is_none(),
+        "no source sheet is loaded"
+    );
+}
+
+/// The tileset with its sheet read from a source image that is never needed,
+/// and a corners set of terrains 1 and 2.
+const CORNER_TILESET: &str = "\
+#corners
+jackdaw_tileset::Tileset {
+    image: \"overworld.png\",
+    tile_size: glam::UVec2 { x: 16, y: 16 },
+    grid: glam::UVec2 { x: 27, y: 65 },
+    sheets: [
+        jackdaw_tileset::TilesetSheet {
+            source: \"source.png\",
+            columns: 27,
+            rows: 65,
+            first_layer: 0,
+        },
+    ],
+    terrain_sets: [
+        jackdaw_tileset::TilesetTerrainSet {
+            inner: 2,
+            outer: 1,
+            mode: jackdaw_tileset::TerrainMatch::Corners,
+        },
+    ],
+}
+";
+
+fn terrain_map_text(name: &str, data_path: &str, tileset: &str) -> String {
+    format!(
+        "#{name}\n\
+         jackdaw_scene_types::tilemap::Tilemap {{\n    \
+         data_path: \"{data_path}\",\n    \
+         layers: [\n        \
+         jackdaw_scene_types::tilemap::TilemapLayer {{ name: \"Ground\", tileset: \"{tileset}\", kind: jackdaw_scene_types::tilemap::TilemapLayerKind::Terrain }},\n    \
+         ],\n\
+         }}\n"
+    )
+}
+
+#[test]
+fn an_old_sidecar_of_a_corner_layer_draws_between_cells_without_a_save() {
+    let project = project();
+    let assets = project.path().join("assets");
+    std::fs::write(assets.join("corners.tileset.bsn"), CORNER_TILESET).expect("tileset");
+    let mut old = layer(&[(0, 0, TileRef::new(3))]);
+    old.kind = LayerKind::Terrain;
+    let data = TilemapData { layers: vec![old] };
+    let bytes = jackdaw_tilemap::encode(&data);
+    assert_eq!(bytes[17], 0, "written before tiles sat between cells");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &data);
+    let scene = terrain_map_text("Map", "zone.tilemap-0.jdtiles", "corners.tileset.bsn");
+    let mut app = game(&assets, &scene);
+    let map = map_named(&mut app, "Map");
+    let drawn = chunks_of(&mut app, map);
+    let (.., at) = drawn.first().expect("a chunk");
+    assert_eq!(at.translation.truncate(), Vec2::splat(264.0));
 }
 
 #[test]
@@ -409,7 +550,12 @@ fn a_tileset_edit_or_swap_draws_the_map_again() {
     assert_eq!(drawn[1].2.tile_display_size, UVec2::splat(8));
     assert_eq!(
         drawn[1].4,
-        chunk_transform(ChunkCoord(IVec2::ZERO), UVec2::splat(8), 0)
+        chunk_transform(
+            ChunkCoord(IVec2::ZERO),
+            UVec2::splat(8),
+            0,
+            Placement::OnCells
+        )
     );
     let before = drawn[1].2.tileset.clone();
 

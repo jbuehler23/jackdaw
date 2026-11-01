@@ -124,7 +124,12 @@ pub(crate) fn assert_resolved(app: &mut App, map: Entity) {
         .terrain_set(Some(TerrainMatch::CornersAndSides))
         .expect("a corners and sides set");
     let data = stored(app, map);
-    let fresh = full_resolve(&set, data.layers[0].authoring.as_ref().expect("authoring")).0;
+    let fresh = full_resolve(
+        &set,
+        data.layers[0].authoring.as_ref().expect("authoring"),
+        None,
+    )
+    .0;
     assert!(
         data.layers[0].tiles == fresh,
         "stored tiles match a fresh resolve"

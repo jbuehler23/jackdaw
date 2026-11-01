@@ -13,9 +13,9 @@ use bevy::{
     ui::{ComputedNode, UiGlobalTransform},
 };
 use jackdaw_scene_types::Tilemap;
-use jackdaw_tilemap::{CHUNK_AREA, CellCoord, ChunkCoord, LayerData, TileRef};
+use jackdaw_tilemap::{CHUNK_AREA, CellCoord, ChunkCoord, LayerData, Placement, TileRef};
 use jackdaw_tileset::Tileset;
-use jackdaw_tileset::chunk::ChunkDraw;
+use jackdaw_tileset::chunk::{ChunkDraw, TileLayout};
 
 use crate::tile_stamp::StampBrush;
 use crate::tile_tools::{
@@ -94,8 +94,10 @@ pub struct TilePreview {
     /// The cells the tool writes; empty for a shape past
     /// [`MAX_PREVIEW_CELLS`].
     pub cells: Vec<CellCoord>,
-    /// Each cell whose tile would change, with that tile, resolved.
+    /// Each tile that would change, with that tile, resolved, by key.
     pub tiles: Vec<(CellCoord, TileRef)>,
+    /// Where `tiles` sit over the cells.
+    pub layout: TileLayout,
     /// The outline, as segments between cell corners.
     pub edges: Vec<(IVec2, IVec2)>,
     /// Times the preview was built.
@@ -290,7 +292,10 @@ fn build_preview(world: &mut World) {
     if world.resource::<TilePreview>().built_from.as_ref() == Some(&inputs) {
         return;
     }
-    let bounds = world.get::<Tilemap>(active.map).and_then(|t| t.bounds);
+    let tilemap = world.get::<Tilemap>(active.map);
+    let bounds = tilemap.and_then(|t| t.bounds);
+    let crop = (world.resource::<TilemapDataStore>()).resolved_bounds(&active.key, active.index);
+    let placement = (set.as_ref()).map_or(Placement::OnCells, |set| set.mode.placement());
     let (mut cells, mut edges) = footprint(shape, bounds);
     let tileset_id = active_tileset(world).ok();
     let store = world.resource::<TilemapDataStore>();
@@ -311,6 +316,7 @@ fn build_preview(world: &mut World) {
                 layer,
                 active.terrain,
                 set.as_deref(),
+                crop,
                 &c,
                 write,
             ));
@@ -330,6 +336,14 @@ fn build_preview(world: &mut World) {
         layer: active.index,
         cells,
         tiles,
+        layout: TileLayout {
+            placement: if active.terrain {
+                placement
+            } else {
+                Placement::OnCells
+            },
+            bounds: crop,
+        },
         edges,
         builds,
         tileset: tileset_id,
@@ -339,6 +353,7 @@ fn build_preview(world: &mut World) {
 
 /// The status bar line for `cell` of `layer`: its terrain on a terrain
 /// layer, its tile by name or as sheet:index, and whether it is hand-placed.
+/// A cell under tiles between cells has no tile of its own.
 pub fn hover_readout(
     cell: CellCoord,
     layer: Option<&LayerData>,
@@ -354,6 +369,10 @@ pub fn hover_readout(
                 .map_or_else(|| id.to_string(), |t| t.name.clone()),
         };
         parts.push(format!("Terrain {name}"));
+    }
+    if layer.is_some_and(|l| l.placement == Placement::BetweenCells) {
+        parts.push("Tiles between cells".to_string());
+        return parts.join(" | ");
     }
     let placed = authoring.and_then(|a| a.overrides.get(&cell).copied());
     let tile = placed.unwrap_or_else(|| layer.map_or(TileRef::EMPTY, |l| l.tiles.get(cell)));
@@ -420,7 +439,7 @@ fn outline(cells: &[CellCoord]) -> Vec<(IVec2, IVec2)> {
 /// with the preview, updating the chunks it keeps in place.
 fn draw_preview(world: &mut World) {
     let preview = world.resource::<TilePreview>();
-    let (map, layer) = (preview.map, preview.layer);
+    let (map, layer, layout) = (preview.map, preview.layer, preview.layout);
     let mut chunks: BTreeMap<ChunkCoord, Box<[TileRef; CHUNK_AREA]>> = BTreeMap::new();
     let mut emptied = BTreeSet::new();
     for &(cell, tile) in &preview.tiles {
@@ -443,12 +462,19 @@ fn draw_preview(world: &mut World) {
             tileset.display_size(cell_size),
         )
     });
+    let draw = draw.map(|(mut draw, size)| {
+        if layout.crops() {
+            draw.strip = jackdaw_tileset::chunk::strip_for(world, &draw.image);
+        }
+        (draw, size)
+    });
     let mut wanted: BTreeMap<ChunkCoord, crate::tilemap_render::Wanted> = BTreeMap::new();
     if let Some((draw, tile_size)) = &draw {
         for (coord, cells) in chunks {
-            let mut bundle = draw.bundle(coord, &cells, *tile_size, layer);
-            bundle.2.translation.z += 0.5;
-            wanted.insert(coord, bundle);
+            let mut chunk = draw.bundle(coord, &cells, *tile_size, layer, layout);
+            chunk.2.translation.z += 0.5;
+            let pieces = draw.edge_pieces(coord, &cells, *tile_size, layout);
+            wanted.insert(coord, (chunk, pieces));
         }
     }
     let drawn: Vec<(Entity, TilePreviewChunk, Entity)> =
@@ -478,14 +504,17 @@ fn draw_preview(world: &mut World) {
     let Some(map) = map else {
         return;
     };
-    for (chunk, bundle) in wanted {
-        world.spawn((TilePreviewChunk { layer, chunk }, bundle, ChildOf(map)));
+    for (chunk, (bundle, pieces)) in wanted {
+        let of = TilePreviewChunk { layer, chunk };
+        let entity = world.spawn((of, bundle, ChildOf(map))).id();
+        crate::tilemap_render::put_edge_pieces(world, entity, pieces);
     }
     let size = cell_size.as_vec2();
+    let shift = layout.placement.offset() * size;
     let tint = jackdaw_feathers::tokens::TEXT_ERROR.with_alpha(0.45);
     for (y, a, b) in runs(emptied) {
         let width = (b - a + 1) as f32 * size.x;
-        let centre = Vec2::new(a as f32 * size.x + width / 2.0, (y as f32 + 0.5) * size.y);
+        let centre = Vec2::new(a as f32 * size.x + width / 2.0, (y as f32 + 0.5) * size.y) + shift;
         world.spawn((
             TilePreviewEmptied,
             Sprite::from_color(tint, Vec2::new(width, size.y)),

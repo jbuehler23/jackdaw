@@ -4305,6 +4305,7 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
     let map = jackdaw_tilemap::TilemapData {
         layers: vec![jackdaw_tilemap::LayerData {
             kind: jackdaw_tilemap::LayerKind::Tile,
+            placement: Default::default(),
             tiles: jackdaw_tilemap::ChunkedLayer::new(),
             authoring: None,
         }],
@@ -4341,6 +4342,7 @@ fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
     let map = jackdaw_tilemap::TilemapData {
         layers: vec![jackdaw_tilemap::LayerData {
             kind: jackdaw_tilemap::LayerKind::Tile,
+            placement: Default::default(),
             tiles: jackdaw_tilemap::ChunkedLayer::new(),
             authoring: None,
         }],
@@ -4425,6 +4427,7 @@ fn tile_map(tile: u16) -> jackdaw_tilemap::TilemapData {
     jackdaw_tilemap::TilemapData {
         layers: vec![jackdaw_tilemap::LayerData {
             kind: jackdaw_tilemap::LayerKind::Tile,
+            placement: Default::default(),
             tiles,
             authoring: None,
         }],
@@ -4596,4 +4599,71 @@ fn a_prefab_tab_and_a_scene_instancing_it_share_the_prefabs_cells() {
         );
     }
     assert!(!tmp.path().join("levels/p.tilemap-0.jdtiles").exists());
+}
+
+/// Two instances of one prefab share its sidecar. Their terrain resolves with
+/// the bounds of the first instance by entity; when the other's bounds differ
+/// the key is noted, and a warning logged.
+#[test]
+fn instances_sharing_a_sidecar_with_different_bounds_are_noted() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("levels")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("prefabs")).unwrap();
+    std::fs::write(
+        tmp.path().join("prefabs/p.bsn"),
+        "#p\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         jackdaw_scene_types::tilemap::Tilemap { data_path: \"p.tilemap-0.jdtiles\" }\n",
+    )
+    .unwrap();
+    let map = jackdaw_tilemap::TilemapData::default();
+    std::fs::write(
+        tmp.path().join("prefabs/p.tilemap-0.jdtiles"),
+        jackdaw_tilemap::encode(&map),
+    )
+    .unwrap();
+    let scene_path = tmp.path().join("levels/zone.bsn");
+    std::fs::write(
+        &scene_path,
+        "bevy_ecs::hierarchy::Children [\n\
+         #a\n\
+         jackdaw::prefab::components::IsA { source: \"../prefabs/p.bsn\", deleted: [] }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         --\n\
+         #b\n\
+         jackdaw::prefab::components::IsA { source: \"../prefabs/p.bsn\", deleted: [] }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         ]\n",
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    app.init_resource::<jackdaw::scenes::Scenes>();
+    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::tilemap_resolve::TilemapResolveStats>();
+    jackdaw::tilemap::plugin(&mut app);
+    jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
+    let keys = tilemap_keys(&mut app);
+    assert_eq!(keys.len(), 2, "both instances read one sidecar");
+    assert_eq!(keys[0], keys[1]);
+    let key = keys[0].clone();
+    jackdaw::tilemap_resolve::refresh_terrain(app.world_mut());
+    let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+    assert!(!store.bounds_diverge(&key));
+
+    let mut maps: Vec<bevy::prelude::Entity> = app
+        .world_mut()
+        .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<jackdaw_scene_types::Tilemap>>(
+        )
+        .iter(app.world())
+        .collect();
+    maps.sort();
+    app.world_mut()
+        .get_mut::<jackdaw_scene_types::Tilemap>(maps[1])
+        .unwrap()
+        .bounds = Some(bevy::math::IRect::new(0, 0, 4, 4));
+    jackdaw::tilemap_resolve::refresh_terrain(app.world_mut());
+    let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+    assert!(store.bounds_diverge(&key));
 }

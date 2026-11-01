@@ -17,7 +17,8 @@
 //! 4         layer_count, u32
 //! then, per layer:
 //! 1         kind, u8 (0 = tile layer, 1 = terrain layer)
-//! 3         reserved, must be 0
+//! 1         placement, u8 (0 = tiles on cells, 1 = tiles between cells)
+//! 2         reserved, must be 0
 //! 4         chunk_count, u32
 //! then, per chunk in ascending ChunkCoord order:
 //! 4 + 4     chunk x, chunk y, i32
@@ -43,7 +44,9 @@
 //! a non-zero terrain id; encode prunes any other link data.
 //!
 //! Version 1 is version 2 without the link chunk list; decode reads it with
-//! empty links and encode always writes version 2.
+//! empty links and encode always writes version 2. Files written before the
+//! placement byte hold 0 there, so they read as tiles on cells. Tiles between
+//! cells are keyed as [`Placement::BetweenCells`] describes.
 //!
 //! Flags bit 0 is set exactly when some terrain layer has authoring data; then
 //! every terrain layer carries an authoring block, written empty for a layer
@@ -58,7 +61,7 @@ use std::collections::BTreeMap;
 
 use glam::IVec2;
 
-use crate::grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, ChunkCoord};
+use crate::grid::{CHUNK_AREA, CHUNK_SIZE, CellCoord, ChunkCoord, Placement};
 use crate::layer::{CellValue, ChunkedLayer};
 use crate::path::Links;
 use crate::tile::{TerrainId, TileRef};
@@ -90,6 +93,8 @@ pub struct TerrainAuthoring {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayerData {
     pub kind: LayerKind,
+    /// Where `tiles` sit over the cells; a terrain layer takes its set's.
+    pub placement: Placement,
     pub tiles: ChunkedLayer<TileRef>,
     /// Only meaningful for [`LayerKind::Terrain`].
     pub authoring: Option<TerrainAuthoring>,
@@ -100,15 +105,19 @@ impl LayerData {
     pub fn empty(kind: LayerKind) -> Self {
         Self {
             kind,
+            placement: Placement::OnCells,
             tiles: ChunkedLayer::new(),
             authoring: (kind == LayerKind::Terrain).then(TerrainAuthoring::default),
         }
     }
 
     /// Every cell holding a tile, a terrain, links or a hand-placed tile, in
-    /// order.
+    /// order. Tiles between cells are keyed by a corner, not a cell, so a
+    /// layer holding authoring counts only its authored cells.
     pub fn painted_cells(&self) -> Vec<CellCoord> {
-        let mut cells: Vec<CellCoord> = self.tiles.cells().map(|(c, _)| c).collect();
+        let keyed_by_cell = self.placement == Placement::OnCells || self.authoring.is_none();
+        let tiles = self.tiles.cells().filter(|_| keyed_by_cell);
+        let mut cells: Vec<CellCoord> = tiles.map(|(c, _)| c).collect();
         if let Some(a) = &self.authoring {
             cells.extend(a.terrain.cells().map(|(c, _)| c));
             cells.extend(a.links.cells().map(|(c, _)| c));
@@ -197,7 +206,11 @@ pub fn encode(data: &TilemapData) -> Vec<u8> {
             LayerKind::Tile => 0,
             LayerKind::Terrain => 1,
         };
-        out.extend_from_slice(&[kind, 0, 0, 0]);
+        let placement = match layer.placement {
+            Placement::OnCells => 0,
+            Placement::BetweenCells => 1,
+        };
+        out.extend_from_slice(&[kind, placement, 0, 0]);
         write_chunks(&mut out, &layer.tiles, put_tile);
         if layer.kind == LayerKind::Terrain && with_authoring {
             let authoring = layer.authoring.as_ref().unwrap_or(&empty);
@@ -248,7 +261,12 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
             1 => LayerKind::Terrain,
             other => return Err(SidecarError::UnknownLayerKind(other)),
         };
-        if header[1..] != [0, 0, 0] {
+        let placement = match header[1] {
+            0 => Placement::OnCells,
+            1 => Placement::BetweenCells,
+            _ => return Err(SidecarError::ReservedBits),
+        };
+        if header[2..] != [0, 0] {
             return Err(SidecarError::ReservedBits);
         }
         let tiles = read_chunks(&mut r, 3, read_tile)?;
@@ -287,6 +305,7 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
         }
         layers.push(LayerData {
             kind,
+            placement,
             tiles,
             authoring,
         });
@@ -435,6 +454,7 @@ mod tests {
         }
         LayerData {
             kind: LayerKind::Tile,
+            placement: Placement::OnCells,
             tiles,
             authoring: None,
         }
@@ -601,9 +621,44 @@ mod tests {
         let mut kind = bytes.clone();
         kind[16] = 7;
         assert_eq!(decode(&kind), Err(SidecarError::UnknownLayerKind(7)));
-        let mut reserved = bytes;
+        let mut reserved = bytes.clone();
         reserved[18] = 1;
         assert_eq!(decode(&reserved), Err(SidecarError::ReservedBits));
+        let mut placement = bytes;
+        placement[17] = 2;
+        assert_eq!(decode(&placement), Err(SidecarError::ReservedBits));
+    }
+
+    #[test]
+    fn placement_round_trips_and_older_files_read_on_cells() {
+        let mut layer = tile_layer(&[(0, 0, TileRef::new(1))]);
+        let old = encode(&TilemapData {
+            layers: vec![layer.clone()],
+        });
+        assert_eq!(old[17], 0);
+        assert_eq!(
+            decode(&old).unwrap().layers[0].placement,
+            Placement::OnCells
+        );
+        layer.placement = Placement::BetweenCells;
+        let map = TilemapData {
+            layers: vec![layer],
+        };
+        let bytes = encode(&map);
+        assert_eq!(bytes[17], 1);
+        assert_eq!(decode(&bytes).unwrap(), map);
+    }
+
+    #[test]
+    fn painted_cells_skip_tiles_keyed_between_cells() {
+        let mut layer = tile_layer(&[(-1, -1, TileRef::new(1)), (0, 0, TileRef::new(1))]);
+        layer.kind = LayerKind::Terrain;
+        let mut authoring = TerrainAuthoring::default();
+        authoring.terrain.set(CellCoord::new(0, 0), 1);
+        layer.authoring = Some(authoring);
+        assert_eq!(layer.painted_cells().len(), 2);
+        layer.placement = Placement::BetweenCells;
+        assert_eq!(layer.painted_cells(), vec![CellCoord::new(0, 0)]);
     }
 
     #[test]

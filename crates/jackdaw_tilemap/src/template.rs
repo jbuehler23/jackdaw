@@ -202,16 +202,23 @@ mod tests {
         t
     }
 
-    fn mask_index(cells: &[TerrainId; 9], outer: TerrainId, peers: [Peer; 4], corner: bool) -> u16 {
+    fn side_mask(cells: &[TerrainId; 9], outer: TerrainId) -> u16 {
         let mut index = 0;
-        for (bit, peer) in peers.iter().enumerate() {
-            let hit = if corner {
-                let [a, b] = peer.corner_sides().unwrap();
-                [*peer, a, b].iter().any(|p| cells[p.index()] == outer)
-            } else {
-                cells[peer.index()] == outer
-            };
-            if hit {
+        for (bit, peer) in Peer::SIDES.iter().enumerate() {
+            if cells[peer.index()] == outer {
+                index |= 1 << bit;
+            }
+        }
+        index
+    }
+
+    /// Outer-corner mask of the tile between cells keyed at the origin: its
+    /// corners are the origin and its +x, +y and +xy neighbours.
+    fn corner_mask(cells: &[TerrainId; 9], outer: TerrainId) -> u16 {
+        let corners = [Peer::Top, Peer::TopRight, Peer::Centre, Peer::Right];
+        let mut index = 0;
+        for (bit, peer) in corners.iter().enumerate() {
+            if cells[peer.index()] == outer {
                 index |= 1 << bit;
             }
         }
@@ -247,12 +254,15 @@ mod tests {
     fn corner16_resolves_exhaustively() {
         for (inner, outer) in PAIRS {
             let set = LayoutTemplate::Corner16.terrain_set(inner, outer);
-            for mask in 0..=255u8 {
-                let (layer, cells) = neighbourhood(mask, inner, inner, outer);
+            for (mask, centre) in (0..=255u8).flat_map(|m| [(m, inner), (m, outer)]) {
+                let (layer, cells) = neighbourhood(mask, centre, inner, outer);
                 let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), origin());
                 assert!(r.is_exact(), "mask {mask}");
-                let expected = mask_index(&cells, outer, Peer::CORNERS, true);
-                assert_eq!(r.tile, TileRef::new(expected), "mask {mask}");
+                let expected = match corner_mask(&cells, outer) {
+                    15 if outer == 0 => TileRef::EMPTY,
+                    bits => TileRef::new(bits),
+                };
+                assert_eq!(r.tile, expected, "mask {mask}");
             }
         }
     }
@@ -265,7 +275,7 @@ mod tests {
                 let (layer, cells) = neighbourhood(mask, inner, inner, outer);
                 let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), origin());
                 assert!(r.is_exact(), "mask {mask}");
-                let expected = mask_index(&cells, outer, Peer::SIDES, false);
+                let expected = side_mask(&cells, outer);
                 assert_eq!(r.tile, TileRef::new(expected), "mask {mask}");
             }
         }
@@ -316,13 +326,13 @@ mod tests {
         let mut layer = ChunkedLayer::new();
         for i in 0..200 {
             for peer in Peer::ALL {
-                let t = if peer == Peer::TopLeft { 1 } else { 2 };
+                let t = if peer == Peer::Top { 1 } else { 2 };
                 layer.set(CellCoord(IVec2::new(i * 4, 0) + peer.offset()), t);
             }
         }
         for i in 0..200 {
             let r = resolve_cell(&set, &layer, &ChunkedLayer::new(), CellCoord::new(i * 4, 0));
-            assert_eq!((r.score, r.max_score), (4, 5));
+            assert_eq!((r.score, r.max_score), (3, 4));
             assert_eq!(r.tile, TileRef::new(0), "cell {i}");
         }
     }
@@ -378,7 +388,8 @@ mod tests {
 
     #[test]
     fn outer_centre_without_tiles_resolves_empty() {
-        for template in LayoutTemplate::ALL {
+        let on_cells = |t: &LayoutTemplate| t.mode().placement() == crate::Placement::OnCells;
+        for template in LayoutTemplate::ALL.iter().copied().filter(on_cells) {
             let set = template.terrain_set(1, 2);
             for mask in [0u8, 0x5a, 0xff] {
                 let (layer, _) = neighbourhood(mask, 2, 1, 2);
