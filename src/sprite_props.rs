@@ -173,11 +173,11 @@ pub(crate) fn sprite_set_anchor(
     label = "Bring Forward",
     description = "Step the selected sprites' z up by one, drawing them in front.",
     allows_undo = false,
-    is_available = can_step_z
+    is_available = can_step_z,
+    params(entity(Entity, doc = "Sprite to step. Left out, every selected sprite."))
 )]
-pub(crate) fn sprite_z_up(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
-    crate::sprite_gizmo::step_sprites_z(world, 1.0);
-    OperatorResult::Finished
+pub(crate) fn sprite_z_up(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    step_z(world, &params, 1.0)
 }
 
 /// Draw the selected sprites one z step further back, as one history entry.
@@ -186,25 +186,41 @@ pub(crate) fn sprite_z_up(_: In<OperatorParameters>, world: &mut World) -> Opera
     label = "Send Backward",
     description = "Step the selected sprites' z down by one, drawing them behind.",
     allows_undo = false,
-    is_available = can_step_z
+    is_available = can_step_z,
+    params(entity(Entity, doc = "Sprite to step. Left out, every selected sprite."))
 )]
-pub(crate) fn sprite_z_down(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
-    crate::sprite_gizmo::step_sprites_z(world, -1.0);
+pub(crate) fn sprite_z_down(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    step_z(world, &params, -1.0)
+}
+
+/// Step the named sprite, or with none named the selection. A page key held
+/// with another modifier belongs to another binding, so the selection is only
+/// stepped without one.
+fn step_z(world: &mut World, params: &OperatorParameters, delta: f32) -> OperatorResult {
+    let named = params.as_entity("entity");
+    if named.is_none()
+        && world
+            .get_resource::<ButtonInput<KeyCode>>()
+            .is_some_and(|keyboard| {
+                crate::keybinds::unwanted_modifier(
+                    keyboard,
+                    crate::keybinds::ChordModifiers::default(),
+                )
+            })
+    {
+        return OperatorResult::Cancelled;
+    }
+    crate::sprite_gizmo::step_sprites_z(world, delta, named);
     OperatorResult::Finished
 }
 
-/// Whether the page keys step z: the primary selection is a sprite the
-/// canvas may move, as for a nudge, and no other modifier is held.
-fn can_step_z(
-    gate: crate::sprite_ops::SpriteAddGate,
-    keyboard: Res<ButtonInput<KeyCode>>,
-    world: &World,
-) -> bool {
-    !crate::keybinds::unwanted_modifier(&keyboard, crate::keybinds::ChordModifiers::default())
-        && world
-            .get_resource::<crate::selection::Selection>()
-            .and_then(crate::selection::Selection::primary)
-            .is_some_and(|primary| crate::sprite_gizmo::movable_sprite(world, primary))
+/// Whether z can step: the primary selection is a sprite the canvas may move,
+/// as for a nudge.
+fn can_step_z(gate: crate::sprite_ops::SpriteAddGate, world: &World) -> bool {
+    world
+        .get_resource::<crate::selection::Selection>()
+        .and_then(crate::selection::Selection::primary)
+        .is_some_and(|primary| crate::sprite_gizmo::movable_sprite(world, primary))
         && gate.allows()
 }
 

@@ -693,7 +693,7 @@ pub(crate) fn spawn_color_row(
         commands,
         body,
         rgba,
-        label,
+        crate::inspector::reflect_fields::ColorLabel::Inline(label),
         0.0,
         None,
         move |world, rgba, _is_final| {

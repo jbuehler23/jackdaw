@@ -8,6 +8,7 @@ use bevy::{prelude::*, sprite::Anchor, ui_widgets::ValueChange};
 use jackdaw::commands::CommandHistory;
 use jackdaw::inspector::sprite_card::{
     CUSTOM_ANCHOR, SpriteAnchorCombo, SpriteCustomAnchor, SpritePpuApply, SpritePpuInput,
+    SpriteYSortToggle,
 };
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
@@ -281,16 +282,16 @@ fn every_row_is_labelled_and_in_sprite_order() {
     let (mut app, _dir, _sprite) = app_with_sprite();
     let labels = row_labels(&mut app);
     let wanted = [
-        "image",
-        "anchor",
-        "flip_x",
-        "flip_y",
-        "custom_size",
-        "size from ppu",
-        "color",
-        "rect",
-        "texture_atlas",
-        "image_mode",
+        "Image",
+        "Anchor",
+        "Flip",
+        "Custom size",
+        "Size from PPU",
+        "Color",
+        "Draw order",
+        "Rect",
+        "Texture atlas",
+        "Image mode",
     ];
     let found: Vec<&str> = labels
         .iter()
@@ -298,6 +299,12 @@ fn every_row_is_labelled_and_in_sprite_order() {
         .filter(|label| wanted.contains(label))
         .collect();
     assert_eq!(found, wanted, "rows top to bottom: {labels:?}");
+    assert!(
+        labels
+            .iter()
+            .all(|label| !label.contains('_') && !label.starts_with(char::is_lowercase)),
+        "every label is sentence case: {labels:?}"
+    );
     let text = jackdaw::inspector::component_card_text(app.world_mut(), SPRITE);
     assert!(
         !text.iter().any(|line| line == "0"),
@@ -531,4 +538,186 @@ fn a_redo_shows_its_preset_even_while_the_combo_reads_custom() {
     let combo = one::<SpriteAnchorCombo>(&mut app);
     assert_eq!(shown_index(&mut app, combo), Some(bottom_left));
     assert!(!custom_row_shown(&mut app));
+}
+
+/// The row of the card body that holds `entity`.
+fn row_of(app: &mut App, entity: Entity) -> Entity {
+    let body = card_body(app);
+    let mut at = entity;
+    loop {
+        let parent = app
+            .world()
+            .get::<ChildOf>(at)
+            .map(ChildOf::parent)
+            .expect("inside the card body");
+        if parent == body {
+            return at;
+        }
+        at = parent;
+    }
+}
+
+fn field_widget(app: &mut App, type_path: &str, field_path: &str) -> Entity {
+    all_entities(app)
+        .into_iter()
+        .find(|&entity| {
+            jackdaw::inspector::field_edited_by(app.world(), entity)
+                == Some((type_path, field_path))
+        })
+        .unwrap_or_else(|| panic!("a widget editing {field_path}"))
+}
+
+#[test]
+fn flip_x_and_flip_y_are_a_pair_in_one_flip_row() {
+    let (mut app, _dir, sprite) = app_with_sprite();
+    let x = field_widget(&mut app, SPRITE, "flip_x");
+    let y = field_widget(&mut app, SPRITE, "flip_y");
+    let row = row_of(&mut app, x);
+    assert_eq!(row, row_of(&mut app, y), "one row holds both");
+    assert_eq!(first_text(&app, row).as_deref(), Some("Flip"));
+
+    app.world_mut().trigger(ValueChange {
+        source: y,
+        value: true,
+        is_final: true,
+    });
+    settle(&mut app);
+    let flipped = app.world().get::<Sprite>(sprite).expect("a sprite");
+    assert!(flipped.flip_y && !flipped.flip_x, "the Y box flips Y only");
+}
+
+/// The width of the label column of the row holding `entity`.
+fn label_width(app: &mut App, entity: Entity) -> Val {
+    let row = row_of(app, entity);
+    let mut stack = vec![row];
+    while let Some(at) = stack.pop() {
+        if app.world().get::<Text>(at).is_some() {
+            return app.world().get::<Node>(at).map_or(Val::Auto, |n| n.width);
+        }
+        if let Some(children) = app.world().get::<Children>(at) {
+            stack.extend(children.iter().rev());
+        }
+    }
+    panic!("the row has a label");
+}
+
+#[test]
+fn the_colour_row_shares_the_label_column_of_the_other_rows() {
+    let (mut app, _dir, _sprite) = app_with_sprite();
+    let anchor = one::<SpriteAnchorCombo>(&mut app);
+    let swatch = one::<bevy::feathers::controls::ColorSwatchValue>(&mut app);
+    let column = label_width(&mut app, anchor);
+    assert_eq!(column, Val::Px(jackdaw_feathers::tokens::FIELD_LABEL_WIDTH));
+    assert_eq!(label_width(&mut app, swatch), column);
+}
+
+fn op_buttons(app: &mut App) -> Vec<(Entity, String)> {
+    app.world_mut()
+        .query::<(Entity, &jackdaw_feathers::button::ButtonOperatorCall)>()
+        .iter(app.world())
+        .map(|(entity, call)| (entity, call.id.to_string()))
+        .collect()
+}
+
+#[test]
+fn the_draw_order_row_has_buttons_for_the_page_keys_and_a_y_sort_toggle() {
+    let (mut app, _dir, sprite) = app_with_sprite();
+    let buttons = op_buttons(&mut app);
+    let mut row = None;
+    for id in ["sprite.z_down", "sprite.z_up"] {
+        let (button, _) = buttons
+            .iter()
+            .find(|(_, call)| call == id)
+            .unwrap_or_else(|| panic!("a {id} button: {buttons:?}"));
+        let held = row_of(&mut app, *button);
+        assert!(row.is_none_or(|row| row == held), "one row holds both");
+        row = Some(held);
+    }
+    let row = row.expect("the draw order row");
+    assert_eq!(first_text(&app, row).as_deref(), Some("Draw order"));
+
+    let toggle = one::<SpriteYSortToggle>(&mut app);
+    assert_eq!(row_of(&mut app, toggle), row);
+    let depth = app.world().resource::<CommandHistory>().undo_stack.len();
+    app.world_mut().trigger(ValueChange {
+        source: toggle,
+        value: true,
+        is_final: true,
+    });
+    settle(&mut app);
+    assert!(
+        app.world()
+            .get::<jackdaw_scene_types::YSort>(sprite)
+            .is_some()
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len() - depth,
+        1
+    );
+    let cards = jackdaw::inspector::component_cards_showing(app.world_mut());
+    assert!(
+        !cards
+            .iter()
+            .any(|path| path == jackdaw_scene_types::Y_SORT_TYPE_PATH),
+        "the toggle stands for the Y-sort card: {cards:?}"
+    );
+    let toggle = one::<SpriteYSortToggle>(&mut app);
+    assert!(app.world().get::<bevy::ui::Checked>(toggle).is_some());
+}
+
+fn z(app: &App, sprite: Entity) -> f32 {
+    app.world()
+        .get::<Transform>(sprite)
+        .map_or(f32::NAN, |transform| transform.translation.z)
+}
+
+#[test]
+fn the_bring_forward_button_moves_only_the_cards_sprite_even_with_shift_held() {
+    let (mut app, _dir, shown) = app_with_sprite();
+    let mut others = Vec::new();
+    for _ in 0..2 {
+        let added = app
+            .world_mut()
+            .operator("sprite.add")
+            .param("path", SHEET)
+            .call()
+            .expect("sprite.add dispatches");
+        assert_eq!(added, OperatorResult::Finished);
+        settle(&mut app);
+        others.push(
+            app.world()
+                .resource::<Selection>()
+                .primary()
+                .expect("the new sprite is selected"),
+        );
+    }
+    app.world_mut().resource_mut::<Selection>().entities = vec![others[0], others[1], shown];
+    settle(&mut app);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
+    settle(&mut app);
+
+    let before: Vec<f32> = others.iter().map(|&other| z(&app, other)).collect();
+    let shown_before = z(&app, shown);
+    let (button, _) = op_buttons(&mut app)
+        .into_iter()
+        .find(|(_, id)| id == "sprite.z_up")
+        .expect("a bring forward button");
+    assert!(
+        app.world()
+            .get::<bevy::ui::InteractionDisabled>(button)
+            .is_none(),
+        "Shift does not grey the button out"
+    );
+    app.world_mut()
+        .trigger(bevy::ui_widgets::Activate { entity: button });
+    settle(&mut app);
+    assert_eq!(
+        z(&app, shown),
+        shown_before + 1.0,
+        "the card's sprite moves"
+    );
+    let after: Vec<f32> = others.iter().map(|&other| z(&app, other)).collect();
+    assert_eq!(after, before, "the other selected sprites stay");
 }

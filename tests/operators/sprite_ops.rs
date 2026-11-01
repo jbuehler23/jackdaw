@@ -288,7 +288,7 @@ fn the_add_menu_shows_the_2d_group_with_2d_world_entries_unavailable_without_a_2
         [
             ("Sprite", wanted),
             ("Empty 2D", "op:entity.add.empty_2d"),
-            ("Camera", "op:entity.add.camera_2d"),
+            ("2D Camera", "op:entity.add.camera_2d"),
             ("Tilemap", "op:tilemap.create"),
         ]
     );

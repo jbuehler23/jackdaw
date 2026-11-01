@@ -489,7 +489,7 @@ pub(crate) fn spawn_preset_row(
     source: Entity,
     resolution: UVec2,
 ) {
-    let row = spawn_field_row(commands, body, FieldRowProps::new("preset"));
+    let row = spawn_field_row(commands, body, FieldRowProps::new("Preset"));
     let options: Vec<String> = CANVAS_PRESETS
         .iter()
         .map(|preset| format!("{} x {}", preset.x, preset.y))

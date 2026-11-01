@@ -223,9 +223,17 @@ fn update_status_center(
     scene_path: Res<SceneFilePath>,
     scene_dirty: Res<SceneDirtyState>,
     history: Res<jackdaw_commands::CommandHistory>,
+    project: Option<Res<crate::project::ProjectRoot>>,
+    mut had_project: Local<bool>,
     mut text_query: Query<&mut Text, With<StatusBarCenter>>,
 ) {
-    if !scene_path.is_changed() && !scene_dirty.is_changed() && !history.is_changed() {
+    let had = std::mem::replace(&mut *had_project, project.is_some());
+    let project_changed = project.as_ref().is_some_and(Res::is_changed) || had != project.is_some();
+    if !scene_path.is_changed()
+        && !scene_dirty.is_changed()
+        && !history.is_changed()
+        && !project_changed
+    {
         return;
     }
     let Ok(mut text) = text_query.single_mut() else {
@@ -238,7 +246,10 @@ fn update_status_center(
     let path_str = scene_path
         .path
         .as_deref()
-        .map(|p| format!(" | {dirty_marker}{p}"))
+        .map(|p| {
+            let assets = project.as_ref().map(|project| project.assets_dir());
+            format!(" | {dirty_marker}{}", scene_label(p, assets.as_deref()))
+        })
         .unwrap_or_else(|| {
             if dirty {
                 " | *Unsaved".to_string()
@@ -248,6 +259,18 @@ fn update_status_center(
         });
 
     text.0 = format!("Jackdaw v{version}{path_str}");
+}
+
+/// A scene as the footer names it: under the assets folder when it is there,
+/// by its file name when it is not, so the footer stays one line.
+fn scene_label(path: &str, assets: Option<&std::path::Path>) -> String {
+    let path = std::path::Path::new(path);
+    assets
+        .and_then(|assets| path.strip_prefix(assets).ok())
+        .or_else(|| path.file_name().map(std::path::Path::new))
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 /// Marker on the slot naming what the inspector is showing.
@@ -297,6 +320,11 @@ fn update_status_inspected(
 /// Marker for the scene stats text in the hierarchy panel footer.
 #[derive(Component)]
 pub struct SceneStatsText;
+
+/// The slot holding [`StatusBarCenter`], which gives up room before the right
+/// side does.
+#[derive(Component)]
+pub struct StatusBarCenterSlot;
 
 /// The fixed-width clipped box holding [`StatusBarRight`].
 #[derive(Component)]
@@ -659,5 +687,26 @@ fn update_build_bar(
             node.left = Val::Percent(sweep * (100.0 - BUILD_BAR_SEGMENT));
             node.width = Val::Percent(BUILD_BAR_SEGMENT);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::scene_label;
+
+    #[test]
+    fn a_scene_reads_from_the_assets_folder_and_one_outside_by_its_name() {
+        let assets = Path::new("/home/me/game/assets");
+        assert_eq!(
+            scene_label("/home/me/game/assets/levels/one.bsn", Some(assets)),
+            "levels/one.bsn"
+        );
+        assert_eq!(
+            scene_label("/tmp/a/very/long/folder/gizmo01b.bsn", Some(assets)),
+            "gizmo01b.bsn"
+        );
+        assert_eq!(scene_label("/tmp/x/gizmo.bsn", None), "gizmo.bsn");
     }
 }

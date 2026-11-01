@@ -1,23 +1,31 @@
 //! The `Sprite` card: the sprite's own fields, its anchor as a preset with a
-//! custom offset beside it, a row that sizes it from the pixels per unit its
-//! art was drawn at, and how its image is sampled.
+//! custom offset beside it, flip X and Y as one row, a row that sizes it from
+//! the pixels per unit its art was drawn at, its draw order, and how its image
+//! is sampled.
 
 use bevy::{ecs::system::SystemState, prelude::*, sprite::Anchor, ui_widgets::ValueChange};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
-    button::{ButtonClickEvent, ButtonProps, button},
+    button::{
+        ButtonClickEvent, ButtonOperatorCall, ButtonProps, ButtonSize, IconButtonProps, button,
+        icon_button,
+    },
     combobox::{
         ComboBoxChangeEvent, ComboBoxOptionData, ComboBoxSelectedIndex, combobox_with_selected,
     },
     field_row::{FieldRowProps, spawn_field_row},
-    icons::{EditorFont, IconFont},
+    icons::{EditorFont, Icon, IconFont},
     number_input::{NumberInputPrecision, ScrubNumberInput, ScrubNumberInputValue},
 };
 
 use crate::commands::FieldWritten;
 use crate::image_sampling::{ImageSetSamplingOp, ProjectSampling2d, Sampling, sampling_target};
+use crate::operator_tooltip::OperatorTooltip;
 use crate::remote::entity_browser::RemoteEntityProxy;
-use crate::sprite_props::{ANCHOR_PRESETS, SpriteSetAnchorOp, SpriteSetPixelsPerUnitOp};
+use crate::sprite_props::{
+    ANCHOR_PRESETS, SpriteSetAnchorOp, SpriteSetPixelsPerUnitOp, SpriteYSortOp, SpriteZDownOp,
+    SpriteZUpOp,
+};
 
 /// Combo index of the Custom option, after the presets.
 pub const CUSTOM_ANCHOR: usize = ANCHOR_PRESETS.len();
@@ -33,6 +41,21 @@ enum CardRow<'a> {
     SizeFromPpu,
     /// How the sprite's image is sampled.
     Sampling,
+    /// Flip X and flip Y as one pair.
+    Flip,
+    /// Z step buttons and the Y-sort toggle.
+    DrawOrder,
+}
+
+impl<'a> CardRow<'a> {
+    /// The `Sprite` fields the row edits, which get no row of their own.
+    fn fields(&self) -> &[&'a str] {
+        match self {
+            CardRow::Field(name) => std::slice::from_ref(name),
+            CardRow::Flip => &["flip_x", "flip_y"],
+            _ => &[],
+        }
+    }
 }
 
 /// The card's rows top to bottom; `Sprite` fields it does not name follow.
@@ -40,11 +63,11 @@ const ROW_ORDER: [CardRow<'static>; 11] = [
     CardRow::Field("image"),
     CardRow::Sampling,
     CardRow::Anchor,
-    CardRow::Field("flip_x"),
-    CardRow::Field("flip_y"),
+    CardRow::Flip,
     CardRow::Field("custom_size"),
     CardRow::SizeFromPpu,
     CardRow::Field("color"),
+    CardRow::DrawOrder,
     CardRow::Field("rect"),
     CardRow::Field("texture_atlas"),
     CardRow::Field("image_mode"),
@@ -87,6 +110,12 @@ pub struct SpriteSamplingCombo {
     pub image: AssetId<Image>,
 }
 
+/// The Y-sort checkbox of the card showing `source`.
+#[derive(Component)]
+pub struct SpriteYSortToggle {
+    pub source: Entity,
+}
+
 /// The sampling combo's choices, in order, as `image.set_sampling` names them.
 const SAMPLING_CHOICES: [&str; 3] = ["project", "linear", "nearest"];
 
@@ -98,6 +127,7 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(on_ppu_number)
         .add_observer(on_ppu_apply)
         .add_observer(on_sampling_pick)
+        .add_observer(on_y_sort_toggle)
         .add_observer(follow_image_write);
 }
 
@@ -144,6 +174,7 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
         return;
     };
     let anchor = world.get::<Anchor>(source).copied();
+    let y_sorted = world.get::<jackdaw_scene_types::YSort>(source).is_some();
     let icon_font = world
         .get_resource::<IconFont>()
         .map(|font| font.0.clone())
@@ -168,13 +199,12 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
                    value: &dyn PartialReflect,
                    path: &str,
                    type_path: &str| {
-            super::reflect_fields::spawn_field_row(
+            super::reflect_fields::spawn_card_field_row(
                 commands,
                 parent,
                 label,
                 value,
-                0,
-                path.to_string(),
+                path,
                 source,
                 type_path,
                 &names,
@@ -185,7 +215,9 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
         };
         let unlisted = (0..sprite.field_len())
             .filter_map(|index| sprite.name_at(index))
-            .filter(|name| !ROW_ORDER.contains(&CardRow::Field(name)))
+            .filter(|name| {
+                !(ROW_ORDER.iter()).any(|row| row.fields().iter().any(|field| field == name))
+            })
             .map(CardRow::Field);
         let listed = ROW_ORDER.iter().copied();
         for card_row in listed.chain(unlisted) {
@@ -195,7 +227,7 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
                     row(
                         &mut commands,
                         custom,
-                        "offset",
+                        "Offset",
                         &anchor.0,
                         ".0",
                         anchor_type_path(),
@@ -209,10 +241,30 @@ pub(crate) fn fill_sprite_card_body(world: &mut World, source: Entity, body: Ent
                     image: sprite.image.id(),
                 };
                 spawn_sampling_row(&mut commands, body, combo, project, own);
+            } else if card_row == CardRow::Flip {
+                let row = spawn_field_row(&mut commands, body, FieldRowProps::new("Flip"));
+                spaced_controls(&mut commands, row.control);
+                for (caption, value, field) in [
+                    ("X", sprite.flip_x, "flip_x"),
+                    ("Y", sprite.flip_y, "flip_y"),
+                ] {
+                    super::reflect_fields::spawn_bound_checkbox(
+                        &mut commands,
+                        row.control,
+                        Some(caption),
+                        value,
+                        field,
+                        source,
+                        sprite_path,
+                    );
+                }
+            } else if card_row == CardRow::DrawOrder {
+                spawn_draw_order_row(&mut commands, body, source, y_sorted, &icon_font);
             } else if let CardRow::Field(name) = card_row
                 && let Some(value) = sprite.field(name)
             {
-                row(&mut commands, body, name, value, name, sprite_path);
+                let label = super::sentence(name);
+                row(&mut commands, body, &label, value, name, sprite_path);
             }
         }
     }
@@ -228,7 +280,7 @@ fn spawn_anchor_rows(
     anchor: Anchor,
 ) -> Entity {
     let index = anchor_index(anchor);
-    let row = spawn_field_row(commands, body, FieldRowProps::new("anchor"));
+    let row = spawn_field_row(commands, body, FieldRowProps::new("Anchor"));
     let options: Vec<ComboBoxOptionData> = ANCHOR_PRESETS
         .iter()
         .map(|(name, _)| ComboBoxOptionData::new(preset_label(name)))
@@ -334,7 +386,7 @@ fn follow_anchor_write(
 }
 
 fn spawn_ppu_row(commands: &mut Commands, body: Entity, source: Entity, ppu: f64) {
-    let row = spawn_field_row(commands, body, FieldRowProps::new("size from ppu"));
+    let row = spawn_field_row(commands, body, FieldRowProps::new("Size from PPU"));
     let input = commands
         .spawn_scene(bsn! { @ScrubNumberInput })
         .insert((
@@ -419,7 +471,7 @@ fn spawn_sampling_row(
     project: Sampling,
     own: Option<Option<Sampling>>,
 ) {
-    let row = spawn_field_row(commands, body, FieldRowProps::new("sampling"));
+    let row = spawn_field_row(commands, body, FieldRowProps::new("Sampling"));
     if own.is_none() {
         commands
             .entity(row.row)
@@ -496,4 +548,64 @@ fn follow_image_write(
     {
         rebuild.0 = Some(written.entity);
     }
+}
+
+/// Send backward and bring forward, the buttons for the page keys, then the
+/// Y-sort toggle.
+fn spawn_draw_order_row(
+    commands: &mut Commands,
+    body: Entity,
+    source: Entity,
+    y_sorted: bool,
+    icon_font: &Handle<Font>,
+) {
+    let row = spawn_field_row(commands, body, FieldRowProps::new("Draw order"));
+    spaced_controls(commands, row.control);
+    for (icon, op) in [
+        (Icon::SendToBack, SpriteZDownOp::ID),
+        (Icon::BringToFront, SpriteZUpOp::ID),
+    ] {
+        let props = IconButtonProps::new(icon).with_size(ButtonSize::IconSM);
+        commands.spawn((
+            icon_button(props, icon_font),
+            ButtonOperatorCall::new(op).with_param("entity", source),
+            ChildOf(row.control),
+        ));
+    }
+    let toggle =
+        super::reflect_fields::spawn_checkbox(commands, row.control, Some("Y-sort"), y_sorted);
+    commands.entity(toggle).insert((
+        SpriteYSortToggle { source },
+        OperatorTooltip(SpriteYSortOp::ID),
+    ));
+}
+
+/// Sort the card's sprite by y, or stop, through `sprite.y_sort`. The card is
+/// rebuilt when the tag comes or goes, so the box shows what the sprite holds.
+fn on_y_sort_toggle(
+    change: On<ValueChange<bool>>,
+    toggles: Query<&SpriteYSortToggle>,
+    proxies: Query<(), With<RemoteEntityProxy>>,
+    mut commands: Commands,
+) {
+    let Ok(toggle) = toggles.get(change.source) else {
+        return;
+    };
+    if proxies.contains(toggle.source) {
+        return;
+    }
+    commands
+        .operator(SpriteYSortOp::ID)
+        .param("entity", toggle.source)
+        .param("on", change.value)
+        .call();
+}
+
+/// Space a row's controls a group apart, so each checkbox caption reads with
+/// its own box.
+fn spaced_controls(commands: &mut Commands, control: Entity) {
+    commands
+        .entity(control)
+        .entry::<Node>()
+        .and_modify(|mut node| node.column_gap = px(jackdaw_feathers::tokens::SPACING_MD));
 }

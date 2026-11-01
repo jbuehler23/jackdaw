@@ -86,6 +86,9 @@ const SKIP_COMPONENT_PATHS: &[&str] = &[
     // 3D viewport for one a world scene imports. It names a camera entity this
     // session spawned, so a saved copy would point at nothing on reload.
     "bevy_ui::ui_node::UiTargetCamera",
+    // Texture usage flags a camera requires and the renderer sets; nothing
+    // authors them.
+    "bevy_camera::camera::CameraMainTextureUsages",
 ];
 
 /// The quad and material bevy's sprite renderer puts on every `Sprite`. A

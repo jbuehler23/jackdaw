@@ -1304,29 +1304,40 @@ pub(crate) fn nudge_sprites(world: &mut World, direction: Option<Vec2>) -> bool 
             .pixel_size()
     };
     let delta = Vec3::new(direction.x, -direction.y, 0.0) * step;
-    move_selected_sprites(world, "Nudge", |item| {
+    let selected = selected_entities(world);
+    move_sprites(world, &selected, "Nudge", |item| {
         item.start.translation + item.to_parent.transform_vector3(delta)
     });
     true
 }
 
-/// Step the selected sprites of the open 2D world scene `delta` along their
-/// own `Transform` z, as one history entry. The same sprites a nudge takes.
-pub(crate) fn step_sprites_z(world: &mut World, delta: f32) {
-    move_selected_sprites(world, "Step Z", |item| {
+/// Step `only`, or with none the selected sprites, of the open 2D world scene
+/// `delta` along their own `Transform` z, as one history entry. The same
+/// sprites a nudge takes.
+pub(crate) fn step_sprites_z(world: &mut World, delta: f32, only: Option<Entity>) {
+    let targets = only.map_or_else(|| selected_entities(world), |entity| vec![entity]);
+    move_sprites(world, &targets, "Step Z", |item| {
         item.start.translation + Vec3::Z * delta
     });
 }
 
-/// Move the selected sprites a nudge takes to the translation `moved` gives
-/// each, as one history entry under `label`.
-fn move_selected_sprites(world: &mut World, label: &str, moved: impl Fn(&DragItem) -> Vec3) {
-    let selected = world
+fn selected_entities(world: &World) -> Vec<Entity> {
+    world
         .get_resource::<Selection>()
         .map(|selection| selection.entities.clone())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// Move those of `targets` a nudge takes to the translation `moved` gives
+/// each, as one history entry under `label`.
+fn move_sprites(
+    world: &mut World,
+    targets: &[Entity],
+    label: &str,
+    moved: impl Fn(&DragItem) -> Vec3,
+) {
     let mut edits: Vec<Box<dyn EditorCommand>> = Vec::new();
-    for item in movable_items(world, &selected) {
+    for item in movable_items(world, targets) {
         let mut command = SetTransform {
             entity: item.entity,
             old_transform: item.start,

@@ -149,14 +149,6 @@ fn hint_of(tileset: Option<&Tileset>) -> Option<&'static str> {
     }
 }
 
-fn sentence(name: &str) -> String {
-    let words = name.replace('_', " ");
-    let mut chars = words.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().chain(chars).collect()
-    })
-}
-
 /// Fill the `Tilemap` card body for `source`. World-exclusive and deferred by
 /// the caller.
 pub(crate) fn fill_tilemap_card_body(world: &mut World, source: Entity, body: Entity) {
@@ -448,7 +440,7 @@ fn spawn_combo(
 ) {
     let labels = combo.values.iter().map(|value| match combo.param {
         "tileset" => crate::tileset_import::tileset_label(value),
-        _ => sentence(value),
+        _ => super::sentence(value),
     });
     let options: Vec<ComboBoxOptionData> = labels.map(ComboBoxOptionData::new).collect();
     let mut spawned = commands.spawn((
