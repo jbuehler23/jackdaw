@@ -10,7 +10,9 @@ use jackdaw_feathers::icons::Icon;
 use jackdaw_tilemap::TileRef;
 
 use crate::layout::{toolbar_op_button, toolbar_separator};
-use crate::tile_palette::{TilemapBrushFlipXOp, TilemapBrushFlipYOp, TilemapBrushRotateOp};
+use crate::tile_palette::{
+    BRUSH_TURNS, TilemapBrushFlipXOp, TilemapBrushFlipYOp, TilemapBrushRotateOp,
+};
 use crate::tile_select::{
     TilemapSelectOp, TilemapSelectionCopyOp, TilemapSelectionCutOp, TilemapSelectionEraseOp,
     TilemapStampPasteOp,
@@ -56,9 +58,9 @@ const TILE_TOOLS: Items = &[
     Some((TilemapPickerOp::ID, Icon::Pipette)),
     Some((TilemapSelectOp::ID, Icon::SquareDashed)),
     None,
-    Some((TilemapBrushFlipXOp::ID, Icon::FlipHorizontal2)),
-    Some((TilemapBrushFlipYOp::ID, Icon::FlipVertical2)),
-    Some((TilemapBrushRotateOp::ID, Icon::RotateCwSquare)),
+    Some(BRUSH_TURNS[0]),
+    Some(BRUSH_TURNS[1]),
+    Some(BRUSH_TURNS[2]),
     None,
     Some((TilemapSelectionCopyOp::ID, Icon::Copy)),
     Some((TilemapSelectionCutOp::ID, Icon::Scissors)),
@@ -125,11 +127,15 @@ fn tile_button_active(id: &str, mode: &TileEditMode, brush: &TileBrush) -> Optio
         TilemapPickerOp::ID => TileTool::Picker,
         TilemapSelectOp::ID => TileTool::Select,
         _ => {
-            let tile = (brush.source != BrushSource::Stamp).then_some(brush.tile);
+            let [flip_x, flip_y, rotate] = if brush.source == BrushSource::Stamp {
+                [false; 3]
+            } else {
+                turns_lit(brush.tile)
+            };
             return match id {
-                TilemapBrushFlipXOp::ID => Some(tile.is_some_and(TileRef::flip_x)),
-                TilemapBrushFlipYOp::ID => Some(tile.is_some_and(TileRef::flip_y)),
-                TilemapBrushRotateOp::ID => Some(tile.is_some_and(TileRef::transpose)),
+                TilemapBrushFlipXOp::ID => Some(flip_x),
+                TilemapBrushFlipYOp::ID => Some(flip_y),
+                TilemapBrushRotateOp::ID => Some(rotate),
                 _ => None,
             };
         }
@@ -172,5 +178,21 @@ fn sync_2d_toolbar(
         if *variant != target {
             *variant = target;
         }
+    }
+}
+
+/// Which of Flip X, Flip Y and Rotate show as on for a tile's orientation.
+/// A pure flip lights its flip; any quarter or half turn lights Rotate; a
+/// quarter turn that is also mirrored lights Rotate and Flip X.
+fn turns_lit(tile: TileRef) -> [bool; 3] {
+    let (flip_x, flip_y) = (tile.flip_x(), tile.flip_y());
+    if !tile.transpose() {
+        if flip_x == flip_y {
+            [false, false, flip_x]
+        } else {
+            [flip_x, flip_y, false]
+        }
+    } else {
+        [flip_x == flip_y, false, true]
     }
 }

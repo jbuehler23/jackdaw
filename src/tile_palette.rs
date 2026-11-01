@@ -3,8 +3,6 @@
 //! a stamp, flip and rotate of a loaded tile or stamp, and the Bucket's
 //! Contiguous toggle. Every change goes through an operator.
 
-use std::path::Path;
-
 use bevy::feathers::controls::FeathersCheckbox;
 use bevy::feathers::theme::ThemedText;
 use bevy::picking::events::{PointerDragEnd, PointerDragEnter, PointerDragStart};
@@ -14,8 +12,9 @@ use bevy::ui_widgets::{Button, ValueChange};
 use jackdaw_api::DefaultArea;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_api_internal::operator::warn_caller;
+use jackdaw_api_internal::operator::{RefreshOperatorButtons, warn_caller};
 use jackdaw_feathers::button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button};
+use jackdaw_feathers::icons::Icon;
 use jackdaw_feathers::scroll::{scroll_area, scrollbar};
 use jackdaw_feathers::tokens;
 use jackdaw_panels::area::DockWindow;
@@ -23,8 +22,12 @@ use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{TerrainId, TileRef};
 use jackdaw_tileset::{TerrainMatch, Tileset, TilesetTile};
 
+use crate::layout::toolbar_op_button;
 use crate::tile_stamp::{StampBrush, TileStamp, flipped_x, flipped_y, rectangle_tiles, rotated};
-use crate::tile_tools::{BrushSource, TileBrush, TileEditMode, TileTool, has_tile_map};
+use crate::tile_tools::{
+    BrushSource, TileBrush, TileEditMode, TileTool, TilemapEditModeOp, has_tile_map,
+};
+use crate::tilemap_ops::TilemapCreateOp;
 use crate::tilemap_stroke::packed_tile;
 use crate::tileset_dock::{spawn_text, swatch, tile_image};
 
@@ -32,6 +35,17 @@ pub const TILE_PALETTE_WINDOW_ID: &str = "jackdaw.tile_palette";
 
 /// On-screen size of one palette tile.
 const CELL: f32 = 32.0;
+
+/// The brush turn operators and their icons, as the palette header and the
+/// 2D toolbar show them.
+pub(crate) const BRUSH_TURNS: [(&str, Icon); 3] = [
+    (TilemapBrushFlipXOp::ID, Icon::FlipHorizontal2),
+    (TilemapBrushFlipYOp::ID, Icon::FlipVertical2),
+    (TilemapBrushRotateOp::ID, Icon::RotateCwSquare),
+];
+
+/// The smallest a palette tile gets before its sheet scrolls sideways.
+pub const MIN_TILE_PX: f32 = 16.0;
 
 pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
@@ -46,6 +60,10 @@ pub(crate) fn plugin(app: &mut App) {
         ),
     )
     .init_resource::<PaletteDrag>()
+    .init_resource::<MapsChanged>()
+    .add_observer(refresh_on_map_change::<Add<Tilemap>>)
+    .add_observer(refresh_on_map_change::<Remove<Tilemap>>)
+    .add_observer(show_contiguous)
     .add_observer(on_contiguous_change)
     .add_observer(on_tile_drag_start)
     .add_observer(on_tile_drag_enter)
@@ -56,6 +74,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext, context: Entity) {
     ctx.register_window(
         WindowDescriptor::new(TILE_PALETTE_WINDOW_ID)
             .with_name("Tile Palette")
+            .with_icon(Icon::Palette.unicode())
             .with_default_area(DefaultArea::BottomDock)
             .with_priority(60)
             .with_build(|window| {
@@ -86,9 +105,15 @@ struct Shown {
     layer: usize,
     terrain_layer: bool,
     path: String,
+    /// No map is in tile edit mode and the scene has a tilemap to enter.
+    any_map: bool,
     /// The tileset's asset, or why the path names none.
     tileset: Result<AssetId<Tileset>, String>,
 }
+
+/// The row of brush controls above the palette body.
+#[derive(Component)]
+pub struct PaletteHeader;
 
 /// The scrolling body of a palette.
 #[derive(Component)]
@@ -128,7 +153,7 @@ struct PaletteDrag {
     to: Option<(u32, u32)>,
 }
 
-/// The Bucket's Contiguous checkbox.
+/// The Bucket's Contiguous checkbox, shown while the Bucket is the tool.
 #[derive(Component)]
 pub struct ContiguousToggle;
 
@@ -335,17 +360,24 @@ fn build_palette(world: &mut World, parent: Entity) {
 }
 
 /// The layer and tileset a palette shows now.
-fn shown(world: &mut World) -> Shown {
+/// `maps` also looks for a tilemap to offer while none is in tile edit mode.
+fn shown(world: &mut World, maps: bool) -> Shown {
     let mode = *world.resource::<TileEditMode>();
     let layer = (mode.map.and_then(|map| world.get::<Tilemap>(map)))
         .and_then(|map| map.layers.get(mode.layer));
     let path = layer.map(|l| l.tileset.clone()).unwrap_or_default();
     let terrain_layer = layer.is_some_and(|l| l.kind == TilemapLayerKind::Terrain);
+    let any_map = maps
+        && mode.map.is_none()
+        && (world.query_filtered::<(), With<Tilemap>>().iter(world))
+            .next()
+            .is_some();
     Shown {
         map: mode.map,
         layer: mode.layer,
         terrain_layer,
         path,
+        any_map,
         tileset: crate::tile_tools::active_tileset(world),
     }
 }
@@ -353,7 +385,7 @@ fn shown(world: &mut World) -> Shown {
 /// Build every palette again whose layer or tileset changed, or all of them
 /// when `force`, then bring the highlight and the toggle up to date.
 fn refresh(world: &mut World, force: bool) {
-    let now = shown(world);
+    let now = shown(world, true);
     let roots: Vec<Entity> = (world.query::<(Entity, &TilePalette)>().iter(world))
         .filter(|(_, p)| force || p.built.as_ref() != Some(&now))
         .map(|(e, _)| e)
@@ -367,6 +399,50 @@ fn refresh(world: &mut World, force: bool) {
 fn refresh_on_state(palettes: Query<(), With<TilePalette>>, mut commands: Commands) {
     if !palettes.is_empty() {
         commands.queue(|world: &mut World| refresh(world, false));
+    }
+}
+
+/// A tilemap was added or removed and a refresh is queued for it.
+#[derive(Resource, Default)]
+struct MapsChanged(bool);
+
+/// While no map is in tile edit mode, a tilemap coming or going can change
+/// what the empty palette offers; queue one refresh for any number of them.
+fn refresh_on_map_change<E: bevy::ecs::event::EventPattern>(
+    _: On<E>,
+    mode: Res<TileEditMode>,
+    palettes: Query<(), With<TilePalette>>,
+    mut queued: ResMut<MapsChanged>,
+    mut commands: Commands,
+) {
+    if mode.map.is_some() || palettes.is_empty() || queued.0 {
+        return;
+    }
+    queued.0 = true;
+    commands.queue(|world: &mut World| {
+        world.resource_mut::<MapsChanged>().0 = false;
+        refresh(world, false);
+    });
+}
+
+/// Show the Contiguous toggle while the Bucket is the tile tool.
+fn show_contiguous(
+    _: On<RefreshOperatorButtons>,
+    mode: Option<Res<TileEditMode>>,
+    mut toggles: Query<&mut Node, With<ContiguousToggle>>,
+) {
+    let Some(mode) = mode else {
+        return;
+    };
+    let display = if mode.tool == TileTool::Bucket {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut node in &mut toggles {
+        if node.display != display {
+            node.display = display;
+        }
     }
 }
 
@@ -390,7 +466,7 @@ fn refresh_on_tileset_events(
 
 /// Outlines the cells the brush holds and sets the Contiguous toggle.
 fn mark(world: &mut World) {
-    let now = shown(world);
+    let now = shown(world, false);
     let cells: Vec<(Entity, PaletteItem, bool)> = (world
         .query::<(Entity, &PaletteCell, Has<PaletteSelected>)>()
         .iter(world))
@@ -464,24 +540,22 @@ fn mark(world: &mut World) {
 }
 
 fn fill(world: &mut World, root: Entity) {
-    let now = shown(world);
+    let now = shown(world, true);
     world.entity_mut(root).despawn_related::<Children>();
     *world.resource_mut::<PaletteDrag>() = PaletteDrag::default();
     if let Some(mut palette) = world.get_mut::<TilePalette>(root) {
         palette.built = Some(now.clone());
     }
-    let id = if now.map.is_none() {
-        Err((
-            "Select a tilemap and enter tile edit mode to paint.".to_string(),
-            false,
-        ))
-    } else {
-        (now.tileset.clone()).map_err(|err| (format!("The layer's tileset: {err}."), true))
-    };
-    let tileset = id.and_then(|id| {
-        (world.resource::<Assets<Tileset>>().get(id).cloned())
-            .ok_or_else(|| ("The layer's tileset is loading.".to_string(), false))
-    });
+    if now.map.is_none() {
+        spawn_empty(world, root, now.any_map);
+        return;
+    }
+    let tileset = (now.tileset.clone())
+        .map_err(|err| (format!("The layer's tileset: {err}."), true))
+        .and_then(|id| {
+            (world.resource::<Assets<Tileset>>().get(id).cloned())
+                .ok_or_else(|| ("The layer's tileset is loading.".to_string(), false))
+        });
     let tileset = match tileset {
         Ok(tileset) => tileset,
         Err((hint, error)) => {
@@ -491,31 +565,17 @@ fn fill(world: &mut World, root: Entity) {
                 tokens::TEXT_SECONDARY
             };
             let text = spawn_text(world, root, hint, color);
-            world.entity_mut(text).insert(PaletteSection::Empty);
+            world.entity_mut(text).insert((
+                PaletteSection::Empty,
+                Node {
+                    margin: UiRect::all(px(tokens::SPACING_MD)),
+                    ..default()
+                },
+            ));
             return;
         }
     };
-    let header = world
-        .spawn((
-            Node {
-                column_gap: px(tokens::SPACING_MD),
-                align_items: AlignItems::Center,
-                padding: UiRect::all(px(tokens::SPACING_SM)),
-                ..default()
-            },
-            ChildOf(root),
-        ))
-        .id();
-    let name = Path::new(&now.path)
-        .file_name()
-        .map_or(now.path.clone(), |n| n.to_string_lossy().into_owned());
-    spawn_text(world, header, name, tokens::TEXT_PRIMARY);
-    spawn_contiguous(world, header);
-    world.spawn((
-        button(ButtonProps::new("Save Stamp").with_variant(ButtonVariant::Ghost)),
-        ButtonOperatorCall::new(crate::tile_stamp::TilemapStampSaveOp::ID),
-        ChildOf(header),
-    ));
+    spawn_header(world, root, &now.path);
     let row = world
         .spawn((
             Node {
@@ -532,8 +592,9 @@ fn fill(world: &mut World, root: Entity) {
             Node {
                 flex_direction: FlexDirection::Column,
                 flex_grow: 1.0,
-                row_gap: px(tokens::SPACING_MD),
-                padding: UiRect::all(px(tokens::SPACING_SM)),
+                min_width: px(0.0),
+                row_gap: px(tokens::SPACING_LG),
+                padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_SM)),
                 overflow: Overflow::scroll_y(),
                 ..default()
             },
@@ -545,7 +606,12 @@ fn fill(world: &mut World, root: Entity) {
     if now.terrain_layer {
         let terrains = section(world, body, PaletteSection::Terrains, "Terrains");
         for terrain in &tileset.terrains {
-            let cell = spawn_cell(world, terrains, PaletteItem::Terrain(terrain.id));
+            let fixed = Node {
+                width: px(CELL),
+                height: px(CELL),
+                ..default()
+            };
+            let cell = spawn_cell(world, terrains, PaletteItem::Terrain(terrain.id), fixed);
             let call = ButtonOperatorCall::new(TilemapPalettePickOp::ID)
                 .with_param("terrain", terrain.id.to_string());
             world.entity_mut(cell).insert(call);
@@ -565,21 +631,39 @@ fn fill(world: &mut World, root: Entity) {
         ..default()
     });
     for (sheet, source) in (0..).zip(&tileset.sheets) {
-        let grid = world
+        let columns = source.columns.max(1);
+        let strip = world
             .spawn((
                 Node {
-                    display: Display::Grid,
-                    grid_template_columns: RepeatedGridTrack::px(
-                        u16::try_from(source.columns.max(1)).unwrap_or(u16::MAX),
-                        CELL,
-                    ),
+                    overflow: Overflow::scroll_x(),
                     ..default()
                 },
                 ChildOf(tiles),
             ))
             .id();
+        let grid = world
+            .spawn((
+                Node {
+                    display: Display::Grid,
+                    flex_grow: 1.0,
+                    min_width: px(columns as f32 * MIN_TILE_PX),
+                    max_width: px(columns as f32 * CELL),
+                    grid_template_columns: RepeatedGridTrack::minmax(
+                        u16::try_from(columns).unwrap_or(u16::MAX),
+                        MinTrackSizingFunction::Px(MIN_TILE_PX),
+                        MaxTrackSizingFunction::Px(CELL),
+                    ),
+                    ..default()
+                },
+                ChildOf(strip),
+            ))
+            .id();
         for tile in 0..source.columns * source.rows {
-            let cell = spawn_cell(world, grid, PaletteItem::Tile(sheet, tile));
+            let fit = Node {
+                aspect_ratio: Some(1.0),
+                ..default()
+            };
+            let cell = spawn_cell(world, grid, PaletteItem::Tile(sheet, tile), fit);
             let call = ButtonOperatorCall::new(TilemapPalettePickOp::ID)
                 .with_param("tile", format!("{sheet}:{tile}"));
             world.entity_mut(cell).insert(call);
@@ -603,6 +687,109 @@ fn fill(world: &mut World, root: Entity) {
             ChildOf(stamps),
         ));
     }
+}
+
+/// The header: the tileset's name, the brush turns lit by the brush, Save
+/// stamp, and the Bucket's Contiguous toggle.
+fn spawn_header(world: &mut World, root: Entity, path: &str) {
+    let header = world
+        .spawn((
+            PaletteHeader,
+            Node {
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                column_gap: px(tokens::SPACING_LG),
+                row_gap: px(tokens::SPACING_SM),
+                padding: UiRect::axes(px(tokens::SPACING_MD), px(tokens::SPACING_SM)),
+                border: UiRect::bottom(px(1.0)),
+                ..default()
+            },
+            BorderColor::all(tokens::BORDER_SUBTLE),
+            ChildOf(root),
+        ))
+        .id();
+    let name = spawn_text(
+        world,
+        header,
+        crate::tileset_import::tileset_label(path),
+        tokens::TEXT_PRIMARY,
+    );
+    world.entity_mut(name).insert(TextFont {
+        font_size: tokens::TEXT_SIZE,
+        ..default()
+    });
+    let turns = spawn_group(world, header, tokens::TOOLBAR_GAP);
+    for (id, icon) in BRUSH_TURNS {
+        match world.spawn_scene(toolbar_op_button(id, icon)) {
+            Ok(mut turn) => {
+                turn.insert(ChildOf(turns));
+            }
+            Err(err) => warn!("tile palette: {err}"),
+        }
+    }
+    let actions = spawn_group(world, header, tokens::SPACING_LG);
+    world.spawn((
+        button(
+            ButtonProps::new("Save stamp")
+                .with_left_icon(Icon::BookmarkPlus)
+                .with_variant(ButtonVariant::Ghost),
+        ),
+        ButtonOperatorCall::new(crate::tile_stamp::TilemapStampSaveOp::ID),
+        ChildOf(actions),
+    ));
+    spawn_contiguous(world, actions);
+}
+
+fn spawn_group(world: &mut World, parent: Entity, gap: f32) -> Entity {
+    world
+        .spawn((
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: px(gap),
+                ..default()
+            },
+            ChildOf(parent),
+        ))
+        .id()
+}
+
+/// What to do while no map is in tile edit mode: edit the selected tilemap's
+/// tiles, or add a tilemap when the scene has none.
+fn spawn_empty(world: &mut World, root: Entity, any_map: bool) {
+    let column = world
+        .spawn((
+            PaletteSection::Empty,
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                row_gap: px(tokens::SPACING_SM),
+                padding: UiRect::all(px(tokens::SPACING_MD)),
+                ..default()
+            },
+            ChildOf(root),
+        ))
+        .id();
+    let (hint, label, icon, id) = if any_map {
+        (
+            "Select a tilemap, then edit its tiles to paint.",
+            "Edit tiles",
+            Icon::Grid2x2,
+            TilemapEditModeOp::ID,
+        )
+    } else {
+        (
+            "The scene has no tilemap to paint yet.",
+            "Add tilemap",
+            Icon::Plus,
+            TilemapCreateOp::ID,
+        )
+    };
+    spawn_text(world, column, hint, tokens::TEXT_SECONDARY);
+    world.spawn((
+        button(ButtonProps::new(label).with_left_icon(icon)),
+        ButtonOperatorCall::new(id),
+        ChildOf(column),
+    ));
 }
 
 /// A titled section of the palette body, and the row its cells wrap in.
@@ -632,14 +819,13 @@ fn section(world: &mut World, body: Entity, kind: PaletteSection, title: &str) -
         .id()
 }
 
-fn spawn_cell(world: &mut World, parent: Entity, item: PaletteItem) -> Entity {
+/// A palette cell sized by `size`, with the selection outline every cell shares.
+fn spawn_cell(world: &mut World, parent: Entity, item: PaletteItem, size: Node) -> Entity {
     world
         .spawn((
             Node {
-                width: px(CELL),
-                height: px(CELL),
                 border: UiRect::all(px(2.0)),
-                ..default()
+                ..size
             },
             BorderColor::all(Color::NONE),
             Button,
