@@ -341,6 +341,21 @@ pub struct EntityArgs {
     pub name: Option<String>,
 }
 
+/// Arguments for `brush_topology`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BrushTopologyArgs {
+    /// Brush entity id.
+    #[serde(default)]
+    pub entity: Option<u64>,
+    /// The brush's `Name`, when it has a unique one.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Arrays to return, from positions, polygons, edges, normals, colors.
+    /// Defaults to positions and polygons.
+    #[serde(default)]
+    pub fields: Option<Vec<String>>,
+}
+
 /// Arguments for `apply_bsn`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ApplyBsnArgs {
@@ -682,6 +697,26 @@ impl JackdawMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.brp_text("jackdaw/check", json!({ "assertions": args.assertions }))
             .await
+    }
+
+    /// A brush's element arrays, for picking indices.
+    #[tool(
+        description = "A brush's faces, edges and vertices as compact brush-local arrays: \
+                       `positions` per vertex, `polygons` as vertex rings (face index = \
+                       position), `edges` as vertex pairs (edge index = position), `normals` \
+                       per face, `colors` when painted. `revision` changes when the elements \
+                       are renumbered. Prefer selecting by rule with the \
+                       `brush.select_elements` operator's `where` over reading indices."
+    )]
+    pub async fn brush_topology(
+        &self,
+        Parameters(args): Parameters<BrushTopologyArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.brp_text(
+            "jackdaw/brush_topology",
+            compact(json!({ "entity": args.entity, "name": args.name, "fields": args.fields })),
+        )
+        .await
     }
 
     /// One node as BSN text.

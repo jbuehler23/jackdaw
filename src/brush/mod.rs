@@ -605,6 +605,11 @@ impl Plugin for BrushPlugin {
             )
             .add_systems(
                 Update,
+                topology_ops::select_elements::flag_menu_on_element_editing
+                    .run_if(in_state(crate::AppState::Editor)),
+            )
+            .add_systems(
+                Update,
                 sync_changed_modifier_stacks_to_ast.run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(

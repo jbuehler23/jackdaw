@@ -3,7 +3,7 @@ name = "jackdaw_select"
 version.workspace = true
 rust-version.workspace = true
 edition = "2024"
-description = "Engine-agnostic half-edge selection traversal for the jackdaw editor"
+description = "Engine-agnostic half-edge selection traversal and element addressing for the jackdaw editor"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
