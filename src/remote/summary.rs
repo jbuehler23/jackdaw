@@ -571,7 +571,7 @@ fn material(world: &World, entity: Entity) -> Value {
     }
 }
 
-fn round(value: f32) -> Value {
+pub(super) fn round(value: f32) -> Value {
     let rounded = (f64::from(value) * 1000.0).round() / 1000.0;
     json!(if rounded == 0.0 { 0.0 } else { rounded })
 }
@@ -847,31 +847,15 @@ fn watertight(world: &mut World, args: &Value) -> Result<Value, BrpError> {
             entity.to_bits()
         )));
     }
-    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
-    for (face, polygon) in topology.polygons.iter().enumerate() {
-        let start = polygon.loop_start as usize;
-        let ring = topology
-            .loops
-            .get(start..start + polygon.loop_total as usize)
-            .filter(|ring| !ring.is_empty());
-        let Some(ring) = ring else {
+    let open = match topology.open_edges() {
+        Ok(open) => open,
+        Err(face) => {
             return Ok(unmeasured(format!(
                 "brush {} face {face} names corners outside its loops",
                 entity.to_bits()
             )));
-        };
-        for (index, corner) in ring.iter().enumerate() {
-            let next = ring[(index + 1) % ring.len()].vert;
-            let edge = (corner.vert.min(next), corner.vert.max(next));
-            *uses.entry(edge).or_default() += 1;
         }
-    }
-    let mut open: Vec<(u32, u32)> = uses
-        .into_iter()
-        .filter(|(_, count)| *count != 2)
-        .map(|(edge, _)| edge)
-        .collect();
-    open.sort_unstable();
+    };
     let global = unsorted_global(world, entity).unwrap_or_default();
     let position = |index: u32| {
         topology
