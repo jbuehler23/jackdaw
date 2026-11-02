@@ -194,8 +194,8 @@ fn each_path_outside_a_batch_pushes_what_it_always_has() {
     menu(&mut app, "entity.add.cube", true);
     assert_eq!(
         depth(&app),
-        before + 2,
-        "a menu dispatch of an operator that pushes its own command, beside its snapshot"
+        before + 1,
+        "a menu dispatch of an operator that pushes its own command"
     );
 
     let before = depth(&app);

@@ -839,6 +839,17 @@ pub(crate) fn spawn_template_under(
     template: EntityTemplate,
     parent: Option<Entity>,
 ) -> Entity {
+    spawn_shaped_under(world, template, parent, |_| {})
+}
+
+/// `spawn_template_under`, with `shape` editing the new entity before it is
+/// parented and written to the document.
+pub(crate) fn spawn_shaped_under(
+    world: &mut World,
+    template: EntityTemplate,
+    parent: Option<Entity>,
+    shape: impl FnOnce(&mut EntityWorldMut),
+) -> Entity {
     let parent = parent.map(|parent| crate::scene_nodes::live_entity(world, parent));
     let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
     let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
@@ -846,6 +857,7 @@ pub(crate) fn spawn_template_under(
     };
     let entity = create_entity(&mut commands, template, &mut selection);
     system_state.apply(world);
+    shape(&mut world.entity_mut(entity));
     if let Some(parent) = parent {
         world.entity_mut(entity).insert(ChildOf(parent));
     }
@@ -2664,23 +2676,74 @@ pub(crate) fn entity_unhide_all(
 
 // -- Add menu ----------------------------------------------------
 
-#[operator(id = "entity.add.cube", label = "Cube")]
-pub(crate) fn entity_add_cube(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Cube);
-    });
-    OperatorResult::Finished
+#[operator(
+    id = "entity.add.cube",
+    label = "Cube",
+    description = "Add a cube brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(Vec3, doc = "Edge lengths [x, y, z]. Defaults to 1 on each axis."),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Cube\"."),
+    )
+)]
+pub(crate) fn entity_add_cube(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Cube)
 }
 
-#[operator(id = "entity.add.sphere", label = "Sphere")]
+#[operator(
+    id = "entity.add.sphere",
+    label = "Sphere",
+    description = "Add a sphere brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Diameters [x, y, z] of the sphere its vertices lie on. Defaults to 1."
+        ),
+        kind(
+            String,
+            doc = "uv for rings and segments, ico for a subdivided 20-face sphere. Defaults to uv when segments or rings are given, else ico."
+        ),
+        segments(
+            i64,
+            doc = "Sides around the axis of a uv sphere, 3 to 256. Defaults to 8."
+        ),
+        rings(
+            i64,
+            doc = "Bands from pole to pole of a uv sphere, 2 to 128. Defaults to half the segments."
+        ),
+        subdivisions(
+            i64,
+            doc = "Times an ico sphere's triangles split in four, 0 to 4. Defaults to 0, 20 faces."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Sphere\"."),
+    )
+)]
 pub(crate) fn entity_add_sphere(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Sphere);
-    });
-    OperatorResult::Finished
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Sphere)
 }
 
 #[operator(id = "entity.add.point_light", label = "Point Light")]
@@ -2803,56 +2866,161 @@ pub(crate) fn entity_add_empty_2d(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.plane", label = "Plane")]
+#[operator(
+    id = "entity.add.plane",
+    label = "Plane",
+    description = "Add a plane brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Footprint [x, y, z]; y is ignored, the slab stays thin. Defaults to 1 by 1."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Plane\"."),
+    )
+)]
 pub(crate) fn entity_add_plane(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Plane);
-    });
-    OperatorResult::Finished
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Plane)
 }
 
-#[operator(id = "entity.add.cylinder", label = "Cylinder")]
+#[operator(
+    id = "entity.add.cylinder",
+    label = "Cylinder",
+    description = "Add a cylinder brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Bounding box [x, y, z]: x and z are the diameters, y the height. Defaults to 1."
+        ),
+        segments(i64, doc = "Sides around the axis, 3 to 256. Defaults to 16."),
+        radius_top(
+            f64,
+            doc = "Top radius along x, z in proportion; 0 is a cone. Defaults to the base radius."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Cylinder\"."),
+    )
+)]
 pub(crate) fn entity_add_cylinder(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Cylinder);
-    });
-    OperatorResult::Finished
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Cylinder)
 }
 
-#[operator(id = "entity.add.wedge", label = "Wedge")]
+#[operator(
+    id = "entity.add.wedge",
+    label = "Wedge",
+    description = "Add a wedge brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Bounding box [x, y, z] of the ramp. Defaults to 1 on each axis."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Wedge\"."),
+    )
+)]
 pub(crate) fn entity_add_wedge(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Wedge);
-    });
-    OperatorResult::Finished
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Wedge)
 }
 
-#[operator(id = "entity.add.cone", label = "Cone")]
-pub(crate) fn entity_add_cone(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Cone);
-    });
-    OperatorResult::Finished
+#[operator(
+    id = "entity.add.cone",
+    label = "Cone",
+    description = "Add a cone brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Bounding box [x, y, z]: x and z are the base diameters, y the height. Defaults to 1."
+        ),
+        segments(i64, doc = "Sides around the base, 3 to 256. Defaults to 16."),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Cone\"."),
+    )
+)]
+pub(crate) fn entity_add_cone(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Cone)
 }
 
-#[operator(id = "entity.add.pyramid", label = "Pyramid")]
+#[operator(
+    id = "entity.add.pyramid",
+    label = "Pyramid",
+    description = "Add a pyramid brush, optionally sized, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Bounding box [x, y, z]: x and z are the base, y the height. Defaults to 1."
+        ),
+        sides(
+            i64,
+            doc = "Sides of the base, 3 to 256, stretched to fill the size. Defaults to 4."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Pyramid\"."),
+    )
+)]
 pub(crate) fn entity_add_pyramid(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Pyramid);
-    });
-    OperatorResult::Finished
+    crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Pyramid)
 }
 
 #[operator(id = "entity.add.animation_player", label = "Animation Player")]

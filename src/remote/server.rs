@@ -16,9 +16,9 @@ use bevy::remote::{BrpError, BrpResult, RemotePlugin, error_codes, http::RemoteH
 use bevy::tasks::{IoTaskPool, Task, futures_lite::future};
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
 use jackdaw_api_internal::operator::{
-    CallOperatorError, CallOperatorSettings, ExecutionContext, OperatorParameters, OperatorReports,
-    OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec, with_batch_snapshot,
-    with_history_span,
+    CallOperatorError, CallOperatorSettings, ExecutionContext, OperatorOutcome, OperatorParameters,
+    OperatorReports, OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec,
+    with_batch_snapshot, with_history_span,
 };
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_env::editor_endpoint::{
@@ -706,6 +706,9 @@ struct CallOutcome {
     /// refusal.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     reports: Vec<String>,
+    /// `changed`, `unchanged` or `invalid`, from an operator that says which.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<&'static str>,
 }
 
 /// Type a `{id, params}` object into a call the dispatcher can take.
@@ -795,6 +798,10 @@ fn dispatch(world: &mut World, call: PreparedCall, history: bool) -> Result<Call
             .map(Entity::to_bits)
             .collect(),
         reports: std::mem::take(&mut world.get_resource_or_init::<OperatorReports>().0),
+        outcome: world
+            .get_resource_or_init::<OperatorOutcome>()
+            .take()
+            .map(jackdaw_api_internal::operator::Outcome::as_str),
     })
 }
 

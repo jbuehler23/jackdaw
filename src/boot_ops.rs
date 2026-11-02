@@ -289,7 +289,14 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("camera.pixel_canvas", "entity"),
     ("clip.track.enable", "track"),
     ("clip.track.interpolation", "track"),
+    ("entity.add.cone", "parent"),
+    ("entity.add.cube", "parent"),
+    ("entity.add.cylinder", "parent"),
     ("entity.add.group", "parent"),
+    ("entity.add.plane", "parent"),
+    ("entity.add.pyramid", "parent"),
+    ("entity.add.sphere", "parent"),
+    ("entity.add.wedge", "parent"),
     ("entity.delete", "entity"),
     ("entity.snap_to_ground", "entity"),
     ("prefab.spawn_instance", "parent"),
@@ -486,6 +493,9 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
 
     let mut outcomes = Vec::with_capacity(entity_params.len());
     for param in entity_params {
+        // A node the new entity goes under is not what the call acts on, so
+        // naming it leaves the selection alone.
+        let selects = sole_target && !OPTIONAL_ENTITY_PARAMS.contains(&(op.id.as_str(), param));
         let at = op.params.iter().position(|(key, _)| key == param);
         let wanted = match at.map(|index| &op.params[index].1) {
             Some(PropertyValue::Entity(_)) => {
@@ -499,7 +509,7 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
                 let id = *id;
                 let outcome = match entity_with_id(world, id) {
                     Some(entity) => {
-                        if sole_target {
+                        if selects {
                             crate::selection::select_only(world, entity);
                         }
                         op.params[at.expect("the value came from this index")].1 =
@@ -530,7 +540,7 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
                 Some(entity) => {
                     // Selecting the named entity satisfies the operator's own
                     // availability gate, as a click would.
-                    if sole_target {
+                    if selects {
                         crate::selection::select_only(world, entity);
                     }
                     EntityParam::Named {

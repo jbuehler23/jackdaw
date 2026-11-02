@@ -203,6 +203,41 @@ fn a_call_adds_an_entity_that_the_tree_and_undo_both_see() {
     );
 }
 
+/// A parametric add answers with what it made: the outcome and the new id,
+/// which then names the node. A refused one answers `invalid` and adds nothing.
+#[test]
+fn a_parametric_add_reports_its_outcome_and_the_id_it_created() {
+    let mut app = editor_with_a_scene();
+    let outcome = call(
+        &mut app,
+        call_operator_handler,
+        json!({
+            "id": "entity.add.cylinder",
+            "params": { "size": [2.0, 1.0, 2.0], "segments": 3, "name": "Post" },
+        }),
+    );
+    assert_eq!(outcome["result"], json!("finished"), "{outcome}");
+    assert_eq!(outcome["outcome"], json!("changed"), "{outcome}");
+    let ids = outcome["entities"].as_array().expect("entities");
+    assert_eq!(ids.len(), 1, "{outcome}");
+    app.update();
+    let post = call(&mut app, entity_handler, json!({ "entity": ids[0] }));
+    assert!(
+        post["bsn"]
+            .as_str()
+            .is_some_and(|text| text.contains("Post")),
+        "the created id names the post: {post}"
+    );
+
+    let refused = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.add.cylinder", "params": { "segments": 2 } }),
+    );
+    assert_eq!(refused["outcome"], json!("invalid"), "{refused}");
+    assert_eq!(refused["entities"], json!([]), "{refused}");
+}
+
 /// A batch is one action, so it is one undo entry: without the shared history
 /// span a caller that placed twelve props would need twelve Ctrl-Zs.
 #[test]

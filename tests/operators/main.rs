@@ -21,6 +21,7 @@ mod operator_undo;
 mod param_declarations;
 mod pixel_canvas_ops;
 mod prefab_ops;
+mod primitive_ops;
 mod remote_coverage;
 mod scatter_ops;
 mod scene_op_ids;

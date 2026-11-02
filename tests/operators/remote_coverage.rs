@@ -344,6 +344,29 @@ fn the_parametric_authoring_operators_are_registered() {
 
     for (id, wanted) in [
         ("entity.add.group", &["name", "parent"][..]),
+        (
+            "entity.add.cube",
+            &["size", "pos", "rot", "material", "parent", "name"][..],
+        ),
+        (
+            "entity.add.cylinder",
+            &[
+                "size",
+                "segments",
+                "radius_top",
+                "pos",
+                "rot",
+                "material",
+                "parent",
+                "name",
+            ][..],
+        ),
+        (
+            "entity.add.sphere",
+            &["size", "kind", "segments", "rings", "subdivisions", "name"][..],
+        ),
+        ("entity.add.pyramid", &["size", "sides", "name"][..]),
+        ("entity.add.plane", &["size", "name"][..]),
         ("entity.set_transform", &["entity", "x", "yaw", "sx"][..]),
         (
             "component.set",
