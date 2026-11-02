@@ -17,7 +17,7 @@ use jackdaw_feathers::tooltip::Tooltip;
 
 #[derive(Reflect, Clone, Default, PartialEq, Debug)]
 #[reflect(Default)]
-struct LootRoll {
+struct CardLootRoll {
     item: String,
     weight: u32,
 }
@@ -26,7 +26,7 @@ struct LootRoll {
 #[reflect(Default)]
 struct MobDef {
     health: u32,
-    loot: Vec<LootRoll>,
+    loot: Vec<CardLootRoll>,
 }
 
 /// An editor showing the inspector, with a mob definition open in it.
@@ -36,7 +36,7 @@ fn app_with_open_definition() -> (App, tempfile::TempDir) {
     app.init_asset::<MobDef>();
     app.register_asset_reflect::<MobDef>();
     app.register_type::<MobDef>();
-    app.register_type::<LootRoll>();
+    app.register_type::<CardLootRoll>();
     app.world_mut()
         .insert_resource(jackdaw::project::ProjectRoot {
             root: tmp.path().to_path_buf(),
@@ -278,7 +278,7 @@ fn a_long_list_on_the_card_shows_a_bounded_number_of_rows() {
         .resource_mut::<Assets<MobDef>>()
         .get_mut(&handle)
         .expect("the definition is in its store")
-        .loot = vec![LootRoll::default(); 200];
+        .loot = vec![CardLootRoll::default(); 200];
 
     let add = add_button(&mut app);
     app.world_mut().trigger(ButtonClickEvent { entity: add });

@@ -1,6 +1,6 @@
 //! The 2D view operators on a 2D world scene: frame, pan and pixel-perfect.
 
-use crate::sprite_gizmo::{add_panel, settle, sprite, world_app_sized};
+use crate::stage::sprite_gizmo::{add_panel, settle, sprite, world_app_sized};
 use crate::util;
 
 use crate::util::OperatorResultExt as _;

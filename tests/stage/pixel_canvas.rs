@@ -2,10 +2,10 @@
 //! never expands it: only the running game draws through the canvas. The 2D
 //! view outlines the frame it shows, behind a toggle.
 
-use crate::sprite_gizmo::{settle, world_app};
+use crate::stage::sprite_gizmo::{settle, world_app};
+use crate::stage::world_guides::mixed_document;
 use crate::util;
 use crate::util::OperatorResultExt as _;
-use crate::world_guides::mixed_document;
 
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;

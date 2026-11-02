@@ -17,11 +17,11 @@ use jackdaw::{
 use jackdaw_api::prelude::*;
 use jackdaw_scene_types::{CanvasGuides, Scene2dRoot};
 
-use crate::sprite_gizmo::{
+use crate::stage::sprite_gizmo::{
     Scene, add_panel, drag, history_len, near, pointer, run, select, settle, transform, undo,
     world_app, world_app_sized,
 };
-use crate::sprite_snap::{ghost, handle, highlights, snap_only};
+use crate::stage::sprite_snap::{ghost, handle, highlights, snap_only};
 use crate::util::{self, OperatorResultExt as _};
 
 /// World y inside the top ruler's gutter under the test view: the area's top

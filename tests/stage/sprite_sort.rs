@@ -2,7 +2,7 @@
 //! `sprite.y_sort` tags sprites that sort by world y without that sort ever
 //! reaching the authored z.
 
-use crate::sprite_gizmo::{
+use crate::stage::sprite_gizmo::{
     drag, handle, history_len, near, run, select, settle, sprite, transform, undo, world_app,
 };
 use crate::util;

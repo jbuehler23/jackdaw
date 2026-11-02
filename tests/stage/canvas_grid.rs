@@ -2,9 +2,9 @@
 //! own render layer, shown while it shows a 2D world, spaced by its snap grid
 //! and switched with the editor's one grid overlay.
 
-use crate::sprite_gizmo::{settle, world_app};
+use crate::stage::sprite_gizmo::{settle, world_app};
+use crate::stage::world_guides::mixed_document;
 use crate::util::OperatorResultExt as _;
-use crate::world_guides::mixed_document;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::dev_tools::infinite_grid::{InfiniteGrid, InfiniteGridSettings};

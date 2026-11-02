@@ -2,9 +2,9 @@
 //! without changing the tileset, and each row shows, dismisses, lays out or
 //! adds its suggestion only when pressed.
 
-use crate::tileset_dock::{control, opened, press, settle, texts, view};
-use crate::tileset_edit_ops::{call, entries, on_disk};
-use crate::tileset_ops::{SHEET, import, project_app, warnings};
+use crate::operators::tileset_dock::{control, opened, press, settle, texts, view};
+use crate::operators::tileset_edit_ops::{call, entries, on_disk};
+use crate::operators::tileset_ops::{SHEET, import, project_app, warnings};
 
 use bevy::prelude::*;
 use jackdaw::tileset_dock::{BitsOverlay, DockAction, DockControl, TilesetDockViews};

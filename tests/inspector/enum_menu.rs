@@ -124,7 +124,10 @@ fn setting_a_variant_that_rebuilds_the_card_leaves_no_menu_at_the_window_root() 
         .world_mut()
         .operator("component.set")
         .param("entity", entity)
-        .param("type_path", "inspector::enum_menu::Shape".to_string())
+        .param(
+            "type_path",
+            "editor::inspector::enum_menu::Shape".to_string(),
+        )
         .param("field", String::new())
         .param("value", "\"Hull\"".to_string())
         .call()

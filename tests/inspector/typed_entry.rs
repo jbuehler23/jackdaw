@@ -216,7 +216,7 @@ struct Sign {
     wording: String,
 }
 
-const SIGN: &str = "inspector::typed_entry::Sign";
+const SIGN: &str = "editor::inspector::typed_entry::Sign";
 
 fn app_with_a_sign() -> (App, Entity) {
     let mut app = util::editor_test_app();

@@ -1,9 +1,11 @@
 //! The layout popover: a block dragged on the sheet offers the layouts that
 //! fit it, previews their bits and applies one as a single edit.
 
-use crate::tileset_dock::{control, handmade, input, opened, press, screen_rect, settle, texts};
-use crate::tileset_edit_ops::{call, entries, on_disk, peers_of, run};
-use crate::tileset_ops::warnings;
+use crate::operators::tileset_dock::{
+    control, handmade, input, opened, press, screen_rect, settle, texts,
+};
+use crate::operators::tileset_edit_ops::{call, entries, on_disk, peers_of, run};
+use crate::operators::tileset_ops::warnings;
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -447,8 +449,11 @@ fn shuffled_cells() -> Vec<u32> {
 /// mix of both on the `noisy` cells. Dirt and grass are terrains shown by
 /// their plain tiles.
 fn blob_project(cells: &[u32], noisy: &[u32]) -> (App, tempfile::TempDir) {
-    let (mut app, dir) = crate::tileset_ops::project_app();
-    let file = dir.path().join("assets").join(crate::tileset_ops::SHEET);
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    let file = dir
+        .path()
+        .join("assets")
+        .join(crate::operators::tileset_ops::SHEET);
     let mut sheet = image::open(&file).expect("decodes").to_rgba8();
     let mut tiles: Vec<(u32, Option<[u8; 9]>)> = (cells.iter().copied())
         .zip(BLOB.0.tiles(2, 1).into_iter().map(|t| Some(t.peers)))
@@ -475,7 +480,10 @@ fn blob_project(cells: &[u32], noisy: &[u32]) -> (App, tempfile::TempDir) {
         }
     }
     sheet.save(&file).expect("writes");
-    crate::tileset_ops::import(&mut app, &[("paths", crate::tileset_ops::SHEET)]);
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[("paths", crate::operators::tileset_ops::SHEET)],
+    );
     let columns = on_disk(&dir).sheets[0].columns;
     for (name, tile) in [("dirt", 6 * columns), ("grass", 6 * columns + 1)] {
         let icon = format!("0:{tile}");

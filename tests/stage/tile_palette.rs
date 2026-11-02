@@ -2,8 +2,8 @@
 //! active layer's tileset, picked through operators, flipped and rotated, and
 //! the Bucket's Contiguous toggle.
 
-use crate::tile_tools::{click, enter, entries, run, stored, stroke};
-use crate::tilemap_render::{
+use crate::stage::tile_tools::{click, enter, entries, run, stored, stroke};
+use crate::stage::tilemap_render::{
     grass_patch, ground_terrain, layer, project_app, settle, spawn_map, tile_layer,
 };
 
@@ -606,7 +606,7 @@ fn a_terrain_with_an_icon_shows_that_tile() {
         &mut app,
         "tileset.terrain.add",
         &[
-            ("path", text(crate::tilemap_render::TILESET)),
+            ("path", text(crate::stage::tilemap_render::TILESET)),
             ("name", text("marsh")),
             ("icon", text("0:5")),
         ],

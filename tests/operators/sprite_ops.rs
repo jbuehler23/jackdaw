@@ -900,14 +900,14 @@ fn set_anchor_in_live_view_goes_to_the_running_game() {
 
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
-struct Vitals {
+struct SpriteVitals {
     ratio: f32,
 }
 
 /// Move `sprites` under a new UI scene root whose bindings drive `write` on
 /// each, and start the preview.
 fn preview_drives(app: &mut App, sprites: &[Entity], write: &str) {
-    app.register_type::<Vitals>();
+    app.register_type::<SpriteVitals>();
     let root = app
         .world_mut()
         .spawn((Name::new("UiRoot"), UiSceneRoot::default(), Node::default()))
@@ -917,7 +917,7 @@ fn preview_drives(app: &mut App, sprites: &[Entity], write: &str) {
         app.world_mut().entity_mut(sprite).insert((
             ChildOf(root),
             jackdaw_bind::Bindings(vec![jackdaw_bind::Binding::Field {
-                read: vec![jackdaw_bind::BindPath::new("Vitals.ratio")],
+                read: vec![jackdaw_bind::BindPath::new("SpriteVitals.ratio")],
                 via: None,
                 write: jackdaw_bind::BindPath::new(write),
                 as_percent: false,

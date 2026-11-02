@@ -1,11 +1,11 @@
 //! Terrain bits on the sheet: the overlay, painting them by dragging across
 //! tiles, the coverage of each set and its missing shapes.
 
-use crate::tileset_dock::{
+use crate::operators::tileset_dock::{
     control, handmade, input, opened, press, screen_rect, settle, texts, view,
 };
-use crate::tileset_edit_ops::{call, entries, on_disk, peers_of, refused, run};
-use crate::tileset_ops::warnings;
+use crate::operators::tileset_edit_ops::{call, entries, on_disk, peers_of, refused, run};
+use crate::operators::tileset_ops::warnings;
 use crate::util::OperatorResultExt as _;
 
 use std::collections::BTreeSet;
@@ -416,8 +416,11 @@ fn a_second_button_mid_stroke_is_ignored() {
 
 #[test]
 fn an_erase_with_no_sets_says_nothing_and_changes_nothing() {
-    let (mut app, dir) = crate::tileset_ops::project_app();
-    crate::tileset_ops::import(&mut app, &[("paths", crate::tileset_ops::SHEET)]);
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[("paths", crate::operators::tileset_ops::SHEET)],
+    );
     call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
     settle(&mut app);
     let root = painting(&mut app);
@@ -495,7 +498,7 @@ fn tileset_operators_without_a_path_edit_the_focused_tab() {
     call.call().expect("dispatches").assert_finished();
     settle(&mut app);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
-    let pairs = crate::tileset_edit_ops::pairs(&on_disk(&dir));
+    let pairs = crate::operators::tileset_edit_ops::pairs(&on_disk(&dir));
     assert!(pairs.contains(&(SAND, GRASS)), "{pairs:?}");
 }
 

@@ -2,12 +2,14 @@
 //! Brush placing it as one block per cell step, its preview, flips and turns,
 //! and saving it with the tileset.
 
-use crate::tile_palette::{
+use crate::stage::tile_palette::{
     available, brush, call, cells, ok, open_palette, packed, sections, selected, text, tile_map,
     tileset,
 };
-use crate::tile_tools::{bytes, enter, entries, run, stored, stroke};
-use crate::tilemap_render::{TILESET, grass_patch, ground_terrain, project_app, settle, spawn_map};
+use crate::stage::tile_tools::{bytes, enter, entries, run, stored, stroke};
+use crate::stage::tilemap_render::{
+    TILESET, grass_patch, ground_terrain, project_app, settle, spawn_map,
+};
 
 use bevy::{
     camera::{NormalizedRenderTarget, RenderTarget},
@@ -378,7 +380,7 @@ fn a_stamp_from_another_tileset_is_refused() {
     app.world_mut().resource_mut::<StampBrush>().tileset = Some(AssetId::default());
     let (before, count) = (bytes(&mut app, map), entries(&app));
     assert_eq!(
-        crate::tile_tools::click(&mut app, "tilemap.brush", MouseButton::Left, (0, 0)),
+        crate::stage::tile_tools::click(&mut app, "tilemap.brush", MouseButton::Left, (0, 0)),
         OperatorResult::Cancelled
     );
     assert_eq!(bytes(&mut app, map), before);
@@ -397,12 +399,12 @@ fn entering_a_map_on_another_tileset_drops_the_stamp() {
     );
     tile_map(&mut app, &[]);
     two_by_two(&mut app);
-    let mut other = crate::tilemap_render::layer(TilemapLayerKind::Tile, default());
+    let mut other = crate::stage::tilemap_render::layer(TilemapLayerKind::Tile, default());
     other.tileset = "second.tileset.bsn".to_string();
     let second = spawn_map(
         &mut app,
         vec![other],
-        crate::tilemap_render::tile_layer(&[]),
+        crate::stage::tilemap_render::tile_layer(&[]),
     );
     app.world_mut().resource_mut::<Selection>().entities = vec![second];
     settle(&mut app);
@@ -444,7 +446,7 @@ fn leaving_the_stamp_source_drops_the_stamp() {
     two_by_two(&mut app);
     assert!(available(&mut app, "tilemap.stamp.save"));
     assert_eq!(
-        crate::tile_tools::click(&mut app, "tilemap.picker", MouseButton::Left, (4, 4)),
+        crate::stage::tile_tools::click(&mut app, "tilemap.picker", MouseButton::Left, (4, 4)),
         OperatorResult::Finished
     );
     assert_eq!(brush(&app).source, BrushSource::Tile);
@@ -453,7 +455,7 @@ fn leaving_the_stamp_source_drops_the_stamp() {
 
     two_by_two(&mut app);
     assert_eq!(
-        crate::tile_tools::set_brush(&mut app, "tile", "0:2"),
+        crate::stage::tile_tools::set_brush(&mut app, "tile", "0:2"),
         OperatorResult::Finished
     );
     settle(&mut app);

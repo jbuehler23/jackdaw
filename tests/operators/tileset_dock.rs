@@ -2,8 +2,8 @@
 //! page and controls, each a call of a tileset operator, and the clearing of
 //! automatic setup on open.
 
-use crate::tileset_edit_ops::{FILE, call, entries, on_disk, overworld, run};
-use crate::tileset_ops::{SHEET, editor_on, import, project_app, warnings};
+use crate::operators::tileset_edit_ops::{FILE, call, entries, on_disk, overworld, run};
+use crate::operators::tileset_ops::{SHEET, editor_on, import, project_app, warnings};
 use crate::util;
 use crate::util::OperatorResultExt as _;
 
@@ -1298,7 +1298,8 @@ fn dock_tooltips_follow_a_rebound_key() {
 #[test]
 fn the_object_hint_names_the_sheet_of_a_tileset_with_several() {
     let (mut app, dir) = project_app();
-    let rows = image::imageops::crop_imm(&crate::tileset_ops::art_rows(), 0, 0, 432, 64).to_image();
+    let rows = image::imageops::crop_imm(&crate::operators::tileset_ops::art_rows(), 0, 0, 432, 64)
+        .to_image();
     rows.save(dir.path().join("assets/rows.png")).expect("save");
     import(&mut app, &[("paths", "overworld.png, rows.png")]);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
