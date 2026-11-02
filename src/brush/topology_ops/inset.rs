@@ -10,11 +10,13 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::halfedge::ops::inset_face::inset_face;
-use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh};
+use jackdaw_geometry::halfedge::ops::inset_face::inset_face_with_depth;
+use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, apply_topology_edit};
 use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
+use super::param_edit::{self, Picks};
+use super::select_elements::refuse;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -95,16 +97,89 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// to the translate grid increment. The live brush mesh is updated each frame
 /// so the inset is visible as a real mesh edit. LMB commits; Esc / RMB cancels.
 ///
+/// Given `amount`, insets by that much at once instead, raised by `depth`.
+///
 /// Requires Face mode with at least one face selected.
 #[operator(
     id = "brush.mesh.inset",
     label = "Inset",
     is_available = can_run_inset,
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_inset,
+    params(
+        amount(
+            f64,
+            doc = "Inset each selected face by this many metres at once instead of dragging; \
+                   above zero and short of collapsing the face."
+        ),
+        depth(
+            f64,
+            doc = "With `amount`, raise the inset faces this many metres along their normals; \
+                   negative sinks them. Defaults to 0."
+        ),
+    )
 )]
-pub(crate) fn brush_inset(
+pub(crate) fn brush_inset(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if params.contains_key("amount") || params.contains_key("depth") {
+        return inset_by(world, &params);
+    }
+    param_edit::run_modal(world, inset_modal, params.0)
+}
+
+/// Inset the selected faces by the `amount` parameter, raised by `depth`.
+fn inset_by(world: &mut World, params: &OperatorParameters) -> OperatorResult {
+    let read = param_edit::positive(params, "amount")
+        .and_then(|amount| Ok((amount, param_edit::number(params, "depth")?.unwrap_or(0.0))));
+    let (amount, depth) = match read {
+        Ok(read) => read,
+        Err(why) => return refuse(world, "Inset", why),
+    };
+    param_edit::run(
+        world,
+        "Inset",
+        BrushEditMode::Face,
+        |brush, halfedge, selected| {
+            let face_keys = param_edit::face_keys(halfedge, &selected.faces);
+            let limit = face_keys
+                .iter()
+                .map(|&fk| compute_face_max_inset(&halfedge.mesh, fk))
+                .fold(f32::MAX, f32::min);
+            param_edit::below(amount, "amount", limit)?;
+            let inner = inset_faces(brush, halfedge, &face_keys, amount, depth);
+            Ok((!inner.is_empty()).then_some(Picks::Faces(inner)))
+        },
+    )
+}
+
+/// Inset each of `faces` by `amount`, raised by `depth`, and reconcile the
+/// brush. Each face's side quads copy that face's look. Returns the inner
+/// faces' indices.
+fn inset_faces(
+    brush: &mut Brush,
+    halfedge: &mut BrushHalfedge,
+    faces: &[FaceKey],
+    amount: f32,
+    depth: f32,
+) -> Vec<usize> {
+    apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            let mut inner = Vec::with_capacity(faces.len());
+            for &face in faces {
+                if let Ok(result) = inset_face_with_depth(mesh, face, amount, depth) {
+                    inner.push(result.inner_face);
+                }
+            }
+            param_edit::flattened_indices(mesh, &inner)
+        },
+    )
+}
+
+/// The pointer-driven inset behind `brush.mesh.inset`.
+fn inset_modal(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
@@ -318,51 +393,14 @@ fn apply_live_inset(
         return Vec::new();
     }
 
-    // Seed new spoke faces from the face being inset so material + UV scale /
-    // rotation / offset inherit from the parent, then re-derive each spoke's UV
-    // axes from its own plane. Preferring the parent over the brush's last face
-    // keeps the inset's checker tiling continuous with the original face.
-    let inset_source = modal_state
-        .face_indices
-        .first()
-        .and_then(|&idx| edit.snapshot_brush().faces.get(idx).cloned())
-        .or_else(|| edit.snapshot_brush().faces.last().cloned())
-        .unwrap_or_default();
-    let original_face_count = edit.snapshot_brush().faces.len();
-
-    // Restore to the snapshot, re-run the inset at the current amount, and
-    // reconcile. The closure resolves each new inner-ring face's post-flatten
-    // index while the mesh still holds the original material_idx values.
-    // `inset_face` rewrites the input face's ring as the inner ring (so
-    // `result.inner_face == fk`), preserving its `material_idx`; its side quads
-    // share that `material_idx` and are inserted AFTER the original face in
-    // slotmap order, so the inner face lands at the topology index
-    // `count(faces with material_idx < M)`.
-    let amount = modal_state.current_amount;
-    let face_keys = modal_state.face_keys.clone();
-    let inner_face_indices = edit.apply(brush, &mut halfedge, |mesh| {
-        let mut inner_material_idxs: Vec<u32> = Vec::with_capacity(face_keys.len());
-        for &fk in &face_keys {
-            if let Ok(result) = inset_face(mesh, fk, amount) {
-                inner_material_idxs.push(mesh.faces[result.inner_face].material_idx);
-            }
-        }
-        inner_material_idxs
-            .iter()
-            .map(|&mtx| mesh.faces.values().filter(|f| f.material_idx < mtx).count())
-            .collect::<Vec<usize>>()
-    });
-
-    // Each new spoke face inherits the parent's appearance with freshly derived
-    // UV axes.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&inset_source);
-        brush.faces[new_face].uv_u_axis = Vec3::ZERO;
-        brush.faces[new_face].uv_v_axis = Vec3::ZERO;
-        brush.faces[new_face].ensure_uv_axes();
-    }
-
-    inner_face_indices
+    edit.restore(brush, &mut halfedge);
+    inset_faces(
+        brush,
+        &mut halfedge,
+        &modal_state.face_keys,
+        modal_state.current_amount,
+        0.0,
+    )
 }
 
 pub(crate) fn can_run_inset(

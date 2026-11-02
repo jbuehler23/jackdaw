@@ -10,11 +10,13 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
-use jackdaw_geometry::halfedge::ops::edge_bevel::edge_bevel;
-use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
+use jackdaw_geometry::halfedge::ops::edge_bevel::{BevelError, edge_bevel_segments};
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, apply_topology_edit, edge_between};
 use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
+use super::param_edit::{self, Picks};
+use super::select_elements::refuse;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -22,6 +24,9 @@ use crate::snapping::SnapSettings;
 /// Pixels-per-world-unit sensitivity for the edge bevel modal. At this value
 /// 100 pixels of cursor motion correspond to 1 world-unit of bevel width.
 const BEVEL_SENSITIVITY: f32 = 0.01;
+
+/// The most quads a parametric bevel rounds over.
+const MAX_SEGMENTS: u32 = 32;
 
 /// Modal state for the `brush.mesh.edge_bevel` operator.
 #[derive(Resource, Default)]
@@ -58,16 +63,98 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// is updated each frame so the chamfer is visible as a real mesh edit. LMB
 /// commits; Esc / RMB cancels and reverts.
 ///
+/// Given `width`, bevels by that much at once instead, rounded over
+/// `segments` quads.
+///
 /// Requires Edge mode with at least one edge selected.
 #[operator(
     id = "brush.mesh.edge_bevel",
     label = "Edge Bevel",
     is_available = can_run_edge_bevel,
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_edge_bevel,
+    params(
+        width(
+            f64,
+            doc = "Bevel each selected edge this many metres into its faces at once instead \
+                   of dragging; above zero and short of the neighbouring edges' middles."
+        ),
+        segments(
+            i64,
+            doc = "With `width`, how many quads round the bevel, 1 to 32. Defaults to 1, a \
+                   flat chamfer."
+        ),
+    )
 )]
 pub(crate) fn brush_edge_bevel(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    if params.contains_key("width") || params.contains_key("segments") {
+        return bevel_by(world, &params);
+    }
+    param_edit::run_modal(world, edge_bevel_modal, params.0)
+}
+
+/// Bevel the selected edges by the `width` parameter over `segments` quads.
+fn bevel_by(world: &mut World, params: &OperatorParameters) -> OperatorResult {
+    let read = param_edit::positive(params, "width").and_then(|width| {
+        Ok((
+            width,
+            param_edit::count(params, "segments", MAX_SEGMENTS)?.unwrap_or(1),
+        ))
+    });
+    let (width, segments) = match read {
+        Ok(read) => read,
+        Err(why) => return refuse(world, "Edge Bevel", why),
+    };
+    param_edit::run(
+        world,
+        "Edge Bevel",
+        BrushEditMode::Edge,
+        |brush, halfedge, selected| {
+            let edge_keys = param_edit::edge_keys(halfedge, &selected.edges);
+            let limit = compute_max_bevel_width(&halfedge.mesh, &edge_keys);
+            param_edit::below(width, "width", limit)?;
+            let beveled = bevel_edges(brush, halfedge, &edge_keys, width, segments).map_err(
+                |err| match err {
+                    BevelError::ProfileWithoutCap => "`segments` above 1 needs both ends of \
+                        every beveled edge to meet exactly three edges"
+                        .to_string(),
+                    _ => "the bevel could not rebuild the faces around the selected edges"
+                        .to_string(),
+                },
+            )?;
+            // The bevel removes the edges' end vertices, renumbering the
+            // rest, so no old pick survives.
+            Ok(beveled.then_some(Picks::Edges(Vec::new())))
+        },
+    )
+}
+
+/// Bevel `edges` by `width` over `segments` quads and reconcile the brush.
+/// Whether any edge was beveled; on an error the brush is unchanged.
+fn bevel_edges(
+    brush: &mut Brush,
+    halfedge: &mut BrushHalfedge,
+    edges: &[EdgeKey],
+    width: f32,
+    segments: u32,
+) -> Result<bool, BevelError> {
+    apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            edge_bevel_segments(mesh, edges, width, segments)
+                .map(|result| !result.new_faces.is_empty())
+        },
+    )
+}
+
+/// The pointer-driven bevel behind `brush.mesh.edge_bevel`.
+fn edge_bevel_modal(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     selection: Res<BrushSelection>,
@@ -110,7 +197,7 @@ pub(crate) fn brush_edge_bevel(
             let Some(&vb) = halfedge.vert_keys.get(b) else {
                 continue;
             };
-            if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
+            if let Some(ek) = edge_between(&halfedge.mesh, va, vb) {
                 edge_keys.push(ek);
             }
         }
@@ -245,34 +332,14 @@ fn apply_live_bevel(
         return;
     }
 
-    // Seed new chamfer faces from the snapshot's last face (for material +
-    // uv_scale / rotation), then re-derive each chamfer's UV axes from its own
-    // plane (inheriting axes from a different-orientation template stretches the
-    // texture).
-    let source = edit
-        .snapshot_brush()
-        .faces
-        .last()
-        .cloned()
-        .unwrap_or_default();
-    let original_face_count = edit.snapshot_brush().faces.len();
-
-    // Restore to the snapshot, re-run the bevel at the current width, and
-    // reconcile. Non-manifold edges are skipped inside the op.
-    let edge_keys = modal_state.edge_keys.clone();
-    let width = modal_state.current_width;
-    edit.apply(brush, &mut halfedge, |mesh| {
-        let _ = edge_bevel(mesh, &edge_keys, width);
-    });
-
-    // Each new chamfer face inherits the source appearance with freshly derived
-    // UV axes.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&source);
-        brush.faces[new_face].uv_u_axis = Vec3::ZERO;
-        brush.faces[new_face].uv_v_axis = Vec3::ZERO;
-        brush.faces[new_face].ensure_uv_axes();
-    }
+    edit.restore(brush, &mut halfedge);
+    let _ = bevel_edges(
+        brush,
+        &mut halfedge,
+        &modal_state.edge_keys,
+        modal_state.current_width,
+        1,
+    );
 }
 
 /// Geometric cap on bevel width: half the length of the shortest parallel
@@ -333,13 +400,6 @@ fn compute_max_bevel_width(mesh: &HalfedgeMesh, edges: &[EdgeKey]) -> f32 {
     } else {
         f32::MAX
     }
-}
-
-fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh.edges
-        .iter()
-        .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
-        .map(|(k, _)| k)
 }
 
 pub(crate) fn can_run_edge_bevel(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {

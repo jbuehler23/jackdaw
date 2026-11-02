@@ -1,4 +1,7 @@
-use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::inset_face::inset_face};
+use jackdaw_geometry::halfedge::{
+    HalfedgeMesh,
+    ops::inset_face::{inset_face, inset_face_with_depth},
+};
 use jackdaw_scene_types::Brush;
 
 #[test]
@@ -56,4 +59,22 @@ fn inset_amount_zero_leaves_geometry_unchanged_in_position() {
     mesh.validate().expect("valid after zero inset");
     // With amount=0 the inner ring has the same positions as the outer ring.
     // Side quads will be degenerate (zero-area) but topology should still validate.
+}
+
+#[test]
+fn a_raised_inset_lifts_the_inner_ring_along_the_normal() {
+    let brush = Brush::cuboid(1.0, 1.0, 1.0);
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let face = mesh.faces.keys().next().unwrap();
+    let normal = mesh.faces[face].normal_cache;
+    let plane = {
+        let first = mesh.faces[face].loop_first;
+        mesh.verts[mesh.loops[first].vert].co.dot(normal)
+    };
+    let result = inset_face_with_depth(&mut mesh, face, 0.1, 0.25).expect("inset");
+    mesh.validate().expect("valid after a raised inset");
+    for vert in result.new_verts {
+        let height = mesh.verts[vert].co.dot(normal) - plane;
+        assert!((height - 0.25).abs() < 1e-5, "inner ring at {height}");
+    }
 }

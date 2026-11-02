@@ -2,105 +2,69 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
-use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey, apply_topology_edit};
-use jackdaw_scene_types::Brush;
+use jackdaw_geometry::halfedge::apply_topology_edit;
+use jackdaw_geometry::halfedge::ops::subdivide::subdivide_cuts;
 
 use super::loop_cut::topology_pairs;
-use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
+use super::param_edit::{self, Picks};
+use super::select_elements::refuse;
+use crate::brush::{BrushEditMode, BrushSelection, EditMode};
 
-/// Split each selected edge at its midpoint and re-tessellate touched faces.
-/// Operates on the current edge selection. No modal interaction. Available
-/// in Edge mode with at least one edge selected.
+/// The most points a subdivide places on each edge.
+const MAX_CUTS: u32 = 32;
+
+/// Split each selected edge into equal pieces and re-tessellate touched faces.
+/// Operates on the current edge selection and leaves the new cross edges
+/// selected. No modal interaction. Available in Edge mode with at least one
+/// edge selected.
 #[operator(
     id = "brush.mesh.subdivide",
     label = "Subdivide",
     is_available = can_run_subdivide,
-    allows_undo = true
+    allows_undo = true,
+    params(cuts(
+        i64,
+        doc = "How many evenly spaced points to put on each selected edge, 1 to 32. With \
+               more than one, a quad cut on two opposite sides is split into strips. \
+               Defaults to 1, the midpoint."
+    ))
 )]
-pub(crate) fn brush_subdivide(
-    _: In<OperatorParameters>,
-    edit_mode: Res<EditMode>,
-    mut selection: ResMut<BrushSelection>,
-    mut brushes: Query<&mut Brush>,
-    mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> Option<OperatorResult> {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
-        return None;
-    }
-    let brush_entity = selection.active_brush?;
-    let sel_edges: Vec<(usize, usize)> = selection
-        .sub(brush_entity)
-        .map(|s| s.edges.clone())
-        .unwrap_or_default();
-    if sel_edges.is_empty() {
-        return None;
-    }
-
-    // Map each selected cache-edge (a, b) to a HalfedgeMesh EdgeKey via vert_keys.
-    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
-    let mut mesh_edges: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
-    for &(a, b) in &sel_edges {
-        let Some(&va) = halfedge.vert_keys.get(a) else {
-            continue;
-        };
-        let Some(&vb) = halfedge.vert_keys.get(b) else {
-            continue;
-        };
-        if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
-            mesh_edges.push(ek);
-        }
-    }
-    if mesh_edges.is_empty() {
-        return None;
-    }
-
-    // Subdivide the edges and reconcile, capturing the topology vertex index
-    // pair for each new cross-cut edge so the post-commit selection can target
-    // them. The pairs are read from the mesh before reconcile; topology vertex
-    // order matches the mesh slotmap order (see `flatten_to_topology`) and
-    // subdivide never removes verts, so the slot positions are stable here.
-    // `into_inner` reborrows the change-detected `Mut<Brush>` as `&mut Brush` so
-    // the two fields can be borrowed disjointly.
-    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
-    let source = brush.faces.last().cloned().unwrap_or_default();
-    let original_face_count = brush.faces.len();
-    let new_edge_pairs: Vec<(usize, usize)> = apply_topology_edit(
-        &mut brush.faces,
-        &mut brush.topology,
-        &mut halfedge.0,
-        |mesh| {
-            subdivide(mesh, &mesh_edges)
-                .map(|subdivide_result| topology_pairs(mesh, &subdivide_result.new_edges))
+pub(crate) fn brush_subdivide(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    let cuts = match param_edit::count(&params, "cuts", MAX_CUTS) {
+        Ok(cuts) => cuts.unwrap_or(1),
+        Err(why) => return refuse(world, "Subdivide", why),
+    };
+    param_edit::run(
+        world,
+        "Subdivide",
+        BrushEditMode::Edge,
+        |brush, halfedge, selected| {
+            let mesh_edges = param_edit::edge_keys(halfedge, &selected.edges);
+            if mesh_edges.is_empty() {
+                return Ok(None);
+            }
+            // The pairs are read before reconcile; subdivide never removes
+            // verts, so slot order is the flattened vertex order.
+            let Ok(new_edge_pairs) = apply_topology_edit(
+                &mut brush.faces,
+                &mut brush.topology,
+                &mut halfedge.0,
+                |mesh| {
+                    subdivide_cuts(mesh, &mesh_edges, cuts)
+                        .map(|result| topology_pairs(mesh, &result.new_edges))
+                },
+            ) else {
+                return Ok(None);
+            };
+            let vert_count = brush.topology.vertices.len();
+            Ok(Some(Picks::Edges(
+                new_edge_pairs
+                    .into_iter()
+                    .filter(|(a, b)| *a < vert_count && *b < vert_count)
+                    .collect(),
+            )))
         },
     )
-    .ok()?;
-
-    // Any face the subdivision created inherits the previous last face's appearance.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&source);
-        brush.faces[new_face].ensure_uv_axes();
-    }
-    // Chain selection: write the new cross-cut edges into `BrushSelection.edges`
-    // so a follow-up gesture (loop cut, edge slide, subdivide again) operates
-    // on the freshly created geometry.
-    let vert_count = brush.topology.vertices.len();
-    let inbounds: Vec<(usize, usize)> = new_edge_pairs
-        .into_iter()
-        .filter(|(a, b)| *a < vert_count && *b < vert_count)
-        .collect();
-    if !inbounds.is_empty() {
-        selection.sub_mut(brush_entity).edges = inbounds;
-    }
-
-    Some(OperatorResult::Finished)
-}
-
-fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh.edges
-        .iter()
-        .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
-        .map(|(k, _)| k)
 }
 
 pub(crate) fn can_run_subdivide(edit_mode: Res<EditMode>, selection: Res<BrushSelection>) -> bool {

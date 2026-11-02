@@ -1,5 +1,9 @@
 //! Apply a half-edge edit to a brush and reconcile its derived data.
 
+use std::collections::{HashMap, HashSet};
+
+use glam::Vec3;
+
 use crate::halfedge::{FaceKey, HalfedgeMesh, VertKey};
 use crate::{BrushFaceData, BrushTopology, newell_normal};
 
@@ -54,27 +58,61 @@ impl HalfedgeBinding {
 }
 
 /// Apply a half-edge `edit` to `binding`, then reconcile a brush's derived
-/// data: recache normals, flatten to topology, resize `faces` to the new
-/// polygon count (truncating extras, default-filling new slots), recompute
-/// every plane, and re-lift the binding. Returns the edit's result.
+/// data: recache normals, flatten to topology, reorder `faces` to the new
+/// polygon order, recompute every plane, and re-lift the binding. Returns the
+/// edit's result.
 ///
-/// Owns structure only. New faces are default-filled; the caller, which knows
-/// which new face derives from which source, propagates appearance afterward
-/// via [`BrushFaceData::copy_appearance_from`].
+/// A face's `material_idx` names the brush face it came from. The face that
+/// already carried that index (or, when the edit rebuilt it, the first one
+/// still carrying it) keeps the old face data; every other face carrying it
+/// copies that face's appearance. A face with an index past the old faces
+/// copies the last old face. New faces get UV axes derived from their own
+/// plane.
 pub fn apply_topology_edit<R>(
     faces: &mut Vec<BrushFaceData>,
     topology: &mut BrushTopology,
     binding: &mut HalfedgeBinding,
     edit: impl FnOnce(&mut HalfedgeMesh) -> R,
 ) -> R {
+    let existed: HashSet<FaceKey> = binding.mesh.faces.keys().collect();
     let result = edit(&mut binding.mesh);
     binding.mesh.recache_face_normals();
 
-    let new_topology = binding.mesh.flatten_to_topology();
-    let count = new_topology.polygons.len();
-    faces.truncate(count);
-    faces.resize_with(count, BrushFaceData::default);
+    let mesh = &binding.mesh;
+    let order = mesh.flatten_order();
+    let source_of = |key: FaceKey| mesh.faces[key].material_idx;
+    let mut keeper: HashMap<u32, FaceKey> = HashMap::new();
+    for &key in order.iter().filter(|key| existed.contains(*key)) {
+        keeper.insert(source_of(key), key);
+    }
+    for &key in &order {
+        keeper.entry(source_of(key)).or_insert(key);
+    }
+    let fallback = faces.last().cloned().unwrap_or_default();
+    let mut fresh = Vec::new();
+    let mut reordered = Vec::with_capacity(order.len());
+    for (slot, &key) in order.iter().enumerate() {
+        let source = faces.get(source_of(key) as usize);
+        if keeper.get(&source_of(key)) == Some(&key)
+            && let Some(kept) = source
+        {
+            reordered.push(kept.clone());
+            continue;
+        }
+        let mut face = BrushFaceData::default();
+        face.copy_appearance_from(source.unwrap_or(&fallback));
+        face.uv_u_axis = Vec3::ZERO;
+        face.uv_v_axis = Vec3::ZERO;
+        reordered.push(face);
+        fresh.push(slot);
+    }
+
+    let new_topology = mesh.flatten_to_topology();
+    *faces = reordered;
     new_topology.recompute_face_planes(faces);
+    for slot in fresh {
+        faces[slot].ensure_uv_axes();
+    }
     *topology = new_topology;
     *binding = HalfedgeBinding::lift_from_topology(topology);
 

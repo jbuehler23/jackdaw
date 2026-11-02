@@ -12,10 +12,12 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_geometry::halfedge::cycles::disk_walk;
 use jackdaw_geometry::halfedge::ops::vertex_bevel::vertex_bevel;
-use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey};
+use jackdaw_geometry::halfedge::{HalfedgeMesh, VertKey, apply_topology_edit};
 use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
+use super::param_edit::{self, Picks};
+use super::select_elements::refuse;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -59,16 +61,76 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// live brush mesh is updated each frame so the bevel is visible as a real
 /// mesh edit. LMB commits; Esc / RMB cancels and reverts.
 ///
+/// Given `width`, bevels by that much at once instead.
+///
 /// Requires Vertex mode with exactly one vertex selected.
 #[operator(
     id = "brush.mesh.vertex_bevel",
     label = "Vertex Bevel",
     is_available = can_run_vertex_bevel,
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_vertex_bevel,
+    params(width(
+        f64,
+        doc = "Cut the selected vertex off this many metres along each of its edges at \
+               once instead of dragging; above zero and short of the edges' middles."
+    ))
 )]
 pub(crate) fn brush_vertex_bevel(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    if params.contains_key("width") {
+        return bevel_by(world, &params);
+    }
+    param_edit::run_modal(world, vertex_bevel_modal, params.0)
+}
+
+/// Bevel the selected vertex by the `width` parameter and select the new face.
+fn bevel_by(world: &mut World, params: &OperatorParameters) -> OperatorResult {
+    let width = match param_edit::positive(params, "width") {
+        Ok(width) => width,
+        Err(why) => return refuse(world, "Vertex Bevel", why),
+    };
+    param_edit::run(
+        world,
+        "Vertex Bevel",
+        BrushEditMode::Vertex,
+        |brush, halfedge, selected| {
+            let [vert_key] = param_edit::vert_keys(halfedge, &selected.vertices)[..] else {
+                return Ok(None);
+            };
+            let limit = compute_max_bevel_width(&halfedge.mesh, vert_key);
+            param_edit::below(width, "width", limit)?;
+            Ok(bevel_vertex(brush, halfedge, vert_key, width).map(|face| Picks::Faces(vec![face])))
+        },
+    )
+}
+
+/// Bevel `vert` by `width` and reconcile the brush. The new face's index, or
+/// `None` when the bevel did nothing.
+fn bevel_vertex(
+    brush: &mut Brush,
+    halfedge: &mut BrushHalfedge,
+    vert: VertKey,
+    width: f32,
+) -> Option<usize> {
+    apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            let face = vertex_bevel(mesh, vert, width).ok()?.new_face;
+            param_edit::flattened_indices(mesh, &[face])
+                .first()
+                .copied()
+        },
+    )
+}
+
+/// The pointer-driven bevel behind `brush.mesh.vertex_bevel`.
+fn vertex_bevel_modal(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
@@ -247,31 +309,8 @@ fn apply_live_bevel(
         return;
     }
 
-    // Seed the new bevel face from the snapshot's last face (for material +
-    // uv_scale / rotation), then re-derive its UV axes from its own plane.
-    let source = edit
-        .snapshot_brush()
-        .faces
-        .last()
-        .cloned()
-        .unwrap_or_default();
-    let original_face_count = edit.snapshot_brush().faces.len();
-
-    // Restore to the snapshot, re-run the bevel at the current width, and
-    // reconcile.
-    let width = modal_state.current_width;
-    edit.apply(brush, &mut halfedge, |mesh| {
-        let _ = vertex_bevel(mesh, vert_key, width);
-    });
-
-    // The new bevel face inherits the source appearance with freshly derived
-    // UV axes.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&source);
-        brush.faces[new_face].uv_u_axis = Vec3::ZERO;
-        brush.faces[new_face].uv_v_axis = Vec3::ZERO;
-        brush.faces[new_face].ensure_uv_axes();
-    }
+    edit.restore(brush, &mut halfedge);
+    bevel_vertex(brush, &mut halfedge, vert_key, modal_state.current_width);
 }
 
 /// Geometric cap on bevel width: half the length of the shortest incident

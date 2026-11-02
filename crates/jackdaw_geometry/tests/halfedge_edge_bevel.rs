@@ -1,7 +1,9 @@
 use glam::Vec3;
 use jackdaw_geometry::halfedge::{
     HalfedgeMesh,
-    ops::edge_bevel::{BevelError, edge_bevel},
+    cycles::radial_walk,
+    ops::edge_bevel::{BevelError, edge_bevel, edge_bevel_segments},
+    ops::loop_cut::loop_cut,
 };
 use jackdaw_scene_types::Brush;
 
@@ -279,4 +281,82 @@ fn bevel_preserves_face_count_plus_new_chamfer() {
     );
     mesh.validate()
         .expect("invariants hold after multi-edge bevel");
+}
+
+#[test]
+fn a_two_segment_bevel_rounds_a_cube_edge_into_two_quads() {
+    let brush = Brush::cuboid(1.0, 1.0, 1.0);
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let edge = mesh.edges.keys().next().expect("an edge");
+    let [a, b] = mesh.edges[edge].v;
+    let corner_a = mesh.verts[a].co;
+    let corner_b = mesh.verts[b].co;
+
+    let result = edge_bevel_segments(&mut mesh, &[edge], 0.05, 2).expect("bevel");
+    assert_eq!(result.new_faces.len(), 2, "two strip quads");
+    assert_eq!(result.new_edges.len(), 3, "two outer rails and one inner");
+    assert_eq!(mesh.face_count(), 8);
+    assert_eq!(mesh.vert_count(), 8 - 2 + 6);
+    assert_eq!(mesh.edge_count(), 12 - 1 + 3 + 2 * 2);
+    mesh.validate().expect("valid after a two-segment bevel");
+    for edge in mesh.edges.keys() {
+        assert_eq!(
+            radial_walk(&mesh, edge).count(),
+            2,
+            "every edge has two faces, so the bevel is watertight"
+        );
+    }
+
+    // The middle profile vertex sits on the quarter circle of radius 0.05
+    // around the rounding centre, so 0.05 * (1 - 1/sqrt 2) in from each face.
+    let inset = 0.05 * (1.0 - std::f32::consts::FRAC_1_SQRT_2);
+    for corner in [corner_a, corner_b] {
+        let nearest = mesh
+            .verts
+            .values()
+            .map(|v| v.co)
+            .filter(|co| (*co - corner).length() < 0.06)
+            .map(|co| co - corner)
+            .filter(|d| d.abs().min_element() < 1e-5)
+            .find(|d| {
+                let parts: Vec<f32> = d
+                    .abs()
+                    .to_array()
+                    .into_iter()
+                    .filter(|c| *c > 1e-5)
+                    .collect();
+                parts.len() == 2 && parts.iter().all(|c| (c - inset).abs() < 1e-5)
+            });
+        assert!(nearest.is_some(), "a rounded profile vertex near {corner}");
+    }
+}
+
+#[test]
+fn one_segment_is_the_plain_chamfer() {
+    let brush = Brush::cuboid(1.0, 1.0, 1.0);
+    let mut plain = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let mut segmented = plain.clone();
+    let edge = plain.edges.keys().next().expect("an edge");
+    edge_bevel(&mut plain, &[edge], 0.1).expect("bevel");
+    edge_bevel_segments(&mut segmented, &[edge], 0.1, 1).expect("bevel");
+    assert_eq!(plain.face_count(), segmented.face_count());
+    assert_eq!(plain.vert_count(), segmented.vert_count());
+    assert_eq!(plain.edge_count(), segmented.edge_count());
+}
+
+#[test]
+fn a_rounded_bevel_at_a_four_edge_corner_is_refused_untouched() {
+    let brush = Brush::cuboid(1.0, 1.0, 1.0);
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let start = mesh.edges.keys().next().expect("an edge");
+    let cut = loop_cut(&mut mesh, start, 0.5).expect("loop cut");
+    let ring_edge = cut.new_loop_edges[0];
+    let (verts, edges, faces) = (mesh.vert_count(), mesh.edge_count(), mesh.face_count());
+
+    let err = edge_bevel_segments(&mut mesh, &[ring_edge], 0.1, 2).expect_err("refused");
+    assert!(matches!(err, BevelError::ProfileWithoutCap), "{err:?}");
+    assert_eq!(
+        (mesh.vert_count(), mesh.edge_count(), mesh.face_count()),
+        (verts, edges, faces)
+    );
 }

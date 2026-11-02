@@ -1,4 +1,7 @@
-use jackdaw_geometry::halfedge::{HalfedgeMesh, ops::subdivide::subdivide};
+use jackdaw_geometry::halfedge::{
+    HalfedgeMesh,
+    ops::subdivide::{subdivide, subdivide_cuts},
+};
 use jackdaw_scene_types::Brush;
 
 #[test]
@@ -54,4 +57,37 @@ fn subdivide_one_edge_only_does_not_panic_and_validates() {
     let edge = mesh.edges.keys().next().unwrap();
     let _ = subdivide(&mut mesh, &[edge]).expect("subdivide");
     mesh.validate().expect("valid after subdivide");
+}
+
+#[test]
+fn two_cuts_on_opposite_sides_split_a_quad_into_three_strips() {
+    let brush = Brush::cuboid(1.0, 1.0, 1.0);
+    let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
+    let face = mesh.faces.keys().next().unwrap();
+    let f = &mesh.faces[face];
+    let mut ring_edges = Vec::new();
+    let mut cur = f.loop_first;
+    for _ in 0..f.loop_count {
+        ring_edges.push(mesh.loops[cur].edge);
+        cur = mesh.loops[cur].next;
+    }
+    let result = subdivide_cuts(&mut mesh, &[ring_edges[0], ring_edges[2]], 2).expect("subdivide");
+    mesh.validate().expect("valid after subdivide");
+    assert_eq!(result.new_verts.len(), 4);
+    assert_eq!(result.new_edges.len(), 2, "two strip edges across the face");
+    assert_eq!(mesh.vert_count(), 12);
+    assert_eq!(
+        mesh.face_count(),
+        8,
+        "three strips; the two neighbours stay whole"
+    );
+    assert_eq!(mesh.edge_count(), 18);
+    for strip in result.new_edges {
+        let [a, b] = mesh.edges[strip].v;
+        let run = mesh.verts[b].co - mesh.verts[a].co;
+        assert!(
+            run.abs().to_array().iter().filter(|c| **c > 1e-5).count() == 1,
+            "a strip edge runs straight across the face: {run}"
+        );
+    }
 }

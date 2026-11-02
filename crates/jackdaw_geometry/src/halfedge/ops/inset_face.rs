@@ -3,7 +3,8 @@
 //! ring is rewritten to the inner ring; N new side-quad faces are added.
 //!
 //! New geometry per inset on an N-ring face:
-//!   - N inner verts (offset = `old_pos` + `inward_dir` * amount, projected on face plane)
+//!   - N inner verts (offset = `old_pos` + `inward_dir` * amount, projected on face plane,
+//!     plus `normal` * depth when raised)
 //!   - N inner-ring edges
 //!   - N wall edges (`old[i]` -> `new[i]`)
 //!   - N side-quad faces (CCW from outside): \[`old[i]`, `old[i+1]`, `new[i+1]`, `new[i]`\]
@@ -30,6 +31,17 @@ pub fn inset_face(
     mesh: &mut HalfedgeMesh,
     face: FaceKey,
     amount: f32,
+) -> Result<InsetResult, InsetError> {
+    inset_face_with_depth(mesh, face, amount, 0.0)
+}
+
+/// [`inset_face`], then raise the inner ring by `depth` along the face normal
+/// (negative sinks it), so the side quads become a bevelled lip.
+pub fn inset_face_with_depth(
+    mesh: &mut HalfedgeMesh,
+    face: FaceKey,
+    amount: f32,
+    depth: f32,
 ) -> Result<InsetResult, InsetError> {
     let face_data = mesh
         .faces
@@ -71,7 +83,7 @@ pub fn inset_face(
         let to_centroid = centroid - pos;
         let inward = to_centroid - face_normal * to_centroid.dot(face_normal);
         let inward_norm = inward.normalize_or_zero();
-        new_verts.push(mesh.add_vert(pos + inward_norm * amount));
+        new_verts.push(mesh.add_vert(pos + inward_norm * amount + face_normal * depth));
     }
 
     // 4. Allocate inner-ring edges: new[i] -- new[i+1].

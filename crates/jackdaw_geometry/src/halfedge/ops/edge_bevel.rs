@@ -1,4 +1,5 @@
-//! Edge bevel: chamfer each selected edge into a quad. Single segment only.
+//! Edge bevel: chamfer each selected edge into a quad, or round it into a
+//! strip of quads with more segments.
 //!
 //! For each selected edge `e` with endpoints `v0`, `v1` and two adjacent quad
 //! (`loop_count` >= 4) faces `fA`, `fB`:
@@ -11,9 +12,14 @@
 //!     standard cube-corner topology) are rebuilt with the new vertices and
 //!     edges.
 //!
+//! With `segments` > 1 the chamfer becomes a strip of quads whose inner rails
+//! follow a quarter-ellipse tangent to both faces (a circular arc on a square
+//! corner), and each end cap gains the in-between vertices.
+//!
 //! Limitations:
-//!   - Multi-segment bevel (profile / segments) is not implemented.
-//!   - Vertex bevel is a separate future op.
+//!   - The profile shape is fixed; only the segment count varies.
+//!   - Vertex bevel is a separate op.
+//!   - The in-between vertices only reach end caps at degree-3 endpoints.
 //!   - If two beveled edges share a vertex, they are processed independently;
 //!     overlapping bevels at that shared vert may produce garbage but will not
 //!     crash.
@@ -24,7 +30,9 @@
 
 use std::collections::HashSet;
 
-use crate::halfedge::cycles::{disk_remove_edge, disk_walk, radial_remove_loop, radial_walk};
+use crate::halfedge::cycles::{
+    disk_remove_edge, disk_walk, edge_between, radial_remove_loop, radial_walk,
+};
 use crate::halfedge::ops::face_create::create_face_from_verts_with_material;
 use crate::halfedge::types::*;
 use crate::newell::newell_normal;
@@ -37,6 +45,11 @@ pub enum BevelError {
     /// current implementation skips non-manifold edges silently and never
     /// returns this variant from the public entry point.
     NonManifoldEdge,
+    /// More than one segment at an endpoint that does not meet exactly three
+    /// edges, where the rounded profile has no end cap to close it.
+    ProfileWithoutCap,
+    /// A face could not be rebuilt; the mesh is left as it was.
+    RebuildFailed,
 }
 
 #[derive(Debug)]
@@ -53,11 +66,27 @@ pub struct BevelResult {
 ///
 /// Returns `EmptyInput` if `edges` is empty, `WidthTooSmall` if `width < 1e-6`.
 /// Per-edge non-manifold (not exactly 2 adjacent faces with `loop_count` >= 4)
-/// is silently skipped; the result reflects whatever edges did succeed.
+/// is silently skipped; the result reflects whatever edges did succeed. A
+/// face that cannot be rebuilt fails the whole call with `RebuildFailed` and
+/// leaves `mesh` untouched.
 pub fn edge_bevel(
     mesh: &mut HalfedgeMesh,
     edges: &[EdgeKey],
     width: f32,
+) -> Result<BevelResult, BevelError> {
+    edge_bevel_segments(mesh, edges, width, 1)
+}
+
+/// [`edge_bevel`] with `segments` quads across each chamfer. `segments` below
+/// 1 counts as 1. The rail edges in the result run from one face side to the
+/// other, two outer rails then the inner ones. More than one segment needs
+/// every endpoint of a bevelable edge to meet exactly three edges, else
+/// `ProfileWithoutCap` and `mesh` untouched.
+pub fn edge_bevel_segments(
+    mesh: &mut HalfedgeMesh,
+    edges: &[EdgeKey],
+    width: f32,
+    segments: u32,
 ) -> Result<BevelResult, BevelError> {
     if edges.is_empty() {
         return Err(BevelError::EmptyInput);
@@ -69,9 +98,28 @@ pub fn edge_bevel(
     let mut new_faces: Vec<FaceKey> = Vec::new();
     let mut new_edges: Vec<EdgeKey> = Vec::new();
 
-    for &edge_key in edges {
-        bevel_one_edge(mesh, edge_key, width, &mut new_faces, &mut new_edges);
+    let segments = segments.max(1);
+    if segments > 1
+        && edges
+            .iter()
+            .filter(|&&edge| bevelable(mesh, edge))
+            .flat_map(|&edge| mesh.edges[edge].v)
+            .any(|vert| disk_walk(mesh, vert).count() != 3)
+    {
+        return Err(BevelError::ProfileWithoutCap);
     }
+    let mut work = mesh.clone();
+    for &edge_key in edges {
+        bevel_one_edge(
+            &mut work,
+            edge_key,
+            width,
+            segments,
+            &mut new_faces,
+            &mut new_edges,
+        )?;
+    }
+    *mesh = work;
 
     Ok(BevelResult {
         new_faces,
@@ -79,30 +127,36 @@ pub fn edge_bevel(
     })
 }
 
-/// Process a single edge. Silently returns on non-manifold input.
+/// Whether `edge` has exactly two adjacent faces of four or more sides.
+fn bevelable(mesh: &HalfedgeMesh, edge: EdgeKey) -> bool {
+    if !mesh.edges.contains_key(edge) {
+        return false;
+    }
+    let radial: Vec<LoopKey> = radial_walk(mesh, edge).collect();
+    radial.len() == 2
+        && radial
+            .iter()
+            .all(|&lp| mesh.faces[mesh.loops[lp].face].loop_count >= 4)
+}
+
+/// Process a single edge. Skips an edge it cannot bevel; fails when a face
+/// cannot be rebuilt, leaving `mesh` half-edited for the caller to discard.
 fn bevel_one_edge(
     mesh: &mut HalfedgeMesh,
     edge_key: EdgeKey,
     width: f32,
+    segments: u32,
     new_faces: &mut Vec<FaceKey>,
     new_edges: &mut Vec<EdgeKey>,
-) {
-    if !mesh.edges.contains_key(edge_key) {
-        return;
+) -> Result<(), BevelError> {
+    if !bevelable(mesh, edge_key) {
+        return Ok(());
     }
-
-    // 1. Verify exactly 2 adjacent faces, each with loop_count >= 4.
     let radial: Vec<LoopKey> = radial_walk(mesh, edge_key).collect();
-    if radial.len() != 2 {
-        return;
-    }
     let l_a = radial[0];
     let l_b = radial[1];
     let face_a = mesh.loops[l_a].face;
     let face_b = mesh.loops[l_b].face;
-    if mesh.faces[face_a].loop_count < 4 || mesh.faces[face_b].loop_count < 4 {
-        return;
-    }
 
     let v0 = mesh.edges[edge_key].v[0];
     let v1 = mesh.edges[edge_key].v[1];
@@ -147,7 +201,7 @@ fn bevel_one_edge(
         .cross(walk_b)
         .normalize_or_zero();
     if perp_a.length_squared() < 1e-12 || perp_b.length_squared() < 1e-12 {
-        return;
+        return Ok(());
     }
     let dir_a_v0 = perp_a;
     let dir_a_v1 = perp_a;
@@ -159,6 +213,8 @@ fn bevel_one_edge(
     let v0_b = mesh.add_vert(v0_pos + dir_b_v0 * width);
     let v1_a = mesh.add_vert(v1_pos + dir_a_v1 * width);
     let v1_b = mesh.add_vert(v1_pos + dir_b_v1 * width);
+    let mids_0 = profile_verts(mesh, v0_pos, v0_a, v0_b, segments);
+    let mids_1 = profile_verts(mesh, v1_pos, v1_a, v1_b, segments);
 
     // 6. Collect every face incident at v0 or v1. These are the faces whose
     //    rings reference v0 or v1 and therefore need rebuilding (or
@@ -181,7 +237,12 @@ fn bevel_one_edge(
     let mut rebuilds: Vec<(Vec<VertKey>, u32)> = Vec::with_capacity(affected.len());
     for &fk in &affected {
         let ring = build_new_ring(
-            mesh, fk, face_a, face_b, edge_key, v0, v1, v0_a, v0_b, v1_a, v1_b,
+            mesh,
+            fk,
+            [face_a, face_b],
+            [v0, v1],
+            [v0_a, v0_b, v1_a, v1_b],
+            [&mids_0, &mids_1],
         );
         let mat = mesh.faces[fk].material_idx;
         rebuilds.push((ring, mat));
@@ -198,7 +259,6 @@ fn bevel_one_edge(
         tear_down_face(mesh, fk);
     }
 
-    // Remove the beveled edge.
     disk_remove_edge(mesh, edge_key);
     mesh.edges.remove(edge_key);
 
@@ -221,11 +281,10 @@ fn bevel_one_edge(
         if ring.len() < 3 {
             continue;
         }
-        if let Ok(face) = create_face_from_verts_with_material(mesh, ring, Some(*mat)) {
-            // Re-cache normal.
-            let positions: Vec<glam::Vec3> = ring.iter().map(|&k| mesh.verts[k].co).collect();
-            mesh.faces[face].normal_cache = newell_normal(&positions);
-        }
+        let face = create_face_from_verts_with_material(mesh, ring, Some(*mat))
+            .map_err(|_| BevelError::RebuildFailed)?;
+        let positions: Vec<glam::Vec3> = ring.iter().map(|&k| mesh.verts[k].co).collect();
+        mesh.faces[face].normal_cache = newell_normal(&positions);
     }
 
     // 10. Create the chamfer quad. Winding `(v0_A, v0_B, v1_B, v1_A)` is the
@@ -239,38 +298,66 @@ fn bevel_one_edge(
     //     `create_face_from_verts_with_material` is idempotent on edge lookup,
     //     so any edge already created by the rebuilds in step 9 will be
     //     reused; only the 0-2 edges that don't yet exist get inserted.
-    // Pick winding so the chamfer's Newell normal faces outward (matching the
-    // average of the two adjacent faces' normals). Without this check the ring
-    // can end up wound clockwise viewed from outside, the face renders as a
-    // backface, and the chamfer looks dark / inverted.
-    let candidate_ring: [VertKey; 4] = [v0_a, v0_b, v1_b, v1_a];
-    let candidate_positions: Vec<glam::Vec3> =
-        candidate_ring.iter().map(|&k| mesh.verts[k].co).collect();
-    let candidate_normal = newell_normal(&candidate_positions);
-    let chamfer_ring: [VertKey; 4] = if outward_expected.length_squared() > 1e-6
-        && candidate_normal.dot(outward_expected) < 0.0
-    {
-        [v0_a, v1_a, v1_b, v0_b]
-    } else {
-        candidate_ring
-    };
-    let chamfer_mat = next_material_idx(mesh);
-    let Ok(chamfer_face) =
-        create_face_from_verts_with_material(mesh, &chamfer_ring, Some(chamfer_mat))
-    else {
-        return;
-    };
-    let positions: Vec<glam::Vec3> = chamfer_ring.iter().map(|&k| mesh.verts[k].co).collect();
-    mesh.faces[chamfer_face].normal_cache = newell_normal(&positions);
-    new_faces.push(chamfer_face);
+    // Pick winding so each strip quad's Newell normal faces outward (matching
+    // the average of the two adjacent faces' normals). Without this check the
+    // ring can end up wound clockwise viewed from outside, the face renders as
+    // a backface, and the chamfer looks dark / inverted.
+    let side_0: Vec<VertKey> = std::iter::once(v0_a)
+        .chain(mids_0.iter().copied())
+        .chain(std::iter::once(v0_b))
+        .collect();
+    let side_1: Vec<VertKey> = std::iter::once(v1_a)
+        .chain(mids_1.iter().copied())
+        .chain(std::iter::once(v1_b))
+        .collect();
+    for k in 0..side_0.len() - 1 {
+        let candidate_ring: [VertKey; 4] = [side_0[k], side_0[k + 1], side_1[k + 1], side_1[k]];
+        let candidate_positions: Vec<glam::Vec3> =
+            candidate_ring.iter().map(|&v| mesh.verts[v].co).collect();
+        let candidate_normal = newell_normal(&candidate_positions);
+        let strip_ring: [VertKey; 4] = if outward_expected.length_squared() > 1e-6
+            && candidate_normal.dot(outward_expected) < 0.0
+        {
+            [side_0[k], side_1[k], side_1[k + 1], side_0[k + 1]]
+        } else {
+            candidate_ring
+        };
+        let strip_mat = next_material_idx(mesh);
+        let strip_face = create_face_from_verts_with_material(mesh, &strip_ring, Some(strip_mat))
+            .map_err(|_| BevelError::RebuildFailed)?;
+        let positions: Vec<glam::Vec3> = strip_ring.iter().map(|&v| mesh.verts[v].co).collect();
+        mesh.faces[strip_face].normal_cache = newell_normal(&positions);
+        new_faces.push(strip_face);
+    }
 
-    // 11. Look up the two rail edges by vertex pair.
-    if let Some(rail_a) = find_edge_between(mesh, v0_a, v1_a) {
-        new_edges.push(rail_a);
-    }
-    if let Some(rail_b) = find_edge_between(mesh, v0_b, v1_b) {
-        new_edges.push(rail_b);
-    }
+    let rails = [(v0_a, v1_a), (v0_b, v1_b)]
+        .into_iter()
+        .chain(mids_0.iter().copied().zip(mids_1.iter().copied()));
+    new_edges.extend(rails.filter_map(|(a, b)| edge_between(mesh, a, b)));
+    Ok(())
+}
+
+/// The `segments - 1` in-between vertices of the rounded profile from `a` to
+/// `b` around the corner at `corner`, in order from `a`. The profile is the
+/// quarter-ellipse through `a` and `b` tangent to both faces, centred on the
+/// corner's opposite in the parallelogram `a`, `corner`, `b`.
+fn profile_verts(
+    mesh: &mut HalfedgeMesh,
+    corner: glam::Vec3,
+    a: VertKey,
+    b: VertKey,
+    segments: u32,
+) -> Vec<VertKey> {
+    let a_pos = mesh.verts[a].co;
+    let b_pos = mesh.verts[b].co;
+    let centre = a_pos + b_pos - corner;
+    (1..segments)
+        .map(|k| {
+            let angle = std::f32::consts::FRAC_PI_2 * k as f32 / segments as f32;
+            let pos = centre + (a_pos - centre) * angle.cos() + (b_pos - centre) * angle.sin();
+            mesh.add_vert(pos)
+        })
+        .collect()
 }
 
 /// Walk direction along the beveled edge `e` in the face containing `lp_at_v0`.
@@ -325,18 +412,16 @@ fn collect_faces_at_vert(mesh: &HalfedgeMesh, v: VertKey, out: &mut HashSet<Face
 /// existing ring; each non-{v0, v1} vert is kept as-is, each v0 is replaced
 /// per the face-specific rule (a single offset vert, two offset verts, or no
 /// change), and likewise for v1.
+///
+/// The offset vertices come as `[v0_a, v0_b, v1_a, v1_b]` and `mids` holds the
+/// profile vertices at `v0` and at `v1`, each ordered from the A offset to the B.
 fn build_new_ring(
     mesh: &HalfedgeMesh,
     face: FaceKey,
-    face_a: FaceKey,
-    face_b: FaceKey,
-    e: EdgeKey,
-    v0: VertKey,
-    v1: VertKey,
-    v0_a: VertKey,
-    v0_b: VertKey,
-    v1_a: VertKey,
-    v1_b: VertKey,
+    [face_a, face_b]: [FaceKey; 2],
+    [v0, v1]: [VertKey; 2],
+    [v0_a, v0_b, v1_a, v1_b]: [VertKey; 4],
+    mids: [&[VertKey]; 2],
 ) -> Vec<VertKey> {
     let face_data = &mesh.faces[face];
     let n = face_data.loop_count as usize;
@@ -359,13 +444,10 @@ fn build_new_ring(
         let next_edge = lp.edge;
 
         if face == face_a {
-            // In fA: the loop walks across `e` (either as next_edge or
-            // prev_edge). Replace v with v_A.
-            let _ = (prev_edge, next_edge, e);
+            // In fA: the loop walks across the beveled edge. Replace v with v_A.
             ring.push(endpoint.pick(v0_a, v1_a));
         } else if face == face_b {
             // In fB: same idea, with v_B.
-            let _ = (prev_edge, next_edge, e);
             ring.push(endpoint.pick(v0_b, v1_b));
         } else {
             // In any other face at v: substitute based on which ring edges
@@ -423,9 +505,15 @@ fn build_new_ring(
                 }
                 (Some(l), Some(r)) => {
                     // Both adjacent edges are parallels (degree-3 cube-corner
-                    // case): v is fully replaced by [l, r].
+                    // case): v is fully replaced by [l, profile, r].
                     ring.push(l);
                     if l != r {
+                        let profile = endpoint.pick(mids[0], mids[1]);
+                        if l == offset_a {
+                            ring.extend(profile.iter().copied());
+                        } else {
+                            ring.extend(profile.iter().rev().copied());
+                        }
                         ring.push(r);
                     }
                 }
@@ -495,14 +583,6 @@ fn next_material_idx(mesh: &HalfedgeMesh) -> u32 {
         .map(|f| f.material_idx)
         .max()
         .map_or(0, |m| m + 1)
-}
-
-/// Linear scan of `mesh.edges` for an edge connecting `va` and `vb`.
-fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
-    mesh.edges
-        .iter()
-        .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
-        .map(|(k, _)| k)
 }
 
 #[derive(Clone, Copy)]
