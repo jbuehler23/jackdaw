@@ -124,6 +124,7 @@ pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
 pub(crate) mod preview_model;
+pub(crate) mod primitive_ops;
 pub mod probe_bake;
 pub mod progress;
 pub mod project;

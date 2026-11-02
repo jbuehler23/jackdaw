@@ -194,6 +194,25 @@ impl OperatorParameters {
         }
     }
 
+    /// Read a `Vec3` parameter, given as a vector or as `x,y,z` text.
+    pub fn as_vec3(&self, key: &str) -> Option<Vec3> {
+        match self.get(key)? {
+            PropertyValue::Vec3(value) => Some(*value),
+            PropertyValue::String(text) => {
+                let parts = text
+                    .split(',')
+                    .map(|part| part.trim().parse::<f32>())
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()?;
+                match parts[..] {
+                    [x, y, z] => Some(Vec3::new(x, y, z)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Read an [`Entity`] parameter. `None` if the key is missing or
     /// the value isn't a [`PropertyValue::Entity`].
     pub fn as_entity(&self, key: &str) -> Option<Entity> {
@@ -615,7 +634,18 @@ fn is_op_running(
 pub struct RefreshOperatorButtons;
 
 fn dispatch_operator(
-    In((id, params, settings)): In<(Cow<'static, str>, OperatorParameters, CallOperatorSettings)>,
+    In(call): In<(Cow<'static, str>, OperatorParameters, CallOperatorSettings)>,
+    world: &mut World,
+    active: &mut SystemState<ActiveModalQuery>,
+) -> Result<OperatorResult, CallOperatorError> {
+    let outer = world.get_resource_or_init::<OperatorOutcome>().enter();
+    let result = dispatch_operator_scoped(call, world, active);
+    world.get_resource_or_init::<OperatorOutcome>().leave(outer);
+    result
+}
+
+fn dispatch_operator_scoped(
+    (id, params, settings): (Cow<'static, str>, OperatorParameters, CallOperatorSettings),
     world: &mut World,
     active: &mut SystemState<ActiveModalQuery>,
 ) -> Result<OperatorResult, CallOperatorError> {
@@ -774,6 +804,68 @@ pub fn report_to_caller(world: &mut World, message: impl Into<String>) {
         .get_resource_or_init::<OperatorReports>()
         .0
         .push(message);
+}
+
+/// What a parametric call made of the scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Changed,
+    Unchanged,
+    /// The parameters were refused before anything was touched.
+    Invalid,
+}
+
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Changed => "changed",
+            Self::Unchanged => "unchanged",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
+/// The [`Outcome`] the operator that just ran declared, if it declares one.
+/// Every dispatch starts it empty; a call made from inside another operator
+/// leaves the outer call's value as it found it.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorOutcome {
+    current: Option<Outcome>,
+    depth: usize,
+}
+
+impl OperatorOutcome {
+    pub fn get(&self) -> Option<Outcome> {
+        self.current
+    }
+
+    pub fn set(&mut self, outcome: Outcome) {
+        self.current = Some(outcome);
+    }
+
+    /// Start a call: the value it replaces, for [`Self::leave`].
+    pub fn enter(&mut self) -> Option<Outcome> {
+        self.depth += 1;
+        self.current.take()
+    }
+
+    /// End a call begun with [`Self::enter`].
+    pub fn leave(&mut self, outer: Option<Outcome>) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth > 0 {
+            self.current = outer;
+        }
+    }
+
+    /// Hand over the outermost call's value.
+    pub fn take(&mut self) -> Option<Outcome> {
+        self.current.take()
+    }
+}
+
+/// Declares what the running operator made of the scene.
+pub fn set_outcome(world: &mut World, outcome: Outcome) {
+    world.get_resource_or_init::<OperatorOutcome>().set(outcome);
 }
 
 /// Runs `body` as one undo entry labelled `label`.
@@ -971,6 +1063,49 @@ fn finalize_modal(
 #[cfg(test)]
 mod parameter_tests {
     use super::*;
+
+    #[test]
+    fn a_vec3_reads_from_a_vector_or_from_three_numbers_as_text() {
+        let given = Vec3::new(1.0, -2.0, 3.5);
+        assert_eq!(
+            params("pos", PropertyValue::Vec3(given)).as_vec3("pos"),
+            Some(given)
+        );
+        assert_eq!(
+            params("pos", PropertyValue::String("1, -2, 3.5".into())).as_vec3("pos"),
+            Some(given)
+        );
+        for text in ["1,2", "1,2,3,4", "1,x,3", ""] {
+            assert_eq!(
+                params("pos", PropertyValue::String(text.into())).as_vec3("pos"),
+                None,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nested_call_never_replaces_the_outer_calls_outcome() {
+        let mut outcome = OperatorOutcome::default();
+        outcome.set(Outcome::Invalid);
+        let outer = outcome.enter();
+        assert_eq!(outcome.get(), None, "a call starts with no outcome");
+        outcome.set(Outcome::Unchanged);
+        let inner = outcome.enter();
+        outcome.set(Outcome::Changed);
+        outcome.leave(inner);
+        assert_eq!(
+            outcome.get(),
+            Some(Outcome::Unchanged),
+            "the inner one is dropped"
+        );
+        outcome.leave(outer);
+        assert_eq!(
+            outcome.get(),
+            Some(Outcome::Unchanged),
+            "the outermost one stays"
+        );
+    }
 
     fn params(key: &str, value: PropertyValue) -> OperatorParameters {
         OperatorParameters([(key.to_string(), value)].into_iter().collect())

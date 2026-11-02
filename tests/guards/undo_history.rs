@@ -582,7 +582,9 @@ fn an_edit_on_a_prefab_instance_redoes_after_the_spawn_is_undone_and_redone() {
 fn a_trimmed_history_still_undoes_every_entry_it_kept() {
     let (mut app, _dir) = editor();
     let start = depth(&app);
-    cube(&mut app);
+    // An empty is added with a whole-scene snapshot, which is what has a
+    // size for the budget to count.
+    menu(&mut app, "entity.add.empty", true);
     let per_cube = depth(&app) - start;
     let one_cube = app.world().resource::<CommandHistory>().heap_bytes();
     app.world_mut()
@@ -590,7 +592,7 @@ fn a_trimmed_history_still_undoes_every_entry_it_kept() {
         .budget_bytes = one_cube * 6;
     let mut texts = vec![scene_text(&mut app)];
     for _ in 0..12 {
-        cube(&mut app);
+        menu(&mut app, "entity.add.empty", true);
         texts.push(scene_text(&mut app));
     }
     let kept = depth(&app);

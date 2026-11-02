@@ -26,6 +26,26 @@ pub struct SceneRootTag;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct DerivedFaceMesh;
 
+/// Why [`Brush::from_polygons`] refused a face ring, by the ring's index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolygonError {
+    TooFewCorners(usize),
+    IndexOutOfRange(usize),
+    NoArea(usize),
+}
+
+impl std::fmt::Display for PolygonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooFewCorners(face) => write!(f, "face {face} has fewer than three corners"),
+            Self::IndexOutOfRange(face) => write!(f, "face {face} names a missing vertex"),
+            Self::NoArea(face) => write!(f, "face {face} has no area"),
+        }
+    }
+}
+
+impl std::error::Error for PolygonError {}
+
 /// Canonical brush data. Serialized. Geometry derived from this.
 #[derive(Component, Reflect, Clone, Debug, Default)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]
@@ -443,71 +463,7 @@ impl Brush {
 
     /// Create a sphere brush approximated as an icosahedron (20 triangular faces).
     pub fn sphere(radius: f32) -> Self {
-        let phi = (1.0 + 5.0_f32.sqrt()) / 2.0;
-        let raw = [
-            Vec3::new(-1.0, phi, 0.0),
-            Vec3::new(1.0, phi, 0.0),
-            Vec3::new(-1.0, -phi, 0.0),
-            Vec3::new(1.0, -phi, 0.0),
-            Vec3::new(0.0, -1.0, phi),
-            Vec3::new(0.0, 1.0, phi),
-            Vec3::new(0.0, -1.0, -phi),
-            Vec3::new(0.0, 1.0, -phi),
-            Vec3::new(phi, 0.0, -1.0),
-            Vec3::new(phi, 0.0, 1.0),
-            Vec3::new(-phi, 0.0, -1.0),
-            Vec3::new(-phi, 0.0, 1.0),
-        ];
-        let verts: Vec<Vec3> = raw.iter().map(|v| v.normalize() * radius).collect();
-
-        // 20 triangular faces (standard icosahedron topology)
-        let tris: [[usize; 3]; 20] = [
-            [0, 11, 5],
-            [0, 5, 1],
-            [0, 1, 7],
-            [0, 7, 10],
-            [0, 10, 11],
-            [1, 5, 9],
-            [5, 11, 4],
-            [11, 10, 2],
-            [10, 7, 6],
-            [7, 1, 8],
-            [3, 9, 4],
-            [3, 4, 2],
-            [3, 2, 6],
-            [3, 6, 8],
-            [3, 8, 9],
-            [4, 9, 5],
-            [2, 4, 11],
-            [6, 2, 10],
-            [8, 6, 7],
-            [9, 8, 1],
-        ];
-
-        let faces: Vec<BrushFaceData> = tris
-            .iter()
-            .map(|&[a, b, c]| {
-                let normal = (verts[b] - verts[a]).cross(verts[c] - verts[a]).normalize();
-                let distance = normal.dot(verts[a]);
-                // Ensure outward-facing
-                let (normal, distance) = if distance < 0.0 {
-                    (-normal, -distance)
-                } else {
-                    (normal, distance)
-                };
-                let (u, v) = compute_face_tangent_axes(normal);
-                BrushFaceData {
-                    plane: BrushPlane { normal, distance },
-                    uv_scale: Vec2::ONE,
-                    uv_u_axis: u,
-                    uv_v_axis: v,
-                    ..default()
-                }
-            })
-            .collect();
-
-        let topology = compute_brush_topology(&faces);
-        Self { faces, topology }
+        Self::ico_sphere(radius, 0)
     }
 
     /// A thin axis-aligned slab usable as a floor or wall tile. Implemented
@@ -656,6 +612,170 @@ impl Brush {
         ];
         let apex = Vec3::new(0.0, half_height, 0.0);
         Self::tapered(&base, apex).unwrap_or_else(|| Self::cuboid(half_x, half_height, half_z))
+    }
+
+    /// A closed solid from vertex `positions` and its faces as rings of
+    /// indices, each counter-clockwise seen from outside.
+    pub fn from_polygons(
+        positions: Vec<Vec3>,
+        polygons: Vec<Vec<usize>>,
+    ) -> Result<Self, PolygonError> {
+        use jackdaw_geometry::newell_normal;
+
+        let mut faces = Vec::with_capacity(polygons.len());
+        for (face, ring) in polygons.iter().enumerate() {
+            if ring.len() < 3 {
+                return Err(PolygonError::TooFewCorners(face));
+            }
+            let corners = ring
+                .iter()
+                .map(|&index| positions.get(index).copied())
+                .collect::<Option<Vec<Vec3>>>()
+                .ok_or(PolygonError::IndexOutOfRange(face))?;
+            let normal = match corners[..] {
+                [a, b, c] => (b - a).cross(c - a),
+                _ => newell_normal(&corners),
+            }
+            .try_normalize()
+            .ok_or(PolygonError::NoArea(face))?;
+            let (u, v) = compute_face_tangent_axes(normal);
+            faces.push(BrushFaceData {
+                plane: BrushPlane {
+                    normal,
+                    distance: normal.dot(corners[0]),
+                },
+                uv_scale: Vec2::ONE,
+                uv_u_axis: u,
+                uv_v_axis: v,
+                ..default()
+            });
+        }
+        let topology = jackdaw_geometry::build_topology_from_face_polygons(positions, polygons);
+        Ok(Self { faces, topology })
+    }
+
+    /// A sphere of `segments` sides around Y and `rings` bands from pole to
+    /// pole (at least 3 and 2), its vertices on a sphere of `radius`.
+    pub fn ring_sphere(radius: f32, segments: usize, rings: usize) -> Self {
+        let (segments, rings) = (segments.max(3), rings.max(2));
+        let mut positions = vec![Vec3::Y * radius];
+        for ring in 1..rings {
+            let polar = ring as f32 / rings as f32 * std::f32::consts::PI;
+            for side in 0..segments {
+                let around = side as f32 / segments as f32 * std::f32::consts::TAU;
+                positions.push(
+                    radius
+                        * Vec3::new(
+                            polar.sin() * around.cos(),
+                            polar.cos(),
+                            polar.sin() * around.sin(),
+                        ),
+                );
+            }
+        }
+        let south = positions.len();
+        positions.push(Vec3::NEG_Y * radius);
+
+        let at = |ring: usize, side: usize| 1 + (ring - 1) * segments + side % segments;
+        let mut polygons = Vec::with_capacity(segments * rings);
+        for side in 0..segments {
+            polygons.push(vec![0, at(1, side + 1), at(1, side)]);
+            for ring in 1..rings - 1 {
+                polygons.push(vec![
+                    at(ring, side),
+                    at(ring, side + 1),
+                    at(ring + 1, side + 1),
+                    at(ring + 1, side),
+                ]);
+            }
+            polygons.push(vec![south, at(rings - 1, side), at(rings - 1, side + 1)]);
+        }
+        Self::from_polygons(positions, polygons).unwrap_or_else(|_| Self::sphere(radius))
+    }
+
+    /// The twenty-face sphere with each triangle split in four `subdivisions`
+    /// times, its vertices pushed out onto a sphere of `radius`.
+    pub fn ico_sphere(radius: f32, subdivisions: usize) -> Self {
+        let (raw, tris) = icosahedron();
+        let mut positions = raw.to_vec();
+        let mut triangles = tris.to_vec();
+        for _ in 0..subdivisions {
+            let mut midpoints = HashMap::new();
+            let mut midpoint = |a: usize, b: usize, positions: &mut Vec<Vec3>| {
+                *midpoints.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                    positions.push((positions[a] + positions[b]).normalize());
+                    positions.len() - 1
+                })
+            };
+            let mut split = Vec::with_capacity(triangles.len() * 4);
+            for [a, b, c] in triangles {
+                let ab = midpoint(a, b, &mut positions);
+                let bc = midpoint(b, c, &mut positions);
+                let ca = midpoint(c, a, &mut positions);
+                split.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
+            }
+            triangles = split;
+        }
+        let polygons = triangles
+            .into_iter()
+            .map(|[a, b, c]| {
+                let outward = (positions[b] - positions[a])
+                    .cross(positions[c] - positions[a])
+                    .dot(positions[a])
+                    > 0.0;
+                if outward {
+                    vec![a, b, c]
+                } else {
+                    vec![a, c, b]
+                }
+            })
+            .collect();
+        let positions = positions.into_iter().map(|p| p * radius).collect();
+        Self::from_polygons(positions, polygons)
+            .unwrap_or_else(|_| Self::cuboid(radius, radius, radius))
+    }
+
+    /// An upright frustum: a `sides`-gon of `radius` at `y = -half_height`
+    /// and one of `radius_top` at `y = half_height`. A zero top is a cone.
+    pub fn frustum(radius: f32, radius_top: f32, half_height: f32, sides: usize) -> Self {
+        if radius_top <= 0.0 {
+            return Self::cone(radius, half_height, sides);
+        }
+        let sides = sides.max(3);
+        let ring = |r: f32, y: f32| {
+            (0..sides).map(move |i| {
+                let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+                Vec3::new(r * a.cos(), y, r * a.sin())
+            })
+        };
+        let positions: Vec<Vec3> = ring(radius, -half_height)
+            .chain(ring(radius_top, half_height))
+            .collect();
+        let mut polygons = vec![(0..sides).collect(), (sides..2 * sides).rev().collect()];
+        for i in 0..sides {
+            let next = (i + 1) % sides;
+            polygons.push(vec![i, sides + i, sides + next, next]);
+        }
+        Self::from_polygons(positions, polygons)
+            .unwrap_or_else(|_| Self::cylinder(radius, half_height, sides))
+    }
+
+    /// This brush stretched by `scale` per axis about its origin, its face
+    /// planes and texture axes refitted to the stretched shape.
+    pub fn scaled(mut self, scale: Vec3) -> Self {
+        for face in &mut self.faces {
+            let stretched = face.plane.normal / scale;
+            let length = stretched.length();
+            face.plane.normal = stretched / length;
+            face.plane.distance /= length;
+            let (u, v) = compute_face_tangent_axes(face.plane.normal);
+            face.uv_u_axis = u;
+            face.uv_v_axis = v;
+        }
+        for vert in &mut self.topology.vertices {
+            vert.position *= scale;
+        }
+        self
     }
 }
 
@@ -1633,9 +1753,131 @@ impl TerrainChannel {
     }
 }
 
+/// The twenty-face sphere's unit vertices and its triangles.
+fn icosahedron() -> ([Vec3; 12], [[usize; 3]; 20]) {
+    let phi = (1.0 + 5.0_f32.sqrt()) / 2.0;
+    let raw = [
+        Vec3::new(-1.0, phi, 0.0),
+        Vec3::new(1.0, phi, 0.0),
+        Vec3::new(-1.0, -phi, 0.0),
+        Vec3::new(1.0, -phi, 0.0),
+        Vec3::new(0.0, -1.0, phi),
+        Vec3::new(0.0, 1.0, phi),
+        Vec3::new(0.0, -1.0, -phi),
+        Vec3::new(0.0, 1.0, -phi),
+        Vec3::new(phi, 0.0, -1.0),
+        Vec3::new(phi, 0.0, 1.0),
+        Vec3::new(-phi, 0.0, -1.0),
+        Vec3::new(-phi, 0.0, 1.0),
+    ]
+    .map(Vec3::normalize);
+    let tris = [
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ];
+    (raw, tris)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tetrahedron() -> (Vec<Vec3>, Vec<Vec<usize>>) {
+        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::Y];
+        let polygons = vec![vec![0, 1, 2], vec![0, 3, 1], vec![0, 2, 3], vec![1, 3, 2]];
+        (positions, polygons)
+    }
+
+    #[test]
+    fn polygons_build_a_brush_and_bad_rings_are_refused() {
+        let (positions, polygons) = tetrahedron();
+        let brush = Brush::from_polygons(positions.clone(), polygons).expect("a tetrahedron");
+        assert_eq!((brush.faces.len(), brush.topology.vertices.len()), (4, 4));
+
+        for (rings, why) in [
+            (vec![vec![0, 1]], "a ring of two"),
+            (vec![vec![0, 1, 9]], "an index past the vertices"),
+            (vec![vec![0, 0, 1]], "a ring with no area"),
+        ] {
+            assert!(
+                Brush::from_polygons(positions.clone(), rings).is_err(),
+                "{why} is refused"
+            );
+        }
+    }
+
+    /// The twenty-face sphere as it was built before it shared the subdivided
+    /// sphere's path.
+    fn sphere_as_before(radius: f32) -> Brush {
+        let (raw, tris) = icosahedron();
+        let verts: Vec<Vec3> = raw.iter().map(|v| v * radius).collect();
+        let faces: Vec<BrushFaceData> = tris
+            .iter()
+            .map(|&[a, b, c]| {
+                let normal = (verts[b] - verts[a]).cross(verts[c] - verts[a]).normalize();
+                let distance = normal.dot(verts[a]);
+                let (normal, distance) = if distance < 0.0 {
+                    (-normal, -distance)
+                } else {
+                    (normal, distance)
+                };
+                let (u, v) = compute_face_tangent_axes(normal);
+                BrushFaceData {
+                    plane: BrushPlane { normal, distance },
+                    uv_scale: Vec2::ONE,
+                    uv_u_axis: u,
+                    uv_v_axis: v,
+                    ..default()
+                }
+            })
+            .collect();
+        let topology = compute_brush_topology(&faces);
+        Brush { faces, topology }
+    }
+
+    #[test]
+    fn the_twenty_face_sphere_keeps_its_faces_in_order_with_the_same_texture_axes() {
+        let before = sphere_as_before(0.5);
+        let now = Brush::sphere(0.5);
+        assert_eq!(now.faces.len(), before.faces.len());
+        for (now, before) in now.faces.iter().zip(&before.faces) {
+            assert!(now.plane.normal.abs_diff_eq(before.plane.normal, 1e-5));
+            assert!((now.plane.distance - before.plane.distance).abs() < 1e-5);
+            assert!(now.uv_u_axis.abs_diff_eq(before.uv_u_axis, 1e-5));
+            assert!(now.uv_v_axis.abs_diff_eq(before.uv_v_axis, 1e-5));
+            assert_eq!(now.uv_scale, before.uv_scale);
+        }
+        assert_eq!(now.topology.vertices.len(), before.topology.vertices.len());
+        for vert in &now.topology.vertices {
+            assert!(
+                before
+                    .topology
+                    .vertices
+                    .iter()
+                    .any(|old| old.position.abs_diff_eq(vert.position, 1e-5)),
+                "{} is new",
+                vert.position
+            );
+        }
+    }
 
     /// A layer authored before the scene carried one wind keeps blowing the
     /// same way: its own settings become the scene's wind and its strength
