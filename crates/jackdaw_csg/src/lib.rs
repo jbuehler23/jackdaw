@@ -811,14 +811,31 @@ pub fn brush_difference_split(
     target: &CsgInput<'_>,
     cutter: &CsgInput<'_>,
 ) -> Result<Vec<CsgBrush>, CsgError> {
-    let t_conv = brush_to_solid(target)?;
-    let c_conv = brush_to_solid(cutter)?;
+    boolean_split(target, cutter, BooleanOp::Difference)
+}
 
-    let result = kernel::boolean(&t_conv.solid, &c_conv.solid, BooleanOp::Difference);
+/// Intersection variant of [`brush_difference_split`]: the parts of `target`
+/// inside `other`, one brush per connected component.
+pub fn brush_intersection_split(
+    target: &CsgInput<'_>,
+    other: &CsgInput<'_>,
+) -> Result<Vec<CsgBrush>, CsgError> {
+    boolean_split(target, other, BooleanOp::Intersection)
+}
+
+fn boolean_split(
+    a: &CsgInput<'_>,
+    b: &CsgInput<'_>,
+    op: BooleanOp,
+) -> Result<Vec<CsgBrush>, CsgError> {
+    let a_conv = brush_to_solid(a)?;
+    let b_conv = brush_to_solid(b)?;
+
+    let result = kernel::boolean(&a_conv.solid, &b_conv.solid, op);
     if kernel::is_empty(&result) {
         return Err(CsgError::EmptyResult);
     }
-    let runs: Vec<&[FaceSlot]> = vec![&t_conv.face_slots, &c_conv.face_slots];
+    let runs: Vec<&[FaceSlot]> = vec![&a_conv.face_slots, &b_conv.face_slots];
     let components = kernel::decompose(&result);
     if components.is_empty() {
         // No disconnected components. Treat the whole thing as one.

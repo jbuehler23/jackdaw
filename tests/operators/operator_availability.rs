@@ -6,8 +6,10 @@
 //! `operator_modals.rs`; the ones here are the three biggest by op count.
 
 use crate::util;
+use crate::util::OperatorResultExt as _;
 
 use jackdaw::selection::{Selected, Selection};
+use jackdaw_api::op::AvailabilityParams;
 use jackdaw_api::prelude::*;
 
 /// Operators gated on `has_primary_selection` (Selection resource has
@@ -379,5 +381,79 @@ fn focus_a_field(app: &mut bevy::app::App) {
             .get::<bevy::text::EditableText>(focused)
             .is_some(),
         "the focus is on the field's own buffer",
+    );
+}
+
+/// What the gate of `test.params_gate` saw each time it ran: the call's
+/// parameters, or `None` when it was asked without a call.
+#[derive(bevy::prelude::Resource, Default)]
+struct GateSaw(Vec<Option<OperatorParameters>>);
+
+#[derive(Default)]
+struct ParamsGateExtension;
+
+impl JackdawExtension for ParamsGateExtension {
+    fn id(&self) -> String {
+        "test.params_gate".to_string()
+    }
+
+    fn register(&self, ctx: &mut ExtensionRegistrar<'_>) {
+        ctx.init_resource::<GateSaw>();
+        ctx.register_operator::<ParamsGateOp>();
+    }
+}
+
+fn record_gate(
+    call: Option<bevy::prelude::Res<AvailabilityParams>>,
+    mut saw: bevy::prelude::ResMut<GateSaw>,
+) -> bool {
+    saw.0.push(call.map(|call| call.0.clone()));
+    true
+}
+
+#[operator(
+    id = "test.params_gate",
+    label = "Params Gate",
+    is_available = record_gate,
+    allows_undo = false,
+    params(size(i64, doc = "Anything."))
+)]
+fn params_gate(_: bevy::prelude::In<OperatorParameters>) -> OperatorResult {
+    OperatorResult::Finished
+}
+
+#[test]
+fn a_gate_sees_the_call_parameters_only_while_a_dispatch_checks_it() {
+    let mut app = util::headless_app();
+    util::register_and_enable_extension::<ParamsGateExtension>(&mut app);
+
+    assert!(available(&mut app, "test.params_gate"));
+    app.world_mut()
+        .operator("test.params_gate")
+        .param("size", 3_i64)
+        .call()
+        .expect("dispatches")
+        .assert_finished();
+    app.world_mut()
+        .operator("test.params_gate")
+        .call()
+        .expect("dispatches")
+        .assert_finished();
+
+    let saw = std::mem::take(&mut app.world_mut().resource_mut::<GateSaw>().0);
+    assert_eq!(saw.len(), 3, "the gate ran once per question");
+    assert!(
+        saw[0].is_none(),
+        "a plain availability query carries no call"
+    );
+    assert_eq!(
+        saw[1].as_ref().and_then(|params| params.as_int("size")),
+        Some(3),
+        "a dispatch with parameters shows them to the gate"
+    );
+    assert!(saw[2].is_none(), "a dispatch without parameters shows none");
+    assert!(
+        app.world().get_resource::<AvailabilityParams>().is_none(),
+        "nothing is left behind once the check is over"
     );
 }

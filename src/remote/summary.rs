@@ -496,7 +496,7 @@ fn brush_counts(world: &World, entity: Entity) -> Option<(usize, usize)> {
 /// The world-space box around a node and everything under it: a brush's
 /// evaluated corners through its transform, or the culling bounds of a mesh.
 /// `None` when nothing in the subtree has either.
-fn world_bounds(world: &World, entity: Entity) -> Option<(Vec3, Vec3)> {
+pub(super) fn world_bounds(world: &World, entity: Entity) -> Option<(Vec3, Vec3)> {
     crate::view_ops::subtree_bounds(
         entity,
         |at| {
@@ -576,7 +576,7 @@ fn round(value: f32) -> Value {
     json!(if rounded == 0.0 { 0.0 } else { rounded })
 }
 
-fn vector(value: Vec3) -> Value {
+pub(super) fn vector(value: Vec3) -> Value {
     json!([round(value.x), round(value.y), round(value.z)])
 }
 

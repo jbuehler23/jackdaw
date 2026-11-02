@@ -539,6 +539,8 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
     ("animation.toggle_keyframe", &["entity"], true),
     ("binding.add", &["entity"], true),
     ("binding.set", &["entity"], true),
+    ("brush.csg_intersect", &["target", "cutters"], false),
+    ("brush.csg_subtract", &["target", "cutters"], false),
     ("brush.mesh.loop_cut_at", &["entity"], false),
     ("brush.select_elements", &["entity"], false),
     ("camera.pixel_canvas", &["entity"], false),

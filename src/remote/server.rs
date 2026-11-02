@@ -17,8 +17,8 @@ use bevy::tasks::{IoTaskPool, Task, futures_lite::future};
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
 use jackdaw_api_internal::operator::{
     CallOperatorError, CallOperatorSettings, ExecutionContext, OperatorOutcome, OperatorParameters,
-    OperatorReports, OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec,
-    with_batch_snapshot, with_history_span,
+    OperatorReplacements, OperatorReports, OperatorResult, OperatorWarnings, OperatorWorldExt,
+    ParamSpec, with_batch_snapshot, with_history_span,
 };
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_env::editor_endpoint::{
@@ -897,9 +897,19 @@ struct CallOutcome {
     /// refusal.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     reports: Vec<String>,
-    /// `changed`, `unchanged` or `invalid`, from an operator that says which.
+    /// `changed`, `empty`, `unchanged` or `invalid`, from an operator that says
+    /// which.
     #[serde(skip_serializing_if = "Option::is_none")]
     outcome: Option<&'static str>,
+    /// Scene entities the call took away, from an operator that replaces them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<u64>,
+    /// Scene entities the call made in their place.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    created: Vec<u64>,
+    /// The world-space `[min, max]` box of each of `created`, in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bounds: Vec<Value>,
 }
 
 impl CallOutcome {
@@ -995,6 +1005,19 @@ fn dispatch(world: &mut World, call: PreparedCall, history: bool) -> Result<Call
 
     let mut warnings = unresolved;
     warnings.append(&mut world.get_resource_or_init::<OperatorWarnings>().0);
+    let (removed, created) = world.get_resource_or_init::<OperatorReplacements>().take();
+    let created: Vec<Entity> = created
+        .into_iter()
+        .filter(|&entity| world.get_entity(entity).is_ok())
+        .collect();
+    let bounds = created
+        .iter()
+        .map(|&entity| {
+            super::summary::world_bounds(world, entity).map_or(Value::Null, |(min, max)| {
+                json!([super::summary::vector(min), super::summary::vector(max)])
+            })
+        })
+        .collect();
 
     Ok(CallOutcome {
         id,
@@ -1014,6 +1037,9 @@ fn dispatch(world: &mut World, call: PreparedCall, history: bool) -> Result<Call
             .get_resource_or_init::<OperatorOutcome>()
             .take()
             .map(jackdaw_api_internal::operator::Outcome::as_str),
+        removed: removed.into_iter().map(Entity::to_bits).collect(),
+        created: created.into_iter().map(Entity::to_bits).collect(),
+        bounds,
     })
 }
 

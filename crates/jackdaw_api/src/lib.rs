@@ -149,11 +149,12 @@ pub use jackdaw_api_macros::operator;
 /// [`OperatorCommandsExt`](op::OperatorCommandsExt)).
 pub mod op {
     pub use jackdaw_api_internal::operator::{
-        CallOperatorError, CallOperatorSettings, ExecutionContext, IntoOperatorResult, Operator,
-        OperatorCallBuilder, OperatorCommandsExt, OperatorOutcome, OperatorParameters,
-        OperatorReports, OperatorResult, OperatorSignature, OperatorSystemId, OperatorWarnings,
-        OperatorWorldExt, Outcome, ParamSpec, RefreshOperatorButtons, UnavailableReason,
-        report_to_caller, set_outcome, warn_caller, with_history_span,
+        AvailabilityParams, CallOperatorError, CallOperatorSettings, ExecutionContext,
+        IntoOperatorResult, Operator, OperatorCallBuilder, OperatorCommandsExt, OperatorOutcome,
+        OperatorParameters, OperatorReplacements, OperatorReports, OperatorResult,
+        OperatorSignature, OperatorSystemId, OperatorWarnings, OperatorWorldExt, Outcome,
+        ParamSpec, RefreshOperatorButtons, UnavailableReason, report_replaced, report_to_caller,
+        set_outcome, warn_caller, with_history_span,
     };
 }
 
