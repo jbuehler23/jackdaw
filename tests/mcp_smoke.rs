@@ -204,6 +204,8 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         "batch",
         "run_batch_file",
         "scene_tree",
+        "scene_summary",
+        "check",
         "get_entity",
         "apply_bsn",
         "scene_bsn",

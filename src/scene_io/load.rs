@@ -853,9 +853,9 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
     // stale when the scene is dropped. Callers who want to preserve
     // history (e.g. undo/redo itself) use `despawn_scene_entities`
     // directly.
-    let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
-    history.undo_stack.clear();
-    history.redo_stack.clear();
+    world
+        .resource_mut::<jackdaw_commands::CommandHistory>()
+        .clear();
 
     if let Err(err) = despawn_scene_entities(world) {
         error!("clear_scene_entities failed: {err}");
