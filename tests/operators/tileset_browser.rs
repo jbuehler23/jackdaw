@@ -2,8 +2,8 @@
 //! imports as one from its context menu, and the packed copy's array texture
 //! is pictured as a plain sheet.
 
-use crate::tileset_edit_ops::{FILE, overworld};
-use crate::tileset_ops::{SHEET, asset_file, project_app};
+use crate::operators::tileset_edit_ops::{FILE, overworld};
+use crate::operators::tileset_ops::{SHEET, asset_file, project_app};
 use crate::util::OperatorResultExt as _;
 
 use std::path::Path;
@@ -115,7 +115,7 @@ fn import_as_tileset_imports_the_image_and_opens_it() {
     settle(&mut app);
     assert!(asset_file(&dir, FILE).is_file(), "the tileset is written");
     assert!(asset_file(&dir, PACKED).is_file(), "with its packed copy");
-    let tileset = crate::tileset_ops::read_tileset(&asset_file(&dir, FILE));
+    let tileset = crate::operators::tileset_ops::read_tileset(&asset_file(&dir, FILE));
     assert!(
         tileset.terrains.is_empty(),
         "nothing is set up automatically"

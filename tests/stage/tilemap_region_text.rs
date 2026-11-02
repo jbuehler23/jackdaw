@@ -4,12 +4,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::tile_tools::{bytes, enter, entries, run, set_brush, stored, tile_map};
-use crate::tilemap_render::{
+use crate::stage::tile_tools::{bytes, enter, entries, run, set_brush, stored, tile_map};
+use crate::stage::tilemap_render::{
     TILESET, corner_pair, corner_patch, grass_patch, ground_terrain, layer, project_app, settle,
     spawn_map, tile_layer,
 };
-use crate::tilemap_shape_ops::{
+use crate::stage::tilemap_shape_ops::{
     Params, assert_refused, call, int, last_label, rect, terrain_at, text, warnings, with,
 };
 

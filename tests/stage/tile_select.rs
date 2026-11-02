@@ -2,9 +2,9 @@
 //! copied into a stamp or cut as one history entry each, and cleared by
 //! Escape before Escape leaves tile edit mode.
 
-use crate::tile_palette::{brush, tile_map};
-use crate::tile_tools::{assert_resolved, bytes, enter, entries, run, stored, stroke, tap};
-use crate::tilemap_render::{
+use crate::stage::tile_palette::{brush, tile_map};
+use crate::stage::tile_tools::{assert_resolved, bytes, enter, entries, run, stored, stroke, tap};
+use crate::stage::tilemap_render::{
     grass_patch, ground_terrain, layer, project_app, settle, spawn_map, tile_layer,
 };
 
@@ -63,7 +63,7 @@ fn dragging_with_select_selects_the_cell_rectangle() {
     );
     let count = entries(&app);
 
-    crate::tile_tools::hold(&mut app, SELECT, MouseButton::Left, &[(2, 1), (0, 3)]);
+    crate::stage::tile_tools::hold(&mut app, SELECT, MouseButton::Left, &[(2, 1), (0, 3)]);
     assert_eq!(
         area(&app),
         Some((cell(0, 1), cell(2, 3))),
@@ -87,7 +87,7 @@ fn the_selection_operators_need_a_selection() {
     tile_map(&mut app, &[]);
     for id in [ERASE, COPY, CUT, "tilemap.selection.clear"] {
         assert!(
-            !crate::tile_palette::available(&mut app, id),
+            !crate::stage::tile_palette::available(&mut app, id),
             "{id} without a selection"
         );
     }
@@ -100,7 +100,7 @@ fn the_selection_operators_need_a_selection() {
     assert_eq!(result, OperatorResult::Finished);
     assert_eq!(area(&app), Some((cell(1, 2), cell(3, 4))));
     for id in [ERASE, COPY, CUT, "tilemap.selection.clear"] {
-        assert!(crate::tile_palette::available(&mut app, id), "{id}");
+        assert!(crate::stage::tile_palette::available(&mut app, id), "{id}");
     }
 }
 
@@ -369,7 +369,7 @@ fn the_selection_operators_wait_for_their_layer() {
     app.world_mut().resource_mut::<TileEditMode>().layer = 1;
     for id in [ERASE, COPY, CUT, "tilemap.selection.clear"] {
         assert!(
-            !crate::tile_palette::available(&mut app, id),
+            !crate::stage::tile_palette::available(&mut app, id),
             "{id} on another layer"
         );
     }

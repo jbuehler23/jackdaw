@@ -2,7 +2,9 @@
 //! tileset: each one's effect on the file, its single undo entry, and its
 //! refusals.
 
-use crate::tileset_ops::{SHEET, asset_file, import, project_app, read_tileset, warnings};
+use crate::operators::tileset_ops::{
+    SHEET, asset_file, import, project_app, read_tileset, warnings,
+};
 use crate::util::OperatorResultExt as _;
 
 use bevy::prelude::*;

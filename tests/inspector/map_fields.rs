@@ -17,7 +17,7 @@ struct Worn {
     materials: BTreeMap<String, String>,
 }
 
-const WORN: &str = "inspector::map_fields::Worn";
+const WORN: &str = "editor::inspector::map_fields::Worn";
 
 fn app_with_worn() -> (App, Entity) {
     let mut app = util::editor_test_app();

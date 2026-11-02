@@ -1,7 +1,7 @@
 //! Tile edit mode's Brush and Eraser: strokes driven by a held button over a
 //! moving cursor cell, one history entry each, undone and redone exactly.
 
-use crate::tilemap_render::{
+use crate::stage::tilemap_render::{
     grass_patch, ground_terrain, key_of, layer, project_app, settle, spawn_map, tile_layer,
 };
 
@@ -512,7 +512,7 @@ fn selecting_something_else_leaves_the_mode() {
 /// paints through the stage observers.
 mod on_the_stage {
     use super::*;
-    use crate::sprite_gizmo::{add_panel, run, sprite, transform};
+    use crate::stage::sprite_gizmo::{add_panel, run, sprite, transform};
     use bevy::sprite::Anchor;
     use bevy::window::{PrimaryWindow, WindowResolution};
     use jackdaw::active_tool::ActiveTool;

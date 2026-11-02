@@ -15,8 +15,8 @@ use jackdaw::{
 };
 use jackdaw_api::prelude::*;
 
-use crate::sprite_gizmo::{drag, near, select, settle, transform, world_app};
-use crate::sprite_snap::snap_only;
+use crate::stage::sprite_gizmo::{drag, near, select, settle, transform, world_app};
+use crate::stage::sprite_snap::snap_only;
 use crate::util::{self, OperatorResultExt as _};
 
 fn set_ppu(app: &mut App, value: f64) {

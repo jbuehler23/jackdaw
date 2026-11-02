@@ -38,3 +38,6 @@ rustflags = ["-Clink-arg=--ld-path=wild"]
 
 [alias]
 xtask = "run --quiet --package xtask --manifest-path xtask/Cargo.toml --"
+# Runs the editor with the features the test targets resolve on Linux and
+# macOS, so `cargo dev` and `cargo test` share one build of the editor crate.
+dev = "run --features bevy/dynamic_linking,jackdaw_api/dynamic_linking,jackdaw_runtime/terrain,jackdaw_runtime/tilemap"

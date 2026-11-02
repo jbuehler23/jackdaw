@@ -1,11 +1,5 @@
 //! Authoring on the canvas and the stage: placement, snapping, guides,
 //! grouping, layout presets and the modelling tools.
-//!
-//! Each module below was its own test binary. Merged, the editor
-//! links once for the theme rather than once per file.
-
-#[path = "../util/mod.rs"]
-mod util;
 
 mod add_component;
 mod animation_graph;

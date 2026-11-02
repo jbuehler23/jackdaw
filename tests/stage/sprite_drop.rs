@@ -2,7 +2,7 @@
 //! sprite under the scene root at the drop point, the same entity
 //! `sprite.add` makes.
 
-use crate::sprite_gizmo::{history_len, pointer, settle, undo, world_app};
+use crate::stage::sprite_gizmo::{history_len, pointer, settle, undo, world_app};
 use crate::util::OperatorResultExt as _;
 
 use bevy::{

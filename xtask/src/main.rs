@@ -78,18 +78,31 @@ const SDK_BINARIES: &str = "binary(bsn_game_run) | binary(editor_journey) \
 /// names carry a hash, so they travel as one extra directory instead.
 const ARCHIVED_DYLIBS: &str = "target/debug/archived-dylibs";
 
-const ARCHIVE_BUILD: [&str; 5] = ["--locked", "--workspace", "--features", "dylib", "--tests"];
+/// The editor crate builds at opt-level 0 here: its build takes about half as
+/// long, which outweighs the slower test run.
+const ARCHIVE_BUILD: [&str; 7] = [
+    "--locked",
+    "--workspace",
+    "--features",
+    "dylib",
+    "--tests",
+    "--config",
+    "profile.dev.package.jackdaw.opt-level=0",
+];
 
 /// Build every test binary the integration tier runs, including library unit
-/// tests, into one nextest archive at `file`.
+/// tests, into one nextest archive at `file`. The [`SDK_BINARIES`] are built
+/// but left out, since the integration tier never runs them.
 fn archive(file: &str) -> bool {
     let mut build = vec!["test", "--no-run"];
     build.extend(ARCHIVE_BUILD);
     if !sh("cargo", &build) || !gather_dylibs() {
         return false;
     }
+    let filter = format!("not ({SDK_BINARIES})");
     let mut args = vec!["nextest", "archive", "--archive-file", file];
     args.extend(ARCHIVE_BUILD);
+    args.extend(["-E", filter.as_str(), "--zstd-level", "1"]);
     sh("cargo", &args)
 }
 

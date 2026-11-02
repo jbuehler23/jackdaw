@@ -3,8 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::tile_tools::{assert_resolved, enter, hold, run, set_brush, stored, stroke};
-use crate::tilemap_render::{
+use crate::stage::tile_tools::{assert_resolved, enter, hold, run, set_brush, stored, stroke};
+use crate::stage::tilemap_render::{
     corner_pair, corner_patch, grass_patch, ground_terrain, layer, project_app, settle, spawn_map,
 };
 

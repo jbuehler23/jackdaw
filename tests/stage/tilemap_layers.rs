@@ -2,7 +2,7 @@
 //! the layer operators with one exact undo step each over the scene and the
 //! cells, and the Layers section of the tilemap's inspector card.
 
-use crate::tilemap_render::{TILESET, key_of, project_app, settle};
+use crate::stage::tilemap_render::{TILESET, key_of, project_app, settle};
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
@@ -585,8 +585,8 @@ fn a_refused_card_choice_shows_the_layer_again() {
 fn layer_edits_wait_for_a_stroke_to_end() {
     let (mut app, _dir, _root, map) = app_with_map();
     add_tile_layer(&mut app, map, "Props");
-    crate::tile_tools::enter(&mut app, map);
-    crate::tile_tools::hold(&mut app, "tilemap.brush", MouseButton::Left, &[(0, 0)]);
+    crate::stage::tile_tools::enter(&mut app, map);
+    crate::stage::tile_tools::hold(&mut app, "tilemap.brush", MouseButton::Left, &[(0, 0)]);
     for id in [
         "tilemap.layer.add",
         "tilemap.layer.remove",

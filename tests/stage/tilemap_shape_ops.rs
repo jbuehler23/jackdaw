@@ -3,11 +3,13 @@
 //! with a reason on bad input, and the same cells and entry as the tile tool
 //! they stand in for.
 
-use crate::tile_tools::{
+use crate::stage::tile_tools::{
     BRUSH, BUCKET, LINE, RECTANGLE, available, bytes, click, enter, entries, fill, hold, run,
     set_brush, stored, stroke, tile_map, two_islands,
 };
-use crate::tilemap_render::{grass_patch, ground_terrain, layer, project_app, settle, spawn_map};
+use crate::stage::tilemap_render::{
+    grass_patch, ground_terrain, layer, project_app, settle, spawn_map,
+};
 
 use bevy::prelude::*;
 use jackdaw::tile_tools::MAX_FILL_CELLS;

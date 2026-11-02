@@ -1,8 +1,8 @@
 //! The 2D viewport toolbar: the object tools and Edit Tiles, the tile tools
 //! that replace them in tile edit mode, and the Snap and View menus.
 
-use crate::tile_palette::{brush, packed, tile_map};
-use crate::tilemap_render::{grass_patch, ground_terrain, project_app, settle, spawn_map};
+use crate::stage::tile_palette::{brush, packed, tile_map};
+use crate::stage::tilemap_render::{grass_patch, ground_terrain, project_app, settle, spawn_map};
 
 use crate::util::OperatorResultExt as _;
 use bevy::feathers::controls::ButtonVariant;
@@ -337,7 +337,7 @@ fn labels(rows: &[(String, String)]) -> Vec<&str> {
 
 #[test]
 fn snap_and_view_menus_split_snapping_from_display() {
-    let (mut app, _scene) = crate::sprite_gizmo::world_app();
+    let (mut app, _scene) = crate::stage::sprite_gizmo::world_app();
     let snap = menu_rows(&mut app, "Snap");
     let snap_labels = labels(&snap);
     for label in ["Use Snap", "Use Pixel Snap", "Grid"] {
@@ -416,8 +416,8 @@ fn a_default_width_viewport_shows_every_paint_tool() {
     use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 
     let width = 536.0 - jackdaw::viewport_2d::RULER_SIZE;
-    let (mut app, scene) = crate::sprite_gizmo::world_app_sized(width);
-    let layer = crate::tilemap_render::layer(TilemapLayerKind::Tile, default());
+    let (mut app, scene) = crate::stage::sprite_gizmo::world_app_sized(width);
+    let layer = crate::stage::tilemap_render::layer(TilemapLayerKind::Tile, default());
     let map = app
         .world_mut()
         .spawn(Tilemap {
@@ -525,7 +525,7 @@ fn panel_overflow(app: &mut App, panel: Entity) -> Entity {
 
 #[test]
 fn a_toolbar_too_narrow_for_any_tool_stays_cut_and_lists_every_tool() {
-    let (mut app, scene) = crate::sprite_gizmo::world_app_sized(60.0);
+    let (mut app, scene) = crate::stage::sprite_gizmo::world_app_sized(60.0);
     let overflow = panel_overflow(&mut app, scene.panel);
     let tools: Vec<String> = [
         "tool.select",
@@ -553,8 +553,8 @@ fn a_toolbar_too_narrow_for_any_tool_stays_cut_and_lists_every_tool() {
 
 #[test]
 fn opening_the_canvas_menu_by_name_picks_the_focused_panel() {
-    let (mut app, scene) = crate::sprite_gizmo::world_app();
-    let second = crate::sprite_gizmo::add_panel(&mut app, 600.0);
+    let (mut app, scene) = crate::stage::sprite_gizmo::world_app();
+    let second = crate::stage::sprite_gizmo::add_panel(&mut app, 600.0);
     settle(&mut app);
     for panel in [scene.panel, second] {
         app.world_mut()
@@ -585,8 +585,8 @@ fn opening_the_canvas_menu_by_name_picks_the_focused_panel() {
 fn the_fit_row_frames_only_its_own_panel() {
     use jackdaw::viewport_2d::Viewport2dPanelHost;
 
-    let (mut app, scene) = crate::sprite_gizmo::world_app();
-    let second = crate::sprite_gizmo::add_panel(&mut app, 600.0);
+    let (mut app, scene) = crate::stage::sprite_gizmo::world_app();
+    let second = crate::stage::sprite_gizmo::add_panel(&mut app, 600.0);
     settle(&mut app);
     for panel in [scene.panel, second] {
         app.world_mut()
@@ -650,7 +650,7 @@ fn a_running_tool_is_the_reason_the_selection_buttons_wait() {
     settle(&mut app);
     assert!(!disabled(&mut app, "tilemap.selection.copy"));
 
-    crate::tile_tools::hold(&mut app, "tilemap.brush", MouseButton::Left, &[(3, 3)]);
+    crate::stage::tile_tools::hold(&mut app, "tilemap.brush", MouseButton::Left, &[(3, 3)]);
     settle(&mut app);
     assert!(disabled(&mut app, "tilemap.selection.copy"));
     let entity = button(&mut app, "tilemap.selection.copy");

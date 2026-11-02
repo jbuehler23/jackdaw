@@ -1,11 +1,11 @@
 //! The template, reset, property, object and describe operators over an
 //! auto-imported overworld tileset.
 
-use crate::tileset_edit_ops::{
+use crate::operators::tileset_edit_ops::{
     GROUND, WATER, call, edit, entries, on_disk, over_the_remote, overworld, pairs, peers_of,
     refused, tile_of,
 };
-use crate::tileset_ops::{SHEET, reports, warnings};
+use crate::operators::tileset_ops::{SHEET, reports, warnings};
 
 use bevy::prelude::*;
 use jackdaw_tilemap::LayoutTemplate;

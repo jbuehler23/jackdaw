@@ -25,8 +25,9 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # The checks that build the editor without the SDK dylib, the way a
-  # `cargo install` does, plus the doctests.
+  # The doctests, built as the archive is so its cache matches. The non-dylib
+  # builds that `cargo install` does are checked in Docs; the embedded recipe
+  # runs in the integration shards.
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -35,23 +36,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Remove unused software
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
+        uses: ./.github/actions/free-disk
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
+      - name: Wait for the cleanup
+        uses: ./.github/actions/free-disk
+        timeout-minutes: 10
+        with:
+          wait: "true"
+
       # Restores the archive job's cache rather than keeping a 4 GB one of
-      # its own, which pushed the saved keys past the 10 GB limit. Most of
-      # the dependency graph builds the same without the `dylib` feature.
+      # its own, which pushed the saved keys past the 10 GB limit.
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -71,28 +72,8 @@ jobs:
       - name: Install Wild
         run: cargo binstall wild-linker@0.10.0 --locked --force
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      # The create/import flows as a user meets them: the `jd` binary
-      # run from outside any checkout, with only its embedded templates.
-      # Required here, so a binary that cannot scaffold fails CI instead
-      # of skipping quietly.
-      - name: Standalone scaffold and import
-        env:
-          JACKDAW_STANDALONE_REQUIRED: "1"
-        run: cargo test --locked -p jd --test standalone_scaffold
-
-      # The recipe is only unpacked on a user's machine at first run, so
-      # a malformed one passes every other check and then leaves them
-      # with no SDK and no way to build any project.
-      - name: Embedded SDK recipe is loadable
-        env:
-          JACKDAW_RECIPE_REQUIRED: "1"
-        run: cargo test --locked --test sdk_recipe
-
       - name: Run doctests
-        run: cargo test --locked --workspace --doc --features bevy/dynamic_linking
+        run: cargo test --locked --workspace --doc --features dylib --config profile.dev.package.jackdaw.opt-level=0
 
   # Every library and integration test binary, built once for the shards.
   build-tests:
@@ -103,19 +84,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Remove unused software
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
+        uses: ./.github/actions/free-disk
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
+
+      - name: Wait for the cleanup
+        uses: ./.github/actions/free-disk
+        timeout-minutes: 10
+        with:
+          wait: "true"
 
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
@@ -153,11 +135,12 @@ jobs:
   # The library and integration tests from the archive, spread over runners.
   # The `*_REQUIRED` variables turn a skip into a failure wherever the shard
   # holding those tests runs:
-  # - the standalone scaffold needs a `jd` it can copy out of the checkout;
   # - the embedded recipe must be loadable;
   # - an SDK prepared from that recipe resolves fewer features than the
   #   editor's own graph, so a project resolving more would compile against
   #   SDK rlibs built without them.
+  # The standalone scaffold is required in Docs, where `jd` builds on its own
+  # rather than with the archive's features.
   integration:
     name: Integration ${{ matrix.shard }}/6
     needs: build-tests
@@ -168,22 +151,17 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
     env:
-      JACKDAW_STANDALONE_REQUIRED: "1"
       JACKDAW_RECIPE_REQUIRED: "1"
       JACKDAW_FEATURE_SUPERSET_REQUIRED: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      # The space is needed only once the archive is unpacked.
       - name: Remove unused software
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
+        uses: ./.github/actions/free-disk
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          components: rustfmt, clippy
           toolchain: ${{ env.toolchain }}
       - name: Set LD_LIBRARY_PATH
         run: |
@@ -226,6 +204,12 @@ jobs:
         with:
           name: tests
           path: ${{ runner.temp }}
+
+      - name: Wait for the cleanup
+        uses: ./.github/actions/free-disk
+        timeout-minutes: 10
+        with:
+          wait: "true"
 
       - name: Integration tier
         run: cargo xtask integration ${{ matrix.shard }}/6 --archive "$RUNNER_TEMP/tests.tar.zst"
@@ -691,6 +675,19 @@ jobs:
 
       - name: Check documentation
         run: cargo doc --locked --workspace --document-private-items --no-deps
+
+      # The editor and `jd` as `cargo install` builds them: without the SDK
+      # dylib, and without the workspace members whose features would turn
+      # Bevy's dynamic linking on.
+      - name: Check the binaries build without the SDK dylib
+        run: cargo check --locked -p jackdaw -p jd --bins
+
+      # The create/import flows as a user meets them: the `jd` binary run
+      # from outside any checkout, with only its embedded templates.
+      - name: Standalone scaffold and import
+        env:
+          JACKDAW_STANDALONE_REQUIRED: "1"
+        run: cargo test --locked -p jd --test standalone_scaffold
 
   # Run Bevy lints.
   bevy-lint:

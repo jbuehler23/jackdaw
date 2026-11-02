@@ -2,7 +2,7 @@
 //! that undo and redo walk exactly, terrain layers holding their resolved
 //! tiles, and tileset edits resolving the open maps again.
 
-use crate::tilemap_render::{
+use crate::stage::tilemap_render::{
     TILESET, chunk_at, chunks, data_tick, grass_patch, grass_strip, ground_terrain, index_at,
     key_of, layer, project_app, settle, spawn_map, the_map, tile_layer,
 };

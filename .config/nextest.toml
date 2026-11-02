@@ -10,17 +10,13 @@ archive.include = [
     { path = "debug/archived-dylibs", relative-to = "target", on-missing = "warn" },
 ]
 
-# Every test in these binaries builds a whole editor app. Unbounded, one
+# Every test in these modules builds a whole editor app. Unbounded, one
 # process per core runs a many-core machine out of memory.
 [test-groups]
 editor-apps = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = """
-binary_id(jackdaw::stage) | binary_id(jackdaw::inspector) | binary_id(jackdaw::outliner)
-| binary_id(jackdaw::operators) | binary_id(jackdaw::viewport) | binary_id(jackdaw::guards)
-| binary_id(jackdaw::terrain) | binary_id(jackdaw::keymap) | binary_id(jackdaw::controls)
-"""
+filter = "(binary_id(jackdaw::editor) & not (test(/^scenes::/) | test(/^prefabs::/))) | binary_id(jackdaw::keymap)"
 test-group = "editor-apps"
 
 [profile.ci]

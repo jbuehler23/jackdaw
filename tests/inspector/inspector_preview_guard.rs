@@ -17,7 +17,7 @@ use jackdaw_scene_types::UiSceneRoot;
 /// case the editor can preview.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
-struct Vitals {
+struct GuardVitals {
     ratio: f32,
 }
 
@@ -27,7 +27,7 @@ const NODE: &str = "bevy_ui::ui_node::Node";
 /// preview off. Returns the fill entity.
 fn scene_with_a_bound_width() -> (App, Entity) {
     let mut app = util::editor_test_app();
-    app.register_type::<Vitals>();
+    app.register_type::<GuardVitals>();
 
     let world = app.world_mut();
     let root = world
@@ -39,7 +39,7 @@ fn scene_with_a_bound_width() -> (App, Entity) {
             Node::default(),
             ChildOf(root),
             Bindings(vec![Binding::Field {
-                read: vec![BindPath::new("Vitals.ratio")],
+                read: vec![BindPath::new("GuardVitals.ratio")],
                 via: None,
                 write: BindPath::new("Node.width"),
                 as_percent: true,

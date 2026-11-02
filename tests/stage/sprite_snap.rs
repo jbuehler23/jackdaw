@@ -10,7 +10,7 @@ use jackdaw::{
 };
 use jackdaw_api::prelude::*;
 
-use crate::sprite_gizmo::{
+use crate::stage::sprite_gizmo::{
     drag, history_len, near, pointer, run, select, settle, sprite, transform, undo, world_app,
 };
 use crate::util::OperatorResultExt as _;

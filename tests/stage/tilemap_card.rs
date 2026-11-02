@@ -2,7 +2,7 @@
 //! layer, word labels, the cell size on one row, and the hint on a terrain
 //! layer whose tileset has nothing to paint with.
 
-use crate::tilemap_render::{TILESET, project_app, settle, spawn_map};
+use crate::stage::tilemap_render::{TILESET, project_app, settle, spawn_map};
 
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};

@@ -66,7 +66,7 @@ fn component_add_with_entity_param_inserts_component() {
         .param("entity", entity)
         .param(
             "type_path",
-            "operators::operator_entity_params::OperatorParamTestMarker".to_string(),
+            "editor::operators::operator_entity_params::OperatorParamTestMarker".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -101,7 +101,7 @@ fn component_add_inserts_component_without_default_derive() {
         .param("entity", entity)
         .param(
             "type_path",
-            "operators::operator_entity_params::OperatorParamNoDefaultMarker".to_string(),
+            "editor::operators::operator_entity_params::OperatorParamNoDefaultMarker".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -132,7 +132,7 @@ fn component_add_with_int_entity_param_cancels() {
         .param("entity", entity_as_int)
         .param(
             "type_path",
-            "operators::operator_entity_params::OperatorParamTestMarker".to_string(),
+            "editor::operators::operator_entity_params::OperatorParamTestMarker".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -165,7 +165,7 @@ fn component_add_refuses_an_untracked_entity() {
         .param("entity", entity)
         .param(
             "type_path",
-            "operators::operator_entity_params::OperatorParamTestMarker".to_string(),
+            "editor::operators::operator_entity_params::OperatorParamTestMarker".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -207,7 +207,7 @@ fn component_remove_with_entity_param_removes_component() {
         .param("entity", entity)
         .param(
             "type_path",
-            "operators::operator_entity_params::OperatorParamTestMarker".to_string(),
+            "editor::operators::operator_entity_params::OperatorParamTestMarker".to_string(),
         )
         .call()
         .expect("dispatch resolves");
@@ -223,9 +223,9 @@ fn component_remove_with_entity_param_removes_component() {
     let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     let node = ast.ast_for(entity).expect("the target is tracked");
     assert!(
-        !ast.component_type_paths(node)
-            .iter()
-            .any(|path| { path == "operators::operator_entity_params::OperatorParamTestMarker" }),
+        !ast.component_type_paths(node).iter().any(|path| {
+            path == "editor::operators::operator_entity_params::OperatorParamTestMarker"
+        }),
         "component.remove left the component in the document; document holds {:?}",
         ast.component_type_paths(node)
     );
@@ -244,7 +244,7 @@ fn entity_param_rejects_int_across_inspector_and_hierarchy_ops() {
 
     let type_path_factory: fn() -> PropertyValue = || {
         PropertyValue::String(
-            "operators::operator_entity_params::OperatorParamTestMarker"
+            "editor::operators::operator_entity_params::OperatorParamTestMarker"
                 .to_string()
                 .into(),
         )
