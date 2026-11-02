@@ -4,6 +4,7 @@
 mod authoring_ops;
 mod dialog_answer;
 mod element_addressing;
+mod element_transform;
 mod field_edits;
 mod light_defaults;
 mod mesh_param_ops;

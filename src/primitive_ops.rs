@@ -178,7 +178,7 @@ fn int_param(
 }
 
 /// A `Vec3` parameter whose every axis is a finite number.
-fn vec3_param(params: &OperatorParameters, key: &str) -> Result<Option<Vec3>, String> {
+pub(crate) fn vec3_param(params: &OperatorParameters, key: &str) -> Result<Option<Vec3>, String> {
     if !params.contains_key(key) {
         return Ok(None);
     }
