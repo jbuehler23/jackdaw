@@ -639,7 +639,11 @@ fn dispatch_operator(
     active: &mut SystemState<ActiveModalQuery>,
 ) -> Result<OperatorResult, CallOperatorError> {
     let outer = world.get_resource_or_init::<OperatorOutcome>().enter();
+    let outer_replaced = world.get_resource_or_init::<OperatorReplacements>().enter();
     let result = dispatch_operator_scoped(call, world, active);
+    world
+        .get_resource_or_init::<OperatorReplacements>()
+        .leave(outer_replaced);
     world.get_resource_or_init::<OperatorOutcome>().leave(outer);
     result
 }
@@ -671,9 +675,16 @@ fn dispatch_operator_scoped(
     }
 
     if let Some(check) = op.availability_check {
-        let available = world
-            .run_system(check)
-            .map_err(|_| CallOperatorError::NotAvailable)?;
+        let previous = world.remove_resource::<AvailabilityParams>();
+        if !params.is_empty() {
+            world.insert_resource(AvailabilityParams(params.clone()));
+        }
+        let checked = world.run_system(check);
+        world.remove_resource::<AvailabilityParams>();
+        if let Some(previous) = previous {
+            world.insert_resource(previous);
+        }
+        let available = checked.map_err(|_| CallOperatorError::NotAvailable)?;
         if !available {
             // FIXME: this should read
             // return Err(CallOperatorError::NotAvailable);
@@ -807,10 +818,19 @@ pub fn report_to_caller(world: &mut World, message: impl Into<String>) {
         .push(message);
 }
 
+/// The parameters of the call whose availability check is running, so a gate
+/// can let a call through that names its own operands. Present only during the
+/// check of a dispatch that carries parameters; a plain
+/// [`OperatorCallBuilder::is_available`] query, as a button asks, sees none.
+#[derive(Resource, Debug)]
+pub struct AvailabilityParams(pub OperatorParameters);
+
 /// What a parametric call made of the scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Changed,
+    /// The call did what was asked and nothing was left of the result.
+    Empty,
     Unchanged,
     /// The parameters were refused before anything was touched.
     Invalid,
@@ -820,10 +840,69 @@ impl Outcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Changed => "changed",
+            Self::Empty => "empty",
             Self::Unchanged => "unchanged",
             Self::Invalid => "invalid",
         }
     }
+}
+
+/// The scene entities the operator that just ran removed and the ones it made
+/// in their place, for a caller that cannot see which ids went away. Scoped
+/// like [`OperatorOutcome`]: every top-level dispatch starts it empty, and a
+/// call made from inside another operator leaves the outer call's lists as it
+/// found them.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorReplacements {
+    removed: Vec<Entity>,
+    created: Vec<Entity>,
+    depth: usize,
+}
+
+/// The lists a dispatch set aside on entering, for [`OperatorReplacements::leave`].
+pub type ReplacedLists = (Vec<Entity>, Vec<Entity>);
+
+impl OperatorReplacements {
+    pub fn removed(&self) -> &[Entity] {
+        &self.removed
+    }
+
+    pub fn created(&self) -> &[Entity] {
+        &self.created
+    }
+
+    /// Start a call: the lists it replaces, for [`Self::leave`].
+    pub fn enter(&mut self) -> ReplacedLists {
+        self.depth += 1;
+        (
+            std::mem::take(&mut self.removed),
+            std::mem::take(&mut self.created),
+        )
+    }
+
+    /// End a call begun with [`Self::enter`].
+    pub fn leave(&mut self, outer: ReplacedLists) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth > 0 {
+            (self.removed, self.created) = outer;
+        }
+    }
+
+    /// Hand over the outermost call's lists.
+    pub fn take(&mut self) -> ReplacedLists {
+        (
+            std::mem::take(&mut self.removed),
+            std::mem::take(&mut self.created),
+        )
+    }
+}
+
+/// Tells whoever dispatched the running operator which entities it removed
+/// and which it created.
+pub fn report_replaced(world: &mut World, removed: &[Entity], created: &[Entity]) {
+    let mut replaced = world.get_resource_or_init::<OperatorReplacements>();
+    replaced.removed.extend_from_slice(removed);
+    replaced.created.extend_from_slice(created);
 }
 
 /// The [`Outcome`] the operator that just ran declared, if it declares one.
@@ -1083,6 +1162,30 @@ mod parameter_tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_nested_call_never_replaces_the_outer_calls_replacements() {
+        let outer_entity = Entity::from_raw_u32(1).expect("a valid index");
+        let inner_entity = Entity::from_raw_u32(2).expect("a valid index");
+        let mut replaced = OperatorReplacements::default();
+        replaced.removed.push(inner_entity);
+        let outer = replaced.enter();
+        assert!(
+            replaced.removed().is_empty(),
+            "a call starts with empty lists"
+        );
+        replaced.removed.push(outer_entity);
+        let inner = replaced.enter();
+        replaced.created.push(inner_entity);
+        replaced.leave(inner);
+        assert_eq!(replaced.removed(), [outer_entity]);
+        assert!(
+            replaced.created().is_empty(),
+            "the nested call's lists are dropped"
+        );
+        replaced.leave(outer);
+        assert_eq!(replaced.take(), (vec![outer_entity], Vec::new()));
     }
 
     #[test]

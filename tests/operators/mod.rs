@@ -2,6 +2,7 @@
 //! tooltips, undo and the id space.
 
 mod authoring_ops;
+mod csg_ops;
 mod dialog_answer;
 mod element_addressing;
 mod element_transform;

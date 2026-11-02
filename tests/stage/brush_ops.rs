@@ -65,12 +65,12 @@ fn brush_join_unavailable_without_two_brushes() {
 }
 
 #[test]
-fn brush_csg_subtract_unavailable_without_two_brushes() {
+fn brush_csg_subtract_unavailable_without_a_selected_brush() {
     use jackdaw::selection::Selection;
 
     with_headless_brush_env(|app| {
         let b1 = spawn_cuboid_brush(app, Vec3::ZERO);
-        app.world_mut().resource_mut::<Selection>().entities = vec![b1];
+        app.world_mut().resource_mut::<Selection>().entities = Vec::new();
         app.update();
         assert!(
             !app.world_mut()
@@ -79,8 +79,7 @@ fn brush_csg_subtract_unavailable_without_two_brushes() {
                 .unwrap()
         );
 
-        let b2 = spawn_cuboid_brush(app, Vec3::X);
-        app.world_mut().resource_mut::<Selection>().entities = vec![b1, b2];
+        app.world_mut().resource_mut::<Selection>().entities = vec![b1];
         app.update();
         assert!(
             app.world_mut()

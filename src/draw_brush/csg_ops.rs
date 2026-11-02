@@ -7,61 +7,49 @@ use crate::draw_brush::{
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
 use crate::selection::{Selected, Selection};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use jackdaw_api_internal::operator::{AvailabilityParams, report_replaced};
+use jackdaw_geometry::{Modifier, ModifierStack};
 use jackdaw_geometry::{
     clean_degenerate_faces, compute_brush_geometry_from_planes, compute_brush_topology,
 };
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{
+    Brush, BrushFaceData, BrushPlane, BrushTopology, PropertyValue, unsorted_global,
+};
 
 struct SubtractionResult {
     original_entity: Entity,
     fragments: Vec<(Brush, Transform)>,
 }
 
-fn parent_world_translation(world: &World, entity: Entity) -> Option<Vec3> {
-    let parent = world.get::<ChildOf>(entity)?.0;
-    Some(world.get::<GlobalTransform>(parent)?.translation())
-}
-
-fn parent_translations_of(
-    world: &World,
-    entities: impl Iterator<Item = Entity>,
-) -> std::collections::HashMap<Entity, Vec3> {
-    entities
-        .filter_map(|entity| {
-            parent_world_translation(world, entity).map(|translation| (entity, translation))
-        })
-        .collect()
-}
-
-fn spawn_subtract_fragments(
-    world: &mut World,
-    results: &[SubtractionResult],
-    parent_translations: &std::collections::HashMap<Entity, Vec3>,
-) {
+/// Spawn each result's fragments beside its original, under the same parent,
+/// at the world placement the kernel gave them.
+fn spawn_subtract_fragments(world: &mut World, results: &[SubtractionResult]) -> Vec<Entity> {
+    let mut created = Vec::new();
     for result in results {
-        let parent_translation = parent_translations.get(&result.original_entity);
+        let parent = world
+            .get::<ChildOf>(result.original_entity)
+            .and_then(|child_of| unsorted_global(world, child_of.parent()));
         for (brush, transform) in &result.fragments {
-            let local_transform = if let Some(parent_translation) = parent_translation {
-                Transform::from_translation(transform.translation - *parent_translation)
-            } else {
-                *transform
-            };
-            if crate::entity_ops::spawn_cloned_brush_with_geometry(
+            let local = parent.map_or(*transform, |parent| {
+                GlobalTransform::from(*transform).reparented_to(&parent)
+            });
+            match crate::entity_ops::spawn_cloned_brush_with_geometry(
                 world,
                 result.original_entity,
                 brush.clone(),
-                local_transform,
-            )
-            .is_none()
-            {
-                warn!(
+                local,
+            ) {
+                Some(entity) => created.push(entity),
+                None => warn!(
                     "CSG fragment spawn failed: source {:?} has no document node",
                     result.original_entity
-                );
+                ),
             }
         }
     }
+    created
 }
 
 /// Perform CSG subtraction: subtract the drawn solid from all intersecting brushes.
@@ -281,11 +269,6 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             return;
         }
 
-        let parent_translations = parent_translations_of(
-            world,
-            results.iter().map(|result| result.original_entity),
-        );
-
         {
             let despawning: Vec<Entity> = results.iter().map(|r| r.original_entity).collect();
             let mut selection = world.resource_mut::<Selection>();
@@ -297,7 +280,7 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             }
         }
 
-        spawn_subtract_fragments(world, &results, &parent_translations);
+        spawn_subtract_fragments(world, &results);
 
         for result in &results {
             despawn_scene_entity(world, result.original_entity);
@@ -445,8 +428,10 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     }
 }
 
-/// Core logic for CSG Subtract. Selected brushes are cutters, non-selected are targets.
-pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
+/// Core logic for CSG Subtract. Selected brushes are cutters, unselected
+/// brushes they overlap are targets. `keep_cutters = Some(false)` removes the
+/// cutters once something is cut.
+pub(crate) fn csg_subtract_selected_impl(world: &mut World, keep_cutters: Option<bool>) {
     let selection = world.resource::<Selection>();
     let selected_set: Vec<Entity> = selection.entities.clone();
 
@@ -456,117 +441,244 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
     // the fragments below cannot get re-mirrored by the mesh rebuild.
     crate::brush::topology_ops::mirror_ops::bake_engaged_mirrors(world, &selected_set);
 
-    let mut brush_query = world.query::<(Entity, &Brush, &GlobalTransform)>();
-    let all_brushes: Vec<(Entity, Brush, GlobalTransform)> = brush_query
-        .iter(world)
-        .map(|(e, b, gt)| (e, b.clone(), *gt))
-        .collect();
-
-    // Cutters = selected brushes, targets = non-selected brushes
-    let cutters: Vec<&(Entity, Brush, GlobalTransform)> = all_brushes
+    let mut brush_query = world.query_filtered::<Entity, With<Brush>>();
+    let all_brushes: Vec<Entity> = brush_query.iter(world).collect();
+    let cutters: Vec<Entity> = all_brushes
         .iter()
-        .filter(|(e, _, _)| selected_set.contains(e))
+        .copied()
+        .filter(|e| selected_set.contains(e))
         .collect();
-    let targets: Vec<&(Entity, Brush, GlobalTransform)> = all_brushes
+    let targets: Vec<Entity> = all_brushes
         .iter()
-        .filter(|(e, _, _)| !selected_set.contains(e))
+        .copied()
+        .filter(|e| !selected_set.contains(e))
         .collect();
-
     if cutters.is_empty() || targets.is_empty() {
         return;
     }
 
     // Subtract via mesh-CSG (manifold kernel). Works on both convex and
-    // concave inputs. For each target, every cutter is differenced off
-    // iteratively; the kernel handles cuts that split the target into
-    // multiple disconnected fragments via `brush_difference_split`.
-
-    // Transform every cutter into world space once (faces + topology).
-    let cutter_world: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> = cutters
+    // concave inputs; a cut that splits a target yields several fragments.
+    let cutter_world: Vec<WorldBrush> = cutters
         .iter()
-        .map(|(_, brush, gt)| {
-            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, gt.affine())
-        })
+        .filter_map(|&cutter| world_operand(world, cutter))
         .collect();
 
     let mut results: Vec<SubtractionResult> = Vec::new();
-
-    for (entity, brush, global_transform) in &targets {
-        let entity = *entity;
-        let (target_world_faces, target_world_topo) =
-            jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, global_transform.affine());
-
-        // Cheap rejection: if no cutter's AABB even touches the target's,
-        // skip the whole op. Mesh-CSG would handle it correctly but the
-        // convert-and-decompose round-trip isn't free. Use topology-vertex
-        // AABBs (the plane separating-axis test isn't sound on concave
-        // brushes).
-        let any_cutter_touches = cutter_world
+    for &entity in &targets {
+        let Some(target) = world_operand(world, entity) else {
+            continue;
+        };
+        // Cheap rejection with topology-vertex AABBs (the plane
+        // separating-axis test isn't sound on concave brushes).
+        if !cutter_world
             .iter()
-            .any(|(_, ct)| topology_aabbs_overlap(&target_world_topo, ct));
-        if !any_cutter_touches {
+            .any(|cutter| topology_aabbs_overlap(&target.topo, &cutter.topo))
+        {
             continue;
         }
-
-        // Iteratively subtract each cutter from the fragment list.
-        struct WorldBrush {
-            faces: Vec<BrushFaceData>,
-            topo: jackdaw_scene_types::BrushTopology,
+        let (pieces, _) = subtract_all(&target, &cutter_world);
+        let fragments = recentre_fragments(&pieces);
+        if fragments.is_empty() {
+            continue;
         }
-        let mut current: Vec<WorldBrush> = vec![WorldBrush {
-            faces: target_world_faces,
-            topo: target_world_topo,
-        }];
-        for (cutter_faces, cutter_topo) in &cutter_world {
-            let mut next: Vec<WorldBrush> = Vec::new();
-            for fragment in &current {
-                if !topology_aabbs_overlap(&fragment.topo, cutter_topo) {
-                    next.push(WorldBrush {
-                        faces: fragment.faces.clone(),
-                        topo: fragment.topo.clone(),
-                    });
-                    continue;
-                }
-                let target_input = jackdaw_csg::CsgInput::new(&fragment.faces, &fragment.topo);
-                let cutter_input = jackdaw_csg::CsgInput::new(cutter_faces, cutter_topo);
-                match jackdaw_csg::brush_difference_split(&target_input, &cutter_input) {
-                    Ok(pieces) => {
-                        for piece in pieces {
-                            next.push(WorldBrush {
-                                faces: piece.faces,
-                                topo: piece.topology,
-                            });
-                        }
-                    }
-                    Err(jackdaw_csg::CsgError::EmptyResult) => {
-                        // Cutter swallowed the fragment whole.
-                    }
-                    Err(e) => {
-                        warn!("CSG subtract kernel error: {e}");
-                        next.push(WorldBrush {
-                            faces: fragment.faces.clone(),
-                            topo: fragment.topo.clone(),
-                        });
-                    }
+        results.push(SubtractionResult {
+            original_entity: entity,
+            fragments,
+        });
+    }
+    if results.is_empty() {
+        return;
+    }
+
+    let mut removed: Vec<Entity> = results.iter().map(|r| r.original_entity).collect();
+    if keep_cutters == Some(false) {
+        removed.extend(&cutters);
+    }
+    crate::commands::deselect_entities(world, &removed);
+    let created = spawn_subtract_fragments(world, &results);
+    for &entity in &removed {
+        despawn_scene_entity(world, entity);
+    }
+    report_replaced(world, &removed, &created);
+}
+
+/// Core logic for CSG Intersect. Replaces the selected brushes with the solid
+/// all of them share, cloned from the first selected; `keep_cutters =
+/// Some(true)` replaces only that first one and keeps the rest.
+pub(crate) fn csg_intersect_selected_impl(world: &mut World, keep_cutters: Option<bool>) {
+    let selected_set: Vec<Entity> = world.resource::<Selection>().entities.clone();
+
+    // Bake live mirrors into the authored topology before any geometry is
+    // read, so the intersection sees both halves; baking removes the
+    // `MeshMirror`, which must not survive onto the result brush.
+    for &entity in &selected_set {
+        crate::brush::topology_ops::mirror_ops::bake_mirror(world, entity);
+    }
+
+    let selected_brushes: Vec<Entity> = selected_set
+        .iter()
+        .copied()
+        .filter(|&e| world.get::<Brush>(e).is_some())
+        .collect();
+    if selected_brushes.len() < 2 {
+        return;
+    }
+
+    let mut world_inputs = selected_brushes
+        .iter()
+        .filter_map(|&entity| world_operand(world, entity));
+    let Some(first) = world_inputs.next() else {
+        return;
+    };
+    let rest: Vec<WorldBrush> = world_inputs.collect();
+    let running = match intersect_all(first, &rest) {
+        Ok(Some(running)) => running,
+        Ok(None) => return,
+        Err(e) => {
+            warn!("CSG intersect kernel error: {e}");
+            return;
+        }
+    };
+    let Some((new_brush, transform)) = intersection_brush(running) else {
+        return;
+    };
+
+    let source = selected_brushes[0];
+    let removed: Vec<Entity> = if keep_cutters == Some(true) {
+        vec![source]
+    } else {
+        selected_brushes.clone()
+    };
+    crate::commands::deselect_entities(world, &removed);
+    let created = spawn_subtract_fragments(
+        world,
+        &[SubtractionResult {
+            original_entity: source,
+            fragments: vec![(new_brush, transform)],
+        }],
+    );
+    for &entity in &removed {
+        despawn_scene_entity(world, entity);
+    }
+    for &entity in &created {
+        world.resource_mut::<Selection>().entities.push(entity);
+        world.entity_mut(entity).insert(Selected);
+    }
+    report_replaced(world, &removed, &created);
+}
+
+/// A brush's faces and topology in world space, as the CSG kernel takes them.
+#[derive(Clone)]
+struct WorldBrush {
+    faces: Vec<BrushFaceData>,
+    topo: BrushTopology,
+}
+
+impl WorldBrush {
+    fn input(&self) -> jackdaw_csg::CsgInput<'_> {
+        jackdaw_csg::CsgInput::new(&self.faces, &self.topo)
+    }
+
+    fn from_csg(brush: jackdaw_csg::CsgBrush) -> Self {
+        Self {
+            faces: brush.faces,
+            topo: brush.topology,
+        }
+    }
+
+    /// The volume the closed solid encloses.
+    fn volume(&self) -> f32 {
+        let corner = |index: u32| self.topo.vertices.get(index as usize).map(|v| v.position);
+        let mut six_times = 0.0;
+        for polygon in &self.topo.polygons {
+            let start = polygon.loop_start as usize;
+            let Some(ring) = self
+                .topo
+                .loops
+                .get(start..start + polygon.loop_total as usize)
+            else {
+                continue;
+            };
+            let Some(apex) = ring.first().and_then(|first| corner(first.vert)) else {
+                continue;
+            };
+            for pair in ring[1..].windows(2) {
+                if let (Some(b), Some(c)) = (corner(pair[0].vert), corner(pair[1].vert)) {
+                    six_times += apex.dot(b.cross(c));
                 }
             }
-            current = next;
         }
+        (six_times / 6.0).abs()
+    }
+}
 
-        // Recentre each fragment to its own local space.
-        let mut fragment_data: Vec<(Brush, Transform)> = Vec::new();
-        for fragment in &current {
-            if fragment.topo.vertices.len() < 4 {
+/// `target` with every cutter differenced off in turn, as world-space pieces,
+/// and the kernel errors met on the way. A piece the kernel fails on is kept
+/// whole.
+fn subtract_all(
+    target: &WorldBrush,
+    cutters: &[WorldBrush],
+) -> (Vec<WorldBrush>, Vec<jackdaw_csg::CsgError>) {
+    let mut current = vec![target.clone()];
+    let mut failures = Vec::new();
+    for cutter in cutters {
+        let mut next: Vec<WorldBrush> = Vec::new();
+        for fragment in current {
+            if !topology_aabbs_overlap(&fragment.topo, &cutter.topo) {
+                next.push(fragment);
                 continue;
             }
-            let centroid: Vec3 = fragment
-                .topo
-                .vertices
-                .iter()
-                .map(|v| v.position)
-                .sum::<Vec3>()
-                / fragment.topo.vertices.len() as f32;
-            let local_faces: Vec<BrushFaceData> = fragment
+            match jackdaw_csg::brush_difference_split(&fragment.input(), &cutter.input()) {
+                Ok(pieces) => next.extend(pieces.into_iter().map(WorldBrush::from_csg)),
+                Err(jackdaw_csg::CsgError::EmptyResult) => {}
+                Err(e) => {
+                    warn!("CSG subtract kernel error: {e}");
+                    failures.push(e);
+                    next.push(fragment);
+                }
+            }
+        }
+        current = next;
+    }
+    (current, failures)
+}
+
+/// The parts of `target` inside any of `cutters`, one piece per connected
+/// part.
+fn inside_any(
+    target: &WorldBrush,
+    cutters: &[WorldBrush],
+) -> Result<Vec<WorldBrush>, jackdaw_csg::CsgError> {
+    let union = match cutters {
+        [] => return Ok(Vec::new()),
+        [only] => only.clone(),
+        many => {
+            let inputs: Vec<jackdaw_csg::CsgInput<'_>> =
+                many.iter().map(WorldBrush::input).collect();
+            WorldBrush::from_csg(jackdaw_csg::brush_batch_union(&inputs)?)
+        }
+    };
+    match jackdaw_csg::brush_intersection_split(&target.input(), &union.input()) {
+        Ok(pieces) => Ok(pieces.into_iter().map(WorldBrush::from_csg).collect()),
+        Err(jackdaw_csg::CsgError::EmptyResult) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Each world-space piece as a brush centred on its own corners, with the
+/// translation that puts it back. Pieces too thin to be a solid are dropped.
+///
+/// The kernel's topology is used as it comes: rebuilding it from the planes
+/// would collapse a concave fragment to its convex hull.
+fn recentre_fragments(pieces: &[WorldBrush]) -> Vec<(Brush, Transform)> {
+    pieces
+        .iter()
+        .filter(|piece| piece.topo.vertices.len() >= 4 && piece.faces.len() >= 4)
+        .map(|piece| {
+            let centroid: Vec3 = piece.topo.vertices.iter().map(|v| v.position).sum::<Vec3>()
+                / piece.topo.vertices.len() as f32;
+            let faces = piece
                 .faces
                 .iter()
                 .map(|f| BrushFaceData {
@@ -577,188 +689,336 @@ pub(crate) fn csg_subtract_selected_impl(world: &mut World) {
                     ..f.clone()
                 })
                 .collect();
-            if local_faces.len() < 4 {
-                continue;
-            }
-            let mut local_topo = fragment.topo.clone();
-            for v in &mut local_topo.vertices {
+            let mut topology = piece.topo.clone();
+            for v in &mut topology.vertices {
                 v.position -= centroid;
             }
-            // Use the mesh-CSG kernel's geometry directly. The
-            // `clean_degenerate_faces` + plane-intersection fallback
-            // path is intentionally skipped here because it collapses
-            // concave fragments to a convex hull and makes the brush
-            // appear deleted in the editor.
-            fragment_data.push((
-                Brush {
-                    faces: local_faces,
-                    topology: local_topo,
-                },
+            (
+                Brush { faces, topology },
                 Transform::from_translation(centroid),
-            ));
-        }
-
-        if fragment_data.is_empty() {
-            continue;
-        }
-
-        results.push(SubtractionResult {
-            original_entity: entity,
-            fragments: fragment_data,
-        });
-    }
-
-    if results.is_empty() {
-        return;
-    }
-
-    let parent_translations =
-        parent_translations_of(world, results.iter().map(|result| result.original_entity));
-
-    {
-        let despawning: Vec<Entity> = results.iter().map(|r| r.original_entity).collect();
-        let mut selection = world.resource_mut::<Selection>();
-        selection.entities.retain(|e| !despawning.contains(e));
-    }
-    for result in &results {
-        if let Ok(mut e) = world.get_entity_mut(result.original_entity) {
-            e.remove::<Selected>();
-        }
-    }
-
-    spawn_subtract_fragments(world, &results, &parent_translations);
-
-    for result in &results {
-        despawn_scene_entity(world, result.original_entity);
-    }
+            )
+        })
+        .collect()
 }
 
-/// Core logic for CSG Intersect. Replaces all selected brushes with their intersection.
-pub(crate) fn csg_intersect_selected_impl(world: &mut World) {
-    let selection = world.resource::<Selection>();
-    let selected_set: Vec<Entity> = selection.entities.clone();
-
-    // Bake live mirrors into the authored topology before any geometry is
-    // read, so the intersection sees both halves; baking removes the
-    // `MeshMirror`, which must not survive onto the result brush.
-    for &entity in &selected_set {
-        crate::brush::topology_ops::mirror_ops::bake_mirror(world, entity);
-    }
-
-    let mut brush_query = world.query::<(Entity, &Brush, &GlobalTransform)>();
-    let selected_brushes: Vec<(Entity, Brush, GlobalTransform)> = brush_query
-        .iter(world)
-        .filter(|(e, _, _)| selected_set.contains(e))
-        .map(|(e, b, gt)| (e, b.clone(), *gt))
-        .collect();
-
-    if selected_brushes.len() < 2 {
-        return;
-    }
-
-    // Intersect via mesh-CSG (manifold kernel). Cumulatively intersect
-    // each subsequent brush into the running result. Works for both
-    // convex and concave inputs.
-
-    let world_inputs: Vec<(Vec<BrushFaceData>, jackdaw_scene_types::BrushTopology)> =
-        selected_brushes
-            .iter()
-            .map(|(_, brush, gt)| {
-                jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, gt.affine())
-            })
-            .collect();
-
-    let mut running = jackdaw_csg::CsgBrush {
-        faces: world_inputs[0].0.clone(),
-        topology: world_inputs[0].1.clone(),
-    };
-    for (next_faces, next_topo) in world_inputs.iter().skip(1) {
-        let lhs = jackdaw_csg::CsgInput::new(&running.faces, &running.topology);
-        let rhs = jackdaw_csg::CsgInput::new(next_faces, next_topo);
-        match jackdaw_csg::brush_boolean(&lhs, &rhs, jackdaw_csg::BooleanOp::Intersection) {
-            Ok(b) => running = b,
-            Err(jackdaw_csg::CsgError::EmptyResult) => return,
-            Err(e) => {
-                warn!("CSG intersect kernel error: {e}");
-                return;
-            }
+/// The solid `first` shares with every one of `rest`; `None` when they share
+/// nothing.
+fn intersect_all(
+    first: WorldBrush,
+    rest: &[WorldBrush],
+) -> Result<Option<WorldBrush>, jackdaw_csg::CsgError> {
+    let mut running = first;
+    for next in rest {
+        match jackdaw_csg::brush_boolean(
+            &running.input(),
+            &next.input(),
+            jackdaw_csg::BooleanOp::Intersection,
+        ) {
+            Ok(shared) => running = WorldBrush::from_csg(shared),
+            Err(jackdaw_csg::CsgError::EmptyResult) => return Ok(None),
+            Err(e) => return Err(e),
         }
     }
-    if running.topology.vertices.len() < 4 || running.faces.len() < 4 {
-        return;
-    }
+    Ok(Some(running))
+}
 
-    let centroid: Vec3 = running
-        .topology
-        .vertices
-        .iter()
-        .map(|v| v.position)
-        .sum::<Vec3>()
-        / running.topology.vertices.len() as f32;
-
-    let local_faces: Vec<BrushFaceData> = running
-        .faces
-        .iter()
-        .map(|f| BrushFaceData {
-            plane: BrushPlane {
-                normal: f.plane.normal,
-                distance: f.plane.distance - f.plane.normal.dot(centroid),
-            },
-            ..f.clone()
-        })
-        .collect();
-    let clean = clean_degenerate_faces(&local_faces);
+/// An intersection as one recentred brush with degenerate faces dropped;
+/// `None` when too little of it is left to be a solid.
+fn intersection_brush(running: WorldBrush) -> Option<(Brush, Transform)> {
+    let (brush, transform) = recentre_fragments(std::slice::from_ref(&running))
+        .into_iter()
+        .next()?;
+    let clean = clean_degenerate_faces(&brush.faces);
     if clean.len() < 4 {
-        return;
+        return None;
     }
-    let mut local_topo = running.topology.clone();
-    for v in &mut local_topo.vertices {
-        v.position -= centroid;
-    }
-
-    // Clean up selection
-    {
-        let despawning: Vec<Entity> = selected_brushes.iter().map(|(e, _, _)| *e).collect();
-        let mut selection = world.resource_mut::<Selection>();
-        selection.entities.retain(|e| !despawning.contains(e));
-    }
-    for (entity, _, _) in &selected_brushes {
-        if let Ok(mut e) = world.get_entity_mut(*entity) {
-            e.remove::<Selected>();
-        }
-    }
-
-    let topology = if clean.len() == running.faces.len() {
-        local_topo
+    let topology = if clean.len() == brush.faces.len() {
+        brush.topology
     } else {
         compute_brush_topology(&clean)
     };
-    let new_brush = Brush {
-        faces: clean,
-        topology,
+    Some((
+        Brush {
+            faces: clean,
+            topology,
+        },
+        transform,
+    ))
+}
+
+/// The operands a call named for subtract or intersect, checked.
+struct NamedOperands {
+    target: Entity,
+    /// The node `cutters` named, which `keep_cutters = false` removes.
+    cutters_node: Entity,
+    /// The brushes that cut: the named one, or every brush under the named
+    /// group.
+    cutters: Vec<Entity>,
+    keep_cutters: bool,
+}
+
+/// The parameters that name operands rather than work on the selection.
+const OPERAND_KEYS: [&str; 2] = ["target", "cutters"];
+
+impl NamedOperands {
+    /// The operands `params` names, `None` when it names none and the call
+    /// works on the selection.
+    fn read(
+        world: &World,
+        params: &OperatorParameters,
+        keep_cutters: Option<bool>,
+    ) -> Result<Option<Self>, String> {
+        if !OPERAND_KEYS.iter().any(|key| params.contains_key(*key)) {
+            return Ok(None);
+        }
+        let target = operand_node(world, params, "target")?;
+        if world.get::<Brush>(target).is_none() {
+            return Err(format!("`target` {target} is not a brush"));
+        }
+        let cutters_node = operand_node(world, params, "cutters")?;
+        if is_at_or_under(world, cutters_node, target) {
+            return Err(format!(
+                "`cutters` {cutters_node} is the target or sits under it"
+            ));
+        }
+        let cutters = brushes_under(world, cutters_node);
+        if cutters.is_empty() {
+            return Err(format!(
+                "`cutters` {cutters_node} is neither a brush nor a group holding brushes"
+            ));
+        }
+        if cutters.contains(&target) {
+            return Err(format!("`target` {target} is also one of `cutters`"));
+        }
+        Ok(Some(Self {
+            target,
+            cutters_node,
+            cutters,
+            keep_cutters: keep_cutters.unwrap_or(true),
+        }))
+    }
+}
+
+/// `keep_cutters` as the call gave it, `None` when it did not.
+fn keep_cutters_param(params: &OperatorParameters) -> Result<Option<bool>, String> {
+    match params.get("keep_cutters") {
+        None => Ok(None),
+        Some(_) => params
+            .as_bool("keep_cutters")
+            .map(Some)
+            .ok_or_else(|| "`keep_cutters` must be true or false".to_string()),
+    }
+}
+
+fn operand_node(world: &World, params: &OperatorParameters, key: &str) -> Result<Entity, String> {
+    match params.get(key) {
+        Some(PropertyValue::Entity(entity)) => {
+            crate::primitive_ops::scene_node(world, *entity, key)
+        }
+        Some(other) => Err(format!("`{key}` {other:?} names no node in this scene")),
+        None => Err(format!(
+            "name both `target` and `cutters`; `{key}` is missing"
+        )),
+    }
+}
+
+/// Whether `node` is `ancestor` or sits somewhere under it.
+fn is_at_or_under(world: &World, node: Entity, ancestor: Entity) -> bool {
+    std::iter::successors(Some(node), |&at| {
+        world.get::<ChildOf>(at).map(ChildOf::parent)
+    })
+    .any(|at| at == ancestor)
+}
+
+/// `node` and every scene node under it that is a brush.
+fn brushes_under(world: &World, node: Entity) -> Vec<Entity> {
+    let Some(document) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+        return Vec::new();
     };
-    let Some(source) = selected_brushes.first().map(|(entity, _, _)| *entity) else {
-        return;
+    let mut found = Vec::new();
+    let mut stack = vec![node];
+    while let Some(at) = stack.pop() {
+        if world.get::<Brush>(at).is_some() && document.ast_for(at).is_some() {
+            found.push(at);
+        }
+        if let Some(children) = world.get::<Children>(at) {
+            stack.extend(children.iter());
+        }
+    }
+    found
+}
+
+/// `entity`'s brush in world space with its modifier stack evaluated, read
+/// without touching the scene.
+fn world_operand(world: &World, entity: Entity) -> Option<WorldBrush> {
+    let mut brush = world.get::<Brush>(entity)?.clone();
+    if let Some(stack) = world.get::<ModifierStack>(entity) {
+        let modifiers: Vec<&Modifier> = stack.modifiers.iter().map(|e| &e.modifier).collect();
+        crate::modifier_ops::bake_modifier_stack(&mut brush, &modifiers);
+    }
+    let global = unsorted_global(world, entity)?;
+    let (faces, topo) = jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, global.affine());
+    Some(WorldBrush { faces, topo })
+}
+
+#[derive(Clone, Copy)]
+enum CsgOp {
+    Subtract,
+    Intersect,
+}
+
+impl CsgOp {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Subtract => "CSG Subtract",
+            Self::Intersect => "CSG Intersect",
+        }
+    }
+}
+
+/// End a call that leaves the scene as it was, telling the caller why.
+fn refuse(world: &mut World, op: CsgOp, outcome: Outcome, why: impl AsRef<str>) -> OperatorResult {
+    warn_caller(world, format!("{}: {}", op.label(), why.as_ref()));
+    set_outcome(world, outcome);
+    OperatorResult::Cancelled
+}
+
+/// Run `op` from its parameters: on the operands they name, or on the
+/// selection when they name none.
+fn run_csg(world: &mut World, op: CsgOp, params: &OperatorParameters) -> OperatorResult {
+    let keep_cutters = match keep_cutters_param(params) {
+        Ok(keep) => keep,
+        Err(why) => return refuse(world, op, Outcome::Invalid, why),
     };
-    let Some(entity) = crate::entity_ops::spawn_cloned_brush_with_geometry(
+    match NamedOperands::read(world, params, keep_cutters) {
+        Ok(Some(operands)) => run_on_named_operands(world, op, &operands),
+        Ok(None) => {
+            match op {
+                CsgOp::Subtract => csg_subtract_selected_impl(world, keep_cutters),
+                CsgOp::Intersect => csg_intersect_selected_impl(world, keep_cutters),
+            }
+            OperatorResult::Finished
+        }
+        Err(why) => refuse(world, op, Outcome::Invalid, why),
+    }
+}
+
+/// Run `op` on the operands a call named: only the target is replaced, by
+/// what is left of it, and is removed when nothing is. Everything is computed
+/// before the scene is touched, so a call that changes nothing leaves it as it
+/// was.
+fn run_on_named_operands(world: &mut World, op: CsgOp, operands: &NamedOperands) -> OperatorResult {
+    let Some(target) = world_operand(world, operands.target) else {
+        let why = format!("`target` {} has no transform", operands.target);
+        return refuse(world, op, Outcome::Invalid, why);
+    };
+    let reaching: Vec<WorldBrush> = operands
+        .cutters
+        .iter()
+        .filter_map(|&cutter| world_operand(world, cutter))
+        .filter(|cutter| topology_aabbs_overlap(&target.topo, &cutter.topo))
+        .collect();
+
+    let pieces = match op {
+        CsgOp::Subtract => {
+            if reaching.is_empty() {
+                return refuse(
+                    world,
+                    op,
+                    Outcome::Unchanged,
+                    "the cutters do not reach the target",
+                );
+            }
+            let (pieces, failures) = subtract_all(&target, &reaching);
+            if let Some(e) = failures.first() {
+                let why = format!("the kernel failed, so nothing was cut: {e}");
+                return refuse(world, op, Outcome::Unchanged, why);
+            }
+            pieces
+        }
+        CsgOp::Intersect => match inside_any(&target, &reaching) {
+            Ok(pieces) => pieces,
+            Err(e) => {
+                let why = format!("the kernel failed, so nothing was trimmed: {e}");
+                return refuse(world, op, Outcome::Unchanged, why);
+            }
+        },
+    };
+    let kept: f32 = pieces.iter().map(WorldBrush::volume).sum();
+    let whole = target.volume();
+    if !pieces.is_empty() && (kept - whole).abs() <= whole.max(1e-6) * 1e-4 {
+        return refuse(
+            world,
+            op,
+            Outcome::Unchanged,
+            "the cutters leave the target as it is",
+        );
+    }
+
+    replace_target(world, operands, recentre_fragments(&pieces))
+}
+
+/// Put `fragments` in place of the named target, moving the target's other
+/// children up to its parent so they outlive it, and remove the cutters when
+/// the call asked.
+fn replace_target(
+    world: &mut World,
+    operands: &NamedOperands,
+    fragments: Vec<(Brush, Transform)>,
+) -> OperatorResult {
+    let target = operands.target;
+    crate::brush::topology_ops::mirror_ops::bake_mirror(world, target);
+    let mut removed = vec![target];
+    if !operands.keep_cutters {
+        removed.push(operands.cutters_node);
+    }
+    crate::commands::deselect_entities(world, &removed);
+
+    let created = spawn_subtract_fragments(
         world,
-        source,
-        new_brush,
-        Transform::from_translation(centroid),
-    ) else {
-        warn!("CSG intersect spawn failed: source {source:?} has no document node");
-        return;
-    };
-
-    for (entity, _, _) in &selected_brushes {
-        despawn_scene_entity(world, *entity);
+        &[SubtractionResult {
+            original_entity: target,
+            fragments,
+        }],
+    );
+    for &entity in &created {
+        crate::commands::SpawnedEntities::record(world, entity);
     }
 
-    {
-        let mut selection = world.resource_mut::<Selection>();
-        selection.entities.push(entity);
+    let parent = world.get::<ChildOf>(target).map(ChildOf::parent);
+    let children: Vec<Entity> = world
+        .get::<Children>(target)
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+    let document = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    let adopted: Vec<Entity> = children
+        .into_iter()
+        .filter(|&child| document.ast_for(child).is_some())
+        .collect();
+    for child in adopted {
+        crate::commands::set_hierarchy_location(
+            world,
+            child,
+            crate::commands::HierarchyLocation {
+                parent,
+                index: usize::MAX,
+            },
+        );
     }
-    world.entity_mut(entity).insert(Selected);
+
+    for &entity in &removed {
+        despawn_scene_entity(world, entity);
+    }
+    report_replaced(world, &removed, &created);
+    set_outcome(
+        world,
+        if created.is_empty() {
+            Outcome::Empty
+        } else {
+            Outcome::Changed
+        },
+    );
+    OperatorResult::Finished
 }
 
 #[operator(
@@ -779,38 +1039,60 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "brush.csg_subtract",
     label = "CSG Subtract",
-    description = "Subtract the non-first selected brushes from the first. \
-                   Requires at least two `Brush` entities in `Selection::entities` \
-                   (first is the target, rest are cutters); availability \
-                   (`can_run_binary_brush_op`) is false otherwise. The target may \
-                   be split into multiple fragment brushes.",
-    is_available = can_run_binary_brush_op,
+    description = "Cut brushes away from other brushes. Naming `target` and `cutters` works \
+                   whatever is selected and cuts only the target: it is replaced by its \
+                   fragments, or removed when nothing is left, and its other children move up \
+                   to its parent. Without them, the selected brushes are the cutters and every \
+                   unselected brush they overlap is a target; at least one brush must be \
+                   selected.",
+    is_available = can_run_csg_subtract,
+    params(
+        target(Entity, doc = "Brush to cut. Every other brush is left alone."),
+        cutters(
+            Entity,
+            doc = "Brush to cut with, or a group whose brushes all cut."
+        ),
+        keep_cutters(
+            bool,
+            doc = "Keep the cutters after the cut. Defaults to true."
+        ),
+    )
 )]
 pub(crate) fn brush_csg_subtract(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(csg_subtract_selected_impl);
-    OperatorResult::Finished
+    run_csg(world, CsgOp::Subtract, &params)
 }
 
 #[operator(
     id = "brush.csg_intersect",
     label = "CSG Intersect",
-    description = "Replace the selected brushes with the solid shared by all of \
-                   them. Requires at least two `Brush` entities in \
-                   `Selection::entities`; availability \
-                   (`can_run_binary_brush_op`) is false otherwise. When the \
-                   intersection is empty the impl exits silently without \
-                   mutating the world.",
-    is_available = can_run_binary_brush_op,
+    description = "Keep only the solid brushes share. Naming `target` and `cutters` works \
+                   whatever is selected and trims only the target: it is replaced by its parts \
+                   inside any of the cutters, or removed when there are none, and its other \
+                   children move up to its parent. Without them, the selected brushes are \
+                   replaced by the solid all of them share; at least two brushes must be \
+                   selected.",
+    is_available = can_run_csg_intersect,
+    params(
+        target(Entity, doc = "Brush to trim. Every other brush is left alone."),
+        cutters(
+            Entity,
+            doc = "Brush to trim to, or a group whose brushes together make the shape kept."
+        ),
+        keep_cutters(
+            bool,
+            doc = "Keep the cutters after the trim. Defaults to true with `target` and \
+                   `cutters`; on the selection, true replaces only the first selected brush."
+        ),
+    )
 )]
 pub(crate) fn brush_csg_intersect(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(csg_intersect_selected_impl);
-    OperatorResult::Finished
+    run_csg(world, CsgOp::Intersect, &params)
 }
 
 /// Shared environment gate: brush-level operators never run mid-draw,
@@ -824,23 +1106,49 @@ pub(crate) fn env_allows_brush_op(
     !keybind_focus.keyboard_is_spoken_for() && modal.active.is_none() && draw_state.active.is_none()
 }
 
-/// `brush.join` / `brush.csg_subtract` / `brush.csg_intersect` all
-/// require at least two `Brush` entities in the current selection.
-fn can_run_binary_brush_op(
-    keybind_focus: KeybindFocus,
-    modal: Res<crate::modal_transform::ModalTransformState>,
-    draw_state: Res<DrawBrushState>,
-    selection: Res<Selection>,
-    brushes: Query<(), With<Brush>>,
-    viewport: crate::viewport_2d::FrontedViewport,
-) -> bool {
-    if !env_allows_brush_op(&keybind_focus, &modal, &draw_state) || !viewport.is_three_d() {
-        return false;
+/// What the join and CSG gates read.
+#[derive(SystemParam)]
+struct BrushOpGate<'w, 's> {
+    keybind_focus: KeybindFocus<'w, 's>,
+    modal: Res<'w, crate::modal_transform::ModalTransformState>,
+    draw_state: Res<'w, DrawBrushState>,
+    selection: Res<'w, Selection>,
+    brushes: Query<'w, 's, (), With<Brush>>,
+    viewport: crate::viewport_2d::FrontedViewport<'w, 's>,
+    call: Option<Res<'w, AvailabilityParams>>,
+}
+
+impl BrushOpGate<'_, '_> {
+    /// Whether the editor is free for a brush op and either at least `min`
+    /// brushes are selected in a 3D view or, for an op that `takes_operands`,
+    /// the call names its own, which the op then checks itself.
+    fn allows(&self, min: usize, takes_operands: bool) -> bool {
+        if !env_allows_brush_op(&self.keybind_focus, &self.modal, &self.draw_state) {
+            return false;
+        }
+        let names_operands = takes_operands
+            && self
+                .call
+                .as_ref()
+                .is_some_and(|call| OPERAND_KEYS.iter().any(|key| call.0.contains_key(*key)));
+        let selected = self
+            .selection
+            .entities
+            .iter()
+            .filter(|&&e| self.brushes.contains(e))
+            .count();
+        names_operands || (self.viewport.is_three_d() && selected >= min)
     }
-    selection
-        .entities
-        .iter()
-        .filter(|&&e| brushes.contains(e))
-        .count()
-        >= 2
+}
+
+fn can_run_binary_brush_op(gate: BrushOpGate) -> bool {
+    gate.allows(2, false)
+}
+
+fn can_run_csg_subtract(gate: BrushOpGate) -> bool {
+    gate.allows(1, true)
+}
+
+fn can_run_csg_intersect(gate: BrushOpGate) -> bool {
+    gate.allows(2, true)
 }
