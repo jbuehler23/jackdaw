@@ -1221,9 +1221,8 @@ fn warnings_do_not_carry_over_to_the_next_call() {
         call_operator_handler,
         json!({ "id": "entity.add.cube" }),
     );
-    assert_eq!(
-        outcome["warnings"],
-        json!([]),
+    assert!(
+        outcome.get("warnings").is_none(),
         "the next call inherited the previous one's warning: {outcome}"
     );
 }
@@ -1656,4 +1655,423 @@ fn waiting_for_idle_holds_until_a_synthetic_chord_has_landed() {
     let idle = poll(&mut app, wait_handler, json!({ "until": "idle" }));
     assert_eq!(idle["idle"], json!(true));
     assert_eq!(cubes(&mut app), 0, "the undo chord took the cube away");
+}
+
+/// The entity a compact outcome reports first.
+fn first_spawned(outcome: &Value) -> Entity {
+    let bits = outcome["entities"][0]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no entity reported: {outcome}"));
+    Entity::try_from_bits(bits).expect("a live entity id")
+}
+
+/// A later call names what an earlier call in the same batch made, so a parent
+/// and the nodes under it build in one round trip.
+#[test]
+fn a_batch_call_names_an_earlier_calls_entity_by_reference() {
+    let mut app = editor_with_a_scene();
+    let outcome = call(
+        &mut app,
+        batch_handler,
+        json!({
+            "calls": [
+                { "id": "entity.add.group", "params": { "name": "Props" } },
+                { "id": "entity.add.cube", "params": { "parent": "$0.entities.0" } },
+            ],
+        }),
+    );
+    app.update();
+
+    let calls = outcome["calls"].as_array().expect("an array");
+    assert_eq!(calls.len(), 2, "{outcome}");
+    let group = first_spawned(&calls[0]);
+    let cube = first_spawned(&calls[1]);
+    assert_eq!(
+        app.world().get::<ChildOf>(cube).map(ChildOf::parent),
+        Some(group),
+        "the cube did not land under the group the reference named: {outcome}"
+    );
+}
+
+/// A reference that is malformed, or names a call that has not run before it,
+/// is refused before anything runs.
+#[test]
+fn a_bad_batch_reference_is_refused_before_any_call_runs() {
+    let mut app = editor_with_a_scene();
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+    let roots = root_names(&mut app);
+
+    for reference in [
+        "$1.entities.0",
+        "$7.entities.0",
+        "$0",
+        "$0.entities..0",
+        "$0.colour",
+        "$0x.entities",
+    ] {
+        let error = app
+            .world_mut()
+            .run_system_cached_with(
+                batch_handler,
+                Some(json!({
+                    "calls": [
+                        { "id": "entity.add.cube" },
+                        { "id": "entity.add.cube", "params": { "parent": reference } },
+                    ],
+                })),
+            )
+            .expect("the handler ran")
+            .expect_err("a bad reference is refused");
+        assert_eq!(
+            error.code,
+            bevy::remote::error_codes::INVALID_PARAMS,
+            "{reference}: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("call 1") && error.message.contains(reference),
+            "{reference}: the refusal names neither the call nor the reference: {}",
+            error.message
+        );
+        app.update();
+    }
+
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        before,
+        "a refused batch pushed an undo entry"
+    );
+    assert_eq!(root_names(&mut app), roots, "a refused batch added a node");
+}
+
+/// A reference to a value the earlier call did not produce stops the batch at
+/// the call that holds it.
+#[test]
+fn a_reference_to_a_missing_value_stops_the_batch_there() {
+    let mut app = editor_with_a_scene();
+    let error = app
+        .world_mut()
+        .run_system_cached_with(
+            batch_handler,
+            Some(json!({
+                "calls": [
+                    { "id": "entity.add.cube" },
+                    { "id": "entity.add.cube", "params": { "parent": "$0.entities.4" } },
+                    { "id": "entity.add.cube" },
+                ],
+            })),
+        )
+        .expect("the handler ran")
+        .expect_err("a missing value stops the batch");
+    assert!(
+        error.message.contains("call 1") && error.message.contains("$0.entities.4"),
+        "{}",
+        error.message
+    );
+    let data = error.data.expect("the error carries what ran");
+    assert_eq!(data["failed_at"], json!(1), "{data}");
+    assert_eq!(data["calls"].as_array().map(Vec::len), Some(1), "{data}");
+}
+
+/// An outcome is compact unless the caller asks: the spawned ids and how the
+/// call ended, without the operator id echoed back or empty lists.
+#[test]
+fn a_call_answers_compactly_unless_asked_to_be_verbose() {
+    let mut app = editor_with_a_scene();
+    let compact = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.add.cube" }),
+    );
+    app.update();
+    assert_eq!(compact["result"], json!("finished"), "{compact}");
+    assert_eq!(
+        compact["entities"].as_array().map(Vec::len),
+        Some(1),
+        "{compact}"
+    );
+    for dropped in ["id", "warnings", "reports"] {
+        assert!(compact.get(dropped).is_none(), "{dropped}: {compact}");
+    }
+
+    let verbose = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.add.cube", "verbose": true }),
+    );
+    app.update();
+    assert_eq!(verbose["id"], json!("entity.add.cube"), "{verbose}");
+    assert_eq!(verbose["warnings"], json!([]), "{verbose}");
+
+    let batch = call(
+        &mut app,
+        batch_handler,
+        json!({ "calls": [{ "id": "entity.add.cube" }] }),
+    );
+    app.update();
+    assert!(batch["calls"][0].get("id").is_none(), "{batch}");
+    let batch = call(
+        &mut app,
+        batch_handler,
+        json!({ "calls": [{ "id": "entity.add.cube" }], "verbose": true }),
+    );
+    app.update();
+    assert_eq!(batch["calls"][0]["id"], json!("entity.add.cube"), "{batch}");
+}
+
+/// One operator can be asked for by id, so a caller need not read the whole
+/// catalogue to learn one schema.
+#[test]
+fn the_operator_list_answers_for_one_id() {
+    let mut app = editor_with_a_scene();
+    let listed = call(
+        &mut app,
+        operators_handler,
+        json!({ "id": "entity.add.cube" }),
+    );
+    let operators = listed["operators"].as_array().expect("an array");
+    assert_eq!(operators.len(), 1, "{listed}");
+    assert_eq!(operators[0]["id"], json!("entity.add.cube"));
+    assert!(operators[0]["params"].is_array(), "{listed}");
+
+    let none = call(&mut app, operators_handler, json!({ "id": "entity.add" }));
+    assert_eq!(
+        none["operators"],
+        json!([]),
+        "an id is not a prefix: {none}"
+    );
+}
+
+/// A `max_px` capture also writes a thumbnail that fits inside that many
+/// pixels, in the format asked for, and keeps the full capture where it was.
+#[test]
+fn a_screenshot_writes_a_thumbnail_within_max_px() {
+    use bevy::image::ToExtents as _;
+    use bevy::render::render_resource::{TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+
+    let (mut app, _project) = editor_with_a_project();
+    let params = Some(json!({
+        "kind": "window",
+        "path": "thumbed.png",
+        "request": "one",
+        "max_px": 64,
+        "format": "jpeg",
+    }));
+    let first = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params.clone())
+        .expect("the handler ran")
+        .expect("a window capture queues");
+    assert!(first.is_none());
+
+    let shot = app
+        .world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .single(app.world())
+        .expect("one capture queued");
+    app.world_mut().trigger(ScreenshotCaptured {
+        entity: shot,
+        image: Image::new_fill(
+            UVec2::new(200, 100).to_extents(),
+            TextureDimension::D2,
+            &[255, 0, 0, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            default(),
+        ),
+    });
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params)
+        .expect("the handler ran")
+        .expect("the handler answered")
+        .expect("a landed capture answers");
+    assert_eq!(answer["width"], json!(200), "{answer}");
+    assert_eq!(answer["height"], json!(100), "{answer}");
+    let thumb = &answer["thumb"];
+    assert_eq!(thumb["width"], json!(64), "{answer}");
+    assert_eq!(thumb["height"], json!(32), "{answer}");
+    let path = thumb["path"].as_str().expect("a thumbnail path");
+    assert!(path.ends_with(".jpg"), "{answer}");
+    let bytes = std::fs::read(path).expect("the thumbnail is on disk");
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8], "not a JPEG: {answer}");
+    let full = answer["path"].as_str().expect("the capture path");
+    assert!(
+        std::fs::metadata(full).is_ok(),
+        "the full capture went away"
+    );
+}
+
+/// A thumbnail format the editor cannot write is the caller's mistake.
+#[test]
+fn an_unknown_thumbnail_format_is_an_invalid_params_error() {
+    let (mut app, _project) = editor_with_a_project();
+    let err = app
+        .world_mut()
+        .run_system_cached_with(
+            screenshot_handler,
+            Some(json!({ "kind": "window", "max_px": 64, "format": "gif" })),
+        )
+        .expect("the handler ran")
+        .expect_err("gif is refused");
+    assert_eq!(err.code, bevy::remote::error_codes::INVALID_PARAMS);
+}
+
+/// A call that holds a reference still has its other parameters typed before
+/// anything runs, so a mistake there refuses the whole batch.
+#[test]
+fn a_referencing_calls_other_parameters_are_checked_before_any_call_runs() {
+    let mut app = editor_with_a_scene();
+    let roots = root_names(&mut app);
+    let error = app
+        .world_mut()
+        .run_system_cached_with(
+            batch_handler,
+            Some(json!({
+                "calls": [
+                    { "id": "entity.add.group", "params": { "name": "Props" } },
+                    {
+                        "id": "entity.add.cube",
+                        "params": { "parent": "$0.entities.0", "size": "tall" },
+                    },
+                ],
+            })),
+        )
+        .expect("the handler ran")
+        .expect_err("a mistyped parameter is refused");
+    assert!(error.message.contains("call 1"), "{}", error.message);
+    app.update();
+    assert_eq!(root_names(&mut app), roots, "a refused batch added a node");
+}
+
+/// Text that starts with `$` is spelled `$$`, and reaches the operator with
+/// one `$`.
+#[test]
+fn a_doubled_dollar_reaches_the_operator_as_text() {
+    let mut app = editor_with_a_scene();
+    let outcome = call(
+        &mut app,
+        batch_handler,
+        json!({
+            "calls": [{ "id": "entity.add.group", "params": { "name": "$$100 Prop" } }],
+        }),
+    );
+    app.update();
+    let group = first_spawned(&outcome["calls"][0]);
+    assert_eq!(
+        app.world().get::<Name>(group).map(Name::as_str),
+        Some("$100 Prop"),
+        "{outcome}"
+    );
+}
+
+/// The batch failure names the operator of the call that failed.
+#[test]
+fn a_batch_failure_names_the_failing_operator() {
+    let mut app = editor_with_a_scene();
+    let error = app
+        .world_mut()
+        .run_system_cached_with(
+            batch_handler,
+            Some(json!({
+                "calls": [
+                    { "id": "entity.add.cube" },
+                    { "id": "entity.add.cube", "params": { "parent": "$0.entities.4" } },
+                ],
+            })),
+        )
+        .expect("the handler ran")
+        .expect_err("a missing value stops the batch");
+    assert!(
+        error.message.contains("call 1 (entity.add.cube)"),
+        "{}",
+        error.message
+    );
+}
+
+/// A capture with no path is matched by the path made when it was queued,
+/// even when it lands in a later second than the one that path is stamped
+/// with.
+#[test]
+fn an_unnamed_screenshot_is_answered_when_it_lands_a_second_later() {
+    use bevy::image::ToExtents as _;
+    use bevy::render::render_resource::{TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+
+    let (mut app, _project) = editor_with_a_project();
+    let params = Some(json!({ "kind": "window", "request": "unnamed" }));
+    let first = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params.clone())
+        .expect("the handler ran")
+        .expect("a window capture queues");
+    assert!(first.is_none());
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let shot = app
+        .world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .single(app.world())
+        .expect("one capture queued");
+    app.world_mut().trigger(ScreenshotCaptured {
+        entity: shot,
+        image: Image::new_fill(
+            UVec2::new(40, 20).to_extents(),
+            TextureDimension::D2,
+            &[0, 0, 0, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            default(),
+        ),
+    });
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params)
+        .expect("the handler ran")
+        .expect("the handler answered")
+        .expect("the capture is matched by the path it was queued with");
+    assert_eq!(answer["width"], json!(40), "{answer}");
+}
+
+/// A capture that already fits as a PNG is its own thumbnail; nothing extra
+/// is written.
+#[test]
+fn a_capture_that_fits_is_its_own_thumbnail() {
+    use bevy::image::ToExtents as _;
+    use bevy::render::render_resource::{TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+
+    let (mut app, _project) = editor_with_a_project();
+    let params = Some(json!({
+        "kind": "window",
+        "path": "small.png",
+        "request": "one",
+        "max_px": 512,
+    }));
+    app.world_mut()
+        .run_system_cached_with(screenshot_handler, params.clone())
+        .expect("the handler ran")
+        .expect("a window capture queues");
+    let shot = app
+        .world_mut()
+        .query_filtered::<Entity, With<Screenshot>>()
+        .single(app.world())
+        .expect("one capture queued");
+    app.world_mut().trigger(ScreenshotCaptured {
+        entity: shot,
+        image: Image::new_fill(
+            UVec2::new(100, 50).to_extents(),
+            TextureDimension::D2,
+            &[0, 255, 0, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            default(),
+        ),
+    });
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, params)
+        .expect("the handler ran")
+        .expect("the handler answered")
+        .expect("a landed capture answers");
+    assert_eq!(answer["thumb"]["path"], answer["path"], "{answer}");
+    assert_eq!(answer["thumb"]["width"], json!(100), "{answer}");
 }

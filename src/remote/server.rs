@@ -535,7 +535,8 @@ fn pending_dialog(world: &mut World) -> Option<Value> {
     }))
 }
 
-/// Every operator a caller may call, with its parameter schema.
+/// Every operator a caller may call, with its parameter schema. `prefix`
+/// narrows the list, and `id` answers for that one operator.
 pub fn operators_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     check_enabled(world)?;
     let prefix = params
@@ -544,6 +545,11 @@ pub fn operators_handler(In(params): In<Option<Value>>, world: &mut World) -> Br
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let exact = params
+        .as_ref()
+        .and_then(|params| params.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     let listed = world
         .run_system_cached(offered_operators)
@@ -552,6 +558,7 @@ pub fn operators_handler(In(params): In<Option<Value>>, world: &mut World) -> Br
     let operators: Vec<Value> = listed
         .into_iter()
         .filter(|op| op.id().starts_with(&prefix))
+        .filter(|op| exact.as_deref().is_none_or(|id| op.id() == id))
         .map(|op| {
             let available = world.operator(op.id()).is_available().unwrap_or(false);
             let params: Vec<Value> = op
@@ -591,11 +598,24 @@ pub fn call_operator_handler(In(params): In<Option<Value>>, world: &mut World) -
         .unwrap_or(true);
     let call = call_from_json(world, &params)?;
     let outcome = dispatch(world, call, history)?;
-    Ok(json!(outcome))
+    Ok(outcome.to_json(verbose(&params)))
+}
+
+/// Whether the caller asked for the whole outcome rather than the compact one.
+fn verbose(params: &Value) -> bool {
+    params
+        .get("verbose")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Run a batch of calls as one undo entry. A call that stops the batch leaves
 /// the earlier ones done, and the error says so.
+///
+/// A string parameter spelled `$N.path` takes the value at `path` in call
+/// `N`'s outcome, e.g. `$0.entities.0` for the first entity call 0 added. A
+/// malformed reference, or one to a call that does not run earlier, refuses
+/// the whole batch before anything runs.
 pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     check_enabled(world)?;
     let params = params.ok_or_else(|| invalid_params("expected {\"calls\": [...]}"))?;
@@ -607,22 +627,44 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
         .and_then(Value::as_str)
         .unwrap_or("Batch")
         .to_string();
+    let verbose = verbose(&params);
 
     let mut prepared = Vec::with_capacity(calls.len());
     for (index, call) in calls.iter().enumerate() {
-        prepared.push(
-            call_from_json(world, call)
-                .map_err(|err| invalid_params(format!("call {index}: {}", err.message)))?,
-        );
+        let refused = |err: BrpError| invalid_params(format!("call {index}: {}", err.message));
+        let referenced = check_references(call.get("params"), index).map_err(refused)?;
+        if referenced {
+            // Everything but the referencing parameters is typed now, so a
+            // mistake there refuses the batch before anything runs.
+            let mut known = call.clone();
+            if let Some(params) = known.get_mut("params").and_then(Value::as_object_mut) {
+                params.retain(|_, value| !holds_reference(value));
+            }
+            typed_call(world, &fill_references(&known, &[]).map_err(refused)?).map_err(refused)?;
+            prepared.push(Pending::Referencing(call.clone()));
+        } else {
+            let call = fill_references(call, &[]).map_err(refused)?;
+            prepared.push(Pending::Ready(
+                call_from_json(world, &call).map_err(refused)?,
+            ));
+        }
     }
 
     let results = with_batch_snapshot(world, label, move |world| {
         let mut results = Vec::with_capacity(prepared.len());
-        for (index, call) in prepared.into_iter().enumerate() {
-            match dispatch(world, call, false) {
+        let mut earlier: Vec<Value> = Vec::with_capacity(prepared.len());
+        for (index, pending) in prepared.into_iter().enumerate() {
+            let call = match pending {
+                Pending::Ready(call) => Ok(call),
+                Pending::Referencing(call) => {
+                    fill_references(&call, &earlier).and_then(|call| call_from_json(world, &call))
+                }
+            };
+            match call.and_then(|call| dispatch(world, call, false)) {
                 Ok(outcome) => {
                     let stop = outcome.result != "finished";
                     let entered_modal = outcome.result == "running";
+                    earlier.push(outcome.to_json(true));
                     results.push((index, Ok(outcome)));
                     if entered_modal {
                         // A modal operator waits for a pointer that is never
@@ -647,7 +689,7 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
     let mut done = Vec::new();
     for (index, result) in results {
         match result {
-            Ok(outcome) => done.push(json!(outcome)),
+            Ok(outcome) => done.push(outcome.to_json(verbose)),
             Err(err) => {
                 return Err(BrpError {
                     code: err.code,
@@ -655,7 +697,7 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
                         "call {index} ({}) failed: {}. The {} call(s) before it are done and are \
                          committed as one undo entry; undo once to take them back rather than \
                          retrying the whole batch.",
-                        done.len(),
+                        calls[index]["id"].as_str().unwrap_or("?"),
                         err.message,
                         done.len()
                     ),
@@ -665,6 +707,149 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
         }
     }
     Ok(json!({ "calls": done }))
+}
+
+/// A batch call, typed up front, or held until the outcomes it references are
+/// in.
+enum Pending {
+    Ready(PreparedCall),
+    Referencing(Value),
+}
+
+/// The fields of an outcome a reference can start from.
+const OUTCOME_FIELDS: [&str; 6] = ["id", "result", "warnings", "entities", "reports", "outcome"];
+
+/// A `$N.path` reference: the value at `path` in call `N`'s outcome.
+#[derive(Debug, PartialEq, Eq)]
+struct ResultRef<'a> {
+    call: usize,
+    path: Vec<&'a str>,
+}
+
+/// Read `text` as a reference. `Ok(None)` is a plain string: one that does not
+/// start with `$` and a digit, or a `$$` that escapes a literal `$`.
+fn parse_reference(text: &str) -> Result<Option<ResultRef<'_>>, String> {
+    let Some(rest) = text.strip_prefix('$') else {
+        return Ok(None);
+    };
+    if !rest.starts_with(|c: char| c.is_ascii_digit()) {
+        return Ok(None);
+    }
+    let mut parts = rest.split('.');
+    let call = parts
+        .next()
+        .and_then(|index| index.parse::<usize>().ok())
+        .ok_or_else(|| {
+            format!(
+                "`{text}` is not a reference: expected `$N.field`; write `$${rest}` for text \
+                 that starts with `$`"
+            )
+        })?;
+    let path: Vec<&str> = parts.collect();
+    let Some(field) = path.first() else {
+        return Err(format!(
+            "`{text}` names a whole outcome; name a value in it, e.g. `${call}.entities.0`"
+        ));
+    };
+    if path.iter().any(|segment| segment.is_empty()) {
+        return Err(format!("`{text}` has an empty step in its path"));
+    }
+    if !OUTCOME_FIELDS.contains(field) {
+        return Err(format!(
+            "`{text}`: an outcome has no `{field}`; it has {}",
+            OUTCOME_FIELDS.join(", ")
+        ));
+    }
+    Ok(Some(ResultRef { call, path }))
+}
+
+/// Check every reference in a call's parameters against the calls that run
+/// before it. Returns whether the call has any.
+fn check_references(params: Option<&Value>, index: usize) -> Result<bool, BrpError> {
+    let mut found = false;
+    let mut pending: Vec<&Value> = params.into_iter().collect();
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::String(text) => {
+                let Some(reference) = parse_reference(text).map_err(invalid_params)? else {
+                    continue;
+                };
+                if reference.call >= index {
+                    return Err(invalid_params(format!(
+                        "`{text}` names call {}, which does not run before call {index}",
+                        reference.call
+                    )));
+                }
+                found = true;
+            }
+            Value::Array(items) => pending.extend(items),
+            Value::Object(fields) => pending.extend(fields.values()),
+            _ => {}
+        }
+    }
+    Ok(found)
+}
+
+/// Whether `value` holds a reference anywhere inside it.
+fn holds_reference(value: &Value) -> bool {
+    match value {
+        Value::String(text) => matches!(parse_reference(text), Ok(Some(_))),
+        Value::Array(items) => items.iter().any(holds_reference),
+        Value::Object(fields) => fields.values().any(holds_reference),
+        _ => false,
+    }
+}
+
+/// A call with every reference in its parameters replaced by the value it
+/// names in `earlier`, and every `$$` escape read as one `$`.
+fn fill_references(call: &Value, earlier: &[Value]) -> Result<Value, BrpError> {
+    fn fill(value: &mut Value, earlier: &[Value]) -> Result<(), BrpError> {
+        match value {
+            Value::String(text) => {
+                if let Some(literal) = text.strip_prefix("$$") {
+                    *text = format!("${literal}");
+                    return Ok(());
+                }
+                let Some(reference) = parse_reference(text).map_err(invalid_params)? else {
+                    return Ok(());
+                };
+                let mut found = earlier.get(reference.call);
+                for segment in &reference.path {
+                    found = found.and_then(|at| match at {
+                        Value::Array(items) => {
+                            segment.parse::<usize>().ok().and_then(|i| items.get(i))
+                        }
+                        other => other.get(segment),
+                    });
+                }
+                let found = found.filter(|found| !found.is_null()).ok_or_else(|| {
+                    invalid_params(format!(
+                        "`{text}`: call {} reported no such value",
+                        reference.call
+                    ))
+                })?;
+                *value = found.clone();
+            }
+            Value::Array(items) => {
+                for item in items {
+                    fill(item, earlier)?;
+                }
+            }
+            Value::Object(fields) => {
+                for field in fields.values_mut() {
+                    fill(field, earlier)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut call = call.clone();
+    if let Some(params) = call.get_mut("params") {
+        fill(params, earlier)?;
+    }
+    Ok(call)
 }
 
 /// End the modal operator holding the editor, if one is. A modal call over the
@@ -711,8 +896,35 @@ struct CallOutcome {
     outcome: Option<&'static str>,
 }
 
+impl CallOutcome {
+    /// The outcome as a caller reads it. Compact leaves out the operator id the
+    /// caller already sent and every empty list but `entities`.
+    fn to_json(&self, verbose: bool) -> Value {
+        let mut value = json!(self);
+        if !verbose && let Some(fields) = value.as_object_mut() {
+            fields.remove("id");
+            fields.retain(|name, field| {
+                name == "entities" || field.as_array().is_none_or(|items| !items.is_empty())
+            });
+        }
+        value
+    }
+}
+
 /// Type a `{id, params}` object into a call the dispatcher can take.
 fn call_from_json(world: &mut World, call: &Value) -> Result<PreparedCall, BrpError> {
+    let mut op = typed_call(world, call)?;
+    let unresolved = resolve_entity_params(world, &mut op)
+        .into_iter()
+        .filter(crate::boot_ops::EntityParam::is_refusal)
+        .filter_map(|outcome| outcome.line(&op.id))
+        .collect();
+    Ok(PreparedCall { op, unresolved })
+}
+
+/// Check a call's operator exists and type its parameters from the schema,
+/// leaving entity parameters unresolved.
+fn typed_call(world: &mut World, call: &Value) -> Result<BootOp, BrpError> {
     let id = call
         .get("id")
         .and_then(Value::as_str)
@@ -739,13 +951,7 @@ fn call_from_json(world: &mut World, call: &Value) -> Result<PreparedCall, BrpEr
         }
     }
 
-    let mut op = BootOp { id, params };
-    let unresolved = resolve_entity_params(world, &mut op)
-        .into_iter()
-        .filter(crate::boot_ops::EntityParam::is_refusal)
-        .filter_map(|outcome| outcome.line(&op.id))
-        .collect();
-    Ok(PreparedCall { op, unresolved })
+    Ok(BootOp { id, params })
 }
 
 /// Dispatch a prepared call and describe what happened.
@@ -1377,25 +1583,36 @@ pub fn screenshot_handler(
         .and_then(Value::as_str)
         .unwrap_or("viewport")
         .to_string();
-    let path = match params.get("path").and_then(Value::as_str) {
-        Some(path) => project_path(world, path)?,
-        None => default_capture_path(world, &kind),
-    };
-    let region = capture_region(&params)?;
     let key = request_key(&params);
 
     let frame = current_frame(world);
     expire_stale(world, frame);
 
-    let known = world
+    // A default path carries a timestamp, so it is made once, when the capture
+    // is queued, and read back from the request on every later poll.
+    let queued = world
         .get_resource_or_init::<PendingWaits>()
         .requests
-        .contains_key(&key);
-    if !known {
+        .get(&key)
+        .and_then(|pending| match &pending.state {
+            PendingState::Capture { path } => Some(path.clone()),
+            _ => None,
+        });
+    let Some(path) = queued else {
+        let path = match params.get("path").and_then(Value::as_str) {
+            Some(path) => project_path(world, path)?,
+            None => default_capture_path(world, &kind),
+        };
+        let region = capture_region(&params)?;
+        let thumbnail = thumbnail_request(&params)?;
         // A capture a previous holder of this path left behind is not this
         // request's answer.
-        if let Some(mut log) = world.get_resource_mut::<crate::screenshot::CaptureLog>() {
+        {
+            let mut log = world.get_resource_or_init::<crate::screenshot::CaptureLog>();
             log.forget(&path);
+            if let Some((max_px, format)) = thumbnail {
+                log.want_thumbnail(path.clone(), max_px, format);
+            }
         }
         let queue = path.clone();
         let outcome = match kind.as_str() {
@@ -1404,6 +1621,9 @@ pub fn screenshot_handler(
             _ => crate::screenshot::queue_capture(world, queue, false, region),
         };
         if let Err(err) = outcome {
+            world
+                .get_resource_or_init::<crate::screenshot::CaptureLog>()
+                .forget(&path);
             return Err(match err {
                 CaptureError::NoViewport | CaptureError::NotAnImageTarget => {
                     internal_error(err.to_string())
@@ -1424,7 +1644,7 @@ pub fn screenshot_handler(
                 },
             );
         return Ok(None);
-    }
+    };
 
     if let Some(pending) = world
         .get_resource_or_init::<PendingWaits>()
@@ -1434,24 +1654,59 @@ pub fn screenshot_handler(
         pending.last_seen = frame;
     }
 
-    let landed = world
-        .get_resource::<crate::screenshot::CaptureLog>()
-        .and_then(|log| log.size_of(&path));
-    let Some((width, height)) = landed else {
+    let mut log = world.get_resource_or_init::<crate::screenshot::CaptureLog>();
+    let Some((width, height)) = log.size_of(&path) else {
         return Ok(None);
     };
-    if let Some(mut log) = world.get_resource_mut::<crate::screenshot::CaptureLog>() {
-        log.forget(&path);
-    }
+    let thumbnail = log.take_thumbnail(&path);
+    log.forget(&path);
     world
         .get_resource_or_init::<PendingWaits>()
         .requests
         .remove(&key);
-    Ok(Some(json!({
+    let mut answer = json!({
         "path": path,
         "width": width,
         "height": height,
-    })))
+    });
+    match thumbnail {
+        Some(Ok(thumb)) => {
+            answer["thumb"] = json!({
+                "path": thumb.path,
+                "width": thumb.width,
+                "height": thumb.height,
+            });
+        }
+        // The capture itself landed; a caller can still read it at full size.
+        Some(Err(err)) => answer["warnings"] = json!([err]),
+        None => {}
+    }
+    Ok(Some(answer))
+}
+
+/// The thumbnail a screenshot request asks for: `max_px` on the longer side,
+/// in `format` (`png`, the default, or `jpeg`). None without `max_px`.
+fn thumbnail_request(
+    params: &Value,
+) -> BrpResult<Option<(u32, crate::screenshot::ThumbnailFormat)>> {
+    let Some(max_px) = params.get("max_px").filter(|max| !max.is_null()) else {
+        return Ok(None);
+    };
+    let max_px = max_px
+        .as_u64()
+        .and_then(|max| u32::try_from(max).ok())
+        .filter(|max| *max > 0)
+        .ok_or_else(|| invalid_params(format!("`max_px` = {max_px} is not a positive size")))?;
+    let format = match params.get("format").and_then(Value::as_str) {
+        None | Some("png") => crate::screenshot::ThumbnailFormat::Png,
+        Some("jpeg" | "jpg") => crate::screenshot::ThumbnailFormat::Jpeg,
+        Some(other) => {
+            return Err(invalid_params(format!(
+                "`format` = {other}: expected `png` or `jpeg`"
+            )));
+        }
+    };
+    Ok(Some((max_px, format)))
 }
 
 /// The `region` a screenshot request names: `{x, y, w, h, space}` with the
@@ -1759,6 +2014,52 @@ mod tests {
             default: None,
             doc: "",
         }
+    }
+
+    #[test]
+    fn a_reference_names_a_call_and_a_path_into_its_outcome() {
+        assert_eq!(
+            parse_reference("$3.entities.0"),
+            Ok(Some(ResultRef {
+                call: 3,
+                path: vec!["entities", "0"],
+            }))
+        );
+        assert_eq!(parse_reference("plain"), Ok(None));
+        assert_eq!(parse_reference("$name"), Ok(None), "a `$` word is text");
+        for malformed in ["$1", "$1.", "$1..entities", "$1x.entities", "$1.colour"] {
+            assert!(parse_reference(malformed).is_err(), "{malformed}");
+        }
+    }
+
+    #[test]
+    fn a_reference_must_name_an_earlier_call() {
+        let params = json!({ "parent": "$0.entities.0", "list": ["$1.entities.0"] });
+        assert!(check_references(Some(&params), 2).expect("both are earlier"));
+        assert!(check_references(Some(&params), 1).is_err());
+        assert!(!check_references(Some(&json!({ "name": "Cube" })), 0).expect("no references"));
+    }
+
+    #[test]
+    fn a_reference_is_filled_from_the_outcome_it_names() {
+        let earlier = vec![json!({ "id": "entity.add.group", "entities": [42, 43] })];
+        let call = json!({ "id": "entity.add.cube", "params": { "parent": "$0.entities.1" } });
+        let filled = fill_references(&call, &earlier).expect("the value is there");
+        assert_eq!(filled["params"]["parent"], json!(43));
+
+        let missing = json!({ "id": "x", "params": { "parent": "$0.entities.5" } });
+        assert!(fill_references(&missing, &earlier).is_err());
+    }
+
+    #[test]
+    fn a_doubled_dollar_is_text_that_starts_with_one() {
+        assert_eq!(parse_reference("$$100 Prop"), Ok(None));
+        assert!(parse_reference("$100 Prop").is_err());
+        let call = json!({ "id": "x", "params": { "name": "$$1.50", "tags": ["$$x"] } });
+        let filled = fill_references(&call, &[]).expect("no references");
+        assert_eq!(filled["params"]["name"], json!("$1.50"));
+        assert_eq!(filled["params"]["tags"][0], json!("$x"));
+        assert!(!holds_reference(&call["params"]));
     }
 
     /// The declared type decides, not the JSON's.
