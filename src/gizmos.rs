@@ -792,7 +792,7 @@ pub fn gizmo_drag_edit(
             &brush_params.brushes,
             &brush_params.caches,
             &brush_params.globals,
-            selected_sub_vertices,
+            crate::numeric_transform::sub_selection_vertices,
         );
         if captures.is_empty() {
             return Some(OperatorResult::Finished);
@@ -1263,37 +1263,6 @@ fn centroid(positions: &[Vec3]) -> Vec3 {
     positions.iter().copied().sum::<Vec3>() / positions.len() as f32
 }
 
-/// Topology vertex indices touched by a sub-selection, given the brush's
-/// face polygons. Unions the selected vertices, both ends of each selected
-/// edge, and every vertex of each selected face. Deduplicated, order-stable
-/// (first appearance wins).
-fn selected_sub_vertices(
-    sub: &crate::brush::BrushSubSelection,
-    face_polygons: &[Vec<usize>],
-) -> Vec<usize> {
-    let mut out: Vec<usize> = Vec::new();
-    let push = |v: usize, out: &mut Vec<usize>| {
-        if !out.contains(&v) {
-            out.push(v);
-        }
-    };
-    for &v in &sub.vertices {
-        push(v, &mut out);
-    }
-    for &(a, b) in &sub.edges {
-        push(a, &mut out);
-        push(b, &mut out);
-    }
-    for &f in &sub.faces {
-        if let Some(polygon) = face_polygons.get(f) {
-            for &v in polygon {
-                push(v, &mut out);
-            }
-        }
-    }
-    out
-}
-
 /// World positions of every selected sub-element vertex across the edit
 /// brushes. For each brush, `brush_data(e)` yields its local vertices,
 /// face polygons, sub-selection, and world transform; brushes that yield
@@ -1316,7 +1285,7 @@ fn sub_element_world_positions<'a>(
         let Some((vertices, face_polygons, sub, global)) = brush_data(e) else {
             continue;
         };
-        for vi in selected_sub_vertices(sub, face_polygons) {
+        for vi in crate::numeric_transform::sub_selection_vertices(sub, face_polygons) {
             if let Some(local) = vertices.get(vi) {
                 positions.push(global.transform_point(*local));
             }
@@ -1470,52 +1439,5 @@ mod central_gizmo_tests {
             Vec3::new(0.0, 3.0, 0.0),
         ]);
         assert!((c - Vec3::new(2.0 / 3.0, 1.0, 0.0)).length() < 1e-6);
-    }
-
-    #[test]
-    fn selected_sub_vertices_expands_and_dedups() {
-        use crate::brush::BrushSubSelection;
-        // Two triangular faces sharing edge (1, 2).
-        let face_polygons = vec![vec![0, 1, 2], vec![2, 1, 3]];
-
-        // A lone vertex.
-        let sub = BrushSubSelection {
-            vertices: vec![5],
-            ..Default::default()
-        };
-        assert_eq!(selected_sub_vertices(&sub, &face_polygons), vec![5]);
-
-        // An edge yields both ends.
-        let sub = BrushSubSelection {
-            edges: vec![(1, 2)],
-            ..Default::default()
-        };
-        assert_eq!(selected_sub_vertices(&sub, &face_polygons), vec![1, 2]);
-
-        // A face expands to its polygon's vertices.
-        let sub = BrushSubSelection {
-            faces: vec![0],
-            ..Default::default()
-        };
-        assert_eq!(selected_sub_vertices(&sub, &face_polygons), vec![0, 1, 2]);
-
-        // Overlap across the three lists is deduplicated, order-stable.
-        let sub = BrushSubSelection {
-            vertices: vec![1],
-            edges: vec![(1, 2)],
-            faces: vec![0, 1],
-        };
-        // vertices: 1; edge (1,2): 2; face 0: 0; face 1 (2,1,3): 3.
-        assert_eq!(
-            selected_sub_vertices(&sub, &face_polygons),
-            vec![1, 2, 0, 3]
-        );
-
-        // Out-of-range face index is skipped without panicking.
-        let sub = BrushSubSelection {
-            faces: vec![99],
-            ..Default::default()
-        };
-        assert!(selected_sub_vertices(&sub, &face_polygons).is_empty());
     }
 }

@@ -355,10 +355,14 @@ fn draw_numeric_axis_guide(
     );
 }
 
-/// Topology vertex indices a sub-selection touches: the union of its
-/// vertices, both ends of every edge, and every vertex of each selected face
-/// polygon. Mirrors `gizmos::selected_sub_vertices`, kept local here.
-fn sub_selection_vertices(sub: &BrushSubSelection, face_polygons: &[Vec<usize>]) -> Vec<usize> {
+/// Topology vertex indices a sub-selection touches, given the brush's face
+/// polygons: the union of its vertices, both ends of every edge, and every
+/// vertex of each selected face. Deduplicated, in first-appearance order; a
+/// face index past the polygons is skipped.
+pub(crate) fn sub_selection_vertices(
+    sub: &BrushSubSelection,
+    face_polygons: &[Vec<usize>],
+) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     let push = |v: usize, out: &mut Vec<usize>| {
         if !out.contains(&v) {
@@ -383,7 +387,7 @@ fn sub_selection_vertices(sub: &BrushSubSelection, face_polygons: &[Vec<usize>])
 }
 
 /// Mean of a set of positions; the origin for an empty set.
-fn centroid(positions: &[Vec3]) -> Vec3 {
+pub(crate) fn centroid(positions: &[Vec3]) -> Vec3 {
     if positions.is_empty() {
         return Vec3::ZERO;
     }
@@ -716,8 +720,32 @@ mod tests {
     }
 
     #[test]
-    fn sub_selection_vertices_unions_and_dedups() {
+    fn sub_selection_vertices_expands_and_dedups() {
+        // Two triangular faces sharing edge (1, 2).
         let face_polygons = vec![vec![0, 1, 2], vec![2, 1, 3]];
+
+        // A lone vertex.
+        let sub = BrushSubSelection {
+            vertices: vec![5],
+            ..Default::default()
+        };
+        assert_eq!(sub_selection_vertices(&sub, &face_polygons), vec![5]);
+
+        // An edge yields both ends.
+        let sub = BrushSubSelection {
+            edges: vec![(1, 2)],
+            ..Default::default()
+        };
+        assert_eq!(sub_selection_vertices(&sub, &face_polygons), vec![1, 2]);
+
+        // A face expands to its polygon's vertices.
+        let sub = BrushSubSelection {
+            faces: vec![0],
+            ..Default::default()
+        };
+        assert_eq!(sub_selection_vertices(&sub, &face_polygons), vec![0, 1, 2]);
+
+        // Overlap across the three lists is deduplicated, order-stable.
         let sub = BrushSubSelection {
             vertices: vec![1],
             edges: vec![(1, 2)],
@@ -728,5 +756,12 @@ mod tests {
             sub_selection_vertices(&sub, &face_polygons),
             vec![1, 2, 0, 3]
         );
+
+        // Out-of-range face index is skipped without panicking.
+        let sub = BrushSubSelection {
+            faces: vec![99],
+            ..Default::default()
+        };
+        assert!(sub_selection_vertices(&sub, &face_polygons).is_empty());
     }
 }

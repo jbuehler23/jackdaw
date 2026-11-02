@@ -11,6 +11,7 @@ pub mod dissolve_verts;
 pub mod edge_bevel;
 pub mod edge_slide;
 pub mod edge_slide_modal;
+pub mod element_transform;
 pub mod extrude;
 pub mod inset;
 pub mod loop_cut;
