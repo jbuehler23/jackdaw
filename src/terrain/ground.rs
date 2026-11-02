@@ -37,14 +37,26 @@ pub fn height_under(
 ) -> Option<f32> {
     terrains
         .iter()
-        .filter_map(|(terrain, transform)| {
-            let to_local = transform.affine().inverse();
-            let local = to_local.transform_point3(Vec3::new(point.x, 0.0, point.y));
-            let height = store.heightmap(terrain).map.height_at_local(local.xz())?;
-            let surface = transform.transform_point(Vec3::new(local.x, height, local.z));
-            Some(surface.y)
-        })
+        .filter_map(|(terrain, transform)| height_on(terrain, transform, store, point))
         .max_by(f32::total_cmp)
+}
+
+/// Height of one terrain's surface under a world-space XZ point, or `None`
+/// when that terrain does not cover it.
+pub fn height_on(
+    terrain: &jackdaw_scene_types::Terrain,
+    transform: &GlobalTransform,
+    store: &TerrainDataStore,
+    point: Vec2,
+) -> Option<f32> {
+    let to_local = transform.affine().inverse();
+    let local = to_local.transform_point3(Vec3::new(point.x, 0.0, point.y));
+    let height = store.heightmap(terrain).map.height_at_local(local.xz())?;
+    Some(
+        transform
+            .transform_point(Vec3::new(local.x, height, local.z))
+            .y,
+    )
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {

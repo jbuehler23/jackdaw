@@ -35,6 +35,8 @@ use crate::scenes::Scenes;
 use crate::screenshot::CaptureError;
 use crate::selection::Selection;
 
+pub use super::summary::{check_handler, scene_summary_handler};
+
 /// The editor's BRP port. One past the game's 15702, so an editor and the
 /// game it is running never contend for the same socket.
 pub const DEFAULT_PORT: u16 = 15703;
@@ -99,7 +101,7 @@ pub fn track_remote_enabled(world: &mut World) {
 
 /// The refusal every method gives while the open project has turned the
 /// surface off.
-fn check_enabled(world: &World) -> Result<(), BrpError> {
+pub(super) fn check_enabled(world: &World) -> Result<(), BrpError> {
     if world.get_resource::<RemoteEnabled>().is_none_or(|e| e.0) {
         return Ok(());
     }
@@ -151,6 +153,8 @@ impl Plugin for JackdawEditorRemotePlugin {
                     .with_method_main("jackdaw/batch", batch_handler)
                     .with_method_main("jackdaw/cancel", cancel_handler)
                     .with_method_main("jackdaw/scene_tree", scene_tree_handler)
+                    .with_method_main("jackdaw/scene_summary", scene_summary_handler)
+                    .with_method_main("jackdaw/check", check_handler)
                     .with_method_main("jackdaw/entity", entity_handler)
                     .with_method_main("jackdaw/apply_bsn", apply_bsn_handler)
                     .with_method_main("jackdaw/scene_bsn", scene_bsn_handler)
@@ -258,7 +262,7 @@ fn active_scene_path(world: &World) -> Option<&Path> {
 
 // --- Shared helpers ---
 
-fn invalid_params(message: impl Into<String>) -> BrpError {
+pub(super) fn invalid_params(message: impl Into<String>) -> BrpError {
     BrpError {
         code: error_codes::INVALID_PARAMS,
         message: message.into(),
@@ -413,7 +417,7 @@ fn property_to_json(value: &PropertyValue) -> Value {
 }
 
 /// The entity a `{"entity": <id>}` or `{"name": "<Name>"}` field means.
-fn entity_from_params(world: &mut World, params: &Value) -> Result<Entity, BrpError> {
+pub(super) fn entity_from_params(world: &mut World, params: &Value) -> Result<Entity, BrpError> {
     if let Some(bits) = params.get("entity").and_then(Value::as_u64) {
         return Entity::try_from_bits(bits)
             .filter(|entity| world.get_entity(*entity).is_ok())
@@ -1026,19 +1030,16 @@ fn spawned_by_the_call(world: &mut World) -> Vec<Entity> {
 pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     check_enabled(world)?;
     let params = params.unwrap_or(Value::Null);
-    let depth = params
-        .get("depth")
-        .and_then(Value::as_u64)
-        .unwrap_or(u64::from(u32::MAX)) as u32;
+    let depth = depth_param(&params)?;
 
-    let asked_for = named_root(&params)?;
+    let asked_for = root_param(world, &params)?;
     let named = asked_for.is_some();
     let roots = match asked_for {
         None => {
             let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
             query.iter(world).collect::<Vec<_>>()
         }
-        Some(root) => vec![entity_from_params(world, &root)?],
+        Some(root) => vec![root],
     };
 
     // A named root may be a row inside a UI screen, which is not a scene root;
@@ -1060,6 +1061,28 @@ pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> B
     Ok(json!({ "tree": tree }))
 }
 
+/// The `depth` a read asks for: generations below its root, all when absent.
+pub(super) fn depth_param(params: &Value) -> Result<u32, BrpError> {
+    match params.get("depth") {
+        None | Some(Value::Null) => Ok(u32::MAX),
+        Some(given) => given
+            .as_u64()
+            .and_then(|depth| u32::try_from(depth).ok())
+            .ok_or_else(|| {
+                invalid_params(format!(
+                    "`depth` is a non-negative whole number, not {given}"
+                ))
+            }),
+    }
+}
+
+/// The entity a read's `root` (or `entity` / `name`) names, if any.
+pub(super) fn root_param(world: &mut World, params: &Value) -> Result<Option<Entity>, BrpError> {
+    named_root(params)?
+        .map(|root| entity_from_params(world, &root))
+        .transpose()
+}
+
 /// The node a `root` field asks for, as an entity id or a name. `entity` and
 /// `name` are read as well.
 fn named_root(params: &Value) -> Result<Option<Value>, BrpError> {
@@ -1079,7 +1102,7 @@ fn named_root(params: &Value) -> Result<Option<Value>, BrpError> {
 
 /// Whether the outliner would draw a root row for `entity`, asking the same
 /// questions `crate::hierarchy::queue_root_row_spawn` does.
-fn is_scene_node(world: &World, entity: Entity) -> bool {
+pub(super) fn is_scene_node(world: &World, entity: Entity) -> bool {
     if is_editor_furniture(world, entity) {
         return false;
     }
@@ -1093,7 +1116,7 @@ fn is_scene_node(world: &World, entity: Entity) -> bool {
 /// `UiTransform` rather than `Transform`, so under a scene root `Node` counts
 /// too; at the top level it would take in the editor's own chrome, which is
 /// `Node` all the way down and carries no scene marker.
-fn is_scene_descendant(world: &World, entity: Entity) -> bool {
+pub(super) fn is_scene_descendant(world: &World, entity: Entity) -> bool {
     if is_editor_furniture(world, entity) {
         return false;
     }
@@ -1103,7 +1126,7 @@ fn is_scene_descendant(world: &World, entity: Entity) -> bool {
 /// Whether `entity` is in the open scene: a scene node, or a UI node under
 /// one. The editor's own chrome is `Node` all the way up to a root that is no
 /// scene node at all, so naming a piece of it reaches nothing.
-fn belongs_to_the_scene(world: &World, entity: Entity) -> bool {
+pub(super) fn belongs_to_the_scene(world: &World, entity: Entity) -> bool {
     let mut current = entity;
     for _ in 0..MAX_SCENE_DEPTH {
         if is_editor_furniture(world, current) {

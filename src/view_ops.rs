@@ -861,20 +861,47 @@ fn world_bounds(
     children: &Query<&Children>,
     bounded: &Query<(&GlobalTransform, &Aabb), Without<crate::ViewDependentBounds>>,
 ) -> Option<(Vec3, Vec3)> {
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
-    let mut found = false;
+    subtree_bounds(
+        entity,
+        |at| {
+            children
+                .get(at)
+                .map(|kids| kids.iter().collect())
+                .unwrap_or_default()
+        },
+        |at| {
+            bounded
+                .get(at)
+                .ok()
+                .map(|(transform, aabb)| aabb_world_bounds(transform, aabb))
+        },
+    )
+}
+
+/// The union of `own` over `entity` and every descendant `children` reaches,
+/// or `None` when none of them has bounds.
+pub(crate) fn subtree_bounds(
+    entity: Entity,
+    mut children: impl FnMut(Entity) -> Vec<Entity>,
+    mut own: impl FnMut(Entity) -> Option<(Vec3, Vec3)>,
+) -> Option<(Vec3, Vec3)> {
+    let mut found: Option<(Vec3, Vec3)> = None;
     let mut stack = vec![entity];
     while let Some(at) = stack.pop() {
-        if let Ok((transform, aabb)) = bounded.get(at) {
-            expand_world_aabb(transform, aabb, &mut min, &mut max);
-            found = true;
+        if let Some((lo, hi)) = own(at) {
+            found = Some(found.map_or((lo, hi), |(min, max)| (min.min(lo), max.max(hi))));
         }
-        if let Ok(kids) = children.get(at) {
-            stack.extend(kids.iter());
-        }
+        stack.extend(children(at));
     }
-    found.then_some((min, max))
+    found
+}
+
+/// The world-space box around a local `Aabb` placed by `transform`.
+pub(crate) fn aabb_world_bounds(transform: &GlobalTransform, aabb: &Aabb) -> (Vec3, Vec3) {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    expand_world_aabb(transform, aabb, &mut min, &mut max);
+    (min, max)
 }
 
 /// Grow `min`/`max` to hold a local `Aabb` placed by `transform`.

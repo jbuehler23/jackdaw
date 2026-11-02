@@ -295,6 +295,41 @@ pub struct SceneTreeArgs {
     pub depth: Option<u32>,
 }
 
+/// Arguments for `scene_summary`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SceneSummaryArgs {
+    /// Entity id or name to start from. The whole scene when omitted.
+    #[serde(default)]
+    pub root: Option<Value>,
+    /// Generations of children to include below `root`. All when omitted.
+    #[serde(default)]
+    pub depth: Option<u32>,
+    /// Columns after `id`, from name, parent, pos, rot, size, bounds,
+    /// material, kind, faces, verts, modifiers. Defaults to name, parent,
+    /// kind, pos, size.
+    #[serde(default)]
+    pub fields: Option<Vec<String>>,
+    /// A `revision` from an earlier summary of the same scope: answer with
+    /// only the rows added, changed and removed since.
+    #[serde(default)]
+    pub since_revision: Option<u64>,
+    /// Keep only nodes matching `{name_prefix?, kind?}`, where kind is one
+    /// of brush, terrain, prefab, light, camera, model, mesh, ui, empty.
+    #[serde(default)]
+    pub filter: Option<Value>,
+}
+
+/// Arguments for `check`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CheckArgs {
+    /// Assertions, each `{"<kind>": {...}}`: `rests_on {entity, on,
+    /// tolerance?}`, `inside {entity, of, tolerance?}`, `no_overlap
+    /// {entities, tolerance?}`, `bounds {entity, min?, max?, tolerance?}`,
+    /// `count {filter, eq?, min?, max?}`, `watertight {entity}`. Entities
+    /// are ids or names; tolerance defaults to 0.01.
+    pub assertions: Vec<Value>,
+}
+
 /// Arguments for `get_entity`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct EntityArgs {
@@ -591,7 +626,10 @@ impl JackdawMcp {
     }
 
     /// The scene as the outliner shows it.
-    #[tool(description = "The open scene's entity tree: ids, names, component type paths.")]
+    #[tool(
+        description = "The open scene's entity tree: ids, names, component type paths. Large; \
+                       use `scene_summary` and `check` to verify edits."
+    )]
     pub async fn scene_tree(
         &self,
         Parameters(args): Parameters<SceneTreeArgs>,
@@ -601,6 +639,49 @@ impl JackdawMcp {
             compact(json!({ "root": args.root, "depth": args.depth })),
         )
         .await
+    }
+
+    /// The scene as compact columnar rows, or what changed since a revision.
+    #[tool(
+        description = "The open scene as compact rows: `columns` names each value and every \
+                       row starts with the entity id. Positions are world space, sizes and \
+                       bounds are world-space boxes, rotations are [yaw, pitch, roll] degrees, \
+                       all rounded to 3 decimals. Pass the answer's `revision` back as \
+                       `since_revision` (same root, depth, fields and filter) to get only the \
+                       added, changed and removed rows."
+    )]
+    pub async fn scene_summary(
+        &self,
+        Parameters(args): Parameters<SceneSummaryArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.brp_text(
+            "jackdaw/scene_summary",
+            compact(json!({
+                "root": args.root,
+                "depth": args.depth,
+                "fields": args.fields,
+                "since_revision": args.since_revision,
+                "filter": args.filter,
+            })),
+        )
+        .await
+    }
+
+    /// Geometric assertions about the scene, each with what it measured.
+    #[tool(
+        description = "Verify the scene without a screenshot: each assertion passes or fails \
+                       and reports what it measured. `rests_on` gives the gap from the \
+                       entity's bottom to the top of `on` (or the ground of a terrain) and \
+                       whether they overlap seen from above; `inside` how far it sticks out; \
+                       `no_overlap` the deepest overlap and the pairs; `bounds` the measured \
+                       box; `count` the matching nodes; `watertight` a brush's open edges."
+    )]
+    pub async fn check(
+        &self,
+        Parameters(args): Parameters<CheckArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.brp_text("jackdaw/check", json!({ "assertions": args.assertions }))
+            .await
     }
 
     /// One node as BSN text.
@@ -827,9 +908,12 @@ impl ServerHandler for JackdawMcp {
                  load the `operators` resource whole. Run one with `call_operator`. Group a run \
                  of calls with `batch` so one undo takes them all back, naming earlier results \
                  with `$N.path`; for long scripts write the calls to a file and use \
-                 `run_batch_file`, which answers with a summary. `scene_tree` and `get_entity` \
-                 read the scene, `screenshot` returns a thumbnail to check it by, and \
-                 `save_scene` writes the open scene back to its file. Operators reach the disk \
+                 `run_batch_file`, which answers with a summary. To read and verify the scene \
+                 prefer `scene_summary` (compact rows; pass its `revision` back as \
+                 `since_revision` for only what changed) and `check` (rests_on, inside, \
+                 no_overlap, bounds, count, watertight, each with the measured value) over \
+                 `scene_tree` and screenshots. `get_entity` reads one node in full, \
+                 `screenshot` is for how things look, and `save_scene` writes the open scene back to its file. Operators reach the disk \
                  too, through the same saves, exports and bakes the menus run."
                 .to_string(),
         );
@@ -1070,5 +1154,18 @@ mod tests {
         assert!(text.contains("never load the `operators` resource whole"));
         assert!(text.contains("run_batch_file"));
         assert!(!text.contains("start with `list_operators`"));
+    }
+
+    #[test]
+    fn the_instructions_prefer_the_summary_and_checks_for_verifying() {
+        let text = JackdawMcp::new(".")
+            .get_info()
+            .instructions
+            .expect("instructions");
+        let summary = text.find("`scene_summary`").expect("names scene_summary");
+        let check = text.find("`check`").expect("names check");
+        let tree = text.find("`scene_tree`").expect("still names scene_tree");
+        assert!(summary < tree && check < tree, "{text}");
+        assert!(text.contains("since_revision"), "{text}");
     }
 }
