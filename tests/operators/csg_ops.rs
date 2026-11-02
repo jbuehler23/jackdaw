@@ -7,6 +7,7 @@ use crate::util::OperatorResultExt as _;
 
 use bevy::prelude::*;
 use jackdaw::commands::CommandHistory;
+use jackdaw::material_browser::MaterialRegistry;
 use jackdaw::remote::server::{batch_handler, call_operator_handler};
 use jackdaw::selection::{Selected, Selection};
 use jackdaw_api::prelude::*;
@@ -764,4 +765,571 @@ fn keep_cutters_alone_runs_on_the_selection_and_is_honoured() {
         "the selection path cuts every brush the cutter reaches"
     );
     assert_eq!(named(&mut app, "Wall").len(), 2);
+}
+
+fn wear(app: &mut App, entity: Entity, handle: &Handle<StandardMaterial>) {
+    let mut brush = app.world().get::<Brush>(entity).expect("a brush").clone();
+    for face in &mut brush.faces {
+        face.material = handle.clone();
+    }
+    app.world_mut().entity_mut(entity).insert(brush);
+    app.update();
+}
+
+fn registered_material(app: &mut App, name: &str) -> Handle<StandardMaterial> {
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    app.world_mut()
+        .resource_mut::<MaterialRegistry>()
+        .add(name.into(), handle.clone());
+    handle
+}
+
+/// A face's world-space plane point and normal.
+fn world_plane(app: &App, entity: Entity, face: usize) -> (Vec3, Vec3) {
+    let global = app
+        .world()
+        .get::<GlobalTransform>(entity)
+        .expect("a transform");
+    let plane = &app.world().get::<Brush>(entity).expect("a brush").faces[face].plane;
+    let point = global.transform_point(plane.normal * plane.distance);
+    let normal = global.rotation() * plane.normal;
+    (point, normal)
+}
+
+/// Whether a world plane is one of the planes listed as `(normal, point)`.
+fn on_any(plane: (Vec3, Vec3), planes: &[(Vec3, Vec3)]) -> bool {
+    planes.iter().any(|(normal, point)| {
+        plane.1.abs_diff_eq(*normal, EPS) && (plane.0 - *point).dot(*normal).abs() < EPS
+    })
+}
+
+/// The texture coordinate a face gives `world_point`.
+fn uv_at(app: &App, entity: Entity, face: usize, world_point: Vec3) -> Vec2 {
+    let global = app
+        .world()
+        .get::<GlobalTransform>(entity)
+        .expect("a transform");
+    let face = &app.world().get::<Brush>(entity).expect("a brush").faces[face];
+    let local = global.affine().inverse().transform_point3(world_point);
+    let (u, v) = (local.dot(face.uv_u_axis), local.dot(face.uv_v_axis));
+    let (sin, cos) = face.uv_rotation.sin_cos();
+    Vec2::new(
+        (u * cos - v * sin) / face.uv_scale.x.max(0.001) + face.uv_offset.x,
+        (u * sin + v * cos) / face.uv_scale.y.max(0.001) + face.uv_offset.y,
+    )
+}
+
+#[test]
+fn a_dry_run_leaves_the_scene_byte_identical_and_reports_what_the_real_run_does() {
+    for (id, params, selected) in [
+        (
+            "brush.csg_subtract",
+            json!({ "target": "Wall", "cutters": "Cutter" }),
+            false,
+        ),
+        (
+            "brush.csg_intersect",
+            json!({ "target": "Wall", "cutters": "Cutter" }),
+            false,
+        ),
+        ("brush.csg_subtract", json!({}), true),
+        ("brush.csg_intersect", json!({}), true),
+    ] {
+        let mut app = csg_app();
+        let scene = split_wall(&mut app);
+        if selected {
+            app.world_mut().resource_mut::<Selection>().entities = if id == "brush.csg_subtract" {
+                vec![scene.cutter]
+            } else {
+                vec![scene.wall, scene.cutter]
+            };
+            app.update();
+        }
+        let before = scene_text(&mut app);
+        let entries = history_len(&app);
+
+        let mut dry = params.clone();
+        dry["dry_run"] = json!(true);
+        let preview = call(&mut app, id, dry);
+        assert_eq!(preview["result"], "finished", "{id} {params}: {preview}");
+        assert_eq!(preview["outcome"], "unchanged", "{id} {params}: {preview}");
+        assert!(preview.get("removed").is_none(), "{id} {params}: {preview}");
+        assert!(preview.get("created").is_none(), "{id} {params}: {preview}");
+        assert_eq!(history_len(&app), entries, "{id} {params}");
+        assert_eq!(scene_text(&mut app), before, "{id} {params}");
+        assert!(
+            app.world().get::<Brush>(scene.wall).is_some(),
+            "{id} {params}"
+        );
+
+        let real = call(&mut app, id, params.clone());
+        assert_eq!(real["outcome"], "changed", "{id} {params}: {real}");
+        assert_eq!(
+            real["report"]["outcome"], "changed",
+            "{id} {params}: {real}"
+        );
+        assert_eq!(preview["report"], real["report"], "{id} {params}");
+    }
+}
+
+#[test]
+fn the_report_gives_the_analytic_volume_for_a_box_cut_from_a_box() {
+    let mut app = csg_app();
+    split_wall(&mut app);
+
+    let outcome = call(
+        &mut app,
+        "brush.csg_subtract",
+        json!({ "target": "Wall", "cutters": "Cutter" }),
+    );
+    let report = &outcome["report"];
+    assert_eq!(report["outcome"], "changed", "{outcome}");
+    assert_eq!(report["fragments"], 2, "{outcome}");
+    let volume: Vec<f64> = report["volume"]
+        .as_array()
+        .expect("volume before and after")
+        .iter()
+        .map(|v| v.as_f64().expect("a number"))
+        .collect();
+    assert!((volume[0] - 16.0).abs() < 1e-3, "{outcome}");
+    assert!((volume[1] - 12.0).abs() < 1e-3, "{outcome}");
+    assert_box(
+        reported_box(&report["bounds"]),
+        Vec3::new(-2.0, -1.0, -1.0),
+        Vec3::new(2.0, 1.0, 1.0),
+    );
+    assert_eq!(report["watertight"], true, "{outcome}");
+    assert_eq!(report["cut_faces"], 2, "{outcome}");
+    assert_eq!(report["degenerate"], 0, "{outcome}");
+}
+
+#[test]
+fn cut_faces_picks_the_material_of_exactly_the_new_faces() {
+    let wall_planes = [
+        (Vec3::X, Vec3::new(2.0, 0.0, 0.0)),
+        (Vec3::NEG_X, Vec3::new(-2.0, 0.0, 0.0)),
+        (Vec3::Y, Vec3::new(0.0, 1.0, 0.0)),
+        (Vec3::NEG_Y, Vec3::new(0.0, -1.0, 0.0)),
+        (Vec3::Z, Vec3::new(0.0, 0.0, 1.0)),
+        (Vec3::NEG_Z, Vec3::new(0.0, 0.0, -1.0)),
+    ];
+    for choice in ["cutter", "target", "materials/slate.material.bsn"] {
+        let mut app = csg_app();
+        let scene = split_wall(&mut app);
+        let stone = registered_material(&mut app, "stone");
+        let cut = registered_material(&mut app, "cut");
+        let slate = registered_material(&mut app, "slate");
+        wear(&mut app, scene.wall, &stone);
+        wear(&mut app, scene.cutter, &cut);
+
+        let outcome = call(
+            &mut app,
+            "brush.csg_subtract",
+            json!({ "target": "Wall", "cutters": "Cutter", "cut_faces": choice }),
+        );
+        assert_eq!(outcome["outcome"], "changed", "{choice}: {outcome}");
+        let expected = match choice {
+            "cutter" => &cut,
+            "target" => &stone,
+            _ => &slate,
+        };
+        let mut new_faces = 0;
+        for fragment in ids(&outcome["created"]) {
+            let count = app
+                .world()
+                .get::<Brush>(fragment)
+                .expect("a brush")
+                .faces
+                .len();
+            for face in 0..count {
+                let plane = world_plane(&app, fragment, face);
+                let worn = app.world().get::<Brush>(fragment).expect("a brush").faces[face]
+                    .material
+                    .clone();
+                if on_any(plane, &wall_planes) {
+                    assert_eq!(worn, stone, "{choice}: a kept face keeps its material");
+                } else {
+                    new_faces += 1;
+                    assert_eq!(&worn, expected, "{choice}: a new face wears the choice");
+                }
+            }
+        }
+        assert_eq!(new_faces, 2, "{choice}: one new face per fragment");
+        assert_eq!(outcome["report"]["cut_faces"], 2, "{choice}: {outcome}");
+    }
+}
+
+#[test]
+fn an_unknown_cut_faces_material_is_refused() {
+    let mut app = csg_app();
+    split_wall(&mut app);
+    let before = scene_text(&mut app);
+    let outcome = call(
+        &mut app,
+        "brush.csg_subtract",
+        json!({ "target": "Wall", "cutters": "Cutter", "cut_faces": "materials/missing.material.bsn" }),
+    );
+    assert_eq!(outcome["outcome"], "invalid", "{outcome}");
+    assert_eq!(scene_text(&mut app), before);
+}
+
+#[test]
+fn a_doorway_cut_dresses_its_reveals_in_the_cutters_material_and_is_confirmed_by_the_report() {
+    let mut app = csg_app();
+    let wall = cube(
+        &mut app,
+        "Wall",
+        [4.0, 3.0, 0.25],
+        [0.0, 1.5, 0.0],
+        [0.0; 3],
+    );
+    let door = cube(&mut app, "Door", [1.0, 2.0, 1.0], [0.0, 1.0, 0.0], [0.0; 3]);
+    clear_selection(&mut app);
+    let plaster = registered_material(&mut app, "plaster");
+    let timber = registered_material(&mut app, "timber");
+    wear(&mut app, wall, &plaster);
+    wear(&mut app, door, &timber);
+    let front = (0..app.world().get::<Brush>(wall).expect("a brush").faces.len())
+        .find(|&face| world_plane(&app, wall, face).1.abs_diff_eq(Vec3::Z, EPS))
+        .expect("a front face");
+    let probe = Vec3::new(1.5, 2.5, 0.125);
+    let front_uv = uv_at(&app, wall, front, probe);
+
+    let outcome = call(
+        &mut app,
+        "brush.csg_subtract",
+        json!({ "target": "Wall", "cutters": "Door" }),
+    );
+    let report = &outcome["report"];
+    assert_eq!(report["outcome"], "changed", "{outcome}");
+    assert_eq!(report["fragments"], 1, "{outcome}");
+    let volume = report["volume"].as_array().expect("volumes");
+    assert!(
+        (volume[0].as_f64().expect("a number") - 3.0).abs() < 1e-3,
+        "{outcome}"
+    );
+    assert!(
+        (volume[1].as_f64().expect("a number") - 2.5).abs() < 1e-3,
+        "{outcome}"
+    );
+    assert_box(
+        reported_box(&report["bounds"]),
+        Vec3::new(-2.0, 0.0, -0.125),
+        Vec3::new(2.0, 3.0, 0.125),
+    );
+    assert_eq!(report["watertight"], true, "{outcome}");
+    assert_eq!(report["cut_faces"], 3, "two jambs and a head: {outcome}");
+    assert_eq!(
+        report["coplanar"], 1,
+        "the threshold sits on the floor plane: {outcome}"
+    );
+
+    let reveals = [
+        (Vec3::X, Vec3::new(-0.5, 0.0, 0.0)),
+        (Vec3::NEG_X, Vec3::new(0.5, 0.0, 0.0)),
+        (Vec3::NEG_Y, Vec3::new(0.0, 2.0, 0.0)),
+    ];
+    let fragment = ids(&outcome["created"])[0];
+    let count = app
+        .world()
+        .get::<Brush>(fragment)
+        .expect("a brush")
+        .faces
+        .len();
+    let mut seen = 0;
+    let mut fronts = 0;
+    for face in 0..count {
+        let (point, normal) = world_plane(&app, fragment, face);
+        let data = app.world().get::<Brush>(fragment).expect("a brush").faces[face].clone();
+        if on_any((point, normal), &reveals) {
+            seen += 1;
+            assert_eq!(data.material, timber, "a reveal wears the door's material");
+            let axes = jackdaw_uv::world_aligned(normal);
+            let global = app
+                .world()
+                .get::<GlobalTransform>(fragment)
+                .expect("a transform");
+            assert!(
+                (global.rotation() * data.uv_u_axis).abs_diff_eq(axes.u, EPS)
+                    && (global.rotation() * data.uv_v_axis).abs_diff_eq(axes.v, EPS),
+                "a reveal is world-aligned"
+            );
+            let corner = point + axes.u * 0.25 + axes.v * 0.5;
+            let expected = Vec2::new(corner.dot(axes.u), corner.dot(axes.v)) / data.uv_scale;
+            assert!(
+                uv_at(&app, fragment, face, corner).abs_diff_eq(expected, EPS),
+                "a reveal projects from the world grid"
+            );
+        } else {
+            assert_eq!(
+                data.material, plaster,
+                "a kept face keeps the wall's material"
+            );
+            if normal.abs_diff_eq(Vec3::Z, EPS) && (point - probe).dot(Vec3::Z).abs() < EPS {
+                fronts += 1;
+                assert!(
+                    uv_at(&app, fragment, face, probe).abs_diff_eq(front_uv, EPS),
+                    "the wall's face keeps its texture where it was"
+                );
+            }
+        }
+    }
+    assert_eq!(seen, 3, "two jambs and a head");
+    assert!(fronts > 0, "the wall's front face survives");
+}
+
+fn set_uv_scale(app: &mut App, entity: Entity, scale: Vec2) {
+    let mut brush = app.world().get::<Brush>(entity).expect("a brush").clone();
+    for face in &mut brush.faces {
+        face.uv_scale = scale;
+    }
+    app.world_mut().entity_mut(entity).insert(brush);
+    app.update();
+}
+
+/// The faces of `entity` that lie on none of `planes`, by index.
+fn faces_off(app: &App, entity: Entity, planes: &[(Vec3, Vec3)]) -> Vec<usize> {
+    let count = app
+        .world()
+        .get::<Brush>(entity)
+        .expect("a brush")
+        .faces
+        .len();
+    (0..count)
+        .filter(|&face| !on_any(world_plane(app, entity, face), planes))
+        .collect()
+}
+
+fn box_planes(min: Vec3, max: Vec3) -> [(Vec3, Vec3); 6] {
+    [
+        (Vec3::X, max),
+        (Vec3::NEG_X, min),
+        (Vec3::Y, max),
+        (Vec3::NEG_Y, min),
+        (Vec3::Z, max),
+        (Vec3::NEG_Z, min),
+    ]
+}
+
+#[test]
+fn a_cut_face_takes_the_scale_of_the_material_it_wears() {
+    for (choice, wanted) in [("cutter", Vec2::splat(2.0)), ("target", Vec2::splat(0.5))] {
+        let mut app = csg_app();
+        let scene = split_wall(&mut app);
+        set_uv_scale(&mut app, scene.wall, Vec2::splat(0.5));
+        set_uv_scale(&mut app, scene.cutter, Vec2::splat(2.0));
+
+        let outcome = call(
+            &mut app,
+            "brush.csg_subtract",
+            json!({ "target": "Wall", "cutters": "Cutter", "cut_faces": choice }),
+        );
+        let wall = box_planes(Vec3::new(-2.0, -1.0, -1.0), Vec3::new(2.0, 1.0, 1.0));
+        let mut seen = 0;
+        for fragment in ids(&outcome["created"]) {
+            for face in faces_off(&app, fragment, &wall) {
+                seen += 1;
+                let scale =
+                    app.world().get::<Brush>(fragment).expect("a brush").faces[face].uv_scale;
+                assert!(scale.abs_diff_eq(wanted, EPS), "{choice}: scale {scale}");
+            }
+        }
+        assert_eq!(seen, 2, "{choice}: {outcome}");
+    }
+}
+
+#[test]
+fn a_scaled_target_keeps_its_texture_where_it_was() {
+    let mut app = csg_app();
+    let wall = cube(&mut app, "Wall", [1.0; 3], [0.0; 3], [0.0; 3]);
+    app.world_mut()
+        .get_mut::<Transform>(wall)
+        .expect("a transform")
+        .scale = Vec3::new(2.0, 1.0, 1.0);
+    cube(&mut app, "Cutter", [0.5, 2.0, 2.0], [0.0; 3], [0.0; 3]);
+    clear_selection(&mut app);
+    let front = (0..app.world().get::<Brush>(wall).expect("a brush").faces.len())
+        .find(|&face| world_plane(&app, wall, face).1.abs_diff_eq(Vec3::Z, EPS))
+        .expect("a front face");
+    let probes = [Vec3::new(-0.75, 0.25, 0.5), Vec3::new(0.6, -0.3, 0.5)];
+    let before: Vec<Vec2> = probes
+        .iter()
+        .map(|&p| uv_at(&app, wall, front, p))
+        .collect();
+
+    let outcome = call(
+        &mut app,
+        "brush.csg_subtract",
+        json!({ "target": "Wall", "cutters": "Cutter" }),
+    );
+    assert_eq!(outcome["report"]["fragments"], 2, "{outcome}");
+    for (probe, before) in probes.iter().zip(&before) {
+        let mut checked = 0;
+        for fragment in ids(&outcome["created"]) {
+            let (min, max) = measured(&app, fragment);
+            if probe.x < min.x || probe.x > max.x {
+                continue;
+            }
+            let count = app
+                .world()
+                .get::<Brush>(fragment)
+                .expect("a brush")
+                .faces
+                .len();
+            for face in 0..count {
+                let (point, normal) = world_plane(&app, fragment, face);
+                if normal.abs_diff_eq(Vec3::Z, EPS) && (point - *probe).dot(Vec3::Z).abs() < EPS {
+                    checked += 1;
+                    let after = uv_at(&app, fragment, face, *probe);
+                    assert!(
+                        after.abs_diff_eq(*before, EPS),
+                        "{probe}: {before} became {after}"
+                    );
+                }
+            }
+        }
+        assert!(checked > 0, "{probe} lies on a kept front face");
+    }
+}
+
+#[test]
+fn a_shallow_groove_floor_counts_as_a_cut_face() {
+    let mut app = csg_app();
+    let block = cube(&mut app, "Block", [2.0; 3], [0.0; 3], [0.0; 3]);
+    let chisel = cube(
+        &mut app,
+        "Chisel",
+        [0.5, 0.5, 3.0],
+        [0.0, 1.245, 0.0],
+        [0.0; 3],
+    );
+    clear_selection(&mut app);
+    let stone = registered_material(&mut app, "stone");
+    let cut = registered_material(&mut app, "cut");
+    wear(&mut app, block, &stone);
+    wear(&mut app, chisel, &cut);
+
+    let outcome = call(
+        &mut app,
+        "brush.csg_subtract",
+        json!({ "target": "Block", "cutters": "Chisel" }),
+    );
+    assert_eq!(outcome["report"]["fragments"], 1, "{outcome}");
+    assert_eq!(
+        outcome["report"]["cut_faces"], 3,
+        "a floor and two walls: {outcome}"
+    );
+    let fragment = ids(&outcome["created"])[0];
+    let count = app
+        .world()
+        .get::<Brush>(fragment)
+        .expect("a brush")
+        .faces
+        .len();
+    let floor = (0..count)
+        .find(|&face| {
+            let (point, normal) = world_plane(&app, fragment, face);
+            normal.abs_diff_eq(Vec3::Y, EPS) && (point.y - 0.995).abs() < 1e-4
+        })
+        .expect("the groove floor");
+    assert_eq!(
+        app.world().get::<Brush>(fragment).expect("a brush").faces[floor].material,
+        cut,
+        "the floor 5 mm below the top is the chisel's"
+    );
+}
+
+#[test]
+fn on_the_selection_a_target_the_cutter_misses_is_left_alone() {
+    let mut app = csg_app();
+    let target = cube(&mut app, "Turned", [2.0; 3], [0.0; 3], [45.0, 0.0, 0.0]);
+    let cutter = cube(&mut app, "Corner", [0.2; 3], [1.25, 0.0, 1.25], [0.0; 3]);
+    clear_selection(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![cutter];
+    app.update();
+    let before = scene_text(&mut app);
+    let entries = history_len(&app);
+
+    let outcome = call(
+        &mut app,
+        "brush.csg_subtract",
+        json!({ "keep_cutters": false }),
+    );
+    assert_eq!(outcome["outcome"], "unchanged", "{outcome}");
+    assert!(
+        app.world().get::<Brush>(target).is_some(),
+        "the target stays"
+    );
+    assert!(
+        app.world().get::<Brush>(cutter).is_some(),
+        "the cutter stays"
+    );
+    assert_eq!(history_len(&app), entries);
+    assert_eq!(scene_text(&mut app), before);
+}
+
+#[test]
+fn on_the_selection_a_swallowed_target_is_removed_and_reported_empty() {
+    let mut app = csg_app();
+    let target = cube(&mut app, "Pebble", [1.0; 3], [0.0; 3], [0.0; 3]);
+    let hull = cube(&mut app, "Hull", [3.0; 3], [0.0; 3], [0.0; 3]);
+    clear_selection(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![hull];
+    app.update();
+
+    let outcome = call(&mut app, "brush.csg_subtract", json!({}));
+    assert_eq!(outcome["outcome"], "empty", "{outcome}");
+    assert_eq!(outcome["report"]["outcome"], "empty", "{outcome}");
+    assert_eq!(outcome["report"]["fragments"], 0, "{outcome}");
+    assert_eq!(ids(&outcome["removed"]), vec![target], "{outcome}");
+    assert!(app.world().get_entity(target).is_err());
+    assert!(app.world().get::<Brush>(hull).is_some());
+}
+
+#[test]
+fn a_selection_intersect_reports_the_volume_of_every_brush_it_replaces() {
+    for (keep, before) in [(false, 32.0), (true, 16.0)] {
+        let mut app = csg_app();
+        let scene = split_wall(&mut app);
+        app.world_mut().resource_mut::<Selection>().entities = vec![scene.wall, scene.cutter];
+        app.update();
+        let outcome = call(
+            &mut app,
+            "brush.csg_intersect",
+            json!({ "keep_cutters": keep, "dry_run": true }),
+        );
+        let reported = outcome["report"]["volume"][0].as_f64().expect("a volume");
+        assert!((reported - before).abs() < 1e-3, "keep {keep}: {outcome}");
+    }
+}
+
+#[test]
+fn a_kept_cutter_keeps_its_modifier_stack() {
+    let mut app = csg_app();
+    let scene = split_wall(&mut app);
+    app.world_mut().resource_mut::<Selection>().entities = vec![scene.cutter];
+    app.update();
+    app.world_mut()
+        .operator("mesh.mirror.add")
+        .call()
+        .expect("mesh.mirror.add dispatches")
+        .assert_finished();
+    app.update();
+    assert!(
+        app.world()
+            .get::<jackdaw_geometry::ModifierStack>(scene.cutter)
+            .is_some()
+    );
+
+    let outcome = call(&mut app, "brush.csg_subtract", json!({}));
+    assert_eq!(outcome["outcome"], "changed", "{outcome}");
+    assert!(
+        app.world()
+            .get::<jackdaw_geometry::ModifierStack>(scene.cutter)
+            .is_some(),
+        "the cutter's stack is left live"
+    );
 }

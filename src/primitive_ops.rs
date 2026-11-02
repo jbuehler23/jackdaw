@@ -236,7 +236,11 @@ impl PrimitiveRequest {
 
         let material = match params.get("material") {
             None => None,
-            Some(_) => Some(standard_material(world, params.as_str("material"))?),
+            Some(_) => Some(standard_material(
+                world,
+                "material",
+                params.as_str("material"),
+            )?),
         };
 
         let parent = match params.get("parent") {
@@ -308,8 +312,10 @@ impl PrimitiveRequest {
     }
 }
 
-fn standard_material(
+/// The standard material `reference` names, for the `key` parameter.
+pub(crate) fn standard_material(
     world: &World,
+    key: &str,
     reference: Option<&str>,
 ) -> Result<Handle<StandardMaterial>, String> {
     let reference = reference.unwrap_or_default();
@@ -322,9 +328,9 @@ fn standard_material(
                 reference,
             )
         })
-        .ok_or_else(|| format!("`material` {reference:?} names no material in this project"))?;
+        .ok_or_else(|| format!("`{key}` {reference:?} names no material in this project"))?;
     worn.standard().cloned().ok_or_else(|| {
-        format!("`material` {reference:?} is not a standard material a brush face takes")
+        format!("`{key}` {reference:?} is not a standard material a brush face takes")
     })
 }
 

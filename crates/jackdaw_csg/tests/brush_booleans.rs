@@ -290,6 +290,7 @@ fn repeated_through_slots_keep_one_closed_brush() {
     let (volume, open) = stats(&CsgBrush {
         faces: target.faces,
         topology: target.topology,
+        ..Default::default()
     });
     assert_eq!(open, 0);
     let expected = 8.0 * 2.0 * 8.0 - 12.0 * 0.4 * 0.6 * 8.0;
@@ -320,6 +321,7 @@ fn pocketed_slab() -> Result<CsgBrush, String> {
     Ok(CsgBrush {
         faces: target.faces,
         topology: target.topology,
+        ..Default::default()
     })
 }
 
@@ -425,11 +427,13 @@ fn random_grid_snapped_pairs_stay_closed_and_conserve_volume() {
         let va = stats(&CsgBrush {
             faces: a.faces.clone(),
             topology: a.topology.clone(),
+            ..Default::default()
         })
         .0;
         let vb = stats(&CsgBrush {
             faces: b.faces.clone(),
             topology: b.topology.clone(),
+            ..Default::default()
         })
         .0;
         assert!(

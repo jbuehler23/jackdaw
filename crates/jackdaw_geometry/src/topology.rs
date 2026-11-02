@@ -119,6 +119,32 @@ impl BrushTopology {
         self.loops[start..start + total].iter().map(|l| l.vert)
     }
 
+    /// The edges not shared by exactly two faces, sorted; `Err` names the
+    /// first face whose ring runs past the loops.
+    pub fn open_edges(&self) -> Result<Vec<(u32, u32)>, usize> {
+        let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+        for (face, polygon) in self.polygons.iter().enumerate() {
+            let start = polygon.loop_start as usize;
+            let ring = self
+                .loops
+                .get(start..start + polygon.loop_total as usize)
+                .filter(|ring| !ring.is_empty())
+                .ok_or(face)?;
+            for (index, corner) in ring.iter().enumerate() {
+                let next = ring[(index + 1) % ring.len()].vert;
+                let edge = (corner.vert.min(next), corner.vert.max(next));
+                *uses.entry(edge).or_default() += 1;
+            }
+        }
+        let mut open: Vec<(u32, u32)> = uses
+            .into_iter()
+            .filter(|(_, count)| *count != 2)
+            .map(|(edge, _)| edge)
+            .collect();
+        open.sort_unstable();
+        Ok(open)
+    }
+
     pub fn edge_id(&self, v0: u32, v1: u32) -> Option<u32> {
         let (a, b) = if v0 <= v1 { (v0, v1) } else { (v1, v0) };
         self.edges

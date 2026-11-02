@@ -16,9 +16,10 @@ use bevy::remote::{BrpError, BrpResult, RemotePlugin, error_codes, http::RemoteH
 use bevy::tasks::{IoTaskPool, Task, futures_lite::future};
 use jackdaw_api_internal::lifecycle::{ActiveModalOperator, OperatorEntity};
 use jackdaw_api_internal::operator::{
-    CallOperatorError, CallOperatorSettings, ExecutionContext, OperatorOutcome, OperatorParameters,
-    OperatorReplacements, OperatorReports, OperatorResult, OperatorWarnings, OperatorWorldExt,
-    ParamSpec, with_batch_snapshot, with_history_span,
+    BooleanReport, CallOperatorError, CallOperatorSettings, ExecutionContext,
+    OperatorBooleanReport, OperatorOutcome, OperatorParameters, OperatorReplacements,
+    OperatorReports, OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec,
+    with_batch_snapshot, with_history_span,
 };
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_env::editor_endpoint::{
@@ -910,6 +911,9 @@ struct CallOutcome {
     /// The world-space `[min, max]` box of each of `created`, in order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     bounds: Vec<Value>,
+    /// What a boolean made or, on a dry run, would make.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report: Option<Value>,
 }
 
 impl CallOutcome {
@@ -978,6 +982,9 @@ fn dispatch(world: &mut World, call: PreparedCall, history: bool) -> Result<Call
     // so a warning from an earlier call is not reported against this one.
     world.get_resource_or_init::<OperatorWarnings>().0.clear();
     world.get_resource_or_init::<OperatorReports>().0.clear();
+    world
+        .get_resource_or_init::<OperatorBooleanReport>()
+        .request();
     crate::commands::SpawnedEntities::watch(world);
     let params = OperatorParameters(op.params.into_iter().collect());
     let run = |world: &mut World| {
@@ -1040,6 +1047,27 @@ fn dispatch(world: &mut World, call: PreparedCall, history: bool) -> Result<Call
         removed: removed.into_iter().map(Entity::to_bits).collect(),
         created: created.into_iter().map(Entity::to_bits).collect(),
         bounds,
+        report: world
+            .get_resource_or_init::<OperatorBooleanReport>()
+            .take()
+            .as_ref()
+            .map(boolean_report_json),
+    })
+}
+
+fn boolean_report_json(report: &BooleanReport) -> Value {
+    use super::summary::{round, vector};
+    json!({
+        "outcome": report.outcome.as_str(),
+        "fragments": report.fragments,
+        "volume": [round(report.volume_before), round(report.volume_after)],
+        "bounds": report
+            .bounds
+            .map_or(Value::Null, |(min, max)| json!([vector(min), vector(max)])),
+        "watertight": report.watertight,
+        "cut_faces": report.cut_faces,
+        "coplanar": report.coplanar,
+        "degenerate": report.degenerate,
     })
 }
 

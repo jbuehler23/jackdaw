@@ -85,11 +85,14 @@ struct FaceSlot {
     uv_u_axis: Vec3,
     uv_v_axis: Vec3,
     is_cap: bool,
+    /// Index of the face in its input brush.
+    index: usize,
 }
 
 impl FaceSlot {
-    fn from_face(face: &BrushFaceData) -> Self {
+    fn from_face(index: usize, face: &BrushFaceData) -> Self {
         Self {
+            index,
             plane: face.plane.clone(),
             material: face.material.clone(),
             uv_offset: face.uv_offset,
@@ -120,6 +123,18 @@ impl FaceSlot {
 pub struct CsgBrush {
     pub faces: Vec<BrushFaceData>,
     pub topology: BrushTopology,
+    /// Where each of `faces` came from, parallel to it; `None` for a face
+    /// that matched no input face.
+    pub origins: Vec<Option<FaceOrigin>>,
+}
+
+/// The input face a result face lies on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FaceOrigin {
+    /// Which input: 0 for the first operand, 1 for the second, and so on.
+    pub operand: usize,
+    /// The face's index in that input.
+    pub face: usize,
 }
 
 /// World-space inputs to a boolean op. Each input owns its faces and
@@ -152,9 +167,21 @@ struct ConvertedInput {
 /// we allow a slightly looser fixed tolerance since we operate in
 /// editor-space (usually meters / units, not microns).
 const PLANE_NORMAL_EPS: f32 = 1e-3;
-const PLANE_DISTANCE_EPS: f32 = 1e-2;
 const COPLANAR_NORMAL_EPS: f32 = 1e-3;
-const COPLANAR_DISTANCE_EPS: f32 = 1e-2;
+/// Plane-distance tolerance near the origin, for both slot matching and
+/// coplanar grouping. It grows with the distance from the origin (see
+/// [`plane_distance_eps`]), so f32 noise far out is still absorbed while a
+/// parallel face a few millimetres away is never taken for the original.
+const PLANE_DISTANCE_EPS: f32 = 1e-3;
+const PLANE_DISTANCE_EPS_PER_UNIT: f32 = 1e-5;
+
+fn plane_distance_eps(positions: &[Vec3]) -> f32 {
+    let reach = positions
+        .iter()
+        .map(|p| p.abs().max_element())
+        .fold(0.0, f32::max);
+    PLANE_DISTANCE_EPS + reach * PLANE_DISTANCE_EPS_PER_UNIT
+}
 /// Snap-radius for welding output vertices that share a position.
 const POS_DEDUP_EPS: f32 = 1e-4;
 /// Tolerance applied to every solid before a boolean op. The kernel uses
@@ -196,7 +223,7 @@ fn brush_to_solid(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
     let mut face_slots: Vec<FaceSlot> = Vec::with_capacity(input.faces.len());
 
     for (face_idx, face) in input.faces.iter().enumerate() {
-        face_slots.push(FaceSlot::from_face(face));
+        face_slots.push(FaceSlot::from_face(face_idx, face));
 
         if face_idx >= input.topology.polygons.len() {
             continue;
@@ -244,8 +271,12 @@ fn brush_to_solid(input: &CsgInput<'_>) -> Result<ConvertedInput, CsgError> {
 /// Match the plane of an output triangle to a source `FaceSlot`. Both
 /// runs are searched; the first slot whose plane lies within the
 /// tolerance wins.
-fn match_plane_to_slot<'a>(plane: &BrushPlane, runs: &[&'a [FaceSlot]]) -> Option<&'a FaceSlot> {
-    for run in runs {
+fn match_plane_to_slot<'a>(
+    plane: &BrushPlane,
+    runs: &[&'a [FaceSlot]],
+    distance_eps: f32,
+) -> Option<(usize, &'a FaceSlot)> {
+    for (operand, run) in runs.iter().enumerate() {
         for slot in run.iter() {
             // The kernel preserves orientation, so we expect normals to
             // match in sign as well as direction. But for a difference,
@@ -260,8 +291,8 @@ fn match_plane_to_slot<'a>(plane: &BrushPlane, runs: &[&'a [FaceSlot]]) -> Optio
             } else {
                 -slot.plane.distance
             };
-            if (expected_distance - plane.distance).abs() < PLANE_DISTANCE_EPS {
-                return Some(slot);
+            if (expected_distance - plane.distance).abs() < distance_eps {
+                return Some((operand, slot));
             }
         }
     }
@@ -294,6 +325,7 @@ fn solid_to_brush(
     // keeps the rebuilt topology clean enough to feed back through the
     // kernel on the next op.
     let (positions, remap) = dedup_positions(&raw_positions, POS_DEDUP_EPS);
+    let distance_eps = plane_distance_eps(&positions);
 
     // Collect (plane, triangle) records, grouped by coplanar plane.
     struct TriRec {
@@ -341,7 +373,7 @@ fn solid_to_brush(
         let mut placed = false;
         for g in groups.iter_mut() {
             if g.plane.normal.dot(tr.plane.normal) > 1.0 - COPLANAR_NORMAL_EPS
-                && (g.plane.distance - tr.plane.distance).abs() < COPLANAR_DISTANCE_EPS
+                && (g.plane.distance - tr.plane.distance).abs() < distance_eps
             {
                 g.tris.push((tr.a, tr.b, tr.c));
                 placed = true;
@@ -366,6 +398,7 @@ fn solid_to_brush(
     // `match_plane_to_slot`, so the visual is one continuous textured
     // surface even though it's stored as multiple polygons.
     let mut faces: Vec<BrushFaceData> = Vec::new();
+    let mut origins: Vec<Option<FaceOrigin>> = Vec::new();
     let mut face_rings: Vec<Vec<usize>> = Vec::new();
     for g in &groups {
         let raw_rings = recover_polygon_boundaries(&g.tris);
@@ -435,20 +468,25 @@ fn solid_to_brush(
             }
         }
 
-        let make_face = |plane: &BrushPlane| -> BrushFaceData {
-            let slot = match_plane_to_slot(plane, source_face_slot_runs);
-            if let Some(slot) = slot {
-                slot.to_face(plane.clone())
+        let make_face = |plane: &BrushPlane| -> (BrushFaceData, Option<FaceOrigin>) {
+            let slot = match_plane_to_slot(plane, source_face_slot_runs, distance_eps);
+            if let Some((operand, slot)) = slot {
+                let origin = FaceOrigin {
+                    operand,
+                    face: slot.index,
+                };
+                (slot.to_face(plane.clone()), Some(origin))
             } else {
                 let (u, v) = compute_face_tangent_axes(plane.normal);
-                BrushFaceData {
+                let face = BrushFaceData {
                     plane: plane.clone(),
                     uv_scale: Vec2::ONE,
                     uv_u_axis: u,
                     uv_v_axis: v,
                     is_cap: true,
                     ..Default::default()
-                }
+                };
+                (face, None)
             }
         };
 
@@ -458,7 +496,9 @@ fn solid_to_brush(
                 if outer.len() < 3 {
                     continue;
                 }
-                faces.push(make_face(&g.plane));
+                let (face, origin) = make_face(&g.plane);
+                faces.push(face);
+                origins.push(origin);
                 face_rings.push(outer.iter().map(|&v| v as usize).collect());
             } else {
                 let holes: Vec<Vec<u32>> = hole_indices
@@ -477,7 +517,9 @@ fn solid_to_brush(
                     if poly.len() < 3 {
                         continue;
                     }
-                    faces.push(make_face(&g.plane));
+                    let (face, origin) = make_face(&g.plane);
+                    faces.push(face);
+                    origins.push(origin);
                     face_rings.push(poly.iter().map(|&v| v as usize).collect());
                 }
             }
@@ -499,7 +541,11 @@ fn solid_to_brush(
         return Err(CsgError::EmptyResult);
     }
 
-    Ok(CsgBrush { faces, topology })
+    Ok(CsgBrush {
+        faces,
+        topology,
+        origins,
+    })
 }
 
 /// Insert into each ring edge every ring vertex that lies on the edge's
@@ -878,8 +924,10 @@ pub fn brush_batch_union(inputs: &[CsgInput<'_>]) -> Result<CsgBrush, CsgError> 
 }
 
 /// Transform a brush's topology positions and face planes by an affine
-/// world transform (scale, rotation, translation). UV axes are transformed
-/// as tangent vectors.
+/// world transform (scale, rotation, translation). Each face's projection is
+/// carried with it: the UV axes, scale and offset are rewritten so every
+/// point keeps the texture coordinate it had, exactly so for an unrotated
+/// projection or a uniform scale.
 ///
 /// This is the topology-aware companion of
 /// `jackdaw_geometry::brush_planes_to_world`. Mesh-CSG needs vertices in
@@ -911,19 +959,15 @@ pub fn brush_to_world(
             } else {
                 (f.plane.normal, f.plane.distance)
             };
-            BrushFaceData {
+            let mut face = BrushFaceData {
                 plane: BrushPlane {
                     normal: world_normal,
                     distance: world_distance,
                 },
-                material: f.material.clone(),
-                uv_offset: f.uv_offset,
-                uv_scale: f.uv_scale,
-                uv_rotation: f.uv_rotation,
-                uv_u_axis: transform.transform_vector3(f.uv_u_axis).normalize_or_zero(),
-                uv_v_axis: transform.transform_vector3(f.uv_v_axis).normalize_or_zero(),
-                is_cap: f.is_cap,
-            }
+                ..f.clone()
+            };
+            carry_projection(&mut face, normal_matrix, translation);
+            face
         })
         .collect();
     let mut world_topo = topology.clone();
@@ -931,6 +975,33 @@ pub fn brush_to_world(
         v.position = transform.transform_point3(v.position);
     }
     (world_faces, world_topo)
+}
+
+/// Rewrite `face`'s projection for positions mapped by a transform whose
+/// inverse transpose is `normal_matrix` and whose translation is
+/// `translation`. A local coordinate `p.dot(axis)` reads, in the new space,
+/// `gradient.dot(w) - gradient.dot(translation)` with `gradient =
+/// normal_matrix * axis`; the gradient's length moves into the scale and the
+/// constant into the offset.
+fn carry_projection(face: &mut BrushFaceData, normal_matrix: Mat3, translation: Vec3) {
+    let carry = |axis: Vec3| {
+        let gradient = normal_matrix * axis;
+        let length = gradient.length();
+        if length > EPSILON {
+            (gradient / length, length, gradient.dot(translation))
+        } else {
+            (axis, 1.0, 0.0)
+        }
+    };
+    let (u_axis, u_length, u_shift) = carry(face.uv_u_axis);
+    let (v_axis, v_length, v_shift) = carry(face.uv_v_axis);
+    let scale = Vec2::new(face.uv_scale.x.max(0.001), face.uv_scale.y.max(0.001));
+    let (sin, cos) = face.uv_rotation.sin_cos();
+    face.uv_offset -=
+        Vec2::new(u_shift * cos - v_shift * sin, u_shift * sin + v_shift * cos) / scale;
+    face.uv_scale = Vec2::new(face.uv_scale.x / u_length, face.uv_scale.y / v_length);
+    face.uv_u_axis = u_axis;
+    face.uv_v_axis = v_axis;
 }
 
 /// Recentre a brush so its topology is around the origin. Returns the

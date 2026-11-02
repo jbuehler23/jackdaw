@@ -640,7 +640,13 @@ fn dispatch_operator(
 ) -> Result<OperatorResult, CallOperatorError> {
     let outer = world.get_resource_or_init::<OperatorOutcome>().enter();
     let outer_replaced = world.get_resource_or_init::<OperatorReplacements>().enter();
+    let outer_boolean = world
+        .get_resource_or_init::<OperatorBooleanReport>()
+        .enter();
     let result = dispatch_operator_scoped(call, world, active);
+    world
+        .get_resource_or_init::<OperatorBooleanReport>()
+        .leave(outer_boolean);
     world
         .get_resource_or_init::<OperatorReplacements>()
         .leave(outer_replaced);
@@ -903,6 +909,80 @@ pub fn report_replaced(world: &mut World, removed: &[Entity], created: &[Entity]
     let mut replaced = world.get_resource_or_init::<OperatorReplacements>();
     replaced.removed.extend_from_slice(removed);
     replaced.created.extend_from_slice(created);
+}
+
+/// What a boolean made, or would make on a dry run, measured so a caller can
+/// confirm the cut without reading the scene.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BooleanReport {
+    pub outcome: Outcome,
+    /// Brushes the result is made of.
+    pub fragments: usize,
+    /// Volume of the brushes cut, before and after.
+    pub volume_before: f32,
+    pub volume_after: f32,
+    /// World-space `(min, max)` around every fragment; `None` when nothing is left.
+    pub bounds: Option<(Vec3, Vec3)>,
+    /// Every edge of every fragment is shared by exactly two faces.
+    pub watertight: bool,
+    /// Faces the cut created.
+    pub cut_faces: usize,
+    /// Cutter faces lying on a face plane of the brush they cut.
+    pub coplanar: usize,
+    /// Sliver faces and fragments too thin to be solid, dropped from the result.
+    pub degenerate: usize,
+}
+
+/// The [`BooleanReport`] of the operator that just ran, scoped like
+/// [`OperatorOutcome`]. An operator measures one only when a caller asked
+/// with [`Self::request`], so a click from the UI does not pay for it.
+#[derive(Resource, Default, Debug)]
+pub struct OperatorBooleanReport {
+    current: Option<BooleanReport>,
+    depth: usize,
+    wanted: bool,
+}
+
+impl OperatorBooleanReport {
+    pub fn get(&self) -> Option<&BooleanReport> {
+        self.current.as_ref()
+    }
+
+    /// Ask the next call to measure its boolean; [`Self::take`] ends the ask.
+    pub fn request(&mut self) {
+        self.wanted = true;
+    }
+
+    pub fn wanted(&self) -> bool {
+        self.wanted
+    }
+
+    /// Start a call: the report it replaces, for [`Self::leave`].
+    pub fn enter(&mut self) -> Option<BooleanReport> {
+        self.depth += 1;
+        self.current.take()
+    }
+
+    /// End a call begun with [`Self::enter`].
+    pub fn leave(&mut self, outer: Option<BooleanReport>) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth > 0 {
+            self.current = outer;
+        }
+    }
+
+    /// Hand over the outermost call's report.
+    pub fn take(&mut self) -> Option<BooleanReport> {
+        self.wanted = false;
+        self.current.take()
+    }
+}
+
+/// Tells whoever dispatched the running operator what its boolean made.
+pub fn report_boolean(world: &mut World, report: BooleanReport) {
+    world
+        .get_resource_or_init::<OperatorBooleanReport>()
+        .current = Some(report);
 }
 
 /// The [`Outcome`] the operator that just ran declared, if it declares one.
