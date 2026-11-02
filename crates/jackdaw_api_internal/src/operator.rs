@@ -685,6 +685,7 @@ fn dispatch_operator_scoped(
                 Some(reason) => debug!("Availability check failed for operator {id}: {reason}"),
                 None => debug!("Availability check failed for operator: {id}"),
             }
+            set_outcome(world, Outcome::Unchanged);
             return Ok(OperatorResult::Cancelled);
         }
     }

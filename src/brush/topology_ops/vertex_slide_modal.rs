@@ -94,7 +94,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     label = "Vertex Slide (Modal)",
     is_available = can_run_vertex_slide_modal,
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_vertex_slide,
 )]
 pub(crate) fn brush_vertex_slide_modal(

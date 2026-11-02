@@ -55,8 +55,6 @@ pub(crate) fn brush_connect_verts(
     // removes verts. `into_inner` reborrows the change-detected `Mut<Brush>` as
     // `&mut Brush` so the two fields can be borrowed disjointly.
     let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
-    let source = brush.faces.last().cloned().unwrap_or_default();
-    let original_face_count = brush.faces.len();
     let new_edge_pairs: Vec<(usize, usize)> = apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
@@ -67,11 +65,6 @@ pub(crate) fn brush_connect_verts(
         },
     );
 
-    // Any face the split created inherits the previous last face's appearance.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&source);
-        brush.faces[new_face].ensure_uv_axes();
-    }
     // Chain selection: write the newly created connecting edges into
     // `BrushSelection.edges` so the user can immediately act on them
     // (e.g. switch to Edge mode and loop-cut / slide).

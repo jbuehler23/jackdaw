@@ -6,6 +6,7 @@ mod dialog_answer;
 mod element_addressing;
 mod field_edits;
 mod light_defaults;
+mod mesh_param_ops;
 mod operator_availability;
 mod operator_entity_params;
 mod operator_modals;

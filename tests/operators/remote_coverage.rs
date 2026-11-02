@@ -14,6 +14,8 @@ use crate::util;
 /// Each is listed with the operator that does the same job from parameters, or
 /// with `None` and the reason no such operator exists yet; adding a modal
 /// operator without a row here fails `every_modal_operator_has_a_parametric_answer`.
+/// A modal operator that runs at once when given its parameters is its own
+/// twin.
 const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     (
         "brush.box_select",
@@ -114,13 +116,13 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "brush.mesh.extrude",
-        None,
-        "a drag distance; no parametric form yet",
+        Some("brush.mesh.extrude_region"),
+        "a drag distance; extrude the face selection by a `distance` instead",
     ),
     (
         "brush.mesh.inset",
-        None,
-        "a drag distance; no parametric form yet",
+        Some("brush.mesh.inset"),
+        "a drag distance; give `amount` (and `depth`) and it runs at once",
     ),
     (
         "brush.mesh.loop_cut",
@@ -129,23 +131,23 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "brush.mesh.edge_bevel",
-        None,
-        "a drag width; no parametric form yet",
+        Some("brush.mesh.edge_bevel"),
+        "a drag width; give `width` (and `segments`) and it runs at once",
     ),
     (
         "brush.mesh.vertex_bevel",
-        None,
-        "a drag width; no parametric form yet",
+        Some("brush.mesh.vertex_bevel"),
+        "a drag width; give `width` and it runs at once",
     ),
     (
         "brush.mesh.edge_slide_modal",
-        None,
-        "a drag along the edge; no parametric form yet",
+        Some("brush.mesh.edge_slide"),
+        "a drag along the edge; slide the edge selection by a fraction `t` instead",
     ),
     (
         "brush.mesh.vertex_slide_modal",
-        None,
-        "a drag along the edge; no parametric form yet",
+        Some("brush.mesh.vertex_slide"),
+        "a drag along the edge; slide the vertex selection by a fraction `t` instead",
     ),
 ];
 
@@ -276,6 +278,13 @@ fn the_pointer_only_table_names_operators_that_exist() {
             .iter()
             .find(|op| op.id() == *twin)
             .unwrap_or_else(|| panic!("{id}'s twin `{twin}` is not registered"));
+        if twin == id {
+            assert!(
+                !twin_op.parameters().is_empty(),
+                "{id} is listed as its own twin but takes no parameters to run without a pointer"
+            );
+            continue;
+        }
         assert!(
             !twin_op.is_modal(),
             "{id}'s twin `{twin}` is itself modal, so it needs a pointer too"
@@ -381,6 +390,18 @@ fn the_parametric_authoring_operators_are_registered() {
             &["terrain", "x", "z", "radius", "slot", "opacity"][..],
         ),
         ("selection.extend", &["name"][..]),
+        ("brush.mesh.extrude", &["distance"][..]),
+        ("brush.mesh.extrude_region", &["distance"][..]),
+        ("brush.mesh.inset", &["amount", "depth"][..]),
+        ("brush.mesh.edge_bevel", &["width", "segments"][..]),
+        ("brush.mesh.vertex_bevel", &["width"][..]),
+        (
+            "brush.mesh.loop_cut_at",
+            &["edge", "where", "count", "factor"][..],
+        ),
+        ("brush.mesh.subdivide", &["cuts"][..]),
+        ("brush.mesh.edge_slide", &["t"][..]),
+        ("brush.mesh.vertex_slide", &["t"][..]),
         ("sprite.add", &["path", "x", "y", "parent", "name"][..]),
         ("sprite.set_pixels_per_unit", &["entity", "ppu"][..]),
         ("sprite.set_anchor", &["entity", "preset", "x", "y"][..]),

@@ -1,4 +1,5 @@
 //! Subdivide selected edges at their midpoints, then re-tessellate touched faces.
+//! [`subdivide_cuts`] places several evenly spaced points per edge instead.
 //!
 //! For each face: count how many of its original edges were cut. Cases:
 //!   - 0 cuts: untouched.
@@ -15,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::halfedge::cycles::radial_walk;
+use crate::halfedge::cycles::{disk_walk, radial_walk};
 use crate::halfedge::ops::edge_split::split_edge;
 use crate::halfedge::ops::face_split::split_face;
 use crate::halfedge::types::*;
@@ -195,6 +196,103 @@ pub fn subdivide(
         new_edges: new_edges_out,
         new_faces: new_faces_out,
     })
+}
+
+/// Split each edge in `edges_to_cut` into `cuts + 1` equal pieces. One cut is
+/// [`subdivide`]. With more, a quad whose two opposite sides are both cut is
+/// split into strips by joining their matching points; any other face touched
+/// keeps the new points on its ring, uncut.
+pub fn subdivide_cuts(
+    mesh: &mut HalfedgeMesh,
+    edges_to_cut: &[EdgeKey],
+    cuts: u32,
+) -> Result<SubdivideResult, SubdivideError> {
+    if cuts <= 1 {
+        return subdivide(mesh, edges_to_cut);
+    }
+    let cut_set: HashSet<EdgeKey> = edges_to_cut.iter().copied().collect();
+    let mut strips: Vec<[(VertKey, EdgeKey); 2]> = Vec::new();
+    for data in mesh.faces.values() {
+        if data.loop_count != 4 {
+            continue;
+        }
+        let mut ring: Vec<(VertKey, EdgeKey)> = Vec::with_capacity(4);
+        let mut cur = data.loop_first;
+        for _ in 0..4 {
+            ring.push((mesh.loops[cur].vert, mesh.loops[cur].edge));
+            cur = mesh.loops[cur].next;
+        }
+        let cut: Vec<usize> = (0..4).filter(|&i| cut_set.contains(&ring[i].1)).collect();
+        if let [first, second] = cut[..]
+            && second == first + 2
+        {
+            // Side `first` runs ring[first] -> ring[first + 1]; its opposite
+            // runs ring[second] -> ring[second + 1], so ring[first] faces
+            // ring[second + 1].
+            strips.push([ring[first], (ring[(second + 1) % 4].0, ring[second].1)]);
+        }
+    }
+
+    let mut new_verts: Vec<VertKey> = Vec::new();
+    let mut points: HashMap<EdgeKey, (VertKey, Vec<VertKey>)> = HashMap::new();
+    for &edge in edges_to_cut {
+        if points.contains_key(&edge) {
+            continue;
+        }
+        let Some(start) = mesh.edges.get(edge).map(|e| e.v[0]) else {
+            continue;
+        };
+        let mut from_end: Vec<VertKey> = Vec::with_capacity(cuts as usize);
+        for k in (1..=cuts).rev() {
+            let t = k as f32 / (k + 1) as f32;
+            from_end.push(split_edge(mesh, edge, t).map_err(SubdivideError::EdgeSplit)?);
+        }
+        from_end.reverse();
+        new_verts.extend(from_end.iter().copied());
+        points.insert(edge, (start, from_end));
+    }
+
+    let along = |edge: EdgeKey, from: VertKey| -> Option<Vec<VertKey>> {
+        let (start, run) = points.get(&edge)?;
+        Some(if *start == from {
+            run.clone()
+        } else {
+            run.iter().rev().copied().collect()
+        })
+    };
+    let mut new_edges: Vec<EdgeKey> = Vec::new();
+    let mut new_faces: Vec<FaceKey> = Vec::new();
+    for [(from_a, edge_a), (from_b, edge_b)] in strips {
+        let (Some(side_a), Some(side_b)) = (along(edge_a, from_a), along(edge_b, from_b)) else {
+            continue;
+        };
+        for (va, vb) in side_a.into_iter().zip(side_b) {
+            let Some(face) = face_joining(mesh, va, vb) else {
+                continue;
+            };
+            let edge = split_face(mesh, face, va, vb).map_err(SubdivideError::FaceSplit)?;
+            new_edges.push(edge);
+            new_faces.extend(
+                radial_walk(mesh, edge)
+                    .map(|lp| mesh.loops[lp].face)
+                    .filter(|&f| f != face),
+            );
+        }
+    }
+
+    Ok(SubdivideResult {
+        new_verts,
+        new_edges,
+        new_faces,
+    })
+}
+
+/// A face around `va` whose ring also holds `vb`, found from `va`'s edges.
+fn face_joining(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<FaceKey> {
+    disk_walk(mesh, va)
+        .flat_map(|edge| radial_walk(mesh, edge))
+        .map(|lp| mesh.loops[lp].face)
+        .find(|&face| face_ring_contains(mesh, face, va, vb))
 }
 
 /// For a face with one newly inserted midpoint vert, find the vert on the opposite

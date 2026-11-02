@@ -15,5 +15,6 @@ pub mod select;
 pub mod types;
 pub mod validate;
 
+pub use cycles::edge_between;
 pub use edit::{HalfedgeBinding, apply_topology_edit};
 pub use types::*;

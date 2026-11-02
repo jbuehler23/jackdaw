@@ -62,6 +62,17 @@ pub fn disk_remove_edge(mesh: &mut HalfedgeMesh, e: EdgeKey) {
     }
 }
 
+/// The edge joining `a` and `b`, if there is one.
+pub fn edge_between(mesh: &HalfedgeMesh, a: VertKey, b: VertKey) -> Option<EdgeKey> {
+    if !mesh.verts.contains_key(a) {
+        return None;
+    }
+    disk_walk(mesh, a).find(|&e| {
+        let v = mesh.edges[e].v;
+        (v[0] == a && v[1] == b) || (v[0] == b && v[1] == a)
+    })
+}
+
 /// Walk the disk cycle around `v`, yielding each incident edge once.
 pub fn disk_walk(mesh: &HalfedgeMesh, v: VertKey) -> impl Iterator<Item = EdgeKey> + '_ {
     let first = mesh.verts[v].edge;

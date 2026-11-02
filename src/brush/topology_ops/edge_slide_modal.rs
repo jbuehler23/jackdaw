@@ -86,7 +86,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     label = "Edge Slide (Modal)",
     is_available = can_run_edge_slide_modal,
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_edge_slide,
 )]
 pub(crate) fn brush_edge_slide_modal(

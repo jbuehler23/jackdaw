@@ -1,7 +1,8 @@
 //! Extrude operators:
 //!
-//! - `brush.mesh.extrude_region` (non-modal): one-shot extrusion at a fixed
-//!   depth, available via menu / command palette.
+//! - `brush.mesh.extrude_region` (non-modal): one-shot extrusion by a
+//!   `distance` parameter (0.5 by default), available via menu / command
+//!   palette. The modal also takes `distance` and then runs the same path.
 //! - `brush.mesh.extrude` (modal, bound to `E`): modal where the
 //!   cursor's projected motion along the face normal drives a signed extrusion
 //!   amount. The brush mesh is mutated each frame so the user sees the live
@@ -21,6 +22,8 @@ use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, apply_topology_edit};
 use jackdaw_scene_types::Brush;
 
 use super::modal_edit::ModalTopologyEdit;
+use super::param_edit::{self, Picks};
+use super::select_elements::refuse;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
 use crate::snapping::SnapSettings;
@@ -28,6 +31,9 @@ use crate::viewport::{MainViewportCamera, SceneViewport};
 use crate::viewport_util::ViewportRemap;
 
 const DEFAULT_EXTRUDE_DEPTH: f32 = 0.5;
+
+/// Distances shorter than this extrude nothing visible.
+const MIN_EXTRUDE: f32 = 1e-4;
 
 /// Pixels-per-world-unit sensitivity for the modal extrude.
 /// At this value 100 pixels of cursor movement along the screen-projected face
@@ -61,97 +67,90 @@ pub struct ExtrudeModalState {
     pub edit: Option<ModalTopologyEdit>,
 }
 
-/// Duplicate each selected face along its normal by a fixed depth and
-/// connect the old and new rings with side quads. Operates on the current
-/// face selection. Available in Face mode with at least one face selected.
+/// Duplicate each selected face along its normal and connect the old and new
+/// rings with side quads. Operates on the current face selection and leaves
+/// the new top faces selected. Available in Face mode with at least one face
+/// selected.
 #[operator(
     id = "brush.mesh.extrude_region",
     label = "Extrude Region",
     is_available = can_run_extrude_region,
-    allows_undo = true
+    allows_undo = true,
+    params(distance(
+        f64,
+        doc = "How far to push the selected faces along their normals, in metres; \
+               negative pulls them in. Defaults to 0.5."
+    ))
 )]
 pub(crate) fn brush_extrude_region(
-    _: In<OperatorParameters>,
-    edit_mode: Res<EditMode>,
-    mut selection: ResMut<BrushSelection>,
-    mut brushes: Query<&mut Brush>,
-    mut halfedge_q: Query<&mut BrushHalfedge>,
-) -> Option<OperatorResult> {
-    if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
-        return None;
-    }
-    let brush_entity = selection.active_brush?;
-    let sel_faces: Vec<usize> = selection
-        .sub(brush_entity)
-        .map(|s| s.faces.clone())
-        .unwrap_or_default();
-    if sel_faces.is_empty() {
-        return None;
-    }
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    extrude_by(
+        world,
+        "Extrude Region",
+        &params,
+        Some(DEFAULT_EXTRUDE_DEPTH),
+    )
+}
 
-    // Map cache face indices to HalfedgeMesh FaceKeys via face_keys parallel array.
-    let mut halfedge = halfedge_q.get_mut(brush_entity).ok()?;
-    let mut mesh_faces: Vec<FaceKey> = Vec::with_capacity(sel_faces.len());
-    for &face_idx in &sel_faces {
-        if let Some(&fk) = halfedge.face_keys.get(face_idx) {
-            mesh_faces.push(fk);
-        }
+/// Extrude the selected faces by the `distance` parameter, or by `fallback`
+/// when it is absent.
+fn extrude_by(
+    world: &mut World,
+    label: &str,
+    params: &OperatorParameters,
+    fallback: Option<f32>,
+) -> OperatorResult {
+    let distance = match param_edit::number(params, "distance") {
+        Ok(distance) => distance.or(fallback),
+        Err(why) => return refuse(world, label, why),
+    };
+    let Some(distance) = distance else {
+        return refuse(world, label, "give `distance`".into());
+    };
+    if distance.abs() < MIN_EXTRUDE {
+        return refuse(
+            world,
+            label,
+            "`distance` must not be zero; nothing would move".into(),
+        );
     }
-    if mesh_faces.is_empty() {
-        return None;
-    }
+    param_edit::run(
+        world,
+        label,
+        BrushEditMode::Face,
+        |brush, halfedge, selected| {
+            let face_keys = param_edit::face_keys(halfedge, &selected.faces);
+            let tops = extrude_faces(brush, halfedge, &face_keys, distance);
+            Ok((!tops.is_empty()).then_some(Picks::Faces(tops)))
+        },
+    )
+}
 
-    // Extrude each selected face and reconcile, capturing each new top face's
-    // `material_idx` so the chained selection (below) can resolve its post-
-    // flatten index. `extrude_face_region` reuses the input face as the new top
-    // cap (so `result.top_face == fk`), and its side quads inherit that
-    // `material_idx`; the top face therefore lands at the topology index
-    // `count(faces with material_idx < M)` after flatten.
-    let brush = brushes.get_mut(brush_entity).ok()?.into_inner();
-    let source = brush.faces.last().cloned().unwrap_or_default();
-    let original_face_count = brush.faces.len();
-    let top_material_idxs: Vec<u32> = apply_topology_edit(
+/// Extrude each of `faces` by `distance` along its normal and reconcile the
+/// brush. Each face's walls copy that face's look. Returns the new top faces'
+/// indices.
+fn extrude_faces(
+    brush: &mut Brush,
+    halfedge: &mut BrushHalfedge,
+    faces: &[FaceKey],
+    distance: f32,
+) -> Vec<usize> {
+    apply_topology_edit(
         &mut brush.faces,
         &mut brush.topology,
         &mut halfedge.0,
         |mesh| {
-            let mut idxs = Vec::with_capacity(mesh_faces.len());
-            for fk in &mesh_faces {
-                if let Ok(result) = extrude_face_region(mesh, *fk, DEFAULT_EXTRUDE_DEPTH) {
-                    idxs.push(mesh.faces[result.top_face].material_idx);
+            let mut tops = Vec::with_capacity(faces.len());
+            for &face in faces {
+                if let Ok(result) = extrude_face_region(mesh, face, distance) {
+                    tops.push(result.top_face);
                 }
             }
-            idxs
+            param_edit::flattened_indices(mesh, &tops)
         },
-    );
-
-    // New side faces inherit the previous last face's appearance.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&source);
-        brush.faces[new_face].ensure_uv_axes();
-    }
-
-    // Chain selection: write the new top face(s) into `BrushSelection.faces`
-    // so a follow-up gesture (drag-along-normal, inset, extrude again) can
-    // operate on the freshly created top ring immediately.
-    let face_count = brush.faces.len();
-    let new_top_indices: Vec<usize> = top_material_idxs
-        .into_iter()
-        .map(|mtx| {
-            halfedge
-                .mesh
-                .faces
-                .values()
-                .filter(|f| f.material_idx < mtx)
-                .count()
-        })
-        .filter(|&i| i < face_count)
-        .collect();
-    if !new_top_indices.is_empty() {
-        selection.sub_mut(brush_entity).faces = new_top_indices;
-    }
-
-    Some(OperatorResult::Finished)
+    )
 }
 
 pub(crate) fn can_run_extrude_region(
@@ -171,16 +170,32 @@ pub(crate) fn can_run_extrude_region(
 /// snaps to the translate grid increment. LMB commits; Esc / RMB cancels and
 /// reverts.
 ///
+/// Given `distance`, extrudes by that much at once instead, as
+/// `brush.mesh.extrude_region` does.
+///
 /// Requires Face mode with at least one face selected.
 #[operator(
     id = "brush.mesh.extrude",
     label = "Extrude",
     is_available = can_run_extrude,
     modal = true,
-    allows_undo = false,
+    allows_undo = true,
     cancel = cancel_extrude,
+    params(distance(
+        f64,
+        doc = "Extrude by this many metres at once instead of dragging; negative pulls \
+               the faces in."
+    ))
 )]
-pub(crate) fn brush_extrude(
+pub(crate) fn brush_extrude(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if params.contains_key("distance") {
+        return extrude_by(world, "Extrude", &params, None);
+    }
+    param_edit::run_modal(world, extrude_modal, params.0)
+}
+
+/// The pointer-driven extrude behind `brush.mesh.extrude`.
+fn extrude_modal(
     _: In<OperatorParameters>,
     edit_mode: Res<EditMode>,
     mut selection: ResMut<BrushSelection>,
@@ -389,49 +404,13 @@ fn apply_live_extrude(
         return Vec::new();
     }
 
-    // Seed new wall faces from the face being extruded so material + UV scale /
-    // rotation / offset inherit from the parent, then re-derive each wall's UV
-    // axes from its own plane. Preferring the parent over the brush's last face
-    // keeps the extrude's checker tiling continuous with the original face.
-    let parent = modal_state
-        .face_indices
-        .first()
-        .and_then(|&idx| edit.snapshot_brush().faces.get(idx).cloned())
-        .or_else(|| edit.snapshot_brush().faces.last().cloned())
-        .unwrap_or_default();
-    let original_face_count = edit.snapshot_brush().faces.len();
-
-    // Restore to the snapshot, re-run the extrude at the current amount, and
-    // reconcile. The closure resolves each new top face's post-flatten index
-    // while the mesh still holds the original material_idx values.
-    // `extrude_face_region` reuses the input face as the new top cap (so
-    // `result.top_face == fk`); its side quads share that `material_idx`, so the
-    // top lands at the topology index `count(faces with material_idx < M)`.
-    let amount = modal_state.current_amount;
-    let face_keys = modal_state.face_keys.clone();
-    let top_face_indices = edit.apply(brush, &mut halfedge, |mesh| {
-        let mut top_material_idxs = Vec::with_capacity(face_keys.len());
-        for &fk in &face_keys {
-            if let Ok(result) = extrude_face_region(mesh, fk, amount) {
-                top_material_idxs.push(mesh.faces[result.top_face].material_idx);
-            }
-        }
-        top_material_idxs
-            .iter()
-            .map(|&mtx| mesh.faces.values().filter(|f| f.material_idx < mtx).count())
-            .collect::<Vec<usize>>()
-    });
-
-    // Each new wall face inherits the parent's appearance with freshly derived
-    // UV axes.
-    for new_face in original_face_count..brush.faces.len() {
-        brush.faces[new_face].copy_appearance_from(&parent);
-        brush.faces[new_face].uv_u_axis = Vec3::ZERO;
-        brush.faces[new_face].uv_v_axis = Vec3::ZERO;
-        brush.faces[new_face].ensure_uv_axes();
-    }
-
-    top_face_indices
+    edit.restore(brush, &mut halfedge);
+    extrude_faces(
+        brush,
+        &mut halfedge,
+        &modal_state.face_keys,
+        modal_state.current_amount,
+    )
 }
 
 /// Project a representative face's world-space centroid and `centroid + normal`

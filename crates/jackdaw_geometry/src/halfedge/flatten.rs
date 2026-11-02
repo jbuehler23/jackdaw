@@ -8,6 +8,19 @@ use crate::halfedge::types::*;
 use crate::topology::{BrushTopology, MeshEdge, MeshLoop, MeshPoly, MeshVert};
 
 impl HalfedgeMesh {
+    /// The faces in the order [`Self::flatten_to_topology`] writes them:
+    /// by `material_idx`, ties in slot order.
+    pub fn flatten_order(&self) -> Vec<FaceKey> {
+        let mut order: Vec<FaceKey> = self.faces.keys().collect();
+        order.sort_by_key(|key| self.faces[*key].material_idx);
+        order
+    }
+
+    /// Where `face` lands in the flattened polygon list.
+    pub fn flattened_index(&self, face: FaceKey) -> Option<usize> {
+        self.flatten_order().iter().position(|key| *key == face)
+    }
+
     pub fn flatten_to_topology(&self) -> BrushTopology {
         // Vertex re-keying.
         let mut vert_idx: HashMap<VertKey, u32> = HashMap::with_capacity(self.verts.len());
@@ -35,9 +48,8 @@ impl HalfedgeMesh {
         // with `Brush::faces`.
         let mut polygons: Vec<MeshPoly> = Vec::with_capacity(self.faces.len());
         let mut loops: Vec<MeshLoop> = Vec::new();
-        let mut faces_sorted: Vec<_> = self.faces.iter().collect();
-        faces_sorted.sort_by_key(|(_, f)| f.material_idx);
-        for (_, face) in faces_sorted {
+        for key in self.flatten_order() {
+            let face = &self.faces[key];
             let loop_start = loops.len() as u32;
             let mut lk = face.loop_first;
             for _ in 0..face.loop_count {
