@@ -17,6 +17,7 @@ mod pixel_canvas_ops;
 mod prefab_ops;
 mod primitive_ops;
 mod remote_coverage;
+mod rename_ops;
 mod scatter_ops;
 mod scene_op_ids;
 mod sprite_ops;

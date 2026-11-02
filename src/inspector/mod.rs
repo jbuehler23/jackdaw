@@ -33,6 +33,7 @@ pub mod val_field;
 use crate::EditorEntity;
 
 use bevy::prelude::*;
+use jackdaw_api::op::{Operator, OperatorCommandsExt as _};
 
 const MAX_REFLECT_DEPTH: usize = 4;
 
@@ -286,7 +287,7 @@ fn find_text_edit_entities_local(world: &World, outer_entity: Entity) -> Option<
 }
 
 /// Handle `TextEditCommitEvent` for Name field inputs.
-/// Pushes a `SetBsnField` command so the rename can be undone.
+/// Commits through `entity.rename`.
 fn on_name_field_commit(
     event: On<jackdaw_feathers::text_edit::TextEditCommitEvent>,
     name_inputs: Query<&NameFieldInput>,
@@ -312,36 +313,15 @@ fn on_name_field_commit(
         return;
     };
 
-    let old_name = names
-        .get(source_entity)
-        .map(|n| n.as_str().to_string())
-        .unwrap_or_default();
-    let new_name = event.text.clone();
-
-    if old_name == new_name {
+    let current = names.get(source_entity).map_or("", Name::as_str);
+    if current == event.text {
         return;
     }
-
-    commands.queue(move |world: &mut World| {
-        let old_value = if old_name.is_empty() {
-            None
-        } else {
-            Some(jackdaw_bsn::BsnValue::String(old_name))
-        };
-        let cmd = crate::commands::SetBsnField {
-            entity: source_entity,
-            type_path: crate::commands::NAME_TYPE_PATH.to_string(),
-            field_path: String::new(),
-            old_value,
-            new_value: jackdaw_bsn::BsnValue::String(new_name),
-            was_derived: false,
-        };
-        let mut cmd: Box<dyn jackdaw_commands::EditorCommand> = Box::new(cmd);
-        cmd.execute(world);
-        world
-            .resource_mut::<crate::commands::CommandHistory>()
-            .push_executed(cmd);
-    });
+    commands
+        .operator(crate::remote_ops::EntityRenameOp::ID)
+        .param("entity", source_entity)
+        .param("name", event.text.clone())
+        .call();
 }
 
 #[derive(Component)]
