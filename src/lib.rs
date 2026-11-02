@@ -2437,7 +2437,21 @@ fn populate_menu(
             .or_default();
         append_extension_entries(rows, entries);
     }
-    let menu_items = menu_items.into_values().flatten();
+    let mut menu_items: Vec<(String, Vec<(String, String)>)> =
+        menu_items.into_values().flatten().collect();
+    if brush::topology_ops::select_elements::editing_elements(world) {
+        let at = menu_items
+            .iter()
+            .position(|(id, _)| *id == TopLevelMenu::Edit.id())
+            .map_or(0, |edit| edit + 1);
+        menu_items.insert(
+            at,
+            (
+                "Select".to_string(),
+                brush::topology_ops::select_elements::select_menu_rows(),
+            ),
+        );
+    }
 
     jackdaw_feathers::menu_bar::populate_menu_bar(world, menu_bar_entity, menu_items);
 }

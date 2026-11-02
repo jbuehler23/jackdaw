@@ -3,6 +3,7 @@
 
 mod authoring_ops;
 mod dialog_answer;
+mod element_addressing;
 mod field_edits;
 mod light_defaults;
 mod operator_availability;

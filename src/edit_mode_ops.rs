@@ -100,34 +100,52 @@ pub(crate) fn brush_exit_edit_mode(
     OperatorResult::Finished
 }
 
-/// True when switching edit modes is safe; no text field has focus,
-/// no modal is running, and no brush sub-element drag is in flight or
-/// pending. Keybind-triggered mode changes would otherwise yank the
-/// drag target out from under the active system. A selected tilemap takes
-/// the same keys for tile edit mode.
-fn can_change_edit_mode(
-    input_focus: Res<InputFocus>,
-    selection: Res<Selection>,
-    tilemaps: Query<(), With<jackdaw_scene_types::Tilemap>>,
-    active: ActiveModalQuery,
-    face_drag: Res<BrushDragState>,
-    vertex_drag: Res<VertexDragState>,
-    edge_drag: Res<EdgeDragState>,
-    viewport: crate::viewport_2d::FrontedViewport,
-) -> bool {
-    if input_focus.get().is_some() || active.is_modal_running() || !viewport.is_three_d() {
-        return false;
+/// What makes switching edit modes unsafe, keyboard focus aside: a running
+/// modal, a brush sub-element drag in flight or pending (it would lose its
+/// target), a 2D viewport in front, or a selected tilemap, which takes the
+/// mode keys for tile edit mode.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct EditModeGuards<'w, 's> {
+    selection: Res<'w, Selection>,
+    tilemaps: Query<'w, 's, (), With<jackdaw_scene_types::Tilemap>>,
+    active: ActiveModalQuery<'w, 's>,
+    face_drag: Res<'w, BrushDragState>,
+    vertex_drag: Res<'w, VertexDragState>,
+    edge_drag: Res<'w, EdgeDragState>,
+    viewport: crate::viewport_2d::FrontedViewport<'w, 's>,
+}
+
+impl EditModeGuards<'_, '_> {
+    /// Why the edit mode may not change now, if it may not.
+    pub(crate) fn blocked(&self) -> Option<&'static str> {
+        if self.active.is_modal_running() {
+            return Some("a modal operation is running");
+        }
+        if !self.viewport.is_three_d() {
+            return Some("the 2D viewport is in front");
+        }
+        if self
+            .selection
+            .primary()
+            .is_some_and(|e| self.tilemaps.contains(e))
+        {
+            return Some("a tilemap is selected");
+        }
+        let (face, vertex, edge) = (&self.face_drag, &self.vertex_drag, &self.edge_drag);
+        if face.active || vertex.active || edge.active {
+            return Some("a drag is in progress");
+        }
+        if face.pending.is_some() || vertex.pending.is_some() || edge.pending.is_some() {
+            return Some("a drag is about to start");
+        }
+        None
     }
-    if selection.primary().is_some_and(|e| tilemaps.contains(e)) {
-        return false;
-    }
-    if face_drag.active || vertex_drag.active || edge_drag.active {
-        return false;
-    }
-    if face_drag.pending.is_some() || vertex_drag.pending.is_some() || edge_drag.pending.is_some() {
-        return false;
-    }
-    true
+}
+
+/// True when switching edit modes is safe: no text field has focus and no
+/// [`EditModeGuards`] objection.
+fn can_change_edit_mode(input_focus: Res<InputFocus>, guards: EditModeGuards) -> bool {
+    input_focus.get().is_none() && guards.blocked().is_none()
 }
 
 #[operator(

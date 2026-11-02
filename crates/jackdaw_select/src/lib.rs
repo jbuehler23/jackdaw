@@ -9,6 +9,8 @@
 //! indices. There is no engine dependency, so the same traversal drives
 //! selection in any host; the editor wraps each one in a thin operator.
 
+pub mod address;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 

@@ -36,6 +36,7 @@ use crate::screenshot::CaptureError;
 use crate::selection::Selection;
 
 pub use super::summary::{check_handler, scene_summary_handler};
+pub use super::topology::brush_topology_handler;
 
 /// The editor's BRP port. One past the game's 15702, so an editor and the
 /// game it is running never contend for the same socket.
@@ -155,6 +156,7 @@ impl Plugin for JackdawEditorRemotePlugin {
                     .with_method_main("jackdaw/scene_tree", scene_tree_handler)
                     .with_method_main("jackdaw/scene_summary", scene_summary_handler)
                     .with_method_main("jackdaw/check", check_handler)
+                    .with_method_main("jackdaw/brush_topology", brush_topology_handler)
                     .with_method_main("jackdaw/entity", entity_handler)
                     .with_method_main("jackdaw/apply_bsn", apply_bsn_handler)
                     .with_method_main("jackdaw/scene_bsn", scene_bsn_handler)

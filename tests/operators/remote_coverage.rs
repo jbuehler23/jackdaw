@@ -17,9 +17,9 @@ use crate::util;
 const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     (
         "brush.box_select",
-        None,
-        "a rubber band over brush vertices, edges and faces; sub-element selection has no \
-         parametric form yet",
+        Some("brush.select_elements"),
+        "a rubber band over brush vertices, edges and faces; select them by index or rule \
+         instead",
     ),
     (
         "selection.box_select",
@@ -124,8 +124,8 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "brush.mesh.loop_cut",
-        None,
-        "a hovered edge ring plus a drag; no parametric form yet",
+        Some("brush.mesh.loop_cut_at"),
+        "a hovered edge ring plus a drag; cut across a named edge at its middle instead",
     ),
     (
         "brush.mesh.edge_bevel",

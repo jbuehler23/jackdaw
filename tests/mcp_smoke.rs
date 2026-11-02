@@ -206,6 +206,7 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         "scene_tree",
         "scene_summary",
         "check",
+        "brush_topology",
         "get_entity",
         "apply_bsn",
         "scene_bsn",

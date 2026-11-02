@@ -6,6 +6,7 @@ use jackdaw_geometry::halfedge::ops::subdivide::subdivide;
 use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey, apply_topology_edit};
 use jackdaw_scene_types::Brush;
 
+use super::loop_cut::topology_pairs;
 use crate::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 
 /// Split each selected edge at its midpoint and re-tessellate touched faces.
@@ -69,31 +70,8 @@ pub(crate) fn brush_subdivide(
         &mut brush.topology,
         &mut halfedge.0,
         |mesh| {
-            subdivide(mesh, &mesh_edges).map(|subdivide_result| {
-                let mut vk_to_topo: std::collections::HashMap<VertKey, usize> =
-                    std::collections::HashMap::with_capacity(mesh.verts.len());
-                for (i, (k, _)) in mesh.verts.iter().enumerate() {
-                    vk_to_topo.insert(k, i);
-                }
-                let mut out: Vec<(usize, usize)> =
-                    Vec::with_capacity(subdivide_result.new_edges.len());
-                for ek in &subdivide_result.new_edges {
-                    let Some(edge) = mesh.edges.get(*ek) else {
-                        continue;
-                    };
-                    let Some(&a) = vk_to_topo.get(&edge.v[0]) else {
-                        continue;
-                    };
-                    let Some(&b) = vk_to_topo.get(&edge.v[1]) else {
-                        continue;
-                    };
-                    let pair = if a < b { (a, b) } else { (b, a) };
-                    if !out.contains(&pair) {
-                        out.push(pair);
-                    }
-                }
-                out
-            })
+            subdivide(mesh, &mesh_edges)
+                .map(|subdivide_result| topology_pairs(mesh, &subdivide_result.new_edges))
         },
     )
     .ok()?;

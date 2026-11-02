@@ -7,6 +7,7 @@ mod registry_fetch;
 pub mod remote_inspector;
 pub mod server;
 mod summary;
+mod topology;
 
 use bevy::prelude::*;
 
