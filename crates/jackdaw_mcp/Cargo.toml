@@ -25,5 +25,8 @@ schemars = "1"
 base64.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "time"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

@@ -285,7 +285,7 @@ path-slash = "0.2.1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 winit = "0.30.13"
-image = { version = "0.25.10", default-features = false, features = ["png", "hdr"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "hdr", "jpeg"] }
 fluent = "0.16"
 fluent_content = "0.0.5"
 unic-langid = { version = "0.9", features = ["macros"] }

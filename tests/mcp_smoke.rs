@@ -199,8 +199,10 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
     for wanted in [
         "status",
         "list_operators",
+        "describe_operator",
         "call_operator",
         "batch",
+        "run_batch_file",
         "scene_tree",
         "get_entity",
         "apply_bsn",
@@ -221,6 +223,7 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
     for (tool, argument) in [
         ("select", "frame"),
         ("screenshot", "look_at"),
+        ("screenshot", "max_px"),
         ("wait", "until"),
     ] {
         let schema = tools["result"]["tools"]
@@ -242,7 +245,10 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         "tools/call",
         json!({ "name": "status", "arguments": {} }),
     );
-    let reported = &status["result"]["structuredContent"];
+    let reported: Value = status["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("status answered no JSON text: {status}"));
     assert_eq!(
         reported["port"].as_u64(),
         TEST_PORT.parse::<u64>().ok(),

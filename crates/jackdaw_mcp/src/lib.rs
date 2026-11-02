@@ -74,6 +74,18 @@ impl JackdawMcp {
 
     /// Call one BRP method on the editor holding this project open.
     async fn brp(&self, method: &str, params: Value) -> Result<Value, ErrorData> {
+        self.brp_answer(method, params)
+            .await?
+            .map_err(|error| ErrorData::internal_error(format!("{method}: {error}"), None))
+    }
+
+    /// Call one BRP method, handing back the editor's own error object rather
+    /// than a message made from it.
+    async fn brp_answer(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Result<Value, Value>, ErrorData> {
         let Some(endpoint) = read_endpoint(&self.project) else {
             return Err(ErrorData::internal_error(
                 format!(
@@ -103,12 +115,9 @@ impl JackdawMcp {
             .await
             .map_err(|err| ErrorData::internal_error(format!("{method}: {err}"), None))?;
         if let Some(error) = body.get("error") {
-            return Err(ErrorData::internal_error(
-                format!("{method}: {error}"),
-                None,
-            ));
+            return Ok(Err(error.clone()));
         }
-        Ok(body.get("result").cloned().unwrap_or(Value::Null))
+        Ok(Ok(body.get("result").cloned().unwrap_or(Value::Null)))
     }
 
     /// A BRP call whose JSON result is the tool's whole answer.
@@ -118,13 +127,90 @@ impl JackdawMcp {
     }
 }
 
-/// A JSON value as a tool result: pretty text for the model to read, and
-/// the same value as structured content for a client that parses it.
+/// A JSON value as a tool result: one compact text block, the form every
+/// client reads.
 fn json_result(value: &Value) -> CallToolResult {
-    let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
-    result.structured_content = Some(value.clone());
-    result
+    CallToolResult::success(vec![ContentBlock::text(value.to_string())])
+}
+
+/// Longest side of a screenshot thumbnail when the caller names none.
+const DEFAULT_MAX_PX: u32 = 512;
+
+/// The calls a batch file holds, and its undo label if it names one. The file
+/// is either the call list itself or `{"calls": [...], "label": "..."}`.
+fn parse_batch_file(text: &str) -> Result<(Vec<Value>, Option<String>), String> {
+    let value: Value =
+        serde_json::from_str(text).map_err(|err| format!("not a JSON batch: {err}"))?;
+    match value {
+        Value::Array(calls) => Ok((calls, None)),
+        Value::Object(mut fields) => {
+            let Some(Value::Array(calls)) = fields.remove("calls") else {
+                return Err("expected a list of calls, or {\"calls\": [...]}".to_string());
+            };
+            let label = fields
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Ok((calls, label))
+        }
+        _ => Err("expected a list of calls, or {\"calls\": [...]}".to_string()),
+    }
+}
+
+/// `path` resolved against the project root, refused when it leads outside.
+fn file_in_project(project: &std::path::Path, path: &str) -> Result<PathBuf, String> {
+    let root = project
+        .canonicalize()
+        .map_err(|err| format!("{}: {err}", project.display()))?;
+    let file = root
+        .join(path)
+        .canonicalize()
+        .map_err(|err| format!("{path}: {err}"))?;
+    if file.starts_with(&root) {
+        Ok(file)
+    } else {
+        Err(format!("{path} is outside the project"))
+    }
+}
+
+/// What a batch did, without the per-call outcomes: how many calls ran, how
+/// many entities they added, and every warning with the call it came from.
+/// `failure` is the editor's error when a call failed; a call that stopped the
+/// batch by not finishing is reported with its outcome under `stopped`.
+fn batch_summary(total: usize, calls: &[Value], failure: Option<(&Value, &str)>) -> Value {
+    let spawned: usize = calls
+        .iter()
+        .filter_map(|call| call.get("entities").and_then(Value::as_array))
+        .map(Vec::len)
+        .sum();
+    let warnings: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .flat_map(|(index, call)| {
+            call.get("warnings")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(move |warning| format!("call {index}: {warning}"))
+        })
+        .collect();
+    let mut summary = json!({ "ran": calls.len(), "of": total, "spawned": spawned });
+    if !warnings.is_empty() {
+        summary["warnings"] = json!(warnings);
+    }
+    if let Some((failed_at, message)) = failure {
+        summary["failed_at"] = failed_at.clone();
+        summary["error"] = json!(message);
+    } else if let Some(last) = calls.last()
+        && (last["result"] != json!("finished") || calls.len() < total)
+    {
+        // A call that ends `cancelled` or `running` stops the batch without
+        // an error; its outcome says why.
+        summary["failed_at"] = json!(calls.len() - 1);
+        summary["stopped"] = last.clone();
+    }
+    summary
 }
 
 /// Drop `null` fields so an omitted optional argument is absent from the
@@ -157,14 +243,42 @@ pub struct CallOperatorArgs {
     /// Whether the call pushes an undo entry. Defaults to true.
     #[serde(default)]
     pub history: Option<bool>,
+    /// Report the whole outcome. By default only how the call ended, the
+    /// entities it added and any warnings come back.
+    #[serde(default)]
+    pub verbose: Option<bool>,
+}
+
+/// Arguments for `describe_operator`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DescribeOperatorArgs {
+    /// Operator id, e.g. `entity.add.cube`.
+    pub id: String,
 }
 
 /// Arguments for `batch`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct BatchArgs {
-    /// The calls to run, each `{"id": ..., "params": {...}}`.
+    /// The calls to run, each `{"id": ..., "params": {...}}`. A string
+    /// parameter `$N.path` takes a value from call N's outcome, e.g.
+    /// `$0.entities.0` for the first entity call 0 added; `$$` spells a
+    /// literal leading `$`.
     pub calls: Vec<Value>,
     /// Undo label for the whole batch.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Report every call's whole outcome rather than the compact one.
+    #[serde(default)]
+    pub verbose: Option<bool>,
+}
+
+/// Arguments for `run_batch_file`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct RunBatchFileArgs {
+    /// JSON file under the project root: a list of calls as `batch` takes
+    /// them, or `{"calls": [...], "label": "..."}`.
+    pub path: String,
+    /// Undo label, over the file's own. The file name when neither names one.
     #[serde(default)]
     pub label: Option<String>,
 }
@@ -235,15 +349,28 @@ pub struct ScreenshotArgs {
     /// Keep only part of the capture.
     #[serde(default)]
     pub region: Option<Region>,
+    /// Longest side of the returned image in pixels, applied after `region`.
+    /// Defaults to 512; 0 returns the capture at full size. The full capture
+    /// stays on disk at `path` either way.
+    #[serde(default)]
+    pub max_px: Option<u32>,
+    /// `png` (the default) or `jpeg` for the returned image. JPEG is smaller
+    /// but blurs edges.
+    #[serde(default)]
+    pub format: Option<String>,
 }
 
 impl ScreenshotArgs {
     /// The `jackdaw/screenshot` parameters for these arguments.
     fn brp_params(&self, request: String) -> Value {
+        let max_px = self.max_px.unwrap_or(DEFAULT_MAX_PX);
+        let thumbnail = max_px > 0;
         compact(json!({
             "kind": self.kind,
             "path": self.path,
             "region": self.region,
+            "max_px": thumbnail.then_some(max_px),
+            "format": self.format.as_ref().filter(|_| thumbnail),
             "request": request,
         }))
     }
@@ -336,6 +463,34 @@ impl JackdawMcp {
         .await
     }
 
+    /// One operator's schema.
+    #[tool(
+        description = "One operator's id, label, description, availability and parameter \
+                       schema, by exact id. Cheaper than listing a whole prefix when you know \
+                       the id."
+    )]
+    pub async fn describe_operator(
+        &self,
+        Parameters(args): Parameters<DescribeOperatorArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .brp("jackdaw/operators", json!({ "id": args.id }))
+            .await?;
+        let found = result["operators"]
+            .as_array()
+            .and_then(|ops| ops.iter().find(|op| op["id"] == json!(args.id)));
+        match found {
+            Some(operator) => Ok(json_result(operator)),
+            None => Err(ErrorData::invalid_params(
+                format!(
+                    "no operator `{}`; `list_operators` with a prefix finds ids",
+                    args.id
+                ),
+                None,
+            )),
+        }
+    }
+
     /// Run one operator.
     #[tool(
         description = "Run one editor operator by id. Parameters are typed from the operator's \
@@ -352,6 +507,7 @@ impl JackdawMcp {
                 "id": args.id,
                 "params": args.params,
                 "history": args.history,
+                "verbose": args.verbose,
             })),
         )
         .await
@@ -360,7 +516,11 @@ impl JackdawMcp {
     /// Run several operators as one undo entry.
     #[tool(
         description = "Run several operator calls as a single undo entry. Stops at the first \
-                       call that does not finish and reports which one."
+                       call that does not finish and reports which one. A string parameter \
+                       `$N.path` takes a value from an earlier call's outcome, e.g. \
+                       `\"parent\": \"$0.entities.0\"`; a malformed or forward reference \
+                       refuses the batch before anything runs. Write `$$` for text that \
+                       starts with a literal `$`, e.g. `\"$$100 Prop\"`."
     )]
     pub async fn batch(
         &self,
@@ -368,9 +528,66 @@ impl JackdawMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.brp_text(
             "jackdaw/batch",
-            compact(json!({ "calls": args.calls, "label": args.label })),
+            compact(json!({
+                "calls": args.calls,
+                "label": args.label,
+                "verbose": args.verbose,
+            })),
         )
         .await
+    }
+
+    /// Run a batch held in a file and report only a summary.
+    #[tool(
+        description = "Run a JSON file of operator calls as one batch (one undo entry) and \
+                       return a summary: calls run, entities added, warnings, and where it \
+                       stopped. The calls never pass through the conversation, so write long \
+                       scripts to a file and run them with this. Same call and `$N.path` \
+                       format as `batch`; the path is relative to the project root."
+    )]
+    pub async fn run_batch_file(
+        &self,
+        Parameters(args): Parameters<RunBatchFileArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let file = file_in_project(&self.project, &args.path)
+            .map_err(|err| ErrorData::invalid_params(err, None))?;
+        let text = tokio::task::spawn_blocking({
+            let file = file.clone();
+            move || std::fs::read_to_string(file)
+        })
+        .await
+        .map_err(|err| ErrorData::internal_error(format!("run_batch_file: {err}"), None))?
+        .map_err(|err| ErrorData::invalid_params(format!("{}: {err}", args.path), None))?;
+        let (calls, file_label) = parse_batch_file(&text)
+            .map_err(|err| ErrorData::invalid_params(format!("{}: {err}", args.path), None))?;
+        let label = args.label.or(file_label).unwrap_or_else(|| {
+            file.file_name().map_or_else(
+                || args.path.clone(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        });
+        let total = calls.len();
+        let answer = self
+            .brp_answer("jackdaw/batch", json!({ "calls": calls, "label": label }))
+            .await?;
+        Ok(match answer {
+            Ok(result) => {
+                let done = result["calls"].as_array().cloned().unwrap_or_default();
+                let summary = batch_summary(total, &done, None);
+                if summary.get("failed_at").is_some() {
+                    CallToolResult::error(vec![ContentBlock::text(summary.to_string())])
+                } else {
+                    json_result(&summary)
+                }
+            }
+            Err(error) => {
+                let data = &error["data"];
+                let done = data["calls"].as_array().cloned().unwrap_or_default();
+                let message = error["message"].as_str().unwrap_or_default();
+                let summary = batch_summary(total, &done, Some((&data["failed_at"], message)));
+                CallToolResult::error(vec![ContentBlock::text(summary.to_string())])
+            }
+        })
     }
 
     /// The scene as the outliner shows it.
@@ -477,12 +694,13 @@ impl JackdawMcp {
 
     /// Capture the editor and hand the PNG back.
     #[tool(
-        description = "Capture the viewport (or the whole window) to a PNG and return the image \
-                       along with its path. Waits for the capture to reach disk, so the file is \
-                       there when this answers. `look_at` aims the camera first, since a camera \
-                       left where it was frames a scene edge-on. `region` keeps only part of \
-                       the image: world units by default for a 2D view, pixels from the \
-                       top-left otherwise."
+        description = "Capture the viewport (or the whole window) to a PNG and return a \
+                       thumbnail (512 px on the longer side unless `max_px` says otherwise; 0 \
+                       for full size) along with the paths. Waits for the capture to reach \
+                       disk, so the file is there when this answers. `look_at` aims the camera \
+                       first, since a camera left where it was frames a scene edge-on. \
+                       `region` keeps only part of the image: world units by default for a 2D \
+                       view, pixels from the top-left otherwise."
     )]
     pub async fn screenshot(
         &self,
@@ -512,14 +730,13 @@ impl JackdawMcp {
                 args.brp_params(self.next_request_id()),
             )
             .await?;
-        let path = result
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let mut blocks = vec![ContentBlock::text(
-            serde_json::to_string_pretty(&result).unwrap_or_default(),
-        )];
+        let (path, mime) = match result["thumb"]["path"].as_str() {
+            Some(thumb) if thumb.ends_with(".jpg") => (thumb, "image/jpeg"),
+            Some(thumb) => (thumb, "image/png"),
+            None => (result["path"].as_str().unwrap_or_default(), "image/png"),
+        };
+        let path = path.to_string();
+        let mut blocks = vec![ContentBlock::text(result.to_string())];
         // Off the runtime, like the asset walk: a screenshot of a large
         // viewport is megabytes, and a blocking read here stalls every
         // other task the server is serving.
@@ -532,15 +749,13 @@ impl JackdawMcp {
         match read {
             Ok(bytes) => blocks.push(ContentBlock::image(
                 base64::engine::general_purpose::STANDARD.encode(bytes),
-                "image/png",
+                mime,
             )),
             Err(err) => blocks.push(ContentBlock::text(format!(
                 "the editor reported {path} but it could not be read: {err}"
             ))),
         }
-        let mut call = CallToolResult::success(blocks);
-        call.structured_content = Some(result);
-        Ok(call)
+        Ok(CallToolResult::success(blocks))
     }
 
     /// End a modal operator holding the editor.
@@ -608,11 +823,14 @@ impl ServerHandler for JackdawMcp {
         info.protocol_version = ProtocolVersion::default();
         info.instructions = Some(
             "Drives a running Jackdaw editor. Everything the editor does is an operator: \
-                 start with `list_operators` to see the vocabulary, then `call_operator`. Group \
-                 a run of calls with `batch` so one undo takes them all back. `scene_tree` and \
-                 `get_entity` read the scene, `screenshot` looks at it, and `save_scene` writes \
-                 the open scene back to its file. Operators reach the disk too, through the same \
-                 saves, exports and bakes the menus run."
+                 use `list_operators` with a prefix or `describe_operator` to learn one; never \
+                 load the `operators` resource whole. Run one with `call_operator`. Group a run \
+                 of calls with `batch` so one undo takes them all back, naming earlier results \
+                 with `$N.path`; for long scripts write the calls to a file and use \
+                 `run_batch_file`, which answers with a summary. `scene_tree` and `get_entity` \
+                 read the scene, `screenshot` returns a thumbnail to check it by, and \
+                 `save_scene` writes the open scene back to its file. Operators reach the disk \
+                 too, through the same saves, exports and bakes the menus run."
                 .to_string(),
         );
         info
@@ -647,7 +865,7 @@ impl ServerHandler for JackdawMcp {
             OPERATORS_URI => {
                 let result = self.brp("jackdaw/operators", json!({})).await?;
                 Ok(ReadResourceResult::new(vec![ResourceContents::text(
-                    serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    result.to_string(),
                     OPERATORS_URI,
                 )])
                 .into())
@@ -716,6 +934,7 @@ mod tests {
             json!({
                 "kind": "viewport2d",
                 "region": { "x": -8.0, "y": 4.0, "w": 16.0, "h": 16.0, "space": "world" },
+                "max_px": 512,
                 "request": "r1",
             }),
         );
@@ -733,7 +952,123 @@ mod tests {
         let args: ScreenshotArgs = serde_json::from_value(json!({})).expect("no arguments");
         assert_eq!(
             args.brp_params("r3".to_string()),
-            json!({ "request": "r3" })
+            json!({ "max_px": 512, "request": "r3" })
         );
+    }
+
+    #[test]
+    fn a_screenshot_asks_for_a_thumbnail_unless_max_px_is_zero() {
+        let args: ScreenshotArgs =
+            serde_json::from_value(json!({ "max_px": 256, "format": "jpeg" })).expect("parses");
+        let params = args.brp_params("r".to_string());
+        assert_eq!(params["max_px"], json!(256));
+        assert_eq!(params["format"], json!("jpeg"));
+
+        let args: ScreenshotArgs =
+            serde_json::from_value(json!({ "max_px": 0, "format": "jpeg" })).expect("parses");
+        assert_eq!(
+            args.brp_params("r".to_string()),
+            json!({ "request": "r" }),
+            "full size asks for no thumbnail"
+        );
+    }
+
+    #[test]
+    fn a_result_is_one_compact_text_block() {
+        let result = json_result(&json!({ "a": [1, 2], "b": "c" }));
+        assert!(result.structured_content.is_none());
+        assert_eq!(result.content.len(), 1);
+        let text = result.content[0]
+            .as_text()
+            .map(|text| text.text.clone())
+            .expect("a text block");
+        assert_eq!(text, r#"{"a":[1,2],"b":"c"}"#);
+    }
+
+    #[test]
+    fn a_batch_file_is_a_call_list_or_an_object_with_one() {
+        let (calls, label) =
+            parse_batch_file(r#"[{"id":"entity.add.cube"}]"#).expect("a bare list");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(label, None);
+
+        let (calls, label) =
+            parse_batch_file(r#"{"label":"House","calls":[{"id":"a"},{"id":"b"}]}"#)
+                .expect("an object");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(label.as_deref(), Some("House"));
+
+        assert!(parse_batch_file(r#"{"steps":[]}"#).is_err());
+        assert!(parse_batch_file("not json").is_err());
+    }
+
+    #[test]
+    fn a_batch_file_must_be_inside_the_project() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join("scripts")).expect("dirs");
+        std::fs::write(project.join("scripts/house.json"), "[]").expect("a file");
+        std::fs::write(dir.path().join("outside.json"), "[]").expect("a file");
+
+        assert!(file_in_project(&project, "scripts/house.json").is_ok());
+        assert!(file_in_project(&project, "../outside.json").is_err());
+        assert!(file_in_project(&project, "missing.json").is_err());
+    }
+
+    #[test]
+    fn a_batch_summary_counts_without_repeating_the_outcomes() {
+        let calls = vec![
+            json!({ "result": "finished", "entities": [1, 2] }),
+            json!({ "result": "finished", "warnings": ["no such material"] }),
+            json!({ "result": "finished", "entities": [3] }),
+        ];
+        assert_eq!(
+            batch_summary(3, &calls, None),
+            json!({
+                "ran": 3,
+                "of": 3,
+                "spawned": 3,
+                "warnings": ["call 1: no such material"],
+            })
+        );
+
+        let failed = batch_summary(10, &calls[..1], Some((&json!(1), "call 1 failed")));
+        assert_eq!(failed["ran"], json!(1));
+        assert_eq!(failed["of"], json!(10));
+        assert_eq!(failed["failed_at"], json!(1));
+        assert_eq!(failed["error"], json!("call 1 failed"));
+        assert!(failed.get("warnings").is_none());
+    }
+
+    #[test]
+    fn a_batch_that_stopped_on_a_call_that_did_not_finish_says_so() {
+        let calls = vec![
+            json!({ "result": "finished", "entities": [1] }),
+            json!({
+                "result": "cancelled",
+                "outcome": "invalid",
+                "entities": [],
+                "warnings": ["segments must be at least 3"],
+            }),
+        ];
+        let summary = batch_summary(5, &calls, None);
+        assert_eq!(summary["ran"], json!(2));
+        assert_eq!(summary["failed_at"], json!(1));
+        assert_eq!(summary["stopped"]["result"], json!("cancelled"));
+        assert_eq!(summary["stopped"]["outcome"], json!("invalid"));
+        assert_eq!(
+            summary["warnings"],
+            json!(["call 1: segments must be at least 3"])
+        );
+    }
+
+    #[test]
+    fn the_instructions_steer_away_from_the_whole_catalogue() {
+        let info = JackdawMcp::new(".").get_info();
+        let text = info.instructions.expect("instructions");
+        assert!(text.contains("describe_operator"), "{text}");
+        assert!(text.contains("never load the `operators` resource whole"));
+        assert!(text.contains("run_batch_file"));
+        assert!(!text.contains("start with `list_operators`"));
     }
 }
