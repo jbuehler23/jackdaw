@@ -1489,13 +1489,38 @@ pub(crate) fn set_name_patch(ast: &mut jackdaw_bsn::SceneBsnAst, node: Entity, n
 }
 
 impl SetBsnField {
+    /// A name edit. `authored` is the name the document's `#name` patch holds
+    /// now, `None` when the node has none; `live` is the name it shows now.
+    /// Undo restores `authored`, and when there was no patch it removes the
+    /// patch and puts `live` back on the entity.
+    pub(crate) fn name(
+        entity: Entity,
+        authored: Option<String>,
+        live: Option<String>,
+        new_name: String,
+    ) -> Self {
+        let was_derived = authored.is_none();
+        Self {
+            entity,
+            type_path: NAME_TYPE_PATH.to_string(),
+            field_path: String::new(),
+            old_value: authored.or(live).map(jackdaw_bsn::BsnValue::String),
+            new_value: jackdaw_bsn::BsnValue::String(new_name),
+            was_derived,
+        }
+    }
+
     /// Write an entity name into the document's `#name` reference patch and
     /// mirror it onto the live ECS entity. `None` removes both.
     fn apply_name(&self, world: &mut World, name: Option<&str>) {
+        self.apply_name_split(world, name, name);
+    }
+
+    fn apply_name_split(&self, world: &mut World, doc: Option<&str>, name: Option<&str>) {
         {
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(self.entity) {
-                set_name_patch(&mut ast, node, name);
+                set_name_patch(&mut ast, node, doc);
             }
         }
         let Ok(mut entity_mut) = world.get_entity_mut(self.entity) else {
@@ -1603,7 +1628,11 @@ impl SetBsnField {
                 .and_then(bsn_value_string)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            self.apply_name(world, old_name.as_deref());
+            if self.was_derived {
+                self.apply_name_split(world, None, old_name.as_deref());
+            } else {
+                self.apply_name(world, old_name.as_deref());
+            }
             return;
         }
         // A missing old value means execute authored something that did not
@@ -3413,14 +3442,7 @@ mod set_bsn_field_tests {
     }
 
     fn name_command(entity: Entity, old: Option<&str>, new: &str) -> SetBsnField {
-        SetBsnField {
-            entity,
-            type_path: NAME_TYPE_PATH.to_string(),
-            field_path: String::new(),
-            old_value: old.map(|s| BsnValue::String(s.to_string())),
-            new_value: BsnValue::String(new.to_string()),
-            was_derived: false,
-        }
+        SetBsnField::name(entity, old.map(str::to_string), None, new.to_string())
     }
 
     #[test]

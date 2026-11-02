@@ -404,3 +404,38 @@ fn resting_on_a_cut_label_shows_the_whole_name() {
         "and what it is resting on carries the name in full",
     );
 }
+
+/// The whole gesture, F2 then a typed name committed, leaves one undo entry.
+#[test]
+fn a_committed_f2_rename_is_one_history_entry() {
+    use jackdaw::commands::CommandHistory;
+    use jackdaw_feathers::text_edit::{EditorTextEdit, TextEditCommitEvent};
+
+    let (mut app, _panel, node) = outliner_app();
+    jackdaw::selection::select_only(app.world_mut(), node);
+    settle(&mut app);
+    let entries = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    run(&mut app, "input.key key=F2");
+    assert!(entry_open(&mut app), "the entry is open");
+    let input = app
+        .world_mut()
+        .query_filtered::<Entity, With<EditorTextEdit>>()
+        .iter(app.world())
+        .next()
+        .expect("the rename entry has a text field");
+    app.world_mut().trigger(TextEditCommitEvent {
+        entity: input,
+        text: "Door".to_string(),
+    });
+    settle(&mut app);
+
+    assert_eq!(
+        app.world().get::<Name>(node).map(Name::as_str),
+        Some("Door")
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        entries + 1
+    );
+}

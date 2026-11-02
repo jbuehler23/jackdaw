@@ -43,8 +43,8 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
     ),
     (
         "hierarchy.rename_begin",
-        Some("component.set"),
-        "an inline text field; set the Name component instead",
+        Some("entity.rename"),
+        "an inline text field; rename by value instead",
     ),
     (
         "tilemap.brush",

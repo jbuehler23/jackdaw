@@ -29,7 +29,7 @@ use jackdaw_widgets::tree_view::{
 
 use crate::{
     EditorEntity, EditorHidden, OP_PREFIX,
-    commands::{CommandHistory, EditorCommand, ReparentEntity, SetBsnField},
+    commands::{CommandHistory, EditorCommand, ReparentEntity},
     entity_ops,
     layout::HierarchyFilter,
     selection::{Selected, Selection},
@@ -3024,6 +3024,7 @@ impl Command for RestoreLabel {
     label = "Rename Entity",
     description = "Rename the selected entity in the hierarchy.",
     modal = true,
+    allows_undo = false,
     cancel = cancel_rename_begin,
     is_available = no_rename_in_progress,
     params(entity(Entity, doc = "Scene entity to rename.")),
@@ -3179,13 +3180,8 @@ fn handle_inline_rename_commit(
     };
 
     input_focus.clear();
-    commands.queue(RestoreLabel {
-        label_entity,
-        text: event.text.clone(),
-    });
     commands.entity(rename_entity).despawn();
 
-    // Trigger the rename
     commands.trigger(TreeRowRenamed {
         entity: label_entity,
         source_entity,
@@ -3193,39 +3189,24 @@ fn handle_inline_rename_commit(
     });
 }
 
-/// Commit inline rename: update Name with undo.
+/// Commit inline rename through `entity.rename`, then show whatever name the
+/// node ended up with, which is the old one when the operator refused.
 fn on_tree_row_renamed(event: On<TreeRowRenamed>, mut commands: Commands, names: Query<&Name>) {
     let source = event.source_entity;
-    let new_name = event.new_name.clone();
-
-    // Apply name change with undo
-    let old_name = names
-        .get(source)
-        .map(|n| n.as_str().to_string())
-        .unwrap_or_default();
-
-    if old_name == new_name {
-        return;
+    let label_entity = event.entity;
+    if entity_name(&names, source) != event.new_name {
+        commands
+            .operator(crate::remote_ops::EntityRenameOp::ID)
+            .param("entity", source)
+            .param("name", event.new_name.clone())
+            .call();
     }
-
     commands.queue(move |world: &mut World| {
-        let old_value = if old_name.is_empty() {
-            None
-        } else {
-            Some(jackdaw_bsn::BsnValue::String(old_name))
-        };
-        let cmd = SetBsnField {
-            entity: source,
-            type_path: crate::commands::NAME_TYPE_PATH.to_string(),
-            field_path: String::new(),
-            old_value,
-            new_value: jackdaw_bsn::BsnValue::String(new_name),
-            was_derived: false,
-        };
-        let mut cmd = Box::new(cmd);
-        cmd.execute(world);
-        let mut history = world.resource_mut::<CommandHistory>();
-        history.push_executed(cmd);
+        let text = world
+            .get::<Name>(source)
+            .map(|name| name.as_str().to_string())
+            .unwrap_or_default();
+        RestoreLabel { label_entity, text }.apply(world);
     });
 }
 

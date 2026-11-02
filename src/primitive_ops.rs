@@ -241,7 +241,7 @@ impl PrimitiveRequest {
 
         let parent = match params.get("parent") {
             None => None,
-            Some(PropertyValue::Entity(entity)) => Some(scene_parent(world, *entity)?),
+            Some(PropertyValue::Entity(entity)) => Some(scene_node(world, *entity, "parent")?),
             Some(other) => return Err(format!("`parent` {other:?} names no node in this scene")),
         };
 
@@ -328,12 +328,14 @@ fn standard_material(
     })
 }
 
-fn scene_parent(world: &World, entity: Entity) -> Result<Entity, String> {
+/// `entity` when it is a node of the open scene document, else why not;
+/// `key` names the parameter it came from.
+pub(crate) fn scene_node(world: &World, entity: Entity, key: &str) -> Result<Entity, String> {
     let in_document = world
         .get_resource::<jackdaw_bsn::SceneBsnAst>()
         .is_some_and(|doc| doc.ast_for(entity).is_some());
     if world.get_entity(entity).is_err() || !in_document {
-        return Err(format!("`parent` {entity} is not a node of this scene"));
+        return Err(format!("`{key}` {entity} is not a node of this scene"));
     }
     Ok(entity)
 }

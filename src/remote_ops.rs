@@ -13,6 +13,7 @@ use crate::entity_ops::EntityTemplate;
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityAddGroupOp>()
         .register_operator::<EntitySetTransformOp>()
+        .register_operator::<EntityRenameOp>()
         .register_operator::<ComponentSetOp>()
         .register_operator::<DialogAnswerOp>();
 }
@@ -107,17 +108,15 @@ pub(crate) fn entity_add_group(
 
         let old_name = world
             .get::<Name>(entity)
-            .map(|name| jackdaw_bsn::BsnValue::String(name.as_str().to_string()));
+            .map(|name| name.as_str().to_string());
         let mut group: Vec<Box<dyn EditorCommand>> = vec![
             Box::new(spawn),
-            Box::new(SetBsnField {
+            Box::new(SetBsnField::name(
                 entity,
-                type_path: crate::commands::NAME_TYPE_PATH.to_string(),
-                field_path: String::new(),
-                old_value: old_name,
-                new_value: jackdaw_bsn::BsnValue::String(name.clone()),
-                was_derived: false,
-            }),
+                old_name.clone(),
+                old_name,
+                name.clone(),
+            )),
         ];
         if let Some(parent) = parent
             && world.get_entity(parent).is_ok()
@@ -143,6 +142,60 @@ pub(crate) fn entity_add_group(
             }));
     });
     OperatorResult::Finished
+}
+
+/// Rename a scene node through the same document patch the hierarchy and the
+/// inspector commit. An empty name clears `Name`; naming it what it already
+/// is leaves the scene and the history alone.
+#[operator(
+    id = "entity.rename",
+    label = "Rename Entity",
+    description = "Set an entity's name. An empty name clears it.",
+    allows_undo = false,
+    params(
+        entity(Entity, doc = "Scene node to rename."),
+        name(String, doc = "The new name. Empty clears the name."),
+    )
+)]
+pub(crate) fn entity_rename(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    let (entity, new_name) = match read_rename(world, &params) {
+        Ok(request) => request,
+        Err(why) => {
+            warn_caller(world, format!("entity.rename: {why}"));
+            set_outcome(world, Outcome::Invalid);
+            return OperatorResult::Cancelled;
+        }
+    };
+    let live = world
+        .get::<Name>(entity)
+        .map(|name| name.as_str().to_string());
+    if live.as_deref().unwrap_or_default() == new_name {
+        set_outcome(world, Outcome::Unchanged);
+        return OperatorResult::Finished;
+    }
+    let authored = {
+        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        ast.ast_for(entity)
+            .and_then(|node| ast.get_name(node))
+            .map(str::to_string)
+    };
+    let mut command: Box<dyn EditorCommand> =
+        Box::new(SetBsnField::name(entity, authored, live, new_name));
+    command.execute(world);
+    world
+        .resource_mut::<CommandHistory>()
+        .push_executed(command);
+    set_outcome(world, Outcome::Changed);
+    OperatorResult::Finished
+}
+
+fn read_rename(world: &World, params: &OperatorParameters) -> Result<(Entity, String), String> {
+    let entity = params
+        .as_entity("entity")
+        .ok_or("`entity` names no entity")?;
+    crate::primitive_ops::scene_node(world, entity, "entity")?;
+    let name = params.as_str("name").ok_or("`name` must be text")?;
+    Ok((entity, name.to_string()))
 }
 
 /// Place an entity: position, rotation in degrees, scale. Every field is

@@ -104,6 +104,56 @@ fn editor_with_a_scene() -> App {
     app
 }
 
+/// A remote rename answers with its outcome, shows in the tree and takes one
+/// undo to revert.
+#[test]
+fn a_remote_rename_reports_its_outcome_and_the_tree_follows() {
+    let mut app = editor_with_a_scene();
+    let added = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.add.cube", "params": { "name": "Wall" } }),
+    );
+    let id = added["entities"][0].as_u64().expect("an entity id");
+    app.update();
+    let before = app.world().resource::<CommandHistory>().undo_stack.len();
+
+    let renamed = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.rename", "params": { "entity": id, "name": "Gate" } }),
+    );
+    assert_eq!(renamed["result"], json!("finished"), "{renamed}");
+    assert_eq!(renamed["outcome"], json!("changed"), "{renamed}");
+    app.update();
+    let tree = call(&mut app, scene_tree_handler, json!({}));
+    let names: Vec<&Value> = tree["tree"]
+        .as_array()
+        .expect("roots")
+        .iter()
+        .map(|node| &node["name"])
+        .collect();
+    assert!(names.contains(&&json!("Gate")), "{tree}");
+    assert!(!names.contains(&&json!("Wall")), "{tree}");
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        before + 1
+    );
+
+    let same = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.rename", "params": { "entity": id, "name": "Gate" } }),
+    );
+    assert_eq!(same["outcome"], json!("unchanged"), "{same}");
+    let refused = call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "entity.rename", "params": { "name": "Gate" } }),
+    );
+    assert_eq!(refused["outcome"], json!("invalid"), "{refused}");
+}
+
 /// `jackdaw/status` is the first call any client makes, so it has to
 /// answer on a cold editor rather than only once a project is open.
 #[test]
