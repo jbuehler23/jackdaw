@@ -135,61 +135,7 @@ pub(crate) fn polygon_self_intersects_on_plane(points: &[Vec3], plane: &DrawPlan
             )
         })
         .collect();
-    polygon_self_intersects(&projected)
-}
-
-/// True if two edges of the closed ring that do not share a corner touch.
-pub(crate) fn polygon_self_intersects(ring: &[Vec2]) -> bool {
-    let n = ring.len();
-    if n < 4 {
-        return false;
-    }
-    for i in 0..n {
-        let i_next = (i + 1) % n;
-        for j in (i + 1)..n {
-            let j_next = (j + 1) % n;
-            if i == j_next || j == i_next {
-                continue;
-            }
-            if segments_intersect(ring[i], ring[i_next], ring[j], ring[j_next]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn segments_intersect(start_a: Vec2, end_a: Vec2, start_b: Vec2, end_b: Vec2) -> bool {
-    let orientation_start_b = orient(start_a, end_a, start_b);
-    let orientation_end_b = orient(start_a, end_a, end_b);
-    let orientation_start_a = orient(start_b, end_b, start_a);
-    let orientation_end_a = orient(start_b, end_b, end_a);
-    if orientation_start_b * orientation_end_b < 0.0
-        && orientation_start_a * orientation_end_a < 0.0
-    {
-        return true;
-    }
-    const EPS: f32 = 1e-5;
-    (orientation_start_b.abs() <= EPS && point_on_segment(start_b, start_a, end_a))
-        || (orientation_end_b.abs() <= EPS && point_on_segment(end_b, start_a, end_a))
-        || (orientation_start_a.abs() <= EPS && point_on_segment(start_a, start_b, end_b))
-        || (orientation_end_a.abs() <= EPS && point_on_segment(end_a, start_b, end_b))
-}
-
-fn orient(start: Vec2, end: Vec2, point: Vec2) -> f32 {
-    (end - start).perp_dot(point - start)
-}
-
-fn point_on_segment(point: Vec2, segment_start: Vec2, segment_end: Vec2) -> bool {
-    const EPS: f32 = 1e-5;
-    let segment = segment_end - segment_start;
-    let to_point = point - segment_start;
-    let length_squared = segment.length_squared();
-    if length_squared <= EPS * EPS {
-        return to_point.length_squared() <= EPS * EPS;
-    }
-    let parameter = to_point.dot(segment) / length_squared;
-    (-EPS..=1.0 + EPS).contains(&parameter)
+    jackdaw_geometry::polygon_self_intersects(&projected)
 }
 
 #[cfg(test)]

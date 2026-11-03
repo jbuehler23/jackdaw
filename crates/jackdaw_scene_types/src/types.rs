@@ -46,6 +46,24 @@ impl std::fmt::Display for PolygonError {
 
 impl std::error::Error for PolygonError {}
 
+/// Why [`Brush::revolve`] refused a profile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RevolveBrushError {
+    Profile(jackdaw_geometry::RevolveError),
+    Face(PolygonError),
+}
+
+impl std::fmt::Display for RevolveBrushError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Profile(why) => why.fmt(f),
+            Self::Face(why) => why.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for RevolveBrushError {}
+
 /// Canonical brush data. Serialized. Geometry derived from this.
 #[derive(Component, Reflect, Clone, Debug, Default)]
 #[reflect(Component, Default, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]
@@ -758,6 +776,17 @@ impl Brush {
         }
         Self::from_polygons(positions, polygons)
             .unwrap_or_else(|_| Self::cylinder(radius, half_height, sides))
+    }
+
+    /// `profile`, a list of `[radius, height]` points, turned around an axis
+    /// through the origin; see [`jackdaw_geometry::revolve_profile`].
+    pub fn revolve(
+        profile: &[Vec2],
+        options: &jackdaw_geometry::RevolveOptions,
+    ) -> Result<Self, RevolveBrushError> {
+        let solid = jackdaw_geometry::revolve_profile(profile, options)
+            .map_err(RevolveBrushError::Profile)?;
+        Self::from_polygons(solid.positions, solid.polygons).map_err(RevolveBrushError::Face)
     }
 
     /// This brush stretched by `scale` per axis about its origin, its face

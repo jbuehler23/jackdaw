@@ -384,8 +384,8 @@ pub(crate) fn add_primitive(
         }
     };
     let label = format!("Add {}", template.label());
-    let placement = request.placement.clone();
-    add_as_one_entry(world, label, &placement, move |world, parent| {
+    let parent = request.placement.parent;
+    add_as_one_entry(world, label, parent, move |world, parent| {
         let brush = request.brush(world);
         crate::entity_ops::spawn_shaped_under(world, template, parent, |entity| {
             request.placement.apply(entity, brush);
@@ -394,17 +394,15 @@ pub(crate) fn add_primitive(
 }
 
 /// Spawn a node as one undo entry labelled `label` and report it changed.
-/// `spawn` builds it under the parent `placement` names, or the 2D scene root,
-/// chosen once so a redo puts it back in the same place.
+/// `spawn` builds it under `parent`, or the 2D scene root, chosen once so a
+/// redo puts it back in the same place.
 pub(crate) fn add_as_one_entry(
     world: &mut World,
     label: String,
-    placement: &Placement,
+    parent: Option<Entity>,
     spawn: impl Fn(&mut World, Option<Entity>) -> Entity + Send + Sync + 'static,
 ) -> OperatorResult {
-    let parent = placement
-        .parent
-        .or_else(|| crate::sprite_ops::scene_2d_parent(world, None));
+    let parent = parent.or_else(|| crate::sprite_ops::scene_2d_parent(world, None));
     let mut command: Box<dyn EditorCommand> = Box::new(SpawnEntity::new(
         move |world: &mut World| spawn(world, parent),
         label,
