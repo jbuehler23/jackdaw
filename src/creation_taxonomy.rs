@@ -721,7 +721,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            ["Empty", "Prefab", "Audio Source", "Animation Player"],
+            ["Empty", "Prefab", "Recipe", "Audio Source", "Animation Player"],
         );
         assert!(
             !taxonomy
