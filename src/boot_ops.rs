@@ -306,6 +306,8 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("entity.add.wedge", "parent"),
     ("entity.delete", "entity"),
     ("entity.snap_to_ground", "entity"),
+    ("mesh.add_brush", "parent"),
+    ("mesh.add_revolve", "parent"),
     ("prefab.spawn_instance", "parent"),
     ("selection.select", "entity"),
     ("sprite.add", "parent"),

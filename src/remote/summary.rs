@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::server::{
     belongs_to_the_scene, check_enabled, depth_param, entity_from_params, invalid_params,
-    is_scene_descendant, is_scene_node, root_param,
+    is_scene_descendant, root_param,
 };
 
 /// Tolerance an assertion uses when the caller names none, in metres.
@@ -309,11 +309,7 @@ fn scene_nodes(world: &mut World, root: Option<Entity>, depth: u32) -> Vec<Entit
             .filter(|entity| belongs_to_the_scene(world, *entity))
             .collect(),
         None => {
-            let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
-            let mut roots: Vec<Entity> = query
-                .iter(world)
-                .filter(|entity| is_scene_node(world, *entity))
-                .collect();
+            let mut roots = super::server::scene_roots(world);
             roots.sort();
             roots
         }

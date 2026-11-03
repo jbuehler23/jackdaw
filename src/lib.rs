@@ -214,6 +214,7 @@ pub mod viewport_select;
 pub mod viewport_settings;
 pub mod viewport_settings_menu;
 pub mod viewport_util;
+pub mod views;
 pub mod windowing;
 pub mod workspace_dropdown;
 pub mod world_units;

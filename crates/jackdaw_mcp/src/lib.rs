@@ -170,6 +170,35 @@ fn json_result(value: &Value) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(value.to_string())])
 }
 
+/// A BRP result as a text block followed by the image the editor wrote at
+/// `path`, or a note saying why it could not be read.
+async fn with_image(
+    result: &Value,
+    path: String,
+    mime: &'static str,
+) -> Result<CallToolResult, ErrorData> {
+    let mut blocks = vec![ContentBlock::text(result.to_string())];
+    // Off the runtime, like the asset walk: a capture of a large viewport is
+    // megabytes, and a blocking read here stalls every other task the server
+    // is serving.
+    let read = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || std::fs::read(path)
+    })
+    .await
+    .map_err(|err| ErrorData::internal_error(format!("reading {path}: {err}"), None))?;
+    match read {
+        Ok(bytes) => blocks.push(ContentBlock::image(
+            base64::engine::general_purpose::STANDARD.encode(bytes),
+            mime,
+        )),
+        Err(err) => blocks.push(ContentBlock::text(format!(
+            "the editor reported {path} but it could not be read: {err}"
+        ))),
+    }
+    Ok(CallToolResult::success(blocks))
+}
+
 /// Longest side of a screenshot thumbnail when the caller names none.
 const DEFAULT_MAX_PX: u32 = 512;
 
@@ -623,6 +652,53 @@ pub struct LookAt {
     pub target: Option<[f64; 3]>,
 }
 
+/// Arguments for `views`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ViewsArgs {
+    /// Entity ids or names to frame. The selection when omitted, or the
+    /// whole scene when nothing is selected.
+    #[serde(default)]
+    pub targets: Option<Vec<Value>>,
+    /// Views to render: `front`, `back`, `left`, `right`, `top`, `iso`, or
+    /// `{eye: [x, y, z], target: [x, y, z]}`. Defaults to front, right, top
+    /// and iso; `iso` alone with `per_target`.
+    #[serde(default)]
+    pub angles: Option<Vec<Value>>,
+    /// Longer side of the sheet in pixels. Defaults to 512.
+    #[serde(default)]
+    pub max_px: Option<u32>,
+    /// `jpeg` (the default) or `png`.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Draw only the targets, without the rest of the scene.
+    #[serde(default)]
+    pub isolate: Option<bool>,
+    /// One tile per target, each framed on its own target.
+    #[serde(default)]
+    pub per_target: Option<bool>,
+    /// Where to write the sheet, relative to the project root. A timestamped
+    /// file under the project when omitted.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+impl ViewsArgs {
+    /// The `jackdaw/views` parameters for these arguments: always one sheet.
+    fn brp_params(&self, request: String) -> Value {
+        compact(json!({
+            "targets": self.targets,
+            "angles": self.angles,
+            "max_px": self.max_px.unwrap_or(DEFAULT_MAX_PX),
+            "format": self.format.clone().unwrap_or_else(|| "jpeg".to_string()),
+            "isolate": self.isolate,
+            "per_target": self.per_target,
+            "path": self.path,
+            "sheet": true,
+            "request": request,
+        }))
+    }
+}
+
 /// Arguments for `wait`.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WaitArgs {
@@ -1023,26 +1099,35 @@ impl JackdawMcp {
             None => (result["path"].as_str().unwrap_or_default(), "image/png"),
         };
         let path = path.to_string();
-        let mut blocks = vec![ContentBlock::text(result.to_string())];
-        // Off the runtime, like the asset walk: a screenshot of a large
-        // viewport is megabytes, and a blocking read here stalls every
-        // other task the server is serving.
-        let read = tokio::task::spawn_blocking({
-            let path = path.clone();
-            move || std::fs::read(path)
-        })
-        .await
-        .map_err(|err| ErrorData::internal_error(format!("screenshot: {err}"), None))?;
-        match read {
-            Ok(bytes) => blocks.push(ContentBlock::image(
-                base64::engine::general_purpose::STANDARD.encode(bytes),
-                mime,
-            )),
-            Err(err) => blocks.push(ContentBlock::text(format!(
-                "the editor reported {path} but it could not be read: {err}"
-            ))),
-        }
-        Ok(CallToolResult::success(blocks))
+        with_image(&result, path, mime).await
+    }
+
+    /// Look at part of the scene from several sides without moving the
+    /// user's camera.
+    #[tool(
+        description = "Render the targets (ids or names; the selection by default) from several \
+                       angles with an offscreen camera framed on their bounds, and return one \
+                       sheet image: front, right, top and iso at 512 px unless `angles` or \
+                       `max_px` say otherwise. The user's viewport camera does not move. \
+                       `isolate` draws only the targets; `per_target` gives each target a tile \
+                       of its own. The text block lists each tile's label and pixel rectangle \
+                       (`at: [x, y, w, h]`) and the framed bounds. Prefer this to aiming a \
+                       `screenshot` when checking a part."
+    )]
+    pub async fn views(
+        &self,
+        Parameters(args): Parameters<ViewsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .brp("jackdaw/views", args.brp_params(self.next_request_id()))
+            .await?;
+        let path = result["path"].as_str().unwrap_or_default().to_string();
+        let mime = if path.ends_with(".png") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+        with_image(&result, path, mime).await
     }
 
     /// End a modal operator holding the editor.
@@ -1120,8 +1205,9 @@ impl ServerHandler for JackdawMcp {
              with `checks` on the batch or `check` (rests_on, inside, no_overlap, bounds, \
              count, watertight, each with the measured value) and read the scene with \
              `scene_summary` (compact rows; pass its `revision` back as `since_revision` for \
-             only what changed), not `scene_tree`. Take a `screenshot` only to judge how \
-             things look; it returns a small thumbnail and puts the camera back. `get_entity` \
+             only what changed), not `scene_tree`. To see a part, call `views`: one \
+             small sheet of it from several sides, rendered offscreen without moving the \
+             user's camera. Take a `screenshot` only for what the user's viewport shows. `get_entity` \
              reads one node in full and `save_scene` writes the open scene back to its file. \
              Operators reach the disk too, through the same saves, exports and bakes the menus \
              run."
@@ -1478,5 +1564,39 @@ mod tests {
         assert!(text.contains("`stage`"), "{text}");
         assert!(text.contains("`atomic`"), "{text}");
         assert!(text.contains("`checks`"), "{text}");
+    }
+
+    #[test]
+    fn views_ask_for_one_small_jpeg_sheet_by_default() {
+        let args: ViewsArgs = serde_json::from_value(json!({})).expect("parses");
+        assert_eq!(
+            args.brp_params("r".to_string()),
+            json!({ "max_px": 512, "format": "jpeg", "sheet": true, "request": "r" })
+        );
+        let args: ViewsArgs = serde_json::from_value(json!({
+            "targets": [12, "House"],
+            "angles": ["front", { "eye": [1.0, 2.0, 3.0] }],
+            "isolate": true,
+            "per_target": true,
+            "max_px": 256,
+        }))
+        .expect("parses");
+        let params = args.brp_params("r".to_string());
+        assert_eq!(params["targets"], json!([12, "House"]));
+        assert_eq!(params["angles"][1], json!({ "eye": [1.0, 2.0, 3.0] }));
+        assert_eq!(params["isolate"], json!(true));
+        assert_eq!(params["per_target"], json!(true));
+        assert_eq!(params["max_px"], json!(256));
+    }
+
+    #[test]
+    fn the_instructions_prefer_views_to_aimed_screenshots() {
+        let text = JackdawMcp::new(".")
+            .get_info()
+            .instructions
+            .expect("instructions");
+        let views = text.find("`views`").expect("names views");
+        let screenshot = text.find("`screenshot`").expect("names screenshot");
+        assert!(views < screenshot, "{text}");
     }
 }

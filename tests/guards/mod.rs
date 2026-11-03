@@ -12,4 +12,5 @@ mod scene_summary;
 mod two_d_workspace;
 mod undo_history;
 mod user_config;
+mod views;
 mod widget_purity;

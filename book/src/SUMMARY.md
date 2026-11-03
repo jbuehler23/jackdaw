@@ -30,7 +30,6 @@
 - [Extending the Editor](developer-guide/extending-the-editor.md)
 - [Writing Editor Tooling](developer-guide/editor-tooling.md)
 - [Remote Control and jd mcp](developer-guide/remote-control.md)
-- [Building Scenes with an Agent](developer-guide/agent-authoring.md)
 - [Open Challenges](developer-guide/open-challenges.md)
 
 # Reference
