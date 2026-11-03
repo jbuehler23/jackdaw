@@ -210,3 +210,69 @@ fn the_recipe_ships_nothing_from_the_editor_package() {
         "the editor crate's src/ must not reach the recipe"
     );
 }
+
+/// The recipe ships every `crates/*` member that does not depend on the
+/// `jackdaw` package and stamps the SDK with a hash of their sources. A
+/// crate there that depended on an `editor/*` crate would drag editor edits
+/// into that hash and rebuild the SDK on every launch, so editor crates stay
+/// in `editor/` and nothing in `crates/` may depend on them.
+#[test]
+fn no_shipped_crate_depends_on_an_editor_crate() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifests = |dir: &str| -> Vec<(PathBuf, toml::Table)> {
+        std::fs::read_dir(root.join(dir))
+            .unwrap_or_else(|error| panic!("read {dir}/: {error}"))
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path().join("Cargo.toml");
+                let text = std::fs::read_to_string(&path).ok()?;
+                let table = text
+                    .parse::<toml::Table>()
+                    .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+                Some((path, table))
+            })
+            .collect()
+    };
+
+    let editor_crates: Vec<String> = manifests("editor")
+        .iter()
+        .filter_map(|(_, table)| table.get("package")?.get("name")?.as_str())
+        .map(str::to_string)
+        .collect();
+    assert!(
+        !editor_crates.is_empty(),
+        "no editor crates found under editor/"
+    );
+
+    let mut offenders = Vec::new();
+    for (path, table) in manifests("crates") {
+        let mut tables: Vec<&toml::Table> = Vec::new();
+        let sections = ["dependencies", "dev-dependencies", "build-dependencies"];
+        tables.extend(sections.iter().filter_map(|s| table.get(*s)?.as_table()));
+        if let Some(targets) = table.get("target").and_then(toml::Value::as_table) {
+            for target in targets.values() {
+                tables.extend(sections.iter().filter_map(|s| target.get(*s)?.as_table()));
+            }
+        }
+        for deps in tables {
+            for (key, spec) in deps {
+                let package = spec
+                    .get("package")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or(key);
+                let path_dep = spec
+                    .get("path")
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|dep| dep.contains("editor/"));
+                if editor_crates.iter().any(|name| name == package) || path_dep {
+                    offenders.push(format!("{} -> {key}", path.display()));
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "crates under crates/ must not depend on editor/ crates: {offenders:?}"
+    );
+}

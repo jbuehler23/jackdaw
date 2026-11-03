@@ -15,7 +15,7 @@ const SDK_TOOLCHAIN_FILES: &[&str] = &[
     "crates/jackdaw_project_build/src/plan.rs",
     "crates/jackdaw_project_build/src/linkage.rs",
     "crates/jackdaw_cli/src/package.rs",
-    "src/preflight.rs",
+    "editor/jackdaw_editor_core/src/preflight.rs",
 ];
 
 const TOOLS: &[&str] = &["cargo", "rustc", "rustup", "rustfmt", "rustdoc"];
@@ -31,8 +31,10 @@ fn workspace_root() -> PathBuf {
 /// Every `.rs` file under the workspace's `src/` and each crate's `src/`.
 fn workspace_sources(root: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![root.join("src")];
-    for entry in std::fs::read_dir(root.join("crates")).expect("crates dir") {
-        dirs.push(entry.expect("crate entry").path().join("src"));
+    for parent in ["crates", "editor"] {
+        for entry in std::fs::read_dir(root.join(parent)).expect("crates dir") {
+            dirs.push(entry.expect("crate entry").path().join("src"));
+        }
     }
     let mut files = Vec::new();
     while let Some(dir) = dirs.pop() {

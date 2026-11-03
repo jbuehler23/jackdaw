@@ -13,7 +13,7 @@ const ALLOWED: &[(&str, &str)] = &[];
 
 /// Directories the scan covers.
 const ROOTS: &[&str] = &[
-    "src",
+    "editor/jackdaw_editor_core/src",
     "crates/jackdaw_feathers/src",
     "crates/jackdaw_panels/src",
     "crates/jackdaw_widgets/src",
