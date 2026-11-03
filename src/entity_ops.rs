@@ -2541,7 +2541,7 @@ pub(crate) fn entity_place_gltf(
         entity(Entity, doc = "Entity to delete. Defaults to the selection."),
         entities(
             String,
-            doc = "Entities to delete, as a comma-separated list of ids. Defaults \
+            doc = "Entities to delete, as a list of ids or one comma-separated string. Defaults \
                    to the selection."
         ),
     )

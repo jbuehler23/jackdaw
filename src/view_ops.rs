@@ -297,6 +297,55 @@ fn read_int_param(params: &OperatorParameters, name: &str) -> Option<i64> {
     })
 }
 
+/// Where the active viewport camera stood, so a caller that aims it for one
+/// shot can put it back.
+#[derive(Clone)]
+pub(crate) struct CameraPose {
+    camera: Entity,
+    transform: Transform,
+    projection: Projection,
+    focus: Option<ViewportFocus>,
+}
+
+impl CameraPose {
+    /// The pose of the camera `view.look_at` would move, if there is one.
+    pub(crate) fn of_active(world: &mut World) -> Option<Self> {
+        let camera = world
+            .run_system_cached(
+                |active: Res<ActiveViewport>, cameras: Query<Entity, With<MainViewportCamera>>| {
+                    resolve_frame_camera(&active, &cameras)
+                },
+            )
+            .ok()??;
+        let entity = world.get_entity(camera).ok()?;
+        Some(Self {
+            camera,
+            transform: *entity.get::<Transform>()?,
+            projection: entity.get::<Projection>()?.clone(),
+            focus: entity.get::<ViewportFocus>().copied(),
+        })
+    }
+
+    /// Whether the camera still stands exactly here.
+    pub(crate) fn is_current(&self, world: &World) -> bool {
+        world
+            .get::<Transform>(self.camera)
+            .is_some_and(|transform| *transform == self.transform)
+    }
+
+    /// Put the camera back where it stood.
+    pub(crate) fn restore(self, world: &mut World) {
+        let Ok(mut camera) = world.get_entity_mut(self.camera) else {
+            return;
+        };
+        camera.insert((self.transform, self.projection));
+        match self.focus {
+            Some(focus) => camera.insert(focus),
+            None => camera.remove::<ViewportFocus>(),
+        };
+    }
+}
+
 /// Resolve which viewport's camera a framing op should act on: the hovered
 /// viewport if one exists, otherwise the sole `MainViewportCamera` if there
 /// is exactly one. More than one is ambiguous, so nothing resolves.

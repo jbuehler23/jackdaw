@@ -46,8 +46,13 @@ lives in the target lib dir that command prints.
 | --- | --- |
 | `status` | Project, open scene, dirty flag, selection, play state |
 | `list_operators` | Every operator with its parameter schema, filtered by prefix |
+| `describe_operator` | One operator's parameter schema, by id |
 | `call_operator` | Run one operator by id |
 | `batch` | Run several calls as one undo entry |
+| `run_batch_file` | Run a JSON file of calls as one batch and answer with a summary |
+| `scene_summary` | The scene as compact rows, or what changed since a revision |
+| `check` | Measure the scene: resting, overlap, bounds, counts, watertightness |
+| `brush_topology` | A brush's vertices, faces and edges as compact arrays |
 | `scene_tree` | The scene as the outliner shows it, from a named root |
 | `get_entity` | One node and its descendants as BSN text |
 | `apply_bsn` | Spawn BSN text, optionally under a named parent |
@@ -55,7 +60,7 @@ lives in the target lib dir that command prints.
 | `open_scene` | Open a scene by its assets-relative path |
 | `save_scene` | Write the open scene to its file |
 | `select` | Select entities by name, and frame them |
-| `screenshot` | Aim the camera, capture the viewport or the window, return the PNG |
+| `screenshot` | Capture the viewport or the window and return a thumbnail |
 | `wait` | Let frames pass, or wait for a state the editor has reached |
 | `cancel` | End the modal operator holding the editor |
 | `assets` | Asset paths under `assets/`, by substring or `*` glob |
@@ -146,8 +151,8 @@ call_operator(id: "view.orbit", params: { yaw: 135, pitch: 40, distance: 200 })
   `distance` in metres.
 - `view.dolly` moves along the sightline.
 
-`select` frames what it selected when asked, and `screenshot` aims before it
-captures:
+`select` frames what it selected when asked. `screenshot` aims for the shot and
+puts the camera back afterwards, unless `keep_camera` is true:
 
 ```text
 select(names: ["Village"], frame: true)

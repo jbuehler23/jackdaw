@@ -6,6 +6,7 @@ mod editor_remote;
 mod feathers_composition;
 mod remote_batches;
 mod remote_debug_smoke;
+mod response_budgets;
 mod scaffolded_component_flow;
 mod scene_summary;
 mod two_d_workspace;

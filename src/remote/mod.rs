@@ -2,6 +2,7 @@ mod brp;
 mod connection;
 pub mod debug;
 pub mod entity_browser;
+pub mod paced;
 pub mod panel;
 mod registry_fetch;
 pub mod remote_inspector;

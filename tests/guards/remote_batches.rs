@@ -5,7 +5,9 @@
 use bevy::prelude::*;
 use bevy::remote::BrpResult;
 use jackdaw::project::{ProjectConfig, ProjectRoot};
-use jackdaw::remote::server::{batch_handler, call_operator_handler, scene_bsn_handler};
+use jackdaw::remote::server::{
+    batch_handler, call_operator_handler, paced_batch_handler, scene_bsn_handler,
+};
 use jackdaw_api_internal::operator::OperatorWorldExt as _;
 use jackdaw_commands::CommandHistory;
 use jackdaw_scene_types::BuildStage;
@@ -892,4 +894,327 @@ fn operators_that_write_files_declare_it() {
     }
     unflagged.sort_unstable();
     assert!(unflagged.is_empty(), "undeclared: {unflagged:?}");
+}
+
+/// References resolve item by item inside list parameters: an `entities` list
+/// built from two earlier calls selects both, and a check's `entities` list
+/// measures both.
+#[test]
+fn references_inside_a_list_parameter_resolve_item_by_item() {
+    let mut app = staged_scene();
+    let answer = batch_ok(
+        &mut app,
+        json!({
+            "verbose": true,
+            "calls": [
+                cube_call("Post A", 0.0),
+                cube_call("Post B", 3.0),
+                { "id": "selection.select", "params": {
+                    "entities": ["$0.entities.0", "$1.entities.0"],
+                } },
+            ],
+            "checks": [{ "no_overlap": { "entities": ["$0.entities.0", "$1.entities.0"] } }],
+        }),
+    );
+    assert_eq!(answer["calls"][2]["result"], json!("finished"), "{answer}");
+    assert_eq!(answer["checks"]["passed"], json!(1), "{answer}");
+    let mut selected = app
+        .world()
+        .resource::<jackdaw::selection::Selection>()
+        .entities
+        .clone();
+    selected.sort();
+    let mut posts = vec![the_one(&mut app, "Post A"), the_one(&mut app, "Post B")];
+    posts.sort();
+    assert_eq!(selected, posts);
+}
+
+/// A reference inside a nested list parameter, here the points of a
+/// `mesh.add_brush` outline, takes the value it names: a cap laid over what a
+/// cut left of a wall, from the box the cut reported.
+#[test]
+fn references_inside_an_outline_take_the_numbers_they_name() {
+    let mut app = staged_scene();
+    let corner = |at: &str, axis: usize| format!("$2.bounds.0.{at}.{axis}");
+    let answer = batch_ok(
+        &mut app,
+        json!({
+            "verbose": true,
+            "calls": [
+                { "id": "entity.add.cube", "params": { "name": "Wall", "size": [4.0, 2.0, 2.0] } },
+                { "id": "entity.add.cube", "params": {
+                    "name": "Cutter", "size": [1.0, 4.0, 4.0], "pos": [1.5, 0.0, 0.0],
+                } },
+                { "id": "brush.csg_subtract", "params": {
+                    "target": "$0.entities.0", "cutters": "$1.entities.0",
+                } },
+                { "id": "mesh.add_brush", "params": {
+                    "name": "Cap",
+                    "plane": "xz",
+                    "depth": 0.5,
+                    "pos": [0.0, 1.25, 0.0],
+                    "outline": [
+                        [corner("0", 0), corner("0", 2)],
+                        [corner("1", 0), corner("0", 2)],
+                        [corner("1", 0), corner("1", 2)],
+                        [corner("0", 0), corner("1", 2)],
+                    ],
+                } },
+            ],
+        }),
+    );
+    assert_eq!(answer["calls"][3]["outcome"], json!("changed"), "{answer}");
+    let cap = the_one(&mut app, "Cap");
+    let global = app
+        .world()
+        .get::<GlobalTransform>(cap)
+        .expect("a transform");
+    let (min, max) = app
+        .world()
+        .get::<jackdaw_scene_types::Brush>(cap)
+        .expect("a brush")
+        .topology
+        .vertices
+        .iter()
+        .map(|vert| global.transform_point(vert.position))
+        .fold((Vec3::MAX, Vec3::MIN), |(min, max), point| {
+            (min.min(point), max.max(point))
+        });
+    assert!(
+        min.abs_diff_eq(Vec3::new(-2.0, 1.0, -1.0), 1e-3)
+            && max.abs_diff_eq(Vec3::new(1.0, 1.5, 1.0), 1e-3),
+        "the cap spans {min}..{max}"
+    );
+}
+
+/// A scene with the system that plays paced batches, which the remote
+/// plugin adds beside the method in the editor.
+fn paced_scene() -> App {
+    let mut app = staged_scene();
+    app.add_systems(Update, jackdaw::remote::paced::drive_paced_batch);
+    app
+}
+
+/// Poll a paced batch once, then let a frame pass.
+fn paced_poll(app: &mut App, params: &Value) -> BrpResult<Option<Value>> {
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(paced_batch_handler, Some(params.clone()))
+        .expect("the handler ran");
+    app.update();
+    answer
+}
+
+/// Poll a paced batch until it answers.
+#[track_caller]
+fn paced_answer(app: &mut App, params: &Value) -> BrpResult {
+    for _ in 0..600 {
+        if let Some(answer) = paced_poll(app, params).transpose() {
+            return answer;
+        }
+    }
+    panic!("the paced batch never answered");
+}
+
+/// A paced batch runs one call a frame with no pause, and between them the
+/// scene holds the calls so far; the whole batch is still one undo entry, and
+/// the poll after the answer does not run it again.
+#[test]
+fn a_paced_batch_builds_one_call_at_a_time_as_one_undo_entry() {
+    let mut app = paced_scene();
+    let before = undo_depth(&app);
+    let params = json!({
+        "request": "posts",
+        "pace_ms": 0,
+        "label": "Posts",
+        "calls": [cube_call("Post 1", 0.0), cube_call("Post 2", 2.0), cube_call("Post 3", 4.0)],
+    });
+    let mut seen = Vec::new();
+    let answer = loop {
+        let polled = paced_poll(&mut app, &params).expect("the paced batch runs");
+        let built = (1..=3)
+            .filter(|n| !named(&mut app, &format!("Post {n}")).is_empty())
+            .count();
+        seen.push(built);
+        if let Some(answer) = polled {
+            break answer;
+        }
+        assert!(seen.len() < 20, "the paced batch never answered: {seen:?}");
+    };
+    assert!(seen.contains(&1) && seen.contains(&2), "{seen:?}");
+    assert_eq!(
+        answer["calls"].as_array().map(Vec::len),
+        Some(3),
+        "{answer}"
+    );
+    assert_eq!(undo_depth(&app), before + 1);
+
+    paced_poll(&mut app, &params).expect_err("a repeat poll is not a second batch");
+    assert_eq!(named(&mut app, "Post 3").len(), 1);
+    undo(&mut app);
+    assert!(named(&mut app, "Post 1").is_empty());
+}
+
+/// `pace_ms` holds each call back by that long.
+#[test]
+fn a_paced_batch_waits_its_pace_between_calls() {
+    let mut app = paced_scene();
+    let params = json!({
+        "request": "slow",
+        "pace_ms": 40,
+        "calls": [cube_call("Slow 1", 0.0), cube_call("Slow 2", 2.0), cube_call("Slow 3", 4.0)],
+    });
+    let started = std::time::Instant::now();
+    paced_answer(&mut app, &params).expect("the paced batch finishes");
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(80),
+        "three calls 40 ms apart took {:?}",
+        started.elapsed()
+    );
+}
+
+/// An atomic paced batch that fails part way takes back what it had built.
+#[test]
+fn an_atomic_paced_batch_that_fails_takes_everything_back() {
+    let mut app = paced_scene();
+    let text = scene_text(&mut app);
+    let before = undo_depth(&app);
+    let params = json!({
+        "request": "broken",
+        "pace_ms": 0,
+        "atomic": true,
+        "calls": [
+            cube_call("Shed 1", 0.0),
+            cube_call("Shed 2", 2.0),
+            { "id": "entity.set_transform", "params": { "entity": "No Such Shed", "x": 1.0 } },
+        ],
+    });
+    let err = paced_answer(&mut app, &params).expect_err("the third call fails");
+    assert_eq!(err.data.expect("data")["rolled_back"], json!(true));
+    assert_eq!(scene_text(&mut app), text);
+    assert_eq!(undo_depth(&app), before);
+}
+
+/// Pacing is refused over its cap, with a rehearsal, without a request id,
+/// on the instant batch method, and while another paced batch plays.
+#[test]
+fn a_paced_batch_is_refused_where_it_cannot_be_played() {
+    let mut app = paced_scene();
+    let calls = json!([cube_call("Gate", 0.0)]);
+    for (params, says) in [
+        (
+            json!({ "request": "a", "pace_ms": 60000, "calls": calls }),
+            "limit",
+        ),
+        (
+            json!({ "request": "a", "pace_ms": -5, "calls": calls }),
+            "milliseconds",
+        ),
+        (
+            json!({ "request": "a", "pace_ms": 10, "dry_run": true, "calls": calls }),
+            "dry_run",
+        ),
+        (json!({ "pace_ms": 10, "calls": calls }), "request"),
+    ] {
+        let err = paced_poll(&mut app, &params).expect_err("refused");
+        assert!(err.message.contains(says), "{params}: {}", err.message);
+    }
+    let err = batch_err(&mut app, json!({ "pace_ms": 10, "calls": calls }));
+    assert!(
+        err.message.contains("jackdaw/paced_batch"),
+        "{}",
+        err.message
+    );
+
+    let first = json!({ "request": "first", "pace_ms": 2000, "calls": [cube_call("Gate", 0.0), cube_call("Gate 2", 1.0)] });
+    assert!(paced_poll(&mut app, &first).expect("starts").is_none());
+    let err = paced_poll(
+        &mut app,
+        &json!({ "request": "second", "pace_ms": 0, "calls": calls }),
+    )
+    .expect_err("one plays at a time");
+    assert!(err.message.contains("still playing"), "{}", err.message);
+    assert!(named(&mut app, "Gate").len() <= 1);
+}
+
+/// While a paced batch plays, undo and the other history steps are refused
+/// with a reason and reported unavailable, so an undo cannot fold an older
+/// entry into the batch; remote edits are refused too. Afterwards one undo
+/// takes back the batch alone.
+#[test]
+fn a_playing_paced_batch_holds_the_history_and_refuses_other_edits() {
+    let mut app = paced_scene();
+    hand_made_cube(&mut app, "Older", -4.0);
+    let before = undo_depth(&app);
+    let params = json!({
+        "request": "held",
+        "pace_ms": 0,
+        "calls": [cube_call("Held 1", 0.0), cube_call("Held 2", 2.0), cube_call("Held 3", 4.0)],
+    });
+    assert!(paced_poll(&mut app, &params).expect("starts").is_none());
+    assert!(!named(&mut app, "Held 1").is_empty(), "the first call ran");
+
+    assert!(
+        !app.world_mut()
+            .operator("history.undo")
+            .is_available()
+            .expect("a known operator")
+    );
+    let undo_result = app
+        .world_mut()
+        .operator("history.undo")
+        .call()
+        .expect("history.undo dispatches");
+    assert!(matches!(
+        undo_result,
+        jackdaw_api_internal::operator::OperatorResult::Cancelled
+    ));
+    app.update();
+
+    let refused = app
+        .world_mut()
+        .run_system_cached_with(
+            call_operator_handler,
+            Some(json!({ "id": "entity.add.cube", "params": { "name": "Stray" } })),
+        )
+        .expect("the handler ran")
+        .expect_err("a remote edit waits for the batch");
+    assert!(
+        refused.message.contains("paced batch"),
+        "{}",
+        refused.message
+    );
+    let refused = batch_err(&mut app, json!({ "calls": [cube_call("Stray", 9.0)] }));
+    assert!(
+        refused.message.contains("paced batch"),
+        "{}",
+        refused.message
+    );
+
+    paced_answer(&mut app, &params).expect("the batch finishes");
+    assert_eq!(undo_depth(&app), before + 1);
+    the_one(&mut app, "Older");
+    assert!(named(&mut app, "Stray").is_empty());
+    undo(&mut app);
+    assert!(named(&mut app, "Held 1").is_empty());
+    the_one(&mut app, "Older");
+}
+
+/// A request id that was answered is refused when it comes back rather than
+/// left waiting, and is forgotten after a while however often it is polled.
+#[test]
+fn a_reused_paced_request_id_is_refused_then_forgotten() {
+    let mut app = paced_scene();
+    let params = json!({ "request": "once", "pace_ms": 0, "calls": [cube_call("Once", 0.0)] });
+    paced_answer(&mut app, &params).expect("the first run answers");
+    for _ in 0..3 {
+        let err = paced_poll(&mut app, &params).expect_err("already answered");
+        assert!(err.message.contains("already answered"), "{}", err.message);
+    }
+    app.world_mut()
+        .resource_mut::<bevy::diagnostic::FrameCount>()
+        .0 += 1000;
+    app.update();
+    paced_answer(&mut app, &params).expect("the id is new again");
+    assert_eq!(named(&mut app, "Once").len(), 2);
 }

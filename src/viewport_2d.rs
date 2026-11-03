@@ -2770,7 +2770,10 @@ fn parse_viewport_2d_mode(mode: &str) -> Option<Viewport2dMode> {
             doc = "Entity to select, which a name cannot tell from \
                               its namesake."
         ),
-        entities(String, doc = "Entities to select, as a comma-separated list of ids."),
+        entities(
+            String,
+            doc = "Entities to select, as a list of ids or one comma-separated string."
+        ),
     )
 )]
 pub(crate) fn selection_select(
