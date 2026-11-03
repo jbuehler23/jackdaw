@@ -292,18 +292,25 @@ pub fn read_asset_file<T>(path: &Path) -> Result<T, AssetFileError>
 where
     T: FromReflect + TypePath + GetTypeRegistration,
 {
-    let expected = T::type_path();
     let text = crate::file::read_document_text(path)
         .map_err(|err| AssetFileError::Read(path.to_path_buf(), err))?;
-    if let Some(header) = read_asset_header(&text).filter(|header| header != expected) {
+    read_asset_text(&text, path)
+}
+
+/// [`read_asset_file`] over text already in hand, `path` naming it in errors.
+pub fn read_asset_text<T>(text: &str, path: &Path) -> Result<T, AssetFileError>
+where
+    T: FromReflect + TypePath + GetTypeRegistration,
+{
+    let expected = T::type_path();
+    if let Some(header) = read_asset_header(text).filter(|header| header != expected) {
         return Err(AssetFileError::WrongType {
             path: path.to_path_buf(),
             expected: expected.to_string(),
             found: header,
         });
     }
-    let ast =
-        parse_bsn_text(&text).map_err(|err| AssetFileError::Parse(path.to_path_buf(), err))?;
+    let ast = parse_bsn_text(text).map_err(|err| AssetFileError::Parse(path.to_path_buf(), err))?;
     let root = *ast
         .roots
         .first()

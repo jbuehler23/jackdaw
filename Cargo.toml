@@ -98,6 +98,7 @@ jackdaw_commands.workspace = true
 jackdaw_terrain.workspace = true
 jackdaw_remote.workspace = true
 jackdaw_snap.workspace = true
+jackdaw_recipe.workspace = true
 jackdaw_select.workspace = true
 jackdaw_uv.workspace = true
 jackdaw_tilemap.workspace = true
@@ -235,6 +236,7 @@ jackdaw_commands = { version = "0.21.0-dev", path = "crates/jackdaw_commands" }
 jackdaw_terrain = { version = "0.21.0-dev", path = "crates/jackdaw_terrain" }
 jackdaw_remote = { version = "0.21.0-dev", path = "crates/jackdaw_remote" }
 jackdaw_snap = { version = "0.21.0-dev", path = "crates/jackdaw_snap" }
+jackdaw_recipe = { version = "0.21.0-dev", path = "crates/jackdaw_recipe" }
 jackdaw_select = { version = "0.21.0-dev", path = "crates/jackdaw_select" }
 jackdaw_uv = { version = "0.21.0-dev", path = "crates/jackdaw_uv" }
 jackdaw_pick = { version = "0.21.0-dev", path = "crates/jackdaw_pick" }

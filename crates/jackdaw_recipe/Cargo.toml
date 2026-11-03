@@ -1,0 +1,13 @@
+[package]
+name = "jackdaw_recipe"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Engine-agnostic recipe inputs and expressions for the jackdaw editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -499,7 +499,10 @@ impl<'a> OperatorCallBuilder<'a, Commands<'_, '_>> {
     /// itself.
     pub fn call(self) {
         self.world_commands.queue(move |world: &mut World| {
-            world.run_system_cached_with(dispatch_operator, (self.id, self.params, self.settings))
+            let id = self.id.clone();
+            if let Err(err) = dispatch_operator(world, (self.id, self.params, self.settings)) {
+                debug!("{id}: {err}");
+            }
         });
     }
 
@@ -587,13 +590,7 @@ impl<'a> OperatorCallBuilder<'a, World> {
     /// invoke system, so validation logic lives only on the operator
     /// itself.
     pub fn call(self) -> Result<OperatorResult, CallOperatorError> {
-        let result = self
-            .world_commands
-            .run_system_cached_with(dispatch_operator, (self.id, self.params, self.settings));
-        match result {
-            Ok(result) => result,
-            Err(_) => Err(CallOperatorError::ExecuteFailed),
-        }
+        dispatch_operator(self.world_commands, (self.id, self.params, self.settings))
     }
 
     /// Checks if an operator is the currently running modal operator.
@@ -646,8 +643,30 @@ fn is_op_running(
 #[derive(Event)]
 pub struct RefreshOperatorButtons;
 
+/// The modal queries dispatches read, kept between calls. A call made while
+/// another is under way, from inside an operator's system, takes one of its
+/// own, so a dispatch can always start whatever is already running.
+#[derive(Resource, Default)]
+struct DispatchStates(Vec<SystemState<ActiveModalQuery<'static, 'static>>>);
+
 fn dispatch_operator(
-    In(call): In<(Cow<'static, str>, OperatorParameters, CallOperatorSettings)>,
+    world: &mut World,
+    call: (Cow<'static, str>, OperatorParameters, CallOperatorSettings),
+) -> Result<OperatorResult, CallOperatorError> {
+    let mut active = world
+        .get_resource_mut::<DispatchStates>()
+        .and_then(|mut states| states.0.pop())
+        .unwrap_or_else(|| SystemState::new(world));
+    let result = dispatch_operator_reported(call, world, &mut active);
+    world
+        .get_resource_or_init::<DispatchStates>()
+        .0
+        .push(active);
+    result
+}
+
+fn dispatch_operator_reported(
+    call: (Cow<'static, str>, OperatorParameters, CallOperatorSettings),
     world: &mut World,
     active: &mut SystemState<ActiveModalQuery>,
 ) -> Result<OperatorResult, CallOperatorError> {
@@ -1052,6 +1071,36 @@ impl OperatorOutcome {
 /// Declares what the running operator made of the scene.
 pub fn set_outcome(world: &mut World, outcome: Outcome) {
     world.get_resource_or_init::<OperatorOutcome>().set(outcome);
+}
+
+/// Runs `body` with the reports of the operator call under way set aside, so
+/// the calls `body` makes report to their caller as top-level calls do: each
+/// one's outcome, replacements, boolean report, warnings and receipts are its
+/// own. The outer call's are put back afterwards.
+pub fn with_outer_call_reports_set_aside<R>(
+    world: &mut World,
+    body: impl FnOnce(&mut World) -> R,
+) -> R {
+    let outcome = world.remove_resource::<OperatorOutcome>();
+    let replaced = world.remove_resource::<OperatorReplacements>();
+    let boolean = world.remove_resource::<OperatorBooleanReport>();
+    let warnings = world.remove_resource::<OperatorWarnings>();
+    let reports = world.remove_resource::<OperatorReports>();
+    let out = body(world);
+    fn put_back<T: Resource>(world: &mut World, held: Option<T>) {
+        match held {
+            Some(held) => world.insert_resource(held),
+            None => {
+                world.remove_resource::<T>();
+            }
+        }
+    }
+    put_back(world, outcome);
+    put_back(world, replaced);
+    put_back(world, boolean);
+    put_back(world, warnings);
+    put_back(world, reports);
+    out
 }
 
 /// Runs `body` as one undo entry labelled `label`.

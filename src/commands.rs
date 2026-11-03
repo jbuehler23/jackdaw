@@ -1086,6 +1086,16 @@ impl SpawnedEntities {
         std::mem::take(&mut spawned.entities)
     }
 
+    /// Take the list being recorded out, for a call that dispatches calls of
+    /// its own; [`Self::put_back`] restores it.
+    pub(crate) fn set_aside(world: &mut World) -> Self {
+        std::mem::take(&mut *world.get_resource_or_init::<Self>())
+    }
+
+    pub(crate) fn put_back(world: &mut World, held: Self) {
+        *world.get_resource_or_init::<Self>() = held;
+    }
+
     /// Record `entity` as spawned, if anyone is watching.
     pub(crate) fn record(world: &mut World, entity: Entity) {
         if let Some(mut spawned) = world.get_resource_mut::<Self>()

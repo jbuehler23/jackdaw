@@ -59,6 +59,12 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
             String,
             doc = "world or local (each brush's own axes). Defaults to world."
         ),
+        per_brush(
+            bool,
+            doc = "Mix each brush's own id into its offsets, so identical brushes differ. \
+                   false gives one seed the same offsets on every identical brush. Defaults \
+                   to true."
+        ),
     )
 )]
 pub(crate) fn brush_mesh_randomize(
@@ -76,7 +82,11 @@ pub(crate) fn brush_mesh_randomize(
     };
     let mut edits = Vec::new();
     for target in &targets {
-        let stream = world.get::<SceneNodeId>(target.entity).map_or(0, |id| id.0);
+        let stream = if request.per_brush {
+            world.get::<SceneNodeId>(target.entity).map_or(0, |id| id.0)
+        } else {
+            0
+        };
         let before = target.positions();
         let (indices, positions) = request.moves(target, &before, stream);
         match target.reshape(&before, &indices, &positions) {
@@ -212,6 +222,7 @@ fn flipped_face(
 struct Randomize {
     jitter: Jitter,
     space: Space,
+    per_brush: bool,
 }
 
 impl Randomize {
@@ -236,6 +247,7 @@ impl Randomize {
                 normal_only: bool_param(params, "normal_only")?.unwrap_or(false),
             },
             space: Space::read(params)?,
+            per_brush: bool_param(params, "per_brush")?.unwrap_or(true),
         })
     }
 

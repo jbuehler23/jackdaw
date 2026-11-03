@@ -355,6 +355,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::dock_ops::add_to_extension(ctx);
         crate::remote_ops::add_to_extension(ctx);
         crate::tags::add_to_extension(ctx);
+        crate::recipes::add_to_extension(ctx);
     }
 }
 
