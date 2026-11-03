@@ -435,3 +435,14 @@ pub(crate) fn float_param(
         )),
     }
 }
+
+/// The bool parameter `key` as the call gave it, `None` when it did not.
+pub(crate) fn bool_param(params: &OperatorParameters, key: &str) -> Result<Option<bool>, String> {
+    match params.get(key) {
+        None => Ok(None),
+        Some(_) => params
+            .as_bool(key)
+            .map(Some)
+            .ok_or_else(|| format!("`{key}` must be true or false")),
+    }
+}

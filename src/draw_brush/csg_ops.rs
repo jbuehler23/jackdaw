@@ -6,6 +6,7 @@ use crate::draw_brush::{
 };
 use crate::keybind_focus::KeybindFocus;
 use crate::prelude::*;
+use crate::primitive_ops::bool_param;
 use crate::selection::{Selected, Selection};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -1086,17 +1087,6 @@ impl NamedOperands {
             cutters,
             keep_cutters: keep_cutters.unwrap_or(true),
         }))
-    }
-}
-
-/// The bool parameter `key` as the call gave it, `None` when it did not.
-fn bool_param(params: &OperatorParameters, key: &str) -> Result<Option<bool>, String> {
-    match params.get(key) {
-        None => Ok(None),
-        Some(_) => params
-            .as_bool(key)
-            .map(Some)
-            .ok_or_else(|| format!("`{key}` must be true or false")),
     }
 }
 
