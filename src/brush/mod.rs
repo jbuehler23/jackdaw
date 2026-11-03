@@ -417,6 +417,20 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
     }
 }
 
+/// Overwrite `entity`'s brush outright, as an operator that rebuilds its
+/// topology does: the document, the live half-edge mesh and the inspector
+/// follow, and element indices picked on the old topology are dropped.
+pub(crate) fn replace_brush(world: &mut World, entity: Entity, brush: &Brush) {
+    apply_brush(world, entity, brush);
+    if let Some(sub) = world
+        .resource_mut::<BrushSelection>()
+        .brushes
+        .get_mut(&entity)
+    {
+        sub.clear();
+    }
+}
+
 /// Write a Brush component into the live scene document.
 pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
     // `jackdaw_scene_types::types::Brush` is the canonical reflected type

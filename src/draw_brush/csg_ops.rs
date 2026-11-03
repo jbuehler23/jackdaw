@@ -25,30 +25,26 @@ struct SubtractionResult {
     fragments: Vec<(Brush, Transform)>,
 }
 
-/// Spawn each result's fragments beside its original, under the same parent,
-/// at the world placement the kernel gave them.
-fn spawn_subtract_fragments(world: &mut World, results: &[SubtractionResult]) -> Vec<Entity> {
+/// Spawn `result`'s fragments beside its original, under the same parent, at
+/// the world placement the kernel gave them.
+fn spawn_subtract_fragments(world: &mut World, result: &SubtractionResult) -> Vec<Entity> {
+    let source = result.original_entity;
+    let parent = world
+        .get::<ChildOf>(source)
+        .and_then(|child_of| unsorted_global(world, child_of.parent()));
     let mut created = Vec::new();
-    for result in results {
-        let parent = world
-            .get::<ChildOf>(result.original_entity)
-            .and_then(|child_of| unsorted_global(world, child_of.parent()));
-        for (brush, transform) in &result.fragments {
-            let local = parent.map_or(*transform, |parent| {
-                GlobalTransform::from(*transform).reparented_to(&parent)
-            });
-            match crate::entity_ops::spawn_cloned_brush_with_geometry(
-                world,
-                result.original_entity,
-                brush.clone(),
-                local,
-            ) {
-                Some(entity) => created.push(entity),
-                None => warn!(
-                    "CSG fragment spawn failed: source {:?} has no document node",
-                    result.original_entity
-                ),
-            }
+    for (brush, transform) in &result.fragments {
+        let local = parent.map_or(*transform, |parent| {
+            GlobalTransform::from(*transform).reparented_to(&parent)
+        });
+        match crate::entity_ops::spawn_cloned_brush_with_geometry(
+            world,
+            source,
+            brush.clone(),
+            local,
+        ) {
+            Some(entity) => created.push(entity),
+            None => warn!("CSG fragment spawn failed: source {source:?} has no document node"),
         }
     }
     created
@@ -223,7 +219,9 @@ pub(crate) fn subtract_drawn_brush(active: &ActiveDraw, commands: &mut Commands)
             }
         }
 
-        spawn_subtract_fragments(world, &results);
+        for result in &results {
+            spawn_subtract_fragments(world, result);
+        }
 
         for result in &results {
             despawn_scene_entity(world, result.original_entity);
@@ -457,23 +455,11 @@ fn csg_subtract_selected_impl(world: &mut World, options: &CsgOptions) {
         return;
     }
 
-    // Bake each replaced target's live mirror before its fragments are cloned
-    // from it, so they cannot get re-mirrored by the mesh rebuild.
-    for result in &results {
-        crate::brush::topology_ops::mirror_ops::bake_mirror(world, result.original_entity);
-    }
-
-    let mut removed: Vec<Entity> = results.iter().map(|r| r.original_entity).collect();
+    let mut also_removed = Vec::new();
     if options.keep_cutters == Some(false) {
-        removed.extend(&cutters);
+        also_removed = cutters;
     }
-    crate::commands::deselect_entities(world, &removed);
-    let created = spawn_subtract_fragments(world, &results);
-    for &entity in &removed {
-        despawn_scene_entity(world, entity);
-    }
-    report_replaced(world, &removed, &created);
-    set_outcome(world, outcome);
+    replace_with_fragments(world, results, options.fragments, also_removed, outcome);
 }
 
 /// Core logic for CSG Intersect. Replaces the selected brushes with the solid
@@ -548,10 +534,10 @@ fn csg_intersect_selected_impl(world: &mut World, options: &CsgOptions) {
     crate::commands::deselect_entities(world, &removed);
     let created = spawn_subtract_fragments(
         world,
-        &[SubtractionResult {
+        &SubtractionResult {
             original_entity: source,
             fragments: vec![fragment],
-        }],
+        },
     );
     for &entity in &removed {
         despawn_scene_entity(world, entity);
@@ -571,9 +557,22 @@ enum CutFaces {
     Material(Handle<StandardMaterial>),
 }
 
+/// What a subtract does with the pieces it cuts a target into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fragments {
+    /// Every piece is a new brush where the target was.
+    Loose,
+    /// The pieces go under a new group named after the target, as
+    /// `<target> 1`, `<target> 2`...
+    Group,
+    /// One connected piece stays in the target's entity; several are grouped.
+    Merge,
+}
+
 /// How a call wants its boolean run.
 struct CsgOptions {
     keep_cutters: Option<bool>,
+    fragments: Fragments,
     /// Work the result out and report it without touching the scene.
     dry_run: bool,
     cut_faces: CutFaces,
@@ -585,6 +584,7 @@ impl Default for CsgOptions {
     fn default() -> Self {
         Self {
             keep_cutters: None,
+            fragments: Fragments::Loose,
             dry_run: false,
             cut_faces: CutFaces::Cutter,
             align_cut_uvs: true,
@@ -593,7 +593,19 @@ impl Default for CsgOptions {
 }
 
 impl CsgOptions {
-    fn read(world: &World, params: &OperatorParameters) -> Result<Self, String> {
+    fn read(world: &World, op: CsgOp, params: &OperatorParameters) -> Result<Self, String> {
+        let fragments = match op {
+            _ if !params.contains_key("fragments") => Fragments::Loose,
+            CsgOp::Intersect => {
+                return Err("`fragments` applies to CSG Subtract only".to_string());
+            }
+            CsgOp::Subtract => match params.as_str("fragments") {
+                Some("loose") => Fragments::Loose,
+                Some("group") => Fragments::Group,
+                Some("merge") => Fragments::Merge,
+                _ => return Err("`fragments` must be `merge`, `group` or `loose`".to_string()),
+            },
+        };
         let cut_faces = match params.get("cut_faces") {
             None => CutFaces::Cutter,
             Some(_) => match params.as_str("cut_faces") {
@@ -608,6 +620,7 @@ impl CsgOptions {
         };
         Ok(Self {
             keep_cutters: bool_param(params, "keep_cutters")?,
+            fragments,
             dry_run: bool_param(params, "dry_run")?.unwrap_or(false),
             cut_faces,
             align_cut_uvs: bool_param(params, "align_cut_uvs")?.unwrap_or(true),
@@ -724,7 +737,7 @@ impl Tally {
 
 /// Plane-distance tolerance for a brush: a millimetre near the origin, growing
 /// with the distance from it as f32 precision does.
-fn plane_distance_eps(topo: &BrushTopology) -> f32 {
+pub(crate) fn plane_distance_eps(topo: &BrushTopology) -> f32 {
     let reach = topo
         .vertices
         .iter()
@@ -1005,7 +1018,9 @@ fn clean_fragment(
 
 /// The operands a call named for subtract or intersect, checked.
 struct NamedOperands {
-    target: Entity,
+    /// The brushes cut: the one `target` named, or every brush under the node
+    /// `targets` named.
+    targets: Vec<Entity>,
     /// The node `cutters` named, which `keep_cutters = false` removes.
     cutters_node: Entity,
     /// The brushes that cut: the named one, or every brush under the named
@@ -1015,7 +1030,7 @@ struct NamedOperands {
 }
 
 /// The parameters that name operands rather than work on the selection.
-const OPERAND_KEYS: [&str; 2] = ["target", "cutters"];
+const OPERAND_KEYS: [&str; 3] = ["target", "targets", "cutters"];
 
 impl NamedOperands {
     /// The operands `params` names, `None` when it names none and the call
@@ -1028,14 +1043,32 @@ impl NamedOperands {
         if !OPERAND_KEYS.iter().any(|key| params.contains_key(*key)) {
             return Ok(None);
         }
-        let target = operand_node(world, params, "target")?;
-        if world.get::<Brush>(target).is_none() {
-            return Err(format!("`target` {target} is not a brush"));
-        }
+        let targets = if params.contains_key("targets") {
+            if params.contains_key("target") {
+                return Err("name `target` or `targets`, not both".to_string());
+            }
+            let node = operand_node(world, params, "targets")?;
+            let found = brushes_under(world, node);
+            if found.is_empty() {
+                return Err(format!(
+                    "`targets` {node} is neither a brush nor a group holding brushes"
+                ));
+            }
+            found
+        } else {
+            let target = operand_node(world, params, "target")?;
+            if world.get::<Brush>(target).is_none() {
+                return Err(format!("`target` {target} is not a brush"));
+            }
+            vec![target]
+        };
         let cutters_node = operand_node(world, params, "cutters")?;
-        if is_at_or_under(world, cutters_node, target) {
+        if targets
+            .iter()
+            .any(|&target| is_at_or_under(world, cutters_node, target))
+        {
             return Err(format!(
-                "`cutters` {cutters_node} is the target or sits under it"
+                "`cutters` {cutters_node} is a target or sits under one"
             ));
         }
         let cutters = brushes_under(world, cutters_node);
@@ -1044,11 +1077,11 @@ impl NamedOperands {
                 "`cutters` {cutters_node} is neither a brush nor a group holding brushes"
             ));
         }
-        if cutters.contains(&target) {
-            return Err(format!("`target` {target} is also one of `cutters`"));
+        if let Some(both) = cutters.iter().find(|cutter| targets.contains(cutter)) {
+            return Err(format!("{both} is both a target and one of `cutters`"));
         }
         Ok(Some(Self {
-            target,
+            targets,
             cutters_node,
             cutters,
             keep_cutters: keep_cutters.unwrap_or(true),
@@ -1067,14 +1100,18 @@ fn bool_param(params: &OperatorParameters, key: &str) -> Result<Option<bool>, St
     }
 }
 
-fn operand_node(world: &World, params: &OperatorParameters, key: &str) -> Result<Entity, String> {
+pub(crate) fn operand_node(
+    world: &World,
+    params: &OperatorParameters,
+    key: &str,
+) -> Result<Entity, String> {
     match params.get(key) {
         Some(PropertyValue::Entity(entity)) => {
             crate::primitive_ops::scene_node(world, *entity, key)
         }
         Some(other) => Err(format!("`{key}` {other:?} names no node in this scene")),
         None => Err(format!(
-            "name both `target` and `cutters`; `{key}` is missing"
+            "name `target` (or `targets`) and `cutters`; `{key}` is missing"
         )),
     }
 }
@@ -1105,14 +1142,21 @@ fn brushes_under(world: &World, node: Entity) -> Vec<Entity> {
     found
 }
 
-/// `entity`'s brush in world space with its modifier stack evaluated, read
+/// `entity`'s brush in its own space with its modifier stack evaluated, read
 /// without touching the scene.
-fn world_operand(world: &World, entity: Entity) -> Option<WorldBrush> {
+pub(crate) fn evaluated_brush(world: &World, entity: Entity) -> Option<Brush> {
     let mut brush = world.get::<Brush>(entity)?.clone();
     if let Some(stack) = world.get::<ModifierStack>(entity) {
         let modifiers: Vec<&Modifier> = stack.modifiers.iter().map(|e| &e.modifier).collect();
         crate::modifier_ops::bake_modifier_stack(&mut brush, &modifiers);
     }
+    Some(brush)
+}
+
+/// `entity`'s brush in world space with its modifier stack evaluated, read
+/// without touching the scene.
+fn world_operand(world: &World, entity: Entity) -> Option<WorldBrush> {
+    let brush = evaluated_brush(world, entity)?;
     let global = unsorted_global(world, entity)?;
     let (faces, topo) = jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, global.affine());
     Some(WorldBrush::new(faces, topo))
@@ -1143,7 +1187,7 @@ fn refuse(world: &mut World, op: CsgOp, outcome: Outcome, why: impl AsRef<str>) 
 /// Run `op` from its parameters: on the operands they name, or on the
 /// selection when they name none.
 fn run_csg(world: &mut World, op: CsgOp, params: &OperatorParameters) -> OperatorResult {
-    let options = match CsgOptions::read(world, params) {
+    let options = match CsgOptions::read(world, op, params) {
         Ok(options) => options,
         Err(why) => return refuse(world, op, Outcome::Invalid, why),
     };
@@ -1160,62 +1204,80 @@ fn run_csg(world: &mut World, op: CsgOp, params: &OperatorParameters) -> Operato
     }
 }
 
-/// Run `op` on the operands a call named: only the target is replaced, by
-/// what is left of it, and is removed when nothing is. Everything is computed
-/// before the scene is touched, so a call that changes nothing, or a dry run,
-/// leaves it as it was.
+/// Run `op` on the operands a call named: only the targets are replaced, each
+/// by what is left of it, and removed when nothing is. Everything is computed
+/// before the scene is touched, so a call that changes nothing, a refused one
+/// or a dry run leaves it as it was.
 fn run_on_named_operands(
     world: &mut World,
     op: CsgOp,
     operands: &NamedOperands,
     options: &CsgOptions,
 ) -> OperatorResult {
-    let Some(target) = world_operand(world, operands.target) else {
-        let why = format!("`target` {} has no transform", operands.target);
-        return refuse(world, op, Outcome::Invalid, why);
-    };
     let cutters: Vec<WorldBrush> = operands
         .cutters
         .iter()
         .filter_map(|&cutter| world_operand(world, cutter))
         .collect();
-    let reaching: Vec<&WorldBrush> = cutters
-        .iter()
-        .filter(|cutter| topology_aabbs_overlap(&target.topo, &cutter.topo))
-        .collect();
-
-    let pieces = match op {
-        CsgOp::Subtract => {
-            if reaching.is_empty() {
-                return refuse(
-                    world,
-                    op,
-                    Outcome::Unchanged,
-                    "the cutters do not reach the target",
-                );
-            }
-            let (pieces, failures) = subtract_all(&target, &reaching);
-            if let Some(e) = failures.first() {
-                let why = format!("the kernel failed, so nothing was cut: {e}");
-                return refuse(world, op, Outcome::Unchanged, why);
-            }
-            pieces
-        }
-        CsgOp::Intersect => match inside_any(&target, &reaching) {
-            Ok(pieces) => pieces,
-            Err(e) => {
-                let why = format!("the kernel failed, so nothing was trimmed: {e}");
-                return refuse(world, op, Outcome::Unchanged, why);
-            }
-        },
-    };
     let measure = options.measures(world);
     let mut tally = Tally::new(measure);
-    let fragments = shape_pieces(&target, pieces, options, &mut tally);
-    tally.add(&target, &reaching, &fragments);
-    if tally.leaves_as_is(&fragments) {
+    let mut untouched = Tally::new(measure);
+    let mut results: Vec<SubtractionResult> = Vec::new();
+    let mut reached = false;
+    for &entity in &operands.targets {
+        let Some(target) = world_operand(world, entity) else {
+            let why = format!("target {entity} has no transform");
+            return refuse(world, op, Outcome::Invalid, why);
+        };
+        let reaching: Vec<&WorldBrush> = cutters
+            .iter()
+            .filter(|cutter| topology_aabbs_overlap(&target.topo, &cutter.topo))
+            .collect();
+        let pieces = match op {
+            CsgOp::Subtract => {
+                if reaching.is_empty() {
+                    continue;
+                }
+                let (pieces, failures) = subtract_all(&target, &reaching);
+                if let Some(e) = failures.first() {
+                    let why = format!("the kernel failed on {entity}, so nothing was cut: {e}");
+                    return refuse(world, op, Outcome::Unchanged, why);
+                }
+                pieces
+            }
+            CsgOp::Intersect => match inside_any(&target, &reaching) {
+                Ok(pieces) => pieces,
+                Err(e) => {
+                    let why = format!("the kernel failed on {entity}, so nothing was trimmed: {e}");
+                    return refuse(world, op, Outcome::Unchanged, why);
+                }
+            },
+        };
+        reached = true;
+        let mut share = Tally::new(measure);
+        let fragments = shape_pieces(&target, pieces, options, &mut share);
+        share.add(&target, &reaching, &fragments);
+        if share.leaves_as_is(&fragments) {
+            untouched.merge(share);
+            continue;
+        }
+        tally.merge(share);
+        results.push(SubtractionResult {
+            original_entity: entity,
+            fragments,
+        });
+    }
+    if !reached {
+        return refuse(
+            world,
+            op,
+            Outcome::Unchanged,
+            "the cutters do not reach the target",
+        );
+    }
+    if results.is_empty() {
         if measure {
-            report_boolean(world, tally.report(Outcome::Unchanged));
+            report_boolean(world, untouched.report(Outcome::Unchanged));
         }
         return refuse(
             world,
@@ -1224,10 +1286,10 @@ fn run_on_named_operands(
             "the cutters leave the target as it is",
         );
     }
-    let outcome = if fragments.is_empty() {
-        Outcome::Empty
-    } else {
+    let outcome = if results.iter().any(|result| !result.fragments.is_empty()) {
         Outcome::Changed
+    } else {
+        Outcome::Empty
     };
     if measure {
         report_boolean(world, tally.report(outcome));
@@ -1236,70 +1298,205 @@ fn run_on_named_operands(
         set_outcome(world, Outcome::Unchanged);
         return OperatorResult::Finished;
     }
-    replace_target(world, operands, fragments)
+    let mut also_removed = Vec::new();
+    if !operands.keep_cutters {
+        also_removed.push(operands.cutters_node);
+    }
+    replace_with_fragments(world, results, options.fragments, also_removed, outcome);
+    OperatorResult::Finished
 }
 
-/// Put `fragments` in place of the named target, moving the target's other
-/// children up to its parent so they outlive it, and remove the cutters when
-/// the call asked.
-fn replace_target(
+/// Put each result's fragments in place of its target, moving a removed
+/// target's other children up to its nearest surviving ancestor so they
+/// outlive it, and remove `also_removed` (the cutters, when the call asked).
+fn replace_with_fragments(
     world: &mut World,
-    operands: &NamedOperands,
-    fragments: Vec<(Brush, Transform)>,
-) -> OperatorResult {
-    let target = operands.target;
-    crate::brush::topology_ops::mirror_ops::bake_mirror(world, target);
-    let mut removed = vec![target];
-    if !operands.keep_cutters {
-        removed.push(operands.cutters_node);
+    results: Vec<SubtractionResult>,
+    mode: Fragments,
+    also_removed: Vec<Entity>,
+    outcome: Outcome,
+) {
+    let doomed: Vec<Entity> = results
+        .iter()
+        .filter(|result| removes_target(result, mode))
+        .map(|result| result.original_entity)
+        .collect();
+    let mut removed = Vec::new();
+    let mut created = Vec::new();
+    for result in results {
+        let placed = place_fragments(world, result, mode, &doomed);
+        for &entity in &placed.spawned {
+            crate::commands::SpawnedEntities::record(world, entity);
+        }
+        created.extend(placed.created);
+        removed.extend(placed.removed);
     }
-    crate::commands::deselect_entities(world, &removed);
-
-    let created = spawn_subtract_fragments(
-        world,
-        &[SubtractionResult {
-            original_entity: target,
-            fragments,
-        }],
-    );
-    for &entity in &created {
-        crate::commands::SpawnedEntities::record(world, entity);
+    for &target in &removed {
+        adopt_children(world, target, &removed);
     }
+    crate::commands::deselect_entities(world, &also_removed);
+    removed.extend(also_removed);
+    for &entity in &removed {
+        despawn_scene_entity(world, entity);
+    }
+    report_replaced(world, &removed, &created);
+    set_outcome(world, outcome);
+}
 
-    let parent = world.get::<ChildOf>(target).map(ChildOf::parent);
+/// Whether placing `result` as `mode` asks takes its target away.
+fn removes_target(result: &SubtractionResult, mode: Fragments) -> bool {
+    mode != Fragments::Merge || result.fragments.len() != 1
+}
+
+/// `node`'s nearest ancestor that is not among `doomed`; `None` at the top.
+fn surviving_ancestor(world: &World, node: Entity, doomed: &[Entity]) -> Option<Entity> {
+    std::iter::successors(world.get::<ChildOf>(node).map(ChildOf::parent), |&at| {
+        world.get::<ChildOf>(at).map(ChildOf::parent)
+    })
+    .find(|at| !doomed.contains(at))
+}
+
+/// Move `node`'s scene children, other than those also going, up to its
+/// nearest ancestor that is not among `doomed`.
+fn adopt_children(world: &mut World, node: Entity, doomed: &[Entity]) {
+    let parent = surviving_ancestor(world, node, doomed);
     let children: Vec<Entity> = world
-        .get::<Children>(target)
+        .get::<Children>(node)
         .map(|children| children.iter().collect())
         .unwrap_or_default();
     let document = world.resource::<jackdaw_bsn::SceneBsnAst>();
     let adopted: Vec<Entity> = children
         .into_iter()
-        .filter(|&child| document.ast_for(child).is_some())
+        .filter(|&child| document.ast_for(child).is_some() && !doomed.contains(&child))
         .collect();
     for child in adopted {
-        crate::commands::set_hierarchy_location(
-            world,
-            child,
-            crate::commands::HierarchyLocation {
-                parent,
-                index: usize::MAX,
-            },
-        );
+        crate::commands::set_parent(world, child, parent);
     }
+}
 
-    for &entity in &removed {
-        despawn_scene_entity(world, entity);
+/// What placing one target's fragments did.
+struct Placed {
+    /// The target, when it is to be removed; the caller removes it.
+    removed: Option<Entity>,
+    /// The brushes standing where the target was: the target itself when it
+    /// was kept, else its fragments.
+    created: Vec<Entity>,
+    /// Every entity spawned, the group included.
+    spawned: Vec<Entity>,
+}
+
+/// Put `result`'s fragments where its target is, as `mode` asks, under the
+/// target's nearest ancestor not among `doomed`. The target is left in the
+/// scene for the caller to remove, so its children can move first.
+fn place_fragments(
+    world: &mut World,
+    result: SubtractionResult,
+    mode: Fragments,
+    doomed: &[Entity],
+) -> Placed {
+    let target = result.original_entity;
+    // Bake the live modifier stack before the target is rewritten or cloned,
+    // so the result cannot get re-mirrored by the mesh rebuild.
+    crate::brush::topology_ops::mirror_ops::bake_mirror(world, target);
+    if !removes_target(&result, mode)
+        && let [fragment] = result.fragments.as_slice()
+    {
+        merge_into(world, target, fragment);
+        return Placed {
+            removed: None,
+            created: vec![target],
+            spawned: Vec::new(),
+        };
     }
-    report_replaced(world, &removed, &created);
-    set_outcome(
+    crate::commands::deselect_entities(world, &[target]);
+    let home = surviving_ancestor(world, target, doomed);
+    let mut slot = crate::commands::HierarchyLocation::from_world(world, target);
+    slot.parent = home;
+    let mut taken = names_besides(world, target);
+    let created = spawn_subtract_fragments(world, &result);
+    let mut spawned = created.clone();
+    if mode == Fragments::Loose || created.is_empty() {
+        if home != world.get::<ChildOf>(target).map(ChildOf::parent) {
+            for &fragment in &created {
+                crate::commands::set_parent(world, fragment, home);
+            }
+        }
+    } else {
+        let base = name_or_default(world, target);
+        let group_name = free_name(&mut taken, &base);
+        let group = spawn_fragment_group(world, target, slot, &group_name);
+        for (index, &fragment) in created.iter().enumerate() {
+            let name = free_name(&mut taken, &format!("{base}{}", index + 1));
+            crate::commands::rename_scene_node(world, fragment, &name);
+            crate::commands::set_parent(world, fragment, Some(group));
+        }
+        spawned.insert(0, group);
+    }
+    Placed {
+        removed: Some(target),
+        created,
+        spawned,
+    }
+}
+
+/// `entity`'s `Name`, or `"Brush"` when it has none.
+pub(crate) fn name_or_default(world: &World, entity: Entity) -> String {
+    world
+        .get::<Name>(entity)
+        .map_or_else(|| "Brush".to_string(), |name| name.as_str().to_string())
+}
+
+/// Every scene name in use except `entity`'s own, which it is giving up.
+pub(crate) fn names_besides(
+    world: &mut World,
+    entity: Entity,
+) -> std::collections::HashSet<String> {
+    let mut query = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
+    query
+        .iter(world)
+        .filter(|(other, _)| *other != entity)
+        .map(|(_, name)| name.as_str().to_string())
+        .collect()
+}
+
+/// `wanted`, or the next free numbered form of it, claimed in `taken`.
+pub(crate) fn free_name(taken: &mut std::collections::HashSet<String>, wanted: &str) -> String {
+    crate::entity_ops::claim_free_name(taken, wanted).unwrap_or_else(|| wanted.to_string())
+}
+
+/// Rewrite `target`'s brush as the world-space `fragment`, keeping its
+/// entity, node id and transform.
+fn merge_into(world: &mut World, target: Entity, (brush, placed): &(Brush, Transform)) {
+    let global = unsorted_global(world, target).unwrap_or_default();
+    let to_local =
+        global.affine().inverse() * bevy::math::Affine3A::from_translation(placed.translation);
+    let (faces, topology) = jackdaw_csg::brush_to_world(&brush.faces, &brush.topology, to_local);
+    crate::brush::replace_brush(world, target, &Brush { faces, topology });
+}
+
+/// A new empty node named `name` at `slot`, placed at `target`'s world
+/// position with no turn or scale, for its fragments to go under.
+fn spawn_fragment_group(
+    world: &mut World,
+    target: Entity,
+    slot: crate::commands::HierarchyLocation,
+    name: &str,
+) -> Entity {
+    let at = Transform::from_translation(
+        unsorted_global(world, target).map_or(Vec3::ZERO, |global| global.translation()),
+    );
+    let name = name.to_string();
+    let group = crate::entity_ops::spawn_shaped_under(
         world,
-        if created.is_empty() {
-            Outcome::Empty
-        } else {
-            Outcome::Changed
+        crate::entity_ops::EntityTemplate::Empty,
+        None,
+        move |entity| {
+            entity.insert((Name::new(name), at));
         },
     );
-    OperatorResult::Finished
+    crate::commands::set_hierarchy_location(world, group, slot);
+    crate::commands::deselect_entities(world, &[group]);
+    group
 }
 
 #[operator(
@@ -1320,10 +1517,11 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
 #[operator(
     id = "brush.csg_subtract",
     label = "CSG Subtract",
-    description = "Cut brushes away from other brushes. Naming `target` and `cutters` works \
-                   whatever is selected and cuts only the target: it is replaced by its \
-                   fragments, or removed when nothing is left, and its other children move up \
-                   to its parent. Without them, the selected brushes are the cutters and every \
+    description = "Cut brushes away from other brushes. Naming `target` (or `targets`) and \
+                   `cutters` works whatever is selected and cuts only the targets, all in one \
+                   undo step: each is replaced by its fragments as `fragments` says, or removed \
+                   when nothing is left, and a removed target's other children move up to its \
+                   parent. Without them, the selected brushes are the cutters and every \
                    unselected brush they overlap is a target; at least one brush must be \
                    selected. Every result carries a report: outcome, fragments, volume before \
                    and after, bounds, watertight, and the cut, coplanar and degenerate face \
@@ -1331,6 +1529,11 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
     is_available = can_run_csg_subtract,
     params(
         target(Entity, doc = "Brush to cut. Every other brush is left alone."),
+        targets(
+            Entity,
+            doc = "A group whose brushes are all cut, in place of `target`. Brushes outside it \
+                   are left alone."
+        ),
         cutters(
             Entity,
             doc = "Brush to cut with, or a group whose brushes all cut."
@@ -1338,6 +1541,13 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
         keep_cutters(
             bool,
             doc = "Keep the cutters after the cut. Defaults to true."
+        ),
+        fragments(
+            String,
+            doc = "What a cut target becomes: `loose` brushes in its place, a `group` named \
+                   after it holding `<target> 1`, `<target> 2`..., or `merge`: the target itself \
+                   when what is left is one connected solid, keeping its id, else a group. \
+                   Defaults to `loose`."
         ),
         dry_run(
             bool,
@@ -1365,15 +1575,21 @@ pub(crate) fn brush_csg_subtract(
 #[operator(
     id = "brush.csg_intersect",
     label = "CSG Intersect",
-    description = "Keep only the solid brushes share. Naming `target` and `cutters` works \
-                   whatever is selected and trims only the target: it is replaced by its parts \
-                   inside any of the cutters, or removed when there are none, and its other \
-                   children move up to its parent. Without them, the selected brushes are \
-                   replaced by the solid all of them share; at least two brushes must be \
-                   selected. Every result carries the same report as CSG Subtract.",
+    description = "Keep only the solid brushes share. Naming `target` (or `targets`) and \
+                   `cutters` works whatever is selected and trims only the targets, all in one \
+                   undo step: each is replaced by its parts inside any of the cutters, or \
+                   removed when there are none, and its other children move up to its parent. \
+                   Without them, the selected brushes are replaced by the solid all of them \
+                   share; at least two brushes must be selected. Every result carries the same \
+                   report as CSG Subtract.",
     is_available = can_run_csg_intersect,
     params(
         target(Entity, doc = "Brush to trim. Every other brush is left alone."),
+        targets(
+            Entity,
+            doc = "A group whose brushes are all trimmed, in place of `target`. Brushes outside \
+                   it are left alone."
+        ),
         cutters(
             Entity,
             doc = "Brush to trim to, or a group whose brushes together make the shape kept."

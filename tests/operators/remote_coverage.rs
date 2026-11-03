@@ -110,6 +110,11 @@ const POINTER_ONLY: &[(&str, Option<&str>, &str)] = &[
         "dragging one face; nudge by a step instead",
     ),
     (
+        "brush.clip.place_point",
+        Some("brush.clip"),
+        "clip points placed on the brush with the cursor; a plane by normal and point instead",
+    ),
+    (
         "tools.measure_distance",
         None,
         "two clicks in the viewport; reading a distance is not authoring",
@@ -400,6 +405,7 @@ fn the_parametric_authoring_operators_are_registered() {
             &["edge", "where", "count", "factor"][..],
         ),
         ("brush.mesh.subdivide", &["cuts"][..]),
+        ("brush.clip", &["entity", "normal", "point", "keep"][..]),
         ("brush.mesh.edge_slide", &["t"][..]),
         ("brush.mesh.vertex_slide", &["t"][..]),
         (

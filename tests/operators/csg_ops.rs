@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 const EPS: f32 = 1e-3;
 
-fn csg_app() -> App {
+pub(super) fn csg_app() -> App {
     let mut app = util::editor_test_app();
     app.world_mut()
         .operator("scene.new")
@@ -27,7 +27,7 @@ fn csg_app() -> App {
     app
 }
 
-fn call(app: &mut App, id: &str, params: Value) -> Value {
+pub(super) fn call(app: &mut App, id: &str, params: Value) -> Value {
     let outcome = app
         .world_mut()
         .run_system_cached_with(
@@ -40,12 +40,18 @@ fn call(app: &mut App, id: &str, params: Value) -> Value {
     outcome
 }
 
-fn entity_of(value: &Value) -> Entity {
+pub(super) fn entity_of(value: &Value) -> Entity {
     Entity::try_from_bits(value.as_u64().expect("an entity id")).expect("a valid entity id")
 }
 
 /// A cube brush of `size` centred at `pos`, turned by `rot` degrees.
-fn cube(app: &mut App, name: &str, size: [f32; 3], pos: [f32; 3], rot: [f32; 3]) -> Entity {
+pub(super) fn cube(
+    app: &mut App,
+    name: &str,
+    size: [f32; 3],
+    pos: [f32; 3],
+    rot: [f32; 3],
+) -> Entity {
     let outcome = call(
         app,
         "entity.add.cube",
@@ -55,7 +61,7 @@ fn cube(app: &mut App, name: &str, size: [f32; 3], pos: [f32; 3], rot: [f32; 3])
     entity_of(&outcome["entities"][0])
 }
 
-fn clear_selection(app: &mut App) {
+pub(super) fn clear_selection(app: &mut App) {
     let selected: Vec<Entity> = app
         .world_mut()
         .query_filtered::<Entity, With<Selected>>()
@@ -69,7 +75,7 @@ fn clear_selection(app: &mut App) {
 }
 
 /// The world-space box around a brush's corners.
-fn measured(app: &App, entity: Entity) -> (Vec3, Vec3) {
+pub(super) fn measured(app: &App, entity: Entity) -> (Vec3, Vec3) {
     let global = app
         .world()
         .get::<GlobalTransform>(entity)
@@ -86,7 +92,7 @@ fn measured(app: &App, entity: Entity) -> (Vec3, Vec3) {
 }
 
 #[track_caller]
-fn assert_box(actual: (Vec3, Vec3), min: Vec3, max: Vec3) {
+pub(super) fn assert_box(actual: (Vec3, Vec3), min: Vec3, max: Vec3) {
     assert!(
         actual.0.abs_diff_eq(min, EPS) && actual.1.abs_diff_eq(max, EPS),
         "expected {min}..{max}, got {}..{}",
@@ -108,14 +114,14 @@ fn reported_box(value: &Value) -> (Vec3, Vec3) {
     (corner(&value[0]), corner(&value[1]))
 }
 
-fn ids(value: &Value) -> Vec<Entity> {
+pub(super) fn ids(value: &Value) -> Vec<Entity> {
     value
         .as_array()
         .map(|items| items.iter().map(entity_of).collect())
         .unwrap_or_default()
 }
 
-fn named(app: &mut App, name: &str) -> Vec<Entity> {
+pub(super) fn named(app: &mut App, name: &str) -> Vec<Entity> {
     let mut found: Vec<(Entity, f32)> = app
         .world_mut()
         .query_filtered::<(Entity, &Name, &GlobalTransform), With<Brush>>()
@@ -127,13 +133,13 @@ fn named(app: &mut App, name: &str) -> Vec<Entity> {
     found.into_iter().map(|(entity, _)| entity).collect()
 }
 
-fn scene_text(app: &mut App) -> String {
+pub(super) fn scene_text(app: &mut App) -> String {
     let dir = tempfile::tempdir().expect("tempdir");
     jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), dir.path())
         .expect("the scene emits")
 }
 
-fn history_len(app: &App) -> usize {
+pub(super) fn history_len(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
 }
 
