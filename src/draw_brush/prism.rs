@@ -7,13 +7,13 @@ use jackdaw_api::prelude::*;
 use jackdaw_scene_types::{Brush, PropertyValue};
 use serde_json::Value;
 
-use crate::draw_brush::{MIN_EXTRUDE_DEPTH, polygon_self_intersects};
+use jackdaw_geometry::polygon2d::{MERGE_DISTANCE, MIN_AREA, polygon_self_intersects, signed_area};
+
+use crate::draw_brush::MIN_EXTRUDE_DEPTH;
 use crate::primitive_ops::{
     MAX_PRIMITIVE_FACES, Placement, add_as_one_entry, float_param, int_param,
 };
 
-const MIN_AREA: f32 = 1e-6;
-const MERGE_DISTANCE: f32 = 1e-5;
 const MAX_ARC_SEGMENTS: i64 = 256;
 const MAX_DEPTH_SEGMENTS: i64 = 64;
 const MAX_DEPTH: f64 = 10_000.0;
@@ -135,7 +135,7 @@ fn read_outline(params: &OperatorParameters, max_points: usize) -> Result<Vec<Ve
     Ok(ring)
 }
 
-fn point_of(value: &Value) -> Option<Vec2> {
+pub(super) fn point_of(value: &Value) -> Option<Vec2> {
     let items = value.as_array()?;
     let [u, v] = items.as_slice() else {
         return None;
@@ -198,14 +198,6 @@ fn arc_points(arc: &Value) -> Result<Vec<Vec2>, String> {
             center + Vec2::from_angle(degrees.to_radians()) * radius
         })
         .collect())
-}
-
-fn signed_area(ring: &[Vec2]) -> f32 {
-    let n = ring.len();
-    (0..n)
-        .map(|i| ring[i].perp_dot(ring[(i + 1) % n]))
-        .sum::<f32>()
-        / 2.0
 }
 
 fn area_centroid(ring: &[Vec2]) -> Vec2 {
@@ -337,17 +329,12 @@ pub(crate) fn add_outline_brush(world: &mut World, params: &OperatorParameters) 
             return OperatorResult::Cancelled;
         }
     };
-    let placement = request.placement.clone();
-    add_as_one_entry(
-        world,
-        "Add Brush".into(),
-        &placement,
-        move |world, parent| {
-            crate::entity_ops::spawn_brush_under(world, request.brush.clone(), parent, |entity| {
-                request.placement.apply(entity, None);
-            })
-        },
-    )
+    let parent = request.placement.parent;
+    add_as_one_entry(world, "Add Brush".into(), parent, move |world, parent| {
+        crate::entity_ops::spawn_brush_under(world, request.brush.clone(), parent, |entity| {
+            request.placement.apply(entity, None);
+        })
+    })
 }
 
 #[cfg(test)]

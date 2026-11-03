@@ -52,8 +52,8 @@ pub use types::{
     DetailLayer, DetailMesh, DetailPresser, DetailVariety, GltfSource, HIDDEN_IN_GAME_TYPE_PATH,
     HiddenInGame, InstanceMaterialOverrides, LodFade, LodGroup, LodLevel, LodOverride,
     MaterialOverrides, NAVMESH_EXCLUDE_TYPE_PATH, NavmeshExclude, NavmeshIgnored, PrefabBaseline,
-    PropertyValue, ReflectionProbe, ScatterGroup, ScatterInstance, SceneRootTag, SceneWind,
-    Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
+    PropertyValue, ReflectionProbe, RevolveBrushError, ScatterGroup, ScatterInstance, SceneRootTag,
+    SceneWind, Terrain, TerrainChannel, TerrainChannelElement, TerrainNavmesh, TerrainPaletteEntry,
     TerrainQuantization, Wind,
 };
 pub use y_sort::{

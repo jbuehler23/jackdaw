@@ -421,6 +421,21 @@ fn the_parametric_authoring_operators_are_registered() {
                 "name",
             ][..],
         ),
+        (
+            "mesh.add_revolve",
+            &[
+                "profile",
+                "segments",
+                "angle_deg",
+                "axis",
+                "caps",
+                "pos",
+                "rot",
+                "material",
+                "parent",
+                "name",
+            ][..],
+        ),
         ("brush.mesh.edge_slide", &["t"][..]),
         ("brush.mesh.vertex_slide", &["t"][..]),
         (

@@ -24,6 +24,7 @@ mod primitive_ops;
 mod prism_ops;
 mod remote_coverage;
 mod rename_ops;
+mod revolve_ops;
 mod scatter_ops;
 mod scene_op_ids;
 mod sprite_ops;
