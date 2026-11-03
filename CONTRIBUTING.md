@@ -37,7 +37,7 @@ cargo run --features dylib
 
 ### Improving compile times
 
-On Linux and macOS, run the editor with `cargo dev` instead of `cargo run`. It enables the features the test targets resolve (Bevy's `dynamic_linking` among them), so `cargo dev` and `cargo test` reuse one build of the editor crate instead of compiling it twice after every edit. `cargo install` and release builds are unaffected. On Windows the test targets link Bevy statically, so `cargo dev` does not share their build there.
+`cargo run` and `cargo test` resolve the same features, so they reuse one build of the editor crate and of Bevy. Tests that load extension dylibs need the split runtime and run with `--features dylib`, as CI does.
 
 If you intend to contribute significantly to Jackdaw, you'll likely want to make some changes to improve compile times when iterating. Jackdaw is not, by default, set up for some of these, as they conflict with other features like SDK dynamic linking.
 

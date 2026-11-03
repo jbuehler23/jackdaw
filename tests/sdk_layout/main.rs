@@ -8,6 +8,7 @@
 #[path = "../util/mod.rs"]
 mod util;
 
+#[cfg(feature = "dylib")]
 mod dylib_loading;
 mod sdk_feature_closure;
 mod sdk_resolution_matrix;
