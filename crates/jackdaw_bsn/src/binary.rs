@@ -355,7 +355,8 @@ impl<'a> Reader<'a> {
     fn string(&mut self) -> Result<String, BinaryError> {
         let len = self.len()?;
         let bytes = self.take(len)?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| BinaryError::NotUtf8)
+        let text = String::from_utf8(bytes.to_vec()).map_err(|_| BinaryError::NotUtf8)?;
+        Ok(crate::migrate::moved_type_path(&text).unwrap_or(text))
     }
 
     fn option_str(&mut self) -> Result<Option<String>, BinaryError> {
