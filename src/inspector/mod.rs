@@ -22,6 +22,7 @@ mod pixel_canvas_card;
 mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
+pub mod recipe_card;
 pub(crate) mod reflect_fields;
 pub(crate) mod schema_fields;
 pub mod sprite_card;
@@ -106,6 +107,7 @@ impl Plugin for InspectorPlugin {
         app.register_type_data::<Name, ReflectDisplayable>()
             .add_plugins(component_tooltip::plugin)
             .add_plugins(file_card::plugin)
+            .add_plugins(recipe_card::plugin)
             .add_plugins(sprite_card::plugin)
             .add_plugins(tilemap_card::plugin)
             .add_plugins(prefab_menu::plugin)

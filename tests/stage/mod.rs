@@ -37,6 +37,7 @@ mod positionable_mirror_plane;
 mod project_definitions;
 mod project_startup;
 mod project_window;
+mod recipe_picker;
 mod reflection_probe;
 mod remote_placement;
 mod save_before_play;

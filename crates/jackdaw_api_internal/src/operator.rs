@@ -640,13 +640,44 @@ fn with_modal_query<R>(
     out
 }
 
+/// Functions run around every operator call that neither another operator nor
+/// a running modal made, while the resource is present: `before` with the call
+/// as given, `after` with how it ended, `None` when it failed to dispatch.
+/// Every `before` gets its `after`, even when the call removes the resource.
+#[derive(Resource, Clone, Copy)]
+pub struct TopLevelCallHook {
+    pub before: fn(&mut World, &str, &OperatorParameters),
+    pub after: fn(&mut World, &str, Option<OperatorResult>),
+}
+
+/// How many dispatches and modal ticks are under way.
+#[derive(Resource, Default)]
+struct DispatchDepth(u32);
+
 fn dispatch_operator(
     world: &mut World,
     call: (Cow<'static, str>, OperatorParameters, CallOperatorSettings),
 ) -> Result<OperatorResult, CallOperatorError> {
-    with_modal_query(world, |world, active| {
+    let depth = {
+        let mut depth = world.get_resource_or_init::<DispatchDepth>();
+        depth.0 += 1;
+        depth.0
+    };
+    let watched = (depth == 1)
+        .then(|| world.get_resource::<TopLevelCallHook>().copied())
+        .flatten()
+        .map(|hook| (hook, call.0.clone()));
+    if let Some((hook, id)) = &watched {
+        (hook.before)(world, id, &call.1);
+    }
+    let result = with_modal_query(world, |world, active| {
         dispatch_operator_reported(call, world, active)
-    })
+    });
+    world.get_resource_or_init::<DispatchDepth>().0 -= 1;
+    if let Some((hook, id)) = &watched {
+        (hook.after)(world, id, result.as_ref().ok().copied());
+    }
+    result
 }
 
 fn dispatch_operator_reported(
@@ -1315,7 +1346,10 @@ pub(crate) fn tick_modal_operator(world: &mut World, active: &mut SystemState<Ac
     else {
         return;
     };
-    let result = match world.run_system_with(op.invoke, default()) {
+    world.get_resource_or_init::<DispatchDepth>().0 += 1;
+    let result = world.run_system_with(op.invoke, default());
+    world.get_resource_or_init::<DispatchDepth>().0 -= 1;
+    let result = match result {
         Ok(r) => r,
         Err(err) => {
             error!("Modal operator's invoke system failed: {err:?}; cancelling");

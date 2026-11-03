@@ -14,7 +14,7 @@ use crate::util;
 use crate::util::OperatorResultExt as _;
 
 /// An editor with a scene open in a project of its own, and the project.
-fn recipe_project() -> (App, tempfile::TempDir) {
+pub(super) fn recipe_project() -> (App, tempfile::TempDir) {
     let dir = tempfile::Builder::new()
         .prefix("jackdaw-recipes-")
         .tempdir()
@@ -40,7 +40,7 @@ fn open_project(app: &mut App, dir: &tempfile::TempDir) {
 }
 
 /// Write a project recipe and index it, as the project watcher would.
-fn write_recipe(app: &mut App, dir: &tempfile::TempDir, name: &str, body: &str) {
+pub(super) fn write_recipe(app: &mut App, dir: &tempfile::TempDir, name: &str, body: &str) {
     let text = format!(
         "// jackdaw asset jackdaw::recipes::Recipe\n#{name}\njackdaw::recipes::Recipe {{\n{body}\n}}\n"
     );
@@ -54,7 +54,7 @@ fn write_recipe(app: &mut App, dir: &tempfile::TempDir, name: &str, body: &str) 
 }
 
 #[track_caller]
-fn call(app: &mut App, id: &str, params: Value) -> Value {
+pub(super) fn call(app: &mut App, id: &str, params: Value) -> Value {
     let answer = app
         .world_mut()
         .run_system_cached_with(
@@ -68,14 +68,14 @@ fn call(app: &mut App, id: &str, params: Value) -> Value {
 }
 
 #[track_caller]
-fn finished(app: &mut App, id: &str, params: Value) -> Value {
+pub(super) fn finished(app: &mut App, id: &str, params: Value) -> Value {
     let answer = call(app, id, params);
     assert_eq!(answer["result"], json!("finished"), "{id}: {answer}");
     answer
 }
 
 #[track_caller]
-fn refused(app: &mut App, id: &str, params: Value) -> String {
+pub(super) fn refused(app: &mut App, id: &str, params: Value) -> String {
     let answer = call(app, id, params);
     assert_eq!(answer["result"], json!("cancelled"), "{id}: {answer}");
     answer["warnings"]
@@ -88,7 +88,7 @@ fn refused(app: &mut App, id: &str, params: Value) -> String {
 }
 
 #[track_caller]
-fn run(app: &mut App, params: Value) -> Entity {
+pub(super) fn run(app: &mut App, params: Value) -> Entity {
     let answer = finished(app, "recipe.run", params);
     let bits = answer["entities"][0].as_u64().expect("the root's id");
     Entity::from_bits(bits)
@@ -104,11 +104,11 @@ fn scene_text(app: &mut App) -> String {
         .to_string()
 }
 
-fn undo_depth(app: &App) -> usize {
+pub(super) fn undo_depth(app: &App) -> usize {
     app.world().resource::<CommandHistory>().undo_stack.len()
 }
 
-fn undo(app: &mut App) {
+pub(super) fn undo(app: &mut App) {
     app.world_mut()
         .operator("history.undo")
         .call()
@@ -128,7 +128,7 @@ fn roots_named(app: &mut App, name: &str) -> Vec<Entity> {
 
 /// The child of `root` named `name`.
 #[track_caller]
-fn child(app: &App, root: Entity, name: &str) -> Entity {
+pub(super) fn child(app: &App, root: Entity, name: &str) -> Entity {
     let found: Vec<Entity> = app
         .world()
         .get::<Children>(root)
@@ -150,7 +150,7 @@ fn child(app: &App, root: Entity, name: &str) -> Entity {
 /// What a root holds, as each child's name, local transform and brush, in
 /// order, so two builds can be compared without their ids. A copy's number,
 /// which counts copies across the whole scene, is left off its name.
-fn contents(app: &App, root: Entity) -> Vec<String> {
+pub(super) fn contents(app: &App, root: Entity) -> Vec<String> {
     let world = app.world();
     world
         .get::<Children>(root)
