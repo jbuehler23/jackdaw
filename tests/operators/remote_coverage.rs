@@ -527,3 +527,26 @@ fn the_parametric_authoring_operators_are_registered() {
         }
     }
 }
+
+/// A `parent` an add operator takes means "top level" when left out, so
+/// leaving it out must not warn that the call is missing a target.
+#[test]
+fn every_optional_parent_is_listed_as_optional() {
+    let mut app = util::editor_test_app();
+    let unlisted: Vec<&str> = registered(&mut app)
+        .iter()
+        .filter(|op| op.id() != "entity.reparent")
+        .filter(|op| {
+            op.parameters()
+                .iter()
+                .any(|spec| spec.name == "parent" && spec.ty == "Entity")
+        })
+        .filter(|op| !jackdaw::boot_ops::OPTIONAL_ENTITY_PARAMS.contains(&(op.id(), "parent")))
+        .map(OperatorEntity::id)
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "these operators take an optional `parent` but are not in OPTIONAL_ENTITY_PARAMS: \
+         {unlisted:?}"
+    );
+}

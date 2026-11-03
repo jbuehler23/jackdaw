@@ -23,6 +23,7 @@ const DESCRIBE_BUDGET: usize = 2048;
 const THUMBNAIL_BUDGET: usize = 60 * 1024;
 const TOPOLOGY_BUDGET: usize = 4 * 1024;
 const SUMMARY_BUDGET: usize = 12 * 1024;
+const VIEWS_BUDGET: usize = 80 * 1024;
 
 #[track_caller]
 fn answer<M>(
@@ -213,5 +214,65 @@ fn a_viewport_thumbnail_stays_within_budget() {
     assert!(
         encoded < THUMBNAIL_BUDGET,
         "a 512 px viewport thumbnail is {encoded} bytes of base64, over {THUMBNAIL_BUDGET}"
+    );
+}
+
+/// One call to `views` on a single house returns a 512 px four-angle sheet
+/// under its budget, and the viewport camera stays where it was. Each tile's
+/// readback is a viewport-like frame scaled to the tile, as the renderer does
+/// not run here.
+#[test]
+fn a_four_angle_views_sheet_of_a_house_stays_within_budget() {
+    use super::views::{add_cube, editor_for_views, land_tiles, views_poll};
+
+    let (mut app, camera, _project) = editor_for_views();
+    let floor = add_cube(&mut app, "House_Floor", [6.0, 0.2, 5.0], [0.0, 0.1, 0.0]);
+    for (name, size, pos) in [
+        ("House_Wall_N", [6.0, 3.0, 0.25], [0.0, 1.7, -2.375]),
+        ("House_Wall_S", [6.0, 3.0, 0.25], [0.0, 1.7, 2.375]),
+        ("House_Wall_E", [0.25, 3.0, 5.0], [2.875, 1.7, 0.0]),
+        ("House_Wall_W", [0.25, 3.0, 5.0], [-2.875, 1.7, 0.0]),
+        ("House_Roof", [6.6, 0.3, 5.6], [0.0, 3.35, 0.0]),
+    ] {
+        add_cube(&mut app, name, size, pos);
+    }
+    let before = *app.world().get::<Transform>(camera).expect("a transform");
+    let targets = json!([
+        floor,
+        "House_Wall_N",
+        "House_Wall_S",
+        "House_Wall_E",
+        "House_Wall_W",
+        "House_Roof"
+    ]);
+    let params = json!({ "targets": targets, "max_px": 512, "format": "jpeg", "request": "house" });
+    assert!(views_poll(&mut app, &params).is_none());
+    land_tiles(&mut app, 4, |edge| {
+        image::DynamicImage::ImageRgb8(viewport_like_frame())
+            .resize_exact(edge, edge, image::imageops::FilterType::Triangle)
+            .to_rgb8()
+    });
+    let answer = views_poll(&mut app, &params).expect("every tile landed");
+    assert_eq!(
+        (answer["width"].clone(), answer["height"].clone()),
+        (json!(512), json!(512))
+    );
+    assert_eq!(
+        answer["tiles"].as_array().map(Vec::len),
+        Some(4),
+        "{answer}"
+    );
+    let bytes = std::fs::read(answer["path"].as_str().expect("a path")).expect("the sheet reads");
+    let encoded = base64::engine::general_purpose::STANDARD
+        .encode(&bytes)
+        .len();
+    assert!(
+        encoded < VIEWS_BUDGET,
+        "a 512 px four-angle sheet is {encoded} bytes of base64, over {VIEWS_BUDGET}"
+    );
+    assert_eq!(
+        *app.world().get::<Transform>(camera).expect("a transform"),
+        before,
+        "the viewport camera moved"
     );
 }

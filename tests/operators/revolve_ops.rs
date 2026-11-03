@@ -588,3 +588,25 @@ fn a_remote_call_reports_the_created_brush() {
     app.update();
     assert_eq!(faces(&app, created[0]), 8 * 4);
 }
+
+/// Leaving the optional `parent` out puts the brush at the top level without
+/// a warning.
+#[test]
+fn an_omitted_parent_adds_at_the_top_level_without_a_warning() {
+    let mut app = csg_app();
+    for (id, params) in [
+        ("mesh.add_revolve", json!({ "profile": barrel_profile() })),
+        (
+            "mesh.add_brush",
+            json!({ "outline": [[-1.0, 0.0], [1.0, 0.0], [0.0, 1.0]], "plane": "xy", "depth": 1.0 }),
+        ),
+    ] {
+        let outcome = call(&mut app, id, params);
+        assert_eq!(outcome["result"], "finished", "{id}: {outcome}");
+        assert_eq!(
+            outcome["warnings"],
+            json!([]),
+            "{id} warned without a parent: {outcome}"
+        );
+    }
+}

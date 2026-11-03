@@ -40,6 +40,7 @@ pub(crate) fn plugin(app: &mut App) {
         drive_shot_probe.run_if(in_state(crate::AppState::Editor)),
     );
     crate::camera_capture::plugin(app);
+    crate::views::plugin(app);
 }
 
 /// Captures that have reached the disk, by the path they were written to.
@@ -658,22 +659,31 @@ pub fn write_thumbnail(
             .to_rgb8()
     };
     let dest = capture.with_extension(format!("thumb.{}", format.extension()));
-    let written = match format {
-        ThumbnailFormat::Png => scaled.save_with_format(&dest, ::image::ImageFormat::Png),
-        ThumbnailFormat::Jpeg => std::fs::File::create(&dest)
-            .map_err(::image::ImageError::IoError)
-            .and_then(|file| {
-                let mut writer = std::io::BufWriter::new(file);
-                ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 80)
-                    .encode_image(&scaled)
-            }),
-    };
-    written.map_err(|err| format!("cannot write thumbnail {}: {err}", dest.display()))?;
+    save_rgb(&scaled, &dest, format)
+        .map_err(|err| format!("cannot write thumbnail {}: {err}", dest.display()))?;
     Ok(Thumbnail {
         path: dest,
         width: scaled.width(),
         height: scaled.height(),
     })
+}
+
+/// Write `rgb` to `path` in `format`; JPEG at quality 80.
+pub(crate) fn save_rgb(
+    rgb: &::image::RgbImage,
+    path: &Path,
+    format: ThumbnailFormat,
+) -> Result<(), ::image::ImageError> {
+    match format {
+        ThumbnailFormat::Png => rgb.save_with_format(path, ::image::ImageFormat::Png),
+        ThumbnailFormat::Jpeg => std::fs::File::create(path)
+            .map_err(::image::ImageError::IoError)
+            .and_then(|file| {
+                let mut writer = std::io::BufWriter::new(file);
+                ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 80)
+                    .encode_image(rgb)
+            }),
+    }
 }
 
 /// Encode a captured frame as a PNG on disk, cropped to the square at its

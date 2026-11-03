@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::asset::UntypedAssetId;
 use bevy::diagnostic::FrameCount;
+use bevy::ecs::entity::EntityHashSet;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, error_codes, http::RemoteHttpPlugin};
@@ -165,6 +166,7 @@ impl Plugin for JackdawEditorRemotePlugin {
                     .with_method_main("jackdaw/scene_bsn", scene_bsn_handler)
                     .with_watching_method_main("jackdaw/assets", assets_handler)
                     .with_watching_method_main("jackdaw/screenshot", screenshot_handler)
+                    .with_watching_method_main("jackdaw/views", views_handler)
                     .with_watching_method_main("jackdaw/wait", wait_handler),
             )
             // No CORS headers: allowing an origin would hand any page served on
@@ -1445,27 +1447,14 @@ pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> B
     let depth = depth_param(&params)?;
 
     let asked_for = root_param(world, &params)?;
-    let named = asked_for.is_some();
-    let roots = match asked_for {
-        None => {
-            let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
-            query.iter(world).collect::<Vec<_>>()
-        }
-        Some(root) => vec![root],
+    // A named root may be a row inside a UI screen, which is not a scene root.
+    let roots: Vec<Entity> = match asked_for {
+        None => scene_roots(world),
+        Some(root) => vec![root]
+            .into_iter()
+            .filter(|entity| belongs_to_the_scene(world, *entity))
+            .collect(),
     };
-
-    // A named root may be a row inside a UI screen, which is not a scene root;
-    // the whole scene is narrowed to the rows the outliner would draw.
-    let roots: Vec<Entity> = roots
-        .into_iter()
-        .filter(|entity| {
-            if named {
-                belongs_to_the_scene(world, *entity)
-            } else {
-                is_scene_node(world, *entity)
-            }
-        })
-        .collect();
     let tree: Vec<Value> = roots
         .into_iter()
         .map(|entity| node_json(world, entity, depth))
@@ -1522,6 +1511,16 @@ pub(super) fn is_scene_node(world: &World, entity: Entity) -> bool {
         || world
             .get::<jackdaw_scene_types::UiSceneRoot>(entity)
             .is_some()
+}
+
+/// The scene nodes at the top of the hierarchy, in query order.
+pub(super) fn scene_roots(world: &mut World) -> Vec<Entity> {
+    let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
+    let roots: Vec<Entity> = query.iter(world).collect();
+    roots
+        .into_iter()
+        .filter(|entity| is_scene_node(world, *entity))
+        .collect()
 }
 
 /// Whether a node under a scene node belongs in the tree. A UI node carries
@@ -2330,6 +2329,452 @@ fn default_capture_path(world: &World, kind: &str) -> PathBuf {
     dir.join(format!("{kind}-{stamp}.png"))
 }
 
+/// Render offscreen views of `targets` and answer with one sheet once every
+/// tile is back. Each view has its own camera framed on the targets' bounds;
+/// the viewport camera does not move.
+///
+/// Watching like `jackdaw/screenshot`: the first poll validates and queues,
+/// later polls answer once the readbacks have landed.
+pub fn views_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult<Option<Value>> {
+    check_enabled(world)?;
+    let params = params.unwrap_or(Value::Null);
+    let key = request_key(&params);
+    let frame = current_frame(world);
+    expire_stale(world, frame);
+
+    let found = match world
+        .get_resource_or_init::<PendingWaits>()
+        .requests
+        .get_mut(&key)
+    {
+        None => None,
+        Some(pending) => match &pending.state {
+            PendingState::Views(job) => {
+                pending.last_seen = frame;
+                Some((job.request, job.tiles.len()))
+            }
+            _ => {
+                return Err(invalid_params(format!(
+                    "views request {key} was already answered; give each call its own id"
+                )));
+            }
+        },
+    };
+    let Some((request, count)) = found else {
+        if !key.starts_with("id:") {
+            return Err(invalid_params(
+                "views needs a `request` id, so the poll after its answer does not render again",
+            ));
+        }
+        let job = plan_views(world, &params)?;
+        world
+            .get_resource_or_init::<PendingWaits>()
+            .requests
+            .insert(
+                key,
+                PendingRequest {
+                    last_seen: frame,
+                    state: PendingState::Views(Box::new(job)),
+                },
+            );
+        return Ok(None);
+    };
+    let Some(images) = crate::views::take_landed(world, request, count) else {
+        return Ok(None);
+    };
+    let finished = {
+        let mut waits = world.get_resource_or_init::<PendingWaits>();
+        if key.starts_with("id:") {
+            waits.requests.get_mut(&key).map(|pending| {
+                pending.last_seen = frame;
+                std::mem::replace(&mut pending.state, PendingState::Answered)
+            })
+        } else {
+            waits.requests.remove(&key).map(|pending| pending.state)
+        }
+    };
+    let Some(PendingState::Views(job)) = finished else {
+        return Ok(None);
+    };
+    let ViewsJob {
+        request,
+        tiles,
+        layout,
+        format,
+        path,
+        isolation,
+        bounds,
+    } = *job;
+    let late = crate::views::was_late(world, request);
+    crate::views::finish(world, request, isolation);
+    let mut answer = write_views(&tiles, layout, format, &path, &images, bounds)?;
+    if late {
+        answer["warnings"] = json!([
+            "the renderer was still compiling when the views were read back; tiles may be \
+             blank, so call again"
+        ]);
+    }
+    Ok(Some(answer))
+}
+
+/// Largest edge of a tile written to its own file, in pixels.
+const MAX_TILE_FILE_EDGE: u32 = 1024;
+/// Most pixels the tiles of one call may add up to when written one per file.
+const MAX_TILE_FILE_PIXELS: u64 = 4 * 1024 * 1024;
+
+/// A views request between its first poll and its answer.
+struct ViewsJob {
+    request: u64,
+    tiles: Vec<ViewTileLabel>,
+    /// The sheet the tiles go on; `None` writes each tile to its own file.
+    layout: Option<crate::views::SheetLayout>,
+    format: crate::screenshot::ThumbnailFormat,
+    path: PathBuf,
+    isolation: Option<crate::views::Isolation>,
+    bounds: (Vec3, Vec3),
+}
+
+struct ViewTileLabel {
+    label: String,
+    target: Option<Entity>,
+}
+
+/// Check a views request and queue its cameras. Nothing is queued when any
+/// parameter is wrong.
+fn plan_views(world: &mut World, params: &Value) -> BrpResult<ViewsJob> {
+    use crate::views::{MAX_EDGE, MAX_TILES, MIN_TILE, SheetLayout, TilePlan};
+
+    let targets = view_targets(world, params)?;
+    let per_target = flag(params, "per_target")?;
+    let angles = view_angles(params, per_target)?;
+    let max_px = match params.get("max_px").filter(|max| !max.is_null()) {
+        None => 512,
+        Some(max) => max
+            .as_u64()
+            .and_then(|max| u32::try_from(max).ok())
+            .filter(|max| (MIN_TILE..=MAX_EDGE).contains(max))
+            .ok_or_else(|| {
+                invalid_params(format!(
+                    "`max_px` = {max} is not a size from {MIN_TILE} to {MAX_EDGE}"
+                ))
+            })?,
+    };
+    let format = match params.get("format").and_then(Value::as_str) {
+        None | Some("jpeg" | "jpg") => crate::screenshot::ThumbnailFormat::Jpeg,
+        Some("png") => crate::screenshot::ThumbnailFormat::Png,
+        Some(other) => {
+            return Err(invalid_params(format!(
+                "`format` = {other}: expected `png` or `jpeg`"
+            )));
+        }
+    };
+    let sheet = match params.get("sheet") {
+        None | Some(Value::Null) => true,
+        _ => flag(params, "sheet")?,
+    };
+    let isolate = flag(params, "isolate")?;
+
+    let measured: Vec<(Entity, Option<(Vec3, Vec3)>)> = targets
+        .iter()
+        .map(|target| (*target, super::summary::world_bounds(world, *target)))
+        .collect();
+    let bounded: Vec<(Entity, (Vec3, Vec3))> = measured
+        .iter()
+        .map(|(target, bounds)| (*target, bounds.unwrap_or_else(|| unit_box(world, *target))))
+        .collect();
+    // Lights, cameras and markers have no bounds; they are framed only when
+    // nothing named has any.
+    let union = |(min, max): (Vec3, Vec3), (lo, hi): (Vec3, Vec3)| (min.min(lo), max.max(hi));
+    let bounds = measured
+        .iter()
+        .filter_map(|(_, bounds)| *bounds)
+        .reduce(union)
+        .or_else(|| bounded.iter().map(|(_, bounds)| *bounds).reduce(union))
+        .ok_or_else(|| invalid_params("nothing to view"))?;
+    let framed: Vec<(Option<Entity>, (Vec3, Vec3))> = if per_target {
+        bounded
+            .iter()
+            .map(|(target, bounds)| (Some(*target), *bounds))
+            .collect()
+    } else {
+        vec![(None, bounds)]
+    };
+    let count = framed.len() * angles.len();
+    if count > MAX_TILES {
+        return Err(invalid_params(format!(
+            "{count} views asked for; at most {MAX_TILES} fit one call"
+        )));
+    }
+    let layout = if sheet {
+        let columns = (per_target && angles.len() > 1).then_some(angles.len());
+        Some(SheetLayout::new(count, columns, max_px).ok_or_else(|| {
+            invalid_params(format!(
+                "`max_px` = {max_px} leaves {count} tiles under {MIN_TILE} px each"
+            ))
+        })?)
+    } else {
+        if max_px > MAX_TILE_FILE_EDGE {
+            return Err(invalid_params(format!(
+                "`max_px` = {max_px}: a tile written on its own is at most \
+                 {MAX_TILE_FILE_EDGE} px; ask for a sheet or a smaller size"
+            )));
+        }
+        let pixels = count as u64 * u64::from(max_px) * u64::from(max_px);
+        if pixels > MAX_TILE_FILE_PIXELS {
+            return Err(invalid_params(format!(
+                "{count} tiles of {max_px} px are {pixels} pixels, over the \
+                 {MAX_TILE_FILE_PIXELS} one call may write; ask for fewer or smaller tiles"
+            )));
+        }
+        None
+    };
+    if world
+        .get_resource_or_init::<PendingWaits>()
+        .requests
+        .values()
+        .any(|pending| matches!(pending.state, PendingState::Views(_)))
+    {
+        return Err(invalid_params(
+            "another views request is still rendering; wait for it",
+        ));
+    }
+    let path = match params.get("path").and_then(Value::as_str) {
+        Some(path) => project_path(world, path)?,
+        None => default_capture_path(world, "views"),
+    }
+    .with_extension(format.extension());
+
+    let mut plans = Vec::with_capacity(count);
+    let mut tiles = Vec::with_capacity(count);
+    for (target, bounds) in &framed {
+        for angle in &angles {
+            let (transform, projection) = crate::views::frame(*angle, *bounds);
+            let label = match target {
+                Some(target) => format!("{} {}", view_name(world, *target), angle.label()),
+                None => angle.label().to_string(),
+            };
+            plans.push(TilePlan {
+                label: label.clone(),
+                target: *target,
+                transform,
+                projection,
+            });
+            tiles.push(ViewTileLabel {
+                label,
+                target: *target,
+            });
+        }
+    }
+    let edge = layout.map_or(max_px, |layout| layout.tile);
+    let isolated = isolate.then_some(targets.as_slice());
+    let (request, isolation) = crate::views::start(world, &plans, edge, isolated);
+    Ok(ViewsJob {
+        request,
+        tiles,
+        layout,
+        format,
+        path,
+        isolation,
+        bounds,
+    })
+}
+
+/// The entities a views request names, or the selection, or every scene root.
+fn view_targets(world: &mut World, params: &Value) -> BrpResult<Vec<Entity>> {
+    let named = match params.get("targets") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(targets)) if !targets.is_empty() => Some(targets.clone()),
+        Some(other) => {
+            return Err(invalid_params(format!(
+                "`targets` is a list of entity ids or names, not {other}"
+            )));
+        }
+    };
+    let targets: Vec<Entity> = match named {
+        Some(named) => {
+            let mut targets = Vec::with_capacity(named.len());
+            let mut seen = EntityHashSet::default();
+            for target in &named {
+                let entity = match target {
+                    Value::Number(_) => entity_from_params(world, &json!({ "entity": target }))?,
+                    Value::String(_) => entity_from_params(world, &json!({ "name": target }))?,
+                    other => {
+                        return Err(invalid_params(format!(
+                            "a target is an entity id or a name, not {other}"
+                        )));
+                    }
+                };
+                if !belongs_to_the_scene(world, entity) {
+                    return Err(invalid_params(format!("{target} is not in the open scene")));
+                }
+                if seen.insert(entity) {
+                    targets.push(entity);
+                }
+            }
+            targets
+        }
+        None => {
+            let selected: Vec<Entity> = world
+                .get_resource::<Selection>()
+                .map(|selection| selection.entities.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|entity| world.get_entity(*entity).is_ok())
+                .collect();
+            if selected.is_empty() {
+                let mut roots = scene_roots(world);
+                roots.sort();
+                roots
+            } else {
+                selected
+            }
+        }
+    };
+    if targets.is_empty() {
+        return Err(invalid_params(
+            "the scene is empty, so there is nothing to view",
+        ));
+    }
+    Ok(targets)
+}
+
+/// The angles a views request names: names from
+/// [`crate::views::ViewAngle::NAMES`] or `{eye, target}`.
+fn view_angles(params: &Value, per_target: bool) -> BrpResult<Vec<crate::views::ViewAngle>> {
+    use crate::views::ViewAngle;
+    let given = match params.get("angles") {
+        None | Some(Value::Null) => {
+            return Ok(if per_target {
+                vec![ViewAngle::Iso]
+            } else {
+                ViewAngle::DEFAULT.to_vec()
+            });
+        }
+        Some(Value::Array(angles)) if !angles.is_empty() => angles,
+        Some(other) => {
+            return Err(invalid_params(format!(
+                "`angles` is a list of names or {{eye, target}}, not {other}"
+            )));
+        }
+    };
+    given
+        .iter()
+        .map(|angle| match angle {
+            Value::String(name) => ViewAngle::named(name).ok_or_else(|| {
+                invalid_params(format!(
+                    "angle `{name}`: expected one of {} or {{eye, target}}",
+                    ViewAngle::NAMES.join(", ")
+                ))
+            }),
+            Value::Object(_) => {
+                let point = |key: &str| -> BrpResult<Option<Vec3>> {
+                    match angle.get(key).filter(|value| !value.is_null()) {
+                        None => Ok(None),
+                        Some(value) => vec_of(value, 3)
+                            .map(|v| Some(Vec3::new(v[0], v[1], v[2])))
+                            .ok_or_else(|| {
+                                invalid_params(format!("angle `{key}` = {value} is not [x, y, z]"))
+                            }),
+                    }
+                };
+                let eye = point("eye")?
+                    .ok_or_else(|| invalid_params("an `{eye, target}` angle needs an `eye`"))?;
+                let target = point("target")?;
+                if target.is_some_and(|target| target == eye) {
+                    return Err(invalid_params("an angle's eye is its target"));
+                }
+                Ok(ViewAngle::Eye { eye, target })
+            }
+            other => Err(invalid_params(format!(
+                "an angle is a name or {{eye, target}}, not {other}"
+            ))),
+        })
+        .collect()
+}
+
+/// A unit box at `target`'s position, for a target with no bounds of its own.
+fn unit_box(world: &World, target: Entity) -> (Vec3, Vec3) {
+    let at = world
+        .get::<GlobalTransform>(target)
+        .map(GlobalTransform::translation)
+        .or_else(|| world.get::<Transform>(target).map(|t| t.translation))
+        .unwrap_or_default();
+    (at - Vec3::splat(0.5), at + Vec3::splat(0.5))
+}
+
+fn view_name(world: &World, entity: Entity) -> String {
+    world.get::<Name>(entity).map_or_else(
+        || entity.to_bits().to_string(),
+        |name| name.as_str().to_string(),
+    )
+}
+
+/// Write a views request's tiles, as one sheet or a file each, and the answer
+/// naming them.
+fn write_views(
+    tiles: &[ViewTileLabel],
+    layout: Option<crate::views::SheetLayout>,
+    format: crate::screenshot::ThumbnailFormat,
+    path: &Path,
+    images: &[::image::RgbImage],
+    (min, max): (Vec3, Vec3),
+) -> BrpResult<Value> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let bounds = json!([super::summary::vector(min), super::summary::vector(max)]);
+    let tile_entry = |tile: &ViewTileLabel, mut entry: Value| {
+        entry["label"] = json!(tile.label);
+        if let Some(target) = tile.target {
+            entry["entity"] = json!(target.to_bits());
+        }
+        entry
+    };
+    let cannot = |path: &Path, err: ::image::ImageError| {
+        internal_error(format!("cannot write {}: {err}", path.display()))
+    };
+    match layout {
+        Some(layout) => {
+            let sheet = crate::views::compose(layout, images);
+            crate::screenshot::save_rgb(&sheet, path, format).map_err(|err| cannot(path, err))?;
+            let laid: Vec<Value> = tiles
+                .iter()
+                .enumerate()
+                .map(|(index, tile)| {
+                    let (x, y) = layout.origin(index);
+                    tile_entry(tile, json!({ "at": [x, y, layout.tile, layout.tile] }))
+                })
+                .collect();
+            Ok(json!({
+                "path": path,
+                "width": sheet.width(),
+                "height": sheet.height(),
+                "tiles": laid,
+                "bounds": bounds,
+            }))
+        }
+        None => {
+            let mut written = Vec::with_capacity(tiles.len());
+            for (index, (tile, image)) in tiles.iter().zip(images).enumerate() {
+                let stem = path.file_stem().map_or_else(
+                    || "views".to_string(),
+                    |stem| stem.to_string_lossy().into_owned(),
+                );
+                let file = path.with_file_name(format!("{stem}-{index}.{}", format.extension()));
+                crate::screenshot::save_rgb(image, &file, format)
+                    .map_err(|err| cannot(&file, err))?;
+                written.push(tile_entry(
+                    tile,
+                    json!({ "path": file, "width": image.width(), "height": image.height() }),
+                ));
+            }
+            Ok(json!({ "tiles": written, "bounds": bounds }))
+        }
+    }
+}
+
 /// Let frames pass, or wait for the editor to reach a state. `until` takes
 /// `idle`, `pie_running` or `pie_stopped`; without it the call waits `frames`.
 pub fn wait_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult<Option<Value>> {
@@ -2536,17 +2981,23 @@ fn current_frame(world: &World) -> u32 {
 /// Forget requests nothing has polled for `STALE_FRAMES`.
 fn expire_stale(world: &mut World, frame: u32) {
     let mut dropped: Vec<(PathBuf, Option<Box<Aim>>)> = Vec::new();
+    let mut abandoned: Vec<Box<ViewsJob>> = Vec::new();
     {
         let mut waits = world.get_resource_or_init::<PendingWaits>();
         waits.requests.retain(|_, pending| {
             if frame.saturating_sub(pending.last_seen) < STALE_FRAMES {
                 return true;
             }
-            if let PendingState::Capture { path, aim, .. } = &mut pending.state {
-                dropped.push((path.clone(), aim.take()));
+            match std::mem::replace(&mut pending.state, PendingState::Answered) {
+                PendingState::Capture { path, aim, .. } => dropped.push((path, aim)),
+                PendingState::Views(job) => abandoned.push(job),
+                _ => {}
             }
             false
         });
+    }
+    for job in abandoned {
+        crate::views::finish(world, job.request, job.isolation);
     }
     // A capture whose client left still lands on disk; its log entry goes with
     // the request so the next capture to that path is not answered with it,
@@ -2592,6 +3043,8 @@ enum PendingState {
         /// The camera the capture aimed.
         aim: Option<Box<Aim>>,
     },
+    /// Offscreen views waiting for their tiles.
+    Views(Box<ViewsJob>),
     /// A capture already answered, kept until the HTTP layer stops polling.
     Answered,
     /// The frame at which the wait is over.

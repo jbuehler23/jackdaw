@@ -19,8 +19,37 @@ const SETTLE_FRAMES: u32 = 12;
 /// Largest edge a capture may ask for, in pixels.
 const MAX_EDGE: u32 = 8192;
 
+/// Frames an offscreen capture waits at most for the renderer to finish
+/// compiling pipelines before it is read back anyway, with a warning.
+pub const READY_CAP_FRAMES: u32 = 600;
+
+/// Frames a capture still renders once no pipeline is compiling, so the new
+/// pipelines draw before the readback.
+const READY_SETTLE_FRAMES: u32 = 3;
+
 pub(crate) fn plugin(app: &mut App) {
-    app.add_systems(Update, (settle_captures, keep_gizmos_out_of_recordings));
+    app.init_resource::<PipelinesPending>()
+        .add_systems(Update, (settle_captures, keep_gizmos_out_of_recordings));
+    if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render_app.add_systems(bevy::render::ExtractSchedule, report_pending_pipelines);
+    }
+}
+
+/// How many render pipelines the renderer was still compiling when it last
+/// reported. `None` without a renderer, where nothing waits on it.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelinesPending(pub Option<usize>);
+
+fn report_pending_pipelines(
+    mut main_world: ResMut<bevy::render::MainWorld>,
+    cache: Res<bevy::render::render_resource::PipelineCache>,
+) {
+    let waiting = Some(cache.waiting_pipelines().count());
+    if let Some(mut pending) = main_world.get_resource_mut::<PipelinesPending>()
+        && pending.0 != waiting
+    {
+        pending.0 = waiting;
+    }
 }
 
 /// A camera recording the scene to a file. While one exists the editor's
@@ -60,11 +89,43 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ViewportCaptureOp>();
 }
 
-/// An offscreen camera waiting to be read back to `path`.
+/// Where an offscreen capture goes once it is read back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CaptureSink {
+    /// A PNG at this path, recorded in the capture log.
+    File(PathBuf),
+    /// One tile of a views request, held until the request collects it.
+    ViewTile { request: u64, index: usize },
+}
+
+/// An offscreen camera waiting to be read back.
 #[derive(Component)]
 pub struct PendingCapture {
-    pub path: PathBuf,
+    pub sink: CaptureSink,
     pub frames_left: u32,
+    /// Frames spent waiting on the renderer's pipelines.
+    pub waited: u32,
+}
+
+impl PendingCapture {
+    /// The file the capture is written to, when it goes to one.
+    pub fn path(&self) -> Option<&Path> {
+        match &self.sink {
+            CaptureSink::File(path) => Some(path),
+            CaptureSink::ViewTile { .. } => None,
+        }
+    }
+}
+
+/// What an offscreen camera sees and how big its image is.
+pub struct OffscreenCamera {
+    pub transform: Transform,
+    pub projection: Projection,
+    pub layers: RenderLayers,
+    pub width: u32,
+    pub height: u32,
+    /// The camera whose environment light and tone mapping it borrows.
+    pub look_of: Option<Entity>,
 }
 
 /// Where a capture path lands: under the open project, whether given relative to it or absolute inside it.
@@ -94,14 +155,46 @@ pub fn spawn_capture_camera(
         .map(GlobalTransform::compute_transform)
         .or_else(|| node.get::<Transform>().copied())?;
     let projection = node.get::<Projection>().cloned().unwrap_or_default();
-    let light = node.get::<EnvironmentMapLight>().cloned();
-    let tonemapping = node.get::<Tonemapping>().copied();
+    let camera = OffscreenCamera {
+        transform,
+        projection,
+        layers: RenderLayers::layer(0),
+        width,
+        height,
+        look_of: Some(source),
+    };
+    Some(spawn_offscreen_camera(
+        world,
+        camera,
+        CaptureSink::File(path),
+    ))
+}
 
-    let mut image = Image::new_target_texture(width, height, TextureFormat::Rgba8UnormSrgb, None);
+/// Spawn an offscreen camera rendering `camera` into an image of its own,
+/// read back to `sink` once it has settled. Editor gizmos stay off while it
+/// exists.
+pub fn spawn_offscreen_camera(
+    world: &mut World,
+    camera: OffscreenCamera,
+    sink: CaptureSink,
+) -> Entity {
+    let light = camera
+        .look_of
+        .and_then(|source| world.get::<EnvironmentMapLight>(source).cloned());
+    let tonemapping = camera
+        .look_of
+        .and_then(|source| world.get::<Tonemapping>(source).copied());
+
+    let mut image = Image::new_target_texture(
+        camera.width,
+        camera.height,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    );
     image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
     let target = world.resource_mut::<Assets<Image>>().add(image);
 
-    let mut camera = world.spawn((
+    let mut spawned = world.spawn((
         crate::EditorEntity,
         Camera3d::default(),
         Camera {
@@ -109,56 +202,88 @@ pub fn spawn_capture_camera(
             ..default()
         },
         RenderTarget::Image(target.into()),
-        transform,
-        projection,
-        RenderLayers::layer(0),
+        camera.transform,
+        camera.projection,
+        camera.layers,
         KeepsGizmosOut,
         PendingCapture {
-            path,
+            sink,
             frames_left: SETTLE_FRAMES,
+            waited: 0,
         },
     ));
     if let Some(light) = light {
-        camera.insert(light);
+        spawned.insert(light);
     }
     if let Some(tonemapping) = tonemapping {
-        camera.insert(tonemapping);
+        spawned.insert(tonemapping);
     }
-    Some(camera.id())
+    spawned.id()
 }
 
+/// Read each offscreen camera back once it has rendered its settle frames
+/// and the renderer has no pipeline left compiling. A capture that waits
+/// [`READY_CAP_FRAMES`] is read back anyway and reported as possibly blank.
 fn settle_captures(
     mut commands: Commands,
+    pipelines: Res<PipelinesPending>,
     mut pending: Query<(Entity, &mut PendingCapture, &RenderTarget)>,
 ) {
+    let compiling = pipelines.0.is_some_and(|waiting| waiting > 0);
     for (camera, mut capture, target) in &mut pending {
+        if compiling && capture.waited < READY_CAP_FRAMES {
+            capture.waited += 1;
+            capture.frames_left = capture.frames_left.max(READY_SETTLE_FRAMES);
+            continue;
+        }
         if capture.frames_left > 0 {
             capture.frames_left -= 1;
             continue;
         }
+        let late = capture.waited >= READY_CAP_FRAMES;
         let Some(image) = target.as_image().cloned() else {
             commands.entity(camera).despawn();
             continue;
         };
-        let path = capture.path.clone();
+        let sink = capture.sink.clone();
         commands.entity(camera).remove::<PendingCapture>();
         commands.spawn(Screenshot::image(image)).observe(
             move |captured: On<ScreenshotCaptured>,
                   mut commands: Commands,
-                  log: Option<ResMut<crate::screenshot::CaptureLog>>| {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if crate::screenshot::write_png(&captured.image, &path)
-                    && let Some(mut log) = log
-                {
-                    log.record(
-                        path.clone(),
-                        (captured.image.width(), captured.image.height()),
-                    );
-                }
-                if let Ok(mut spent) = commands.get_entity(camera) {
-                    spent.despawn();
+                  log: Option<ResMut<crate::screenshot::CaptureLog>>,
+                  views: Option<ResMut<crate::views::ViewCaptures>>| {
+                // A camera despawned before its readback belongs to a request
+                // that has already ended.
+                let Ok(mut spent) = commands.get_entity(camera) else {
+                    return;
+                };
+                spent.despawn();
+                match &sink {
+                    CaptureSink::File(path) => {
+                        if let Some(parent) = path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if late {
+                            warn!(
+                                "capture: {} was read back while the renderer was still \
+                                 compiling; it may be blank",
+                                path.display()
+                            );
+                        }
+                        if crate::screenshot::write_png(&captured.image, path)
+                            && let Some(mut log) = log
+                        {
+                            log.record(
+                                path.clone(),
+                                (captured.image.width(), captured.image.height()),
+                            );
+                        }
+                    }
+                    CaptureSink::ViewTile { request, index } => {
+                        if let Some(mut views) = views {
+                            views.land(*request, *index, &captured.image, late);
+                        }
+                    }
                 }
             },
         );

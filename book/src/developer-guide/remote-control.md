@@ -61,6 +61,7 @@ lives in the target lib dir that command prints.
 | `save_scene` | Write the open scene to its file |
 | `select` | Select entities by name, and frame them |
 | `screenshot` | Capture the viewport or the window and return a thumbnail |
+| `views` | Render the targets from several angles offscreen and return one sheet |
 | `wait` | Let frames pass, or wait for a state the editor has reached |
 | `cancel` | End the modal operator holding the editor |
 | `assets` | Asset paths under `assets/`, by substring or `*` glob |
@@ -68,9 +69,9 @@ lives in the target lib dir that command prints.
 Two read-only resources: `jackdaw://operators` is the operator catalogue, and
 `jackdaw://scene` is the open document as BSN.
 
-`save_scene` and `screenshot` are the only tools that write to disk, though
+`save_scene`, `screenshot` and `views` are the only tools that write to disk, though
 `call_operator` reaches operators that save, export and bake. The server only
-talks to loopback, and screenshot and scene paths must name a file inside the
+talks to loopback, and capture and scene paths must name a file inside the
 project.
 
 ## Working with it

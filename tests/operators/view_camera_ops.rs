@@ -454,7 +454,11 @@ fn a_camera_capture_renders_offscreen_at_the_size_asked_for_from_the_viewports_v
         .iter(app.world())
         .next()
         .expect("an offscreen camera waits to be read back");
-    assert!(capture.path.ends_with("target/captures/frame.png"));
+    assert!(
+        capture
+            .path()
+            .is_some_and(|path| path.ends_with("target/captures/frame.png"))
+    );
     assert_eq!(transform.translation, Vec3::new(4.0, 5.0, 6.0));
     assert_eq!(
         layers,

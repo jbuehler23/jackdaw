@@ -214,6 +214,7 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         "save_scene",
         "select",
         "screenshot",
+        "views",
         "wait",
         "cancel",
         "assets",
@@ -227,6 +228,8 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         ("select", "frame"),
         ("screenshot", "look_at"),
         ("screenshot", "max_px"),
+        ("views", "targets"),
+        ("views", "isolate"),
         ("wait", "until"),
     ] {
         let schema = tools["result"]["tools"]
