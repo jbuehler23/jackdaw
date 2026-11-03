@@ -1453,6 +1453,17 @@ fn bsn_value_string(value: &jackdaw_bsn::BsnValue) -> Option<&str> {
     }
 }
 
+/// Give a scene node a new name, in the document and on the live entity.
+pub(crate) fn rename_scene_node(world: &mut World, entity: Entity, name: &str) {
+    {
+        let mut document = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = document.ast_for(entity) {
+            set_name_patch(&mut document, node, Some(name));
+        }
+    }
+    world.entity_mut(entity).insert(Name::new(name.to_string()));
+}
+
 /// Set, replace, or remove the [`jackdaw_bsn::BsnPatch::Name`] patch on a
 /// document node.
 pub(crate) fn set_name_patch(ast: &mut jackdaw_bsn::SceneBsnAst, node: Entity, name: Option<&str>) {

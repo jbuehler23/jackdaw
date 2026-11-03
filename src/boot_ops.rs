@@ -288,8 +288,10 @@ pub const SELECTION_FALLBACK_OPS: &[&str] = &[
 pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("brush.csg_intersect", "cutters"),
     ("brush.csg_intersect", "target"),
+    ("brush.csg_intersect", "targets"),
     ("brush.csg_subtract", "cutters"),
     ("brush.csg_subtract", "target"),
+    ("brush.csg_subtract", "targets"),
     ("camera.pixel_canvas", "entity"),
     ("clip.track.enable", "track"),
     ("clip.track.interpolation", "track"),

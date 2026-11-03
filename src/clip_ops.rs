@@ -9,7 +9,7 @@
 use bevy::{prelude::*, ui::ui_transform::UiGlobalTransform};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
-use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
+use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane, unsorted_global};
 
 use crate::brush::{BrushEditMode, BrushMeshCache, BrushSelection, ClipMode, ClipState, EditMode};
 use crate::core_extension::CoreExtensionInputContext;
@@ -27,7 +27,8 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ClipPlacePointOp>()
         .register_operator::<ClipCycleModeOp>()
         .register_operator::<ClipApplyOp>()
-        .register_operator::<ClipClearOp>();
+        .register_operator::<ClipClearOp>()
+        .register_operator::<BrushClipOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, ClipCycleModeOp>([PresetInput::key("Tab")]);
     ctx.bind_operator::<CoreExtensionInputContext, ClipApplyOp>([PresetInput::key("Enter")]);
@@ -455,4 +456,163 @@ fn apply_clip_face(
     commands.queue(move |world: &mut World| {
         crate::brush::sync_brush_to_ast(world, entity, &new_brush);
     });
+}
+
+/// Which side of a plane `brush.clip` keeps.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClipKeep {
+    Front,
+    Back,
+    Both,
+}
+
+/// A `brush.clip` call, checked.
+struct PlaneClip {
+    entity: Entity,
+    /// The plane in the brush's own space.
+    plane: BrushPlane,
+    keep: ClipKeep,
+}
+
+impl PlaneClip {
+    fn read(world: &World, params: &OperatorParameters) -> Result<Self, String> {
+        if !params.contains_key("entity") {
+            return Err("name the brush to clip with `entity`".to_string());
+        }
+        let entity = crate::draw_brush::operand_node(world, params, "entity")?;
+        if world.get::<Brush>(entity).is_none() {
+            return Err(format!("`entity` {entity} is not a brush"));
+        }
+        let normal = params
+            .as_vec3("normal")
+            .ok_or("give the plane's world-space `normal` as x,y,z")?;
+        if !normal.is_finite() || normal.length_squared() < 1e-12 {
+            return Err(format!("`normal` {normal} has no direction"));
+        }
+        let point = params
+            .as_vec3("point")
+            .ok_or("give a world-space `point` on the plane as x,y,z")?;
+        if !point.is_finite() {
+            return Err(format!("`point` {point} is not a place"));
+        }
+        let keep = if params.contains_key("keep") {
+            match params.as_str("keep") {
+                Some("front") => ClipKeep::Front,
+                Some("back") => ClipKeep::Back,
+                Some("both") => ClipKeep::Both,
+                _ => return Err("`keep` must be `front`, `back` or `both`".to_string()),
+            }
+        } else {
+            ClipKeep::Front
+        };
+        let global = unsorted_global(world, entity)
+            .ok_or_else(|| format!("`entity` {entity} has no transform"))?;
+        let affine = global.affine();
+        let local_normal = (Mat3::from(affine.matrix3).transpose() * normal).normalize_or_zero();
+        if local_normal == Vec3::ZERO {
+            return Err(format!("`entity` {entity} is scaled flat"));
+        }
+        let local_point = affine.inverse().transform_point3(point);
+        Ok(Self {
+            entity,
+            plane: BrushPlane {
+                normal: local_normal,
+                distance: local_normal.dot(local_point),
+            },
+            keep,
+        })
+    }
+}
+
+/// End a clip that leaves the scene as it was, telling the caller why.
+fn refuse_clip(world: &mut World, outcome: Outcome, why: impl AsRef<str>) -> OperatorResult {
+    warn_caller(world, format!("brush.clip: {}", why.as_ref()));
+    set_outcome(world, outcome);
+    OperatorResult::Cancelled
+}
+
+#[operator(
+    id = "brush.clip",
+    label = "Clip Brush by Plane",
+    description = "Clip a brush by a plane given as a world-space normal and a point on it, \
+                   without the clip tool. The side the normal points to is the front. `keep = \
+                   both` keeps the front in the brush and adds the back as a new brush named \
+                   `<brush> 2`. A plane that does not cross the brush changes nothing.",
+    params(
+        entity(Entity, doc = "Brush to clip."),
+        normal(Vec3, doc = "World-space normal of the plane."),
+        point(Vec3, doc = "A world-space point on the plane."),
+        keep(String, doc = "`front`, `back` or `both`. Defaults to `front`."),
+    )
+)]
+pub(crate) fn brush_clip(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    let clip = match PlaneClip::read(world, &params) {
+        Ok(clip) => clip,
+        Err(why) => return refuse_clip(world, Outcome::Invalid, why),
+    };
+    let Some(brush) = crate::draw_brush::evaluated_brush(world, clip.entity) else {
+        return refuse_clip(world, Outcome::Invalid, "the brush went away");
+    };
+
+    let eps = crate::draw_brush::plane_distance_eps(&brush.topology);
+    let (mut front, mut back) = (false, false);
+    for vertex in &brush.topology.vertices {
+        let side = clip.plane.normal.dot(vertex.position) - clip.plane.distance;
+        front |= side > eps;
+        back |= side < -eps;
+    }
+    if !(front && back) {
+        return refuse_clip(
+            world,
+            Outcome::Unchanged,
+            "the plane does not cross the brush, so nothing was clipped",
+        );
+    }
+
+    let failed = "the plane cut failed, so nothing was clipped";
+    let kept_side = if clip.keep == ClipKeep::Back {
+        BisectKeep::Back
+    } else {
+        BisectKeep::Front
+    };
+    let Some(kept) = bisect_brush(&brush, &clip.plane, kept_side) else {
+        return refuse_clip(world, Outcome::Unchanged, failed);
+    };
+    let split = if clip.keep == ClipKeep::Both {
+        let Some(back) = bisect_brush(&brush, &clip.plane, BisectKeep::Back) else {
+            return refuse_clip(world, Outcome::Unchanged, failed);
+        };
+        Some(back)
+    } else {
+        None
+    };
+
+    // Baked before the back half is cloned from the brush, so neither half
+    // carries the stack that is already folded into it.
+    crate::brush::topology_ops::mirror_ops::bake_mirror(world, clip.entity);
+    let mut created = Vec::new();
+    if let Some(back) = split {
+        let local = world
+            .get::<Transform>(clip.entity)
+            .copied()
+            .unwrap_or_default();
+        match crate::entity_ops::spawn_cloned_brush_with_geometry(world, clip.entity, back, local) {
+            Some(spawned) => {
+                let base = crate::draw_brush::name_or_default(world, clip.entity);
+                let mut taken = crate::draw_brush::names_besides(world, spawned);
+                let name = crate::draw_brush::free_name(&mut taken, &format!("{base}2"));
+                crate::commands::rename_scene_node(world, spawned, &name);
+                crate::commands::SpawnedEntities::record(world, spawned);
+                created.push(spawned);
+            }
+            None => warn_caller(
+                world,
+                "brush.clip: the back half could not be added, so only the front is kept",
+            ),
+        }
+    }
+    crate::brush::replace_brush(world, clip.entity, &kept);
+    jackdaw_api_internal::operator::report_replaced(world, &[], &created);
+    set_outcome(world, Outcome::Changed);
+    OperatorResult::Finished
 }

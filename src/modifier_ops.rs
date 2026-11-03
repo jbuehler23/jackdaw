@@ -41,13 +41,20 @@ pub(crate) fn bake_modifier_stack_entity(world: &mut World, entity: Entity) {
     };
     let mods: Vec<&Modifier> = stack.modifiers.iter().map(|e| &e.modifier).collect();
     bake_modifier_stack(&mut brush, &mods);
-    let topology = relift.then(|| brush.topology.clone());
-    if let Some(topology) = topology {
+    let baked = brush.clone();
+    if relift {
         world
             .entity_mut(entity)
-            .insert(BrushHalfedge::from_topology(&topology));
+            .insert(BrushHalfedge::from_topology(&baked.topology));
     }
     world.entity_mut(entity).remove::<ModifierStack>();
+    {
+        let mut document = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        if let Some(node) = document.ast_for(entity) {
+            document.remove_component_patch(node, ModifierStack::type_path());
+        }
+    }
+    crate::brush::sync_brush_to_ast(world, entity, &baked);
 }
 
 /// Append a modifier of the named kind to every selected brush's stack,
