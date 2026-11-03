@@ -51,6 +51,12 @@ pub fn user_toolchain_command<S: AsRef<OsStr>>(program: S) -> Command {
 /// Asks rustup for its list rather than running the toolchain, which rustup
 /// would otherwise download on the spot.
 pub fn sdk_toolchain_installed() -> Option<bool> {
+    toolchain_installed(RUSTUP_TOOLCHAIN)
+}
+
+/// Whether rustup has `toolchain` installed, or `None` when rustup cannot be
+/// run. Asks for the list so nothing is downloaded.
+pub fn toolchain_installed(toolchain: &str) -> Option<bool> {
     let output = user_toolchain_command("rustup")
         .args(["toolchain", "list"])
         .output()
@@ -58,9 +64,43 @@ pub fn sdk_toolchain_installed() -> Option<bool> {
         .filter(|output| output.status.success())?;
     Some(lists_toolchain(
         &String::from_utf8_lossy(&output.stdout),
-        RUSTUP_TOOLCHAIN,
+        toolchain,
         HOST_TRIPLE,
     ))
+}
+
+/// The `rust-toolchain.toml` or `rust-toolchain` that selects the toolchain
+/// for `dir`, searching `dir` and its parents the way rustup does.
+pub fn project_toolchain_file(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    dir.ancestors().find_map(|ancestor| {
+        ["rust-toolchain.toml", "rust-toolchain"]
+            .into_iter()
+            .map(|name| ancestor.join(name))
+            .find(|path| path.is_file())
+    })
+}
+
+/// The channel a toolchain file names, in either its TOML or its bare
+/// one-line form.
+pub fn toolchain_file_channel(contents: &str) -> Option<String> {
+    let unquote = |value: &str| value.trim().trim_matches(['"', '\'']).to_string();
+    let lines = || {
+        contents
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    };
+    let channel = lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "channel").then(|| unquote(value))
+    });
+    channel
+        .or_else(|| {
+            let mut all = lines();
+            let first = all.next()?;
+            (!first.starts_with('[') && !first.contains('=')).then(|| unquote(first))
+        })
+        .filter(|channel| !channel.is_empty())
 }
 
 /// Whether `rustup toolchain list` output names `toolchain` for `host`.
@@ -110,6 +150,19 @@ pub fn without_console_window(command: &mut Command) -> &mut Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toolchain_file_channels_are_read_in_both_forms() {
+        assert_eq!(
+            toolchain_file_channel("[toolchain]\nchannel = \"1.97.1\"\ncomponents = []\n"),
+            Some("1.97.1".to_string())
+        );
+        assert_eq!(
+            toolchain_file_channel("# pinned\nnightly\n"),
+            Some("nightly".to_string())
+        );
+        assert_eq!(toolchain_file_channel("[toolchain]\npath = \"/x\"\n"), None);
+    }
 
     #[test]
     fn a_user_toolchain_command_drops_the_editors_toolchain() {
