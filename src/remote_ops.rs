@@ -4,11 +4,10 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_commands::{CommandGroup, EditorCommand};
+use jackdaw_commands::EditorCommand;
 use jackdaw_feathers::dialog::{DialogChoices, EditorDialog, answer_dialog, resolve_dialog_choice};
 
-use crate::commands::{CommandHistory, ReparentEntity, SetBsnField, SetTransform, SpawnEntity};
-use crate::entity_ops::EntityTemplate;
+use crate::commands::{CommandHistory, SetBsnField, SetTransform};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<EntityAddGroupOp>()
@@ -63,11 +62,12 @@ fn a_dialog_is_up(dialogs: Query<(), With<EditorDialog>>) -> bool {
     !dialogs.is_empty()
 }
 
-/// Add an empty node, named, optionally under another node, as one undo entry.
+/// Add an empty node, named, placed, optionally under another node, as one
+/// undo entry.
 #[operator(
     id = "entity.add.group",
     label = "Add Group",
-    description = "Add an empty node, named, optionally under another node.",
+    description = "Add an empty node, named, placed, optionally under another node.",
     allows_undo = false,
     params(
         name(String, doc = "Name for the new node. Defaults to \"Group\"."),
@@ -75,73 +75,18 @@ fn a_dialog_is_up(dialogs: Query<(), With<EditorDialog>>) -> bool {
             Entity,
             doc = "Node that adopts it. Left out, top level, or in an open 2D world scene beside a selection inside the scene, else under the scene root."
         ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
     )
 )]
 pub(crate) fn entity_add_group(
     params: In<OperatorParameters>,
-    mut commands: Commands,
+    world: &mut World,
 ) -> OperatorResult {
-    let name = params
-        .as_str("name")
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Group")
-        .to_string();
-    let parent = params.as_entity("parent");
-    commands.queue(move |world: &mut World| {
-        // Spawn through the same command `entity.add.empty` pushes, so undo
-        // despawns the node rather than only taking back its rename.
-        let in_2d = crate::sprite_ops::scene_2d_parent(world, None);
-        let mut spawn = SpawnEntity::new(
-            move |world: &mut World| {
-                crate::entity_ops::spawn_template_under(world, EntityTemplate::Empty, in_2d)
-            },
-            "Add Group".to_string(),
-        );
-        spawn.execute(world);
-        let Some(entity) = spawn
-            .spawned
-            .filter(|entity| *entity != Entity::PLACEHOLDER)
-        else {
-            warn_caller(world, "entity.add.group: could not spawn the node");
-            return;
-        };
-
-        let old_name = world
-            .get::<Name>(entity)
-            .map(|name| name.as_str().to_string());
-        let mut group: Vec<Box<dyn EditorCommand>> = vec![
-            Box::new(spawn),
-            Box::new(SetBsnField::name(
-                entity,
-                old_name.clone(),
-                old_name,
-                name.clone(),
-            )),
-        ];
-        if let Some(parent) = parent
-            && world.get_entity(parent).is_ok()
-        {
-            group.push(Box::new(ReparentEntity {
-                entity,
-                old_parent: world.get::<ChildOf>(entity).map(ChildOf::parent),
-                new_parent: Some(parent),
-                old_index: None,
-            }));
-        }
-
-        // The spawn already ran; the rest runs here and the group goes on the
-        // history as one already-executed entry.
-        for command in group.iter_mut().skip(1) {
-            command.execute(world);
-        }
-        world
-            .resource_mut::<CommandHistory>()
-            .push_executed(Box::new(CommandGroup {
-                label: format!("Add Group {name}"),
-                commands: group,
-            }));
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(world, &params, crate::node_ops::NodeKind::Group)
 }
 
 /// Rename a scene node through the same document patch the hierarchy and the

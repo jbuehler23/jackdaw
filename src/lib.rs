@@ -112,6 +112,7 @@ pub mod modifier_ops;
 pub mod module_picker;
 pub mod native_dialog;
 pub mod new_project;
+pub(crate) mod node_ops;
 pub mod numeric_transform;
 pub mod operator_tooltip;
 pub mod perf_probe;
