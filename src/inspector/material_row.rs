@@ -392,7 +392,10 @@ fn write_face_material(world: &mut World, path: &str) -> bool {
         };
         handle
     };
-    world.trigger(crate::material_browser::ApplyMaterialDefToFaces { material });
+    world.trigger(crate::material_browser::ApplyMaterialDefToFaces {
+        material,
+        entities: None,
+    });
     world.flush();
     true
 }

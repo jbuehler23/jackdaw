@@ -556,12 +556,17 @@ fn the_tree_refuses_a_panel_of_the_editors_own_chrome() {
     app.update();
 
     for named in ["Sidebar", "SidebarRow"] {
-        let tree = call(&mut app, scene_tree_handler, json!({ "root": named }));
-        assert_eq!(
-            tree["tree"].as_array().expect("an array").len(),
-            0,
-            "{named} reached the caller: {tree}"
-        );
+        let answer = app
+            .world_mut()
+            .run_system_cached_with(scene_tree_handler, Some(json!({ "root": named })))
+            .expect("the handler ran");
+        if let Ok(tree) = answer {
+            assert_eq!(
+                tree["tree"].as_array().expect("an array").len(),
+                0,
+                "{named} reached the caller: {tree}"
+            );
+        }
     }
 }
 

@@ -11,6 +11,7 @@ mod outliner_drag_cleanup;
 mod outliner_keyboard_walk;
 mod outliner_missing_prefab;
 mod outliner_range_select;
+mod outliner_reference_filter;
 mod outliner_rename;
 mod outliner_row_drop;
 mod outliner_row_icons;

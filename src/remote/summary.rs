@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::camera::primitives::Aabb;
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
 use jackdaw_commands::CommandHistory;
@@ -82,26 +83,41 @@ impl Field {
     }
 }
 
-/// Which nodes a read covers: a name prefix and a kind, either optional.
+/// Which nodes a read covers: an entity reference, a name prefix and a kind,
+/// each optional.
 #[derive(Default, Clone)]
 struct NodeFilter {
+    reference: Option<String>,
+    matched: Option<EntityHashSet>,
     name_prefix: Option<String>,
     kind: Option<String>,
 }
 
 impl NodeFilter {
-    fn from_params(given: Option<&Value>) -> Result<Self, BrpError> {
+    /// `given` is an entity reference such as `"#roof"`, or
+    /// `{ref?, name_prefix?, kind?}`.
+    fn from_params(world: &mut World, given: Option<&Value>) -> Result<Self, BrpError> {
         let Some(given) = given.filter(|given| !given.is_null()) else {
             return Ok(Self::default());
         };
+        let mut filter = Self::default();
+        if let Some(reference) = given.as_str() {
+            filter.reference = Some(reference.to_string());
+            return filter.matched_by(world);
+        }
         let Some(object) = given.as_object() else {
             return Err(invalid_params(format!(
-                "`filter` is {{name_prefix?, kind?}}, not {given}"
+                "`filter` is a reference or {{ref?, name_prefix?, kind?}}, not {given}"
             )));
         };
-        let mut filter = Self::default();
         for (key, value) in object {
             match key.as_str() {
+                "ref" => {
+                    let reference = value
+                        .as_str()
+                        .ok_or_else(|| invalid_params("`ref` is an entity reference"))?;
+                    filter.reference = Some(reference.to_string());
+                }
                 "name_prefix" => {
                     filter.name_prefix = Some(
                         value
@@ -124,15 +140,34 @@ impl NodeFilter {
                 }
                 other => {
                     return Err(invalid_params(format!(
-                        "unknown filter `{other}`; use name_prefix or kind"
+                        "unknown filter `{other}`; use ref, name_prefix or kind"
                     )));
                 }
             }
         }
-        Ok(filter)
+        filter.matched_by(world)
+    }
+
+    /// Resolve the reference, if any, once for the whole read.
+    fn matched_by(mut self, world: &mut World) -> Result<Self, BrpError> {
+        if let Some(reference) = &self.reference {
+            self.matched = Some(
+                super::server::reference_matches(world, reference)?
+                    .into_iter()
+                    .collect(),
+            );
+        }
+        Ok(self)
     }
 
     fn admits(&self, world: &World, entity: Entity) -> bool {
+        if self
+            .matched
+            .as_ref()
+            .is_some_and(|matched| !matched.contains(&entity))
+        {
+            return false;
+        }
         if let Some(prefix) = &self.name_prefix
             && !label(world, entity).is_some_and(|name| name.starts_with(prefix.as_str()))
         {
@@ -147,7 +182,7 @@ impl NodeFilter {
     }
 
     fn key(&self) -> Value {
-        json!([self.name_prefix, self.kind])
+        json!([self.reference, self.name_prefix, self.kind])
     }
 }
 
@@ -168,7 +203,7 @@ pub fn scene_summary_handler(In(params): In<Option<Value>>, world: &mut World) -
     check_enabled(world)?;
     let params = params.unwrap_or(Value::Null);
     let fields = fields_from_params(params.get("fields"))?;
-    let filter = NodeFilter::from_params(params.get("filter"))?;
+    let filter = NodeFilter::from_params(world, params.get("filter"))?;
     let depth = depth_param(&params)?;
     let root = root_param(world, &params)?;
     let since = match params.get("since_revision") {
@@ -832,7 +867,7 @@ fn bounds(world: &mut World, args: &Value) -> Result<Value, BrpError> {
 
 /// How many scene nodes match `filter`, against `eq`, `min` or `max`.
 fn count(world: &mut World, args: &Value) -> Result<Value, BrpError> {
-    let filter = NodeFilter::from_params(args.get("filter"))?;
+    let filter = NodeFilter::from_params(world, args.get("filter"))?;
     let bound = |key: &str| args.get(key).and_then(Value::as_u64);
     let (eq, min, max) = (bound("eq"), bound("min"), bound("max"));
     if eq.is_none() && min.is_none() && max.is_none() {

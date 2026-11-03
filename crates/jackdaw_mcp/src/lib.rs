@@ -476,6 +476,10 @@ pub struct SceneTreeArgs {
     /// adds its children. The whole subtree when omitted.
     #[serde(default)]
     pub depth: Option<u32>,
+    /// An entity reference such as `#roof` or `village/*/roof`: report the
+    /// nodes it matches (within `root`) as the roots of the answer.
+    #[serde(default)]
+    pub filter: Option<String>,
 }
 
 /// Arguments for `scene_summary`.
@@ -496,8 +500,9 @@ pub struct SceneSummaryArgs {
     /// only the rows added, changed and removed since.
     #[serde(default)]
     pub since_revision: Option<u64>,
-    /// Keep only nodes matching `{name_prefix?, kind?}`, where kind is one
-    /// of brush, terrain, prefab, light, camera, model, mesh, ui, empty.
+    /// Keep only nodes an entity reference such as `"#roof"` matches, or
+    /// those matching `{ref?, name_prefix?, kind?}`, where kind is one of
+    /// brush, terrain, prefab, light, camera, model, mesh, ui, empty.
     #[serde(default)]
     pub filter: Option<Value>,
 }
@@ -914,7 +919,7 @@ impl JackdawMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.brp_text(
             "jackdaw/scene_tree",
-            compact(json!({ "root": args.root, "depth": args.depth })),
+            compact(json!({ "root": args.root, "depth": args.depth, "filter": args.filter })),
         )
         .await
     }
@@ -1203,7 +1208,11 @@ impl ServerHandler for JackdawMcp {
              nothing half-built; `dry_run` tries one without keeping it. For long scripts write \
              the calls to a file and use `run_batch_file`, which answers with a summary. Verify \
              with `checks` on the batch or `check` (rests_on, inside, no_overlap, bounds, \
-             count, watertight, each with the measured value) and read the scene with \
+             count, watertight, each with the measured value). Any entity or entity-list \
+             parameter also takes a name path (`village/inn/roof`, `*` inside one name) or a \
+             query (`#roof`, `#roof&under:village`, `!` to exclude); tag nodes with \
+             `entity.tag` so later calls can name them without reading the scene. Read the \
+             scene with \
              `scene_summary` (compact rows; pass its `revision` back as `since_revision` for \
              only what changed), not `scene_tree`. To see a part, call `views`: one \
              small sheet of it from several sides, rendered offscreen without moving the \

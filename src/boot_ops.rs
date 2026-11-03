@@ -19,8 +19,10 @@
 //! job.
 //!
 //! A clause is text, so [`resolve_entity_params`] fills in an operator's
-//! `Entity` parameters from `name=` or, for [`SELECTION_FALLBACK_OPS`], from
-//! the selection. A clause has no quoting, so a value cannot contain a space.
+//! `Entity` parameters from a reference ([`crate::entity_refs`]: an id, a name
+//! path or a query), from `name=`, or for [`SELECTION_FALLBACK_OPS`] from the
+//! selection, and turns an `entities` list of references into ids. A clause
+//! has no quoting, so a value cannot contain a space.
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -174,41 +176,6 @@ pub fn parse_value(raw: &str) -> PropertyValue {
     PropertyValue::String(raw.to_string().into())
 }
 
-/// The one entity carrying `wanted`, or `None` when none does or more than
-/// one does.
-pub(crate) fn unique_named_entity<'a>(
-    named: impl Iterator<Item = (Entity, &'a Name)>,
-    wanted: &str,
-) -> Option<Entity> {
-    let mut matches = named
-        .filter(|(_, name)| name.as_str() == wanted)
-        .map(|(entity, _)| entity);
-    match (matches.next(), matches.next()) {
-        (Some(entity), None) => Some(entity),
-        _ => None,
-    }
-}
-
-/// The one entity a label picks out: one carrying `wanted` as its name, or,
-/// failing that, the instance labelled by the file stem of the prefab it
-/// points at, which is the only label an instance that inherited nothing has.
-pub(crate) fn unique_labelled_entity<'a>(
-    named: impl Iterator<Item = (Entity, &'a Name)>,
-    unnamed_instances: impl Iterator<Item = (Entity, &'a crate::prefab::IsA)>,
-    wanted: &str,
-) -> Option<Entity> {
-    if let Some(entity) = unique_named_entity(named, wanted) {
-        return Some(entity);
-    }
-    let mut matches = unnamed_instances
-        .filter(|(_, isa)| isa.source.file_stem().and_then(|stem| stem.to_str()) == Some(wanted))
-        .map(|(entity, _)| entity);
-    match (matches.next(), matches.next()) {
-        (Some(entity), None) => Some(entity),
-        _ => None,
-    }
-}
-
 /// The entity an id names, or `None` when the authored scene no longer holds
 /// it. Editor chrome answers to no id, the way it answers to no name.
 fn entity_with_id(world: &World, id: i64) -> Option<Entity> {
@@ -217,15 +184,6 @@ fn entity_with_id(world: &World, id: i64) -> Option<Entity> {
             .get_entity(*entity)
             .is_ok_and(|entity| !entity.contains::<crate::EditorEntity>())
     })
-}
-
-fn entity_named(world: &mut World, wanted: &str) -> Option<Entity> {
-    let mut named = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
-    let mut instances = world.query_filtered::<
-        (Entity, &crate::prefab::IsA),
-        (Without<Name>, Without<crate::EditorEntity>),
-    >();
-    unique_labelled_entity(named.iter(world), instances.iter(world), wanted)
 }
 
 /// The parameter schemas declared for `id`, across every registration that
@@ -337,7 +295,8 @@ const BARE_NAME_SKIPS: &[(&str, &str)] = &[("entity.duplicate", "parent")];
 ///
 /// `entities=` is a comma-separated list of the ids `jackdaw/scene_tree`
 /// reports, which is how a caller acts on two entities that carry the same
-/// `Name`. A list holding anything else, an id the scene has since minted past,
+/// `Name`; [`resolve_entity_params`] has already turned any name, path or
+/// query in it into ids. A list holding anything else, an id the scene has since minted past,
 /// or anything belonging to the editor rather than to the scene, is refused
 /// whole rather than acted on as far as it reads.
 pub(crate) fn target_entities(
@@ -410,8 +369,20 @@ pub enum EntityParam {
         entity: Entity,
         entity_name: String,
     },
-    /// The name the clause carried answers to no entity, or to two.
+    /// The reference the clause carried matches no entity.
     NoSuchName { param: &'static str, name: String },
+    /// The reference matches several entities where one is wanted.
+    Ambiguous {
+        param: &'static str,
+        name: String,
+        count: usize,
+    },
+    /// The text is not a reference at all; `reason` says why.
+    Malformed { param: &'static str, reason: String },
+    /// A list of references resolved to `count` entities, passed on as ids.
+    Listed { param: &'static str, count: usize },
+    /// A list of references with an item that matches nothing or is malformed.
+    BadList { param: &'static str, reason: String },
     /// The id the clause carried answers to no entity in this scene.
     NoSuchId { param: &'static str, id: i64 },
     /// The clause named nothing and this operator does not take the selection.
@@ -429,13 +400,20 @@ impl EntityParam {
     /// True when the parameter was left unresolved, so the operator refuses
     /// rather than acts.
     pub fn is_refusal(&self) -> bool {
+        self.blocks() || matches!(self, Self::NeedsAName { .. } | Self::NothingSelected { .. })
+    }
+
+    /// True when the call named something the scene does not hold, or named it
+    /// wrongly, so it is refused as invalid before the operator runs.
+    pub fn blocks(&self) -> bool {
         matches!(
             self,
             Self::NoSuchName { .. }
                 | Self::NoSuchId { .. }
-                | Self::NeedsAName { .. }
-                | Self::NothingSelected { .. }
                 | Self::NotAName { .. }
+                | Self::Ambiguous { .. }
+                | Self::Malformed { .. }
+                | Self::BadList { .. }
         )
     }
 
@@ -460,10 +438,18 @@ impl EntityParam {
                 entity,
                 entity_name,
             } => format!("{op}: `{param}` = {entity} ({entity_name}), by id"),
-            Self::NoSuchName { param, name } => format!(
-                "{op}: `{param}` was not set: `{name}` names no entity in this scene, or more \
-                 than one"
+            Self::NoSuchName { param, name } => {
+                format!("{op}: `{param}` was not set: `{name}` names no entity in this scene")
+            }
+            Self::Ambiguous { param, name, count } => format!(
+                "{op}: `{param}` was not set: `{name}` matches {count} entities; this takes one"
             ),
+            Self::Malformed { param, reason } | Self::BadList { param, reason } => {
+                format!("{op}: `{param}` was not set: {reason}")
+            }
+            Self::Listed { param, count } => {
+                format!("{op}: `{param}` = {count} entities")
+            }
             Self::NoSuchId { param, id } => {
                 format!("{op}: `{param}` was not set: no entity in this scene has id {id}")
             }
@@ -502,8 +488,10 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
         .filter(|spec| spec.ty == "Entity")
         .map(|spec| spec.name)
         .collect();
+    let mut outcomes = resolve_entity_lists(world, op, &specs);
     if entity_params.is_empty() {
-        return Vec::new();
+        log_outcomes(&op.id, &outcomes);
+        return outcomes;
     }
     let sole_target = entity_params.len() == 1;
     let takes_selection = SELECTION_FALLBACK_OPS.contains(&op.id.as_str());
@@ -518,7 +506,6 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
             _ => None,
         });
 
-    let mut outcomes = Vec::with_capacity(entity_params.len());
     for param in entity_params {
         // A node the new entity goes under is not what the call acts on, so
         // naming it leaves the selection alone.
@@ -534,7 +521,11 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
             // reading ids out of the scene tree can act on either of them.
             Some(PropertyValue::Int(id)) => {
                 let id = *id;
-                let outcome = match entity_with_id(world, id) {
+                // A node named exactly these digits comes first, as for any
+                // other reference.
+                let found = crate::entity_refs::exactly_named(world, &id.to_string())
+                    .or_else(|| entity_with_id(world, id));
+                let outcome = match found {
                     Some(entity) => {
                         if selects {
                             crate::selection::select_only(world, entity);
@@ -564,8 +555,9 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
         };
 
         let outcome = match wanted {
-            Some(name) => match entity_named(world, &name) {
-                Some(entity) => {
+            Some(name) => match crate::entity_refs::resolve(world, &name) {
+                Ok(found) if found.len() == 1 => {
+                    let entity = found[0];
                     // Selecting the named entity satisfies the operator's own
                     // availability gate, as a click would.
                     if selects {
@@ -578,7 +570,18 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
                         entity_name: name_of(world, entity),
                     }
                 }
-                None => EntityParam::NoSuchName { param, name },
+                Ok(found) => EntityParam::Ambiguous {
+                    param,
+                    name,
+                    count: found.len(),
+                },
+                Err(crate::entity_refs::RefError::NoMatch) => {
+                    EntityParam::NoSuchName { param, name }
+                }
+                Err(err) => EntityParam::Malformed {
+                    param,
+                    reason: err.describe(&name),
+                },
             },
             None if OPTIONAL_ENTITY_PARAMS.contains(&(op.id.as_str(), param)) => {
                 EntityParam::LeftOut { param }
@@ -614,8 +617,13 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
         outcomes.push(outcome);
     }
 
-    for outcome in &outcomes {
-        if let Some(line) = outcome.line(&op.id) {
+    log_outcomes(&op.id, &outcomes);
+    outcomes
+}
+
+fn log_outcomes(op: &str, outcomes: &[EntityParam]) {
+    for outcome in outcomes {
+        if let Some(line) = outcome.line(op) {
             if outcome.is_refusal() {
                 warn!("{ENV_RUN_OP}: {line}");
             } else {
@@ -623,13 +631,64 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
             }
         }
     }
-    outcomes
+}
+
+/// The parameter an operator takes a list of entities in.
+const ENTITY_LIST_PARAM: &str = "entities";
+
+/// Turn an `entities` list of references into the ids the operator reads, so
+/// `#roof` reaches it as every roof. An item that matches nothing refuses the
+/// whole list.
+fn resolve_entity_lists(
+    world: &mut World,
+    op: &mut BootOp,
+    specs: &[&'static ParamSpec],
+) -> Vec<EntityParam> {
+    let Some(spec) = specs
+        .iter()
+        .find(|spec| spec.name == ENTITY_LIST_PARAM && spec.ty == "String")
+    else {
+        return Vec::new();
+    };
+    let param = spec.name;
+    let Some(at) = op.params.iter().position(|(key, _)| key == param) else {
+        return Vec::new();
+    };
+    let text = match &op.params[at].1 {
+        PropertyValue::String(text) => text.to_string(),
+        PropertyValue::Int(id) => id.to_string(),
+        PropertyValue::Entity(entity) => entity.to_bits().to_string(),
+        other => {
+            return vec![EntityParam::BadList {
+                param,
+                reason: format!("{other} is not a list of entity references"),
+            }];
+        }
+    };
+    match crate::entity_refs::resolve_list(world, &text) {
+        Ok(found) => {
+            let ids: Vec<String> = found.iter().map(|e| e.to_bits().to_string()).collect();
+            op.params[at].1 = PropertyValue::String(ids.join(",").into());
+            vec![EntityParam::Listed {
+                param,
+                count: found.len(),
+            }]
+        }
+        Err(reason) => vec![EntityParam::BadList { param, reason }],
+    }
+}
+
+/// Whether any resolution refuses the call before it runs.
+pub fn blocked(outcomes: &[EntityParam]) -> bool {
+    outcomes.iter().any(EntityParam::blocks)
 }
 
 /// Resolve one clause's entity parameters and dispatch it.
 pub fn run_boot_op(world: &mut World, op: &BootOp) -> Result<OperatorResult, CallOperatorError> {
     let mut op = op.clone();
-    resolve_entity_params(world, &mut op);
+    if blocked(&resolve_entity_params(world, &mut op)) {
+        return Ok(OperatorResult::Cancelled);
+    }
     let id = op.id.clone();
     let mut call = world.operator(op.id);
     for (key, value) in op.params {
@@ -663,7 +722,9 @@ pub fn run_op_clause_as_user(
     let Some(mut op) = parse_run_ops(clause).into_iter().next() else {
         return Err(CallOperatorError::UnknownId(clause.to_string().into()));
     };
-    resolve_entity_params(world, &mut op);
+    if blocked(&resolve_entity_params(world, &mut op)) {
+        return Ok(OperatorResult::Cancelled);
+    }
     let mut call = world.operator(op.id).settings(CallOperatorSettings {
         execution_context: ExecutionContext::Invoke,
         creates_history_entry: true,
@@ -795,28 +856,6 @@ mod tests {
                 param("offset", PropertyValue::Float(-0.5)),
             ]
         );
-    }
-
-    #[test]
-    fn a_name_carried_by_one_entity_resolves_to_it() {
-        let mut world = World::new();
-        let wanted = world.spawn(Name::new("Target")).id();
-        world.spawn(Name::new("Other"));
-        let mut state = world.query::<(Entity, &Name)>();
-        assert_eq!(
-            unique_named_entity(state.iter(&world), "Target"),
-            Some(wanted)
-        );
-    }
-
-    #[test]
-    fn a_name_two_entities_share_resolves_to_neither() {
-        let mut world = World::new();
-        world.spawn(Name::new("Row"));
-        world.spawn(Name::new("Row"));
-        let mut state = world.query::<(Entity, &Name)>();
-        assert_eq!(unique_named_entity(state.iter(&world), "Row"), None);
-        assert_eq!(unique_named_entity(state.iter(&world), "Missing"), None);
     }
 
     #[test]

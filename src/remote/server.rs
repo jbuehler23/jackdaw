@@ -424,25 +424,24 @@ fn property_to_json(value: &PropertyValue) -> Value {
     }
 }
 
-/// The entity a `{"entity": <id>}` or `{"name": "<Name>"}` field means.
+/// The entity a `{"entity": <id>}` or `{"name": "<reference>"}` field means;
+/// the reference is an id, a name path or a query matching one node.
 pub(super) fn entity_from_params(world: &mut World, params: &Value) -> Result<Entity, BrpError> {
     if let Some(bits) = params.get("entity").and_then(Value::as_u64) {
         return Entity::try_from_bits(bits)
             .filter(|entity| world.get_entity(*entity).is_ok())
             .ok_or_else(|| invalid_params(format!("no entity with id {bits}")));
     }
-    let Some(name) = params.get("name").and_then(Value::as_str) else {
+    let Some(name) = params
+        .get("name")
+        .or_else(|| params.get("entity"))
+        .and_then(Value::as_str)
+    else {
         return Err(invalid_params(
             "expected an \"entity\" id or a \"name\"".to_string(),
         ));
     };
-    let mut named = world.query_filtered::<(Entity, &Name), Without<crate::EditorEntity>>();
-    let mut instances = world.query_filtered::<
-        (Entity, &crate::prefab::IsA),
-        (Without<Name>, Without<crate::EditorEntity>),
-    >();
-    crate::boot_ops::unique_labelled_entity(named.iter(world), instances.iter(world), name)
-        .ok_or_else(|| invalid_params(format!("`{name}` names no entity in this scene, or two")))
+    crate::entity_refs::resolve_one(world, name).map_err(invalid_params)
 }
 
 // --- Methods ---
@@ -723,10 +722,11 @@ impl BatchPlan {
                     .map_err(refused)?;
                 prepared.push(Pending::Referencing(call.clone()));
             } else {
+                // Typed now so a mistake refuses the batch, but its entity
+                // references resolve when it runs, against what earlier calls left.
                 let call = fill_references(call, &[]).map_err(refused)?;
-                prepared.push(Pending::Ready(
-                    call_from_json(world, &call).map_err(refused)?,
-                ));
+                typed_call(world, &call).map_err(refused)?;
+                prepared.push(Pending::Ready(call));
             }
         }
         let plan = Self {
@@ -1006,7 +1006,7 @@ impl BatchRunner {
         let index = self.index;
         self.index += 1;
         let call = match pending {
-            Pending::Ready(call) => Ok(call),
+            Pending::Ready(call) => call_from_json(world, &call),
             Pending::Referencing(call) => {
                 fill_references(&call, &self.earlier).and_then(|call| call_from_json(world, &call))
             }
@@ -1066,10 +1066,10 @@ impl BatchRunner {
     }
 }
 
-/// A batch call, typed up front, or held until the outcomes it references are
-/// in.
+/// A batch call, checked up front, or held until the outcomes it references
+/// are in.
 pub(super) enum Pending {
-    Ready(PreparedCall),
+    Ready(Value),
     Referencing(Value),
 }
 
@@ -1234,6 +1234,8 @@ pub fn cancel_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
 pub(super) struct PreparedCall {
     op: BootOp,
     unresolved: Vec<String>,
+    /// A reference named nothing, or too much, so the call is refused unrun.
+    blocked: bool,
 }
 
 /// What a call did.
@@ -1288,12 +1290,18 @@ impl CallOutcome {
 /// Type a `{id, params}` object into a call the dispatcher can take.
 pub(super) fn call_from_json(world: &mut World, call: &Value) -> Result<PreparedCall, BrpError> {
     let mut op = typed_call(world, call)?;
-    let unresolved = resolve_entity_params(world, &mut op)
+    let outcomes = resolve_entity_params(world, &mut op);
+    let blocked = crate::boot_ops::blocked(&outcomes);
+    let unresolved = outcomes
         .into_iter()
         .filter(crate::boot_ops::EntityParam::is_refusal)
         .filter_map(|outcome| outcome.line(&op.id))
         .collect();
-    Ok(PreparedCall { op, unresolved })
+    Ok(PreparedCall {
+        op,
+        unresolved,
+        blocked,
+    })
 }
 
 /// Check a call's operator exists and type its parameters from the schema,
@@ -1334,8 +1342,26 @@ pub(super) fn dispatch(
     call: PreparedCall,
     history: bool,
 ) -> Result<CallOutcome, BrpError> {
-    let PreparedCall { op, unresolved } = call;
+    let PreparedCall {
+        op,
+        unresolved,
+        blocked,
+    } = call;
     let id = op.id.clone();
+    if blocked {
+        return Ok(CallOutcome {
+            id,
+            result: "cancelled".to_string(),
+            warnings: unresolved,
+            entities: Vec::new(),
+            reports: Vec::new(),
+            outcome: Some(jackdaw_api_internal::operator::Outcome::Invalid.as_str()),
+            removed: Vec::new(),
+            created: Vec::new(),
+            bounds: Vec::new(),
+            report: None,
+        });
+    }
     // Anything the operator itself wants the caller told. Cleared first,
     // so a warning from an earlier call is not reported against this one.
     world.get_resource_or_init::<OperatorWarnings>().0.clear();
@@ -1441,6 +1467,9 @@ fn spawned_by_the_call(world: &mut World) -> Vec<Entity> {
 
 /// The scene as the outliner shows it. `root` names the node to report and
 /// `depth` counts generations below it; absent, they mean the whole scene.
+/// `filter` is an entity reference: the nodes it matches (within `root`, when
+/// given) are reported as the roots, the topmost one where one sits under
+/// another.
 pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     check_enabled(world)?;
     let params = params.unwrap_or(Value::Null);
@@ -1455,11 +1484,80 @@ pub fn scene_tree_handler(In(params): In<Option<Value>>, world: &mut World) -> B
             .filter(|entity| belongs_to_the_scene(world, *entity))
             .collect(),
     };
+    let roots = match filter_param(world, &params)? {
+        None => roots,
+        Some(matched) => {
+            let kept: Vec<Entity> = matched
+                .into_iter()
+                .filter(|&entity| {
+                    belongs_to_the_scene(world, entity)
+                        && asked_for.is_none_or(|root| is_at_or_under(world, entity, root))
+                })
+                .collect();
+            let kept_set: EntityHashSet = kept.iter().copied().collect();
+            kept.into_iter()
+                .filter(|&entity| !has_ancestor_in(world, entity, &kept_set))
+                .collect()
+        }
+    };
     let tree: Vec<Value> = roots
         .into_iter()
         .map(|entity| node_json(world, entity, depth))
         .collect();
     Ok(json!({ "tree": tree }))
+}
+
+/// The nodes a read's `filter` reference matches, in outliner order. A
+/// reference that matches nothing reads as no nodes; a malformed one is
+/// refused.
+pub(super) fn filter_param(
+    world: &mut World,
+    params: &Value,
+) -> Result<Option<Vec<Entity>>, BrpError> {
+    let text = match params.get("filter") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(text)) => text,
+        Some(other) => {
+            return Err(invalid_params(format!(
+                "`filter` is an entity reference such as \"#roof\", not {other}"
+            )));
+        }
+    };
+    reference_matches(world, text).map(Some)
+}
+
+/// What a reference in a read matches: nothing is an answer, malformed text is
+/// refused.
+pub(super) fn reference_matches(world: &mut World, text: &str) -> Result<Vec<Entity>, BrpError> {
+    match crate::entity_refs::resolve(world, text) {
+        Ok(found) => Ok(found),
+        Err(crate::entity_refs::RefError::NoMatch) => Ok(Vec::new()),
+        Err(err) => Err(invalid_params(err.describe(text))),
+    }
+}
+
+/// Whether any ancestor of `entity` (not itself) is in `set`.
+fn has_ancestor_in(world: &World, entity: Entity, set: &EntityHashSet) -> bool {
+    let mut current = world.get::<ChildOf>(entity).map(ChildOf::parent);
+    while let Some(at) = current {
+        if set.contains(&at) {
+            return true;
+        }
+        current = world.get::<ChildOf>(at).map(ChildOf::parent);
+    }
+    false
+}
+
+/// Whether `entity` is `ancestor` or sits somewhere below it.
+fn is_at_or_under(world: &World, entity: Entity, ancestor: Entity) -> bool {
+    let mut current = Some(entity);
+    while let Some(at) = current {
+        if at == ancestor {
+            return true;
+        }
+        current = world.get::<ChildOf>(at).map(ChildOf::parent);
+    }
+    false
 }
 
 /// The `depth` a read asks for: generations below its root, all when absent.
@@ -1514,7 +1612,7 @@ pub(super) fn is_scene_node(world: &World, entity: Entity) -> bool {
 }
 
 /// The scene nodes at the top of the hierarchy, in query order.
-pub(super) fn scene_roots(world: &mut World) -> Vec<Entity> {
+pub(crate) fn scene_roots(world: &mut World) -> Vec<Entity> {
     let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
     let roots: Vec<Entity> = query.iter(world).collect();
     roots
@@ -1527,7 +1625,7 @@ pub(super) fn scene_roots(world: &mut World) -> Vec<Entity> {
 /// `UiTransform` rather than `Transform`, so under a scene root `Node` counts
 /// too; at the top level it would take in the editor's own chrome, which is
 /// `Node` all the way down and carries no scene marker.
-pub(super) fn is_scene_descendant(world: &World, entity: Entity) -> bool {
+pub(crate) fn is_scene_descendant(world: &World, entity: Entity) -> bool {
     if is_editor_furniture(world, entity) {
         return false;
     }
@@ -1537,7 +1635,7 @@ pub(super) fn is_scene_descendant(world: &World, entity: Entity) -> bool {
 /// Whether `entity` is in the open scene: a scene node, or a UI node under
 /// one. The editor's own chrome is `Node` all the way up to a root that is no
 /// scene node at all, so naming a piece of it reaches nothing.
-pub(super) fn belongs_to_the_scene(world: &World, entity: Entity) -> bool {
+pub(crate) fn belongs_to_the_scene(world: &World, entity: Entity) -> bool {
     let mut current = entity;
     for _ in 0..MAX_SCENE_DEPTH {
         if is_editor_furniture(world, current) {

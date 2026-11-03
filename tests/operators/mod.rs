@@ -30,6 +30,7 @@ mod scatter_ops;
 mod scene_op_ids;
 mod spawn_param_ops;
 mod sprite_ops;
+mod tag_ops;
 mod tileset_bits;
 mod tileset_browser;
 mod tileset_dock;

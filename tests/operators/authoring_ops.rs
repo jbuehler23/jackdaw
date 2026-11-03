@@ -364,7 +364,7 @@ fn a_name_that_matches_nothing_is_refused_by_the_resolver_not_the_gate() {
     );
     let line = outcomes[0].line("field.set").expect("a refusal says why");
     assert!(
-        line.contains("`Nope` names no entity in this scene, or more than one"),
+        line.contains("`Nope` names no entity in this scene"),
         "the refusal names what it could not find: {line}"
     );
 
