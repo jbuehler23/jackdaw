@@ -21,6 +21,7 @@ mod param_declarations;
 mod pixel_canvas_ops;
 mod prefab_ops;
 mod primitive_ops;
+mod prism_ops;
 mod remote_coverage;
 mod rename_ops;
 mod scatter_ops;

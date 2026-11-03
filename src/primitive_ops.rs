@@ -159,7 +159,7 @@ fn sided_pyramid(sides: usize) -> Brush {
 }
 
 /// A whole-number parameter within `range`.
-fn int_param(
+pub(crate) fn int_param(
     params: &OperatorParameters,
     key: &str,
     range: std::ops::RangeInclusive<i64>,
@@ -196,32 +196,21 @@ struct PrimitiveRequest {
     template: EntityTemplate,
     shape: Shape,
     size: Option<Vec3>,
-    transform: Option<Transform>,
-    material: Option<Handle<StandardMaterial>>,
-    parent: Option<Entity>,
-    name: Option<String>,
+    placement: Placement,
 }
 
-impl PrimitiveRequest {
-    fn read(
-        world: &World,
-        params: &OperatorParameters,
-        template: EntityTemplate,
-    ) -> Result<Self, String> {
-        let shape = Shape::read(params, template)?;
-        let size = vec3_param(params, "size")?;
-        if let Some(size) = size {
-            let checked = match template {
-                EntityTemplate::Plane => vec![size.x, size.z],
-                _ => size.to_array().to_vec(),
-            };
-            if checked.iter().any(|axis| *axis <= 0.0) {
-                return Err(format!(
-                    "every axis of `size` must be above zero, got {size}"
-                ));
-            }
-        }
+/// Where a new brush goes and what it wears: `pos`, `rot`, `material`,
+/// `parent` and `name`, checked.
+#[derive(Clone)]
+pub(crate) struct Placement {
+    pub transform: Option<Transform>,
+    pub material: Option<Handle<StandardMaterial>>,
+    pub parent: Option<Entity>,
+    pub name: Option<String>,
+}
 
+impl Placement {
+    pub(crate) fn read(world: &World, params: &OperatorParameters) -> Result<Self, String> {
         let pos = vec3_param(params, "pos")?;
         let rot = vec3_param(params, "rot")?;
         let transform = (pos.is_some() || rot.is_some()).then(|| {
@@ -261,9 +250,6 @@ impl PrimitiveRequest {
         };
 
         Ok(Self {
-            template,
-            shape,
-            size,
             transform,
             material,
             parent,
@@ -271,10 +257,67 @@ impl PrimitiveRequest {
         })
     }
 
+    /// Paint every face of `brush` with the asked material, else the last used.
+    pub(crate) fn paint(&self, world: &World, brush: &mut Brush) {
+        let worn = self.material.clone().or_else(|| {
+            world
+                .get_resource::<crate::brush::LastUsedMaterial>()
+                .and_then(|last| last.material.clone())
+        });
+        if let Some(worn) = worn {
+            for face in &mut brush.faces {
+                face.material = worn.clone();
+            }
+        }
+    }
+
+    pub(crate) fn apply(&self, entity: &mut EntityWorldMut, brush: Option<Brush>) {
+        if let Some(brush) = brush {
+            entity.insert(brush);
+        }
+        if let Some(transform) = self.transform {
+            entity.insert(transform);
+        }
+        if let Some(name) = &self.name {
+            entity.insert(Name::new(name.clone()));
+        }
+    }
+}
+
+impl PrimitiveRequest {
+    fn read(
+        world: &World,
+        params: &OperatorParameters,
+        template: EntityTemplate,
+    ) -> Result<Self, String> {
+        let shape = Shape::read(params, template)?;
+        let size = vec3_param(params, "size")?;
+        if let Some(size) = size {
+            let checked = match template {
+                EntityTemplate::Plane => vec![size.x, size.z],
+                _ => size.to_array().to_vec(),
+            };
+            if checked.iter().any(|axis| *axis <= 0.0) {
+                return Err(format!(
+                    "every axis of `size` must be above zero, got {size}"
+                ));
+            }
+        }
+
+        let placement = Placement::read(world, params)?;
+
+        Ok(Self {
+            template,
+            shape,
+            size,
+            placement,
+        })
+    }
+
     /// The brush to put in place of the template's, or `None` when the call
     /// asked nothing of it.
     fn brush(&self, world: &World) -> Option<Brush> {
-        if self.size.is_none() && self.shape.is_default() && self.material.is_none() {
+        if self.size.is_none() && self.shape.is_default() && self.placement.material.is_none() {
             return None;
         }
         let template = self.template;
@@ -286,29 +329,8 @@ impl PrimitiveRequest {
             Some(size) if template == EntityTemplate::Plane => base.scaled(size.with_y(1.0)),
             Some(size) => base.scaled(size),
         };
-        let worn = self.material.clone().or_else(|| {
-            world
-                .get_resource::<crate::brush::LastUsedMaterial>()
-                .and_then(|last| last.material.clone())
-        });
-        if let Some(worn) = worn {
-            for face in &mut brush.faces {
-                face.material = worn.clone();
-            }
-        }
+        self.placement.paint(world, &mut brush);
         Some(brush)
-    }
-
-    fn apply(&self, entity: &mut EntityWorldMut, brush: Option<Brush>) {
-        if let Some(brush) = brush {
-            entity.insert(brush);
-        }
-        if let Some(transform) = self.transform {
-            entity.insert(transform);
-        }
-        if let Some(name) = &self.name {
-            entity.insert(Name::new(name.clone()));
-        }
     }
 }
 
@@ -361,21 +383,57 @@ pub(crate) fn add_primitive(
             return OperatorResult::Cancelled;
         }
     };
-    let parent = request
-        .parent
-        .or_else(|| crate::sprite_ops::scene_2d_parent(world, None));
-    let spawn = move |world: &mut World| {
+    let label = format!("Add {}", template.label());
+    let placement = request.placement.clone();
+    add_as_one_entry(world, label, &placement, move |world, parent| {
         let brush = request.brush(world);
         crate::entity_ops::spawn_shaped_under(world, template, parent, |entity| {
-            request.apply(entity, brush);
+            request.placement.apply(entity, brush);
         })
-    };
-    let mut command: Box<dyn EditorCommand> =
-        Box::new(SpawnEntity::new(spawn, format!("Add {}", template.label())));
+    })
+}
+
+/// Spawn a node as one undo entry labelled `label` and report it changed.
+/// `spawn` builds it under the parent `placement` names, or the 2D scene root,
+/// chosen once so a redo puts it back in the same place.
+pub(crate) fn add_as_one_entry(
+    world: &mut World,
+    label: String,
+    placement: &Placement,
+    spawn: impl Fn(&mut World, Option<Entity>) -> Entity + Send + Sync + 'static,
+) -> OperatorResult {
+    let parent = placement
+        .parent
+        .or_else(|| crate::sprite_ops::scene_2d_parent(world, None));
+    let mut command: Box<dyn EditorCommand> = Box::new(SpawnEntity::new(
+        move |world: &mut World| spawn(world, parent),
+        label,
+    ));
     command.execute(world);
     world
         .resource_mut::<CommandHistory>()
         .push_executed(command);
     set_outcome(world, Outcome::Changed);
     OperatorResult::Finished
+}
+
+/// A number parameter within `range`, finite once it is an `f32`.
+pub(crate) fn float_param(
+    params: &OperatorParameters,
+    key: &str,
+    range: std::ops::RangeInclusive<f64>,
+) -> Result<Option<f32>, String> {
+    if !params.contains_key(key) {
+        return Ok(None);
+    }
+    match params.as_float(key) {
+        Some(value) if range.contains(&value) && (value as f32).is_finite() => {
+            Ok(Some(value as f32))
+        }
+        _ => Err(format!(
+            "`{key}` must be a number from {} to {}",
+            range.start(),
+            range.end()
+        )),
+    }
 }

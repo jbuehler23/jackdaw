@@ -850,12 +850,55 @@ pub(crate) fn spawn_shaped_under(
     parent: Option<Entity>,
     shape: impl FnOnce(&mut EntityWorldMut),
 ) -> Entity {
+    spawn_selected_under(
+        world,
+        parent,
+        |commands, selection| create_entity(commands, template, selection),
+        shape,
+    )
+}
+
+/// A brush node named "Brush" holding `brush`, spawned and selected the way
+/// [`spawn_shaped_under`] spawns a template, without a template's own shape.
+pub(crate) fn spawn_brush_under(
+    world: &mut World,
+    brush: crate::brush::Brush,
+    parent: Option<Entity>,
+    shape: impl FnOnce(&mut EntityWorldMut),
+) -> Entity {
+    spawn_selected_under(
+        world,
+        parent,
+        move |commands, selection| {
+            let entity = commands
+                .spawn((
+                    Name::new("Brush"),
+                    brush,
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .id();
+            selection.select_single(commands, entity);
+            entity
+        },
+        shape,
+    )
+}
+
+/// Spawn through `create`, select it, let `shape` edit it, then parent it
+/// under `parent` and write it to the document.
+fn spawn_selected_under(
+    world: &mut World,
+    parent: Option<Entity>,
+    create: impl FnOnce(&mut Commands, &mut Selection) -> Entity,
+    shape: impl FnOnce(&mut EntityWorldMut),
+) -> Entity {
     let parent = parent.map(|parent| crate::scene_nodes::live_entity(world, parent));
     let mut system_state: SystemState<(Commands, ResMut<Selection>)> = SystemState::new(world);
     let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
         return Entity::PLACEHOLDER;
     };
-    let entity = create_entity(&mut commands, template, &mut selection);
+    let entity = create(&mut commands, &mut selection);
     system_state.apply(world);
     shape(&mut world.entity_mut(entity));
     if let Some(parent) = parent {

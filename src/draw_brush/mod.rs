@@ -16,6 +16,7 @@ mod extend_face;
 mod interaction;
 mod plane_math;
 mod preview_mesh;
+mod prism;
 mod state;
 
 pub(crate) use self::build::*;
@@ -424,11 +425,50 @@ fn is_in_draw_brush_modal(active: ActiveModalQuery) -> bool {
     active.is_operator(ActivateDrawBrushModalOp::ID)
 }
 
-#[operator(id = "mesh.add_brush")]
-pub fn add_brush(_params: In<OperatorParameters>) -> OperatorResult {
-    // TODO: make this add / finalize the geometry that was previewed by the draw model
-    // The reason for this operator to exist is to be called by user extensions.
-    OperatorResult::Finished
+#[operator(
+    id = "mesh.add_brush",
+    label = "Add Brush",
+    description = "Add a brush extruded from an outline of points and arcs, optionally tapered, \
+                   sliced, placed, materialled, named and parented.",
+    allows_undo = false,
+    params(
+        outline(
+            String,
+            doc = "JSON list of [u, v] points and {\"arc\": {\"center\": [u, v], \"radius\", \
+                   \"from_deg\", \"to_deg\", \"segments\"}} items; at least three points, \
+                   concave allowed, not crossing itself. Arc angles turn from +u toward +v and \
+                   default to 8 segments."
+        ),
+        plane(
+            String,
+            doc = "xy, xz or yz: u and v are the first and second axis, the depth runs along \
+                   the third. Defaults to xz."
+        ),
+        depth(
+            f64,
+            doc = "Extrusion, centred on the plane; 0.01 to 10000. Defaults to 1."
+        ),
+        taper(
+            f64,
+            doc = "Scale of the far cap about the outline's centroid, 0 to 1; below 0.001 ends \
+                   in a point. Defaults to 1."
+        ),
+        depth_segments(i64, doc = "Slices along the depth, 1 to 64. Defaults to 1."),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        material(
+            String,
+            doc = "Material file path for every face. Defaults to the last used."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Brush\"."),
+    )
+)]
+pub fn add_brush(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    self::prism::add_outline_brush(world, &params)
 }
 
 pub(crate) const MIN_FOOTPRINT_SIZE: f32 = 0.01;

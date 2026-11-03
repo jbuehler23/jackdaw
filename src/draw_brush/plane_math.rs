@@ -126,10 +126,6 @@ pub(crate) fn snap_to_diagonal(hit: Vec3, origin: Vec3, plane: &DrawPlane) -> Ve
 
 /// True if the ring self-intersects when projected onto the drawing plane.
 pub(crate) fn polygon_self_intersects_on_plane(points: &[Vec3], plane: &DrawPlane) -> bool {
-    let n = points.len();
-    if n < 4 {
-        return false;
-    }
     let projected: Vec<Vec2> = points
         .iter()
         .map(|&point| {
@@ -139,6 +135,15 @@ pub(crate) fn polygon_self_intersects_on_plane(points: &[Vec3], plane: &DrawPlan
             )
         })
         .collect();
+    polygon_self_intersects(&projected)
+}
+
+/// True if two edges of the closed ring that do not share a corner touch.
+pub(crate) fn polygon_self_intersects(ring: &[Vec2]) -> bool {
+    let n = ring.len();
+    if n < 4 {
+        return false;
+    }
     for i in 0..n {
         let i_next = (i + 1) % n;
         for j in (i + 1)..n {
@@ -146,12 +151,7 @@ pub(crate) fn polygon_self_intersects_on_plane(points: &[Vec3], plane: &DrawPlan
             if i == j_next || j == i_next {
                 continue;
             }
-            if segments_intersect(
-                projected[i],
-                projected[i_next],
-                projected[j],
-                projected[j_next],
-            ) {
+            if segments_intersect(ring[i], ring[i_next], ring[j], ring[j_next]) {
                 return true;
             }
         }
