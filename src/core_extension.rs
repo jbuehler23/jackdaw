@@ -294,6 +294,7 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::brush::topology_ops::subdivide::add_to_extension(ctx);
         crate::brush::topology_ops::vertex_slide::add_to_extension(ctx);
         crate::brush::topology_ops::element_transform::add_to_extension(ctx);
+        crate::brush::topology_ops::randomize::add_to_extension(ctx);
         crate::brush::topology_ops::vertex_slide_modal::add_to_extension(ctx);
         crate::brush::topology_ops::weld_selected::add_to_extension(ctx);
         crate::brush::topology_ops::uv_reset_axes::add_to_extension(ctx);

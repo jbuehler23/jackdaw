@@ -20,6 +20,7 @@ pub mod merge_by_distance;
 pub mod mirror_ops;
 pub mod modal_edit;
 pub mod param_edit;
+pub mod randomize;
 pub mod reconvexify;
 pub mod select_elements;
 pub mod select_invert;

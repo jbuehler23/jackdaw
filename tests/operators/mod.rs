@@ -22,6 +22,7 @@ mod pixel_canvas_ops;
 mod prefab_ops;
 mod primitive_ops;
 mod prism_ops;
+mod randomize_ops;
 mod remote_coverage;
 mod rename_ops;
 mod revolve_ops;

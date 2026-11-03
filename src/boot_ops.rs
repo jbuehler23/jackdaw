@@ -292,6 +292,7 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("brush.csg_subtract", "cutters"),
     ("brush.csg_subtract", "target"),
     ("brush.csg_subtract", "targets"),
+    ("brush.mesh.randomize", "entity"),
     ("camera.pixel_canvas", "entity"),
     ("clip.track.enable", "track"),
     ("clip.track.interpolation", "track"),

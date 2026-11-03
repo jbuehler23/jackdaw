@@ -551,6 +551,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
         false,
     ),
     ("brush.mesh.loop_cut_at", &["entity"], false),
+    ("brush.mesh.randomize", &["entity"], false),
     ("brush.select_elements", &["entity"], false),
     ("camera.pixel_canvas", &["entity"], false),
     ("clip.select", &["entity"], true),

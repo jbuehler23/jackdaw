@@ -25,7 +25,7 @@ const MIN_VERTEX_GAP: f32 = 1e-6;
 
 /// Least move, relative to the size of the coordinates involved, that counts
 /// as moving a vertex rather than rounding.
-const MOVE_TOLERANCE: f32 = 1e-6;
+pub(super) const MOVE_TOLERANCE: f32 = 1e-6;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<BrushElementsTransformOp>();
@@ -79,7 +79,7 @@ pub(crate) fn brush_elements_transform(
         Err(why) => return refuse(world, LABEL, why),
     };
     if !is_element_mode(*world.resource::<EditMode>()) {
-        return unchanged(world, "no faces, edges or vertices are being edited");
+        return unchanged(world, LABEL, "no faces, edges or vertices are being edited");
     }
     let targets = targets(world);
     let picked_world: Vec<Vec3> = targets
@@ -94,7 +94,7 @@ pub(crate) fn brush_elements_transform(
         })
         .collect();
     if picked_world.is_empty() {
-        return unchanged(world, "nothing is selected to transform");
+        return unchanged(world, LABEL, "nothing is selected to transform");
     }
     let pivot_world = centroid(&picked_world);
 
@@ -107,9 +107,17 @@ pub(crate) fn brush_elements_transform(
         }
     }
     if edits.is_empty() {
-        return unchanged(world, "the transform leaves every vertex where it is");
+        return unchanged(
+            world,
+            LABEL,
+            "the transform leaves every vertex where it is",
+        );
     }
+    commit(world, LABEL, edits)
+}
 
+/// Put every reshaped brush in place and report how many vertices moved.
+pub(super) fn commit(world: &mut World, label: &str, edits: Vec<Reshaped>) -> OperatorResult {
     let moved: usize = edits.iter().map(|edit| edit.moved).sum();
     let brushes = edits.len();
     for edit in edits {
@@ -119,9 +127,9 @@ pub(crate) fn brush_elements_transform(
         world.entity_mut(edit.entity).insert(edit.halfedge);
     }
     let report = if brushes == 1 {
-        format!("{LABEL}: moved {moved} vertices")
+        format!("{label}: moved {moved} vertices")
     } else {
-        format!("{LABEL}: moved {moved} vertices on {brushes} brushes")
+        format!("{label}: moved {moved} vertices on {brushes} brushes")
     };
     report_to_caller(world, report);
     set_outcome(world, Outcome::Changed);
@@ -140,40 +148,125 @@ pub(crate) fn can_transform_elements(
 }
 
 /// Whether faces, edges or vertices are being edited.
-fn is_element_mode(edit_mode: EditMode) -> bool {
+pub(super) fn is_element_mode(edit_mode: EditMode) -> bool {
     matches!(
         edit_mode,
         EditMode::BrushEdit(BrushEditMode::Face | BrushEditMode::Edge | BrushEditMode::Vertex)
     )
 }
 
-fn unchanged(world: &mut World, why: &str) -> OperatorResult {
-    warn_caller(world, format!("{LABEL}: {why}"));
+pub(super) fn unchanged(world: &mut World, label: &str, why: &str) -> OperatorResult {
+    warn_caller(world, format!("{label}: {why}"));
     set_outcome(world, Outcome::Unchanged);
     OperatorResult::Cancelled
 }
 
-/// A brush being edited with a selection, as the transform found it.
-struct Target {
-    entity: Entity,
-    brush: Brush,
-    rings: Vec<Vec<usize>>,
-    /// Per vertex, whether the selection touches it.
-    picked: Vec<bool>,
-    to_world: Affine3A,
-    mirror: Option<MeshMirror>,
+/// A brush to reshape, as the operator found it.
+pub(super) struct Target {
+    pub(super) entity: Entity,
+    pub(super) brush: Brush,
+    pub(super) rings: Vec<Vec<usize>>,
+    /// Per vertex, whether the operator acts on it.
+    pub(super) picked: Vec<bool>,
+    pub(super) to_world: Affine3A,
+    pub(super) mirror: Option<MeshMirror>,
+}
+
+impl Target {
+    /// `entity`'s brush with the vertices `pick` chooses from its face
+    /// rings; `None` when it is no brush or `pick` chooses nothing.
+    pub(super) fn new(
+        world: &World,
+        entity: Entity,
+        pick: impl FnOnce(&Brush, &[Vec<usize>]) -> Vec<usize>,
+    ) -> Option<Self> {
+        let brush = world.get::<Brush>(entity)?.clone();
+        let rings = face_rings(&brush.topology);
+        let mut picked = vec![false; brush.topology.vertices.len()];
+        for vert in pick(&brush, &rings) {
+            if let Some(slot) = picked.get_mut(vert) {
+                *slot = true;
+            }
+        }
+        if !picked.contains(&true) {
+            return None;
+        }
+        let to_world = jackdaw_scene_types::unsorted_global(world, entity)
+            .map_or(Affine3A::IDENTITY, |global| global.affine());
+        let mirror = world
+            .get::<ModifierStack>(entity)
+            .and_then(ModifierStack::first_enabled_mirror)
+            .cloned();
+        Some(Self {
+            entity,
+            brush,
+            rings,
+            picked,
+            to_world,
+            mirror,
+        })
+    }
+
+    pub(super) fn positions(&self) -> Vec<Vec3> {
+        self.brush
+            .topology
+            .vertices
+            .iter()
+            .map(|vert| vert.position)
+            .collect()
+    }
+
+    /// The brush with the vertices at `indices` moved to `positions`
+    /// (brush-local), clipped at an enabled mirror plane, and refused when a
+    /// face it reshapes is left with no area or two vertices in one place.
+    /// `None` when `indices` is empty.
+    pub(super) fn reshape(
+        &self,
+        before: &[Vec3],
+        indices: &[usize],
+        positions: &[Vec3],
+    ) -> Result<Option<Reshaped>, String> {
+        if indices.is_empty() {
+            return Ok(None);
+        }
+        let mut brush = self.brush.clone();
+        let mut halfedge = BrushHalfedge::from_topology(&brush.topology);
+        apply_vertex_deltas(
+            &mut brush,
+            Some(&mut halfedge),
+            self.mirror.as_ref(),
+            &self.brush,
+            before,
+            &self.rings,
+            indices,
+            positions,
+        );
+        let mut moved = vec![false; before.len()];
+        for &vert in indices {
+            moved[vert] = true;
+        }
+        if let Some(why) = degenerate_face(self.entity, &brush, &self.rings, &moved) {
+            return Err(why);
+        }
+        Ok(Some(Reshaped {
+            entity: self.entity,
+            brush,
+            halfedge,
+            moved: indices.len(),
+        }))
+    }
 }
 
 /// One brush reshaped, ready to replace the live one.
-struct Reshaped {
+pub(super) struct Reshaped {
     entity: Entity,
-    brush: Brush,
+    pub(super) brush: Brush,
     halfedge: BrushHalfedge,
     moved: usize,
 }
 
 /// Every brush being edited whose selection touches a vertex.
-fn targets(world: &World) -> Vec<Target> {
+pub(super) fn targets(world: &World) -> Vec<Target> {
     let selection = world.resource::<BrushSelection>();
     let mut entities: Vec<Entity> = selection.edit_brushes().collect();
     entities.sort();
@@ -181,31 +274,7 @@ fn targets(world: &World) -> Vec<Target> {
         .into_iter()
         .filter_map(|entity| {
             let sub = selection.sub(entity)?;
-            let brush = world.get::<Brush>(entity)?.clone();
-            let rings = face_rings(&brush.topology);
-            let mut picked = vec![false; brush.topology.vertices.len()];
-            for vert in sub_selection_vertices(sub, &rings) {
-                if let Some(slot) = picked.get_mut(vert) {
-                    *slot = true;
-                }
-            }
-            if !picked.contains(&true) {
-                return None;
-            }
-            let to_world = jackdaw_scene_types::unsorted_global(world, entity)
-                .map_or(Affine3A::IDENTITY, |global| global.affine());
-            let mirror = world
-                .get::<ModifierStack>(entity)
-                .and_then(ModifierStack::first_enabled_mirror)
-                .cloned();
-            Some(Target {
-                entity,
-                brush,
-                rings,
-                picked,
-                to_world,
-                mirror,
-            })
+            Target::new(world, entity, |_, rings| sub_selection_vertices(sub, rings))
         })
         .collect()
 }
@@ -270,10 +339,30 @@ enum Pivot {
     Point(Vec3),
 }
 
+/// The axes an operator's offsets are given along.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Space {
+pub(super) enum Space {
     World,
     Local,
+}
+
+impl Space {
+    /// The `space` parameter: world or local, world when absent.
+    pub(super) fn read(params: &OperatorParameters) -> Result<Self, String> {
+        match text(params, "space")? {
+            None | Some("world") => Ok(Self::World),
+            Some("local") => Ok(Self::Local),
+            Some(other) => Err(format!("`space` {other:?} must be world or local")),
+        }
+    }
+
+    /// The affine from brush-local coordinates into this space.
+    pub(super) fn local_to_space(self, to_world: Affine3A) -> Affine3A {
+        match self {
+            Self::World => to_world,
+            Self::Local => Affine3A::IDENTITY,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -351,11 +440,7 @@ impl ElementTransform {
                 ));
             }
         };
-        let space = match text(params, "space")? {
-            None | Some("world") => Space::World,
-            Some("local") => Space::Local,
-            Some(other) => return Err(format!("`space` {other:?} must be world or local")),
-        };
+        let space = Space::read(params)?;
         let curve = match text(params, "falloff_curve")? {
             None | Some("smooth") => FalloffCurve::Smooth,
             Some("linear") => FalloffCurve::Linear,
@@ -396,43 +481,10 @@ impl ElementTransform {
     /// `target` reshaped, with `pivot_world` the centroid of every selected
     /// vertex. `None` when no vertex moves.
     fn reshape(&self, target: &Target, pivot_world: Vec3) -> Result<Option<Reshaped>, String> {
-        let before: Vec<Vec3> = target
-            .brush
-            .topology
-            .vertices
-            .iter()
-            .map(|vert| vert.position)
-            .collect();
+        let before = target.positions();
         let (indices, positions) =
             self.moves(&before, &target.picked, target.to_world, pivot_world);
-        if indices.is_empty() {
-            return Ok(None);
-        }
-        let mut brush = target.brush.clone();
-        let mut halfedge = BrushHalfedge::from_topology(&brush.topology);
-        apply_vertex_deltas(
-            &mut brush,
-            Some(&mut halfedge),
-            target.mirror.as_ref(),
-            &target.brush,
-            &before,
-            &target.rings,
-            &indices,
-            &positions,
-        );
-        let mut moved = vec![false; before.len()];
-        for &vert in &indices {
-            moved[vert] = true;
-        }
-        if let Some(why) = degenerate_face(target.entity, &brush, &target.rings, &moved) {
-            return Err(why);
-        }
-        Ok(Some(Reshaped {
-            entity: target.entity,
-            brush,
-            halfedge,
-            moved: indices.len(),
-        }))
+        target.reshape(&before, &indices, &positions)
     }
 
     /// The vertices of `positions` (brush-local) that move and where to,
@@ -444,10 +496,7 @@ impl ElementTransform {
         to_world: Affine3A,
         pivot_world: Vec3,
     ) -> (Vec<usize>, Vec<Vec3>) {
-        let to_space = match self.space {
-            Space::World => to_world,
-            Space::Local => Affine3A::IDENTITY,
-        };
+        let to_space = self.space.local_to_space(to_world);
         let from_space = to_space.inverse();
         let in_space: Vec<Vec3> = positions
             .iter()
@@ -513,7 +562,10 @@ impl ElementTransform {
 }
 
 /// A text parameter, `None` when absent.
-fn text<'a>(params: &'a OperatorParameters, key: &str) -> Result<Option<&'a str>, String> {
+pub(super) fn text<'a>(
+    params: &'a OperatorParameters,
+    key: &str,
+) -> Result<Option<&'a str>, String> {
     if !params.contains_key(key) {
         return Ok(None);
     }
