@@ -454,12 +454,16 @@ pub(crate) fn terrain_scatter_asset_remove(
     params(
         index(i64, doc = "Palette index."),
         name(String, doc = "The model's material name."),
-        material(String, doc = "Material asset path. Empty takes the override off."),
+        material(
+            String,
+            doc = "Palette name or material asset path. Empty takes the override off."
+        ),
     )
 )]
 pub(crate) fn terrain_scatter_asset_material(
     params: In<OperatorParameters>,
     mut state: ResMut<TerrainScatterState>,
+    registry: Option<Res<crate::material_assets::MaterialRegistry>>,
 ) -> Option<OperatorResult> {
     let index = usize::try_from(params.as_int("index")?).ok()?;
     let name = params.as_str("name")?.trim().to_string();
@@ -473,7 +477,10 @@ pub(crate) fn terrain_scatter_asset_material(
         .filter(|path| !path.is_empty())
     {
         Some(path) => {
-            asset.materials.insert(name, path.to_string());
+            asset.materials.insert(
+                name,
+                crate::material_palette::palette_path_in(registry.as_deref(), path),
+            );
         }
         None => {
             asset.materials.remove(&name);
@@ -493,7 +500,10 @@ pub(crate) fn terrain_scatter_asset_material(
         terrain(String, doc = "Terrain name. Defaults to the selected terrain."),
         asset(String, doc = "Model path as the terrain's stored scatter names it."),
         name(String, doc = "The model's material name."),
-        material(String, doc = "Material asset path. Empty takes the override off."),
+        material(
+            String,
+            doc = "Palette name or material asset path. Empty takes the override off."
+        ),
     )
 )]
 pub(crate) fn terrain_scatter_palette_material(
@@ -527,7 +537,9 @@ pub(crate) fn terrain_scatter_palette_material(
     let material = params
         .as_str("material")
         .map(str::trim)
-        .filter(|path| !path.is_empty());
+        .filter(|path| !path.is_empty())
+        .map(|reference| crate::material_assets::stored_reference(world, reference));
+    let material = material.as_deref();
     if let Some(path) = material
         && jackdaw_runtime::material_of_reference(world, path).is_none()
     {

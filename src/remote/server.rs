@@ -492,6 +492,9 @@ pub fn status_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
         "scene": scene,
         "dirty": dirty,
         "selection": selection,
+        // The project palette: the active one, every palette's names and the
+        // material files they stand for, and why the file could not be read.
+        "palette": crate::material_palette::palette_status(world),
         // Non-null means a modal operator is holding the editor and every
         // other modal call will be refused until `jackdaw/cancel`.
         "modal": modal,

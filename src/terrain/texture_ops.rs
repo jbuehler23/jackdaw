@@ -126,7 +126,7 @@ fn commit(
     allows_undo = false,
     params(material(
         String,
-        doc = "Path of a saved material file, such as \
+        doc = "Palette name or path of a saved material file, such as roof or \
                materials/slate.material.bsn. A bare name still resolves for \
                one release."
     )),
@@ -180,6 +180,7 @@ fn slot_reference(
     registry: &MaterialRegistry,
     named: &str,
 ) -> Result<String, TerrainMaterialError> {
+    let named = registry.palette_path(named);
     let name = jackdaw_bsn::asset_stem(named);
     if let Some(entry) =
         index.and_then(|index| crate::material_assets::material_file_of(index, named))

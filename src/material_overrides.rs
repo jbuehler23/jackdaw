@@ -223,8 +223,8 @@ impl EditorCommand for SetMaterialOverrides {
         ),
         material(
             String,
-            doc = "Path of the material asset to wear, e.g. materials/moss.bsn. Empty gives the \
-                   model its own material back."
+            doc = "Palette name or path of the material asset to wear, e.g. roof or \
+                   materials/moss.bsn. Empty gives the model its own material back."
         ),
     )
 )]
@@ -265,7 +265,9 @@ pub(crate) fn material_override(
     let material = params
         .as_str("material")
         .map(str::trim)
-        .filter(|path| !path.is_empty());
+        .filter(|path| !path.is_empty())
+        .map(|reference| crate::material_assets::stored_reference(world, reference));
+    let material = material.as_deref();
     if let Some(path) = material
         && jackdaw_runtime::material_of_reference(world, path).is_none()
     {

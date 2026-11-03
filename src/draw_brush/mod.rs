@@ -463,7 +463,7 @@ fn is_in_draw_brush_modal(active: ActiveModalQuery) -> bool {
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Brush\"."),
@@ -510,7 +510,7 @@ pub fn add_brush(params: In<OperatorParameters>, world: &mut World) -> OperatorR
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Brush\"."),

@@ -46,6 +46,9 @@ const STANDARD_MATERIAL: &str = "bevy_pbr::pbr_material::StandardMaterial";
 #[derive(Resource, Default)]
 pub struct MaterialRegistry {
     pub entries: Vec<MaterialRegistryEntry>,
+    /// The active palette's names and the material files they stand for, kept
+    /// by [`crate::material_palette`] so every resolver reads them.
+    pub palette: std::collections::BTreeMap<String, String>,
 }
 
 pub struct MaterialRegistryEntry {
@@ -57,6 +60,17 @@ pub struct MaterialRegistryEntry {
 }
 
 impl MaterialRegistry {
+    /// The material file a palette name stands for, else `reference` itself.
+    /// Text holding `/` or `.` is always a path.
+    pub fn palette_path<'a>(&'a self, reference: &'a str) -> &'a str {
+        if !crate::material_palette::is_palette_name(reference) {
+            return reference;
+        }
+        self.palette
+            .get(reference)
+            .map_or(reference, String::as_str)
+    }
+
     pub fn get_by_name(&self, name: &str) -> Option<&MaterialRegistryEntry> {
         self.entries.iter().find(|e| e.name == name)
     }
@@ -143,13 +157,15 @@ pub fn material_file_of<'a>(
         .or_else(|| index.material_named(jackdaw_bsn::asset_stem(reference)))
 }
 
-/// The material a reference names: the file it spells the path of, or, for the
-/// references written before paths, the bare name a file's stem gives it.
+/// The material a reference names: an active palette name, the file it spells
+/// the path of, or, for the references written before paths, the bare name a
+/// file's stem gives it.
 pub fn material_of_reference(
     index: Option<&crate::asset_index::AssetIndex>,
     registry: &MaterialRegistry,
     reference: &str,
 ) -> Option<Handle<StandardMaterial>> {
+    let reference = registry.palette_path(reference);
     if reference.is_empty() {
         return None;
     }
@@ -171,6 +187,7 @@ pub fn worn_of_reference(
     registry: &MaterialRegistry,
     reference: &str,
 ) -> Option<crate::worn_material::WornMaterial> {
+    let reference = registry.palette_path(reference);
     if let Some(handle) = index
         .and_then(|index| index.get(&<PathBuf as path_slash::PathBufExt>::from_slash(reference)))
         .and_then(|entry| entry.value.handle().cloned())
@@ -180,6 +197,15 @@ pub fn worn_of_reference(
     }
     material_of_reference(index, registry, reference)
         .map(crate::worn_material::WornMaterial::Standard)
+}
+
+/// The reference to store for one a caller gave: an active palette name becomes
+/// the material file it stands for, so stored data never depends on the palette.
+pub fn stored_reference(world: &World, reference: &str) -> String {
+    world
+        .get_resource::<MaterialRegistry>()
+        .map_or(reference, |registry| registry.palette_path(reference))
+        .to_string()
 }
 
 /// Strip path separators and other characters that cannot appear in a file
@@ -668,7 +694,7 @@ fn a_material_is_selected(
     allows_undo = false,
     is_available = a_material_is_selected,
     params(
-        material(String, doc = "Path or name of the material to save. Defaults to the previewed one."),
+        material(String, doc = "Palette name, path or name of the material to save. Defaults to the previewed one."),
         name(String, doc = "Name to save under. Defaults to the material's current name."),
         path(
             String,
@@ -759,7 +785,7 @@ pub fn save_previewed_material_to(world: &mut World, file: &Path) {
 ///
 /// Compared case-insensitively, as a case-insensitive file system would, so two
 /// display names cannot race for one file stem.
-fn name_owner(
+pub(crate) fn name_owner(
     registry: &MaterialRegistry,
     handle: &Handle<StandardMaterial>,
     name: &str,
@@ -776,7 +802,7 @@ fn name_owner(
 /// A rename removes the file the old name held and keeps `@old` resolving to
 /// the same handle for the rest of this editor run, so open scenes do not lose
 /// their material between the rename and their next save.
-fn write_and_promote(
+pub(crate) fn write_and_promote(
     world: &mut World,
     handle: &Handle<StandardMaterial>,
     current: Option<&str>,
@@ -791,6 +817,7 @@ fn write_and_promote(
     }
 
     crate::material_browser::bind_texture_set(world, handle.id());
+    let filed_before = filed_path(world, handle);
     let file = match write_material_file_at(world, name, handle, chosen) {
         Ok(file) => file,
         Err(err) => {
@@ -805,6 +832,11 @@ fn write_and_promote(
         forget_material_file(world, old);
     }
     index_material_file(world, &file, handle);
+    if let (Some(before), Some(after)) = (filed_before, filed_path(world, handle))
+        && before != after
+    {
+        crate::material_palette::repoint_bindings(world, &before, Some(&after));
+    }
 
     let mut registry = world.resource_mut::<MaterialRegistry>();
     if let Some(entry) = registry.entries.iter_mut().find(|e| e.handle == *handle) {
@@ -824,6 +856,14 @@ fn write_and_promote(
         .inline_materials
         .remove(name);
     info!("Saved material '{name}'");
+}
+
+/// The path under the assets folder the index holds a material at.
+pub(crate) fn filed_path(world: &World, handle: &Handle<StandardMaterial>) -> Option<String> {
+    world
+        .get_resource::<crate::asset_index::AssetIndex>()?
+        .by_handle(&handle.clone().untyped())
+        .map(|entry| path_slash::PathExt::to_slash_lossy(entry.path.as_path()).into_owned())
 }
 
 /// Record a material file the editor just wrote, so the index holds it under
@@ -916,6 +956,10 @@ pub fn material_delete(
         return OperatorResult::Cancelled;
     }
     let name = match params.as_str("material") {
+        Some(name) if registry.palette_path(name) != name => {
+            material_of_reference(None, &registry, name)
+                .and_then(|handle| registry.name_of(&handle).map(str::to_owned))
+        }
         Some(name) => Some(name.to_string()),
         None => preview
             .and_then(|p| p.active_material.clone())
@@ -988,6 +1032,14 @@ fn on_material_delete_confirmed(
 
 /// Remove every trace of a material name from this project.
 fn delete_material(world: &mut World, name: &str) {
+    let filed = world
+        .resource::<MaterialRegistry>()
+        .get_by_name(name)
+        .map(|entry| entry.handle.clone())
+        .and_then(|handle| filed_path(world, &handle));
+    if let Some(path) = filed {
+        crate::material_palette::repoint_bindings(world, &path, None);
+    }
     remove_material_file(world, name);
     forget_material_file(world, name);
 
