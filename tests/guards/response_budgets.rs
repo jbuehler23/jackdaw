@@ -19,6 +19,7 @@ use crate::util::OperatorResultExt as _;
 
 const STATUS_BUDGET: usize = 1024;
 const CALL_BUDGET: usize = 300;
+const RECIPE_RUN_BUDGET: usize = 300;
 const DESCRIBE_BUDGET: usize = 2048;
 const THUMBNAIL_BUDGET: usize = 60 * 1024;
 const TOPOLOGY_BUDGET: usize = 4 * 1024;
@@ -96,6 +97,17 @@ fn status_and_an_operator_call_stay_within_budget() {
         }),
     );
     assert_within("an entity.set_transform call", &moved, CALL_BUDGET);
+
+    let recipe = answer(
+        &mut app,
+        call_operator_handler,
+        json!({
+            "id": "recipe.run",
+            "params": { "recipe": "house", "inputs": { "width": 7.5, "floors": 2 }, "pos": [12.0, 0.0, -4.0] },
+        }),
+    );
+    assert_eq!(recipe["result"], json!("finished"), "{recipe}");
+    assert_within("a recipe.run call", &recipe, RECIPE_RUN_BUDGET);
 
     let status = answer(&mut app, status_handler, json!({}));
     assert_within("status", &status, STATUS_BUDGET);

@@ -139,6 +139,7 @@ pub mod project_select;
 pub mod project_settings;
 pub mod project_types;
 pub mod project_window;
+pub mod recipes;
 pub mod reference_image;
 pub mod reflect_default;
 pub mod remote;
@@ -483,6 +484,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::ShadowViewCleanupPlugin)
         .add_plugins(probe_bake::plugin)
         .add_plugins(tags::plugin)
+        .add_plugins(recipes::plugin)
         .add_plugins(tileset_import::plugin)
         .add_plugins(tilemap::plugin)
         .add_plugins(tile_tools::plugin)

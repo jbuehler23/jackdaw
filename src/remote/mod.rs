@@ -4,6 +4,7 @@ pub mod debug;
 pub mod entity_browser;
 pub mod paced;
 pub mod panel;
+pub(crate) mod recipe_run;
 mod registry_fetch;
 pub mod remote_inspector;
 pub mod server;

@@ -25,6 +25,34 @@ use serde_json::Value;
 
 use crate::EditorEntity;
 
+/// While it holds a root, every reference names only nodes below that root,
+/// and a path starts from the root's children: `roof/window` is the window
+/// under the root's `roof`. A recipe sets it while its calls run, so each
+/// built copy's names reach only its own nodes.
+#[derive(Resource, Default)]
+pub struct ReferenceScope(pub Option<Entity>);
+
+fn scope_root(world: &World) -> Option<Entity> {
+    world
+        .get_resource::<ReferenceScope>()
+        .and_then(|scope| scope.0)
+}
+
+/// Whether `entity` may be named under the current scope.
+fn in_scope(world: &World, entity: Entity) -> bool {
+    let Some(root) = scope_root(world) else {
+        return true;
+    };
+    let mut at = entity;
+    while let Some(parent) = world.get::<ChildOf>(at).map(ChildOf::parent) {
+        if parent == root {
+            return true;
+        }
+        at = parent;
+    }
+    false
+}
+
 /// Why a reference named nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefError {
@@ -128,7 +156,7 @@ impl Reference {
                 kept.remove(&entity);
             }
         }
-        kept.retain(|&entity| is_scene_member(world, entity));
+        kept.retain(|&entity| is_scene_member(world, entity) && in_scope(world, entity));
         kept
     }
 }
@@ -160,7 +188,7 @@ pub fn exactly_named(world: &mut World, text: &str) -> Option<Entity> {
         .collect();
     let mut members = candidates
         .into_iter()
-        .filter(|&entity| is_scene_member(world, entity));
+        .filter(|&entity| is_scene_member(world, entity) && in_scope(world, entity));
     match (members.next(), members.next()) {
         (Some(entity), None) => Some(entity),
         _ => None,
@@ -464,7 +492,14 @@ fn eval(world: &mut World, atom: &Atom) -> EntityHashSet {
         Atom::Path(path) => match path.as_slice() {
             [only] => named_anywhere(world, only),
             [first, rest @ ..] => {
-                let mut level: Vec<Entity> = crate::remote::server::scene_roots(world)
+                let top = match scope_root(world) {
+                    Some(root) => world
+                        .get::<Children>(root)
+                        .map(|children| children.to_vec())
+                        .unwrap_or_default(),
+                    None => crate::remote::server::scene_roots(world),
+                };
+                let mut level: Vec<Entity> = top
                     .into_iter()
                     .filter(|&root| label(world, root).is_some_and(|name| first.matches(&name)))
                     .collect();
@@ -496,7 +531,7 @@ fn named_anywhere(world: &mut World, pattern: &Pattern) -> EntityHashSet {
     let mut named = world.query_filtered::<(Entity, &Name), Without<EditorEntity>>();
     let found: EntityHashSet = named
         .iter(world)
-        .filter(|(_, name)| pattern.matches(name.as_str()))
+        .filter(|(entity, name)| pattern.matches(name.as_str()) && in_scope(world, *entity))
         .map(|(entity, _)| entity)
         .collect();
     if !found.is_empty() {
@@ -506,11 +541,13 @@ fn named_anywhere(world: &mut World, pattern: &Pattern) -> EntityHashSet {
         .query_filtered::<(Entity, &crate::prefab::IsA), (Without<Name>, Without<EditorEntity>)>();
     instances
         .iter(world)
-        .filter(|(_, isa)| {
-            isa.source
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| pattern.matches(stem))
+        .filter(|(entity, isa)| {
+            in_scope(world, *entity)
+                && isa
+                    .source
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| pattern.matches(stem))
         })
         .map(|(entity, _)| entity)
         .collect()

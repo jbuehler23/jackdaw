@@ -31,6 +31,7 @@ pub mod model_import;
 pub mod model_parts;
 pub mod node_id;
 pub mod pixel_canvas;
+pub mod recipe_instance;
 #[cfg(feature = "render")]
 pub mod render_assets;
 pub mod tilemap;
@@ -48,6 +49,7 @@ pub use environment::{
 pub use mesh_rebuild::evaluate_brush_geometry;
 pub use node_id::{SCENE_NODE_ID_TYPE_PATH, SPARSE_MIN, SceneNodeId};
 pub use pixel_canvas::{CanvasScale, PIXEL_CANVAS_TYPE_PATH, PixelCanvas};
+pub use recipe_instance::{RECIPE_INSTANCE_TYPE_PATH, RecipeInstance};
 pub use tilemap::{LayerTerrainMatch, Tilemap, TilemapLayer, TilemapLayerKind};
 pub use types::{
     Brush, BrushFaceData, BrushPlane, BrushTopology, CustomProperties, DerivedFaceMesh,
@@ -104,6 +106,7 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<CustomProperties>()
             .register_type::<PropertyValue>()
             .register_type::<SceneNodeId>()
+            .register_type::<RecipeInstance>()
             .register_type::<GltfSource>()
             .register_type::<MaterialOverrides>()
             .register_type::<LodGroup>()

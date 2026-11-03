@@ -1,0 +1,62 @@
+// jackdaw asset jackdaw::recipes::Recipe
+#house
+jackdaw::recipes::Recipe {
+    description: "A floor, four walls as tall as the floors they hold, and a gable roof.",
+    inputs: [
+        jackdaw::recipes::RecipeInput { name: "width", kind: "float", default: "6", range: [2.0, 20.0] },
+        jackdaw::recipes::RecipeInput { name: "depth", kind: "float", default: "5", range: [2.0, 20.0] },
+        jackdaw::recipes::RecipeInput { name: "floors", kind: "int", default: "1", range: [1.0, 4.0] },
+        jackdaw::recipes::RecipeInput { name: "floor_height", kind: "float", default: "2.8", range: [2.0, 5.0] },
+        jackdaw::recipes::RecipeInput { name: "wall", kind: "float", default: "0.2", range: [0.05, 1.0] },
+        jackdaw::recipes::RecipeInput { name: "material", kind: "text", default: "", range: [] },
+        jackdaw::recipes::RecipeInput { name: "roof_material", kind: "text", default: "", range: [] },
+    ],
+    calls: [
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Floor"),
+            ("size", "[$width, $wall, $depth]"),
+            ("pos", "[0, $wall * 0.5, 0]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Wall_Front"),
+            ("size", "[$width, $floors * $floor_height, $wall]"),
+            ("pos", "[0, $wall + $floors * $floor_height * 0.5, ($depth - $wall) * 0.5]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Wall_Back"),
+            ("size", "[$width, $floors * $floor_height, $wall]"),
+            ("pos", "[0, $wall + $floors * $floor_height * 0.5, ($wall - $depth) * 0.5]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Wall_Left"),
+            ("size", "[$wall, $floors * $floor_height, $depth - 2 * $wall]"),
+            ("pos", "[($wall - $width) * 0.5, $wall + $floors * $floor_height * 0.5, 0]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Wall_Right"),
+            ("size", "[$wall, $floors * $floor_height, $depth - 2 * $wall]"),
+            ("pos", "[($width - $wall) * 0.5, $wall + $floors * $floor_height * 0.5, 0]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "mesh.add_brush", params: map[
+            ("name", "Roof"),
+            ("plane", "xy"),
+            ("outline", "[[-$width * 0.5 - 0.3, 0], [$width * 0.5 + 0.3, 0], [0, $width * 0.4]]"),
+            ("depth", "$depth + 0.6"),
+            ("pos", "[0, $wall + $floors * $floor_height, 0]"),
+            ("material", "$roof_material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+            ("entities", "[$1.entities.0, $2.entities.0, $3.entities.0, $4.entities.0]"),
+            ("add", "wall"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+            ("entities", "Roof"),
+            ("add", "roof"),
+        ] },
+    ],
+}

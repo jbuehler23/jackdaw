@@ -108,7 +108,7 @@ fn find(world: &mut World, name: &str) -> Result<Option<Entity>, BrpError> {
 
 /// A stage being built: its group, emptied, and the document as the last
 /// call left it.
-pub(super) struct OpenStage {
+pub(crate) struct OpenStage {
     name: String,
     group: Entity,
     group_key: UnitKey,
@@ -138,7 +138,28 @@ impl OpenStage {
             None => (add_group(world, &spec.name)?, true),
         };
         mark(world, group, &spec.after)?;
+        Self::empty(world, spec.name.clone(), group, created)
+    }
 
+    /// Open `root` as a stage that is not named: what it holds is deleted, and
+    /// the calls build inside it alone. `name` says what it is in a refusal.
+    pub(crate) fn open_root(world: &mut World, root: Entity, name: String) -> Result<Self, String> {
+        let span = world.resource_mut::<CommandHistory>().begin_span();
+        let opened = Self::empty(world, name, root, false);
+        world.resource_mut::<CommandHistory>().take_span(span);
+        opened
+    }
+
+    pub(crate) fn replaced(&self) -> usize {
+        self.replaced
+    }
+
+    fn empty(
+        world: &mut World,
+        name: String,
+        group: Entity,
+        created: bool,
+    ) -> Result<Self, String> {
         let held: Vec<Entity> = {
             let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
             world
@@ -158,13 +179,13 @@ impl OpenStage {
             .get::<SceneNodeId>(group)
             .map(|id| UnitKey::Node(id.0))
             .filter(|key| units.0.contains_key(key))
-            .ok_or_else(|| format!("the group of stage `{}` is not in the document", spec.name))?;
+            .ok_or_else(|| format!("the group of stage `{name}` is not in the document"))?;
         let beside = beside(world, group, &HashSet::new())
             .into_iter()
             .filter_map(|entity| world.get::<SceneNodeId>(entity).map(|id| id.0))
             .collect();
         Ok(Self {
-            name: spec.name.clone(),
+            name,
             group,
             group_key,
             beside,

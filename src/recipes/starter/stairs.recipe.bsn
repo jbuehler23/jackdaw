@@ -1,0 +1,29 @@
+// jackdaw asset jackdaw::recipes::Recipe
+#stairs
+jackdaw::recipes::Recipe {
+    description: "A straight flight of solid steps climbing along +z.",
+    inputs: [
+        jackdaw::recipes::RecipeInput { name: "steps", kind: "int", default: "6", range: [2.0, 64.0] },
+        jackdaw::recipes::RecipeInput { name: "width", kind: "float", default: "1.2", range: [0.3, 10.0] },
+        jackdaw::recipes::RecipeInput { name: "rise", kind: "float", default: "0.2", range: [0.05, 1.0] },
+        jackdaw::recipes::RecipeInput { name: "run", kind: "float", default: "0.3", range: [0.1, 2.0] },
+        jackdaw::recipes::RecipeInput { name: "material", kind: "text", default: "", range: [] },
+    ],
+    calls: [
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Step"),
+            ("size", "[$width, $rise, $run]"),
+            ("pos", "[0, $rise * 0.5, $run * 0.5]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+            ("entities", "$0.entities.0"),
+            ("add", "step"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.duplicate", params: map[
+            ("entity", "$0.entities.0"),
+            ("count", "$steps - 1"),
+            ("offset", "[0, $rise, $run]"),
+        ] },
+    ],
+}

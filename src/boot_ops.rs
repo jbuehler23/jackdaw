@@ -280,6 +280,7 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("mesh.add_brush", "parent"),
     ("mesh.add_revolve", "parent"),
     ("prefab.spawn_instance", "parent"),
+    ("recipe.run", "parent"),
     ("selection.select", "entity"),
     ("sprite.add", "parent"),
     ("viewport.capture", "camera"),

@@ -1,0 +1,39 @@
+// jackdaw asset jackdaw::recipes::Recipe
+#tree
+jackdaw::recipes::Recipe {
+    description: "A turned trunk under a rough round crown.",
+    inputs: [
+        jackdaw::recipes::RecipeInput { name: "height", kind: "float", default: "4", range: [1.0, 12.0] },
+        jackdaw::recipes::RecipeInput { name: "trunk", kind: "float", default: "0.35", range: [0.1, 2.0] },
+        jackdaw::recipes::RecipeInput { name: "crown", kind: "float", default: "2.4", range: [0.5, 8.0] },
+        jackdaw::recipes::RecipeInput { name: "bark", kind: "text", default: "", range: [] },
+        jackdaw::recipes::RecipeInput { name: "leaves", kind: "text", default: "", range: [] },
+    ],
+    calls: [
+        jackdaw::recipes::RecipeCall { id: "mesh.add_revolve", params: map[
+            ("name", "Trunk"),
+            ("profile", "[[$trunk * 0.5, 0], [$trunk * 0.35, $height * 0.55]]"),
+            ("segments", "8"),
+            ("material", "$bark"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.sphere", params: map[
+            ("name", "Crown"),
+            ("kind", "ico"),
+            ("subdivisions", "1"),
+            ("size", "[$crown, $crown * rand(0.8, 1.1), $crown]"),
+            ("pos", "[0, $height * 0.5 + $crown * 0.35, 0]"),
+            ("material", "$leaves"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "brush.mesh.randomize", params: map[
+            ("entity", "$1.entities.0"),
+            ("amount", "$crown * 0.06"),
+            ("seed", "$seed"),
+            ("per_brush", "false"),
+            ("space", "local"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+            ("entities", "Crown"),
+            ("add", "foliage"),
+        ] },
+    ],
+}

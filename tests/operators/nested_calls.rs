@@ -1,0 +1,139 @@
+//! An operator's system can call other operators, through the world or
+//! through `Commands`, and each nested call runs; an availability check can
+//! ask whether another operator is available.
+
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
+
+use crate::util;
+use crate::util::OperatorResultExt as _;
+
+#[derive(Resource, Default)]
+struct InnerRuns(usize);
+
+#[derive(Default)]
+struct NestingExtension;
+
+impl NestingExtension {
+    const INNER: &'static str = "nesting.inner";
+    const THROUGH_WORLD: &'static str = "nesting.through_world";
+    const THROUGH_COMMANDS: &'static str = "nesting.through_commands";
+    const GUARDED: &'static str = "nesting.guarded";
+    const THROUGH_GUARD: &'static str = "nesting.through_guard";
+}
+
+impl JackdawExtension for NestingExtension {
+    fn id(&self) -> String {
+        "nesting".to_string()
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.register_operator::<InnerOp>()
+            .register_operator::<ThroughWorldOp>()
+            .register_operator::<ThroughCommandsOp>()
+            .register_operator::<GuardedOp>()
+            .register_operator::<ThroughGuardOp>();
+    }
+}
+
+#[operator(id = NestingExtension::INNER, allows_undo = false)]
+fn inner(_: In<OperatorParameters>, mut runs: ResMut<InnerRuns>) -> OperatorResult {
+    runs.0 += 1;
+    OperatorResult::Finished
+}
+
+#[operator(id = NestingExtension::THROUGH_WORLD, allows_undo = false)]
+fn through_world(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    match world.operator(NestingExtension::INNER).call() {
+        Ok(OperatorResult::Finished) => OperatorResult::Finished,
+        _ => OperatorResult::Cancelled,
+    }
+}
+
+#[operator(id = NestingExtension::THROUGH_COMMANDS, allows_undo = false)]
+fn through_commands(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.operator(NestingExtension::INNER).call();
+    OperatorResult::Finished
+}
+
+#[test]
+fn an_operator_calls_another_through_the_world_or_through_commands() {
+    let mut app = util::headless_app();
+    app.init_resource::<InnerRuns>();
+    util::register_and_enable_extension::<NestingExtension>(&mut app);
+
+    app.world_mut()
+        .operator(NestingExtension::THROUGH_WORLD)
+        .call()
+        .expect("the outer call dispatches")
+        .assert_finished();
+    assert_eq!(
+        app.world().resource::<InnerRuns>().0,
+        1,
+        "the nested world call ran"
+    );
+
+    app.world_mut()
+        .operator(NestingExtension::THROUGH_COMMANDS)
+        .call()
+        .expect("the outer call dispatches")
+        .assert_finished();
+    app.update();
+    assert_eq!(
+        app.world().resource::<InnerRuns>().0,
+        2,
+        "the queued call ran"
+    );
+}
+
+fn inner_is_available(world: &mut World) -> bool {
+    world
+        .operator(NestingExtension::INNER)
+        .is_available()
+        .unwrap_or(false)
+}
+
+#[operator(
+    id = NestingExtension::GUARDED,
+    allows_undo = false,
+    is_available = inner_is_available
+)]
+fn guarded(_: In<OperatorParameters>, mut runs: ResMut<InnerRuns>) -> OperatorResult {
+    runs.0 += 1;
+    OperatorResult::Finished
+}
+
+#[operator(id = NestingExtension::THROUGH_GUARD, allows_undo = false)]
+fn through_guard(_: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    match world.operator(NestingExtension::GUARDED).call() {
+        Ok(OperatorResult::Finished) => OperatorResult::Finished,
+        _ => OperatorResult::Cancelled,
+    }
+}
+
+/// The guard asks after another operator for the first time from inside a
+/// nested dispatch, and again from inside a top-level availability query.
+#[test]
+fn an_availability_check_asks_after_another_operator_inside_a_nested_call() {
+    let mut app = util::headless_app();
+    app.init_resource::<InnerRuns>();
+    util::register_and_enable_extension::<NestingExtension>(&mut app);
+
+    app.world_mut()
+        .operator(NestingExtension::THROUGH_GUARD)
+        .call()
+        .expect("the outer call dispatches")
+        .assert_finished();
+    assert_eq!(
+        app.world().resource::<InnerRuns>().0,
+        1,
+        "the guarded call ran"
+    );
+
+    let available = app
+        .world_mut()
+        .operator(NestingExtension::GUARDED)
+        .is_available()
+        .expect("the operator is known");
+    assert!(available);
+}

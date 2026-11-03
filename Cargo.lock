@@ -4233,6 +4233,7 @@ dependencies = [
  "jackdaw_pie_protocol",
  "jackdaw_prefab",
  "jackdaw_project_build",
+ "jackdaw_recipe",
  "jackdaw_releases",
  "jackdaw_remote",
  "jackdaw_runtime",
@@ -4661,6 +4662,10 @@ dependencies = [
  "toml_edit",
  "tracing",
 ]
+
+[[package]]
+name = "jackdaw_recipe"
+version = "0.21.0-dev"
 
 [[package]]
 name = "jackdaw_releases"

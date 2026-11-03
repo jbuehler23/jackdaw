@@ -1,0 +1,45 @@
+// jackdaw asset jackdaw::recipes::Recipe
+#fence
+jackdaw::recipes::Recipe {
+    description: "A straight run of posts along +x with two rails.",
+    inputs: [
+        jackdaw::recipes::RecipeInput { name: "posts", kind: "int", default: "5", range: [2.0, 64.0] },
+        jackdaw::recipes::RecipeInput { name: "spacing", kind: "float", default: "2", range: [0.5, 10.0] },
+        jackdaw::recipes::RecipeInput { name: "height", kind: "float", default: "1.1", range: [0.3, 4.0] },
+        jackdaw::recipes::RecipeInput { name: "post", kind: "float", default: "0.15", range: [0.05, 1.0] },
+        jackdaw::recipes::RecipeInput { name: "material", kind: "text", default: "", range: [] },
+    ],
+    calls: [
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Post"),
+            ("size", "[$post, $height, $post]"),
+            ("pos", "[0, $height * 0.5, 0]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+            ("entities", "$0.entities.0"),
+            ("add", "post"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.duplicate", params: map[
+            ("entity", "$0.entities.0"),
+            ("count", "$posts - 1"),
+            ("offset", "[$spacing, 0, 0]"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Rail_Top"),
+            ("size", "[$spacing * ($posts - 1), $post * 0.6, $post * 0.4]"),
+            ("pos", "[$spacing * ($posts - 1) * 0.5, $height * 0.8, 0]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.add.cube", params: map[
+            ("name", "Rail_Bottom"),
+            ("size", "[$spacing * ($posts - 1), $post * 0.6, $post * 0.4]"),
+            ("pos", "[$spacing * ($posts - 1) * 0.5, $height * 0.35, 0]"),
+            ("material", "$material"),
+        ] },
+        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+            ("entities", "[$3.entities.0, $4.entities.0]"),
+            ("add", "rail"),
+        ] },
+    ],
+}

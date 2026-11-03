@@ -755,29 +755,63 @@ impl BatchPlan {
     /// The answer, or the error, for a batch that ran as `run`.
     pub(super) fn answer(&self, run: BatchRun) -> BrpResult {
         let (dry_run, atomic, verbose) = (self.dry_run, self.atomic, self.verbose);
-        let (calls, checks) = (&self.calls, &self.checks);
+        let checks = &self.checks;
         let done: Vec<Value> = run.done.iter().map(|call| call.to_json(verbose)).collect();
-        let call_id = |index: usize| calls[index]["id"].as_str().unwrap_or("?");
         let checks_skipped = !checks.is_empty()
             && matches!(
                 run.failure,
                 Some(BatchFailure::Call(..) | BatchFailure::Stopped(_) | BatchFailure::Stage(_))
             );
-        let (code, mut what, failed_at) = match run.failure {
-            None => return Ok(batch_answer(done, dry_run, run.stage, run.checks)),
-            Some(BatchFailure::Stopped(_)) if !atomic && checks.is_empty() => {
-                return Ok(batch_answer(done, dry_run, run.stage, run.checks));
-            }
-            Some(BatchFailure::Call(index, err)) => (
+        let Some(failure) = self.failure(&run) else {
+            return Ok(batch_answer(done, dry_run, run.stage, run.checks));
+        };
+        let mut what = failure.what;
+        if checks_skipped {
+            what.push_str(", so the checks were not run");
+        }
+        let message = if atomic {
+            format!(
+                "{what}. The batch was rolled back: the scene and the undo history are as they were."
+            )
+        } else {
+            format!(
+                "{what}. The {} call(s) that ran are done and are committed as one undo entry; undo \
+                 once to take them back rather than retrying the whole batch.",
+                done.len()
+            )
+        };
+        let mut data =
+            json!({ "failed_at": failure.failed_at, "calls": done, "rolled_back": atomic });
+        if dry_run {
+            data["dry_run"] = json!(true);
+        }
+        if let Some(checks) = run.checks {
+            data["checks"] = checks;
+        }
+        Err(BrpError {
+            code: failure.code,
+            message,
+            data: Some(data),
+        })
+    }
+
+    /// What stopped `run`, or `None` for a run that did all it was asked, or
+    /// a plain batch whose call merely did not finish.
+    pub(super) fn failure(&self, run: &BatchRun) -> Option<BatchFailureText> {
+        let calls = &self.calls;
+        let call_id = |index: usize| calls[index]["id"].as_str().unwrap_or("?");
+        let (code, what, failed_at) = match run.failure.as_ref()? {
+            BatchFailure::Stopped(_) if !self.atomic && self.checks.is_empty() => return None,
+            BatchFailure::Call(index, err) => (
                 err.code,
-                format!("call {index} ({}) failed: {}", call_id(index), err.message),
-                json!(index),
+                format!("call {index} ({}) failed: {}", call_id(*index), err.message),
+                json!(*index),
             ),
-            Some(BatchFailure::Stopped(index)) => {
-                let outcome = &done[index];
+            BatchFailure::Stopped(index) => {
+                let outcome = run.done[*index].to_json(true);
                 let mut what = format!(
                     "call {index} ({}) did not finish: {}",
-                    call_id(index),
+                    call_id(*index),
                     outcome["result"].as_str().unwrap_or("?")
                 );
                 if let Some(warnings) = outcome["warnings"].as_array()
@@ -786,14 +820,14 @@ impl BatchPlan {
                     let warnings: Vec<&str> = warnings.iter().filter_map(Value::as_str).collect();
                     what.push_str(&format!(" ({})", warnings.join("; ")));
                 }
-                (error_codes::INVALID_PARAMS, what, json!(index))
+                (error_codes::INVALID_PARAMS, what, json!(*index))
             }
-            Some(BatchFailure::Stage(why)) => (
+            BatchFailure::Stage(why) => (
                 error_codes::INTERNAL_ERROR,
                 format!("the stage could not be opened: {why}"),
                 Value::Null,
             ),
-            Some(BatchFailure::Checks) => {
+            BatchFailure::Checks => {
                 let results = run
                     .checks
                     .as_ref()
@@ -818,39 +852,26 @@ impl BatchPlan {
                     Value::Null,
                 )
             }
-            Some(BatchFailure::CheckError(err)) => (
+            BatchFailure::CheckError(err) => (
                 err.code,
                 format!("the checks could not run: {}", err.message),
                 Value::Null,
             ),
         };
-        if checks_skipped {
-            what.push_str(", so the checks were not run");
-        }
-        let message = if atomic {
-            format!(
-                "{what}. The batch was rolled back: the scene and the undo history are as they were."
-            )
-        } else {
-            format!(
-                "{what}. The {} call(s) that ran are done and are committed as one undo entry; undo \
-                 once to take them back rather than retrying the whole batch.",
-                done.len()
-            )
-        };
-        let mut data = json!({ "failed_at": failed_at, "calls": done, "rolled_back": atomic });
-        if dry_run {
-            data["dry_run"] = json!(true);
-        }
-        if let Some(checks) = run.checks {
-            data["checks"] = checks;
-        }
-        Err(BrpError {
+        Some(BatchFailureText {
             code,
-            message,
-            data: Some(data),
+            what,
+            failed_at,
         })
     }
+}
+
+/// Why a batch failed, as its error says it.
+pub(super) struct BatchFailureText {
+    pub(super) code: i16,
+    /// What failed, without what became of the calls that ran.
+    pub(super) what: String,
+    pub(super) failed_at: Value,
 }
 
 /// What a batch that did all it was asked answers.
@@ -965,6 +986,10 @@ pub(super) struct BatchRunner {
     index: usize,
     earlier: Vec<Value>,
     open: Option<super::stage::OpenStage>,
+    /// The root references are held to while a call runs, and whether the
+    /// selection is cleared before each call so none acts on what an earlier
+    /// one selected.
+    scope: Option<Entity>,
     run: BatchRun,
 }
 
@@ -989,7 +1014,26 @@ impl BatchRunner {
             pending: prepared.into_iter(),
             index: 0,
             open,
+            scope: None,
             run,
+        }
+    }
+
+    /// Ready to run `prepared` into `root`, opened as a stage: every entity
+    /// reference a call makes names only nodes under it, and the selection is
+    /// cleared before each call.
+    pub(super) fn start_in(
+        prepared: Vec<Pending>,
+        open: super::stage::OpenStage,
+        root: Entity,
+    ) -> Self {
+        Self {
+            earlier: Vec::with_capacity(prepared.len()),
+            pending: prepared.into_iter(),
+            index: 0,
+            open: Some(open),
+            scope: Some(root),
+            run: BatchRun::default(),
         }
     }
 
@@ -1008,13 +1052,22 @@ impl BatchRunner {
         };
         let index = self.index;
         self.index += 1;
+        if self.scope.is_some() {
+            crate::selection::clear_selection_in_world(world);
+        }
+        let outer_scope = world
+            .get_resource_or_init::<crate::entity_refs::ReferenceScope>()
+            .0;
+        world.resource_mut::<crate::entity_refs::ReferenceScope>().0 = self.scope.or(outer_scope);
         let call = match pending {
             Pending::Ready(call) => call_from_json(world, &call),
             Pending::Referencing(call) => {
                 fill_references(&call, &self.earlier).and_then(|call| call_from_json(world, &call))
             }
         };
-        let outcome = match call.and_then(|call| dispatch(world, call, false)) {
+        let dispatched = call.and_then(|call| dispatch(world, call, false));
+        world.resource_mut::<crate::entity_refs::ReferenceScope>().0 = outer_scope;
+        let outcome = match dispatched {
             Ok(outcome) => outcome,
             Err(err) => {
                 self.run.failure = Some(BatchFailure::Call(index, err));
@@ -1278,7 +1331,7 @@ pub(super) struct CallOutcome {
 impl CallOutcome {
     /// The outcome as a caller reads it. Compact leaves out the operator id the
     /// caller already sent and every empty list but `entities`.
-    fn to_json(&self, verbose: bool) -> Value {
+    pub(super) fn to_json(&self, verbose: bool) -> Value {
         let mut value = json!(self);
         if !verbose && let Some(fields) = value.as_object_mut() {
             fields.remove("id");
