@@ -154,7 +154,11 @@ pub fn build_project_binary_with_load(
             report(BuildEvent::Log(line.to_string()));
         }
         return Err(ProjectBuildError::Compile {
-            log: compile_failure_log(log, &stderr),
+            log: with_toolchain_hint(
+                compile_failure_log(log, &stderr),
+                &stderr,
+                &spec.project_root,
+            ),
         });
     }
 
@@ -229,6 +233,33 @@ pub(crate) fn compile_failure_log(diagnostics: String, stderr: &str) -> String {
         log.push_str("project failed to compile, and cargo reported no diagnostics");
     }
     log
+}
+
+const TOOLCHAIN_TOO_OLD: &str = "is not supported by the following package";
+
+/// Cargo's rust-version refusal names the packages but not the way out, which
+/// depends on whether the project picks its own toolchain.
+fn with_toolchain_hint(mut log: String, stderr: &str, project: &Path) -> String {
+    if stderr.contains(TOOLCHAIN_TOO_OLD) {
+        log.push_str(&toolchain_too_old_hint(
+            jackdaw_env::project_toolchain_file(project).as_deref(),
+        ));
+        log.push('\n');
+    }
+    log
+}
+
+fn toolchain_too_old_hint(toolchain_file: Option<&Path>) -> String {
+    match toolchain_file {
+        Some(file) => format!(
+            "hint: this project builds with the toolchain {} selects, which is older than its \
+             dependencies need. Raise the channel in that file.",
+            file.display()
+        ),
+        None => "hint: this project builds with the rustup default toolchain, which is older \
+                 than its dependencies need. Run `rustup update stable`."
+            .to_string(),
+    }
 }
 
 /// How long the extractor may run before it is killed. This path compiles
@@ -724,6 +755,40 @@ mod tests {
         );
         assert!(log.contains("E0308"), "got {log}");
         assert!(log.contains("could not compile"), "got {log}");
+    }
+
+    #[test]
+    fn an_old_toolchain_failure_names_the_fix() {
+        let dir = temp_project_dir("old_toolchain");
+        for stderr in [
+            "error: rustc 1.96.0 is not supported by the following packages:\n",
+            "error: rustc 1.96.0 is not supported by the following package:\n",
+        ] {
+            let log = with_toolchain_hint(String::new(), stderr, &dir);
+            assert!(log.contains("rustup update stable"), "got {log}");
+        }
+        let other = with_toolchain_hint(String::new(), "error: could not compile `x`\n", &dir);
+        assert!(other.is_empty(), "got {other}");
+
+        std::fs::write(
+            dir.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.90.0\"\n",
+        )
+        .unwrap();
+        let pinned = with_toolchain_hint(
+            String::new(),
+            "rustc 1.90.0 is not supported by the following packages",
+            &dir,
+        );
+        assert!(pinned.contains("Raise the channel"), "got {pinned}");
+        assert!(!pinned.contains("rustup update"), "got {pinned}");
+    }
+
+    fn temp_project_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("jackdaw_hint_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]

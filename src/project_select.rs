@@ -218,15 +218,21 @@ pub struct PreflightState {
 }
 
 /// Kick off the environment checks off the main thread when the launcher opens.
-fn start_preflight(mut state: ResMut<PreflightState>, pending: Option<Res<PendingAutoOpen>>) {
+fn start_preflight(
+    mut state: ResMut<PreflightState>,
+    pending: Option<Res<PendingAutoOpen>>,
+    project: Option<Res<ProjectRoot>>,
+) {
     // No launcher shell during an auto-open handoff; skip the checks.
     if pending.is_some() {
         return;
     }
+    let project = project.map(|project| project.root.clone());
     state.results.clear();
     state.reported = false;
-    state.task =
-        Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
+    state.task = Some(
+        AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks(project) }),
+    );
 }
 
 /// Drain the preflight task when it completes, store the results for the UI, and
@@ -372,11 +378,15 @@ pub(crate) fn pick_project_folder_from(world: &mut World, import: bool) {
 
 /// Run the environment checks again, as Doctor's Recheck does.
 pub(crate) fn restart_preflight(world: &mut World) {
+    let project = world
+        .get_resource::<ProjectRoot>()
+        .map(|project| project.root.clone());
     let mut state = world.resource_mut::<PreflightState>();
     state.results.clear();
     state.reported = false;
-    state.task =
-        Some(AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks() }));
+    state.task = Some(
+        AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks(project) }),
+    );
 }
 
 fn poll_folder_dialog(world: &mut World) {
