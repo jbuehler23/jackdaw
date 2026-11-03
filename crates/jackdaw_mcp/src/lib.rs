@@ -76,7 +76,7 @@ impl JackdawMcp {
     async fn brp(&self, method: &str, params: Value) -> Result<Value, ErrorData> {
         self.brp_answer(method, params)
             .await?
-            .map_err(|error| ErrorData::internal_error(format!("{method}: {error}"), None))
+            .map_err(|error| brp_error(method, &error))
     }
 
     /// Call one BRP method, handing back the editor's own error object rather
@@ -85,6 +85,17 @@ impl JackdawMcp {
         &self,
         method: &str,
         params: Value,
+    ) -> Result<Result<Value, Value>, ErrorData> {
+        self.brp_answer_within(method, params, CALL_TIMEOUT).await
+    }
+
+    /// [`Self::brp_answer`] with its own time limit, for a call that is slow on
+    /// purpose.
+    async fn brp_answer_within(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: std::time::Duration,
     ) -> Result<Result<Value, Value>, ErrorData> {
         let Some(endpoint) = read_endpoint(&self.project) else {
             return Err(ErrorData::internal_error(
@@ -105,7 +116,7 @@ impl JackdawMcp {
         let response = self
             .http
             .post(endpoint.url())
-            .timeout(CALL_TIMEOUT)
+            .timeout(timeout)
             .json(&request)
             .send()
             .await
@@ -125,6 +136,32 @@ impl JackdawMcp {
         let result = self.brp(method, params).await?;
         Ok(json_result(&result))
     }
+
+    /// Send a batch request to `jackdaw/batch`, or to `jackdaw/paced_batch`
+    /// when it names a `pace_ms`, waiting as long as the pacing needs.
+    async fn run_batch(&self, mut request: Value) -> Result<Result<Value, Value>, ErrorData> {
+        let Some(pace) = request.get("pace_ms").filter(|pace| !pace.is_null()) else {
+            return self.brp_answer("jackdaw/batch", request).await;
+        };
+        // The editor judges the pace; one it refuses answers at once.
+        let pace = pace.as_u64().unwrap_or(0);
+        let calls = request["calls"].as_array().map_or(0, Vec::len);
+        request["request"] = json!(self.next_request_id());
+        self.brp_answer_within("jackdaw/paced_batch", request, paced_timeout(calls, pace))
+            .await
+    }
+}
+
+/// The tool error for an error the editor answered `method` with.
+fn brp_error(method: &str, error: &Value) -> ErrorData {
+    ErrorData::internal_error(format!("{method}: {error}"), None)
+}
+
+/// How long a paced batch of `calls` calls `pace_ms` apart may take: its
+/// pauses, a frame's grace for each call, and the usual limit on top.
+fn paced_timeout(calls: usize, pace_ms: u64) -> std::time::Duration {
+    let calls = u64::try_from(calls).unwrap_or(u64::MAX);
+    CALL_TIMEOUT + std::time::Duration::from_millis(calls.saturating_mul(pace_ms + 100))
 }
 
 /// A JSON value as a tool result: one compact text block, the form every
@@ -146,7 +183,7 @@ struct BatchFile {
 }
 
 /// The `jackdaw/batch` options a batch file or `run_batch_file` may set.
-const BATCH_OPTIONS: [&str; 5] = ["atomic", "dry_run", "stage", "after", "checks"];
+const BATCH_OPTIONS: [&str; 6] = ["atomic", "dry_run", "stage", "after", "checks", "pace_ms"];
 
 fn parse_batch_file(text: &str) -> Result<BatchFile, String> {
     let value: Value =
@@ -186,6 +223,7 @@ fn batch_file_request(file: BatchFile, label: String, args: &RunBatchFileArgs) -
         "stage": args.stage,
         "after": args.after,
         "checks": args.checks,
+        "pace_ms": args.pace_ms,
     }));
     if let Value::Object(given) = given {
         request.extend(given);
@@ -363,6 +401,10 @@ pub struct BatchArgs {
     /// batch. `$N.path` references work here too.
     #[serde(default)]
     pub checks: Option<Vec<Value>>,
+    /// Milliseconds to pause between calls (0 to 2000), so the build plays
+    /// out on screen. Not with `dry_run`.
+    #[serde(default)]
+    pub pace_ms: Option<u64>,
 }
 
 /// Arguments for `run_batch_file`.
@@ -390,6 +432,9 @@ pub struct RunBatchFileArgs {
     /// `check` assertions run after the calls. Over the file's own.
     #[serde(default)]
     pub checks: Option<Vec<Value>>,
+    /// Milliseconds to pause between calls, 0 to 2000. Over the file's own.
+    #[serde(default)]
+    pub pace_ms: Option<u64>,
 }
 
 /// Arguments for `scene_tree`.
@@ -502,9 +547,13 @@ pub struct ScreenshotArgs {
     /// timestamped file under the project when omitted.
     #[serde(default)]
     pub path: Option<String>,
-    /// Where to aim the viewport camera before capturing.
+    /// Where to aim the viewport camera for the capture. The camera goes back
+    /// where it was afterwards unless `keep_camera` is true.
     #[serde(default)]
     pub look_at: Option<LookAt>,
+    /// Leave the camera where `look_at` put it.
+    #[serde(default)]
+    pub keep_camera: Option<bool>,
     /// Keep only part of the capture.
     #[serde(default)]
     pub region: Option<Region>,
@@ -513,8 +562,9 @@ pub struct ScreenshotArgs {
     /// stays on disk at `path` either way.
     #[serde(default)]
     pub max_px: Option<u32>,
-    /// `png` (the default) or `jpeg` for the returned image. JPEG is smaller
-    /// but blurs edges.
+    /// `jpeg` or `png` for the returned image. JPEG by default, which is a
+    /// fraction of the size; PNG by default for `viewport2d`, where pixel art
+    /// would blur.
     #[serde(default)]
     pub format: Option<String>,
 }
@@ -524,12 +574,21 @@ impl ScreenshotArgs {
     fn brp_params(&self, request: String) -> Value {
         let max_px = self.max_px.unwrap_or(DEFAULT_MAX_PX);
         let thumbnail = max_px > 0;
+        let format = self.format.clone().unwrap_or_else(|| {
+            if self.kind.as_deref() == Some("viewport2d") {
+                "png".to_string()
+            } else {
+                "jpeg".to_string()
+            }
+        });
         compact(json!({
             "kind": self.kind,
             "path": self.path,
             "region": self.region,
+            "look_at": self.look_at,
+            "keep_camera": self.keep_camera,
             "max_px": thumbnail.then_some(max_px),
-            "format": self.format.as_ref().filter(|_| thumbnail),
+            "format": thumbnail.then_some(format),
             "request": request,
         }))
     }
@@ -560,7 +619,7 @@ pub struct LookAt {
     /// Where the camera sits, as `[x, y, z]`.
     pub eye: [f64; 3],
     /// What it looks at, as `[x, y, z]`. The origin when omitted.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<[f64; 3]>,
 }
 
@@ -683,26 +742,29 @@ impl JackdawMcp {
                        everything back on any failure; `dry_run` runs, reports and takes back; \
                        `stage` rebuilds the named stage group in place (re-run safe, atomic); \
                        `checks` are `check` assertions that fail the batch. These refuse calls \
-                       that write to disk."
+                       that write to disk. `pace_ms` pauses between calls so the build plays out \
+                       on screen."
     )]
     pub async fn batch(
         &self,
         Parameters(args): Parameters<BatchArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.brp_text(
-            "jackdaw/batch",
-            compact(json!({
-                "calls": args.calls,
-                "label": args.label,
-                "verbose": args.verbose,
-                "atomic": args.atomic,
-                "dry_run": args.dry_run,
-                "stage": args.stage,
-                "after": args.after,
-                "checks": args.checks,
-            })),
-        )
-        .await
+        let request = compact(json!({
+            "calls": args.calls,
+            "label": args.label,
+            "verbose": args.verbose,
+            "atomic": args.atomic,
+            "dry_run": args.dry_run,
+            "stage": args.stage,
+            "after": args.after,
+            "checks": args.checks,
+            "pace_ms": args.pace_ms,
+        }));
+        let result = self
+            .run_batch(request)
+            .await?
+            .map_err(|error| brp_error("jackdaw/batch", &error))?;
+        Ok(json_result(&result))
     }
 
     /// Run a batch held in a file and report only a summary.
@@ -712,8 +774,8 @@ impl JackdawMcp {
                        stopped. The calls never pass through the conversation, so write long \
                        scripts to a file and run them with this. Same call and `$N.path` \
                        format as `batch`; the path is relative to the project root. The file \
-                       or the arguments may set `atomic`, `dry_run`, `stage`, `after` and \
-                       `checks` as `batch` takes them; arguments win."
+                       or the arguments may set `atomic`, `dry_run`, `stage`, `after`, \
+                       `checks` and `pace_ms` as `batch` takes them; arguments win."
     )]
     pub async fn run_batch_file(
         &self,
@@ -742,7 +804,7 @@ impl JackdawMcp {
             });
         let total = batch.calls.len();
         let request = batch_file_request(batch, label, &args);
-        let answer = self.brp_answer("jackdaw/batch", request).await?;
+        let answer = self.run_batch(request).await?;
         Ok(match answer {
             Ok(result) => {
                 let done = result["calls"].as_array().cloned().unwrap_or_default();
@@ -939,32 +1001,16 @@ impl JackdawMcp {
                        thumbnail (512 px on the longer side unless `max_px` says otherwise; 0 \
                        for full size) along with the paths. Waits for the capture to reach \
                        disk, so the file is there when this answers. `look_at` aims the camera \
-                       first, since a camera left where it was frames a scene edge-on. \
-                       `region` keeps only part of the image: world units by default for a 2D \
-                       view, pixels from the top-left otherwise."
+                       for the shot and then puts it back where the user left it \
+                       (`keep_camera` leaves it aimed). The thumbnail is JPEG unless `format` \
+                       says `png` (the default for `viewport2d`). `region` keeps only part of \
+                       the image: world units by default for a 2D view, pixels from the \
+                       top-left otherwise."
     )]
     pub async fn screenshot(
         &self,
         Parameters(args): Parameters<ScreenshotArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        if let Some(look_at) = &args.look_at {
-            let target = look_at.target.unwrap_or([0.0; 3]);
-            self.brp(
-                "jackdaw/call_operator",
-                json!({
-                    "id": "view.look_at",
-                    "params": {
-                        "eye_x": look_at.eye[0],
-                        "eye_y": look_at.eye[1],
-                        "eye_z": look_at.eye[2],
-                        "target_x": target[0],
-                        "target_y": target[1],
-                        "target_z": target[2],
-                    },
-                }),
-            )
-            .await?;
-        }
         let result = self
             .brp(
                 "jackdaw/screenshot",
@@ -1064,17 +1110,21 @@ impl ServerHandler for JackdawMcp {
         info.protocol_version = ProtocolVersion::default();
         info.instructions = Some(
             "Drives a running Jackdaw editor. Everything the editor does is an operator: \
-                 use `list_operators` with a prefix or `describe_operator` to learn one; never \
-                 load the `operators` resource whole. Run one with `call_operator`. Group a run \
-                 of calls with `batch` so one undo takes them all back, naming earlier results \
-                 with `$N.path`; for long scripts write the calls to a file and use \
-                 `run_batch_file`, which answers with a summary. To read and verify the scene \
-                 prefer `scene_summary` (compact rows; pass its `revision` back as \
-                 `since_revision` for only what changed) and `check` (rests_on, inside, \
-                 no_overlap, bounds, count, watertight, each with the measured value) over \
-                 `scene_tree` and screenshots. `get_entity` reads one node in full, \
-                 `screenshot` is for how things look, and `save_scene` writes the open scene back to its file. Operators reach the disk \
-                 too, through the same saves, exports and bakes the menus run."
+             use `list_operators` with a prefix or `describe_operator` to learn one; never load \
+             the `operators` resource whole. Run one with `call_operator`. Build with `batch`: \
+             one undo takes a batch back, and `$N.path` names an earlier call's result. Give \
+             each part of a build its own `stage` so re-running it replaces what it built \
+             instead of adding a copy, and make other batches `atomic` so a failure leaves \
+             nothing half-built; `dry_run` tries one without keeping it. For long scripts write \
+             the calls to a file and use `run_batch_file`, which answers with a summary. Verify \
+             with `checks` on the batch or `check` (rests_on, inside, no_overlap, bounds, \
+             count, watertight, each with the measured value) and read the scene with \
+             `scene_summary` (compact rows; pass its `revision` back as `since_revision` for \
+             only what changed), not `scene_tree`. Take a `screenshot` only to judge how \
+             things look; it returns a small thumbnail and puts the camera back. `get_entity` \
+             reads one node in full and `save_scene` writes the open scene back to its file. \
+             Operators reach the disk too, through the same saves, exports and bakes the menus \
+             run."
                 .to_string(),
         );
         info
@@ -1179,6 +1229,7 @@ mod tests {
                 "kind": "viewport2d",
                 "region": { "x": -8.0, "y": 4.0, "w": 16.0, "h": 16.0, "space": "world" },
                 "max_px": 512,
+                "format": "png",
                 "request": "r1",
             }),
         );
@@ -1196,7 +1247,7 @@ mod tests {
         let args: ScreenshotArgs = serde_json::from_value(json!({})).expect("no arguments");
         assert_eq!(
             args.brp_params("r3".to_string()),
-            json!({ "max_px": 512, "request": "r3" })
+            json!({ "max_px": 512, "format": "jpeg", "request": "r3" })
         );
     }
 
@@ -1214,6 +1265,35 @@ mod tests {
             args.brp_params("r".to_string()),
             json!({ "request": "r" }),
             "full size asks for no thumbnail"
+        );
+    }
+
+    #[test]
+    fn a_screenshot_aims_in_the_same_request_and_keeps_the_camera_only_when_asked() {
+        let args: ScreenshotArgs = serde_json::from_value(json!({
+            "look_at": { "eye": [10.0, 8.0, 10.0] },
+        }))
+        .expect("parses");
+        let params = args.brp_params("r".to_string());
+        assert_eq!(params["look_at"], json!({ "eye": [10.0, 8.0, 10.0] }));
+        assert!(params.get("keep_camera").is_none(), "{params}");
+
+        let args: ScreenshotArgs = serde_json::from_value(json!({
+            "look_at": { "eye": [1.0, 2.0, 3.0], "target": [0.0, 1.0, 0.0] },
+            "keep_camera": true,
+        }))
+        .expect("parses");
+        let params = args.brp_params("r".to_string());
+        assert_eq!(params["keep_camera"], json!(true));
+        assert_eq!(params["look_at"]["target"], json!([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn a_paced_batch_waits_long_enough_for_its_pauses() {
+        assert_eq!(paced_timeout(0, 500), CALL_TIMEOUT);
+        assert_eq!(
+            paced_timeout(100, 400),
+            CALL_TIMEOUT + std::time::Duration::from_secs(50)
         );
     }
 
@@ -1259,6 +1339,7 @@ mod tests {
             stage: None,
             after: None,
             checks: None,
+            pace_ms: Some(250),
         };
         let request = batch_file_request(file, "inn.json".to_string(), &args);
         assert_eq!(
@@ -1271,6 +1352,7 @@ mod tests {
                 "atomic": true,
                 "dry_run": true,
                 "checks": [{ "count": { "eq": 1 } }],
+                "pace_ms": 250,
             })
         );
     }
@@ -1385,5 +1467,16 @@ mod tests {
         let tree = text.find("`scene_tree`").expect("still names scene_tree");
         assert!(summary < tree && check < tree, "{text}");
         assert!(text.contains("since_revision"), "{text}");
+    }
+
+    #[test]
+    fn the_instructions_recommend_stages_and_atomic_batches() {
+        let text = JackdawMcp::new(".")
+            .get_info()
+            .instructions
+            .expect("instructions");
+        assert!(text.contains("`stage`"), "{text}");
+        assert!(text.contains("`atomic`"), "{text}");
+        assert!(text.contains("`checks`"), "{text}");
     }
 }

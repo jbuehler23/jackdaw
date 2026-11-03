@@ -2125,3 +2125,202 @@ fn a_capture_that_fits_is_its_own_thumbnail() {
     assert_eq!(answer["thumb"]["path"], answer["path"], "{answer}");
     assert_eq!(answer["thumb"]["width"], json!(100), "{answer}");
 }
+
+/// An editor with a project and one viewport camera standing orthographic at
+/// `(0, 0, 10)`, for screenshots that aim it.
+fn editor_with_a_camera() -> (App, Entity, tempfile::TempDir) {
+    let (mut app, project) = editor_with_a_project();
+    let camera = app
+        .world_mut()
+        .spawn((
+            jackdaw::viewport::MainViewportCamera,
+            Transform::from_xyz(0.0, 0.0, 10.0),
+            Projection::Orthographic(OrthographicProjection::default_3d()),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<jackdaw::viewport::ActiveViewport>()
+        .camera = Some(camera);
+    app.update();
+    (app, camera, project)
+}
+
+/// Poll `params` once on the screenshot method.
+#[track_caller]
+fn screenshot_poll(app: &mut App, params: &Value) -> Option<Value> {
+    app.world_mut()
+        .run_system_cached_with(screenshot_handler, Some(params.clone()))
+        .expect("the handler ran")
+        .unwrap_or_else(|err| panic!("the screenshot refused: {}", err.message))
+}
+
+/// Stand in for the readback of the capture `name` under the project.
+fn land_capture(app: &mut App, name: &str) {
+    let project = app.world().resource::<ProjectRoot>().root.clone();
+    let path = dunce::canonicalize(&project).unwrap().join(name);
+    app.world_mut()
+        .resource_mut::<jackdaw::screenshot::CaptureLog>()
+        .record(path, (1280, 720));
+}
+
+/// Whether a capture is queued for the renderer.
+fn capture_queued(app: &mut App) -> bool {
+    app.world_mut()
+        .query_filtered::<Entity, With<bevy::render::view::screenshot::Screenshot>>()
+        .iter(app.world())
+        .next()
+        .is_some()
+}
+
+/// An aimed screenshot queues its capture a frame after aiming, once the
+/// camera's world transform holds the aim, so the frame captured is the aimed
+/// view. Once it lands the camera goes back where the user left it,
+/// projection and all, and the poll after the answer neither captures nor
+/// aims again.
+#[test]
+fn a_screenshot_that_aims_the_camera_captures_the_aim_and_puts_it_back() {
+    let (mut app, camera, _project) = editor_with_a_camera();
+    let params = json!({
+        "kind": "window",
+        "path": "aimed.png",
+        "request": "aimed",
+        "look_at": { "eye": [20.0, 15.0, 20.0], "target": [0.0, 0.0, 0.0] },
+    });
+    assert!(screenshot_poll(&mut app, &params).is_none());
+    assert!(!capture_queued(&mut app), "queued in the frame it aimed");
+    app.update();
+
+    assert!(screenshot_poll(&mut app, &params).is_none());
+    assert!(capture_queued(&mut app), "the capture was not queued");
+    let at_capture = app
+        .world()
+        .get::<GlobalTransform>(camera)
+        .expect("a world transform")
+        .translation();
+    assert_eq!(at_capture, Vec3::new(20.0, 15.0, 20.0));
+
+    land_capture(&mut app, "aimed.png");
+    let answer = screenshot_poll(&mut app, &params).expect("a landed capture answers");
+    assert_eq!(answer["width"], json!(1280), "{answer}");
+    let back = *app.world().get::<Transform>(camera).expect("a transform");
+    assert_eq!(back, Transform::from_xyz(0.0, 0.0, 10.0));
+    assert!(matches!(
+        app.world().get::<Projection>(camera),
+        Some(Projection::Orthographic(_))
+    ));
+
+    let trailing = app
+        .world_mut()
+        .run_system_cached_with(screenshot_handler, Some(params.clone()))
+        .expect("the handler ran");
+    let err = trailing.expect_err("an answered id is not a new screenshot");
+    assert!(err.message.contains("already answered"), "{}", err.message);
+    assert_eq!(
+        *app.world().get::<Transform>(camera).expect("a transform"),
+        back,
+        "the poll after the answer aimed the camera again"
+    );
+}
+
+/// `keep_camera` leaves the camera where the shot aimed it.
+#[test]
+fn a_screenshot_with_keep_camera_leaves_the_camera_aimed() {
+    let (mut app, camera, _project) = editor_with_a_camera();
+    let params = json!({
+        "kind": "window",
+        "path": "kept.png",
+        "request": "kept",
+        "keep_camera": true,
+        "look_at": { "eye": [0.0, 30.0, 5.0] },
+    });
+    assert!(screenshot_poll(&mut app, &params).is_none());
+    app.update();
+    assert!(screenshot_poll(&mut app, &params).is_none());
+    land_capture(&mut app, "kept.png");
+    screenshot_poll(&mut app, &params).expect("a landed capture answers");
+    let kept = app.world().get::<Transform>(camera).expect("a transform");
+    assert_eq!(kept.translation, Vec3::new(0.0, 30.0, 5.0));
+    assert!(matches!(
+        app.world().get::<Projection>(camera),
+        Some(Projection::Perspective(_))
+    ));
+}
+
+/// A `look_at` is refused before anything moves when it has no eye, no
+/// request id, or another aimed screenshot is still capturing.
+#[test]
+fn an_aimed_screenshot_is_refused_where_it_could_not_put_the_camera_back() {
+    let (mut app, camera, _project) = editor_with_a_camera();
+    let home = Transform::from_xyz(0.0, 0.0, 10.0);
+    for (params, says) in [
+        (
+            json!({ "kind": "window", "request": "a", "look_at": { "target": [1.0, 0.0, 0.0] } }),
+            "eye",
+        ),
+        (
+            json!({ "kind": "window", "look_at": { "eye": [5.0, 5.0, 5.0] } }),
+            "request",
+        ),
+    ] {
+        let err = app
+            .world_mut()
+            .run_system_cached_with(screenshot_handler, Some(params.clone()))
+            .expect("the handler ran")
+            .expect_err("refused");
+        assert_eq!(err.code, bevy::remote::error_codes::INVALID_PARAMS);
+        assert!(err.message.contains(says), "{params}: {}", err.message);
+        assert_eq!(*app.world().get::<Transform>(camera).unwrap(), home);
+    }
+
+    let first =
+        json!({ "kind": "window", "request": "one", "look_at": { "eye": [5.0, 5.0, 5.0] } });
+    assert!(screenshot_poll(&mut app, &first).is_none());
+    let err = app
+        .world_mut()
+        .run_system_cached_with(
+            screenshot_handler,
+            Some(json!({ "kind": "window", "request": "two", "look_at": { "eye": [9.0, 9.0, 9.0] } })),
+        )
+        .expect("the handler ran")
+        .expect_err("one aimed screenshot at a time");
+    assert!(err.message.contains("still capturing"), "{}", err.message);
+    assert_eq!(
+        app.world().get::<Transform>(camera).unwrap().translation,
+        Vec3::new(5.0, 5.0, 5.0)
+    );
+}
+
+/// Make every pending request stale, then poll an unrelated screenshot so
+/// the stale ones expire.
+fn expire_pending(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<bevy::diagnostic::FrameCount>()
+        .0 += 1000;
+    screenshot_poll(
+        app,
+        &json!({ "kind": "window", "path": "other.png", "request": "other" }),
+    );
+}
+
+/// A capture abandoned by its caller puts the camera back when it expires,
+/// unless the user has moved the camera since the aim.
+#[test]
+fn an_abandoned_aim_puts_the_camera_back_only_if_nobody_moved_it() {
+    let (mut app, camera, _project) = editor_with_a_camera();
+    let aimed =
+        json!({ "kind": "window", "request": "left", "look_at": { "eye": [5.0, 5.0, 5.0] } });
+    assert!(screenshot_poll(&mut app, &aimed).is_none());
+    expire_pending(&mut app);
+    assert_eq!(
+        *app.world().get::<Transform>(camera).unwrap(),
+        Transform::from_xyz(0.0, 0.0, 10.0)
+    );
+
+    let aimed =
+        json!({ "kind": "window", "request": "moved", "look_at": { "eye": [5.0, 5.0, 5.0] } });
+    assert!(screenshot_poll(&mut app, &aimed).is_none());
+    let users = Transform::from_xyz(-3.0, 2.0, 7.0);
+    app.world_mut().entity_mut(camera).insert(users);
+    expire_pending(&mut app);
+    assert_eq!(*app.world().get::<Transform>(camera).unwrap(), users);
+}

@@ -350,9 +350,10 @@ pub(crate) fn target_entities(
     Ok(selection.entities.clone())
 }
 
-/// The entities a comma-separated list of ids names.
+/// The entities a comma-separated list of ids names, bracketed or not, so a
+/// JSON list of ids reads too.
 fn parse_entity_ids(list: &str) -> Result<Vec<Entity>, String> {
-    list.split([',', ' '])
+    list.split([',', ' ', '[', ']'])
         .filter(|token| !token.is_empty())
         .map(|token| {
             token

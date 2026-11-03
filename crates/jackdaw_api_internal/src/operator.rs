@@ -566,6 +566,9 @@ impl<'a> OperatorCallBuilder<'a, World> {
             if op.modal && active.get(world).ok().is_some_and(|a| a.is_modal_running()) {
                 return Err(CallOperatorError::ModalAlreadyActive(op.id));
             }
+            if op.leaves_history && HistoryHold::reason(world).is_some() {
+                return Ok(false);
+            }
             let Some(check) = op.availability_check else {
                 return Ok(true);
             };
@@ -688,6 +691,19 @@ fn dispatch_operator_scoped(
             .and_then(|a| a.get_operator().cloned())
     {
         return Err(CallOperatorError::ModalAlreadyActive(active_op.id));
+    }
+
+    if op.leaves_history
+        && let Some(reason) = HistoryHold::reason(world)
+    {
+        let refusal = format!("{id}: {reason}");
+        warn!("{refusal}");
+        world
+            .get_resource_or_init::<OperatorWarnings>()
+            .0
+            .push(refusal);
+        set_outcome(world, Outcome::Unchanged);
+        return Ok(OperatorResult::Cancelled);
     }
 
     if let Some(check) = op.availability_check {
@@ -1084,50 +1100,110 @@ pub fn with_batch_transaction<R>(
     may_roll_back: bool,
     body: impl FnOnce(&mut World) -> (R, bool),
 ) -> R {
-    let label = label.into();
-    let redo = may_roll_back
-        .then(|| std::mem::take(&mut world.resource_mut::<CommandHistory>().redo_stack));
-    let span = world.resource_mut::<CommandHistory>().begin_span();
-    let before = world
-        .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
+    let transaction = BatchTransaction::begin(world, label, may_roll_back);
     let (out, keep) = body(world);
-    let mut commands = world.resource_mut::<CommandHistory>().take_span(span);
-    let change = world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
-        let after = snapshotter.0.capture(world);
-        snapshotter
-            .0
-            .history_entry(before.clone_box(), after, label.clone())
-    });
-    if !keep {
-        BatchEntry {
-            commands,
-            change,
-            label,
-        }
-        .undo(world);
-        before.restore_selection(world);
-        if let Some(redo) = redo {
-            world.resource_mut::<CommandHistory>().redo_stack = redo;
-        }
-        return out;
-    }
-    let entry: Option<Box<dyn EditorCommand>> = match (commands.len(), change) {
-        (0, None) => None,
-        (0, Some(change)) => Some(change),
-        (1, None) => commands.pop(),
-        (_, change) => Some(Box::new(BatchEntry {
-            commands,
-            change,
-            label,
-        })),
-    };
-    let mut history = world.resource_mut::<CommandHistory>();
-    match (entry, redo) {
-        (Some(entry), _) => history.push_executed(entry),
-        (None, Some(redo)) => history.redo_stack = redo,
-        (None, None) => {}
-    }
+    transaction.finish(world, keep);
     out
+}
+
+/// Why the history may not be stepped or swapped right now, while something
+/// holds an undo entry open across frames. While held, every operator that
+/// leaves the history (undo, redo, opening, closing or switching a scene or
+/// project) is unavailable and refused with this reason.
+#[derive(Resource, Default, Debug)]
+pub struct HistoryHold(Option<String>);
+
+impl HistoryHold {
+    /// Hold the history, saying why.
+    pub fn hold(&mut self, reason: impl Into<String>) {
+        self.0 = Some(reason.into());
+    }
+
+    /// Let the history go.
+    pub fn release(&mut self) {
+        self.0 = None;
+    }
+
+    /// Why the history is held, if it is.
+    pub fn reason(world: &World) -> Option<String> {
+        world.get_resource::<Self>().and_then(|hold| hold.0.clone())
+    }
+}
+
+/// [`with_batch_transaction`] held open across frames: [`Self::begin`] where
+/// the body would start and [`Self::finish`] where it ends. Whatever reaches
+/// the history in between joins the one entry.
+pub struct BatchTransaction {
+    label: String,
+    redo: Option<Vec<Box<dyn EditorCommand>>>,
+    span: jackdaw_commands::HistorySpan,
+    before: Box<dyn SceneSnapshot>,
+}
+
+impl BatchTransaction {
+    /// Open the transaction; see [`with_batch_transaction`] for
+    /// `may_roll_back`.
+    pub fn begin(world: &mut World, label: impl Into<String>, may_roll_back: bool) -> Self {
+        let redo = may_roll_back
+            .then(|| std::mem::take(&mut world.resource_mut::<CommandHistory>().redo_stack));
+        let span = world.resource_mut::<CommandHistory>().begin_span();
+        let before = world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
+            snapshotter.0.capture(world)
+        });
+        Self {
+            label: label.into(),
+            redo,
+            span,
+            before,
+        }
+    }
+
+    /// Close the transaction as one undo entry, or take everything in it back
+    /// when `keep` is false.
+    pub fn finish(self, world: &mut World, keep: bool) {
+        let Self {
+            label,
+            redo,
+            span,
+            before,
+        } = self;
+        let mut commands = world.resource_mut::<CommandHistory>().take_span(span);
+        let change = world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
+            let after = snapshotter.0.capture(world);
+            snapshotter
+                .0
+                .history_entry(before.clone_box(), after, label.clone())
+        });
+        if !keep {
+            BatchEntry {
+                commands,
+                change,
+                label,
+            }
+            .undo(world);
+            before.restore_selection(world);
+            if let Some(redo) = redo {
+                world.resource_mut::<CommandHistory>().redo_stack = redo;
+            }
+            return;
+        }
+        let entry: Option<Box<dyn EditorCommand>> = match (commands.len(), change) {
+            (0, None) => None,
+            (0, Some(change)) => Some(change),
+            (1, None) => commands.pop(),
+            (_, change) => Some(Box::new(BatchEntry {
+                commands,
+                change,
+                label,
+            })),
+        };
+        let mut history = world.resource_mut::<CommandHistory>();
+        match (entry, redo) {
+            (Some(entry), _) => history.push_executed(entry),
+            (None, Some(redo)) => history.redo_stack = redo,
+            (None, None) => {}
+        }
+    }
 }
 
 /// A batch as one undo entry: the commands its calls pushed, then the scene
