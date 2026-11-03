@@ -102,6 +102,8 @@ pub mod lod_upgrade;
 pub mod material_assets;
 pub mod material_browser;
 pub mod material_overrides;
+pub mod material_palette;
+pub mod material_params;
 pub mod material_preview;
 pub mod material_ui;
 pub mod measure_tool;

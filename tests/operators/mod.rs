@@ -9,6 +9,7 @@ mod element_addressing;
 mod element_transform;
 mod field_edits;
 mod light_defaults;
+mod material_param_ops;
 mod mesh_param_ops;
 mod operator_availability;
 mod operator_entity_params;

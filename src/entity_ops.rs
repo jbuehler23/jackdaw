@@ -2919,7 +2919,7 @@ pub(crate) fn entity_unhide_all(
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Cube\"."),
@@ -2962,7 +2962,7 @@ pub(crate) fn entity_add_cube(params: In<OperatorParameters>, world: &mut World)
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Sphere\"."),
@@ -3247,7 +3247,7 @@ pub(crate) fn entity_add_empty_2d(
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Plane\"."),
@@ -3282,7 +3282,7 @@ pub(crate) fn entity_add_plane(
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Cylinder\"."),
@@ -3312,7 +3312,7 @@ pub(crate) fn entity_add_cylinder(
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Wedge\"."),
@@ -3343,7 +3343,7 @@ pub(crate) fn entity_add_wedge(
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Cone\"."),
@@ -3374,7 +3374,7 @@ pub(crate) fn entity_add_cone(params: In<OperatorParameters>, world: &mut World)
         ),
         material(
             String,
-            doc = "Material file path for every face. Defaults to the last used."
+            doc = "Palette name or material file path for every face. Defaults to the last used."
         ),
         parent(Entity, doc = "Node that adopts it. Defaults to top level."),
         name(String, doc = "Name for the new node. Defaults to \"Pyramid\"."),

@@ -1546,7 +1546,7 @@ pub(crate) fn brush_join(_: In<OperatorParameters>, mut commands: Commands) -> O
         cut_faces(
             String,
             doc = "What the faces the cut creates wear: `cutter`, `target` (its most worn \
-                   material) or a material file path. Defaults to `cutter`."
+                   material), a palette name or a material file path. Defaults to `cutter`."
         ),
         align_cut_uvs(
             bool,
@@ -1596,7 +1596,7 @@ pub(crate) fn brush_csg_subtract(
         cut_faces(
             String,
             doc = "What the faces the cut creates wear: `cutter`, `target` (its most worn \
-                   material) or a material file path. Defaults to `cutter`."
+                   material), a palette name or a material file path. Defaults to `cutter`."
         ),
         align_cut_uvs(
             bool,
