@@ -93,8 +93,11 @@ fn an_entity_with_bindings_gets_an_inspector_card() {
     app.update();
     app.world_mut()
         .spawn(jackdaw::layout::inspector_components_content(default()));
-    app.world_mut()
-        .spawn((Name::new("Play"), Node::default(), Bindings::default()));
+    let play = app
+        .world_mut()
+        .spawn((Name::new("Play"), Node::default(), Bindings::default()))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), play);
     app.update();
 
     app.world_mut()

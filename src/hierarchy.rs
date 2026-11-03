@@ -3483,21 +3483,56 @@ pub fn clear_all_tree_rows(
     world.resource_mut::<TreeIndex>().clear();
 }
 
-/// Filter hierarchy tree rows based on the filter text input.
+/// Filter hierarchy tree rows based on the filter text input: a plain word
+/// matches names case-insensitively, while a complete entity reference
+/// (`#roof`, `village/*/roof`, `#roof&under:inn`) shows the nodes it matches.
 fn apply_hierarchy_filter(
     filter_input: Query<&TextEditValue, (With<HierarchyFilter>, Changed<TextEditValue>)>,
-    tree_nodes: Query<(Entity, &TreeNode)>,
-    names: Query<&Name>,
-    parent_query: Query<&ChildOf>,
-    tree_row_children_query: Query<(), With<TreeRowChildren>>,
-    mut display_query: Query<&mut Node>,
-    mut parked_query: Query<&mut jackdaw_widgets::tree_view::TreeRowParked>,
+    mut commands: Commands,
 ) {
     let Ok(text_edit_value) = filter_input.single() else {
         return;
     };
+    let filter = text_edit_value.0.trim().to_string();
+    commands.queue(move |world: &mut World| filter_rows(world, &filter));
+}
 
-    let filter = text_edit_value.0.trim().to_lowercase();
+type FilterRows<'w, 's> = (
+    Query<'w, 's, (Entity, &'static TreeNode)>,
+    Query<'w, 's, &'static Name>,
+    Query<'w, 's, &'static ChildOf>,
+    Query<'w, 's, (), With<TreeRowChildren>>,
+    Query<'w, 's, &'static mut Node>,
+    Query<'w, 's, &'static mut jackdaw_widgets::tree_view::TreeRowParked>,
+);
+
+fn filter_rows(world: &mut World, filter: &str) {
+    // Text still being typed (`#`, `village/`) is not a query yet, so it
+    // searches names until it parses.
+    let is_query = crate::entity_refs::looks_like_query(filter)
+        && crate::entity_refs::Reference::parse(filter).is_ok();
+    let referenced: Option<HashSet<Entity>> = is_query.then(|| {
+        crate::entity_refs::resolve(world, filter)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    });
+    let lowered = filter.to_lowercase();
+    let mut state = bevy::ecs::system::SystemState::<FilterRows>::new(world);
+    let (
+        tree_nodes,
+        names,
+        parent_query,
+        tree_row_children_query,
+        mut display_query,
+        mut parked_query,
+    ) = match state.get_mut(world) {
+        Ok(params) => params,
+        Err(err) => {
+            warn!("hierarchy filter: {err}");
+            return;
+        }
+    };
 
     if filter.is_empty() {
         for (tree_entity, _) in &tree_nodes {
@@ -3515,11 +3550,14 @@ fn apply_hierarchy_filter(
     let mut visible_tree_entities: HashSet<Entity> = HashSet::new();
 
     for (tree_entity, tree_node) in &tree_nodes {
-        let label = names
-            .get(tree_node.0)
-            .map(|n| n.as_str().to_lowercase())
-            .unwrap_or_else(|_| format!("entity {}", tree_node.0).to_lowercase());
-        let matches = label.contains(&filter);
+        let matches = match &referenced {
+            Some(found) => found.contains(&tree_node.0),
+            None => names
+                .get(tree_node.0)
+                .map(|n| n.as_str().to_lowercase())
+                .unwrap_or_else(|_| format!("entity {}", tree_node.0).to_lowercase())
+                .contains(&lowered),
+        };
 
         if matches {
             visible_tree_entities.insert(tree_entity);

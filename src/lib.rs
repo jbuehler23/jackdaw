@@ -37,6 +37,7 @@ pub mod definition_assets;
 pub mod draw_brush;
 pub mod edit_mode_ops;
 pub mod entity_ops;
+pub mod entity_refs;
 pub mod environment_ops;
 pub mod face_grid;
 pub use jackdaw_runtime::frame_work;
@@ -163,6 +164,7 @@ pub mod sprite_props;
 pub mod sprite_snap;
 pub mod sprite_stage;
 pub mod status_bar;
+pub mod tags;
 pub mod terrain;
 pub mod test_input;
 pub mod texture_files;
@@ -478,6 +480,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(jackdaw_surface::ReflectionProbePlugin)
         .add_plugins(jackdaw_surface::ShadowViewCleanupPlugin)
         .add_plugins(probe_bake::plugin)
+        .add_plugins(tags::plugin)
         .add_plugins(tileset_import::plugin)
         .add_plugins(tilemap::plugin)
         .add_plugins(tile_tools::plugin)

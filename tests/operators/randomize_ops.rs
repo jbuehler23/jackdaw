@@ -473,6 +473,14 @@ fn a_face_turned_inside_out_is_refused() {
         "entity.add.cube",
         json!({ "name": "Thin", "size": [0.4, 0.02, 0.4] }),
     );
+    // Each brush's offsets are keyed on its node id, which is minted from a
+    // random base per process; a fixed id makes this slab's flip certain.
+    app.world_mut()
+        .entity_mut(slab)
+        .insert(jackdaw_scene_types::SceneNodeId(
+            jackdaw_scene_types::SPARSE_MIN + 1,
+        ));
+    app.update();
     let before = scene_text(&mut app);
     let entries = history_len(&app);
 

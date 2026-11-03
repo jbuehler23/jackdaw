@@ -87,6 +87,8 @@ pub struct MaterialBrowserState {
 #[derive(Event, Clone)]
 pub struct ApplyMaterialDefToFaces {
     pub material: WornMaterial,
+    /// The entities to dress, in place of the selection and its faces.
+    pub entities: Option<Vec<Entity>>,
 }
 
 #[derive(Event, Clone)]
@@ -479,7 +481,10 @@ fn handle_apply_material(
         .active_sub()
         .map(|s| s.faces.clone())
         .unwrap_or_default();
-    if *edit_mode == EditMode::BrushEdit(BrushEditMode::Face) && !active_faces.is_empty() {
+    if event.entities.is_none()
+        && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && !active_faces.is_empty()
+    {
         let Some(standard) = event.material.standard().cloned() else {
             warn!("material.apply: a brush face takes a standard material only");
             return;
@@ -507,9 +512,12 @@ fn handle_apply_material(
             });
         }
     } else {
-        let selected = selection.entities.to_vec();
+        let selected = event
+            .entities
+            .clone()
+            .unwrap_or_else(|| selection.entities.to_vec());
         let targets: Vec<Entity> = crate::brush::shown_edit_brushes(
-            &selection.entities,
+            &selected,
             |e| brushes.contains(e),
             |e| {
                 children_query
@@ -1151,20 +1159,42 @@ pub(crate) fn material_select(
     label = "Apply Material",
     description = "Apply a material to the selected faces or brushes.",
     allows_undo = false,
-    params(material(
-        String,
-        doc = "Path of the material file to apply, such as \
-               materials/slate.material.bsn. A bare name still resolves for \
-               one release. Defaults to the previewed one."
-    ))
+    params(
+        material(
+            String,
+            doc = "Path of the material file to apply, such as \
+                   materials/slate.material.bsn. A bare name still resolves for \
+                   one release. Defaults to the previewed one."
+        ),
+        entities(
+            String,
+            doc = "Entities to dress whole: a list of ids, names, paths or queries such as \
+                   #roof. Defaults to the selected faces or brushes."
+        ),
+    )
 )]
 pub(crate) fn material_apply(
     params: In<OperatorParameters>,
     registry: Res<MaterialRegistry>,
     index: Option<Res<crate::asset_index::AssetIndex>>,
     preview_state: Res<MaterialPreviewState>,
+    selection: Res<Selection>,
+    authored: Query<(), Without<crate::EditorEntity>>,
     mut commands: Commands,
 ) -> OperatorResult {
+    let entities = match params.get("entities") {
+        None => None,
+        Some(_) => match crate::boot_ops::target_entities(&params, &selection, &authored) {
+            Ok(targets) => Some(targets),
+            Err(refusal) => {
+                commands.queue(move |world: &mut World| {
+                    warn_caller(world, format!("material.apply: {refusal}"));
+                    set_outcome(world, Outcome::Invalid);
+                });
+                return OperatorResult::Cancelled;
+            }
+        },
+    };
     let material = match params.as_str("material") {
         Some(reference) => {
             crate::material_assets::worn_of_reference(index.as_deref(), &registry, reference)
@@ -1178,7 +1208,7 @@ pub(crate) fn material_apply(
         warn!("material.apply: no material to apply");
         return OperatorResult::Cancelled;
     };
-    commands.trigger(ApplyMaterialDefToFaces { material });
+    commands.trigger(ApplyMaterialDefToFaces { material, entities });
     OperatorResult::Finished
 }
 

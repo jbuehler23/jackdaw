@@ -2763,7 +2763,8 @@ fn parse_viewport_2d_mode(mode: &str) -> Option<Viewport2dMode> {
     params(
         name(
             String,
-            doc = "`Name` of the entity to select. Must match exactly one."
+            doc = "Name, path or query of the entity to select, such as village/inn. Must match \
+                   exactly one."
         ),
         entity(
             Entity,
@@ -2772,55 +2773,52 @@ fn parse_viewport_2d_mode(mode: &str) -> Option<Viewport2dMode> {
         ),
         entities(
             String,
-            doc = "Entities to select, as a list of ids or one comma-separated string."
+            doc = "Entities to select, as a list of ids, names, paths or queries such as #roof."
         ),
     )
 )]
 pub(crate) fn selection_select(
     params: In<OperatorParameters>,
-    named: Query<(Entity, &Name), Without<crate::EditorEntity>>,
-    instances: Query<(Entity, &crate::prefab::IsA), (Without<Name>, Without<crate::EditorEntity>)>,
-    authored: Query<(), Without<crate::EditorEntity>>,
-    mut selection: ResMut<Selection>,
-    mut commands: Commands,
+    world: &mut World,
 ) -> OperatorResult {
     if params.get("entity").is_some() || params.get("entities").is_some() {
-        let targets = match crate::boot_ops::target_entities(&params, &selection, &authored) {
-            Ok(targets) => targets,
+        let mut state: bevy::ecs::system::SystemState<(
+            Res<Selection>,
+            Query<(), Without<crate::EditorEntity>>,
+        )> = bevy::ecs::system::SystemState::new(world);
+        let targets = match state.get(world) {
+            Ok((selection, authored)) => {
+                crate::boot_ops::target_entities(&params, &selection, &authored)
+            }
+            Err(err) => Err(err.to_string()),
+        };
+        return match targets {
+            Ok(targets) => {
+                crate::selection::select_many(world, &targets);
+                OperatorResult::Finished
+            }
             Err(refusal) => {
-                commands.queue(move |world: &mut World| {
-                    warn_caller(world, format!("selection.select: {refusal}"));
-                });
-                return OperatorResult::Cancelled;
+                warn_caller(world, format!("selection.select: {refusal}"));
+                OperatorResult::Cancelled
             }
         };
-        selection.select_multiple(&mut commands, &targets);
-        return OperatorResult::Finished;
     }
     let Some(wanted) = params.as_str("name").filter(|name| !name.is_empty()) else {
-        commands.queue(|world: &mut World| {
-            warn_caller(world, "selection.select: no name was given");
-        });
+        warn_caller(world, "selection.select: no name was given");
         return OperatorResult::Cancelled;
     };
-    let Some(entity) =
-        crate::boot_ops::unique_labelled_entity(named.iter(), instances.iter(), wanted)
-    else {
-        let wanted = wanted.to_string();
-        commands.queue(move |world: &mut World| {
-            warn_caller(
-                world,
-                format!(
-                    "selection.select: '{wanted}' names no entity in this scene, or more than one"
-                ),
-            );
-        });
-        return OperatorResult::Cancelled;
-    };
-    if !selection.is_only(entity) {
-        selection.select_single(&mut commands, entity);
+    match crate::entity_refs::resolve_one(world, wanted) {
+        Ok(entity) => {
+            if !world.resource::<Selection>().is_only(entity) {
+                crate::selection::select_only(world, entity);
+            }
+            OperatorResult::Finished
+        }
+        Err(refusal) => {
+            warn_caller(world, format!("selection.select: {refusal}"));
+            OperatorResult::Cancelled
+        }
     }
-    OperatorResult::Finished
 }
 
 /// Add the authored entity with this name to the selection, which
@@ -2830,36 +2828,34 @@ pub(crate) fn selection_select(
     label = "Add To Selection By Name",
     description = "Add the entity with this name to the current selection.",
     allows_undo = false,
-    params(name(String, doc = "`Name` of the entity to add. Must match exactly one."))
+    params(name(
+        String,
+        doc = "Name, path or query of the entities to add, such as #roof."
+    ))
 )]
 pub(crate) fn selection_extend(
     params: In<OperatorParameters>,
-    named: Query<(Entity, &Name), Without<crate::EditorEntity>>,
-    instances: Query<(Entity, &crate::prefab::IsA), (Without<Name>, Without<crate::EditorEntity>)>,
-    mut selection: ResMut<Selection>,
-    mut commands: Commands,
+    world: &mut World,
 ) -> OperatorResult {
     let Some(wanted) = params.as_str("name").filter(|name| !name.is_empty()) else {
-        commands.queue(|world: &mut World| {
-            warn_caller(world, "selection.extend: no name was given");
-        });
+        warn_caller(world, "selection.extend: no name was given");
         return OperatorResult::Cancelled;
     };
-    let Some(entity) =
-        crate::boot_ops::unique_labelled_entity(named.iter(), instances.iter(), wanted)
-    else {
-        let wanted = wanted.to_string();
-        commands.queue(move |world: &mut World| {
-            warn_caller(
-                world,
-                format!(
-                    "selection.extend: '{wanted}' names no entity in this scene, or more than one"
-                ),
-            );
-        });
-        return OperatorResult::Cancelled;
+    let found = match crate::entity_refs::resolve(world, wanted) {
+        Ok(found) => found,
+        Err(err) => {
+            warn_caller(world, format!("selection.extend: {}", err.describe(wanted)));
+            return OperatorResult::Cancelled;
+        }
     };
-    selection.extend(&mut commands, entity);
+    let mut state: bevy::ecs::system::SystemState<(Commands, ResMut<Selection>)> =
+        bevy::ecs::system::SystemState::new(world);
+    if let Ok((mut commands, mut selection)) = state.get_mut(world) {
+        for entity in found {
+            selection.extend(&mut commands, entity);
+        }
+    }
+    state.apply(world);
     OperatorResult::Finished
 }
 

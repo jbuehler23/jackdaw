@@ -1039,6 +1039,7 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                                     )],
                                 ),],
                             ),
+                            (crate::tags::InspectorTagsMount,),
                             save_to_scene_button(save_font),
                             crate::inspector::unavailable::unavailable_notice(),
                         ],

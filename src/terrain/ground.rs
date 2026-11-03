@@ -110,7 +110,7 @@ pub(crate) fn terrain_height(
         entity(Entity, doc = "Entity to drop. Defaults to the selection."),
         entities(
             String,
-            doc = "Entities to drop, as a list of ids or one comma-separated string. Defaults \
+            doc = "Entities to drop, as a list of ids, names, paths or queries such as #roof. Defaults \
                    to the selection."
         ),
     )

@@ -2627,7 +2627,7 @@ pub(crate) fn entity_place_gltf(
         entity(Entity, doc = "Entity to delete. Defaults to the selection."),
         entities(
             String,
-            doc = "Entities to delete, as a list of ids or one comma-separated string. Defaults \
+            doc = "Entities to delete, as a list of ids, names, paths or queries such as #roof. Defaults \
                    to the selection."
         ),
     )
@@ -2660,7 +2660,7 @@ pub(crate) fn entity_delete(
         entity(Entity, doc = "Entity to duplicate. Defaults to the selection."),
         entities(
             String,
-            doc = "Entities to duplicate, as a list of ids or one comma-separated string. Defaults \
+            doc = "Entities to duplicate, as a list of ids, names, paths or queries such as #roof. Defaults \
                    to the selection."
         ),
         offset(
