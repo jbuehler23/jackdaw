@@ -522,28 +522,20 @@ impl<'a> OperatorCallBuilder<'a, World> {
     /// Whether this operator is declared `modal = true`. Returns
     /// `Err(UnknownId)` if the id doesn't resolve.
     pub fn is_modal(self) -> Result<bool, CallOperatorError> {
-        fn is_modal_inner(
-            In(id): In<Cow<'static, str>>,
-            world: &mut World,
-        ) -> Result<bool, CallOperatorError> {
-            let Some(op_entity) = world
-                .resource::<OperatorIndex>()
-                .by_id
-                .get(id.as_ref())
-                .copied()
-            else {
-                return Err(CallOperatorError::UnknownId(id));
-            };
-            let Some(op) = world.get::<OperatorEntity>(op_entity) else {
-                return Err(CallOperatorError::UnknownId(id));
-            };
-            Ok(op.modal)
-        }
-        self.world_commands
-            .run_system_cached_with(is_modal_inner, self.id.clone())
-            .map_err(BevyError::from)
-            .map_err(CallOperatorError::from)
-            .flatten()
+        let world = self.world_commands;
+        let id = self.id;
+        let Some(op_entity) = world
+            .resource::<OperatorIndex>()
+            .by_id
+            .get(id.as_ref())
+            .copied()
+        else {
+            return Err(CallOperatorError::UnknownId(id));
+        };
+        let Some(op) = world.get::<OperatorEntity>(op_entity) else {
+            return Err(CallOperatorError::UnknownId(id));
+        };
+        Ok(op.modal)
     }
 
     /// Whether the operator would run in the current editor state.
@@ -551,7 +543,7 @@ impl<'a> OperatorCallBuilder<'a, World> {
     /// ids.
     pub fn is_available(self) -> Result<bool, CallOperatorError> {
         fn is_available_inner(
-            In(id): In<Cow<'static, str>>,
+            id: Cow<'static, str>,
             world: &mut World,
             active: &mut SystemState<ActiveModalQuery>,
         ) -> Result<bool, CallOperatorError> {
@@ -579,11 +571,10 @@ impl<'a> OperatorCallBuilder<'a, World> {
                 .run_system(check)
                 .map_err(|_| CallOperatorError::NotAvailable)
         }
-        self.world_commands
-            .run_system_cached_with(is_available_inner, self.id.clone())
-            .map_err(BevyError::from)
-            .map_err(CallOperatorError::from)
-            .flatten()
+        let id = self.id;
+        with_modal_query(self.world_commands, |world, active| {
+            is_available_inner(id, world, active)
+        })
     }
 
     /// Call an operator by id. The availability check runs before the
@@ -595,19 +586,10 @@ impl<'a> OperatorCallBuilder<'a, World> {
 
     /// Checks if an operator is the currently running modal operator.
     pub fn is_running(self) -> bool {
-        let result = self
-            .world_commands
-            .run_system_cached_with(is_op_running, self.id.clone());
-        match result {
-            Ok(result) => result,
-            Err(_) => {
-                error!(
-                    "Failed to check if operator is running: {}, treating as `false`",
-                    self.id
-                );
-                false
-            }
-        }
+        let id = self.id;
+        with_modal_query(self.world_commands, |world, active| {
+            active.get(world).ok().is_some_and(|a| a.is_operator(id))
+        })
     }
 
     /// Calls an operator's cancel system, if one is defined, and stops the execution if it is running as a modal.
@@ -618,14 +600,6 @@ impl<'a> OperatorCallBuilder<'a, World> {
             .run_system_cached_with(cancel_operator, self.id)
             .map_err(From::from)
     }
-}
-
-fn is_op_running(
-    In(id): In<Cow<'static, str>>,
-    world: &mut World,
-    active: &mut SystemState<ActiveModalQuery>,
-) -> bool {
-    active.get(world).ok().is_some_and(|a| a.is_operator(id))
 }
 
 /// Fired once whenever an operator runs through `dispatch_operator`,
@@ -643,26 +617,36 @@ fn is_op_running(
 #[derive(Event)]
 pub struct RefreshOperatorButtons;
 
-/// The modal queries dispatches read, kept between calls. A call made while
-/// another is under way, from inside an operator's system, takes one of its
-/// own, so a dispatch can always start whatever is already running.
+/// The modal queries dispatches and availability checks read, kept between
+/// calls. Each call takes one out and puts it back when done, holding no
+/// resource while it runs, so a check or a dispatch can start another from
+/// inside an operator's system or an availability check.
 #[derive(Resource, Default)]
-struct DispatchStates(Vec<SystemState<ActiveModalQuery<'static, 'static>>>);
+struct ModalQueryStates(Vec<SystemState<ActiveModalQuery<'static, 'static>>>);
+
+fn with_modal_query<R>(
+    world: &mut World,
+    body: impl FnOnce(&mut World, &mut SystemState<ActiveModalQuery<'static, 'static>>) -> R,
+) -> R {
+    let mut active = world
+        .get_resource_mut::<ModalQueryStates>()
+        .and_then(|mut states| states.0.pop())
+        .unwrap_or_else(|| SystemState::new(world));
+    let out = body(world, &mut active);
+    world
+        .get_resource_or_init::<ModalQueryStates>()
+        .0
+        .push(active);
+    out
+}
 
 fn dispatch_operator(
     world: &mut World,
     call: (Cow<'static, str>, OperatorParameters, CallOperatorSettings),
 ) -> Result<OperatorResult, CallOperatorError> {
-    let mut active = world
-        .get_resource_mut::<DispatchStates>()
-        .and_then(|mut states| states.0.pop())
-        .unwrap_or_else(|| SystemState::new(world));
-    let result = dispatch_operator_reported(call, world, &mut active);
-    world
-        .get_resource_or_init::<DispatchStates>()
-        .0
-        .push(active);
-    result
+    with_modal_query(world, |world, active| {
+        dispatch_operator_reported(call, world, active)
+    })
 }
 
 fn dispatch_operator_reported(
