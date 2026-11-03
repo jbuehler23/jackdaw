@@ -434,6 +434,7 @@ fn refresh_card(cards: &Query<&SpriteSamplingCombo>, rebuild: &mut PendingInspec
 /// keeps its own sampler. A project setting, so no history entry.
 #[operator(
     id = "project.set_2d_sampling",
+    writes_disk = true,
     label = "Set 2D Sampling",
     description = "Draw the project's 2D sprites smooth (linear) or crisp (nearest, for pixel art). \
                    The game applies it when its main.rs sets \
@@ -470,6 +471,7 @@ pub(crate) fn project_set_2d_sampling(
 /// project again. The meta is a project file, so no history entry.
 #[operator(
     id = "image.set_sampling",
+    writes_disk = true,
     label = "Set Image Sampling",
     description = "Override the project's 2D sampling for one image, or follow it again.",
     allows_undo = false,

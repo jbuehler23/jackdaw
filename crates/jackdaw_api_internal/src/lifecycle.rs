@@ -94,6 +94,8 @@ pub struct OperatorEntity {
     pub(crate) cancel: Option<SystemId<()>>,
     pub(crate) modal: bool,
     pub(crate) allows_undo: bool,
+    pub(crate) writes_disk: bool,
+    pub(crate) leaves_history: bool,
     pub(crate) remote_hidden: Option<&'static str>,
     pub(crate) unavailable_reason: Option<crate::operator::UnavailableReason>,
 }
@@ -136,6 +138,16 @@ impl OperatorEntity {
     /// auto-capture for them.
     pub fn allows_undo(&self) -> bool {
         self.allows_undo
+    }
+
+    /// Mirrors [`crate::Operator::WRITES_DISK`].
+    pub fn writes_disk(&self) -> bool {
+        self.writes_disk
+    }
+
+    /// Mirrors [`crate::Operator::LEAVES_HISTORY`].
+    pub fn leaves_history(&self) -> bool {
+        self.leaves_history
     }
 
     /// Why a scripted caller is not offered this operator, or `None`

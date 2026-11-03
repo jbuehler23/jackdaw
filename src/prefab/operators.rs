@@ -2054,6 +2054,7 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
 /// Save the active prefab tab's cached document to its source file.
 #[operator(
     id = "prefab.save",
+    writes_disk = true,
     label = "Save Prefab",
     description = "Write the active prefab tab's document out to its source file.",
     allows_undo = true
@@ -2155,6 +2156,7 @@ pub fn prefab_spawn_instance(
 /// Turn a group into a prefab file and an instance of it.
 #[operator(
     id = "prefab.pack",
+    writes_disk = true,
     label = "Pack Group as Prefab",
     description = "Write a group out as a prefab file and replace it with an instance of that file.",
     allows_undo = true,
@@ -2193,6 +2195,7 @@ pub fn prefab_pack(params: In<OperatorParameters>, mut commands: Commands) -> Op
 /// instances of the same file.
 #[operator(
     id = "prefab.pack_matching",
+    writes_disk = true,
     label = "Pack Matching Groups as Prefab",
     description = "Pack a group as a prefab file, then replace every other top-level group that \
                    matches it with an instance of that file.",
@@ -2351,6 +2354,7 @@ pub fn prefab_revert_all(params: In<OperatorParameters>, mut commands: Commands)
 /// JSON-encoded string via `value_json`.
 #[operator(
     id = "prefab.apply_to_source",
+    writes_disk = true,
     label = "Apply Field to Prefab Source",
     description = "Push one overridden field into the prefab source so every instance picks it up.",
     allows_undo = true,
@@ -2409,6 +2413,7 @@ pub fn prefab_apply_to_source(
 /// at `source_path`.
 #[operator(
     id = "prefab.bulk_apply_in_scene",
+    writes_disk = true,
     label = "Bulk Apply Field in Scene",
     description = "Copy one overridden field to every other prefab instance in the scene that shares the same source.",
     allows_undo = true,
@@ -2458,6 +2463,7 @@ pub fn prefab_bulk_apply_in_scene(
 /// Convert an existing prefab instance into a new variant prefab file.
 #[operator(
     id = "prefab.save_as_variant_entity",
+    writes_disk = true,
     label = "Save Instance as Variant",
     description = "Write a prefab-instance entity out as a new variant prefab file inheriting from the original.",
     allows_undo = true,

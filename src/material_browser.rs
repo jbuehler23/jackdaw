@@ -1086,6 +1086,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// until `material.save` writes a file for it.
 #[operator(
     id = "material.create",
+    writes_disk = true,
     label = "New Material",
     description = "Create a fresh empty material."
 )]
@@ -1199,6 +1200,7 @@ pub(crate) fn material_rescan(
 /// with no folder in mind would put it.
 #[operator(
     id = "material.save_as",
+    writes_disk = true,
     label = "Save Material As",
     description = "Choose the file to write this material to.",
     allows_undo = false

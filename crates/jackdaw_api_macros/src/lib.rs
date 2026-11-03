@@ -21,6 +21,11 @@ use syn::{
 /// - `modal`: `bool`, default `false`
 /// - `allows_undo`: `bool`, default `true`. When `false`, this operator never
 ///   creates an undo history entry.
+/// - `writes_disk`: `bool`, default `false`. The operator writes files outside
+///   the scene document, which no undo or rollback takes back.
+/// - `leaves_history`: `bool`, default `false`. The operator moves the editor
+///   off the history a batch records into: it opens, closes or switches a
+///   scene or project, or steps undo or redo.
 /// - `is_available`: path to a Bevy system returning `bool` that
 ///   decides whether the operator can run in the current editor
 ///   state. Runs before the execute system on every `World::operator`
@@ -77,6 +82,8 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
     let mut description: Option<Expr> = None;
     let mut modal: bool = false;
     let mut allows_undo: bool = true;
+    let mut writes_disk: bool = false;
+    let mut leaves_history: bool = false;
     let mut remote_hidden: Option<String> = None;
     let mut unavailable_reason: Option<Path> = None;
     let mut name_override: Option<String> = None;
@@ -114,6 +121,16 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
                     "allows_undo" => {
                         if let Some(b) = as_lit_bool(&nv.value) {
                             allows_undo = b.value;
+                        }
+                    }
+                    "writes_disk" => {
+                        if let Some(b) = as_lit_bool(&nv.value) {
+                            writes_disk = b.value;
+                        }
+                    }
+                    "leaves_history" => {
+                        if let Some(b) = as_lit_bool(&nv.value) {
+                            leaves_history = b.value;
                         }
                     }
                     "remote_hidden" => {
@@ -189,6 +206,12 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
             }
             Meta::Path(path) if path.is_ident("allows_undo") => {
                 allows_undo = true;
+            }
+            Meta::Path(path) if path.is_ident("writes_disk") => {
+                writes_disk = true;
+            }
+            Meta::Path(path) if path.is_ident("leaves_history") => {
+                leaves_history = true;
             }
             other => {
                 return syn::Error::new(
@@ -270,6 +293,8 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
             const DESCRIPTION: &'static str = #description;
             const MODAL: bool = #modal;
             const ALLOWS_UNDO: bool = #allows_undo;
+            const WRITES_DISK: bool = #writes_disk;
+            const LEAVES_HISTORY: bool = #leaves_history;
             const REMOTE_HIDDEN: Option<&'static str> = #remote_hidden_tokens;
             #unavailable_reason_impl
 

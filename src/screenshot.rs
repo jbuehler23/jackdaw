@@ -747,6 +747,7 @@ fn drive_shot_probe(world: &mut World) {
 /// Capture the viewport to a PNG: the world it is showing, or the canvas.
 #[operator(
     id = "viewport.screenshot",
+    writes_disk = true,
     label = "Screenshot Viewport",
     description = "Save what the viewport is showing to a PNG file, or the part of it named \
                    by the region values.",
@@ -791,6 +792,7 @@ pub(crate) fn viewport_screenshot(
 /// alone, without the stage chrome drawn over it.
 #[operator(
     id = "viewport2d.screenshot",
+    writes_disk = true,
     label = "Screenshot 2D Viewport",
     description = "Save what the 2D viewport is showing to a PNG file, without the selection \
                    chrome, or the part of it named by the region values; `window.screenshot` \
@@ -863,6 +865,7 @@ fn run_capture(
 /// Capture the whole editor window to a PNG, `bevy_ui` chrome included.
 #[operator(
     id = "window.screenshot",
+    writes_disk = true,
     label = "Screenshot Window",
     description = "Save the whole editor window, including all UI panels, to a PNG file.",
     allows_undo = false,

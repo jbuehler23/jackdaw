@@ -142,6 +142,7 @@ struct Stroke {
 /// Paint one terrain on many tile zones as one history entry.
 #[operator(
     id = "tileset.tile.paint_bits",
+    writes_disk = true,
     label = "Paint Tile Bits",
     description = "Paint a terrain on zones of sheet tiles in one terrain set, as one undo \
                    entry; zones its match mode does not use and tiles of objects are left. \

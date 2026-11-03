@@ -37,7 +37,12 @@ const UNDO_CHORD: crate::keybinds::ChordModifiers = crate::keybinds::ChordModifi
     shift: false,
 };
 
-#[operator(id = "history.undo", label = "Undo", allows_undo = false)]
+#[operator(
+    id = "history.undo",
+    leaves_history = true,
+    label = "Undo",
+    allows_undo = false
+)]
 pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         // Ctrl+Shift+Z fires both the Ctrl-only and Ctrl+Shift bindings
@@ -78,7 +83,12 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
-#[operator(id = "history.redo", label = "Redo", allows_undo = false)]
+#[operator(
+    id = "history.redo",
+    leaves_history = true,
+    label = "Redo",
+    allows_undo = false
+)]
 pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         // Symmetric to `history_undo`: re-add the last knife point if any.

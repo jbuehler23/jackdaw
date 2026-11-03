@@ -92,6 +92,7 @@ fn version_param(params: &OperatorParameters, id: &str) -> Option<String> {
 /// Show one of the launcher's pages.
 #[operator(
     id = "launcher.show_page",
+    leaves_history = true,
     label = "Show Launcher Page",
     description = "Show the launcher's Projects, Editors, Extensions or New project page.",
     allows_undo = false,
@@ -112,6 +113,7 @@ pub fn launcher_show_page(
 /// Filter the project list.
 #[operator(
     id = "launcher.project_filter",
+    leaves_history = true,
     label = "Filter Projects",
     description = "Show all projects, the Stable or Bleeding Edge ones, or those whose editor \
                    is not installed, optionally only those matching some text.",
@@ -143,6 +145,7 @@ pub fn launcher_project_filter(
 /// Filter the editor list.
 #[operator(
     id = "launcher.editor_filter",
+    leaves_history = true,
     label = "Filter Editors",
     description = "Show all installed editors, or the Stable or Bleeding Edge ones.",
     allows_undo = false,
@@ -163,6 +166,7 @@ pub fn launcher_editor_filter(
 /// Open a project with the editor its pin selects.
 #[operator(
     id = "launcher.open_project",
+    leaves_history = true,
     label = "Open Project",
     description = "Open a project with the editor its jackdaw.toml names: here, in another \
                    installed editor, or after choosing what to do when that editor is missing.",
@@ -183,6 +187,7 @@ pub fn launcher_open_project(
 /// Choose which editor opens a project.
 #[operator(
     id = "launcher.open_with",
+    leaves_history = true,
     label = "Open With...",
     description = "Choose how to open a project: install its editor, open a copy or convert it \
                    with an installed editor, or look at its scenes here.",
@@ -203,6 +208,7 @@ pub fn launcher_open_with(
 /// Pick an option in the Open with dialog.
 #[operator(
     id = "launcher.open_with_choice",
+    leaves_history = true,
     label = "Choose How To Open",
     description = "Pick an option in the Open with a different editor dialog.",
     allows_undo = false,
@@ -245,6 +251,7 @@ pub fn launcher_open_with_choice(
 /// Carry out the Open with dialog's choice.
 #[operator(
     id = "launcher.open_with_confirm",
+    leaves_history = true,
     label = "Continue",
     description = "Carry out the option picked in the Open with a different editor dialog.",
     allows_undo = false
@@ -265,6 +272,7 @@ pub fn launcher_open_with_confirm(
 /// Forget a project in the launcher's list.
 #[operator(
     id = "launcher.remove_project",
+    leaves_history = true,
     label = "Remove From List",
     description = "Forget a project in the launcher's list. Its folder is left alone.",
     allows_undo = false,
@@ -287,6 +295,7 @@ pub fn launcher_remove_project(
 /// Show a project's folder in the file manager.
 #[operator(
     id = "launcher.reveal_project",
+    leaves_history = true,
     label = "Show in Files",
     description = "Show a project's folder in the system file manager.",
     allows_undo = false,
@@ -335,6 +344,7 @@ fn install_extension(world: &mut World, path: PathBuf) {
 /// Install an editor extension bundle.
 #[operator(
     id = "launcher.install_extension",
+    leaves_history = true,
     label = "Install Extension...",
     description = "Install a signed .jdext editor extension bundle into this editor.",
     allows_undo = false,
@@ -448,6 +458,7 @@ pub fn add_project(world: &mut World, path: PathBuf) {
 /// Add an existing project to the list.
 #[operator(
     id = "launcher.add_project",
+    leaves_history = true,
     label = "Add Project",
     description = "List an existing project in the launcher without opening it.",
     allows_undo = false,
@@ -476,6 +487,7 @@ pub fn launcher_add_project(
 /// Open a project folder.
 #[operator(
     id = "launcher.open_folder",
+    leaves_history = true,
     label = "Open Folder...",
     description = "Pick a project folder and open it.",
     allows_undo = false
@@ -489,6 +501,7 @@ pub fn launcher_open_folder(_: In<OperatorParameters>, mut commands: Commands) -
 /// Set up an existing Bevy project for jackdaw.
 #[operator(
     id = "launcher.import_project",
+    leaves_history = true,
     label = "Import Bevy Project...",
     description = "Pick a Bevy project and see what setting it up for jackdaw writes.",
     allows_undo = false
@@ -505,6 +518,7 @@ pub fn launcher_import_project(
 /// Start a new project.
 #[operator(
     id = "launcher.new_project",
+    leaves_history = true,
     label = "New Project",
     description = "Show the New project page, starting from a template.",
     allows_undo = false,
@@ -537,6 +551,7 @@ pub fn launcher_new_project(
 /// Pick the new project's template.
 #[operator(
     id = "launcher.new_project_template",
+    leaves_history = true,
     label = "Choose Template",
     description = "Pick the template the new project starts from.",
     allows_undo = false,
@@ -559,6 +574,7 @@ pub fn launcher_new_project_template(
 /// Pick the editor the new project is made with.
 #[operator(
     id = "launcher.new_project_editor",
+    leaves_history = true,
     label = "Choose Editor",
     description = "Pick the installed editor the new project is made with and pinned to.",
     allows_undo = false,
@@ -588,6 +604,7 @@ pub fn launcher_new_project_editor(
 /// Turn a module on or off for the new project.
 #[operator(
     id = "launcher.new_project_module",
+    leaves_history = true,
     label = "Set New Project Module",
     description = "Turn one of the new project's modules on or off. Turning one on turns on \
                    what it needs; turning one off turns off what needs it.",
@@ -629,6 +646,7 @@ pub fn launcher_new_project_module(
 /// Choose whether the new project gets a git repository.
 #[operator(
     id = "launcher.new_project_git",
+    leaves_history = true,
     label = "Create Git Repository",
     description = "Choose whether the new project starts as a git repository.",
     allows_undo = false,
@@ -650,6 +668,7 @@ pub fn launcher_new_project_git(
 /// Pick the folder the new project is made in.
 #[operator(
     id = "launcher.new_project_browse",
+    leaves_history = true,
     label = "Choose Location...",
     description = "Pick the folder the new project is made in.",
     allows_undo = false
@@ -674,6 +693,7 @@ pub fn launcher_new_project_browse(
 /// Create the new project and open it.
 #[operator(
     id = "launcher.new_project_create",
+    leaves_history = true,
     label = "Create Project",
     description = "Create the project the New project page describes, pinned to the chosen \
                    editor, and open it. Only while the New project page is showing.",
@@ -706,6 +726,7 @@ pub fn launcher_new_project_create(
 /// Show the Install editor dialog.
 #[operator(
     id = "launcher.install_editor",
+    leaves_history = true,
     label = "Install Editor...",
     description = "Choose an editor release and its modules to install.",
     allows_undo = false,
@@ -752,6 +773,7 @@ fn install_form(dialog: &mut LauncherDialog) -> Option<&mut InstallForm> {
 /// Pick the channel in the Install editor dialog.
 #[operator(
     id = "launcher.install_channel",
+    leaves_history = true,
     label = "Choose Channel",
     description = "Pick Stable or Bleeding Edge in the Install editor dialog.",
     allows_undo = false,
@@ -785,6 +807,7 @@ pub fn launcher_install_channel(
 /// Pick the release in the Install editor dialog.
 #[operator(
     id = "launcher.install_version",
+    leaves_history = true,
     label = "Choose Version",
     description = "Pick the release the Install editor dialog installs.",
     allows_undo = false,
@@ -811,6 +834,7 @@ pub fn launcher_install_version(
 /// Show or hide older releases in the Install editor dialog.
 #[operator(
     id = "launcher.install_show_older",
+    leaves_history = true,
     label = "Show Older Releases",
     description = "List every published release in the Install editor dialog, not only the \
                    newest of each line.",
@@ -836,6 +860,7 @@ pub fn launcher_install_show_older(
 /// Show or hide release candidates in the Install editor dialog.
 #[operator(
     id = "launcher.install_show_prereleases",
+    leaves_history = true,
     label = "Show Prereleases",
     description = "List release candidates in the Install editor dialog.",
     allows_undo = false,
@@ -860,6 +885,7 @@ pub fn launcher_install_show_prereleases(
 /// Turn a module on or off in the Install editor dialog.
 #[operator(
     id = "launcher.install_module",
+    leaves_history = true,
     label = "Choose Module",
     description = "Turn a module on or off in the Install editor dialog.",
     allows_undo = false,
@@ -894,6 +920,7 @@ pub fn launcher_install_module(
 /// Install what the Install editor dialog describes.
 #[operator(
     id = "launcher.install_confirm",
+    leaves_history = true,
     label = "Install",
     description = "Download, verify and install the release the Install editor dialog names.",
     allows_undo = false
@@ -939,6 +966,7 @@ pub fn install_args(
 /// Install the newest release of an editor's line.
 #[operator(
     id = "launcher.update_editor",
+    leaves_history = true,
     label = "Update",
     description = "Install the newest release of an installed editor's line, beside it.",
     allows_undo = false,
@@ -977,6 +1005,7 @@ pub fn launcher_update_editor(
 /// Make an installed editor the default.
 #[operator(
     id = "launcher.set_default_editor",
+    leaves_history = true,
     label = "Set as Default",
     description = "Open projects that name no editor with this one.",
     allows_undo = false,
@@ -1005,6 +1034,7 @@ pub fn launcher_set_default_editor(
 /// Uninstall an editor.
 #[operator(
     id = "launcher.uninstall_editor",
+    leaves_history = true,
     label = "Uninstall...",
     description = "Remove an installed editor. When projects still open with it, the launcher \
                    lists them and asks first.",
@@ -1063,6 +1093,7 @@ pub fn launcher_uninstall_editor(
 /// Open an editor release's notes.
 #[operator(
     id = "launcher.release_notes",
+    leaves_history = true,
     label = "Release Notes",
     description = "Open a release's notes in the web browser.",
     allows_undo = false,
@@ -1097,6 +1128,7 @@ pub fn launcher_release_notes(
 /// Show an installed editor's folder.
 #[operator(
     id = "launcher.reveal_editor",
+    leaves_history = true,
     label = "Show in Files",
     description = "Show an installed editor's folder in the system file manager.",
     allows_undo = false,
@@ -1124,6 +1156,7 @@ pub fn launcher_reveal_editor(
 /// Check that an installed editor runs.
 #[operator(
     id = "launcher.verify_editor",
+    leaves_history = true,
     label = "Verify Install",
     description = "Check that an installed editor starts and reports its version.",
     allows_undo = false,
@@ -1153,6 +1186,7 @@ pub fn launcher_verify_editor(
 /// Add modules to an installed editor.
 #[operator(
     id = "launcher.editor_modules",
+    leaves_history = true,
     label = "Add or Remove Modules...",
     description = "Choose the modules fetched for an installed editor.",
     allows_undo = false,
@@ -1183,6 +1217,7 @@ pub fn launcher_editor_modules(
 /// Register an editor installed some other way.
 #[operator(
     id = "launcher.locate_editor",
+    leaves_history = true,
     label = "Locate...",
     description = "Pick an editor installed some other way, such as with cargo install, and \
                    list it with the installed editors.",
@@ -1222,6 +1257,7 @@ pub fn launcher_locate_editor(
 /// Remove nightlies nothing uses.
 #[operator(
     id = "launcher.clean_nightlies",
+    leaves_history = true,
     label = "Clean Up",
     description = "Remove the Bleeding Edge builds kept for rollback that no project opens with.",
     allows_undo = false
@@ -1244,6 +1280,7 @@ pub fn launcher_clean_nightlies(
 /// Fetch the release index again.
 #[operator(
     id = "launcher.refresh_index",
+    leaves_history = true,
     label = "Check for Updates",
     description = "Fetch the signed release index, to see new editor releases. Nothing is \
                    downloaded.",
@@ -1273,6 +1310,7 @@ fn show_dialog(dialog: &mut ResMut<LauncherDialog>, next: LauncherDialog) {
 /// Show the environment checks.
 #[operator(
     id = "launcher.doctor",
+    leaves_history = true,
     label = "Doctor",
     description = "Show whether the toolchain and SDK can build projects, with fixes.",
     allows_undo = false
@@ -1288,6 +1326,7 @@ pub fn launcher_doctor(
 /// Run the environment checks again.
 #[operator(
     id = "launcher.recheck_environment",
+    leaves_history = true,
     label = "Recheck",
     description = "Run the environment checks again after fixing something.",
     allows_undo = false
@@ -1303,6 +1342,7 @@ pub fn launcher_recheck_environment(
 /// Show the launcher's settings.
 #[operator(
     id = "launcher.settings",
+    leaves_history = true,
     label = "Settings",
     description = "Show where the launcher keeps editors and which release index it reads.",
     allows_undo = false
@@ -1318,6 +1358,7 @@ pub fn launcher_settings(
 /// Show downloads and installs.
 #[operator(
     id = "launcher.downloads",
+    leaves_history = true,
     label = "Downloads",
     description = "Show the editor downloads and installs of this session.",
     allows_undo = false
@@ -1333,6 +1374,7 @@ pub fn launcher_downloads(
 /// Stop a download or install.
 #[operator(
     id = "launcher.cancel_job",
+    leaves_history = true,
     label = "Cancel",
     description = "Stop a running download or install. Nothing half-installed is kept.",
     allows_undo = false,
@@ -1352,6 +1394,7 @@ pub fn launcher_cancel_job(
 /// Close the launcher's dialog.
 #[operator(
     id = "launcher.close_dialog",
+    leaves_history = true,
     label = "Close",
     description = "Close the launcher's open dialog.",
     allows_undo = false
@@ -1367,6 +1410,7 @@ pub fn launcher_close_dialog(
 /// Dismiss the launcher's message.
 #[operator(
     id = "launcher.dismiss_notice",
+    leaves_history = true,
     label = "Dismiss",
     description = "Hide the message across the top of the launcher.",
     allows_undo = false
@@ -1382,6 +1426,7 @@ pub fn launcher_dismiss_notice(
 /// Show the Extensions page.
 #[operator(
     id = "launcher.extensions",
+    leaves_history = true,
     label = "Extensions and Plugins",
     description = "Show the modules and editor extensions for a project, or the global \
                    defaults every project starts from.",
@@ -1410,6 +1455,7 @@ pub fn launcher_extensions(
 /// Filter the Extensions page.
 #[operator(
     id = "launcher.extensions_filter",
+    leaves_history = true,
     label = "Filter Extensions",
     description = "Show all entries on the Extensions page, those on or off, or those that need \
                    attention.",
@@ -1432,6 +1478,7 @@ pub fn launcher_extensions_filter(
 /// Show an entry's details on the Extensions page.
 #[operator(
     id = "launcher.extensions_select",
+    leaves_history = true,
     label = "Select Extension",
     description = "Show a module's or extension's details on the Extensions page.",
     allows_undo = false,
@@ -1459,6 +1506,7 @@ pub fn launcher_extensions_select(
 /// Turn an entry on or off on the Extensions page, as a pending change.
 #[operator(
     id = "launcher.extensions_toggle",
+    leaves_history = true,
     label = "Turn Extension On or Off",
     description = "Turn a module or extension on or off. The change waits until Apply.",
     allows_undo = false,
@@ -1491,6 +1539,7 @@ pub fn launcher_extensions_toggle(
 /// Drop the Extensions page's pending changes.
 #[operator(
     id = "launcher.extensions_revert",
+    leaves_history = true,
     label = "Revert",
     description = "Drop the Extensions page's changes that are not applied yet.",
     allows_undo = false
@@ -1508,6 +1557,7 @@ pub fn launcher_extensions_revert(
 /// Apply the Extensions page's pending changes.
 #[operator(
     id = "launcher.extensions_apply",
+    leaves_history = true,
     label = "Apply",
     description = "Write the Extensions page's changes: a project's to its jackdaw.toml and \
                    Cargo.toml, the global defaults to the editor's extension list.",

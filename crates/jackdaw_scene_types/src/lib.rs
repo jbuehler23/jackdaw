@@ -19,6 +19,7 @@
 
 pub mod asset_path;
 pub mod brush_chunks;
+pub mod build_stage;
 pub mod environment;
 #[cfg(feature = "render")]
 pub mod lod_generate;
@@ -38,6 +39,7 @@ pub mod y_sort;
 
 pub use asset_path::to_asset_path;
 pub use brush_chunks::{MeshChunk, build_brush_chunks};
+pub use build_stage::{BUILD_STAGE_TYPE_PATH, BuildStage};
 pub use environment::{
     Ambient, AmbientMode, Antialiasing, Environment, Fog, FogMode, Multisampling, PostProcess,
     Reflections, ShadowFiltering, Sky, Tonemapper,
@@ -146,7 +148,8 @@ impl Plugin for SceneTypesPlugin {
             .register_type::<CanvasGuides>()
             .register_type::<Locked>()
             .register_type::<PixelCanvas>()
-            .register_type::<Tilemap>();
+            .register_type::<Tilemap>()
+            .register_type::<BuildStage>();
 
         app.init_resource::<SceneWind>()
             .add_systems(First, follow_the_scene_wind)

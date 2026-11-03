@@ -662,7 +662,7 @@ fn a_material_is_selected(
 /// Registry key, file stem and `@Name` are the same string, so a call naming a
 /// material another entry already answers to is refused.
 #[operator(
-    id = "material.save",
+    id = "material.save", writes_disk = true,
     label = "Save Material",
     description = "Write the material to a file of its own as a reusable asset.",
     allows_undo = false,
@@ -893,7 +893,7 @@ impl PendingMaterialDelete {
 /// one at a time, so arming against a dialog that never appears would leave
 /// this pointing at whatever opened next.
 #[operator(
-    id = "material.delete",
+    id = "material.delete", writes_disk = true,
     label = "Delete Material",
     description = "Delete a saved material's file and remove it from this project.",
     allows_undo = false,

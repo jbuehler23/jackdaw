@@ -152,16 +152,13 @@ impl CommandHistory {
 
     /// Collapse everything pushed since `span` into one entry labelled
     /// `label`, and count the span as that one entry for any enclosing
-    /// span.
-    pub fn end_span(&mut self, span: HistorySpan, label: impl Into<String>) {
-        let produced = self.pushes.saturating_sub(span.0) as usize;
-        let take = produced.min(self.undo_stack.len());
-        let at = self.undo_stack.len() - take;
-        let mut pushed = self.undo_stack.split_off(at);
+    /// span. Returns whether the span left an entry.
+    pub fn end_span(&mut self, span: HistorySpan, label: impl Into<String>) -> bool {
+        let mut pushed = self.split_span(span);
         match pushed.len() {
             0 => {
                 self.pushes = span.0;
-                return;
+                return false;
             }
             // One entry is already one entry; wrapping it would only bury
             // the description the user reads in the undo menu.
@@ -172,6 +169,23 @@ impl CommandHistory {
             })),
         }
         self.pushes = span.0 + 1;
+        true
+    }
+
+    /// Take everything pushed since `span` off the stack without undoing it,
+    /// for a caller that records the span its own way or has already put the
+    /// scene back.
+    pub fn take_span(&mut self, span: HistorySpan) -> Vec<Box<dyn EditorCommand>> {
+        let pushed = self.split_span(span);
+        self.pushes = span.0;
+        pushed
+    }
+
+    fn split_span(&mut self, span: HistorySpan) -> Vec<Box<dyn EditorCommand>> {
+        let produced = self.pushes.saturating_sub(span.0) as usize;
+        let take = produced.min(self.undo_stack.len());
+        let at = self.undo_stack.len() - take;
+        self.undo_stack.split_off(at)
     }
 
     /// Bytes both stacks currently hold.

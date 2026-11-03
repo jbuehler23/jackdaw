@@ -32,6 +32,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Move every packed prefab's inner transform onto its instances.
 #[operator(
     id = "prefab.migrate_packed_transforms",
+    writes_disk = true,
     label = "Migrate Packed Prefab Transforms",
     description = "Stand the lone node of every packed prefab at identity and give each instance \
                    of it the whole placement instead, so instances can carry any scale. Writes \

@@ -76,6 +76,7 @@ impl SceneKind {
 
 #[operator(
     id = "scene.new",
+    leaves_history = true,
     label = "New Scene",
     allows_undo = false,
     params(
@@ -194,6 +195,7 @@ fn activate_pushed_tab(world: &mut World, target: usize) {
 
 #[operator(
     id = "scene.open",
+    leaves_history = true,
     label = "Open Scene...",
     allows_undo = false,
     params(
@@ -606,7 +608,12 @@ pub(crate) fn open_read_scene(world: &mut World, read: ReadScene) {
     crate::scenes::load_progress::scene_spawned(world, target);
 }
 
-#[operator(id = "scene.close", label = "Close Tab", allows_undo = false)]
+#[operator(
+    id = "scene.close",
+    leaves_history = true,
+    label = "Close Tab",
+    allows_undo = false
+)]
 pub fn scene_close(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         let active = world.resource::<Scenes>().active;
@@ -698,6 +705,7 @@ pub fn scene_close_system_unprompted(world: &mut World, target: usize) {
 
 #[operator(
     id = "scene.switch",
+    leaves_history = true,
     label = "Switch Scene",
     allows_undo = false,
     params(tab(i64, doc = "Index of the tab to activate, counting from zero."))
@@ -716,7 +724,12 @@ pub fn scene_switch_system(world: &mut World, target: usize) {
     crate::scenes::swap::swap_active_tab(world, target);
 }
 
-#[operator(id = "scene.save_all", label = "Save All", allows_undo = false)]
+#[operator(
+    id = "scene.save_all",
+    writes_disk = true,
+    label = "Save All",
+    allows_undo = false
+)]
 pub fn scene_save_all(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         scene_save_all_system(world);
@@ -833,7 +846,12 @@ fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
     failures
 }
 
-#[operator(id = "scene.cycle_next", label = "Next Scene Tab", allows_undo = false)]
+#[operator(
+    id = "scene.cycle_next",
+    leaves_history = true,
+    label = "Next Scene Tab",
+    allows_undo = false
+)]
 pub fn scene_cycle_next(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         // Ctrl+Tab also fires the Ctrl-only binding because the modifier
@@ -858,6 +876,7 @@ pub fn scene_cycle_next(_: In<OperatorParameters>, mut commands: Commands) -> Op
 
 #[operator(
     id = "scene.cycle_prev",
+    leaves_history = true,
     label = "Previous Scene Tab",
     allows_undo = false
 )]

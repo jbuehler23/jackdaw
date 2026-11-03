@@ -136,13 +136,27 @@ fn json_result(value: &Value) -> CallToolResult {
 /// Longest side of a screenshot thumbnail when the caller names none.
 const DEFAULT_MAX_PX: u32 = 512;
 
-/// The calls a batch file holds, and its undo label if it names one. The file
-/// is either the call list itself or `{"calls": [...], "label": "..."}`.
-fn parse_batch_file(text: &str) -> Result<(Vec<Value>, Option<String>), String> {
+/// What a batch file holds: its calls, its undo label if it names one, and
+/// any of the batch options in [`BATCH_OPTIONS`]. The file is either the call
+/// list itself or `{"calls": [...], "label": "...", "stage": "...", ...}`.
+struct BatchFile {
+    calls: Vec<Value>,
+    label: Option<String>,
+    options: serde_json::Map<String, Value>,
+}
+
+/// The `jackdaw/batch` options a batch file or `run_batch_file` may set.
+const BATCH_OPTIONS: [&str; 5] = ["atomic", "dry_run", "stage", "after", "checks"];
+
+fn parse_batch_file(text: &str) -> Result<BatchFile, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|err| format!("not a JSON batch: {err}"))?;
     match value {
-        Value::Array(calls) => Ok((calls, None)),
+        Value::Array(calls) => Ok(BatchFile {
+            calls,
+            label: None,
+            options: serde_json::Map::new(),
+        }),
         Value::Object(mut fields) => {
             let Some(Value::Array(calls)) = fields.remove("calls") else {
                 return Err("expected a list of calls, or {\"calls\": [...]}".to_string());
@@ -151,9 +165,70 @@ fn parse_batch_file(text: &str) -> Result<(Vec<Value>, Option<String>), String> 
                 .get("label")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            Ok((calls, label))
+            fields.retain(|key, _| BATCH_OPTIONS.contains(&key.as_str()));
+            Ok(BatchFile {
+                calls,
+                label,
+                options: fields,
+            })
         }
         _ => Err("expected a list of calls, or {\"calls\": [...]}".to_string()),
+    }
+}
+
+/// The `jackdaw/batch` request for a batch file: the file's options, each
+/// overridden by the one the tool call names.
+fn batch_file_request(file: BatchFile, label: String, args: &RunBatchFileArgs) -> Value {
+    let mut request = file.options;
+    let given = compact(json!({
+        "atomic": args.atomic,
+        "dry_run": args.dry_run,
+        "stage": args.stage,
+        "after": args.after,
+        "checks": args.checks,
+    }));
+    if let Value::Object(given) = given {
+        request.extend(given);
+    }
+    request.insert("calls".to_string(), Value::Array(file.calls));
+    request.insert("label".to_string(), Value::String(label));
+    Value::Object(request)
+}
+
+/// Copy what a batch said about its stage, its checks and a rollback from
+/// `source` (an answer or an error's data) into `summary`. Only the checks
+/// that failed are listed. A batch that was taken back spawned nothing; what
+/// its calls added before that is reported as `would_spawn`.
+fn add_batch_outcome(summary: &mut Value, source: &Value) {
+    for key in ["stage", "dry_run", "rolled_back"] {
+        if let Some(value) = source.get(key) {
+            summary[key] = value.clone();
+        }
+    }
+    let taken_back = [&source["rolled_back"], &source["dry_run"]]
+        .into_iter()
+        .any(|flag| *flag == json!(true));
+    if taken_back {
+        summary["would_spawn"] = summary["spawned"].take();
+        summary["spawned"] = json!(0);
+    }
+    if let Some(checks) = source.get("checks") {
+        let failing: Vec<Value> = checks["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, result)| result["pass"] != json!(true))
+            .map(|(index, result)| {
+                let mut result = result.clone();
+                result["index"] = json!(index);
+                result
+            })
+            .collect();
+        summary["checks"] = json!({ "passed": checks["passed"], "failed": checks["failed"] });
+        if !failing.is_empty() {
+            summary["checks"]["failing"] = json!(failing);
+        }
     }
 }
 
@@ -270,6 +345,24 @@ pub struct BatchArgs {
     /// Report every call's whole outcome rather than the compact one.
     #[serde(default)]
     pub verbose: Option<bool>,
+    /// Take the whole batch back if a call fails, does not finish, or a check
+    /// fails.
+    #[serde(default)]
+    pub atomic: Option<bool>,
+    /// Run the calls and checks, report them, then take everything back.
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    /// Build into the stage group of this name, replacing what an earlier
+    /// run built there. A staged batch is atomic.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// Stages that must already exist before this one builds.
+    #[serde(default)]
+    pub after: Option<Vec<String>>,
+    /// `check` assertions evaluated after the calls; one that fails fails the
+    /// batch. `$N.path` references work here too.
+    #[serde(default)]
+    pub checks: Option<Vec<Value>>,
 }
 
 /// Arguments for `run_batch_file`.
@@ -281,6 +374,22 @@ pub struct RunBatchFileArgs {
     /// Undo label, over the file's own. The file name when neither names one.
     #[serde(default)]
     pub label: Option<String>,
+    /// Take the whole batch back on any failure. Over the file's own.
+    #[serde(default)]
+    pub atomic: Option<bool>,
+    /// Run and report, then take everything back. Over the file's own.
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    /// Build into the stage group of this name, replacing its last build.
+    /// Over the file's own.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// Stages that must already exist. Over the file's own.
+    #[serde(default)]
+    pub after: Option<Vec<String>>,
+    /// `check` assertions run after the calls. Over the file's own.
+    #[serde(default)]
+    pub checks: Option<Vec<Value>>,
 }
 
 /// Arguments for `scene_tree`.
@@ -570,7 +679,11 @@ impl JackdawMcp {
                        `$N.path` takes a value from an earlier call's outcome, e.g. \
                        `\"parent\": \"$0.entities.0\"`; a malformed or forward reference \
                        refuses the batch before anything runs. Write `$$` for text that \
-                       starts with a literal `$`, e.g. `\"$$100 Prop\"`."
+                       starts with a literal `$`, e.g. `\"$$100 Prop\"`. `atomic` takes \
+                       everything back on any failure; `dry_run` runs, reports and takes back; \
+                       `stage` rebuilds the named stage group in place (re-run safe, atomic); \
+                       `checks` are `check` assertions that fail the batch. These refuse calls \
+                       that write to disk."
     )]
     pub async fn batch(
         &self,
@@ -582,6 +695,11 @@ impl JackdawMcp {
                 "calls": args.calls,
                 "label": args.label,
                 "verbose": args.verbose,
+                "atomic": args.atomic,
+                "dry_run": args.dry_run,
+                "stage": args.stage,
+                "after": args.after,
+                "checks": args.checks,
             })),
         )
         .await
@@ -593,7 +711,9 @@ impl JackdawMcp {
                        return a summary: calls run, entities added, warnings, and where it \
                        stopped. The calls never pass through the conversation, so write long \
                        scripts to a file and run them with this. Same call and `$N.path` \
-                       format as `batch`; the path is relative to the project root."
+                       format as `batch`; the path is relative to the project root. The file \
+                       or the arguments may set `atomic`, `dry_run`, `stage`, `after` and \
+                       `checks` as `batch` takes them; arguments win."
     )]
     pub async fn run_batch_file(
         &self,
@@ -608,22 +728,26 @@ impl JackdawMcp {
         .await
         .map_err(|err| ErrorData::internal_error(format!("run_batch_file: {err}"), None))?
         .map_err(|err| ErrorData::invalid_params(format!("{}: {err}", args.path), None))?;
-        let (calls, file_label) = parse_batch_file(&text)
+        let batch = parse_batch_file(&text)
             .map_err(|err| ErrorData::invalid_params(format!("{}: {err}", args.path), None))?;
-        let label = args.label.or(file_label).unwrap_or_else(|| {
-            file.file_name().map_or_else(
-                || args.path.clone(),
-                |name| name.to_string_lossy().into_owned(),
-            )
-        });
-        let total = calls.len();
-        let answer = self
-            .brp_answer("jackdaw/batch", json!({ "calls": calls, "label": label }))
-            .await?;
+        let label = args
+            .label
+            .clone()
+            .or(batch.label.clone())
+            .unwrap_or_else(|| {
+                file.file_name().map_or_else(
+                    || args.path.clone(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            });
+        let total = batch.calls.len();
+        let request = batch_file_request(batch, label, &args);
+        let answer = self.brp_answer("jackdaw/batch", request).await?;
         Ok(match answer {
             Ok(result) => {
                 let done = result["calls"].as_array().cloned().unwrap_or_default();
-                let summary = batch_summary(total, &done, None);
+                let mut summary = batch_summary(total, &done, None);
+                add_batch_outcome(&mut summary, &result);
                 if summary.get("failed_at").is_some() {
                     CallToolResult::error(vec![ContentBlock::text(summary.to_string())])
                 } else {
@@ -634,7 +758,8 @@ impl JackdawMcp {
                 let data = &error["data"];
                 let done = data["calls"].as_array().cloned().unwrap_or_default();
                 let message = error["message"].as_str().unwrap_or_default();
-                let summary = batch_summary(total, &done, Some((&data["failed_at"], message)));
+                let mut summary = batch_summary(total, &done, Some((&data["failed_at"], message)));
+                add_batch_outcome(&mut summary, data);
                 CallToolResult::error(vec![ContentBlock::text(summary.to_string())])
             }
         })
@@ -1106,19 +1231,77 @@ mod tests {
 
     #[test]
     fn a_batch_file_is_a_call_list_or_an_object_with_one() {
-        let (calls, label) =
-            parse_batch_file(r#"[{"id":"entity.add.cube"}]"#).expect("a bare list");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(label, None);
+        let file = parse_batch_file(r#"[{"id":"entity.add.cube"}]"#).expect("a bare list");
+        assert_eq!(file.calls.len(), 1);
+        assert_eq!(file.label, None);
 
-        let (calls, label) =
-            parse_batch_file(r#"{"label":"House","calls":[{"id":"a"},{"id":"b"}]}"#)
-                .expect("an object");
-        assert_eq!(calls.len(), 2);
-        assert_eq!(label.as_deref(), Some("House"));
+        let file = parse_batch_file(r#"{"label":"House","calls":[{"id":"a"},{"id":"b"}]}"#)
+            .expect("an object");
+        assert_eq!(file.calls.len(), 2);
+        assert_eq!(file.label.as_deref(), Some("House"));
 
         assert!(parse_batch_file(r#"{"steps":[]}"#).is_err());
         assert!(parse_batch_file("not json").is_err());
+    }
+
+    #[test]
+    fn a_batch_file_passes_its_options_and_the_tool_call_overrides_them() {
+        let file = parse_batch_file(
+            r#"{"calls":[{"id":"a"}],"stage":"Inn","after":["Walls"],"atomic":false,
+                "checks":[{"count":{"eq":1}}],"colour":"red"}"#,
+        )
+        .expect("an object");
+        let args = RunBatchFileArgs {
+            path: "inn.json".to_string(),
+            label: None,
+            atomic: Some(true),
+            dry_run: Some(true),
+            stage: None,
+            after: None,
+            checks: None,
+        };
+        let request = batch_file_request(file, "inn.json".to_string(), &args);
+        assert_eq!(
+            request,
+            json!({
+                "calls": [{ "id": "a" }],
+                "label": "inn.json",
+                "stage": "Inn",
+                "after": ["Walls"],
+                "atomic": true,
+                "dry_run": true,
+                "checks": [{ "count": { "eq": 1 } }],
+            })
+        );
+    }
+
+    #[test]
+    fn a_batch_summary_carries_the_stage_rollback_and_failing_checks() {
+        let mut summary = json!({ "ran": 1, "spawned": 3 });
+        add_batch_outcome(
+            &mut summary,
+            &json!({
+                "rolled_back": true,
+                "stage": { "name": "Inn", "replaced": 2 },
+                "checks": {
+                    "passed": 1,
+                    "failed": 1,
+                    "results": [
+                        { "check": "count", "pass": true },
+                        { "check": "bounds", "pass": false, "reason": "no bounds" },
+                    ],
+                },
+            }),
+        );
+        assert_eq!(summary["rolled_back"], json!(true));
+        assert_eq!(summary["spawned"], json!(0));
+        assert_eq!(summary["would_spawn"], json!(3));
+        assert_eq!(summary["stage"]["name"], json!("Inn"));
+        assert_eq!(summary["checks"]["failed"], json!(1));
+        assert_eq!(
+            summary["checks"]["failing"],
+            json!([{ "check": "bounds", "pass": false, "reason": "no bounds", "index": 1 }])
+        );
     }
 
     #[test]

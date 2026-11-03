@@ -408,7 +408,7 @@ struct Thumbnails(HashMap<(LayoutTemplate, Placement), Handle<Image>>);
 
 /// Apply the layout picked in the layout popover.
 #[operator(
-    id = "tileset.layout.apply",
+    id = "tileset.layout.apply", writes_disk = true,
     label = "Apply Layout",
     description = "Apply the layout picked in the layout popover of the Tileset tab with the \
                    keyboard to its block, as tileset.apply_template does. The popover stays \

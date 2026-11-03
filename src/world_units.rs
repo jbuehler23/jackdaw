@@ -192,6 +192,7 @@ fn store(units: &WorldUnits, project: Option<&ProjectRoot>) {
 /// units. A project setting, so no history entry.
 #[operator(
     id = "project.set_pixels_per_unit",
+    writes_disk = true,
     label = "Set Pixels Per Unit",
     description = "Set how many sprite pixels make one world unit in the 2D view's rulers, \
                    inspector and pixel snap. Editor-only: the game never sees it.",
@@ -220,6 +221,7 @@ pub(crate) fn project_set_pixels_per_unit(
 /// so no history entry.
 #[operator(
     id = "project.set_length_unit",
+    writes_disk = true,
     label = "Set Length Unit",
     description = "Show 2D world lengths in pixels or in world units.",
     allows_undo = false,

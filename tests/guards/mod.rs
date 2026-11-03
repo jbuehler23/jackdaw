@@ -4,6 +4,7 @@
 mod batch_undo;
 mod editor_remote;
 mod feathers_composition;
+mod remote_batches;
 mod remote_debug_smoke;
 mod scaffolded_component_flow;
 mod scene_summary;

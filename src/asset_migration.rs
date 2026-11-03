@@ -68,6 +68,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// spells them.
 #[operator(
     id = "project.migrate_asset_references",
+    writes_disk = true,
     label = "Migrate Asset References",
     description = "Rewrite every name reference as a path, write the catalog's entries out as \
                    files, head every asset file and re-encode every terrain sidecar. Writes \

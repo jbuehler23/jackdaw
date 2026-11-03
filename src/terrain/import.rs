@@ -475,7 +475,7 @@ fn slot_caption(slot: &jackdaw_terrain::sidecar::TerrainMaterialSlot) -> String 
 /// the cell size onto the component, which the framework's snapshot diff
 /// would otherwise record a second time.
 #[operator(
-    id = "terrain.import",
+    id = "terrain.import", writes_disk = true,
     label = "Import Terrain",
     description = "Replace the selected terrain's heights, and optionally its paint and masks, \
                    from images.",

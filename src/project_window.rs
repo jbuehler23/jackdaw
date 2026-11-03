@@ -2047,6 +2047,7 @@ pub fn project_select(params: In<OperatorParameters>, mut commands: Commands) ->
 /// Open a file the way a double click does.
 #[operator(
     id = "project.open",
+    leaves_history = true,
     label = "Open in Project",
     description = "Open a file: a tab for a scene or prefab, and the kind's own action otherwise.",
     allows_undo = false,
@@ -2153,6 +2154,7 @@ pub(crate) fn open_with_desktop(target: impl AsRef<std::ffi::OsStr>) -> std::io:
 /// Make a folder under another one.
 #[operator(
     id = "project.new_folder",
+    writes_disk = true,
     label = "New Folder",
     description = "Make a folder under the one named, under a name nothing else holds.",
     allows_undo = false,
@@ -2224,6 +2226,7 @@ fn unused_name(parent: &Path, name: &str) -> PathBuf {
 /// Rename a file or folder where it sits.
 #[operator(
     id = "file.rename",
+    writes_disk = true,
     label = "Rename",
     description = "Give a file or folder another name, in the folder it already sits in.",
     allows_undo = false,

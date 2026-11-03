@@ -123,6 +123,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// because the layers are built from uncompressed texels.
 #[operator(
     id = "texture.import",
+    writes_disk = true,
     label = "Import Texture",
     description = "Block compress a texture, or every texture under a folder, with mipmaps. \
                    Only apps built on jackdaw_runtime, or running Bevy's asset processor, \

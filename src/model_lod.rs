@@ -516,6 +516,7 @@ pub fn write_model_settings(world: &mut World, path: &str) -> std::io::Result<Op
 /// while the number of levels stays the same.
 #[operator(
     id = "model.lod.import",
+    writes_disk = true,
     label = "Import LOD Levels",
     description = "Find a model's levels of detail, from nodes named _LOD0, _LOD1 ... inside it \
                    or files named <name>_LOD1, _LOD2 ... beside it, and put them in its import \
@@ -575,6 +576,7 @@ pub(crate) fn import_model_levels(world: &mut World, given: &str) {
 /// scene.
 #[operator(
     id = "model.lod.apply",
+    writes_disk = true,
     label = "Apply Import Settings",
     description = "Write a model's edited import settings to its .meta now.",
     allows_undo = false,
@@ -628,6 +630,7 @@ pub fn generated_levels(count: usize) -> Vec<ModelLodLevel> {
 /// project's import cache.
 #[operator(
     id = "model.lod.generate",
+    writes_disk = true,
     label = "Generate LOD Levels",
     description = "Give a model levels of detail simplified from its own meshes, each with half \
                    the triangles of the one before. Written to the model's .meta on Save or Apply.",
