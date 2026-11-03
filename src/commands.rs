@@ -1086,6 +1086,21 @@ impl SpawnedEntities {
         std::mem::take(&mut spawned.entities)
     }
 
+    /// Whether a caller is waiting for the list.
+    pub(crate) fn is_watching(world: &World) -> bool {
+        world
+            .get_resource::<Self>()
+            .is_some_and(|spawned| spawned.watching)
+    }
+
+    /// What has been recorded so far, leaving it for the caller waiting on it.
+    pub(crate) fn peek(world: &World) -> Vec<Entity> {
+        world
+            .get_resource::<Self>()
+            .map(|spawned| spawned.entities.clone())
+            .unwrap_or_default()
+    }
+
     /// Take the list being recorded out, for a call that dispatches calls of
     /// its own; [`Self::put_back`] restores it.
     pub(crate) fn set_aside(world: &mut World) -> Self {

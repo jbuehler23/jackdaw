@@ -23,6 +23,16 @@ use serde_json::{Value, json};
 
 use crate::remote::recipe_run::{self, RecipePlan, RecipeRoot};
 
+pub mod picker;
+mod promote;
+pub mod record;
+
+pub(crate) use picker::RecipePickerOp;
+pub use picker::{RecipeList, recipe_choices};
+pub(crate) use promote::RecipePromoteOp;
+pub use record::RecipeRecording;
+use record::{RecipeRecordStartOp, RecipeRecordStopOp};
+
 /// The recipes the editor ships, by name.
 pub const STARTER_RECIPES: [&str; 5] = ["tree", "rock", "fence", "house", "stairs"];
 
@@ -70,7 +80,11 @@ pub(crate) fn plugin(app: &mut App) {
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<RecipeRunOp>()
-        .register_operator::<RecipeRerunOp>();
+        .register_operator::<RecipeRerunOp>()
+        .register_operator::<RecipeRecordStartOp>()
+        .register_operator::<RecipeRecordStopOp>()
+        .register_operator::<RecipePromoteOp>()
+        .register_operator::<RecipePickerOp>();
 }
 
 /// A recipe read and checked: its inputs and its calls.
@@ -121,13 +135,7 @@ impl Loaded {
 
     /// The display name a root takes when the caller gives none.
     fn root_name(&self) -> String {
-        let reference = self.reference.trim_start_matches(STARTER_PREFIX);
-        let stem = jackdaw_bsn::asset_stem(reference);
-        let mut chars = stem.chars();
-        match chars.next() {
-            Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
-            None => "Recipe".to_string(),
-        }
+        display_name(&self.reference)
     }
 
     /// Every input's value: `base` where it holds one, else the default, with
@@ -188,6 +196,8 @@ impl Loaded {
                         format!("call {index} ({}) `{name}` = `{text}`: {why}", call.id)
                     })?;
                     to_json(&value)
+                } else if let Some(list) = reference_list(text) {
+                    list
                 } else {
                     json!(text)
                 };
@@ -200,6 +210,105 @@ impl Loaded {
         }
         Ok(calls)
     }
+}
+
+/// The name a recipe goes by: its stem with a capital first letter.
+pub fn display_name(reference: &str) -> String {
+    let reference = reference.trim_start_matches(STARTER_PREFIX);
+    let stem = jackdaw_bsn::asset_stem(reference);
+    let mut chars = stem.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => "Recipe".to_string(),
+    }
+}
+
+/// A recipe as its file holds it and its inputs read, for a surface showing
+/// it.
+pub struct RecipeView {
+    /// How a root names it: `starter:<name>` or a path under the assets
+    /// directory.
+    pub reference: String,
+    pub inputs: Vec<InputSpec>,
+    pub calls: Vec<RecipeCall>,
+}
+
+impl RecipeView {
+    pub fn read(world: &mut World, reference: &str) -> Result<Self, String> {
+        let loaded = Loaded::read(world, reference)?;
+        Ok(Self {
+            reference: loaded.reference,
+            inputs: loaded.inputs,
+            calls: loaded.calls,
+        })
+    }
+
+    /// Whether the editor ships it, so it cannot be changed in place.
+    pub fn is_starter(&self) -> bool {
+        self.reference.starts_with(STARTER_PREFIX)
+    }
+}
+
+/// The text a `.recipe.bsn` file holds for `recipe`, under the name `stem`.
+pub fn recipe_file_text(stem: &str, recipe: &Recipe) -> String {
+    let quote =
+        |text: &str| jackdaw_bsn::emit_value_text(&jackdaw_bsn::BsnValue::String(text.into()));
+    let mut body = format!(
+        "#{stem}\n{RECIPE_TYPE_PATH} {{\n    description: {},\n    inputs: [\n",
+        quote(&recipe.description)
+    );
+    for input in &recipe.inputs {
+        let range: Vec<String> = input.range.iter().map(|n| format!("{n:?}")).collect();
+        body.push_str(&format!(
+            "        jackdaw::recipes::RecipeInput {{ name: {}, kind: {}, default: {}, range: [{}] }},\n",
+            quote(&input.name),
+            quote(&input.kind),
+            quote(&input.default),
+            range.join(", ")
+        ));
+    }
+    body.push_str("    ],\n    calls: [\n");
+    for call in &recipe.calls {
+        body.push_str(&format!(
+            "        jackdaw::recipes::RecipeCall {{ id: {}, params: map[\n",
+            quote(&call.id)
+        ));
+        for (name, value) in &call.params {
+            body.push_str(&format!(
+                "            ({}, {}),\n",
+                quote(name),
+                quote(value)
+            ));
+        }
+        body.push_str("        ] },\n");
+    }
+    body.push_str("    ],\n}\n");
+    crate::asset_files::asset_file_text(RECIPE_TYPE_PATH, &body)
+}
+
+/// The type a `.recipe.bsn` file holds.
+pub const RECIPE_TYPE_PATH: &str = "jackdaw::recipes::Recipe";
+
+/// Read the recipe file at `path`.
+fn read_recipe_file(path: &Path) -> Result<Recipe, String> {
+    let text = jackdaw_bsn::read_document_text(path)
+        .map_err(|err| format!("{} could not be read: {err}", path.display()))?;
+    jackdaw_bsn::read_asset_text(&text, path).map_err(|err| format!("{}: {err}", path.display()))
+}
+
+/// Literal text that is a JSON list of text holding a `$N` result
+/// reference, as the list, so the batch fills the reference in.
+fn reference_list(text: &str) -> Option<Value> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(text.trim()) else {
+        return None;
+    };
+    let is_reference = |item: &Value| {
+        item.as_str()
+            .and_then(|text| text.strip_prefix('$'))
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    (items.iter().all(Value::is_string) && items.iter().any(is_reference))
+        .then_some(Value::Array(items))
 }
 
 /// A value given for `spec` as JSON, checked.

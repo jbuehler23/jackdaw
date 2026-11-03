@@ -26,6 +26,7 @@ mod primitive_ops;
 mod prism_ops;
 mod randomize_ops;
 mod recipe_ops;
+mod recipe_record;
 mod remote_coverage;
 mod rename_ops;
 mod revolve_ops;

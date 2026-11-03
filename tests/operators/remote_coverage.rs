@@ -509,6 +509,20 @@ fn the_parametric_authoring_operators_are_registered() {
             "tilemap.write_region",
             &["entity", "layer", "x0", "y0", "text", "mode"][..],
         ),
+        (
+            "recipe.run",
+            &["recipe", "inputs", "pos", "rot", "parent", "name", "seed"][..],
+        ),
+        ("recipe.rerun", &["entity", "inputs", "seed"][..]),
+        ("recipe.record.start", &[][..]),
+        ("recipe.record.stop", &["name", "discard"][..]),
+        (
+            "recipe.promote",
+            &[
+                "entity", "step", "param", "input", "kind", "default", "min", "max",
+            ][..],
+        ),
+        ("recipe.picker", &[][..]),
     ] {
         let op = all
             .iter()

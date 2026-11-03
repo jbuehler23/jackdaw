@@ -121,3 +121,27 @@ fn add_root(world: &mut World, params: Value) -> Result<Entity, String> {
             format!("the root could not be added: {}", warnings.join("; "))
         })
 }
+
+/// Run one call from inside an operator, answering the entities it made, or
+/// why it did not finish.
+pub(crate) fn call_inside(world: &mut World, call: Value) -> Result<Vec<Entity>, String> {
+    let id = call["id"].as_str().unwrap_or_default().to_string();
+    let outcome = call_from_json(world, &call)
+        .and_then(|call| dispatch(world, call, false))
+        .map_err(|err| format!("{id}: {}", err.message))?;
+    let answer = outcome.to_json(true);
+    if answer["result"] != json!("finished") {
+        let warnings: Vec<&str> = answer["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        return Err(format!("{id} did not finish: {}", warnings.join("; ")));
+    }
+    Ok(outcome
+        .entities
+        .iter()
+        .filter_map(|bits| Entity::try_from_bits(*bits))
+        .collect())
+}

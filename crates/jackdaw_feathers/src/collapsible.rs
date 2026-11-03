@@ -13,10 +13,21 @@ pub fn collapsible_section(
     title: &str,
     parent: Entity,
 ) -> (Entity, Entity) {
+    collapsible_section_open(commands, title, parent, true)
+}
+
+/// [`collapsible_section`], starting open or closed.
+pub fn collapsible_section_open(
+    commands: &mut Commands,
+    title: &str,
+    parent: Entity,
+    open: bool,
+) -> (Entity, Entity) {
     let body = commands
         .spawn((
             CollapsibleBody,
             Node {
+                display: if open { Display::Flex } else { Display::None },
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::left(Val::Px(tokens::SPACING_MD)),
                 width: Val::Percent(100.0),
@@ -27,7 +38,7 @@ pub fn collapsible_section(
 
     let section = commands
         .spawn((
-            CollapsibleSection { collapsed: false },
+            CollapsibleSection { collapsed: !open },
             Node {
                 flex_direction: FlexDirection::Column,
                 width: Val::Percent(100.0),
@@ -57,8 +68,11 @@ pub fn collapsible_section(
 
     let disclosure = commands
         .spawn_scene(bsn! { @FeathersDisclosureToggle })
-        .insert((ChildOf(header), DisclosureSection(section), Checked))
+        .insert((ChildOf(header), DisclosureSection(section)))
         .id();
+    if open {
+        commands.entity(disclosure).insert(Checked);
+    }
 
     // Title text
     commands.spawn((

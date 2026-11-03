@@ -608,6 +608,7 @@ const ENTITY_PARAM_OPS: &[(&str, &[&str], bool)] = &[
         &["child_entity", "drop_target_entity"],
         false,
     ),
+    ("recipe.promote", &["entity"], false),
     ("recipe.rerun", &["entity"], false),
     ("recipe.run", &["parent"], false),
     ("selection.select", &["entity"], false),

@@ -506,13 +506,14 @@ fn short_type_name(type_path: &str) -> &str {
 /// components out of the generic list. These are not bookkeeping -- they
 /// are the scene data the user selected the entity to edit -- so culling
 /// them takes their inspector surface with them.
-const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 6] = [
+const SCENE_TYPES_WITH_INSPECTOR_CARDS: [&str; 7] = [
     "jackdaw_scene_types::types::Brush",
     "jackdaw_scene_types::types::Terrain",
     "jackdaw_scene_types::CanvasGuides",
     jackdaw_scene_types::HIDDEN_IN_GAME_TYPE_PATH,
     jackdaw_scene_types::NAVMESH_EXCLUDE_TYPE_PATH,
     jackdaw_scene_types::Y_SORT_TYPE_PATH,
+    jackdaw_scene_types::RECIPE_INSTANCE_TYPE_PATH,
 ];
 
 /// Whether a `jackdaw*` type is editor bookkeeping rather than something
@@ -1187,6 +1188,14 @@ fn build_inspector_cards(
                 let body = body_entity;
                 commands.queue(move |world: &mut World| {
                     super::tilemap_card::fill_tilemap_card_body(world, source_entity, body);
+                });
+                continue;
+            }
+
+            if type_id == TypeId::of::<jackdaw_scene_types::RecipeInstance>() {
+                let body = body_entity;
+                commands.queue(move |world: &mut World| {
+                    super::recipe_card::fill_recipe_card_body(world, source_entity, body);
                 });
                 continue;
             }

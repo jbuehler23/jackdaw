@@ -182,6 +182,11 @@ fn builtin(taxonomy: &mut CreationTaxonomy) {
         entry(GENERAL_GROUP, "Prefab", op_action::<EntityAddPrefabOp>()),
         entry(
             GENERAL_GROUP,
+            "Recipe",
+            op_action::<crate::recipes::RecipePickerOp>(),
+        ),
+        entry(
+            GENERAL_GROUP,
             "Audio Source",
             op_action::<EntityAddAudioSourceOp>(),
         ),
