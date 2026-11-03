@@ -325,14 +325,14 @@ fn a_snapshot_entry_reports_the_document_it_holds() {
     let mut app = util::editor_test_app();
 
     app.world_mut()
-        .operator("entity.add.empty")
+        .operator("entity.add.animation_player")
         .settings(CallOperatorSettings {
             execution_context: ExecutionContext::Invoke,
             creates_history_entry: true,
         })
         .call()
         .expect("dispatch")
-        .assert_finished_or_panic("entity.add.empty");
+        .assert_finished_or_panic("entity.add.animation_player");
 
     let history = app.world().resource::<CommandHistory>();
     let newest = history.undo_stack.last().expect("an entry was pushed");
@@ -353,14 +353,14 @@ fn snapshot_entries_are_trimmed_once_they_pass_the_budget() {
 
     for _ in 0..4 {
         app.world_mut()
-            .operator("entity.add.empty")
+            .operator("entity.add.animation_player")
             .settings(CallOperatorSettings {
                 execution_context: ExecutionContext::Invoke,
                 creates_history_entry: true,
             })
             .call()
             .expect("dispatch")
-            .assert_finished_or_panic("entity.add.empty");
+            .assert_finished_or_panic("entity.add.animation_player");
     }
 
     assert_eq!(

@@ -529,9 +529,9 @@ fn an_outcome_never_carries_over_to_the_next_call() {
     assert_eq!(outcome(&mut app), Some(Outcome::Invalid));
 
     app.world_mut()
-        .operator("entity.add.empty")
+        .operator("entity.unhide_all")
         .call()
-        .expect("entity.add.empty dispatches")
+        .expect("entity.unhide_all dispatches")
         .assert_finished();
     assert_eq!(
         outcome(&mut app),

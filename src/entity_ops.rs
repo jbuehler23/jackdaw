@@ -602,6 +602,24 @@ impl EntityTemplate {
     }
 }
 
+/// Where a light or 3D camera `template` spawns; identity for anything else.
+pub(crate) fn template_transform(template: EntityTemplate) -> Transform {
+    match template {
+        EntityTemplate::PointLight => Transform::from_xyz(0.0, 3.0, 0.0),
+        EntityTemplate::DirectionalLight => {
+            Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0))
+                .with_translation(Vec3::new(0.0, 10.0, 0.0))
+        }
+        EntityTemplate::SpotLight => {
+            Transform::from_xyz(0.0, 3.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y)
+        }
+        EntityTemplate::Camera3d => {
+            Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y)
+        }
+        _ => Transform::default(),
+    }
+}
+
 pub fn create_entity(
     commands: &mut Commands,
     template: EntityTemplate,
@@ -652,7 +670,7 @@ pub fn create_entity(
                     range: NEW_LIGHT_RANGE,
                     ..default()
                 },
-                Transform::from_xyz(0.0, 3.0, 0.0),
+                template_transform(template),
             ))
             .id(),
         EntityTemplate::DirectionalLight => commands
@@ -663,12 +681,7 @@ pub fn create_entity(
                     shadow_maps_enabled: true,
                     ..default()
                 },
-                Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0))
-                    .with_translation(Vec3 {
-                        x: 0.0,
-                        y: 10.0,
-                        z: 0.0,
-                    }),
+                template_transform(template),
             ))
             .id(),
         EntityTemplate::SpotLight => commands
@@ -679,7 +692,7 @@ pub fn create_entity(
                     range: NEW_LIGHT_RANGE,
                     ..default()
                 },
-                Transform::from_xyz(0.0, 3.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+                template_transform(template),
             ))
             .id(),
         // Both camera templates save the camera active so Play draws through
@@ -689,7 +702,7 @@ pub fn create_entity(
                 Name::new("Camera"),
                 SceneCamera,
                 Camera3d::default(),
-                Transform::from_xyz(0.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+                template_transform(template),
             ))
             .id(),
         EntityTemplate::Camera2d => {
@@ -887,7 +900,7 @@ pub(crate) fn spawn_brush_under(
 
 /// Spawn through `create`, select it, let `shape` edit it, then parent it
 /// under `parent` and write it to the document.
-fn spawn_selected_under(
+pub(crate) fn spawn_selected_under(
     world: &mut World,
     parent: Option<Entity>,
     create: impl FnOnce(&mut Commands, &mut Selection) -> Entity,
@@ -1197,58 +1210,123 @@ pub(crate) fn move_selected_siblings(world: &mut World, delta: isize) {
 /// Duplicate selected entities by grafting authored AST subtrees into the live
 /// document and spawning from those patches.
 pub fn duplicate_selected(world: &mut World) {
-    let selection = world.resource::<Selection>();
-    let entities: Vec<Entity> = selection.entities.clone();
+    let entities = world.resource::<Selection>().entities.clone();
+    duplicate_entities(world, &entities, &DuplicateRun::default());
+}
 
-    if entities.is_empty() {
-        return;
-    }
+/// How a duplicate lays its copies out: copy `k` of `count` sits `k * offset`
+/// from its source and is turned by `step_rotation` `k` times, in the space
+/// its translation is written in. `parent` adopts every copy, keeping the
+/// source's local values.
+#[derive(Clone, Copy)]
+pub struct DuplicateRun {
+    pub count: usize,
+    pub offset: Vec3,
+    pub step_rotation: Quat,
+    pub parent: Option<Entity>,
+}
 
-    // Deselect current entities first
-    for &entity in &entities {
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.remove::<Selected>();
+impl Default for DuplicateRun {
+    fn default() -> Self {
+        Self {
+            count: 1,
+            offset: Vec3::ZERO,
+            step_rotation: Quat::IDENTITY,
+            parent: None,
         }
     }
+}
 
-    // Snapshot authored subtrees (and their live parents) before mutating the document.
-    let to_duplicate: Vec<Entity> = entities
-        .iter()
-        .copied()
-        .filter(|&entity| {
-            world.get_entity(entity).is_ok() && world.get::<EditorEntity>(entity).is_none()
-        })
-        .collect();
-    let plans: Vec<(jackdaw_bsn::SceneBsnAst, Option<Entity>)> = {
+impl DuplicateRun {
+    fn moves(&self) -> bool {
+        self.offset != Vec3::ZERO || self.step_rotation != Quat::IDENTITY
+    }
+}
+
+/// The type path a node's authored `Transform` patch carries.
+const TRANSFORM_TYPE_PATH: &str = "bevy_transform::components::transform::Transform";
+
+/// Whether the document authors a `Transform` on `entity`.
+pub(crate) fn authors_transform(world: &World, entity: Entity) -> bool {
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    ast.ast_for(entity).is_some_and(|node| {
+        ast.find_patch_by_type_path(node, TRANSFORM_TYPE_PATH)
+            .is_some()
+    })
+}
+
+/// Duplicate `entities` as `run` lays them out, select the copies and return
+/// them, every first copy before every second one. A call that copies
+/// nothing leaves the selection as it was.
+pub fn duplicate_entities(
+    world: &mut World,
+    entities: &[Entity],
+    run: &DuplicateRun,
+) -> Vec<Entity> {
+    // Each source is copied out of the document once, before anything is
+    // grafted, so a copy landing inside a source is not copied again.
+    let sources: Vec<(jackdaw_bsn::SceneBsnAst, Option<Entity>)> = {
         let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-        let mut plans = Vec::new();
-        for entity in to_duplicate {
-            let Some(src_node) = ast.ast_for(entity) else {
-                warn!("Duplicate: entity {entity:?} has no document node");
+        let adopter = run.parent.and_then(|parent| ast.ast_for(parent));
+        entities
+            .iter()
+            .copied()
+            .filter(|&entity| {
+                world.get_entity(entity).is_ok() && world.get::<EditorEntity>(entity).is_none()
+            })
+            .filter_map(|entity| {
+                let Some(src_node) = ast.ast_for(entity) else {
+                    warn!("Duplicate: entity {entity:?} has no document node");
+                    return None;
+                };
+                let parent_ast = match run.parent {
+                    Some(_) => adopter,
+                    None => ast.find_ast_parent_of(src_node),
+                };
+                let mut copy = jackdaw_bsn::SceneBsnAst::default();
+                jackdaw_bsn::clone_subtree_into(&mut copy, ast, src_node, None);
+                Some((copy, parent_ast))
+            })
+            .collect()
+    };
+    if sources.is_empty() {
+        return Vec::new();
+    }
+
+    let mut taken = scene_entity_names(world);
+    let mut new_entities = Vec::new();
+    let mut turn = Quat::IDENTITY;
+    let mut sources = sources;
+    for step in 1..=run.count {
+        turn = run.step_rotation * turn;
+        for (copy, parent_ast) in &mut sources {
+            mint_scene_node_ids(world, copy);
+            claim_entity_names(world, copy, &mut taken);
+            let Some(&root) = graft_and_spawn(world, copy, *parent_ast).first() else {
                 continue;
             };
-            let parent_ast = ast.find_ast_parent_of(src_node);
-            let mut temp = jackdaw_bsn::SceneBsnAst::default();
-            jackdaw_bsn::clone_subtree_into(&mut temp, ast, src_node, None);
-            plans.push((temp, parent_ast));
-        }
-        plans
-    };
-
-    let mut new_entities = Vec::new();
-    for (mut temp, parent_ast) in plans {
-        prepare_authored_subtree_for_spawn(world, &mut temp);
-        let spawned = graft_and_spawn(world, &temp, parent_ast);
-        if let Some(&root) = spawned.first() {
+            // The copy spawned from the authored patch, so its transform is the
+            // source's authored one.
+            if run.moves()
+                && let Some(&authored) = world.get::<Transform>(root)
+            {
+                let placed = Transform {
+                    translation: authored.translation + run.offset * step as f32,
+                    rotation: turn * authored.rotation,
+                    scale: authored.scale,
+                };
+                world.entity_mut(root).insert(placed);
+                crate::commands::sync_component_to_ast(world, root, TRANSFORM_TYPE_PATH, &placed);
+            }
+            crate::commands::SpawnedEntities::record(world, root);
             new_entities.push(root);
         }
     }
 
-    let mut selection = world.resource_mut::<Selection>();
-    selection.entities = new_entities;
-    for &entity in &selection.entities.clone() {
-        world.entity_mut(entity).insert(Selected);
+    if !new_entities.is_empty() {
+        crate::selection::select_many(world, &new_entities);
     }
+    new_entities
 }
 
 /// Mint fresh ids and unique root names on an authored subtree before it is
@@ -1275,14 +1353,22 @@ fn entity_root_scene_node_ids(
 /// live scene entity and no other node in the batch has claimed, since a name
 /// is what an operator clause addresses an entity by.
 fn assign_unique_entity_names(world: &mut World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    let mut taken = scene_entity_names(world);
+    claim_entity_names(world, ast, &mut taken);
+}
+
+/// Rename every named node in `ast` to a name `taken` does not hold, and
+/// claim it there.
+fn claim_entity_names(
+    world: &World,
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    taken: &mut std::collections::HashSet<String>,
+) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let asset_roots: std::collections::HashSet<Entity> = {
         let reg = registry.read();
         jackdaw_bsn::asset_roots(ast, &reg).into_iter().collect()
     };
-
-    let mut taken = scene_entity_names(world);
-
     for node in walk_entity_nodes(ast) {
         if asset_roots.contains(&node) {
             // An asset entry's name is the reference its components carry.
@@ -1291,7 +1377,7 @@ fn assign_unique_entity_names(world: &mut World, ast: &mut jackdaw_bsn::SceneBsn
         let Some(name) = ast.get_name(node).map(str::to_owned) else {
             continue;
         };
-        if let Some(free) = claim_free_name(&mut taken, &name) {
+        if let Some(free) = claim_free_name(taken, &name) {
             crate::commands::set_name_patch(ast, node, Some(&free));
         }
     }
@@ -2568,14 +2654,114 @@ pub(crate) fn entity_delete(
 #[operator(
     id = "entity.duplicate",
     label = "Duplicate",
-    is_available = can_act_on_entities
+    description = "Duplicate entities, or lay out a run of copies each offset and turned from the last.",
+    is_available = can_act_on_entities,
+    params(
+        entity(Entity, doc = "Entity to duplicate. Defaults to the selection."),
+        entities(
+            String,
+            doc = "Entities to duplicate, as a list of ids or one comma-separated string. Defaults \
+                   to the selection."
+        ),
+        offset(
+            Vec3,
+            doc = "Move [x, y, z] from each copy to the next, in its parent's space. Defaults to none."
+        ),
+        rot(
+            Vec3,
+            doc = "Turn [yaw, pitch, roll] in degrees from each copy to the next. Defaults to none."
+        ),
+        count(i64, doc = "Copies of each entity, 1 to 256. Defaults to 1."),
+        parent(
+            Entity,
+            doc = "Node that adopts every copy, keeping the source's local placement. Defaults to \
+                   each source's own parent."
+        ),
+    )
 )]
 pub(crate) fn entity_duplicate(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(duplicate_selected);
+    let request = read_duplicate(world, &params);
+    let (entities, run) = match request {
+        Ok(request) => request,
+        Err(why) => {
+            warn_caller(world, format!("entity.duplicate: {why}"));
+            set_outcome(world, Outcome::Invalid);
+            return OperatorResult::Cancelled;
+        }
+    };
+    let copies = duplicate_entities(world, &entities, &run);
+    set_outcome(
+        world,
+        if copies.is_empty() {
+            Outcome::Unchanged
+        } else {
+            Outcome::Changed
+        },
+    );
     OperatorResult::Finished
+}
+
+/// `name` is the bare name a clause gives, which the resolver has already
+/// turned into `entity`.
+const DUPLICATE_KEYS: [&str; 7] = [
+    "entity", "entities", "name", "offset", "rot", "count", "parent",
+];
+
+/// The sources and layout an `entity.duplicate` call asked for, checked.
+fn read_duplicate(
+    world: &mut World,
+    params: &OperatorParameters,
+) -> Result<(Vec<Entity>, DuplicateRun), String> {
+    if let Some(key) = params
+        .keys()
+        .find(|key| !DUPLICATE_KEYS.contains(&key.as_str()))
+    {
+        return Err(format!("this takes no `{key}`"));
+    }
+    let count = crate::primitive_ops::int_param(params, "count", 1..=256)?.unwrap_or(1);
+    let offset = crate::primitive_ops::vec3_param(params, "offset")?.unwrap_or(Vec3::ZERO);
+    let step_rotation = crate::primitive_ops::vec3_param(params, "rot")?
+        .map_or(Quat::IDENTITY, crate::primitive_ops::euler_degrees);
+    let parent = crate::primitive_ops::parent_param(world, params)?;
+    if let Some(name) = params.as_str("name")
+        && !matches!(
+            params.get("entity"),
+            Some(jackdaw_scene_types::PropertyValue::Entity(_))
+        )
+    {
+        return Err(format!(
+            "`name` {name:?} names no entity in this scene, or two"
+        ));
+    }
+    let mut state: SystemState<(Res<Selection>, Query<(), Without<EditorEntity>>)> =
+        SystemState::new(world);
+    let (selection, authored) = state.get(world).map_err(|err| err.to_string())?;
+    let entities = crate::boot_ops::target_entities(params, &selection, &authored)?;
+    if entities.is_empty() {
+        return Err("nothing is selected and `entities` names nothing".into());
+    }
+    let moves = offset != Vec3::ZERO || step_rotation != Quat::IDENTITY;
+    if moves
+        && let Some(&bare) = entities
+            .iter()
+            .find(|&&entity| !authors_transform(world, entity))
+    {
+        return Err(format!(
+            "{bare} has no Transform, so `offset` and `rot` have nothing to move"
+        ));
+    }
+    Ok((
+        entities,
+        DuplicateRun {
+            count,
+            offset,
+            step_rotation,
+            parent,
+        },
+    ))
 }
 
 #[operator(
@@ -2789,52 +2975,151 @@ pub(crate) fn entity_add_sphere(
     crate::primitive_ops::add_primitive(world, &params, EntityTemplate::Sphere)
 }
 
-#[operator(id = "entity.add.point_light", label = "Point Light")]
+#[operator(
+    id = "entity.add.point_light",
+    label = "Point Light",
+    description = "Add a point light, optionally coloured, sized, placed, named and parented.",
+    allows_undo = false,
+    params(
+        color(
+            String,
+            doc = "Colour: a hex code, a name, or r,g,b in 0..1. Defaults to white."
+        ),
+        intensity(f64, doc = "Brightness in lumens, 0 or more. Defaults to 1000000."),
+        range(f64, doc = "How far it reaches in metres, above 0. Defaults to 10."),
+        radius(
+            f64,
+            doc = "Size of the glowing source in metres, 0 or more. Defaults to 0."
+        ),
+        shadows(bool, doc = "Whether it casts shadows. Defaults to false."),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to [0, 3, 0]."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Point Light\"."),
+    )
+)]
 pub(crate) fn entity_add_point_light(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::PointLight);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::PointLight),
+    )
 }
 
-#[operator(id = "entity.add.directional_light", label = "Directional Light")]
+#[operator(
+    id = "entity.add.directional_light",
+    label = "Directional Light",
+    description = "Add a directional light, optionally coloured, aimed, placed, named and parented.",
+    allows_undo = false,
+    params(
+        color(
+            String,
+            doc = "Colour: a hex code, a name, or r,g,b in 0..1. Defaults to white."
+        ),
+        intensity(f64, doc = "Illuminance in lux, 0 or more. Defaults to 10000."),
+        shadows(bool, doc = "Whether it casts shadows. Defaults to true."),
+        target(
+            Vec3,
+            doc = "Point [x, y, z] to aim at, in the same space as pos. Not with rot. Defaults to a downward tilt."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to [0, 10, 0]."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to a downward tilt."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(
+            String,
+            doc = "Name for the new node. Defaults to \"Directional Light\"."
+        ),
+    )
+)]
 pub(crate) fn entity_add_directional_light(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::DirectionalLight);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::DirectionalLight),
+    )
 }
 
-#[operator(id = "entity.add.spot_light", label = "Spot Light")]
+#[operator(
+    id = "entity.add.spot_light",
+    label = "Spot Light",
+    description = "Add a spot light, optionally coloured, sized, coned, aimed, placed, named and parented.",
+    allows_undo = false,
+    params(
+        color(
+            String,
+            doc = "Colour: a hex code, a name, or r,g,b in 0..1. Defaults to white."
+        ),
+        intensity(f64, doc = "Brightness in lumens, 0 or more. Defaults to 1000000."),
+        range(f64, doc = "How far it reaches in metres, above 0. Defaults to 10."),
+        radius(
+            f64,
+            doc = "Size of the glowing source in metres, 0 or more. Defaults to 0."
+        ),
+        shadows(bool, doc = "Whether it casts shadows. Defaults to false."),
+        cone(
+            Vec2,
+            doc = "[inner, outer] angles from the axis in degrees, 0 <= inner <= outer <= 90. Defaults to [0, 45]."
+        ),
+        target(
+            Vec3,
+            doc = "Point [x, y, z] to aim at, in the same space as pos. Not with rot. Defaults to the origin."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to [0, 3, 0]."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to aimed at the origin."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Spot Light\"."),
+    )
+)]
 pub(crate) fn entity_add_spot_light(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::SpotLight);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::SpotLight),
+    )
 }
 
 #[operator(
     id = "entity.add.camera",
     label = "3D Camera",
-    description = "Add a 3D camera the game draws through. A camera saved inactive by an earlier editor stays off: set its Camera is_active to true to use it."
+    description = "Add a 3D camera the game draws through, optionally placed, named and parented. A camera saved inactive by an earlier editor stays off: set its Camera is_active to true to use it.",
+    allows_undo = false,
+    params(
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to [0, 2, 5]."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to facing the origin."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Camera\"."),
+    )
 )]
 pub(crate) fn entity_add_camera(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Camera3d);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::Camera3d),
+    )
 }
 
 #[cfg(feature = "camera_rig")]
@@ -2849,10 +3134,31 @@ pub(crate) fn entity_add_camera_rig(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.image", label = "Reference Image")]
-pub fn entity_add_image(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(crate::reference_image::open_reference_image_picker);
-    OperatorResult::Finished
+#[operator(
+    id = "entity.add.image",
+    label = "Reference Image",
+    description = "Add a reference image. With a path it is placed directly, else a file picker opens.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Image file to show (png, jpg, jpeg, ktx2, bmp, tga, webp). Left out, a file picker opens and nothing else may be given."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Image\"."),
+    )
+)]
+pub fn entity_add_image(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if params.is_empty() {
+        crate::reference_image::open_reference_image_picker(world);
+        return OperatorResult::Finished;
+    }
+    crate::node_ops::add_node(world, &params, crate::node_ops::NodeKind::Image)
 }
 
 /// Add a 2D camera to the open 2D world scene.
@@ -2880,15 +3186,30 @@ fn can_add_empty_2d(gate: crate::sprite_ops::SpriteAddGate) -> bool {
     gate.allows()
 }
 
-#[operator(id = "entity.add.empty", label = "Empty")]
+#[operator(
+    id = "entity.add.empty",
+    label = "Empty",
+    description = "Add an empty node, optionally placed, named and parented.",
+    allows_undo = false,
+    params(
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Empty\"."),
+    )
+)]
 pub(crate) fn entity_add_empty(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::Empty);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::Empty),
+    )
 }
 
 /// Add an empty entity to the open 2D world scene.
@@ -3077,86 +3398,109 @@ pub(crate) fn entity_add_animation_player(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.audio_source", label = "Audio Source")]
+#[operator(
+    id = "entity.add.audio_source",
+    label = "Audio Source",
+    description = "Add an audio source, optionally placed, named and parented.",
+    allows_undo = false,
+    params(
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Audio Source\"."),
+    )
+)]
 pub(crate) fn entity_add_audio_source(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::AudioSource);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::AudioSource),
+    )
 }
 
-#[operator(id = "entity.add.fog_volume", label = "Fog Volume")]
+#[operator(
+    id = "entity.add.fog_volume",
+    label = "Fog Volume",
+    description = "Add a fog volume, optionally sized, placed, named and parented.",
+    allows_undo = false,
+    params(
+        size(Vec3, doc = "Box [x, y, z] the fog fills, its scale. Defaults to 1."),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Fog Volume\"."),
+    )
+)]
 pub(crate) fn entity_add_fog_volume(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        create_entity_in_world(world, EntityTemplate::FogVolume);
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(
+        world,
+        &params,
+        crate::node_ops::NodeKind::Template(EntityTemplate::FogVolume),
+    )
 }
 
-#[operator(id = "entity.add.reflection_probe", label = "Reflection Probe")]
+#[operator(
+    id = "entity.add.reflection_probe",
+    label = "Reflection Probe",
+    description = "Add a reflection probe, optionally sized, placed, named and parented.",
+    allows_undo = false,
+    params(
+        size(
+            Vec3,
+            doc = "Box [x, y, z] the probe covers, its scale. Defaults to 10."
+        ),
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(
+            String,
+            doc = "Name for the new node. Defaults to \"Reflection Probe\"."
+        ),
+    )
+)]
 pub(crate) fn entity_add_reflection_probe(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::spawn_undoable(world, "Add Reflection Probe", |world| {
-            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                SystemState::new(world);
-            let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-                return Entity::PLACEHOLDER;
-            };
-            let entity = commands
-                .spawn((
-                    Name::new("Reflection Probe"),
-                    jackdaw_scene_types::ReflectionProbe::default(),
-                    SceneReflectionProbe,
-                    Transform::from_scale(Vec3::splat(10.0)),
-                    Visibility::default(),
-                ))
-                .id();
-            selection.select_single(&mut commands, entity);
-            system_state.apply(world);
-            crate::scene_io::register_entity_in_ast(world, entity);
-            entity
-        });
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(world, &params, crate::node_ops::NodeKind::ReflectionProbe)
 }
 
 #[cfg(feature = "multiplayer")]
-#[operator(id = "entity.add.spawn_point", label = "Spawn Point")]
+#[operator(
+    id = "entity.add.spawn_point",
+    label = "Spawn Point",
+    description = "Add a spawn point, optionally placed, named and parented.",
+    allows_undo = false,
+    params(
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Spawn Point\"."),
+    )
+)]
 pub(crate) fn entity_add_spawn_point(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        crate::spawn_undoable(world, "Add Spawn Point", |world| {
-            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                SystemState::new(world);
-            let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-                return Entity::PLACEHOLDER;
-            };
-            let entity = commands
-                .spawn((
-                    Name::new("Spawn Point"),
-                    jackdaw_multiplayer::SpawnPoint::default(),
-                    Transform::default(),
-                    Visibility::default(),
-                ))
-                .id();
-            selection.select_single(&mut commands, entity);
-            system_state.apply(world);
-            crate::scene_io::register_entity_in_ast(world, entity);
-            entity
-        });
-    });
-    OperatorResult::Finished
+    crate::node_ops::add_node(world, &params, crate::node_ops::NodeKind::SpawnPoint)
 }
 
 #[cfg(feature = "multiplayer")]
@@ -3222,36 +3566,37 @@ pub(crate) fn entity_add_network_room(
     OperatorResult::Finished
 }
 
-#[operator(id = "entity.add.terrain", label = "Terrain")]
+#[operator(
+    id = "entity.add.terrain",
+    label = "Terrain",
+    description = "Add a terrain, optionally placed, named and parented.",
+    allows_undo = false,
+    params(
+        pos(Vec3, doc = "Position [x, y, z]. Defaults to the origin."),
+        rot(
+            Vec3,
+            doc = "Rotation [yaw, pitch, roll] in degrees. Defaults to none."
+        ),
+        parent(Entity, doc = "Node that adopts it. Defaults to top level."),
+        name(String, doc = "Name for the new node. Defaults to \"Terrain\"."),
+    )
+)]
 pub(crate) fn entity_add_terrain(
-    _: In<OperatorParameters>,
-    mut commands: Commands,
+    params: In<OperatorParameters>,
+    world: &mut World,
 ) -> OperatorResult {
-    commands.queue(|world: &mut World| {
-        let is_first_terrain = world
-            .query_filtered::<Entity, With<jackdaw_scene_types::Terrain>>()
-            .iter(world)
-            .next()
-            .is_none();
-        crate::spawn_undoable(world, "Add Terrain", move |world| {
-            let mut system_state: SystemState<(Commands, ResMut<Selection>)> =
-                SystemState::new(world);
-            let Ok((mut commands, mut selection)) = system_state.get_mut(world) else {
-                return Entity::PLACEHOLDER;
-            };
-            let entity = crate::terrain::spawn_terrain_entity(&mut commands);
-            selection.select_single(&mut commands, entity);
-            system_state.apply(world);
-            crate::scene_io::register_entity_in_ast(world, entity);
-            // Only the first terrain opens the panel: a later add must not
-            // steal focus from the tab in use.
-            if is_first_terrain {
-                crate::open_window_in_default_area_if_absent(world, "jackdaw.inspector.terrain");
-            }
-            entity
-        });
-    });
-    OperatorResult::Finished
+    let is_first_terrain = world
+        .query_filtered::<Entity, With<jackdaw_scene_types::Terrain>>()
+        .iter(world)
+        .next()
+        .is_none();
+    let result = crate::node_ops::add_node(world, &params, crate::node_ops::NodeKind::Terrain);
+    // Only the first terrain opens the panel: a later add must not steal
+    // focus from the tab in use.
+    if is_first_terrain && result == OperatorResult::Finished {
+        crate::open_window_in_default_area_if_absent(world, "jackdaw.inspector.terrain");
+    }
+    result
 }
 
 /// Pick a prefab file and drop an instance of it at the origin, through a polled

@@ -296,15 +296,28 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("camera.pixel_canvas", "entity"),
     ("clip.track.enable", "track"),
     ("clip.track.interpolation", "track"),
+    ("entity.add.audio_source", "parent"),
+    ("entity.add.camera", "parent"),
     ("entity.add.cone", "parent"),
     ("entity.add.cube", "parent"),
     ("entity.add.cylinder", "parent"),
+    ("entity.add.directional_light", "parent"),
+    ("entity.add.empty", "parent"),
+    ("entity.add.fog_volume", "parent"),
     ("entity.add.group", "parent"),
+    ("entity.add.image", "parent"),
     ("entity.add.plane", "parent"),
+    ("entity.add.point_light", "parent"),
     ("entity.add.pyramid", "parent"),
+    ("entity.add.reflection_probe", "parent"),
+    ("entity.add.spawn_point", "parent"),
     ("entity.add.sphere", "parent"),
+    ("entity.add.spot_light", "parent"),
+    ("entity.add.terrain", "parent"),
     ("entity.add.wedge", "parent"),
     ("entity.delete", "entity"),
+    ("entity.duplicate", "entity"),
+    ("entity.duplicate", "parent"),
     ("entity.snap_to_ground", "entity"),
     ("mesh.add_brush", "parent"),
     ("mesh.add_revolve", "parent"),
@@ -314,6 +327,10 @@ pub const OPTIONAL_ENTITY_PARAMS: &[(&str, &str)] = &[
     ("viewport.capture", "camera"),
     ("widget.add", "parent"),
 ];
+
+/// `(operator, parameter)` pairs a bare `name=` never fills: the node a copy
+/// goes under is not the one the clause names.
+const BARE_NAME_SKIPS: &[(&str, &str)] = &[("entity.duplicate", "parent")];
 
 /// The entities an operator's `entity=` or `entities=` parameters name, or
 /// the selection when they name none.
@@ -542,6 +559,7 @@ pub fn resolve_entity_params(world: &mut World, op: &mut BootOp) -> Vec<EntityPa
                 });
                 continue;
             }
+            None if BARE_NAME_SKIPS.contains(&(op.id.as_str(), param)) => None,
             None => bare_name.clone(),
         };
 

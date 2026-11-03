@@ -13,7 +13,7 @@ use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_scene_types::{BUILD_STAGE_TYPE_PATH, BuildStage, SceneNodeId};
 use serde_json::{Value, json};
 
-use super::server::{call_from_json, dispatch, invalid_params};
+use super::server::invalid_params;
 use crate::commands::AddComponent;
 use crate::document_units::{UnitChange, UnitKey, Units};
 
@@ -300,16 +300,7 @@ fn describe(world: &World, by_id: &HashMap<u64, Entity>, key: &UnitKey) -> Strin
 }
 
 fn add_group(world: &mut World, name: &str) -> Result<Entity, String> {
-    let call = call_from_json(
-        world,
-        &json!({ "id": "entity.add.group", "params": { "name": name } }),
-    )
-    .map_err(|err| err.message)?;
-    let outcome = dispatch(world, call, false).map_err(|err| err.message)?;
-    outcome
-        .entities
-        .first()
-        .and_then(|&bits| Entity::try_from_bits(bits))
+    crate::node_ops::add_named_group(world, name.to_string())
         .ok_or_else(|| format!("the group for stage `{name}` could not be added"))
 }
 

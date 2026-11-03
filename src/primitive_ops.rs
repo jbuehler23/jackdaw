@@ -158,6 +158,17 @@ fn sided_pyramid(sides: usize) -> Brush {
     Brush::tapered(&base, Vec3::Y * 0.5).unwrap_or_else(|| Brush::pyramid(0.5, 0.5, 0.5))
 }
 
+/// The rotation `[yaw, pitch, roll]` in degrees names, in the order
+/// `entity.set_transform` reads them.
+pub(crate) fn euler_degrees(degrees: Vec3) -> Quat {
+    Quat::from_euler(
+        EulerRot::YXZ,
+        degrees.x.to_radians(),
+        degrees.y.to_radians(),
+        degrees.z.to_radians(),
+    )
+}
+
 /// A whole-number parameter within `range`.
 pub(crate) fn int_param(
     params: &OperatorParameters,
@@ -199,11 +210,13 @@ struct PrimitiveRequest {
     placement: Placement,
 }
 
-/// Where a new brush goes and what it wears: `pos`, `rot`, `material`,
-/// `parent` and `name`, checked.
+/// Where a new node goes and what it wears: `pos`, `rot`, `material`,
+/// `parent` and `name`, checked. `pos` and `rot` replace only their own part
+/// of the transform the node spawns with.
 #[derive(Clone)]
 pub(crate) struct Placement {
-    pub transform: Option<Transform>,
+    pub pos: Option<Vec3>,
+    pub rot: Option<Quat>,
     pub material: Option<Handle<StandardMaterial>>,
     pub parent: Option<Entity>,
     pub name: Option<String>,
@@ -212,16 +225,7 @@ pub(crate) struct Placement {
 impl Placement {
     pub(crate) fn read(world: &World, params: &OperatorParameters) -> Result<Self, String> {
         let pos = vec3_param(params, "pos")?;
-        let rot = vec3_param(params, "rot")?;
-        let transform = (pos.is_some() || rot.is_some()).then(|| {
-            let degrees = rot.unwrap_or_default();
-            Transform::from_translation(pos.unwrap_or_default()).with_rotation(Quat::from_euler(
-                EulerRot::YXZ,
-                degrees.x.to_radians(),
-                degrees.y.to_radians(),
-                degrees.z.to_radians(),
-            ))
-        });
+        let rot = vec3_param(params, "rot")?.map(euler_degrees);
 
         let material = match params.get("material") {
             None => None,
@@ -232,11 +236,7 @@ impl Placement {
             )?),
         };
 
-        let parent = match params.get("parent") {
-            None => None,
-            Some(PropertyValue::Entity(entity)) => Some(scene_node(world, *entity, "parent")?),
-            Some(other) => return Err(format!("`parent` {other:?} names no node in this scene")),
-        };
+        let parent = parent_param(world, params)?;
 
         let name = match params.get("name") {
             None => None,
@@ -250,7 +250,8 @@ impl Placement {
         };
 
         Ok(Self {
-            transform,
+            pos,
+            rot,
             material,
             parent,
             name,
@@ -275,7 +276,14 @@ impl Placement {
         if let Some(brush) = brush {
             entity.insert(brush);
         }
-        if let Some(transform) = self.transform {
+        if self.pos.is_some() || self.rot.is_some() {
+            let mut transform = entity.get::<Transform>().copied().unwrap_or_default();
+            if let Some(pos) = self.pos {
+                transform.translation = pos;
+            }
+            if let Some(rot) = self.rot {
+                transform.rotation = rot;
+            }
             entity.insert(transform);
         }
         if let Some(name) = &self.name {
@@ -356,6 +364,18 @@ pub(crate) fn standard_material(
     })
 }
 
+/// The scene node the `parent` parameter names, `None` when it names none.
+pub(crate) fn parent_param(
+    world: &World,
+    params: &OperatorParameters,
+) -> Result<Option<Entity>, String> {
+    match params.get("parent") {
+        None => Ok(None),
+        Some(PropertyValue::Entity(entity)) => scene_node(world, *entity, "parent").map(Some),
+        Some(other) => Err(format!("`parent` {other:?} names no node in this scene")),
+    }
+}
+
 /// `entity` when it is a node of the open scene document, else why not;
 /// `key` names the parameter it came from.
 pub(crate) fn scene_node(world: &World, entity: Entity, key: &str) -> Result<Entity, String> {
@@ -403,16 +423,29 @@ pub(crate) fn add_as_one_entry(
     spawn: impl Fn(&mut World, Option<Entity>) -> Entity + Send + Sync + 'static,
 ) -> OperatorResult {
     let parent = parent.or_else(|| crate::sprite_ops::scene_2d_parent(world, None));
-    let mut command: Box<dyn EditorCommand> = Box::new(SpawnEntity::new(
-        move |world: &mut World| spawn(world, parent),
-        label,
-    ));
+    spawn_as_one_entry(world, label, parent, spawn);
+    set_outcome(world, Outcome::Changed);
+    OperatorResult::Finished
+}
+
+/// Spawn a node under `parent` exactly, as one undo entry labelled `label`,
+/// and return it.
+pub(crate) fn spawn_as_one_entry(
+    world: &mut World,
+    label: String,
+    parent: Option<Entity>,
+    spawn: impl Fn(&mut World, Option<Entity>) -> Entity + Send + Sync + 'static,
+) -> Option<Entity> {
+    let mut command = SpawnEntity::new(move |world: &mut World| spawn(world, parent), label);
     command.execute(world);
+    let spawned = command
+        .spawned
+        .filter(|entity| *entity != Entity::PLACEHOLDER);
+    let command: Box<dyn EditorCommand> = Box::new(command);
     world
         .resource_mut::<CommandHistory>()
         .push_executed(command);
-    set_outcome(world, Outcome::Changed);
-    OperatorResult::Finished
+    spawned
 }
 
 /// A number parameter within `range`, finite once it is an `f32`.
