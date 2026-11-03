@@ -68,6 +68,7 @@ fn default_export_dir(source: &Path) -> PathBuf {
 /// window has selected.
 #[operator(
     id = "file.delete",
+    writes_disk = true,
     label = "Delete File",
     description = "Remove a file or directory from disk after user confirmation.",
     allows_undo = false,
@@ -242,6 +243,7 @@ fn delete_path(world: &mut World, path: &Path) {
 /// Copy one file beside itself, under the next free name or the one asked for.
 #[operator(
     id = "asset.duplicate",
+    writes_disk = true,
     label = "Duplicate",
     description = "Copy an asset, scene or prefab file beside itself under a name of its own.",
     allows_undo = false,
@@ -513,6 +515,7 @@ pub fn asset_references(params: In<OperatorParameters>, mut commands: Commands) 
 /// Rewrite one document as its binary twin, in place.
 #[operator(
     id = "file.convert_to_binary",
+    writes_disk = true,
     label = "Convert to Binary",
     description = "Rewrite one BSN document in the binary form, removing the text file.",
     allows_undo = false,
@@ -532,6 +535,7 @@ pub fn file_convert_to_binary(
 /// Rewrite one document as `.bsn` text, in place.
 #[operator(
     id = "file.convert_to_text",
+    writes_disk = true,
     label = "Convert to Text",
     description = "Rewrite one BSN document in the text form, removing the binary file.",
     allows_undo = false,
@@ -598,6 +602,7 @@ fn is_open_in_a_tab(scenes: &crate::scenes::Scenes, path: &Path) -> bool {
 /// Write a tree of documents out in the binary form, for a shipped game.
 #[operator(
     id = "project.export_binary",
+    writes_disk = true,
     label = "Export Binary Assets",
     description = "Write every BSN document under a folder out in the binary form, leaving the \
                    source files as they are and copying everything else through.",

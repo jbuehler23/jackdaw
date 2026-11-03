@@ -1436,6 +1436,7 @@ const KIND_SPELLINGS: &str = "its id, its type path, or the label the New Asset 
 /// Create an asset file of a registered type and open it.
 #[operator(
     id = "asset.new",
+    writes_disk = true,
     label = "New Asset",
     description = "Create an asset file of a registered type and open it in the inspector. \
                    The type is named by its id, its type path or the label the New Asset \
@@ -1626,6 +1627,7 @@ pub fn asset_open(params: In<OperatorParameters>, mut commands: Commands) -> Ope
 /// Write an asset back to its file.
 #[operator(
     id = "asset.save",
+    writes_disk = true,
     label = "Save Asset",
     description = "Write the open asset back to its file.",
     allows_undo = false,
@@ -1657,6 +1659,7 @@ pub fn asset_save(params: In<OperatorParameters>, mut commands: Commands) -> Ope
 /// Delete an asset file and forget what it held.
 #[operator(
     id = "asset.delete",
+    writes_disk = true,
     label = "Delete Asset",
     description = "Delete an asset file and drop it from this project.",
     allows_undo = false,

@@ -247,6 +247,11 @@ impl SceneSnapshot for BsnDocumentSnapshot {
         same_document && self.editor_state == other.editor_state
     }
 
+    fn restore_selection(&self, world: &mut World) {
+        crate::selection::clear_selection_in_world(world);
+        restore_selection(world, &self.selection);
+    }
+
     fn clone_box(&self) -> Box<dyn SceneSnapshot> {
         let document = match &self.document {
             Document::Units(units) => Document::Units(units.clone()),

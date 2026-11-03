@@ -216,7 +216,7 @@ fn has_unsaved_stamp(
 
 /// Save the loaded stamp with the tileset.
 #[operator(
-    id = "tilemap.stamp.save",
+    id = "tilemap.stamp.save", writes_disk = true,
     label = "Save Stamp",
     description = "Save the loaded stamp in the active layer's tileset under a name, as one \
                    undo entry.",

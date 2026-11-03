@@ -19,7 +19,7 @@ use jackdaw_api_internal::operator::{
     BooleanReport, CallOperatorError, CallOperatorSettings, ExecutionContext,
     OperatorBooleanReport, OperatorOutcome, OperatorParameters, OperatorReplacements,
     OperatorReports, OperatorResult, OperatorWarnings, OperatorWorldExt, ParamSpec,
-    with_batch_snapshot, with_history_span,
+    with_batch_transaction, with_history_span,
 };
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_env::editor_endpoint::{
@@ -623,6 +623,16 @@ fn verbose(params: &Value) -> bool {
 /// `N`'s outcome, e.g. `$0.entities.0` for the first entity call 0 added. A
 /// malformed reference, or one to a call that does not run earlier, refuses
 /// the whole batch before anything runs.
+///
+/// `atomic` takes the whole batch back when a call fails, does not finish or a
+/// check fails: the scene and the history are left as they were. `dry_run`
+/// runs the calls and checks, reports them, and takes everything back.
+/// `stage` builds the calls' new nodes into the group of that name, deleting
+/// what an earlier run built there, and refuses a call that changes anything
+/// outside it; `after` names stages that must already exist. A staged batch
+/// is atomic. `checks` are `jackdaw/check` assertions evaluated after the
+/// calls; one that fails fails the batch. Atomic, dry-run and staged batches
+/// refuse calls a rollback cannot take back, such as saving a file.
 pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     check_enabled(world)?;
     let params = params.ok_or_else(|| invalid_params("expected {\"calls\": [...]}"))?;
@@ -635,6 +645,25 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
         .unwrap_or("Batch")
         .to_string();
     let verbose = verbose(&params);
+    let dry_run = flag(&params, "dry_run")?;
+    let stage = super::stage::StageSpec::from_params(&params)?;
+    let atomic = flag(&params, "atomic")? || dry_run || stage.is_some();
+    let checks = match params.get("checks") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(checks)) => checks.clone(),
+        Some(_) => return Err(invalid_params("`checks` is a list of assertions")),
+    };
+    for (index, check) in checks.iter().enumerate() {
+        let refused = |err: BrpError| invalid_params(format!("check {index}: {}", err.message));
+        super::summary::check_shape(check).map_err(refused)?;
+        check_references(Some(check), calls.len()).map_err(refused)?;
+    }
+    if atomic {
+        refuse_unrecoverable(world, calls)?;
+    }
+    if let Some(stage) = &stage {
+        stage.check(world)?;
+    }
 
     let mut prepared = Vec::with_capacity(calls.len());
     for (index, call) in calls.iter().enumerate() {
@@ -657,63 +686,285 @@ pub fn batch_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
         }
     }
 
-    let results = with_batch_snapshot(world, label, move |world| {
-        let mut results = Vec::with_capacity(prepared.len());
-        let mut earlier: Vec<Value> = Vec::with_capacity(prepared.len());
-        for (index, pending) in prepared.into_iter().enumerate() {
-            let call = match pending {
-                Pending::Ready(call) => Ok(call),
-                Pending::Referencing(call) => {
-                    fill_references(&call, &earlier).and_then(|call| call_from_json(world, &call))
-                }
-            };
-            match call.and_then(|call| dispatch(world, call, false)) {
-                Ok(outcome) => {
-                    let stop = outcome.result != "finished";
-                    let entered_modal = outcome.result == "running";
-                    earlier.push(outcome.to_json(true));
-                    results.push((index, Ok(outcome)));
-                    if entered_modal {
-                        // A modal operator waits for a pointer that is never
-                        // coming, and holds off every later modal call.
-                        if let Err(err) = world.cancel_active_modal() {
-                            warn!("jackdaw/batch: could not cancel the modal call: {err}");
-                        }
-                    }
-                    if stop {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    results.push((index, Err(err)));
-                    break;
-                }
-            }
-        }
-        results
+    let run = with_batch_transaction(world, label, atomic, |world| {
+        let run = run_batch(world, prepared, stage.as_ref(), &checks);
+        let keep = match run.failure {
+            Some(_) => !atomic,
+            None => !dry_run,
+        };
+        (run, keep)
     });
 
-    let mut done = Vec::new();
-    for (index, result) in results {
-        match result {
-            Ok(outcome) => done.push(outcome.to_json(verbose)),
-            Err(err) => {
-                return Err(BrpError {
-                    code: err.code,
-                    message: format!(
-                        "call {index} ({}) failed: {}. The {} call(s) before it are done and are \
-                         committed as one undo entry; undo once to take them back rather than \
-                         retrying the whole batch.",
-                        calls[index]["id"].as_str().unwrap_or("?"),
-                        err.message,
-                        done.len()
-                    ),
-                    data: Some(json!({ "failed_at": index, "calls": done })),
-                });
+    let done: Vec<Value> = run.done.iter().map(|call| call.to_json(verbose)).collect();
+    let call_id = |index: usize| calls[index]["id"].as_str().unwrap_or("?");
+    let checks_skipped = !checks.is_empty()
+        && matches!(
+            run.failure,
+            Some(BatchFailure::Call(..) | BatchFailure::Stopped(_) | BatchFailure::Stage(_))
+        );
+    let (code, mut what, failed_at) = match run.failure {
+        None => return Ok(batch_answer(done, dry_run, run.stage, run.checks)),
+        Some(BatchFailure::Stopped(_)) if !atomic && checks.is_empty() => {
+            return Ok(batch_answer(done, dry_run, run.stage, run.checks));
+        }
+        Some(BatchFailure::Call(index, err)) => (
+            err.code,
+            format!("call {index} ({}) failed: {}", call_id(index), err.message),
+            json!(index),
+        ),
+        Some(BatchFailure::Stopped(index)) => {
+            let outcome = &done[index];
+            let mut what = format!(
+                "call {index} ({}) did not finish: {}",
+                call_id(index),
+                outcome["result"].as_str().unwrap_or("?")
+            );
+            if let Some(warnings) = outcome["warnings"].as_array()
+                && !warnings.is_empty()
+            {
+                let warnings: Vec<&str> = warnings.iter().filter_map(Value::as_str).collect();
+                what.push_str(&format!(" ({})", warnings.join("; ")));
             }
+            (error_codes::INVALID_PARAMS, what, json!(index))
+        }
+        Some(BatchFailure::Stage(why)) => (
+            error_codes::INTERNAL_ERROR,
+            format!("the stage could not be opened: {why}"),
+            Value::Null,
+        ),
+        Some(BatchFailure::Checks) => {
+            let results = run
+                .checks
+                .as_ref()
+                .and_then(|checks| checks["results"].as_array());
+            let failed: Vec<String> = results
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter(|(_, result)| result["pass"] != json!(true))
+                .map(|(index, result)| {
+                    format!("{index} ({})", result["check"].as_str().unwrap_or("?"))
+                })
+                .collect();
+            (
+                error_codes::INVALID_PARAMS,
+                format!(
+                    "{} of {} checks failed: {}",
+                    failed.len(),
+                    results.map_or(0, Vec::len),
+                    failed.join(", ")
+                ),
+                Value::Null,
+            )
+        }
+        Some(BatchFailure::CheckError(err)) => (
+            err.code,
+            format!("the checks could not run: {}", err.message),
+            Value::Null,
+        ),
+    };
+    if checks_skipped {
+        what.push_str(", so the checks were not run");
+    }
+    let message = if atomic {
+        format!(
+            "{what}. The batch was rolled back: the scene and the undo history are as they were."
+        )
+    } else {
+        format!(
+            "{what}. The {} call(s) that ran are done and are committed as one undo entry; undo \
+             once to take them back rather than retrying the whole batch.",
+            done.len()
+        )
+    };
+    let mut data = json!({ "failed_at": failed_at, "calls": done, "rolled_back": atomic });
+    if dry_run {
+        data["dry_run"] = json!(true);
+    }
+    if let Some(checks) = run.checks {
+        data["checks"] = checks;
+    }
+    Err(BrpError {
+        code,
+        message,
+        data: Some(data),
+    })
+}
+
+/// What a batch that did all it was asked answers.
+fn batch_answer(
+    done: Vec<Value>,
+    dry_run: bool,
+    stage: Option<Value>,
+    checks: Option<Value>,
+) -> Value {
+    let mut answer = json!({ "calls": done });
+    if dry_run {
+        answer["dry_run"] = json!(true);
+    }
+    if let Some(stage) = stage {
+        answer["stage"] = stage;
+    }
+    if let Some(checks) = checks {
+        answer["checks"] = checks;
+    }
+    answer
+}
+
+/// A boolean parameter, false when absent.
+fn flag(params: &Value, key: &str) -> Result<bool, BrpError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(other) => Err(invalid_params(format!(
+            "`{key}` is true or false, not {other}"
+        ))),
+    }
+}
+
+/// Why a rollback could not take a call to `id` back, from the flags the
+/// operator declares; `None` when it could.
+fn beyond_rollback(In(id): In<String>, ops: Query<&OperatorEntity>) -> Option<&'static str> {
+    let op = ops.iter().find(|op| op.id() == id)?;
+    if op.writes_disk() {
+        Some("writes to disk")
+    } else if op.leaves_history() {
+        Some("leaves the history the batch records into")
+    } else {
+        None
+    }
+}
+
+/// Refuse a batch that must be able to roll back but holds a call that writes
+/// to disk or leaves the batch's history, naming every such call.
+fn refuse_unrecoverable(world: &mut World, calls: &[Value]) -> Result<(), BrpError> {
+    let mut found: Vec<(usize, String, &'static str)> = Vec::new();
+    for (index, call) in calls.iter().enumerate() {
+        let Some(id) = call.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let why = world
+            .run_system_cached_with(beyond_rollback, id.to_string())
+            .map_err(|err| internal_error(err.to_string()))?;
+        if let Some(why) = why {
+            found.push((index, id.to_string(), why));
         }
     }
-    Ok(json!({ "calls": done }))
+    if found.is_empty() {
+        return Ok(());
+    }
+    let listed: Vec<String> = found
+        .iter()
+        .map(|(index, id, why)| format!("call {index} ({id}) {why}"))
+        .collect();
+    Err(BrpError {
+        code: error_codes::INVALID_PARAMS,
+        message: format!(
+            "{}; a rollback cannot take that back, so an atomic, dry-run or staged batch refuses \
+             it. Run it in a plain batch or call once this one is done.",
+            listed.join("; ")
+        ),
+        data: Some(json!({
+            "unrecoverable": found
+                .iter()
+                .map(|(index, id, why)| json!({ "call": index, "id": id, "why": why }))
+                .collect::<Vec<_>>(),
+        })),
+    })
+}
+
+/// What running a batch's calls did.
+#[derive(Default)]
+struct BatchRun {
+    /// Every call that ran, the one that stopped the batch included.
+    done: Vec<CallOutcome>,
+    failure: Option<BatchFailure>,
+    stage: Option<Value>,
+    checks: Option<Value>,
+}
+
+/// Why a batch did not do all it was asked.
+enum BatchFailure {
+    /// The call at this index failed, or a stage refused what it did.
+    Call(usize, BrpError),
+    /// The call at this index ended without finishing.
+    Stopped(usize),
+    Stage(String),
+    /// An assertion failed; the results say which.
+    Checks,
+    /// An assertion could not be evaluated.
+    CheckError(BrpError),
+}
+
+fn run_batch(
+    world: &mut World,
+    prepared: Vec<Pending>,
+    stage: Option<&super::stage::StageSpec>,
+    checks: &[Value],
+) -> BatchRun {
+    let mut run = BatchRun::default();
+    let mut open = match stage.map(|spec| super::stage::OpenStage::open(world, spec)) {
+        None => None,
+        Some(Ok(open)) => Some(open),
+        Some(Err(why)) => {
+            run.failure = Some(BatchFailure::Stage(why));
+            return run;
+        }
+    };
+    let mut earlier: Vec<Value> = Vec::with_capacity(prepared.len());
+    for (index, pending) in prepared.into_iter().enumerate() {
+        let call = match pending {
+            Pending::Ready(call) => Ok(call),
+            Pending::Referencing(call) => {
+                fill_references(&call, &earlier).and_then(|call| call_from_json(world, &call))
+            }
+        };
+        let outcome = match call.and_then(|call| dispatch(world, call, false)) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                run.failure = Some(BatchFailure::Call(index, err));
+                return run;
+            }
+        };
+        if outcome.result == "running" {
+            // A modal operator waits for a pointer that is never coming, and
+            // holds off every later modal call.
+            if let Err(err) = world.cancel_active_modal() {
+                warn!("jackdaw/batch: could not cancel the modal call: {err}");
+            }
+        }
+        let finished = outcome.result == "finished";
+        earlier.push(outcome.to_json(true));
+        run.done.push(outcome);
+        if !finished {
+            run.failure = Some(BatchFailure::Stopped(index));
+            return run;
+        }
+        if let Some(open) = open.as_mut()
+            && let Err(why) = open.after_call(world)
+        {
+            run.failure = Some(BatchFailure::Call(index, invalid_params(why)));
+            return run;
+        }
+    }
+    run.stage = open.as_ref().map(super::stage::OpenStage::report);
+    if checks.is_empty() {
+        return run;
+    }
+    let checked = fill_references(&json!({ "params": checks }), &earlier).and_then(|filled| {
+        let assertions = filled["params"].as_array().cloned().unwrap_or_default();
+        super::summary::run_checks(world, &assertions)
+    });
+    match checked {
+        Ok(result) => {
+            if result["failed"] != json!(0) {
+                run.failure = Some(BatchFailure::Checks);
+            }
+            run.checks = Some(result);
+        }
+        Err(err) => run.failure = Some(BatchFailure::CheckError(err)),
+    }
+    run
 }
 
 /// A batch call, typed up front, or held until the outcomes it references are
@@ -877,14 +1128,14 @@ pub fn cancel_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
 
 /// One prepared call: an id, its typed parameters, and how each `Entity`
 /// parameter was filled in.
-struct PreparedCall {
+pub(super) struct PreparedCall {
     op: BootOp,
     unresolved: Vec<String>,
 }
 
 /// What a call did.
 #[derive(Serialize)]
-struct CallOutcome {
+pub(super) struct CallOutcome {
     id: String,
     /// `finished`, `cancelled` or `running`.
     result: String,
@@ -892,7 +1143,7 @@ struct CallOutcome {
     /// reported through `OperatorWarnings`. Empty on a clean call.
     warnings: Vec<String>,
     /// Scene entities the call added, as ids the other methods take.
-    entities: Vec<u64>,
+    pub(super) entities: Vec<u64>,
     /// What the operator did, where the amount is the answer and the scene does
     /// not say it. Kept apart from `warnings` so a receipt is not read as a
     /// refusal.
@@ -932,7 +1183,7 @@ impl CallOutcome {
 }
 
 /// Type a `{id, params}` object into a call the dispatcher can take.
-fn call_from_json(world: &mut World, call: &Value) -> Result<PreparedCall, BrpError> {
+pub(super) fn call_from_json(world: &mut World, call: &Value) -> Result<PreparedCall, BrpError> {
     let mut op = typed_call(world, call)?;
     let unresolved = resolve_entity_params(world, &mut op)
         .into_iter()
@@ -975,7 +1226,11 @@ fn typed_call(world: &mut World, call: &Value) -> Result<BootOp, BrpError> {
 }
 
 /// Dispatch a prepared call and describe what happened.
-fn dispatch(world: &mut World, call: PreparedCall, history: bool) -> Result<CallOutcome, BrpError> {
+pub(super) fn dispatch(
+    world: &mut World,
+    call: PreparedCall,
+    history: bool,
+) -> Result<CallOutcome, BrpError> {
     let PreparedCall { op, unresolved } = call;
     let id = op.id.clone();
     // Anything the operator itself wants the caller told. Cleared first,

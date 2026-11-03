@@ -400,6 +400,8 @@ impl<'a> ExtensionContext<'a> {
                 cancel,
                 modal: O::MODAL,
                 allows_undo: O::ALLOWS_UNDO,
+                writes_disk: O::WRITES_DISK,
+                leaves_history: O::LEAVES_HISTORY,
                 remote_hidden: O::REMOTE_HIDDEN,
                 unavailable_reason: O::UNAVAILABLE_REASON,
             },

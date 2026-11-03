@@ -168,6 +168,7 @@ fn settle_captures(
 /// Render a camera's view to a PNG at a chosen size, without the grid, gizmos or selection outlines.
 #[operator(
     id = "viewport.capture",
+    writes_disk = true,
     label = "Capture Camera",
     description = "Render what a camera sees to a PNG at a chosen size, without the editor's grid, \
                    gizmos or selection outlines.",

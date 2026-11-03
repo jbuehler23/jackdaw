@@ -6,6 +6,7 @@ pub mod panel;
 mod registry_fetch;
 pub mod remote_inspector;
 pub mod server;
+mod stage;
 mod summary;
 mod topology;
 

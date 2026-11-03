@@ -28,6 +28,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 
 #[operator(
     id = "scene.save",
+    writes_disk = true,
     label = "Save",
     allows_undo = false,
     params(path(
@@ -50,7 +51,12 @@ pub fn scene_save(params: In<OperatorParameters>, world: &mut World) -> Operator
     OperatorResult::Finished
 }
 
-#[operator(id = "scene.save_as", label = "Save As...", allows_undo = false)]
+#[operator(
+    id = "scene.save_as",
+    writes_disk = true,
+    label = "Save As...",
+    allows_undo = false
+)]
 pub fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         crate::scene_io::save_scene_as(world);
@@ -60,6 +66,7 @@ pub fn scene_save_as(_: In<OperatorParameters>, mut commands: Commands) -> Opera
 
 #[operator(
     id = "scene.save_selection_as_prefab",
+    writes_disk = true,
     label = "Save Selection as Prefab",
     allows_undo = false
 )]
@@ -92,7 +99,11 @@ pub(crate) fn scene_save_selection_as_prefab(
     OperatorResult::Finished
 }
 
-#[operator(id = "scene.open_recent", label = "Open Recent...")]
+#[operator(
+    id = "scene.open_recent",
+    leaves_history = true,
+    label = "Open Recent..."
+)]
 pub(crate) fn scene_open_recent(
     _: In<OperatorParameters>,
     mut commands: Commands,

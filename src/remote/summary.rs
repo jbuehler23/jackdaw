@@ -591,6 +591,11 @@ pub fn check_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
         .get("assertions")
         .and_then(Value::as_array)
         .ok_or_else(|| invalid_params("expected {\"assertions\": [{\"<kind>\": {...}}]}"))?;
+    run_checks(world, assertions)
+}
+
+/// Evaluate `assertions` as `jackdaw/check` does and answer what it answers.
+pub(super) fn run_checks(world: &mut World, assertions: &[Value]) -> BrpResult {
     let mut results = Vec::with_capacity(assertions.len());
     for (index, assertion) in assertions.iter().enumerate() {
         let result = evaluate(world, assertion)
@@ -608,7 +613,22 @@ pub fn check_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRes
     }))
 }
 
-fn evaluate(world: &mut World, assertion: &Value) -> Result<Value, BrpError> {
+/// One `jackdaw/check` assertion: measures what its arguments name.
+type Assertion = fn(&mut World, &Value) -> Result<Value, BrpError>;
+
+/// The assertions `jackdaw/check` knows, by kind.
+const ASSERTIONS: [(&str, Assertion); 6] = [
+    ("rests_on", rests_on),
+    ("inside", inside),
+    ("no_overlap", no_overlap),
+    ("bounds", bounds),
+    ("count", count),
+    ("watertight", watertight),
+];
+
+/// An assertion's kind, arguments and evaluator, refusing one that is not
+/// shaped `{"<kind>": {...}}` with a kind `jackdaw/check` knows.
+pub(super) fn check_shape(assertion: &Value) -> Result<(&str, &Value, Assertion), BrpError> {
     let (kind, args) = assertion
         .as_object()
         .filter(|object| object.len() == 1)
@@ -616,20 +636,22 @@ fn evaluate(world: &mut World, assertion: &Value) -> Result<Value, BrpError> {
         .ok_or_else(|| {
             invalid_params(format!("expected {{\"<kind>\": {{...}}}}, not {assertion}"))
         })?;
-    let mut result = match kind.as_str() {
-        "rests_on" => rests_on(world, args)?,
-        "inside" => inside(world, args)?,
-        "no_overlap" => no_overlap(world, args)?,
-        "bounds" => bounds(world, args)?,
-        "count" => count(world, args)?,
-        "watertight" => watertight(world, args)?,
-        other => {
-            return Err(invalid_params(format!(
-                "unknown assertion `{other}`; one of rests_on, inside, no_overlap, bounds, \
-                 count, watertight"
-            )));
-        }
-    };
+    let (kind, evaluate) = ASSERTIONS
+        .into_iter()
+        .find(|(known, _)| *known == kind.as_str())
+        .ok_or_else(|| {
+            let kinds: Vec<&str> = ASSERTIONS.iter().map(|(kind, _)| *kind).collect();
+            invalid_params(format!(
+                "unknown assertion `{kind}`; one of {}",
+                kinds.join(", ")
+            ))
+        })?;
+    Ok((kind, args, evaluate))
+}
+
+fn evaluate(world: &mut World, assertion: &Value) -> Result<Value, BrpError> {
+    let (kind, args, evaluate) = check_shape(assertion)?;
+    let mut result = evaluate(world, args)?;
     result["check"] = json!(kind);
     Ok(result)
 }

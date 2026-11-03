@@ -82,6 +82,16 @@ pub trait Operator: 'static {
     /// so this should usually be `true`.
     const ALLOWS_UNDO: bool = true;
 
+    /// Whether this operator writes files outside the scene document. No undo
+    /// or rollback takes such a write back, so a batch that has to be able to
+    /// roll back refuses the call.
+    const WRITES_DISK: bool = false;
+
+    /// Whether this operator moves the editor off the history a batch records
+    /// into: it opens, closes or switches a scene or project, or steps undo or
+    /// redo. A batch that has to be able to roll back refuses the call.
+    const LEAVES_HISTORY: bool = false;
+
     /// Why this operator is out of reach of a scripted or remote caller, or
     /// `None` when it is not.
     ///
@@ -1052,22 +1062,113 @@ pub fn with_history_span<R>(
 }
 
 /// Run `body` as one undo entry holding one scene snapshot pair, for a caller
-/// that dispatches its operators without history of their own. The entry has
-/// the shape a single history dispatch leaves: the commands the operators
-/// pushed, then the change from before `body` to after it.
-pub fn with_batch_snapshot<R>(
+/// that dispatches its operators without history of their own. `body`
+/// answers its result and whether to keep what it did.
+///
+/// Kept, the work is one undo entry: the commands the operators pushed, then
+/// the change from before `body` to after it, which runs last both ways. The
+/// change sets each node it names to one side, so it settles whatever the
+/// commands did to the same nodes; run first, a deletion's undo would bring
+/// back a second copy of what the change had already put back.
+///
+/// Not kept, that same entry is undone and dropped, the selection is put back,
+/// and the history reads as if `body` never ran. The undo touches only what
+/// `body` changed, so other nodes keep their entity ids, and the commands'
+/// undo takes back what they did outside the scene document.
+///
+/// `may_roll_back` sets the redo stack aside while `body` runs, so a rollback
+/// can put it back; a body that may roll back must not step undo or redo.
+pub fn with_batch_transaction<R>(
     world: &mut World,
     label: impl Into<String>,
-    body: impl FnOnce(&mut World) -> R,
+    may_roll_back: bool,
+    body: impl FnOnce(&mut World) -> (R, bool),
 ) -> R {
     let label = label.into();
+    let redo = may_roll_back
+        .then(|| std::mem::take(&mut world.resource_mut::<CommandHistory>().redo_stack));
     let span = world.resource_mut::<CommandHistory>().begin_span();
     let before = world
         .resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| snapshotter.0.capture(world));
-    let out = body(world);
-    push_snapshot_diff(world, label.clone(), before);
-    world.resource_mut::<CommandHistory>().end_span(span, label);
+    let (out, keep) = body(world);
+    let mut commands = world.resource_mut::<CommandHistory>().take_span(span);
+    let change = world.resource_scope(|world, snapshotter: Mut<ActiveSnapshotter>| {
+        let after = snapshotter.0.capture(world);
+        snapshotter
+            .0
+            .history_entry(before.clone_box(), after, label.clone())
+    });
+    if !keep {
+        BatchEntry {
+            commands,
+            change,
+            label,
+        }
+        .undo(world);
+        before.restore_selection(world);
+        if let Some(redo) = redo {
+            world.resource_mut::<CommandHistory>().redo_stack = redo;
+        }
+        return out;
+    }
+    let entry: Option<Box<dyn EditorCommand>> = match (commands.len(), change) {
+        (0, None) => None,
+        (0, Some(change)) => Some(change),
+        (1, None) => commands.pop(),
+        (_, change) => Some(Box::new(BatchEntry {
+            commands,
+            change,
+            label,
+        })),
+    };
+    let mut history = world.resource_mut::<CommandHistory>();
+    match (entry, redo) {
+        (Some(entry), _) => history.push_executed(entry),
+        (None, Some(redo)) => history.redo_stack = redo,
+        (None, None) => {}
+    }
     out
+}
+
+/// A batch as one undo entry: the commands its calls pushed, then the scene
+/// change, which runs last in both directions.
+struct BatchEntry {
+    commands: Vec<Box<dyn EditorCommand>>,
+    change: Option<Box<dyn EditorCommand>>,
+    label: String,
+}
+
+impl EditorCommand for BatchEntry {
+    fn execute(&mut self, world: &mut World) {
+        for command in &mut self.commands {
+            command.execute(world);
+        }
+        if let Some(change) = &mut self.change {
+            change.execute(world);
+        }
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        for command in self.commands.iter_mut().rev() {
+            command.undo(world);
+        }
+        if let Some(change) = &mut self.change {
+            change.undo(world);
+        }
+    }
+
+    fn description(&self) -> &str {
+        &self.label
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.commands
+            .iter()
+            .chain(&self.change)
+            .map(|command| command.heap_bytes())
+            .sum::<usize>()
+            + self.label.capacity()
+    }
 }
 
 /// One undo entry. Swaps the active scene snapshot on execute / undo.

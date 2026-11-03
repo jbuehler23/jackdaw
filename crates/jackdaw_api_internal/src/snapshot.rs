@@ -21,6 +21,10 @@ pub trait SceneSnapshot: Any + Send + Sync + 'static {
 
     fn clone_box(&self) -> Box<dyn SceneSnapshot>;
 
+    /// Put back the selection this snapshot recorded, leaving the scene as it
+    /// is. Does nothing for a snapshot that records none.
+    fn restore_selection(&self, _world: &mut World) {}
+
     /// Heap bytes this snapshot holds, for the history's budget.
     ///
     /// A document snapshot is the whole scene as text, so two of them

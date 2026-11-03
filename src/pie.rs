@@ -329,7 +329,7 @@ fn play_is_running(state: Res<State<PlayState>>) -> bool {
 /// Start the game. From Stopped, builds the project's game binary and
 /// launches it connected to the editor; from Paused, resumes.
 #[operator(
-    id = "pie.play",
+    id = "pie.play", writes_disk = true,
     label = "Play",
     description = "Start the game running in the editor.",
     is_available = play_is_stopped_or_paused
@@ -381,6 +381,7 @@ pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> O
 /// the editor then reloads, and an extension is loaded into the editor.
 #[operator(
     id = "project.build",
+    writes_disk = true,
     label = "Rebuild Project",
     description = "Rebuild the project so new or changed components and extensions appear in the editor."
 )]
@@ -403,6 +404,7 @@ pub(crate) fn project_build(_: In<OperatorParameters>, mut commands: Commands) -
 /// live pickup for those who want it.
 #[operator(
     id = "project.toggle_auto_build",
+    writes_disk = true,
     label = "Toggle Auto Build",
     description = "Turn automatic rebuild-on-source-change on or off."
 )]
@@ -430,6 +432,7 @@ pub(crate) fn project_toggle_auto_build(
 /// single session.
 #[operator(
     id = "project.toggle_prebuild",
+    writes_disk = true,
     label = "Toggle Prebuild On Open",
     description = "Turn the background pre-build that runs when a project opens on or off."
 )]
@@ -456,6 +459,7 @@ pub(crate) fn project_toggle_prebuild(
 /// On by default, so the game loads what the editor shows.
 #[operator(
     id = "project.toggle_save_before_play",
+    writes_disk = true,
     label = "Toggle Save Before Play",
     description = "Turn saving modified scenes before Play starts the game on or off."
 )]

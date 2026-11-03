@@ -102,6 +102,7 @@ fn placement(template: LayoutTemplate, text: &str) -> Result<Placement, String> 
 /// Lay a layout template's bits onto a block of tiles.
 #[operator(
     id = "tileset.apply_template",
+    writes_disk = true,
     label = "Apply Tileset Template",
     description = "Set the bits of a block of tiles to a common layout of an inner terrain over \
                    an outer one, adding their terrain set when missing and giving it the \
@@ -252,6 +253,7 @@ fn bare_icons(tileset: &Tileset, setup: &mut TilesetSetup, terrains: [TerrainId;
 /// Hand tiles back to auto setup.
 #[operator(
     id = "tileset.tile.reset_to_auto",
+    writes_disk = true,
     label = "Reset Tiles To Auto",
     description = "Hand tiles back to auto setup: their bits and shapes are proposed afresh \
                    from the source sheets.",
@@ -298,6 +300,7 @@ pub fn tileset_tile_reset_to_auto(
 /// Set or clear a named value on tiles.
 #[operator(
     id = "tileset.paint_property",
+    writes_disk = true,
     label = "Paint Tile Property",
     description = "Set a named value on tiles, or clear it with an empty value.",
     allows_undo = false,
@@ -343,6 +346,7 @@ pub fn tileset_paint_property(
 /// Mark a block of tiles as one object.
 #[operator(
     id = "tileset.object.add",
+    writes_disk = true,
     label = "Add Tileset Object",
     description = "Mark a block of tiles as one object placed as a sprite, in place of any \
                    object sharing a tile with it.",
@@ -419,6 +423,7 @@ pub fn tileset_object_add(
 /// Unmark an object.
 #[operator(
     id = "tileset.object.remove",
+    writes_disk = true,
     label = "Remove Tileset Object",
     description = "Remove the object covering a tile; its tiles stay in the tileset.",
     allows_undo = false,

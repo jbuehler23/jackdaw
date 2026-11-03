@@ -88,7 +88,7 @@ pub(crate) fn face_view(face: u32) -> (Vec3, Vec3, bool) {
 
 /// Render the six faces of the probe `entity` sees from where it stands.
 #[operator(
-    id = "environment.bake_probe",
+    id = "environment.bake_probe", writes_disk = true,
     label = "Bake Reflection Probe",
     description = "Render what a reflection probe sees from where it stands into the cubemap it \
                    reflects, written beside the scene.",

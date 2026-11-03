@@ -67,6 +67,7 @@ pub fn project_modules(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 /// Turn one module on or off for the open project.
 #[operator(
     id = "project.set_module",
+    writes_disk = true,
     label = "Set Module",
     description = "Turn one of the project's optional modules on or off. Edits jackdaw.toml \
                    and the game's Cargo.toml; the game rebuilds the next time it is built.",

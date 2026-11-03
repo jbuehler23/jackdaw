@@ -36,6 +36,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
 /// Start a graph of this name and open it on the canvas.
 #[operator(
     id = "animation.graph.new",
+    writes_disk = true,
     label = "New Animation Graph",
     description = "Start an empty animation graph in assets/animation and open it in the Graph \
                    window.",
@@ -95,7 +96,7 @@ pub(crate) fn animation_graph_open(
 
 /// Write the open graph back to its file.
 #[operator(
-    id = "animation.graph.save",
+    id = "animation.graph.save", writes_disk = true,
     label = "Save Animation Graph",
     description = "Write the open graph back to the file it came from.",
     is_available = a_graph_is_open,
@@ -549,7 +550,7 @@ pub(crate) fn animation_graph_assign(
 
 /// Write a selected animation set out as a graph and open it.
 #[operator(
-    id = "animation.graph.convert_set",
+    id = "animation.graph.convert_set", writes_disk = true,
     label = "Convert To Graph",
     description = "Write the selected entity's animation set out as a graph file, and point \
                    the entity at it.",

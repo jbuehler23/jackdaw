@@ -3290,6 +3290,7 @@ fn on_prefab_dialog_action(
 /// pending state after running.
 #[operator(
     id = "prefab.save_as_prefab",
+    writes_disk = true,
     label = "Save as Prefab",
     description = "Write the pending entity roots out as a new prefab file.",
     allows_undo = true,
@@ -3336,6 +3337,7 @@ pub fn prefab_save_as_prefab(
 /// that point on.
 #[operator(
     id = "prefab.save_scene_as_prefab",
+    writes_disk = true,
     label = "Save Scene as Prefab",
     description = "Write the active scene tab out as a new prefab file and convert the tab into a prefab tab.",
     allows_undo = true,
@@ -3376,6 +3378,7 @@ pub fn prefab_save_scene_as_prefab(
 /// instance overrides.
 #[operator(
     id = "prefab.save_as_variant",
+    writes_disk = true,
     label = "Save as Variant",
     description = "Write the pending instance out as a variant prefab.",
     allows_undo = true,

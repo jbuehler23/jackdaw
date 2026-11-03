@@ -63,6 +63,7 @@ enum SetupChoice {
 /// any step fails, and an import never replaces an existing file.
 #[operator(
     id = "tileset.import",
+    writes_disk = true,
     label = "Import Tileset",
     description = "Make a tileset from one or more tile sheets of one tile size: a packed copy \
                    of their tiles with a .meta that loads it as an array texture in any Bevy \

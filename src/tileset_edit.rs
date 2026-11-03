@@ -345,6 +345,7 @@ pub(crate) fn peer(text: &str) -> Result<Peer, String> {
 /// Add a terrain to a tileset.
 #[operator(
     id = "tileset.terrain.add",
+    writes_disk = true,
     label = "Add Tileset Terrain",
     description = "Add a terrain to a tileset; it takes the next free id, up to 255.",
     allows_undo = false,
@@ -405,6 +406,7 @@ pub fn tileset_terrain_add(
 /// Remove a terrain from a tileset.
 #[operator(
     id = "tileset.terrain.remove",
+    writes_disk = true,
     label = "Remove Tileset Terrain",
     description = "Remove a terrain: its peers become empty and its terrain sets go.",
     allows_undo = false,
@@ -438,6 +440,7 @@ pub fn tileset_terrain_remove(
 /// Show a terrain by a tile.
 #[operator(
     id = "tileset.terrain.set_icon",
+    writes_disk = true,
     label = "Set Tileset Terrain Icon",
     description = "Show a terrain by a tile of the sheet, which no other terrain shows.",
     allows_undo = false,
@@ -478,6 +481,7 @@ pub fn tileset_terrain_set_icon(
 /// Rename a terrain of a tileset.
 #[operator(
     id = "tileset.terrain.rename",
+    writes_disk = true,
     label = "Rename Tileset Terrain",
     description = "Rename a terrain; a re-run of auto setup keeps the new name.",
     allows_undo = false,
@@ -517,6 +521,7 @@ pub fn tileset_terrain_rename(
 /// Split some tiles off a terrain into a new one.
 #[operator(
     id = "tileset.terrain.split",
+    writes_disk = true,
     label = "Split Tileset Terrain",
     description = "Move the listed tiles' peers of a terrain to a new terrain like it, with \
                    copies of the terrain sets they border.",
@@ -576,6 +581,7 @@ pub fn tileset_terrain_split(
 /// Merge one terrain into another.
 #[operator(
     id = "tileset.terrain.merge",
+    writes_disk = true,
     label = "Merge Tileset Terrains",
     description = "Fold one terrain into another: its peers and terrain sets take the other's id.",
     allows_undo = false,
@@ -612,6 +618,7 @@ pub fn tileset_terrain_merge(
 /// Choose how a terrain collides.
 #[operator(
     id = "tileset.terrain.set_collision",
+    writes_disk = true,
     label = "Set Terrain Collision",
     description = "Choose whether a terrain is solid, a trigger or passable.",
     allows_undo = false,
@@ -647,6 +654,7 @@ pub fn tileset_terrain_set_collision(
 /// Add a terrain set to a tileset.
 #[operator(
     id = "tileset.terrain_set.add",
+    writes_disk = true,
     label = "Add Terrain Set",
     description = "Add the transition set of an inner terrain over an outer one.",
     allows_undo = false,
@@ -700,6 +708,7 @@ pub fn tileset_terrain_set_add(
 /// Remove a terrain set from a tileset.
 #[operator(
     id = "tileset.terrain_set.remove",
+    writes_disk = true,
     label = "Remove Terrain Set",
     description = "Remove a terrain set; tiles laid out for it keep their terrain bits.",
     allows_undo = false,
@@ -752,6 +761,7 @@ pub fn tileset_terrain_set_remove(
 /// Change the match mode of a terrain set.
 #[operator(
     id = "tileset.terrain_set.set",
+    writes_disk = true,
     label = "Set Terrain Set Mode",
     description = "Change which peers a terrain set matches on.",
     allows_undo = false,
@@ -796,6 +806,7 @@ pub fn tileset_terrain_set_set(
 /// Set a tile's terrain bits by hand.
 #[operator(
     id = "tileset.tile.set_bits",
+    writes_disk = true,
     label = "Set Tile Bits",
     description = "Set the terrain of a tile's nine peers, or of one of them.",
     allows_undo = false,
@@ -875,6 +886,7 @@ pub fn tileset_tile_set_bits(
 /// Clear what auto setup made in a tileset.
 #[operator(
     id = "tileset.clear_auto",
+    writes_disk = true,
     label = "Clear Automatic Setup",
     description = "Clear a tileset that holds automatic setup nobody has touched: its terrains, \
                    terrain sets, bits, collision shapes and objects go and the slicing stays. A \
