@@ -406,6 +406,21 @@ fn the_parametric_authoring_operators_are_registered() {
         ),
         ("brush.mesh.subdivide", &["cuts"][..]),
         ("brush.clip", &["entity", "normal", "point", "keep"][..]),
+        (
+            "mesh.add_brush",
+            &[
+                "outline",
+                "plane",
+                "depth",
+                "taper",
+                "depth_segments",
+                "pos",
+                "rot",
+                "material",
+                "parent",
+                "name",
+            ][..],
+        ),
         ("brush.mesh.edge_slide", &["t"][..]),
         ("brush.mesh.vertex_slide", &["t"][..]),
         (
