@@ -58,7 +58,7 @@ pub const SPARKLINE_WINDOW: usize = 64;
 /// Samples packed four per `vec4` for std140 (see the shader).
 const SAMPLE_VECS: usize = SPARKLINE_WINDOW / 4;
 
-const SHADER_SPARKLINE_PATH: &str = "embedded://jackdaw/remote/debug/shaders/sparkline.wesl";
+const SHADER_SPARKLINE_PATH: &str = "embedded://jackdaw_editor_remote/debug/shaders/sparkline.wesl";
 
 /// GPU material that draws a `RingBuffer`'s window as a filled polyline.
 ///

@@ -240,7 +240,7 @@ pub(crate) fn row_label(world: &World, entity: Entity) -> String {
 
 /// The file stem an instance that inherited no name is labelled by, which is
 /// all anyone has to go on until the prefab is back.
-pub(crate) fn prefab_stem_label(world: &World, entity: Entity) -> Option<String> {
+pub fn prefab_stem_label(world: &World, entity: Entity) -> Option<String> {
     if world.get::<Name>(entity).is_some() {
         return None;
     }
@@ -259,7 +259,7 @@ fn names_a_prefab(world: &World, entity: Entity) -> bool {
 
 /// The file a prefab instance points at when the project does not hold it, so
 /// it inherits nothing and its row says so.
-pub(crate) fn missing_prefab_source(world: &World, entity: Entity) -> Option<&std::path::Path> {
+pub fn missing_prefab_source(world: &World, entity: Entity) -> Option<&std::path::Path> {
     let isa = world.get::<crate::prefab::IsA>(entity)?;
     world
         .get_resource::<crate::prefab::PrefabAstCache>()
@@ -1476,7 +1476,7 @@ fn on_tree_node_expanded(
         Has<RowsBuiltOnExpand>,
     )>,
     tree_row_children_marker: Query<Entity, With<TreeRowChildren>>,
-    remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_check: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
     unbuilt_rows: Query<&TreeNodeExpanded, (With<TreeNode>, Without<Children>)>,
 ) {
     let entity = trigger.mutated;
@@ -1681,7 +1681,7 @@ fn on_tree_row_clicked(
     keyboard: Res<ButtonInput<KeyCode>>,
     parent_query: Query<&ChildOf>,
     tree_nodes: Query<Entity, With<TreeNode>>,
-    remote_check: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_check: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
     time: Res<Time>,
     instances: Query<(), With<crate::prefab::IsA>>,
     asset_sources: Query<(), With<jackdaw_scene_types::GltfSource>>,

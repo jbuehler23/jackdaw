@@ -2267,8 +2267,7 @@ fn apply_to(
 }
 
 /// The read-only entities every write path on the card has to check for.
-type RemoteProxies<'w, 's> =
-    Query<'w, 's, (), With<crate::remote::entity_browser::RemoteEntityProxy>>;
+type RemoteProxies<'w, 's> = Query<'w, 's, (), With<crate::remote_mode::RemoteEntityProxy>>;
 
 pub(crate) fn on_binding_combobox_change(
     event: On<ComboBoxChangeEvent>,

@@ -15,9 +15,9 @@ use jackdaw_geometry::ModifierStack;
 use jackdaw_scene_types::{Brush, GltfSource, Terrain, unsorted_global};
 use serde_json::{Value, json};
 
-use super::server::{
-    belongs_to_the_scene, check_enabled, depth_param, entity_from_params, invalid_params,
-    is_scene_descendant, root_param,
+use super::{
+    belongs_to_the_scene, depth_param, entity_from_params, invalid_params, is_scene_descendant,
+    root_param,
 };
 
 /// Tolerance an assertion uses when the caller names none, in metres.
@@ -152,7 +152,7 @@ impl NodeFilter {
     fn matched_by(mut self, world: &mut World) -> Result<Self, BrpError> {
         if let Some(reference) = &self.reference {
             self.matched = Some(
-                super::server::reference_matches(world, reference)?
+                super::reference_matches(world, reference)?
                     .into_iter()
                     .collect(),
             );
@@ -199,8 +199,7 @@ struct SummarySnapshot {
 /// The open scene as compact rows. `fields` picks the columns after `id`;
 /// `root`, `depth` and `filter` narrow the nodes; `since_revision` answers
 /// with only the rows added, changed and removed since that summary.
-pub fn scene_summary_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    check_enabled(world)?;
+pub fn scene_summary(params: Option<Value>, world: &mut World) -> BrpResult {
     let params = params.unwrap_or(Value::Null);
     let fields = fields_from_params(params.get("fields"))?;
     let filter = NodeFilter::from_params(world, params.get("filter"))?;
@@ -344,7 +343,7 @@ fn scene_nodes(world: &mut World, root: Option<Entity>, depth: u32) -> Vec<Entit
             .filter(|entity| belongs_to_the_scene(world, *entity))
             .collect(),
         None => {
-            let mut roots = super::server::scene_roots(world);
+            let mut roots = super::scene_roots(world);
             roots.sort();
             roots
         }
@@ -527,7 +526,7 @@ fn brush_counts(world: &World, entity: Entity) -> Option<(usize, usize)> {
 /// The world-space box around a node and everything under it: a brush's
 /// evaluated corners through its transform, or the culling bounds of a mesh.
 /// `None` when nothing in the subtree has either.
-pub(super) fn world_bounds(world: &World, entity: Entity) -> Option<(Vec3, Vec3)> {
+pub fn world_bounds(world: &World, entity: Entity) -> Option<(Vec3, Vec3)> {
     crate::view_ops::subtree_bounds(
         entity,
         |at| {
@@ -602,12 +601,12 @@ fn material(world: &World, entity: Entity) -> Value {
     }
 }
 
-pub(super) fn round(value: f32) -> Value {
+pub fn round(value: f32) -> Value {
     let rounded = (f64::from(value) * 1000.0).round() / 1000.0;
     json!(if rounded == 0.0 { 0.0 } else { rounded })
 }
 
-pub(super) fn vector(value: Vec3) -> Value {
+pub fn vector(value: Vec3) -> Value {
     json!([round(value.x), round(value.y), round(value.z)])
 }
 
@@ -615,8 +614,7 @@ pub(super) fn vector(value: Vec3) -> Value {
 /// pass or fail with the value it measured. An assertion naming no node, or
 /// malformed, refuses the whole call; one that cannot measure what it names
 /// fails alone with a `reason`.
-pub fn check_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    check_enabled(world)?;
+pub fn check(params: Option<Value>, world: &mut World) -> BrpResult {
     let params = params.unwrap_or(Value::Null);
     let assertions = params
         .get("assertions")

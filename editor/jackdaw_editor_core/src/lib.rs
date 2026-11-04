@@ -114,6 +114,7 @@ pub mod native_dialog;
 pub mod new_project;
 pub(crate) mod node_ops;
 pub mod numeric_transform;
+pub mod operator_calls;
 pub mod operator_tooltip;
 pub mod perf_probe;
 pub mod pie;
@@ -140,7 +141,7 @@ pub mod project_window;
 pub mod recipes;
 pub mod reference_image;
 pub mod reflect_default;
-pub mod remote;
+pub mod remote_mode;
 pub mod remote_ops;
 pub mod render_diagnostics;
 pub mod restart;
@@ -174,7 +175,7 @@ pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
 pub mod tile_mode;
-pub(crate) mod timestamps;
+pub mod timestamps;
 pub mod tool_ops;
 pub mod toolbar_2d;
 pub mod toolbar_overflow;
@@ -522,8 +523,6 @@ impl Plugin for EditorCorePlugin {
             screenshot::plugin,
             reference_image::ReferenceImagePlugin,
             jackdaw_widgets::RadialMenuPlugin,
-            remote::RemoteConnectionPlugin,
-            remote::debug::RemoteDebugPlugin,
             camera_settings::plugin,
         ))
         .add_plugins((

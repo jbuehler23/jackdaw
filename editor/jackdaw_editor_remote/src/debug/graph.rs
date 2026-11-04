@@ -153,7 +153,8 @@ pub fn force_layout(node_count: usize, edges: &[(usize, usize)], iterations: usi
 
 // --------------------------- Edge material ---------------------------
 
-const SHADER_GRAPH_EDGE_PATH: &str = "embedded://jackdaw/remote/debug/shaders/graph_edge.wesl";
+const SHADER_GRAPH_EDGE_PATH: &str =
+    "embedded://jackdaw_editor_remote/debug/shaders/graph_edge.wesl";
 
 /// GPU material for one graph edge wire: a copy of
 /// `jackdaw_node_graph::materials::ConnectionMaterial`. Not reused directly:

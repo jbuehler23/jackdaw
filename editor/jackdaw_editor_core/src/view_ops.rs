@@ -300,7 +300,7 @@ fn read_int_param(params: &OperatorParameters, name: &str) -> Option<i64> {
 /// Where the active viewport camera stood, so a caller that aims it for one
 /// shot can put it back.
 #[derive(Clone)]
-pub(crate) struct CameraPose {
+pub struct CameraPose {
     camera: Entity,
     transform: Transform,
     projection: Projection,
@@ -309,7 +309,7 @@ pub(crate) struct CameraPose {
 
 impl CameraPose {
     /// The pose of the camera `view.look_at` would move, if there is one.
-    pub(crate) fn of_active(world: &mut World) -> Option<Self> {
+    pub fn of_active(world: &mut World) -> Option<Self> {
         let camera = world
             .run_system_cached(
                 |active: Res<ActiveViewport>, cameras: Query<Entity, With<MainViewportCamera>>| {
@@ -327,14 +327,14 @@ impl CameraPose {
     }
 
     /// Whether the camera still stands exactly here.
-    pub(crate) fn is_current(&self, world: &World) -> bool {
+    pub fn is_current(&self, world: &World) -> bool {
         world
             .get::<Transform>(self.camera)
             .is_some_and(|transform| *transform == self.transform)
     }
 
     /// Put the camera back where it stood.
-    pub(crate) fn restore(self, world: &mut World) {
+    pub fn restore(self, world: &mut World) {
         let Ok(mut camera) = world.get_entity_mut(self.camera) else {
             return;
         };

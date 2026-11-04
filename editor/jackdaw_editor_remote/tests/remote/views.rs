@@ -8,11 +8,11 @@ use bevy::image::ToExtents as _;
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use jackdaw::project::{ProjectConfig, ProjectRoot};
-use jackdaw::remote::server::{call_operator_handler, views_handler};
-use jackdaw::viewport::MainViewportCamera;
-use jackdaw::views::ViewTile;
 use jackdaw_api_internal::operator::OperatorWorldExt as _;
+use jackdaw_editor_core::project::{ProjectConfig, ProjectRoot};
+use jackdaw_editor_core::viewport::MainViewportCamera;
+use jackdaw_editor_core::views::ViewTile;
+use jackdaw_editor_remote::server::{call_operator_handler, views_handler};
 use serde_json::{Value, json};
 
 use crate::util;
@@ -44,7 +44,7 @@ pub(super) fn editor_for_views() -> (App, Entity, tempfile::TempDir) {
         ))
         .id();
     app.world_mut()
-        .resource_mut::<jackdaw::viewport::ActiveViewport>()
+        .resource_mut::<jackdaw_editor_core::viewport::ActiveViewport>()
         .camera = Some(camera);
     app.update();
     (app, camera, dir)
@@ -246,7 +246,7 @@ fn isolated_views_frame_only_their_targets() {
     let lamp = app.world_mut().spawn(PointLight::default()).id();
     let stage_lamp = app
         .world_mut()
-        .spawn((jackdaw::EditorEntity, PointLight::default()))
+        .spawn((jackdaw_editor_core::EditorEntity, PointLight::default()))
         .id();
     let lantern_layers = RenderLayers::from_layers(&[0, 20]);
     let lantern = app
@@ -535,7 +535,7 @@ fn one_views_request_renders_at_a_time() {
 /// warns it may be blank.
 #[test]
 fn views_wait_for_the_renderer_and_warn_when_it_never_finishes() {
-    use jackdaw::camera_capture::{PendingCapture, PipelinesPending, READY_CAP_FRAMES};
+    use jackdaw_editor_core::camera_capture::{PendingCapture, PipelinesPending, READY_CAP_FRAMES};
 
     let (mut app, _camera, _project) = editor_for_views();
     add_cube(&mut app, "Crate", [1.0, 1.0, 1.0], [0.0, 0.5, 0.0]);

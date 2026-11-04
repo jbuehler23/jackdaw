@@ -732,7 +732,7 @@ fn carded_components(
     carded
 }
 
-pub(crate) fn build_inspector_displays(
+pub fn build_inspector_displays(
     commands: &mut Commands,
     components: &Components,
     type_registry: &Res<AppTypeRegistry>,
@@ -1497,7 +1497,7 @@ pub(crate) use jackdaw_feathers::panel_card::DisclosureSection;
 /// Inputs to [`spawn_component_display`]. Bundled into a single
 /// struct so the call site is readable as a struct literal instead of
 /// a long positional argument list.
-pub(crate) struct ComponentDisplaySpec<'a> {
+pub struct ComponentDisplaySpec<'a> {
     pub name: &'a str,
     pub type_path: &'a str,
     pub entity: Entity,
@@ -1530,7 +1530,7 @@ const TITLE_ROW_BASIS: f32 = 96.0;
 /// Entities spawned by [`spawn_component_display`]. `section` is the card
 /// root; `body` is where field widgets go; `type_settings` sits between
 /// header and body so type-settings chrome can span the header width.
-pub(crate) struct ComponentDisplayCard {
+pub struct ComponentDisplayCard {
     pub section: Entity,
     pub body: Entity,
     pub header: Entity,
@@ -1539,7 +1539,7 @@ pub(crate) struct ComponentDisplayCard {
     pub type_settings: Entity,
 }
 
-pub(crate) fn spawn_component_display(
+pub fn spawn_component_display(
     commands: &mut Commands,
     spec: ComponentDisplaySpec<'_>,
 ) -> ComponentDisplayCard {

@@ -21,7 +21,7 @@ use jackdaw_feathers::{
 use crate::commands::FieldWritten;
 use crate::image_sampling::{ImageSetSamplingOp, ProjectSampling2d, Sampling, sampling_target};
 use crate::operator_tooltip::OperatorTooltip;
-use crate::remote::entity_browser::RemoteEntityProxy;
+use crate::remote_mode::RemoteEntityProxy;
 use crate::sprite_props::{
     ANCHOR_PRESETS, SpriteSetAnchorOp, SpriteSetPixelsPerUnitOp, SpriteYSortOp, SpriteZDownOp,
     SpriteZUpOp,

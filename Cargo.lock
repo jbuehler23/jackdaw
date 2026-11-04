@@ -4207,6 +4207,7 @@ dependencies = [
  "jackdaw_commands",
  "jackdaw_editor_core",
  "jackdaw_editor_modelling",
+ "jackdaw_editor_remote",
  "jackdaw_editor_terrain",
  "jackdaw_editor_tile",
  "jackdaw_env",
@@ -4498,6 +4499,38 @@ dependencies = [
  "jackdaw_select",
  "jackdaw_uv",
  "jackdaw_widgets",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "jackdaw_editor_remote"
+version = "0.21.0-dev"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "base64 0.22.1",
+ "bevy",
+ "image",
+ "jackdaw_api",
+ "jackdaw_api_internal",
+ "jackdaw_bsn",
+ "jackdaw_commands",
+ "jackdaw_editor_core",
+ "jackdaw_env",
+ "jackdaw_feathers",
+ "jackdaw_geometry",
+ "jackdaw_panels",
+ "jackdaw_pie_protocol",
+ "jackdaw_prefab",
+ "jackdaw_remote",
+ "jackdaw_runtime",
+ "jackdaw_scene_types",
+ "jackdaw_select",
+ "jackdaw_terrain",
+ "jackdaw_widgets",
+ "path-slash",
+ "serde",
  "serde_json",
  "tempfile",
 ]

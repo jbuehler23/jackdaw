@@ -119,7 +119,7 @@ pub(crate) struct AssetFieldReader(pub(crate) Box<dyn Fn(&World) -> Option<Strin
 
 /// The picker a row's Pick opened, so its choice reaches the row that asked.
 #[derive(Component)]
-pub(crate) struct AssetFieldPicker(pub(crate) Entity);
+pub struct AssetFieldPicker(pub Entity);
 
 /// A row that has not yet drawn what its field names, because the value could
 /// not be read when the row was built.

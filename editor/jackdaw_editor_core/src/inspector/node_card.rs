@@ -815,8 +815,7 @@ fn build_node_card(
 // ---------------------------------------------------------------------------
 
 /// The read-only entities every write path on the card has to check for.
-type RemoteProxies<'w, 's> =
-    Query<'w, 's, (), With<crate::remote::entity_browser::RemoteEntityProxy>>;
+type RemoteProxies<'w, 's> = Query<'w, 's, (), With<crate::remote_mode::RemoteEntityProxy>>;
 
 /// True when an edit must be dropped: the row lost its binding, or it points
 /// at a read-only remote proxy.

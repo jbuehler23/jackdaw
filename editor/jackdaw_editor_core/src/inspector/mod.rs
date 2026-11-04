@@ -1,11 +1,11 @@
 pub(crate) mod add_header;
 pub(crate) mod anim_diamond;
 mod animation_graph_card;
-pub(crate) mod asset_row;
+pub mod asset_row;
 pub mod bindings_card;
 mod brush_display;
 pub(crate) mod category_strip;
-pub(crate) mod component_display;
+pub mod component_display;
 pub mod component_picker;
 pub(crate) mod component_tooltip;
 mod custom_props_display;
@@ -19,7 +19,7 @@ mod modifier_display;
 pub mod node_card;
 pub(crate) mod ops;
 mod pixel_canvas_card;
-mod prefab_field_dots;
+pub mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
 pub mod recipe_card;
@@ -27,7 +27,7 @@ pub mod recipe_card;
 pub mod reflect_fields;
 pub(crate) mod schema_fields;
 pub mod sprite_card;
-pub(crate) mod type_metadata_pane;
+pub mod type_metadata_pane;
 pub mod unavailable;
 pub mod val_field;
 
@@ -381,7 +381,7 @@ pub(crate) struct ComponentDisplayTypePath(pub(crate) String);
 
 /// Marker for a group section (the `CollapsibleSection` that wraps a group header + body).
 #[derive(Component)]
-pub(super) struct InspectorGroupSection;
+pub struct InspectorGroupSection;
 
 /// Tracks which inspector field entity maps to which source entity + component + field path.
 #[derive(Component)]

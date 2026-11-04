@@ -31,10 +31,10 @@ use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_scene_types::{PropertyValue, RecipeInstance, SceneNodeId};
 use serde_json::json;
 
+use super::run::call_inside;
 use super::{RECIPE_EXTENSION, Recipe, RecipeCall, display_name, recipe_file_text, refuse};
 use crate::commands::SpawnedEntities;
 use crate::document_units::{UnitKey, Units};
-use crate::remote::recipe_run::call_inside;
 
 /// A recording under way.
 #[derive(Resource, Default)]

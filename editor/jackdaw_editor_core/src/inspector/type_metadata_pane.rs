@@ -63,7 +63,7 @@ pub(super) fn plugin(app: &mut App) {
     );
 }
 
-pub(crate) fn spawn_type_metadata_ui(
+pub fn spawn_type_metadata_ui(
     commands: &mut Commands,
     card: &ComponentDisplayCard,
     type_path: &str,

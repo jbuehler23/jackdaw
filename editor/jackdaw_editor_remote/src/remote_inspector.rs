@@ -19,7 +19,7 @@ use serde::de::DeserializeSeed;
 use super::entity_browser::{
     RemoteEntityProxy, RemoteProxyIndex, RemoteSceneCache, RemoteSelection,
 };
-use crate::inspector::{ComponentDisplay, InspectorGroupSection, component_display};
+use jackdaw_editor_core::inspector::{ComponentDisplay, InspectorGroupSection, component_display};
 
 /// Marker for the remote inspector panel (distinct from `Inspector` to avoid `Single<>` conflict).
 #[derive(Component)]
@@ -211,10 +211,10 @@ pub(crate) fn build_remote_inspector_displays(
     inspector_query: Query<(Entity, &RemoteInspectorNeedsRebuild), With<RemoteInspector>>,
     entity_query: Query<(&Archetype, EntityRef)>,
     materials: Res<Assets<StandardMaterial>>,
-    collapse_state: Res<crate::inspector::InspectorCollapseState>,
-    type_metadata: Res<crate::type_metadata::TypeMetadata>,
-    project_types: Res<crate::project_types::ProjectTypes>,
-    cards: Res<crate::inspector::ComponentCardRegistry>,
+    collapse_state: Res<jackdaw_editor_core::inspector::InspectorCollapseState>,
+    type_metadata: Res<jackdaw_editor_core::type_metadata::TypeMetadata>,
+    project_types: Res<jackdaw_editor_core::project_types::ProjectTypes>,
+    cards: Res<jackdaw_editor_core::inspector::ComponentCardRegistry>,
 ) {
     let Ok((inspector_entity, rebuild)) = inspector_query.single() else {
         return;
@@ -283,10 +283,10 @@ pub(crate) fn spawn_fallback_section(
     fallback_components: &[(String, serde_json::Value)],
     icon_font: &IconFont,
     editor_font: &EditorFont,
-    collapse_state: &crate::inspector::InspectorCollapseState,
+    collapse_state: &jackdaw_editor_core::inspector::InspectorCollapseState,
     type_registry: &bevy::reflect::TypeRegistry,
-    type_metadata: &crate::type_metadata::TypeMetadata,
-    project_types: &crate::project_types::ProjectTypes,
+    type_metadata: &jackdaw_editor_core::type_metadata::TypeMetadata,
+    project_types: &jackdaw_editor_core::project_types::ProjectTypes,
 ) {
     let section = commands
         .spawn((
@@ -389,7 +389,7 @@ pub(crate) fn spawn_fallback_section(
                 collapse_state,
             },
         );
-        crate::inspector::type_metadata_pane::spawn_type_metadata_ui(
+        jackdaw_editor_core::inspector::type_metadata_pane::spawn_type_metadata_ui(
             commands,
             &card,
             type_path,

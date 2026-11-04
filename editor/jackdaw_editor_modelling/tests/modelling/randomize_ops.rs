@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::selection::Selection;
 use jackdaw_editor_core::commands::CommandHistory;
-use jackdaw_editor_core::remote::server::call_operator_handler;
+use jackdaw_editor_core::operator_calls::call_operator as call_operator_handler;
 use jackdaw_scene_types::Brush;
 use serde_json::{Value, json};
 

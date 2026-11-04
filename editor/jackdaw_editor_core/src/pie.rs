@@ -195,7 +195,7 @@ impl PieSession {
 /// cargo build, `running` once a game process is up (a paused game
 /// included), `failed` when a launch's build did not compile, `stopped`
 /// otherwise.
-pub(crate) fn play_status(world: &World) -> &'static str {
+pub fn play_status(world: &World) -> &'static str {
     let session = world.get_non_send::<PieSession>();
     let playing = world
         .get_resource::<State<PlayState>>()

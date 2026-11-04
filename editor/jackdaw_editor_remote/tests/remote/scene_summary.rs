@@ -3,9 +3,9 @@
 //! reporting what it measured.
 
 use bevy::prelude::*;
-use jackdaw::remote::server::{call_operator_handler, check_handler, scene_summary_handler};
 use jackdaw_api_internal::operator::OperatorWorldExt as _;
 use jackdaw_commands::CommandHistory;
+use jackdaw_editor_remote::server::{call_operator_handler, check_handler, scene_summary_handler};
 use jackdaw_scene_types::Brush;
 use serde_json::{Value, json};
 
@@ -99,7 +99,7 @@ fn summary_scene_with_ground() -> App {
     }
     let mut store = app
         .world_mut()
-        .resource_mut::<jackdaw::terrain_mode::TerrainDataStore>();
+        .get_resource_or_init::<jackdaw_editor_core::terrain_mode::TerrainDataStore>();
     store.insert(data_path, document);
     store.set_grid(data_path, jackdaw_terrain::sidecar::GridGeometry::DEFAULT);
     app.world_mut()
@@ -457,7 +457,7 @@ fn add_group(app: &mut App, name: &str, at: Vec3) -> Entity {
             Visibility::default(),
         ))
         .id();
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+    jackdaw_editor_core::scene_io::register_entity_in_ast(app.world_mut(), entity);
     app.update();
     entity
 }
