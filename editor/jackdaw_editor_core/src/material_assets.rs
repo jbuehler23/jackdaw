@@ -488,8 +488,9 @@ pub fn write_edited_materials(world: &mut World) {
             warn!("Material '{name}' has no valid file name; it is not written out");
             continue;
         }
-        if let Err(err) = write_material_file(world, &name, &handle) {
-            warn!("Failed to write material '{name}': {err}");
+        match write_material_file(world, &name, &handle) {
+            Ok(file) => crate::asset_index::note_written(world, &file),
+            Err(err) => warn!("Failed to write material '{name}': {err}"),
         }
     }
 }
