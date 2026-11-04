@@ -272,7 +272,8 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         }
         jackdaw_prefab::absolutize_isa_sources(&mut authored, &assets_root, &parent_path);
         if !crate::scenes::operators::document_is_prefab(&authored) {
-            crate::scene_nodes::name_instance_roots(&mut authored);
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            crate::scene_nodes::name_scene_nodes(&mut authored, &registry.read());
         }
 
         // A legacy scene's prefabs may be legacy too, and the cache reads

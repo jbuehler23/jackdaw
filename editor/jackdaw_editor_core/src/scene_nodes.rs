@@ -164,23 +164,27 @@ pub fn rename_node(world: &mut World, entity: Entity, node: SceneNodeId) {
     world.entity_mut(entity).insert(node);
 }
 
-/// Give every prefab instance root in `ast` that has no node id a fresh one.
+/// Give every entity node in `ast` that the scene owns and that has no node id
+/// a fresh one, so a hand-written or older scene names each node the way the
+/// editor and a running game address it. Named asset roots spawn no entity and
+/// are left alone.
 ///
-/// The nodes inside an instance take their ids from the prefab file; the root
-/// is the scene's own node, and a scene saved before roots were named has none.
-pub fn name_instance_roots(ast: &mut SceneBsnAst) {
-    let mut stack = ast.roots.clone();
+/// The nodes inside a prefab instance carry a `PrefabEntityId` and take their
+/// ids from the prefab file, so they are left as they are. An instance root
+/// carries one too, but it is the scene's own node.
+pub fn name_scene_nodes(ast: &mut SceneBsnAst, registry: &bevy::reflect::TypeRegistry) {
+    let mut stack = jackdaw_bsn::catalog::entity_roots(ast, registry);
     let mut seen = HashSet::new();
     let mut unnamed = Vec::new();
     while let Some(node) = stack.pop() {
         if !seen.insert(node) {
             continue;
         }
-        if ast
+        let instance_root = ast
             .find_patch_by_type_path(node, crate::prefab::resolver_bsn::ISA_TYPE)
-            .is_some()
-            && ast.stable_id_of(node).is_none()
-        {
+            .is_some();
+        let from_prefab = crate::prefab::overrides_bsn::is_inside_prefab_instance(ast, node);
+        if ast.stable_id_of(node).is_none() && (instance_root || !from_prefab) {
             unnamed.push(node);
         }
         stack.extend(ast.get_children_ast(node));

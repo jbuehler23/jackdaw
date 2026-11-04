@@ -301,9 +301,18 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     }
 
     let pending = super::hooks::begin_save(world, &path);
+    world.remove_resource::<FileAssetNames>();
     let written = write_scene_files(world, &path, legacy_backup.as_deref(), &pending);
     super::hooks::finish_save(world, pending, written.is_ok());
     written?;
+    let named = world
+        .remove_resource::<FileAssetNames>()
+        .map(|names| names.0)
+        .unwrap_or_default();
+    world
+        .get_resource_or_init::<SavedAssetNames>()
+        .0
+        .insert(path.clone(), named);
 
     world.trigger(jackdaw_api_internal::document::SceneSaved {
         path: PathBuf::from(&path),
@@ -471,13 +480,40 @@ pub fn save_layout_to_project(world: &mut World) {
     }
 }
 
+/// The `#Name`s the last save of each scene file gave the pathless runtime
+/// assets its document uses, by the file's path. The live document does not
+/// carry them, so the play sync reads them here to name those assets the way
+/// the file the game loaded does.
+#[derive(Resource, Default)]
+pub(crate) struct SavedAssetNames(
+    HashMap<String, bevy::platform::collections::HashMap<UntypedAssetId, String>>,
+);
+
+/// The names the latest document authored for a file gave its runtime assets,
+/// taken by the save that wrote it.
+#[derive(Resource)]
+struct FileAssetNames(bevy::platform::collections::HashMap<UntypedAssetId, String>);
+
+/// The names [`SavedAssetNames`] holds for the scene file open now.
+pub(crate) fn saved_asset_names(world: &World) -> impl Iterator<Item = (&UntypedAssetId, &String)> {
+    let path = world
+        .get_resource::<SceneFilePath>()
+        .and_then(|scene| scene.path.as_deref());
+    world
+        .get_resource::<SavedAssetNames>()
+        .zip(path)
+        .and_then(|(saved, path)| saved.0.get(path))
+        .into_iter()
+        .flatten()
+}
+
 /// What each loaded asset is referenced by when a document emits a handle to
 /// it: the path of the file the index holds it under, else the `#Name` the
 /// open document embeds it as, else the name the catalog resolves.
 ///
 /// An unsaved material is left out so it embeds inline: a name for it would
 /// resolve nowhere outside this editor run.
-fn asset_reference_seed(
+pub(crate) fn asset_reference_seed(
     world: &World,
 ) -> bevy::platform::collections::HashMap<UntypedAssetId, String> {
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =
@@ -1078,6 +1114,17 @@ fn author(
     }
 
     normalize_runtime_derived_values(world, &mut ast);
+    if spelling == SourceSpelling::RelativeToFile {
+        let named = pass
+            .refs
+            .iter()
+            .filter_map(|asset| {
+                let name = pass.names.get(&asset.asset_id)?;
+                Some((asset.asset_id, name.clone()))
+            })
+            .collect();
+        world.insert_resource(FileAssetNames(named));
+    }
     AuthoredDocument {
         ast,
         names_new_assets: !pass.refs.is_empty(),
