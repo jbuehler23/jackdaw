@@ -31,7 +31,7 @@ static ISOLATED: LazyLock<PathBuf> = LazyLock::new(|| {
     // written again.
     unsafe {
         std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, &dir);
-        std::env::set_var(jackdaw_editor_core::pie::ENV_PIE_PREBUILD, "0");
+        std::env::set_var(jackdaw_editor_core::project_build::ENV_PIE_PREBUILD, "0");
     }
     dir
 });
