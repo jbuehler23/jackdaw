@@ -80,7 +80,7 @@ const ARCHIVED_DYLIBS: &str = "target/debug/archived-dylibs";
 
 /// The editor crates build at opt-level 0 here: its build takes about half as
 /// long, which outweighs the slower test run.
-const ARCHIVE_BUILD: [&str; 11] = [
+const ARCHIVE_BUILD: &[&str] = &[
     "--locked",
     "--workspace",
     "--features",
