@@ -750,7 +750,8 @@ pub fn index_written(
 }
 
 /// Record that a file was written, so the next scan does not read back what
-/// the editor itself just wrote.
+/// the editor itself just wrote. Counts as a write of the index, so a walk
+/// already out, which may have seen the file before this write, is not applied.
 pub fn note_written(world: &mut World, path: &Path) {
     let Some(relative) = indexed_path(world, path) else {
         return;
@@ -758,8 +759,10 @@ pub fn note_written(world: &mut World, path: &Path) {
     let Ok(mtime) = std::fs::metadata(path).and_then(|meta| meta.modified()) else {
         return;
     };
-    if let Some(entry) = world.resource_mut::<AssetIndex>().get_mut(&relative) {
+    let mut index = world.resource_mut::<AssetIndex>();
+    if let Some(entry) = index.get_mut(&relative) {
         entry.mtime = mtime;
+        index.writes += 1;
     }
 }
 
