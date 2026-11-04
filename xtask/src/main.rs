@@ -98,6 +98,8 @@ const ARCHIVE_BUILD: [&str; 11] = [
     "profile.dev.package.jackdaw_editor_modelling.opt-level=0",
     "--config",
     "profile.dev.package.jackdaw_editor_remote.opt-level=0",
+    "--config",
+    "profile.dev.package.jackdaw_editor_animation.opt-level=0",
 ];
 
 /// Build every test binary the integration tier runs, including library unit

@@ -10,7 +10,7 @@ use super::asset_fields::AbsoluteAssetField;
 use super::load::SceneDialogTask;
 use super::{SceneDirtyState, SceneFilePath, doc_skip_type_ids, should_skip_component};
 
-pub(crate) use jackdaw_api_internal::document::write_atomic;
+pub use jackdaw_api_internal::document::write_atomic;
 
 /// Write the model settings and prefabs edited along with the scene, and say
 /// which files the save wrote.

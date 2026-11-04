@@ -30,13 +30,13 @@ fn call(app: &mut App, id: &'static str, params: &[(&'static str, PropertyValue)
 fn editor_on_the_test_project() -> App {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .insert_resource(jackdaw::project::ProjectRoot {
-            root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        .insert_resource(jackdaw_editor_core::project::ProjectRoot {
+            root: util::workspace_root(),
             config: default(),
         });
     app.world_mut()
-        .resource_mut::<NextState<jackdaw::AppState>>()
-        .set(jackdaw::AppState::Editor);
+        .resource_mut::<NextState<jackdaw_editor_core::AppState>>()
+        .set(jackdaw_editor_core::AppState::Editor);
     app
 }
 
@@ -58,8 +58,8 @@ fn entity_with_a_clip(app: &mut App) -> Entity {
         .world_mut()
         .spawn((Name::new("Cube"), Transform::default()))
         .id();
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), target);
-    jackdaw::selection::select_only(app.world_mut(), target);
+    jackdaw_editor_core::scene_io::register_entity_in_ast(app.world_mut(), target);
+    jackdaw_editor_core::selection::select_only(app.world_mut(), target);
     app.update();
     call(
         app,
@@ -215,11 +215,24 @@ fn stopping_the_preview_takes_the_imported_clip_off_the_timeline() {
     );
 }
 
+fn is_under(world: &World, mut entity: Entity, ancestor: Entity) -> bool {
+    while let Some(parent) = world.get::<ChildOf>(entity) {
+        entity = parent.parent();
+        if entity == ancestor {
+            return true;
+        }
+    }
+    false
+}
+
 #[test]
 fn every_timeline_action_has_an_operator() {
     let mut app = editor_on_the_test_project();
     entity_with_a_clip(&mut app);
-    app.world_mut().spawn(jackdaw_animation::timeline_panel());
+    let panel = app
+        .world_mut()
+        .spawn(jackdaw_animation::timeline_panel())
+        .id();
     app.world_mut().resource_mut::<TimelineDirty>().0 = true;
     app.update();
     app.update();
@@ -234,9 +247,10 @@ fn every_timeline_action_has_an_operator() {
     // What the tab's buttons carry, which is what a click dispatches.
     let mut dispatched: Vec<String> = app
         .world_mut()
-        .query::<&ButtonOperatorCall>()
+        .query::<(Entity, &ButtonOperatorCall)>()
         .iter(app.world())
-        .map(|call| call.id.to_string())
+        .filter(|(button, _)| is_under(app.world(), *button, panel))
+        .map(|(_, call)| call.id.to_string())
         .collect();
     dispatched.sort();
     dispatched.dedup();

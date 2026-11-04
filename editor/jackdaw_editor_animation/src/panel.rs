@@ -20,11 +20,11 @@ use jackdaw_feathers::{
     tokens,
 };
 
-use super::library::AnimationLibrary;
-use super::preview::{
+use crate::preview::{
     AnimationPreview, AnimationPreviewOp, AnimationPreviewPauseOp, AnimationPreviewStopOp,
 };
-use crate::selection::Selection;
+use jackdaw_editor_core::animation_mode::AnimationLibrary;
+use jackdaw_editor_core::selection::Selection;
 
 /// Width of the file column, wide enough for a nested asset path.
 const FILE_COLUMN_WIDTH: f32 = 220.0;
@@ -81,7 +81,7 @@ struct LibraryFileList;
 fn demand_project_walk(
     lists: Query<Entity, With<LibraryFileList>>,
     nodes: Query<(&Node, Option<&ChildOf>)>,
-    mut demand: ResMut<super::library::LibraryDemand>,
+    mut demand: ResMut<jackdaw_editor_core::animation_mode::LibraryDemand>,
 ) {
     let showing = lists.iter().any(|list| is_displayed(list, &nodes));
     if demand.panel != showing {
@@ -161,9 +161,9 @@ pub(crate) fn animation_panel_tab(
     };
     if *tab == AnimationPanelTab::Graph {
         commands.queue(|world: &mut World| {
-            crate::open_window_in_default_area_if_absent(
+            jackdaw_editor_core::open_window_in_default_area_if_absent(
                 world,
-                super::graph_window::GRAPH_WINDOW_ID,
+                crate::graph_window::GRAPH_WINDOW_ID,
             );
         });
     }
@@ -252,14 +252,19 @@ fn add_chosen_clip_as_state(world: &mut World) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let value = {
         let registry = registry.read();
-        crate::inspector::reflect_fields::reflect_to_json(&set, &registry)
+        jackdaw_editor_core::inspector::reflect_fields::reflect_to_json(&set, &registry)
     };
     let Some(value) = value else {
         warn!("animation.library.add_state: the set did not convert to a value to author");
         return;
     };
-    if !crate::commands::field_edit_commit_on(world, entity, AnimationSet::type_path(), "", &value)
-    {
+    if !jackdaw_editor_core::commands::field_edit_commit_on(
+        world,
+        entity,
+        AnimationSet::type_path(),
+        "",
+        &value,
+    ) {
         warn!("animation.library.add_state: the set refused the appended state");
     }
 }
@@ -793,7 +798,7 @@ fn spawn_graph_tab(commands: &mut Commands, body: Entity, state: &AnimationPanel
                 .with_variant(ButtonVariant::Default)
                 .with_left_icon(Icon::Plus),
         ),
-        ButtonOperatorCall::new(crate::animation::graph_ops::AnimationGraphNewOp::ID),
+        ButtonOperatorCall::new(crate::graph_ops::AnimationGraphNewOp::ID),
         ChildOf(toolbar),
     ));
     commands.spawn((
@@ -818,8 +823,8 @@ fn spawn_graph_tab(commands: &mut Commands, body: Entity, state: &AnimationPanel
 /// rather than every frame.
 fn update_graph_list(
     mut commands: Commands,
-    doc: Res<crate::animation::graph_doc::AnimationGraphDoc>,
-    index: Option<Res<crate::asset_index::AssetIndex>>,
+    doc: Res<crate::graph_doc::AnimationGraphDoc>,
+    index: Option<Res<jackdaw_editor_core::asset_index::AssetIndex>>,
     lists: Query<(Entity, Option<&Children>), With<AnimationGraphList>>,
     mut last: Local<Option<String>>,
 ) {
@@ -834,7 +839,9 @@ fn update_graph_list(
     *last = Some(open.clone());
 
     let mut files = index
-        .map(|index| index.paths_of_kind(crate::definition_assets::ANIMATION_GRAPH_KIND))
+        .map(|index| {
+            index.paths_of_kind(jackdaw_editor_core::definition_assets::ANIMATION_GRAPH_KIND)
+        })
         .unwrap_or_default();
     files.sort();
     for (list, children) in &lists {
@@ -860,7 +867,7 @@ fn update_graph_list(
                         .with_size(ButtonSize::MD)
                         .align_left(),
                 ),
-                ButtonOperatorCall::new(crate::animation::graph_ops::AnimationGraphOpenOp::ID)
+                ButtonOperatorCall::new(crate::graph_ops::AnimationGraphOpenOp::ID)
                     .with_param("path", path.clone()),
                 ChildOf(list),
             ));
@@ -956,7 +963,7 @@ pub(super) fn plugin(app: &mut App) {
                 drop_orphaned_panel_parts,
             )
                 .chain()
-                .run_if(in_state(crate::AppState::Editor)),
+                .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
         );
 }
 
@@ -966,7 +973,7 @@ mod tests {
 
     fn walk_demanded(tab_display: Display) -> bool {
         let mut app = App::new();
-        app.init_resource::<super::super::library::LibraryDemand>()
+        app.init_resource::<jackdaw_editor_core::animation_mode::LibraryDemand>()
             .add_systems(Update, demand_project_walk);
         let tab = app
             .world_mut()
@@ -979,7 +986,7 @@ mod tests {
             .spawn((LibraryFileList, Node::default(), ChildOf(tab)));
         app.update();
         app.world()
-            .resource::<super::super::library::LibraryDemand>()
+            .resource::<jackdaw_editor_core::animation_mode::LibraryDemand>()
             .panel
     }
 

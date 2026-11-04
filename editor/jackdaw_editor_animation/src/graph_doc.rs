@@ -23,7 +23,7 @@ use jackdaw_node_graph::{
     Connection, GraphCanvasView, GraphNode, NodeGraph, Terminal, TerminalDirection,
 };
 
-use crate::project::ProjectRoot;
+use jackdaw_editor_core::project::ProjectRoot;
 
 /// Directory a graph with no folder in mind is created in.
 pub const GRAPH_DIR: &str = "animation";
@@ -151,7 +151,7 @@ pub struct GraphCanvasPart;
 /// The file an assets-relative graph path names, refusing one that climbs out
 /// of the project.
 pub fn graph_file_path(project: &ProjectRoot, path: &str) -> Option<PathBuf> {
-    match crate::project::path_within(&project.assets_dir(), Path::new(path)) {
+    match jackdaw_editor_core::project::path_within(&project.assets_dir(), Path::new(path)) {
         Ok(file) => Some(file),
         Err(err) => {
             warn!("{err}");
@@ -191,10 +191,11 @@ pub fn sanitize_graph_name(name: &str) -> String {
 /// Every graph file the project holds, wherever it sits, as an assets-relative
 /// path, sorted.
 pub fn graph_files(world: &World) -> Vec<String> {
-    let Some(index) = world.get_resource::<crate::asset_index::AssetIndex>() else {
+    let Some(index) = world.get_resource::<jackdaw_editor_core::asset_index::AssetIndex>() else {
         return Vec::new();
     };
-    let mut paths = index.paths_of_kind(crate::definition_assets::ANIMATION_GRAPH_KIND);
+    let mut paths =
+        index.paths_of_kind(jackdaw_editor_core::definition_assets::ANIMATION_GRAPH_KIND);
     paths.sort();
     paths
 }
@@ -236,7 +237,7 @@ pub fn write_graph_file(world: &mut World) -> Option<PathBuf> {
     let text = {
         let registry = world.resource::<AppTypeRegistry>().read();
         let body = graph_to_bsn(&world.resource::<AnimationGraphDoc>().def, &registry);
-        crate::asset_files::asset_file_text(
+        jackdaw_editor_core::asset_files::asset_file_text(
             <AnimationGraphDef as bevy::reflect::TypePath>::type_path(),
             &body,
         )
@@ -258,7 +259,7 @@ pub fn write_graph_file(world: &mut World) -> Option<PathBuf> {
             return None;
         }
     };
-    if let Err(err) = crate::scene_io::save::write_atomic(&file, &bytes) {
+    if let Err(err) = jackdaw_editor_core::scene_io::save::write_atomic(&file, &bytes) {
         warn!("could not write {}: {err}", file.display());
         return None;
     }
@@ -315,7 +316,7 @@ fn spawn_graph_root(world: &mut World, path: &str) -> Entity {
             GraphCanvasView::default(),
             GraphCanvasPart,
             Name::new(format!("Animation Graph {path}")),
-            crate::EditorEntity,
+            jackdaw_editor_core::EditorEntity,
         ))
         .id()
 }
@@ -1002,6 +1003,14 @@ pub fn parameter<'a>(def: &'a AnimationGraphDef, name: &str) -> Option<&'a Anima
         .find(|parameter| parameter.name == name)
 }
 
+/// The edit a migration would write over in the open animation graph.
+pub(crate) fn unsaved_graph_edit(world: &World) -> Option<&'static str> {
+    world
+        .get_resource::<AnimationGraphDoc>()
+        .is_some_and(|doc| doc.dirty)
+        .then_some("the open animation graph has edits that are not saved")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,15 +1037,15 @@ mod tests {
         app.register_type::<AnimationGraphDef>();
         app.insert_resource(ProjectRoot {
             root: tmp.path().to_path_buf(),
-            config: crate::project::ProjectConfig::default(),
+            config: jackdaw_editor_core::project::ProjectConfig::default(),
         });
-        app.init_resource::<crate::asset_index::AssetIndex>();
-        app.init_resource::<crate::asset_files::AssetKindCache>();
+        app.init_resource::<jackdaw_editor_core::asset_index::AssetIndex>();
+        app.init_resource::<jackdaw_editor_core::asset_files::AssetKindCache>();
         app.init_resource::<jackdaw_api::prelude::AssetKinds>();
         app.world_mut()
             .resource_mut::<jackdaw_api::prelude::AssetKinds>()
             .register(jackdaw_api::prelude::AssetKind::compiled(
-                crate::definition_assets::ANIMATION_GRAPH_KIND,
+                jackdaw_editor_core::definition_assets::ANIMATION_GRAPH_KIND,
                 "Animation Graph",
                 <AnimationGraphDef as bevy::reflect::TypePath>::type_path(),
             ));
@@ -1048,7 +1057,7 @@ mod tests {
         )
         .expect("the file is written");
 
-        crate::asset_index::rescan_asset_index(app.world_mut());
+        jackdaw_editor_core::asset_index::rescan_asset_index(app.world_mut());
 
         assert_eq!(graph_files(app.world()), vec!["rigs/hero.bsn".to_string()]);
         let def = read_graph_file(app.world(), "rigs/hero.bsn").expect("the graph reads back");

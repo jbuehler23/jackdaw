@@ -228,9 +228,8 @@ pub(crate) fn decorate_prefab_field_rows(
         }
 
         // Absolutely-positioned wrapper so the dot anchors to the row's
-        // right edge without disturbing the row's flex layout. Same
-        // approach `anim_diamond::decorate_animatable_fields` uses for
-        // its corner button. The dot itself is the wrapper's only
+        // right edge without disturbing the row's flex layout, as the
+        // keyframe diamonds' corner button does. The dot itself is the wrapper's only
         // child; sharing the wrapper keeps a single entity-level click
         // observer driving the revert.
         let wrapper = commands

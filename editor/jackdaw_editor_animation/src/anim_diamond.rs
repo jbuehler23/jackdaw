@@ -14,8 +14,8 @@ use jackdaw_animation::{
 use jackdaw_feathers::button::{ButtonClickEvent, ButtonProps, ButtonSize, ButtonVariant, button};
 use jackdaw_feathers::icons::Icon;
 
-use super::InspectorFieldRow;
-use crate::prelude::*;
+use jackdaw_editor_core::inspector::InspectorFieldRow;
+use jackdaw_editor_core::prelude::*;
 
 /// Epsilon for "is the cursor on this keyframe?" (~1 frame at 60fps).
 const CURSOR_ON_KEYFRAME_EPS: f32 = 0.02;
@@ -119,7 +119,7 @@ pub fn on_diamond_click(
         return;
     };
     commands
-        .operator(super::ops::AnimationToggleKeyframeOp::ID)
+        .operator(crate::keyframe_ops::AnimationToggleKeyframeOp::ID)
         .param("entity", button_ref.source_entity)
         .param(
             "component_type_path",

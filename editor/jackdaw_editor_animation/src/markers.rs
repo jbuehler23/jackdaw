@@ -13,8 +13,8 @@ use jackdaw_animation::{
 };
 use jackdaw_animation_runtime::{AnimationEvent, ClipPass, ClipPlayhead, stands_for_clip};
 
-use super::preview::AnimationPreview;
-use crate::status_bar::StatusNotice;
+use crate::preview::AnimationPreview;
+use jackdaw_editor_core::status_bar::StatusNotice;
 
 /// The clip-event row the Timeline is driving, so a fired event can be traced
 /// back to the marker that stands for it.
@@ -182,12 +182,12 @@ pub(super) fn plugin(app: &mut App) {
         (
             write_shown_clip_playhead
                 .after(jackdaw_animation::sync_cursor_from_player)
-                .after(super::preview::drive_preview_player)
+                .after(crate::preview::drive_preview_player)
                 .after(jackdaw_animation_runtime::write_clip_playheads)
                 .before(jackdaw_animation_runtime::fire_clip_events),
             report_fired_clip_events.after(jackdaw_animation_runtime::fire_clip_events),
         )
-            .run_if(in_state(crate::AppState::Editor)),
+            .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
     );
 }
 

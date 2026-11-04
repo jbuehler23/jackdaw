@@ -5,14 +5,13 @@ use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_feathers::{
     button::ButtonOperatorCall,
     picker::{DismissPickerEvent, Picker},
 };
-use jackdaw_input::{ActionOf, Condition, InputContext, actions, bindings};
+use jackdaw_input::{Condition, InputContext, actions, bindings};
 use jackdaw_scene_types::PropertyValue;
 
 use crate::selection::Selection;
@@ -184,54 +183,6 @@ impl JackdawExtension for JackdawCoreExtension {
             .register_operator::<crate::MenuHoverOp>()
             .register_operator::<crate::ProjectOpenRecentOp>()
             .register_operator::<crate::PreviewSetOp>();
-        ctx.register_operator::<crate::ClipDeleteKeyframesOp>()
-            .register_operator::<crate::ClipTimelineStepLeftOp>()
-            .register_operator::<crate::ClipTimelineStepRightOp>()
-            .register_operator::<crate::ClipTimelineJumpPrevOp>()
-            .register_operator::<crate::ClipTimelineJumpNextOp>()
-            .register_operator::<crate::ClipTimelineJumpStartOp>()
-            .register_operator::<crate::ClipTimelineJumpEndOp>()
-            .register_operator::<crate::ClipCopyKeyframesOp>()
-            .register_operator::<crate::ClipPasteKeyframesOp>()
-            .register_operator::<crate::ClipPlayOp>()
-            .register_operator::<crate::ClipPauseOp>()
-            .register_operator::<crate::ClipStopOp>()
-            .register_operator::<crate::ClipNewOp>()
-            .register_operator::<crate::ClipNewBlendGraphOp>();
-        let core_ext = ctx.id();
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipDeleteKeyframesOp>([
-            PresetInput::key("Delete"),
-            PresetInput::key("Backspace"),
-        ]);
-        // No press condition on Step Left / Right: deferred (hold-to-repeat, not a bare press).
-        ctx.spawn((
-            OperatorAction(crate::ClipTimelineStepLeftOp::ID),
-            ActionOf(core_ext),
-            bindings![KeyCode::ArrowLeft],
-        ));
-        ctx.spawn((
-            OperatorAction(crate::ClipTimelineStepRightOp::ID),
-            ActionOf(core_ext),
-            bindings![KeyCode::ArrowRight],
-        ));
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpPrevOp>([
-            PresetInput::key("ArrowLeft").shift(),
-        ]);
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpNextOp>([
-            PresetInput::key("ArrowRight").shift(),
-        ]);
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpStartOp>([
-            PresetInput::key("Home"),
-        ]);
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipTimelineJumpEndOp>([
-            PresetInput::key("End"),
-        ]);
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipCopyKeyframesOp>([
-            PresetInput::key("KeyC").ctrl_or_super(),
-        ]);
-        ctx.bind_operator::<CoreExtensionInputContext, crate::ClipPasteKeyframesOp>([
-            PresetInput::key("KeyV").ctrl_or_super(),
-        ]);
         crate::draw_brush::add_to_extension(ctx);
 
         crate::scene_ops::add_to_extension(ctx);
@@ -269,7 +220,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::pie::add_to_extension(ctx);
         crate::play_settings::add_to_extension(ctx);
         crate::project_modules::add_to_extension(ctx);
-        crate::animation::add_to_extension(ctx);
         crate::texture_files::add_to_extension(ctx);
         crate::lod_group::add_to_extension(ctx);
         crate::model_lod::add_to_extension(ctx);

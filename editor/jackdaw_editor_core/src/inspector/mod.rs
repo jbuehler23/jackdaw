@@ -1,6 +1,4 @@
 pub(crate) mod add_header;
-pub(crate) mod anim_diamond;
-mod animation_graph_card;
 pub mod asset_row;
 pub mod bindings_card;
 mod brush_display;
@@ -45,17 +43,35 @@ pub type ComponentCardFill = fn(&mut World, Entity, Entity);
 /// Component cards a feature supplies for its own components, keyed by the
 /// component's type. A registered card replaces the reflected fields.
 #[derive(Resource, Default)]
-pub struct ComponentCardRegistry(std::collections::HashMap<std::any::TypeId, ComponentCardFill>);
+pub struct ComponentCardRegistry {
+    cards: std::collections::HashMap<std::any::TypeId, ComponentCardFill>,
+    leading: std::collections::HashMap<std::any::TypeId, ComponentCardFill>,
+}
 
 impl ComponentCardRegistry {
     pub fn register<C: Component>(&mut self, fill: ComponentCardFill) {
-        self.0.insert(std::any::TypeId::of::<C>(), fill);
+        self.cards.insert(std::any::TypeId::of::<C>(), fill);
     }
 
     pub fn get(&self, type_id: std::any::TypeId) -> Option<ComponentCardFill> {
-        self.0.get(&type_id).copied()
+        self.cards.get(&type_id).copied()
+    }
+
+    /// Put `fill` at the head of the component's card, above its reflected
+    /// fields, which still show.
+    pub fn register_leading<C: Component>(&mut self, fill: ComponentCardFill) {
+        self.leading.insert(std::any::TypeId::of::<C>(), fill);
+    }
+
+    pub fn leading(&self, type_id: std::any::TypeId) -> Option<ComponentCardFill> {
+        self.leading.get(&type_id).copied()
     }
 }
+
+/// Systems that decorate inspector field rows (an `InspectorFieldRow` gaining
+/// a `FieldRowDecoration` child), run before the row gutters are reserved.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InspectorFieldDecorations;
 
 /// Remembers each inspector card's collapsed state across rebuilds, keyed by
 /// the card's display name. A name not present defaults to collapsed.
@@ -116,6 +132,12 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<bindings_card::BindingsCardEcho>();
         app.init_resource::<PendingInspectorRebuild>();
         app.init_resource::<ComponentCardRegistry>();
+        app.configure_sets(
+            Update,
+            InspectorFieldDecorations
+                .after(component_display::sync_inspector_to_selection)
+                .run_if(in_state(crate::AppState::Editor)),
+        );
         app.init_resource::<reflect_fields::OpenColorRows>();
         app.init_resource::<unavailable::UnavailableTypes>();
 
@@ -154,7 +176,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(brush_display::on_brush_face_text_commit)
             .add_observer(on_name_field_commit)
-            .add_observer(anim_diamond::on_diamond_click)
             .init_resource::<live_edit_dots::LiveEditMenuTarget>()
             .add_observer(live_edit_dots::on_live_edit_menu_action)
             .add_observer(on_category_strip_mount_added)
@@ -203,8 +224,6 @@ impl Plugin for InspectorPlugin {
                     category_strip::resolve_active_on_rebuild,
                     component_display::filter_inspector_components
                         .after(category_strip::resolve_active_on_rebuild),
-                    anim_diamond::decorate_animatable_fields,
-                    anim_diamond::update_anim_diamond_highlights,
                     prefab_field_dots::decorate_prefab_field_rows,
                     prefab_field_dots::refresh_prefab_field_dots,
                     live_edit_dots::refresh_live_edit_field_dots,
@@ -212,7 +231,7 @@ impl Plugin for InspectorPlugin {
                     // Their spawns are deferred, so the gutter follows a new
                     // mark on the next pass rather than the same one.
                     jackdaw_feathers::field_row::reserve_decoration_gutters
-                        .after(anim_diamond::decorate_animatable_fields)
+                        .after(InspectorFieldDecorations)
                         .after(prefab_field_dots::decorate_prefab_field_rows)
                         .after(live_edit_dots::refresh_live_edit_field_dots),
                     refresh_name_field,
@@ -508,10 +527,10 @@ pub fn asset_field_value_of(world: &World, row: Entity) -> Option<Entity> {
 /// so per-field decorations (like the animation keyframe diamond)
 /// can hang off this marker without being duplicated per axis.
 #[derive(Component)]
-pub(super) struct InspectorFieldRow {
-    pub(super) source_entity: Entity,
-    pub(super) type_path: String,
-    pub(super) field_path: String,
+pub struct InspectorFieldRow {
+    pub source_entity: Entity,
+    pub type_path: String,
+    pub field_path: String,
 }
 
 /// Marker on the container that holds an enum select menu + its current

@@ -16,7 +16,7 @@ use jackdaw_animation::graph_owner::{LoanedPlayer, PlayerLoan, lend_player, retu
 use jackdaw_animation_runtime::{AnimationSet, AnimationSetBound, AnimationState, ClipPlayhead};
 use jackdaw_api::prelude::*;
 
-use super::panel::AnimationPanelState;
+use crate::panel::AnimationPanelState;
 
 /// A model spawned only so a clip has something to play on.
 ///
@@ -134,7 +134,7 @@ impl AnimationPreview {
 )]
 pub(crate) fn animation_preview(
     params: In<OperatorParameters>,
-    selection: Res<crate::selection::Selection>,
+    selection: Res<jackdaw_editor_core::selection::Selection>,
     mut preview: ResMut<AnimationPreview>,
     mut panel: ResMut<AnimationPanelState>,
 ) -> Option<OperatorResult> {
@@ -254,7 +254,7 @@ fn start_requested_preview(world: &mut World) {
     let handle = match request.gltf.clone() {
         Some(handle) => handle,
         None => {
-            let path = crate::entity_ops::to_asset_path(&request.file);
+            let path = jackdaw_editor_core::entity_ops::to_asset_path(&request.file);
             let handle: Handle<Gltf> = jackdaw_scene_types::render_assets::load_model(
                 world.resource::<AssetServer>(),
                 world.get_resource(),
@@ -297,7 +297,7 @@ fn start_requested_preview(world: &mut World) {
         .resource::<Assets<AnimationClip>>()
         .get(&clip_handle)
         .map_or(0.0, AnimationClip::duration);
-    let repeat = super::library::looped_hint(&request.clip);
+    let repeat = jackdaw_editor_core::animation_mode::library::looped_hint(&request.clip);
     let tagged = jackdaw_animation_runtime::tag_animation_targets(world, player);
     let (graph, node) = AnimationGraph::from_clip(clip_handle);
     let graph = world.resource_mut::<Assets<AnimationGraph>>().add(graph);
@@ -423,7 +423,7 @@ fn resolve_target(
             Name::new(format!("Preview {}", request.file)),
             WorldAssetRoot(scene),
             Transform::default(),
-            crate::EditorEntity,
+            jackdaw_editor_core::EditorEntity,
         ))
         .id();
     request.mannequin = Some(mannequin);
@@ -543,6 +543,6 @@ pub(super) fn plugin(app: &mut App) {
             restart_returned_sets,
         )
             .chain()
-            .run_if(in_state(crate::AppState::Editor)),
+            .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
     );
 }

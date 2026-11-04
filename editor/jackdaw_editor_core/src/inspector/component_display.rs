@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
-    InspectorTarget, ReflectDisplayable, animation_graph_card, bindings_card, brush_display,
+    InspectorTarget, ReflectDisplayable, bindings_card, brush_display,
     category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
     custom_props_display, material_display, modifier_display, node_card, reflect_fields,
 };
@@ -1108,20 +1108,11 @@ fn build_inspector_cards(
             );
         }
 
-        // A graph reference leads with the graphs the project holds, and a set
-        // of clips with the way to a graph. Both are filled world-exclusive
-        // after the flush, then fall through to the reflected fields.
-        if type_id == Some(TypeId::of::<jackdaw_animation_runtime::AnimationGraphRef>()) {
+        // A leading fill is run world-exclusive after the flush, then falls
+        // through to the reflected fields.
+        if let Some(fill) = type_id.and_then(|type_id| cards.leading(type_id)) {
             let body = body_entity;
-            commands.queue(move |world: &mut World| {
-                animation_graph_card::fill_graph_reference_picker(world, source_entity, body);
-            });
-        }
-        if type_id == Some(TypeId::of::<jackdaw_animation_runtime::AnimationSet>()) {
-            let body = body_entity;
-            commands.queue(move |world: &mut World| {
-                animation_graph_card::fill_animation_set_actions(world, source_entity, body);
-            });
+            commands.queue(move |world: &mut World| fill(world, source_entity, body));
         }
 
         if let Some(type_id) = type_id

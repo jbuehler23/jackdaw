@@ -249,7 +249,7 @@ pub(crate) fn try_field_edit_commit(
 ///
 /// Returns whether the value was taken; `false` when the JSON does not
 /// convert to the field's type or the running preview drives the component.
-pub(crate) fn field_edit_commit_on(
+pub fn field_edit_commit_on(
     world: &mut World,
     entity: Entity,
     type_path: &str,

@@ -89,7 +89,7 @@ impl AnimationLibrary {
 }
 
 /// Whether a clip's name says it was exported to loop.
-pub(super) fn looped_hint(name: &str) -> bool {
+pub fn looped_hint(name: &str) -> bool {
     name.ends_with("_Loop") || name.ends_with("Loop")
 }
 

@@ -91,13 +91,20 @@ pub(crate) fn open_edit(world: &World) -> Option<&'static str> {
     if crate::definition_assets::open_card_has_unsaved_edits(world) {
         return Some("an open asset has edits that are not saved");
     }
-    if world
-        .get_resource::<crate::animation::graph_doc::AnimationGraphDoc>()
-        .is_some_and(|doc| doc.dirty)
-    {
-        return Some("the open animation graph has edits that are not saved");
+    world
+        .get_resource::<UnsavedEditChecks>()
+        .and_then(|checks| checks.0.iter().find_map(|check| check(world)))
+}
+
+/// Edits a feature holds outside the scene and the asset cards, each check
+/// naming the edit a migration would write over, or `None` when there is none.
+#[derive(Resource, Default)]
+pub struct UnsavedEditChecks(Vec<fn(&World) -> Option<&'static str>>);
+
+impl UnsavedEditChecks {
+    pub fn register(&mut self, check: fn(&World) -> Option<&'static str>) {
+        self.0.push(check);
     }
-    None
 }
 
 fn migrate(world: &mut World) {
