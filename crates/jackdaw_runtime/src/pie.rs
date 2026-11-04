@@ -15,29 +15,22 @@ use serde::de::DeserializeSeed;
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
-use jackdaw_pie_protocol::{ControlEvent, PieMode, build_snapshot};
+use jackdaw_pie_protocol::{ControlEvent, build_snapshot};
 use jackdaw_scene_types::SceneNodeId;
 
 /// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PieConfig {
-    /// Mode the editor launched the game in.
-    pub mode: PieMode,
     /// ipc-channel rendezvous name to connect to.
     pub server: String,
 }
 
 impl PieConfig {
     /// Build from the value of `JACKDAW_PIE` (the rendezvous name).
-    /// Returns `None` when the variable is absent. `JACKDAW_PIE_MODE` selects
-    /// the mode and defaults to `play`.
+    /// Returns `None` when the variable is absent.
     pub fn from_env_value(server: Option<String>) -> Option<Self> {
         let server = server?;
-        let mode = match std::env::var("JACKDAW_PIE_MODE").as_deref() {
-            Ok("editor-preview") => PieMode::EditorPreview,
-            _ => PieMode::Play,
-        };
-        Some(PieConfig { mode, server })
+        Some(PieConfig { server })
     }
 }
 
@@ -263,7 +256,7 @@ fn stream_state(world: &mut World) {
         transport.send(PieChannel::Reliable, bytes);
     }
     for bytes in &changed_frames {
-        transport.send(PieChannel::Unreliable, bytes);
+        transport.send(PieChannel::Reliable, bytes);
     }
     for bytes in &despawn_frames {
         transport.send(PieChannel::Reliable, bytes);
@@ -1298,7 +1291,6 @@ mod tests {
         assert!(PieConfig::from_env_value(None).is_none());
         let cfg = PieConfig::from_env_value(Some("rv-123".to_string())).unwrap();
         assert_eq!(cfg.server, "rv-123");
-        assert_eq!(cfg.mode, PieMode::Play);
     }
 
     /// `SetComponent` sent from the editor updates the game world's `Transform`.

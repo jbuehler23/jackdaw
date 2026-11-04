@@ -2,21 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::snapshot::RemoteEntity;
 
-/// Which mode the editor launched the game in.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum PieMode {
-    #[default]
-    Play,
-    EditorPreview,
-}
-
-/// Delivery channel for a message. Reliable-ordered for control and
-/// discrete changes; unreliable for high-frequency state.
+/// Delivery channel for a message.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PieChannel {
     Reliable,
-    Unreliable,
     /// Raw frame-view pixel messages (see `crate::frame`); never JSON.
     Frames,
 }
@@ -34,14 +23,6 @@ pub enum StateEvent {
     },
     EntityDespawned {
         entity: u64,
-    },
-    Status {
-        mode: PieMode,
-        ready: bool,
-    },
-    Log {
-        level: String,
-        message: String,
     },
     /// The game's cursor options changed (mouse-look grabs); the editor
     /// mirrors this onto its own cursor while input capture is engaged.
@@ -105,13 +86,6 @@ pub enum ControlEvent {
     },
 }
 
-/// Either direction, for transports that carry a single type.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub enum PieEvent {
-    State(StateEvent),
-    Control(ControlEvent),
-}
-
 /// Serialize a protocol message to bytes. Uses JSON so component payloads
 /// (`serde_json::Value`) round-trip cleanly; swap the codec here to avoid
 /// touching call sites.
@@ -137,10 +111,10 @@ mod tests {
     }
 
     #[test]
-    fn state_event_status_round_trips() {
-        let ev = StateEvent::Status {
-            mode: PieMode::Play,
-            ready: true,
+    fn state_event_round_trips() {
+        let ev = StateEvent::CursorState {
+            grabbed: true,
+            visible: false,
         };
         let bytes = to_bytes(&ev).unwrap();
         let back: StateEvent = from_bytes(&bytes).unwrap();
