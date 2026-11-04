@@ -135,7 +135,14 @@ fn within_dead_zone(a: UVec2, b: UVec2) -> bool {
 /// the focused-instance check reads the non-send
 /// [`PieSession`](crate::pie::PieSession) and the send path needs the world.
 pub fn drive_stream_requests(world: &mut World) {
-    let want = crate::pie::focused_live_instance(world).zip(game_panel_pixel_size(world));
+    let embedded = world
+        .get_resource::<crate::pie::PieWindowMode>()
+        .is_none_or(|mode| *mode == crate::pie::PieWindowMode::Embedded);
+    let want = stream_target(
+        embedded,
+        crate::pie::focused_live_instance(world),
+        game_panel_pixel_size(world),
+    );
     let stream_is_fresh = world
         .get_resource::<LiveFrameStream>()
         .is_some_and(LiveFrameStream::is_fresh);
@@ -166,6 +173,19 @@ pub fn drive_stream_requests(world: &mut World) {
     }
 }
 
+/// The instance and size to stream, or `None` (which stops any stream) when
+/// the game runs in its own window or nothing can be shown.
+fn stream_target(
+    embedded: bool,
+    focus: Option<InstanceKey>,
+    size: Option<UVec2>,
+) -> Option<(InstanceKey, UVec2)> {
+    if !embedded {
+        return None;
+    }
+    focus.zip(size)
+}
+
 /// Pixel size of the Game panel's letterbox surface, the stream request
 /// target. `None` while the panel is closed or collapsed, which stops the
 /// stream.
@@ -191,6 +211,34 @@ mod tests {
     /// An instant the debounce window has already elapsed against.
     fn later(start: Instant) -> Instant {
         start + std::time::Duration::from_millis(RESIZE_DEBOUNCE_MS as u64 + 10)
+    }
+
+    #[test]
+    fn windowed_mode_has_no_stream_target() {
+        let focus = Some(key("game", 1));
+        let size = Some(UVec2::new(800, 600));
+        assert!(stream_target(false, focus.clone(), size).is_none());
+        assert!(stream_target(true, focus, size).is_some());
+    }
+
+    #[test]
+    fn switching_to_windowed_stops_an_active_stream() {
+        let mut req = StreamRequest {
+            requested: Some(UVec2::new(800, 600)),
+            pending: None,
+            last_focus: Some(key("game", 1)),
+            last_start: None,
+        };
+        let want = stream_target(false, Some(key("game", 1)), Some(UVec2::new(800, 600)));
+        assert_eq!(
+            next_stream_action(
+                want.as_ref().map(|(k, s)| (k, *s)),
+                true,
+                &mut req,
+                Instant::now()
+            ),
+            StreamAction::Stop
+        );
     }
 
     #[test]

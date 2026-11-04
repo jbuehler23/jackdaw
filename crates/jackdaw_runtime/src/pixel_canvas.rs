@@ -2,9 +2,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use bevy::asset::uuid::Uuid;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers, VisibilitySystems};
-use bevy::camera::{
-    CameraUpdateSystems, NormalizedRenderTarget, RenderTarget, ScalingMode, Viewport,
-};
+use bevy::camera::{CameraUpdateSystems, NormalizedRenderTarget, RenderTarget, Viewport};
 use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::ecs::system::SystemParam;
 use bevy::image::ImageSampler;
@@ -57,9 +55,6 @@ impl PixelCanvasExpanded {
 
 #[derive(Resource, Default)]
 struct CanvasLayers(u32);
-
-#[derive(Component)]
-struct CapturesView(Entity);
 
 /// Expands every [`PixelCanvas`] on a camera into its low-resolution image,
 /// view camera and display, keeps the display fitted to its viewport, snaps
@@ -288,7 +283,6 @@ fn fit_displays(
     views: Query<(&Camera, &PixelCanvasHelper), Changed<Camera>>,
     canvases: Query<(&PixelCanvas, &PixelCanvasExpanded)>,
     mut displays: Query<(&mut Sprite, &mut Transform), With<PixelCanvasHelper>>,
-    mut captures: Query<(&CapturesView, &mut Projection)>,
 ) -> Result {
     for (view, helper) in &views {
         let (Some((area, scale)), Ok((canvas, expanded))) =
@@ -303,57 +297,8 @@ fn fit_displays(
         let offset = (rect.center() - area.size() / 2.0) / scale;
         sprite.custom_size = Some(rect.size() / scale);
         transform.translation = Vec3::new(offset.x, -offset.y, 0.0);
-        for (capture, mut projection) in &mut captures {
-            if capture.0 == expanded.view {
-                *projection = capture_projection(area.size() / scale);
-            }
-        }
     }
     Ok(())
-}
-
-fn capture_projection(shown: Vec2) -> Projection {
-    Projection::Orthographic(OrthographicProjection {
-        scaling_mode: ScalingMode::AutoMin {
-            min_width: shown.x,
-            min_height: shown.y,
-        },
-        ..OrthographicProjection::default_2d()
-    })
-}
-
-/// Points the frame-capture `camera` at what the view of `rig`'s canvas
-/// shows, so captured frames match the game window. False when `rig` has no
-/// expanded canvas.
-#[cfg_attr(
-    not(any(feature = "pie", test)),
-    expect(dead_code, reason = "only the windowed frame capture calls it")
-)]
-pub(crate) fn capture_canvas(world: &mut World, camera: Entity, rig: Entity) -> bool {
-    let Some(expanded) = world.get::<PixelCanvasExpanded>(rig) else {
-        return false;
-    };
-    let (layer, view) = (RenderLayers::layer(expanded.layer), expanded.view);
-    let shown = world
-        .get::<Camera>(view)
-        .and_then(view_area)
-        .map_or(Vec2::ONE, |(area, scale)| area.size() / scale);
-    let clear_color = world
-        .get::<PixelCanvas>(rig)
-        .map_or(ClearColorConfig::None, |canvas| {
-            ClearColorConfig::Custom(canvas.letterbox)
-        });
-    let mut capture = world.entity_mut(camera);
-    capture.insert((
-        Camera2d,
-        layer,
-        CapturesView(view),
-        capture_projection(shown),
-    ));
-    if let Some(mut camera) = capture.get_mut::<Camera>() {
-        camera.clear_color = clear_color;
-    }
-    true
 }
 
 fn snap_cameras(
@@ -1118,36 +1063,5 @@ mod tests {
         app.update();
         let messages = app.world().resource::<Messages<PointerInput>>();
         assert_eq!(seen.read(messages).count(), 0, "nothing is forwarded twice");
-    }
-
-    #[test]
-    fn a_capture_camera_shows_what_the_view_shows() {
-        let mut app = app();
-        let camera = spawn_canvas(&mut app, PixelCanvas::new(320, 180));
-        let view = expanded(&app, camera).view;
-        render_into(&mut app, view, UVec2::new(1366, 768), 1.0);
-        app.update();
-        let capture = app.world_mut().spawn(Camera::default()).id();
-        assert!(capture_canvas(app.world_mut(), capture, camera));
-        let plain = app.world_mut().spawn(Camera2d).id();
-        assert!(!capture_canvas(app.world_mut(), capture, plain));
-
-        let world = app.world();
-        assert_eq!(
-            world.get::<RenderLayers>(capture),
-            Some(&RenderLayers::layer(31))
-        );
-        assert!(matches!(
-            world.get::<Projection>(capture),
-            Some(Projection::Orthographic(OrthographicProjection {
-                scaling_mode: ScalingMode::AutoMin { min_width, min_height },
-                ..
-            })) if *min_width == 1366.0 && *min_height == 768.0
-        ));
-        assert!(
-            world
-                .get::<Camera>(capture)
-                .is_some_and(|c| letterboxes(c, Color::BLACK))
-        );
     }
 }

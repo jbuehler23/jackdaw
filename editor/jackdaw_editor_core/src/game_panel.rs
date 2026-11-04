@@ -97,7 +97,10 @@ fn surface_clicked(world: &mut World, surface: Entity) {
     let fresh = world
         .get_resource::<LiveFrameStream>()
         .is_some_and(LiveFrameStream::is_fresh);
-    if !fresh {
+    let embedded = world
+        .get_resource::<PieWindowMode>()
+        .is_none_or(|mode| *mode == PieWindowMode::Embedded);
+    if !fresh || !embedded {
         return;
     }
     if !world
@@ -286,7 +289,7 @@ fn sync_game_panel_image(
 }
 
 const IDLE_STOPPED: &str = "Press Play to run the game here";
-const IDLE_WINDOWED: &str = "The game is running in its own window";
+const IDLE_WINDOWED: &str = "Running in its own window";
 const IDLE_WAITING: &str = "Waiting for the game's first frame. A game whose main.rs does not pass \
      DefaultPlugins through jackdaw_runtime::maybe_windowless opens its own window instead.";
 

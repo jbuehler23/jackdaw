@@ -482,12 +482,15 @@ pub(crate) fn project_toggle_save_before_play(
     OperatorResult::Finished
 }
 
-/// Input capture needs a focused instance and a fresh frame to forward to.
+/// Input capture needs an embedded game with a focused instance and a fresh
+/// frame to forward to.
 pub(crate) fn focused_with_fresh_stream(
     stream: Res<crate::live_frame::LiveFrameStream>,
     instances: Res<PieInstances>,
+    window_mode: Option<Res<PieWindowMode>>,
 ) -> bool {
-    instances.focused.is_some() && stream.is_fresh()
+    let embedded = window_mode.is_none_or(|mode| *mode == PieWindowMode::Embedded);
+    embedded && instances.focused.is_some() && stream.is_fresh()
 }
 
 /// Where a launched game's window lives. Applies to the next launch.

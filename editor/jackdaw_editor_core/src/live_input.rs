@@ -43,8 +43,15 @@ pub struct LiveInputCapture {
 pub(crate) struct PendingForwards(pub(crate) Vec<PieInputEvent>);
 
 /// Engage capture bound to the Game panel surface: input forwards to the
-/// focused game until released.
+/// focused game until released. Does nothing while the game runs in its own
+/// window.
 pub(crate) fn engage_capture(world: &mut World, surface: Entity) {
+    if world
+        .get_resource::<crate::pie::PieWindowMode>()
+        .is_some_and(|mode| *mode == crate::pie::PieWindowMode::Windowed)
+    {
+        return;
+    }
     {
         let mut capture = world.resource_mut::<LiveInputCapture>();
         capture.active = true;
@@ -173,6 +180,7 @@ fn collect_forwards(
 fn auto_release(
     mut capture: ResMut<LiveInputCapture>,
     stream: Option<Res<LiveFrameStream>>,
+    window_mode: Option<Res<crate::pie::PieWindowMode>>,
     mut focus_events: MessageReader<WindowFocused>,
     windows: Query<(), With<PrimaryWindow>>,
 ) {
@@ -186,7 +194,8 @@ fn auto_release(
     let lost_os_focus = focus_events
         .read()
         .any(|event| !event.focused && windows.get(event.window).is_ok());
-    if lost_os_focus || !view_ok {
+    let windowed = window_mode.is_some_and(|mode| *mode == crate::pie::PieWindowMode::Windowed);
+    if lost_os_focus || !view_ok || windowed {
         capture.release_requested = true;
     }
 }
@@ -472,6 +481,21 @@ mod tests {
         let options = world.get::<CursorOptions>(window).unwrap();
         assert_eq!(options.grab_mode, CursorGrabMode::Locked);
         assert!(!options.visible);
+    }
+
+    #[test]
+    fn capture_does_not_engage_in_windowed_mode() {
+        let mut world = World::new();
+        world.init_resource::<LiveInputCapture>();
+        world.init_resource::<PendingForwards>();
+        world.init_resource::<bevy::input_focus::InputFocus>();
+        world.insert_resource(crate::pie::PieWindowMode::Windowed);
+        let surface = world.spawn_empty().id();
+
+        engage_capture(&mut world, surface);
+
+        assert!(!world.resource::<LiveInputCapture>().active);
+        assert!(world.resource::<PendingForwards>().0.is_empty());
     }
 
     #[test]

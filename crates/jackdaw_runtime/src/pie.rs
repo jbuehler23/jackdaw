@@ -69,18 +69,14 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     app.init_resource::<PieStreamState>();
     app.init_resource::<HighlightedEntity>();
     // Drain control in PreUpdate, before input processing so forwarded editor
-    // input lands in `ButtonInput` the same frame, and before Update where a
-    // stop or restart despawns the readback entity that pacing would target.
+    // input lands in `ButtonInput` the same frame.
     app.add_systems(
         PreUpdate,
         (apply_control, stream_cursor_state)
             .chain()
             .before(bevy::input::InputSystems),
     );
-    app.add_systems(
-        Update,
-        (stream_state, crate::pie_frames::pace_frame_capture),
-    );
+    app.add_systems(Update, stream_state);
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
@@ -766,7 +762,6 @@ mod tests {
         let mut world = World::new();
         let authored = world.spawn(Transform::default()).id();
         world.spawn((Transform::default(), crate::FallbackCamera2d));
-        world.spawn((Transform::default(), crate::pie_frames::FrameCaptureCamera));
         world.spawn((Transform::default(), crate::RuntimeOnly));
 
         assert_eq!(streamed_entities(&mut world), vec![authored]);
