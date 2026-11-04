@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use jackdaw::project::{ProjectConfig, ProjectRoot};
 use jackdaw::remote::server::{batch_handler, call_operator_handler, scene_bsn_handler};
 use jackdaw::selection::Selection;
-use jackdaw::terrain::TerrainDataStore;
+use jackdaw::terrain_mode::TerrainDataStore;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
 use jackdaw_commands::CommandHistory;
@@ -280,10 +280,10 @@ fn an_undo_after_a_batch_and_a_single_call_takes_the_single_call_first() {
 fn terrain(app: &mut App) -> (Entity, String) {
     history(app, "entity.add.terrain");
     app.world_mut()
-        .run_system_cached(jackdaw::terrain::ensure_terrain_dirty_chunks)
+        .run_system_cached(jackdaw_editor_terrain::ensure_terrain_dirty_chunks)
         .expect("dirty-chunk tracking is installed");
     app.world_mut()
-        .run_system_cached(jackdaw::terrain::ensure_terrain_data_path)
+        .run_system_cached(jackdaw_editor_terrain::ensure_terrain_data_path)
         .expect("sidecar paths are minted");
     app.update();
     let mut query = app

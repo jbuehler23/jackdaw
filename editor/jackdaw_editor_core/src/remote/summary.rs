@@ -775,8 +775,8 @@ fn rests_on(world: &mut World, args: &Value) -> Result<Value, BrpError> {
 /// The world height of `terrain`'s surface under a world XZ point.
 fn ground_under(world: &World, entity: Entity, terrain: &Terrain, point: Vec2) -> Option<f32> {
     let global = unsorted_global(world, entity)?;
-    let store = world.get_resource::<crate::terrain::TerrainDataStore>()?;
-    crate::terrain::ground::height_on(terrain, &global, store, point)
+    let store = world.get_resource::<crate::terrain_mode::TerrainDataStore>()?;
+    crate::terrain_mode::height_on(terrain, &global, store, point)
 }
 
 /// How far `entity`'s box reaches outside the box of `of`, along the worst

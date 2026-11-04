@@ -168,7 +168,7 @@ pub mod sprite_snap;
 pub mod sprite_stage;
 pub mod status_bar;
 pub mod tags;
-pub mod terrain;
+pub mod terrain_mode;
 pub mod test_input;
 #[doc(hidden)]
 pub mod testing;
@@ -470,6 +470,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(tags::plugin)
         .add_plugins(recipes::plugin)
         .add_plugins(tile_mode::plugin)
+        .add_plugins(terrain_mode::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins((
@@ -521,7 +522,6 @@ impl Plugin for EditorCorePlugin {
             brush::mirror_plane_overlay::MirrorPlaneOverlayPlugin,
             asset_ingest::AssetIngestPlugin,
             alignment_guides::AlignmentGuidesPlugin,
-            terrain::TerrainPlugin,
             screenshot::plugin,
             reference_image::ReferenceImagePlugin,
             jackdaw_widgets::RadialMenuPlugin,
@@ -2946,7 +2946,6 @@ fn cleanup_editor(world: &mut World) {
     world.insert_resource(scenes::Scenes::default());
     world.insert_resource(scenes::confirm_dialog::PendingTabClose::default());
     world.remove_resource::<project_select::PendingSceneOpens>();
-    world.insert_resource(terrain::TerrainDataStore::default());
     scene_io::hooks::forget_project(world);
     scenes::reset_scene_resources(world);
     world.insert_resource(brush::BrushSelection::default());

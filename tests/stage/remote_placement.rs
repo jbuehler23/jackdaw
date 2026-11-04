@@ -102,7 +102,7 @@ fn scene_with_ground_at(stands: Transform) -> App {
     }
     let mut store = app
         .world_mut()
-        .resource_mut::<jackdaw::terrain::TerrainDataStore>();
+        .resource_mut::<jackdaw::terrain_mode::TerrainDataStore>();
     store.insert(data_path, document);
     // One metre per cell with vertex (0, 0) at the entity, so a world point
     // is a grid coordinate and the test can say where the ground is.

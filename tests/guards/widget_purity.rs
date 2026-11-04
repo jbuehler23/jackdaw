@@ -15,6 +15,7 @@ const ALLOWED: &[(&str, &str)] = &[];
 const ROOTS: &[&str] = &[
     "editor/jackdaw_editor_core/src",
     "editor/jackdaw_editor_tile/src",
+    "editor/jackdaw_editor_terrain/src",
     "crates/jackdaw_feathers/src",
     "crates/jackdaw_panels/src",
     "crates/jackdaw_widgets/src",

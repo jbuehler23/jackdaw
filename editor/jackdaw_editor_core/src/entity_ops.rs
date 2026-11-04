@@ -2588,8 +2588,8 @@ pub(crate) const TIMELINE_WINDOW_ID: &str = "jackdaw.timeline";
 )]
 pub(crate) fn entity_place_gltf(
     params: In<OperatorParameters>,
-    terrains: crate::terrain::ground::TerrainSurfaces,
-    store: Res<crate::terrain::TerrainDataStore>,
+    terrains: crate::terrain_mode::TerrainSurfaces,
+    store: Option<Res<crate::terrain_mode::TerrainDataStore>>,
     mut commands: Commands,
 ) -> OperatorResult {
     let Some(path) = params.as_str("path").map(str::to_owned) else {
@@ -2604,8 +2604,10 @@ pub(crate) fn entity_place_gltf(
         warn!("entity.place_gltf: missing `pos_z` param");
         return OperatorResult::Cancelled;
     };
-    let ground =
-        || crate::terrain::ground::height_under(&terrains, &store, Vec2::new(x as f32, z as f32));
+    let ground = || {
+        let store = store.as_deref()?;
+        crate::terrain_mode::height_under(&terrains, store, Vec2::new(x as f32, z as f32))
+    };
     // Placing a model on the ground is what a caller with no viewport asks
     // for, so an omitted height is the ground rather than a refusal.
     let y = params
@@ -3596,7 +3598,7 @@ pub(crate) fn entity_add_terrain(
     // Only the first terrain opens the panel: a later add must not steal
     // focus from the tab in use.
     if is_first_terrain && result == OperatorResult::Finished {
-        crate::open_window_in_default_area_if_absent(world, "jackdaw.inspector.terrain");
+        crate::open_window_in_default_area_if_absent(world, crate::terrain_mode::TERRAIN_WINDOW_ID);
     }
     result
 }

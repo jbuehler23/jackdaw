@@ -121,7 +121,7 @@ impl NodeKind {
                         Visibility::default(),
                     ))
                     .id(),
-                Self::Terrain => crate::terrain::spawn_terrain_entity(commands),
+                Self::Terrain => crate::terrain_mode::spawn_terrain_node(commands),
                 #[cfg(feature = "multiplayer")]
                 Self::SpawnPoint => commands
                     .spawn((

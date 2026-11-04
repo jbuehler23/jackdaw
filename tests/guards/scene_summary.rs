@@ -99,7 +99,7 @@ fn summary_scene_with_ground() -> App {
     }
     let mut store = app
         .world_mut()
-        .resource_mut::<jackdaw::terrain::TerrainDataStore>();
+        .resource_mut::<jackdaw::terrain_mode::TerrainDataStore>();
     store.insert(data_path, document);
     store.set_grid(data_path, jackdaw_terrain::sidecar::GridGeometry::DEFAULT);
     app.world_mut()

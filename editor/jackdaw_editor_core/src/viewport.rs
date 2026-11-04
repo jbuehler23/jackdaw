@@ -163,7 +163,7 @@ pub(crate) struct InteractionGuards<'w, 's> {
     pub viewport_drag: Res<'w, crate::modal_transform::ViewportDragState>,
     pub draw_state: Res<'w, crate::draw_brush::DrawBrushState>,
     pub edit_mode: Res<'w, crate::brush::EditMode>,
-    pub terrain_edit_mode: Res<'w, crate::terrain::TerrainEditMode>,
+    pub terrain_edit_mode: Res<'w, crate::terrain_mode::TerrainEditMode>,
     pub active_modal: ActiveModalQuery<'w, 's>,
 }
 
@@ -183,6 +183,28 @@ impl InteractionGuards<'_, '_> {
 #[derive(Resource, Default)]
 pub struct CameraFlyActive(pub bool);
 
+/// Spawns a feature's node for a 3D viewport, returning its root.
+pub type ViewportSlotSpawn = fn(&mut World) -> Result<Entity, BevyError>;
+
+/// Rows and overlays features add to each 3D viewport: an options bar sits
+/// beneath the viewport toolbar, an overlay is placed over the viewport, both
+/// in registration order.
+#[derive(Resource, Default, Clone)]
+pub struct ViewportSlots {
+    options_bars: Vec<ViewportSlotSpawn>,
+    overlays: Vec<ViewportSlotSpawn>,
+}
+
+impl ViewportSlots {
+    pub fn register_options_bar(&mut self, spawn: ViewportSlotSpawn) {
+        self.options_bars.push(spawn);
+    }
+
+    pub fn register_overlay(&mut self, spawn: ViewportSlotSpawn) {
+        self.overlays.push(spawn);
+    }
+}
+
 pub struct ViewportPlugin;
 
 impl Plugin for ViewportPlugin {
@@ -193,6 +215,7 @@ impl Plugin for ViewportPlugin {
             .add_plugins(crate::editor_grid_depth_patch::plugin)
             .init_resource::<CameraFlyActive>()
             .init_resource::<ActiveViewport>()
+            .init_resource::<ViewportSlots>()
             .init_resource::<ViewportLayerCounter>()
             .insert_resource(GlobalAmbientLight::NONE)
             .add_systems(Startup, init_axis_indicator_asset)
@@ -466,16 +489,22 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
         Err(err) => error!("failed to spawn editor toolbar scene: {err}"),
     }
 
-    // The terrain options bar is likewise a bsn! Scene. Spawn it standalone,
-    // stamp the editor markers, and slot it in at index 1 so the contextual
-    // row sits directly beneath the main toolbar and above the viewport.
-    match world.spawn_scene(crate::terrain::options_bar::terrain_options_bar()) {
-        Ok(mut bar) => {
-            bar.insert((crate::terrain::TerrainOptionsBar, crate::EditorEntity));
-            let bar = bar.id();
-            world.entity_mut(column).insert_children(1, &[bar]);
+    // Feature rows sit directly beneath the main toolbar and above the
+    // viewport, in registration order.
+    let slots = world
+        .get_resource::<ViewportSlots>()
+        .cloned()
+        .unwrap_or_default();
+    let mut index = 1;
+    for spawn_bar in &slots.options_bars {
+        match spawn_bar(world) {
+            Ok(bar) => {
+                world.entity_mut(bar).insert(crate::EditorEntity);
+                world.entity_mut(column).insert_children(index, &[bar]);
+                index += 1;
+            }
+            Err(err) => error!("failed to spawn a viewport options bar: {err}"),
         }
-        Err(err) => error!("failed to spawn terrain options bar scene: {err}"),
     }
 
     // Find the freshly-spawned SceneViewport that's a descendant of
@@ -488,20 +517,18 @@ pub(crate) fn build_3d_presentation(world: &mut World, parent: Entity) -> Entity
         warn!("build_3d_presentation: SceneViewport descendant not found under parent");
     }
 
-    // The terrain tool palette overlays the viewport's content rather
-    // than sitting in the dock tree: a child of this column, absolutely
-    // positioned against its left edge at a fixed offset that clears the
-    // toolbar and the options bar's first row (see `terrain::palette`).
-    // Last child, so it draws over the viewport below it.
-    match world.spawn_scene(crate::terrain::palette::terrain_palette()) {
-        Ok(mut palette) => {
-            palette.insert((
-                crate::terrain::TerrainPalette,
-                crate::EditorEntity,
-                ChildOf(column),
-            ));
+    // Feature overlays draw over the viewport's content rather than sitting
+    // in the dock tree: last children of this column, so they draw over the
+    // viewport below them.
+    for spawn_overlay in &slots.overlays {
+        match spawn_overlay(world) {
+            Ok(overlay) => {
+                world
+                    .entity_mut(overlay)
+                    .insert((crate::EditorEntity, ChildOf(column)));
+            }
+            Err(err) => error!("failed to spawn a viewport overlay: {err}"),
         }
-        Err(err) => error!("failed to spawn terrain palette scene: {err}"),
     }
 
     // Tag the panel content entity so the despawn observer can find

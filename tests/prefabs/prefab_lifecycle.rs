@@ -4262,8 +4262,9 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
-    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::terrain_mode::TerrainDataStore>();
     jackdaw_editor_tile::tilemap::plugin(&mut app);
+    jackdaw_editor_terrain::sidecar_io::plugin(&mut app);
     app.world_mut()
         .resource_mut::<jackdaw::prefab::PrefabAstCache>()
         .insert(
@@ -4292,7 +4293,7 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
     jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
 
     app.world_mut()
-        .resource_mut::<jackdaw::terrain::TerrainDataStore>()
+        .resource_mut::<jackdaw::terrain_mode::TerrainDataStore>()
         .insert(
             "p.terrain-0.jdterrain".to_string(),
             jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
@@ -4359,7 +4360,7 @@ fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
-    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::terrain_mode::TerrainDataStore>();
     jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
     let key = tilemap_key(&mut app);
@@ -4468,7 +4469,7 @@ fn a_scene_map_and_a_prefab_map_of_one_file_name_stay_apart() {
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
-    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::terrain_mode::TerrainDataStore>();
     jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
 
@@ -4571,7 +4572,7 @@ fn a_prefab_tab_and_a_scene_instancing_it_share_the_prefabs_cells() {
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
-    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::terrain_mode::TerrainDataStore>();
     jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
     let in_scene = tilemap_key(&mut app);
@@ -4642,7 +4643,7 @@ fn instances_sharing_a_sidecar_with_different_bounds_are_noted() {
 
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
-    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::terrain_mode::TerrainDataStore>();
     app.init_resource::<jackdaw_editor_tile::tilemap_resolve::TilemapResolveStats>();
     jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);

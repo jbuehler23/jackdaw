@@ -7,10 +7,10 @@ use crate::util;
 
 use bevy::prelude::*;
 use jackdaw::layout::Toolbar;
-use jackdaw::terrain::{TerrainOptionsBar, TerrainPalette};
 use jackdaw::toolbar_2d::Toolbar2dGroup;
 use jackdaw::viewport::build_viewport_panel;
 use jackdaw::viewport_host::{ViewportMode, set_viewport_mode};
+use jackdaw_editor_terrain::{TerrainOptionsBar, TerrainPalette};
 use jackdaw_feathers::button::ButtonOperatorCall;
 
 /// Operator ids the terrain palette's buttons carry, one per entry.

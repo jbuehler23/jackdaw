@@ -141,17 +141,14 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         ),
     )
 )]
-pub(crate) fn texture_import(
-    params: In<OperatorParameters>,
-    project: Option<Res<crate::project::ProjectRoot>>,
-    asset_server: Res<AssetServer>,
-    terrains: Option<Res<crate::terrain::splat::TerrainSplatMaterials>>,
-    preview: Option<ResMut<crate::texture_files::AssetPreviewState>>,
-) -> OperatorResult {
-    let Some(project) = project else {
+pub(crate) fn texture_import(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    let Some(assets) = world
+        .get_resource::<crate::project::ProjectRoot>()
+        .map(crate::project::ProjectRoot::assets_dir)
+    else {
         return OperatorResult::Cancelled;
     };
-    let assets = project.assets_dir();
+    let asset_server = world.resource::<AssetServer>().clone();
     let Some(named) = params.as_str("path") else {
         warn!("texture.import: no path given");
         return OperatorResult::Cancelled;
@@ -169,9 +166,8 @@ pub(crate) fn texture_import(
         warn!("texture.import: nothing at {named}");
         return OperatorResult::Cancelled;
     }
-    let stacked: Vec<PathBuf> = terrains
-        .iter()
-        .flat_map(|terrains| terrains.texture_paths())
+    let stacked: Vec<PathBuf> = stacked_textures(world)
+        .into_iter()
         .map(|path| assets.join(path))
         .collect();
     for texture in textures_under(&target) {
@@ -188,10 +184,33 @@ pub(crate) fn texture_import(
             Err(err) => warn!("texture.import: {}: {err}", texture.display()),
         }
     }
-    if let Some(mut preview) = preview {
+    if let Some(mut preview) = world.get_resource_mut::<crate::texture_files::AssetPreviewState>() {
         preview.set_changed();
     }
     OperatorResult::Finished
+}
+
+/// Lists texture files, as paths under the project's assets, that a feature
+/// stacks into array textures of its own.
+pub type StackedTextureSource = fn(&World) -> Vec<String>;
+
+/// Where `texture.import` learns which textures are stacked into array
+/// textures: those keep loading as the original file, so importing leaves
+/// them alone.
+#[derive(Resource, Default, Clone)]
+pub struct StackedTextureSources(Vec<StackedTextureSource>);
+
+impl StackedTextureSources {
+    pub fn register(&mut self, source: StackedTextureSource) {
+        self.0.push(source);
+    }
+}
+
+fn stacked_textures(world: &World) -> Vec<String> {
+    world
+        .get_resource::<StackedTextureSources>()
+        .map(|sources| sources.0.iter().flat_map(|source| source(world)).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -886,15 +886,16 @@ fn set_menu_button_caption(world: &mut World, button: Entity, text: &str) {
 /// `default_collapsed` is stated per surface: the Materials window opens Textures, the
 /// terrain panel keeps it shut behind the slot controls. `key` is what the user's own toggle
 /// is remembered under, so a rebuild does not reopen what they closed.
-pub(crate) struct MaterialSection {
-    pub(crate) title: &'static str,
-    pub(crate) icon: Icon,
-    pub(crate) key: &'static str,
-    pub(crate) default_collapsed: bool,
+#[doc(hidden)]
+pub struct MaterialSection {
+    pub title: &'static str,
+    pub icon: Icon,
+    pub key: &'static str,
+    pub default_collapsed: bool,
 }
 
 impl MaterialSection {
-    pub(crate) const fn new(
+    pub const fn new(
         title: &'static str,
         icon: Icon,
         key: &'static str,
@@ -910,7 +911,8 @@ impl MaterialSection {
 }
 
 /// Spawn a collapsible titled section for a group of material fields.
-pub(crate) fn spawn_section(
+#[doc(hidden)]
+pub fn spawn_section(
     commands: &mut Commands,
     parent: Entity,
     section: MaterialSection,
@@ -934,15 +936,16 @@ pub(crate) fn spawn_section(
 // ---------------------------------------------------------------------------
 
 /// One button in a material action header.
-pub(crate) struct HeaderAction {
-    pub(crate) icon: Icon,
-    pub(crate) tooltip: &'static str,
-    pub(crate) description: &'static str,
-    pub(crate) call: ButtonOperatorCall,
+#[doc(hidden)]
+pub struct HeaderAction {
+    pub icon: Icon,
+    pub tooltip: &'static str,
+    pub description: &'static str,
+    pub call: ButtonOperatorCall,
 }
 
 impl HeaderAction {
-    pub(crate) fn new(
+    pub fn new(
         icon: Icon,
         tooltip: &'static str,
         description: &'static str,
@@ -989,16 +992,18 @@ pub(crate) fn library_actions() -> Vec<HeaderAction> {
 
 /// A material surface header: the material's name on the left, marked when it has no file
 /// behind it, and the actions on the right.
-pub(crate) struct ActionHeaderProps<'a> {
-    pub(crate) name: String,
+#[doc(hidden)]
+pub struct ActionHeaderProps<'a> {
+    pub name: String,
     /// A material with no file is named in italic and marked "(unsaved)".
-    pub(crate) saved: bool,
-    pub(crate) italic_font: &'a Handle<Font>,
-    pub(crate) icon_font: &'a Handle<Font>,
-    pub(crate) actions: Vec<HeaderAction>,
+    pub saved: bool,
+    pub italic_font: &'a Handle<Font>,
+    pub icon_font: &'a Handle<Font>,
+    pub actions: Vec<HeaderAction>,
 }
 
-pub(crate) fn spawn_action_header(
+#[doc(hidden)]
+pub fn spawn_action_header(
     commands: &mut Commands,
     parent: Entity,
     props: ActionHeaderProps,
@@ -1128,11 +1133,8 @@ pub(crate) fn fit_preview_shape_strip(
 /// the wheel zooms.
 ///
 /// The caller points [`MaterialPreviewState`] at the material to show before calling this.
-pub(crate) fn spawn_preview(
-    commands: &mut Commands,
-    parent: Entity,
-    image: Handle<Image>,
-) -> Entity {
+#[doc(hidden)]
+pub fn spawn_preview(commands: &mut Commands, parent: Entity, image: Handle<Image>) -> Entity {
     let row = commands
         .spawn((
             Node {
@@ -1273,7 +1275,8 @@ pub(crate) fn preview_zoom_from_scroll(
 
 /// The texture section: one row per slot, with Flip Normal Y indented under the normal map
 /// it flips and the parallax scalars indented under the height map they need.
-pub(crate) fn fill_texture_rows(
+#[doc(hidden)]
+pub fn fill_texture_rows(
     commands: &mut Commands,
     body: Entity,
     material: &StandardMaterial,
@@ -1349,7 +1352,8 @@ fn set_emissive_srgb(material: &mut StandardMaterial, c: [f32; 4]) {
 }
 
 /// The surface section: the core PBR values.
-pub(crate) fn fill_surface_rows(
+#[doc(hidden)]
+pub fn fill_surface_rows(
     commands: &mut Commands,
     body: Entity,
     material: &StandardMaterial,
