@@ -1,29 +1,17 @@
 //! Frame capture for the live frame view: reads back a rendered target and
-//! ships frames on the `Frames` channel. Two modes.
+//! ships frames on the `Frames` channel.
 //!
-//! Windowless mode (no OS window): the game's own cameras already render into
-//! the shared `WindowlessTarget` image every frame, so capture attaches a
-//! permanent [`Readback`] on that image and the completion observer encodes
-//! and ships every readback. There is no capture camera and no pacing; a
-//! stream stop only detaches the readback and leaves the image in place.
-//!
-//! Windowed fallback (the game has its own window): a capture camera spawns
-//! as a child of the active rig with an identity transform, inheriting the
-//! rig pose through transform propagation. Each pace tick activates the
-//! camera and attaches a [`Readback`] to the readback entity; the readback
-//! copy is encoded after the render graph runs, so the completion carries
-//! that tick's render. The completion observer encodes the frame, deactivates
-//! the camera, and detaches the [`Readback`], so the scene is rendered and
-//! copied once per tick rather than every game frame.
+//! Capture only runs in windowless mode (no OS window): the game's own
+//! cameras already render into the shared `WindowlessTarget` image every
+//! frame, so capture attaches a permanent [`Readback`] on that image and the
+//! completion observer encodes and ships every readback. A stream stop only
+//! detaches the readback and leaves the image in place. A game with its own
+//! window never streams.
 
 use std::sync::{Arc, Condvar, Mutex};
 
-use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
-use bevy::render::render_resource::{TextureFormat, TextureUsages};
-use bevy::time::Real;
-use jackdaw_camera_rig::{ActiveCameraRig, CameraRig};
 use jackdaw_pie_protocol::frame::encode_frame;
 
 /// Single-slot, newest-wins handoff from the render-thread readback observer
@@ -97,38 +85,20 @@ pub(crate) fn spawn_frame_sender_thread(lane: jackdaw_pie_protocol::IpcLaneSende
     sender
 }
 
-/// Interval between captured frames (about 30 fps).
-const FRAME_INTERVAL: f32 = 1.0 / 30.0;
 /// Hard cap on the streamed frame size.
 const MAX_DIM: u32 = 1920;
 // round_stream_size relies on the cap itself being row-aligned, so clamping
 // to MAX_DIM cannot break the multiple-of-64 width invariant.
 const _: () = assert!(MAX_DIM.is_multiple_of(64));
 
-/// Marker for the offscreen capture camera.
-#[derive(Component)]
-#[require(crate::RuntimeOnly)]
-pub(crate) struct FrameCaptureCamera;
-
 /// Live capture state. Present only while a stream is active.
 #[derive(Resource)]
 pub(crate) struct FrameStream {
-    pub target: Handle<Image>,
-    /// The offscreen capture camera that drives the windowed fallback. `None`
-    /// in windowless mode, where the game's own cameras render into the shared
-    /// target every frame and there is nothing extra to spawn.
-    pub camera: Option<Entity>,
     pub readback: Entity,
     pub size: UVec2,
     pub seq: u64,
-    /// Paces the windowed fallback to about 30 fps by toggling the capture
-    /// camera per tick. `None` in windowless mode, which ships every readback
-    /// completion without pacing.
-    pub pace: Option<Timer>,
     /// Limits the malformed-readback warning to a single log line.
     pub warned_bad_len: bool,
-    /// Limits the dead-capture-camera warning to a single log line.
-    pub warned_dead_camera: bool,
 }
 
 /// Round the requested size: width up to a multiple of 64 (so a row is
@@ -139,99 +109,37 @@ pub(crate) fn round_stream_size(width: u32, height: u32) -> UVec2 {
     UVec2::new(w, h)
 }
 
-/// Set after a start request was declined, so the editor's periodic retry
-/// (which re-sends the request every couple of seconds until a camera rig
-/// exists, e.g. while the player is still on a login screen) logs the reason
-/// once per streak instead of once per attempt. Cleared when a stream starts.
+/// Set after a start request was declined, so repeated requests log the
+/// reason once per streak instead of once per attempt. Cleared when a stream
+/// starts.
 #[derive(Resource, Default)]
 struct StartDeclinedLogged(bool);
 
 fn log_start_declined_once(world: &mut World, reason: &str) {
     let mut logged = world.get_resource_or_insert_with(StartDeclinedLogged::default);
     if !logged.0 {
-        info!("PIE frames: {reason}, not streaming (will retry quietly)");
+        info!("PIE frames: {reason}, not streaming");
         logged.0 = true;
     }
 }
 
-/// Begin streaming: build the offscreen target, spawn the capture camera as a
-/// child of the active rig, and install the [`FrameStream`] state. An already
-/// running stream restarts at the new size. A headless world without an
-/// active rig logs and leaves nothing behind.
+/// Begin streaming and install the [`FrameStream`] state. An already running
+/// stream restarts at the new size. A game with its own window declines,
+/// logging once and leaving nothing behind.
 pub(crate) fn start_frame_stream(world: &mut World, width: u32, height: u32) {
     stop_frame_stream(world);
     let size = round_stream_size(width, height);
     if world.contains_resource::<crate::pie_windowless::WindowlessTarget>() {
         start_windowless_stream(world, size);
     } else {
-        start_capture_camera_stream(world, size);
+        log_start_declined_once(world, "the game has its own window");
     }
-}
-
-/// Windowed fallback: spawn an offscreen capture camera under the active rig,
-/// pace it to about 30 fps, and attach the readback per tick. Logs and leaves
-/// nothing behind on a headless world without an active rig.
-fn start_capture_camera_stream(world: &mut World, size: UVec2) {
-    let mut rigs = world.query_filtered::<Entity, (With<CameraRig>, With<ActiveCameraRig>)>();
-    let Some(rig) = rigs.iter(world).next() else {
-        log_start_declined_once(world, "no active camera rig");
-        return;
-    };
-
-    let mut image = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
-    image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
-    let Some(mut images) = world.get_resource_mut::<Assets<Image>>() else {
-        log_start_declined_once(world, "no image assets");
-        return;
-    };
-    let target = images.add(image);
-
-    let camera = world
-        .spawn((
-            FrameCaptureCamera,
-            Camera {
-                is_active: false,
-                ..default()
-            },
-            RenderTarget::Image(target.clone().into()),
-        ))
-        .id();
-    // A rig drawn through a pixel canvas is captured as its window shows it.
-    #[cfg(feature = "render")]
-    let shows_canvas = crate::pixel_canvas::capture_canvas(world, camera, rig);
-    #[cfg(not(feature = "render"))]
-    let shows_canvas = false;
-    if !shows_canvas {
-        world
-            .entity_mut(camera)
-            .insert((Camera3d::default(), Transform::default(), ChildOf(rig)));
-    }
-
-    // The Readback component itself is attached per pace tick; only the
-    // completion observer lives on the entity permanently.
-    let mut readback = world.spawn_empty();
-    readback.observe(on_frame_readback);
-    let readback = readback.id();
-
-    world.insert_resource(FrameStream {
-        target,
-        camera: Some(camera),
-        readback,
-        size,
-        seq: 0,
-        pace: Some(Timer::from_seconds(FRAME_INTERVAL, TimerMode::Repeating)),
-        warned_bad_len: false,
-        warned_dead_camera: false,
-    });
-    world.insert_resource(StartDeclinedLogged(false));
-    info!("PIE frames: streaming at {}x{}", size.x, size.y);
 }
 
 /// Windowless capture: resize the shared target in place (the handle every
 /// camera and the virtual window agree on) and attach a permanent readback.
-/// The game renders into the target every frame, so there is no capture
-/// camera and no pacing; stop only detaches the readback and leaves the
-/// image in place for the still-running instance.
+/// The game renders into the target every frame; stop only detaches the
+/// readback and leaves the image in place for the still-running instance.
 fn start_windowless_stream(world: &mut World, size: UVec2) {
     let image_handle = {
         let target = world.resource::<crate::pie_windowless::WindowlessTarget>();
@@ -261,117 +169,38 @@ fn start_windowless_stream(world: &mut World, size: UVec2) {
     let readback = readback.id();
 
     world.insert_resource(FrameStream {
-        target: image_handle,
-        camera: None,
         readback,
         size,
         seq: 0,
-        pace: None,
         warned_bad_len: false,
-        warned_dead_camera: false,
     });
     world.insert_resource(StartDeclinedLogged(false));
     info!("PIE frames: windowless streaming at {}x{}", size.x, size.y);
 }
 
-/// Tear down an active stream: drop the state, despawn the capture camera and
-/// readback entities, and release the target image. Safe to call when nothing
-/// is streaming.
+/// Tear down an active stream: drop the state and despawn the readback
+/// entity. The shared windowless target stays alive for the still-running
+/// game. Safe to call when nothing is streaming.
 pub(crate) fn stop_frame_stream(world: &mut World) {
     let Some(stream) = world.remove_resource::<FrameStream>() else {
         return;
     };
-    if let Some(camera) = stream.camera
-        && let Ok(camera) = world.get_entity_mut(camera)
-    {
-        camera.despawn();
-    }
     if let Ok(readback) = world.get_entity_mut(stream.readback) {
         readback.despawn();
-    }
-    // The windowless shared target stays alive for the still-running game; only
-    // a capture-camera target is private to the stream and freed here.
-    let keep_image = world
-        .get_resource::<crate::pie_windowless::WindowlessTarget>()
-        .is_some_and(|target| target.image == stream.target);
-    if !keep_image {
-        world.resource_mut::<Assets<Image>>().remove(&stream.target);
     }
     info!("PIE frames: stream stopped");
 }
 
-/// Once per pace tick, activate the capture camera and attach the [`Readback`]
-/// that copies the target back to the cpu. Ticks on real time so the live view
-/// keeps following editor-driven edits while the virtual clock is paused.
-pub(crate) fn pace_frame_capture(
-    time: Res<Time<Real>>,
-    stream: Option<ResMut<FrameStream>>,
-    mut cameras: Query<&mut Camera, With<FrameCaptureCamera>>,
-    mut commands: Commands,
-) {
-    let Some(mut stream) = stream else {
-        return;
-    };
-    // Windowless streams have no pace timer: the game renders into the shared
-    // target every frame and the permanent readback ships each completion.
-    let Some(pace) = stream.pace.as_mut() else {
-        return;
-    };
-    if !pace.tick(time.delta()).just_finished() {
-        return;
-    }
-    let Some(camera_entity) = stream.camera else {
-        return;
-    };
-    let Ok(mut camera) = cameras.get_mut(camera_entity) else {
-        if !stream.warned_dead_camera {
-            warn!("PIE frames: capture camera is gone, stream is dead until restarted");
-            stream.warned_dead_camera = true;
-        }
-        return;
-    };
-    camera.is_active = true;
-    // try_insert: a stop or restart in this tick may have despawned the
-    // readback entity before this command applies.
-    commands
-        .entity(stream.readback)
-        .try_insert(Readback::texture(stream.target.clone()));
-}
-
 /// Completion observer: encode the readback data as a frame and hand it to the
-/// sender thread, then deactivate the capture camera and detach the
-/// [`Readback`] until the next pace tick.
+/// sender thread.
 fn on_frame_readback(
     readback: On<ReadbackComplete>,
     stream: Option<ResMut<FrameStream>>,
     frames: Option<Res<FrameSender>>,
-    mut cameras: Query<&mut Camera, With<FrameCaptureCamera>>,
-    mut commands: Commands,
 ) {
     let Some(mut stream) = stream else {
         return;
     };
-    // The windowed fallback toggles a capture camera and a per-tick readback;
-    // windowless mode has neither, so the camera bookkeeping is skipped and the
-    // permanent readback stays attached.
-    if let Some(camera_entity) = stream.camera {
-        let Ok(mut camera) = cameras.get_mut(camera_entity) else {
-            // The rig despawned and took the capture camera with it; detach the
-            // Readback so the GPU copy stops instead of running every frame.
-            if let Ok(mut readback) = commands.get_entity(stream.readback) {
-                readback.remove::<Readback>();
-            }
-            return;
-        };
-        // A completion arriving after the camera was deactivated is a leftover
-        // copy from an already-shipped capture; drop it.
-        if !camera.is_active {
-            return;
-        }
-        camera.is_active = false;
-        commands.entity(stream.readback).remove::<Readback>();
-    }
-
     let data = &readback.event().data;
     let expected = stream.size.x as usize * stream.size.y as usize * 4;
     if data.len() != expected {
@@ -439,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn start_without_active_rig_is_a_noop() {
+    fn start_without_windowless_target_is_a_noop() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Image>();
@@ -454,49 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn start_and_stop_lifecycle_with_active_rig() {
-        use jackdaw_camera_rig::{ActiveCameraRig, CameraRig};
-        let mut app = bevy::app::App::new();
-        app.add_plugins(bevy::asset::AssetPlugin::default());
-        app.init_asset::<Image>();
-        let rig = app
-            .world_mut()
-            .spawn((CameraRig::default(), ActiveCameraRig, Transform::default()))
-            .id();
-        start_frame_stream(app.world_mut(), 640, 480);
-        let (camera, target) = {
-            let stream = app
-                .world()
-                .get_resource::<FrameStream>()
-                .expect("stream installed");
-            (
-                stream.camera.expect("windowed mode has a capture camera"),
-                stream.target.clone(),
-            )
-        };
-        assert_eq!(
-            app.world().entity(camera).get::<ChildOf>().map(|c| c.0),
-            Some(rig)
-        );
-        assert!(
-            app.world()
-                .resource::<Assets<Image>>()
-                .get(&target)
-                .is_some()
-        );
-        stop_frame_stream(app.world_mut());
-        assert!(app.world().get_resource::<FrameStream>().is_none());
-        assert!(app.world().get_entity(camera).is_err());
-        assert!(
-            app.world()
-                .resource::<Assets<Image>>()
-                .get(&target)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn windowless_stream_has_no_camera_and_keeps_the_image_on_stop() {
+    fn windowless_stream_keeps_the_image_on_stop() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Image>();
@@ -508,13 +295,14 @@ mod tests {
                 .world()
                 .get_resource::<FrameStream>()
                 .expect("stream installed");
-            assert!(
-                stream.camera.is_none(),
-                "no capture camera in windowless mode"
-            );
-            assert!(stream.pace.is_none(), "no pace timer in windowless mode");
             assert_eq!(stream.size, UVec2::new(1024, 700));
-            (stream.readback, stream.target.clone())
+            (
+                stream.readback,
+                app.world()
+                    .resource::<crate::pie_windowless::WindowlessTarget>()
+                    .image
+                    .clone(),
+            )
         };
         assert!(
             app.world().entity(readback).contains::<Readback>(),

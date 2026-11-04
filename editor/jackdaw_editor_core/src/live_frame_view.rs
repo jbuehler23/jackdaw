@@ -67,9 +67,7 @@ enum StreamAction {
 /// [`RESIZE_DEAD_ZONE`] (or a fresh entry / refocus) starts it after holding
 /// steady for [`RESIZE_DEBOUNCE_MS`]. While the size is settled but the
 /// stream is not fresh, the start is re-sent once per
-/// [`RESTART_BACKOFF_MS`]; game-side start has restart semantics and
-/// re-finds the currently active rig, so this recovers a capture that died
-/// (rig despawn) as well as a lost initial start.
+/// [`RESTART_BACKOFF_MS`], covering a start the game missed.
 fn next_stream_action(
     want: Option<(&InstanceKey, UVec2)>,
     stream_is_fresh: bool,
@@ -135,7 +133,11 @@ fn within_dead_zone(a: UVec2, b: UVec2) -> bool {
 /// the focused-instance check reads the non-send
 /// [`PieSession`](crate::pie::PieSession) and the send path needs the world.
 pub fn drive_stream_requests(world: &mut World) {
-    let want = crate::pie::focused_live_instance(world).zip(game_panel_pixel_size(world));
+    let want = stream_target(
+        crate::pie::effective_window_mode_in(world) == crate::pie::PieWindowMode::Embedded,
+        crate::pie::focused_live_instance(world),
+        game_panel_pixel_size(world),
+    );
     let stream_is_fresh = world
         .get_resource::<LiveFrameStream>()
         .is_some_and(LiveFrameStream::is_fresh);
@@ -166,6 +168,19 @@ pub fn drive_stream_requests(world: &mut World) {
     }
 }
 
+/// The instance and size to stream, or `None` (which stops any stream) when
+/// the game runs in its own window or nothing can be shown.
+fn stream_target(
+    embedded: bool,
+    focus: Option<InstanceKey>,
+    size: Option<UVec2>,
+) -> Option<(InstanceKey, UVec2)> {
+    if !embedded {
+        return None;
+    }
+    focus.zip(size)
+}
+
 /// Pixel size of the Game panel's letterbox surface, the stream request
 /// target. `None` while the panel is closed or collapsed, which stops the
 /// stream.
@@ -191,6 +206,35 @@ mod tests {
     /// An instant the debounce window has already elapsed against.
     fn later(start: Instant) -> Instant {
         start + std::time::Duration::from_millis(RESIZE_DEBOUNCE_MS as u64 + 10)
+    }
+
+    #[test]
+    fn windowed_mode_has_no_stream_target() {
+        let focus = Some(key("game", 1));
+        let size = Some(UVec2::new(800, 600));
+        assert!(stream_target(false, focus.clone(), size).is_none());
+        assert!(stream_target(true, focus, size).is_some());
+    }
+
+    #[test]
+    fn stream_target_follows_the_focused_instances_launch_mode() {
+        use crate::pie::{PieWindowMode, effective_window_mode_in, record_test_launch};
+
+        let size = Some(UVec2::new(800, 600));
+        let mut world = World::new();
+        world.insert_resource(PieWindowMode::Embedded);
+        let embedded = key("embedded", 1);
+        record_test_launch(&mut world, &embedded, PieWindowMode::Embedded);
+
+        world.insert_resource(PieWindowMode::Windowed);
+        let embedded_mode = effective_window_mode_in(&world) == PieWindowMode::Embedded;
+        assert!(stream_target(embedded_mode, Some(embedded), size).is_some());
+
+        let windowed = key("windowed", 1);
+        record_test_launch(&mut world, &windowed, PieWindowMode::Windowed);
+        world.insert_resource(PieWindowMode::Embedded);
+        let embedded_mode = effective_window_mode_in(&world) == PieWindowMode::Embedded;
+        assert!(stream_target(embedded_mode, Some(windowed), size).is_none());
     }
 
     #[test]

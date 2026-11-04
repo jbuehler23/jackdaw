@@ -97,7 +97,8 @@ fn surface_clicked(world: &mut World, surface: Entity) {
     let fresh = world
         .get_resource::<LiveFrameStream>()
         .is_some_and(LiveFrameStream::is_fresh);
-    if !fresh {
+    let embedded = crate::pie::effective_window_mode_in(world) == PieWindowMode::Embedded;
+    if !fresh || !embedded {
         return;
     }
     if !world
@@ -286,18 +287,18 @@ fn sync_game_panel_image(
 }
 
 const IDLE_STOPPED: &str = "Press Play to run the game here";
-const IDLE_WINDOWED: &str = "The game is running in its own window";
+const IDLE_WINDOWED: &str = "Running in its own window";
 const IDLE_WAITING: &str = "Waiting for the game's first frame. A game whose main.rs does not pass \
      DefaultPlugins through jackdaw_runtime::maybe_windowless opens its own window instead.";
 
 /// Say where the game is while the panel has no frame to show.
 fn update_game_panel_idle_label(
     play_state: Option<Res<State<PlayState>>>,
-    window_mode: Option<Res<PieWindowMode>>,
+    launched: crate::pie::LaunchedWindowMode,
     mut labels: Query<&mut Text, With<GamePanelIdleLabel>>,
 ) {
     let running = play_state.is_some_and(|state| *state.get() != PlayState::Stopped);
-    let windowed = window_mode.is_some_and(|mode| *mode == PieWindowMode::Windowed);
+    let windowed = launched.get() == PieWindowMode::Windowed;
     let message = match (running, windowed) {
         (false, _) => IDLE_STOPPED,
         (true, true) => IDLE_WINDOWED,
@@ -318,9 +319,7 @@ fn surface_game_panel_on_play(world: &mut World) {
     let running = world
         .get_resource::<State<PlayState>>()
         .is_some_and(|state| *state.get() != PlayState::Stopped);
-    let embedded = world
-        .get_resource::<PieWindowMode>()
-        .is_none_or(|mode| *mode == PieWindowMode::Embedded);
+    let embedded = crate::pie::effective_window_mode_in(world) == PieWindowMode::Embedded;
     let Some(shown) = world
         .get_resource::<GamePanelSurfaced>()
         .map(|surfaced| surfaced.shown)

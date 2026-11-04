@@ -18,6 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use jackdaw_api::pie::PlayState;
@@ -133,6 +134,7 @@ pub(crate) struct PendingSpawn {
 #[derive(Default)]
 pub struct PieSession {
     children: HashMap<InstanceKey, ChildStage>,
+    pub(crate) launch_modes: HashMap<InstanceKey, PieWindowMode>,
     pub(crate) builds: HashMap<PathBuf, BuildState>,
 }
 
@@ -158,6 +160,11 @@ impl PieSession {
     /// Whether an instance is currently launched (connecting or live).
     pub fn is_running(&self, key: &InstanceKey) -> bool {
         self.children.contains_key(key)
+    }
+
+    /// The window mode an instance was launched with.
+    pub fn launch_mode(&self, key: &InstanceKey) -> Option<PieWindowMode> {
+        self.launch_modes.get(key).copied()
     }
 
     /// Keys of all launched instances, for the dropdown checks.
@@ -472,15 +479,76 @@ pub(crate) fn project_toggle_save_before_play(
     OperatorResult::Finished
 }
 
-/// Input capture needs a focused instance and a fresh frame to forward to.
+/// Input capture needs an embedded game with a focused instance and a fresh
+/// frame to forward to.
 pub(crate) fn focused_with_fresh_stream(
     stream: Res<crate::live_frame::LiveFrameStream>,
     instances: Res<PieInstances>,
+    launched: LaunchedWindowMode,
 ) -> bool {
-    instances.focused.is_some() && stream.is_fresh()
+    launched.get() == PieWindowMode::Embedded && instances.focused.is_some() && stream.is_fresh()
 }
 
-/// Where a launched game's window lives. Applies to the next launch.
+/// The window mode of the game being shown: the focused instance's launch
+/// mode, else any launched instance's, else the [`PieWindowMode`] setting a
+/// launch would use now.
+pub(crate) fn effective_window_mode(
+    instances: Option<&PieInstances>,
+    session: Option<&PieSession>,
+    setting: Option<PieWindowMode>,
+) -> PieWindowMode {
+    let focused = instances
+        .and_then(|instances| instances.focused.as_ref())
+        .and_then(|key| session?.launch_mode(key));
+    focused
+        .or_else(|| session?.launch_modes.values().next().copied())
+        .or(setting)
+        .unwrap_or_default()
+}
+
+/// System-param access to [`effective_window_mode`].
+#[derive(SystemParam)]
+pub(crate) struct LaunchedWindowMode<'w> {
+    instances: Option<Res<'w, PieInstances>>,
+    session: Option<NonSend<'w, PieSession>>,
+    setting: Option<Res<'w, PieWindowMode>>,
+}
+
+impl LaunchedWindowMode<'_> {
+    pub(crate) fn get(&self) -> PieWindowMode {
+        effective_window_mode(
+            self.instances.as_deref(),
+            self.session.as_deref(),
+            self.setting.as_deref().copied(),
+        )
+    }
+}
+
+/// [`effective_window_mode`] for exclusive access.
+pub(crate) fn effective_window_mode_in(world: &World) -> PieWindowMode {
+    effective_window_mode(
+        world.get_resource::<PieInstances>(),
+        world.get_non_send::<PieSession>(),
+        world.get_resource::<PieWindowMode>().copied(),
+    )
+}
+
+/// Record `key` as launched with `mode` and focused, without a child process.
+#[cfg(test)]
+pub(crate) fn record_test_launch(world: &mut World, key: &InstanceKey, mode: PieWindowMode) {
+    world.init_resource::<PieInstances>();
+    if world.get_non_send::<PieSession>().is_none() {
+        world.insert_non_send(PieSession::default());
+    }
+    world
+        .non_send_mut::<PieSession>()
+        .launch_modes
+        .insert(key.clone(), mode);
+    world.resource_mut::<PieInstances>().focused = Some(key.clone());
+}
+
+/// Where a launched game's window lives. A launch records the mode it used, and
+/// running instances keep it; changing the setting only affects later launches.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PieWindowMode {
     /// No OS window: the game streams its frames into the editor's Game panel.
@@ -627,11 +695,10 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
     if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&root) {
         if source_is_current(&root, path) {
             let path = path.clone();
-            if let Some(stage) = spawn_instance(world, &key, &run, &path) {
-                world
-                    .non_send_mut::<PieSession>()
-                    .children
-                    .insert(key, stage);
+            if let Some((stage, mode)) = spawn_instance(world, &key, &run, &path) {
+                let mut session = world.non_send_mut::<PieSession>();
+                session.launch_modes.insert(key.clone(), mode);
+                session.children.insert(key, stage);
             }
             return;
         }
@@ -898,7 +965,9 @@ pub(crate) fn spawn_game_build(
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
 /// Returns to authoring mode once no children remain.
 pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
-    let Some(mut stage) = world.non_send_mut::<PieSession>().children.remove(key) else {
+    let mut session = world.non_send_mut::<PieSession>();
+    session.launch_modes.remove(key);
+    let Some(mut stage) = session.children.remove(key) else {
         return;
     };
     match &mut stage {
@@ -978,6 +1047,7 @@ pub fn handle_stop(world: &mut World) {
     broadcast_control(world, ControlEvent::Stop);
 
     let mut session = world.non_send_mut::<PieSession>();
+    session.launch_modes.clear();
     for (_key, mut stage) in session.children.drain() {
         match &mut stage {
             ChildStage::Connecting { child, .. } | ChildStage::Live { child, .. } => {
@@ -1276,7 +1346,7 @@ fn advance_pie_session(world: &mut World) {
 /// spawning so `spawn_instance` can read the world without aliasing.
 fn poll_builds(world: &mut World) {
     let mut builds = std::mem::take(&mut world.non_send_mut::<PieSession>().builds);
-    let mut spawned: Vec<(InstanceKey, ChildStage)> = Vec::new();
+    let mut spawned: Vec<(InstanceKey, ChildStage, PieWindowMode)> = Vec::new();
 
     for (root, state) in builds.iter_mut() {
         let BuildState::Running {
@@ -1299,10 +1369,10 @@ fn poll_builds(world: &mut World) {
                 // game reported about itself, and Play runs that same
                 // binary in a fresh process below.
                 for spawn in pending.drain(..) {
-                    if let Some(stage) =
+                    if let Some((stage, mode)) =
                         spawn_instance(world, &spawn.key, &spawn.run, &result.binary)
                     {
-                        spawned.push((spawn.key, stage));
+                        spawned.push((spawn.key, stage, mode));
                     }
                 }
                 *state = BuildState::Done(result.binary);
@@ -1338,7 +1408,8 @@ fn poll_builds(world: &mut World) {
 
     let mut session = world.non_send_mut::<PieSession>();
     session.builds = builds;
-    for (key, stage) in spawned {
+    for (key, stage, mode) in spawned {
+        session.launch_modes.insert(key.clone(), mode);
         session.children.insert(key, stage);
     }
 }
@@ -1357,7 +1428,11 @@ fn poll_children(world: &mut World) {
         }
     }
 
-    world.non_send_mut::<PieSession>().children = survivors;
+    let mut session = world.non_send_mut::<PieSession>();
+    session
+        .launch_modes
+        .retain(|key, _| survivors.contains_key(key));
+    session.children = survivors;
 }
 
 /// Step one child's stage by value, returning the stage it should
@@ -1531,7 +1606,7 @@ fn spawn_instance(
     key: &InstanceKey,
     run: &RunConfig,
     binary: &Path,
-) -> Option<ChildStage> {
+) -> Option<(ChildStage, PieWindowMode)> {
     let root = project_root(world)?;
 
     let (handle, server_name) = match serve() {
@@ -1564,12 +1639,11 @@ fn spawn_instance(
         command.envs(&settings.env).args(&settings.args);
     }
 
-    if world
+    let mode = world
         .get_resource::<PieWindowMode>()
         .copied()
-        .map(wants_windowless_env)
-        .unwrap_or(true)
-    {
+        .unwrap_or_default();
+    if wants_windowless_env(mode) {
         command.env("JACKDAW_PIE_WINDOWLESS", "1");
     }
 
@@ -1639,12 +1713,15 @@ fn spawn_instance(
     let accept = AsyncComputeTaskPool::get().spawn(async move { handle.accept() });
 
     info!("PIE: {key} launched, awaiting connection");
-    Some(ChildStage::Connecting {
-        child,
-        accept,
-        stderr_tail,
-        since: Instant::now(),
-    })
+    Some((
+        ChildStage::Connecting {
+            child,
+            accept,
+            stderr_tail,
+            since: Instant::now(),
+        },
+        mode,
+    ))
 }
 
 /// Log the buffered stderr tail as an error, for diagnosing a crashed
