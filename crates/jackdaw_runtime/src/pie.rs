@@ -84,11 +84,6 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
-        // Select-mode picking needs a 3D raycast backend; UI picking alone
-        // only hits interface nodes.
-        if !app.is_plugin_added::<bevy::picking::mesh_picking::MeshPickingPlugin>() {
-            app.add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin);
-        }
         // Forwarded image-targeted pointer events own the mouse pointer.
         // Disable window-targeted pointer derivation outright so a stray
         // window event can never fight the forwarded stream over the pointer
@@ -341,16 +336,6 @@ fn apply_control(world: &mut World) {
                 crate::pie_frames::stop_frame_stream(world);
             }
             ControlEvent::Input(event) => apply_input(world, event),
-            ControlEvent::Pick => {
-                let entity = picked_entity(world);
-                let reply = StateEvent::PickResult { entity };
-                if let Ok(bytes) = to_bytes(&reply) {
-                    world
-                        .non_send_mut::<PieTransportRes>()
-                        .0
-                        .send(PieChannel::Reliable, &bytes);
-                }
-            }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity
                     .map(Entity::from_bits)
@@ -443,33 +428,6 @@ fn draw_highlight(
             HIGHLIGHT_COLOR,
         );
     }
-}
-
-/// The topmost streamable entity under the mouse pointer, from the picking
-/// hover map. Hits without a `Transform` (UI nodes, picking infrastructure)
-/// are skipped so the answer is always an entity the editor can inspect.
-fn picked_entity(world: &mut World) -> Option<u64> {
-    let candidates: Vec<(Entity, f32)> = {
-        let hover = world.get_resource::<bevy::picking::hover::HoverMap>()?;
-        let hits = hover.0.get(&bevy::picking::pointer::PointerId::Mouse)?;
-        hits.iter()
-            .map(|(&entity, hit)| (entity, hit.depth))
-            .collect()
-    };
-    let mut best: Option<(Entity, f32)> = None;
-    for (entity, depth) in candidates {
-        if world.get::<Transform>(entity).is_none() {
-            continue;
-        }
-        let better = match best {
-            Some((_, best_depth)) => depth < best_depth,
-            None => true,
-        };
-        if better {
-            best = Some((entity, depth));
-        }
-    }
-    best.map(|(entity, _)| entity.to_bits())
 }
 
 /// Inject one forwarded input event as ordinary bevy input messages aimed at
@@ -1165,42 +1123,6 @@ mod tests {
             }
             other => panic!("expected an image pointer target, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn pick_replies_with_the_nearest_transform_hit() {
-        use bevy::ecs::entity::EntityHashMap;
-        use bevy::picking::backend::HitData;
-        use bevy::picking::hover::HoverMap;
-        use bevy::picking::pointer::PointerId;
-
-        let mut world = World::new();
-        let camera = world.spawn_empty().id();
-        // A UI-style hit (no Transform) nearer than a world entity: the world
-        // entity must win because only streamable entities are inspectable.
-        let ui_entity = world.spawn_empty().id();
-        let near = world.spawn(Transform::default()).id();
-        let far = world.spawn(Transform::default()).id();
-
-        let hit = |depth: f32| HitData {
-            camera,
-            depth,
-            position: None,
-            normal: None,
-            extra: None,
-        };
-        let mut hits = EntityHashMap::new();
-        hits.insert(ui_entity, hit(0.1));
-        hits.insert(near, hit(1.0));
-        hits.insert(far, hit(5.0));
-        let mut map = HoverMap::default();
-        map.0.insert(PointerId::Mouse, hits);
-        world.insert_resource(map);
-
-        assert_eq!(picked_entity(&mut world), Some(near.to_bits()));
-
-        world.resource_mut::<HoverMap>().0.clear();
-        assert_eq!(picked_entity(&mut world), None);
     }
 
     /// `highlight_boxes` takes `Query` params, so it is exercised through a

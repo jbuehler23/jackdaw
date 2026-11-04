@@ -30,11 +30,6 @@ pub enum StateEvent {
         grabbed: bool,
         visible: bool,
     },
-    /// Answer to [`ControlEvent::Pick`]: the topmost streamable entity under
-    /// the forwarded cursor, or `None` when nothing inspectable is hit.
-    PickResult {
-        entity: Option<u64>,
-    },
 }
 
 /// Editor-to-game messages.
@@ -74,10 +69,6 @@ pub enum ControlEvent {
     StopFrameStream,
     /// Forwarded editor input while the Live viewport has input capture.
     Input(crate::input::PieInputEvent),
-    /// Ask what is under the forwarded cursor. The game answers with
-    /// [`StateEvent::PickResult`] using its own picking backend, so picking
-    /// works in any game state and needs no editor-side camera alignment.
-    Pick,
     /// Box the given entity in the game's own render (gizmo bounds), or
     /// clear the highlight with `None`. Sent when the editor selection
     /// changes while an instance is focused.
@@ -147,21 +138,6 @@ mod tests {
             grabbed: true,
             visible: false,
         };
-        let bytes = to_bytes(&ev).unwrap();
-        assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
-    }
-
-    #[test]
-    fn pick_events_round_trip() {
-        let ev = ControlEvent::Pick;
-        let bytes = to_bytes(&ev).unwrap();
-        assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
-
-        let ev = StateEvent::PickResult { entity: Some(42) };
-        let bytes = to_bytes(&ev).unwrap();
-        assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
-
-        let ev = StateEvent::PickResult { entity: None };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
     }

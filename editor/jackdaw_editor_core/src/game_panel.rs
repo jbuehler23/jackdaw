@@ -1,18 +1,11 @@
 //! The Game panel: a dockable surface showing the focused instance's
-//! streamed frame. A Play/Select mode bar decides what a click means: Play
-//! engages input capture (the frame is the running game), Select asks the
-//! game what is under the cursor and selects it in the Live tree. The panel
-//! is a pure monitor: no editor camera, no overlay, no compositing.
+//! streamed frame. A click on the frame engages input capture. The panel is
+//! a pure monitor: no editor camera, no overlay, no compositing.
 
-use bevy::{
-    prelude::*,
-    ui::Checked,
-    ui_widgets::{ValueChange, observe},
-};
+use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::button::{ButtonProps, button};
-use jackdaw_feathers::segmented;
 use jackdaw_feathers::tokens;
 
 use jackdaw_panels::tree::{DockTree, NodeId, TabId};
@@ -22,16 +15,6 @@ use crate::pie::PieWindowMode;
 
 /// Dock window id, used for registration and presence checks.
 pub const GAME_WINDOW_ID: &str = "jackdaw.game";
-
-/// What a click in the Game panel does.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GamePanelMode {
-    /// Clicks engage input capture; the game is playable.
-    #[default]
-    Play,
-    /// Game input is off; clicks pick the entity under the cursor.
-    Select,
-}
 
 /// Marker on the panel content root.
 #[derive(Component)]
@@ -49,13 +32,6 @@ pub struct GamePanelImage;
 /// Marker on the idle label shown while no frame is streaming.
 #[derive(Component)]
 pub struct GamePanelIdleLabel;
-
-/// Marker on one Play/Select segment.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GameModeSegment {
-    Play,
-    Select,
-}
 
 /// Marker on the "no signal" chip shown while an instance is focused but no
 /// fresh frame has arrived.
@@ -115,53 +91,25 @@ pub(crate) fn surface_remap(
     (top_left, panel)
 }
 
-/// Route a click on the frame surface by mode. Play engages capture; Select
-/// forwards the cursor and asks the game to pick. Clicks with no focused
-/// fresh stream do nothing (the idle label is showing).
-fn surface_clicked(world: &mut World, surface: Entity, window_pos: Vec2) {
+/// Engage input capture on a click on the frame surface. Clicks with no
+/// focused fresh stream do nothing (the idle label is showing).
+fn surface_clicked(world: &mut World, surface: Entity) {
     let fresh = world
         .get_resource::<LiveFrameStream>()
         .is_some_and(LiveFrameStream::is_fresh);
     if !fresh {
         return;
     }
-    match *world.resource::<GamePanelMode>() {
-        GamePanelMode::Play => {
-            if !world
-                .resource::<crate::live_input::LiveInputCapture>()
-                .active
-            {
-                crate::live_input::engage_capture(world, surface);
-            }
-        }
-        GamePanelMode::Select => {
-            if let Some(position) = surface_to_stream(world, surface, window_pos) {
-                crate::pie::send_control_to_focused(
-                    world,
-                    jackdaw_pie_protocol::ControlEvent::Input(
-                        jackdaw_pie_protocol::PieInputEvent::CursorMoved { position },
-                    ),
-                );
-                crate::pie::send_control_to_focused(
-                    world,
-                    jackdaw_pie_protocol::ControlEvent::Pick,
-                );
-            }
-        }
+    if !world
+        .resource::<crate::live_input::LiveInputCapture>()
+        .active
+    {
+        crate::live_input::engage_capture(world, surface);
     }
 }
 
-/// Window-logical position to stream pixels via the surface's letterbox.
-fn surface_to_stream(world: &mut World, surface: Entity, window_pos: Vec2) -> Option<Vec2> {
-    let stream = world.get_resource::<LiveFrameStream>()?.size.as_vec2();
-    let computed = world.get::<ComputedNode>(surface)?;
-    let transform = world.get::<bevy::ui::UiGlobalTransform>(surface)?;
-    let (top_left, panel) = surface_remap(computed, transform);
-    panel_to_stream(window_pos - top_left, panel, stream)
-}
-
-/// Build the panel content: a header with the Play/Select mode bar, signal
-/// and playing chips, and a Play-input button; below it a letterbox surface
+/// Build the panel content: a header with the signal and playing chips and
+/// a Play-input button; below it a letterbox surface
 /// hosting the frame image and an idle label.
 pub fn game_panel_content() -> impl Bundle {
     (
@@ -185,7 +133,6 @@ pub fn game_panel_content() -> impl Bundle {
                     ..Default::default()
                 },
                 children![
-                    game_mode_bar(),
                     game_no_signal_chip(),
                     game_playing_chip(),
                     game_play_input_button(),
@@ -203,9 +150,8 @@ pub fn game_panel_content() -> impl Bundle {
                 },
                 observe(|click: On<PointerClick>, mut commands: Commands| {
                     let surface = click.event_target();
-                    let window_pos = click.pointer.position;
                     commands.queue(move |world: &mut World| {
-                        surface_clicked(world, surface, window_pos);
+                        surface_clicked(world, surface);
                     });
                 }),
                 children![
@@ -229,65 +175,6 @@ pub fn game_panel_content() -> impl Bundle {
                 ],
             ),
         ],
-    )
-}
-
-/// Build the two-segment Play/Select mode bar.
-fn game_mode_bar() -> impl Bundle {
-    (
-        segmented::segmented_bar(),
-        observe(
-            |change: On<ValueChange<Entity>>,
-             segments: Query<&GameModeSegment>,
-             mut commands: Commands| {
-                let Ok(&segment) = segments.get(change.value) else {
-                    return;
-                };
-                commands.queue(move |world: &mut World| {
-                    let next = match segment {
-                        GameModeSegment::Play => GamePanelMode::Play,
-                        GameModeSegment::Select => GamePanelMode::Select,
-                    };
-                    if next == GamePanelMode::Select
-                        && world
-                            .resource::<crate::live_input::LiveInputCapture>()
-                            .active
-                    {
-                        world
-                            .resource_mut::<crate::live_input::LiveInputCapture>()
-                            .release_requested = true;
-                        crate::live_input::apply_release_requests(world);
-                        crate::live_input::flush_forwards(world);
-                    }
-                    *world.resource_mut::<GamePanelMode>() = next;
-                });
-            },
-        ),
-        children![
-            game_mode_segment(
-                GameModeSegment::Play,
-                "Play",
-                "Play: clicks and keys go to the game (Shift+Esc releases)",
-            ),
-            game_mode_segment(
-                GameModeSegment::Select,
-                "Select",
-                "Select: click the frame to inspect the entity under the cursor",
-            ),
-        ],
-    )
-}
-
-/// One segment inside the Play/Select mode bar.
-fn game_mode_segment(
-    segment: GameModeSegment,
-    label: &'static str,
-    tooltip: &'static str,
-) -> impl Bundle {
-    (
-        segment,
-        jackdaw_feathers::tooltip::Tooltip::title(tooltip),
-        segmented::segment(label),
     )
 }
 
@@ -509,27 +396,6 @@ fn layout_game_panel_image(
     }
 }
 
-/// Highlight the active mode segment.
-fn update_game_mode_bar(
-    mode: Res<GamePanelMode>,
-    mut segments: Query<(Entity, &GameModeSegment, &mut BackgroundColor, Has<Checked>)>,
-    mut commands: Commands,
-) {
-    for (entity, segment, mut bg, checked) in &mut segments {
-        let is_active = match segment {
-            GameModeSegment::Play => *mode == GamePanelMode::Play,
-            GameModeSegment::Select => *mode == GamePanelMode::Select,
-        };
-        let color = segmented::segment_background(is_active);
-        if bg.0 != color {
-            bg.0 = color;
-        }
-        if checked != is_active {
-            segmented::set_segment_checked(&mut commands, entity, is_active);
-        }
-    }
-}
-
 /// Drive the no-signal chip, the playing chip, and the capture accent border.
 fn update_game_panel_chips(
     capture: Res<crate::live_input::LiveInputCapture>,
@@ -571,47 +437,11 @@ fn update_game_panel_chips(
     }
 }
 
-/// While Select mode is active, forward the cursor position over the surface
-/// so the game's picking backend tracks hover before a pick click.
-fn forward_select_hover(
-    mode: Res<GamePanelMode>,
-    stream: Option<Res<LiveFrameStream>>,
-    mut cursor: MessageReader<bevy::window::CursorMoved>,
-    surfaces: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<GamePanelSurface>>,
-    mut pending: ResMut<crate::live_input::PendingForwards>,
-) {
-    if *mode != GamePanelMode::Select {
-        cursor.clear();
-        return;
-    }
-    let Some(stream) = stream.filter(|s| s.is_fresh()) else {
-        cursor.clear();
-        return;
-    };
-    let Ok((computed, transform)) = surfaces.single() else {
-        cursor.clear();
-        return;
-    };
-    let (top_left, panel) = surface_remap(computed, transform);
-    for moved in cursor.read() {
-        let local = moved.position - top_left;
-        if local.x < 0.0 || local.y < 0.0 || local.x > panel.x || local.y > panel.y {
-            continue;
-        }
-        if let Some(position) = panel_to_stream(local, panel, stream.size.as_vec2()) {
-            pending
-                .0
-                .push(jackdaw_pie_protocol::PieInputEvent::CursorMoved { position });
-        }
-    }
-}
-
 pub struct GamePanelPlugin;
 
 impl Plugin for GamePanelPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<GamePanelMode>()
-            .init_resource::<GamePanelSurfaced>()
+        app.init_resource::<GamePanelSurfaced>()
             .add_systems(Update, surface_game_panel_on_play)
             .add_systems(
                 Update,
@@ -619,9 +449,7 @@ impl Plugin for GamePanelPlugin {
                     sync_game_panel_image,
                     update_game_panel_idle_label,
                     layout_game_panel_image,
-                    update_game_mode_bar,
                     update_game_panel_chips,
-                    forward_select_hover,
                 ),
             );
     }
@@ -647,12 +475,11 @@ mod tests {
     #[test]
     fn surface_click_without_fresh_stream_is_a_noop() {
         let mut world = World::new();
-        world.init_resource::<GamePanelMode>();
         world.init_resource::<crate::live_input::LiveInputCapture>();
         world.init_resource::<crate::live_input::PendingForwards>();
         let surface = world.spawn_empty().id();
         // No LiveFrameStream resource: not fresh, so the click does nothing.
-        surface_clicked(&mut world, surface, Vec2::new(10.0, 10.0));
+        surface_clicked(&mut world, surface);
         assert!(
             !world
                 .resource::<crate::live_input::LiveInputCapture>()
