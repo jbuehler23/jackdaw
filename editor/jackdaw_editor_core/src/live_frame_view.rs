@@ -67,9 +67,7 @@ enum StreamAction {
 /// [`RESIZE_DEAD_ZONE`] (or a fresh entry / refocus) starts it after holding
 /// steady for [`RESIZE_DEBOUNCE_MS`]. While the size is settled but the
 /// stream is not fresh, the start is re-sent once per
-/// [`RESTART_BACKOFF_MS`]; game-side start has restart semantics and
-/// re-finds the currently active rig, so this recovers a capture that died
-/// (rig despawn) as well as a lost initial start.
+/// [`RESTART_BACKOFF_MS`], covering a start the game missed.
 fn next_stream_action(
     want: Option<(&InstanceKey, UVec2)>,
     stream_is_fresh: bool,
@@ -135,11 +133,8 @@ fn within_dead_zone(a: UVec2, b: UVec2) -> bool {
 /// the focused-instance check reads the non-send
 /// [`PieSession`](crate::pie::PieSession) and the send path needs the world.
 pub fn drive_stream_requests(world: &mut World) {
-    let embedded = world
-        .get_resource::<crate::pie::PieWindowMode>()
-        .is_none_or(|mode| *mode == crate::pie::PieWindowMode::Embedded);
     let want = stream_target(
-        embedded,
+        crate::pie::effective_window_mode_in(world) == crate::pie::PieWindowMode::Embedded,
         crate::pie::focused_live_instance(world),
         game_panel_pixel_size(world),
     );
@@ -222,23 +217,24 @@ mod tests {
     }
 
     #[test]
-    fn switching_to_windowed_stops_an_active_stream() {
-        let mut req = StreamRequest {
-            requested: Some(UVec2::new(800, 600)),
-            pending: None,
-            last_focus: Some(key("game", 1)),
-            last_start: None,
-        };
-        let want = stream_target(false, Some(key("game", 1)), Some(UVec2::new(800, 600)));
-        assert_eq!(
-            next_stream_action(
-                want.as_ref().map(|(k, s)| (k, *s)),
-                true,
-                &mut req,
-                Instant::now()
-            ),
-            StreamAction::Stop
-        );
+    fn stream_target_follows_the_focused_instances_launch_mode() {
+        use crate::pie::{PieWindowMode, effective_window_mode_in, record_test_launch};
+
+        let size = Some(UVec2::new(800, 600));
+        let mut world = World::new();
+        world.insert_resource(PieWindowMode::Embedded);
+        let embedded = key("embedded", 1);
+        record_test_launch(&mut world, &embedded, PieWindowMode::Embedded);
+
+        world.insert_resource(PieWindowMode::Windowed);
+        let embedded_mode = effective_window_mode_in(&world) == PieWindowMode::Embedded;
+        assert!(stream_target(embedded_mode, Some(embedded), size).is_some());
+
+        let windowed = key("windowed", 1);
+        record_test_launch(&mut world, &windowed, PieWindowMode::Windowed);
+        world.insert_resource(PieWindowMode::Embedded);
+        let embedded_mode = effective_window_mode_in(&world) == PieWindowMode::Embedded;
+        assert!(stream_target(embedded_mode, Some(windowed), size).is_none());
     }
 
     #[test]

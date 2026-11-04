@@ -46,10 +46,7 @@ pub(crate) struct PendingForwards(pub(crate) Vec<PieInputEvent>);
 /// focused game until released. Does nothing while the game runs in its own
 /// window.
 pub(crate) fn engage_capture(world: &mut World, surface: Entity) {
-    if world
-        .get_resource::<crate::pie::PieWindowMode>()
-        .is_some_and(|mode| *mode == crate::pie::PieWindowMode::Windowed)
-    {
+    if crate::pie::effective_window_mode_in(world) == crate::pie::PieWindowMode::Windowed {
         return;
     }
     {
@@ -180,7 +177,7 @@ fn collect_forwards(
 fn auto_release(
     mut capture: ResMut<LiveInputCapture>,
     stream: Option<Res<LiveFrameStream>>,
-    window_mode: Option<Res<crate::pie::PieWindowMode>>,
+    launched: crate::pie::LaunchedWindowMode,
     mut focus_events: MessageReader<WindowFocused>,
     windows: Query<(), With<PrimaryWindow>>,
 ) {
@@ -194,7 +191,7 @@ fn auto_release(
     let lost_os_focus = focus_events
         .read()
         .any(|event| !event.focused && windows.get(event.window).is_ok());
-    let windowed = window_mode.is_some_and(|mode| *mode == crate::pie::PieWindowMode::Windowed);
+    let windowed = launched.get() == crate::pie::PieWindowMode::Windowed;
     if lost_os_focus || !view_ok || windowed {
         capture.release_requested = true;
     }
@@ -489,13 +486,58 @@ mod tests {
         world.init_resource::<LiveInputCapture>();
         world.init_resource::<PendingForwards>();
         world.init_resource::<bevy::input_focus::InputFocus>();
-        world.insert_resource(crate::pie::PieWindowMode::Windowed);
+        world.insert_resource(crate::pie::PieWindowMode::Embedded);
+        let key = crate::pie::InstanceKey {
+            config: "game".into(),
+            instance: 1,
+        };
+        crate::pie::record_test_launch(&mut world, &key, crate::pie::PieWindowMode::Windowed);
         let surface = world.spawn_empty().id();
 
         engage_capture(&mut world, surface);
 
         assert!(!world.resource::<LiveInputCapture>().active);
         assert!(world.resource::<PendingForwards>().0.is_empty());
+    }
+
+    fn auto_release_app(mode: crate::pie::PieWindowMode) -> (App, crate::pie::InstanceKey) {
+        let mut app = App::new();
+        app.add_message::<WindowFocused>();
+        app.init_resource::<LiveInputCapture>();
+        app.insert_resource(LiveFrameStream {
+            received_at: Some(std::time::Instant::now()),
+            ..Default::default()
+        });
+        app.insert_resource(crate::pie::PieWindowMode::Embedded);
+        let key = crate::pie::InstanceKey {
+            config: "game".into(),
+            instance: 1,
+        };
+        crate::pie::record_test_launch(app.world_mut(), &key, mode);
+        app.world_mut().resource_mut::<LiveInputCapture>().active = true;
+        app.add_systems(Update, auto_release);
+        (app, key)
+    }
+
+    #[test]
+    fn capture_survives_the_setting_changing_but_not_a_windowed_focus() {
+        let (mut app, key) = auto_release_app(crate::pie::PieWindowMode::Embedded);
+        app.insert_resource(crate::pie::PieWindowMode::Windowed);
+        app.update();
+        assert!(!app.world().resource::<LiveInputCapture>().release_requested);
+
+        let other = crate::pie::InstanceKey {
+            config: "other".into(),
+            instance: 1,
+        };
+        crate::pie::record_test_launch(
+            app.world_mut(),
+            &other,
+            crate::pie::PieWindowMode::Windowed,
+        );
+        assert_ne!(key, other);
+        app.update();
+        assert!(app.world().resource::<LiveInputCapture>().release_requested);
     }
 
     #[test]
