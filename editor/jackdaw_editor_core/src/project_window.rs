@@ -2156,7 +2156,7 @@ pub fn project_reveal(params: In<OperatorParameters>, mut commands: Commands) ->
 }
 
 /// Hand a folder or URL to whatever the desktop opens it with.
-pub(crate) fn open_with_desktop(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
+pub fn open_with_desktop(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
     let program = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {

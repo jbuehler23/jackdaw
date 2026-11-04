@@ -317,7 +317,8 @@ fn modules(
     } else {
         for module in ModuleCatalog::builtin().modules() {
             let on = form.modules.contains(&module.id);
-            let included = crate::module_picker::catalog_has_module(catalog, &module.id);
+            let included =
+                jackdaw_editor_core::module_picker::catalog_has_module(catalog, &module.id);
             let call = ButtonOperatorCall::new("launcher.new_project_module")
                 .with_param("id", module.id.clone());
             let unavailable = module.unavailable.as_ref().filter(|_| !on);
@@ -454,8 +455,8 @@ fn details(form: &NewProjectForm) -> impl Scene {
 
 /// The folder the form would create.
 pub fn destination(form: &NewProjectForm) -> Result<PathBuf, String> {
-    let name =
-        crate::scaffold::validated_project_name(&form.name).map_err(|error| error.to_string())?;
+    let name = jackdaw_editor_core::scaffold::validated_project_name(&form.name)
+        .map_err(|error| error.to_string())?;
     let dest = form.location.join(name);
     let occupied = dest
         .read_dir()
@@ -597,7 +598,7 @@ pub fn create_project(world: &mut World, form: NewProjectForm) {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::project::save_last_new_project_location(&form.location);
+    jackdaw_editor_core::project::save_last_new_project_location(&form.location);
     let install = form
         .editor
         .as_deref()
@@ -693,7 +694,7 @@ pub fn poll_new_project(world: &mut World) {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            crate::project::touch_recent(&dest, &name);
+            jackdaw_editor_core::project::touch_recent(&dest, &name);
             super::super::open_project(world, dest);
         }
         Err(error) => set_status(world, Some(error), false),

@@ -424,7 +424,7 @@ pub(crate) fn apply_confirm_quit_action(world: &mut World, action: ConfirmQuitBu
 /// open the next time the launcher is reached, and the wording flag would
 /// outlive the question it belonged to.
 fn disarm_leave(world: &mut World) {
-    world.remove_resource::<crate::project_select::PendingAutoOpen>();
+    world.remove_resource::<crate::launcher_mode::PendingAutoOpen>();
     if let Some(mut pending) = world.get_resource_mut::<PendingQuit>() {
         pending.leaving_project = false;
     }
@@ -672,7 +672,7 @@ mod apply_confirm_dialog_action_tests {
             active: true,
             leaving_project: true,
         });
-        world.insert_resource(crate::project_select::PendingAutoOpen {
+        world.insert_resource(crate::launcher_mode::PendingAutoOpen {
             path: std::path::PathBuf::from("/projects/beta"),
             skip_build: false,
         });
@@ -681,7 +681,7 @@ mod apply_confirm_dialog_action_tests {
 
         assert!(
             world
-                .get_resource::<crate::project_select::PendingAutoOpen>()
+                .get_resource::<crate::launcher_mode::PendingAutoOpen>()
                 .is_none(),
             "a pick nobody confirmed must not survive to fire later",
         );

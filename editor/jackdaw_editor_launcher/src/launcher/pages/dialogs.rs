@@ -19,8 +19,8 @@ use super::super::project_actions::{OpenChoice, backup_destination, copy_destina
 use super::super::ui::{self, Tone};
 use super::super::{InstallForm, Launcher, LauncherDialog, OpenWithForm};
 use super::projects::display_path;
-use crate::preflight::CheckStatus;
 use crate::project_select::PreflightState;
+use jackdaw_editor_core::preflight::CheckStatus;
 
 /// The open dialog's root, over the whole window.
 #[derive(Component, Default, Clone)]

@@ -278,7 +278,7 @@ fn poll_sdk_build(world: &mut World) {
             setup.status = Some(SdkStatus::Ready);
             if let Some(root) = setup.waiting.take() {
                 finish_progress(world, SDK_BUILD);
-                crate::project_select::enter_project(world, root);
+                world.trigger(crate::launcher_mode::EnterProject { root });
             }
         }
         Some(Err(error)) => {

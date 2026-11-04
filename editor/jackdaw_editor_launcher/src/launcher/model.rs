@@ -414,7 +414,7 @@ impl LauncherData {
             .and_then(|layout| layout.load_installs().ok())
             .unwrap_or_default();
         let index = layout.as_ref().map(CachedIndex::read).unwrap_or_default();
-        let recent = crate::project::read_recent_projects_including_missing()
+        let recent = jackdaw_editor_core::project::read_recent_projects_including_missing()
             .projects
             .into_iter()
             .map(|entry| RecentProject {

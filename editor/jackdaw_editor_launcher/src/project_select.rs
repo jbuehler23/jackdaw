@@ -16,17 +16,20 @@ use jackdaw_feathers::{
 use jackdaw_project_build::project_manifest;
 use rfd::FileHandle;
 
-use crate::{
+use crate::new_project::scaffold_project;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+use bevy_window_chrome::CaptionFont;
+use bevy_window_chrome::{WindowChromeTheme, spawn_window_shell};
+use jackdaw_editor_core::{
     AppState, EditorEntity,
-    new_project::scaffold_project,
     project::{self, ProjectRoot},
     scaffold::{ImportChange, NewProjectWarning, ScaffoldError, TemplateKind},
     windowing::JackdawIcon,
 };
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
-use bevy_window_chrome::CaptionFont;
-use bevy_window_chrome::{WindowChromeTheme, spawn_window_shell};
 use jackdaw_project_build::cargo_meta::ResolveError;
+
+use jackdaw_editor_core::launcher_mode::EnterProject;
+pub use jackdaw_editor_core::launcher_mode::PendingAutoOpen;
 
 pub struct ProjectSelectPlugin;
 
@@ -38,8 +41,9 @@ impl Plugin for ProjectSelectPlugin {
         // spawning `rustc` and the compiler probes on every boot.
         let windowed = app.is_plugin_added::<bevy::winit::WinitPlugin>();
         app.init_resource::<NewProjectState>()
-            .init_resource::<crate::build_status::BuildStatus>()
             .init_resource::<PreflightState>()
+            .add_observer(on_enter_project)
+            .add_systems(OnExit(AppState::Editor), forget_pending_scene_opens)
             .add_systems(
                 OnEnter(AppState::ProjectSelect),
                 (
@@ -82,17 +86,6 @@ impl Plugin for ProjectSelectPlugin {
 #[derive(Component, Copy, Clone)]
 #[require(EditorEntity)]
 struct ProjectSelectorRoot;
-
-/// When set, the project selector will skip UI and auto-open the given project.
-#[derive(Resource)]
-pub struct PendingAutoOpen {
-    pub path: PathBuf,
-    /// `true` when we got here via a post-restart auto-open ;
-    /// the parent process already built + installed the dylib,
-    /// so we skip that step (preventing an infinite
-    /// build->restart->auto-open->build loop).
-    pub skip_build: bool,
-}
 
 /// Resource holding the async folder picker task and what the picked
 /// folder is for.
@@ -211,9 +204,9 @@ fn default_projects_dir() -> PathBuf {
 /// is reported before the user starts a long build.
 #[derive(Resource, Default)]
 pub struct PreflightState {
-    task: Option<Task<Vec<crate::preflight::CheckResult>>>,
+    task: Option<Task<Vec<jackdaw_editor_core::preflight::CheckResult>>>,
     /// Latest results, available for the launcher UI to render.
-    pub results: Vec<crate::preflight::CheckResult>,
+    pub results: Vec<jackdaw_editor_core::preflight::CheckResult>,
     reported: bool,
 }
 
@@ -231,7 +224,8 @@ fn start_preflight(
     state.results.clear();
     state.reported = false;
     state.task = Some(
-        AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks(project) }),
+        AsyncComputeTaskPool::get()
+            .spawn(async move { jackdaw_editor_core::preflight::run_all_checks(project) }),
     );
 }
 
@@ -249,7 +243,7 @@ fn poll_preflight(mut state: ResMut<PreflightState>) {
     };
     state.task = None;
     if !state.reported {
-        use crate::preflight::CheckStatus;
+        use jackdaw_editor_core::preflight::CheckStatus;
         for r in &results {
             let fix = r.fix.as_deref().unwrap_or("");
             match r.status {
@@ -367,8 +361,8 @@ pub(crate) fn pick_project_folder_from(world: &mut World, import: bool) {
     };
     let mut windows = world.query_filtered::<&RawHandleWrapper, With<PrimaryWindow>>();
     let window = windows.iter(world).next().cloned();
-    let dialog = crate::native_dialog::dialog_at(
-        crate::native_dialog::launcher_project_directory(),
+    let dialog = jackdaw_editor_core::native_dialog::dialog_at(
+        jackdaw_editor_core::native_dialog::launcher_project_directory(),
         window.as_ref(),
     )
     .set_title(title);
@@ -385,7 +379,8 @@ pub(crate) fn restart_preflight(world: &mut World) {
     state.results.clear();
     state.reported = false;
     state.task = Some(
-        AsyncComputeTaskPool::get().spawn(async move { crate::preflight::run_all_checks(project) }),
+        AsyncComputeTaskPool::get()
+            .spawn(async move { jackdaw_editor_core::preflight::run_all_checks(project) }),
     );
 }
 
@@ -410,6 +405,15 @@ fn poll_folder_dialog(world: &mut World) {
         FolderPurpose::Open => enter_project(world, path),
         FolderPurpose::Import => on_setup_jackdaw_clicked(world, path),
     }
+}
+
+fn on_enter_project(event: On<EnterProject>, mut commands: Commands) {
+    let root = event.root.clone();
+    commands.queue(move |world: &mut World| enter_project(world, root));
+}
+
+fn forget_pending_scene_opens(world: &mut World) {
+    world.remove_resource::<PendingSceneOpens>();
 }
 
 /// Entry point for **every** "open a project" action from the
@@ -479,7 +483,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
         .removed_runtime_features(&game)
         .is_empty();
     if (versions.is_some() || removed_features)
-        && let Ok(plan) = crate::scaffold::plan_upgrade_project(&root)
+        && let Ok(plan) = jackdaw_editor_core::scaffold::plan_upgrade_project(&root)
         && !plan.is_empty()
     {
         show_upgrade_card(world, root, versions, plan);
@@ -488,7 +492,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 
     // An extension builds against the SDK; on an install without one, the
     // open waits for its build instead of failing later.
-    if crate::sdk_setup::wait_for_sdk(world, &root) {
+    if jackdaw_editor_core::sdk_setup::wait_for_sdk(world, &root) {
         close_new_project_modal(world);
         return;
     }
@@ -515,17 +519,21 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
 /// server is not reading from.
 pub(crate) fn transition_to_editor(world: &mut World, root: PathBuf) {
     let plan = world
-        .get_resource::<crate::restart::AssetProjectRoot>()
+        .get_resource::<jackdaw_editor_core::restart::AssetProjectRoot>()
         .map(|asset_root| {
-            crate::restart::plan_open(&asset_root.0, &root, crate::restart::can_restart())
+            jackdaw_editor_core::restart::plan_open(
+                &asset_root.0,
+                &root,
+                jackdaw_editor_core::restart::can_restart(),
+            )
         });
     match plan {
-        None | Some(crate::restart::OpenPlan::Here) => {}
-        Some(crate::restart::OpenPlan::Reopen) => {
+        None | Some(jackdaw_editor_core::restart::OpenPlan::Here) => {}
+        Some(jackdaw_editor_core::restart::OpenPlan::Reopen) => {
             reopen_in_new_process(root);
             return;
         }
-        Some(crate::restart::OpenPlan::Unreachable) => {
+        Some(jackdaw_editor_core::restart::OpenPlan::Unreachable) => {
             show_cannot_reopen_card(world, root);
             return;
         }
@@ -558,15 +566,15 @@ pub(crate) fn transition_to_editor(world: &mut World, root: PathBuf) {
     // The scenes queued below open before the schema watcher's first tick, so
     // the project's component types must be known here or the first load reads
     // them all as unknown.
-    crate::pie::refresh_project_types(world);
+    jackdaw_editor_core::pie::refresh_project_types(world);
 
     let last_open_tabs = world
-        .resource::<crate::project::ProjectRoot>()
+        .resource::<jackdaw_editor_core::project::ProjectRoot>()
         .config
         .last_open_tabs
         .clone();
     let last_active = world
-        .resource::<crate::project::ProjectRoot>()
+        .resource::<jackdaw_editor_core::project::ProjectRoot>()
         .config
         .last_active_tab;
 
@@ -621,15 +629,17 @@ fn open_pending_scenes(world: &mut World) {
                 return;
             };
             let canonical = dunce::canonicalize(&next).unwrap_or(next);
-            if crate::scenes::operators::switch_to_open_tab(world, &canonical) {
+            if jackdaw_editor_core::scenes::operators::switch_to_open_tab(world, &canonical) {
                 return;
             }
-            crate::scenes::load_progress::begin_scene_load(world, &canonical, true);
+            jackdaw_editor_core::scenes::load_progress::begin_scene_load(world, &canonical, true);
             world.resource_mut::<PendingSceneOpens>().step = SceneOpenStep::Open(canonical);
         }
         SceneOpenStep::Open(path) => {
-            if let Some(read) = crate::scenes::operators::read_scene_for_load(world, &path) {
-                crate::scenes::operators::open_read_scene(world, read);
+            if let Some(read) =
+                jackdaw_editor_core::scenes::operators::read_scene_for_load(world, &path)
+            {
+                jackdaw_editor_core::scenes::operators::open_read_scene(world, read);
             }
         }
     }
@@ -646,11 +656,17 @@ fn finish_pending_scene_opens(world: &mut World) {
     let Some(pending) = world.remove_resource::<PendingSceneOpens>() else {
         return;
     };
-    let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
+    let tab_count = world
+        .resource::<jackdaw_editor_core::scenes::Scenes>()
+        .tabs
+        .len();
     if tab_count > 0 {
-        crate::scenes::swap::swap_active_tab(world, pending.active.min(tab_count - 1));
+        jackdaw_editor_core::scenes::swap::swap_active_tab(
+            world,
+            pending.active.min(tab_count - 1),
+        );
     } else {
-        let assets = crate::project::project_assets_dir(&pending.root);
+        let assets = jackdaw_editor_core::project::project_assets_dir(&pending.root);
         let bsn = assets.join("scene.bsn");
         let jsn = assets.join("scene.jsn");
         let scene_path = if bsn.is_file() {
@@ -661,8 +677,10 @@ fn finish_pending_scene_opens(world: &mut World) {
             None
         };
         match scene_path {
-            Some(scene_path) => crate::scenes::operators::scene_open_system(world, &scene_path),
-            None => crate::scenes::operators::scene_new_system(world),
+            Some(scene_path) => {
+                jackdaw_editor_core::scenes::operators::scene_open_system(world, &scene_path);
+            }
+            None => jackdaw_editor_core::scenes::operators::scene_new_system(world),
         }
     }
 }
@@ -681,12 +699,12 @@ fn finish_pending_scene_opens(world: &mut World) {
 /// the funnel can be exercised without replacing the test binary.
 #[cfg(not(test))]
 fn reopen_in_new_process(root: PathBuf) {
-    crate::restart::relaunch_into_project(&root)
+    jackdaw_editor_core::restart::relaunch_into_project(&root)
 }
 
 #[cfg(test)]
 fn reopen_in_new_process(root: PathBuf) {
-    crate::restart::request_project_relaunch(root);
+    jackdaw_editor_core::restart::request_project_relaunch(root);
 }
 
 /// Tear down any existing New Project modal. Idempotent.
@@ -1219,7 +1237,7 @@ fn show_upgrade_card(
     world: &mut World,
     root: PathBuf,
     versions: Option<(String, String)>,
-    plan: crate::scaffold::ImportPlan,
+    plan: jackdaw_editor_core::scaffold::ImportPlan,
 ) {
     let (_, card, font) = spawn_modal_card(world, 520.0, 720.0);
     spawn_card_title(world, card, "Update this project for jackdaw", &font);
@@ -1265,7 +1283,7 @@ fn show_upgrade_card(
             let plan = plan.clone();
             commands.queue(move |world: &mut World| {
                 let root = plan.root.clone();
-                if let Err(error) = crate::scaffold::apply_import_plan(&plan) {
+                if let Err(error) = jackdaw_editor_core::scaffold::apply_import_plan(&plan) {
                     warn!("Upgrade failed for {}: {error}", root.display());
                 }
                 close_new_project_modal(world);
@@ -1544,7 +1562,7 @@ fn plan_and_show_import_with(
     modules: Option<jackdaw_project_build::modules::ModuleSet>,
     module_note: String,
 ) {
-    match crate::scaffold::plan_import_with_modules(
+    match jackdaw_editor_core::scaffold::plan_import_with_modules(
         &root,
         None,
         package.as_deref(),
@@ -1731,7 +1749,7 @@ fn package_candidate_row(name: String, root: PathBuf, allow_bevy_mismatch: bool)
 
 /// What happens to the lockfile: import leaves it alone, but a manifest edit
 /// means the first build resolves the new dependency into it.
-fn lockfile_note(plan: &crate::scaffold::ImportPlan) -> &'static str {
+fn lockfile_note(plan: &jackdaw_editor_core::scaffold::ImportPlan) -> &'static str {
     let edits_manifest = plan.changes.iter().any(|change| {
         matches!(change, ImportChange::WriteFile { path, .. }
             if path.file_name().is_some_and(|name| name == "Cargo.toml"))
@@ -1754,7 +1772,7 @@ struct ImportReview {
 
 fn show_import_preview_card(
     world: &mut World,
-    plan: crate::scaffold::ImportPlan,
+    plan: jackdaw_editor_core::scaffold::ImportPlan,
     package: Option<String>,
     allow_bevy_mismatch: bool,
     module_note: String,
@@ -1791,7 +1809,7 @@ fn show_import_preview_card(
         ChildOf(card),
     ));
     let mut commands = world.commands();
-    let picker = crate::module_picker::spawn_module_picker(
+    let picker = jackdaw_editor_core::module_picker::spawn_module_picker(
         &mut commands,
         card,
         plan.modules.clone(),
@@ -1799,7 +1817,7 @@ fn show_import_preview_card(
         "Already in Cargo.toml.",
     );
     commands.entity(picker).insert((
-        crate::module_picker::ModulePicker {
+        jackdaw_editor_core::module_picker::ModulePicker {
             modules: plan.modules.clone(),
             locked: plan.detected_modules.clone(),
             note: module_note,
@@ -1832,7 +1850,7 @@ fn show_import_preview_card(
             let plan = plan.clone();
             commands.queue(move |world: &mut World| {
                 let root = plan.root.clone();
-                match crate::scaffold::apply_import_plan(&plan) {
+                match jackdaw_editor_core::scaffold::apply_import_plan(&plan) {
                     Ok(report) => {
                         info!(
                             "Set up jackdaw at {}: {}",
@@ -2192,7 +2210,7 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
             ChildOf(card),
         ));
         let mut commands = world.commands();
-        let picker = crate::module_picker::spawn_module_picker(
+        let picker = jackdaw_editor_core::module_picker::spawn_module_picker(
             &mut commands,
             card,
             jackdaw_project_build::modules::ModuleCatalog::builtin().defaults(),
@@ -2345,7 +2363,13 @@ pub fn open_new_project_modal(world: &mut World, kind: TemplateKind) {
 /// Re-plan the import when its review card's modules change, so the change
 /// list shows what the new choice writes.
 fn replan_import_on_module_change(
-    pickers: Query<(Ref<crate::module_picker::ModulePicker>, &ImportReview), With<ImportModules>>,
+    pickers: Query<
+        (
+            Ref<jackdaw_editor_core::module_picker::ModulePicker>,
+            &ImportReview,
+        ),
+        With<ImportModules>,
+    >,
     mut commands: Commands,
 ) {
     for (picker, review) in &pickers {
@@ -2378,7 +2402,7 @@ fn on_browse_new_location(
     raw_handle: Query<&RawHandleWrapper, With<PrimaryWindow>>,
     state: Res<NewProjectState>,
 ) {
-    let dialog = crate::native_dialog::dialog_at(
+    let dialog = jackdaw_editor_core::native_dialog::dialog_at(
         new_project_browse_directory(&state.location),
         raw_handle.single().ok(),
     )
@@ -2396,7 +2420,7 @@ fn new_project_browse_directory(location: &Path) -> Option<PathBuf> {
         .ancestors()
         .find(|ancestor| ancestor.is_dir())
         .map(Path::to_path_buf)
-        .or_else(crate::native_dialog::launcher_project_directory)
+        .or_else(jackdaw_editor_core::native_dialog::launcher_project_directory)
 }
 
 fn spawn_reset_location_button(
@@ -2485,7 +2509,7 @@ fn refresh_new_project_validation(
     let (message, valid) = if creating || raw.is_empty() {
         (String::new(), false)
     } else {
-        match crate::scaffold::validated_project_name(raw) {
+        match jackdaw_editor_core::scaffold::validated_project_name(raw) {
             Ok(name) => describe_destination(&state.location.join(&name)),
             Err(error) => (error.to_string(), false),
         }
@@ -2544,7 +2568,7 @@ fn lock_new_project_dialog_while_creating(
     mut focus: ResMut<InputFocus>,
     module_toggles: Query<(
         Entity,
-        &crate::module_picker::ModuleToggle,
+        &jackdaw_editor_core::module_picker::ModuleToggle,
         Has<InteractionDisabled>,
     )>,
     module_pickers: Query<(), With<NewProjectModules>>,
@@ -2648,7 +2672,7 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
         (state.location.clone(), kind)
     };
     let modules = world
-        .query_filtered::<&crate::module_picker::ModulePicker, With<NewProjectModules>>()
+        .query_filtered::<&jackdaw_editor_core::module_picker::ModulePicker, With<NewProjectModules>>()
         .iter(world)
         .next()
         .map(|picker| picker.modules.clone())
@@ -2662,7 +2686,7 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
             Some("Please enter a project name.".into());
         return;
     } else {
-        match crate::scaffold::validated_project_name(raw_name.trim()) {
+        match jackdaw_editor_core::scaffold::validated_project_name(raw_name.trim()) {
             Ok(name) => name,
             Err(error) => {
                 world.resource_mut::<NewProjectState>().status = Some(error.to_string());
@@ -2676,7 +2700,7 @@ pub fn create_new_project(world: &mut World, raw_name: &str) {
     ));
     let task = AsyncComputeTaskPool::get().spawn(async move {
         scaffold_project(&name, &location, kind, &modules).map(|dest| {
-            let warnings = crate::scaffold::check_new_project(&dest);
+            let warnings = jackdaw_editor_core::scaffold::check_new_project(&dest);
             (dest, warnings)
         })
     });
@@ -2833,8 +2857,11 @@ mod tests {
             .collect()
     }
 
-    fn plan_with(changes: Vec<ImportChange>, notes: Vec<String>) -> crate::scaffold::ImportPlan {
-        crate::scaffold::ImportPlan {
+    fn plan_with(
+        changes: Vec<ImportChange>,
+        notes: Vec<String>,
+    ) -> jackdaw_editor_core::scaffold::ImportPlan {
+        jackdaw_editor_core::scaffold::ImportPlan {
             root: PathBuf::from("/proj"),
             package_dir: PathBuf::from("/proj"),
             package_name: "proj".into(),
@@ -3018,13 +3045,13 @@ mod tests {
     fn the_modal_and_the_cli_reject_the_same_names() {
         for bad in ["2d-shooter", "crate", "impl", "***", ""] {
             assert!(
-                crate::scaffold::validated_project_name(bad).is_err(),
+                jackdaw_editor_core::scaffold::validated_project_name(bad).is_err(),
                 "`{bad}` should be rejected"
             );
         }
         for good in ["my-game", "My Cool Game", "spaced  out"] {
             assert!(
-                crate::scaffold::validated_project_name(good).is_ok(),
+                jackdaw_editor_core::scaffold::validated_project_name(good).is_ok(),
                 "`{good}` should be accepted"
             );
         }
@@ -3035,13 +3062,14 @@ mod tests {
     #[test]
     fn the_name_hint_previews_the_directory_or_the_problem() {
         let location = PathBuf::from("/home/dev/Projects");
-        let ok = crate::scaffold::validated_project_name("My Cool Game").expect("valid");
+        let ok =
+            jackdaw_editor_core::scaffold::validated_project_name("My Cool Game").expect("valid");
         assert_eq!(
             location.join(&ok),
             location.join("my-cool-game"),
             "the hint shows the sanitized directory, not the raw input"
         );
-        let error = crate::scaffold::validated_project_name("2d-shooter")
+        let error = jackdaw_editor_core::scaffold::validated_project_name("2d-shooter")
             .expect_err("a leading digit is not a crate name");
         assert!(
             error.to_string().contains("cannot start with a digit"),
@@ -3170,8 +3198,8 @@ mod tests {
             b"use bevy::prelude::*;\npub struct MyGamePlugin;\n              impl Plugin for MyGamePlugin { fn build(&self, _a: &mut App) {} }\n",
         )
         .unwrap();
-        let plan =
-            crate::scaffold::plan_import_project(&plain, None).expect("a bevy lib is importable");
+        let plan = jackdaw_editor_core::scaffold::plan_import_project(&plain, None)
+            .expect("a bevy lib is importable");
         let mut world = card_world();
         show_import_preview_card(&mut world, plan, None, false, String::new());
         let text = rendered_text(&mut world).join("\n");
@@ -3189,7 +3217,7 @@ mod tests {
         std::fs::create_dir_all(&bare).unwrap();
         std::fs::write(bare.join("readme.txt"), b"hi").unwrap();
         assert!(
-            crate::scaffold::plan_import_project(&bare, None).is_err(),
+            jackdaw_editor_core::scaffold::plan_import_project(&bare, None).is_err(),
             "a folder with no Cargo.toml is not importable"
         );
         let mut world = card_world();
@@ -3252,9 +3280,9 @@ mod tests {
     #[test]
     fn a_project_outside_the_asset_root_is_handed_to_another_process() {
         let mut world = World::new();
-        world.insert_resource(crate::restart::AssetProjectRoot(PathBuf::from(
-            "/projects/alpha",
-        )));
+        world.insert_resource(jackdaw_editor_core::restart::AssetProjectRoot(
+            PathBuf::from("/projects/alpha"),
+        ));
         world.init_resource::<bevy::ecs::message::Messages<bevy::app::AppExit>>();
 
         transition_to_editor(&mut world, PathBuf::from("/projects/beta"));
@@ -3271,7 +3299,7 @@ mod tests {
             "the reopen replaces the shutdown rather than following it"
         );
         assert_eq!(
-            crate::restart::take_project_relaunch(),
+            jackdaw_editor_core::restart::take_project_relaunch(),
             Some(PathBuf::from("/projects/beta"))
         );
     }

@@ -29,6 +29,7 @@ pub struct BuildPanelPlugin;
 impl Plugin for BuildPanelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BuildPanelFocus>()
+            .init_resource::<BuildStatus>()
             .add_systems(OnEnter(crate::AppState::Editor), reset_build_focus)
             .add_systems(
                 Update,

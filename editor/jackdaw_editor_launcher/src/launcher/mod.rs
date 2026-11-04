@@ -30,7 +30,8 @@ pub use ops::*;
 pub use pages::extensions::apply_project_overrides;
 pub use project_actions::{EditorHandoff, OpenChoice, open_project, record_open, show_open_with};
 
-use crate::AppState;
+use jackdaw_editor_core::AppState;
+pub use jackdaw_editor_core::launcher_mode::LauncherShell;
 
 pub struct LauncherPlugin;
 
@@ -102,7 +103,7 @@ pub fn fill_launcher(
 ) {
     commands
         .entity(title_bar)
-        .with_child(crate::windowing::title_bar_repo_link(icon));
+        .with_child(jackdaw_editor_core::windowing::title_bar_repo_link(icon));
     commands
         .spawn_scene(pages::title_bar())
         .insert(ChildOf(title_bar));
@@ -110,11 +111,6 @@ pub fn fill_launcher(
         .spawn_scene(pages::body())
         .insert((LauncherShell, ChildOf(body)));
 }
-
-/// The launcher's body; while it exists, the launcher's pages are kept up
-/// to date.
-#[derive(Component, Default, Clone)]
-pub struct LauncherShell;
 
 /// The launcher's state from disk: projects, installs and the cached index.
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Deref)]
@@ -263,18 +259,18 @@ impl Template {
         }
     }
 
-    pub fn kind(self) -> crate::scaffold::TemplateKind {
+    pub fn kind(self) -> jackdaw_editor_core::scaffold::TemplateKind {
         match self {
-            Self::Extension => crate::scaffold::TemplateKind::Extension,
-            _ => crate::scaffold::TemplateKind::Game,
+            Self::Extension => jackdaw_editor_core::scaffold::TemplateKind::Extension,
+            _ => jackdaw_editor_core::scaffold::TemplateKind::Game,
         }
     }
 
-    pub fn starter(self) -> crate::scaffold::StarterScene {
+    pub fn starter(self) -> jackdaw_editor_core::scaffold::StarterScene {
         match self {
-            Self::TwoD => crate::scaffold::StarterScene::TwoD,
-            Self::Empty => crate::scaffold::StarterScene::Empty,
-            _ => crate::scaffold::StarterScene::ThreeD,
+            Self::TwoD => jackdaw_editor_core::scaffold::StarterScene::TwoD,
+            Self::Empty => jackdaw_editor_core::scaffold::StarterScene::Empty,
+            _ => jackdaw_editor_core::scaffold::StarterScene::ThreeD,
         }
     }
 }
@@ -301,7 +297,7 @@ impl Default for NewProjectForm {
             template: Template::default(),
             modules: ModuleCatalog::builtin().defaults(),
             name: "my_game".into(),
-            location: crate::project::read_last_new_project_location()
+            location: jackdaw_editor_core::project::read_last_new_project_location()
                 .unwrap_or_else(default_projects_dir),
             git: true,
             status: None,
@@ -532,14 +528,16 @@ fn poll_jd_jobs(world: &mut World) {
                 version,
                 starter,
             }) => {
-                if let Err(error) = crate::scaffold::write_starter_scene(&project, starter) {
+                if let Err(error) =
+                    jackdaw_editor_core::scaffold::write_starter_scene(&project, starter)
+                {
                     notify_error(world, error.to_string());
                 }
                 let name = project
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                crate::project::touch_recent(&project, &name);
+                jackdaw_editor_core::project::touch_recent(&project, &name);
                 world.resource_mut::<NewProjectForm>().creating = false;
                 project_actions::open_with_install(world, project, &version);
             }

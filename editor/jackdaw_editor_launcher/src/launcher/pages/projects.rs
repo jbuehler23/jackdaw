@@ -18,8 +18,8 @@ use super::super::model::{ProjectEntry, ProjectFilter, filter_projects};
 use super::super::ui::{self, Tone};
 use super::super::{Launcher, LauncherField, ProjectListView};
 use super::TextSlot;
-use crate::preflight::CheckStatus;
 use crate::project_select::PreflightState;
+use jackdaw_editor_core::preflight::CheckStatus;
 
 #[derive(Component, Default, Clone)]
 pub struct ProjectListRegion;
@@ -102,7 +102,7 @@ pub fn page() -> impl Scene {
             EnvironmentRegion
             Node { flex_direction: FlexDirection::Column }
             --
-            crate::sdk_setup::SdkStatusRow
+            jackdaw_editor_core::sdk_setup::SdkStatusRow
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(4),
@@ -206,7 +206,7 @@ fn opened_label(entry: &ProjectEntry) -> String {
     entry
         .last_opened
         .as_deref()
-        .and_then(crate::timestamps::relative_to_now)
+        .and_then(jackdaw_editor_core::timestamps::relative_to_now)
         .unwrap_or_default()
 }
 

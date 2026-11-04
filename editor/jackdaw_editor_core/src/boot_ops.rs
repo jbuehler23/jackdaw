@@ -93,7 +93,7 @@ pub(crate) fn plugin(app: &mut App) {
         Update,
         drive_boot_ops.run_if(
             in_state(crate::AppState::Editor)
-                .or_else(any_with_component::<crate::launcher::LauncherShell>),
+                .or_else(any_with_component::<crate::launcher_mode::LauncherShell>),
         ),
     );
 }

@@ -146,7 +146,7 @@ pub fn rebuild_header(
     let issues = preflight
         .results
         .iter()
-        .filter(|result| result.status != crate::preflight::CheckStatus::Ok)
+        .filter(|result| result.status != jackdaw_editor_core::preflight::CheckStatus::Ok)
         .count();
     let state = (running, issues, preflight.results.is_empty());
     let stale = shown.as_ref() != Some(&state);

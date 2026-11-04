@@ -431,7 +431,7 @@ pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
 }
 
 /// Bring forward the tab already holding `canonical`, if one does.
-pub(crate) fn switch_to_open_tab(world: &mut World, canonical: &std::path::Path) -> bool {
+pub fn switch_to_open_tab(world: &mut World, canonical: &std::path::Path) -> bool {
     let Some(idx) = tab_holding(world, canonical) else {
         return false;
     };
@@ -442,7 +442,7 @@ pub(crate) fn switch_to_open_tab(world: &mut World, canonical: &std::path::Path)
 
 /// A scene file read and parsed, waiting for [`open_read_scene`] to give it a
 /// tab.
-pub(crate) struct ReadScene {
+pub struct ReadScene {
     canonical: std::path::PathBuf,
     file_text: String,
     doc: jackdaw_bsn::SceneBsnAst,
@@ -450,11 +450,8 @@ pub(crate) struct ReadScene {
     pending_conversion: Option<crate::jsn_to_bsn::PendingConversion>,
 }
 
-/// [`read_scene`], reporting a failure as the end of the scene load.
-pub(crate) fn read_scene_for_load(
-    world: &mut World,
-    canonical: &std::path::Path,
-) -> Option<ReadScene> {
+/// `read_scene`, reporting a failure as the end of the scene load.
+pub fn read_scene_for_load(world: &mut World, canonical: &std::path::Path) -> Option<ReadScene> {
     match read_scene(world, canonical) {
         Ok(read) => {
             crate::scenes::load_progress::scene_read(world);
@@ -529,7 +526,7 @@ fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScen
 }
 
 /// Give a read scene its tab and spawn it.
-pub(crate) fn open_read_scene(world: &mut World, read: ReadScene) {
+pub fn open_read_scene(world: &mut World, read: ReadScene) {
     let ReadScene {
         canonical,
         file_text,
