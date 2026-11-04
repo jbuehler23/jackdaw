@@ -204,7 +204,7 @@ pub fn is_scene_member(world: &World, entity: Entity) -> bool {
     if found.contains::<EditorEntity>() || found.contains::<jackdaw_scene_types::EditorHidden>() {
         return false;
     }
-    crate::remote::server::belongs_to_the_scene(world, entity)
+    crate::operator_calls::belongs_to_the_scene(world, entity)
         || world
             .get_resource::<jackdaw_bsn::SceneBsnAst>()
             .is_some_and(|doc| doc.ast_for(entity).is_some())
@@ -497,7 +497,7 @@ fn eval(world: &mut World, atom: &Atom) -> EntityHashSet {
                         .get::<Children>(root)
                         .map(|children| children.to_vec())
                         .unwrap_or_default(),
-                    None => crate::remote::server::scene_roots(world),
+                    None => crate::operator_calls::scene_roots(world),
                 };
                 let mut level: Vec<Entity> = top
                     .into_iter()
@@ -513,7 +513,7 @@ fn eval(world: &mut World, atom: &Atom) -> EntityHashSet {
                                 .unwrap_or_default()
                         })
                         .filter(|&child| {
-                            crate::remote::server::is_scene_descendant(world, child)
+                            crate::operator_calls::is_scene_descendant(world, child)
                                 && label(world, child).is_some_and(|name| step.matches(&name))
                         })
                         .collect();
@@ -564,7 +564,7 @@ fn in_outliner_order(world: &mut World, found: EntityHashSet) -> Vec<Entity> {
 /// Each scene node's place in the outliner: top-level nodes by id, then each
 /// node's children in their order, depth first.
 fn outliner_order(world: &mut World) -> EntityHashMap<usize> {
-    let mut roots = crate::remote::server::scene_roots(world);
+    let mut roots = crate::operator_calls::scene_roots(world);
     roots.sort();
     let mut order = EntityHashMap::default();
     let mut stack: Vec<Entity> = roots.into_iter().rev().collect();

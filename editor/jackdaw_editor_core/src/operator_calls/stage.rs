@@ -13,20 +13,20 @@ use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_scene_types::{BUILD_STAGE_TYPE_PATH, BuildStage, SceneNodeId};
 use serde_json::{Value, json};
 
-use super::server::invalid_params;
+use super::invalid_params;
 use crate::commands::AddComponent;
 use crate::document_units::{UnitChange, UnitKey, Units};
 
 /// The stage a batch builds, as the caller named it.
-pub(super) struct StageSpec {
-    pub(super) name: String,
+pub struct StageSpec {
+    pub name: String,
     after: Vec<String>,
 }
 
 impl StageSpec {
     /// `stage` and `after` from a batch's parameters; `None` when no stage is
     /// named.
-    pub(super) fn from_params(params: &Value) -> Result<Option<Self>, BrpError> {
+    pub fn from_params(params: &Value) -> Result<Option<Self>, BrpError> {
         let after = match params.get("after") {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::Array(names)) => names
@@ -60,7 +60,7 @@ impl StageSpec {
 
     /// Refuse a stage whose name two groups share, or that comes after a
     /// stage the scene does not hold.
-    pub(super) fn check(&self, world: &mut World) -> Result<(), BrpError> {
+    pub fn check(&self, world: &mut World) -> Result<(), BrpError> {
         find(world, &self.name)?;
         let missing: Vec<&str> = self
             .after
@@ -108,7 +108,7 @@ fn find(world: &mut World, name: &str) -> Result<Option<Entity>, BrpError> {
 
 /// A stage being built: its group, emptied, and the document as the last
 /// call left it.
-pub(crate) struct OpenStage {
+pub struct OpenStage {
     name: String,
     group: Entity,
     group_key: UnitKey,
@@ -125,7 +125,7 @@ impl OpenStage {
     ///
     /// None of this is recorded as history of its own: the batch's scene
     /// change holds all of it.
-    pub(super) fn open(world: &mut World, spec: &StageSpec) -> Result<Self, String> {
+    pub fn open(world: &mut World, spec: &StageSpec) -> Result<Self, String> {
         let span = world.resource_mut::<CommandHistory>().begin_span();
         let opened = Self::open_unrecorded(world, spec);
         world.resource_mut::<CommandHistory>().take_span(span);
@@ -143,14 +143,14 @@ impl OpenStage {
 
     /// Open `root` as a stage that is not named: what it holds is deleted, and
     /// the calls build inside it alone. `name` says what it is in a refusal.
-    pub(crate) fn open_root(world: &mut World, root: Entity, name: String) -> Result<Self, String> {
+    pub fn open_root(world: &mut World, root: Entity, name: String) -> Result<Self, String> {
         let span = world.resource_mut::<CommandHistory>().begin_span();
         let opened = Self::empty(world, name, root, false);
         world.resource_mut::<CommandHistory>().take_span(span);
         opened
     }
 
-    pub(crate) fn replaced(&self) -> usize {
+    pub fn replaced(&self) -> usize {
         self.replaced
     }
 
@@ -203,7 +203,7 @@ impl OpenStage {
     /// instance, or an embedded asset. A node must be inside the group both
     /// before and after; the group itself must not change; an embedded asset
     /// may be added but not changed or removed.
-    pub(super) fn after_call(&mut self, world: &mut World) -> Result<(), String> {
+    pub fn after_call(&mut self, world: &mut World) -> Result<(), String> {
         for entity in beside(world, self.group, &self.beside) {
             adopt(world, entity, self.group);
         }
@@ -243,7 +243,7 @@ impl OpenStage {
     }
 
     /// What the batch result says about the stage.
-    pub(super) fn report(&self) -> Value {
+    pub fn report(&self) -> Value {
         json!({
             "name": self.name,
             "entity": self.group.to_bits(),

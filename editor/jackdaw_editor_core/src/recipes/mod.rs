@@ -21,11 +21,12 @@ use jackdaw_recipe::{InputSpec, SEED_INPUT, Scope, Value as RecipeValue, value_t
 use jackdaw_scene_types::{RECIPE_INSTANCE_TYPE_PATH, RecipeInstance};
 use serde_json::{Value, json};
 
-use crate::remote::recipe_run::{self, RecipePlan, RecipeRoot};
+use run::{RecipePlan, RecipeRoot};
 
 pub mod picker;
 mod promote;
 pub mod record;
+mod run;
 
 pub(crate) use picker::RecipePickerOp;
 pub use picker::{RecipeList, recipe_choices};
@@ -612,7 +613,7 @@ fn run_recipe(world: &mut World, params: &OperatorParameters) -> Result<(), Stri
     }
 
     let instance = instance_of(&recipe.reference, &inputs, seed);
-    recipe_run::build(
+    run::build(
         world,
         format!("Run Recipe {name}"),
         RecipeRoot::New(Value::Object(root)),
@@ -693,7 +694,7 @@ fn rerun_recipe(world: &mut World, params: &OperatorParameters) -> Result<(), St
     let name = world
         .get::<Name>(root)
         .map_or_else(|| recipe.root_name(), |name| name.as_str().to_string());
-    let built = recipe_run::build(
+    let built = run::build(
         world,
         format!("Rerun Recipe {name}"),
         RecipeRoot::Existing(root),

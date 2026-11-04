@@ -14,11 +14,7 @@ use jackdaw_widgets::tree_view::{
 
 use super::connection::ConnectionManager;
 
-/// Marker component for remote entity proxies (prevents local hierarchy from acting on them).
-#[derive(Component)]
-pub struct RemoteEntityProxy {
-    pub remote_bits: u64,
-}
+pub use jackdaw_editor_core::remote_mode::RemoteEntityProxy;
 
 /// Display name extracted from snapshot, stored on proxy entities.
 /// The monitors watch this for Mutation events.

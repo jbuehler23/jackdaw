@@ -5,13 +5,13 @@
 
 use base64::Engine as _;
 use bevy::prelude::*;
-use jackdaw::project::{ProjectConfig, ProjectRoot};
-use jackdaw::remote::server::{
+use jackdaw_api_internal::operator::OperatorWorldExt as _;
+use jackdaw_editor_core::project::{ProjectConfig, ProjectRoot};
+use jackdaw_editor_core::screenshot::{ThumbnailFormat, write_thumbnail};
+use jackdaw_editor_remote::server::{
     batch_handler, brush_topology_handler, call_operator_handler, operators_handler,
     scene_summary_handler, status_handler,
 };
-use jackdaw::screenshot::{ThumbnailFormat, write_thumbnail};
-use jackdaw_api_internal::operator::OperatorWorldExt as _;
 use serde_json::{Value, json};
 
 use crate::util;

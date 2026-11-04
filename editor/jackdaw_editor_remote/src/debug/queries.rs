@@ -495,8 +495,8 @@ pub(crate) fn on_add_filter_clicked(
     commands.spawn((
         props,
         FilterPicker(add.0),
-        crate::EditorEntity,
-        crate::BlocksCameraInput,
+        jackdaw_editor_core::EditorEntity,
+        jackdaw_editor_core::BlocksCameraInput,
     ));
 }
 

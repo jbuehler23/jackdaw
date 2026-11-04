@@ -417,7 +417,7 @@ fn val_to_json(value: Val) -> serde_json::Value {
 fn val_edit_skipped(
     root: Entity,
     bindings: &Query<&ValFieldBinding>,
-    remote_proxies: &Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: &Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
 ) -> bool {
     bindings
         .get(root)
@@ -490,7 +490,7 @@ pub(crate) fn on_val_number_change(
     event: On<ValueChange<f64>>,
     inputs: Query<&ValNumberInput>,
     bindings: Query<&ValFieldBinding>,
-    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
     mut commands: Commands,
 ) {
     let source = event.source;
@@ -525,7 +525,7 @@ pub(crate) fn on_val_unit_change(
     event: On<ComboBoxChangeEvent>,
     selects: Query<&ValUnitSelect>,
     bindings: Query<&ValFieldBinding>,
-    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
     mut commands: Commands,
 ) {
     let Ok(select) = selects.get(event.entity) else {

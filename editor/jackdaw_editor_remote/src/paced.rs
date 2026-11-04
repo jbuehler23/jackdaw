@@ -11,7 +11,8 @@ use bevy::remote::{BrpError, BrpResult};
 use jackdaw_api_internal::operator::{BatchTransaction, HistoryHold};
 use serde_json::Value;
 
-use super::server::{BatchPlan, BatchRunner, check_enabled, invalid_params};
+use super::server::check_enabled;
+use jackdaw_editor_core::operator_calls::{BatchPlan, BatchRunner, invalid_params};
 
 /// The longest pause a paced batch may ask for between calls.
 pub const MAX_PACE_MS: u64 = 2000;

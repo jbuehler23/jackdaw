@@ -10,8 +10,9 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_core::brush::{BrushEditMode, BrushSelection, EditMode};
 use jackdaw_editor_core::commands::CommandHistory;
-use jackdaw_editor_core::remote::server::{
-    batch_handler, brush_topology_handler, call_operator_handler,
+use jackdaw_editor_core::operator_calls::topology::brush_topology as brush_topology_handler;
+use jackdaw_editor_core::operator_calls::{
+    call_operator as call_operator_handler, run_batch as batch_handler,
 };
 use jackdaw_editor_core::selection::Selection;
 use jackdaw_scene_types::Brush;

@@ -965,7 +965,7 @@ pub fn editor_status_bar() -> impl Bundle {
                         )],
                     ),
                     // Connection indicator
-                    crate::remote::panel::connection_indicator()
+                    (crate::remote_mode::ConnectionIndicatorSlot, Node::default())
                 ],
             )
         ],

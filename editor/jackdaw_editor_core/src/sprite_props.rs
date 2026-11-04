@@ -400,7 +400,7 @@ fn target_sprites(world: &mut World, params: &OperatorParameters, id: &str) -> O
     }
     if let Some(proxy) = sprites.iter().copied().find(|&entity| {
         world
-            .get::<crate::remote::entity_browser::RemoteEntityProxy>(entity)
+            .get::<crate::remote_mode::RemoteEntityProxy>(entity)
             .is_some()
     }) {
         warn_caller(world, format!("{id}: {proxy} is a read-only remote entity"));

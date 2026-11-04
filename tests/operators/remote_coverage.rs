@@ -345,7 +345,7 @@ fn every_parameter_type_can_be_written_as_text() {
     assert!(
         unspellable.is_empty(),
         "these parameters have a type no text client can spell. Give the type a spelling in \
-         `text_for` here and in `property_from_json` (src/remote/server.rs): {unspellable:?}"
+         `text_for` here and in `property_from_json` (editor/jackdaw_editor_core/src/operator_calls/mod.rs): {unspellable:?}"
     );
 }
 

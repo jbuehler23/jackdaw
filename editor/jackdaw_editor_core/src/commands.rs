@@ -1339,7 +1339,7 @@ pub(crate) fn deselect_entities(world: &mut World, entities: &[Entity]) {
 }
 
 /// Remove `entity` from the live BSN document, then despawn it from ECS.
-pub(crate) fn despawn_scene_entity(world: &mut World, entity: Entity) {
+pub fn despawn_scene_entity(world: &mut World, entity: Entity) {
     jackdaw_bsn::delete_entity_from_ast(world, entity);
     if let Ok(entity_mut) = world.get_entity_mut(entity) {
         entity_mut.despawn();

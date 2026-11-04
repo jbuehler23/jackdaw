@@ -402,7 +402,7 @@ mod tint {
 mod across_a_respawn {
     use super::*;
     use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
-    use jackdaw_editor_core::remote::server::batch_handler;
+    use jackdaw_editor_core::operator_calls::run_batch as batch_handler;
     use serde_json::json;
 
     fn heights(app: &App, data_path: &str) -> Vec<f32> {

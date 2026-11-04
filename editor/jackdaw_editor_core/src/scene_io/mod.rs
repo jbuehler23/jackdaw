@@ -13,7 +13,7 @@ pub mod hooks;
 mod legacy;
 mod load;
 mod registration;
-pub(crate) mod save;
+pub mod save;
 pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn};

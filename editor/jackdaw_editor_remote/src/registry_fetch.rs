@@ -19,7 +19,7 @@ pub fn poll_registry_task(
     mut commands: Commands,
     mut manager: ResMut<super::ConnectionManager>,
     task: Option<ResMut<RegistryFetchTask>>,
-    project: Option<Res<crate::project::ProjectRoot>>,
+    project: Option<Res<jackdaw_editor_core::project::ProjectRoot>>,
 ) {
     let Some(mut task) = task else { return };
 
@@ -46,7 +46,7 @@ pub fn poll_registry_task(
                 header: jackdaw_remote::schema::RegistryHeader {
                     format_version: [1, 0, 0],
                 },
-                extracted_at: crate::timestamps::utc_rfc3339_now(),
+                extracted_at: jackdaw_editor_core::timestamps::utc_rfc3339_now(),
                 source: jackdaw_remote::schema::RegistrySource {
                     app_name: Some(app_info.app_name),
                     endpoint: manager.endpoint.clone(),

@@ -948,7 +948,7 @@ fn rebuild_tiles(
     icon_font: Res<IconFont>,
     mut thumbnails: ImageThumbnails,
     index: Option<Res<crate::asset_index::AssetIndex>>,
-    tilesets: Res<Assets<jackdaw_tileset::Tileset>>,
+    tilesets: Option<Res<Assets<jackdaw_tileset::Tileset>>>,
     grids: Query<(Entity, Option<&Children>), With<ProjectFileGrid>>,
     path_bars: Query<(Entity, Option<&Children>), With<ProjectPathBar>>,
 ) {
@@ -974,9 +974,12 @@ fn rebuild_tiles(
     for entry in entries[..drawn].iter_mut() {
         let image = if !entry.is_directory && is_image_file_path(&entry.path) {
             entry.path.clone()
-        } else if let Some(packed) =
-            packed_copy(entry, &state.root_directory, index.as_deref(), &tilesets)
-        {
+        } else if let Some(packed) = packed_copy(
+            entry,
+            &state.root_directory,
+            index.as_deref(),
+            tilesets.as_deref(),
+        ) {
             packed
         } else {
             continue;
@@ -1213,14 +1216,14 @@ fn packed_copy(
     entry: &DirEntry,
     assets: &Path,
     index: Option<&crate::asset_index::AssetIndex>,
-    tilesets: &Assets<jackdaw_tileset::Tileset>,
+    tilesets: Option<&Assets<jackdaw_tileset::Tileset>>,
 ) -> Option<PathBuf> {
     if entry.kind.type_path() != Some(jackdaw_tileset::Tileset::type_path()) {
         return None;
     }
     let loaded = (entry.path.strip_prefix(assets).ok())
         .and_then(|relative| index?.get(relative)?.value.handle().cloned())
-        .and_then(|handle| tilesets.get(handle.id().typed::<jackdaw_tileset::Tileset>()))
+        .and_then(|handle| tilesets?.get(handle.id().typed::<jackdaw_tileset::Tileset>()))
         .map(|tileset| assets.join(&tileset.image));
     let guessed = || {
         let stem = (entry.file_name).strip_suffix(crate::tile_mode::TILESET_SUFFIX)?;

@@ -1861,7 +1861,7 @@ fn spawn_color_field(
         .entity(root)
         .insert(ColorCommitSkip(Box::new(move |world: &World| {
             world
-                .get::<crate::remote::entity_browser::RemoteEntityProxy>(source_entity)
+                .get::<crate::remote_mode::RemoteEntityProxy>(source_entity)
                 .is_some()
         })));
 }
@@ -2845,7 +2845,7 @@ pub(crate) fn on_text_edit_commit(
     bindings: Query<&FieldBinding>,
     child_of_query: Query<&ChildOf>,
     mut commands: Commands,
-    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
 ) {
     // Only the drag/typing-finished commit writes back.
     if !event.is_final {
@@ -2941,7 +2941,7 @@ pub(crate) fn on_numeric_value_change_f64(
     event: On<ValueChange<f64>>,
     bindings: Query<(&FieldBinding, Has<LengthField>)>,
     mut commands: Commands,
-    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
 ) {
     let source = event.source;
     let Ok((binding, length)) = bindings.get(source) else {
@@ -3035,7 +3035,7 @@ pub(crate) fn on_numeric_value_change_i64(
     event: On<ValueChange<i64>>,
     bindings: Query<&FieldBinding>,
     mut commands: Commands,
-    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
 ) {
     let source = event.source;
     let Ok(binding) = bindings.get(source) else {
@@ -3070,7 +3070,7 @@ pub(crate) fn on_checkbox_commit(
     event: On<ValueChange<bool>>,
     bindings: Query<&FieldBinding>,
     mut commands: Commands,
-    remote_proxies: Query<(), With<crate::remote::entity_browser::RemoteEntityProxy>>,
+    remote_proxies: Query<(), With<crate::remote_mode::RemoteEntityProxy>>,
 ) {
     // This global observer sees `ValueChange<bool>` for every checkbox, so
     // the `FieldBinding` lookup self-filters to inspector fields.

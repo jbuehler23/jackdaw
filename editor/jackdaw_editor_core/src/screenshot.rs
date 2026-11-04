@@ -669,7 +669,7 @@ pub fn write_thumbnail(
 }
 
 /// Write `rgb` to `path` in `format`; JPEG at quality 80.
-pub(crate) fn save_rgb(
+pub fn save_rgb(
     rgb: &::image::RgbImage,
     path: &Path,
     format: ThumbnailFormat,

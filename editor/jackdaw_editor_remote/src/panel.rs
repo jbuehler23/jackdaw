@@ -68,6 +68,16 @@ pub fn connection_indicator() -> impl Bundle {
     )
 }
 
+/// Put the connection indicator into the status-bar slot the core leaves for it.
+pub fn fill_connection_indicator_slot(
+    trigger: On<Add<jackdaw_editor_core::remote_mode::ConnectionIndicatorSlot>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(trigger.event_target())
+        .with_child(connection_indicator());
+}
+
 /// Update the connection indicator dot color and label based on current state.
 pub fn update_connection_status_indicator(
     manager: Res<ConnectionManager>,

@@ -1130,7 +1130,7 @@ fn entering_tile_edit_mode_over_the_remote_reports_finished() {
         let outcome = app
             .world_mut()
             .run_system_cached_with(
-                jackdaw_editor_core::remote::server::call_operator_handler,
+                jackdaw_editor_core::operator_calls::call_operator,
                 Some(call),
             )
             .expect("the handler ran")

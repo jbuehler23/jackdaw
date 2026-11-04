@@ -7,7 +7,7 @@ use jackdaw_geometry::AttributeData;
 use jackdaw_scene_types::Brush;
 use serde_json::{Value, json};
 
-use super::server::{check_enabled, entity_from_params, invalid_params};
+use super::{entity_from_params, invalid_params};
 
 const FIELDS: [&str; 5] = ["positions", "polygons", "edges", "normals", "colors"];
 const DEFAULT_FIELDS: [&str; 2] = ["positions", "polygons"];
@@ -17,8 +17,7 @@ const DEFAULT_FIELDS: [&str; 2] = ["positions", "polygons"];
 /// pairs (the order edge indices count in), `normals` per face and `colors`
 /// per vertex or corner when painted. `revision` changes whenever the
 /// elements are renumbered.
-pub fn brush_topology_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    check_enabled(world)?;
+pub fn brush_topology(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
     let params = params.ok_or_else(|| invalid_params("expected an \"entity\" or a \"name\""))?;
     let fields = fields_from_params(params.get("fields"))?;
     let entity = entity_from_params(world, &params)?;

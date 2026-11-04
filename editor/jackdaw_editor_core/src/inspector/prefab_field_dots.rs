@@ -16,7 +16,7 @@ use jackdaw_bsn::SceneBsnAst;
 /// and the header's revert / right-click actions route to the prefab
 /// operators rather than the legacy baseline path.
 #[derive(Clone)]
-pub(crate) struct PrefabInstanceCtx {
+pub struct PrefabInstanceCtx {
     /// ECS entity for the prefab-instance root. Prefab operators resolve
     /// their document nodes post-snapshot-install, so dispatch sites pass
     /// this Entity rather than a pre-resolved (stale) node.
