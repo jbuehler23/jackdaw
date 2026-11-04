@@ -106,7 +106,8 @@ fn a_house_recorded_by_hand_builds_what_the_starter_builds() {
     let text = std::fs::read_to_string(dir.path().join("assets/recipes/my_house.recipe.bsn"))
         .expect("the recipe is saved under assets");
     assert_eq!(
-        text.matches("jackdaw::recipes::RecipeCall").count(),
+        text.matches("jackdaw_editor_core::recipes::RecipeCall")
+            .count(),
         8,
         "{text}"
     );

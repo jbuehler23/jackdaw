@@ -636,7 +636,7 @@ mod tests {
         write(
             &tmp,
             "zones/hedgerow.bsn",
-            "#Sign\njackdaw::asset_migration::tests::Signpost { board: \"@slate\" }\n",
+            "#Sign\njackdaw_editor_core::asset_migration::tests::Signpost { board: \"@slate\" }\n",
         );
 
         run(&mut app);
@@ -656,7 +656,7 @@ mod tests {
             &tmp,
             "prefabs/post.bsn",
             "#post\njackdaw::prefab::components::Prefab\n\
-             jackdaw::asset_migration::tests::Signpost { board: \"slate\" }\n",
+             jackdaw_editor_core::asset_migration::tests::Signpost { board: \"slate\" }\n",
         );
 
         run(&mut app);
@@ -729,7 +729,7 @@ mod tests {
         write(
             &tmp,
             "zones/hedgerow.bsn",
-            "#Sign\njackdaw::asset_migration::tests::Signpost { board: \"@slate\" }\n",
+            "#Sign\njackdaw_editor_core::asset_migration::tests::Signpost { board: \"@slate\" }\n",
         );
 
         let reports = run(&mut app);
@@ -752,7 +752,7 @@ mod tests {
         write(
             &tmp,
             "zones/hedgerow.bsn",
-            "#Sign\njackdaw::asset_migration::tests::Signpost { board: \"@ephemeral\" }\n",
+            "#Sign\njackdaw_editor_core::asset_migration::tests::Signpost { board: \"@ephemeral\" }\n",
         );
 
         let reports = run(&mut app);
@@ -836,7 +836,7 @@ mod tests {
         write(
             &tmp,
             "zones/hedgerow.bsn",
-            "#Sign\njackdaw::asset_migration::tests::Signpost { board: \"slate.bsn\" }\n",
+            "#Sign\njackdaw_editor_core::asset_migration::tests::Signpost { board: \"slate.bsn\" }\n",
         );
 
         run(&mut app);
@@ -852,7 +852,7 @@ mod tests {
         write(
             &tmp,
             "zones/hedgerow.bsn",
-            "#Sign\njackdaw::asset_migration::tests::Signpost { board: \"@slate\" }\n",
+            "#Sign\njackdaw_editor_core::asset_migration::tests::Signpost { board: \"@slate\" }\n",
         );
 
         run(&mut app);

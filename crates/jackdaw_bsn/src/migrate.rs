@@ -79,7 +79,52 @@ fn migrate_with<'a>(text: &'a str, moved: &[(&str, &str)]) -> Cow<'a, str> {
 ///
 /// Moving a saved type into another crate means adding its entry here and a
 /// test in the new crate that loads a scene saved before the move.
-pub const MOVED_TYPES: &[(&str, &str)] = &[];
+pub const MOVED_TYPES: &[(&str, &str)] = &[
+    (
+        "jackdaw::entity_ops::EmptyEntity",
+        "jackdaw_editor_core::entity_ops::EmptyEntity",
+    ),
+    (
+        "jackdaw::entity_ops::SceneCamera",
+        "jackdaw_editor_core::entity_ops::SceneCamera",
+    ),
+    (
+        "jackdaw::entity_ops::SceneLight",
+        "jackdaw_editor_core::entity_ops::SceneLight",
+    ),
+    (
+        "jackdaw::entity_ops::SceneFogVolume",
+        "jackdaw_editor_core::entity_ops::SceneFogVolume",
+    ),
+    (
+        "jackdaw::entity_ops::SceneReflectionProbe",
+        "jackdaw_editor_core::entity_ops::SceneReflectionProbe",
+    ),
+    (
+        "jackdaw::entity_ops::SceneAnimationPlayer",
+        "jackdaw_editor_core::entity_ops::SceneAnimationPlayer",
+    ),
+    (
+        "jackdaw::entity_ops::SceneAudioSource",
+        "jackdaw_editor_core::entity_ops::SceneAudioSource",
+    ),
+    (
+        "jackdaw::reference_image::ReferenceImage",
+        "jackdaw_editor_core::reference_image::ReferenceImage",
+    ),
+    (
+        "jackdaw::recipes::Recipe",
+        "jackdaw_editor_core::recipes::Recipe",
+    ),
+    (
+        "jackdaw::recipes::RecipeInput",
+        "jackdaw_editor_core::recipes::RecipeInput",
+    ),
+    (
+        "jackdaw::recipes::RecipeCall",
+        "jackdaw_editor_core::recipes::RecipeCall",
+    ),
+];
 
 /// Rename every [`MOVED_TYPES`] path in `text`.
 pub fn moved_types(text: &str) -> Cow<'_, str> {

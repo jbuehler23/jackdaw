@@ -9,6 +9,7 @@ mod integration;
 mod jsn_conversion_commit;
 mod jsn_to_bsn;
 mod load_progress;
+mod moved_type_paths;
 mod native_dialogs;
 mod physics_round_trip;
 mod scene_reopen;

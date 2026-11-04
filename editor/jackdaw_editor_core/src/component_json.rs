@@ -589,7 +589,7 @@ mod tests {
         registry.register::<TestShape>();
         registry.register::<f32>();
 
-        let type_path = "jackdaw::component_json::tests::TestShape";
+        let type_path = "jackdaw_editor_core::component_json::tests::TestShape";
         // Bevy's reflect serializer emits struct-variants as `{"Sphere": {"radius": 1.0}}`.
         let component = serde_json::json!({ "Sphere": { "radius": 1.0_f32 } });
 
@@ -619,7 +619,7 @@ mod tests {
         registry.register::<bool>();
         registry.register::<f32>();
 
-        let type_path = "jackdaw::component_json::tests::TestModifier";
+        let type_path = "jackdaw_editor_core::component_json::tests::TestModifier";
         let mut component = to_canonical_json(
             &TestModifier::Wrap(TestInner {
                 flag: false,
@@ -656,7 +656,7 @@ mod tests {
         registry.register::<Vec<f32>>();
         registry.register::<f32>();
 
-        let type_path = "jackdaw::component_json::tests::TestList";
+        let type_path = "jackdaw_editor_core::component_json::tests::TestList";
         let component = to_canonical_json(
             &TestList {
                 items: vec![10.0, 20.0, 30.0],

@@ -526,7 +526,7 @@ fn hidden_by_namespace(full_path: &str) -> bool {
     full_path.starts_with("jackdaw")
         && !full_path.starts_with("jackdaw_jsn")
         && !full_path.starts_with("jackdaw_geometry")
-        && !full_path.starts_with("jackdaw::reference_image")
+        && !full_path.starts_with("jackdaw_editor_core::reference_image")
         && !full_path.starts_with("jackdaw_animation")
         && !full_path.starts_with("jackdaw_bind::")
         && ModuleCatalog::builtin()

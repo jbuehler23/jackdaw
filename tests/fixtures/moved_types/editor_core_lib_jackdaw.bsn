@@ -1,0 +1,16 @@
+// jackdaw 0.21.0-dev | bevy 0.20
+#Board
+jackdaw::reference_image::ReferenceImage { path: "refs/front.png", opacity: 0.5, locked: true }
+bevy_transform::components::transform::Transform { translation: glam::Vec3 { x: 0.0, y: 0.0, z: 0.0 }, rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }, scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 } }
+bevy_camera::visibility::Visibility::Inherited
+--
+#Haze
+jackdaw::entity_ops::SceneFogVolume
+bevy_transform::components::transform::Transform { translation: glam::Vec3 { x: 0.0, y: 0.0, z: 0.0 }, rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }, scale: glam::Vec3 { x: 4.0, y: 2.0, z: 4.0 } }
+bevy_camera::visibility::Visibility::Inherited
+--
+#Tree
+jackdaw::prefab::components::Prefab
+jackdaw::prefab::components::PrefabEntityId(0)
+bevy_transform::components::transform::Transform { translation: glam::Vec3 { x: 0.0, y: 0.0, z: 0.0 }, rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }, scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 } }
+bevy_camera::visibility::Visibility::Inherited

@@ -40,7 +40,7 @@ use record::{RecipeRecordStartOp, RecipeRecordStopOp};
 pub const STARTER_RECIPES: [&str; 5] = ["tree", "rock", "fence", "house", "stairs"];
 
 /// Where `embedded_asset!` registers the starter recipes.
-const STARTER_DIR: &str = "jackdaw/recipes/starter";
+const STARTER_DIR: &str = "jackdaw_editor_core/recipes/starter";
 
 /// The file extension a recipe is saved under.
 pub const RECIPE_EXTENSION: &str = ".recipe.bsn";
@@ -263,7 +263,7 @@ pub fn recipe_file_text(stem: &str, recipe: &Recipe) -> String {
     for input in &recipe.inputs {
         let range: Vec<String> = input.range.iter().map(|n| format!("{n:?}")).collect();
         body.push_str(&format!(
-            "        jackdaw::recipes::RecipeInput {{ name: {}, kind: {}, default: {}, range: [{}] }},\n",
+            "        jackdaw_editor_core::recipes::RecipeInput {{ name: {}, kind: {}, default: {}, range: [{}] }},\n",
             quote(&input.name),
             quote(&input.kind),
             quote(&input.default),
@@ -273,7 +273,7 @@ pub fn recipe_file_text(stem: &str, recipe: &Recipe) -> String {
     body.push_str("    ],\n    calls: [\n");
     for call in &recipe.calls {
         body.push_str(&format!(
-            "        jackdaw::recipes::RecipeCall {{ id: {}, params: map[\n",
+            "        jackdaw_editor_core::recipes::RecipeCall {{ id: {}, params: map[\n",
             quote(&call.id)
         ));
         for (name, value) in &call.params {
@@ -290,7 +290,7 @@ pub fn recipe_file_text(stem: &str, recipe: &Recipe) -> String {
 }
 
 /// The type a `.recipe.bsn` file holds.
-pub const RECIPE_TYPE_PATH: &str = "jackdaw::recipes::Recipe";
+pub const RECIPE_TYPE_PATH: &str = "jackdaw_editor_core::recipes::Recipe";
 
 /// Read the recipe file at `path`.
 fn read_recipe_file(path: &Path) -> Result<Recipe, String> {

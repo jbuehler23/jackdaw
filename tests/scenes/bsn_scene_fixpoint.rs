@@ -240,7 +240,7 @@ fn navmesh_exclude_survives_a_save_and_load() {
 }
 
 /// `HiddenInGame` lives in `jackdaw_scene_types` so the save filter, which
-/// drops every `jackdaw::` path, keeps it. Without the round trip, reopening
+/// drops every editor-crate path, keeps it. Without the round trip, reopening
 /// a scene would lose the tag and the volume would draw in the game.
 #[test]
 fn hidden_in_game_survives_a_save_and_load() {

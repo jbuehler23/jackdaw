@@ -279,7 +279,7 @@ fn a_step_literal_is_promoted_from_the_card() {
     );
 }
 
-const FLAG_RECIPE: &str = "// jackdaw asset jackdaw::recipes::Recipe\n#flag\njackdaw::recipes::Recipe {\n    description: \"A box.\",\n    inputs: [\n        jackdaw::recipes::RecipeInput { name: \"lit\", kind: \"bool\", default: \"false\", range: [] },\n        jackdaw::recipes::RecipeInput { name: \"label\", kind: \"text\", default: \"Box\", range: [] },\n    ],\n    calls: [\n        jackdaw::recipes::RecipeCall { id: \"entity.add.cube\", params: map[(\"name\", \"$label\")] },\n    ],\n}\n";
+const FLAG_RECIPE: &str = "// jackdaw asset jackdaw_editor_core::recipes::Recipe\n#flag\njackdaw_editor_core::recipes::Recipe {\n    description: \"A box.\",\n    inputs: [\n        jackdaw_editor_core::recipes::RecipeInput { name: \"lit\", kind: \"bool\", default: \"false\", range: [] },\n        jackdaw_editor_core::recipes::RecipeInput { name: \"label\", kind: \"text\", default: \"Box\", range: [] },\n    ],\n    calls: [\n        jackdaw_editor_core::recipes::RecipeCall { id: \"entity.add.cube\", params: map[(\"name\", \"$label\")] },\n    ],\n}\n";
 
 fn checked(app: &App, field: Entity) -> bool {
     app.world().get::<bevy::ui::Checked>(field).is_some()
