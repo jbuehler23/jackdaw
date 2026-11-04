@@ -15,29 +15,22 @@ use serde::de::DeserializeSeed;
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
-use jackdaw_pie_protocol::{ControlEvent, PieMode, build_snapshot};
+use jackdaw_pie_protocol::{ControlEvent, build_snapshot};
 use jackdaw_scene_types::SceneNodeId;
 
 /// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PieConfig {
-    /// Mode the editor launched the game in.
-    pub mode: PieMode,
     /// ipc-channel rendezvous name to connect to.
     pub server: String,
 }
 
 impl PieConfig {
     /// Build from the value of `JACKDAW_PIE` (the rendezvous name).
-    /// Returns `None` when the variable is absent. `JACKDAW_PIE_MODE` selects
-    /// the mode and defaults to `play`.
+    /// Returns `None` when the variable is absent.
     pub fn from_env_value(server: Option<String>) -> Option<Self> {
         let server = server?;
-        let mode = match std::env::var("JACKDAW_PIE_MODE").as_deref() {
-            Ok("editor-preview") => PieMode::EditorPreview,
-            _ => PieMode::Play,
-        };
-        Some(PieConfig { mode, server })
+        Some(PieConfig { server })
     }
 }
 
@@ -91,11 +84,6 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
-        // Select-mode picking needs a 3D raycast backend; UI picking alone
-        // only hits interface nodes.
-        if !app.is_plugin_added::<bevy::picking::mesh_picking::MeshPickingPlugin>() {
-            app.add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin);
-        }
         // Forwarded image-targeted pointer events own the mouse pointer.
         // Disable window-targeted pointer derivation outright so a stray
         // window event can never fight the forwarded stream over the pointer
@@ -107,7 +95,7 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
         // The highlight box draws through the game's own cameras so it lands
         // in the streamed frame. `Gizmos` needs the gizmo plugin, present on
         // the windowless render path but not the headless server, so it is
-        // registered only here alongside the picking backend.
+        // registered only here.
         app.add_systems(Update, draw_highlight);
     }
 }
@@ -263,7 +251,7 @@ fn stream_state(world: &mut World) {
         transport.send(PieChannel::Reliable, bytes);
     }
     for bytes in &changed_frames {
-        transport.send(PieChannel::Unreliable, bytes);
+        transport.send(PieChannel::Reliable, bytes);
     }
     for bytes in &despawn_frames {
         transport.send(PieChannel::Reliable, bytes);
@@ -348,16 +336,6 @@ fn apply_control(world: &mut World) {
                 crate::pie_frames::stop_frame_stream(world);
             }
             ControlEvent::Input(event) => apply_input(world, event),
-            ControlEvent::Pick => {
-                let entity = picked_entity(world);
-                let reply = StateEvent::PickResult { entity };
-                if let Ok(bytes) = to_bytes(&reply) {
-                    world
-                        .non_send_mut::<PieTransportRes>()
-                        .0
-                        .send(PieChannel::Reliable, &bytes);
-                }
-            }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity
                     .map(Entity::from_bits)
@@ -450,33 +428,6 @@ fn draw_highlight(
             HIGHLIGHT_COLOR,
         );
     }
-}
-
-/// The topmost streamable entity under the mouse pointer, from the picking
-/// hover map. Hits without a `Transform` (UI nodes, picking infrastructure)
-/// are skipped so the answer is always an entity the editor can inspect.
-fn picked_entity(world: &mut World) -> Option<u64> {
-    let candidates: Vec<(Entity, f32)> = {
-        let hover = world.get_resource::<bevy::picking::hover::HoverMap>()?;
-        let hits = hover.0.get(&bevy::picking::pointer::PointerId::Mouse)?;
-        hits.iter()
-            .map(|(&entity, hit)| (entity, hit.depth))
-            .collect()
-    };
-    let mut best: Option<(Entity, f32)> = None;
-    for (entity, depth) in candidates {
-        if world.get::<Transform>(entity).is_none() {
-            continue;
-        }
-        let better = match best {
-            Some((_, best_depth)) => depth < best_depth,
-            None => true,
-        };
-        if better {
-            best = Some((entity, depth));
-        }
-    }
-    best.map(|(entity, _)| entity.to_bits())
 }
 
 /// Inject one forwarded input event as ordinary bevy input messages aimed at
@@ -1174,42 +1125,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pick_replies_with_the_nearest_transform_hit() {
-        use bevy::ecs::entity::EntityHashMap;
-        use bevy::picking::backend::HitData;
-        use bevy::picking::hover::HoverMap;
-        use bevy::picking::pointer::PointerId;
-
-        let mut world = World::new();
-        let camera = world.spawn_empty().id();
-        // A UI-style hit (no Transform) nearer than a world entity: the world
-        // entity must win because only streamable entities are inspectable.
-        let ui_entity = world.spawn_empty().id();
-        let near = world.spawn(Transform::default()).id();
-        let far = world.spawn(Transform::default()).id();
-
-        let hit = |depth: f32| HitData {
-            camera,
-            depth,
-            position: None,
-            normal: None,
-            extra: None,
-        };
-        let mut hits = EntityHashMap::new();
-        hits.insert(ui_entity, hit(0.1));
-        hits.insert(near, hit(1.0));
-        hits.insert(far, hit(5.0));
-        let mut map = HoverMap::default();
-        map.0.insert(PointerId::Mouse, hits);
-        world.insert_resource(map);
-
-        assert_eq!(picked_entity(&mut world), Some(near.to_bits()));
-
-        world.resource_mut::<HoverMap>().0.clear();
-        assert_eq!(picked_entity(&mut world), None);
-    }
-
     /// `highlight_boxes` takes `Query` params, so it is exercised through a
     /// tiny one-shot system that forwards a target entity into it and returns
     /// the box count. A mesh-bearing entity with one mesh-bearing child yields
@@ -1298,7 +1213,6 @@ mod tests {
         assert!(PieConfig::from_env_value(None).is_none());
         let cfg = PieConfig::from_env_value(Some("rv-123".to_string())).unwrap();
         assert_eq!(cfg.server, "rv-123");
-        assert_eq!(cfg.mode, PieMode::Play);
     }
 
     /// `SetComponent` sent from the editor updates the game world's `Transform`.

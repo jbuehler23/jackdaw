@@ -2,21 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::snapshot::RemoteEntity;
 
-/// Which mode the editor launched the game in.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum PieMode {
-    #[default]
-    Play,
-    EditorPreview,
-}
-
-/// Delivery channel for a message. Reliable-ordered for control and
-/// discrete changes; unreliable for high-frequency state.
+/// Delivery channel for a message.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PieChannel {
     Reliable,
-    Unreliable,
     /// Raw frame-view pixel messages (see `crate::frame`); never JSON.
     Frames,
 }
@@ -35,24 +24,11 @@ pub enum StateEvent {
     EntityDespawned {
         entity: u64,
     },
-    Status {
-        mode: PieMode,
-        ready: bool,
-    },
-    Log {
-        level: String,
-        message: String,
-    },
     /// The game's cursor options changed (mouse-look grabs); the editor
     /// mirrors this onto its own cursor while input capture is engaged.
     CursorState {
         grabbed: bool,
         visible: bool,
-    },
-    /// Answer to [`ControlEvent::Pick`]: the topmost streamable entity under
-    /// the forwarded cursor, or `None` when nothing inspectable is hit.
-    PickResult {
-        entity: Option<u64>,
     },
 }
 
@@ -93,23 +69,12 @@ pub enum ControlEvent {
     StopFrameStream,
     /// Forwarded editor input while the Live viewport has input capture.
     Input(crate::input::PieInputEvent),
-    /// Ask what is under the forwarded cursor. The game answers with
-    /// [`StateEvent::PickResult`] using its own picking backend, so picking
-    /// works in any game state and needs no editor-side camera alignment.
-    Pick,
     /// Box the given entity in the game's own render (gizmo bounds), or
     /// clear the highlight with `None`. Sent when the editor selection
     /// changes while an instance is focused.
     Highlight {
         entity: Option<u64>,
     },
-}
-
-/// Either direction, for transports that carry a single type.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub enum PieEvent {
-    State(StateEvent),
-    Control(ControlEvent),
 }
 
 /// Serialize a protocol message to bytes. Uses JSON so component payloads
@@ -137,10 +102,10 @@ mod tests {
     }
 
     #[test]
-    fn state_event_status_round_trips() {
-        let ev = StateEvent::Status {
-            mode: PieMode::Play,
-            ready: true,
+    fn state_event_round_trips() {
+        let ev = StateEvent::CursorState {
+            grabbed: true,
+            visible: false,
         };
         let bytes = to_bytes(&ev).unwrap();
         let back: StateEvent = from_bytes(&bytes).unwrap();
@@ -173,21 +138,6 @@ mod tests {
             grabbed: true,
             visible: false,
         };
-        let bytes = to_bytes(&ev).unwrap();
-        assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
-    }
-
-    #[test]
-    fn pick_events_round_trip() {
-        let ev = ControlEvent::Pick;
-        let bytes = to_bytes(&ev).unwrap();
-        assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
-
-        let ev = StateEvent::PickResult { entity: Some(42) };
-        let bytes = to_bytes(&ev).unwrap();
-        assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
-
-        let ev = StateEvent::PickResult { entity: None };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
     }

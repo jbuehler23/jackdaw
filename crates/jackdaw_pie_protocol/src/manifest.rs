@@ -8,8 +8,6 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::event::PieMode;
-
 /// One launchable run configuration. Every run launches the same
 /// game binary; configs differ only in launch environment, not in
 /// what gets built.
@@ -30,9 +28,6 @@ pub struct RunConfig {
     /// Working directory; defaults to the project root.
     #[serde(default)]
     pub cwd: Option<String>,
-    /// Engine-execution axis; `editor-preview` reserved.
-    #[serde(default)]
-    pub mode: PieMode,
 }
 
 fn one() -> u32 {
@@ -78,7 +73,6 @@ name = "My Game""#,
         .unwrap();
         assert_eq!(m.runs[0].label(), "My Game");
         assert_eq!(m.runs[0].instances, 1);
-        assert_eq!(m.runs[0].mode, PieMode::Play);
         assert!(m.plugin.is_none());
     }
 
@@ -103,12 +97,12 @@ env = { ADDR = "127.0.0.1:5000" }
     }
 
     #[test]
-    fn editor_preview_mode_parses() {
+    fn legacy_mode_key_is_ignored() {
         let m: Manifest = toml::from_str(
             r#"[[run]]
 mode = "editor-preview""#,
         )
         .unwrap();
-        assert_eq!(m.runs[0].mode, PieMode::EditorPreview);
+        assert_eq!(m.runs[0].instances, 1);
     }
 }

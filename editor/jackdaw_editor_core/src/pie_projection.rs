@@ -1,8 +1,8 @@
 //! Projects the focused PIE instance's streamed state into the editor preview
-//! ECS, so the Scene outliner and inspector show the live game's entities, and
-//! the Game panel's Select mode can resolve a picked game entity. (Those
-//! entities also appear in the viewport because they are real preview ECS
-//! entities; there is no separate viewport renderer for the running game.)
+//! ECS, so the Scene outliner and inspector show the live game's entities.
+//! (Those entities also appear in the viewport because they are real preview
+//! ECS entities; there is no separate viewport renderer for the running
+//! game.)
 
 use std::collections::HashMap;
 
@@ -51,15 +51,10 @@ const CHILDREN_PATH: &str = "bevy_ecs::hierarchy::Children";
 const PROJECTION_SKIP_PREFIXES: &[&str] = &["bevy_camera::camera::", "bevy_camera::components::"];
 
 /// Streamed but never saved: these must reach the preview even though the
-/// save filter rejects them. The rig activation marker is how the Live
-/// camera lock finds the game's active rig; dropping it here would silently
-/// misalign picking and overlays against the streamed frame. The graph
-/// playback is what the Graph window lights its running state from while the
-/// game is the one playing.
-const PROJECTION_ALLOW_PATHS: &[&str] = &[
-    "jackdaw_camera_rig::ActiveCameraRig",
-    "jackdaw_animation_runtime::graph::AnimationGraphPlayback",
-];
+/// save filter rejects them. The graph playback is what the Graph window
+/// lights its running state from while the game is the one playing.
+const PROJECTION_ALLOW_PATHS: &[&str] =
+    &["jackdaw_animation_runtime::graph::AnimationGraphPlayback"];
 
 /// True when a streamed component must not be applied to a preview entity.
 fn projection_skips(type_path: &str) -> bool {
@@ -350,10 +345,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 }
             }
         }
-        StateEvent::Status { .. }
-        | StateEvent::Log { .. }
-        | StateEvent::CursorState { .. }
-        | StateEvent::PickResult { .. } => {}
+        StateEvent::CursorState { .. } => {}
     }
 }
 
@@ -979,12 +971,6 @@ mod tests {
         assert!(!projection_skips("bevy_camera::projection::Projection"));
         assert!(!projection_skips(
             "bevy_transform::components::transform::Transform"
-        ));
-        // Never saved, but MUST stream: the Live camera lock finds the game's
-        // active rig through this marker.
-        assert!(!projection_skips("jackdaw_camera_rig::ActiveCameraRig"));
-        assert!(crate::scene_io::should_skip_component(
-            "jackdaw_camera_rig::ActiveCameraRig"
         ));
 
         // A streamed camera component is dropped, not applied, even when the
