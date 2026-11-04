@@ -401,7 +401,7 @@ fn the_first_scene_of_a_session_loads_before_any_watcher_tick() {
     );
 
     // What project open does before it restores tabs.
-    jackdaw::pie::refresh_project_types(app.world_mut());
+    jackdaw::project_build::refresh_project_types(app.world_mut());
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
 
     let unresolved = app

@@ -78,7 +78,7 @@ fn app_with_open_outfit() -> (App, tempfile::TempDir) {
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
     app.update();
-    jackdaw::pie::refresh_project_types(app.world_mut());
+    jackdaw::project_build::refresh_project_types(app.world_mut());
     settle(&mut app);
 
     for name in ["slate", "moss"] {

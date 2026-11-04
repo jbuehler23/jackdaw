@@ -85,7 +85,7 @@ fn editor_with_the_rat_open() -> (App, tempfile::TempDir) {
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
     app.update();
-    jackdaw::pie::refresh_project_types(app.world_mut());
+    jackdaw::project_build::refresh_project_types(app.world_mut());
     for _ in 0..4 {
         app.update();
     }
