@@ -1,7 +1,13 @@
-//! Types shared between jackdaw's PIE runtime and loaded games.
+//! [`PlayState`]: the lifecycle of the game process the editor launches
+//! for Play.
 //!
-//! Games import [`PlayState`] to gate their systems on the
-//! user's Play/Pause/Stop transport buttons:
+//! Play runs the game as a separate process started by the editor. The two
+//! talk over an IPC channel (control messages from the editor, entity and
+//! component state back from the game), and the editor's `PlayState`
+//! reflects that process: `Stopped` when none is running, `Playing` once
+//! the game is up, `Paused` while the editor has paused it.
+//!
+//! Game code that runs inside the editor can gate its systems on it:
 //!
 //! ```ignore
 //! use bevy::prelude::*;
@@ -17,22 +23,14 @@
 //!     }
 //! }
 //! ```
-//!
-//! Jackdaw's editor crate owns the rest of the PIE infrastructure
-//! (the `PiePlugin`, the scene-snapshot resource, the toolbar
-//! buttons); those stay editor-private because they depend on the
-//! editor's scene representation.
 
 use bevy::prelude::*;
 
-/// Three-state transport controlled by the editor's Play / Pause /
-/// Stop buttons.
+/// Lifecycle of the game process launched by the editor's Play button.
 ///
-/// Games attach `.run_if(in_state(PlayState::Playing))` to their
-/// update systems and `OnEnter(PlayState::Playing)` to their
-/// start-of-play systems (entity spawning, initial state setup).
-/// `Stopped` is authoring mode; the game is loaded but dormant.
-/// `Paused` freezes game systems without discarding world state.
+/// `Stopped` means no game process is running, which is also the editor's
+/// authoring state. `Playing` means a game process is running. `Paused`
+/// means the editor has paused that process without discarding its world.
 #[derive(States, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum PlayState {
     #[default]

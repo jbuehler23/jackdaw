@@ -5,10 +5,8 @@
 //! [`connect`] to complete the bidirectional setup. Both ends then hold an
 //! [`IpcChannelTransport`] carrying `(PieChannel, Vec<u8>)` frames.
 //!
-//! `ipc-channel` is reliable-ordered on every platform, so
-//! [`PieChannel::Unreliable`] frames are
-//! delivered reliably here. The channel tag is preserved so transports that do
-//! distinguish the two can act on it.
+//! `ipc-channel` is reliable-ordered on every platform. The channel tag is
+//! preserved on the wire so the receiver can route each frame.
 
 use bevy::log::warn;
 use ipc_channel::ipc::{self, IpcOneShotServer, IpcReceiver, IpcSender};

@@ -91,9 +91,7 @@ impl InstanceBuffer {
             jackdaw_pie_protocol::StateEvent::EntityDespawned { entity } => {
                 self.entities.remove(entity);
             }
-            jackdaw_pie_protocol::StateEvent::Status { .. }
-            | jackdaw_pie_protocol::StateEvent::Log { .. }
-            | jackdaw_pie_protocol::StateEvent::CursorState { .. }
+            jackdaw_pie_protocol::StateEvent::CursorState { .. }
             | jackdaw_pie_protocol::StateEvent::PickResult { .. } => {}
         }
     }
@@ -214,21 +212,6 @@ mod instance_buffer_tests {
             value: serde_json::json!(null),
         });
         assert!(!buf.entities.contains_key(&99));
-    }
-
-    // Status and Log events are no-ops.
-    #[test]
-    fn status_and_log_are_ignored() {
-        let mut buf = InstanceBuffer::default();
-        buf.apply(&StateEvent::Status {
-            mode: jackdaw_pie_protocol::event::PieMode::Play,
-            ready: true,
-        });
-        buf.apply(&StateEvent::Log {
-            level: "info".to_string(),
-            message: "hello".to_string(),
-        });
-        assert!(buf.entities.is_empty());
     }
 
     // PieInstances starts with no focus and accumulates focus on first insert.

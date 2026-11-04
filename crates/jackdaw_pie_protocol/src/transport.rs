@@ -4,7 +4,7 @@ use crate::event::PieChannel;
 
 /// A byte pipe between an editor client and a game server, abstracting the
 /// wire (a local socket, an IPC channel). The protocol layer serializes
-/// `PieEvent`s to bytes (`event::to_bytes`) and routes them by channel.
+/// `StateEvent`s and `ControlEvent`s to bytes (`event::to_bytes`) and routes them by channel.
 pub trait PieTransport {
     /// Queue `bytes` for delivery on `channel`.
     fn send(&mut self, channel: PieChannel, bytes: &[u8]);
