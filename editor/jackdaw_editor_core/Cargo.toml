@@ -15,11 +15,6 @@ include = [
     "Cargo.toml",
 ]
 
-# Named `jackdaw` so reflected type paths, `embedded://` asset paths and
-# module paths stay `jackdaw::...`; the `jackdaw` package re-exports it.
-[lib]
-name = "jackdaw"
-
 [features]
 # Source and `cargo install` builds are self-contained by default.
 # Cargo only installs executables, so enabling Bevy's dynamic-linking

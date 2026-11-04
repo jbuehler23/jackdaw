@@ -11,7 +11,7 @@ use jackdaw_scene_types::RecipeInstance;
 use crate::util;
 use crate::util::OperatorResultExt as _;
 
-const LINE: &str = "// jackdaw asset jackdaw::recipes::Recipe\n#post\njackdaw::recipes::Recipe {\n    description: \"A post.\",\n    inputs: [],\n    calls: [\n        jackdaw::recipes::RecipeCall { id: \"entity.add.cube\", params: map[(\"name\", \"Post\")] },\n    ],\n}\n";
+const LINE: &str = "// jackdaw asset jackdaw_editor_core::recipes::Recipe\n#post\njackdaw_editor_core::recipes::Recipe {\n    description: \"A post.\",\n    inputs: [],\n    calls: [\n        jackdaw_editor_core::recipes::RecipeCall { id: \"entity.add.cube\", params: map[(\"name\", \"Post\")] },\n    ],\n}\n";
 
 fn settle(app: &mut App) {
     for _ in 0..4 {

@@ -34,16 +34,28 @@ pub(crate) const WORLD_ENTITY_ICONS: &[(&str, Icon)] = &[
     ("jackdaw_scene_types::types::Terrain", Icon::Mountain),
     // Ahead of the `Mesh3d` rule: an instance carries no mesh of its own.
     ("jackdaw_scene_types::types::GltfSource", Icon::Boxes),
-    ("jackdaw::entity_ops::SceneFogVolume", Icon::CloudFog),
-    ("jackdaw::entity_ops::SceneReflectionProbe", Icon::Sparkles),
+    (
+        "jackdaw_editor_core::entity_ops::SceneFogVolume",
+        Icon::CloudFog,
+    ),
+    (
+        "jackdaw_editor_core::entity_ops::SceneReflectionProbe",
+        Icon::Sparkles,
+    ),
     (
         "jackdaw_scene_types::types::ReflectionProbe",
         Icon::Sparkles,
     ),
-    ("jackdaw::entity_ops::SceneAnimationPlayer", Icon::Play),
-    ("jackdaw::entity_ops::SceneAudioSource", Icon::Volume2),
     (
-        "jackdaw::reference_image::ReferenceImage",
+        "jackdaw_editor_core::entity_ops::SceneAnimationPlayer",
+        Icon::Play,
+    ),
+    (
+        "jackdaw_editor_core::entity_ops::SceneAudioSource",
+        Icon::Volume2,
+    ),
+    (
+        "jackdaw_editor_core::reference_image::ReferenceImage",
         Icon::PictureInPicture,
     ),
 ];

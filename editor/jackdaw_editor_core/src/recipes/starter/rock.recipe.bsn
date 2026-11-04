@@ -1,14 +1,14 @@
-// jackdaw asset jackdaw::recipes::Recipe
+// jackdaw asset jackdaw_editor_core::recipes::Recipe
 #rock
-jackdaw::recipes::Recipe {
+jackdaw_editor_core::recipes::Recipe {
     description: "A squat boulder, its shape drawn from the seed.",
     inputs: [
-        jackdaw::recipes::RecipeInput { name: "size", kind: "float", default: "1.2", range: [0.2, 10.0] },
-        jackdaw::recipes::RecipeInput { name: "roughness", kind: "float", default: "0.08", range: [0.0, 0.2] },
-        jackdaw::recipes::RecipeInput { name: "material", kind: "text", default: "", range: [] },
+        jackdaw_editor_core::recipes::RecipeInput { name: "size", kind: "float", default: "1.2", range: [0.2, 10.0] },
+        jackdaw_editor_core::recipes::RecipeInput { name: "roughness", kind: "float", default: "0.08", range: [0.0, 0.2] },
+        jackdaw_editor_core::recipes::RecipeInput { name: "material", kind: "text", default: "", range: [] },
     ],
     calls: [
-        jackdaw::recipes::RecipeCall { id: "entity.add.sphere", params: map[
+        jackdaw_editor_core::recipes::RecipeCall { id: "entity.add.sphere", params: map[
             ("name", "Rock"),
             ("kind", "ico"),
             ("subdivisions", "1"),
@@ -16,14 +16,14 @@ jackdaw::recipes::Recipe {
             ("pos", "[0, $size * 0.3, 0]"),
             ("material", "$material"),
         ] },
-        jackdaw::recipes::RecipeCall { id: "brush.mesh.randomize", params: map[
+        jackdaw_editor_core::recipes::RecipeCall { id: "brush.mesh.randomize", params: map[
             ("entity", "$0.entities.0"),
             ("amount", "$size * $roughness"),
             ("seed", "$seed"),
             ("per_brush", "false"),
             ("space", "local"),
         ] },
-        jackdaw::recipes::RecipeCall { id: "entity.tag", params: map[
+        jackdaw_editor_core::recipes::RecipeCall { id: "entity.tag", params: map[
             ("entities", "$0.entities.0"),
             ("add", "rock"),
         ] },

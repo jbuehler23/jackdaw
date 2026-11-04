@@ -691,7 +691,7 @@ fn modifier_remove_restores_base_cache() {
     assert!(cache.vert_source.is_empty());
 }
 
-const REFERENCE_IMAGE_TYPE_PATH: &str = "jackdaw::reference_image::ReferenceImage";
+const REFERENCE_IMAGE_TYPE_PATH: &str = "jackdaw_editor_core::reference_image::ReferenceImage";
 
 /// A `ReferenceImage` component must survive the scene save path
 /// (always-save override for the `jackdaw_editor_core::` skip prefix) and

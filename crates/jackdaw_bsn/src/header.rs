@@ -39,7 +39,9 @@ pub fn read_asset_header(text: &str) -> Option<String> {
         }
         if let Some(type_path) = line.strip_prefix(ASSET_HEADER) {
             let type_path = type_path.trim();
-            return (!type_path.is_empty()).then(|| type_path.to_string());
+            return (!type_path.is_empty()).then(|| {
+                crate::migrate::moved_type_path(type_path).unwrap_or_else(|| type_path.to_string())
+            });
         }
         if !line.starts_with("//") {
             return None;
@@ -337,6 +339,15 @@ mod tests {
     use crate::parse_bsn_text;
 
     const STAMP: &str = "// jackdaw 0.19.0 | bevy 0.19";
+
+    #[test]
+    fn a_header_naming_a_moved_type_reads_as_its_new_path() {
+        let text = "// jackdaw asset jackdaw::recipes::Recipe\n#fence\njackdaw::recipes::Recipe {}";
+        assert_eq!(
+            read_asset_header(text).as_deref(),
+            Some("jackdaw_editor_core::recipes::Recipe")
+        );
+    }
 
     #[test]
     fn an_asset_file_s_header_round_trips() {
