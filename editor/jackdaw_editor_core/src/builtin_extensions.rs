@@ -218,7 +218,7 @@ impl JackdawExtension for ProjectWindowExtension {
 }
 
 /// Game monitor in the bottom dock: shows the focused instance's streamed
-/// frame with a Play/Select mode bar.
+/// frame.
 #[derive(Default)]
 pub struct GamePanelExtension;
 

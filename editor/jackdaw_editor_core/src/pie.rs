@@ -2073,44 +2073,6 @@ fn report_stderr_tail(stderr_tail: &StderrTail) {
     }
 }
 
-/// Apply a game pick answer: resolve the bits through the projection and
-/// select the preview entity. Stale or unstreamed hits resolve to nothing
-/// and are dropped.
-pub(crate) fn handle_pick_result(world: &mut World, bits: Option<u64>) {
-    let Some(bits) = bits else {
-        return;
-    };
-    let Some(&preview) = world
-        .resource::<crate::pie_projection::PieProjection>()
-        .by_bits
-        .get(&bits)
-    else {
-        return;
-    };
-    if world.get_entity(preview).is_err() {
-        return;
-    }
-    let old_entities: Vec<Entity> = world
-        .resource::<crate::selection::Selection>()
-        .entities
-        .clone();
-    {
-        let mut selection = world.resource_mut::<crate::selection::Selection>();
-        selection.entities.clear();
-        selection.entities.push(preview);
-    }
-    for e in old_entities {
-        if e != preview
-            && let Ok(mut entity_mut) = world.get_entity_mut(e)
-        {
-            entity_mut.remove::<crate::selection::Selected>();
-        }
-    }
-    if let Ok(mut entity_mut) = world.get_entity_mut(preview) {
-        entity_mut.insert(crate::selection::Selected);
-    }
-}
-
 /// Drain `StateEvent`s from every live child. Events for every instance are
 /// always accumulated into that instance's [`InstanceBuffer`](crate::pie_mirror::InstanceBuffer) regardless of
 /// view mode, so the buffers always hold current game state and a Scene->Live
@@ -2184,15 +2146,6 @@ fn drain_game_events(world: &mut World) {
             if let StateEvent::CursorState { grabbed, visible } = &event {
                 if is_focused {
                     crate::live_input::note_game_cursor_state(world, *grabbed, *visible);
-                }
-                continue;
-            }
-
-            // A pick answer resolves to a preview entity selection; it is not
-            // scene data, so it never reaches the buffer or the projector.
-            if let StateEvent::PickResult { entity } = &event {
-                if is_focused {
-                    handle_pick_result(world, *entity);
                 }
                 continue;
             }
@@ -2589,28 +2542,6 @@ mod stop_cleanup_tests {
                 .by_bits
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn pick_result_selects_the_projected_entity() {
-        let mut world = build_focus_world();
-        let preview = world.spawn_empty().id();
-        world
-            .resource_mut::<crate::pie_projection::PieProjection>()
-            .by_bits
-            .insert(0xC3, preview);
-        world.init_resource::<crate::selection::Selection>();
-
-        crate::pie::handle_pick_result(&mut world, Some(0xC3));
-        assert!(
-            world
-                .resource::<crate::selection::Selection>()
-                .is_selected(preview)
-        );
-
-        // Unresolvable bits and None are no-ops, not panics.
-        crate::pie::handle_pick_result(&mut world, Some(0xDEAD));
-        crate::pie::handle_pick_result(&mut world, None);
     }
 }
 
