@@ -71,7 +71,8 @@ fn auto_attach_button_tooltip(
 /// The tooltip of a control that dispatches operator `.0` itself rather than
 /// through a [`ButtonOperatorCall`]; it shows the operator and its live key.
 #[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct OperatorTooltip(pub &'static str);
+#[doc(hidden)]
+pub struct OperatorTooltip(pub &'static str);
 
 fn attach_operator_tooltip(
     add: On<Add<OperatorTooltip>>,

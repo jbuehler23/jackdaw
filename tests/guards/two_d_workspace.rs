@@ -26,7 +26,7 @@ fn the_2d_workspace_docks_the_tile_palette() {
         jackdaw::viewport::VIEWPORT_WINDOW_ID,
         "jackdaw.hierarchy",
         "jackdaw.inspector.components",
-        jackdaw::tile_palette::TILE_PALETTE_WINDOW_ID,
+        jackdaw::tile_mode::TILE_PALETTE_WINDOW_ID,
         jackdaw::project_window::PROJECT_WINDOW_ID,
     ] {
         assert_eq!(

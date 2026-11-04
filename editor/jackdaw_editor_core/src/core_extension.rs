@@ -332,16 +332,6 @@ impl JackdawExtension for JackdawCoreExtension {
         crate::lod_bar::add_to_extension(ctx);
         crate::texture_import::add_to_extension(ctx);
         crate::image_sampling::add_to_extension(ctx);
-        crate::tileset_dock::add_to_extension(ctx);
-        crate::tileset_bits::add_to_extension(ctx);
-        crate::tileset_edit::add_to_extension(ctx);
-        crate::tilemap_stroke::add_to_extension(ctx);
-        crate::tile_tools::add_to_extension(ctx);
-        crate::tilemap_ops::add_to_extension(ctx);
-        crate::tilemap_shape_ops::add_to_extension(ctx);
-        crate::tilemap_region_ops::add_to_extension(ctx);
-        crate::tileset_import::add_to_extension(ctx);
-        crate::tileset_layout_ops::add_to_extension(ctx);
         crate::world_units::add_to_extension(ctx);
         crate::project_window::add_to_extension(ctx);
         crate::material_browser::add_to_extension(ctx);

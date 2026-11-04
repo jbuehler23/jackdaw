@@ -549,7 +549,8 @@ pub fn update_grid_size_label(
 /// Starts in the `Plain` variant so idle buttons read flat against the
 /// toolbar panel; [`update_toolbar_button_variants`] flips the active
 /// tool/mode/modal button to `Primary`.
-pub(crate) fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
+#[doc(hidden)]
+pub fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
     let glyph = String::from(icon.unicode());
     bsn! {
         @FeathersToolButton {

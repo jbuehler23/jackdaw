@@ -1,13 +1,6 @@
 use std::borrow::Cow;
 
-use bevy::{
-    prelude::*,
-    render::{
-        RenderPlugin,
-        settings::{RenderCreation, WgpuSettings},
-    },
-    winit::WinitPlugin,
-};
+use bevy::prelude::*;
 use jackdaw::prelude::*;
 use jackdaw_api_internal::lifecycle::{ExtensionAppExt as _, OperatorEntity, enable_extension};
 use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot};
@@ -19,7 +12,7 @@ use jackdaw_api_internal::snapshot::{ActiveSnapshotter, SceneSnapshot};
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn skip_setup_check() {
-    jackdaw_project_build::bootstrap::skip_setup_check();
+    jackdaw::testing::skip_setup_check();
 }
 
 /// Point the editor's per-user config directory at a scratch directory for
@@ -42,17 +35,10 @@ pub fn primary_mod() -> &'static str {
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn isolate_config_dir() {
-    static ISOLATED: std::sync::Once = std::sync::Once::new();
-    ISOLATED.call_once(|| {
-        let chosen =
-            std::env::var_os(jackdaw_env::paths::CONFIG_DIR_VAR).is_some_and(|dir| !dir.is_empty());
-        if chosen {
-            return;
-        }
-        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("jackdaw-config-{}", std::process::id()));
-        unsafe { std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, dir) };
-    });
+    jackdaw::testing::isolate_config_dir(
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("jackdaw-config-{}", std::process::id())),
+    );
 }
 
 pub fn headless_app() -> App {
@@ -74,26 +60,8 @@ pub fn ambient_app() -> App {
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
-    skip_setup_check();
     isolate_config_dir();
-    let mut app = App::new();
-    app.add_plugins(
-        DefaultPlugins
-            .set(assets)
-            .set(RenderPlugin {
-                render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
-                    backends: None,
-                    ..default()
-                })),
-                ..default()
-            })
-            // Headless integration tests never exercise sound. Disabling the
-            // backend avoids attempts to connect to host ALSA/JACK services,
-            // which can otherwise block an otherwise-complete test process.
-            .disable::<bevy::audio::AudioPlugin>()
-            .disable::<WinitPlugin>(),
-    );
-    app
+    jackdaw::testing::ambient_app(assets)
 }
 
 /// The editor itself, over an app that already carries the ambient
@@ -101,18 +69,8 @@ fn ambient_app_reading(assets: bevy::asset::AssetPlugin) -> App {
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn add_editor_plugins(app: &mut App) {
-    app.add_plugins(JackdawEditorPlugins::default());
-    // Bevy's component-sync hooks (`On<Remove<SyncToRenderWorld>>`) read the
-    // main-world `PendingSyncEntity` resource that `SyncWorldPlugin` installs.
-    // The headless `RenderPlugin` (no backend) never spins up the render world,
-    // so that plugin isn't pulled in here; add it explicitly so despawning a
-    // sync-component entity (e.g. through `scene.new`) doesn't panic.
-    if !app.is_plugin_added::<bevy::extract::sync_world::SyncWorldPlugin<bevy::render::RenderApp>>()
-    {
-        app.add_plugins(bevy::extract::sync_world::SyncWorldPlugin::<
-            bevy::render::RenderApp,
-        >::default());
-    }
+    jackdaw::testing::add_editor_plugins(app);
+    jackdaw::add_feature_plugins(app);
 }
 
 /// Like [`headless_app`] but also runs the startup pass and ticks one
@@ -151,25 +109,14 @@ pub fn editor_test_app_reading(assets: &std::path::Path) -> App {
 /// The CC0 overworld tile sheet: 16 px tiles, 27 columns, 432 x 1040.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
-pub const OVERWORLD_SHEET: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/crates/jackdaw_tilemap/tests/data/punyworld/punyworld-overworld-tileset.png"
-);
+pub const OVERWORLD_SHEET: &str = jackdaw::testing::OVERWORLD_SHEET;
 
 /// Write [`OVERWORLD_SHEET`] to `to` re-packed with a transparent pixel
 /// between neighbouring tiles: 458 x 1104.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn write_spaced_overworld_sheet(to: &std::path::Path) {
-    let packed = image::open(OVERWORLD_SHEET)
-        .expect("the sheet decodes")
-        .to_rgba8();
-    let (w, h) = packed.dimensions();
-    let mut spaced = image::RgbaImage::new(w / 16 * 17 - 1, h / 16 * 17 - 1);
-    for (x, y, pixel) in packed.enumerate_pixels() {
-        spaced.put_pixel(x + x / 16, y + y / 16, *pixel);
-    }
-    spaced.save(to).expect("write the spaced sheet");
+    jackdaw::testing::write_spaced_overworld_sheet(to);
 }
 
 /// Run frames until `done` holds, failing the test once `limit` has passed
@@ -180,49 +127,23 @@ pub fn update_until(
     app: &mut App,
     what: &str,
     limit: std::time::Duration,
-    mut done: impl FnMut(&mut App) -> bool,
+    done: impl FnMut(&mut App) -> bool,
 ) {
-    let started = std::time::Instant::now();
-    while !done(app) {
-        assert!(
-            started.elapsed() < limit,
-            "gave up after {limit:?} waiting for {what}"
-        );
-        app.update();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    jackdaw::testing::update_until(app, what, limit, done);
 }
 
-/// Run frames until the scene load the last open began is over. The limit is
-/// under the load's own stall limit, so a model that never comes in fails the
-/// test instead of ending the load quietly.
+/// Run frames until the scene load the last open began is over.
 #[expect(clippy::allow_attributes, reason = "shared across test binaries")]
 #[allow(dead_code, reason = "shared across test binaries")]
 pub fn settle_scene_load(app: &mut App) {
-    update_until(
-        app,
-        "the scene load to finish",
-        std::time::Duration::from_secs(45),
-        |app| {
-            !app.world()
-                .resource::<jackdaw::progress::EditorProgress>()
-                .is_running(jackdaw::scenes::load_progress::SCENE_LOAD)
-        },
-    );
+    jackdaw::testing::settle_scene_load(app);
 }
 
-/// Advance the app's clock by a fixed step per frame, so gestures measured
-/// in seconds (double clicks, spring loads) read the same on a loaded
-/// runner as on a fast machine.
-#[expect(clippy::allow_attributes, reason = "Some tests use this")]
-#[allow(
-    dead_code,
-    reason = "shared across integration test binaries; not every test file calls it."
-)]
+/// Advance the app's clock by a fixed step per frame.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "shared across test binaries")]
 pub fn fixed_frame_clock(app: &mut App) {
-    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-        std::time::Duration::from_millis(16),
-    ));
+    jackdaw::testing::fixed_frame_clock(app);
 }
 
 /// Register `T` in the catalog AND enable it.

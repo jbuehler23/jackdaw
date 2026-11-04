@@ -306,7 +306,7 @@ fn is_editable_primitive(value: &dyn PartialReflect) -> bool {
         || value.try_downcast_ref::<String>().is_some()
 }
 
-pub(crate) fn spawn_field_row(
+pub fn spawn_field_row(
     commands: &mut Commands,
     parent: Entity,
     name: &str,
@@ -2630,7 +2630,7 @@ struct PendingFieldText(String);
 /// `FieldBinding` and initial text ride on the container entity; the inner
 /// text entry emits `ValueChange<String>` on Enter or blur, which
 /// `on_text_edit_commit` writes back as a JSON string.
-pub(super) fn spawn_string_input(
+pub fn spawn_string_input(
     commands: &mut Commands,
     parent: Entity,
     current_value: &str,

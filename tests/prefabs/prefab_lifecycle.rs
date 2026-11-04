@@ -4263,7 +4263,7 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::terrain::TerrainDataStore>();
-    jackdaw::tilemap::plugin(&mut app);
+    jackdaw_editor_tile::tilemap::plugin(&mut app);
     app.world_mut()
         .resource_mut::<jackdaw::prefab::PrefabAstCache>()
         .insert(
@@ -4312,7 +4312,7 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
     };
     let key = tilemap_key(&mut app);
     app.world_mut()
-        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .resource_mut::<jackdaw_editor_tile::tilemap::TilemapDataStore>()
         .insert(key, map.clone());
 
     jackdaw::scene_io::save_scene(app.world_mut());
@@ -4360,12 +4360,12 @@ fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::terrain::TerrainDataStore>();
-    jackdaw::tilemap::plugin(&mut app);
+    jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
     let key = tilemap_key(&mut app);
     assert_eq!(
         app.world()
-            .resource::<jackdaw::tilemap::TilemapDataStore>()
+            .resource::<jackdaw_editor_tile::tilemap::TilemapDataStore>()
             .get(&key),
         Some(&map),
         "the instance reads the prefab's sidecar"
@@ -4378,7 +4378,7 @@ fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
         scenes.tabs = vec![tab];
     }
     app.world_mut()
-        .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+        .resource_mut::<jackdaw_editor_tile::tilemap::TilemapDataStore>()
         .get_mut(&key)
         .expect("loaded")
         .layers
@@ -4412,7 +4412,7 @@ fn tilemap_keys(app: &mut bevy::prelude::App) -> Vec<String> {
         .collect();
     let mut keys: Vec<String> = entities
         .into_iter()
-        .filter_map(|e| jackdaw::tilemap::store_key_of(app.world_mut(), e))
+        .filter_map(|e| jackdaw_editor_tile::tilemap::store_key_of(app.world_mut(), e))
         .collect();
     keys.sort();
     keys
@@ -4469,12 +4469,14 @@ fn a_scene_map_and_a_prefab_map_of_one_file_name_stay_apart() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::terrain::TerrainDataStore>();
-    jackdaw::tilemap::plugin(&mut app);
+    jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
 
     let keys = tilemap_keys(&mut app);
     assert_eq!(keys.len(), 2, "two entries: {keys:?}");
-    let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+    let store = app
+        .world()
+        .resource::<jackdaw_editor_tile::tilemap::TilemapDataStore>();
     let cells: Vec<_> = keys.iter().map(|k| store.get(k).cloned()).collect();
     assert!(cells.contains(&Some(tile_map(1))) && cells.contains(&Some(tile_map(2))));
 
@@ -4487,7 +4489,7 @@ fn a_scene_map_and_a_prefab_map_of_one_file_name_stay_apart() {
     }
     for key in keys {
         app.world_mut()
-            .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+            .resource_mut::<jackdaw_editor_tile::tilemap::TilemapDataStore>()
             .get_mut(&key);
     }
     assert!(jackdaw::scenes::operators::scene_save_all_system(
@@ -4570,7 +4572,7 @@ fn a_prefab_tab_and_a_scene_instancing_it_share_the_prefabs_cells() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::terrain::TerrainDataStore>();
-    jackdaw::tilemap::plugin(&mut app);
+    jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &scene_path);
     let in_scene = tilemap_key(&mut app);
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &prefab_path);
@@ -4579,7 +4581,7 @@ fn a_prefab_tab_and_a_scene_instancing_it_share_the_prefabs_cells() {
     for (tab, cells) in [(0, tile_map(2)), (1, tile_map(3))] {
         jackdaw::scenes::swap::swap_active_tab(app.world_mut(), tab);
         *app.world_mut()
-            .resource_mut::<jackdaw::tilemap::TilemapDataStore>()
+            .resource_mut::<jackdaw_editor_tile::tilemap::TilemapDataStore>()
             .get_mut(&in_scene)
             .expect("loaded") = cells.clone();
         {
@@ -4641,15 +4643,17 @@ fn instances_sharing_a_sidecar_with_different_bounds_are_noted() {
     let mut app = make_app_for_prefab_tests();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::terrain::TerrainDataStore>();
-    app.init_resource::<jackdaw::tilemap_resolve::TilemapResolveStats>();
-    jackdaw::tilemap::plugin(&mut app);
+    app.init_resource::<jackdaw_editor_tile::tilemap_resolve::TilemapResolveStats>();
+    jackdaw_editor_tile::tilemap::plugin(&mut app);
     jackdaw::scene_io::load_scene_from_file(app.world_mut(), &scene_path);
     let keys = tilemap_keys(&mut app);
     assert_eq!(keys.len(), 2, "both instances read one sidecar");
     assert_eq!(keys[0], keys[1]);
     let key = keys[0].clone();
-    jackdaw::tilemap_resolve::refresh_terrain(app.world_mut());
-    let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+    jackdaw_editor_tile::tilemap_resolve::refresh_terrain(app.world_mut());
+    let store = app
+        .world()
+        .resource::<jackdaw_editor_tile::tilemap::TilemapDataStore>();
     assert!(!store.bounds_diverge(&key));
 
     let mut maps: Vec<bevy::prelude::Entity> = app
@@ -4663,7 +4667,9 @@ fn instances_sharing_a_sidecar_with_different_bounds_are_noted() {
         .get_mut::<jackdaw_scene_types::Tilemap>(maps[1])
         .unwrap()
         .bounds = Some(bevy::math::IRect::new(0, 0, 4, 4));
-    jackdaw::tilemap_resolve::refresh_terrain(app.world_mut());
-    let store = app.world().resource::<jackdaw::tilemap::TilemapDataStore>();
+    jackdaw_editor_tile::tilemap_resolve::refresh_terrain(app.world_mut());
+    let store = app
+        .world()
+        .resource::<jackdaw_editor_tile::tilemap::TilemapDataStore>();
     assert!(store.bounds_diverge(&key));
 }

@@ -9,6 +9,7 @@ use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 
 pub(crate) mod asset_fields;
+pub mod hooks;
 mod legacy;
 mod load;
 mod registration;
@@ -16,13 +17,14 @@ pub(crate) mod save;
 pub mod stamp;
 
 pub use legacy::{load_inline_assets, load_scene_from_jsn};
+pub use load::SidecarImport;
 pub use load::{
     LoadOutcome, LoadRefusal, RefusalCategory, declared_scene_kind, declares_ui_scene_root,
     is_ui_scene_root_type_path, load_scene_from_file, load_scene_from_file_with_outcome,
     spawn_default_lighting, spawn_open_dialog,
 };
 pub(crate) use load::{
-    SidecarImport, clear_scene_entities, despawn_scene_entities, forget_prefab_cache_bump,
+    clear_scene_entities, despawn_scene_entities, forget_prefab_cache_bump,
     import_terrain_sidecars, prefab_cache_epoch,
 };
 pub use registration::{register_entities_in_ast, register_entity_in_ast};
@@ -302,6 +304,7 @@ pub struct SceneIoPlugin;
 impl Plugin for SceneIoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SceneFilePath>()
+            .init_resource::<hooks::DocumentIoHooks>()
             .init_resource::<SceneDirtyState>()
             .add_systems(
                 Update,
