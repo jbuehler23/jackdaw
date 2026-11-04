@@ -506,3 +506,70 @@ fn pie_sync_an_unsaved_material_goes_by_the_name_the_save_gave_it() {
         "the name is the one the saved file embeds the material as: {name}"
     );
 }
+
+/// A starter scene: a root holding a camera and a light, none of them with a
+/// node id.
+const STARTER_SCENE: &str = "\
+bevy_ecs::hierarchy::Children [
+    #Root
+    bevy_transform::components::transform::Transform
+    bevy_ecs::hierarchy::Children [
+        #Camera
+        bevy_transform::components::transform::Transform
+        --
+        #Sun
+        bevy_transform::components::transform::Transform
+    ]
+]
+";
+
+fn named(app: &mut App, name: &str) -> SceneNodeId {
+    app.world_mut()
+        .query::<(&Name, &SceneNodeId)>()
+        .iter(app.world())
+        .find(|(held, _)| held.as_str() == name)
+        .map(|(_, node)| *node)
+        .unwrap_or_else(|| panic!("{name} holds a node id"))
+}
+
+#[test]
+fn pie_sync_an_edit_to_a_nested_node_of_an_opened_scene_lands_in_the_game() {
+    let (mut app, dir) = editor();
+    let path = dir.path().join("assets/scenes/start.bsn");
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("a scenes dir");
+    std::fs::write(&path, STARTER_SCENE).expect("the scene");
+    app.world_mut()
+        .operator("scene.open")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.open dispatches")
+        .assert_finished();
+    app.update();
+    app.update();
+    app.world_mut()
+        .operator("scene.save")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches")
+        .assert_finished();
+    app.update();
+    let sun = named(&mut app, "Sun");
+
+    let mut game = unspawned_game();
+    let saved = std::fs::read_to_string(&path).expect("the saved scene");
+    jackdaw_bsn::load_bsn_scene(game.world_mut(), &saved).expect("the game loads the scene");
+    game.update();
+    let entity = game
+        .world_mut()
+        .query::<(Entity, &SceneNodeId)>()
+        .iter(game.world())
+        .find(|(_, node)| **node == sun)
+        .map(|(entity, _)| entity)
+        .expect("the game's light carries the editor's node id");
+    let (mut link, mut game_end) = LoopbackTransport::pair();
+    assert!(collect_node_changes(app.world_mut()).is_empty());
+
+    move_to(&mut app, sun, 3.0);
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(game_x(&game, entity), 3.0);
+}

@@ -56,3 +56,91 @@ fn a_second_open_replaces_the_first_scene() {
         "the first scene must be gone once the second is open",
     );
 }
+
+/// A scene whose nodes, nested ones too, carry no node ids.
+const UNNAMED_NESTED_SCENE: &str = "\
+bevy_ecs::hierarchy::Children [
+    #Root
+    bevy_transform::components::transform::Transform
+    bevy_ecs::hierarchy::Children [
+        #Camera
+        bevy_transform::components::transform::Transform
+        --
+        #Sun
+        bevy_transform::components::transform::Transform
+    ]
+    --
+    #Ground
+    bevy_transform::components::transform::Transform
+]
+";
+
+/// Every node of `text` by name, with its node id.
+fn saved_ids(text: &str) -> std::collections::BTreeMap<String, Option<u64>> {
+    let ast = jackdaw_bsn::parse_bsn_text(text).expect("the saved scene parses");
+    let mut ids = std::collections::BTreeMap::new();
+    let mut stack = ast.roots.clone();
+    while let Some(node) = stack.pop() {
+        let name = ast.get_name(node).unwrap_or_default().to_string();
+        ids.insert(name, ast.stable_id_of(node));
+        stack.extend(ast.get_children_ast(node));
+    }
+    ids
+}
+
+/// Every named scene entity, with its node id.
+fn entity_ids(app: &mut App) -> std::collections::BTreeMap<String, Option<u64>> {
+    let mut query = app
+        .world_mut()
+        .query::<(&Name, Option<&jackdaw_scene_types::SceneNodeId>)>();
+    query
+        .iter(app.world())
+        .filter(|(name, _)| ["Root", "Camera", "Sun", "Ground"].contains(&name.as_str()))
+        .map(|(name, id)| (name.to_string(), id.map(|id| id.0)))
+        .collect()
+}
+
+fn save(app: &mut App, path: &std::path::Path) -> String {
+    use crate::util::OperatorResultExt as _;
+    use jackdaw_api::prelude::*;
+    app.world_mut()
+        .operator("scene.save")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches")
+        .assert_finished();
+    app.update();
+    std::fs::read_to_string(path).expect("the saved scene")
+}
+
+/// Opening a scene names every node it owns, and the save writes the ids the
+/// editor holds, the same ones on every later save and open.
+#[test]
+fn opening_and_saving_names_every_node_once() {
+    let mut app = util::editor_test_app();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("nested.bsn");
+    std::fs::write(&path, UNNAMED_NESTED_SCENE).expect("write scene");
+
+    request_open_with_conversion(app.world_mut(), &path);
+    app.update();
+    let held = entity_ids(&mut app);
+    assert_eq!(held.len(), 4, "every node spawned: {held:?}");
+    assert!(held.values().all(Option::is_some), "{held:?}");
+
+    let first = saved_ids(&save(&mut app, &path));
+    assert_eq!(first, held, "the save writes the ids the editor holds");
+    let unique: std::collections::HashSet<_> = first.values().collect();
+    assert_eq!(unique.len(), first.len(), "no two nodes share an id");
+
+    assert_eq!(saved_ids(&save(&mut app, &path)), first);
+
+    let mut reopened = util::editor_test_app();
+    request_open_with_conversion(reopened.world_mut(), &path);
+    reopened.update();
+    assert_eq!(
+        entity_ids(&mut reopened),
+        first,
+        "a reopen keeps the saved ids"
+    );
+}

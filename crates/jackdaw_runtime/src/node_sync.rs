@@ -59,7 +59,8 @@ impl SceneNodeIndex {
     }
 }
 
-/// Type paths a node sync already warned about, so each warns once.
+/// Type paths and expired nodes a node sync already warned about, so each
+/// warns once.
 #[derive(Resource, Default)]
 struct NodeSyncWarnings(HashSet<String>);
 
@@ -193,10 +194,34 @@ fn apply_pending_node_changes(world: &mut World) {
         apply_node_components(world, node, &held.set, &held.removed);
     }
     let mut pending = world.resource_mut::<PendingNodeChanges>();
-    if let Some(first_indexed) = pending.first_indexed {
-        pending.nodes.retain(|_, held| {
-            now.saturating_sub(held.changed.max(first_indexed)) < PENDING_LIFETIME
-        });
+    let Some(first_indexed) = pending.first_indexed else {
+        return;
+    };
+    let mut expired = Vec::new();
+    pending.nodes.retain(|&node, held| {
+        let alive = now.saturating_sub(held.changed.max(first_indexed)) < PENDING_LIFETIME;
+        if !alive {
+            let paths: Vec<&str> = held
+                .set
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .chain(held.removed.iter().map(String::as_str))
+                .collect();
+            expired.push((node, paths.join(", ")));
+        }
+        alive
+    });
+    if expired.is_empty() {
+        return;
+    }
+    let mut warnings = world.get_resource_or_init::<NodeSyncWarnings>();
+    for (node, paths) in expired {
+        if warnings.0.insert(format!("expired {node}")) {
+            warn!(
+                "PIE: dropped changes to node {node} ({paths}): no entity in the game carries \
+                 that node; the scene the game loaded may not name it"
+            );
+        }
     }
 }
 
@@ -798,6 +823,12 @@ bevy_ecs::hierarchy::Children [
             app.update();
         }
         assert!(app.world().resource::<PendingNodeChanges>().is_empty());
+        assert!(
+            app.world()
+                .get_resource::<NodeSyncWarnings>()
+                .is_some_and(|warnings| warnings.0.contains("expired 8")),
+            "the dropped node is reported"
+        );
     }
 
     #[test]

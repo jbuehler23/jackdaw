@@ -508,7 +508,7 @@ fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScen
     jackdaw_prefab::absolutize_isa_sources(&mut doc, &assets_root, &scene_dir);
     crate::prefab::save_load::retarget_isa_sources(&mut doc, &assets_root, &scene_dir);
     if !document_is_prefab(&doc) {
-        crate::scene_nodes::name_instance_roots(&mut doc);
+        crate::scene_nodes::name_scene_nodes(&mut doc);
     }
 
     // A document naming the removed facade UI vocabulary gets no tab at all,
