@@ -260,8 +260,14 @@ pub struct JsnCatalog {
 /// Return the current type path for a component key found in a `.jsn` file,
 /// or `None` when the key is already current. Scene component types moved out
 /// of this crate into `jackdaw_scene_types`; files written before that move
-/// still carry the old paths.
+/// still carry the old paths, and so do files written before a type moved
+/// between jackdaw crates.
 pub fn canonical_type_path(path: &str) -> Option<String> {
+    let legacy = legacy_type_path(path);
+    jackdaw_bsn::migrate::moved_type_path(legacy.as_deref().unwrap_or(path)).or(legacy)
+}
+
+fn legacy_type_path(path: &str) -> Option<String> {
     if path == "jackdaw_jsn::ast::JsnNodeId" {
         return Some(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string());
     }
