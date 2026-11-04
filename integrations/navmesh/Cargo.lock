@@ -4018,6 +4018,7 @@ name = "jackdaw"
 version = "0.21.0-dev"
 dependencies = [
  "bevy",
+ "jackdaw_editor_animation",
  "jackdaw_editor_core",
  "jackdaw_editor_modelling",
  "jackdaw_editor_remote",
@@ -4150,6 +4151,25 @@ dependencies = [
 [[package]]
 name = "jackdaw_data_path"
 version = "0.21.0-dev"
+
+[[package]]
+name = "jackdaw_editor_animation"
+version = "0.21.0-dev"
+dependencies = [
+ "bevy",
+ "jackdaw_animation",
+ "jackdaw_animation_runtime",
+ "jackdaw_api",
+ "jackdaw_api_internal",
+ "jackdaw_bsn",
+ "jackdaw_commands",
+ "jackdaw_editor_core",
+ "jackdaw_feathers",
+ "jackdaw_input",
+ "jackdaw_node_graph",
+ "jackdaw_scene_types",
+ "serde_json",
+]
 
 [[package]]
 name = "jackdaw_editor_core"
