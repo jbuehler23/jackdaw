@@ -678,7 +678,7 @@ fn finish_pending_scene_opens(world: &mut World) {
         };
         match scene_path {
             Some(scene_path) => {
-                jackdaw_editor_core::scenes::operators::scene_open_system(world, &scene_path)
+                jackdaw_editor_core::scenes::operators::scene_open_system(world, &scene_path);
             }
             None => jackdaw_editor_core::scenes::operators::scene_new_system(world),
         }
