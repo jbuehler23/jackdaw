@@ -131,7 +131,7 @@ jackdaw_loader.workspace = true
 # implement. The editor depends on it (rather than the other way
 # around) so the trait is reachable from a game crate that only
 # pulls in `jackdaw_runtime` and never compiles the editor.
-jackdaw_runtime.workspace = true
+jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
 # Process-based Play: the editor spawns the project's game binary and
 # drives it over ipc-channel. The protocol's `ipc` transport is light
 # enough to be unconditional, so Play always works in the editor with
@@ -326,7 +326,6 @@ redundant_closure_for_method_calls = "warn"
 
 [dev-dependencies]
 bevy.workspace = true
-jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
 libloading = "0.8"
 serde_json.workspace = true
 tempfile = "3"
@@ -335,14 +334,6 @@ path-slash.workspace = true
 # workspace test-target graph. `tests/dylib_loading.rs` dlopens the
 # resulting `.so` by path - it doesn't reference the rlib side.
 test_fixture_extension = { path = "tests/fixtures/test_fixture_extension" }
-
-# Plain test targets on Linux and macOS use the same split runtime as release
-# builds. This avoids statically relinking the multi-gigabyte editor graph for
-# small integration tests. Windows enables the split explicitly in the SDK and
-# release jobs, where its full DLL graph and export counts are exercised.
-[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-bevy = { workspace = true, features = ["dynamic_linking"] }
-jackdaw_api = { workspace = true, features = ["dynamic_linking"] }
 
 [lints]
 workspace = true
