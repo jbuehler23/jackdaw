@@ -311,8 +311,10 @@ fn spawn_build(job: Job, progress: Arc<Mutex<BuildProgress>>) -> Stage {
             }
         };
         let sdk = SdkPaths::compute();
-        let dev_workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let dev_workspace = dev_workspace.exists().then_some(dev_workspace);
+        let dev_workspace = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let dev_workspace = dev_workspace
+            .exists()
+            .then(|| dunce::canonicalize(&dev_workspace).unwrap_or(dev_workspace));
         let result = build_project_dylib(
             &spec,
             &jackdaw_dir,

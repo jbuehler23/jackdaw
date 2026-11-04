@@ -57,7 +57,7 @@ const PLANE_SIZE: f32 = 200.0;
 /// Two things change at this scale that are not visible at two hundred metres.
 /// The depth the grid has to lose a tie against is a thousand times the near
 /// plane out here, so the fixed centimetre
-/// [`GRID_DEPTH_YIELD_WORLD`](../src/editor_grid_depth_patch.wesl) yields by is
+/// [`GRID_DEPTH_YIELD_WORLD`](../editor/jackdaw_editor_core/src/editor_grid_depth_patch.wesl) yields by is
 /// a far smaller share of it; and the grid's fadeout keeps it drawing only
 /// within [`FADEOUT`] of the eye, so a band can appear only in the near ground
 /// while the far ground supplies the depth range. The pair below approaches
@@ -109,7 +109,7 @@ fn patch_grid_shader(app: &mut App) {
     registry.insert_asset(
         PathBuf::from("src/editor_grid_depth_patch.wesl"),
         &asset_path,
-        include_bytes!("../src/editor_grid_depth_patch.wesl").as_slice(),
+        include_bytes!("../editor/jackdaw_editor_core/src/editor_grid_depth_patch.wesl").as_slice(),
     );
 }
 

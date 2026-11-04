@@ -1,0 +1,181 @@
+[package]
+name = "jackdaw_editor_core"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Core of the Jackdaw scene editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+readme = "../../README.md"
+keywords = ["bevy", "editor", "3d", "level-editor"]
+categories = ["game-development", "graphics"]
+include = [
+    "src/**/*",
+    "assets/**/*",
+    "Cargo.toml",
+]
+
+# Named `jackdaw` so reflected type paths, `embedded://` asset paths and
+# module paths stay `jackdaw::...`; the `jackdaw` package re-exports it.
+[lib]
+name = "jackdaw"
+
+[features]
+# Source and `cargo install` builds are self-contained by default.
+# Cargo only installs executables, so enabling Bevy's dynamic-linking
+# feature here would leave the installed editor without its required
+# SDK dylib. Release builds explicitly enable `dylib` after staging the
+# matching SDK beside the editor.
+default = ["multiplayer", "camera_rig", "embed-recipe"]
+# Bundles the editor-only networking authoring extension into the
+# editor: registers the proxy reflection types (`Replication`,
+# `NetworkRoom`) plus the user-toggleable networking extension. The
+# editor authors networking metadata only; the game brings its own
+# networking backend. On by
+# default; opt out with `--no-default-features` for a slimmer build.
+multiplayer = ["dep:jackdaw_multiplayer", "dep:jackdaw_multiplayer_editor"]
+camera_rig = ["dep:jackdaw_camera_rig"]
+# The SDK-backed extension flow: builds the SDK facade plus separate Bevy
+# and Jackdaw runtime dylibs. The editor and every loaded extension import
+# those same libraries so TypeIds and process-wide registries cross
+# `dlopen`. Games do not use this path; they build as ordinary cargo
+# binaries with their own Bevy. Off by default only because building the
+# SDK slows plain dev builds; release editor builds enable it.
+dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
+# Bake the SDK-builder recipe into the editor binary so a self-contained
+# Cargo install can build its SDK on first launch (the first-run setup
+# screen). Enabled by default; release bundles already carry a built SDK.
+embed-recipe = ["jackdaw_project_build/embed-recipe"]
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "system_font_discovery",
+    "system_clipboard",
+    "clipboard_image",
+] }
+jackdaw_jsn.workspace = true
+jackdaw_bsn.workspace = true
+jackdaw_prefab.workspace = true
+# Types only: the editor registers the binding components so they are
+# authorable and round-trip through BSN. `JackdawBindPlugin` (evaluator
+# + observers) stays out of the editor world; bindings run in the game.
+jackdaw_bind.workspace = true
+jackdaw_geometry.workspace = true
+jackdaw_scene_types.workspace = true
+jackdaw_schema.workspace = true
+jackdaw_project_build.workspace = true
+jackdaw_scaffold.workspace = true
+jackdaw_csg.workspace = true
+bevy_window_chrome.workspace = true
+jackdaw_camera.workspace = true
+jackdaw_feathers.workspace = true
+jackdaw_widgets.workspace = true
+jackdaw_widgets_runtime = { workspace = true, features = ["feathers"] }
+jackdaw_commands.workspace = true
+jackdaw_terrain.workspace = true
+jackdaw_remote.workspace = true
+jackdaw_snap.workspace = true
+jackdaw_recipe.workspace = true
+jackdaw_select.workspace = true
+jackdaw_uv.workspace = true
+jackdaw_tilemap.workspace = true
+jackdaw_tileset = { workspace = true, features = ["render"] }
+jackdaw_pick.workspace = true
+jackdaw_hull.workspace = true
+jackdaw_material.workspace = true
+jackdaw_surface.workspace = true
+jackdaw_node_graph.workspace = true
+jackdaw_animation.workspace = true
+jackdaw_animation_runtime.workspace = true
+# Optional, activated by the default-on `multiplayer` feature. Together
+# these bundle the editor-only networking authoring extension (proxy
+# reflection types + the toggleable networking extension) into the
+# editor. Gated so `--no-default-features` produces a slimmer build.
+jackdaw_multiplayer = { workspace = true, optional = true }
+jackdaw_multiplayer_editor = { workspace = true, optional = true }
+jackdaw_camera_rig = { workspace = true, optional = true }
+jackdaw_panels.workspace = true
+jackdaw_api.workspace = true
+# The editor crate uses `jackdaw_api` the same way third-party
+# extension authors do, and reaches into `jackdaw_api_internal` only
+# for host-side plumbing (loader plugin, catalog, enable/disable
+# helpers, internal component markers) that `jackdaw_api` deliberately
+# doesn't re-export.
+jackdaw_api_internal.workspace = true
+jackdaw_loader.workspace = true
+# `jackdaw_runtime` hosts the standalone scene loader plus the
+# `EditorMeta`/`ReflectEditorMeta` trait that user game crates
+# implement. The editor depends on it (rather than the other way
+# around) so the trait is reachable from a game crate that only
+# pulls in `jackdaw_runtime` and never compiles the editor.
+jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
+# Process-based Play: the editor spawns the project's game binary and
+# drives it over ipc-channel. The protocol's `ipc` transport is light
+# enough to be unconditional, so Play always works in the editor with
+# no per-build feature gate.
+jackdaw_pie_protocol = { version = "0.21.0-dev", path = "../../crates/jackdaw_pie_protocol", features = [
+    "ipc",
+] }
+# Optional and activated only by the `dylib` feature. Nothing in
+# the editor's own Rust code imports `jackdaw_sdk` - it's a pure
+# build artifact consumed at runtime by the extension build
+# pipeline (`SdkPaths::compute` / `ext_build`), which already
+# handles a missing SDK with a user-actionable error. Keeping it
+# optional means default `cargo build` doesn't try to link
+# `jackdaw_sdk.dll` on Windows, where the dylib's re-exports
+# would otherwise blow past the 65,535 PE export cap. See issue #183.
+jackdaw_sdk = { workspace = true, optional = true }
+# The wrapper's logic also lives in this crate's `[[bin]]` so that
+# `cargo install jackdaw` ships `jackdaw-rustc-wrapper` next to the
+# editor binary. Both binaries call into the same library entry
+# point. For dev builds running from a source checkout the standalone
+# wrapper crate's `[[bin]]` is also available; either path works at
+# runtime.
+jackdaw_rustc_wrapper.workspace = true
+jackdaw_input.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rfd.workspace = true
+# Hands the BRP client thread's reply back to the task polling it.
+async-channel = "2"
+base64.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+regex.workspace = true
+pathdiff.workspace = true
+path-slash.workspace = true
+dunce = "1.0.5"
+flate2 = "1"
+notify = "8"
+toml = "1"
+winit.workspace = true
+image.workspace = true
+half = "2"
+jackdaw_localization = { version = "0.21.0-dev", path = "../../crates/jackdaw_localization" }
+jackdaw_env.workspace = true
+jackdaw_package.workspace = true
+jackdaw_releases.workspace = true
+toml_edit = "0.25"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Powers the Linux `PR_SET_PDEATHSIG` hook that takes PIE game processes down
+# with the editor when it is killed (`src/pie.rs`).
+libc = "0.2"
+fontique = { version = "0.11", default-features = false, features = [
+    "fontconfig-dlopen",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

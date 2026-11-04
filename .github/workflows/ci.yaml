@@ -73,7 +73,7 @@ jobs:
         run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Run doctests
-        run: cargo test --locked --workspace --doc --features dylib --config profile.dev.package.jackdaw.opt-level=0
+        run: cargo test --locked --workspace --doc --features dylib --config profile.dev.package.jackdaw.opt-level=0 --config profile.dev.package.jackdaw_editor_core.opt-level=0
 
   # Every library and integration test binary, built once for the shards.
   build-tests:
@@ -240,7 +240,7 @@ jobs:
           fetch-depth: 0
       - id: diff
         run: |
-          pattern='^(src/pie|crates/jackdaw_project_build/|crates/jackdaw_pie_protocol/|crates/jackdaw_runtime/|crates/jackdaw_rustc_wrapper/|tests/bsn_game_run\.rs|tests/fixtures/bsn_game/|\.github/workflows/ci\.yaml)'
+          pattern='^(editor/jackdaw_editor_core/src/pie|crates/jackdaw_project_build/|crates/jackdaw_pie_protocol/|crates/jackdaw_runtime/|crates/jackdaw_rustc_wrapper/|tests/bsn_game_run\.rs|tests/fixtures/bsn_game/|\.github/workflows/ci\.yaml)'
           if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE "$pattern"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else

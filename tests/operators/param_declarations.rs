@@ -145,7 +145,7 @@ fn rust_sources(dir: &Path, found: &mut Vec<PathBuf>) {
 fn operators() -> Vec<(String, PathBuf, BTreeSet<String>, BTreeSet<String>)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_sources(&root.join("src"), &mut files);
+    rust_sources(&root.join("editor"), &mut files);
     rust_sources(&root.join("crates"), &mut files);
 
     let mut found = Vec::new();
