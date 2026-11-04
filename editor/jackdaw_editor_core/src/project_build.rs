@@ -50,7 +50,7 @@ impl Plugin for ProjectBuildPlugin {
 /// session, without re-running `cargo metadata` every frame.
 #[derive(Resource, Default)]
 pub struct PiePrebuildState {
-    pub(crate) attempted: bool,
+    attempted: bool,
 }
 
 /// Turns the open-time pre-build off when set to `0`, `false` or empty.

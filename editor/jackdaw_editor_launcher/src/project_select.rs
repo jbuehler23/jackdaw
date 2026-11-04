@@ -498,7 +498,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     }
 
     // Project code is compiled by the editor's own pipeline once the
-    // project is open (`pie::prebuild_play_target`), which streams into
+    // project is open (`project_build::prebuild_play_target`), which streams into
     // the Build panel. The launcher's job ends at the handoff.
     close_new_project_modal(world);
     transition_to_editor(world, root);
