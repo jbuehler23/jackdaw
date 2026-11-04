@@ -91,7 +91,7 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
         // The highlight box draws through the game's own cameras so it lands
         // in the streamed frame. `Gizmos` needs the gizmo plugin, present on
         // the windowless render path but not the headless server, so it is
-        // registered only here alongside the picking backend.
+        // registered only here.
         app.add_systems(Update, draw_highlight);
     }
 }

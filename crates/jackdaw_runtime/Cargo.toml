@@ -95,7 +95,6 @@ pie = [
     "dep:jackdaw_camera_rig",
     "bevy/bevy_render",
     "bevy/bevy_image",
-    "bevy/mesh_picking",
 ]
 # Draw the terrain a scene authored. Each `Terrain` entity's sidecar is read
 # from beside the scene file, its material slots resolve against the project

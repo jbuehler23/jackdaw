@@ -33,8 +33,8 @@ pub fn windowless_requested() -> bool {
 
 /// Added by [`maybe_windowless`] when it reconfigures the app for a
 /// windowless launch. Its presence is the proof the app opted in: the PIE
-/// link checks it before installing the virtual window, camera retarget,
-/// and picking backend, so a headless process that shares the launch
+/// link checks it before installing the virtual window and camera
+/// retarget, so a headless process that shares the launch
 /// environment (the dedicated server) is never misconfigured by the env
 /// vars alone.
 pub struct WindowlessActivePlugin;
