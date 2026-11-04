@@ -1,4 +1,7 @@
-#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
+#![cfg_attr(
+    feature = "dylib",
+    expect(clippy::print_stdout, reason = "test prints progress diagnostics")
+)]
 //! `reflect_auto_register` across `dlopen` with the shared SDK.
 //!
 //! Builds `tests/fixtures/reflect_game` (a plain Bevy library deriving

@@ -1,4 +1,7 @@
-#![expect(clippy::print_stdout, reason = "test prints progress diagnostics")]
+#![cfg_attr(
+    feature = "dylib",
+    expect(clippy::print_stdout, reason = "test prints progress diagnostics")
+)]
 //! An extension built through the SDK pipeline carries the hash of the SDK it
 //! was built against, and the loader opens it only in an editor on that SDK.
 //!
