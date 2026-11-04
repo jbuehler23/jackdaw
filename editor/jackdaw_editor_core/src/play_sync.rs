@@ -11,6 +11,11 @@
 //! goes as its current value instead of a removal. Commands, undo, redo and
 //! remote edits all change the document, so no command needs to report its
 //! own edit.
+//!
+//! An instance whose scene spawns reports it, and is sent the current value
+//! of every authored component of every node ([`catch_up_events`]), so edits
+//! that reached it before its scene existed, or while it was still
+//! connecting, are not lost.
 
 use std::any::TypeId;
 use std::collections::hash_map::DefaultHasher;
@@ -85,14 +90,23 @@ fn forget_on_stop(mut sync: ResMut<DocumentSync>) {
 }
 
 /// Send the document's node changes to every live instance. A launching
-/// instance is not sent to: it loads the scene when it starts. With no
-/// instance live, the first launch records the document as the baseline.
+/// instance is not sent to: it loads the scene when it starts, and gets a
+/// catch-up once its scene spawns (see [`catch_up_events`]). With no
+/// instance live, the first launch records the document as the baseline,
+/// and with nothing live or launching (play stopped, or a launch whose build
+/// failed) the baseline is dropped.
 pub(crate) fn sync_document_to_game(world: &mut World) {
     let target = world
         .get_non_send::<crate::pie::PieSession>()
         .map_or(SyncTarget::None, crate::pie::PieSession::sync_target);
     match target {
-        SyncTarget::None => {}
+        SyncTarget::None => {
+            if let Some(mut sync) = world.get_resource_mut::<DocumentSync>()
+                && sync.seen.is_some()
+            {
+                sync.forget();
+            }
+        }
         SyncTarget::Launching => {
             if world
                 .get_resource::<DocumentSync>()
@@ -255,6 +269,8 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
                 continue;
             };
             if projected.contains(&entity) {
+                keep_previous(path);
+                seen.retry.insert(id);
                 continue;
             }
             match game_value(held.as_partial_reflect(), &registry, references) {
@@ -272,6 +288,62 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
                 node: id,
                 set,
                 removed,
+            });
+        }
+    }
+    events
+}
+
+/// The current value of every authored component of every node in the
+/// document, one event per node: what an instance whose scene just spawned
+/// is sent so it matches the document whatever file it loaded. Components
+/// that cannot be sent are left out with the same warnings as an edit. The
+/// cost grows with the document (every authored component is serialized),
+/// and it is paid once per scene spawn of one instance.
+pub fn catch_up_events(world: &mut World) -> Vec<ControlEvent> {
+    if !world.contains_resource::<SceneBsnAst>() || !world.contains_resource::<DocumentSync>() {
+        return Vec::new();
+    }
+    world.resource_scope(|world, mut sync: Mut<DocumentSync>| catch_up(world, &mut sync))
+}
+
+fn catch_up(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
+    let nodes = {
+        let mut ast = world.resource_mut::<SceneBsnAst>();
+        let ast = ast.bypass_change_detection();
+        let now = ast.world.change_tick();
+        touched_nodes(ast, None, now).0
+    };
+    let world: &World = world;
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let project = world.get_resource::<ProjectTypes>();
+    let references = AssetReferences::of(world);
+    let ast = world.resource::<SceneBsnAst>();
+    let mut events = Vec::new();
+    for (id, node, patches) in nodes {
+        let Some(entity) = ast
+            .ecs_for_ast(node)
+            .filter(|&entity| world.get_entity(entity).is_ok())
+        else {
+            continue;
+        };
+        let mut paths: Vec<String> = by_component(patches, &registry, project)
+            .into_keys()
+            .collect();
+        paths.sort();
+        let mut set = Vec::new();
+        for path in paths {
+            match component_value(world, &registry, &references, entity, node, &path) {
+                Ok(value) => set.push((path, value)),
+                Err(unsent) => unsent.warn(&mut sync.warned, id, entity, &path),
+            }
+        }
+        if !set.is_empty() {
+            events.push(ControlEvent::NodeComponents {
+                node: id,
+                set,
+                removed: Vec::new(),
             });
         }
     }
@@ -438,13 +510,18 @@ impl Unsent {
 }
 
 /// How the game's scene loader names each asset a handle can point at: the
-/// asset path, the `#Name` the loaded scene embeds it as, or the catalog's
+/// asset path, the `#Name` the loaded scene embeds it as (including the names
+/// the last save of the open scene gave its runtime assets), or the catalog's
 /// `@Name`, the same references a scene save writes.
 struct AssetReferences(HashMap<UntypedAssetId, String>);
 
 impl AssetReferences {
     fn of(world: &World) -> Self {
-        Self(crate::scene_io::save::asset_reference_seed(world))
+        let mut seed = crate::scene_io::save::asset_reference_seed(world);
+        for (id, name) in crate::scene_io::save::saved_asset_names(world) {
+            seed.entry(*id).or_insert_with(|| name.clone());
+        }
+        Self(seed)
     }
 
     fn reference(&self, handle: &UntypedHandle) -> Option<String> {
@@ -666,22 +743,33 @@ mod tests {
 
     /// A document with one node bound to an editor entity, and no session.
     fn editor_world() -> (World, Entity) {
+        editor_world_with(None)
+    }
+
+    /// [`editor_world`], the node also authoring `visibility` when given.
+    fn editor_world_with(visibility: Option<Visibility>) -> (World, Entity) {
         let mut world = World::new();
         let registry = AppTypeRegistry::default();
         {
             let mut registry = registry.write();
             registry.register::<Transform>();
             registry.register::<SceneNodeId>();
+            registry.register::<Visibility>();
         }
         world.insert_resource(registry.clone());
         world.init_resource::<DocumentSync>();
         let entity = world.spawn((SceneNodeId(NODE), Transform::default())).id();
         let patches = {
             let registry = registry.read();
-            vec![
+            let mut patches = vec![
                 component_to_bsn_patch(&SceneNodeId(NODE), &registry),
                 component_to_bsn_patch(&Transform::default(), &registry),
-            ]
+            ];
+            if let Some(visibility) = visibility {
+                world.entity_mut(entity).insert(visibility);
+                patches.push(component_to_bsn_patch(&visibility, &registry));
+            }
+            patches
         };
         let mut ast = SceneBsnAst::default();
         let node = ast.create_entity_node(patches);
@@ -795,6 +883,98 @@ mod tests {
         move_to(&mut world, entity, 1.0);
         sync_document_to_game(&mut world);
         assert_eq!(received_x(&mut game_end), vec![1.0]);
+    }
+
+    #[test]
+    fn a_failed_build_drops_the_baseline() {
+        let (mut world, entity) = editor_world();
+        let mut session = PieSession::default();
+        session.insert_test_pending_build(key(1));
+        world.insert_non_send(session);
+        sync_document_to_game(&mut world);
+        assert!(world.resource::<DocumentSync>().seen.is_some());
+
+        world.non_send_mut::<PieSession>().fail_test_builds();
+        sync_document_to_game(&mut world);
+        assert!(
+            world.resource::<DocumentSync>().seen.is_none(),
+            "nothing is live or launching, so the baseline goes"
+        );
+
+        move_to(&mut world, entity, 5.0);
+        world
+            .non_send_mut::<PieSession>()
+            .insert_test_pending_build(key(2));
+        sync_document_to_game(&mut world);
+        let (editor_end, mut game_end) = link();
+        world
+            .non_send_mut::<PieSession>()
+            .insert_test_live(key(2), child(), editor_end);
+        sync_document_to_game(&mut world);
+        assert!(
+            received_x(&mut game_end).is_empty(),
+            "the next launch starts from the document as it is then"
+        );
+    }
+
+    /// Edits sent while instance 2 was connecting reach it in the catch-up
+    /// its scene spawn asks for; instance 1, already caught up, gets nothing.
+    #[test]
+    fn a_scene_spawn_catches_up_only_its_own_instance() {
+        let (mut world, entity) = editor_world();
+        world.init_resource::<crate::pie_mirror::PieInstances>();
+        let (first_editor, mut first_game) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(1), child(), first_editor);
+        session.insert_test_connecting(key(2), child());
+        world.insert_non_send(session);
+        sync_document_to_game(&mut world);
+
+        move_to(&mut world, entity, 4.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut first_game), vec![4.0]);
+
+        let (second_editor, mut second_game) = link();
+        world
+            .non_send_mut::<PieSession>()
+            .insert_test_live(key(2), child(), second_editor);
+        let spawned =
+            jackdaw_pie_protocol::event::to_bytes(&jackdaw_pie_protocol::StateEvent::SceneSpawned)
+                .expect("encode");
+        second_game.send(jackdaw_pie_protocol::PieChannel::Reliable, &spawned);
+        crate::pie::drain_game_events(&mut world);
+        assert_eq!(received_x(&mut second_game), vec![4.0]);
+        assert!(received_x(&mut first_game).is_empty());
+    }
+
+    /// A derived component whose patch goes while Live view projects the
+    /// entity is held back, and goes with the node's next edit.
+    #[test]
+    fn a_derived_component_left_while_projected_is_sent_later() {
+        const VISIBILITY: &str = "bevy_camera::visibility::Visibility";
+        let (mut world, entity) = editor_world_with(Some(Visibility::Hidden));
+        collect_node_changes(&mut world);
+
+        world.insert_resource(PieViewMode::Live);
+        let mut projection = PieProjection::default();
+        projection.by_bits.insert(1, entity);
+        world.insert_resource(projection);
+        world.resource_scope(|_, mut ast: Mut<SceneBsnAst>| {
+            let node = ast.ast_for(entity).expect("a node");
+            ast.remove_component_patch(node, VISIBILITY);
+        });
+        *world.get_mut::<Visibility>(entity).expect("a visibility") = Visibility::Inherited;
+        assert!(collect_node_changes(&mut world).is_empty());
+
+        world.insert_resource(PieViewMode::Scene);
+        move_to(&mut world, entity, 1.0);
+        let events = collect_node_changes(&mut world);
+        let [ControlEvent::NodeComponents { set, removed, .. }] = events.as_slice() else {
+            panic!("one node event, got {events:?}");
+        };
+        assert!(removed.is_empty());
+        let sent: Vec<&str> = set.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(sent, vec![VISIBILITY, TRANSFORM]);
     }
 
     #[test]

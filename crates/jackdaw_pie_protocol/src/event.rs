@@ -30,6 +30,11 @@ pub enum StateEvent {
         grabbed: bool,
         visible: bool,
     },
+    /// A scene root finished spawning its scene. Sent once per spawn, a
+    /// reload included; the editor answers with the document's current
+    /// components for every node, so edits made before the scene existed
+    /// are not lost.
+    SceneSpawned,
 }
 
 /// Editor-to-game messages.

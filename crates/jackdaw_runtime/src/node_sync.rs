@@ -11,6 +11,7 @@ use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
+use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::{PartialReflect, ReflectFromReflect, TypeRegistration, TypeRegistry};
 use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_scene_types::SceneNodeId;
@@ -189,16 +190,56 @@ pub(crate) fn decode_component(
     })
 }
 
-/// Look up the reflection for `type_path` without a value.
-fn reflect_component_for(world: &World, type_path: &str) -> Result<ReflectComponent, String> {
+/// What removing `type_path` from an entity needs: its reflection, and its
+/// default value for an entity where another component requires it.
+struct Removal {
+    reflect: ReflectComponent,
+    type_id: std::any::TypeId,
+    default: Option<DecodedComponent>,
+}
+
+fn removal_for(world: &World, type_path: &str) -> Result<Removal, String> {
     let registry = world.resource::<AppTypeRegistry>().read();
     let registration = registry
         .get_with_type_path(type_path)
         .ok_or_else(|| format!("unknown type path `{type_path}`"))?;
-    registration
+    let reflect = registration
         .data::<ReflectComponent>()
         .cloned()
-        .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))
+        .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))?;
+    let default = registration.data::<ReflectDefault>().map(|default| {
+        let from_reflect = registration.data::<ReflectFromReflect>().cloned();
+        DecodedComponent {
+            reflect: reflect.clone(),
+            value: default.default().into_partial_reflect(),
+            type_id: registration.type_id(),
+            from_reflect,
+        }
+    });
+    Ok(Removal {
+        reflect,
+        type_id: registration.type_id(),
+        default,
+    })
+}
+
+/// Whether a component `entity` holds requires the component `type_id`.
+fn required_on(world: &World, entity: Entity, type_id: std::any::TypeId) -> bool {
+    let components = world.components();
+    let Some(required) = components.get_id(type_id) else {
+        return false;
+    };
+    let Ok(entity_ref) = world.get_entity(entity) else {
+        return false;
+    };
+    entity_ref.archetype().components().iter().any(|&held| {
+        held != required
+            && components.get_info(held).is_some_and(|info| {
+                info.required_components()
+                    .iter_ids()
+                    .any(|id| id == required)
+            })
+    })
 }
 
 /// Write `decoded` onto `entity` as its whole new value.
@@ -253,8 +294,10 @@ fn warn_once(world: &mut World, type_path: &str, reason: &str) {
 
 /// Apply one node's changed components to every entity spawned from it: each
 /// value in `set` replaces (or adds) that component, and each type path in
-/// `removed` is removed. A type the game does not know, or a value that does
-/// not deserialize, is skipped with a warning once per type path.
+/// `removed` is removed. A removed component that another component on the
+/// entity requires stays, reset to its reflected default when it has one, as
+/// the spawn gave it. A type the game does not know, or a value that does not
+/// deserialize, is skipped with a warning once per type path.
 pub fn apply_node_components(
     world: &mut World,
     node: u64,
@@ -279,15 +322,23 @@ pub fn apply_node_components(
         }
     }
     for type_path in removed {
-        match reflect_component_for(world, type_path) {
-            Ok(reflect) => {
-                for &entity in &entities {
-                    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-                        reflect.remove(&mut entity_mut);
-                    }
-                }
+        let removal = match removal_for(world, type_path) {
+            Ok(removal) => removal,
+            Err(reason) => {
+                warn_once(world, type_path, &reason);
+                continue;
             }
-            Err(reason) => warn_once(world, type_path, &reason),
+        };
+        for &entity in &entities {
+            if required_on(world, entity, removal.type_id) {
+                if let Some(default) = &removal.default {
+                    write_component(world, entity, default);
+                }
+                continue;
+            }
+            if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+                removal.reflect.remove(&mut entity_mut);
+            }
         }
     }
 }
@@ -321,6 +372,16 @@ mod tests {
         swatch: Handle<Swatch>,
     }
 
+    #[derive(Component, Reflect, Default, Debug, PartialEq)]
+    #[reflect(Component, Default)]
+    struct Health(u32);
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    #[require(Health)]
+    struct Player;
+
+    const HEALTH: &str = "jackdaw_runtime::node_sync::tests::Health";
     const TINT: &str = "jackdaw_runtime::node_sync::tests::Tint";
     const PATH: &str = "jackdaw_runtime::node_sync::tests::Path";
     const PAINTED: &str = "jackdaw_runtime::node_sync::tests::Painted";
@@ -421,6 +482,22 @@ mod tests {
         apply_node_components(app.world_mut(), 3, &[], &[NAME.to_string()]);
         assert!(app.world().get::<Name>(entity).is_none());
         assert!(app.world().get::<Transform>(entity).is_some());
+    }
+
+    /// Undoing an override of a required component removes it from the node,
+    /// but the entity keeps it, at the value the spawn gave it.
+    #[test]
+    fn a_required_component_is_reset_instead_of_removed() {
+        let mut app = app();
+        app.register_type::<Health>().register_type::<Player>();
+        let player = app
+            .world_mut()
+            .spawn((SceneNodeId(4), Player, Health(30)))
+            .id();
+        let loose = app.world_mut().spawn((SceneNodeId(4), Health(30))).id();
+        apply_node_components(app.world_mut(), 4, &[], &[HEALTH.to_string()]);
+        assert_eq!(app.world().get::<Health>(player), Some(&Health(0)));
+        assert!(app.world().get::<Health>(loose).is_none());
     }
 
     #[test]

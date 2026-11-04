@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use jackdaw::commands::SetTransform;
-use jackdaw::play_sync::collect_node_changes;
+use jackdaw::play_sync::{catch_up_events, collect_node_changes};
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_commands::{CommandHistory, EditorCommand};
@@ -179,14 +179,20 @@ fn pie_sync_names_a_removed_component() {
     assert_eq!(removed, vec![NAME.to_string()]);
 }
 
-/// The game side of the link: a world whose entity came from the editor's node.
-fn game(node: SceneNodeId) -> (App, Entity) {
+/// The game side of the link before its scene has spawned.
+fn unspawned_game() -> App {
     let mut game = App::new();
     game.add_plugins(MinimalPlugins);
     game.register_type::<Transform>();
     game.register_type::<Name>();
     game.register_type::<SceneNodeId>();
     jackdaw_runtime::node_sync::install_node_index(&mut game);
+    game
+}
+
+/// The game side of the link: a world whose entity came from the editor's node.
+fn game(node: SceneNodeId) -> (App, Entity) {
+    let mut game = unspawned_game();
     let entity = game.world_mut().spawn((node, Transform::default())).id();
     (game, entity)
 }
@@ -197,7 +203,28 @@ fn deliver(
     game_end: &mut LoopbackTransport,
     game: &mut App,
 ) {
-    for event in collect_node_changes(editor.world_mut()) {
+    let events = collect_node_changes(editor.world_mut());
+    send(events, link, game_end, game);
+}
+
+/// Send the catch-up a game asks for once its scene has spawned.
+fn catch_up(
+    editor: &mut App,
+    link: &mut LoopbackTransport,
+    game_end: &mut LoopbackTransport,
+    game: &mut App,
+) {
+    let events = catch_up_events(editor.world_mut());
+    send(events, link, game_end, game);
+}
+
+fn send(
+    events: Vec<ControlEvent>,
+    link: &mut LoopbackTransport,
+    game_end: &mut LoopbackTransport,
+    game: &mut App,
+) {
+    for event in events {
         link.send(PieChannel::Reliable, &to_bytes(&event).expect("encode"));
     }
     for (_, bytes) in game_end.drain_received() {
@@ -406,4 +433,106 @@ fn pie_sync_a_shorter_list_and_an_immutable_edit_land_in_the_game() {
         Some(vec![7.0])
     );
     assert_eq!(game.world().get::<Tint>(entity), Some(&Tint { level: 5 }));
+}
+
+fn game_x(game: &App, entity: Entity) -> f32 {
+    game.world()
+        .get::<Transform>(entity)
+        .expect("a transform")
+        .translation
+        .x
+}
+
+#[test]
+fn pie_sync_an_edit_made_before_the_scene_spawns_lands_with_the_catch_up() {
+    let (mut app, _dir, rock) = playing();
+    let mut game = unspawned_game();
+    let (mut link, mut game_end) = LoopbackTransport::pair();
+
+    move_to(&mut app, rock, 6.0);
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    let entity = game.world_mut().spawn((rock, Transform::default())).id();
+    assert_eq!(
+        game_x(&game, entity),
+        0.0,
+        "the edit found nothing to apply to"
+    );
+
+    catch_up(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(game_x(&game, entity), 6.0);
+
+    move_to(&mut app, rock, 2.0);
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(game_x(&game, entity), 2.0, "edits keep flowing after it");
+}
+
+#[test]
+fn pie_sync_a_second_instance_catches_up_on_edits_made_while_it_connected() {
+    let (mut app, _dir, rock) = playing();
+    let (mut first, first_entity) = game(rock);
+    let (mut first_link, mut first_end) = LoopbackTransport::pair();
+
+    move_to(&mut app, rock, 3.0);
+    rename(&mut app, rock, "Boulder");
+    deliver(&mut app, &mut first_link, &mut first_end, &mut first);
+    assert_eq!(game_x(&first, first_entity), 3.0);
+
+    let (mut second, second_entity) = game(rock);
+    let (mut second_link, mut second_end) = LoopbackTransport::pair();
+    catch_up(&mut app, &mut second_link, &mut second_end, &mut second);
+    assert_eq!(game_x(&second, second_entity), 3.0);
+    assert_eq!(
+        second.world().get::<Name>(second_entity).map(Name::as_str),
+        Some("Boulder")
+    );
+}
+
+/// Change the brush the way the brush tools do: on the entity, which the
+/// editor mirrors into the document.
+fn edit_brush(app: &mut App, rock: SceneNodeId, edit: impl FnOnce(&mut Brush)) {
+    let entity = entity_of(app, rock);
+    let world = app.world_mut();
+    let mut brush = world.get::<Brush>(entity).expect("a brush").clone();
+    edit(&mut brush);
+    world.entity_mut(entity).insert(brush.clone());
+    jackdaw::brush::sync_brush_to_ast(world, entity, &brush);
+    app.update();
+}
+
+#[test]
+fn pie_sync_an_unsaved_material_goes_by_the_name_the_save_gave_it() {
+    let (mut app, dir, rock) = playing();
+    let material = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    edit_brush(&mut app, rock, |brush| brush.faces[0].material = material);
+    assert!(
+        collect_node_changes(app.world_mut()).is_empty(),
+        "the game cannot name the material before a save embeds it"
+    );
+    let path = dir.path().join("assets/scenes/level.bsn");
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("a scenes dir");
+    app.world_mut()
+        .operator("scene.save")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches")
+        .assert_finished();
+    app.update();
+    let saved = std::fs::read_to_string(&path).expect("the saved scene");
+
+    edit_brush(&mut app, rock, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.5, 0.25);
+    });
+    let (_, set, _) = only(collect_node_changes(app.world_mut()));
+    let brush = sent(&set, BRUSH);
+    assert_eq!(brush["faces"][0]["uv_offset"][0], 0.5);
+    let name = brush["faces"][0]["material"]
+        .as_str()
+        .expect("the material is named");
+    assert!(
+        name.starts_with('#') && saved.contains(name),
+        "the name is the one the saved file embeds the material as: {name}"
+    );
 }

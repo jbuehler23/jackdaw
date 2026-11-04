@@ -610,6 +610,13 @@ impl PieSession {
         );
     }
 
+    /// Fail every build, dropping the instances waiting on it.
+    pub(crate) fn fail_test_builds(&mut self) {
+        for build in self.builds.values_mut() {
+            *build = BuildState::Failed { launch: true };
+        }
+    }
+
     /// Add a build that never finishes with `key` waiting on it.
     pub(crate) fn insert_test_pending_build(&mut self, key: InstanceKey) {
         let task = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
@@ -1169,6 +1176,21 @@ pub(crate) fn broadcast_control(world: &mut World, event: ControlEvent) {
         if let ChildStage::Live { transport, .. } = stage {
             send_control_to(transport, event.clone());
         }
+    }
+}
+
+/// Send control messages to the one instance `key`, when it is live.
+pub(crate) fn send_controls_to_instance(
+    world: &mut World,
+    key: &InstanceKey,
+    events: Vec<ControlEvent>,
+) {
+    let mut session = world.non_send_mut::<PieSession>();
+    let Some(ChildStage::Live { transport, .. }) = session.children.get_mut(key) else {
+        return;
+    };
+    for event in events {
+        send_control_to(transport, event);
     }
 }
 
@@ -1825,10 +1847,11 @@ fn report_stderr_tail(stderr_tail: &StderrTail) {
 /// view mode, so the buffers always hold current game state and a Scene->Live
 /// toggle re-projects fresh data. Additionally, events from the focused instance
 /// are projected into the preview ECS via `project_event`, but only in Live mode.
-fn drain_game_events(world: &mut World) {
+pub(crate) fn drain_game_events(world: &mut World) {
     // Collect all pending (key, events) pairs without holding the session borrow.
     let mut per_instance: Vec<(InstanceKey, Vec<StateEvent>)> = Vec::new();
     let mut pixel_frames: Vec<(InstanceKey, Vec<u8>)> = Vec::new();
+    let mut spawned_scenes: Vec<InstanceKey> = Vec::new();
 
     {
         let mut session = world.non_send_mut::<PieSession>();
@@ -1849,6 +1872,11 @@ fn drain_game_events(world: &mut World) {
                     continue;
                 }
                 match from_bytes::<StateEvent>(&bytes) {
+                    Ok(StateEvent::SceneSpawned) => {
+                        if !spawned_scenes.contains(key) {
+                            spawned_scenes.push(key.clone());
+                        }
+                    }
                     Ok(event) => events.push(event),
                     Err(err) => warn!("PIE: {key} dropping malformed state event: {err}"),
                 }
@@ -1856,6 +1884,15 @@ fn drain_game_events(world: &mut World) {
             if !events.is_empty() {
                 per_instance.push((key.clone(), events));
             }
+        }
+    }
+
+    // Before this drain projects anything, so the editor entities still hold
+    // the document's values.
+    if !spawned_scenes.is_empty() {
+        let events = crate::play_sync::catch_up_events(world);
+        for key in spawned_scenes {
+            send_controls_to_instance(world, &key, events.clone());
         }
     }
 
