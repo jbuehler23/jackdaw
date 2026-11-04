@@ -13,7 +13,7 @@ use super::element_transform::{
 use super::select_elements::{edit_target, refuse};
 use jackdaw_editor_core::brush::{BrushSelection, EditMode};
 use jackdaw_editor_core::numeric_transform::sub_selection_vertices;
-use jackdaw_editor_core::primitive_ops::{bool_param, float_param, int_param, vec3_param};
+use jackdaw_editor_core::{bool_param, float_param, int_param, vec3_param};
 
 const LABEL: &str = "Randomize Vertices";
 

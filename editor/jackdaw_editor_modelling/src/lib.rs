@@ -1,10 +1,12 @@
 //! Brush and mesh modelling tools for the Jackdaw scene editor: topology
 //! operators, knife mode, element delete and nudge, the mesh quick menu, the
-//! measure tool, and the modifier and mirror plane operators. The brush data,
-//! its meshes and its CSG stay in the editor core.
+//! measure tool, the modifier and mirror plane operators and the brush
+//! inspector card. The brush data, its meshes and its CSG stay in the editor
+//! core.
 //!
 //! Add [`ModellingEditorPlugin`] after the editor's own plugins.
 
+pub mod brush_card;
 pub mod brush_element_ops;
 pub mod knife_mode;
 pub mod measure_tool;
@@ -17,6 +19,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_editor_core::MenuBarSlots;
+use jackdaw_editor_core::inspector::{ComponentCardRegistry, InspectorSync};
 use jackdaw_editor_core::scene_io::hooks::DragResets;
 
 pub use jackdaw_editor_core::modelling_mode::MODELLING_EDITOR_EXTENSION_ID;
@@ -73,7 +76,14 @@ impl Plugin for ModellingEditorPlugin {
                 Update,
                 topology_ops::select_elements::flag_menu_on_element_editing
                     .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
-            );
+            )
+            .add_systems(
+                Update,
+                brush_card::update_brush_face_properties
+                    .after(InspectorSync)
+                    .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
+            )
+            .add_observer(brush_card::on_brush_face_text_commit);
         let world = app.world_mut();
         {
             let mut resets = world.get_resource_or_init::<DragResets>();
@@ -84,6 +94,9 @@ impl Plugin for ModellingEditorPlugin {
             resets.register::<EdgeSlideModalState>();
             resets.register::<VertexSlideModalState>();
         }
+        world
+            .get_resource_or_init::<ComponentCardRegistry>()
+            .register::<jackdaw_scene_types::Brush>(brush_card::fill_brush_card_body);
         world
             .get_resource_or_init::<MenuBarSlots>()
             .register(topology_ops::select_elements::select_menu);
@@ -150,6 +163,7 @@ impl JackdawExtension for ModellingEditorExtension {
         topology_ops::uv_align_to_edge::add_to_extension(ctx);
         topology_ops::reconvexify::add_to_extension(ctx);
         measure_tool::add_to_extension(ctx);
+        brush_card::add_to_extension(ctx);
         brush_element_ops::add_to_extension(ctx);
         mirror_plane_ops::add_to_extension(ctx);
         modifier_ops::add_to_extension(ctx);

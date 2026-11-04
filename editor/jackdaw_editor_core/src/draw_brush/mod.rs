@@ -21,12 +21,17 @@ mod revolve;
 mod state;
 
 pub(crate) use self::build::*;
-pub use self::csg_ops::*;
+pub use self::csg_ops::env_allows_brush_op;
+pub(crate) use self::csg_ops::{
+    BrushCsgIntersectOp, BrushCsgSubtractOp, BrushJoinOp, evaluated_brush, free_name,
+    name_or_default, names_besides, operand_node, plane_distance_eps, subtract_drawn_brush,
+};
 pub(crate) use self::extend_face::*;
 pub(crate) use self::interaction::*;
 pub(crate) use self::plane_math::*;
 pub(crate) use self::preview_mesh::*;
-pub use self::state::*;
+pub use self::state::DrawBrushState;
+pub(crate) use self::state::{ActiveDraw, DrawMode, DrawPhase, DrawPlane};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     let ext = ctx.id();

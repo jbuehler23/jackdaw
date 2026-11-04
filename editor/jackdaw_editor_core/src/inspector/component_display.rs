@@ -34,9 +34,9 @@ use std::collections::{HashMap, HashSet};
 use super::{
     ComponentDisplay, ComponentDisplayBody, ComponentDisplayTypePath, ComponentName,
     ComponentPicker, Inspector, InspectorDirty, InspectorGroupSection, InspectorSearch,
-    InspectorTarget, ReflectDisplayable, bindings_card, brush_display,
-    category_strip::ActiveInspectorCategory, component_tooltip::ReflectedTypeTooltip,
-    custom_props_display, material_display, modifier_display, node_card, reflect_fields,
+    InspectorTarget, ReflectDisplayable, bindings_card, category_strip::ActiveInspectorCategory,
+    component_tooltip::ReflectedTypeTooltip, custom_props_display, material_display,
+    modifier_display, node_card, reflect_fields,
 };
 use crate::inspector::prefab_field_dots::{PrefabInstanceCtx, inspector_type_paths_for};
 use crate::prefab::PrefabAstCache;
@@ -73,7 +73,6 @@ pub(crate) struct CardBuildInputs<'w, 's> {
     names: Query<'w, 's, &'static Name>,
     icon_font: Res<'w, IconFont>,
     editor_font: Res<'w, EditorFont>,
-    materials: Res<'w, Assets<StandardMaterial>>,
     asts: SceneAsts<'w>,
     prefab_cache: Res<'w, PrefabAstCache>,
     collapse_state: Res<'w, super::InspectorCollapseState>,
@@ -338,7 +337,6 @@ impl EntityCards<'_, '_, '_> {
             &inputs.names,
             &inputs.icon_font,
             &inputs.editor_font,
-            &inputs.materials,
             self.authored_type_paths,
             Some(&inputs.asts.bsn),
             Some(&inputs.prefab_cache),
@@ -496,7 +494,7 @@ fn short_type_name(type_path: &str) -> &str {
 }
 
 /// Scene-document components that live under `jackdaw_scene_types` and
-/// belong in the inspector: `Brush` mounts the mesh card (`brush_display`,
+/// belong in the inspector: `Brush` mounts the mesh card (the brush card,
 /// and with it the whole Mesh tab), `Terrain` mounts the scatter /
 /// quantization / channel / generation sections; `CanvasGuides` is where
 /// a canvas guide's exact position is typed. `HiddenInGame` and
@@ -745,7 +743,6 @@ pub fn build_inspector_displays(
     icon_font: &IconFont,
     editor_font: &EditorFont,
     _read_only: bool,
-    materials: &Assets<StandardMaterial>,
     authored_type_paths: &HashSet<String>,
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
@@ -766,7 +763,6 @@ pub fn build_inspector_displays(
         names,
         icon_font,
         editor_font,
-        materials,
         authored_type_paths,
         scene_ast,
         prefab_cache,
@@ -793,7 +789,6 @@ fn build_inspector_cards(
     names: &Query<&Name>,
     icon_font: &IconFont,
     editor_font: &EditorFont,
-    materials: &Assets<StandardMaterial>,
     authored_type_paths: &HashSet<String>,
     scene_ast: Option<&jackdaw_bsn::SceneBsnAst>,
     prefab_cache: Option<&PrefabAstCache>,
@@ -1140,14 +1135,6 @@ fn build_inspector_cards(
                         &editor_font.0,
                         &icon_font.0,
                     );
-                }
-                continue;
-            }
-
-            // Priority 3b: Brush, show face/vertex info
-            if type_id == TypeId::of::<crate::brush::Brush>() {
-                if let Some(brush) = reflected.downcast_ref::<crate::brush::Brush>() {
-                    brush_display::spawn_brush_display(commands, body_entity, brush, materials);
                 }
                 continue;
             }

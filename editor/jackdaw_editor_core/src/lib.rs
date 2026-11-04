@@ -125,8 +125,8 @@ pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
 pub(crate) mod preview_model;
-#[doc(hidden)]
-pub mod primitive_ops;
+pub(crate) mod primitive_ops;
+pub use primitive_ops::{bool_param, float_param, int_param, scene_node, vec3_param};
 pub mod probe_bake;
 pub mod progress;
 pub mod project;

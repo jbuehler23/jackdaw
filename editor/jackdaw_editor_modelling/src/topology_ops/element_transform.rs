@@ -13,7 +13,7 @@ use super::select_elements::refuse;
 use jackdaw_editor_core::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
 use jackdaw_editor_core::brush_drag_ops::apply_vertex_deltas;
 use jackdaw_editor_core::numeric_transform::{centroid, sub_selection_vertices};
-use jackdaw_editor_core::primitive_ops::vec3_param;
+use jackdaw_editor_core::vec3_param;
 
 const LABEL: &str = "Transform Elements";
 

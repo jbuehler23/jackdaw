@@ -1,9 +1,8 @@
-use crate::EditorEntity;
-use crate::brush::{Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode, SetBrush};
-use crate::commands::CommandHistory;
-use crate::selection::Selection;
+//! The brush inspector card: topology counts, the materials summary and the
+//! selected faces' material and UV fields, with their operators.
 
 use bevy::ecs::lifecycle::Insert;
+use bevy::ecs::world::CommandQueue;
 use bevy::feathers::containers::{group, group_body, group_header, pane_body};
 use bevy::feathers::controls::{FeathersTextInput, FeathersTextInputContainer};
 use bevy::feathers::theme::ThemedText;
@@ -13,9 +12,40 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, TextEdit};
 use bevy::ui_widgets::ValueChange;
 use jackdaw_api::prelude::*;
+use jackdaw_editor_core::EditorEntity;
+use jackdaw_editor_core::brush::{
+    Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode, SetBrush,
+};
+use jackdaw_editor_core::commands::CommandHistory;
+use jackdaw_editor_core::inspector::InspectorDirty;
+use jackdaw_editor_core::selection::Selection;
 use jackdaw_feathers::{button::ButtonOperatorCall, tokens};
 
-use super::{BrushFaceField, BrushFaceFieldBinding, BrushFacePropsContainer};
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushFaceClearMaterialOp>()
+        .register_operator::<BrushFaceApplyTextureToAllOp>()
+        .register_operator::<BrushFaceSetUvScalePresetOp>()
+        .register_operator::<BrushClearAllMaterialsOp>();
+}
+
+/// Container for brush face properties (texture, UV, etc). Populated dynamically.
+#[derive(Component)]
+pub(crate) struct BrushFacePropsContainer;
+
+/// Binding for a brush face UV field.
+#[derive(Component)]
+pub(crate) struct BrushFaceFieldBinding {
+    field: BrushFaceField,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrushFaceField {
+    UvOffsetX,
+    UvOffsetY,
+    UvScaleX,
+    UvScaleY,
+    UvRotation,
+}
 
 /// Initial text staged on a brush face text input container. The
 /// `Insert`-triggered `seed_brush_face_text` observer writes it into the
@@ -149,10 +179,26 @@ fn resolve_material_label(
     format!("Material {:?}", mat_handle.id())
 }
 
-pub(super) fn spawn_brush_display(
+/// Fill the `Brush` card body for `source`.
+pub(crate) fn fill_brush_card_body(world: &mut World, source: Entity, body: Entity) {
+    let Some(brush) = world.get::<Brush>(source) else {
+        return;
+    };
+    let mut queue = CommandQueue::default();
+    let mut commands = Commands::new(&mut queue, world);
+    spawn_brush_display(
+        &mut commands,
+        body,
+        brush,
+        world.resource::<Assets<StandardMaterial>>(),
+    );
+    queue.apply(world);
+}
+
+fn spawn_brush_display(
     commands: &mut Commands,
     parent: Entity,
-    brush: &crate::brush::Brush,
+    brush: &Brush,
     materials: &Assets<StandardMaterial>,
 ) {
     // Brushes always have populated topology in normal flow; the
@@ -166,7 +212,7 @@ pub(super) fn spawn_brush_display(
         )
     } else {
         let (vertices, face_polygons) =
-            crate::brush::compute_brush_geometry_from_planes(&brush.faces);
+            jackdaw_editor_core::brush::compute_brush_geometry_from_planes(&brush.faces);
         let mut edges = std::collections::HashSet::new();
         for polygon in &face_polygons {
             for i in 0..polygon.len() {
@@ -389,7 +435,7 @@ fn spawn_material_summary(
 
 /// Tracks the last state we rendered so we only rebuild on change.
 #[derive(Default)]
-pub(super) struct BrushFacePropsState {
+pub(crate) struct BrushFacePropsState {
     entity: Option<Entity>,
     faces: Vec<usize>,
     /// Hash of face data to detect UV edits
@@ -838,7 +884,7 @@ pub(crate) fn brush_face_clear_material(
         label: "Clear material".to_string(),
     };
     history.push_executed(Box::new(cmd));
-    commands.entity(brush_entity).insert(super::InspectorDirty);
+    commands.entity(brush_entity).insert(InspectorDirty);
     Some(OperatorResult::Finished)
 }
 
@@ -880,7 +926,7 @@ pub(crate) fn brush_face_apply_texture_to_all(
         label: "Apply material to all faces".to_string(),
     };
     history.push_executed(Box::new(cmd));
-    commands.entity(brush_entity).insert(super::InspectorDirty);
+    commands.entity(brush_entity).insert(InspectorDirty);
     Some(OperatorResult::Finished)
 }
 
@@ -936,7 +982,7 @@ pub(crate) fn brush_clear_all_materials(
     children_query: Query<&Children>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let targets: Vec<Entity> = crate::brush::shown_edit_brushes(
+    let targets: Vec<Entity> = jackdaw_editor_core::brush::shown_edit_brushes(
         &selection.entities,
         |e| brushes.contains(e),
         |e| {
@@ -965,7 +1011,7 @@ pub(crate) fn brush_clear_all_materials(
                 label: "Clear all materials".to_string(),
             };
             group_commands.push(Box::new(cmd));
-            commands.entity(entity).insert(super::InspectorDirty);
+            commands.entity(entity).insert(InspectorDirty);
         }
     }
     if !group_commands.is_empty() {

@@ -21,6 +21,8 @@ use jackdaw_recipe::{InputSpec, SEED_INPUT, Scope, Value as RecipeValue, value_t
 use jackdaw_scene_types::{RECIPE_INSTANCE_TYPE_PATH, RecipeInstance};
 use serde_json::{Value, json};
 
+use crate::brush::refuse;
+
 use run::{RecipePlan, RecipeRoot};
 
 pub mod picker;
@@ -532,12 +534,6 @@ fn instance_of(
             .collect(),
         seed,
     }
-}
-
-fn refuse(world: &mut World, op: &str, why: String) -> OperatorResult {
-    warn_caller(world, format!("{op}: {why}"));
-    set_outcome(world, Outcome::Invalid);
-    OperatorResult::Cancelled
 }
 
 const RUN_KEYS: [&str; 7] = ["recipe", "inputs", "pos", "rot", "parent", "name", "seed"];
