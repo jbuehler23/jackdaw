@@ -657,6 +657,53 @@ mod tests {
             .x
     }
 
+    #[test]
+    fn a_held_edit_lands_after_a_scene_spawns_the_node() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::transform::TransformPlugin);
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+        install_node_index(&mut app);
+        app.add_plugins(crate::JackdawPlugin);
+
+        let scene = "\
+bevy_ecs::hierarchy::Children [
+    jackdaw_scene_types::node_id::SceneNodeId(21)
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 { x: 1.0, y: 0.0, z: 0.0 },
+    }
+]
+";
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<crate::JackdawScene>>()
+            .add(crate::JackdawScene::new(
+                scene.to_string(),
+                std::path::PathBuf::new(),
+            ));
+
+        apply_node_components(
+            app.world_mut(),
+            21,
+            &[(TRANSFORM.to_string(), transform_json(9.0))],
+            &[],
+        );
+        assert!(app.world().resource::<PendingNodeChanges>().contains(21));
+
+        app.world_mut().spawn(crate::JackdawSceneRoot(handle));
+        app.update();
+        app.update();
+
+        let mut query = app.world_mut().query::<(&SceneNodeId, &Transform)>();
+        let found: Vec<f32> = query
+            .iter(app.world())
+            .filter(|(id, _)| id.0 == 21)
+            .map(|(_, transform)| transform.translation.x)
+            .collect();
+        assert_eq!(found, vec![9.0], "the held edit wins over the scene value");
+    }
+
     /// An edit for a node no entity carries yet waits, and lands on the
     /// entity spawned for it, after the spawn's own components.
     #[test]
