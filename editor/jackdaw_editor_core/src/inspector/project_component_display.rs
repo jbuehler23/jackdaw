@@ -67,7 +67,7 @@ pub(crate) fn fill_project_component_fields(
 
 /// The component's current value as JSON: what the document authors, and the
 /// type's default for the rest.
-fn project_component_json(world: &World, node: Entity, schema: &TypeSchema) -> Value {
+pub(crate) fn project_component_json(world: &World, node: Entity, schema: &TypeSchema) -> Value {
     let Some(types) = world.get_resource::<ProjectTypes>() else {
         return schema_values::type_default_json(schema)
             .unwrap_or(Value::Object(Default::default()));

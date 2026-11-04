@@ -121,6 +121,7 @@ pub mod pie_menu;
 pub mod pie_mirror;
 pub mod pie_projection;
 pub mod play_settings;
+pub mod play_sync;
 pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
@@ -554,6 +555,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(extension_build::ExtensionBuildPlugin)
         .add_plugins(pie::PiePlugin)
         .add_plugins(project_build::ProjectBuildPlugin)
+        .add_plugins(play_sync::plugin)
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(live_input::LiveInputPlugin)
         .add_plugins(game_panel::GamePanelPlugin)

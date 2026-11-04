@@ -189,12 +189,38 @@ impl PieSession {
         )
     }
 
+    /// Whether the instances can take document edits now: `None` with no
+    /// instance launched, `Launching` while one builds or connects, `Live`
+    /// once every launched instance is connected.
+    pub(crate) fn sync_target(&self) -> SyncTarget {
+        let connecting = self
+            .children
+            .values()
+            .any(|stage| matches!(stage, ChildStage::Connecting { .. }));
+        if connecting || self.is_launching() {
+            SyncTarget::Launching
+        } else if self.children.is_empty() {
+            SyncTarget::None
+        } else {
+            SyncTarget::Live
+        }
+    }
+
     /// Whether the last thing a launch did was fail its build.
     fn launch_failed(&self) -> bool {
         self.builds
             .values()
             .any(|build| matches!(build, BuildState::Failed { launch: true }))
     }
+}
+
+/// Whether the running instances can take document edits; see
+/// [`PieSession::sync_target`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SyncTarget {
+    None,
+    Launching,
+    Live,
 }
 
 /// What play-in-editor is doing: `building` while a launch waits on its
@@ -1082,7 +1108,7 @@ fn send_control_to(transport: &mut IpcChannelTransport, event: ControlEvent) {
 
 /// Send a control message to every live child. Connecting children
 /// (not yet holding a transport) are skipped.
-fn broadcast_control(world: &mut World, event: ControlEvent) {
+pub(crate) fn broadcast_control(world: &mut World, event: ControlEvent) {
     let mut session = world.non_send_mut::<PieSession>();
     for stage in session.children.values_mut() {
         if let ChildStage::Live { transport, .. } = stage {

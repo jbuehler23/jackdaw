@@ -75,6 +75,16 @@ pub enum ControlEvent {
     Highlight {
         entity: Option<u64>,
     },
+    /// The authored components of one scene node changed in the editor's
+    /// document. `set` holds the full current value of each changed
+    /// component, keyed by type path; `removed` names the components the node
+    /// no longer has. The game applies both to every entity spawned from the
+    /// node, matched by its `SceneNodeId`.
+    NodeComponents {
+        node: u64,
+        set: Vec<(String, serde_json::Value)>,
+        removed: Vec<String>,
+    },
 }
 
 /// Serialize a protocol message to bytes. Uses JSON so component payloads
@@ -140,6 +150,30 @@ mod tests {
         };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
+    }
+
+    #[test]
+    fn node_components_round_trip() {
+        let ev = ControlEvent::NodeComponents {
+            node: 1 << 40,
+            set: vec![
+                (
+                    "bevy_transform::components::transform::Transform".to_string(),
+                    serde_json::json!({
+                        "translation": [1.0, 2.0, 3.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0],
+                        "scale": [1.0, 1.0, 1.0]
+                    }),
+                ),
+                (
+                    "bevy_ecs::name::Name".to_string(),
+                    serde_json::json!("Rock"),
+                ),
+            ],
+            removed: vec!["game::Health".to_string()],
+        };
+        let bytes = to_bytes(&ev).unwrap();
+        assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
     }
 
     #[test]

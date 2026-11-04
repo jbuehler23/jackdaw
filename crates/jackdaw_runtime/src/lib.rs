@@ -99,6 +99,7 @@ pub mod frame_work;
 mod live_levels;
 #[cfg(feature = "render")]
 mod lod;
+pub mod node_sync;
 #[cfg(feature = "render")]
 pub use live_levels::{
     AwaitingModelSettings, LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin,

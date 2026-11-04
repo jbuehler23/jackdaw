@@ -8,9 +8,7 @@
 use bevy::app::AppExit;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
-use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::time::Virtual;
-use serde::de::DeserializeSeed;
 
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
@@ -39,10 +37,10 @@ pub fn pie_config() -> Option<PieConfig> {
     PieConfig::from_env_value(std::env::var("JACKDAW_PIE").ok())
 }
 
-/// Holds the editor link. `IpcChannelTransport` is `Send` but not `Sync` (its
+/// Holds the editor link. The ipc transport is `Send` but not `Sync` (its
 /// receiver wraps a `Cell`-held file descriptor), so it lives as a `NonSend`
 /// resource and the PIE systems run on the main thread.
-pub(crate) struct PieTransportRes(pub(crate) IpcChannelTransport);
+pub(crate) struct PieTransportRes(pub(crate) Box<dyn PieTransport>);
 
 /// Entity the editor asked to box in the rendered frame, or none.
 #[derive(Resource, Default)]
@@ -65,18 +63,7 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     app.insert_resource(crate::pie_frames::spawn_frame_sender_thread(
         transport.lane_sender(jackdaw_pie_protocol::PieChannel::Frames),
     ));
-    app.insert_non_send(PieTransportRes(transport));
-    app.init_resource::<PieStreamState>();
-    app.init_resource::<HighlightedEntity>();
-    // Drain control in PreUpdate, before input processing so forwarded editor
-    // input lands in `ButtonInput` the same frame.
-    app.add_systems(
-        PreUpdate,
-        (apply_control, stream_cursor_state)
-            .chain()
-            .before(bevy::input::InputSystems),
-    );
-    app.add_systems(Update, stream_state);
+    install_link(app, Box::new(transport));
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
@@ -94,6 +81,25 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
         // registered only here.
         app.add_systems(Update, draw_highlight);
     }
+}
+
+/// Install the control and stream systems over `transport`. Control drains
+/// in `PreUpdate` whatever the virtual clock says, so edits from the editor
+/// land while the game is paused.
+fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
+    app.insert_non_send(PieTransportRes(transport));
+    app.init_resource::<PieStreamState>();
+    app.init_resource::<HighlightedEntity>();
+    crate::node_sync::install_node_index(app);
+    // Drain control in PreUpdate, before input processing so forwarded editor
+    // input lands in `ButtonInput` the same frame.
+    app.add_systems(
+        PreUpdate,
+        (apply_control, stream_cursor_state)
+            .chain()
+            .before(bevy::input::InputSystems),
+    );
+    app.add_systems(Update, stream_state);
 }
 
 /// Lift the `SceneNodeId` component out of a snapshot's `components` map and
@@ -273,7 +279,8 @@ fn stream_state(world: &mut World) {
 /// `Stop`, or the editor hanging up, writes `AppExit::Success` to tear down
 /// the game loop. `Pause` / `Resume` toggle the virtual clock, freezing
 /// gameplay systems keyed on `Time<Virtual>`. `SetComponent`,
-/// `AddComponent`, `RemoveComponent` apply reflected edits to live entities.
+/// `AddComponent`, `RemoveComponent` apply reflected edits to live entities,
+/// and `NodeComponents` to every entity spawned from a scene node.
 /// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
@@ -332,6 +339,9 @@ fn apply_control(world: &mut World) {
                 crate::pie_frames::stop_frame_stream(world);
             }
             ControlEvent::Input(event) => apply_input(world, event),
+            ControlEvent::NodeComponents { node, set, removed } => {
+                crate::node_sync::apply_node_components(world, node, &set, &removed);
+            }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity
                     .map(Entity::from_bits)
@@ -635,38 +645,23 @@ fn apply_set_component(
     type_path: &str,
     value: &serde_json::Value,
 ) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry_guard = registry.read();
-
-    let Some(registration) = registry_guard.get_with_type_path(type_path) else {
-        warn!("PIE: SetComponent: unknown type path `{type_path}`");
-        return;
+    let decoded = match crate::node_sync::decode_component(world, type_path, value) {
+        Ok(decoded) => decoded,
+        Err(reason) => {
+            warn!("PIE: SetComponent: {reason}");
+            return;
+        }
     };
-    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-        warn!("PIE: SetComponent: `{type_path}` has no ReflectComponent");
-        return;
-    };
-
-    let reflected =
-        match TypedReflectDeserializer::new(registration, &registry_guard).deserialize(value) {
-            Ok(r) => r,
-            Err(err) => {
-                warn!("PIE: SetComponent: failed to deserialize `{type_path}`: {err}");
-                return;
-            }
-        };
-
     let entity = Entity::from_bits(entity_bits);
-    if world.get_entity(entity).is_err() {
+    let Ok(entity_ref) = world.get_entity(entity) else {
         warn!("PIE: SetComponent: entity {entity_bits} not found");
         return;
-    }
-    if !reflect_component.contains(world.entity(entity)) {
+    };
+    if !decoded.reflect.contains(entity_ref) {
         warn!("PIE: SetComponent: entity {entity_bits} does not have `{type_path}`");
         return;
     }
-
-    reflect_component.apply(world.entity_mut(entity), reflected.as_ref());
+    crate::node_sync::write_component(world, entity, &decoded);
 }
 
 /// Deserialize `value` for `type_path` and insert (or replace) a component on the entity.
@@ -677,37 +672,24 @@ fn apply_add_component(
     type_path: &str,
     value: &serde_json::Value,
 ) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry_guard = registry.read();
-
-    let Some(registration) = registry_guard.get_with_type_path(type_path) else {
-        warn!("PIE: AddComponent: unknown type path `{type_path}`");
-        return;
+    let decoded = match crate::node_sync::decode_component(world, type_path, value) {
+        Ok(decoded) => decoded,
+        Err(reason) => {
+            warn!("PIE: AddComponent: {reason}");
+            return;
+        }
     };
-    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-        warn!("PIE: AddComponent: `{type_path}` has no ReflectComponent");
-        return;
-    };
-
-    let reflected =
-        match TypedReflectDeserializer::new(registration, &registry_guard).deserialize(value) {
-            Ok(r) => r,
-            Err(err) => {
-                warn!("PIE: AddComponent: failed to deserialize `{type_path}`: {err}");
-                return;
-            }
-        };
-
     let entity = Entity::from_bits(entity_bits);
     if world.get_entity(entity).is_err() {
         warn!("PIE: AddComponent: entity {entity_bits} not found");
         return;
     }
-
-    reflect_component.insert(
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    decoded.reflect.insert(
         &mut world.entity_mut(entity),
-        reflected.as_ref(),
-        &registry_guard,
+        decoded.value.as_ref(),
+        &registry,
     );
 }
 
@@ -1201,6 +1183,51 @@ mod tests {
         assert_eq!(resolve(&world, Some(live.to_bits())), Some(live));
         assert_eq!(resolve(&world, Some(dead_bits)), None);
         assert_eq!(resolve(&world, None), None);
+    }
+
+    /// A node edit lands on every entity of the node while the virtual clock
+    /// is paused: control drains every frame regardless of `Time<Virtual>`.
+    #[test]
+    fn node_components_apply_while_paused() {
+        use jackdaw_pie_protocol::LoopbackTransport;
+
+        let (mut editor, game) = LoopbackTransport::pair();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.register_type::<Transform>();
+        app.register_type::<SceneNodeId>();
+        install_link(&mut app, Box::new(game));
+        let first = app
+            .world_mut()
+            .spawn((SceneNodeId(7), Transform::default()))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((SceneNodeId(7), Transform::default()))
+            .id();
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.update();
+
+        let event = ControlEvent::NodeComponents {
+            node: 7,
+            set: vec![(
+                "bevy_transform::components::transform::Transform".to_string(),
+                serde_json::json!({
+                    "translation": [3.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }),
+            )],
+            removed: Vec::new(),
+        };
+        editor.send(PieChannel::Reliable, &to_bytes(&event).expect("encode"));
+        app.update();
+
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        for entity in [first, second] {
+            let transform = app.world().get::<Transform>(entity).expect("a transform");
+            assert_eq!(transform.translation.x, 3.0);
+        }
     }
 
     #[test]
