@@ -1,12 +1,14 @@
 //! Records the rustup toolchain that compiles this crate, so the SDK and
 //! every extension are later built by the same compiler as the editor, and
 //! the target it compiles for, which is the editor's host.
+//!
+//! `RUSTUP_TOOLCHAIN` is not tracked, since tools set it as a path or a name
+//! for the same compiler; a real compiler change already rebuilds everything.
 
 use std::{env, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=RUSTC");
-    println!("cargo:rerun-if-env-changed=RUSTUP_TOOLCHAIN");
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
     let version = Command::new(&rustc)
         .arg("-vV")
@@ -40,6 +42,10 @@ fn toolchain_name(release: Option<&str>, rustup: Option<&str>, host: &str) -> St
         return release.to_string();
     }
     if let Some(name) = rustup {
+        let name = std::path::Path::new(name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(name);
         let name = name
             .strip_suffix(host)
             .and_then(|n| n.strip_suffix('-'))
