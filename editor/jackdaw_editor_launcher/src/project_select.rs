@@ -498,7 +498,7 @@ pub fn enter_project_with(world: &mut World, root: PathBuf, skip_build: bool) {
     }
 
     // Project code is compiled by the editor's own pipeline once the
-    // project is open (`pie::prebuild_play_target`), which streams into
+    // project is open (`project_build::prebuild_play_target`), which streams into
     // the Build panel. The launcher's job ends at the handoff.
     close_new_project_modal(world);
     transition_to_editor(world, root);
@@ -566,7 +566,7 @@ pub(crate) fn transition_to_editor(world: &mut World, root: PathBuf) {
     // The scenes queued below open before the schema watcher's first tick, so
     // the project's component types must be known here or the first load reads
     // them all as unknown.
-    jackdaw_editor_core::pie::refresh_project_types(world);
+    jackdaw_editor_core::project_build::refresh_project_types(world);
 
     let last_open_tabs = world
         .resource::<jackdaw_editor_core::project::ProjectRoot>()

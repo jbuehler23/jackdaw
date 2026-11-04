@@ -553,6 +553,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(hot_reload::HotReloadPlugin)
         .add_plugins(extension_build::ExtensionBuildPlugin)
         .add_plugins(pie::PiePlugin)
+        .add_plugins(project_build::ProjectBuildPlugin)
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(live_input::LiveInputPlugin)
         .add_plugins(game_panel::GamePanelPlugin)

@@ -60,7 +60,7 @@ fn app_with_open(kind: &'static str, name: &'static str) -> (App, tempfile::Temp
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
     app.update();
-    jackdaw::pie::refresh_project_types(app.world_mut());
+    jackdaw::project_build::refresh_project_types(app.world_mut());
     app.update();
 
     let result = app
