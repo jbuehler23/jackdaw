@@ -144,3 +144,32 @@ fn opening_and_saving_names_every_node_once() {
         "a reopen keeps the saved ids"
     );
 }
+
+/// A named asset root spawns no entity, so it gets no node id.
+#[test]
+fn opening_a_scene_leaves_its_asset_roots_unnamed() {
+    let mut app = util::editor_test_app();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("assets.bsn");
+    std::fs::write(
+        &path,
+        "\
+bevy_ecs::hierarchy::Children [
+    #Stone
+    bevy_pbr::pbr_material::StandardMaterial
+    --
+    #Ground
+    bevy_transform::components::transform::Transform
+]
+",
+    )
+    .expect("write scene");
+
+    request_open_with_conversion(app.world_mut(), &path);
+    app.update();
+
+    let saved = save(&mut app, &path);
+    let ids = saved_ids(&saved);
+    assert!(ids["Ground"].is_some(), "{saved}");
+    assert_eq!(ids["Stone"], None, "{saved}");
+}
