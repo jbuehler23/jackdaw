@@ -4020,6 +4020,7 @@ dependencies = [
  "bevy",
  "jackdaw_editor_animation",
  "jackdaw_editor_core",
+ "jackdaw_editor_launcher",
  "jackdaw_editor_modelling",
  "jackdaw_editor_remote",
  "jackdaw_editor_terrain",
@@ -4208,14 +4209,12 @@ dependencies = [
  "jackdaw_multiplayer",
  "jackdaw_multiplayer_editor",
  "jackdaw_node_graph",
- "jackdaw_package",
  "jackdaw_panels",
  "jackdaw_pick",
  "jackdaw_pie_protocol",
  "jackdaw_prefab",
  "jackdaw_project_build",
  "jackdaw_recipe",
- "jackdaw_releases",
  "jackdaw_remote",
  "jackdaw_runtime",
  "jackdaw_rustc_wrapper",
@@ -4240,9 +4239,31 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
- "toml_edit",
  "windows-sys 0.61.2",
  "winit",
+]
+
+[[package]]
+name = "jackdaw_editor_launcher"
+version = "0.21.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_window_chrome",
+ "dirs",
+ "dunce",
+ "jackdaw_api",
+ "jackdaw_api_internal",
+ "jackdaw_editor_core",
+ "jackdaw_feathers",
+ "jackdaw_package",
+ "jackdaw_project_build",
+ "jackdaw_releases",
+ "jackdaw_scaffold",
+ "jackdaw_scene_types",
+ "rfd",
+ "serde_json",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]
