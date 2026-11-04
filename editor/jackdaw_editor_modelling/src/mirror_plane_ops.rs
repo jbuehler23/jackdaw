@@ -219,7 +219,7 @@ fn world_per_pixel_along_axis(
 
 /// On LMB just-pressed while a mirror-plane handle is hovered and no modal is
 /// running, dispatch `mirror.plane.drag`. Mirrors
-/// [`jackdaw_editor_core::brush_drag_ops::vertex_drag_invoke_trigger`]: the operator captures
+/// `vertex_drag_invoke_trigger` in core: the operator captures
 /// its start state on the first invoke and runs modal from there.
 pub(crate) fn mirror_plane_drag_invoke_trigger(
     pointer: jackdaw_editor_core::modal_inputs::PointerInputs,
