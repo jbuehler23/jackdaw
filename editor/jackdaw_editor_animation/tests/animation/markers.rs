@@ -41,13 +41,13 @@ fn editor_on_the_test_project() -> App {
     app.init_resource::<FiredEvents>();
     app.add_systems(Last, record_fired_events);
     app.world_mut()
-        .insert_resource(jackdaw::project::ProjectRoot {
-            root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        .insert_resource(jackdaw_editor_core::project::ProjectRoot {
+            root: util::workspace_root(),
             config: default(),
         });
     app.world_mut()
-        .resource_mut::<NextState<jackdaw::AppState>>()
-        .set(jackdaw::AppState::Editor);
+        .resource_mut::<NextState<jackdaw_editor_core::AppState>>()
+        .set(jackdaw_editor_core::AppState::Editor);
     app
 }
 
@@ -85,8 +85,8 @@ fn previewing_a_library_clip(app: &mut App) -> Entity {
         .id();
     app.world_mut()
         .spawn((Name::new("Bone"), Transform::default(), ChildOf(rig)));
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), rig);
-    jackdaw::selection::select_only(app.world_mut(), rig);
+    jackdaw_editor_core::scene_io::register_entity_in_ast(app.world_mut(), rig);
+    jackdaw_editor_core::selection::select_only(app.world_mut(), rig);
 
     call(
         app,
@@ -137,7 +137,10 @@ fn clip_row(app: &App, owner: Entity) -> Option<Entity> {
 /// Every `ClipEvent` the document would write, read off the emitted text
 /// rather than off the world, so an undone edit left in the AST is caught.
 fn saved_document(app: &mut App) -> String {
-    jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), std::path::Path::new("."))
+    jackdaw_editor_core::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new("."),
+    )
 }
 
 /// The `(time, name)` of every event under a row.
@@ -176,8 +179,13 @@ fn an_event_on_a_library_clip_makes_a_row_under_the_entity() {
         "the event hangs under the row, not under the entity"
     );
     assert!(
-        app.world().get::<jackdaw::EditorEntity>(row).is_none()
-            && app.world().get::<jackdaw::EditorHidden>(row).is_none(),
+        app.world()
+            .get::<jackdaw_editor_core::EditorEntity>(row)
+            .is_none()
+            && app
+                .world()
+                .get::<jackdaw_editor_core::EditorHidden>(row)
+                .is_none(),
         "the row belongs to the document, so the outliner has to show it"
     );
     assert_eq!(
@@ -212,7 +220,7 @@ fn a_library_clip_row_comes_back_when_the_document_is_reopened() {
         text.contains("ClipEvent"),
         "the marker has to reach the document:\n{text}"
     );
-    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text);
+    jackdaw_editor_core::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text);
     app.update();
 
     let reopened = app
@@ -399,8 +407,8 @@ fn redoing_an_undone_event_puts_the_row_and_the_marker_back() {
 fn a_clip_previewed_on_a_mannequin_takes_no_events() {
     let mut app = editor_on_the_test_project();
     let bare = app.world_mut().spawn(Name::new("Bare")).id();
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), bare);
-    jackdaw::selection::select_only(app.world_mut(), bare);
+    jackdaw_editor_core::scene_io::register_entity_in_ast(app.world_mut(), bare);
+    jackdaw_editor_core::selection::select_only(app.world_mut(), bare);
     call(
         &mut app,
         "animation.preview",
@@ -471,8 +479,8 @@ fn a_set_whose_skeleton_spawns_later_still_owns_its_markers() {
             },
         ))
         .id();
-    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), actor);
-    jackdaw::selection::select_only(app.world_mut(), actor);
+    jackdaw_editor_core::scene_io::register_entity_in_ast(app.world_mut(), actor);
+    jackdaw_editor_core::selection::select_only(app.world_mut(), actor);
 
     call(
         &mut app,

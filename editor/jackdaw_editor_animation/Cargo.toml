@@ -1,0 +1,42 @@
+[package]
+name = "jackdaw_editor_animation"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Animation timeline, clip editing and animation graph editor for the Jackdaw scene editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+readme = "../../README.md"
+keywords = ["bevy", "editor", "animation"]
+categories = ["game-development"]
+include = ["src/**/*", "Cargo.toml"]
+
+[dependencies]
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "../jackdaw_editor_core", default-features = false }
+bevy.workspace = true
+jackdaw_animation.workspace = true
+jackdaw_animation_runtime.workspace = true
+jackdaw_api.workspace = true
+jackdaw_api_internal.workspace = true
+jackdaw_bsn.workspace = true
+jackdaw_commands.workspace = true
+jackdaw_feathers.workspace = true
+jackdaw_input.workspace = true
+jackdaw_node_graph.workspace = true
+jackdaw_scene_types.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The features the root enables on the core, and not `default`, so the
+# animation tests share the core `cargo build` and `cargo test` make instead
+# of compiling one of their own.
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "../jackdaw_editor_core", default-features = false, features = [
+    "multiplayer",
+    "camera_rig",
+    "embed-recipe",
+] }
+jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
+tempfile = "3"
+
+[lints]
+workspace = true

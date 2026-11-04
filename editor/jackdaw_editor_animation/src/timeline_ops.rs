@@ -12,9 +12,9 @@ use jackdaw_animation::{
 use jackdaw_api::prelude::*;
 use jackdaw_commands::{CommandHistory, EditorCommand};
 
-use super::markers::{clip_event_row, clip_event_row_in, clip_event_row_name};
-use super::preview::AnimationPreview;
-use crate::selection::Selection;
+use crate::markers::{clip_event_row, clip_event_row_in, clip_event_row_name};
+use crate::preview::AnimationPreview;
+use jackdaw_editor_core::selection::Selection;
 
 /// The reflected type path of the authored clip, which is what a field edit
 /// has to name to reach the document.
@@ -439,7 +439,8 @@ fn set_field(
     field: &str,
     value: serde_json::Value,
 ) {
-    if !crate::commands::field_edit_commit_on(world, entity, type_path, field, &value) {
+    if !jackdaw_editor_core::commands::field_edit_commit_on(world, entity, type_path, field, &value)
+    {
         warn!("the timeline could not write {type_path}.{field} on {entity}");
         return;
     }
@@ -507,7 +508,7 @@ impl ClipEventEdit {
         let row = world
             .spawn((Name::new(clip_event_row_name(&file, &clip)), ChildOf(owner)))
             .id();
-        crate::scene_io::register_entity_in_ast(world, row);
+        jackdaw_editor_core::scene_io::register_entity_in_ast(world, row);
         self.made_row = true;
         Some(row)
     }
@@ -527,7 +528,7 @@ impl ClipEventEdit {
                 ChildOf(row),
             ))
             .id();
-        crate::scene_io::register_entity_in_ast(world, event);
+        jackdaw_editor_core::scene_io::register_entity_in_ast(world, event);
         self.event = Some(event);
     }
 
@@ -535,21 +536,21 @@ impl ClipEventEdit {
     /// earlier event made stays, being where the next event goes.
     fn despawn(&mut self, world: &mut World) {
         if let Some(event) = self.event.take() {
-            crate::commands::despawn_scene_entity(world, event);
+            jackdaw_editor_core::commands::despawn_scene_entity(world, event);
         }
         if !self.made_row {
             return;
         }
         self.made_row = false;
         if let Some(row) = self.on.take() {
-            crate::commands::despawn_scene_entity(world, row);
+            jackdaw_editor_core::commands::despawn_scene_entity(world, row);
         }
     }
 }
 
 impl ClipEventEdit {
     fn relive(&mut self, world: &World) {
-        let live = |entity: Entity| crate::scene_nodes::live_entity(world, entity);
+        let live = |entity: Entity| jackdaw_editor_core::scene_nodes::live_entity(world, entity);
         match &mut self.row {
             EventRow::Authored(clip) => *clip = live(*clip),
             EventRow::Named { owner, .. } => *owner = live(*owner),

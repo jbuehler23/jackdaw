@@ -11,11 +11,11 @@ use jackdaw_animation_runtime::{
 };
 use jackdaw_api::prelude::*;
 
-use super::graph_doc::{
+use crate::graph_doc::{
     AnimationGraphDoc, commit_graph_edit, condition_op_from_name, graph_path_for_name, new_graph,
     open_graph, parameter, parameter_kind_from_name, parse_clip_ref, write_graph_file,
 };
-use super::graph_window::graph_preview_target;
+use crate::graph_window::graph_preview_target;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<AnimationGraphNewOp>()
@@ -54,7 +54,7 @@ pub(crate) fn animation_graph_new(
     commands.queue(move |world: &mut World| {
         let name = named.clone().unwrap_or_else(|| {
             let typed = world
-                .resource::<super::AnimationPanelState>()
+                .resource::<crate::AnimationPanelState>()
                 .graph_name
                 .clone();
             if typed.is_empty() {
@@ -67,7 +67,10 @@ pub(crate) fn animation_graph_new(
             warn!("animation.graph.new: {name} could not be written");
             return;
         }
-        crate::open_window_in_default_area_if_absent(world, super::graph_window::GRAPH_WINDOW_ID);
+        jackdaw_editor_core::open_window_in_default_area_if_absent(
+            world,
+            crate::graph_window::GRAPH_WINDOW_ID,
+        );
     });
     OperatorResult::Finished
 }
@@ -89,7 +92,10 @@ pub(crate) fn animation_graph_open(
         if !open_graph(world, &path) {
             return;
         }
-        crate::open_window_in_default_area_if_absent(world, super::graph_window::GRAPH_WINDOW_ID);
+        jackdaw_editor_core::open_window_in_default_area_if_absent(
+            world,
+            crate::graph_window::GRAPH_WINDOW_ID,
+        );
     });
     Some(OperatorResult::Finished)
 }
@@ -525,10 +531,13 @@ pub(crate) fn animation_graph_assign(
 ) -> Option<OperatorResult> {
     let path = params.as_str("path").map(str::to_string)?;
     commands.queue(move |world: &mut World| {
-        let Some(entity) = world.resource::<crate::selection::Selection>().primary() else {
+        let Some(entity) = world
+            .resource::<jackdaw_editor_core::selection::Selection>()
+            .primary()
+        else {
             return;
         };
-        if !crate::commands::field_edit_commit_on(
+        if !jackdaw_editor_core::commands::field_edit_commit_on(
             world,
             entity,
             <AnimationGraphRef as bevy::reflect::TypePath>::type_path(),
@@ -539,9 +548,9 @@ pub(crate) fn animation_graph_assign(
             return;
         }
         if open_graph(world, &path) {
-            crate::open_window_in_default_area_if_absent(
+            jackdaw_editor_core::open_window_in_default_area_if_absent(
                 world,
-                super::graph_window::GRAPH_WINDOW_ID,
+                crate::graph_window::GRAPH_WINDOW_ID,
             );
         }
     });
@@ -568,7 +577,10 @@ pub(crate) fn animation_graph_convert_set(
 /// Turn the selected set into a graph file, and give the entity a reference to
 /// it so the rig plays the graph rather than the set.
 fn convert_selected_set(world: &mut World) {
-    let Some(entity) = world.resource::<crate::selection::Selection>().primary() else {
+    let Some(entity) = world
+        .resource::<jackdaw_editor_core::selection::Selection>()
+        .primary()
+    else {
         return;
     };
     let Some(set) = world
@@ -582,7 +594,7 @@ fn convert_selected_set(world: &mut World) {
         .map(|name| name.as_str().to_string())
         .unwrap_or_else(|| "graph".to_string());
     let path = graph_path_for_name(&name);
-    super::graph_doc::install_graph(world, &path, set.to_graph(), true);
+    crate::graph_doc::install_graph(world, &path, set.to_graph(), true);
     if write_graph_file(world).is_none() {
         return;
     }
@@ -593,13 +605,13 @@ fn convert_selected_set(world: &mut World) {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let value = {
         let registry = registry.read();
-        crate::inspector::reflect_fields::reflect_to_json(&reference, &registry)
+        jackdaw_editor_core::inspector::reflect_fields::reflect_to_json(&reference, &registry)
     };
     let Some(value) = value else {
         warn!("animation.graph.convert_set: the reference did not convert to a value to author");
         return;
     };
-    if !crate::commands::field_edit_commit_on(
+    if !jackdaw_editor_core::commands::field_edit_commit_on(
         world,
         entity,
         <AnimationGraphRef as bevy::reflect::TypePath>::type_path(),
@@ -608,7 +620,10 @@ fn convert_selected_set(world: &mut World) {
     ) {
         warn!("animation.graph.convert_set: the entity refused the graph reference");
     }
-    crate::open_window_in_default_area_if_absent(world, super::graph_window::GRAPH_WINDOW_ID);
+    jackdaw_editor_core::open_window_in_default_area_if_absent(
+        world,
+        crate::graph_window::GRAPH_WINDOW_ID,
+    );
 }
 
 fn a_graph_is_open(doc: Res<AnimationGraphDoc>) -> bool {
@@ -616,7 +631,7 @@ fn a_graph_is_open(doc: Res<AnimationGraphDoc>) -> bool {
 }
 
 fn a_set_without_a_graph_is_selected(
-    selection: Res<crate::selection::Selection>,
+    selection: Res<jackdaw_editor_core::selection::Selection>,
     sets: Query<
         (),
         (

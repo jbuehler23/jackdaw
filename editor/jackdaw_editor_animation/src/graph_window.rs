@@ -24,17 +24,17 @@ use jackdaw_node_graph::{
     Connection, GraphCanvasWorld, GraphNode, GraphNodeBody, GraphNodeView, GraphSelection,
 };
 
-use super::graph_doc::{
+use crate::graph_doc::{
     AnimationGraphDoc, GraphAnyStateNode, GraphStateNode, motion_summary, transition_summary,
 };
-use super::graph_ops::{
+use crate::graph_ops::{
     AnimationGraphAddParamOp, AnimationGraphAddStateOp, AnimationGraphRemoveStateOp,
     AnimationGraphSaveOp, AnimationGraphSetEntryOp, AnimationGraphSetParamOp,
     AnimationGraphSetStateOp,
 };
 
 /// Catalog id of the dock window this module builds.
-pub const GRAPH_WINDOW_ID: &str = "jackdaw.animation_graph";
+pub use jackdaw_editor_core::animation_mode::GRAPH_WINDOW_ID;
 
 /// How far a wire's annotation sits from the ends it joins.
 const NODE_CENTRE: Vec2 = Vec2::new(80.0, 40.0);
@@ -119,7 +119,9 @@ pub fn highlight_of(playback: &AnimationGraphPlayback) -> GraphHighlight {
 /// stands in, which is what a scene with one rig wants.
 pub fn graph_preview_target(world: &mut World) -> Option<Entity> {
     let path = world.resource::<AnimationGraphDoc>().path.clone()?;
-    let selected = world.resource::<crate::selection::Selection>().primary();
+    let selected = world
+        .resource::<jackdaw_editor_core::selection::Selection>()
+        .primary();
     let mut playing = world.query::<(Entity, &AnimationGraphRef)>();
     let mut first = None;
     for (entity, reference) in playing.iter(world) {
@@ -473,7 +475,7 @@ fn selected_state(selection: &GraphSelection, nodes: &Query<&GraphStateNode>) ->
 fn update_state_strip(
     mut commands: Commands,
     doc: Res<AnimationGraphDoc>,
-    panel: Res<super::AnimationPanelState>,
+    panel: Res<crate::AnimationPanelState>,
     selection: Res<GraphSelection>,
     nodes: Query<&GraphStateNode>,
     strips: Query<(Entity, Option<&Children>), With<GraphStateStrip>>,
@@ -758,15 +760,15 @@ fn drop_orphaned_window_parts(
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<AnimationGraphDoc>()
-        .add_systems(Startup, super::graph_doc::register_graph_node_types)
+        .add_systems(Startup, crate::graph_doc::register_graph_node_types)
         .add_observer(on_parameter_toggle)
         .add_observer(on_parameter_slide)
         .add_observer(on_state_name_commit)
         .add_systems(
             Update,
             (
-                super::graph_doc::read_canvas_back,
-                super::graph_doc::reconcile_canvas,
+                crate::graph_doc::read_canvas_back,
+                crate::graph_doc::reconcile_canvas,
                 build_graph_canvas,
                 update_graph_toolbar,
                 update_parameter_strip,
@@ -777,7 +779,7 @@ pub(super) fn plugin(app: &mut App) {
                 drop_orphaned_window_parts,
             )
                 .chain()
-                .run_if(in_state(crate::AppState::Editor)),
+                .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
         );
 }
 

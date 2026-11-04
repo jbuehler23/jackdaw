@@ -5,13 +5,13 @@
 use crate::util;
 
 use bevy::prelude::*;
-use jackdaw::animation::graph_doc::AnimationGraphDoc;
 use jackdaw_animation_runtime::{
     AnimationConditionOp, AnimationGraphDef, AnimationGraphRef, AnimationMotion, AnimationParams,
     parse_animation_graph,
 };
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
+use jackdaw_editor_animation::graph_doc::AnimationGraphDoc;
 use jackdaw_node_graph::GraphNode;
 use jackdaw_scene_types::PropertyValue;
 
@@ -22,13 +22,13 @@ fn editor_in_a_fresh_project() -> (App, tempfile::TempDir) {
     std::fs::create_dir_all(project.path().join("assets")).expect("an assets directory");
     let mut app = util::editor_test_app();
     app.world_mut()
-        .insert_resource(jackdaw::project::ProjectRoot {
+        .insert_resource(jackdaw_editor_core::project::ProjectRoot {
             root: project.path().to_path_buf(),
             config: default(),
         });
     app.world_mut()
-        .resource_mut::<NextState<jackdaw::AppState>>()
-        .set(jackdaw::AppState::Editor);
+        .resource_mut::<NextState<jackdaw_editor_core::AppState>>()
+        .set(jackdaw_editor_core::AppState::Editor);
     app.update();
     (app, project)
 }

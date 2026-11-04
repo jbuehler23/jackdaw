@@ -244,12 +244,12 @@ pub(crate) fn try_field_edit_commit(
 }
 
 /// Set one field on one entity's component, as one undo entry. Unlike
-/// [`field_edit_commit`], which writes the whole selection, this writes only
+/// `field_edit_commit`, which writes the whole selection, this writes only
 /// the named entity.
 ///
 /// Returns whether the value was taken; `false` when the JSON does not
 /// convert to the field's type or the running preview drives the component.
-pub(crate) fn field_edit_commit_on(
+pub fn field_edit_commit_on(
     world: &mut World,
     entity: Entity,
     type_path: &str,

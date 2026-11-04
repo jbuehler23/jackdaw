@@ -4344,7 +4344,7 @@ fn default_list_item(
     reflect_to_json(item.default().as_partial_reflect(), &registry)
 }
 
-pub(crate) fn reflect_to_json(
+pub fn reflect_to_json(
     value: &dyn PartialReflect,
     registry: &bevy::reflect::TypeRegistry,
 ) -> Option<serde_json::Value> {

@@ -2,6 +2,8 @@
 //! `jackdaw_editor_core` and the feature crates beside it; this crate
 //! re-exports the core so `jackdaw::...` paths keep resolving, and adds the
 //! feature crates to the editor.
+pub use jackdaw_editor_animation;
+pub use jackdaw_editor_animation as animation;
 pub use jackdaw_editor_core::*;
 pub use jackdaw_editor_modelling;
 pub use jackdaw_editor_remote;
@@ -26,6 +28,7 @@ impl PluginGroup for JackdawEditorPlugins {
             .add(jackdaw_editor_terrain::TerrainEditorPlugin)
             .add(jackdaw_editor_modelling::ModellingEditorPlugin)
             .add(jackdaw_editor_remote::RemoteEditorPlugin)
+            .add(jackdaw_editor_animation::AnimationEditorPlugin)
     }
 }
 
@@ -36,6 +39,7 @@ pub fn add_feature_plugins(app: &mut App) {
         jackdaw_editor_terrain::TerrainEditorPlugin,
         jackdaw_editor_modelling::ModellingEditorPlugin,
         jackdaw_editor_remote::RemoteEditorPlugin,
+        jackdaw_editor_animation::AnimationEditorPlugin,
     ));
 }
 

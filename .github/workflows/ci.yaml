@@ -73,7 +73,7 @@ jobs:
         run: cargo binstall wild-linker@0.10.0 --locked --force
 
       - name: Run doctests
-        run: cargo test --locked --workspace --doc --features dylib --config profile.dev.package.jackdaw.opt-level=0 --config profile.dev.package.jackdaw_editor_core.opt-level=0 --config profile.dev.package.jackdaw_editor_tile.opt-level=0 --config profile.dev.package.jackdaw_editor_terrain.opt-level=0 --config profile.dev.package.jackdaw_editor_modelling.opt-level=0 --config profile.dev.package.jackdaw_editor_remote.opt-level=0
+        run: cargo test --locked --workspace --doc --features dylib --config profile.dev.package.jackdaw.opt-level=0 --config profile.dev.package.jackdaw_editor_core.opt-level=0 --config profile.dev.package.jackdaw_editor_tile.opt-level=0 --config profile.dev.package.jackdaw_editor_terrain.opt-level=0 --config profile.dev.package.jackdaw_editor_modelling.opt-level=0 --config profile.dev.package.jackdaw_editor_remote.opt-level=0 --config profile.dev.package.jackdaw_editor_animation.opt-level=0
 
   # Every library and integration test binary, built once for the shards.
   build-tests:

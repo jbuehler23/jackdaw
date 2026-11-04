@@ -1,5 +1,5 @@
 //! Inspector operators: per-component buttons (add / remove / revert)
-//! and the small set of typed actions such as `animation.toggle_keyframe`.
+//! and the small set of typed component actions.
 //! The physics actions live in `physics_display`.
 
 use bevy::ecs::component::ComponentId;
@@ -19,7 +19,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<ComponentAddOp>()
         .register_operator::<ComponentRemoveOp>()
         .register_operator::<ComponentRevertBaselineOp>()
-        .register_operator::<AnimationToggleKeyframeOp>()
         .register_operator::<FieldSetOp>()
         .register_operator::<super::bindings_card::BindingAddOp>()
         .register_operator::<super::bindings_card::BindingSetOp>()
@@ -447,38 +446,6 @@ pub(crate) fn component_revert_baseline(
         {
             error!("revert_component_to_baseline failed: {err}");
         }
-    });
-    Some(OperatorResult::Finished)
-}
-
-/// Spawn (or replace) a keyframe at the current timeline cursor for one
-/// of the entity's animatable properties. Creates the clip and track
-/// lazily if they don't exist yet.
-#[operator(
-    id = "animation.toggle_keyframe",
-    label = "Toggle Keyframe",
-    description = "Add or replace a keyframe for this property at the current timeline cursor.",
-    is_available = has_primary_selection,
-    params(
-        entity(Entity, doc = "Source entity whose property is being animated."),
-        component_type_path(String, doc = "Fully-qualified Bevy reflected type path of the component that owns the property."),
-        field_path(String, doc = "Dotted path to the field within the component (e.g. \"translation\")."),
-    ),
-)]
-pub(crate) fn animation_toggle_keyframe(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> Option<OperatorResult> {
-    let entity = params.as_entity("entity")?;
-    let type_path = params.as_str("component_type_path").map(str::to_string)?;
-    let field_path = params.as_str("field_path").map(str::to_string)?;
-    commands.queue(move |world: &mut World| {
-        world
-            .run_system_cached_with(
-                super::anim_diamond::toggle_keyframe,
-                (entity, type_path, field_path),
-            )
-            .ok();
     });
     Some(OperatorResult::Finished)
 }

@@ -9,8 +9,8 @@ use jackdaw_feathers::{
     tokens,
 };
 
-use crate::animation::graph_doc::graph_files;
-use crate::animation::graph_ops::{AnimationGraphAssignOp, AnimationGraphConvertSetOp};
+use crate::graph_doc::graph_files;
+use crate::graph_ops::{AnimationGraphAssignOp, AnimationGraphConvertSetOp};
 
 /// List the project's graph files under an [`AnimationGraphRef`] card, so the
 /// path is picked rather than typed.

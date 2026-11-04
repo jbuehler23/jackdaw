@@ -2557,16 +2557,12 @@ pub(crate) fn can_act_on_entities(
     if draw_state.active.is_some() {
         return false;
     }
-    if panel_focus.is_focused(TIMELINE_WINDOW_ID) {
+    if panel_focus.is_focused(crate::animation_mode::TIMELINE_WINDOW_ID) {
         return false;
     }
 
     matches!(*edit_mode, crate::brush::EditMode::Object)
 }
-
-/// The timeline panel, which claims the clipboard chords and Delete in its own
-/// bounds.
-pub(crate) const TIMELINE_WINDOW_ID: &str = "jackdaw.timeline";
 
 // -- Entity lifecycle --------------------------------------------
 

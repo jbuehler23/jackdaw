@@ -823,7 +823,7 @@ pub fn assets_handler(
         return Ok(Some(json!({ "assets": paths })));
     }
     if let Some(mut demand) =
-        world.get_resource_mut::<jackdaw_editor_core::animation::LibraryDemand>()
+        world.get_resource_mut::<jackdaw_editor_core::animation_mode::LibraryDemand>()
     {
         demand.requested = true;
     }
@@ -834,7 +834,8 @@ pub fn assets_handler(
             let assets_dir = world
                 .get_resource::<jackdaw_editor_core::project::ProjectRoot>()
                 .map(jackdaw_editor_core::project::ProjectRoot::assets_dir);
-            let library = world.get_resource::<jackdaw_editor_core::animation::AnimationLibrary>();
+            let library =
+                world.get_resource::<jackdaw_editor_core::animation_mode::AnimationLibrary>();
             found
                 .into_iter()
                 .map(|(path, binary)| {

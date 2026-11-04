@@ -15,8 +15,8 @@ use jackdaw_animation::{
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::text_edit::{TextEditCommitEvent, TextEditValue};
 
-use super::preview::AnimationPreview;
-use crate::selection::Selection;
+use crate::preview::AnimationPreview;
+use jackdaw_editor_core::selection::Selection;
 
 /// How far up from a committed field the marker that owns it can sit.
 ///
@@ -113,7 +113,7 @@ pub(super) fn on_speed_commit(
         return;
     }
     commands.queue(move |world: &mut World| {
-        crate::commands::field_edit_commit_on(
+        jackdaw_editor_core::commands::field_edit_commit_on(
             world,
             clip,
             "jackdaw_animation::clip::Clip",
@@ -136,7 +136,7 @@ pub(super) fn on_snap_rate_commit(
     }
     if let Ok(rate) = event.text.trim().parse::<f64>() {
         commands
-            .operator(super::timeline_ops::ClipSnapOp::ID)
+            .operator(crate::timeline_ops::ClipSnapOp::ID)
             .param("rate", rate)
             .call();
     }
@@ -154,7 +154,7 @@ pub(super) fn on_zoom_commit(
     }
     if let Ok(factor) = event.text.trim().parse::<f64>() {
         commands
-            .operator(super::timeline_ops::ClipZoomOp::ID)
+            .operator(crate::timeline_ops::ClipZoomOp::ID)
             .param("factor", factor)
             .call();
     }
@@ -181,7 +181,7 @@ pub(super) fn on_add_property_commit(
         };
         world
             .run_system_cached_with(
-                crate::inspector::anim_diamond::toggle_keyframe,
+                crate::anim_diamond::toggle_keyframe,
                 (target, type_path, field),
             )
             .ok();
@@ -234,7 +234,7 @@ pub(super) fn on_view_segment_click(
         return;
     };
     commands
-        .operator(super::timeline_ops::ClipViewOp::ID)
+        .operator(crate::timeline_ops::ClipViewOp::ID)
         .param("mode", segment.view.as_str().to_string())
         .call();
     event.propagate(false);
@@ -250,7 +250,7 @@ pub(super) fn on_loop_segment_click(
         return;
     };
     commands
-        .operator(super::timeline_ops::ClipLoopModeOp::ID)
+        .operator(crate::timeline_ops::ClipLoopModeOp::ID)
         .param("mode", segment.mode.as_str().to_string())
         .call();
     event.propagate(false);
@@ -286,7 +286,7 @@ pub(super) fn commit_retimed_keyframes(
             let Some(type_path) = keyframe_type_path(world, moved.keyframe) else {
                 return;
             };
-            crate::commands::field_edit_commit_on(
+            jackdaw_editor_core::commands::field_edit_commit_on(
                 world,
                 moved.keyframe,
                 type_path,
@@ -362,7 +362,7 @@ pub(super) fn record_edited_fields(
         commands.queue(move |world: &mut World| {
             world
                 .run_system_cached_with(
-                    crate::inspector::anim_diamond::toggle_keyframe,
+                    crate::anim_diamond::toggle_keyframe,
                     (target, type_path, field),
                 )
                 .ok();
@@ -396,7 +396,7 @@ pub(super) fn describe_previewed_clip(
         return;
     };
     let row = preview.owner().and_then(|owner| {
-        super::markers::clip_event_row(owner, &file, &name, &children, &names, &placed)
+        crate::markers::clip_event_row(owner, &file, &name, &children, &names, &placed)
     });
     let spec = format!("{file}#{name}");
     if view.clip.as_deref() == Some(spec.as_str()) {
@@ -543,6 +543,6 @@ pub(super) fn plugin(app: &mut App) {
                 describe_previewed_clip,
                 refresh_timeline_readouts,
             )
-                .run_if(in_state(crate::AppState::Editor)),
+                .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
         );
 }
