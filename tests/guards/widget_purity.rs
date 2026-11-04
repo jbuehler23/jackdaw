@@ -19,6 +19,7 @@ const ROOTS: &[&str] = &[
     "editor/jackdaw_editor_modelling/src",
     "editor/jackdaw_editor_remote/src",
     "editor/jackdaw_editor_animation/src",
+    "editor/jackdaw_editor_launcher/src",
     "crates/jackdaw_feathers/src",
     "crates/jackdaw_panels/src",
     "crates/jackdaw_widgets/src",

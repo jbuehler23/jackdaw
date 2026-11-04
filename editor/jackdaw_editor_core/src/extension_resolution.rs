@@ -19,6 +19,7 @@ pub const REQUIRED_EXTENSIONS: &[&str] = &[
     crate::terrain_mode::TERRAIN_EDITOR_EXTENSION_ID,
     crate::modelling_mode::MODELLING_EDITOR_EXTENSION_ID,
     crate::animation_mode::ANIMATION_EDITOR_EXTENSION_ID,
+    crate::launcher_mode::LAUNCHER_EXTENSION_ID,
 ];
 
 /// True if the named extension is load-bearing and must not be

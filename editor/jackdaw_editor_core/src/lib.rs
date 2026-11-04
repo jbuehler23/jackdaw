@@ -87,7 +87,7 @@ pub mod file_ops;
 pub mod fps_overlay;
 pub mod hot_reload;
 pub mod launch;
-pub mod launcher;
+pub mod launcher_mode;
 pub mod layout;
 pub mod live_edits;
 pub mod live_edits_ui;
@@ -111,7 +111,6 @@ pub mod model_lod;
 pub mod modelling_mode;
 pub mod module_picker;
 pub mod native_dialog;
-pub mod new_project;
 pub(crate) mod node_ops;
 pub mod numeric_transform;
 pub mod operator_calls;
@@ -134,7 +133,6 @@ pub mod project;
 pub mod project_build;
 pub mod project_definitions;
 pub mod project_modules;
-pub mod project_select;
 pub mod project_settings;
 pub mod project_types;
 pub mod project_window;
@@ -429,8 +427,6 @@ impl Plugin for EditorCorePlugin {
             },
             jackdaw_bsn::JackdawBsnPlugin,
             (
-                project_select::ProjectSelectPlugin,
-                launcher::LauncherPlugin,
                 sdk_setup::SdkSetupPlugin,
                 scrolling_log::ScrollingLogPlugin,
                 inspector::InspectorPlugin,
@@ -1321,7 +1317,7 @@ pub(crate) fn project_open_recent(
     mut commands: bevy::prelude::Commands,
 ) -> Option<OperatorResult> {
     let path = std::path::PathBuf::from(unescape_action_value(params.as_str("path")?));
-    commands.insert_resource(project_select::PendingAutoOpen {
+    commands.insert_resource(launcher_mode::PendingAutoOpen {
         path,
         skip_build: false,
     });
@@ -1652,7 +1648,6 @@ fn cleanup_editor(world: &mut World) {
     // all belong to the project being closed; the next project opens its own.
     world.insert_resource(scenes::Scenes::default());
     world.insert_resource(scenes::confirm_dialog::PendingTabClose::default());
-    world.remove_resource::<project_select::PendingSceneOpens>();
     scene_io::hooks::forget_project(world);
     scenes::reset_scene_resources(world);
     world.insert_resource(brush::BrushSelection::default());
@@ -1787,7 +1782,7 @@ pub(crate) fn open_recent_dialog(world: &mut World) {
             .entity(row)
             .observe(move |_: On<PointerClick>, mut commands: Commands| {
                 let path = path.clone();
-                commands.insert_resource(project_select::PendingAutoOpen {
+                commands.insert_resource(launcher_mode::PendingAutoOpen {
                     path: path.clone(),
                     skip_build: false,
                 });

@@ -110,21 +110,21 @@ pub fn run_with(commands: LaunchCommands, extend: impl FnOnce(&mut App)) -> AppE
     let respawn_skip_build = std::env::var_os(crate::restart::ENV_SKIP_INITIAL_BUILD).is_some();
     let auto_open_opt_in = std::env::var_os("JACKDAW_AUTO_OPEN").is_some();
     let auto_open = if respawn_skip_build {
-        crate::project::read_last_project().map(|path| crate::project_select::PendingAutoOpen {
+        crate::project::read_last_project().map(|path| crate::launcher_mode::PendingAutoOpen {
             path,
             skip_build: true,
         })
     } else if let Some(path) = crate::project::requested_project() {
         // `jd open <path>` names the project explicitly rather than
         // reordering the recents file to make it the most recent.
-        Some(crate::project_select::PendingAutoOpen {
+        Some(crate::launcher_mode::PendingAutoOpen {
             path,
             skip_build: false,
         })
     } else if auto_open_opt_in {
         crate::project::read_last_project()
             .filter(|p| p.is_dir() && p.join("Cargo.toml").is_file())
-            .map(|path| crate::project_select::PendingAutoOpen {
+            .map(|path| crate::launcher_mode::PendingAutoOpen {
                 path,
                 skip_build: false,
             })

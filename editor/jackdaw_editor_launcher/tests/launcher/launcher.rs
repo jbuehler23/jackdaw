@@ -16,11 +16,11 @@ use bevy::picking::{
 };
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowRef};
-use jackdaw::launcher::{
+use jackdaw_api::prelude::*;
+use jackdaw_editor_launcher::launcher::{
     EditorHandoff, JdJobs, JdProgram, JobKind, JobStatus, LauncherDialog, LauncherPage,
     ProjectFilter, ProjectListView,
 };
-use jackdaw_api::prelude::*;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_releases::{Channel, Install, Installs, Layout};
 use jackdaw_scene_types::PropertyValue;
@@ -34,7 +34,7 @@ static CONFIG: LazyLock<PathBuf> = LazyLock::new(|| {
     // written again.
     unsafe {
         std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, &dir);
-        std::env::set_var(jackdaw::pie::ENV_PIE_PREBUILD, "0");
+        std::env::set_var(jackdaw_editor_core::pie::ENV_PIE_PREBUILD, "0");
     }
     dir
 });
@@ -115,12 +115,12 @@ fn pinned_project(dir: &Path, name: &str, version: &str) -> PathBuf {
         format!("[jackdaw]\nversion = \"{version}\"\nbevy = \"{bevy}\"\nchannel = \"stable\"\n"),
     )
     .unwrap();
-    jackdaw::project::touch_recent(&root, name);
+    jackdaw_editor_core::project::touch_recent(&root, name);
     root
 }
 
 fn refresh(app: &mut App) {
-    jackdaw::launcher::refresh_launcher(app.world_mut());
+    jackdaw_editor_launcher::launcher::refresh_launcher(app.world_mut());
     app.update();
 }
 
@@ -212,7 +212,7 @@ fn button(app: &mut App, id: &str, key: &str, value: &str) -> Entity {
                 .iter(app.world())
                 .map(ToString::to_string)
                 .collect();
-            let projects = app.world().resource::<jackdaw::launcher::Launcher>().projects.len();
+            let projects = app.world().resource::<jackdaw_editor_launcher::launcher::Launcher>().projects.len();
             let texts: Vec<String> = app
                 .world_mut()
                 .query::<&Text>()
@@ -283,7 +283,7 @@ fn clicking_a_project_pinned_to_another_install_hands_it_to_that_editor() {
     );
     assert!(
         app.world()
-            .get_resource::<jackdaw::project::ProjectRoot>()
+            .get_resource::<jackdaw_editor_core::project::ProjectRoot>()
             .is_none(),
         "and it does not open here"
     );
@@ -364,7 +364,7 @@ fn opening_a_copy_moves_the_copy_to_this_editor_and_leaves_the_original() {
         Duration::from_secs(60),
         |app| {
             app.world()
-                .get_resource::<jackdaw::project::ProjectRoot>()
+                .get_resource::<jackdaw_editor_core::project::ProjectRoot>()
                 .is_some_and(|root| root.root == copy)
         },
     );
@@ -443,7 +443,7 @@ fn the_new_project_page_creates_the_chosen_template_pinned_to_this_editor() {
     );
     let modules = app
         .world()
-        .resource::<jackdaw::launcher::NewProjectForm>()
+        .resource::<jackdaw_editor_launcher::launcher::NewProjectForm>()
         .modules
         .clone();
     assert!(modules.contains("navmesh"), "navmesh is on: {modules:?}");
@@ -457,7 +457,7 @@ fn the_new_project_page_creates_the_chosen_template_pinned_to_this_editor() {
     assert!(matches!(refused, OperatorResult::Cancelled));
     assert!(
         !app.world()
-            .resource::<jackdaw::launcher::NewProjectForm>()
+            .resource::<jackdaw_editor_launcher::launcher::NewProjectForm>()
             .modules
             .contains("physics"),
         "physics is not compatible with this Bevy, so it stays off"
@@ -475,16 +475,16 @@ fn the_new_project_page_creates_the_chosen_template_pinned_to_this_editor() {
             ("location", path_value(dir.path())),
         ],
     );
-    let project = dir
-        .path()
-        .join(jackdaw::scaffold::validated_project_name("flat_game").expect("a usable name"));
+    let project = dir.path().join(
+        jackdaw_editor_core::scaffold::validated_project_name("flat_game").expect("a usable name"),
+    );
     util::update_until(
         &mut app,
         "the new project to open",
         Duration::from_secs(60),
         |app| {
             app.world()
-                .get_resource::<jackdaw::project::ProjectRoot>()
+                .get_resource::<jackdaw_editor_core::project::ProjectRoot>()
                 .is_some_and(|root| root.root == project)
         },
     );
@@ -517,12 +517,12 @@ fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = launcher_app();
     let project = dir.path().join("with-overrides");
-    jackdaw::new_project::scaffold_project_with(
+    jackdaw_editor_launcher::new_project::scaffold_project_with(
         "with-overrides",
         dir.path(),
-        jackdaw::scaffold::TemplateKind::Game,
+        jackdaw_editor_core::scaffold::TemplateKind::Game,
         &jackdaw_project_build::modules::ModuleSet::new(),
-        jackdaw::scaffold::StarterScene::ThreeD,
+        jackdaw_editor_core::scaffold::StarterScene::ThreeD,
         false,
     )
     .unwrap();
@@ -585,13 +585,13 @@ fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
     }
     let pending = app
         .world()
-        .resource::<jackdaw::launcher::ExtensionsView>()
+        .resource::<jackdaw_editor_launcher::launcher::ExtensionsView>()
         .pending
         .clone();
     assert_eq!(
         pending
             .keys()
-            .map(jackdaw::launcher::ExtensionItem::id)
+            .map(jackdaw_editor_launcher::launcher::ExtensionItem::id)
             .collect::<Vec<_>>(),
         ["navmesh"],
         "a missing extension and an incompatible module cannot be toggled; the module change waits"
@@ -613,7 +613,7 @@ fn the_extensions_page_lists_optional_extensions_and_applies_module_changes() {
     );
     assert!(
         app.world()
-            .resource::<jackdaw::launcher::ExtensionsView>()
+            .resource::<jackdaw_editor_launcher::launcher::ExtensionsView>()
             .pending
             .is_empty()
     );

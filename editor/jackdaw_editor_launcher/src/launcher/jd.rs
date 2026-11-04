@@ -88,7 +88,7 @@ pub enum AfterJob {
     NewProject {
         project: PathBuf,
         version: String,
-        starter: crate::scaffold::StarterScene,
+        starter: jackdaw_editor_core::scaffold::StarterScene,
     },
 }
 

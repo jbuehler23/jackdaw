@@ -43,7 +43,7 @@ pub(crate) fn plugin(app: &mut App) {
 }
 
 /// Start reporting the load of the scene at `path`.
-pub(crate) fn begin_scene_load(world: &mut World, path: &std::path::Path, immediate: bool) {
+pub fn begin_scene_load(world: &mut World, path: &std::path::Path, immediate: bool) {
     let name = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())

@@ -5,6 +5,8 @@
 pub use jackdaw_editor_animation;
 pub use jackdaw_editor_animation as animation;
 pub use jackdaw_editor_core::*;
+pub use jackdaw_editor_launcher;
+pub use jackdaw_editor_launcher::{launcher, new_project, project_select};
 pub use jackdaw_editor_modelling;
 pub use jackdaw_editor_remote;
 pub use jackdaw_editor_remote as remote;
@@ -29,6 +31,7 @@ impl PluginGroup for JackdawEditorPlugins {
             .add(jackdaw_editor_modelling::ModellingEditorPlugin)
             .add(jackdaw_editor_remote::RemoteEditorPlugin)
             .add(jackdaw_editor_animation::AnimationEditorPlugin)
+            .add(jackdaw_editor_launcher::LauncherEditorPlugin)
     }
 }
 
@@ -40,6 +43,7 @@ pub fn add_feature_plugins(app: &mut App) {
         jackdaw_editor_modelling::ModellingEditorPlugin,
         jackdaw_editor_remote::RemoteEditorPlugin,
         jackdaw_editor_animation::AnimationEditorPlugin,
+        jackdaw_editor_launcher::LauncherEditorPlugin,
     ));
 }
 

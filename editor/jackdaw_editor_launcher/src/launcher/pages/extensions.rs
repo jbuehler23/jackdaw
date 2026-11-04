@@ -104,7 +104,7 @@ pub struct Listing {
 }
 
 fn project_modules(root: &Path) -> ModuleSet {
-    crate::scaffold::project_modules(root)
+    jackdaw_editor_core::scaffold::project_modules(root)
         .unwrap_or_else(|_| ProjectManifest::read(root).modules(root))
 }
 
@@ -132,7 +132,7 @@ fn module_changes(id: &str, on: bool) -> Vec<String> {
 
 /// The extension ids on in the editor's global list.
 pub fn globally_enabled(world: &World) -> Vec<String> {
-    crate::extension_resolution::resolve_enabled_list(world)
+    jackdaw_editor_core::extension_resolution::resolve_enabled_list(world)
 }
 
 /// Build the page's listing from `view`'s scope and pending changes.
@@ -143,7 +143,7 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
     let project_modules = view.project.as_deref().map(project_modules);
     for module in catalog.modules() {
         let item = ExtensionItem::Module(module.id.clone());
-        let included = crate::module_picker::editor_has_module(world, &module.id);
+        let included = jackdaw_editor_core::module_picker::editor_has_module(world, &module.id);
         let incompatible = module
             .unavailable
             .as_ref()
@@ -199,7 +199,7 @@ pub fn listing(world: &World, view: &ExtensionsView) -> Listing {
             .iter_with_content()
             .filter(|(id, _, _, kind)| {
                 *kind == jackdaw_api::prelude::ExtensionKind::Regular
-                    && !crate::extension_resolution::is_required(id)
+                    && !jackdaw_editor_core::extension_resolution::is_required(id)
                     && catalog.get(id).is_none()
             })
             .map(|(id, label, description, _)| (id, label, description))
@@ -831,8 +831,8 @@ pub fn apply(world: &mut World, restart: bool) {
     if world.resource::<Launcher>().0 != data {
         world.resource_mut::<Launcher>().0 = data;
     }
-    if restart && view.project.is_none() && crate::restart::can_restart().is_some() {
-        crate::restart::restart_jackdaw();
+    if restart && view.project.is_none() && jackdaw_editor_core::restart::can_restart().is_some() {
+        jackdaw_editor_core::restart::restart_jackdaw();
     }
 }
 
@@ -855,10 +855,11 @@ fn apply_to_project(world: &World, root: &Path, view: &ExtensionsView) -> Result
             .filter(|entry| view.pending.get(&entry.item).copied().unwrap_or(entry.on))
             .map(|entry| entry.item.id().to_string())
             .collect();
-        let plan = crate::scaffold::plan_module_change(root, &modules)
+        let plan = jackdaw_editor_core::scaffold::plan_module_change(root, &modules)
             .map_err(|error| error.to_string())?;
         if !plan.is_empty() {
-            crate::scaffold::apply_import_plan(&plan).map_err(|error| error.to_string())?;
+            jackdaw_editor_core::scaffold::apply_import_plan(&plan)
+                .map_err(|error| error.to_string())?;
         }
     }
     let extension_changes: Vec<(String, bool)> = view
@@ -916,7 +917,7 @@ pub fn apply_project_overrides(world: &mut World, root: &Path) {
         return;
     };
     for (id, enabled) in overrides {
-        if crate::extension_resolution::is_required(&id) || !catalog_has(world, &id) {
+        if jackdaw_editor_core::extension_resolution::is_required(&id) || !catalog_has(world, &id) {
             continue;
         }
         if enabled {

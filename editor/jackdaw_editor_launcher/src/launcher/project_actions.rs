@@ -18,7 +18,9 @@ pub struct EditorHandoff(pub fn(&Path, &Path));
 
 impl Default for EditorHandoff {
     fn default() -> Self {
-        Self(|executable, project| crate::restart::relaunch_into_editor(executable, project))
+        Self(|executable, project| {
+            jackdaw_editor_core::restart::relaunch_into_editor(executable, project)
+        })
     }
 }
 
@@ -290,7 +292,7 @@ pub fn poll_project_copies(world: &mut World) {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        crate::project::touch_recent(&moved, &name);
+        jackdaw_editor_core::project::touch_recent(&moved, &name);
         open_with_install(world, moved, &copy.version);
     }
 }

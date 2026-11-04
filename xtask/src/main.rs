@@ -80,7 +80,7 @@ const ARCHIVED_DYLIBS: &str = "target/debug/archived-dylibs";
 
 /// The editor crates build at opt-level 0 here: its build takes about half as
 /// long, which outweighs the slower test run.
-const ARCHIVE_BUILD: [&str; 11] = [
+const ARCHIVE_BUILD: [&str; 21] = [
     "--locked",
     "--workspace",
     "--features",
@@ -100,6 +100,8 @@ const ARCHIVE_BUILD: [&str; 11] = [
     "profile.dev.package.jackdaw_editor_remote.opt-level=0",
     "--config",
     "profile.dev.package.jackdaw_editor_animation.opt-level=0",
+    "--config",
+    "profile.dev.package.jackdaw_editor_launcher.opt-level=0",
 ];
 
 /// Build every test binary the integration tier runs, including library unit

@@ -16,8 +16,8 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui::InteractionDisabled;
 use bevy::window::{PrimaryWindow, WindowRef};
-use jackdaw::project_select::NewProjectCreateButton;
-use jackdaw::scaffold::TemplateKind;
+use jackdaw_editor_core::scaffold::TemplateKind;
+use jackdaw_editor_launcher::project_select::NewProjectCreateButton;
 use jackdaw_feathers::text_edit::{EditorTextEdit, TextEditValue, set_text_input_value};
 
 /// A config directory of this process's own, with the background game build
@@ -31,7 +31,7 @@ static ISOLATED: LazyLock<PathBuf> = LazyLock::new(|| {
     // written again.
     unsafe {
         std::env::set_var(jackdaw_env::paths::CONFIG_DIR_VAR, &dir);
-        std::env::set_var(jackdaw::pie::ENV_PIE_PREBUILD, "0");
+        std::env::set_var(jackdaw_editor_core::pie::ENV_PIE_PREBUILD, "0");
     }
     dir
 });
@@ -47,7 +47,7 @@ fn remember_location(location: &Path) {
 
 fn open_project(app: &App) -> Option<PathBuf> {
     app.world()
-        .get_resource::<jackdaw::project::ProjectRoot>()
+        .get_resource::<jackdaw_editor_core::project::ProjectRoot>()
         .map(|root| root.root.clone())
 }
 
@@ -101,7 +101,10 @@ fn create_in_the_new_game_dialog_makes_the_offered_project_and_opens_it() {
     remember_location(projects.path());
     let mut app = util::editor_test_app();
 
-    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    jackdaw_editor_launcher::project_select::open_new_project_modal(
+        app.world_mut(),
+        TemplateKind::Game,
+    );
     for _ in 0..4 {
         app.update();
     }
@@ -115,7 +118,8 @@ fn create_in_the_new_game_dialog_makes_the_offered_project_and_opens_it() {
     let create = create_button(&mut app);
     click(&mut app, create);
 
-    let offered = jackdaw::scaffold::validated_project_name("my_game").expect("a usable name");
+    let offered =
+        jackdaw_editor_core::scaffold::validated_project_name("my_game").expect("a usable name");
     let project = projects.path().join(offered);
     open_after(&mut app, &project);
 
@@ -129,8 +133,10 @@ fn create_in_the_new_game_dialog_makes_the_offered_project_and_opens_it() {
     }
     app.update();
     assert_eq!(
-        app.world().resource::<State<jackdaw::AppState>>().get(),
-        &jackdaw::AppState::Editor,
+        app.world()
+            .resource::<State<jackdaw_editor_core::AppState>>()
+            .get(),
+        &jackdaw_editor_core::AppState::Editor,
         "and the launcher handed over to the editor"
     );
 }
@@ -141,8 +147,11 @@ fn a_typed_name_names_the_project_the_dialog_creates() {
     remember_location(projects.path());
     let mut app = util::editor_test_app();
 
-    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
-    jackdaw::project_select::create_new_project(app.world_mut(), "Moss Valley");
+    jackdaw_editor_launcher::project_select::open_new_project_modal(
+        app.world_mut(),
+        TemplateKind::Game,
+    );
+    jackdaw_editor_launcher::project_select::create_new_project(app.world_mut(), "Moss Valley");
 
     let project = projects.path().join("moss-valley");
     open_after(&mut app, &project);
@@ -159,8 +168,11 @@ fn a_name_the_command_line_would_refuse_is_refused_by_the_dialog_too() {
     remember_location(projects.path());
     let mut app = util::editor_test_app();
 
-    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
-    jackdaw::project_select::create_new_project(app.world_mut(), "9 lives");
+    jackdaw_editor_launcher::project_select::open_new_project_modal(
+        app.world_mut(),
+        TemplateKind::Game,
+    );
+    jackdaw_editor_launcher::project_select::create_new_project(app.world_mut(), "9 lives");
     for _ in 0..4 {
         app.update();
     }
@@ -201,7 +213,10 @@ fn while_a_create_runs_the_dialog_is_locked_and_quiet_about_its_own_folder() {
     remember_location(projects.path());
     let mut app = util::editor_test_app();
 
-    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    jackdaw_editor_launcher::project_select::open_new_project_modal(
+        app.world_mut(),
+        TemplateKind::Game,
+    );
     for _ in 0..4 {
         app.update();
     }
@@ -257,7 +272,7 @@ fn while_a_create_runs_the_dialog_is_locked_and_quiet_about_its_own_folder() {
 /// The checkbox for module `id` in the open dialog.
 fn module_toggle(app: &mut App, id: &str) -> Entity {
     app.world_mut()
-        .query::<(Entity, &jackdaw::module_picker::ModuleToggle)>()
+        .query::<(Entity, &jackdaw_editor_core::module_picker::ModuleToggle)>()
         .iter(app.world())
         .find_map(|(entity, toggle)| (toggle.id == id).then_some(entity))
         .unwrap_or_else(|| panic!("the dialog offers the {id} module"))
@@ -282,7 +297,10 @@ fn an_unavailable_module_is_offered_but_cannot_be_ticked() {
     remember_location(projects.path());
     let mut app = util::editor_test_app();
 
-    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    jackdaw_editor_launcher::project_select::open_new_project_modal(
+        app.world_mut(),
+        TemplateKind::Game,
+    );
     for _ in 0..4 {
         app.update();
     }
@@ -309,7 +327,10 @@ fn ticking_navmesh_gives_the_created_game_the_navmesh_feature() {
     remember_location(projects.path());
     let mut app = util::editor_test_app();
 
-    jackdaw::project_select::open_new_project_modal(app.world_mut(), TemplateKind::Game);
+    jackdaw_editor_launcher::project_select::open_new_project_modal(
+        app.world_mut(),
+        TemplateKind::Game,
+    );
     for _ in 0..4 {
         app.update();
     }
@@ -323,7 +344,8 @@ fn ticking_navmesh_gives_the_created_game_the_navmesh_feature() {
 
     let create = create_button(&mut app);
     click(&mut app, create);
-    let offered = jackdaw::scaffold::validated_project_name("my_game").expect("a usable name");
+    let offered =
+        jackdaw_editor_core::scaffold::validated_project_name("my_game").expect("a usable name");
     let project = projects.path().join(offered);
     open_after(&mut app, &project);
 

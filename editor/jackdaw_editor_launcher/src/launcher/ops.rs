@@ -286,7 +286,7 @@ pub fn launcher_remove_project(
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        crate::project::remove_recent(&path);
+        jackdaw_editor_core::project::remove_recent(&path);
         refresh(world);
     });
     OperatorResult::Finished
@@ -305,7 +305,7 @@ pub fn launcher_reveal_project(params: In<OperatorParameters>) -> OperatorResult
     let Some(path) = path_param(&params, "launcher.reveal_project") else {
         return OperatorResult::Cancelled;
     };
-    if let Err(error) = crate::project_window::open_with_desktop(&path) {
+    if let Err(error) = jackdaw_editor_core::project_window::open_with_desktop(&path) {
         warn!("launcher.reveal_project: {}: {error}", path.display());
     }
     OperatorResult::Finished
@@ -330,7 +330,7 @@ pub fn poll_extension_pick(world: &mut World) {
 }
 
 fn install_extension(world: &mut World, path: PathBuf) {
-    match crate::extensions_dialog::handle_install_from_path(world, path.clone()) {
+    match jackdaw_editor_core::extensions_dialog::handle_install_from_path(world, path.clone()) {
         Ok(id) => super::notify_info(world, format!("Installed the extension `{id}`.")),
         Err(error) => super::notify_error(
             world,
@@ -363,9 +363,12 @@ pub fn launcher_install_extension(
         None => {
             let mut windows = world.query_filtered::<&RawHandleWrapper, With<PrimaryWindow>>();
             let window = windows.iter(world).next().cloned();
-            let dialog = crate::native_dialog::dialog_at(dirs::download_dir(), window.as_ref())
-                .set_title("Install an extension")
-                .add_filter("Jackdaw extension", &["jdext"]);
+            let dialog = jackdaw_editor_core::native_dialog::dialog_at(
+                dirs::download_dir(),
+                window.as_ref(),
+            )
+            .set_title("Install an extension")
+            .add_filter("Jackdaw extension", &["jdext"]);
             let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_file().await });
             world.insert_resource(LauncherExtensionPick(task));
         }
@@ -391,7 +394,8 @@ pub struct LauncherFolderPick {
 fn pick_folder(world: &mut World, title: &str, start: Option<PathBuf>, purpose: PickPurpose) {
     let mut windows = world.query_filtered::<&RawHandleWrapper, With<PrimaryWindow>>();
     let window = windows.iter(world).next().cloned();
-    let dialog = crate::native_dialog::dialog_at(start, window.as_ref()).set_title(title);
+    let dialog =
+        jackdaw_editor_core::native_dialog::dialog_at(start, window.as_ref()).set_title(title);
     let task = AsyncComputeTaskPool::get().spawn(async move { dialog.pick_folder().await });
     world.insert_resource(LauncherFolderPick { task, purpose });
 }
@@ -451,7 +455,7 @@ pub fn add_project(world: &mut World, path: PathBuf) {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    crate::project::touch_recent(&path, &name);
+    jackdaw_editor_core::project::touch_recent(&path, &name);
     refresh(world);
 }
 
@@ -477,7 +481,7 @@ pub fn launcher_add_project(
         None => pick_folder(
             world,
             "Add a project",
-            crate::native_dialog::launcher_project_directory(),
+            jackdaw_editor_core::native_dialog::launcher_project_directory(),
             PickPurpose::AddProject,
         ),
     });
@@ -1119,7 +1123,7 @@ pub fn launcher_release_notes(
         });
         return OperatorResult::Cancelled;
     };
-    if let Err(error) = crate::project_window::open_with_desktop(&url) {
+    if let Err(error) = jackdaw_editor_core::project_window::open_with_desktop(&url) {
         warn!("launcher.release_notes: {url}: {error}");
     }
     OperatorResult::Finished
@@ -1144,7 +1148,7 @@ pub fn launcher_reveal_editor(
     let Some(install) = launcher.installs.get(&version) else {
         return OperatorResult::Cancelled;
     };
-    if let Err(error) = crate::project_window::open_with_desktop(&install.path) {
+    if let Err(error) = jackdaw_editor_core::project_window::open_with_desktop(&install.path) {
         warn!(
             "launcher.reveal_editor: {}: {error}",
             install.path.display()
