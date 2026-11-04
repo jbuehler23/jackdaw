@@ -22,10 +22,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<FieldSetOp>()
         .register_operator::<super::bindings_card::BindingAddOp>()
         .register_operator::<super::bindings_card::BindingSetOp>()
-        .register_operator::<super::brush_display::BrushFaceClearMaterialOp>()
-        .register_operator::<super::brush_display::BrushFaceApplyTextureToAllOp>()
-        .register_operator::<super::brush_display::BrushFaceSetUvScalePresetOp>()
-        .register_operator::<super::brush_display::BrushClearAllMaterialsOp>()
         .register_operator::<InspectorCategoryOp>()
         .register_operator::<InspectorCardOp>();
 }

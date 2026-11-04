@@ -210,7 +210,6 @@ pub(crate) fn build_remote_inspector_displays(
     editor_font: Res<EditorFont>,
     inspector_query: Query<(Entity, &RemoteInspectorNeedsRebuild), With<RemoteInspector>>,
     entity_query: Query<(&Archetype, EntityRef)>,
-    materials: Res<Assets<StandardMaterial>>,
     collapse_state: Res<jackdaw_editor_core::inspector::InspectorCollapseState>,
     type_metadata: Res<jackdaw_editor_core::type_metadata::TypeMetadata>,
     project_types: Res<jackdaw_editor_core::project_types::ProjectTypes>,
@@ -248,7 +247,6 @@ pub(crate) fn build_remote_inspector_displays(
         &icon_font,
         &editor_font,
         true, // read_only
-        &materials,
         &empty_jsn_paths,
         None,
         None,

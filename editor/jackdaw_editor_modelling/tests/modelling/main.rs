@@ -3,6 +3,7 @@
 
 mod util;
 
+mod brush_card;
 mod element_addressing;
 mod element_transform;
 mod mesh_param_ops;

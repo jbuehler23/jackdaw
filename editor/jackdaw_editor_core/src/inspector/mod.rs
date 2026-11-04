@@ -1,7 +1,6 @@
 pub(crate) mod add_header;
 pub mod asset_row;
 pub mod bindings_card;
-mod brush_display;
 pub(crate) mod category_strip;
 pub mod component_display;
 pub mod component_picker;
@@ -72,6 +71,10 @@ impl ComponentCardRegistry {
 /// a `FieldRowDecoration` child), run before the row gutters are reserved.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InspectorFieldDecorations;
+
+/// The pass that rebuilds the inspector's cards for the current selection.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InspectorSync;
 
 /// Remembers each inspector card's collapsed state across rebuilds, keyed by
 /// the card's display name. A name not present defaults to collapsed.
@@ -174,7 +177,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(bindings_card::on_binding_text_commit)
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
-            .add_observer(brush_display::on_brush_face_text_commit)
             .add_observer(on_name_field_commit)
             .init_resource::<live_edit_dots::LiveEditMenuTarget>()
             .add_observer(live_edit_dots::on_live_edit_menu_action)
@@ -187,7 +189,7 @@ impl Plugin for InspectorPlugin {
                 (
                     apply_pending_inspector_rebuild,
                     flag_inspector_dirty_on_modifier_stack_change,
-                    component_display::sync_inspector_to_selection,
+                    component_display::sync_inspector_to_selection.in_set(InspectorSync),
                 )
                     .chain()
                     .before(category_strip::resolve_active_on_rebuild),
@@ -220,7 +222,6 @@ impl Plugin for InspectorPlugin {
                         asset_row::poll_asset_browse_pick,
                         material_row::follow_the_material_the_entity_wears,
                     ),
-                    brush_display::update_brush_face_properties,
                     category_strip::resolve_active_on_rebuild,
                     component_display::filter_inspector_components
                         .after(category_strip::resolve_active_on_rebuild),
@@ -548,25 +549,6 @@ pub struct EnumVariantHost {
     pub(super) label: String,
 }
 
-/// Container for brush face properties (texture, UV, etc). Populated dynamically.
-#[derive(Component)]
-pub(super) struct BrushFacePropsContainer;
-
-/// Binding for a brush face UV field.
-#[derive(Component)]
-pub(super) struct BrushFaceFieldBinding {
-    pub(super) field: BrushFaceField,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum BrushFaceField {
-    UvOffsetX,
-    UvOffsetY,
-    UvScaleX,
-    UvScaleY,
-    UvRotation,
-}
-
 /// Tracks a custom property field binding (property name + source entity).
 #[derive(Component)]
 pub(super) struct CustomPropertyBinding {
@@ -592,7 +574,7 @@ pub(crate) struct InspectorTarget(pub Entity);
 
 /// Marker inserted on a selected entity to signal the inspector needs rebuilding.
 #[derive(Component)]
-pub(crate) struct InspectorDirty;
+pub struct InspectorDirty;
 
 /// Force inspector rebuild by marking the source entity dirty.
 pub(super) fn rebuild_inspector(world: &mut World, source_entity: Entity) {

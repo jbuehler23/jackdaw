@@ -173,7 +173,7 @@ pub(crate) fn edit_target(
     use jackdaw_scene_types::PropertyValue;
     let entity = match given {
         Some(PropertyValue::Entity(entity)) => {
-            jackdaw_editor_core::primitive_ops::scene_node(world, *entity, "entity")?
+            jackdaw_editor_core::scene_node(world, *entity, "entity")?
         }
         Some(other) => return Err(format!("`entity` {other:?} names no node in this scene")),
         None => {
