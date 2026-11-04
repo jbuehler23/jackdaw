@@ -330,7 +330,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
         };
         let path = path.to_string_lossy();
         crate::scene_io::import_terrain_sidecars(world, &path, mode);
-        crate::tilemap::import_tilemap_sidecars(world, &path, mode);
+        crate::scene_io::hooks::import_sidecars(world, &path, mode);
     }
 
     let mut scenes = world.resource_mut::<Scenes>();

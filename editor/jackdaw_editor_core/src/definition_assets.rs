@@ -86,7 +86,8 @@ pub fn sanitize_definition_name(name: &str) -> String {
 }
 
 /// Whether a path names a file to write rather than the folder to write in.
-pub(crate) fn names_a_file(path: &Path) -> bool {
+#[doc(hidden)]
+pub fn names_a_file(path: &Path) -> bool {
     !path.is_dir()
         && path
             .extension()
@@ -252,7 +253,8 @@ pub fn write_asset_file(
 /// The text one asset saves as: the stamp and the header naming its type, then
 /// an asset catalog entry for a compiled type or the patch it holds for a
 /// schema-backed one.
-pub(crate) fn asset_text(world: &World, name: &str, value: &AssetValue) -> Option<String> {
+#[doc(hidden)]
+pub fn asset_text(world: &World, name: &str, value: &AssetValue) -> Option<String> {
     let body = match value {
         AssetValue::Handle(handle) => jackdaw_bsn::serialize_assets_to_bsn(
             world,
@@ -1212,7 +1214,8 @@ pub fn kind_of_file(world: &World, path: &Path) -> Option<AssetKind> {
 
 /// The entry for a file, reading and indexing it if the walk has not reached it
 /// yet.
-pub(crate) fn entry_for_file(world: &mut World, path: &Path) -> Option<AssetEntry> {
+#[doc(hidden)]
+pub fn entry_for_file(world: &mut World, path: &Path) -> Option<AssetEntry> {
     let indexed = indexed_path(world, path)?;
     if crate::asset_index::is_catalog_file(&indexed) {
         return None;
@@ -1821,7 +1824,8 @@ fn write_open_definition_field(
 
 /// Put the open card's rows back in line with the value behind them, for an
 /// edit that came from outside the inspector.
-pub(crate) fn rebuild_open_card(world: &mut World) {
+#[doc(hidden)]
+pub fn rebuild_open_card(world: &mut World) {
     let Some(open) = world
         .get_resource::<OpenDefinition>()
         .and_then(|open| open.0)
@@ -2062,7 +2066,8 @@ pub fn asset_list(params: In<OperatorParameters>, mut commands: Commands) -> Ope
 
 /// Accept both a path under the project and one relative to its assets
 /// directory, so a caller can pass what the Project window lists.
-pub(crate) fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
+#[doc(hidden)]
+pub fn resolve_project_path(world: &World, path: &Path) -> PathBuf {
     if path.is_absolute() {
         return path.to_path_buf();
     }

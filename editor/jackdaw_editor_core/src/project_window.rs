@@ -277,7 +277,8 @@ impl ProjectWindowState {
         self.expanded.contains(directory)
     }
 
-    pub(crate) fn rebuild(&mut self) {
+    #[doc(hidden)]
+    pub fn rebuild(&mut self) {
         self.needs_refresh = true;
         self.needs_tree_refresh = true;
     }
@@ -349,9 +350,25 @@ pub struct MenuTarget {
 
 pub struct ProjectWindowPlugin;
 
+/// Opens a file the Project window was asked to open, returning whether it
+/// did. One that does not know the file returns `false` without touching it.
+pub type FileOpener = fn(&mut World, &Path) -> bool;
+
+/// Openers features register for their own kinds of file, tried in order
+/// before the Project window's built-in kinds.
+#[derive(Resource, Default, Clone)]
+pub struct FileOpeners(Vec<FileOpener>);
+
+impl FileOpeners {
+    pub fn register(&mut self, opener: FileOpener) {
+        self.0.push(opener);
+    }
+}
+
 impl Plugin for ProjectWindowPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProjectWindowState>()
+            .init_resource::<FileOpeners>()
             .init_resource::<MenuTarget>()
             .add_systems(OnEnter(crate::AppState::Editor), setup_project_window)
             .add_systems(
@@ -1206,7 +1223,7 @@ fn packed_copy(
         .and_then(|handle| tilesets.get(handle.id().typed::<jackdaw_tileset::Tileset>()))
         .map(|tileset| assets.join(&tileset.image));
     let guessed = || {
-        let stem = (entry.file_name).strip_suffix(crate::tileset_import::TILESET_SUFFIX)?;
+        let stem = (entry.file_name).strip_suffix(crate::tile_mode::TILESET_SUFFIX)?;
         Some(entry.path.with_file_name(format!("{stem}.tiles.png")))
     };
     loaded.or_else(guessed).filter(|p| p.is_file())
@@ -1624,19 +1641,19 @@ fn open_path(world: &mut World, path: &Path, is_directory: bool) {
         return;
     }
 
-    let (holds_an_asset, is_tileset) = {
-        let kinds = world.resource::<AssetKinds>();
-        let kind = crate::asset_files::read_asset_kind(&path, kinds);
-        let type_path = kind.type_path();
-        (
-            type_path.is_some_and(|type_path| kinds.by_type_path(type_path).is_some()),
-            type_path == Some(jackdaw_tileset::Tileset::type_path()),
-        )
-    };
-    if is_tileset {
-        crate::tileset_dock::edit_tileset(world, &path.to_string_lossy());
+    let openers = world
+        .get_resource::<FileOpeners>()
+        .cloned()
+        .unwrap_or_default();
+    if openers.0.iter().any(|open| open(world, &path)) {
         return;
     }
+    let holds_an_asset = {
+        let kinds = world.resource::<AssetKinds>();
+        let kind = crate::asset_files::read_asset_kind(&path, kinds);
+        kind.type_path()
+            .is_some_and(|type_path| kinds.by_type_path(type_path).is_some())
+    };
     if holds_an_asset {
         crate::definition_assets::open_definition_file(world, &path);
         return;
@@ -1652,16 +1669,13 @@ fn open_path(world: &mut World, path: &Path, is_directory: bool) {
     }
 
     if crate::texture_files::array_layout_of(&path).is_some() {
-        match crate::tileset_import::tileset_of_image(world, &path) {
-            Some(tileset) => crate::tileset_dock::edit_tileset(world, &tileset),
-            None => warn_caller(
-                world,
-                format!(
-                    "project.open: {} is an array texture; open its tileset",
-                    path.display()
-                ),
+        warn_caller(
+            world,
+            format!(
+                "project.open: {} is an array texture; open its tileset",
+                path.display()
             ),
-        }
+        );
         return;
     }
     if crate::texture_files::is_image_file_path(&path) {
@@ -1770,7 +1784,7 @@ fn on_context_action(
         state.renaming = Some(target.path.clone());
         state.needs_refresh = true;
     } else if action == IMPORT_TILESET_ACTION {
-        (commands.operator(crate::tileset_import::TilesetImportOp::ID))
+        (commands.operator(crate::tile_mode::TILESET_IMPORT_OP))
             .param("path", target.path.to_string_lossy().into_owned())
             .param("edit", true)
             .call();

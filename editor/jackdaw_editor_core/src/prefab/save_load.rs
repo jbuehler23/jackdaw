@@ -182,11 +182,8 @@ pub fn retarget_isa_sources(ast: &mut SceneBsnAst, assets_root: &Path, document_
 
 /// The prefab file an instance's `source` names, with a fallback for a scene
 /// naming the other scene format.
-pub(crate) fn resolve_source_path(
-    source: &Path,
-    assets_root: &Path,
-    document_dir: &Path,
-) -> PathBuf {
+#[doc(hidden)]
+pub fn resolve_source_path(source: &Path, assets_root: &Path, document_dir: &Path) -> PathBuf {
     let resolved = jackdaw_prefab::source_path(source, assets_root, document_dir);
     // Scenes written before (or after) their prefab converted formats may
     // reference the other extension; fall back to the sibling.

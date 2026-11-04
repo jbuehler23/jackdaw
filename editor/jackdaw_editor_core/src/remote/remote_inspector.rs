@@ -214,6 +214,7 @@ pub(crate) fn build_remote_inspector_displays(
     collapse_state: Res<crate::inspector::InspectorCollapseState>,
     type_metadata: Res<crate::type_metadata::TypeMetadata>,
     project_types: Res<crate::project_types::ProjectTypes>,
+    cards: Res<crate::inspector::ComponentCardRegistry>,
 ) {
     let Ok((inspector_entity, rebuild)) = inspector_query.single() else {
         return;
@@ -254,6 +255,7 @@ pub(crate) fn build_remote_inspector_displays(
         &collapse_state,
         &project_types,
         &type_metadata,
+        &cards,
     );
 
     // Spawn JSON fallback section for unregistered components

@@ -170,28 +170,12 @@ pub mod status_bar;
 pub mod tags;
 pub mod terrain;
 pub mod test_input;
+#[doc(hidden)]
+pub mod testing;
 pub mod texture_files;
 pub mod texture_import;
 pub mod thumbnail;
-pub mod tile_palette;
-pub mod tile_preview;
-pub mod tile_select;
-pub mod tile_stamp;
-pub mod tile_tools;
-pub mod tilemap;
-pub mod tilemap_ops;
-pub mod tilemap_region_ops;
-pub mod tilemap_render;
-pub mod tilemap_resolve;
-pub mod tilemap_shape_ops;
-pub mod tilemap_stroke;
-pub mod tileset_bits;
-pub mod tileset_dock;
-pub mod tileset_edit;
-pub mod tileset_import;
-pub mod tileset_layout;
-pub mod tileset_layout_ops;
-pub mod tileset_suggest;
+pub mod tile_mode;
 pub(crate) mod timestamps;
 pub mod tool_ops;
 pub mod toolbar_2d;
@@ -485,21 +469,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(probe_bake::plugin)
         .add_plugins(tags::plugin)
         .add_plugins(recipes::plugin)
-        .add_plugins(tileset_import::plugin)
-        .add_plugins(tilemap::plugin)
-        .add_plugins(tile_tools::plugin)
-        .add_plugins(tile_palette::plugin)
-        .add_plugins(tile_preview::plugin)
-        .add_plugins(tile_stamp::plugin)
-        .add_plugins(tile_select::plugin)
-        .add_plugins(tilemap_render::plugin)
-        .add_plugins(tilemap_resolve::plugin)
-        .add_plugins((
-            tileset_dock::plugin,
-            tileset_bits::plugin,
-            tileset_layout::plugin,
-            tileset_suggest::plugin,
-        ))
+        .add_plugins(tile_mode::plugin)
         .add_plugins(jackdaw_runtime::MaterialOverridesPlugin)
         .add_plugins(jackdaw_runtime::LodPlugin)
         .add_plugins((
@@ -2977,7 +2947,7 @@ fn cleanup_editor(world: &mut World) {
     world.insert_resource(scenes::confirm_dialog::PendingTabClose::default());
     world.remove_resource::<project_select::PendingSceneOpens>();
     world.insert_resource(terrain::TerrainDataStore::default());
-    world.insert_resource(tilemap::TilemapDataStore::default());
+    scene_io::hooks::forget_project(world);
     scenes::reset_scene_resources(world);
     world.insert_resource(brush::BrushSelection::default());
 
@@ -3286,7 +3256,7 @@ fn build_two_d_tree() -> jackdaw_panels::tree::DockTree {
     let palette = leaf(
         &mut tree,
         "bottom_dock",
-        crate::tile_palette::TILE_PALETTE_WINDOW_ID,
+        crate::tile_mode::TILE_PALETTE_WINDOW_ID,
     );
     let project = leaf(
         &mut tree,
@@ -3758,7 +3728,8 @@ pub(crate) fn open_window_in_default_area_if_absent(world: &mut World, window_id
 }
 
 /// Add a tab of `window_id` to its default area and return it.
-pub(crate) fn open_window_in_default_area(
+#[doc(hidden)]
+pub fn open_window_in_default_area(
     world: &mut World,
     window_id: &str,
 ) -> Option<jackdaw_panels::tree::TabId> {

@@ -48,6 +48,7 @@ members = [
 # The editor itself. Its library is named `jackdaw` so reflected type paths
 # stay `jackdaw::...`; the rename keeps it apart from this package's own lib.
 jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "editor/jackdaw_editor_core", default-features = false }
+jackdaw_editor_tile = { version = "0.21.0-dev", path = "editor/jackdaw_editor_tile" }
 bevy.workspace = true
 # The wrapper's logic also lives in this crate's `[[bin]]` so that
 # `cargo install jackdaw` ships `jackdaw-rustc-wrapper` next to the
@@ -249,6 +250,9 @@ debug = "line-tables-only"
 incremental = true
 
 [profile.dev.package.jackdaw_editor_core]
+incremental = true
+
+[profile.dev.package.jackdaw_editor_tile]
 incremental = true
 
 [profile.dev.package."*"]

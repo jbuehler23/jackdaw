@@ -77,6 +77,7 @@ pub(crate) struct CardBuildInputs<'w, 's> {
     asts: SceneAsts<'w>,
     prefab_cache: Res<'w, PrefabAstCache>,
     collapse_state: Res<'w, super::InspectorCollapseState>,
+    cards: Res<'w, super::ComponentCardRegistry>,
 }
 
 /// What a panel's cards were last built for: how many entities were selected,
@@ -344,6 +345,7 @@ impl EntityCards<'_, '_, '_> {
             &inputs.collapse_state,
             &inputs.asts.project_types,
             &inputs.asts.type_metadata,
+            &inputs.cards,
             standing,
         )
     }
@@ -750,6 +752,7 @@ pub(crate) fn build_inspector_displays(
     collapse_state: &super::InspectorCollapseState,
     project_types: &crate::project_types::ProjectTypes,
     type_metadata: &TypeMetadata,
+    cards: &super::ComponentCardRegistry,
 ) {
     build_inspector_cards(
         commands,
@@ -770,6 +773,7 @@ pub(crate) fn build_inspector_displays(
         collapse_state,
         project_types,
         type_metadata,
+        cards,
         &|_| false,
     );
 }
@@ -796,6 +800,7 @@ fn build_inspector_cards(
     collapse_state: &super::InspectorCollapseState,
     project_types: &crate::project_types::ProjectTypes,
     type_metadata: &TypeMetadata,
+    cards: &super::ComponentCardRegistry,
     standing: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
     let mut plan = CardPlan::new(standing);
@@ -1184,11 +1189,9 @@ fn build_inspector_cards(
                 continue;
             }
 
-            if type_id == TypeId::of::<jackdaw_scene_types::Tilemap>() {
+            if let Some(fill) = cards.get(type_id) {
                 let body = body_entity;
-                commands.queue(move |world: &mut World| {
-                    super::tilemap_card::fill_tilemap_card_body(world, source_entity, body);
-                });
+                commands.queue(move |world: &mut World| fill(world, source_entity, body));
                 continue;
             }
 

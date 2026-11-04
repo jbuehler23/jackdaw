@@ -246,9 +246,9 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let renames = crate::tilemap::begin_save(world, &path.to_string_lossy());
-        let written = write_prefab_files(world, &path, &parent, &renames);
-        crate::tilemap::finish_save(world, renames, written.is_ok());
+        let pending = super::hooks::begin_save(world, &path.to_string_lossy());
+        let written = write_prefab_files(world, &path, &parent, &pending);
+        super::hooks::finish_save(world, pending, written.is_ok());
         written?;
         write_alongside(world, &path.to_string_lossy())?;
         // Clear dirty bit + sync history depth so the tab stops showing
@@ -300,9 +300,9 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         scene_path.metadata.name = "Untitled".to_string();
     }
 
-    let renames = crate::tilemap::begin_save(world, &path);
-    let written = write_scene_files(world, &path, legacy_backup.as_deref(), &renames);
-    crate::tilemap::finish_save(world, renames, written.is_ok());
+    let pending = super::hooks::begin_save(world, &path);
+    let written = write_scene_files(world, &path, legacy_backup.as_deref(), &pending);
+    super::hooks::finish_save(world, pending, written.is_ok());
     written?;
 
     world.trigger(jackdaw_api_internal::document::SceneSaved {
@@ -345,7 +345,7 @@ fn write_prefab_files(
     world: &mut World,
     path: &Path,
     parent: &Path,
-    renames: &crate::tilemap::SaveRenames,
+    pending: &super::hooks::PendingSave,
 ) -> Result<(), BevyError> {
     let text = emit_bsn_scene_with_inline_assets(world, parent);
     let bsn = jackdaw_bsn::parse_emitted(&text)
@@ -355,7 +355,7 @@ fn write_prefab_files(
         .insert(path, bsn);
     let sidecar_base = path.to_string_lossy();
     export_terrain_sidecars(world, &sidecar_base)?;
-    crate::tilemap::export_tilemap_sidecars(world, &sidecar_base, renames)?;
+    super::hooks::export_sidecars(world, &sidecar_base, pending)?;
     crate::prefab::operators::save_prefab_to_disk(world, path)
         .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
     Ok(())
@@ -367,7 +367,7 @@ fn write_scene_files(
     world: &mut World,
     path: &str,
     legacy_backup: Option<&str>,
-    renames: &crate::tilemap::SaveRenames,
+    pending: &super::hooks::PendingSave,
 ) -> Result<(), BevyError> {
     let contents = {
         let parent_path = Path::new(&path)
@@ -403,7 +403,7 @@ fn write_scene_files(
         warn!("cannot make the folder for {path}: {err}");
     }
     export_terrain_sidecars(world, path)?;
-    crate::tilemap::export_tilemap_sidecars(world, path, renames)?;
+    super::hooks::export_sidecars(world, path, pending)?;
 
     // A redirected save renames the legacy source to `.jsn.bak` first so a
     // stale `.jsn` cannot shadow the fresh `.bsn` on the next open.

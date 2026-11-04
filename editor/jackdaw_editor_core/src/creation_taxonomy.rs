@@ -275,7 +275,7 @@ fn two_d(taxonomy: &mut CreationTaxonomy) {
         entry(
             TWO_D_GROUP,
             "Tilemap",
-            op_action::<crate::tilemap_ops::TilemapCreateOp>(),
+            format!("op:{}", crate::tile_mode::TILEMAP_CREATE_OP),
         ),
     ]);
 }

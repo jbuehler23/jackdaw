@@ -13,7 +13,10 @@ use jackdaw_api_internal::{extensions_config::read_extension_config, lifecycle::
 /// was extracted) can't take the editor down. The Extensions dialog
 /// should also hide or lock these so users can't try to turn them
 /// off.
-pub const REQUIRED_EXTENSIONS: &[&str] = &[crate::core_extension::CORE_EXTENSION_ID];
+pub const REQUIRED_EXTENSIONS: &[&str] = &[
+    crate::core_extension::CORE_EXTENSION_ID,
+    crate::tile_mode::TILE_EDITOR_EXTENSION_ID,
+];
 
 /// True if the named extension is load-bearing and must not be
 /// user-toggleable.

@@ -420,7 +420,7 @@ fn the_tile_tool_keys_claim_only_their_tools() {
         .into_iter()
         .map(|context| {
             app.world()
-                .get::<jackdaw::tile_tools::TileEditInputContext>(context)
+                .get::<jackdaw_editor_tile::tile_tools::TileEditInputContext>(context)
                 .is_some()
                 && !app
                     .world()
@@ -495,7 +495,7 @@ fn the_tile_selection_keys_sit_above_core() {
     for (operator, context) in contexts {
         assert!(
             world
-                .get::<jackdaw::tile_select::TileSelectionInputContext>(context)
+                .get::<jackdaw_editor_tile::tile_select::TileSelectionInputContext>(context)
                 .is_some(),
             "{operator} is on the selection context"
         );
@@ -544,7 +544,7 @@ fn n_in_the_tileset_window_claims_only_the_new_terrain_command() {
     let context = contexts[0];
     assert!(
         world
-            .get::<jackdaw::tileset_dock::TilesetDockInputContext>(context)
+            .get::<jackdaw_editor_tile::tileset_dock::TilesetDockInputContext>(context)
             .is_some()
     );
     assert!(

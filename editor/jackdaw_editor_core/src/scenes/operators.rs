@@ -246,7 +246,8 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
 /// With a project open the file has to be inside it, since `path=` is reachable
 /// from the remote surface. The File > Open dialog does not come through here,
 /// so opening a scene from outside the project by hand still works.
-pub(crate) fn resolve_scene_path(
+#[doc(hidden)]
+pub fn resolve_scene_path(
     world: &World,
     path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {

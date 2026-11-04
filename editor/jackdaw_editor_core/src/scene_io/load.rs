@@ -424,7 +424,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
     // explicit load means disk is the truth, so this overwrites whatever
     // the store held for these paths.
     import_terrain_sidecars(world, &path, SidecarImport::Reload);
-    crate::tilemap::import_tilemap_sidecars(world, &path, SidecarImport::Reload);
+    super::hooks::import_sidecars(world, &path, SidecarImport::Reload);
 
     if let Some(hash) = loaded_hash {
         crate::scenes::external_watch::note_known_hash(world, Path::new(&path), hash);
@@ -497,7 +497,7 @@ pub fn declared_scene_kind(ast: &jackdaw_bsn::SceneBsnAst) -> crate::scenes::ope
 
 /// Whether a sidecar import may overwrite data the store already holds.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SidecarImport {
+pub enum SidecarImport {
     /// Disk wins. Used when the user explicitly loads or reloads a scene.
     Reload,
     /// Only fill paths the store has never heard of. Used on tab

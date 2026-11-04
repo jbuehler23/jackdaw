@@ -1401,7 +1401,8 @@ fn walk_entity_nodes(ast: &jackdaw_bsn::SceneBsnAst) -> Vec<Entity> {
 }
 
 /// Every `Name` on a scene entity, editor chrome excluded.
-pub(crate) fn scene_entity_names(world: &mut World) -> std::collections::HashSet<String> {
+#[doc(hidden)]
+pub fn scene_entity_names(world: &mut World) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     let mut query = world.query_filtered::<&Name, Without<EditorEntity>>();
     for existing in query.iter(world) {
@@ -1413,7 +1414,8 @@ pub(crate) fn scene_entity_names(world: &mut World) -> std::collections::HashSet
 /// Reserve `name` in `taken`, and say what it had to become: `None` when it was
 /// free, otherwise the next free `BaseN` suffix, also claimed. The suffix
 /// carries no space, which an operator clause could not address.
-pub(crate) fn claim_free_name(
+#[doc(hidden)]
+pub fn claim_free_name(
     taken: &mut std::collections::HashSet<String>,
     name: &str,
 ) -> Option<String> {

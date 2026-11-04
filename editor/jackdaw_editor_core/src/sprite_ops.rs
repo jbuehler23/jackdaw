@@ -103,7 +103,8 @@ pub(crate) fn sprite_add(
 /// `can_act_on_entities` asks holds. A `SystemParam` so the stage's image drop
 /// asks the same question before it claims a drag.
 #[derive(SystemParam)]
-pub(crate) struct SpriteAddGate<'w, 's> {
+#[doc(hidden)]
+pub struct SpriteAddGate<'w, 's> {
     scene_roots: Scene2dRoots<'w, 's>,
     keybind_focus: crate::keybind_focus::KeybindFocus<'w, 's>,
     active: ActiveModalQuery<'w, 's>,
@@ -114,6 +115,11 @@ pub(crate) struct SpriteAddGate<'w, 's> {
 }
 
 impl<'w, 's> SpriteAddGate<'w, 's> {
+    /// Whether a 2D scene root is open.
+    pub fn has_2d_scene(&self) -> bool {
+        !self.scene_roots.is_empty()
+    }
+
     pub(crate) fn scene_roots(&self) -> &Scene2dRoots<'w, 's> {
         &self.scene_roots
     }
@@ -147,7 +153,8 @@ fn open_2d_scene_exists(world: &World) -> bool {
     })
 }
 
-pub(crate) fn needs_2d_scene(world: &World, what: &str) -> Option<String> {
+#[doc(hidden)]
+pub fn needs_2d_scene(world: &World, what: &str) -> Option<String> {
     (!open_2d_scene_exists(world)).then(|| format!("Open a 2D scene to add {what}."))
 }
 
@@ -297,7 +304,8 @@ impl OpenScene2d<'_, '_> {
 /// Where a new entity of the open 2D world scene goes: `explicit` when it is
 /// in the scene, else beside the selection when that is inside the scene,
 /// else under the scene root. `None` when no 2D world scene is open.
-pub(crate) fn scene_2d_parent(world: &mut World, explicit: Option<Entity>) -> Option<Entity> {
+#[doc(hidden)]
+pub fn scene_2d_parent(world: &mut World, explicit: Option<Entity>) -> Option<Entity> {
     let mut state = SystemState::<OpenScene2d>::new(world);
     state.get(world).ok()?.parent(explicit)
 }

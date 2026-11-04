@@ -23,10 +23,10 @@ mod prefab_field_dots;
 pub(crate) mod prefab_menu;
 pub(crate) mod project_component_display;
 pub mod recipe_card;
-pub(crate) mod reflect_fields;
+#[doc(hidden)]
+pub mod reflect_fields;
 pub(crate) mod schema_fields;
 pub mod sprite_card;
-pub mod tilemap_card;
 pub(crate) mod type_metadata_pane;
 pub mod unavailable;
 pub mod val_field;
@@ -37,6 +37,25 @@ use bevy::prelude::*;
 use jackdaw_api::op::{Operator, OperatorCommandsExt as _};
 
 const MAX_REFLECT_DEPTH: usize = 4;
+
+/// Fills a component's inspector card body: the world, the inspected entity
+/// and the card body to fill.
+pub type ComponentCardFill = fn(&mut World, Entity, Entity);
+
+/// Component cards a feature supplies for its own components, keyed by the
+/// component's type. A registered card replaces the reflected fields.
+#[derive(Resource, Default)]
+pub struct ComponentCardRegistry(std::collections::HashMap<std::any::TypeId, ComponentCardFill>);
+
+impl ComponentCardRegistry {
+    pub fn register<C: Component>(&mut self, fill: ComponentCardFill) {
+        self.0.insert(std::any::TypeId::of::<C>(), fill);
+    }
+
+    pub fn get(&self, type_id: std::any::TypeId) -> Option<ComponentCardFill> {
+        self.0.get(&type_id).copied()
+    }
+}
 
 /// Remembers each inspector card's collapsed state across rebuilds, keyed by
 /// the card's display name. A name not present defaults to collapsed.
@@ -96,6 +115,7 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<InspectorCollapseState>();
         app.init_resource::<bindings_card::BindingsCardEcho>();
         app.init_resource::<PendingInspectorRebuild>();
+        app.init_resource::<ComponentCardRegistry>();
         app.init_resource::<reflect_fields::OpenColorRows>();
         app.init_resource::<unavailable::UnavailableTypes>();
 
@@ -109,7 +129,6 @@ impl Plugin for InspectorPlugin {
             .add_plugins(file_card::plugin)
             .add_plugins(recipe_card::plugin)
             .add_plugins(sprite_card::plugin)
-            .add_plugins(tilemap_card::plugin)
             .add_plugins(prefab_menu::plugin)
             .add_plugins(type_metadata_pane::plugin)
             .add_observer(material_card_routing::on_refresh_inspector_card_body)
@@ -413,7 +432,8 @@ pub fn asset_field_shown_by(world: &World, row: Entity) -> Option<(&str, &str)> 
 }
 
 /// A field name as a row label: `cell_size` reads "Cell size".
-pub(crate) fn sentence(name: &str) -> String {
+#[doc(hidden)]
+pub fn sentence(name: &str) -> String {
     let words = name.replace('_', " ");
     let mut chars = words.chars();
     chars.next().map_or_else(String::new, |first| {
@@ -568,7 +588,8 @@ pub(super) fn rebuild_inspector(world: &mut World, source_entity: Entity) {
 /// already queued for it that frame then land on an entity that is gone. A
 /// frame's delay lets those finish first.
 #[derive(Resource, Default)]
-pub(crate) struct PendingInspectorRebuild(pub(crate) Option<Entity>);
+#[doc(hidden)]
+pub struct PendingInspectorRebuild(pub Option<Entity>);
 
 fn apply_pending_inspector_rebuild(
     mut pending: ResMut<PendingInspectorRebuild>,

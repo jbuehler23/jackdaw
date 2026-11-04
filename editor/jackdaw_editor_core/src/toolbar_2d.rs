@@ -1,5 +1,6 @@
-//! The 2D viewport toolbar's tool groups: the object tools, and the tile tools
-//! that take their place while tile edit mode is on.
+//! The 2D viewport toolbar's tool groups: the object tools, and the groups
+//! features add through [`Toolbar2dSlots`], each shown in place of the object
+//! tools while its feature's mode is on.
 
 use bevy::feathers::controls::ButtonVariant;
 use bevy::prelude::*;
@@ -7,79 +8,81 @@ use jackdaw_api::prelude::Operator;
 use jackdaw_api_internal::operator::RefreshOperatorButtons;
 use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::icons::Icon;
-use jackdaw_tilemap::TileRef;
 
 use crate::layout::{toolbar_op_button, toolbar_separator};
-use crate::tile_palette::{
-    BRUSH_TURNS, TilemapBrushFlipXOp, TilemapBrushFlipYOp, TilemapBrushRotateOp,
-};
-use crate::tile_select::{
-    TilemapSelectOp, TilemapSelectionCopyOp, TilemapSelectionCutOp, TilemapSelectionEraseOp,
-    TilemapStampPasteOp,
-};
-use crate::tile_tools::{
-    BrushSource, TileBrush, TileEditMode, TileTool, TilemapBrushOp, TilemapBucketOp,
-    TilemapEditModeExitOp, TilemapEditModeOp, TilemapEraserOp, TilemapLineOp, TilemapPickerOp,
-    TilemapRectangleOp,
-};
 use crate::tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp};
 use crate::toolbar_overflow::ToolbarTools;
 
 /// The name of the 2D toolbar's display menu.
 pub const CANVAS_VIEW_MENU: &str = "Canvas view";
 
-/// Which tool group of the 2D toolbar a node is.
+/// Which tool group of the 2D toolbar a node is: the object tools, or the
+/// group of the [`Toolbar2dSlot`] with that id.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toolbar2dGroup {
     Object,
-    Tiles,
+    Mode(&'static str),
 }
 
 /// A group's buttons in order; `None` is a separator.
-type Items = &'static [Option<(&'static str, Icon)>];
+pub type Toolbar2dItems = &'static [Option<(&'static str, Icon)>];
 
-const OBJECT_TOOLS: Items = &[
+/// A tool group a feature adds to the 2D toolbar.
+#[derive(Clone, Copy)]
+pub struct Toolbar2dSlot {
+    pub id: &'static str,
+    /// A button at the end of the object tools, such as the one that turns
+    /// the mode on.
+    pub entry: Option<(&'static str, Icon)>,
+    pub items: Toolbar2dItems,
+    /// Whether the mode is on, which shows this group instead of the object
+    /// tools.
+    pub active: fn(&World) -> bool,
+    /// Whether the button calling an operator id shows as on, or `None` for
+    /// a button this slot does not light.
+    pub lit: fn(&World, &str) -> Option<bool>,
+}
+
+/// The tool groups features add to the 2D toolbar, in registration order.
+#[derive(Resource, Default, Clone)]
+pub struct Toolbar2dSlots(Vec<Toolbar2dSlot>);
+
+impl Toolbar2dSlots {
+    pub fn register(&mut self, slot: Toolbar2dSlot) {
+        self.0.push(slot);
+    }
+}
+
+const OBJECT_TOOLS: Toolbar2dItems = &[
     Some((ToolSelectOp::ID, Icon::MousePointer)),
     Some((ToolTranslateOp::ID, Icon::Move)),
     Some((ToolRotateOp::ID, Icon::RotateCw)),
     Some((ToolScaleOp::ID, Icon::Scale3d)),
-    None,
-    Some((TilemapEditModeOp::ID, Icon::Grid2x2)),
-];
-
-const TILE_TOOLS: Items = &[
-    Some((TilemapEditModeExitOp::ID, Icon::Check)),
-    None,
-    Some((TilemapBrushOp::ID, Icon::Paintbrush)),
-    Some((TilemapEraserOp::ID, Icon::Eraser)),
-    Some((TilemapRectangleOp::ID, Icon::Square)),
-    Some((TilemapLineOp::ID, Icon::Slash)),
-    Some((TilemapBucketOp::ID, Icon::PaintBucket)),
-    Some((TilemapPickerOp::ID, Icon::Pipette)),
-    Some((TilemapSelectOp::ID, Icon::SquareDashed)),
-    None,
-    Some(BRUSH_TURNS[0]),
-    Some(BRUSH_TURNS[1]),
-    Some(BRUSH_TURNS[2]),
-    None,
-    Some((TilemapSelectionCopyOp::ID, Icon::Copy)),
-    Some((TilemapSelectionCutOp::ID, Icon::Scissors)),
-    Some((TilemapStampPasteOp::ID, Icon::ClipboardPaste)),
-    Some((TilemapSelectionEraseOp::ID, Icon::Trash2)),
 ];
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_observer(sync_2d_toolbar);
+    app.init_resource::<Toolbar2dSlots>()
+        .add_observer(sync_2d_toolbar);
 }
 
-/// Put the object and tile tool groups at the start of `toolbar`, each with
+/// Put the object and feature tool groups at the start of `toolbar`, each with
 /// the overflow menu the 3D toolbar uses.
 pub(crate) fn spawn_tool_groups(world: &mut World, toolbar: Entity) -> Result {
+    let slots = world.resource::<Toolbar2dSlots>().clone();
+    let mut object: Vec<Option<(&'static str, Icon)>> = OBJECT_TOOLS.to_vec();
+    let entries: Vec<_> = slots.0.iter().filter_map(|slot| slot.entry).collect();
+    if !entries.is_empty() {
+        object.push(None);
+        object.extend(entries.into_iter().map(Some));
+    }
     let mut groups = Vec::new();
-    for (which, items) in [
-        (Toolbar2dGroup::Object, OBJECT_TOOLS),
-        (Toolbar2dGroup::Tiles, TILE_TOOLS),
-    ] {
+    let all = std::iter::once((Toolbar2dGroup::Object, object.as_slice())).chain(
+        slots
+            .0
+            .iter()
+            .map(|slot| (Toolbar2dGroup::Mode(slot.id), slot.items)),
+    );
+    for (which, items) in all {
         let group = world
             .spawn((
                 crate::EditorEntity,
@@ -115,84 +118,51 @@ pub(crate) fn spawn_tool_groups(world: &mut World, toolbar: Entity) -> Result {
     Ok(())
 }
 
-/// Whether the tile button calling `id` shows as on, or `None` for a button
-/// that is not one of the tile tools.
-fn tile_button_active(id: &str, mode: &TileEditMode, brush: &TileBrush) -> Option<bool> {
-    let tool = match id {
-        TilemapBrushOp::ID => TileTool::Brush,
-        TilemapEraserOp::ID => TileTool::Eraser,
-        TilemapRectangleOp::ID => TileTool::Rectangle,
-        TilemapLineOp::ID => TileTool::Line,
-        TilemapBucketOp::ID => TileTool::Bucket,
-        TilemapPickerOp::ID => TileTool::Picker,
-        TilemapSelectOp::ID => TileTool::Select,
-        _ => {
-            let [flip_x, flip_y, rotate] = if brush.source == BrushSource::Stamp {
-                [false; 3]
-            } else {
-                turns_lit(brush.tile)
-            };
-            return match id {
-                TilemapBrushFlipXOp::ID => Some(flip_x),
-                TilemapBrushFlipYOp::ID => Some(flip_y),
-                TilemapBrushRotateOp::ID => Some(rotate),
-                _ => None,
-            };
-        }
-    };
-    Some(mode.tool == tool)
+/// Show the group of the slot whose mode is on, or the object group when
+/// none is, and light the buttons the slots name.
+fn sync_2d_toolbar(_: On<RefreshOperatorButtons>, mut commands: Commands) {
+    commands.queue(sync_2d_toolbar_now);
 }
 
-/// Show the tile group while tile edit mode is on and the object group
-/// otherwise, and light the active tile tool and the brush's flips.
-fn sync_2d_toolbar(
-    _: On<RefreshOperatorButtons>,
-    mode: Option<Res<TileEditMode>>,
-    brush: Option<Res<TileBrush>>,
-    mut groups: Query<(&Toolbar2dGroup, &mut Node)>,
-    mut buttons: Query<(&ButtonOperatorCall, &mut ButtonVariant)>,
-) {
-    let (Some(mode), Some(brush)) = (mode, brush) else {
+fn sync_2d_toolbar_now(world: &mut World) {
+    let slots = world.resource::<Toolbar2dSlots>().clone();
+    if slots.0.is_empty() {
         return;
-    };
-    let editing = mode.map.is_some();
-    for (group, mut node) in &mut groups {
-        let display = if (*group == Toolbar2dGroup::Tiles) == editing {
-            Display::Flex
-        } else {
-            Display::None
+    }
+    let active = slots
+        .0
+        .iter()
+        .find(|slot| (slot.active)(world))
+        .map(|slot| slot.id);
+    let mut groups = world.query::<(&Toolbar2dGroup, &mut Node)>();
+    for (group, mut node) in groups.iter_mut(world) {
+        let shown = match *group {
+            Toolbar2dGroup::Object => active.is_none(),
+            Toolbar2dGroup::Mode(id) => active == Some(id),
         };
+        let display = if shown { Display::Flex } else { Display::None };
         if node.display != display {
             node.display = display;
         }
     }
-    for (call, mut variant) in &mut buttons {
-        let Some(active) = tile_button_active(call.id.as_ref(), &mode, &brush) else {
+    let mut buttons = world.query::<(Entity, &ButtonOperatorCall)>();
+    let calls: Vec<(Entity, String)> = buttons
+        .iter(world)
+        .map(|(entity, call)| (entity, call.id.to_string()))
+        .collect();
+    for (entity, id) in calls {
+        let Some(lit) = slots.0.iter().find_map(|slot| (slot.lit)(world, &id)) else {
             continue;
         };
-        let target = if active {
+        let target = if lit {
             ButtonVariant::Primary
         } else {
             ButtonVariant::Plain
         };
-        if *variant != target {
+        if let Some(mut variant) = world.get_mut::<ButtonVariant>(entity)
+            && *variant != target
+        {
             *variant = target;
         }
-    }
-}
-
-/// Which of Flip X, Flip Y and Rotate show as on for a tile's orientation.
-/// A pure flip lights its flip; any quarter or half turn lights Rotate; a
-/// quarter turn that is also mirrored lights Rotate and Flip X.
-fn turns_lit(tile: TileRef) -> [bool; 3] {
-    let (flip_x, flip_y) = (tile.flip_x(), tile.flip_y());
-    if !tile.transpose() {
-        if flip_x == flip_y {
-            [false, false, flip_x]
-        } else {
-            [flip_x, flip_y, false]
-        }
-    } else {
-        [flip_x == flip_y, false, true]
     }
 }

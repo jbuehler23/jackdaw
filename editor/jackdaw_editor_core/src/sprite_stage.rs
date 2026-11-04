@@ -134,7 +134,8 @@ pub(crate) struct SpritePress {
 /// The world point under `cursor` (ui-logical) on a 2D panel's stage, and
 /// whether the cursor is on the stage at all; off it, the point is clamped
 /// to the stage's edge.
-pub(crate) fn stage_world_point(
+#[doc(hidden)]
+pub fn stage_world_point(
     cursor: Vec2,
     host: &Viewport2dPanelHost,
     computed: &ComputedNode,
@@ -405,7 +406,7 @@ fn document_path(
 /// [`Selection`] the way [`crate::ui_stage`] does.
 fn on_sprite_press(
     event: On<PointerPress>,
-    tile_mode: Option<Res<crate::tile_tools::TileEditMode>>,
+    tile_mode: Option<Res<crate::tile_mode::TileEditMode>>,
     ui_scale: Res<UiScale>,
     keys: Res<ButtonInput<KeyCode>>,
     hosts: Query<&Viewport2dPanelHost>,
