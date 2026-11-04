@@ -3,13 +3,15 @@
 //! drag committed on release.
 
 use bevy::prelude::*;
+use bevy::reflect::TypePath;
 use jackdaw::commands::SetTransform;
 use jackdaw::play_sync::collect_node_changes;
 use jackdaw_api::prelude::*;
+use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_commands::{CommandHistory, EditorCommand};
 use jackdaw_pie_protocol::event::{from_bytes, to_bytes};
 use jackdaw_pie_protocol::{ControlEvent, LoopbackTransport, PieChannel, PieTransport};
-use jackdaw_scene_types::SceneNodeId;
+use jackdaw_scene_types::{Brush, SceneNodeId};
 use serde_json::Value;
 
 use super::batch_undo::{editor, history, menu};
@@ -236,4 +238,172 @@ fn pie_sync_an_edit_and_its_undo_land_in_the_game() {
     deliver(&mut app, &mut link, &mut game_end, &mut game);
     assert_eq!(x_of(&mut app, rock), 4.0);
     assert_eq!(x(&game), 4.0);
+}
+
+const VISIBILITY: &str = "bevy_camera::visibility::Visibility";
+const BRUSH: &str = "jackdaw_scene_types::types::Brush";
+
+fn set_field(app: &mut App, node: SceneNodeId, type_path: &str, field: &str, value: &str) {
+    let entity = entity_of(app, node);
+    app.world_mut()
+        .operator("component.set")
+        .param("entity", entity)
+        .param("type_path", type_path.to_string())
+        .param("field", field.to_string())
+        .param("value", value.to_string())
+        .call()
+        .expect("component.set dispatches")
+        .assert_finished();
+    app.update();
+}
+
+fn sent<'a>(set: &'a [(String, Value)], type_path: &str) -> &'a Value {
+    &set.iter()
+        .find(|(path, _)| path == type_path)
+        .unwrap_or_else(|| panic!("{type_path} was sent: {set:?}"))
+        .1
+}
+
+#[test]
+fn pie_sync_undoing_a_derived_component_edit_sends_its_value() {
+    let (mut app, _dir, rock) = playing();
+    set_field(&mut app, rock, VISIBILITY, "", "\"Hidden\"");
+    let (_, set, removed) = only(collect_node_changes(app.world_mut()));
+    assert_eq!(sent(&set, VISIBILITY), &Value::from("Hidden"));
+    assert!(removed.is_empty());
+
+    history(&mut app, "history.undo");
+    let (_, set, removed) = only(collect_node_changes(app.world_mut()));
+    assert!(
+        removed.is_empty(),
+        "the component stays on the entity, so the game keeps it too"
+    );
+    assert_eq!(sent(&set, VISIBILITY), &Value::from("Inherited"));
+}
+
+/// A material the open scene embeds as `#Stone`, as a loaded scene file's
+/// named asset entries are.
+fn embed_stone(world: &mut World) -> Handle<StandardMaterial> {
+    let stone = world
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let mut assets = world.get_resource_or_init::<BsnSceneAssets>();
+    assets
+        .0
+        .insert("#Stone".to_string(), stone.clone().untyped());
+    stone
+}
+
+#[test]
+fn pie_sync_a_brush_face_edit_reaches_the_game_with_its_material() {
+    let (mut app, _dir, rock) = playing();
+    embed_stone(app.world_mut());
+    set_field(&mut app, rock, BRUSH, "faces[0].material", "\"#Stone\"");
+    let (_, set, _) = only(collect_node_changes(app.world_mut()));
+    assert_eq!(sent(&set, BRUSH)["faces"][0]["material"], "#Stone");
+
+    let (mut game, entity) = game(rock);
+    game.add_plugins(bevy::asset::AssetPlugin::default());
+    game.init_asset::<StandardMaterial>();
+    game.register_asset_reflect::<StandardMaterial>();
+    game.register_type::<Brush>();
+    let game_stone = embed_stone(game.world_mut());
+    game.world_mut()
+        .entity_mut(entity)
+        .insert(Brush::cuboid(0.5, 0.5, 0.5));
+    let (mut link, mut game_end) = LoopbackTransport::pair();
+
+    set_field(&mut app, rock, BRUSH, "faces[0].uv_offset", "[0.5, 0.25]");
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    let brush = game.world().get::<Brush>(entity).expect("a brush");
+    assert_eq!(brush.faces[0].uv_offset, Vec2::new(0.5, 0.25));
+    assert_eq!(brush.faces[0].material, game_stone);
+}
+
+#[test]
+fn pie_sync_an_unnamed_material_is_held_back_until_it_can_be_sent() {
+    let (mut app, _dir, rock) = playing();
+    let stone = embed_stone(app.world_mut());
+    set_field(&mut app, rock, BRUSH, "faces[0].material", "\"#Stone\"");
+    app.world_mut()
+        .resource_mut::<BsnSceneAssets>()
+        .0
+        .remove("#Stone");
+    assert!(
+        collect_node_changes(app.world_mut()).is_empty(),
+        "a material the game's scene does not name is not sent"
+    );
+
+    app.world_mut()
+        .resource_mut::<BsnSceneAssets>()
+        .0
+        .insert("#Stone".to_string(), stone.untyped());
+    move_to(&mut app, rock, 2.0);
+    let (_, set, _) = only(collect_node_changes(app.world_mut()));
+    assert_eq!(translation_x(&set), 2.0);
+    assert_eq!(
+        sent(&set, BRUSH)["faces"][0]["material"],
+        "#Stone",
+        "the held-back component goes with the node's next edit"
+    );
+}
+
+/// A component holding a list, registered in both the editor and the game.
+#[derive(Component, Reflect, Default, Debug, PartialEq)]
+#[reflect(Component, Default)]
+struct Waypoints {
+    points: Vec<f32>,
+}
+
+/// An immutable component, registered in both the editor and the game.
+#[derive(Component, Reflect, Default, Debug, PartialEq)]
+#[component(immutable)]
+#[reflect(Component, Default)]
+struct Tint {
+    level: u32,
+}
+
+fn add_component(app: &mut App, node: SceneNodeId, type_path: &str) {
+    let entity = entity_of(app, node);
+    app.world_mut()
+        .operator("component.add")
+        .param("entity", entity)
+        .param("type_path", type_path.to_string())
+        .call()
+        .expect("component.add dispatches")
+        .assert_finished();
+    app.update();
+}
+
+#[test]
+fn pie_sync_a_shorter_list_and_an_immutable_edit_land_in_the_game() {
+    let (mut app, _dir, rock) = playing();
+    app.register_type::<Waypoints>().register_type::<Tint>();
+    let waypoints = Waypoints::type_path();
+    let tint = Tint::type_path();
+    let (mut game, entity) = game(rock);
+    game.register_type::<Waypoints>().register_type::<Tint>();
+    let (mut link, mut game_end) = LoopbackTransport::pair();
+
+    add_component(&mut app, rock, waypoints);
+    set_field(&mut app, rock, waypoints, "points", "[1.0, 2.0, 3.0]");
+    add_component(&mut app, rock, tint);
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(
+        game.world()
+            .get::<Waypoints>(entity)
+            .map(|w| w.points.clone()),
+        Some(vec![1.0, 2.0, 3.0])
+    );
+
+    set_field(&mut app, rock, waypoints, "", "{\"points\": [7.0]}");
+    set_field(&mut app, rock, tint, "level", "5");
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(
+        game.world()
+            .get::<Waypoints>(entity)
+            .map(|w| w.points.clone()),
+        Some(vec![7.0])
+    );
+    assert_eq!(game.world().get::<Tint>(entity), Some(&Tint { level: 5 }));
 }

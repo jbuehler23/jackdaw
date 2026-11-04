@@ -189,20 +189,22 @@ impl PieSession {
         )
     }
 
-    /// Whether the instances can take document edits now: `None` with no
-    /// instance launched, `Launching` while one builds or connects, `Live`
-    /// once every launched instance is connected.
+    /// Whether any instance can take document edits now: `Live` while at
+    /// least one is connected (others may still be launching), `Launching`
+    /// while instances build or connect and none is connected yet, `None`
+    /// with no instance launched.
     pub(crate) fn sync_target(&self) -> SyncTarget {
-        let connecting = self
-            .children
-            .values()
-            .any(|stage| matches!(stage, ChildStage::Connecting { .. }));
+        let mut connecting = false;
+        for stage in self.children.values() {
+            match stage {
+                ChildStage::Live { .. } => return SyncTarget::Live,
+                ChildStage::Connecting { .. } => connecting = true,
+            }
+        }
         if connecting || self.is_launching() {
             SyncTarget::Launching
-        } else if self.children.is_empty() {
-            SyncTarget::None
         } else {
-            SyncTarget::Live
+            SyncTarget::None
         }
     }
 
@@ -571,6 +573,59 @@ pub(crate) fn record_test_launch(world: &mut World, key: &InstanceKey, mode: Pie
         .launch_modes
         .insert(key.clone(), mode);
     world.resource_mut::<PieInstances>().focused = Some(key.clone());
+}
+
+#[cfg(test)]
+impl PieSession {
+    /// Add a connected instance over `transport`, with `child` standing in
+    /// for its process.
+    pub(crate) fn insert_test_live(
+        &mut self,
+        key: InstanceKey,
+        child: Child,
+        transport: IpcChannelTransport,
+    ) {
+        self.children.insert(
+            key,
+            ChildStage::Live {
+                child,
+                transport,
+                stderr_tail: StderrTail::default(),
+            },
+        );
+    }
+
+    /// Add an instance that is still connecting and never connects.
+    pub(crate) fn insert_test_connecting(&mut self, key: InstanceKey, child: Child) {
+        let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
+            .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
+        self.children.insert(
+            key,
+            ChildStage::Connecting {
+                child,
+                accept,
+                stderr_tail: StderrTail::default(),
+                since: Instant::now(),
+            },
+        );
+    }
+
+    /// Add a build that never finishes with `key` waiting on it.
+    pub(crate) fn insert_test_pending_build(&mut self, key: InstanceKey) {
+        let task = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
+            .spawn(std::future::pending::<io::Result<GameBuildResult>>());
+        self.builds.insert(
+            PathBuf::from(format!("test-build-{key}")),
+            BuildState::Running {
+                task,
+                pending: vec![PendingSpawn {
+                    key,
+                    run: RunConfig::default(),
+                }],
+                progress: Arc::default(),
+            },
+        );
+    }
 }
 
 /// Where a launched game's window lives. A launch records the mode it used, and
@@ -1332,8 +1387,12 @@ fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
             commands: sub_commands,
         })
     };
+    // The values came from the running game: send what was pending before
+    // the write, then count the write itself as already sent.
+    crate::play_sync::sync_document_to_game(world);
     cmd.execute(world);
     world.resource_mut::<CommandHistory>().push_executed(cmd);
+    crate::play_sync::absorb_document_changes(world);
     info!("save to scene: promoted runtime values into node {node_id}");
 }
 

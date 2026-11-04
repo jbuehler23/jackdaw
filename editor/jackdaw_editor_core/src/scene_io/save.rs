@@ -477,7 +477,7 @@ pub fn save_layout_to_project(world: &mut World) {
 ///
 /// An unsaved material is left out so it embeds inline: a name for it would
 /// resolve nowhere outside this editor run.
-fn asset_reference_seed(
+pub(crate) fn asset_reference_seed(
     world: &World,
 ) -> bevy::platform::collections::HashMap<UntypedAssetId, String> {
     let mut seed: bevy::platform::collections::HashMap<UntypedAssetId, String> =

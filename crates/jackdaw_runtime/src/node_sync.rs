@@ -11,8 +11,11 @@ use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
-use bevy::reflect::{PartialReflect, TypeRegistration, TypeRegistry};
+use bevy::reflect::{PartialReflect, ReflectFromReflect, TypeRegistration, TypeRegistry};
+use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_scene_types::SceneNodeId;
+
+use crate::JackdawCatalog;
 use serde::Deserialize;
 use serde::de::DeserializeSeed;
 
@@ -86,13 +89,27 @@ fn index_node_replace(
     }
 }
 
-/// Reads an asset handle as the asset path the editor sent, loading it through
-/// the asset server, and `null` as the handle type's default.
-struct HandlePathProcessor<'a> {
+/// Reads an asset handle as the reference the editor sent: a `#Name` or
+/// `@Name` the loaded scene or the project catalog answers to, else an asset
+/// path loaded through the asset server. `null` reads as the handle type's
+/// default. A `#Name` or `@Name` nothing answers to is refused.
+struct HandleReferenceProcessor<'a> {
     server: Option<&'a AssetServer>,
+    scene: Option<&'a BsnSceneAssets>,
+    catalog: Option<&'a JackdawCatalog>,
 }
 
-impl ReflectDeserializerProcessor for HandlePathProcessor<'_> {
+impl HandleReferenceProcessor<'_> {
+    fn named(&self, reference: &str, asset_type: std::any::TypeId) -> Option<UntypedHandle> {
+        self.scene
+            .and_then(|scene| scene.0.get(reference))
+            .or_else(|| self.catalog.and_then(|catalog| catalog.get(reference)))
+            .filter(|handle| handle.type_id() == asset_type)
+            .cloned()
+    }
+}
+
+impl ReflectDeserializerProcessor for HandleReferenceProcessor<'_> {
     fn try_deserialize<'de, D>(
         &mut self,
         registration: &TypeRegistration,
@@ -106,9 +123,20 @@ impl ReflectDeserializerProcessor for HandlePathProcessor<'_> {
             return Ok(Err(deserializer));
         };
         let asset_type = reflect_handle.asset_type_id();
-        let untyped = match (Option::<String>::deserialize(deserializer)?, self.server) {
-            (Some(path), Some(server)) => server.load_builder().load_erased(asset_type, path),
-            _ => UntypedHandle::default_for_type(asset_type),
+        let untyped = match Option::<String>::deserialize(deserializer)? {
+            None => UntypedHandle::default_for_type(asset_type),
+            Some(reference) => match self.named(&reference, asset_type) {
+                Some(handle) => handle,
+                None if reference.starts_with('#') || reference.starts_with('@') => {
+                    return Err(serde::de::Error::custom(format!(
+                        "the asset reference `{reference}` names nothing this game loaded"
+                    )));
+                }
+                None => match self.server {
+                    Some(server) => server.load_builder().load_erased(asset_type, reference),
+                    None => UntypedHandle::default_for_type(asset_type),
+                },
+            },
         };
         Ok(Ok(reflect_handle.typed(untyped).into_partial_reflect()))
     }
@@ -118,10 +146,12 @@ impl ReflectDeserializerProcessor for HandlePathProcessor<'_> {
 pub(crate) struct DecodedComponent {
     pub(crate) reflect: ReflectComponent,
     pub(crate) value: Box<dyn PartialReflect>,
+    type_id: std::any::TypeId,
+    from_reflect: Option<ReflectFromReflect>,
 }
 
 /// Deserialize `value` as the component `type_path` names. Asset handles are
-/// read as asset paths and loaded through the world's asset server.
+/// read as the references [`HandleReferenceProcessor`] resolves.
 pub(crate) fn decode_component(
     world: &World,
     type_path: &str,
@@ -135,13 +165,28 @@ pub(crate) fn decode_component(
         .data::<ReflectComponent>()
         .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))?
         .clone();
-    let mut processor = HandlePathProcessor {
+    let mut processor = HandleReferenceProcessor {
         server: world.get_resource::<AssetServer>(),
+        scene: world.get_resource::<BsnSceneAssets>(),
+        catalog: world.get_resource::<JackdawCatalog>(),
     };
     let value = TypedReflectDeserializer::with_processor(registration, &registry, &mut processor)
         .deserialize(value)
         .map_err(|err| format!("failed to deserialize `{type_path}`: {err}"))?;
-    Ok(DecodedComponent { reflect, value })
+    let from_reflect = registration.data::<ReflectFromReflect>().cloned();
+    let value = match &from_reflect {
+        Some(from_reflect) => from_reflect
+            .from_reflect(value.as_ref())
+            .ok_or_else(|| format!("`{type_path}` cannot be built from the value sent"))?
+            .into_partial_reflect(),
+        None => value,
+    };
+    Ok(DecodedComponent {
+        reflect,
+        value,
+        type_id: registration.type_id(),
+        from_reflect,
+    })
 }
 
 /// Look up the reflection for `type_path` without a value.
@@ -156,23 +201,47 @@ fn reflect_component_for(world: &World, type_path: &str) -> Result<ReflectCompon
         .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))
 }
 
-/// Write `decoded` onto `entity`: applied over the component when present,
-/// inserted when not.
+/// Write `decoded` onto `entity` as its whole new value.
+///
+/// A mutable component the entity holds has its value replaced in place: no
+/// hooks or observers run, and the component reads as changed. A reflective
+/// apply is not used because it only overwrites and appends list elements, so
+/// a shorter list would keep its stale tail. An immutable component cannot
+/// be changed in place and is re-inserted, which runs its replace and insert
+/// hooks and observers. A component the entity lacks is inserted.
 pub(crate) fn write_component(world: &mut World, entity: Entity, decoded: &DecodedComponent) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry = registry.read();
     let Ok(entity_ref) = world.get_entity(entity) else {
         return;
     };
     let present = decoded.reflect.contains(entity_ref);
-    let mut entity_mut = world.entity_mut(entity);
-    if present {
-        decoded.reflect.apply(entity_mut, decoded.value.as_ref());
-    } else {
-        decoded
-            .reflect
-            .insert(&mut entity_mut, decoded.value.as_ref(), &registry);
+    let mutable = world
+        .components()
+        .get_id(decoded.type_id)
+        .and_then(|id| world.components().get_info(id))
+        .is_none_or(bevy::ecs::component::ComponentInfo::mutable);
+    let replacement = decoded
+        .from_reflect
+        .as_ref()
+        .and_then(|from_reflect| from_reflect.from_reflect(decoded.value.as_ref()));
+    if present
+        && mutable
+        && let Some(replacement) = replacement
+        && let Some(mut current) = decoded.reflect.reflect_mut(world.entity_mut(entity))
+    {
+        if let Err(refused) = current.set(replacement) {
+            warn!(
+                "PIE: node sync could not replace `{}`",
+                refused.reflect_type_path()
+            );
+        }
+        return;
     }
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let mut entity_mut = world.entity_mut(entity);
+    decoded
+        .reflect
+        .insert(&mut entity_mut, decoded.value.as_ref(), &registry);
 }
 
 fn warn_once(world: &mut World, type_path: &str, reason: &str) {
@@ -230,11 +299,39 @@ mod tests {
     const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
     const NAME: &str = "bevy_ecs::name::Name";
 
+    #[derive(Component, Reflect, Default, Debug, PartialEq)]
+    #[component(immutable)]
+    #[reflect(Component, Default)]
+    struct Tint {
+        level: u32,
+    }
+
+    #[derive(Component, Reflect, Default, Debug, PartialEq)]
+    #[reflect(Component, Default)]
+    struct Path {
+        points: Vec<f32>,
+    }
+
+    #[derive(Asset, TypePath, Default)]
+    struct Swatch;
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    struct Painted {
+        swatch: Handle<Swatch>,
+    }
+
+    const TINT: &str = "jackdaw_runtime::node_sync::tests::Tint";
+    const PATH: &str = "jackdaw_runtime::node_sync::tests::Path";
+    const PAINTED: &str = "jackdaw_runtime::node_sync::tests::Painted";
+
     fn app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.register_type::<Name>();
         app.register_type::<Transform>();
+        app.register_type::<Tint>();
+        app.register_type::<Path>();
         app.register_type::<SceneNodeId>();
         install_node_index(&mut app);
         app
@@ -347,6 +444,126 @@ mod tests {
         assert_eq!(
             app.world().get::<Transform>(entity).unwrap().translation.x,
             0.0
+        );
+    }
+
+    #[test]
+    fn an_immutable_component_is_replaced() {
+        let mut app = app();
+        let entity = app
+            .world_mut()
+            .spawn((SceneNodeId(8), Tint { level: 1 }))
+            .id();
+        apply_node_components(
+            app.world_mut(),
+            8,
+            &[(TINT.to_string(), serde_json::json!({ "level": 5 }))],
+            &[],
+        );
+        assert_eq!(app.world().get::<Tint>(entity), Some(&Tint { level: 5 }));
+    }
+
+    #[test]
+    fn a_shorter_list_drops_the_stale_tail() {
+        let mut app = app();
+        let entity = app
+            .world_mut()
+            .spawn((
+                SceneNodeId(9),
+                Path {
+                    points: vec![1.0, 2.0, 3.0],
+                },
+            ))
+            .id();
+        apply_node_components(
+            app.world_mut(),
+            9,
+            &[(PATH.to_string(), serde_json::json!({ "points": [7.0] }))],
+            &[],
+        );
+        assert_eq!(app.world().get::<Path>(entity).unwrap().points, vec![7.0]);
+    }
+
+    #[test]
+    fn a_handle_reference_resolves_through_the_scene_assets() {
+        let mut app = app();
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Swatch>();
+        app.register_type::<Painted>();
+        app.register_type_data::<Handle<Swatch>, ReflectHandle>();
+        let swatch = app.world_mut().resource_mut::<Assets<Swatch>>().add(Swatch);
+        let mut scene = bevy::platform::collections::HashMap::default();
+        scene.insert("#Red".to_string(), swatch.clone().untyped());
+        app.world_mut().insert_resource(BsnSceneAssets(scene));
+        let entity = app
+            .world_mut()
+            .spawn((SceneNodeId(10), Painted::default()))
+            .id();
+
+        apply_node_components(
+            app.world_mut(),
+            10,
+            &[(PAINTED.to_string(), serde_json::json!({ "swatch": "#Red" }))],
+            &[],
+        );
+        assert_eq!(app.world().get::<Painted>(entity).unwrap().swatch, swatch);
+
+        apply_node_components(
+            app.world_mut(),
+            10,
+            &[(
+                PAINTED.to_string(),
+                serde_json::json!({ "swatch": "#Missing" }),
+            )],
+            &[],
+        );
+        assert_eq!(
+            app.world().get::<Painted>(entity).unwrap().swatch,
+            swatch,
+            "a reference the game cannot resolve leaves the component alone"
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct Inserts(u32);
+
+    #[test]
+    fn a_mutable_edit_replaces_in_place_without_running_insert_hooks() {
+        let mut app = app();
+        app.init_resource::<Inserts>();
+        app.add_observer(|_: On<Insert<Path>>, mut inserts: ResMut<Inserts>| inserts.0 += 1);
+        let entity = app
+            .world_mut()
+            .spawn((
+                SceneNodeId(11),
+                Path {
+                    points: vec![1.0, 2.0],
+                },
+            ))
+            .id();
+        app.update();
+        let before = app.world_mut().increment_change_tick();
+        apply_node_components(
+            app.world_mut(),
+            11,
+            &[(PATH.to_string(), serde_json::json!({ "points": [4.0] }))],
+            &[],
+        );
+        assert_eq!(
+            app.world().resource::<Inserts>().0,
+            1,
+            "only the spawn inserted"
+        );
+        let path = app
+            .world()
+            .entity(entity)
+            .get_ref::<Path>()
+            .expect("a path");
+        assert_eq!(path.points, vec![4.0]);
+        assert!(
+            path.last_changed()
+                .is_newer_than(before, app.world().read_change_tick()),
+            "the replaced value reads as changed"
         );
     }
 }
