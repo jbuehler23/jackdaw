@@ -300,7 +300,8 @@ const BARE_NAME_SKIPS: &[(&str, &str)] = &[("entity.duplicate", "parent")];
 /// query in it into ids. A list holding anything else, an id the scene has since minted past,
 /// or anything belonging to the editor rather than to the scene, is refused
 /// whole rather than acted on as far as it reads.
-pub(crate) fn target_entities(
+#[doc(hidden)]
+pub fn target_entities(
     params: &OperatorParameters,
     selection: &Selection,
     authored: &Query<(), Without<crate::EditorEntity>>,

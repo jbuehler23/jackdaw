@@ -30,7 +30,6 @@ mod recipe_record;
 mod remote_coverage;
 mod rename_ops;
 mod revolve_ops;
-mod scatter_ops;
 mod scene_op_ids;
 mod spawn_param_ops;
 mod sprite_ops;

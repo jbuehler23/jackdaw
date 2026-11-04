@@ -15,6 +15,21 @@ use bevy::{
 /// A binary that bundles extensions with the editor registers them in
 /// `extend`, for example with `app.register_extension::<MyExtension>()`.
 pub fn run(extend: impl FnOnce(&mut App)) -> AppExit {
+    run_with(LaunchCommands::default(), extend)
+}
+
+/// Runs a subcommand with the arguments after its name.
+pub type LaunchCommand = fn(&[String]) -> AppExit;
+
+/// Subcommands the core names but a feature crate carries out.
+#[derive(Default, Clone, Copy)]
+pub struct LaunchCommands {
+    /// `export-terrain`, from the terrain editor.
+    pub export_terrain: Option<LaunchCommand>,
+}
+
+/// [`run`], with the subcommands `commands` carries out.
+pub fn run_with(commands: LaunchCommands, extend: impl FnOnce(&mut App)) -> AppExit {
     let args: Vec<String> = std::env::args().collect();
     let launch = crate::cli::decide(&args);
     if launch != crate::cli::Launch::Editor {
@@ -44,7 +59,14 @@ pub fn run(extend: impl FnOnce(&mut App)) -> AppExit {
         // `jd export-terrain` runs here: reading a scene needs this binary's
         // Bevy types, which `jd` does not link.
         crate::cli::Launch::ExportTerrain(rest) => {
-            return crate::terrain::export::run_export_terrain_cli(rest);
+            let Some(export_terrain) = commands.export_terrain else {
+                #[expect(clippy::print_stderr, reason = "usage errors report to stderr")]
+                {
+                    eprintln!("jackdaw: this build has no terrain editor to export with");
+                }
+                return AppExit::from_code(2);
+            };
+            return export_terrain(rest);
         }
         crate::cli::Launch::CheckExtensions(rest) => return check_extensions(rest),
         crate::cli::Launch::Unknown(flag) => {

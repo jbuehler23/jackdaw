@@ -171,7 +171,7 @@ fn swap_preserves_a_sculpted_terrain() {
     use bevy::render::RenderPlugin;
     use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
-    use jackdaw::terrain::TerrainDataStore;
+    use jackdaw::terrain_mode::TerrainDataStore;
     use jackdaw_scene_types::Terrain;
     use jackdaw_terrain::{RegionTerrainData, TerrainData};
 
@@ -274,7 +274,7 @@ fn scene_tabs_keep_same_named_terrain_sidecars_isolated() {
     use bevy::render::RenderPlugin;
     use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::winit::WinitPlugin;
-    use jackdaw::terrain::TerrainDataStore;
+    use jackdaw::terrain_mode::TerrainDataStore;
     use jackdaw_scene_types::Terrain;
     use jackdaw_terrain::{TerrainData, sidecar};
 
@@ -299,6 +299,7 @@ fn scene_tabs_keep_same_named_terrain_sidecars_isolated() {
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
     app.init_resource::<TerrainDataStore>();
+    jackdaw_editor_terrain::sidecar_io::plugin(&mut app);
 
     let terrain_entity = app
         .world_mut()
@@ -658,7 +659,7 @@ fn scene_save_all_reports_failure_and_keeps_a_tab_dirty() {
         scenes.tabs[0].dirty = true;
     }
     let data_path = "zone.terrain-0.jdterrain";
-    let mut store = jackdaw::terrain::TerrainDataStore::default();
+    let mut store = jackdaw::terrain_mode::TerrainDataStore::default();
     store.insert(
         data_path.to_string(),
         jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {
@@ -964,7 +965,7 @@ fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
         content: TabContent::Scene(None),
         view_state: jackdaw::scenes::ViewState::default(),
         history: jackdaw::commands::CommandHistory::default(),
-        terrain_data_store: jackdaw::terrain::TerrainDataStore::default(),
+        terrain_data_store: jackdaw::terrain_mode::TerrainDataStore::default(),
         scene_resources: Default::default(),
         history_depth_at_last_check: 0,
         refusal: None,
@@ -2283,10 +2284,11 @@ const TILEMAP_TYPE_PATH: &str = "jackdaw_scene_types::tilemap::Tilemap";
 
 fn tilemap_app(tabs: usize) -> bevy::app::App {
     let mut app = make_app_with_n_tabs(tabs);
-    app.init_resource::<jackdaw::terrain::TerrainDataStore>();
+    app.init_resource::<jackdaw::terrain_mode::TerrainDataStore>();
     app.init_resource::<jackdaw::status_bar::StatusNotice>();
     app.init_resource::<jackdaw::entity_ops::EntityClipboard>();
     jackdaw_editor_tile::tilemap::plugin(&mut app);
+    jackdaw_editor_terrain::sidecar_io::plugin(&mut app);
     app
 }
 
@@ -2476,7 +2478,7 @@ fn scene_save_all_writes_terrain_and_tile_sidecars_of_every_tab() {
     open_new_scene(&mut app, &tmp.path().join("a.bsn"));
     let terrain_path = "a.terrain-0.jdterrain";
     app.world_mut()
-        .resource_mut::<jackdaw::terrain::TerrainDataStore>()
+        .resource_mut::<jackdaw::terrain_mode::TerrainDataStore>()
         .insert(
             terrain_path.to_string(),
             jackdaw_terrain::RegionTerrainData::from_legacy_v1(&jackdaw_terrain::TerrainData {

@@ -1161,12 +1161,6 @@ fn build_inspector_cards(
                 continue;
             }
 
-            // Priority 3c: Terrain, custom inspector sections
-            if type_id == TypeId::of::<jackdaw_scene_types::Terrain>() {
-                crate::terrain::inspector::spawn_terrain_inspector_container(commands, body_entity);
-                continue;
-            }
-
             // Priority 3d: Node, the structured layout card. Filled
             // world-exclusive after the flush, like the material cards.
             if type_id == TypeId::of::<Node>() {

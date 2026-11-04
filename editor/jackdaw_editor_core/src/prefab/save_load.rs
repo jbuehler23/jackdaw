@@ -116,7 +116,8 @@ pub fn missing_source_reason(path: &Path) -> &'static str {
 
 /// Cache `path` and every prefab it transitively inherits from. The resolver
 /// expands a whole `IsA` chain in one pass, so a partly cached chain fails.
-pub(crate) fn cache_prefab_tree(path: &Path, cache: &mut PrefabAstCache, assets_root: &Path) {
+#[doc(hidden)]
+pub fn cache_prefab_tree(path: &Path, cache: &mut PrefabAstCache, assets_root: &Path) {
     cache_prefab_tree_inner(path, cache, assets_root, 0);
 }
 

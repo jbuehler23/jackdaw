@@ -97,7 +97,7 @@ pub fn handle_grid_size_scroll(
     keyboard: Res<ButtonInput<KeyCode>>,
     keybind_focus: crate::keybind_focus::KeybindFocus,
     modal: Res<crate::modal_transform::ModalTransformState>,
-    terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
+    terrain_edit_mode: Res<crate::terrain_mode::TerrainEditMode>,
     active_viewport: Res<crate::viewport::ActiveViewport>,
     mut scroll_events: MessageReader<MouseWheel>,
     mut commands: Commands,

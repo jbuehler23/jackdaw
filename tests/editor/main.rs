@@ -30,8 +30,5 @@ mod scenes;
 #[path = "../stage/mod.rs"]
 mod stage;
 
-#[path = "../terrain/mod.rs"]
-mod terrain;
-
 #[path = "../viewport/mod.rs"]
 mod viewport;

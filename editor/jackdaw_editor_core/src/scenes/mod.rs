@@ -15,7 +15,7 @@ use bevy::prelude::*;
 
 use crate::commands::CommandHistory;
 use crate::project::ProjectRoot;
-use crate::terrain::TerrainDataStore;
+use crate::terrain_mode::TerrainDataStore;
 use jackdaw_api_internal::document::{SceneResource, SceneResourceValue};
 
 pub struct ScenesPlugin;

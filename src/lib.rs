@@ -3,6 +3,7 @@
 //! re-exports the core so `jackdaw::...` paths keep resolving, and adds the
 //! feature crates to the editor.
 pub use jackdaw_editor_core::*;
+pub use jackdaw_editor_terrain;
 pub use jackdaw_editor_tile;
 
 use bevy::app::{App, PluginGroup, PluginGroupBuilder};
@@ -16,13 +17,19 @@ pub struct JackdawEditorPlugins {
 
 impl PluginGroup for JackdawEditorPlugins {
     fn build(self) -> PluginGroupBuilder {
-        self.core.build().add(jackdaw_editor_tile::TileEditorPlugin)
+        self.core
+            .build()
+            .add(jackdaw_editor_tile::TileEditorPlugin)
+            .add(jackdaw_editor_terrain::TerrainEditorPlugin)
     }
 }
 
 /// Adds the feature crates to an app that already has the core's plugins.
 pub fn add_feature_plugins(app: &mut App) {
-    app.add_plugins(jackdaw_editor_tile::TileEditorPlugin);
+    app.add_plugins((
+        jackdaw_editor_tile::TileEditorPlugin,
+        jackdaw_editor_terrain::TerrainEditorPlugin,
+    ));
 }
 
 pub mod prelude {

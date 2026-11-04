@@ -150,7 +150,7 @@ fn viewport_drag_detect(
     (edit_mode, draw_state, terrain_edit_mode, active_modal): (
         Res<crate::brush::EditMode>,
         Res<crate::draw_brush::DrawBrushState>,
-        Res<crate::terrain::TerrainEditMode>,
+        Res<crate::terrain_mode::TerrainEditMode>,
         jackdaw_api::prelude::ActiveModalQuery,
     ),
     (mut ray_cast, parents, brushes, editor_entities): (
@@ -287,7 +287,7 @@ fn viewport_drag_update(
     mut transforms: Query<&mut Transform>,
     mut cursor_query: Query<&mut CursorOptions, With<Window>>,
     edit_mode: Res<crate::brush::EditMode>,
-    terrain_edit_mode: Res<crate::terrain::TerrainEditMode>,
+    terrain_edit_mode: Res<crate::terrain_mode::TerrainEditMode>,
 ) {
     if !mouse.pressed(MouseButton::Left) {
         drag_state.pending = None;

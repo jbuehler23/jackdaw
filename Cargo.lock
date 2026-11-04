@@ -4206,6 +4206,7 @@ dependencies = [
  "jackdaw_bsn",
  "jackdaw_commands",
  "jackdaw_editor_core",
+ "jackdaw_editor_terrain",
  "jackdaw_editor_tile",
  "jackdaw_env",
  "jackdaw_feathers",
@@ -4475,6 +4476,33 @@ dependencies = [
  "toml_edit",
  "windows-sys 0.61.2",
  "winit",
+]
+
+[[package]]
+name = "jackdaw_editor_terrain"
+version = "0.21.0-dev"
+dependencies = [
+ "bevy",
+ "dunce",
+ "image",
+ "jackdaw_api",
+ "jackdaw_api_internal",
+ "jackdaw_bsn",
+ "jackdaw_commands",
+ "jackdaw_editor_core",
+ "jackdaw_feathers",
+ "jackdaw_panels",
+ "jackdaw_prefab",
+ "jackdaw_remote",
+ "jackdaw_runtime",
+ "jackdaw_scene_types",
+ "jackdaw_terrain",
+ "jackdaw_widgets",
+ "path-slash",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -135,7 +135,7 @@ pub(crate) fn capture_active_tab(world: &mut World) -> Result<(), jackdaw_bsn::U
     }
 
     let terrain_data_store = world
-        .get_resource_mut::<crate::terrain::TerrainDataStore>()
+        .get_resource_mut::<crate::terrain_mode::TerrainDataStore>()
         .map(|mut store| std::mem::take(&mut *store));
     let scene_resources = crate::scenes::take_scene_resources(world);
     let mut scenes = world.resource_mut::<Scenes>();
@@ -152,7 +152,7 @@ pub(crate) fn capture_active_tab(world: &mut World) -> Result<(), jackdaw_bsn::U
 /// Spawn the target tab's document into the live world and restore per-tab
 /// history and view state.
 pub fn activate_tab(world: &mut World, target: usize) {
-    let has_terrain_data_store = world.contains_resource::<crate::terrain::TerrainDataStore>();
+    let has_terrain_data_store = world.contains_resource::<crate::terrain_mode::TerrainDataStore>();
     let (mut content, view_state, history, tab_path, terrain_data_store, scene_resources) = {
         let mut scenes = world.resource_mut::<Scenes>();
         let tab = &mut scenes.tabs[target];
@@ -170,7 +170,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
     // and importing any sidecars. `FillMissing` can now preserve unsaved
     // edits without confusing a same-named sidecar from another tab.
     if let Some(terrain_data_store) = terrain_data_store {
-        *world.resource_mut::<crate::terrain::TerrainDataStore>() = terrain_data_store;
+        *world.resource_mut::<crate::terrain_mode::TerrainDataStore>() = terrain_data_store;
     }
     crate::scenes::restore_scene_resources(world, scene_resources);
 
@@ -329,7 +329,6 @@ pub fn activate_tab(world: &mut World, target: usize) {
             crate::scene_io::SidecarImport::RefreshChanged
         };
         let path = path.to_string_lossy();
-        crate::scene_io::import_terrain_sidecars(world, &path, mode);
         crate::scene_io::hooks::import_sidecars(world, &path, mode);
     }
 
