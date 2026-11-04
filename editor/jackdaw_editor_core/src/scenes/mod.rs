@@ -148,6 +148,9 @@ pub struct SceneTab {
     /// Why the tab is in front without its contents in the world, if it is.
     /// Set, the world is not the file's contents and must not be written back.
     pub refusal: Option<TabRefusal>,
+    /// Node ids were minted when the scene opened and no save has written them
+    /// to the file. Play saves such a tab so the game loads the same ids.
+    pub unsaved_node_ids: bool,
 }
 
 /// Why an activation refused to put a tab's document in the world. The next
@@ -188,6 +191,7 @@ impl SceneTab {
             scene_resources: TabResources::default(),
             history_depth_at_last_check: 0,
             refusal: None,
+            unsaved_node_ids: false,
         }
     }
 }

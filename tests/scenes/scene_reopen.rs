@@ -144,3 +144,84 @@ fn opening_and_saving_names_every_node_once() {
         "a reopen keeps the saved ids"
     );
 }
+
+fn open_scene(app: &mut App, path: &std::path::Path) {
+    request_open_with_conversion(app.world_mut(), path);
+    app.update();
+}
+
+fn active_tab_is_clean(app: &App) -> bool {
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    !scenes.tabs[scenes.active].dirty
+        && !jackdaw::scenes::operators::active_tab_modified(app.world())
+}
+
+/// Play writes the ids an opened scene was given, so the game loads the same
+/// ones, without making the tab look modified.
+#[test]
+fn play_saves_the_ids_minted_when_a_scene_opened() {
+    let mut app = util::editor_test_app();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("nested.bsn");
+    std::fs::write(&path, UNNAMED_NESTED_SCENE).expect("write scene");
+    open_scene(&mut app, &path);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        UNNAMED_NESTED_SCENE
+    );
+    let held = entity_ids(&mut app);
+
+    jackdaw::pie::save_before_play(app.world_mut()).expect("play saves");
+    app.update();
+
+    let written = std::fs::read_to_string(&path).expect("scene");
+    assert_eq!(saved_ids(&written), held, "every owned node has its id");
+    assert!(active_tab_is_clean(&app), "the tab stays clean");
+
+    let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    jackdaw::pie::save_before_play(app.world_mut()).expect("play saves again");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), mtime);
+}
+
+#[test]
+fn play_leaves_a_scene_that_already_has_its_ids_alone() {
+    let mut app = util::editor_test_app();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("nested.bsn");
+    std::fs::write(&path, UNNAMED_NESTED_SCENE).expect("write scene");
+    open_scene(&mut app, &path);
+    let named = save(&mut app, &path);
+
+    let mut reopened = util::editor_test_app();
+    open_scene(&mut reopened, &path);
+    let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    jackdaw::pie::save_before_play(reopened.world_mut()).expect("play saves");
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), named);
+    assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), mtime);
+}
+
+#[test]
+fn play_writes_nothing_with_save_before_play_off() {
+    use crate::util::OperatorResultExt as _;
+    use jackdaw_api::prelude::*;
+
+    let mut app = util::editor_test_app();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("nested.bsn");
+    std::fs::write(&path, UNNAMED_NESTED_SCENE).expect("write scene");
+    open_scene(&mut app, &path);
+    app.world_mut()
+        .operator("project.toggle_save_before_play")
+        .call()
+        .expect("toggle dispatches")
+        .assert_finished();
+    app.update();
+
+    jackdaw::pie::save_before_play(app.world_mut()).expect("play proceeds");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        UNNAMED_NESTED_SCENE
+    );
+}

@@ -969,6 +969,7 @@ fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
         scene_resources: Default::default(),
         history_depth_at_last_check: 0,
         refusal: None,
+        unsaved_node_ids: false,
     };
 }
 

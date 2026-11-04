@@ -448,6 +448,7 @@ pub struct ReadScene {
     doc: jackdaw_bsn::SceneBsnAst,
     saved_camera: Option<Transform>,
     pending_conversion: Option<crate::jsn_to_bsn::PendingConversion>,
+    named_nodes: bool,
 }
 
 /// `read_scene`, reporting a failure as the end of the scene load.
@@ -507,9 +508,8 @@ fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScen
     let assets_root = crate::prefab::save_load::source_root(world, &scene_dir);
     jackdaw_prefab::absolutize_isa_sources(&mut doc, &assets_root, &scene_dir);
     crate::prefab::save_load::retarget_isa_sources(&mut doc, &assets_root, &scene_dir);
-    if !document_is_prefab(&doc) {
-        crate::scene_nodes::name_scene_nodes(&mut doc);
-    }
+    let named_nodes =
+        !document_is_prefab(&doc) && crate::scene_nodes::name_scene_nodes(&mut doc) > 0;
 
     // A document naming the removed facade UI vocabulary gets no tab at all,
     // rather than opening with its UI silently missing.
@@ -522,6 +522,7 @@ fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScen
         doc,
         saved_camera,
         pending_conversion,
+        named_nodes,
     })
 }
 
@@ -533,6 +534,7 @@ pub fn open_read_scene(world: &mut World, read: ReadScene) {
         mut doc,
         saved_camera,
         pending_conversion,
+        named_nodes,
     } = read;
     if let Some(pending) = pending_conversion {
         let bsn_path = pending.bsn_path.clone();
@@ -576,6 +578,7 @@ pub fn open_read_scene(world: &mut World, read: ReadScene) {
     tab.path = Some(canonical.clone());
     tab.display_name = display_name;
     tab.dirty = dirty;
+    tab.unsaved_node_ids = named_nodes;
     // Restore the saved viewport camera framing if the scene file
     // carried one; otherwise leave the default (0, 4, 8) from
     // `new_untitled`.
@@ -758,6 +761,16 @@ pub fn scene_save_all_system(world: &mut World) -> bool {
 /// Save every tab that has a file and unsaved changes, leaving clean and
 /// untitled tabs alone. Returns a message for each tab that did not save.
 pub fn save_modified_scenes(world: &mut World) -> Vec<String> {
+    save_scenes_where(world, false)
+}
+
+/// [`save_modified_scenes`], also saving tabs whose node ids were minted on
+/// open and never written, so the game loads the ids the editor addresses.
+pub fn save_scenes_for_play(world: &mut World) -> Vec<String> {
+    save_scenes_where(world, true)
+}
+
+fn save_scenes_where(world: &mut World, with_unsaved_ids: bool) -> Vec<String> {
     let active_modified = active_tab_modified(world);
     let scenes = world.resource::<Scenes>();
     let modified: Vec<usize> = scenes
@@ -767,7 +780,9 @@ pub fn save_modified_scenes(world: &mut World) -> Vec<String> {
         .filter(|(i, tab)| {
             tab.path.is_some()
                 && !tab.is_refused()
-                && (tab.dirty || (*i == scenes.active && active_modified))
+                && (tab.dirty
+                    || (*i == scenes.active && active_modified)
+                    || (with_unsaved_ids && tab.unsaved_node_ids))
         })
         .map(|(i, _)| i)
         .collect();

@@ -171,7 +171,9 @@ pub fn rename_node(world: &mut World, entity: Entity, node: SceneNodeId) {
 /// The nodes inside a prefab instance carry a `PrefabEntityId` and take their
 /// ids from the prefab file, so they are left as they are. An instance root
 /// carries one too, but it is the scene's own node.
-pub fn name_scene_nodes(ast: &mut SceneBsnAst) {
+///
+/// Returns how many nodes were named.
+pub fn name_scene_nodes(ast: &mut SceneBsnAst) -> usize {
     let mut stack = ast.roots.clone();
     let mut seen = HashSet::new();
     let mut unnamed = Vec::new();
@@ -190,12 +192,14 @@ pub fn name_scene_nodes(ast: &mut SceneBsnAst) {
         }
         stack.extend(ast.get_children_ast(node));
     }
+    let named = unnamed.len();
     for node in unnamed {
         let patch = ast.world.spawn(node_id_patch(SceneNodeId::next())).id();
         if let Some(patches) = ast.get_patches_mut(node) {
             patches.0.push(patch);
         }
     }
+    named
 }
 
 #[cfg(test)]

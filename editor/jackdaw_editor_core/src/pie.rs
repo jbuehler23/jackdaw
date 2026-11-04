@@ -861,7 +861,7 @@ fn open_scene_asset_path(world: &World) -> Option<String> {
 /// Save the modified scenes the game may load, unless the project turned
 /// that off. Refuses when the scene in front has never been saved, since the
 /// game cannot load it.
-fn save_before_play(world: &mut World) -> Result<(), String> {
+pub fn save_before_play(world: &mut World) -> Result<(), String> {
     if !world
         .get_resource::<crate::project_build::EditorBuildSettings>()
         .is_none_or(|settings| settings.save_before_play)
@@ -875,7 +875,7 @@ fn save_before_play(world: &mut World) -> Result<(), String> {
     if untitled_in_front && crate::scenes::operators::active_tab_modified(world) {
         return Err("Save the scene before playing".to_string());
     }
-    let failures = crate::scenes::operators::save_modified_scenes(world);
+    let failures = crate::scenes::operators::save_scenes_for_play(world);
     if failures.is_empty() {
         Ok(())
     } else {

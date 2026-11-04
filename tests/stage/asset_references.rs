@@ -391,6 +391,7 @@ fn converting_a_document_a_tab_has_open_is_refused() {
             scene_resources: Default::default(),
             history_depth_at_last_check: 0,
             refusal: None,
+            unsaved_node_ids: false,
         });
 
     let result = app
