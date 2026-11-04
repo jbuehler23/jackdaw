@@ -1,7 +1,6 @@
 //! Mirrors the editor selection into the focused running game as a highlight
 //! box. The game draws the box through its own cameras, so it appears in the
-//! streamed frame. Works whether the entity was picked in the Game panel or
-//! selected in the Live tree, since both routes update [`Selection`].
+//! streamed frame.
 
 use bevy::prelude::*;
 
