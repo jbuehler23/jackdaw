@@ -335,7 +335,7 @@ pub(crate) fn follow_scene_selection_to_clip(
 
 /// Typed, undo-aware delete command for animation keyframes.
 ///
-/// We don't reuse [`commands::DespawnEntity`] for keyframes because
+/// We don't reuse `DespawnEntity` for keyframes because
 /// that path round-trips through Bevy's `DynamicScene::write_to_world`,
 /// which doesn't play well with entity ID reuse: after despawn,
 /// Bevy may reissue the keyframe's slot to a later-spawned entity,
@@ -501,7 +501,7 @@ impl DespawnKeyframeCmd {
 /// Delete all keyframe entities currently in [`jackdaw_editor_core::selection::Selection`]
 /// as a single undoable group. Strips them from the selection first so
 /// any non-keyframe entities still in the selection get processed by
-/// the generic [`entity_ops::EntityDeleteOp`] in the same press.
+/// the generic `EntityDeleteOp` in the same press.
 #[operator(
     id = "clip.delete_keyframes",
     label = "Delete Keyframes",
