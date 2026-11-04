@@ -159,7 +159,6 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
 
     let mut loaded_hash: Option<u64> = None;
     let mut pending_upgrade = None;
-    let mut named_nodes = false;
 
     if path.ends_with(".scene.json") {
         // Legacy format: raw DynamicWorld JSON
@@ -273,7 +272,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         }
         jackdaw_prefab::absolutize_isa_sources(&mut authored, &assets_root, &parent_path);
         if !crate::scenes::operators::document_is_prefab(&authored) {
-            named_nodes = crate::scene_nodes::name_scene_nodes(&mut authored) > 0;
+            crate::scene_nodes::name_scene_nodes(&mut authored);
         }
 
         // A legacy scene's prefabs may be legacy too, and the cache reads
@@ -436,12 +435,6 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
 
     // Stacks were cleared by clear_scene_entities, so dirty baseline is 0
     world.resource_mut::<SceneDirtyState>().undo_len_at_save = 0;
-    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
-        let active = scenes.active;
-        if let Some(tab) = scenes.tabs.get_mut(active) {
-            tab.unsaved_node_ids = named_nodes;
-        }
-    }
     if let Some(upgrade) = pending_upgrade {
         crate::lod_upgrade::finish_upgrade(world, upgrade);
     }

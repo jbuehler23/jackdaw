@@ -262,7 +262,6 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             let active = scenes.active;
             if let Some(tab) = scenes.tabs.get_mut(active) {
                 tab.dirty = false;
-                tab.unsaved_node_ids = false;
                 tab.history_depth_at_last_check = history_len;
             }
         }
@@ -335,7 +334,6 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         let active = scenes.active;
         if let Some(tab) = scenes.tabs.get_mut(active) {
             tab.dirty = false;
-            tab.unsaved_node_ids = false;
             tab.history_depth_at_last_check = history_len;
             if legacy_backup.is_some() {
                 tab.path = Some(PathBuf::from(&path));
