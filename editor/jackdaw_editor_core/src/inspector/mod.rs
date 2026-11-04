@@ -70,11 +70,11 @@ impl ComponentCardRegistry {
 /// Systems that decorate inspector field rows (an `InspectorFieldRow` gaining
 /// a `FieldRowDecoration` child), run before the row gutters are reserved.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InspectorFieldDecorations;
+pub struct InspectorFieldDecorationSystems;
 
 /// The pass that rebuilds the inspector's cards for the current selection.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InspectorSync;
+pub struct InspectorSyncSystems;
 
 /// Remembers each inspector card's collapsed state across rebuilds, keyed by
 /// the card's display name. A name not present defaults to collapsed.
@@ -137,7 +137,7 @@ impl Plugin for InspectorPlugin {
         app.init_resource::<ComponentCardRegistry>();
         app.configure_sets(
             Update,
-            InspectorFieldDecorations
+            InspectorFieldDecorationSystems
                 .after(component_display::sync_inspector_to_selection)
                 .run_if(in_state(crate::AppState::Editor)),
         );
@@ -189,7 +189,7 @@ impl Plugin for InspectorPlugin {
                 (
                     apply_pending_inspector_rebuild,
                     flag_inspector_dirty_on_modifier_stack_change,
-                    component_display::sync_inspector_to_selection.in_set(InspectorSync),
+                    component_display::sync_inspector_to_selection.in_set(InspectorSyncSystems),
                 )
                     .chain()
                     .before(category_strip::resolve_active_on_rebuild),
@@ -232,7 +232,7 @@ impl Plugin for InspectorPlugin {
                     // Their spawns are deferred, so the gutter follows a new
                     // mark on the next pass rather than the same one.
                     jackdaw_feathers::field_row::reserve_decoration_gutters
-                        .after(InspectorFieldDecorations)
+                        .after(InspectorFieldDecorationSystems)
                         .after(prefab_field_dots::decorate_prefab_field_rows)
                         .after(live_edit_dots::refresh_live_edit_field_dots),
                     refresh_name_field,

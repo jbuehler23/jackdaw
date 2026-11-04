@@ -35,7 +35,7 @@ use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_api_internal::lifecycle::OperatorAction;
 use jackdaw_editor_core::asset_migration::UnsavedEditChecks;
-use jackdaw_editor_core::inspector::{ComponentCardRegistry, InspectorFieldDecorations};
+use jackdaw_editor_core::inspector::{ComponentCardRegistry, InspectorFieldDecorationSystems};
 use jackdaw_feathers::icons::Icon;
 use jackdaw_input::{ActionOf, bindings};
 
@@ -66,7 +66,7 @@ impl Plugin for AnimationEditorPlugin {
                 anim_diamond::decorate_animatable_fields,
                 anim_diamond::update_anim_diamond_highlights,
             )
-                .in_set(InspectorFieldDecorations),
+                .in_set(InspectorFieldDecorationSystems),
         )
         .add_observer(anim_diamond::on_diamond_click)
         .add_observer(keyframe_ops::on_create_clip_for_selection)

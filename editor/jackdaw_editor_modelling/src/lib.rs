@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::lifecycle::ExtensionAppExt as _;
 use jackdaw_editor_core::MenuBarSlots;
-use jackdaw_editor_core::inspector::{ComponentCardRegistry, InspectorSync};
+use jackdaw_editor_core::inspector::{ComponentCardRegistry, InspectorSyncSystems};
 use jackdaw_editor_core::scene_io::hooks::DragResets;
 
 pub use jackdaw_editor_core::modelling_mode::MODELLING_EDITOR_EXTENSION_ID;
@@ -80,7 +80,7 @@ impl Plugin for ModellingEditorPlugin {
             .add_systems(
                 Update,
                 brush_card::update_brush_face_properties
-                    .after(InspectorSync)
+                    .after(InspectorSyncSystems)
                     .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
             )
             .add_observer(brush_card::on_brush_face_text_commit);
