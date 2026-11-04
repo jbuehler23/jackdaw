@@ -124,7 +124,8 @@ pub(crate) fn cursor_over_brush_face(
 /// Mouse-down dispatches `brush.face.drag` whenever the gesture is one
 /// of: LMB while in face-edit mode, or Shift / Alt + LMB in object
 /// mode (auto-enters face-edit as a "quick action").
-pub(crate) fn face_drag_invoke_trigger(
+#[doc(hidden)]
+pub fn face_drag_invoke_trigger(
     pointer: crate::modal_inputs::PointerInputs,
     keyboard: Res<ButtonInput<KeyCode>>,
     edit_mode: Res<EditMode>,
@@ -1638,7 +1639,8 @@ fn clip_mirror_positions(
 /// mirror planes first ([`clip_mirror_positions`]); each dragged vert's start
 /// position is read from `all_vertices[indices[i]]`, so `all_vertices` must
 /// hold the drag-start authored vertices on both paths.
-pub(crate) fn apply_vertex_deltas(
+#[doc(hidden)]
+pub fn apply_vertex_deltas(
     brush: &mut Brush,
     halfedge: Option<&mut crate::brush::BrushHalfedge>,
     mirror: Option<&jackdaw_geometry::MeshMirror>,

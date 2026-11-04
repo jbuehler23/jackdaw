@@ -307,7 +307,8 @@ pub(crate) fn clip_apply(
 /// the cap slot from the first surviving face (so checker tiling
 /// inherits from the cut's neighbor) before zeroing UV axes so
 /// `ensure_uv_axes` derives proper tangents from the cap's plane.
-pub(crate) fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<Brush> {
+#[doc(hidden)]
+pub fn bisect_brush(brush: &Brush, plane: &BrushPlane, keep: BisectKeep) -> Option<Brush> {
     let mut mesh = HalfedgeMesh::lift_from_topology(&brush.topology);
     let result = bisect_plane(&mut mesh, plane, keep).ok()?;
     if mesh.face_count() == 0 {
@@ -589,7 +590,7 @@ pub(crate) fn brush_clip(params: In<OperatorParameters>, world: &mut World) -> O
 
     // Baked before the back half is cloned from the brush, so neither half
     // carries the stack that is already folded into it.
-    crate::brush::topology_ops::mirror_ops::bake_mirror(world, clip.entity);
+    crate::brush::modifier_bake::bake_modifier_stack_entity(world, clip.entity);
     let mut created = Vec::new();
     if let Some(back) = split {
         let local = world

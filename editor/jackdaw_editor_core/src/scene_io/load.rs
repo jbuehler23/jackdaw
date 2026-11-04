@@ -601,16 +601,10 @@ fn forget_dragged_entities(world: &mut World) {
 
     // Every other gesture that parks entity ids in a resource for the length of
     // a drag.
-    use crate::brush::topology_ops as topo;
     forget_drag_resource::<crate::ui_stage::UiManipulation>(world);
     forget_drag_resource::<crate::sprite_gizmo::SpriteManipulation>(world);
     forget_drag_resource::<crate::sprite_stage::SpritePress>(world);
-    forget_drag_resource::<topo::extrude::ExtrudeModalState>(world);
-    forget_drag_resource::<topo::inset::InsetModalState>(world);
-    forget_drag_resource::<topo::edge_bevel::EdgeBevelModalState>(world);
-    forget_drag_resource::<topo::vertex_bevel::VertexBevelModalState>(world);
-    forget_drag_resource::<topo::edge_slide_modal::EdgeSlideModalState>(world);
-    forget_drag_resource::<topo::vertex_slide_modal::VertexSlideModalState>(world);
+    super::hooks::forget_drags(world);
 }
 
 /// Put one drag-state resource back to its resting value, if the app has it.

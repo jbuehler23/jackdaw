@@ -1168,9 +1168,7 @@ pub(crate) fn material_create(params: In<OperatorParameters>, world: &mut World)
             set_outcome(world, Outcome::Changed);
             OperatorResult::Finished
         }
-        Err(why) => {
-            crate::brush::topology_ops::select_elements::refuse(world, "material.create", why)
-        }
+        Err(why) => crate::brush::refuse(world, "material.create", why),
     }
 }
 

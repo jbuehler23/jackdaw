@@ -50,6 +50,7 @@ members = [
 jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "editor/jackdaw_editor_core", default-features = false }
 jackdaw_editor_tile = { version = "0.21.0-dev", path = "editor/jackdaw_editor_tile" }
 jackdaw_editor_terrain = { version = "0.21.0-dev", path = "editor/jackdaw_editor_terrain" }
+jackdaw_editor_modelling = { version = "0.21.0-dev", path = "editor/jackdaw_editor_modelling" }
 bevy.workspace = true
 # The wrapper's logic also lives in this crate's `[[bin]]` so that
 # `cargo install jackdaw` ships `jackdaw-rustc-wrapper` next to the
@@ -257,6 +258,9 @@ incremental = true
 incremental = true
 
 [profile.dev.package.jackdaw_editor_terrain]
+incremental = true
+
+[profile.dev.package.jackdaw_editor_modelling]
 incremental = true
 
 [profile.dev.package."*"]

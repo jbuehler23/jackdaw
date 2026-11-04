@@ -94,3 +94,28 @@ pub fn forget_project(world: &mut World) {
         hook.forget_project(world);
     }
 }
+
+/// Drag-state resources a feature parks scene entity ids in, put back to rest
+/// when the scene those ids name goes away.
+#[derive(Resource, Default, Clone)]
+pub struct DragResets(Vec<fn(&mut World)>);
+
+impl DragResets {
+    pub fn register<R: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(&mut self) {
+        self.0.push(|world| {
+            if let Some(mut drag) = world.get_resource_mut::<R>() {
+                *drag = R::default();
+            }
+        });
+    }
+}
+
+pub fn forget_drags(world: &mut World) {
+    let resets = world
+        .get_resource::<DragResets>()
+        .cloned()
+        .unwrap_or_default();
+    for reset in resets.0 {
+        reset(world);
+    }
+}

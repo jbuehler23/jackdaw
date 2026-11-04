@@ -15,7 +15,8 @@ pub use jackdaw_hull::{HullFace, merge_hull_triangles};
 /// Thin wrapper over `jackdaw_hull::rebuild_brush_from_vertices` that unpacks
 /// the old brush's faces and repacks the rebuilt faces plus topology into a
 /// `Brush`. Returns the rebuilt brush and the old-to-new face index map.
-pub(crate) fn rebuild_brush_from_vertices(
+#[doc(hidden)]
+pub fn rebuild_brush_from_vertices(
     old_brush: &Brush,
     old_vertices: &[Vec3],
     old_face_polygons: &[Vec<usize>],

@@ -1,0 +1,91 @@
+//! `brush.select.invert` operator. Replace the current selection with the
+//! complement: full set of element keys (in current edit mode) minus current
+//! selection. Works in Vertex, Edge, or Face mode.
+
+use bevy::prelude::*;
+use jackdaw_api::prelude::*;
+
+use jackdaw_editor_core::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
+
+/// Flip the current selection: select everything that wasn't selected, deselect
+/// everything that was. Operates per the current edit mode (Vertex / Edge /
+/// Face).
+#[operator(
+    id = "brush.select.invert",
+    label = "Invert Selection",
+    is_available = can_run_select_invert,
+    allows_undo = false
+)]
+pub(crate) fn brush_select_invert(
+    _: In<OperatorParameters>,
+    edit_mode: Res<EditMode>,
+    mut selection: ResMut<BrushSelection>,
+    halfedge_q: Query<&BrushHalfedge>,
+) -> Option<OperatorResult> {
+    let brush_entity = selection.active_brush?;
+    let halfedge = halfedge_q.get(brush_entity).ok()?;
+
+    match *edit_mode {
+        EditMode::BrushEdit(BrushEditMode::Vertex) => {
+            let total = halfedge.vert_keys.len();
+            let current: std::collections::HashSet<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.vertices.iter().copied().collect())
+                .unwrap_or_default();
+            selection.sub_mut(brush_entity).vertices =
+                (0..total).filter(|i| !current.contains(i)).collect();
+            Some(OperatorResult::Finished)
+        }
+        EditMode::BrushEdit(BrushEditMode::Edge) => {
+            let mut all_edges: Vec<(usize, usize)> = Vec::with_capacity(halfedge.mesh.edges.len());
+            let mut key_to_idx: std::collections::HashMap<
+                jackdaw_geometry::halfedge::VertKey,
+                usize,
+            > = std::collections::HashMap::with_capacity(halfedge.vert_keys.len());
+            for (i, &k) in halfedge.vert_keys.iter().enumerate() {
+                key_to_idx.insert(k, i);
+            }
+            for (_, edge) in halfedge.mesh.edges.iter() {
+                let Some(&a) = key_to_idx.get(&edge.v[0]) else {
+                    continue;
+                };
+                let Some(&b) = key_to_idx.get(&edge.v[1]) else {
+                    continue;
+                };
+                let pair = if a < b { (a, b) } else { (b, a) };
+                all_edges.push(pair);
+            }
+            let current: std::collections::HashSet<(usize, usize)> = selection
+                .sub(brush_entity)
+                .map(|s| s.edges.iter().copied().collect())
+                .unwrap_or_default();
+            selection.sub_mut(brush_entity).edges = all_edges
+                .into_iter()
+                .filter(|p| !current.contains(p))
+                .collect();
+            Some(OperatorResult::Finished)
+        }
+        EditMode::BrushEdit(BrushEditMode::Face) => {
+            let total = halfedge.face_keys.len();
+            let current: std::collections::HashSet<usize> = selection
+                .sub(brush_entity)
+                .map(|s| s.faces.iter().copied().collect())
+                .unwrap_or_default();
+            selection.sub_mut(brush_entity).faces =
+                (0..total).filter(|i| !current.contains(i)).collect();
+            Some(OperatorResult::Finished)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn can_run_select_invert(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+) -> bool {
+    matches!(*edit_mode, EditMode::BrushEdit(_)) && selection.active_brush.is_some()
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushSelectInvertOp>();
+}

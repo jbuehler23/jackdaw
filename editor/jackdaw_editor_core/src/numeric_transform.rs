@@ -359,10 +359,8 @@ fn draw_numeric_axis_guide(
 /// polygons: the union of its vertices, both ends of every edge, and every
 /// vertex of each selected face. Deduplicated, in first-appearance order; a
 /// face index past the polygons is skipped.
-pub(crate) fn sub_selection_vertices(
-    sub: &BrushSubSelection,
-    face_polygons: &[Vec<usize>],
-) -> Vec<usize> {
+#[doc(hidden)]
+pub fn sub_selection_vertices(sub: &BrushSubSelection, face_polygons: &[Vec<usize>]) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     let push = |v: usize, out: &mut Vec<usize>| {
         if !out.contains(&v) {
@@ -387,7 +385,8 @@ pub(crate) fn sub_selection_vertices(
 }
 
 /// Mean of a set of positions; the origin for an empty set.
-pub(crate) fn centroid(positions: &[Vec3]) -> Vec3 {
+#[doc(hidden)]
+pub fn centroid(positions: &[Vec3]) -> Vec3 {
     if positions.is_empty() {
         return Vec3::ZERO;
     }

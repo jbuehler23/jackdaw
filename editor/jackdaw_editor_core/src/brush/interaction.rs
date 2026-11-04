@@ -47,19 +47,22 @@ pub(super) fn drop_brush_edit_on_deselect(
     }
 }
 
-pub(crate) struct PendingSubDrag {
+#[doc(hidden)]
+pub struct PendingSubDrag {
     pub click_pos: Vec2,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) enum FaceExtrudeMode {
+#[doc(hidden)]
+pub enum FaceExtrudeMode {
     #[default]
     Merge, // Push/pull existing face plane
     Extend, // Create new brush from face extrusion
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct BrushDragState {
+#[doc(hidden)]
+pub struct BrushDragState {
     pub pending: Option<PendingSubDrag>,
     pub active: bool,
     pub extrude_mode: FaceExtrudeMode,
@@ -84,7 +87,8 @@ pub(crate) struct BrushDragState {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) enum VertexDragConstraint {
+#[doc(hidden)]
+pub enum VertexDragConstraint {
     #[default]
     Free,
     AxisX,
@@ -113,7 +117,8 @@ pub(crate) struct BrushDragCapture {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct VertexDragState {
+#[doc(hidden)]
+pub struct VertexDragState {
     pub pending: Option<PendingSubDrag>,
     pub active: bool,
     pub constraint: VertexDragConstraint,
@@ -138,7 +143,8 @@ pub(crate) struct VertexDragState {
 /// movement. `anchor_world` is the world position of the dragged element;
 /// the cursor ray meets a plane through that point so the drag tracks the
 /// pointer under perspective.
-pub(crate) fn compute_brush_drag_offset(
+#[doc(hidden)]
+pub fn compute_brush_drag_offset(
     constraint: VertexDragConstraint,
     start_cursor: Vec2,
     current_cursor: Vec2,
@@ -183,7 +189,8 @@ pub(crate) fn compute_brush_drag_offset(
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct EdgeDragState {
+#[doc(hidden)]
+pub struct EdgeDragState {
     pub pending: Option<PendingSubDrag>,
     pub active: bool,
     pub constraint: VertexDragConstraint,
@@ -212,7 +219,8 @@ pub enum ClipMode {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct ClipState {
+#[doc(hidden)]
+pub struct ClipState {
     pub points: Vec<Vec3>,
     pub preview_plane: Option<BrushPlane>,
     pub mode: ClipMode,
@@ -222,7 +230,8 @@ pub(crate) struct ClipState {
 /// the clip overlay (points + front/back wireframes). Mutations
 /// (placing points, cycling mode, applying, clearing) live in the
 /// `brush.clip.*` operators in [`crate::clip_ops`].
-pub(super) fn handle_clip_mode(
+#[doc(hidden)]
+pub fn handle_clip_mode(
     edit_mode: Res<EditMode>,
     camera_query: Query<(Entity, &Camera, &GlobalTransform), With<MainViewportCamera>>,
     active: Res<crate::viewport::ActiveViewport>,
@@ -570,7 +579,8 @@ pub(super) fn brush_face_hover(
 /// hover (its `should_hover` guard is false), so this system fills in the
 /// vertex or edge nearest to the cursor across all edit brushes and writes
 /// it into `BrushFaceHover`.
-pub(super) fn brush_vertex_edge_hover(
+#[doc(hidden)]
+pub fn brush_vertex_edge_hover(
     edit_mode: Res<EditMode>,
     vp: crate::viewport::ViewportCursor,
     brush_selection: Res<BrushSelection>,

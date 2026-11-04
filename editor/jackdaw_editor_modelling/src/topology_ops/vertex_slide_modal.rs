@@ -1,0 +1,443 @@
+//! `brush.mesh.vertex_slide_modal` operator: modal vertex slide.
+//!
+//! Press `Shift+V` in Vertex mode with exactly one vertex selected. Cursor
+//! motion picks both the target incident edge (whichever screen-space
+//! direction from the vertex outward best aligns with the cursor delta) and
+//! the slide factor in `[0, 1]`: 0 = no slide, 1 = collapsed onto the chosen
+//! neighbor. The brush mesh is mutated each frame so the user sees the live
+//! slid vertex position as a real mesh edit. LMB commits; Esc / RMB cancels
+//! and restores the pre-modal mesh.
+//!
+//! Coexists with the non-modal `brush.mesh.vertex_slide` operator (which
+//! slides by a fixed amount along the first disk-cycle edge) -- this is a
+//! separate entry point.
+
+use bevy::prelude::*;
+use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
+use jackdaw_geometry::halfedge::cycles::disk_walk;
+use jackdaw_geometry::halfedge::ops::vertex_slide::vertex_slide;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
+use jackdaw_scene_types::Brush;
+
+use super::modal_edit::ModalTopologyEdit;
+use jackdaw_editor_core::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
+use jackdaw_editor_core::snapping::SnapSettings;
+use jackdaw_editor_core::viewport::{MainViewportCamera, SceneViewport};
+use jackdaw_editor_core::viewport_util::ViewportRemap;
+
+/// Below this cursor-delta magnitude (in window pixels), no candidate edge
+/// is preferred and the slide factor stays at 0. Avoids jittery target
+/// switching when the user has barely moved the cursor.
+const VERTEX_SLIDE_DEADZONE: f32 = 2.0;
+
+/// One incident edge and its screen-space direction from the slid vertex.
+#[derive(Clone, Copy)]
+struct CandidateEdge {
+    edge_key: EdgeKey,
+    /// Unit-length screen-space direction from the slid vertex toward the
+    /// edge's other endpoint, in window pixels. `None` if both endpoints
+    /// projected to the same point (degenerate / behind-camera edge).
+    screen_dir: Option<Vec2>,
+    /// Length of the (non-normalized) screen vector from the slid vertex
+    /// to the other endpoint. Used to map projection distance to a [0, 1]
+    /// factor.
+    screen_len: f32,
+    /// World-space length of the candidate edge. Used to convert factor into
+    /// a world distance for grid snapping.
+    world_len: f32,
+}
+
+/// Modal state for the `brush.mesh.vertex_slide_modal` operator.
+#[derive(Resource, Default)]
+pub struct VertexSlideModalState {
+    pub active: bool,
+    pub brush_entity: Option<Entity>,
+    /// `HalfedgeMesh` `VertKey` of the vertex being slid. The slotmap key stays
+    /// valid across the snapshot's clones, so it re-resolves each frame after
+    /// the snapshot is restored.
+    pub vert_key: Option<VertKey>,
+    /// Window-space cursor position at the moment the modal started.
+    pub start_cursor: Vec2,
+    /// Incident edges of the slid vertex, snapshotted at modal entry along
+    /// with their screen-space directions.
+    candidates: Vec<CandidateEdge>,
+    /// Index into `candidates` of the currently chosen slide-target edge.
+    /// `None` until the cursor leaves the deadzone.
+    chosen_idx: Option<usize>,
+    /// Current factor in `[0, 1]`. 0 = no slide, 1 = collapsed onto neighbor.
+    pub current_factor: f32,
+    /// Pre-edit snapshot driving restore and per-frame re-apply.
+    pub edit: Option<ModalTopologyEdit>,
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushVertexSlideModalOp>();
+
+    ctx.bind_operator_host::<BrushVertexSlideModalOp>([PresetInput::key("KeyV").shift()]);
+}
+
+/// Slide the selected vertex along whichever incident edge the cursor is
+/// pointing toward, by a factor in `[0, 1]` derived from cursor distance.
+/// The live brush mesh is updated each frame so the slide is visible as a
+/// real mesh edit. LMB commits; Esc / RMB cancels and reverts.
+///
+/// Requires Vertex mode with exactly one vertex selected.
+#[operator(
+    id = "brush.mesh.vertex_slide_modal",
+    label = "Vertex Slide (Modal)",
+    is_available = can_run_vertex_slide_modal,
+    modal = true,
+    allows_undo = true,
+    cancel = cancel_vertex_slide,
+)]
+pub(crate) fn brush_vertex_slide_modal(
+    _: In<OperatorParameters>,
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+    mut brushes: Query<&mut Brush>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
+    brush_transforms: Query<&GlobalTransform>,
+    mut modal_state: ResMut<VertexSlideModalState>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: jackdaw_editor_core::keybind_focus::KeybindFocus,
+    modal_inputs: jackdaw_editor_core::modal_inputs::ModalInputs,
+    cursor: jackdaw_editor_core::viewport::UiCursorPos,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    snap_settings: Res<SnapSettings>,
+    modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> Option<OperatorResult> {
+    // Ui-logical cursor; dragging outside the viewport panel should not
+    // cancel the modal (matches inset / extrude / edge_slide_modal behavior).
+    let cursor_pos = cursor.get()?;
+
+    // --- First invoke: snapshot and enter modal ---
+    if modal_entity.is_none() {
+        if *edit_mode != EditMode::BrushEdit(BrushEditMode::Vertex) {
+            return None;
+        }
+        let brush_entity = selection.active_brush?;
+        let sel_verts: Vec<usize> = selection
+            .sub(brush_entity)
+            .map(|s| s.vertices.clone())
+            .unwrap_or_default();
+        if sel_verts.len() != 1 {
+            return None;
+        }
+
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
+
+        let &vert_idx = sel_verts.first()?;
+        let &vert_key = halfedge.vert_keys.get(vert_idx)?;
+
+        let brush_xform = brush_transforms.get(brush_entity).ok();
+
+        let candidates = collect_candidate_edges(
+            &halfedge.mesh,
+            vert_key,
+            brush_xform,
+            &camera_query,
+            &viewport_query,
+        );
+        if candidates.is_empty() {
+            return None;
+        }
+
+        modal_state.active = true;
+        modal_state.brush_entity = Some(brush_entity);
+        modal_state.vert_key = Some(vert_key);
+        modal_state.start_cursor = cursor_pos;
+        modal_state.candidates = candidates;
+        modal_state.chosen_idx = None;
+        modal_state.current_factor = 0.0;
+        modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
+
+        return Some(OperatorResult::Running);
+    }
+
+    // --- Subsequent invokes: cancel, update factor, mutate preview, or commit ---
+
+    let rmb = mouse.just_pressed(MouseButton::Right);
+    if modal_inputs.cancel() || rmb {
+        // Live brush has been mutated each frame, so restore from the snapshot
+        // before clearing modal state.
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+        *modal_state = VertexSlideModalState::default();
+        return None;
+    }
+
+    let cursor_delta = cursor_pos - modal_state.start_cursor;
+    let delta_len = cursor_delta.length();
+
+    if delta_len < VERTEX_SLIDE_DEADZONE {
+        modal_state.chosen_idx = None;
+        modal_state.current_factor = 0.0;
+    } else {
+        // Pick the candidate whose screen-space outward direction is most
+        // aligned with the cursor delta. We compare unit-dir dot products
+        // against the unit cursor direction; candidates without a usable
+        // screen direction are skipped.
+        let cursor_dir = cursor_delta / delta_len;
+        let mut best: Option<(usize, f32)> = None;
+        for (idx, cand) in modal_state.candidates.iter().enumerate() {
+            let Some(dir) = cand.screen_dir else {
+                continue;
+            };
+            let align = dir.dot(cursor_dir);
+            if align <= 0.0 {
+                continue;
+            }
+            if best.is_none_or(|(_, best_align)| align > best_align) {
+                best = Some((idx, align));
+            }
+        }
+
+        if let Some((idx, _)) = best {
+            modal_state.chosen_idx = Some(idx);
+            let cand = modal_state.candidates[idx];
+            // Project cursor delta onto the (non-normalized) screen edge
+            // vector and divide by its squared length to get the [0, 1]
+            // parameter along the edge. Equivalent to (delta . dir) / len
+            // where dir is unit-length, but using the raw vector avoids a
+            // potential div-by-zero if `screen_len` is tiny.
+            let raw_factor = if cand.screen_len > 1e-4 {
+                let dir_unit = cand.screen_dir.unwrap_or(Vec2::X);
+                let proj = cursor_delta.dot(dir_unit);
+                (proj / cand.screen_len).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            // Snap respects the global translate_snap toggle; Ctrl flips it.
+            let ctrl =
+                keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
+            modal_state.current_factor = if snap_settings.translate_active(ctrl)
+                && snap_settings.translate_increment > 0.0
+                && cand.world_len > 1e-6
+            {
+                // Snap the world-space slide distance to the translate grid,
+                // then back-convert to a [0, 1] factor along this edge.
+                let inc = snap_settings.translate_increment;
+                let world_disp = raw_factor * cand.world_len;
+                let snapped_world = (world_disp / inc).round() * inc;
+                (snapped_world / cand.world_len).clamp(0.0, 1.0)
+            } else {
+                raw_factor
+            };
+        } else {
+            modal_state.chosen_idx = None;
+            modal_state.current_factor = 0.0;
+        }
+    }
+
+    // Apply the slide to the live brush mesh so the user sees it as a real
+    // mesh edit. The op result is discarded; the slid vertex is visible
+    // through the regular brush mesh pipeline picking up `Changed<Brush>`.
+    apply_live_vertex_slide(&mut modal_state, &mut brushes, &mut halfedge_q);
+
+    // Commit on LMB.
+    if mouse.just_pressed(MouseButton::Left) {
+        if modal_state.chosen_idx.is_none() {
+            // No chosen edge: treat as no-op cancel.
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+            *modal_state = VertexSlideModalState::default();
+            return None;
+        }
+
+        // Degenerate zero-factor commit: treat as no-op cancel so we don't
+        // record a useless undo entry. The live brush should already be back
+        // to the snapshot (apply_live_vertex_slide resets when factor is sub-threshold).
+        if modal_state.current_factor.abs() < 1e-4 {
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+            *modal_state = VertexSlideModalState::default();
+            return None;
+        }
+
+        // selection.vertices intentionally untouched: vertex_slide preserves
+        // vertex identity (no add/remove), and slotmap iteration order is
+        // stable when no verts are added or removed.
+
+        *modal_state = VertexSlideModalState::default();
+        return Some(OperatorResult::Finished);
+    }
+
+    Some(OperatorResult::Running)
+}
+
+/// Cancel handler: restore the brush to its pre-modal state. Called when the
+/// modal lifecycle is force-cancelled from outside the operator.
+fn cancel_vertex_slide(
+    mut modal_state: ResMut<VertexSlideModalState>,
+    mut brushes: Query<&mut Brush>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
+) {
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+    *modal_state = VertexSlideModalState::default();
+}
+
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
+fn restore_brush_from_snapshot(
+    modal_state: &VertexSlideModalState,
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
+) {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(edit) = modal_state.edit.as_ref() else {
+        return;
+    };
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    edit.restore(&mut brush, &mut halfedge);
+}
+
+/// Re-run `vertex_slide` against the snapshot at the current factor and write
+/// the resulting topology back into the live `Brush` + `BrushHalfedge`. Slide
+/// is a pure vertex transform: it never adds or removes faces, so no face
+/// growth or chained selection bookkeeping is needed.
+fn apply_live_vertex_slide(
+    modal_state: &mut VertexSlideModalState,
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
+) {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(edit) = modal_state.edit.as_ref() else {
+        return;
+    };
+    let Some(vert_key) = modal_state.vert_key else {
+        return;
+    };
+    let Ok(brush_mut) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    let brush = brush_mut.into_inner();
+
+    // No chosen edge OR sub-threshold factor: snap the live brush back to the
+    // snapshot. The user is still hovering inside the deadzone or has not yet
+    // pointed at a candidate edge, so there is no slide to preview.
+    if modal_state.chosen_idx.is_none() || modal_state.current_factor.abs() < 1e-4 {
+        edit.restore(brush, &mut halfedge);
+        return;
+    }
+
+    let chosen_idx = modal_state.chosen_idx.unwrap();
+    let chosen_edge = modal_state.candidates[chosen_idx].edge_key;
+    let factor = modal_state.current_factor;
+
+    // Restore to the snapshot, re-run the slide at the current factor, and
+    // reconcile. Slide is a pure vertex transform: it adds no faces, so there
+    // is no appearance fixup.
+    edit.apply(brush, &mut halfedge, |mesh| {
+        // Steer the `vertex_slide` op toward our chosen edge. The op reads
+        // `verts[v].edge` to pick the slide target; the disk cycle's
+        // doubly-linked structure (via `disk_next` / `disk_prev` on edges) is
+        // independent of this anchor, so retargeting it does not break any
+        // invariants. The restore inside `apply` rewinds `verts[v].edge`, so it
+        // is set here on the restored snapshot before the slide runs.
+        if let Some(vert) = mesh.verts.get_mut(vert_key) {
+            vert.edge = Some(chosen_edge);
+        }
+        let _ = vertex_slide(mesh, &[vert_key], factor);
+    });
+}
+
+/// Enumerate incident edges of `vert_key` and project each neighbor into
+/// window-space pixels. Used at modal entry to pre-compute the per-frame
+/// "which edge does the cursor point at" decision.
+fn collect_candidate_edges(
+    mesh: &HalfedgeMesh,
+    vert_key: VertKey,
+    brush_xform: Option<&GlobalTransform>,
+    camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+) -> Vec<CandidateEdge> {
+    let mut out = Vec::new();
+    let Some(brush_xform) = brush_xform else {
+        return out;
+    };
+    let Ok((camera, cam_tf)) = camera_query.single() else {
+        return out;
+    };
+
+    let v_local = mesh.verts[vert_key].co;
+    let v_world = brush_xform.transform_point(v_local);
+    let Ok(v_rt) = camera.world_to_viewport(cam_tf, v_world) else {
+        return out;
+    };
+
+    let viewport_remap = viewport_query.single().ok();
+    let v_win = if let Some((computed, vp_transform)) = viewport_remap {
+        let map = ViewportRemap::new(camera, computed, vp_transform);
+        map.top_left + v_rt / map.remap
+    } else {
+        v_rt
+    };
+
+    let v_world = brush_xform.transform_point(mesh.verts[vert_key].co);
+    for edge_key in disk_walk(mesh, vert_key) {
+        let edge = &mesh.edges[edge_key];
+        let other_vert = if edge.v[0] == vert_key {
+            edge.v[1]
+        } else {
+            edge.v[0]
+        };
+        let other_local = mesh.verts[other_vert].co;
+        let other_world = brush_xform.transform_point(other_local);
+        let world_len = (other_world - v_world).length();
+        let Ok(other_rt) = camera.world_to_viewport(cam_tf, other_world) else {
+            out.push(CandidateEdge {
+                edge_key,
+                screen_dir: None,
+                screen_len: 0.0,
+                world_len,
+            });
+            continue;
+        };
+        let other_win = if let Some((computed, vp_transform)) = viewport_remap {
+            let map = ViewportRemap::new(camera, computed, vp_transform);
+            map.top_left + other_rt / map.remap
+        } else {
+            other_rt
+        };
+
+        let vec = other_win - v_win;
+        let len = vec.length();
+        let (dir, screen_len) = if len > 1e-4 {
+            (Some(vec / len), len)
+        } else {
+            (None, 0.0)
+        };
+        out.push(CandidateEdge {
+            edge_key,
+            screen_dir: dir,
+            screen_len,
+            world_len,
+        });
+    }
+
+    out
+}
+
+pub(crate) fn can_run_vertex_slide_modal(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+) -> bool {
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Vertex)
+        && selection
+            .active_sub()
+            .is_some_and(|s| s.vertices.len() == 1)
+}
