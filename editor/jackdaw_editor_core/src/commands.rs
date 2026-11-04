@@ -244,7 +244,7 @@ pub(crate) fn try_field_edit_commit(
 }
 
 /// Set one field on one entity's component, as one undo entry. Unlike
-/// [`field_edit_commit`], which writes the whole selection, this writes only
+/// `field_edit_commit`, which writes the whole selection, this writes only
 /// the named entity.
 ///
 /// Returns whether the value was taken; `false` when the JSON does not

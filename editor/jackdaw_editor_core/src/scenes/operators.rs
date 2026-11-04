@@ -450,7 +450,7 @@ pub struct ReadScene {
     pending_conversion: Option<crate::jsn_to_bsn::PendingConversion>,
 }
 
-/// [`read_scene`], reporting a failure as the end of the scene load.
+/// `read_scene`, reporting a failure as the end of the scene load.
 pub fn read_scene_for_load(world: &mut World, canonical: &std::path::Path) -> Option<ReadScene> {
     match read_scene(world, canonical) {
         Ok(read) => {
