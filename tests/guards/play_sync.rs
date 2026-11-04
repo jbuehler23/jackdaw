@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use jackdaw::commands::SetTransform;
-use jackdaw::play_sync::{catch_up_events, collect_node_changes};
+use jackdaw::play_sync::collect_node_changes;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_commands::{CommandHistory, EditorCommand};
@@ -204,17 +204,6 @@ fn deliver(
     game: &mut App,
 ) {
     let events = collect_node_changes(editor.world_mut());
-    send(events, link, game_end, game);
-}
-
-/// Send the catch-up a game asks for once its scene has spawned.
-fn catch_up(
-    editor: &mut App,
-    link: &mut LoopbackTransport,
-    game_end: &mut LoopbackTransport,
-    game: &mut App,
-) {
-    let events = catch_up_events(editor.world_mut());
     send(events, link, game_end, game);
 }
 
@@ -444,47 +433,28 @@ fn game_x(game: &App, entity: Entity) -> f32 {
 }
 
 #[test]
-fn pie_sync_an_edit_made_before_the_scene_spawns_lands_with_the_catch_up() {
+fn pie_sync_an_edit_made_before_the_scene_spawns_lands_once_it_spawns() {
     let (mut app, _dir, rock) = playing();
     let mut game = unspawned_game();
     let (mut link, mut game_end) = LoopbackTransport::pair();
 
     move_to(&mut app, rock, 6.0);
+    rename(&mut app, rock, "Boulder");
     deliver(&mut app, &mut link, &mut game_end, &mut game);
-    let entity = game.world_mut().spawn((rock, Transform::default())).id();
-    assert_eq!(
-        game_x(&game, entity),
-        0.0,
-        "the edit found nothing to apply to"
-    );
-
-    catch_up(&mut app, &mut link, &mut game_end, &mut game);
+    let entity = game
+        .world_mut()
+        .spawn((rock, Transform::default(), Name::new("Rock")))
+        .id();
+    game.update();
     assert_eq!(game_x(&game, entity), 6.0);
+    assert_eq!(
+        game.world().get::<Name>(entity).map(Name::as_str),
+        Some("Boulder")
+    );
 
     move_to(&mut app, rock, 2.0);
     deliver(&mut app, &mut link, &mut game_end, &mut game);
     assert_eq!(game_x(&game, entity), 2.0, "edits keep flowing after it");
-}
-
-#[test]
-fn pie_sync_a_second_instance_catches_up_on_edits_made_while_it_connected() {
-    let (mut app, _dir, rock) = playing();
-    let (mut first, first_entity) = game(rock);
-    let (mut first_link, mut first_end) = LoopbackTransport::pair();
-
-    move_to(&mut app, rock, 3.0);
-    rename(&mut app, rock, "Boulder");
-    deliver(&mut app, &mut first_link, &mut first_end, &mut first);
-    assert_eq!(game_x(&first, first_entity), 3.0);
-
-    let (mut second, second_entity) = game(rock);
-    let (mut second_link, mut second_end) = LoopbackTransport::pair();
-    catch_up(&mut app, &mut second_link, &mut second_end, &mut second);
-    assert_eq!(game_x(&second, second_entity), 3.0);
-    assert_eq!(
-        second.world().get::<Name>(second_entity).map(Name::as_str),
-        Some("Boulder")
-    );
 }
 
 /// Change the brush the way the brush tools do: on the entity, which the

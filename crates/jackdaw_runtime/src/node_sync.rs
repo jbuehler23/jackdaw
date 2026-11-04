@@ -5,16 +5,26 @@
 //! it, kept current by observers on the component. [`apply_node_components`]
 //! writes a node's changed components to each of those entities through
 //! reflection.
+//!
+//! A change for a node no entity carries yet (an edit made while the game was
+//! building or loading its scene) is held in [`PendingNodeChanges`] and
+//! applied once the first entity for that node is indexed, after the scene
+//! that spawned it has finished inserting its components. Held changes are
+//! bounded by the number of distinct node ids, and once the first scene
+//! entity has been indexed each one is dropped [`PENDING_LIFETIME`] after it
+//! was last changed (or after that first entity, if later): a node that does
+//! not appear by then is not one the game spawns.
 
 use bevy::asset::{AssetServer, ReflectHandle, UntypedHandle};
+use bevy::ecs::component::ComponentId;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserializer};
-use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::{PartialReflect, ReflectFromReflect, TypeRegistration, TypeRegistry};
 use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_scene_types::SceneNodeId;
+use std::time::Duration;
 
 use crate::JackdawCatalog;
 use serde::Deserialize;
@@ -30,11 +40,13 @@ impl SceneNodeIndex {
         self.0.get(&node).map_or(&[], Vec::as_slice)
     }
 
-    fn add(&mut self, node: SceneNodeId, entity: Entity) {
+    /// Index `entity` under `node`, answering whether it is the node's first.
+    fn add(&mut self, node: SceneNodeId, entity: Entity) -> bool {
         let entities = self.0.entry(node).or_default();
         if !entities.contains(&entity) {
             entities.push(entity);
         }
+        entities.len() == 1
     }
 
     fn remove(&mut self, node: SceneNodeId, entity: Entity) {
@@ -51,13 +63,88 @@ impl SceneNodeIndex {
 #[derive(Resource, Default)]
 struct NodeSyncWarnings(HashSet<String>);
 
+/// How long a held change waits for its node once the game has indexed its
+/// first scene entity.
+pub const PENDING_LIFETIME: Duration = Duration::from_secs(30);
+
+/// Node changes that arrived before any entity carried their node, by node.
+#[derive(Resource, Default)]
+pub struct PendingNodeChanges {
+    nodes: HashMap<u64, PendingNode>,
+    /// Held nodes that gained their first entity, applied next update.
+    ready: Vec<u64>,
+    /// Real time at which the first scene entity was indexed.
+    first_indexed: Option<Duration>,
+}
+
+impl PendingNodeChanges {
+    /// Whether a change for `node` is held.
+    pub fn contains(&self, node: u64) -> bool {
+        self.nodes.contains_key(&node)
+    }
+
+    /// How many nodes have a change held.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Whether no change is held.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Merge a change into what `node` holds: a value replaces an earlier
+    /// value or removal of its type, and a removal replaces an earlier value.
+    fn hold(
+        &mut self,
+        node: u64,
+        set: &[(String, serde_json::Value)],
+        removed: &[String],
+        now: Duration,
+    ) {
+        let held = self.nodes.entry(node).or_default();
+        held.changed = now;
+        for (type_path, value) in set {
+            held.removed.retain(|path| path != type_path);
+            match held.set.iter_mut().find(|(path, _)| path == type_path) {
+                Some((_, held_value)) => *held_value = value.clone(),
+                None => held.set.push((type_path.clone(), value.clone())),
+            }
+        }
+        for type_path in removed {
+            held.set.retain(|(path, _)| path != type_path);
+            if !held.removed.contains(type_path) {
+                held.removed.push(type_path.clone());
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct PendingNode {
+    set: Vec<(String, serde_json::Value)>,
+    removed: Vec<String>,
+    changed: Duration,
+}
+
+fn real_now(world: &World) -> Duration {
+    world
+        .get_resource::<Time<Real>>()
+        .map_or(Duration::ZERO, Time::elapsed)
+}
+
 /// Install [`SceneNodeIndex`] and the observers that keep it current, indexing
 /// the entities that already carry a [`SceneNodeId`].
 pub fn install_node_index(app: &mut App) {
     app.init_resource::<SceneNodeIndex>();
     app.init_resource::<NodeSyncWarnings>();
+    app.init_resource::<PendingNodeChanges>();
     app.add_observer(index_node_insert);
     app.add_observer(index_node_replace);
+    app.add_systems(
+        Update,
+        apply_pending_node_changes.after(crate::spawn_loaded_scenes),
+    );
     let world = app.world_mut();
     let present: Vec<(Entity, SceneNodeId)> = world
         .query::<(Entity, &SceneNodeId)>()
@@ -74,9 +161,42 @@ fn index_node_insert(
     insert: On<Insert<SceneNodeId>>,
     nodes: Query<&SceneNodeId>,
     mut index: ResMut<SceneNodeIndex>,
+    mut pending: ResMut<PendingNodeChanges>,
+    time: Option<Res<Time<Real>>>,
 ) {
-    if let Ok(node) = nodes.get(insert.entity) {
-        index.add(*node, insert.entity);
+    let Ok(node) = nodes.get(insert.entity) else {
+        return;
+    };
+    let first = index.add(*node, insert.entity);
+    if pending.first_indexed.is_none() {
+        pending.first_indexed = Some(time.map_or(Duration::ZERO, |time| time.elapsed()));
+    }
+    if first && pending.contains(node.0) && !pending.ready.contains(&node.0) {
+        pending.ready.push(node.0);
+    }
+}
+
+/// Apply the held changes of nodes that gained their first entity, and drop
+/// held changes older than [`PENDING_LIFETIME`]. Runs after scenes spawn, so
+/// a held value is not overwritten by a component the spawn inserts later.
+fn apply_pending_node_changes(world: &mut World) {
+    let now = real_now(world);
+    let ready: Vec<(u64, PendingNode)> = {
+        let mut pending = world.resource_mut::<PendingNodeChanges>();
+        let ready = std::mem::take(&mut pending.ready);
+        ready
+            .into_iter()
+            .filter_map(|node| pending.nodes.remove(&node).map(|held| (node, held)))
+            .collect()
+    };
+    for (node, held) in ready {
+        apply_node_components(world, node, &held.set, &held.removed);
+    }
+    let mut pending = world.resource_mut::<PendingNodeChanges>();
+    if let Some(first_indexed) = pending.first_indexed {
+        pending.nodes.retain(|_, held| {
+            now.saturating_sub(held.changed.max(first_indexed)) < PENDING_LIFETIME
+        });
     }
 }
 
@@ -190,12 +310,11 @@ pub(crate) fn decode_component(
     })
 }
 
-/// What removing `type_path` from an entity needs: its reflection, and its
-/// default value for an entity where another component requires it.
+/// The reflection and component id of a removed type.
 struct Removal {
+    type_path: String,
     reflect: ReflectComponent,
-    type_id: std::any::TypeId,
-    default: Option<DecodedComponent>,
+    id: Option<ComponentId>,
 }
 
 fn removal_for(world: &World, type_path: &str) -> Result<Removal, String> {
@@ -207,33 +326,28 @@ fn removal_for(world: &World, type_path: &str) -> Result<Removal, String> {
         .data::<ReflectComponent>()
         .cloned()
         .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))?;
-    let default = registration.data::<ReflectDefault>().map(|default| {
-        let from_reflect = registration.data::<ReflectFromReflect>().cloned();
-        DecodedComponent {
-            reflect: reflect.clone(),
-            value: default.default().into_partial_reflect(),
-            type_id: registration.type_id(),
-            from_reflect,
-        }
-    });
     Ok(Removal {
+        type_path: type_path.to_string(),
         reflect,
-        type_id: registration.type_id(),
-        default,
+        id: world.components().get_id(registration.type_id()),
     })
 }
 
-/// Whether a component `entity` holds requires the component `type_id`.
-fn required_on(world: &World, entity: Entity, type_id: std::any::TypeId) -> bool {
+/// Whether a component `entity` holds, other than those in `leaving`,
+/// requires the component `required`.
+fn required_on(
+    world: &World,
+    entity: Entity,
+    required: ComponentId,
+    leaving: &[ComponentId],
+) -> bool {
     let components = world.components();
-    let Some(required) = components.get_id(type_id) else {
-        return false;
-    };
     let Ok(entity_ref) = world.get_entity(entity) else {
         return false;
     };
     entity_ref.archetype().components().iter().any(|&held| {
         held != required
+            && !leaving.contains(&held)
             && components.get_info(held).is_some_and(|info| {
                 info.required_components()
                     .iter_ids()
@@ -292,12 +406,23 @@ fn warn_once(world: &mut World, type_path: &str, reason: &str) {
     }
 }
 
+fn warn_kept_once(world: &mut World, type_path: &str) {
+    let mut warnings = world.get_resource_or_init::<NodeSyncWarnings>();
+    if warnings.0.insert(format!("kept {type_path}")) {
+        warn!(
+            "PIE: node sync kept `{type_path}`: another component on the entity requires it, \
+             so the running game keeps its last value until it restarts"
+        );
+    }
+}
+
 /// Apply one node's changed components to every entity spawned from it: each
 /// value in `set` replaces (or adds) that component, and each type path in
-/// `removed` is removed. A removed component that another component on the
-/// entity requires stays, reset to its reflected default when it has one, as
-/// the spawn gave it. A type the game does not know, or a value that does not
-/// deserialize, is skipped with a warning once per type path.
+/// `removed` is removed. A removed component that a component staying on the
+/// entity requires is left as it is, with a warning once per type path. A
+/// type the game does not know, or a value that does not deserialize, is
+/// skipped with a warning once per type path. When no entity carries `node`
+/// yet, the change is held in [`PendingNodeChanges`] until one does.
 pub fn apply_node_components(
     world: &mut World,
     node: u64,
@@ -309,6 +434,10 @@ pub fn apply_node_components(
         .map(|index| index.entities(SceneNodeId(node)).to_vec())
         .unwrap_or_default();
     if entities.is_empty() {
+        let now = real_now(world);
+        if let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() {
+            pending.hold(node, set, removed, now);
+        }
         return;
     }
     for (type_path, value) in set {
@@ -321,19 +450,20 @@ pub fn apply_node_components(
             Err(reason) => warn_once(world, type_path, &reason),
         }
     }
+    let mut removals = Vec::new();
     for type_path in removed {
-        let removal = match removal_for(world, type_path) {
-            Ok(removal) => removal,
-            Err(reason) => {
-                warn_once(world, type_path, &reason);
-                continue;
-            }
-        };
+        match removal_for(world, type_path) {
+            Ok(removal) => removals.push(removal),
+            Err(reason) => warn_once(world, type_path, &reason),
+        }
+    }
+    let leaving: Vec<ComponentId> = removals.iter().filter_map(|removal| removal.id).collect();
+    for removal in &removals {
         for &entity in &entities {
-            if required_on(world, entity, removal.type_id) {
-                if let Some(default) = &removal.default {
-                    write_component(world, entity, default);
-                }
+            if let Some(id) = removal.id
+                && required_on(world, entity, id, &leaving)
+            {
+                warn_kept_once(world, &removal.type_path);
                 continue;
             }
             if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
@@ -382,6 +512,7 @@ mod tests {
     struct Player;
 
     const HEALTH: &str = "jackdaw_runtime::node_sync::tests::Health";
+    const PLAYER: &str = "jackdaw_runtime::node_sync::tests::Player";
     const TINT: &str = "jackdaw_runtime::node_sync::tests::Tint";
     const PATH: &str = "jackdaw_runtime::node_sync::tests::Path";
     const PAINTED: &str = "jackdaw_runtime::node_sync::tests::Painted";
@@ -485,9 +616,9 @@ mod tests {
     }
 
     /// Undoing an override of a required component removes it from the node,
-    /// but the entity keeps it, at the value the spawn gave it.
+    /// but an entity whose other components require it keeps it as it is.
     #[test]
-    fn a_required_component_is_reset_instead_of_removed() {
+    fn a_required_component_is_left_unchanged() {
         let mut app = app();
         app.register_type::<Health>().register_type::<Player>();
         let player = app
@@ -496,8 +627,130 @@ mod tests {
             .id();
         let loose = app.world_mut().spawn((SceneNodeId(4), Health(30))).id();
         apply_node_components(app.world_mut(), 4, &[], &[HEALTH.to_string()]);
-        assert_eq!(app.world().get::<Health>(player), Some(&Health(0)));
+        assert_eq!(app.world().get::<Health>(player), Some(&Health(30)));
         assert!(app.world().get::<Health>(loose).is_none());
+    }
+
+    /// A requirer leaving in the same change does not keep what it requires,
+    /// whichever order the removals come in.
+    #[test]
+    fn a_requirer_removed_alongside_does_not_keep_its_requirement() {
+        let mut app = app();
+        app.register_type::<Health>().register_type::<Player>();
+        for (node, removed) in [(5, [HEALTH, PLAYER]), (6, [PLAYER, HEALTH])] {
+            let entity = app
+                .world_mut()
+                .spawn((SceneNodeId(node), Player, Health(30)))
+                .id();
+            let removed: Vec<String> = removed.iter().map(ToString::to_string).collect();
+            apply_node_components(app.world_mut(), node, &[], &removed);
+            assert!(app.world().get::<Health>(entity).is_none(), "{removed:?}");
+            assert!(app.world().get::<Player>(entity).is_none(), "{removed:?}");
+        }
+    }
+
+    fn x_of(app: &App, entity: Entity) -> f32 {
+        app.world()
+            .get::<Transform>(entity)
+            .expect("a transform")
+            .translation
+            .x
+    }
+
+    /// An edit for a node no entity carries yet waits, and lands on the
+    /// entity spawned for it, after the spawn's own components.
+    #[test]
+    fn an_edit_before_its_node_spawns_lands_when_it_spawns() {
+        let mut app = app();
+        apply_node_components(
+            app.world_mut(),
+            8,
+            &[(TRANSFORM.to_string(), transform_json(3.0))],
+            &[],
+        );
+        assert!(app.world().resource::<PendingNodeChanges>().contains(8));
+
+        let entity = app.world_mut().spawn(SceneNodeId(8)).id();
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(Transform::default());
+        app.update();
+        assert_eq!(x_of(&app, entity), 3.0);
+        assert!(app.world().resource::<PendingNodeChanges>().is_empty());
+
+        let twin = app
+            .world_mut()
+            .spawn((SceneNodeId(8), Transform::default()))
+            .id();
+        app.update();
+        assert_eq!(
+            x_of(&app, twin),
+            0.0,
+            "an applied change is not held for later entities"
+        );
+    }
+
+    /// A removal cancels a held value of its type, and a later value cancels
+    /// a held removal.
+    #[test]
+    fn held_changes_merge_per_type() {
+        let mut app = app();
+        let name = |text: &str| (NAME.to_string(), serde_json::json!(text));
+        let world = app.world_mut();
+        apply_node_components(
+            world,
+            8,
+            &[name("Early"), (TRANSFORM.to_string(), transform_json(1.0))],
+            &[],
+        );
+        apply_node_components(world, 8, &[], &[NAME.to_string()]);
+        apply_node_components(world, 9, &[], &[NAME.to_string()]);
+        apply_node_components(world, 9, &[name("Late")], &[]);
+
+        let removed = world
+            .spawn((SceneNodeId(8), Name::new("Spawned"), Transform::default()))
+            .id();
+        let renamed = world
+            .spawn((SceneNodeId(9), Name::new("Spawned"), Transform::default()))
+            .id();
+        app.update();
+        assert!(app.world().get::<Name>(removed).is_none());
+        assert_eq!(x_of(&app, removed), 1.0);
+        assert_eq!(
+            app.world().get::<Name>(renamed).map(Name::as_str),
+            Some("Late")
+        );
+    }
+
+    /// Held changes wait as long as no scene entity exists, and expire
+    /// [`PENDING_LIFETIME`] after one does.
+    #[test]
+    fn held_changes_expire_after_the_first_scene_entity() {
+        let mut app = app();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            PENDING_LIFETIME / 3,
+        ));
+        apply_node_components(
+            app.world_mut(),
+            8,
+            &[(TRANSFORM.to_string(), transform_json(3.0))],
+            &[],
+        );
+        for _ in 0..6 {
+            app.update();
+        }
+        assert!(
+            app.world().resource::<PendingNodeChanges>().contains(8),
+            "nothing expires before the scene spawns"
+        );
+
+        app.world_mut().spawn(SceneNodeId(1));
+        app.update();
+        assert!(app.world().resource::<PendingNodeChanges>().contains(8));
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(app.world().resource::<PendingNodeChanges>().is_empty());
     }
 
     #[test]

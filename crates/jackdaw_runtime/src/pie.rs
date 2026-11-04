@@ -91,8 +91,6 @@ fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
     app.init_resource::<PieStreamState>();
     app.init_resource::<HighlightedEntity>();
     crate::node_sync::install_node_index(app);
-    app.init_resource::<SpawnedScenesToReport>();
-    app.add_observer(note_spawned_scene);
     // Drain control in PreUpdate, before input processing so forwarded editor
     // input lands in `ButtonInput` the same frame.
     app.add_systems(
@@ -101,46 +99,7 @@ fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
             .chain()
             .before(bevy::input::InputSystems),
     );
-    // A spawn is reported before its entities stream, and in the frame it
-    // happened.
-    app.add_systems(
-        Update,
-        (report_spawned_scenes, stream_state)
-            .chain()
-            .after(crate::spawn_loaded_scenes),
-    );
-}
-
-/// Scene spawns not yet reported to the editor.
-#[derive(Resource, Default)]
-struct SpawnedScenesToReport(usize);
-
-/// Count a scene root that finished spawning its scene. A refused scene
-/// spawned nothing, so it is not counted.
-fn note_spawned_scene(
-    add: On<Add<crate::SceneSpawned>>,
-    refused: Query<(), With<crate::SceneRefused>>,
-    mut pending: ResMut<SpawnedScenesToReport>,
-) {
-    if !refused.contains(add.entity) {
-        pending.0 += 1;
-    }
-}
-
-/// Tell the editor about each scene spawn, so it sends the document's
-/// current components for the scene's nodes.
-fn report_spawned_scenes(world: &mut World) {
-    let count = std::mem::take(&mut world.resource_mut::<SpawnedScenesToReport>().0);
-    if count == 0 {
-        return;
-    }
-    let Ok(bytes) = to_bytes(&StateEvent::SceneSpawned) else {
-        return;
-    };
-    let transport = &mut world.non_send_mut::<PieTransportRes>().0;
-    for _ in 0..count {
-        transport.send(PieChannel::Reliable, &bytes);
-    }
+    app.add_systems(Update, stream_state);
 }
 
 /// Lift the `SceneNodeId` component out of a snapshot's `components` map and
@@ -1269,82 +1228,6 @@ mod tests {
             let transform = app.world().get::<Transform>(entity).expect("a transform");
             assert_eq!(transform.translation.x, 3.0);
         }
-    }
-
-    /// Each scene a root spawns is reported once; a refused scene is not.
-    /// Edits sent before the spawn found nothing to apply to, and the
-    /// editor's answer to the report lands on the spawned entities.
-    #[test]
-    fn a_scene_spawn_is_reported_and_its_catch_up_applies() {
-        use jackdaw_pie_protocol::LoopbackTransport;
-        use jackdaw_pie_protocol::event::from_bytes;
-
-        let (mut editor, game) = LoopbackTransport::pair();
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.register_type::<Transform>();
-        app.register_type::<SceneNodeId>();
-        install_link(&mut app, Box::new(game));
-        let moved = |x: f32| ControlEvent::NodeComponents {
-            node: 7,
-            set: vec![(
-                "bevy_transform::components::transform::Transform".to_string(),
-                serde_json::json!({
-                    "translation": [x, 0.0, 0.0],
-                    "rotation": [0.0, 0.0, 0.0, 1.0],
-                    "scale": [1.0, 1.0, 1.0]
-                }),
-            )],
-            removed: Vec::new(),
-        };
-        editor.send(
-            PieChannel::Reliable,
-            &to_bytes(&moved(2.0)).expect("encode"),
-        );
-        app.update();
-
-        let reports = |editor: &mut LoopbackTransport| {
-            editor
-                .drain_received()
-                .into_iter()
-                .filter(|(_, bytes)| matches!(from_bytes(bytes), Ok(StateEvent::SceneSpawned)))
-                .count()
-        };
-        assert_eq!(reports(&mut editor), 0);
-
-        let node = app
-            .world_mut()
-            .spawn((SceneNodeId(7), Transform::default()))
-            .id();
-        app.world_mut().spawn(crate::SceneSpawned);
-        app.world_mut()
-            .spawn((crate::SceneSpawned, crate::SceneRefused));
-        app.update();
-        assert_eq!(reports(&mut editor), 1);
-        assert_eq!(
-            app.world()
-                .get::<Transform>(node)
-                .expect("a transform")
-                .translation
-                .x,
-            0.0,
-            "the edit sent before the spawn had nothing to land on"
-        );
-
-        editor.send(
-            PieChannel::Reliable,
-            &to_bytes(&moved(2.0)).expect("encode"),
-        );
-        app.update();
-        assert_eq!(
-            app.world()
-                .get::<Transform>(node)
-                .expect("a transform")
-                .translation
-                .x,
-            2.0
-        );
-        assert_eq!(reports(&mut editor), 0, "one report per spawn");
     }
 
     #[test]

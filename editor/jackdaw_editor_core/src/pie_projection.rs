@@ -345,7 +345,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 }
             }
         }
-        StateEvent::CursorState { .. } | StateEvent::SceneSpawned => {}
+        StateEvent::CursorState { .. } => {}
     }
 }
 
