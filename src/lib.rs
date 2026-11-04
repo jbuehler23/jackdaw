@@ -3,6 +3,7 @@
 //! re-exports the core so `jackdaw::...` paths keep resolving, and adds the
 //! feature crates to the editor.
 pub use jackdaw_editor_core::*;
+pub use jackdaw_editor_modelling;
 pub use jackdaw_editor_terrain;
 pub use jackdaw_editor_tile;
 
@@ -21,6 +22,7 @@ impl PluginGroup for JackdawEditorPlugins {
             .build()
             .add(jackdaw_editor_tile::TileEditorPlugin)
             .add(jackdaw_editor_terrain::TerrainEditorPlugin)
+            .add(jackdaw_editor_modelling::ModellingEditorPlugin)
     }
 }
 
@@ -29,6 +31,7 @@ pub fn add_feature_plugins(app: &mut App) {
     app.add_plugins((
         jackdaw_editor_tile::TileEditorPlugin,
         jackdaw_editor_terrain::TerrainEditorPlugin,
+        jackdaw_editor_modelling::ModellingEditorPlugin,
     ));
 }
 

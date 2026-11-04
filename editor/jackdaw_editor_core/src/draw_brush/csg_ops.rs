@@ -256,7 +256,7 @@ pub(crate) fn join_selected_brushes_impl(world: &mut World) {
     // read: the hull must include the mirrored halves, and the baked
     // brushes must not keep a `MeshMirror` that would re-mirror the result.
     for &entity in &selected_brushes {
-        crate::brush::topology_ops::mirror_ops::bake_mirror(world, entity);
+        crate::brush::modifier_bake::bake_modifier_stack_entity(world, entity);
     }
 
     // Join (Convex Merge) wraps all selected brushes' vertices in a single
@@ -530,7 +530,7 @@ fn csg_intersect_selected_impl(world: &mut World, options: &CsgOptions) {
 
     // Bake the first brush's live mirror before the result is cloned from it;
     // baking removes the `MeshMirror`, which must not survive onto the result.
-    crate::brush::topology_ops::mirror_ops::bake_mirror(world, source);
+    crate::brush::modifier_bake::bake_modifier_stack_entity(world, source);
 
     crate::commands::deselect_entities(world, &removed);
     let created = spawn_subtract_fragments(
@@ -1138,7 +1138,7 @@ pub(crate) fn evaluated_brush(world: &World, entity: Entity) -> Option<Brush> {
     let mut brush = world.get::<Brush>(entity)?.clone();
     if let Some(stack) = world.get::<ModifierStack>(entity) {
         let modifiers: Vec<&Modifier> = stack.modifiers.iter().map(|e| &e.modifier).collect();
-        crate::modifier_ops::bake_modifier_stack(&mut brush, &modifiers);
+        crate::brush::modifier_bake::bake_modifier_stack(&mut brush, &modifiers);
     }
     Some(brush)
 }
@@ -1387,7 +1387,7 @@ fn place_fragments(
     let target = result.original_entity;
     // Bake the live modifier stack before the target is rewritten or cloned,
     // so the result cannot get re-mirrored by the mesh rebuild.
-    crate::brush::topology_ops::mirror_ops::bake_mirror(world, target);
+    crate::brush::modifier_bake::bake_modifier_stack_entity(world, target);
     if !removes_target(&result, mode)
         && let [fragment] = result.fragments.as_slice()
     {
@@ -1615,7 +1615,8 @@ pub(crate) fn brush_csg_intersect(
 /// Shared environment gate: brush-level operators never run mid-draw,
 /// mid-modal, or while a text input is focused. Each specific op
 /// composes this with its own selection-state precondition check.
-pub(crate) fn env_allows_brush_op(
+#[doc(hidden)]
+pub fn env_allows_brush_op(
     keybind_focus: &KeybindFocus,
     modal: &crate::modal_transform::ModalTransformState,
     draw_state: &DrawBrushState,

@@ -1,0 +1,425 @@
+//! `brush.mesh.edge_slide_modal` operator: modal edge slide.
+//!
+//! Press `Shift+E` in Edge mode with at least one edge selected. Cursor motion
+//! projected onto the screen-space slide direction drives a signed factor in
+//! `[-1, +1]`: 0 = no slide, +1 = collapse toward one neighbor loop, -1 = the
+//! other. The brush mesh is mutated each frame so the user sees the live slid
+//! edge positions as a real mesh edit. Ctrl snaps to 0.25 increments. LMB
+//! commits; Esc / RMB cancels and restores the pre-modal mesh.
+//!
+//! Coexists with the non-modal `brush.mesh.edge_slide` operator (which slides
+//! by a fixed amount) -- this is a separate entry point.
+
+use bevy::prelude::*;
+use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
+use jackdaw_geometry::halfedge::cycles::radial_walk;
+use jackdaw_geometry::halfedge::ops::edge_slide::edge_slide;
+use jackdaw_geometry::halfedge::{EdgeKey, HalfedgeMesh, VertKey};
+use jackdaw_scene_types::Brush;
+
+use super::modal_edit::ModalTopologyEdit;
+use jackdaw_editor_core::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
+use jackdaw_editor_core::snapping::SnapSettings;
+use jackdaw_editor_core::viewport::{MainViewportCamera, SceneViewport};
+use jackdaw_editor_core::viewport_util::ViewportRemap;
+
+/// Per-side projection info for cursor-tracks-edge mapping. Sides correspond
+/// to the edge's two adjacent quad faces; `pos` is the face whose direction
+/// the underlying op uses for positive `t`, `neg` is the other face.
+#[derive(Default, Clone, Copy)]
+pub struct SlideSideInfo {
+    /// Unit screen-space direction from the representative end vertex toward
+    /// the parallel-edge neighbor on this side.
+    pub dir_unit: Vec2,
+    /// Length of that screen-space segment in pixels (factor = `cursor_proj
+    /// / len_window` puts 1 pixel of cursor = 1 pixel of edge motion).
+    pub len_window: f32,
+    /// World-space length of the corresponding parallel edge. Used to convert
+    /// `factor` into a world distance for grid snapping.
+    pub len_world: f32,
+}
+
+/// Modal state for the `brush.mesh.edge_slide_modal` operator.
+#[derive(Resource, Default)]
+pub struct EdgeSlideModalState {
+    pub active: bool,
+    pub brush_entity: Option<Entity>,
+    /// `HalfedgeMesh` `EdgeKeys` of the edges being slid. Slotmap keys stay
+    /// valid across the snapshot's clones, so they re-resolve each frame after
+    /// the snapshot is restored.
+    pub edge_keys: Vec<EdgeKey>,
+    /// Window-space cursor position at the moment the modal started.
+    pub start_cursor: Vec2,
+    /// Cursor-tracks-edge info for the positive side (`face[0]` in radial cycle).
+    pub pos_side: Option<SlideSideInfo>,
+    /// Cursor-tracks-edge info for the negative side (`face[1]` in radial cycle).
+    /// `None` for boundary edges with only one adjacent quad face.
+    pub neg_side: Option<SlideSideInfo>,
+    /// Current factor in `[-1, +1]`. Sign flips slide side; 0 is no slide.
+    pub current_factor: f32,
+    /// Pre-edit snapshot driving restore and per-frame re-apply.
+    pub edit: Option<ModalTopologyEdit>,
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushEdgeSlideModalOp>();
+
+    ctx.bind_operator_host::<BrushEdgeSlideModalOp>([PresetInput::key("KeyE").shift()]);
+}
+
+/// Slide each selected edge along its parallel-edge direction in adjacent quad
+/// faces, controlled by cursor motion projected onto the screen-space slide
+/// direction. Factor is normalized to `[-1, +1]`; Ctrl snaps to 0.25 increments.
+/// The live brush mesh is updated each frame so the slide is visible as a real
+/// mesh edit. LMB commits; Esc / RMB cancels and reverts.
+///
+/// Requires Edge mode with at least one edge selected.
+#[operator(
+    id = "brush.mesh.edge_slide_modal",
+    label = "Edge Slide (Modal)",
+    is_available = can_run_edge_slide_modal,
+    modal = true,
+    allows_undo = true,
+    cancel = cancel_edge_slide,
+)]
+pub(crate) fn brush_edge_slide_modal(
+    _: In<OperatorParameters>,
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+    mut brushes: Query<&mut Brush>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
+    brush_transforms: Query<&GlobalTransform>,
+    mut modal_state: ResMut<EdgeSlideModalState>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: jackdaw_editor_core::keybind_focus::KeybindFocus,
+    modal_inputs: jackdaw_editor_core::modal_inputs::ModalInputs,
+    cursor: jackdaw_editor_core::viewport::UiCursorPos,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    snap_settings: Res<SnapSettings>,
+    modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> Option<OperatorResult> {
+    // Ui-logical cursor; dragging outside the viewport panel should not
+    // cancel the modal (matches inset / extrude / loop_cut behavior).
+    let cursor_pos = cursor.get()?;
+
+    // --- First invoke: snapshot and enter modal ---
+    if modal_entity.is_none() {
+        if *edit_mode != EditMode::BrushEdit(BrushEditMode::Edge) {
+            return None;
+        }
+        let brush_entity = selection.active_brush?;
+        let sel_edges: Vec<(usize, usize)> = selection
+            .sub(brush_entity)
+            .map(|s| s.edges.clone())
+            .unwrap_or_default();
+        if sel_edges.is_empty() {
+            return None;
+        }
+
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
+
+        // Map cache edge pairs to HalfedgeMesh EdgeKeys via vert_keys.
+        let mut edge_keys: Vec<EdgeKey> = Vec::with_capacity(sel_edges.len());
+        for &(a, b) in &sel_edges {
+            let Some(&va) = halfedge.vert_keys.get(a) else {
+                continue;
+            };
+            let Some(&vb) = halfedge.vert_keys.get(b) else {
+                continue;
+            };
+            if let Some(ek) = find_edge_between(&halfedge.mesh, va, vb) {
+                edge_keys.push(ek);
+            }
+        }
+        if edge_keys.is_empty() {
+            return None;
+        }
+
+        let brush_xform = brush_transforms.get(brush_entity).ok();
+
+        // Compute cursor-tracks-edge projection info for both adjacent faces of
+        // the first selected edge. Each side carries its own world + screen
+        // lengths so that 1 pixel of cursor = 1 pixel of edge movement on that
+        // side, and grid snap can convert factor back to a world distance.
+        let (pos_side, neg_side) = compute_slide_sides(
+            &halfedge.mesh,
+            edge_keys[0],
+            brush_xform,
+            &camera_query,
+            &viewport_query,
+        );
+
+        modal_state.active = true;
+        modal_state.brush_entity = Some(brush_entity);
+        modal_state.edge_keys = edge_keys;
+        modal_state.start_cursor = cursor_pos;
+        modal_state.pos_side = pos_side;
+        modal_state.neg_side = neg_side;
+        modal_state.current_factor = 0.0;
+        modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
+
+        return Some(OperatorResult::Running);
+    }
+
+    // --- Subsequent invokes: cancel, update factor, mutate preview, or commit ---
+
+    let rmb = mouse.just_pressed(MouseButton::Right);
+    if modal_inputs.cancel() || rmb {
+        // Live brush has been mutated each frame, so restore from the snapshot
+        // before clearing modal state.
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+        *modal_state = EdgeSlideModalState::default();
+        return None;
+    }
+
+    // Cursor-tracks-edge: project cursor delta onto each adjacent face's screen
+    // slide direction; the side with the larger positive projection wins, and
+    // factor magnitude = projection_pixels / side_screen_length. This makes 1
+    // pixel of cursor motion = 1 pixel of edge motion on the chosen side.
+    let cursor_delta = cursor_pos - modal_state.start_cursor;
+
+    let pos_proj_px = modal_state
+        .pos_side
+        .map(|s| cursor_delta.dot(s.dir_unit))
+        .unwrap_or(f32::NEG_INFINITY);
+    let neg_proj_px = modal_state
+        .neg_side
+        .map(|s| cursor_delta.dot(s.dir_unit))
+        .unwrap_or(f32::NEG_INFINITY);
+
+    let (factor, world_len) = if pos_proj_px >= neg_proj_px && pos_proj_px > 0.0 {
+        let s = modal_state.pos_side.unwrap();
+        let f = if s.len_window > 1e-4 {
+            (pos_proj_px / s.len_window).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (f, s.len_world)
+    } else if neg_proj_px > 0.0 {
+        let s = modal_state.neg_side.unwrap();
+        let f = if s.len_window > 1e-4 {
+            (neg_proj_px / s.len_window).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (-f, s.len_world)
+    } else {
+        (0.0, 0.0)
+    };
+
+    // Snap respects the global translate_snap toggle; Ctrl flips it.
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
+    modal_state.current_factor = if snap_settings.translate_active(ctrl)
+        && snap_settings.translate_increment > 0.0
+        && world_len > 1e-6
+    {
+        // Snap world-space displacement to translate_increment, then back-
+        // convert to a factor. Preserves direction sign.
+        let inc = snap_settings.translate_increment;
+        let world_disp = factor.abs() * world_len;
+        let snapped_world = (world_disp / inc).round() * inc;
+        let snapped_factor = (snapped_world / world_len).clamp(0.0, 1.0);
+        if factor < 0.0 {
+            -snapped_factor
+        } else {
+            snapped_factor
+        }
+    } else {
+        factor
+    };
+
+    // Apply the slide to the live brush mesh so the user sees it as a real
+    // mesh edit. The op result is discarded; the slid edges are visible
+    // through the regular brush mesh pipeline picking up `Changed<Brush>`.
+    apply_live_edge_slide(&mut modal_state, &mut brushes, &mut halfedge_q);
+
+    // Commit on LMB.
+    if mouse.just_pressed(MouseButton::Left) {
+        // Degenerate zero-factor commit: treat as no-op cancel so we don't
+        // record a useless undo entry. The live brush should already be back
+        // to the snapshot (apply_live_edge_slide resets when factor is sub-threshold).
+        if modal_state.current_factor.abs() < 1e-4 {
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+            *modal_state = EdgeSlideModalState::default();
+            return None;
+        }
+
+        // selection.edges intentionally untouched: edge_slide preserves edge
+        // identity (no add/remove), and vertex indices are preserved across
+        // flatten/re-lift since slotmap iteration order is stable when no
+        // verts are added or removed.
+
+        *modal_state = EdgeSlideModalState::default();
+        return Some(OperatorResult::Finished);
+    }
+
+    Some(OperatorResult::Running)
+}
+
+/// Cancel handler: restore the brush to its pre-modal state. Called when the
+/// modal lifecycle is force-cancelled from outside the operator.
+fn cancel_edge_slide(
+    mut modal_state: ResMut<EdgeSlideModalState>,
+    mut brushes: Query<&mut Brush>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
+) {
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+    *modal_state = EdgeSlideModalState::default();
+}
+
+/// Reset the live brush + `HalfedgeMesh` to the snapshot captured at modal start.
+fn restore_brush_from_snapshot(
+    modal_state: &EdgeSlideModalState,
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
+) {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(edit) = modal_state.edit.as_ref() else {
+        return;
+    };
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    edit.restore(&mut brush, &mut halfedge);
+}
+
+/// Re-run `edge_slide` against the snapshot at the current factor and write
+/// the resulting topology back into the live `Brush` + `BrushHalfedge`. Slide
+/// is a pure vertex transform: it never adds or removes faces, so no face
+/// growth or chained selection bookkeeping is needed.
+fn apply_live_edge_slide(
+    modal_state: &mut EdgeSlideModalState,
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
+) {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(edit) = modal_state.edit.as_ref() else {
+        return;
+    };
+    let Ok(brush_mut) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    let brush = brush_mut.into_inner();
+
+    // Sub-threshold factors: snap the live brush back to the snapshot.
+    if modal_state.current_factor.abs() < 1e-4 {
+        edit.restore(brush, &mut halfedge);
+        return;
+    }
+
+    // Restore to the snapshot, re-run the slide at the current factor, and
+    // reconcile. Slide is a pure vertex transform: it adds no faces, so there
+    // is no appearance fixup.
+    let edge_keys = modal_state.edge_keys.clone();
+    let factor = modal_state.current_factor;
+    edit.apply(brush, &mut halfedge, |mesh| {
+        let _ = edge_slide(mesh, &edge_keys, factor);
+    });
+}
+
+/// Compute cursor-tracks-edge projection info for both adjacent quad faces of
+/// `edge_key`. The first quad in the edge's radial cycle is the "positive"
+/// side (matches the underlying op's `t >= 0` choice); the second quad is the
+/// "negative" side. Boundary edges with only one quad face return `(Some, None)`.
+///
+/// For each side: take that face's loop on the edge, walk `lp.next.edge` to
+/// get the parallel slide-along edge for the loop's END vertex. The screen
+/// direction from that vertex to the parallel edge's other endpoint, plus the
+/// pixel length of that segment and the world-space length of the parallel
+/// edge, is the projection info.
+fn compute_slide_sides(
+    mesh: &HalfedgeMesh,
+    edge_key: EdgeKey,
+    brush_xform: Option<&GlobalTransform>,
+    camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+) -> (Option<SlideSideInfo>, Option<SlideSideInfo>) {
+    let Some(brush_xform) = brush_xform else {
+        return (None, None);
+    };
+    let Ok((camera, cam_tf)) = camera_query.single() else {
+        return (None, None);
+    };
+
+    let quad_loops: Vec<_> = radial_walk(mesh, edge_key)
+        .filter(|&lp| mesh.faces[mesh.loops[lp].face].loop_count == 4)
+        .collect();
+
+    let viewport_map = viewport_query
+        .single()
+        .ok()
+        .map(|(computed, vp_transform)| ViewportRemap::new(camera, computed, vp_transform));
+    let to_window = |rt: Vec2| match &viewport_map {
+        Some(map) => map.top_left + rt / map.remap,
+        None => rt,
+    };
+
+    let compute_side = |lp_key: jackdaw_geometry::halfedge::LoopKey| -> Option<SlideSideInfo> {
+        let next_loop = mesh.loops[lp_key].next;
+        let v_end = mesh.loops[next_loop].vert;
+        let slide_edge = mesh.loops[next_loop].edge;
+        let slide_edge_data = &mesh.edges[slide_edge];
+        let other_vert = if slide_edge_data.v[0] == v_end {
+            slide_edge_data.v[1]
+        } else {
+            slide_edge_data.v[0]
+        };
+
+        let v_end_world = brush_xform.transform_point(mesh.verts[v_end].co);
+        let other_world = brush_xform.transform_point(mesh.verts[other_vert].co);
+        let len_world = (other_world - v_end_world).length();
+        if len_world < 1e-6 {
+            return None;
+        }
+
+        let p_end_rt = camera.world_to_viewport(cam_tf, v_end_world).ok()?;
+        let p_other_rt = camera.world_to_viewport(cam_tf, other_world).ok()?;
+        let p_end = to_window(p_end_rt);
+        let p_other = to_window(p_other_rt);
+        let dir = p_other - p_end;
+        let len_window = dir.length();
+        if len_window < 1e-4 {
+            return None;
+        }
+        Some(SlideSideInfo {
+            dir_unit: dir / len_window,
+            len_window,
+            len_world,
+        })
+    };
+
+    let pos_side = quad_loops.first().copied().and_then(compute_side);
+    let neg_side = quad_loops.get(1).copied().and_then(compute_side);
+    (pos_side, neg_side)
+}
+
+fn find_edge_between(mesh: &HalfedgeMesh, va: VertKey, vb: VertKey) -> Option<EdgeKey> {
+    mesh.edges
+        .iter()
+        .find(|(_, e)| (e.v[0] == va && e.v[1] == vb) || (e.v[0] == vb && e.v[1] == va))
+        .map(|(k, _)| k)
+}
+
+pub(crate) fn can_run_edge_slide_modal(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+) -> bool {
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Edge)
+        && selection.active_sub().is_some_and(|s| !s.edges.is_empty())
+}

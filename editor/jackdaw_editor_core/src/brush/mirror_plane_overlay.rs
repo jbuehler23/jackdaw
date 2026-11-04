@@ -54,6 +54,30 @@ pub struct MirrorPlaneHover {
     pub target: Option<(Entity, usize)>,
 }
 
+/// Per-drag state for `mirror.plane.drag`: the grabbed handle, the offset and
+/// anchor captured at grab, and the cursor / viewport the drag is bound to.
+#[derive(Resource, Default)]
+pub struct MirrorPlaneDragState {
+    pub active: bool,
+    pub entity: Option<Entity>,
+    pub axis: usize,
+    /// `offset[axis]` at grab, the baseline the drag delta adds to and the
+    /// value cancel restores.
+    pub start_offset: f32,
+    /// `plane_handle_world` at grab; the depth the pixel-to-world drag
+    /// calibration measures against.
+    pub anchor_world: Vec3,
+    pub start_cursor: Vec2,
+    /// Multi-viewport: camera + UI-node entities captured at grab so the drag
+    /// stays bound to its origin viewport even if the cursor wanders.
+    pub camera_entity: Option<Entity>,
+    pub viewport_entity: Option<Entity>,
+    /// Brush-local position of the geometry element the plane is currently
+    /// locked to (a vertex or edge midpoint), for the snap highlight. `None`
+    /// when snapping to the grid or nothing.
+    pub snap_target: Option<Vec3>,
+}
+
 pub struct MirrorPlaneOverlayPlugin;
 
 impl Plugin for MirrorPlaneOverlayPlugin {
@@ -62,6 +86,7 @@ impl Plugin for MirrorPlaneOverlayPlugin {
         // `BrushPlugin` for the vertex handles, which this overlay reuses.
         app.init_gizmo_group::<MirrorPlaneGizmoGroup>()
             .init_resource::<MirrorPlaneHover>()
+            .init_resource::<MirrorPlaneDragState>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 OnEnter(crate::AppState::Editor),
@@ -180,7 +205,8 @@ fn setup_mirror_plane_handle_assets(
 /// plane-grid center at `mirror.offset[axis]`, with the two in-plane axes at
 /// the brush's local bounds midpoint. Returns `None` when the brush has no
 /// geometry to bound.
-pub(crate) fn plane_handle_world(
+#[doc(hidden)]
+pub fn plane_handle_world(
     brush: &Brush,
     global_tf: &GlobalTransform,
     mirror: &MeshMirror,
@@ -431,7 +457,7 @@ fn draw_plane_grid(
 /// camera-facing circle at constant on-screen size.
 fn draw_mirror_plane_snap_highlight(
     mut gizmos: Gizmos<MirrorPlaneGizmoGroup>,
-    drag: Res<crate::brush::mirror_plane_ops::MirrorPlaneDragState>,
+    drag: Res<MirrorPlaneDragState>,
     camera: Query<
         (&Camera, &GlobalTransform, &Projection),
         With<crate::viewport::MainViewportCamera>,

@@ -3,7 +3,7 @@ use bevy::{picking::prelude::Pickable, prelude::*, ui::UiGlobalTransform};
 use crate::default_style;
 use crate::viewport::SceneViewport;
 
-pub(crate) use jackdaw_api_internal::viewport::ViewportRemap;
+pub use jackdaw_api_internal::viewport::ViewportRemap;
 
 /// Build the rubber-band marquee overlay node spanning `start`..`current`
 /// in window pixels. Returns the node bundle without a marker component so
@@ -77,7 +77,8 @@ pub(crate) fn window_to_viewport_cursor_for(
 }
 
 /// Test whether a 2D point lies inside a convex or concave polygon (ray-casting algorithm).
-pub(crate) fn point_in_polygon_2d(point: Vec2, polygon: &[Vec2]) -> bool {
+#[doc(hidden)]
+pub fn point_in_polygon_2d(point: Vec2, polygon: &[Vec2]) -> bool {
     let n = polygon.len();
     if n < 3 {
         return false;

@@ -2243,7 +2243,8 @@ fn viewport_2d_is_current(viewport: FrontedViewport) -> bool {
 /// an availability gate is one system, and the operators that ask are already
 /// asking something else.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct FrontedViewport<'w, 's> {
+#[doc(hidden)]
+pub struct FrontedViewport<'w, 's> {
     hosts: Query<'w, 's, &'static Viewport2dPanelHost>,
     hover_map: Res<'w, HoverMap>,
     parents: Query<'w, 's, &'static ChildOf>,
@@ -2269,7 +2270,8 @@ impl FrontedViewport<'_, '_> {
 
     /// Whether the 3D world is what the user is looking at: anything but the
     /// canvas, so a workspace with no viewport open still answers yes.
-    pub(crate) fn is_three_d(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_three_d(&self) -> bool {
         !self.is_two_d()
     }
 
@@ -2294,7 +2296,8 @@ impl FrontedViewport<'_, '_> {
 /// True while the 3D world is the one the keyboard belongs to. The single-letter
 /// transform and brush chords mean nothing on a UI canvas, where a user typing a
 /// name with no field focused would otherwise arm one of them.
-pub(crate) fn three_d_world_is_current(viewport: FrontedViewport) -> bool {
+#[doc(hidden)]
+pub fn three_d_world_is_current(viewport: FrontedViewport) -> bool {
     viewport.is_three_d()
 }
 

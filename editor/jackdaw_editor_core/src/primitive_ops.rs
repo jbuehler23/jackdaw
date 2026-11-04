@@ -170,7 +170,8 @@ pub(crate) fn euler_degrees(degrees: Vec3) -> Quat {
 }
 
 /// A whole-number parameter within `range`.
-pub(crate) fn int_param(
+#[doc(hidden)]
+pub fn int_param(
     params: &OperatorParameters,
     key: &str,
     range: std::ops::RangeInclusive<i64>,
@@ -189,7 +190,8 @@ pub(crate) fn int_param(
 }
 
 /// A `Vec3` parameter whose every axis is a finite number.
-pub(crate) fn vec3_param(params: &OperatorParameters, key: &str) -> Result<Option<Vec3>, String> {
+#[doc(hidden)]
+pub fn vec3_param(params: &OperatorParameters, key: &str) -> Result<Option<Vec3>, String> {
     if !params.contains_key(key) {
         return Ok(None);
     }
@@ -378,7 +380,8 @@ pub(crate) fn parent_param(
 
 /// `entity` when it is a node of the open scene document, else why not;
 /// `key` names the parameter it came from.
-pub(crate) fn scene_node(world: &World, entity: Entity, key: &str) -> Result<Entity, String> {
+#[doc(hidden)]
+pub fn scene_node(world: &World, entity: Entity, key: &str) -> Result<Entity, String> {
     let in_document = world
         .get_resource::<jackdaw_bsn::SceneBsnAst>()
         .is_some_and(|doc| doc.ast_for(entity).is_some());
@@ -449,7 +452,8 @@ pub(crate) fn spawn_as_one_entry(
 }
 
 /// A number parameter within `range`, finite once it is an `f32`.
-pub(crate) fn float_param(
+#[doc(hidden)]
+pub fn float_param(
     params: &OperatorParameters,
     key: &str,
     range: std::ops::RangeInclusive<f64>,
@@ -470,7 +474,8 @@ pub(crate) fn float_param(
 }
 
 /// The bool parameter `key` as the call gave it, `None` when it did not.
-pub(crate) fn bool_param(params: &OperatorParameters, key: &str) -> Result<Option<bool>, String> {
+#[doc(hidden)]
+pub fn bool_param(params: &OperatorParameters, key: &str) -> Result<Option<bool>, String> {
     match params.get(key) {
         None => Ok(None),
         Some(_) => params

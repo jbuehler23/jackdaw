@@ -1,0 +1,371 @@
+use bevy::{
+    picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility},
+    picking::prelude::Pickable,
+    prelude::*,
+};
+use jackdaw_api::prelude::*;
+use jackdaw_feathers::tokens;
+
+use jackdaw_editor_core::{
+    JackdawDrawSystems, default_style,
+    viewport::{MainViewportCamera, SceneViewport},
+};
+
+// -- Plugin --
+
+pub struct MeasureToolPlugin;
+
+impl Plugin for MeasureToolPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<MeasureToolState>()
+            .init_resource::<MeasureLabelEntities>()
+            .init_gizmo_group::<MeasureToolGizmoGroup>()
+            .add_systems(Startup, configure_measure_tool_gizmos)
+            .add_systems(
+                PostUpdate,
+                (draw_measure_line, update_measure_labels)
+                    .in_set(JackdawDrawSystems)
+                    .run_if(in_state(jackdaw_editor_core::AppState::Editor)),
+            );
+    }
+}
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct MeasureToolGizmoGroup;
+
+fn configure_measure_tool_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
+    let (config, _) = config_store.config_mut::<MeasureToolGizmoGroup>();
+    config.depth_bias = -1.0;
+}
+
+// -- State --
+
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct MeasureToolState {
+    pub active: bool,
+    pub initialized: bool,
+    has_start: bool,
+    start_point: Vec3,
+    end_point: Vec3,
+    /// Multi-viewport: viewport this measurement is anchored to.
+    /// Captured on the first invoke so the label and confirm clicks
+    /// stay bound to it even if the cursor wanders to another panel.
+    camera: Option<Entity>,
+    viewport: Option<Entity>,
+}
+
+#[derive(Resource, Default)]
+struct MeasureLabelEntities {
+    label: Option<Entity>,
+}
+
+#[derive(Component)]
+struct MeasureLabel;
+
+// -- Extension registration --
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    use jackdaw_api_internal::lifecycle::OperatorAction;
+    use jackdaw_input::{ActionOf, Condition, bindings};
+
+    // Deferred: condition is not a bare press (key + Press).
+    ctx.entity_mut().with_related::<ActionOf>((
+        OperatorAction(MeasureDistanceOp::ID),
+        bindings![(KeyCode::KeyM, Condition::Press)],
+    ));
+
+    // Deferred: condition is not a bare press (mouse button + Press).
+    ctx.entity_mut().with_related::<ActionOf>((
+        OperatorAction(ConfirmMeasureDistanceOp::ID),
+        bindings![(MouseButton::Left, Condition::Press)],
+    ));
+
+    ctx.register_operator::<MeasureDistanceOp>()
+        .register_operator::<ConfirmMeasureDistanceOp>()
+        .register_menu_entry::<MeasureDistanceOp>(TopLevelMenu::Tools);
+}
+
+// -- Operator --
+
+#[operator(
+    id = "tools.measure_distance",
+    label = "Measure Distance",
+    description = "Click two points in the viewport to measure the distance between them",
+    modal = true,
+    allows_undo = false,
+    cancel = cancel_measure_distance,
+    is_available = jackdaw_editor_core::viewport_2d::three_d_world_is_current
+)]
+pub(crate) fn measure_distance(
+    _: In<OperatorParameters>,
+    mut state: ResMut<MeasureToolState>,
+    vp: jackdaw_editor_core::viewport::ViewportCursor,
+    mut ray_cast: MeshRayCast,
+    editor_entities: Query<(), With<jackdaw_editor_core::EditorEntity>>,
+) -> Option<OperatorResult> {
+    if !state.initialized {
+        // Viewport capture is deferred so the modal can start from a
+        // toolbar button click where the cursor is over the toolbar.
+        state.initialized = true;
+        state.active = true;
+        state.has_start = false;
+        return Some(OperatorResult::Running);
+    }
+
+    if !state.active {
+        // Confirm triggered finish, clean up and exit the modal.
+        state.initialized = false;
+        state.has_start = false;
+        state.camera = None;
+        state.viewport = None;
+        return Some(OperatorResult::Finished);
+    }
+
+    // Capture the viewport the modal was started on; subsequent
+    // frames stick to it even if the cursor strays elsewhere.
+    let camera_entity = state.camera.or_else(|| vp.camera_entity());
+    let viewport_entity = state.viewport.or_else(|| vp.viewport_entity());
+    let (Some(camera_entity), Some(viewport_entity)) = (camera_entity, viewport_entity) else {
+        return Some(OperatorResult::Running);
+    };
+    if state.camera.is_none() {
+        state.camera = Some(camera_entity);
+    }
+    if state.viewport.is_none() {
+        state.viewport = Some(viewport_entity);
+    }
+    let Some((camera, cam_tf)) = vp.camera_for(camera_entity) else {
+        return Some(OperatorResult::Running);
+    };
+
+    // Try to get a world-space point under the cursor.
+    let current_point = vp.cursor().and_then(|cursor_pos| {
+        let vp_cursor = vp.viewport_cursor_for(camera, viewport_entity, cursor_pos)?;
+        let ray = camera.viewport_to_world(cam_tf, vp_cursor).ok()?;
+        Some(
+            raycast_closest_point(ray, &mut ray_cast, &editor_entities)
+                .or_else(|| ray_plane_intersection(ray, Vec3::ZERO, Vec3::Y))
+                .unwrap_or(cam_tf.translation() + *ray.direction * 10.0),
+        )
+    });
+
+    // Track cursor while waiting for the first click or while measuring.
+    if let Some(point) = current_point {
+        state.end_point = point;
+    }
+
+    Some(OperatorResult::Running)
+}
+
+fn cancel_measure_distance(mut state: ResMut<MeasureToolState>) {
+    state.active = false;
+    state.initialized = false;
+    state.has_start = false;
+    state.camera = None;
+    state.viewport = None;
+}
+
+/// Without the pointer check, the toolbar click that activates the modal would
+/// be taken as the first confirm, as would a click on an overlay floating over
+/// the viewport.
+fn confirm_measure_available(
+    state: Res<MeasureToolState>,
+    vp: jackdaw_editor_core::viewport::ViewportCursor,
+) -> bool {
+    state.active && vp.viewport_pointer().is_some()
+}
+
+#[operator(
+    id = "tools.measure_distance.confirm",
+    label = "Confirm Measurement",
+    description = "First click sets the start point, second click finishes",
+    is_available = confirm_measure_available,
+    allows_undo = false,
+    remote_hidden = "confirms a measurement the pointer is taking",
+)]
+fn confirm_measure_distance(
+    _: In<OperatorParameters>,
+    mut state: ResMut<MeasureToolState>,
+) -> OperatorResult {
+    if !state.active || !state.initialized {
+        return OperatorResult::Cancelled;
+    }
+
+    if !state.has_start {
+        // First click: capture start point and begin showing the line.
+        state.has_start = true;
+        state.start_point = state.end_point;
+        OperatorResult::Running
+    } else {
+        // Subsequent click: finish the current measurement and immediately
+        // start a new one from the current cursor position.
+        state.start_point = state.end_point;
+        OperatorResult::Running
+    }
+}
+
+// -- Raycasting helpers --
+
+/// The nearest scene geometry under `ray`.
+///
+/// Editor entities are filtered out: the tool reports distances in the authored
+/// world, and the editor draws meshes into it that are not part of it. An
+/// overlay such as a baked navmesh floats above the ground it describes, so
+/// measuring against it would answer with the drawing rather than the terrain.
+fn raycast_closest_point(
+    ray: Ray3d,
+    ray_cast: &mut MeshRayCast,
+    editor_entities: &Query<(), With<jackdaw_editor_core::EditorEntity>>,
+) -> Option<Vec3> {
+    let editor_filter = |entity: Entity| !editor_entities.contains(entity);
+    let settings = MeshRayCastSettings::default()
+        .with_visibility(RayCastVisibility::Any)
+        .with_filter(&editor_filter);
+    ray_cast
+        .cast_ray(ray, &settings)
+        .first()
+        .map(|(_, hit_data)| hit_data.point)
+}
+
+fn ray_plane_intersection(ray: Ray3d, plane_point: Vec3, plane_normal: Vec3) -> Option<Vec3> {
+    jackdaw_geometry::ray_plane_intersection(ray.origin, *ray.direction, plane_point, plane_normal)
+}
+
+// -- Viewport drawing --
+
+fn draw_measure_line(mut gizmos: Gizmos<MeasureToolGizmoGroup>, state: Res<MeasureToolState>) {
+    if !state.active || !state.has_start {
+        return;
+    }
+
+    let color = default_style::MEASURE_TOOL_LINE;
+    let start = state.start_point;
+    let end = state.end_point;
+
+    // Main measurement line
+    gizmos.line(start, end, color);
+
+    // Endpoint markers (small crosses)
+    for point in [start, end] {
+        gizmos.line(
+            point - Vec3::X * default_style::MARKER_SIZE,
+            point + Vec3::X * default_style::MARKER_SIZE,
+            color,
+        );
+        gizmos.line(
+            point - Vec3::Y * default_style::MARKER_SIZE,
+            point + Vec3::Y * default_style::MARKER_SIZE,
+            color,
+        );
+        gizmos.line(
+            point - Vec3::Z * default_style::MARKER_SIZE,
+            point + Vec3::Z * default_style::MARKER_SIZE,
+            color,
+        );
+    }
+}
+
+fn ensure_measure_label(
+    commands: &mut Commands,
+    label_entities: &mut MeasureLabelEntities,
+    label_alive: impl Fn(Entity) -> bool,
+    parent: Entity,
+) -> Entity {
+    if let Some(existing) = label_entities.label
+        && label_alive(existing)
+    {
+        commands.entity(existing).insert(ChildOf(parent));
+        return existing;
+    }
+    let entity = commands
+        .spawn((
+            MeasureLabel,
+            jackdaw_editor_core::EditorEntity,
+            jackdaw_editor_core::NonSerializable,
+            Text::default(),
+            TextFont {
+                font_size: tokens::TEXT_SIZE,
+                ..default()
+            },
+            TextColor(default_style::MEASURE_TOOL_LABEL),
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            // Any hovered node other than the viewport's own suppresses viewport
+            // gestures, and this readout follows the pointer over the viewport.
+            Pickable::IGNORE,
+            Visibility::Hidden,
+            ChildOf(parent),
+        ))
+        .id();
+    label_entities.label = Some(entity);
+    entity
+}
+
+fn update_measure_labels(
+    mut commands: Commands,
+    state: Res<MeasureToolState>,
+    mut label_entities: ResMut<MeasureLabelEntities>,
+    cameras: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewports: Query<&ComputedNode, With<SceneViewport>>,
+    mut label_query: Query<(&mut Text, &mut Node, &mut Visibility), With<MeasureLabel>>,
+) {
+    if !state.active || !state.has_start {
+        if let Some(entity) = label_entities.label
+            && let Ok((_, _, mut vis)) = label_query.get_mut(entity)
+        {
+            *vis = Visibility::Hidden;
+        }
+        return;
+    }
+
+    let Some(camera_entity) = state.camera else {
+        return;
+    };
+    let Some(viewport_entity) = state.viewport else {
+        return;
+    };
+    let Ok((camera, cam_tf)) = cameras.get(camera_entity) else {
+        return;
+    };
+    let Ok(viewport_node) = viewports.get(viewport_entity) else {
+        return;
+    };
+
+    let entity = {
+        let alive_check = |e: Entity| label_query.contains(e);
+        ensure_measure_label(
+            &mut commands,
+            &mut label_entities,
+            alive_check,
+            viewport_entity,
+        )
+    };
+    let Ok((mut text_comp, mut node, mut vis)) = label_query.get_mut(entity) else {
+        // Freshly spawned label is not yet in the query; show it next frame.
+        return;
+    };
+
+    let vp_node_size = viewport_node.size();
+    let scale = viewport_node.inverse_scale_factor();
+    let render_target_size = camera
+        .logical_viewport_size()
+        .unwrap_or(vp_node_size * scale);
+
+    let start = state.start_point;
+    let end = state.end_point;
+    let mid = (start + end) / 2.0;
+    let dist = start.distance(end);
+
+    text_comp.0 = format!("{:.3} m", dist);
+
+    if let Ok(vp_coords) = camera.world_to_viewport(cam_tf, mid) {
+        let ui_pos = vp_coords * vp_node_size / render_target_size * scale;
+        node.left = px(ui_pos.x - 4.0);
+        node.top = px(ui_pos.y - 7.0);
+        *vis = Visibility::Inherited;
+    } else {
+        *vis = Visibility::Hidden;
+    }
+}

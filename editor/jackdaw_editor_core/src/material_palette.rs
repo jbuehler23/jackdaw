@@ -18,7 +18,7 @@ use jackdaw_feathers::tokens;
 use serde::{Deserialize, Serialize};
 
 use crate::EditorEntity;
-use crate::brush::topology_ops::select_elements::refuse;
+use crate::brush::refuse;
 use crate::brush::{Brush, SetBrush};
 use crate::commands::CommandHistory;
 use crate::material_assets::MaterialRegistry;

@@ -32,7 +32,6 @@ use crate::{
     grid_ops::{GridDecreaseOp, GridIncreaseOp, GridToggleSnapOp},
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
-    measure_tool::MeasureDistanceOp,
     pie::PieWindowModeToggleOp,
     pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
     snapping::SnapSettings,
@@ -444,7 +443,7 @@ fn toolbar_tools() -> impl Scene {
             --
             @toolbar_op_button(ActivateDrawBrushModalOp::ID, Icon::Box)
             --
-            @toolbar_op_button(MeasureDistanceOp::ID, Icon::RulerDimensionLine)
+            @toolbar_op_button(crate::modelling_mode::MEASURE_DISTANCE_OP, Icon::RulerDimensionLine)
             --
             @toolbar_op_button(EditModeVertexOp::ID, Icon::CircleDot)
             --
@@ -718,7 +717,7 @@ fn is_main_toolbar_op(id: &str) -> bool {
         || id == ToolScaleOp::ID
         || id == GizmoSpaceToggleOp::ID
         || id == ActivateDrawBrushModalOp::ID
-        || id == MeasureDistanceOp::ID
+        || id == crate::modelling_mode::MEASURE_DISTANCE_OP
         || id == EditModeVertexOp::ID
         || id == EditModeEdgeOp::ID
         || id == EditModeFaceOp::ID

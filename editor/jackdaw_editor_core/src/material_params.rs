@@ -9,7 +9,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_commands::EditorCommand;
 use jackdaw_scene_types::PropertyValue;
 
-use crate::brush::topology_ops::select_elements::refuse;
+use crate::brush::refuse;
 use crate::commands::CommandHistory;
 use crate::material_assets::{MaterialRegistry, sanitize_material_name};
 

@@ -4,14 +4,13 @@ pub mod edit_mode_systems;
 mod geometry;
 mod gizmo_overlay;
 mod hull;
-pub(crate) mod interaction;
-pub(crate) mod knife_mode;
+#[doc(hidden)]
+pub mod interaction;
 pub(crate) mod mesh;
-pub mod mirror_plane_ops;
 pub mod mirror_plane_overlay;
+pub mod modifier_bake;
 pub mod preview;
 pub mod topology_migration;
-pub mod topology_ops;
 
 use bevy::prelude::*;
 
@@ -22,28 +21,29 @@ pub use self::csg::{
 };
 pub use self::geometry::{compute_brush_geometry_from_planes, compute_face_tangent_axes};
 pub use self::hull::HullFace;
-pub(crate) use self::hull::{merge_hull_triangles, rebuild_brush_from_vertices};
-pub(crate) use self::interaction::{
-    BrushDragCapture, BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState,
-};
+pub(crate) use self::hull::merge_hull_triangles;
+pub use self::hull::rebuild_brush_from_vertices;
+pub(crate) use self::interaction::BrushDragCapture;
+pub use self::interaction::{BrushDragState, ClipMode, ClipState, EdgeDragState, VertexDragState};
 pub use self::mesh::{
     ensure_brush_chunk_materials, mark_brushes_changed_on_modifier_removal,
     regenerate_brush_meshes, setup_default_materials,
 };
+pub use crate::modelling_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
 pub use edit_mode_systems::BrushHalfedge;
 pub use jackdaw_geometry::MeshMirror;
 pub use jackdaw_scene_types::{Brush, BrushFaceData, BrushPlane};
-pub use knife_mode::{KnifeMode, KnifePathPoint, KnifeSnapKind, KnifeSnapTarget};
 pub use preview::{ActivePreview, PreviewMesh, PreviewState};
-pub use topology_ops::edge_bevel::EdgeBevelModalState;
-pub use topology_ops::edge_slide_modal::EdgeSlideModalState;
-pub use topology_ops::extrude::ExtrudeModalState;
-pub use topology_ops::inset::InsetModalState;
-pub use topology_ops::loop_cut::{LoopCutModalState, LoopCutPreviewLines};
-pub use topology_ops::vertex_bevel::VertexBevelModalState;
-pub use topology_ops::vertex_slide_modal::VertexSlideModalState;
 
 pub use jackdaw_api_internal::brush::{BrushDefault, BrushSystems};
+
+/// Warn the caller why a call was refused and mark it invalid.
+pub fn refuse(world: &mut World, label: &str, why: String) -> jackdaw_api::prelude::OperatorResult {
+    use jackdaw_api::prelude::*;
+    warn_caller(world, format!("{label}: {why}"));
+    set_outcome(world, Outcome::Invalid);
+    OperatorResult::Cancelled
+}
 
 /// Cached computed geometry (NOT serialized, rebuilt from Brush).
 #[derive(Component, Default, Clone, Debug)]
@@ -536,17 +536,8 @@ impl Plugin for BrushPlugin {
             .init_resource::<BrushDragState>()
             .init_resource::<VertexDragState>()
             .init_resource::<EdgeDragState>()
-            .init_resource::<mirror_plane_ops::MirrorPlaneDragState>()
             .init_resource::<box_select::BrushBoxSelectState>()
             .init_resource::<ClipState>()
-            .init_resource::<InsetModalState>()
-            .init_resource::<LoopCutModalState>()
-            .init_resource::<LoopCutPreviewLines>()
-            .init_resource::<ExtrudeModalState>()
-            .init_resource::<EdgeSlideModalState>()
-            .init_resource::<VertexSlideModalState>()
-            .init_resource::<EdgeBevelModalState>()
-            .init_resource::<VertexBevelModalState>()
             .init_resource::<KnifeMode>()
             .init_resource::<LastUsedMaterial>()
             .add_plugins(mesh::MeshPlugin)
@@ -567,17 +558,12 @@ impl Plugin for BrushPlugin {
                     interaction::drop_brush_edit_on_deselect,
                     interaction::brush_face_hover,
                     interaction::brush_vertex_edge_hover,
-                    // Runs before the sub-element drag triggers: a hovered plane
-                    // handle grabs the press, and those triggers bail when the
-                    // handle is hovered, so the plane drag wins the gesture.
-                    mirror_plane_ops::mirror_plane_drag_invoke_trigger,
                     crate::brush_drag_ops::face_drag_invoke_trigger,
                     crate::brush_drag_ops::vertex_drag_invoke_trigger,
                     crate::brush_drag_ops::edge_drag_invoke_trigger,
                     box_select::brush_box_select_promote,
                     crate::clip_ops::place_point_invoke_trigger,
                     interaction::handle_clip_mode,
-                    knife_mode::handle_knife_mode,
                 )
                     .chain()
                     .in_set(crate::EditorInteractionSystems),
@@ -605,9 +591,6 @@ impl Plugin for BrushPlugin {
                     gizmo_overlay::draw_brush_edit_gizmos,
                     gizmo_overlay::update_vertex_handles,
                     gizmo_overlay::update_edge_overlay,
-                    gizmo_overlay::draw_loop_cut_preview,
-                    topology_ops::loop_cut::update_loop_cut_mid_label,
-                    knife_mode::draw_knife_overlay,
                     box_select::update_brush_box_select_overlay,
                 )
                     .chain()
@@ -616,11 +599,6 @@ impl Plugin for BrushPlugin {
             .add_systems(
                 Update,
                 sync_changed_brushes_to_ast.run_if(in_state(crate::AppState::Editor)),
-            )
-            .add_systems(
-                Update,
-                topology_ops::select_elements::flag_menu_on_element_editing
-                    .run_if(in_state(crate::AppState::Editor)),
             )
             .add_systems(
                 Update,

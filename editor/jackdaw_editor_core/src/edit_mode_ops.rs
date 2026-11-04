@@ -105,7 +105,8 @@ pub(crate) fn brush_exit_edit_mode(
 /// target), a 2D viewport in front, or a selected tilemap, which takes the
 /// mode keys for tile edit mode.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct EditModeGuards<'w, 's> {
+#[doc(hidden)]
+pub struct EditModeGuards<'w, 's> {
     selection: Res<'w, Selection>,
     tilemaps: Query<'w, 's, (), With<jackdaw_scene_types::Tilemap>>,
     active: ActiveModalQuery<'w, 's>,
@@ -117,7 +118,8 @@ pub(crate) struct EditModeGuards<'w, 's> {
 
 impl EditModeGuards<'_, '_> {
     /// Why the edit mode may not change now, if it may not.
-    pub(crate) fn blocked(&self) -> Option<&'static str> {
+    #[doc(hidden)]
+    pub fn blocked(&self) -> Option<&'static str> {
         if self.active.is_modal_running() {
             return Some("a modal operation is running");
         }

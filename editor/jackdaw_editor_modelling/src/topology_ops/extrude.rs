@@ -1,0 +1,510 @@
+//! Extrude operators:
+//!
+//! - `brush.mesh.extrude_region` (non-modal): one-shot extrusion by a
+//!   `distance` parameter (0.5 by default), available via menu / command
+//!   palette. The modal also takes `distance` and then runs the same path.
+//! - `brush.mesh.extrude` (modal, bound to `E`): modal where the
+//!   cursor's projected motion along the face normal drives a signed extrusion
+//!   amount. The brush mesh is mutated each frame so the user sees the live
+//!   extrusion as a real mesh edit.
+//!
+//! Both share the same `HalfedgeMesh` op (`extrude_face_region`) and the same
+//! chained selection behavior: post-commit, `BrushSelection.faces` is updated
+//! to the new top face indices.
+
+use bevy::prelude::*;
+use bevy::ui::ui_transform::UiGlobalTransform;
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
+use jackdaw_api_internal::lifecycle::ActiveModalOperator;
+use jackdaw_geometry::halfedge::ops::extrude_face_region::extrude_face_region;
+use jackdaw_geometry::halfedge::{FaceKey, HalfedgeMesh, apply_topology_edit};
+use jackdaw_scene_types::Brush;
+
+use super::modal_edit::ModalTopologyEdit;
+use super::param_edit::{self, Picks};
+use super::select_elements::refuse;
+use jackdaw_editor_core::brush::{BrushEditMode, BrushHalfedge, BrushSelection, EditMode};
+use jackdaw_editor_core::snapping::SnapSettings;
+use jackdaw_editor_core::viewport::{MainViewportCamera, SceneViewport};
+use jackdaw_editor_core::viewport_util::ViewportRemap;
+
+const DEFAULT_EXTRUDE_DEPTH: f32 = 0.5;
+
+/// Distances shorter than this extrude nothing visible.
+const MIN_EXTRUDE: f32 = 1e-4;
+
+/// Pixels-per-world-unit sensitivity for the modal extrude.
+/// At this value 100 pixels of cursor movement along the screen-projected face
+/// normal corresponds to 1 world-unit of extrusion. Tune as needed.
+const EXTRUDE_SENSITIVITY: f32 = 0.01;
+
+/// Modal state for the `brush.mesh.extrude` operator.
+#[derive(Resource, Default)]
+pub struct ExtrudeModalState {
+    pub active: bool,
+    pub brush_entity: Option<Entity>,
+    /// `HalfedgeMesh` `FaceKeys` of the faces being extruded. Slotmap keys stay
+    /// valid across the snapshot's clones, so they re-resolve each frame after
+    /// the snapshot is restored.
+    pub face_keys: Vec<FaceKey>,
+    /// Brush face indices of the faces being extruded, captured at modal entry.
+    /// The live-preview path seeds new wall faces from the first of these so
+    /// they inherit the parent face's material and UV projection rather than an
+    /// unrelated face's.
+    pub face_indices: Vec<usize>,
+    /// Window-space cursor position at the moment the modal started.
+    pub start_cursor: Vec2,
+    /// Unit-length screen-space direction corresponding to "+1 unit along the
+    /// representative face normal" (in window pixels). Used to map cursor
+    /// motion onto a signed scalar amount.
+    pub screen_normal_dir: Vec2,
+    /// Current signed extrude amount in world-space units. Positive = along
+    /// face normal; negative = against face normal.
+    pub current_amount: f32,
+    /// Pre-edit snapshot driving restore and per-frame re-apply.
+    pub edit: Option<ModalTopologyEdit>,
+}
+
+/// Duplicate each selected face along its normal and connect the old and new
+/// rings with side quads. Operates on the current face selection and leaves
+/// the new top faces selected. Available in Face mode with at least one face
+/// selected.
+#[operator(
+    id = "brush.mesh.extrude_region",
+    label = "Extrude Region",
+    is_available = can_run_extrude_region,
+    allows_undo = true,
+    params(distance(
+        f64,
+        doc = "How far to push the selected faces along their normals, in metres; \
+               negative pulls them in. Defaults to 0.5."
+    ))
+)]
+pub(crate) fn brush_extrude_region(
+    params: In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    extrude_by(
+        world,
+        "Extrude Region",
+        &params,
+        Some(DEFAULT_EXTRUDE_DEPTH),
+    )
+}
+
+/// Extrude the selected faces by the `distance` parameter, or by `fallback`
+/// when it is absent.
+fn extrude_by(
+    world: &mut World,
+    label: &str,
+    params: &OperatorParameters,
+    fallback: Option<f32>,
+) -> OperatorResult {
+    let distance = match param_edit::number(params, "distance") {
+        Ok(distance) => distance.or(fallback),
+        Err(why) => return refuse(world, label, why),
+    };
+    let Some(distance) = distance else {
+        return refuse(world, label, "give `distance`".into());
+    };
+    if distance.abs() < MIN_EXTRUDE {
+        return refuse(
+            world,
+            label,
+            "`distance` must not be zero; nothing would move".into(),
+        );
+    }
+    param_edit::run(
+        world,
+        label,
+        BrushEditMode::Face,
+        |brush, halfedge, selected| {
+            let face_keys = param_edit::face_keys(halfedge, &selected.faces);
+            let tops = extrude_faces(brush, halfedge, &face_keys, distance);
+            Ok((!tops.is_empty()).then_some(Picks::Faces(tops)))
+        },
+    )
+}
+
+/// Extrude each of `faces` by `distance` along its normal and reconcile the
+/// brush. Each face's walls copy that face's look. Returns the new top faces'
+/// indices.
+fn extrude_faces(
+    brush: &mut Brush,
+    halfedge: &mut BrushHalfedge,
+    faces: &[FaceKey],
+    distance: f32,
+) -> Vec<usize> {
+    apply_topology_edit(
+        &mut brush.faces,
+        &mut brush.topology,
+        &mut halfedge.0,
+        |mesh| {
+            let mut tops = Vec::with_capacity(faces.len());
+            for &face in faces {
+                if let Ok(result) = extrude_face_region(mesh, face, distance) {
+                    tops.push(result.top_face);
+                }
+            }
+            param_edit::flattened_indices(mesh, &tops)
+        },
+    )
+}
+
+pub(crate) fn can_run_extrude_region(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+) -> bool {
+    *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
+}
+
+// --- Modal extrude (`brush.mesh.extrude`, bound to `E`) ---
+
+/// Extrude each selected face along its normal by a signed amount controlled
+/// by cursor motion projected onto the screen-space face normal. Positive
+/// values push outward; negative values pull inward. The live brush mesh is
+/// updated each frame so the extrusion is visible as a real mesh edit. Ctrl
+/// snaps to the translate grid increment. LMB commits; Esc / RMB cancels and
+/// reverts.
+///
+/// Given `distance`, extrudes by that much at once instead, as
+/// `brush.mesh.extrude_region` does.
+///
+/// Requires Face mode with at least one face selected.
+#[operator(
+    id = "brush.mesh.extrude",
+    label = "Extrude",
+    is_available = can_run_extrude,
+    modal = true,
+    allows_undo = true,
+    cancel = cancel_extrude,
+    params(distance(
+        f64,
+        doc = "Extrude by this many metres at once instead of dragging; negative pulls \
+               the faces in."
+    ))
+)]
+pub(crate) fn brush_extrude(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if params.contains_key("distance") {
+        return extrude_by(world, "Extrude", &params, None);
+    }
+    param_edit::run_modal(world, extrude_modal, params.0)
+}
+
+/// The pointer-driven extrude behind `brush.mesh.extrude`.
+fn extrude_modal(
+    _: In<OperatorParameters>,
+    edit_mode: Res<EditMode>,
+    mut selection: ResMut<BrushSelection>,
+    mut brushes: Query<&mut Brush>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
+    brush_transforms: Query<&GlobalTransform>,
+    mut modal_state: ResMut<ExtrudeModalState>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    keybind_focus: jackdaw_editor_core::keybind_focus::KeybindFocus,
+    modal_inputs: jackdaw_editor_core::modal_inputs::ModalInputs,
+    cursor: jackdaw_editor_core::viewport::UiCursorPos,
+    camera_query: Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+    snap_settings: Res<SnapSettings>,
+    modal_entity: Option<Single<Entity, With<ActiveModalOperator>>>,
+) -> Option<OperatorResult> {
+    // Ui-logical cursor; dragging outside the viewport panel should not
+    // cancel the modal (matches inset / loop_cut behavior).
+    let cursor_pos = cursor.get()?;
+
+    // --- First invoke: snapshot and enter modal ---
+    if modal_entity.is_none() {
+        if *edit_mode != EditMode::BrushEdit(BrushEditMode::Face) {
+            return None;
+        }
+        let brush_entity = selection.active_brush?;
+        let modal_sel_faces: Vec<usize> = selection
+            .sub(brush_entity)
+            .map(|s| s.faces.clone())
+            .unwrap_or_default();
+        if modal_sel_faces.is_empty() {
+            return None;
+        }
+
+        let brush_before = brushes.get(brush_entity).cloned().ok()?;
+        let halfedge = halfedge_q.get(brush_entity).ok()?;
+
+        let mut face_keys: Vec<FaceKey> = Vec::with_capacity(modal_sel_faces.len());
+        for &face_idx in &modal_sel_faces {
+            if let Some(&fk) = halfedge.face_keys.get(face_idx) {
+                face_keys.push(fk);
+            }
+        }
+        if face_keys.is_empty() {
+            return None;
+        }
+
+        let brush_xform = brush_transforms.get(brush_entity).ok();
+
+        // Derive the screen-space direction corresponding to "+1 world-unit
+        // along the representative face normal". Fall back to (0, -1) (cursor
+        // up = positive amount) when the camera projection isn't available.
+        let screen_normal_dir = compute_screen_normal_dir(
+            &halfedge.mesh,
+            &face_keys,
+            brush_xform,
+            &camera_query,
+            &viewport_query,
+        );
+
+        modal_state.active = true;
+        modal_state.brush_entity = Some(brush_entity);
+        modal_state.face_keys = face_keys;
+        modal_state.face_indices = modal_sel_faces;
+        modal_state.start_cursor = cursor_pos;
+        modal_state.screen_normal_dir = screen_normal_dir;
+        modal_state.current_amount = 0.0;
+        modal_state.edit = Some(ModalTopologyEdit::begin(&brush_before, halfedge));
+
+        return Some(OperatorResult::Running);
+    }
+
+    // --- Subsequent invokes: cancel, update amount, mutate preview, or commit ---
+
+    let rmb = mouse.just_pressed(MouseButton::Right);
+    if modal_inputs.cancel() || rmb {
+        // Live brush has been mutated each frame, so restore from the snapshot
+        // before clearing modal state.
+        restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+        *modal_state = ExtrudeModalState::default();
+        return None;
+    }
+
+    // Signed projection of cursor motion onto the screen-normal direction.
+    let cursor_delta = cursor_pos - modal_state.start_cursor;
+    let raw_amount = cursor_delta.dot(modal_state.screen_normal_dir) * EXTRUDE_SENSITIVITY;
+
+    // Snap respects the global translate_snap toggle; Ctrl flips the current
+    // snap state (anti-modifier).
+    let ctrl = keybind_focus.any_pressed(&keyboard, [KeyCode::ControlLeft, KeyCode::ControlRight]);
+    modal_state.current_amount =
+        if snap_settings.translate_active(ctrl) && snap_settings.translate_increment > 0.0 {
+            let inc = snap_settings.translate_increment;
+            (raw_amount / inc).round() * inc
+        } else {
+            raw_amount
+        };
+
+    // Apply the extrude to the live brush mesh so the user sees it as a real
+    // mesh edit. The op result is discarded; the extrusion is visible through
+    // the regular brush mesh pipeline picking up `Changed<Brush>`. The returned
+    // indices identify the post-flatten top-face slots so the commit path can
+    // chain selection without recomputing them.
+    let top_face_indices = apply_live_extrude(&mut modal_state, &mut brushes, &mut halfedge_q);
+
+    // Commit on LMB.
+    if mouse.just_pressed(MouseButton::Left) {
+        let Some(brush_entity) = modal_state.brush_entity else {
+            *modal_state = ExtrudeModalState::default();
+            return None;
+        };
+
+        // Degenerate zero-amount commit: treat as no-op cancel so we don't
+        // record a useless undo entry. The live brush should already be back
+        // to the snapshot (apply_live_extrude resets when amount is sub-threshold).
+        if modal_state.current_amount.abs() < 1e-4 {
+            restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+            *modal_state = ExtrudeModalState::default();
+            return None;
+        }
+
+        let Ok(brush) = brushes.get(brush_entity).cloned() else {
+            *modal_state = ExtrudeModalState::default();
+            return None;
+        };
+
+        // Chain selection: write the new top face indices into
+        // `BrushSelection.faces` so a follow-up gesture (drag-along-normal,
+        // inset, extrude again) can act on them immediately. Filter out
+        // indices that landed past the brush face array; defensive clamp.
+        let face_count = brush.faces.len();
+        let new_top_indices: Vec<usize> = top_face_indices
+            .into_iter()
+            .filter(|&i| i < face_count)
+            .collect();
+        if !new_top_indices.is_empty() {
+            selection.sub_mut(brush_entity).faces = new_top_indices;
+        }
+
+        *modal_state = ExtrudeModalState::default();
+        return Some(OperatorResult::Finished);
+    }
+
+    Some(OperatorResult::Running)
+}
+
+/// Cancel handler: restore the brush to its pre-modal state. Called when the
+/// modal lifecycle is force-cancelled from outside the operator.
+fn cancel_extrude(
+    mut modal_state: ResMut<ExtrudeModalState>,
+    mut brushes: Query<&mut Brush>,
+    mut halfedge_q: Query<&mut BrushHalfedge>,
+) {
+    restore_brush_from_snapshot(&modal_state, &mut brushes, &mut halfedge_q);
+    *modal_state = ExtrudeModalState::default();
+}
+
+/// Reset the live brush and binding to the snapshot captured at modal start.
+fn restore_brush_from_snapshot(
+    modal_state: &ExtrudeModalState,
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
+) {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return;
+    };
+    let Some(edit) = modal_state.edit.as_ref() else {
+        return;
+    };
+    let Ok(mut brush) = brushes.get_mut(brush_entity) else {
+        return;
+    };
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return;
+    };
+    edit.restore(&mut brush, &mut halfedge);
+}
+
+/// Re-run `extrude_face_region` against the snapshot at the current amount and
+/// write the result into the live `Brush` + `BrushHalfedge`. Returns the
+/// post-flatten face indices of the new top faces (one per successful
+/// extrusion), in `modal_state.face_keys` order, for chained selection.
+fn apply_live_extrude(
+    modal_state: &mut ExtrudeModalState,
+    brushes: &mut Query<&mut Brush>,
+    halfedge_q: &mut Query<&mut BrushHalfedge>,
+) -> Vec<usize> {
+    let Some(brush_entity) = modal_state.brush_entity else {
+        return Vec::new();
+    };
+    let Some(edit) = modal_state.edit.as_ref() else {
+        return Vec::new();
+    };
+    let Ok(brush_mut) = brushes.get_mut(brush_entity) else {
+        return Vec::new();
+    };
+    let Ok(mut halfedge) = halfedge_q.get_mut(brush_entity) else {
+        return Vec::new();
+    };
+    let brush = brush_mut.into_inner();
+
+    // Sub-threshold amounts: snap the live brush back to the snapshot.
+    if modal_state.current_amount.abs() < 1e-4 {
+        edit.restore(brush, &mut halfedge);
+        return Vec::new();
+    }
+
+    edit.restore(brush, &mut halfedge);
+    extrude_faces(
+        brush,
+        &mut halfedge,
+        &modal_state.face_keys,
+        modal_state.current_amount,
+    )
+}
+
+/// Project a representative face's world-space centroid and `centroid + normal`
+/// through the active camera into window-space pixels; return the normalized
+/// pixel-space direction (length 1) corresponding to "+1 unit along the face
+/// normal in screen space". Falls back to `(0, -1)` (cursor-up = positive)
+/// if anything in the projection pipeline is unavailable, matching the
+/// heuristic spelled out in the spec.
+fn compute_screen_normal_dir(
+    mesh: &HalfedgeMesh,
+    face_keys: &[FaceKey],
+    brush_xform: Option<&GlobalTransform>,
+    camera_query: &Query<(&Camera, &GlobalTransform), With<MainViewportCamera>>,
+    viewport_query: &Query<(&ComputedNode, &UiGlobalTransform), With<SceneViewport>>,
+) -> Vec2 {
+    const FALLBACK: Vec2 = Vec2::new(0.0, -1.0);
+
+    let Some(&first_fk) = face_keys.first() else {
+        return FALLBACK;
+    };
+    let Some(face) = mesh.faces.get(first_fk) else {
+        return FALLBACK;
+    };
+    let Some(brush_xform) = brush_xform else {
+        return FALLBACK;
+    };
+    let Ok((camera, cam_tf)) = camera_query.single() else {
+        return FALLBACK;
+    };
+
+    // Walk the face ring once for both centroid (local space) and average
+    // ring normal via Newell. We prefer `normal_cache` if it looks set
+    // (matches inset's robustness pattern).
+    let n = face.loop_count as usize;
+    if n < 3 {
+        return FALLBACK;
+    }
+    let mut ring: Vec<Vec3> = Vec::with_capacity(n);
+    let mut cur = face.loop_first;
+    for _ in 0..n {
+        let lp = &mesh.loops[cur];
+        ring.push(mesh.verts[lp.vert].co);
+        cur = lp.next;
+    }
+    let centroid_local = ring.iter().copied().sum::<Vec3>() / n as f32;
+    let normal_local = if face.normal_cache.length_squared() > 0.5 {
+        face.normal_cache
+    } else {
+        jackdaw_geometry::newell_normal(&ring)
+    };
+
+    let centroid_world = brush_xform.transform_point(centroid_local);
+    // Direction-only: transform by rotation/scale, NOT translation. Using
+    // `transform_point` on `(centroid + normal)` then subtracting works
+    // identically and keeps the math obvious.
+    let tip_world = brush_xform.transform_point(centroid_local + normal_local);
+
+    let Ok(p0_rt) = camera.world_to_viewport(cam_tf, centroid_world) else {
+        return FALLBACK;
+    };
+    let Ok(p1_rt) = camera.world_to_viewport(cam_tf, tip_world) else {
+        return FALLBACK;
+    };
+
+    // Render-target coords -> window-space pixels (the same space the cursor
+    // lives in). On HiDPI/fractional-scaling viewports these differ; loop_cut
+    // uses the identical shape.
+    let (p0_win, p1_win) = if let Ok((computed, vp_transform)) = viewport_query.single() {
+        let map = ViewportRemap::new(camera, computed, vp_transform);
+        (
+            map.top_left + p0_rt / map.remap,
+            map.top_left + p1_rt / map.remap,
+        )
+    } else {
+        (p0_rt, p1_rt)
+    };
+
+    let dir = p1_win - p0_win;
+    let len = dir.length();
+    if len > 1e-4 { dir / len } else { FALLBACK }
+}
+
+pub(crate) fn can_run_extrude(
+    edit_mode: Res<EditMode>,
+    selection: Res<BrushSelection>,
+    viewport: jackdaw_editor_core::viewport_2d::FrontedViewport,
+) -> bool {
+    viewport.is_three_d()
+        && *edit_mode == EditMode::BrushEdit(BrushEditMode::Face)
+        && selection.active_sub().is_some_and(|s| !s.faces.is_empty())
+}
+
+pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
+    ctx.register_operator::<BrushExtrudeRegionOp>();
+    ctx.register_operator::<BrushExtrudeOp>();
+
+    ctx.bind_operator_host::<BrushExtrudeOp>([PresetInput::key("KeyE")]);
+}

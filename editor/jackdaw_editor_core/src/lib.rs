@@ -21,7 +21,6 @@ pub mod authored_widgets;
 pub mod boot_ops;
 pub mod brush;
 pub mod brush_drag_ops;
-pub mod brush_element_ops;
 pub mod build_panel;
 pub mod build_status;
 pub mod builtin_extensions;
@@ -106,12 +105,10 @@ pub mod material_palette;
 pub mod material_params;
 pub mod material_preview;
 pub mod material_ui;
-pub mod measure_tool;
-pub mod mesh_quick_menu;
 pub mod modal_inputs;
 pub mod modal_transform;
 pub mod model_lod;
-pub mod modifier_ops;
+pub mod modelling_mode;
 pub mod module_picker;
 pub mod native_dialog;
 pub mod new_project;
@@ -128,7 +125,8 @@ pub mod prefab;
 pub mod preflight;
 pub mod preview_context;
 pub(crate) mod preview_model;
-pub(crate) mod primitive_ops;
+#[doc(hidden)]
+pub mod primitive_ops;
 pub mod probe_bake;
 pub mod progress;
 pub mod project;
@@ -516,7 +514,6 @@ impl Plugin for EditorCorePlugin {
         ))
         .add_plugins((
             material_browser::MaterialBrowserPlugin,
-            measure_tool::MeasureToolPlugin,
             draw_brush::DrawBrushPlugin,
             face_grid::FaceGridPlugin,
             brush::mirror_plane_overlay::MirrorPlaneOverlayPlugin,
@@ -525,7 +522,6 @@ impl Plugin for EditorCorePlugin {
             screenshot::plugin,
             reference_image::ReferenceImagePlugin,
             jackdaw_widgets::RadialMenuPlugin,
-            mesh_quick_menu::MeshQuickMenuPlugin,
             remote::RemoteConnectionPlugin,
             remote::debug::RemoteDebugPlugin,
             camera_settings::plugin,
@@ -589,6 +585,7 @@ impl Plugin for EditorCorePlugin {
         .init_resource::<layout::SceneViewPreset>()
         .init_resource::<asset_catalog::AssetCatalog>()
         .init_resource::<MenuBarDirty>()
+        .init_resource::<MenuBarSlots>()
         // Always available so the Extensions dialog's runtime
         // "Install from file" path can push into it even when
         // `with_dylib_loader()` wasn't called.
@@ -749,6 +746,21 @@ impl Plugin for ExtensionPlugin {
 /// single menu-bar rebuild.
 #[derive(Resource, Default)]
 pub struct MenuBarDirty(pub bool);
+
+/// A top-level menu a feature shows after Edit while the editor is in a state
+/// it answers for: its title and rows, or `None` to leave it out.
+pub type MenuBarSlot = fn(&World) -> Option<(String, Vec<(String, String)>)>;
+
+/// The registered [`MenuBarSlot`]s, shown in registration order. A feature
+/// whose menu comes or goes sets [`MenuBarDirty`] when its state changes.
+#[derive(Resource, Default)]
+pub struct MenuBarSlots(Vec<MenuBarSlot>);
+
+impl MenuBarSlots {
+    pub fn register(&mut self, slot: MenuBarSlot) {
+        self.0.push(slot);
+    }
+}
 
 fn rebuild_menu_if_dirty(world: &mut World) {
     if !world.resource::<MenuBarDirty>().0 {
@@ -2418,19 +2430,16 @@ fn populate_menu(
     }
     let mut menu_items: Vec<(String, Vec<(String, String)>)> =
         menu_items.into_values().flatten().collect();
-    if brush::topology_ops::select_elements::editing_elements(world) {
-        let at = menu_items
-            .iter()
-            .position(|(id, _)| *id == TopLevelMenu::Edit.id())
-            .map_or(0, |edit| edit + 1);
-        menu_items.insert(
-            at,
-            (
-                "Select".to_string(),
-                brush::topology_ops::select_elements::select_menu_rows(),
-            ),
-        );
-    }
+    let slots = world
+        .get_resource::<MenuBarSlots>()
+        .map(|slots| slots.0.clone())
+        .unwrap_or_default();
+    let at = menu_items
+        .iter()
+        .position(|(id, _)| *id == TopLevelMenu::Edit.id())
+        .map_or(0, |edit| edit + 1);
+    let slot_menus: Vec<_> = slots.into_iter().filter_map(|slot| slot(world)).collect();
+    menu_items.splice(at..at, slot_menus);
 
     jackdaw_feathers::menu_bar::populate_menu_bar(world, menu_bar_entity, menu_items);
 }

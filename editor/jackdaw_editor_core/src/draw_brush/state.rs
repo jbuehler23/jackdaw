@@ -59,6 +59,14 @@ pub(crate) struct ActiveDraw {
 }
 
 #[derive(Resource, Debug, Default)]
-pub(crate) struct DrawBrushState {
+#[doc(hidden)]
+pub struct DrawBrushState {
     pub(crate) active: Option<ActiveDraw>,
+}
+
+impl DrawBrushState {
+    /// Drop the draw in progress, if any.
+    pub fn cancel(&mut self) {
+        self.active = None;
+    }
 }

@@ -21,12 +21,12 @@ mod revolve;
 mod state;
 
 pub(crate) use self::build::*;
-pub(crate) use self::csg_ops::*;
+pub use self::csg_ops::*;
 pub(crate) use self::extend_face::*;
 pub(crate) use self::interaction::*;
 pub(crate) use self::plane_math::*;
 pub(crate) use self::preview_mesh::*;
-pub(crate) use self::state::*;
+pub use self::state::*;
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     let ext = ctx.id();

@@ -1,0 +1,45 @@
+[package]
+name = "jackdaw_editor_modelling"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+description = "Brush and mesh modelling tools for the Jackdaw scene editor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jbuehler23/jackdaw"
+readme = "../../README.md"
+keywords = ["bevy", "editor", "modelling"]
+categories = ["game-development"]
+include = ["src/**/*", "Cargo.toml"]
+
+[dependencies]
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "../jackdaw_editor_core", default-features = false }
+bevy.workspace = true
+jackdaw_api.workspace = true
+jackdaw_api_internal.workspace = true
+jackdaw_commands.workspace = true
+jackdaw_feathers.workspace = true
+jackdaw_geometry.workspace = true
+jackdaw_input.workspace = true
+jackdaw_pick.workspace = true
+jackdaw_scene_types.workspace = true
+jackdaw_select.workspace = true
+jackdaw_uv.workspace = true
+jackdaw_widgets.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The features the root enables on the core, and not `default`, so the
+# modelling tests share the core `cargo build` and `cargo test` make instead
+# of compiling one of their own.
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "../jackdaw_editor_core", default-features = false, features = [
+    "multiplayer",
+    "camera_rig",
+    "embed-recipe",
+] }
+jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
+jackdaw_bsn.workspace = true
+jackdaw_widgets.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true
