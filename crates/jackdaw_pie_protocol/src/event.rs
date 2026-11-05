@@ -44,16 +44,21 @@ pub enum StateEvent {
 pub enum SceneAnswer {
     /// The editor's current document. `dir` is the folder it counts as being
     /// in, relative to the asset folder, and `stem` the name it goes by.
-    /// `sidecars` is the private folder holding unsaved sidecars when any exist,
-    /// laid out like the asset folder; a sidecar found there wins over its file.
+    /// `sidecars` is the private folder of this scene's unsaved sidecars when any
+    /// exist, laid out like the asset folder; a sidecar found there wins over its
+    /// file.
     Document {
         text: String,
         dir: String,
         stem: String,
         sidecars: Option<String>,
     },
-    /// Load this file, relative to the asset folder.
-    UseFile { path: String },
+    /// Load this file, relative to the asset folder. `sidecars` is as for
+    /// [`Self::Document`]: a prefab the file instances can have unsaved sidecars.
+    UseFile {
+        path: String,
+        sidecars: Option<String>,
+    },
 }
 
 /// Editor-to-game messages.
@@ -241,6 +246,7 @@ mod tests {
             },
             SceneAnswer::UseFile {
                 path: "scene.bsn".to_string(),
+                sidecars: Some("/game/.jackdaw/play/0".to_string()),
             },
         ] {
             let ev = ControlEvent::SceneDocument { request: 3, answer };

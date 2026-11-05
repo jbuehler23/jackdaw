@@ -1,6 +1,6 @@
 //! What a running game reads in place of files that lag the editor: the real
-//! answer to a scene request, taken by the runtime's own loader, with Play's save
-//! never having run.
+//! answer to a scene request, taken by the runtime's own loader, in a project with
+//! Play's save turned off.
 
 use std::path::{Path, PathBuf};
 
@@ -8,14 +8,16 @@ use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunkMaterial, TilemapChunkMeshCache};
 use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::pie::InstanceKey;
-use jackdaw::play_scene::{LaunchScene, PlayScene, ServedScene, serve_scene};
+use jackdaw::play_scene::{LaunchScene, PlayScene, ServedScene, launch_scene, serve_scene};
+use jackdaw::scenes::Scenes;
+use jackdaw::scenes::confirm_dialog::{ConfirmDialogButton, apply_confirm_dialog_action};
 use jackdaw::terrain_mode::TerrainDataStore;
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_tile::tilemap::{TilemapDataStore, store_key_of};
 use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
 use jackdaw_runtime::node_sync::{install_node_index, load_asset_files};
-use jackdaw_runtime::play_overlay::{load_prefab_files, note_sidecar_overlay};
+use jackdaw_runtime::play_overlay::{load_prefab_files, sidecar_overlay};
 use jackdaw_runtime::{
     JackdawCatalogPath, JackdawPlugin, JackdawScene, JackdawSceneRoot, TerrainHeights,
     TilemapChunkOf,
@@ -138,6 +140,10 @@ fn editor(files: &[(&str, &str)]) -> (App, tempfile::TempDir) {
             root: tmp.path().to_path_buf(),
             config: default(),
         });
+    run_op_clause(app.world_mut(), "project.toggle_save_before_play")
+        .expect("the toggle dispatches")
+        .assert_finished();
+    app.update();
     (app, tmp)
 }
 
@@ -157,9 +163,13 @@ fn open(app: &mut App, path: &str) {
 }
 
 fn key() -> InstanceKey {
+    key_of(1)
+}
+
+fn key_of(instance: u32) -> InstanceKey {
     InstanceKey {
         config: "game".to_string(),
-        instance: 1,
+        instance,
     }
 }
 
@@ -173,6 +183,26 @@ fn asset_file(tmp: &tempfile::TempDir, path: &str) -> Vec<u8> {
 
 fn play_dir(tmp: &tempfile::TempDir) -> PathBuf {
     tmp.path().join(".jackdaw/play")
+}
+
+/// Every copy named `name` under the private folder.
+fn copies_named(tmp: &tempfile::TempDir, name: &str) -> Vec<PathBuf> {
+    fn walk(dir: &Path, name: &str, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, name, found);
+            } else if path.file_name().is_some_and(|file| file == name) {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&play_dir(tmp), name, &mut found);
+    found
 }
 
 /// Edit a prefab the way an author does: in its own tab, then back to `scene`.
@@ -241,23 +271,27 @@ fn take(game: &mut App, served: ServedScene) {
     if let Some(ControlEvent::PrefabFiles { files }) = served.prefabs {
         load_prefab_files(game.world_mut(), &files);
     }
-    let handle = match served.answer {
+    let (handle, sidecars) = match served.answer {
         SceneAnswer::Document {
             text,
             dir,
             sidecars,
             ..
-        } => {
-            if let Some(sidecars) = sidecars {
-                note_sidecar_overlay(game.world_mut(), &sidecars);
-            }
+        } => (
             game.world_mut()
                 .resource_mut::<Assets<JackdawScene>>()
-                .add(JackdawScene::new(text, PathBuf::from(dir)))
+                .add(JackdawScene::new(text, PathBuf::from(dir))),
+            sidecars,
+        ),
+        SceneAnswer::UseFile { path, sidecars } => {
+            (game.world().resource::<AssetServer>().load(path), sidecars)
         }
-        SceneAnswer::UseFile { path } => game.world().resource::<AssetServer>().load(path),
     };
-    game.world_mut().spawn(JackdawSceneRoot(handle));
+    let overlay = sidecars.and_then(|named| sidecar_overlay(game.world(), &named));
+    let mut root = game.world_mut().spawn(JackdawSceneRoot(handle));
+    if let Some(overlay) = overlay {
+        root.insert(overlay);
+    }
 }
 
 /// Run the game until `done` holds.
@@ -339,8 +373,9 @@ fn prefab_files(served: &ServedScene) -> Vec<(String, Option<String>)> {
 
 fn sidecars_of(served: &ServedScene) -> Option<String> {
     match &served.answer {
-        SceneAnswer::Document { sidecars, .. } => sidecars.clone(),
-        SceneAnswer::UseFile { .. } => None,
+        SceneAnswer::Document { sidecars, .. } | SceneAnswer::UseFile { sidecars, .. } => {
+            sidecars.clone()
+        }
     }
 }
 
@@ -456,6 +491,14 @@ fn a_scene_loaded_from_its_file_gets_the_unsaved_prefab_too() {
     assert_eq!(door_x(&mut game), 4.0);
 }
 
+/// A component of the game's naming an asset, known to both sides.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default, no_auto_register)]
+#[type_path = "game"]
+struct Swatch {
+    swatch: Handle<StandardMaterial>,
+}
+
 #[test]
 fn an_embedded_asset_of_an_unsaved_prefab_goes_by_its_session_name() {
     let scene = instance_of("door.bsn");
@@ -464,9 +507,10 @@ fn an_embedded_asset_of_an_unsaved_prefab_goes_by_its_session_name() {
         ("zone.bsn", &scene),
         ("other.bsn", &scene),
     ]);
+    app.register_type::<Swatch>();
     open(&mut app, "assets/zone.bsn");
     let with_material = roots(&[
-        door(2.0),
+        format!("{}game::Swatch {{ swatch: \"#Stone\" }}\n", door(2.0)),
         "#Stone\nbevy_pbr::pbr_material::StandardMaterial { perceptual_roughness: 0.25 }\n"
             .to_string(),
     ]);
@@ -483,7 +527,13 @@ fn an_embedded_asset_of_an_unsaved_prefab_goes_by_its_session_name() {
         .expect("a session name")
         .to_string();
 
+    assert!(
+        text.contains(&format!("swatch: \"{name}\"")),
+        "the reference follows the name: {text}"
+    );
+
     let mut game = empty_game(&tmp);
+    game.register_type::<Swatch>();
     game.update();
     take(&mut game, served);
     let handle = game
@@ -500,6 +550,22 @@ fn an_embedded_asset_of_an_unsaved_prefab_goes_by_its_session_name() {
         .expect("the material");
     assert_eq!(material.perceptual_roughness, 0.25);
     assert_eq!(door_x(&mut game), 2.0);
+
+    let swatch = game
+        .world_mut()
+        .query::<&Swatch>()
+        .single(game.world())
+        .expect("the instance holds the component")
+        .swatch
+        .clone();
+    assert_eq!(
+        game.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&swatch)
+            .expect("the reference resolves with the asset root stripped")
+            .perceptual_roughness,
+        0.25
+    );
 }
 
 /// A second answer repeats nothing the game holds, and a prefab that has since
@@ -516,6 +582,11 @@ fn a_game_is_sent_only_what_it_does_not_hold() {
     assert!(first[0].1.is_some());
     assert!(prefab_files(&serve(&mut app, "zone.bsn")).is_empty());
 
+    let other =
+        |app: &mut App| prefab_files(&serve_scene(app.world_mut(), &key_of(2), None, "zone.bsn"));
+    assert_eq!(other(&mut app), first, "a second game holds nothing yet");
+    assert!(other(&mut app).is_empty());
+
     set_cached_prefab(&mut app, &tmp, "door.bsn", &door(8.0));
     let changed = prefab_files(&serve(&mut app, "zone.bsn"));
     assert!(
@@ -531,6 +602,360 @@ fn a_game_is_sent_only_what_it_does_not_hold() {
     let back = prefab_files(&serve(&mut app, "zone.bsn"));
     assert_eq!(back, vec![("door.bsn".to_string(), None)]);
     assert!(prefab_files(&serve(&mut app, "zone.bsn")).is_empty());
+    let other_back = other(&mut app);
+    assert_eq!(
+        other_back,
+        vec![("door.bsn".to_string(), None)],
+        "a game goes back to the file on its own next request, whatever the first was told"
+    );
+}
+
+/// Text that no longer parses back cannot go, and the game must not stay on the
+/// last text it got: that is older than the file the warning tells it to read.
+#[test]
+fn a_prefab_whose_text_stops_parsing_sends_the_game_back_to_its_file() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    set_cached_prefab(&mut app, &tmp, "door.bsn", &door(9.0));
+    assert!(prefab_files(&serve(&mut app, "zone.bsn"))[0].1.is_some());
+
+    let full = tmp.path().join("assets/door.bsn");
+    let mut broken = jackdaw_bsn::SceneBsnAst::default();
+    let node = broken.create_entity_node(vec![jackdaw_bsn::BsnPatch::Struct(
+        jackdaw_bsn::BsnStructData {
+            type_path: String::new(),
+            fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                name: "0".into(),
+                value: jackdaw_bsn::BsnValue::Int(1),
+            }]),
+        },
+    )]);
+    broken.add_to_roots(node);
+    assert!(jackdaw_bsn::emit_scene_checked(&broken).is_err());
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(&full, broken);
+
+    assert_eq!(
+        prefab_files(&serve(&mut app, "zone.bsn")),
+        vec![("door.bsn".to_string(), None)]
+    );
+}
+
+/// A prefab spawned directly as a root goes by its unsaved text wherever the editor
+/// holds it: the tab in front, a tab behind, or only the cache.
+#[test]
+fn a_prefab_spawned_as_a_root_gets_its_unsaved_text() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    let saved = asset_file(&tmp, "door.bsn");
+
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    let mut game = game_serving(&mut app, &tmp, "door.bsn");
+    assert_eq!(x_of(&mut game, "Door"), 9.0, "a tab behind");
+
+    open(&mut app, "assets/door.bsn");
+    let mut game = game_serving(&mut app, &tmp, "door.bsn");
+    assert_eq!(x_of(&mut game, "Door"), 9.0, "the tab in front");
+    assert_eq!(asset_file(&tmp, "door.bsn"), saved);
+}
+
+#[test]
+fn a_prefab_spawned_as_a_root_gets_a_cached_edit_with_no_tab() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    set_cached_prefab(&mut app, &tmp, "door.bsn", &door(4.0));
+
+    let mut game = game_serving(&mut app, &tmp, "door.bsn");
+    assert_eq!(x_of(&mut game, "Door"), 4.0);
+}
+
+/// Play with a modified prefab in front runs the game's usual scene, and that scene
+/// shows the edit.
+#[test]
+fn play_with_a_modified_prefab_in_front_shows_it_in_the_usual_scene() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("scene.bsn", &scene)]);
+    open(&mut app, "assets/scene.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/door.bsn");
+    assert!(jackdaw::scenes::operators::active_tab_modified(app.world()));
+
+    let launch = launch_scene(app.world(), &default());
+    assert_eq!(launch, None, "a prefab does not take the scene's place");
+    let served = serve_scene(app.world_mut(), &key(), launch.as_ref(), "scene.bsn");
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, served);
+    assert_eq!(door_x(&mut game), 9.0);
+}
+
+fn tab_named(app: &App, path_end: &str) -> usize {
+    app.world()
+        .resource::<Scenes>()
+        .tabs
+        .iter()
+        .position(|tab| {
+            tab.path
+                .as_deref()
+                .is_some_and(|path| path.ends_with(path_end))
+        })
+        .expect("the tab is open")
+}
+
+fn discard(app: &mut App, tab: usize) {
+    apply_confirm_dialog_action(app.world_mut(), ConfirmDialogButton::Discard, tab);
+    app.update();
+}
+
+/// Close a prefab tab, choose Discard: the file wins again for the editor and for a
+/// game that held the text.
+#[test]
+fn a_discarded_prefab_edit_goes_back_to_the_file() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    let served = prefab_files(&serve(&mut app, "zone.bsn"));
+    assert!(served[0].1.is_some(), "the game holds the edit");
+    assert_eq!(
+        editor_x(&mut app, "Placed"),
+        9.0,
+        "the scene in front shows it too"
+    );
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+
+    assert_eq!(
+        prefab_files(&serve(&mut app, "zone.bsn")),
+        vec![("door.bsn".to_string(), None)],
+        "the game goes back to its file"
+    );
+    assert!(prefab_files(&serve(&mut app, "zone.bsn")).is_empty());
+    let mut game = game_serving(&mut app, &tmp, "zone.bsn");
+    assert_eq!(door_x(&mut game), 1.0);
+    assert_eq!(
+        editor_x(&mut app, "Placed"),
+        1.0,
+        "the scene in front goes back too"
+    );
+}
+
+/// The same with the prefab's own tab in front when it closes.
+#[test]
+fn a_discard_of_the_prefab_tab_in_front_goes_back_to_the_file() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    open(&mut app, "assets/door.bsn");
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+
+    let mut game = game_serving(&mut app, &tmp, "door.bsn");
+    assert_eq!(x_of(&mut game, "Door"), 1.0);
+    assert_eq!(editor_x(&mut app, "Placed"), 1.0);
+}
+
+fn editor_x(app: &mut App, entity: &str) -> f32 {
+    app.world_mut()
+        .query::<(&Name, &Transform)>()
+        .iter(app.world())
+        .find(|(name, _)| name.as_str() == entity)
+        .map(|(_, transform)| transform.translation.x)
+        .expect("the instance is in the editor")
+}
+
+#[test]
+fn discarded_tilemap_edits_go_back_to_the_file() {
+    let (mut app, tmp) = field_with_sidecars();
+    edit_sidecars(&mut app);
+    let key = {
+        let map = map_entity(&mut app);
+        store_key_of(app.world_mut(), map).expect("a key")
+    };
+    write_in(
+        &tmp.path().join("assets"),
+        "other.bsn",
+        door(1.0).as_bytes(),
+    );
+    open(&mut app, "assets/other.bsn");
+    assert!(sidecars_of(&serve(&mut app, "levels/field.bsn")).is_some());
+    assert_eq!(copies_named(&tmp, TILES_FILE).len(), 1);
+
+    let tab = tab_named(&app, "field.bsn");
+    discard(&mut app, tab);
+
+    assert!(
+        !app.world()
+            .resource::<TilemapDataStore>()
+            .has_unsaved_edits(&key)
+    );
+    let mut game = game_serving(&mut app, &tmp, "levels/field.bsn");
+    assert_eq!(tile_chunks(&mut game), 1, "the file again");
+    assert_eq!(copies_named(&tmp, TILES_FILE), Vec::<PathBuf>::new());
+}
+
+/// A file answer carries the folder, and a prefab the file instances draws its tab's
+/// unsaved data: a sidecar owned by a prefab, in a scene no tab holds.
+#[test]
+fn a_scene_from_its_file_draws_a_prefabs_unsaved_sidecars() {
+    let prop = format!(
+        "#Prop\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         jackdaw_scene_types::types::Terrain {{ data_path: \"{TERRAIN_FILE}\" }}\n"
+    );
+    let scene = instance_of("../prop.bsn");
+    let (mut app, tmp) = editor(&[("prop.bsn", &prop), ("levels/b.bsn", &scene)]);
+    let assets = tmp.path().join("assets");
+    write_in(
+        &assets,
+        TERRAIN_FILE,
+        &sidecar::save(&terrain_data(1.0)).expect("encodes"),
+    );
+    let saved = asset_file(&tmp, TERRAIN_FILE);
+    open(&mut app, "assets/prop.bsn");
+    app.world_mut()
+        .resource_mut::<TerrainDataStore>()
+        .insert(TERRAIN_FILE, terrain_data(6.0));
+
+    let served = serve(&mut app, "levels/b.bsn");
+    assert!(matches!(served.answer, SceneAnswer::UseFile { .. }));
+    assert!(sidecars_of(&served).is_some(), "the file answer names it");
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, served);
+    assert_eq!(terrain_height(&mut game), 6.0);
+    assert_eq!(asset_file(&tmp, TERRAIN_FILE), saved);
+
+    let mut game = game_serving(&mut app, &tmp, "prop.bsn");
+    assert_eq!(terrain_height(&mut game), 6.0, "as a root of its own");
+}
+
+/// A store that lags its file holds nothing unsaved, so the newer file wins.
+#[test]
+fn a_clean_store_behind_a_newer_file_exports_nothing() {
+    let (mut app, tmp) = field_with_sidecars();
+    write_in(
+        &tmp.path().join("assets"),
+        &format!("levels/{TERRAIN_FILE}"),
+        &sidecar::save(&terrain_data(5.0)).expect("encodes"),
+    );
+    let served = serve(&mut app, "levels/field.bsn");
+    assert_eq!(sidecars_of(&served), None);
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, served);
+    assert_eq!(terrain_height(&mut game), 5.0);
+}
+
+/// Repeat requests re-export nothing: what is found in a copy stays until the data
+/// moves.
+#[test]
+fn a_game_respawning_a_scene_exports_nothing_again() {
+    let (mut app, tmp) = field_with_sidecars();
+    edit_sidecars(&mut app);
+    serve(&mut app, "levels/field.bsn");
+    let copies = [
+        copies_named(&tmp, TERRAIN_FILE).remove(0),
+        copies_named(&tmp, TILES_FILE).remove(0),
+    ];
+    for copy in &copies {
+        std::fs::write(copy, b"left as it was").expect("written");
+    }
+    serve(&mut app, "levels/field.bsn");
+    for copy in &copies {
+        assert_eq!(std::fs::read(copy).expect("the copy"), b"left as it was");
+    }
+
+    edit_sidecars(&mut app);
+    serve(&mut app, "levels/field.bsn");
+    for copy in &copies {
+        assert_ne!(std::fs::read(copy).expect("the copy"), b"left as it was");
+    }
+}
+
+/// Both a terrain and a map read their files when the copy has gone by read time,
+/// as it has once the author saves.
+#[test]
+fn a_copy_gone_by_read_time_leaves_the_game_on_the_file() {
+    let (mut app, tmp) = field_with_sidecars();
+    edit_sidecars(&mut app);
+    let served = serve(&mut app, "levels/field.bsn");
+    assert!(sidecars_of(&served).is_some());
+    std::fs::remove_dir_all(play_dir(&tmp)).expect("the copies go");
+
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, served);
+    assert_eq!(terrain_height(&mut game), 1.0, "the file, not flat ground");
+    assert_eq!(tile_chunks(&mut game), 1, "the file, not an empty map");
+}
+
+/// A live edit moves a map onto a data path with no copy: it reads that file.
+#[test]
+fn a_map_moved_to_a_data_path_with_no_copy_reads_the_file() {
+    let (mut app, tmp) = field_with_sidecars();
+    edit_sidecars(&mut app);
+    let other = "other.tilemap-0.jdtiles";
+    write_in(
+        &tmp.path().join("assets"),
+        &format!("levels/{other}"),
+        &jackdaw_tilemap::encode(&tiles(&[(0, 0), (40, 40)])),
+    );
+    let mut game = game_serving(&mut app, &tmp, "levels/field.bsn");
+    assert_eq!(tile_chunks(&mut game), 3);
+
+    let map = game
+        .world_mut()
+        .query_filtered::<Entity, With<Tilemap>>()
+        .single(game.world())
+        .expect("the map");
+    game.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("the map")
+        .data_path = other.to_string();
+    game.update();
+    game.update();
+    assert_eq!(tile_chunks(&mut game), 2);
+}
+
+/// Two documents in a folder can name the same data path: one's unsaved data neither
+/// reaches the other nor goes when the other is asked for.
+#[test]
+fn documents_naming_one_data_path_do_not_share_a_copy() {
+    let scene = terrain_scene();
+    let (mut app, tmp) = field_holding(scene.clone());
+    write_in(
+        &tmp.path().join("assets"),
+        "levels/twin.bsn",
+        scene.as_bytes(),
+    );
+    edit_sidecars(&mut app);
+
+    let first = serve(&mut app, "levels/field.bsn");
+    assert!(sidecars_of(&first).is_some());
+    let second = serve(&mut app, "levels/twin.bsn");
+    assert_eq!(sidecars_of(&second), None, "no tab holds the twin");
+    assert_eq!(copies_named(&tmp, TERRAIN_FILE).len(), 1, "it stays");
+    assert_eq!(copies_named(&tmp, TILES_FILE).len(), 1, "it stays");
+
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, first);
+    assert_eq!(terrain_height(&mut game), 6.0);
+    assert_eq!(tile_chunks(&mut game), 3);
+
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, second);
+    assert_eq!(terrain_height(&mut game), 1.0);
+    assert_eq!(tile_chunks(&mut game), 1);
 }
 
 fn field_with_sidecars() -> (App, tempfile::TempDir) {
@@ -548,13 +973,16 @@ fn field_holding(scene: String) -> (App, tempfile::TempDir) {
     (app, tmp)
 }
 
-fn edit_sidecars(app: &mut App) {
-    let map = app
-        .world_mut()
+fn map_entity(app: &mut App) -> Entity {
+    app.world_mut()
         .query_filtered::<Entity, With<Tilemap>>()
         .iter(app.world())
         .next()
-        .expect("the map");
+        .expect("the map")
+}
+
+fn edit_sidecars(app: &mut App) {
+    let map = map_entity(app);
     let key = store_key_of(app.world_mut(), map).expect("a key");
     app.world_mut()
         .resource_mut::<TilemapDataStore>()
@@ -585,13 +1013,8 @@ fn unsaved_sidecars_reach_the_game_and_leave_with_stop() {
         saved,
         "the user's files stay"
     );
-    assert!(play_dir(&tmp).join("levels").join(TILES_FILE).is_file());
-    let map = app
-        .world_mut()
-        .query_filtered::<Entity, With<Tilemap>>()
-        .iter(app.world())
-        .next()
-        .expect("the map");
+    assert_eq!(copies_named(&tmp, TILES_FILE).len(), 1);
+    let map = map_entity(&mut app);
     let key = store_key_of(app.world_mut(), map).expect("a key");
     assert!(
         app.world()
@@ -711,6 +1134,106 @@ fn edit_untitled_sidecars(app: &mut App) {
         .insert(data_path, terrain_data(3.0));
 }
 
+/// Two untitled tabs mint the same data path and each game draws its own, and a real
+/// file naming that path reads its own sidecar.
+#[test]
+fn untitled_scenes_do_not_share_copies() {
+    let (mut app, tmp) = editor(&[]);
+    let mut launches = Vec::new();
+    for (height, cells) in [(3.0, &[(0, 0)][..]), (4.0, &[(0, 0), (40, 40)][..])] {
+        run_op_clause(app.world_mut(), "scene.new")
+            .expect("a new scene opens")
+            .assert_finished();
+        app.update();
+        run_op_clause_as_user(app.world_mut(), "entity.add.terrain")
+            .expect("the terrain dispatched")
+            .assert_finished();
+        app.update();
+        // `add_map_node` spawns outside the scene, so a tab switch leaves it behind.
+        let left: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<Tilemap>>()
+            .iter(app.world())
+            .collect();
+        for entity in left {
+            app.world_mut().despawn(entity);
+        }
+        add_map_node(&mut app);
+        jackdaw_editor_terrain::ensure_terrain_data_path(app.world_mut());
+        let map = map_entity(&mut app);
+        let key = store_key_of(app.world_mut(), map).expect("a key");
+        app.world_mut()
+            .resource_mut::<TilemapDataStore>()
+            .insert(key, tiles(cells));
+        let data_path = app
+            .world_mut()
+            .query::<&Terrain>()
+            .iter(app.world())
+            .next()
+            .map(|terrain| terrain.data_path.clone())
+            .expect("the terrain");
+        app.world_mut()
+            .resource_mut::<TerrainDataStore>()
+            .insert(data_path, terrain_data(height));
+        let scenes = app.world().resource::<Scenes>();
+        launches.push(LaunchScene {
+            replaces: "scene.bsn".to_string(),
+            scene: PlayScene::Untitled(scenes.tabs[scenes.active].display_name.clone()),
+        });
+    }
+
+    let mut served: Vec<ServedScene> = launches
+        .iter()
+        .map(|launch| serve_scene(app.world_mut(), &key(), Some(launch), "scene.bsn"))
+        .collect();
+    let second = served.pop().expect("the second");
+    let first = served.pop().expect("the first");
+    assert_ne!(sidecars_of(&first), sidecars_of(&second));
+    assert_eq!(
+        copies_named(&tmp, "untitled.tilemap-0.jdtiles").len(),
+        2,
+        "both tabs minted the one name"
+    );
+
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, first);
+    assert_eq!(terrain_height(&mut game), 3.0);
+    assert_eq!(tile_chunks(&mut game), 1);
+
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, second);
+    assert_eq!(terrain_height(&mut game), 4.0);
+    assert_eq!(tile_chunks(&mut game), 2);
+
+    let assets = tmp.path().join("assets");
+    write_in(
+        &assets,
+        "untitled.bsn",
+        roots(&[format!(
+            "#Map\n{}",
+            tilemap_component("untitled.tilemap-0.jdtiles")
+        )])
+        .as_bytes(),
+    );
+    write_in(
+        &assets,
+        "untitled.tilemap-0.jdtiles",
+        &jackdaw_tilemap::encode(&tiles(&[(0, 0), (40, 40), (-40, -40), (80, 80)])),
+    );
+    let served = serve(&mut app, "untitled.bsn");
+    assert_eq!(sidecars_of(&served), None);
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, served);
+    assert_eq!(
+        tile_chunks(&mut game),
+        4,
+        "a real file reads its own sidecar"
+    );
+}
+
 #[test]
 fn nothing_goes_for_data_with_no_unsaved_change() {
     let mut entries = terrain_entries();
@@ -719,8 +1242,8 @@ fn nothing_goes_for_data_with_no_unsaved_change() {
     let served = serve(&mut app, "levels/field.bsn");
     assert!(prefab_files(&served).is_empty(), "no unsaved prefab");
     assert_eq!(sidecars_of(&served), None, "no unsaved sidecar");
-    assert!(!play_dir(&tmp).join("levels").join(TILES_FILE).exists());
-    assert!(!play_dir(&tmp).join("levels").join(TERRAIN_FILE).exists());
+    assert!(copies_named(&tmp, TILES_FILE).is_empty());
+    assert!(copies_named(&tmp, TERRAIN_FILE).is_empty());
 
     let mut game = empty_game(&tmp);
     game.update();
@@ -734,15 +1257,50 @@ fn nothing_goes_for_data_with_no_unsaved_change() {
 #[test]
 fn a_copy_goes_once_the_data_matches_the_file() {
     let (mut app, tmp) = field_with_sidecars();
-    edit_sidecars(&mut app);
-    serve(&mut app, "levels/field.bsn");
-    let copy = play_dir(&tmp).join("levels").join(TERRAIN_FILE);
-    assert!(copy.is_file());
+    let (entity, terrain) = app
+        .world_mut()
+        .query::<(Entity, &Terrain)>()
+        .iter(app.world())
+        .next()
+        .map(|(entity, terrain)| (entity, terrain.clone()))
+        .expect("the terrain");
+    let shape = app
+        .world()
+        .resource::<TerrainDataStore>()
+        .grid_shape(&terrain);
+    let centre = shape.origin + shape.size * 0.5;
     app.world_mut()
-        .resource_mut::<TerrainDataStore>()
-        .insert(TERRAIN_FILE, terrain_data(1.0));
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![entity];
+    run_op_clause_as_user(
+        app.world_mut(),
+        &format!(
+            "terrain.sculpt.stamp x={} z={} radius=40 strength=5",
+            centre.x, centre.y
+        ),
+    )
+    .expect("the stamp dispatches")
+    .assert_finished();
+    app.update();
+    assert!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .has_unsaved_edits(TERRAIN_FILE)
+    );
+
+    let served = serve(&mut app, "levels/field.bsn");
+    assert!(sidecars_of(&served).is_some());
+    assert_eq!(copies_named(&tmp, TERRAIN_FILE).len(), 1);
+
+    run_op_clause_as_user(app.world_mut(), "history.undo")
+        .expect("the undo dispatches")
+        .assert_finished();
+    app.update();
     serve(&mut app, "levels/field.bsn");
-    assert!(!copy.exists());
+    assert!(copies_named(&tmp, TERRAIN_FILE).is_empty());
+
+    let mut game = game_serving(&mut app, &tmp, "levels/field.bsn");
+    assert_eq!(terrain_height(&mut game), 1.0);
 }
 
 /// A game with no link never hears of the overlay, whatever lies in the folder.

@@ -3,10 +3,11 @@
 //! A scene reaches prefabs and sidecars the game reads off disk at spawn. For
 //! each scene it asks for, the game gets the unsaved ones with the answer: the
 //! text of each prefab in the scene's `IsA` closure that differs from its last
-//! saved state, spelled as a save spells it, and a copy of each sidecar that
-//! differs from its file, under `.jackdaw/play/` of the project. Nothing a save
-//! writes is touched. Text and copies of data with no unsaved change are never
-//! made, so the game reads the normal file.
+//! saved state, spelled as a save spells it, and a copy of each sidecar with
+//! unsaved changes, under a folder of that scene's own in `.jackdaw/play/` of the
+//! project, so no document reads another's copies. Nothing a save writes is
+//! touched. Text and copies of data with no unsaved change are never made, so the
+//! game reads the normal file.
 
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -18,12 +19,14 @@ use jackdaw_bsn::SceneBsnAst;
 use jackdaw_pie_protocol::ControlEvent;
 
 use crate::pie::InstanceKey;
-use crate::play_scene::{DocumentAssets, PlayAssetNames, warn_absolute, with_session_names};
+use crate::play_scene::{
+    DocumentAssets, PlayAssetNames, PlayScene, warn_absolute, with_session_names,
+};
 use crate::prefab::canonical_prefab_path;
 use crate::prefab::operators::prefab_body;
 use crate::prefab::resolver_bsn::{PREFAB_TYPE, clone_scene};
 use crate::prefab::save_load::{read_prefab_ast, resolve_source_path, source_root};
-use crate::scene_io::hooks::{PlayDocument, export_play_sidecars};
+use crate::scene_io::hooks::{PlayCopies, PlayDocument, export_play_sidecars};
 use crate::scene_io::save::{GameDocument, emit_bsn_scene_for_game, emit_snapshot_for_game};
 use crate::scenes::{Scenes, TabContent};
 
@@ -48,7 +51,7 @@ pub(crate) struct Overlay {
     pub(crate) prefabs: Vec<UnsavedPrefab>,
     /// What those prefabs' texts hold or name.
     pub(crate) assets: DocumentAssets,
-    /// The private folder, when a sidecar of the scene or its prefabs is in it.
+    /// The scene's private folder, when a sidecar of it or its prefabs is in there.
     pub(crate) sidecars: Option<String>,
 }
 
@@ -58,18 +61,30 @@ fn overlay_root(world: &World) -> Option<PathBuf> {
     Some(project.jackdaw_dir().join("play"))
 }
 
+/// The folder of the copies a game reads for `scene`. Each document has its own,
+/// whatever its folder and whatever data paths it names.
+fn scene_folder(play: &Path, scene: &PlayScene) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    match scene {
+        PlayScene::Path(path) => ("path", path).hash(&mut hasher),
+        PlayScene::Untitled(name) => ("untitled", name).hash(&mut hasher),
+    }
+    play.join(format!("{:016x}", hasher.finish()))
+}
+
 /// Whether `dir` stays below the folder it is joined to.
 fn is_plain_relative(dir: &Path) -> bool {
     dir.components()
         .all(|part| matches!(part, Component::Normal(_)))
 }
 
-/// The overlay of the scene in tab `tab`, whose document counts as being in `dir`
-/// under the asset folder. `folder` is that folder on disk and `ast` the text
-/// going to the game.
-pub(crate) fn overlay_of_tab(
+/// The overlay of the document `target` with its text going to the game, held in
+/// tab `tab` if any, counting as being in `dir` under the asset folder. `folder` is
+/// that folder on disk and `ast` that text.
+pub(crate) fn overlay_of_document(
     world: &mut World,
-    tab: usize,
+    tab: Option<usize>,
+    target: &PlayScene,
     ast: &SceneBsnAst,
     folder: &Path,
     dir: &str,
@@ -77,15 +92,36 @@ pub(crate) fn overlay_of_tab(
     if !is_plain_relative(Path::new(dir)) {
         return Overlay::default();
     }
-    let file = world.resource::<Scenes>().tabs[tab].path.clone();
+    let file = match (tab, target) {
+        (Some(tab), _) => world.resource::<Scenes>().tabs[tab].path.clone(),
+        (None, PlayScene::Path(path)) => crate::asset_index::assets_dir(world)
+            .and_then(|assets| jackdaw_bsn::existing_form(&assets.join(path))),
+        (None, PlayScene::Untitled(_)) => None,
+    };
     let scene = SceneInOverlay {
-        tab: Some(tab),
+        tab,
+        target,
         file: file.as_deref(),
         ast,
         folder,
         dir: Path::new(dir),
     };
     overlay_of(world, &scene)
+}
+
+/// The unsaved text of the prefab at `path` under the asset folder, when only the
+/// cache holds it: no tab does.
+pub(crate) fn unsaved_cached_prefab(world: &mut World, path: &str) -> Option<GameDocument> {
+    let assets = crate::asset_index::assets_dir(world)?;
+    if !is_plain_relative(Path::new(path)) {
+        return None;
+    }
+    let source = assets.join(path);
+    world
+        .get_resource::<crate::prefab::PrefabAstCache>()?
+        .get(&source)?;
+    let namespace = source_root(world, source.parent().unwrap_or(&assets));
+    held_prefab(world, &source, &namespace)?.unsaved
 }
 
 /// The overlay of the scene file at `path` under the asset folder, which a game
@@ -109,8 +145,11 @@ pub(crate) fn overlay_of_file(world: &mut World, path: &str) -> Overlay {
         return Overlay::default();
     };
     let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
+    let tab = tab_of_file(world, &file);
+    let target = PlayScene::Path(path.to_string());
     let scene = SceneInOverlay {
-        tab: None,
+        tab,
+        target: &target,
         file: Some(&file),
         ast: &ast,
         folder: &folder,
@@ -122,6 +161,7 @@ pub(crate) fn overlay_of_file(world: &mut World, path: &str) -> Overlay {
 /// The document a closure starts from.
 struct SceneInOverlay<'a> {
     tab: Option<usize>,
+    target: &'a PlayScene,
     file: Option<&'a Path>,
     ast: &'a SceneBsnAst,
     folder: &'a Path,
@@ -135,13 +175,15 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
         return overlay;
     };
     let namespace = source_root(world, scene.folder);
-    let mut copied = export_copies(
+    let copies_root = scene_folder(&play, scene.target);
+    world.get_resource_or_init::<PlayCopies>().begin_walk();
+    export_copies(
         world,
         &PlayDocument {
             tab: scene.tab,
             file: scene.file,
             ast: scene.ast,
-            overlay_dir: &play.join(scene.dir),
+            overlay_dir: &copies_root.join(scene.dir),
         },
     );
 
@@ -159,40 +201,41 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
         };
         let parent = source.parent().map(Path::to_path_buf).unwrap_or_default();
         pending.extend(sources_of(&held.ast, &namespace, &parent));
-        copied |= export_copies(
+        export_copies(
             world,
             &PlayDocument {
                 tab: held.tab,
                 file: Some(&source),
                 ast: &held.ast,
-                overlay_dir: &play.join(relative.parent().unwrap_or(Path::new(""))),
+                overlay_dir: &copies_root.join(relative.parent().unwrap_or(Path::new(""))),
             },
         );
         if let Some(document) = held.unsaved {
             add_unsaved(world, &mut overlay, &relative, &document);
         }
     }
-    overlay.sidecars = copied.then(|| play.to_string_lossy().into_owned());
+    let copied = world.resource_mut::<PlayCopies>().finish_walk(&copies_root);
+    overlay.sidecars = copied.then(|| copies_root.to_string_lossy().into_owned());
     overlay
 }
 
 /// Run the sidecar hooks for one document. A failure costs the game that data,
 /// not the scene.
-fn export_copies(world: &mut World, document: &PlayDocument) -> bool {
-    match export_play_sidecars(world, document) {
-        Ok(copied) => copied,
-        Err(err) => {
-            let message = format!("The game may miss unsaved terrain or tilemap data: {err}");
-            warn!("PIE: {message}");
-            crate::status_bar::notify_warn(world, message);
-            false
-        }
+fn export_copies(world: &mut World, document: &PlayDocument) {
+    let exported = world.resource_scope(|world, mut copies: Mut<PlayCopies>| {
+        export_play_sidecars(world, document, &mut copies)
+    });
+    if let Err(err) = exported {
+        let message = format!("The game may miss unsaved terrain or tilemap data: {err}");
+        warn!("PIE: {message}");
+        crate::status_bar::notify_warn(world, message);
     }
 }
 
 /// `document` as the unsaved text of the prefab at `relative`, under session names
-/// and spelled as a save spells it. A document that does not parse back leaves the
-/// game on the file, with a warning.
+/// and spelled as a save spells it. A document that does not parse back goes
+/// unsent, with a warning, and [`prefab_files_missing_from`] sends the game back to
+/// the file.
 fn add_unsaved(world: &mut World, overlay: &mut Overlay, relative: &Path, document: &GameDocument) {
     let (body, mut parsed) = match with_session_names(world, document) {
         Ok(named) => named,
@@ -285,12 +328,12 @@ fn held_prefab(world: &mut World, source: &Path, namespace: &Path) -> Option<Hel
             });
         }
     }
+    let differs = cached_differs_from_file(world, source, namespace);
     let cached = world
         .get_resource::<crate::prefab::PrefabAstCache>()
         .and_then(|cache| cache.get(source));
-    if let Some(cached) = cached {
-        let unsaved = differs_from_file(world, source, cached, namespace)
-            .then(|| emit_snapshot_for_game(world, cached, &parent));
+    if let Some((cached, differs)) = cached.zip(differs) {
+        let unsaved = differs.then(|| emit_snapshot_for_game(world, cached, &parent));
         return Some(HeldPrefab {
             tab,
             ast: clone_scene(cached),
@@ -303,6 +346,31 @@ fn held_prefab(world: &mut World, source: &Path, namespace: &Path) -> Option<Hel
         ast: read_prefab_ast(&file, namespace).ok()?,
         unsaved: None,
     })
+}
+
+/// Whether the cache entry for `source`, if there is one, differs from the file.
+/// Answered from the last comparison until the cache or the file moves.
+fn cached_differs_from_file(world: &mut World, source: &Path, namespace: &Path) -> Option<bool> {
+    let cache = world.get_resource::<crate::prefab::PrefabAstCache>()?;
+    let cached = cache.get(source)?;
+    let epoch = cache.epoch();
+    let modified = jackdaw_bsn::existing_form(source)
+        .and_then(|file| std::fs::metadata(file).ok())
+        .and_then(|meta| meta.modified().ok());
+    let key = canonical_prefab_path(source).as_path().to_path_buf();
+    let earlier = world
+        .get_resource::<PlayCopies>()
+        .and_then(|copies| copies.prefab_checks.get(&key))
+        .filter(|(at, file, _)| *at == epoch && *file == modified);
+    if let Some(&(_, _, differs)) = earlier {
+        return Some(differs);
+    }
+    let differs = differs_from_file(world, source, cached, namespace);
+    world
+        .get_resource_or_init::<PlayCopies>()
+        .prefab_checks
+        .insert(key, (epoch, modified, differs));
+    Some(differs)
 }
 
 /// Whether `held` spells differently from the file at `source` read the same way,
@@ -324,8 +392,8 @@ fn differs_from_file(world: &World, source: &Path, held: &SceneBsnAst, namespace
 }
 
 /// What the game `key` needs to hold `prefabs` as the editor does, now counted as
-/// held, and the prefabs it holds that have since been saved, sent back to their
-/// files.
+/// held, and the prefabs it holds that no longer have unsaved text it can read,
+/// sent back to their files.
 pub(crate) fn prefab_files_missing_from(
     world: &mut World,
     key: &InstanceKey,
@@ -355,7 +423,8 @@ pub(crate) fn prefab_files_missing_from(
     (!sent.is_empty()).then_some(ControlEvent::PrefabFiles { files: sent })
 }
 
-/// Those of `paths`, under the asset folder, with no unsaved change.
+/// Those of `paths`, under the asset folder, with no unsaved change a game can
+/// read: saved, discarded, or holding text that does not parse back.
 fn saved_since(world: &mut World, paths: Vec<String>) -> Vec<String> {
     let Some(assets) = crate::asset_index::assets_dir(world) else {
         return Vec::new();
@@ -365,7 +434,8 @@ fn saved_since(world: &mut World, paths: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter(|path| {
             held_prefab(world, &namespace.join(path), &namespace)
-                .is_none_or(|held| held.unsaved.is_none())
+                .and_then(|held| held.unsaved)
+                .is_none_or(|document| with_session_names(world, &document).is_err())
         })
         .collect()
 }
@@ -373,6 +443,9 @@ fn saved_since(world: &mut World, paths: Vec<String>) -> Vec<String> {
 /// Remove the copies games were reading. Runs as Play stops, and as it starts, for
 /// copies an editor crash left behind.
 pub fn clear_play_sidecars(world: &mut World) {
+    if let Some(mut copies) = world.get_resource_mut::<PlayCopies>() {
+        *copies = PlayCopies::default();
+    }
     let Some(play) = overlay_root(world) else {
         return;
     };
@@ -415,16 +488,55 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(1100));
         let copy = dir.path().join(".jackdaw/play/levels/map.jdtiles");
-        crate::scene_io::hooks::put_play_copy(&copy, Some(b"cells")).expect("written");
+        PlayCopies::default()
+            .settle(&copy, 1, || Ok(Some(b"cells".to_vec())))
+            .expect("written");
         assert!(copy.is_file());
         assert!(crate::pie::source_unchanged_since(dir.path(), built));
     }
 
     #[test]
-    fn a_copy_that_is_not_there_is_not_an_error_to_remove() {
+    fn a_copy_is_encoded_once_per_stamp_and_goes_when_a_walk_passes_it_over() {
         let dir = tempfile::tempdir().expect("a temp dir");
-        let copy = dir.path().join("map.jdtiles");
-        assert!(!crate::scene_io::hooks::put_play_copy(&copy, None).expect("nothing to do"));
+        let copy = dir.path().join("levels/map.jdtiles");
+        let mut copies = PlayCopies::default();
+        let encodes = std::cell::Cell::new(0);
+        let settle = |copies: &mut PlayCopies, stamp| {
+            copies.begin_walk();
+            copies
+                .settle(&copy, stamp, || {
+                    encodes.set(encodes.get() + 1);
+                    Ok(Some(b"cells".to_vec()))
+                })
+                .expect("written");
+            assert!(copies.finish_walk(dir.path()));
+        };
+        settle(&mut copies, 1);
+        settle(&mut copies, 1);
+        assert_eq!(encodes.get(), 1, "the copy was current");
+        settle(&mut copies, 2);
+        assert_eq!(encodes.get(), 2, "the data moved");
+
+        std::fs::remove_file(&copy).expect("removed");
+        settle(&mut copies, 2);
+        assert_eq!(encodes.get(), 3, "the copy had gone");
+
+        copies.begin_walk();
+        assert!(!copies.finish_walk(dir.path()), "nothing asked for it");
+        assert!(!copy.exists());
+    }
+
+    /// A folder per document keeps a copy from reaching anything else in the folder
+    /// the document counts as being in.
+    #[test]
+    fn documents_with_the_same_data_path_keep_their_own_copies() {
+        let play = Path::new("play");
+        let untitled = |name: &str| scene_folder(play, &PlayScene::Untitled(name.to_string()));
+        let file = |path: &str| scene_folder(play, &PlayScene::Path(path.to_string()));
+        assert_ne!(untitled("Untitled"), untitled("Untitled 2"));
+        assert_ne!(untitled("untitled.bsn"), file("untitled.bsn"));
+        assert_ne!(file("a.bsn"), file("b.bsn"));
+        assert_eq!(file("a.bsn"), file("a.bsn"));
     }
 
     #[test]

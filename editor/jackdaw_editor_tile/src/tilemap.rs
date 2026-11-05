@@ -21,7 +21,7 @@ use jackdaw_tileset::TerrainMatch;
 
 use jackdaw_editor_core::scene_io::SidecarImport;
 use jackdaw_editor_core::scene_io::hooks::{
-    DocumentIoHook, DocumentIoHooks, PlayDocument, put_play_copy,
+    DocumentIoHook, DocumentIoHooks, PlayCopies, PlayDocument, play_copy_stamp,
 };
 
 pub fn plugin(app: &mut App) {
@@ -76,8 +76,13 @@ impl DocumentIoHook for TilemapSidecars {
         &self,
         world: &World,
         document: &PlayDocument,
-    ) -> Result<bool, BevyError> {
-        export_play_tilemaps(world, document)
+        copies: &mut PlayCopies,
+    ) -> Result<(), BevyError> {
+        export_play_tilemaps(world, document, copies)
+    }
+
+    fn discard_document(&self, world: &mut World, tab: usize) {
+        discard_tilemap_edits(world, tab);
     }
 }
 
@@ -1217,10 +1222,10 @@ pub(crate) fn import_tilemap_sidecars(
     warnings
 }
 
-/// The document `play` keys its maps under, read without minting a key: `None`
-/// for an unsaved tab whose maps have not asked for one.
-fn play_doc(world: &World, play: &PlayDocument) -> Option<Doc> {
-    let held = play.tab.and_then(|tab| {
+/// The document of tab `tab` (or, with none, of `file`), read without minting a
+/// key: `None` for an unsaved tab whose maps have not asked for one.
+fn doc_of_tab(world: &World, tab: Option<usize>, file: Option<&Path>) -> Option<Doc> {
+    let held = tab.and_then(|tab| {
         let scenes = world.get_resource::<jackdaw_editor_core::scenes::Scenes>()?;
         if scenes.active == tab {
             return world.get_resource::<TilemapDocument>();
@@ -1241,34 +1246,88 @@ fn play_doc(world: &World, play: &PlayDocument) -> Option<Doc> {
             dir: None,
             stem: "untitled".to_string(),
         }),
-        _ => play.file.map(|file| Doc::file(world, file)),
+        _ => file.map(|file| Doc::file(world, file)),
     }
 }
 
-/// Copy each of `play`'s maps whose cells changed since they were read or
-/// written, or that have no file, into the overlay. A map with neither, or whose
-/// file failed to load, loses any copy. The store's record of what changed stays.
-fn export_play_tilemaps(world: &World, play: &PlayDocument) -> Result<bool, BevyError> {
+/// Settle a copy of each of `play`'s maps whose cells changed since they were read
+/// or written, or that have no file. A map with neither gets none, nor does one
+/// whose file failed to load, one another document owns, or one whose cells came
+/// back to what the file holds. The store's record of what changed stays.
+fn export_play_tilemaps(
+    world: &World,
+    play: &PlayDocument,
+    copies: &mut PlayCopies,
+) -> Result<(), BevyError> {
     let Some(store) = world.get_resource::<TilemapDataStore>() else {
-        return Ok(false);
+        return Ok(());
     };
-    let doc = play_doc(world, play);
-    let mut copied = false;
+    let Some(doc) = doc_of_tab(world, play.tab, play.file) else {
+        return Ok(());
+    };
     for data_path in play.data_paths(Tilemap::type_path()) {
         let Ok(copy) = jackdaw_tilemap::resolve_path(play.overlay_dir, &data_path) else {
             warn!("Skipping invalid tilemap data path {data_path:?}");
             continue;
         };
-        let located = doc.as_ref().and_then(|doc| doc.locate(world, &data_path));
-        let cells = located.and_then(|(full, key)| {
-            let unsaved = store.load_failed_reason(&key).is_none()
-                && (store.changed.contains(&key) || full.is_none_or(|full| !full.exists()));
-            store.get(&key).filter(|_| unsaved)
-        });
-        let bytes = cells.map(jackdaw_tilemap::encode);
-        copied |= put_play_copy(&copy, bytes.as_deref())?;
+        let Some((full, key)) = doc.locate(world, &data_path) else {
+            continue;
+        };
+        let owned = store.owner(&key).is_none_or(|owner| owner == doc.id);
+        let Some(cells) = store
+            .get(&key)
+            .filter(|_| owned && store.load_failed_reason(&key).is_none())
+        else {
+            continue;
+        };
+        let on_disk = full.as_deref().is_some_and(Path::exists);
+        if on_disk && !store.changed.contains(&key) {
+            continue;
+        }
+        let stamp = play_copy_stamp(store.revision(), full.as_deref());
+        copies.settle(&copy, stamp, || {
+            let bytes = jackdaw_tilemap::encode(cells);
+            let holds = full
+                .as_deref()
+                .and_then(|file| std::fs::read(file).ok())
+                .is_some_and(|held| held == bytes);
+            Ok((!holds).then_some(bytes))
+        })?;
     }
-    Ok(copied)
+    Ok(())
+}
+
+/// Forget the edited cells of the document in tab `tab`, so its files win again.
+/// Maps still drawn from them read those files now; the rest read them when they
+/// next load.
+fn discard_tilemap_edits(world: &mut World, tab: usize) {
+    if !world.contains_resource::<TilemapDataStore>() {
+        return;
+    }
+    let file = (world.get_resource::<jackdaw_editor_core::scenes::Scenes>())
+        .and_then(|scenes| scenes.tabs.get(tab)?.path.clone());
+    let Some(doc) = doc_of_tab(world, Some(tab), file.as_deref()) else {
+        return;
+    };
+    let mut store = world.resource_mut::<TilemapDataStore>();
+    let edited: Vec<String> = (store.changed.iter())
+        .filter(|key| {
+            store.owner(key) == Some(doc.id.as_str()) || key.starts_with(&format!("{}/", doc.id))
+        })
+        .cloned()
+        .collect();
+    if edited.is_empty() {
+        return;
+    }
+    for key in &edited {
+        store.remove(key);
+    }
+    let active = world
+        .get_resource::<jackdaw_editor_core::scenes::Scenes>()
+        .and_then(|scenes| scenes.tabs.get(scenes.active)?.path.clone());
+    if let Some(active) = active {
+        import_tilemap_sidecars(world, &active.to_string_lossy(), SidecarImport::FillMissing);
+    }
 }
 
 /// Writes each live map of the document being saved whose cells changed

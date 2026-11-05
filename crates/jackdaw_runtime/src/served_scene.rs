@@ -123,13 +123,20 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
     if answer.is_none() && requests.open.contains_key(&request) {
         return Gate::Hold;
     }
+    let overlay = answer
+        .as_ref()
+        .and_then(answer_sidecars)
+        .and_then(|named| crate::play_overlay::sidecar_overlay(world, named));
     let mut root_entity = world.entity_mut(root);
-    root_entity.remove::<AwaitingDocument>();
+    root_entity.remove::<(AwaitingDocument, crate::play_overlay::SidecarOverlay)>();
+    if let Some(overlay) = overlay {
+        root_entity.insert(overlay);
+    }
     match answer {
         Some(SceneAnswer::Document {
             text, dir, stem, ..
         }) => Gate::Document { text, dir, stem },
-        Some(SceneAnswer::UseFile { path: file }) if file != path => {
+        Some(SceneAnswer::UseFile { path: file, .. }) if file != path => {
             root_entity.insert(SceneFromFile);
             let handle = world
                 .resource::<AssetServer>()
@@ -142,6 +149,14 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
         Some(SceneAnswer::UseFile { .. }) | None => {
             root_entity.insert(SceneFromFile);
             Gate::File
+        }
+    }
+}
+
+fn answer_sidecars(answer: &SceneAnswer) -> Option<&str> {
+    match answer {
+        SceneAnswer::Document { sidecars, .. } | SceneAnswer::UseFile { sidecars, .. } => {
+            sidecars.as_deref()
         }
     }
 }
@@ -184,11 +199,8 @@ pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
     if !world.contains_resource::<SceneRequests>() {
         return;
     }
-    if let SceneAnswer::Document { text, sidecars, .. } = &answer {
+    if let SceneAnswer::Document { text, .. } = &answer {
         crate::node_sync::load_scene_assets(world, text);
-        if let Some(sidecars) = sidecars {
-            crate::play_overlay::note_sidecar_overlay(world, sidecars);
-        }
     }
     let mut requests = world.resource_mut::<SceneRequests>();
     if requests.open.remove(&request).is_some() {
@@ -308,6 +320,7 @@ mod tests {
             request,
             answer: SceneAnswer::UseFile {
                 path: path.to_string(),
+                sidecars: None,
             },
         }
     }
@@ -1127,7 +1140,7 @@ mod tests {
                 files: vec![("door.bsn".to_string(), Some(door(9.0)))],
             },
         );
-        let play = project.path().join(".jackdaw/play");
+        let play = project.path().join(".jackdaw/play/scene");
         send(
             &mut editor,
             &ControlEvent::SceneDocument {
@@ -1149,18 +1162,49 @@ mod tests {
 
         #[cfg(any(feature = "terrain", feature = "tilemap"))]
         {
-            std::fs::create_dir_all(&play).expect("the folder");
-            std::fs::write(play.join("map.jdtiles"), b"cells").expect("a copy");
+            let root = app
+                .world_mut()
+                .query_filtered::<Entity, With<JackdawSceneRoot>>()
+                .single(app.world())
+                .expect("the root");
             assert_eq!(
-                crate::play_overlay::overlaid_sidecar_dir(
-                    app.world(),
-                    &assets,
-                    &assets,
-                    "map.jdtiles"
-                ),
+                crate::play_overlay::overlaid_sidecar_dir(app.world(), root, &assets, &assets),
                 Some(jackdaw_prefab::normalize_path(&play)),
                 "the folder the answer named"
             );
         }
+    }
+
+    /// A file answer names a folder too: the file can instance a prefab with
+    /// unsaved sidecars.
+    #[cfg(any(feature = "terrain", feature = "tilemap"))]
+    #[test]
+    fn a_file_answer_gives_its_root_the_sidecar_folder() {
+        let project = tempfile::tempdir().expect("a temp dir");
+        let assets = project.path().join("assets");
+        std::fs::create_dir_all(&assets).expect("assets");
+        std::fs::write(assets.join("scene.bsn"), scene_text(2.0)).expect("a scene");
+        let (mut editor, game) = LoopbackTransport::pair();
+        let mut app = base_app(&assets);
+        install_link(&mut app, Box::new(game));
+        let root = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        let play = project.path().join(".jackdaw/play/scene");
+        send(
+            &mut editor,
+            &ControlEvent::SceneDocument {
+                request,
+                answer: SceneAnswer::UseFile {
+                    path: "scene.bsn".to_string(),
+                    sidecars: Some(play.to_string_lossy().into_owned()),
+                },
+            },
+        );
+        app.update();
+        assert_eq!(
+            crate::play_overlay::overlaid_sidecar_dir(app.world(), root, &assets, &assets),
+            Some(jackdaw_prefab::normalize_path(&play))
+        );
     }
 }

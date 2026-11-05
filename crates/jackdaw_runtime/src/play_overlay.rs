@@ -1,10 +1,11 @@
 //! What a game under Play reads in place of files that lag the editor.
 //!
 //! The editor sends [`ControlEvent::PrefabFiles`] and names a folder of sidecars
-//! in its answer to a scene request. Nothing else creates the overlay, so a
-//! game with no editor link reads only its files. Every path goes through
-//! the checks a file gets: a prefab must be inside the asset root, and the sidecar
-//! folder must be `.jackdaw/play` of a project holding the asset root.
+//! in its answer to a scene request, which goes on the root that asked. Nothing
+//! else creates the overlay, so a game with no editor link reads only its files.
+//! Every path goes through the checks a file gets: a prefab must be inside the
+//! asset root, and the sidecar folder must be directly under `.jackdaw/play` of a
+//! project holding the asset root.
 //!
 //! [`ControlEvent::PrefabFiles`]: jackdaw_pie_protocol::ControlEvent::PrefabFiles
 
@@ -19,9 +20,12 @@ use jackdaw_bsn::SceneBsnAst;
 struct PlayOverlay {
     /// Unsaved prefab text, by the prefab's normalized path in its text form.
     prefabs: HashMap<PathBuf, String>,
-    /// The folder of unsaved sidecars, laid out like the asset folder.
-    sidecars: Option<PathBuf>,
 }
+
+/// The folder of a scene root's unsaved sidecars, laid out like the asset folder,
+/// as the editor named it answering that root.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct SidecarOverlay(PathBuf);
 
 /// Take prefab documents from the editor, as `(path, text)` under the asset
 /// folder. The embedded assets of a text load now, so edits the editor sends from
@@ -57,14 +61,15 @@ pub fn load_prefab_files(world: &mut World, files: &[(String, Option<String>)]) 
     }
 }
 
-/// Take the folder of unsaved sidecars the editor named. Refused, with a warning,
-/// unless it is `.jackdaw/play` of a folder holding the asset root.
-pub fn note_sidecar_overlay(world: &mut World, named: &str) {
+/// The folder of unsaved sidecars the editor named. Refused, with a warning, unless
+/// it is directly under `.jackdaw/play` of a folder holding the asset root.
+pub fn sidecar_overlay(world: &World, named: &str) -> Option<SidecarOverlay> {
     let folder = jackdaw_prefab::normalize_path(Path::new(named));
     let project = folder
-        .ends_with(Path::new(".jackdaw").join("play"))
-        .then(|| folder.parent().and_then(Path::parent))
-        .flatten();
+        .parent()
+        .filter(|play| play.ends_with(Path::new(".jackdaw").join("play")))
+        .and_then(Path::parent)
+        .and_then(Path::parent);
     let holds_assets = project
         .zip(crate::assets_root(world))
         .is_some_and(|(project, assets)| {
@@ -72,9 +77,9 @@ pub fn note_sidecar_overlay(world: &mut World, named: &str) {
         });
     if !holds_assets {
         warn!("PIE: ignoring the sidecar folder {named} the editor named");
-        return;
+        return None;
     }
-    world.get_resource_or_init::<PlayOverlay>().sidecars = Some(folder);
+    Some(SidecarOverlay(folder))
 }
 
 fn real_path(path: &Path) -> PathBuf {
@@ -115,31 +120,41 @@ pub(crate) fn overlaid_prefab(
     Some(ast)
 }
 
-/// The folder holding an unsaved copy of the sidecar `data_path` names beside the
-/// document in `dir`, if there is a copy.
+/// Where the scene under `root` keeps unsaved copies of the sidecars of the document
+/// in `dir`, `assets` being the asset root. A copy may or may not be there when it
+/// is read; see [`read_sidecar`].
 #[cfg(any(feature = "terrain", feature = "tilemap"))]
 pub(crate) fn overlaid_sidecar_dir(
     world: &World,
-    root: &Path,
+    root: Entity,
+    assets: &Path,
     dir: &Path,
-    data_path: &str,
 ) -> Option<PathBuf> {
-    use std::path::Component;
-
-    let overlay = world.get_resource::<PlayOverlay>()?.sidecars.as_ref()?;
-    let names_a_file = !data_path.is_empty()
-        && Path::new(data_path)
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)));
-    if !names_a_file {
-        return None;
-    }
+    let overlay = world.get::<SidecarOverlay>(root)?;
     let under = jackdaw_prefab::normalize_path(dir);
     let under = under
-        .strip_prefix(jackdaw_prefab::normalize_path(root))
+        .strip_prefix(jackdaw_prefab::normalize_path(assets))
         .ok()?;
-    let copy_dir = overlay.join(under);
-    copy_dir.join(data_path).is_file().then_some(copy_dir)
+    Some(overlay.0.join(under))
+}
+
+/// The bytes of a sidecar: its unsaved copy at `copy` while that is there, else its
+/// file. The copy can go between the spawn and this read, when the author saves or a
+/// later answer finds nothing unsaved, and the file is then the right data.
+#[cfg(any(feature = "terrain", feature = "tilemap"))]
+pub(crate) fn read_sidecar(copy: Option<&Path>, file: &Path) -> std::io::Result<Vec<u8>> {
+    if let Some(copy) = copy {
+        match std::fs::read(copy) {
+            Ok(bytes) => return Ok(bytes),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => warn!(
+                "PIE: reading {} instead of its unsaved copy {}: {err}",
+                file.display(),
+                copy.display()
+            ),
+        }
+    }
+    std::fs::read(file)
 }
 
 #[cfg(test)]
@@ -213,50 +228,61 @@ mod tests {
     #[test]
     fn only_a_private_folder_of_the_project_holds_sidecars() {
         let (dir, assets) = project();
-        let mut app = game(&assets);
-        let held = |app: &App| {
-            app.world()
-                .get_resource::<PlayOverlay>()
-                .and_then(|overlay| overlay.sidecars.clone())
-        };
+        let app = game(&assets);
 
         let elsewhere = tempfile::tempdir().expect("a temp dir");
         for named in [
-            elsewhere.path().join(".jackdaw/play"),
+            elsewhere.path().join(".jackdaw/play/scene"),
             dir.path().join("somewhere"),
+            dir.path().join(".jackdaw/play"),
+            dir.path().join(".jackdaw/play/scene/deeper"),
             dir.path().join(".jackdaw/play/../../.."),
         ] {
-            note_sidecar_overlay(app.world_mut(), &named.to_string_lossy());
-            assert_eq!(held(&app), None, "{}", named.display());
+            assert_eq!(
+                sidecar_overlay(app.world(), &named.to_string_lossy()),
+                None,
+                "{}",
+                named.display()
+            );
         }
 
-        let play = dir.path().join(".jackdaw/play");
-        note_sidecar_overlay(app.world_mut(), &play.to_string_lossy());
-        assert_eq!(held(&app), Some(jackdaw_prefab::normalize_path(&play)));
+        let folder = dir.path().join(".jackdaw/play/scene");
+        assert_eq!(
+            sidecar_overlay(app.world(), &folder.to_string_lossy()),
+            Some(SidecarOverlay(jackdaw_prefab::normalize_path(&folder)))
+        );
     }
 
     #[cfg(any(feature = "terrain", feature = "tilemap"))]
     #[test]
-    fn a_sidecar_is_read_from_the_overlay_only_when_the_copy_exists() {
+    fn a_roots_copies_are_laid_out_like_the_asset_folder() {
         let (dir, assets) = project();
         let mut app = game(&assets);
-        let play = dir.path().join(".jackdaw/play");
-        note_sidecar_overlay(app.world_mut(), &play.to_string_lossy());
-        std::fs::create_dir_all(play.join("levels")).expect("the folder");
-        std::fs::write(play.join("levels/map.jdtiles"), b"cells").expect("a copy");
-
+        let folder = dir.path().join(".jackdaw/play/scene");
+        let overlay = sidecar_overlay(app.world(), &folder.to_string_lossy()).expect("allowed");
+        let with = app.world_mut().spawn(overlay).id();
+        let without = app.world_mut().spawn_empty().id();
         let levels = assets.join("levels");
         assert_eq!(
-            overlaid_sidecar_dir(app.world(), &assets, &levels, "map.jdtiles"),
-            Some(jackdaw_prefab::normalize_path(&play).join("levels"))
+            overlaid_sidecar_dir(app.world(), with, &assets, &levels),
+            Some(jackdaw_prefab::normalize_path(&folder).join("levels"))
         );
         assert_eq!(
-            overlaid_sidecar_dir(app.world(), &assets, &levels, "other.jdtiles"),
+            overlaid_sidecar_dir(app.world(), without, &assets, &levels),
             None
         );
-        assert_eq!(
-            overlaid_sidecar_dir(app.world(), &assets, &levels, "../levels/map.jdtiles"),
-            None
-        );
+    }
+
+    #[cfg(any(feature = "terrain", feature = "tilemap"))]
+    #[test]
+    fn a_copy_that_has_gone_falls_back_to_the_file() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (copy, file) = (dir.path().join("copy"), dir.path().join("file"));
+        std::fs::write(&file, b"saved").expect("a file");
+        std::fs::write(&copy, b"unsaved").expect("a copy");
+        assert_eq!(read_sidecar(Some(&copy), &file).expect("read"), b"unsaved");
+        std::fs::remove_file(&copy).expect("gone");
+        assert_eq!(read_sidecar(Some(&copy), &file).expect("read"), b"saved");
+        assert_eq!(read_sidecar(None, &file).expect("read"), b"saved");
     }
 }

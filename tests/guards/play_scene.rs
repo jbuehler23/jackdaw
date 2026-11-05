@@ -77,13 +77,14 @@ fn document(answer: SceneAnswer) -> (String, String, String) {
         SceneAnswer::Document {
             text, dir, stem, ..
         } => (text, dir, stem),
-        SceneAnswer::UseFile { path } => panic!("expected a document, got the file {path}"),
+        SceneAnswer::UseFile { path, .. } => panic!("expected a document, got the file {path}"),
     }
 }
 
 fn use_file(path: &str) -> SceneAnswer {
     SceneAnswer::UseFile {
         path: path.to_string(),
+        sidecars: None,
     }
 }
 
@@ -195,7 +196,7 @@ fn an_inactive_tab_answers_with_its_document_and_its_folder() {
 }
 
 #[test]
-fn a_scene_not_open_refused_or_a_prefab_uses_its_file() {
+fn a_scene_not_open_or_refused_uses_its_file() {
     let (mut app, _tmp) = editor();
     assert_eq!(
         scene_answer(app.world_mut(), None, "levels/meadow.bsn"),
@@ -220,10 +221,12 @@ fn a_scene_not_open_refused_or_a_prefab_uses_its_file() {
         tab.refusal = None;
         tab.kind = TabKind::Prefab;
     });
-    assert_eq!(
-        scene_answer(app.world_mut(), None, "zone.bsn"),
-        use_file("zone.bsn"),
-        "a prefab tab is not a scene"
+    assert!(
+        matches!(
+            scene_answer(app.world_mut(), None, "zone.bsn"),
+            SceneAnswer::Document { .. }
+        ),
+        "a prefab tab answers for a root spawning that prefab"
     );
 }
 

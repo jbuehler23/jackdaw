@@ -1,8 +1,9 @@
 //! What a running game spawns a scene from.
 //!
 //! A scene root in the game asks by asset path ([`StateEvent::RequestScene`]).
-//! [`scene_answer`] replies with the document's current text, for a scene open
-//! in a tab, or tells the game to load the file. Nothing is written: the text
+//! [`scene_answer`] replies with the document's current text, for a scene or
+//! prefab open in a tab or a prefab with a cached edit, or tells the game to load
+//! the file. Nothing is written: the text
 //! holds the node ids a file saved before they existed lacks, and unsaved edits.
 //!
 //! The text is never written anywhere, so each asset it embeds goes by a name
@@ -81,8 +82,9 @@ pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
 }
 
 /// What the game spawns for a root asking for the asset path `requested`, for an
-/// instance launched with `launch`. The scene the path resolves to, if open in a
-/// tab, answers with its document; anything else answers with the file.
+/// instance launched with `launch`. The document the path resolves to, if open in
+/// a tab or an edited prefab in the cache, answers with its text; anything else
+/// answers with the file.
 pub fn scene_answer(
     world: &mut World,
     launch: Option<&LaunchScene>,
@@ -198,7 +200,10 @@ impl Answered {
     fn use_file(world: &mut World, path: String) -> Self {
         let overlay = crate::play_overlay::overlay_of_file(world, &path);
         Self {
-            answer: SceneAnswer::UseFile { path },
+            answer: SceneAnswer::UseFile {
+                path,
+                sidecars: overlay.sidecars,
+            },
             assets: overlay.assets,
             prefabs: overlay.prefabs,
         }
@@ -228,18 +233,23 @@ fn answer_with_assets(
     let Some(assets) = crate::asset_index::assets_dir(world) else {
         return Answered::use_file(world, file);
     };
-    let Some(tab) = tab_of(world, &target) else {
-        if let PlayScene::Untitled(name) = &target {
-            let message = format!(
-                "{name} was saved or closed during the build, so the game loads {requested}"
-            );
-            warn!("PIE: {message}");
-            crate::status_bar::notify_warn(world, message);
-        }
-        return Answered::use_file(world, file);
+    let tab = tab_of(world, &target);
+    if let (None, PlayScene::Untitled(name)) = (tab, &target) {
+        let message =
+            format!("{name} was saved or closed during the build, so the game loads {requested}");
+        warn!("PIE: {message}");
+        crate::status_bar::notify_warn(world, message);
+    }
+    let parent = tab.map_or_else(
+        || assets.join(&served.dir),
+        |tab| tab_folder(world, tab, &assets, &served.dir),
+    );
+    let document = match (tab, &target) {
+        (Some(tab), _) => document_of_tab(world, tab, &parent),
+        (None, PlayScene::Path(path)) => crate::play_overlay::unsaved_cached_prefab(world, path),
+        (None, PlayScene::Untitled(_)) => None,
     };
-    let parent = tab_folder(world, tab, &assets, &served.dir);
-    let Some(document) = document_of_tab(world, tab, &parent) else {
+    let Some(document) = document else {
         return Answered::use_file(world, file);
     };
     let session_text = with_session_names(world, &document);
@@ -252,7 +262,14 @@ fn answer_with_assets(
     };
     warn_absolute(world, &document.absolute);
     let mut held = DocumentAssets::of(world, &mut parsed);
-    let overlay = crate::play_overlay::overlay_of_tab(world, tab, &parsed, &parent, &served.dir);
+    let overlay = crate::play_overlay::overlay_of_document(
+        world,
+        tab,
+        &target,
+        &parsed,
+        &parent,
+        &served.dir,
+    );
     held.embedded.extend(overlay.assets.embedded);
     held.files.extend(overlay.assets.files);
     Answered {
@@ -440,13 +457,13 @@ impl ServedAs {
     }
 }
 
-/// The index of the tab holding `target`, when it holds a scene that loaded.
+/// The index of the tab holding `target`, when it holds a scene or prefab that
+/// loaded.
 fn tab_of(world: &World, target: &PlayScene) -> Option<usize> {
     let scenes = world.get_resource::<Scenes>()?;
     let project = world.get_resource::<crate::project::ProjectRoot>()?;
     scenes.tabs.iter().position(|tab| {
-        tab.kind == TabKind::Scene
-            && !tab.is_refused()
+        !tab.is_refused()
             && match target {
                 PlayScene::Untitled(name) => tab.path.is_none() && tab.display_name == *name,
                 PlayScene::Path(path) => tab
@@ -467,7 +484,8 @@ fn tab_folder(world: &World, tab: usize, assets: &Path, dir: &str) -> PathBuf {
 }
 
 /// The text of the document in tab `index`, read from the document: the live one
-/// for the tab in front, and the snapshot for any other.
+/// for the tab in front, the snapshot for any other, or the cache entry for a
+/// prefab behind.
 pub(crate) fn document_of_tab(
     world: &mut World,
     index: usize,
@@ -486,7 +504,11 @@ pub(crate) fn document_of_tab(
         TabContent::Scene(Some(document)) => Some(crate::scene_io::save::emit_snapshot_for_game(
             world, document, parent,
         )),
-        TabContent::Scene(None) | TabContent::Prefab(_) => None,
+        TabContent::Prefab(path) => world
+            .get_resource::<crate::prefab::PrefabAstCache>()?
+            .get(path.as_path())
+            .map(|document| crate::scene_io::save::emit_snapshot_for_game(world, document, parent)),
+        TabContent::Scene(None) => None,
     }
 }
 
@@ -853,7 +875,9 @@ mod tests {
     fn text_of(answer: SceneAnswer) -> String {
         match answer {
             SceneAnswer::Document { text, .. } => text,
-            SceneAnswer::UseFile { path } => panic!("expected a document, got the file {path}"),
+            SceneAnswer::UseFile { path, .. } => {
+                panic!("expected a document, got the file {path}")
+            }
         }
     }
 
