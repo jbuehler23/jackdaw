@@ -6,9 +6,10 @@ on:
   pull_request:
     branches: [main, "release-*"]
   # Pull requests only restore caches. This daily run on main saves any that
-  # were pushed out. Only the jobs on a pull request's longest path keep a
-  # cache, so the saved keys fit the repository's 10 GB together. Off the
-  # hour, where scheduled runs start hours late.
+  # were pushed out. Only the jobs that gain the most keep a cache, and
+  # `prune-caches` keeps one generation of each, so the saved keys fit the
+  # repository's 10 GB together. Off the hour, where scheduled runs start hours
+  # late.
   schedule:
     - cron: "17 2 * * *"
 
@@ -25,11 +26,52 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # Whether a pull request touches what Navmesh, Templates and the doctests
+  # build. Their `!= 'false'` runs them on main and the schedule, where this
+  # job is skipped, and when it fails. A skipped job reports success, so a
+  # required check stays satisfied.
+  changed-inputs:
+    name: Job inputs changed
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      navmesh: ${{ steps.diff.outputs.navmesh }}
+      templates: ${{ steps.diff.outputs.templates }}
+      doctests: ${{ steps.diff.outputs.doctests }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          always='(^|/)Cargo\.(toml|lock)$|^rust-toolchain|^clippy\.toml$|^\.cargo/|^\.config/|^\.github/(actions/|workflows/ci\.yaml$)'
+          files=$(git -c core.quotepath=off diff --no-renames --name-only "origin/$BASE_REF...HEAD") || files=.github/workflows/ci.yaml
+          report() {
+            if grep -qE "$always|$2" <<<"$files"; then
+              echo "$1=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$1=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          # The module builds against nearly every library and the editor.
+          report navmesh '^(crates|editor|src|assets|integrations/navmesh)/'
+          # The scaffolder and its templates, `jd`, and what a project links
+          # all live in crates/; packaging runs from xtask/ without compiling.
+          report templates '^(crates|xtask)/'
+          # A doctest can live in any crate.
+          report doctests '\.rs$|^(crates|editor|src)/'
+
   # The doctests, built as the archive is so its cache matches. The non-dylib
   # builds that `cargo install` does are checked in Docs; the embedded recipe
   # runs in the integration shards.
   test:
     name: Tests
+    needs: changed-inputs
+    if: ${{ !cancelled() && needs.changed-inputs.outputs.doctests != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -44,12 +86,6 @@ jobs:
       - name: Set LD_LIBRARY_PATH
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
-
-      - name: Wait for the cleanup
-        uses: ./.github/actions/free-disk
-        timeout-minutes: 10
-        with:
-          wait: "true"
 
       # Restores the archive job's cache rather than keeping a 4 GB one of
       # its own, which pushed the saved keys past the 10 GB limit.
@@ -66,14 +102,24 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
+      - name: Wait for the cleanup
+        uses: ./.github/actions/free-disk
+        timeout-minutes: 10
+        with:
+          wait: "true"
+
+      - name: Compiler cache
+        uses: ./.github/actions/sccache
 
       - name: Run doctests
         run: cargo test --locked --workspace --doc --features dylib --config profile.dev.package.jackdaw.opt-level=0 --config profile.dev.package.jackdaw_editor_core.opt-level=0 --config profile.dev.package.jackdaw_editor_tile.opt-level=0 --config profile.dev.package.jackdaw_editor_terrain.opt-level=0 --config profile.dev.package.jackdaw_editor_modelling.opt-level=0 --config profile.dev.package.jackdaw_editor_remote.opt-level=0 --config profile.dev.package.jackdaw_editor_animation.opt-level=0 --config profile.dev.package.jackdaw_editor_launcher.opt-level=0
+
+      - name: Compiler cache statistics
+        if: ${{ !cancelled() }}
+        run: sccache --show-stats || true
 
   # Every library and integration test binary, built once for the shards.
   build-tests:
@@ -93,12 +139,6 @@ jobs:
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
-      - name: Wait for the cleanup
-        uses: ./.github/actions/free-disk
-        timeout-minutes: 10
-        with:
-          wait: "true"
-
       - name: Populate target directory from cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -112,14 +152,17 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
+      - name: Wait for the cleanup
+        uses: ./.github/actions/free-disk
+        timeout-minutes: 10
+        with:
+          wait: "true"
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - name: Compiler cache
+        uses: ./.github/actions/sccache
 
       - name: Archive the test binaries
         run: cargo xtask archive "$RUNNER_TEMP/tests.tar.zst"
@@ -131,6 +174,19 @@ jobs:
           path: ${{ runner.temp }}/tests.tar.zst
           retention-days: 1
           compression-level: 0
+
+      - name: Stop the compiler cache
+        if: ${{ !cancelled() }}
+        run: |
+          sccache --show-stats || true
+          sccache --stop-server || true
+
+      - name: Save the compiler cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-build-tests-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The library and integration tests from the archive, spread over runners.
   # The `*_REQUIRED` variables turn a skip into a failure wherever the shard
@@ -174,14 +230,8 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
       - name: Download the archive
         uses: actions/download-artifact@v4
@@ -240,8 +290,9 @@ jobs:
           fetch-depth: 0
       - id: diff
         run: |
-          pattern='^(editor/jackdaw_editor_core/src/pie|crates/jackdaw_project_build/|crates/jackdaw_pie_protocol/|crates/jackdaw_runtime/|crates/jackdaw_rustc_wrapper/|tests/bsn_game_run\.rs|tests/fixtures/bsn_game/|\.github/workflows/ci\.yaml)'
-          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qE "$pattern"; then
+          pattern='(^|/)Cargo\.(toml|lock)$|^rust-toolchain|^(editor/jackdaw_editor_core/src/pie|crates/|tests/bsn_game_run\.rs|tests/fixtures/bsn_game/|\.cargo/|\.config/|\.github/actions/|\.github/workflows/ci\.yaml)'
+          files=$(git -c core.quotepath=off diff --no-renames --name-only "origin/${{ github.base_ref }}...HEAD") || files=.github/workflows/ci.yaml
+          if grep -qE "$pattern" <<<"$files"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -250,7 +301,7 @@ jobs:
   play:
     name: Play
     needs: play-paths
-    if: needs.play-paths.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.play-paths.outputs.changed != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -258,11 +309,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Remove unused software
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
+        uses: ./.github/actions/free-disk
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -274,6 +321,15 @@ jobs:
         run: |
           echo "LD_LIBRARY_PATH=$(rustc --print target-libdir)" >> $GITHUB_ENV
 
+      # The harness is built as the archive builds it, so the archive job's
+      # caches apply. The game it builds is detached from them: its nested
+      # cargo drops RUSTC_WRAPPER and uses its own target directory.
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          shared-key: build-tests
+
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev mesa-vulkan-drivers
         timeout-minutes: 10
@@ -281,17 +337,24 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
+      - name: Wait for the cleanup
+        uses: ./.github/actions/free-disk
+        timeout-minutes: 10
+        with:
+          wait: "true"
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - name: Compiler cache
+        uses: ./.github/actions/sccache
 
       - name: A built game loads and plays its scene
-        run: cargo nextest run --profile heavy --cargo-profile dev -p jackdaw --features dylib --target x86_64-unknown-linux-gnu --test bsn_game_run
+        run: cargo nextest run --profile heavy --locked --workspace --features dylib --test bsn_game_run --config profile.dev.package.jackdaw.opt-level=0 --config profile.dev.package.jackdaw_editor_core.opt-level=0 --config profile.dev.package.jackdaw_editor_tile.opt-level=0 --config profile.dev.package.jackdaw_editor_terrain.opt-level=0 --config profile.dev.package.jackdaw_editor_modelling.opt-level=0 --config profile.dev.package.jackdaw_editor_remote.opt-level=0 --config profile.dev.package.jackdaw_editor_animation.opt-level=0 --config profile.dev.package.jackdaw_editor_launcher.opt-level=0
+
+      - name: Compiler cache statistics
+        if: ${{ !cancelled() }}
+        run: sccache --show-stats || true
 
   # Packaging checks the whole graph from the packaged sources, so pull requests
   # run it only when they touch a manifest or the release tooling.
@@ -345,7 +408,8 @@ jobs:
 
   templates:
     name: Template - ${{ matrix.template }}
-    needs: bevy-source
+    needs: [bevy-source, changed-inputs]
+    if: ${{ !cancelled() && needs.bevy-source.result == 'success' && needs.changed-inputs.outputs.templates != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -370,15 +434,6 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
-
-      - name: Install nextest
-        run: cargo binstall cargo-nextest --locked --force
-
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
         timeout-minutes: 10
@@ -395,6 +450,9 @@ jobs:
       # those versions to the packages built from this change. On Bevy's
       # main branch nothing is packaged, and the project depends on this
       # checkout instead.
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
       - name: Scaffold ${{ matrix.template }}
         env:
           BEVY_MAIN: ${{ needs.bevy-source.outputs.main }}
@@ -460,11 +518,8 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -516,18 +571,6 @@ jobs:
         if: steps.availability.outputs.available == 'true'
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        if: steps.availability.outputs.available == 'true'
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        if: steps.availability.outputs.available == 'true'
-        run: cargo binstall wild-linker@0.10.0 --locked --force
-
-      - name: Install cargo-nextest
-        if: steps.availability.outputs.available == 'true'
-        uses: taiki-e/install-action@nextest
-
       - name: Install dependencies
         if: steps.availability.outputs.available == 'true'
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -539,6 +582,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: integrations/physics
+
+      - name: Install tools
+        if: steps.availability.outputs.available == 'true'
+        uses: ./.github/actions/install-tools
 
       - name: Run cargo fmt
         if: steps.availability.outputs.available == 'true'
@@ -556,6 +603,8 @@ jobs:
   # linted and tested here, against the editor by path.
   navmesh:
     name: Navmesh module
+    needs: changed-inputs
+    if: ${{ !cancelled() && needs.changed-inputs.outputs.navmesh != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -589,18 +638,6 @@ jobs:
         if: steps.availability.outputs.available == 'true'
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        if: steps.availability.outputs.available == 'true'
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        if: steps.availability.outputs.available == 'true'
-        run: cargo binstall wild-linker@0.10.0 --locked --force
-
-      - name: Install cargo-nextest
-        if: steps.availability.outputs.available == 'true'
-        uses: taiki-e/install-action@nextest
-
       - name: Install dependencies
         if: steps.availability.outputs.available == 'true'
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
@@ -612,6 +649,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: integrations/navmesh
+
+      - name: Install tools
+        if: steps.availability.outputs.available == 'true'
+        uses: ./.github/actions/install-tools
 
       - name: Run cargo fmt
         if: steps.availability.outputs.available == 'true'
@@ -663,15 +704,19 @@ jobs:
       - name: Activate CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
-
       - name: Install dependencies
         run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-prod*; sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; sudo apt-get install -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends libasound2-dev libudev-dev libwayland-dev
         timeout-minutes: 10
+
+      # Its own key: `cargo doc` needs the dependencies' metadata and no others
+      # build that, and sccache cannot store a metadata-only compile.
+      - name: Populate target directory from cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
       - name: Check documentation
         run: cargo doc --locked --workspace --document-private-items --no-deps
@@ -721,13 +766,35 @@ jobs:
       - name: Active CI cargo config
         run: mv .cargo/config_ci.toml .cargo/config.toml
 
-      - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install Wild
-        run: cargo binstall wild-linker@0.10.0 --locked --force
+      - name: Install tools
+        uses: ./.github/actions/install-tools
 
       # Bevy 0.20 states rust-version 1.97.1, newer than any nightly a
       # bevy_lint revision builds on yet.
       - name: Run Bevy linter
         run: bevy_lint --locked --ignore-rust-version --workspace --all-targets --features bevy/dynamic_linking
+
+  # Saved keys carry a hash of the manifests, so each manifest change adds a
+  # generation that would otherwise sit counted against the limit for a week.
+  # Keeps the newest of each.
+  prune-caches:
+    name: Prune old caches
+    needs: [build-tests, templates, physics, navmesh, doc]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Delete all but the newest generation of each key
+        run: |
+          for prefix in v0-rust-build-tests- v0-rust-template- v0-rust-navmesh- v0-rust-physics- v0-rust-doc- sccache-build-tests-; do
+            gh cache list --key "$prefix" --ref refs/heads/main --sort created_at --order desc --limit 100 --json id --jq '.[1:][].id' |
+              while read -r id; do
+                gh cache delete "$id"
+              done
+          done

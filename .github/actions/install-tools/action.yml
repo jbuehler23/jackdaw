@@ -1,0 +1,32 @@
+name: Install build tools
+description: >-
+  Puts the linker, test runner and compiler cache in Cargo's bin directory, as
+  pinned release binaries checked against their digests.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+        mkdir -p "$bin"
+        install_tool() {
+          local url=$1 digest=$2 strip=$3 member=$4 archive
+          archive=$(mktemp)
+          curl --fail --silent --show-error --location --connect-timeout 20 --max-time 60 --retry 8 --retry-all-errors --output "$archive" "$url"
+          echo "$digest  $archive" | sha256sum --check --quiet
+          tar -xzf "$archive" -C "$bin" --strip-components="$strip" "$member"
+          rm -f "$archive"
+        }
+        install_tool \
+          https://github.com/wild-linker/wild/releases/download/0.10.0/wild-linker-0.10.0-x86_64-unknown-linux-gnu.tar.gz \
+          641265506a7c06cfb03181b8916ab663ec8407855db6d4db7f8450667d105283 \
+          1 wild-linker-0.10.0-x86_64-unknown-linux-gnu/wild
+        install_tool \
+          https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.149/cargo-nextest-0.9.149-x86_64-unknown-linux-gnu.tar.gz \
+          32d1d8c0567b7a80bee2bad8bb09125c846da96bc009b2de11ec08557290c770 \
+          0 cargo-nextest
+        install_tool \
+          https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-x86_64-unknown-linux-musl.tar.gz \
+          45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89 \
+          1 sccache-v0.18.0-x86_64-unknown-linux-musl/sccache
