@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use jackdaw_api_internal::document::write_atomic;
 use jackdaw_editor_core::scene_io::SidecarImport;
-use jackdaw_editor_core::scene_io::hooks::{DocumentIoHook, DocumentIoHooks};
+use jackdaw_editor_core::scene_io::hooks::{
+    DocumentIoHook, DocumentIoHooks, PlayDocument, put_play_copy,
+};
+use jackdaw_editor_core::scenes::Scenes;
 
 use crate::TerrainDataStore;
 
@@ -45,6 +48,71 @@ impl DocumentIoHook for TerrainSidecars {
     fn forget_project(&self, world: &mut World) {
         world.insert_resource(TerrainDataStore::default());
     }
+
+    fn export_play_sidecars(
+        &self,
+        world: &World,
+        document: &PlayDocument,
+    ) -> Result<bool, BevyError> {
+        export_play_terrain(world, document)
+    }
+}
+
+/// The terrain store of tab `tab`: the world's for the tab in front.
+fn store_of_tab(world: &World, tab: Option<usize>) -> Option<&TerrainDataStore> {
+    let tab = tab?;
+    let scenes = world.get_resource::<Scenes>()?;
+    if scenes.active == tab {
+        return world.get_resource::<TerrainDataStore>();
+    }
+    Some(&scenes.tabs.get(tab)?.terrain_data_store)
+}
+
+/// Copy each of `document`'s terrains that differs from its sidecar into the
+/// overlay, read from the store of the tab holding it. A terrain that does not
+/// differ, or failed to load, loses any copy.
+fn export_play_terrain(world: &World, document: &PlayDocument) -> Result<bool, BevyError> {
+    use jackdaw_terrain::sidecar;
+
+    let type_path = <jackdaw_scene_types::Terrain as bevy::reflect::TypePath>::type_path();
+    let assets = jackdaw_editor_core::asset_index::assets_dir(world);
+    let store = store_of_tab(world, document.tab);
+    let mut copied = false;
+    for data_path in document.data_paths(type_path) {
+        let Ok(copy) = sidecar::resolve_path(document.overlay_dir, &data_path) else {
+            warn!("Skipping invalid terrain data path {data_path:?}");
+            continue;
+        };
+        let bytes = store
+            .filter(|store| !store.is_load_failed(&data_path))
+            .and_then(|store| store.get(&data_path))
+            .map(sidecar::save)
+            .transpose()
+            .map_err(|err| format!("terrain data {data_path:?} cannot be encoded: {err}"))?;
+        let saved = document
+            .file_dir()
+            .and_then(|dir| sidecar::resolve_path(dir, &data_path).ok());
+        let unsaved = bytes.filter(|bytes| {
+            saved
+                .as_deref()
+                .is_none_or(|file| !sidecar_holds(file, bytes, assets.as_deref()))
+        });
+        copied |= put_play_copy(&copy, unsaved.as_deref())?;
+    }
+    Ok(copied)
+}
+
+/// Whether the sidecar at `file`, encoded afresh, is `bytes`. An older format
+/// on disk therefore does not read as a change.
+fn sidecar_holds(file: &Path, bytes: &[u8], assets: Option<&Path>) -> bool {
+    use jackdaw_terrain::sidecar;
+
+    let Ok(held) = std::fs::read(file) else {
+        return false;
+    };
+    sidecar::load_from(&held, assets)
+        .and_then(|loaded| sidecar::save(&loaded.data))
+        .is_ok_and(|encoded| encoded == bytes)
 }
 
 /// Write every terrain's bulk data to its sidecar beside the scene.

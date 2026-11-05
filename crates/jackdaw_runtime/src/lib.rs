@@ -102,6 +102,7 @@ mod live_levels;
 #[cfg(feature = "render")]
 mod lod;
 pub mod node_sync;
+pub mod play_overlay;
 #[cfg(feature = "render")]
 pub use live_levels::{
     AwaitingModelSettings, LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin,
@@ -827,7 +828,7 @@ fn resolve_prefab_references(
     let document_dir = jackdaw_prefab::normalize_path(&assets_root.join(scene_dir));
     jackdaw_prefab::absolutize_isa_sources(&mut ast, &assets_root, &document_dir);
 
-    let sources = match read_prefab_sources(&ast, &assets_root, scene_name) {
+    let sources = match read_prefab_sources(world, &ast, &assets_root, scene_name) {
         Ok(sources) => sources,
         Err(outside) => {
             warn!(
@@ -857,8 +858,10 @@ fn resolve_prefab_references(
 /// Sources are normalized to real paths first, so a loop between two prefabs
 /// ends here. A source outside `assets_root` returns `Err(source)` before that
 /// file is opened, checked as it comes off the queue so a prefab reached
-/// through another is checked too.
+/// through another is checked too. Under Play, the unsaved text the editor sent
+/// for a prefab stands in for its file.
 fn read_prefab_sources(
+    world: &World,
     ast: &SceneBsnAst,
     assets_root: &Path,
     scene_name: &str,
@@ -871,6 +874,11 @@ fn read_prefab_sources(
         }
         if !path.starts_with(assets_root) {
             return Err(path);
+        }
+        if let Some(document) = play_overlay::overlaid_prefab(world, &path, assets_root) {
+            pending.extend(isa_sources(&document));
+            documents.insert(path, document);
+            continue;
         }
         let file = jackdaw_bsn::existing_form(&path).unwrap_or_else(|| path.clone());
         match jackdaw_prefab::read_prefab_document(&file, assets_root) {
@@ -1052,7 +1060,17 @@ fn sidecar_dirs(
                 .unwrap_or_default(),
             None => scene_dir.clone(),
         };
-        (entity, dir)
+        let data_path = world
+            .get::<jackdaw_scene_types::Terrain>(entity)
+            .map(|terrain| terrain.data_path.as_str())
+            .or_else(|| {
+                world
+                    .get::<jackdaw_scene_types::Tilemap>(entity)
+                    .map(|map| map.data_path.as_str())
+            })
+            .unwrap_or_default();
+        let overlaid = play_overlay::overlaid_sidecar_dir(world, &root, &dir, data_path);
+        (entity, overlaid.unwrap_or(dir))
     })
     .collect();
     Some(dirs)

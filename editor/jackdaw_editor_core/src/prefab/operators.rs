@@ -2008,6 +2008,23 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Enti
     }
 }
 
+/// A prefab document as text for the file at `path`. A prefab that instances
+/// another names it under the assets folder, as a scene does. Rewritten on a
+/// copy, so `ast` keeps absolute paths.
+pub(crate) fn prefab_body(
+    world: &World,
+    ast: &jackdaw_bsn::SceneBsnAst,
+    path: &Path,
+) -> Result<String, jackdaw_bsn::UnparsableEmit> {
+    let mut out = crate::prefab::resolver_bsn::clone_scene(ast);
+    crate::prefab::save_load::relativize_for_file(
+        world,
+        &mut out,
+        path.parent().unwrap_or(Path::new(".")),
+    );
+    jackdaw_bsn::emit_scene_checked(&out)
+}
+
 /// Write a prefab's cached document to disk and record the saved fingerprint so
 /// the file watcher ignores its own echo.
 pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Result<()> {
@@ -2022,16 +2039,7 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
                 format!("prefab not cached: {}", prefab_path.display()),
             ));
         };
-        // A prefab that instances another names it under the assets folder, as
-        // a scene does. Rewritten on the copy being written, so the cached
-        // document keeps absolute paths.
-        let mut out = crate::prefab::resolver_bsn::clone_scene(ast);
-        crate::prefab::save_load::relativize_for_file(
-            world,
-            &mut out,
-            write_path.parent().unwrap_or(Path::new(".")),
-        );
-        let body = jackdaw_bsn::emit_scene_checked(&out).map_err(|err| {
+        let body = prefab_body(world, ast, &write_path).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("cannot save {}: {err}", prefab_path.display()),

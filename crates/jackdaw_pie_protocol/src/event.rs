@@ -44,10 +44,13 @@ pub enum StateEvent {
 pub enum SceneAnswer {
     /// The editor's current document. `dir` is the folder it counts as being
     /// in, relative to the asset folder, and `stem` the name it goes by.
+    /// `sidecars` is the private folder holding unsaved sidecars when any exist,
+    /// laid out like the asset folder; a sidecar found there wins over its file.
     Document {
         text: String,
         dir: String,
         stem: String,
+        sidecars: Option<String>,
     },
     /// Load this file, relative to the asset folder.
     UseFile { path: String },
@@ -121,6 +124,13 @@ pub enum ControlEvent {
     /// the path, and when the asset changes.
     AssetFiles {
         files: Vec<(String, String)>,
+    },
+    /// Prefab documents with unsaved changes, as `(path, text)` with `path`
+    /// relative to the asset folder. Sent ahead of the answer that needs them. The
+    /// game reads `text` in place of the file, and `None` sends it back to the
+    /// file.
+    PrefabFiles {
+        files: Vec<(String, Option<String>)>,
     },
 }
 
@@ -227,6 +237,7 @@ mod tests {
                 text: "#Zone\n".to_string(),
                 dir: "levels".to_string(),
                 stem: "zone".to_string(),
+                sidecars: Some("/game/.jackdaw/play".to_string()),
             },
             SceneAnswer::UseFile {
                 path: "scene.bsn".to_string(),
@@ -242,6 +253,18 @@ mod tests {
     fn scene_assets_round_trip() {
         let ev = ControlEvent::SceneAssets {
             text: "#Stone\ngame::Swatch\n".to_string(),
+        };
+        let bytes = to_bytes(&ev).unwrap();
+        assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
+    }
+
+    #[test]
+    fn prefab_files_round_trip() {
+        let ev = ControlEvent::PrefabFiles {
+            files: vec![
+                ("props/door.bsn".to_string(), Some("#Door\n".to_string())),
+                ("props/gate.bsn".to_string(), None),
+            ],
         };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);

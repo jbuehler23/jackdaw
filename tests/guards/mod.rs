@@ -4,6 +4,7 @@
 mod batch_undo;
 mod editor_remote;
 mod feathers_composition;
+mod play_overlay;
 mod play_scene;
 mod play_sync;
 mod remote_batches;

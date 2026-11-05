@@ -126,7 +126,9 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
     let mut root_entity = world.entity_mut(root);
     root_entity.remove::<AwaitingDocument>();
     match answer {
-        Some(SceneAnswer::Document { text, dir, stem }) => Gate::Document { text, dir, stem },
+        Some(SceneAnswer::Document {
+            text, dir, stem, ..
+        }) => Gate::Document { text, dir, stem },
         Some(SceneAnswer::UseFile { path: file }) if file != path => {
             root_entity.insert(SceneFromFile);
             let handle = world
@@ -182,8 +184,11 @@ pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
     if !world.contains_resource::<SceneRequests>() {
         return;
     }
-    if let SceneAnswer::Document { text, .. } = &answer {
+    if let SceneAnswer::Document { text, sidecars, .. } = &answer {
         crate::node_sync::load_scene_assets(world, text);
+        if let Some(sidecars) = sidecars {
+            crate::play_overlay::note_sidecar_overlay(world, sidecars);
+        }
     }
     let mut requests = world.resource_mut::<SceneRequests>();
     if requests.open.remove(&request).is_some() {
@@ -293,6 +298,7 @@ mod tests {
                 text,
                 dir: String::new(),
                 stem: "scene".to_string(),
+                sidecars: None,
             },
         }
     }
@@ -973,6 +979,7 @@ mod tests {
                     ),
                     dir: "levels".to_string(),
                     stem: "meadow".to_string(),
+                    sidecars: None,
                 },
             },
         );
@@ -1086,5 +1093,74 @@ mod tests {
         stop.store(true, Ordering::Release);
         game.join().expect("the game ran");
         editor.join().expect("the editor ran");
+    }
+
+    /// Over the link: the prefab text ahead of the answer stands in for the file,
+    /// and the answer's folder is where sidecars are looked for.
+    #[test]
+    fn prefab_files_and_the_sidecar_folder_arrive_over_the_link() {
+        let project = tempfile::tempdir().expect("a temp dir");
+        let assets = project.path().join("assets");
+        std::fs::create_dir_all(&assets).expect("assets");
+        let door = |x: f32| {
+            format!(
+                "#Door\n\
+                 jackdaw::prefab::components::Prefab\n\
+                 jackdaw::prefab::components::PrefabEntityId(0)\n\
+                 jackdaw_scene_types::node_id::SceneNodeId({NODE})\n\
+                 bevy_transform::components::transform::Transform {{\n    \
+                 translation: glam::Vec3 {{ x: {x:?}, y: 0.0, z: 0.0 }},\n}}\n"
+            )
+        };
+        std::fs::write(assets.join("door.bsn"), door(1.0)).expect("a prefab");
+        std::fs::write(assets.join("scene.bsn"), scene_text(2.0)).expect("a scene");
+        let (mut editor, game) = LoopbackTransport::pair();
+        let mut app = base_app(&assets);
+        install_link(&mut app, Box::new(game));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+
+        send(
+            &mut editor,
+            &ControlEvent::PrefabFiles {
+                files: vec![("door.bsn".to_string(), Some(door(9.0)))],
+            },
+        );
+        let play = project.path().join(".jackdaw/play");
+        send(
+            &mut editor,
+            &ControlEvent::SceneDocument {
+                request,
+                answer: SceneAnswer::Document {
+                    text: format!(
+                        "#Placed\n{} {{ source: \"door.bsn\", deleted: [] }}\n\
+                         jackdaw::prefab::components::PrefabEntityId(0)\n",
+                        jackdaw_prefab::ISA_TYPE
+                    ),
+                    dir: String::new(),
+                    stem: "scene".to_string(),
+                    sidecars: Some(play.to_string_lossy().into_owned()),
+                },
+            },
+        );
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![9.0], "the unsaved prefab");
+
+        #[cfg(any(feature = "terrain", feature = "tilemap"))]
+        {
+            std::fs::create_dir_all(&play).expect("the folder");
+            std::fs::write(play.join("map.jdtiles"), b"cells").expect("a copy");
+            assert_eq!(
+                crate::play_overlay::overlaid_sidecar_dir(
+                    app.world(),
+                    &assets,
+                    &assets,
+                    "map.jdtiles"
+                ),
+                Some(jackdaw_prefab::normalize_path(&play)),
+                "the folder the answer named"
+            );
+        }
     }
 }

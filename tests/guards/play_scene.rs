@@ -74,7 +74,9 @@ fn move_to(app: &mut App, entity: Entity, x: f64) {
 
 fn document(answer: SceneAnswer) -> (String, String, String) {
     match answer {
-        SceneAnswer::Document { text, dir, stem } => (text, dir, stem),
+        SceneAnswer::Document {
+            text, dir, stem, ..
+        } => (text, dir, stem),
         SceneAnswer::UseFile { path } => panic!("expected a document, got the file {path}"),
     }
 }
