@@ -3,7 +3,12 @@ use std::collections::HashMap;
 
 use bevy::{
     asset::{ReflectHandle, UntypedHandle},
-    ecs::{archetype::{Archetype, ArchetypeId}, component::ComponentId, reflect::ReflectComponent, world::EntityRef},
+    ecs::{
+        archetype::{Archetype, ArchetypeId},
+        component::ComponentId,
+        reflect::ReflectComponent,
+        world::EntityRef,
+    },
     prelude::*,
     reflect::{
         TypeRegistration, TypeRegistry,
@@ -251,26 +256,6 @@ pub fn build_snapshot(
         })
         .collect()
 }
-
-// TEMP_TIMING start
-pub fn temp_should_skip(path: &str) -> bool { should_skip(path) }
-pub fn temp_legacy_snapshot(world: &World, registry: &TypeRegistry, entities: &[Entity]) -> Vec<RemoteEntity> {
-    let processor = RemoteSerializerProcessor;
-    entities.iter().map(|&entity| {
-        let entity_ref = world.entity(entity);
-        let mut components = HashMap::new();
-        for registration in registry.iter() {
-            let type_path = registration.type_info().type_path_table().path();
-            if should_skip(type_path) { continue; }
-            let Some(reflect_component) = registration.data::<ReflectComponent>() else { continue; };
-            let Some(component) = reflect_component.reflect(entity_ref) else { continue; };
-            let serializer = TypedReflectSerializer::with_processor(component, registry, &processor);
-            if let Ok(value) = serde_json::to_value(&serializer) { components.insert(type_path.to_string(), value); }
-        }
-        RemoteEntity { entity: entity.to_bits(), components, scene_node_id: None }
-    }).collect()
-}
-// TEMP_TIMING end
 
 #[cfg(test)]
 mod tests {

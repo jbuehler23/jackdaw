@@ -291,8 +291,13 @@ const IDLE_STOPPED: &str = "Press Play to run the game here";
 const IDLE_BUILDING: &str = "Building the game...";
 const IDLE_WINDOWED: &str = "Running in its own window";
 const IDLE_LOADING: &str = "Loading the game...";
+const IDLE_STARTING: &str = "Starting the game...";
 const IDLE_OWN_WINDOW: &str = "This game opened its own window. To show it here, pass DefaultPlugins \
      through jackdaw_runtime::maybe_windowless in its main.rs.";
+
+/// How long a launched game may stay unconnected before the panel says why it
+/// might never connect. It is stopped soon after, at the session's own timeout.
+const SLOW_CONNECT: Duration = Duration::from_secs(10);
 
 /// How long a game may take to its first frame before the panel remarks on it.
 const SLOW_FIRST_FRAME: Duration = Duration::from_secs(60);
@@ -304,7 +309,10 @@ enum GameWait {
     Building,
     Windowed,
     OwnWindow,
-    /// Running and not yet showing a frame, for this long.
+    /// Launched and not yet connected, for this long. A game connects when
+    /// `JackdawPlugin` builds, so one without it never does.
+    Connecting(Duration),
+    /// Connected and not yet showing a frame, for this long.
     Loading(Duration),
 }
 
@@ -314,6 +322,12 @@ fn idle_message(wait: GameWait) -> String {
         GameWait::Building => IDLE_BUILDING.to_string(),
         GameWait::Windowed => IDLE_WINDOWED.to_string(),
         GameWait::OwnWindow => IDLE_OWN_WINDOW.to_string(),
+        GameWait::Connecting(waited) if waited >= SLOW_CONNECT => {
+            "The game has not connected to the editor yet. It connects when its app adds \
+             JackdawPlugin, and is stopped if it does not."
+                .to_string()
+        }
+        GameWait::Connecting(_) => IDLE_STARTING.to_string(),
         GameWait::Loading(waited) if waited >= SLOW_FIRST_FRAME => format!(
             "Still loading the game ({} s). A large scene takes a while.",
             waited.as_secs()
@@ -344,7 +358,10 @@ fn update_game_panel_idle_label(
             commands.queue(move |world: &mut World| {
                 crate::status_bar::notify_info(
                     world,
-                    format!("The game took {} s to show its first frame", waited.as_secs()),
+                    format!(
+                        "The game took {} s to show its first frame",
+                        waited.as_secs()
+                    ),
                 );
             });
         }
@@ -360,8 +377,14 @@ fn update_game_panel_idle_label(
         } else {
             GameWait::Loading(loading_since.map_or(Duration::ZERO, |since| since.elapsed()))
         }
-    } else if session.is_some_and(|session| session.is_launching()) {
-        GameWait::Building
+    } else if let Some(session) = session {
+        if session.is_launching() {
+            GameWait::Building
+        } else if let Some(waited) = session.connecting_for() {
+            GameWait::Connecting(waited)
+        } else {
+            GameWait::Stopped
+        }
     } else {
         GameWait::Stopped
     };
@@ -566,6 +589,13 @@ mod tests {
         assert!(!long.contains("maybe_windowless"));
 
         assert!(idle_message(GameWait::OwnWindow).contains("maybe_windowless"));
+        assert_eq!(
+            idle_message(GameWait::Connecting(Duration::from_secs(1))),
+            IDLE_STARTING
+        );
+        let unconnected = idle_message(GameWait::Connecting(SLOW_CONNECT));
+        assert!(unconnected.contains("JackdawPlugin"), "{unconnected}");
+        assert!(!unconnected.contains("oading"), "{unconnected}");
         assert_eq!(idle_message(GameWait::Stopped), IDLE_STOPPED);
         assert_eq!(idle_message(GameWait::Building), IDLE_BUILDING);
         assert_eq!(idle_message(GameWait::Windowed), IDLE_WINDOWED);

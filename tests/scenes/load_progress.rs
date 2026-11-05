@@ -398,10 +398,18 @@ fn a_lod_group_whose_models_are_all_missing_does_not_hold_the_load_up() {
 
     open(&mut app, &scene);
     settle_load(&mut app);
+    util::update_until(
+        &mut app,
+        "the missing models to fail",
+        std::time::Duration::from_secs(30),
+        |app| {
+            let progress = app.world().resource::<jackdaw_runtime::LiveLevelProgress>();
+            progress.is_drawn() && progress.is_refined()
+        },
+    );
 
     let progress = *app.world().resource::<jackdaw_runtime::LiveLevelProgress>();
     assert_eq!(progress.groups, 1);
-    assert!(progress.is_drawn() && progress.is_refined(), "{progress:?}");
 }
 
 /// An editor with a viewport camera, so LOD groups want levels.

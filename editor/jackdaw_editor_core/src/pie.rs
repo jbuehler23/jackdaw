@@ -209,6 +209,17 @@ impl PieSession {
         )
     }
 
+    /// How long the longest-waiting launched instance has gone without connecting.
+    pub(crate) fn connecting_for(&self) -> Option<Duration> {
+        self.children
+            .values()
+            .filter_map(|stage| match stage {
+                ChildStage::Connecting { since, .. } => Some(since.elapsed()),
+                ChildStage::Live { .. } => None,
+            })
+            .max()
+    }
+
     /// Whether any instance can take document edits now: `Live` while at
     /// least one is connected (others may still be launching), `Launching`
     /// while instances build or connect and none is connected yet, `None`
@@ -365,7 +376,7 @@ fn cleanup_session_on_stop(world: &mut World) {
 /// revert when play stops.
 pub(crate) fn enter_live_view(world: &mut World) {
     *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
-    crate::pie_projection::reproject_focused(world);
+    crate::pie_projection::reproject_view(world);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -2450,6 +2461,19 @@ mod enter_live_tests {
         enter_live_view(&mut world);
 
         assert_eq!(*world.resource::<PieViewMode>(), PieViewMode::Live);
+    }
+
+    #[test]
+    fn enter_live_view_keeps_an_owed_respawn() {
+        let mut world = World::new();
+        world.insert_resource(PieViewMode::Scene);
+        world.init_resource::<PieInstances>();
+        world.init_resource::<PieProjection>();
+        world.resource_mut::<PieProjection>().needs_respawn = true;
+
+        enter_live_view(&mut world);
+
+        assert!(world.resource::<PieProjection>().needs_respawn);
     }
 
     #[test]

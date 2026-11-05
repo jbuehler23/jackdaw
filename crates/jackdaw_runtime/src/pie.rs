@@ -58,8 +58,9 @@ pub(crate) struct PieTransportRes(pub(crate) Box<dyn PieTransport>);
 struct HighlightedEntity(Option<Entity>);
 
 /// How long one frame may spend serializing world state for the editor. Work
-/// past this waits for the next frame, so entity count never sets the game's
-/// frame time; at least one item goes out each frame so the stream always moves.
+/// past this waits for the next frame; at least one item goes out each frame
+/// unless the link is congested, when none does. The scan that finds the work is outside this: it
+/// walks every streamed entity each frame, so it still grows with entity count.
 const STREAM_BUDGET: Duration = Duration::from_millis(4);
 
 /// What the editor has been sent, and what it still has to be sent.
@@ -76,6 +77,8 @@ struct PieStreamState {
     dirty: VecDeque<(Entity, ComponentId)>,
     /// `dirty` as a set, so a component changing every frame holds one place.
     dirty_set: HashSet<(Entity, ComponentId)>,
+    /// Whose turn it is when spawns and changes both wait.
+    spawn_next: bool,
     /// The tick of the last scan; changes newer than this are not yet queued.
     last_scan: Option<Tick>,
     /// What each archetype streams, resolved once.
@@ -90,7 +93,12 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
     app.insert_resource(crate::pie_frames::spawn_frame_sender_thread(
         transport.lane_sender(jackdaw_pie_protocol::PieChannel::Frames),
     ));
-    install_link(app, Box::new(transport));
+    let link: Box<dyn PieTransport> =
+        match jackdaw_pie_protocol::QueuedSendTransport::new(transport) {
+            Ok(queued) => Box::new(queued),
+            Err(direct) => Box::new(direct),
+        };
+    install_link(app, link);
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
@@ -114,6 +122,9 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
 /// in `PreUpdate` whatever the virtual clock says, so edits from the editor
 /// land while the game is paused.
 pub(crate) fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
+    if let Some(switch) = app.world().get_resource::<crate::LeaveParseToSpawn>() {
+        switch.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     app.insert_non_send(PieTransportRes(transport));
     app.init_resource::<PieStreamState>();
     app.init_resource::<crate::served_scene::SceneRequests>();
@@ -150,12 +161,14 @@ fn streamed_entities(world: &mut World) -> Vec<Entity> {
 /// A scan finds what the editor is behind on from entity membership and
 /// component change ticks, reading no component values, so an idle frame costs a
 /// walk of the streamed entities. Queued work then goes out until
-/// [`STREAM_BUDGET`] is spent:
+/// [`STREAM_BUDGET`] is spent, taking turns between changes and spawns:
 ///   - A component whose tick moved emits `ComponentChanged`, unless its value
 ///     serializes the same as the one last sent.
 ///   - An entity not yet sent emits `EntitySpawned` with all its components.
 ///
 /// An entity gone from the streamed set emits `EntityDespawned` straight away.
+/// While the link reads congested no queued work goes out. It stays queued, each
+/// component in one place, so what the game holds back is bounded by its world.
 fn stream_state(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;
@@ -168,12 +181,18 @@ fn stream_state(world: &mut World) {
     let mut state = std::mem::take(&mut *world.resource_mut::<PieStreamState>());
     let mut frames: Vec<Vec<u8>> = Vec::new();
 
-    let t0_scan = Instant::now(); // TEMP_TIMING
-    scan_stream(world, &registry, &entities, this_scan, &mut state, &mut frames);
-    let t_scan = t0_scan.elapsed(); // TEMP_TIMING
+    scan_stream(
+        world,
+        &registry,
+        &entities,
+        this_scan,
+        &mut state,
+        &mut frames,
+    );
     let began = Instant::now();
     let mut sent_one = false;
-    while !sent_one || began.elapsed() < STREAM_BUDGET {
+    let congested = world.non_send::<PieTransportRes>().0.congested();
+    while !congested && (!sent_one || began.elapsed() < STREAM_BUDGET) {
         if !send_next(world, &registry, &mut state, &mut frames) {
             break;
         }
@@ -182,55 +201,12 @@ fn stream_state(world: &mut World) {
 
     state.last_scan = Some(this_scan);
     world.increment_change_tick();
-    let t_sent = began.elapsed(); // TEMP_TIMING
-    let pending = state.unsent.len() + state.dirty.len(); // TEMP_TIMING
-    let sent_map = state.sent.len(); // TEMP_TIMING
     *world.resource_mut::<PieStreamState>() = state;
     let transport = &mut world.non_send_mut::<PieTransportRes>().0;
     for bytes in &frames {
         transport.send(PieChannel::Reliable, bytes);
     }
-    temp_timing(world, &registry, &entities, t_scan, t_sent, pending, sent_map, frames.len()); // TEMP_TIMING
 }
-
-// TEMP_TIMING start
-#[allow(clippy::too_many_arguments)]
-fn temp_timing(world: &mut World, registry: &TypeRegistry, entities: &[Entity], t_scan: Duration, t_sent: Duration, pending: usize, sent_map: usize, frames: usize) {
-    use std::sync::Mutex;
-    static LAST: Mutex<Option<(Instant, Instant, u32)>> = Mutex::new(None);
-    let now = Instant::now();
-    let mut guard = LAST.lock().unwrap();
-    let (mut last_frame, mut last_log, mut count) = guard.unwrap_or((now, now, 0));
-    let dt = now - last_frame;
-    last_frame = now;
-    count += 1;
-    if entities.len() > 100 && now - last_log > Duration::from_secs(5) {
-        let t0 = Instant::now();
-        let mut lookups = 0usize;
-        for registration in registry.iter() {
-            let path = registration.type_info().type_path_table().path();
-            let _ = jackdaw_pie_protocol::snapshot::temp_should_skip(path);
-            lookups += 1;
-        }
-        let one_pass = t0.elapsed();
-        let t1 = Instant::now();
-        let snap = jackdaw_pie_protocol::build_snapshot(world, registry, entities);
-        let new_full = t1.elapsed();
-        let t2 = Instant::now();
-        let legacy = jackdaw_pie_protocol::snapshot::temp_legacy_snapshot(world, registry, entities);
-        let old_snapshot = t2.elapsed();
-        let t3 = Instant::now();
-        let mut total = 0usize;
-        for r in &legacy { total += serde_json::to_vec(r).map_or(0, |b| b.len()); }
-        let encode = t3.elapsed();
-        info!("TEMP_TIMING frame_dt={dt:?} frames_since={count} entities={} sent={sent_map} pending={pending} out={frames} scan={t_scan:?} send={t_sent:?} | old_full_snapshot={old_snapshot:?} (registry walk one entity={one_pass:?}, {lookups} types) columns_full_snapshot={new_full:?} json_bytes={total} encode={encode:?} snap={}", entities.len(), snap.len());
-        last_log = Instant::now();
-        last_frame = last_log;
-        count = 0;
-    }
-    *guard = Some((last_frame, last_log, count));
-}
-// TEMP_TIMING end
 
 /// Queue what changed since the last scan and report what went away.
 fn scan_stream(
@@ -288,22 +264,26 @@ fn columns_of(
     }))
 }
 
-/// Encode one queued item, changes ahead of spawns so an edit in a running game
-/// is not held behind the rest of a large scene. False when nothing was queued.
+/// Encode one queued item, changes and spawns in turn, so an edit in a running
+/// game is not held behind the rest of a large scene and a world that changes more
+/// than the budget covers still gets its spawns out. False when nothing was queued.
 fn send_next(
     world: &World,
     registry: &TypeRegistry,
     state: &mut PieStreamState,
     frames: &mut Vec<Vec<u8>>,
 ) -> bool {
-    if let Some((entity, id)) = state.dirty.pop_front() {
+    let spawn_turn = state.spawn_next && !state.unsent.is_empty();
+    if !spawn_turn && let Some((entity, id)) = state.dirty.pop_front() {
         state.dirty_set.remove(&(entity, id));
+        state.spawn_next = true;
         send_change(world, registry, state, entity, id, frames);
         return true;
     }
     let Some(entity) = state.unsent.pop_front() else {
         return false;
     };
+    state.spawn_next = false;
     state.queued.remove(&entity);
     send_spawn(world, registry, state, entity, frames);
     true
@@ -1187,8 +1167,10 @@ mod tests {
         app.register_type::<Transform>();
         install_link(&mut app, Box::new(game));
         for index in 0..count {
-            app.world_mut()
-                .spawn((Name::new(format!("{index}{}", "x".repeat(4096))), Transform::default()));
+            app.world_mut().spawn((
+                Name::new(format!("{index}{}", "x".repeat(4096))),
+                Transform::default(),
+            ));
         }
         (app, editor)
     }
@@ -1222,6 +1204,115 @@ mod tests {
         assert_eq!(total, COUNT);
     }
 
+    /// A transport the test can report as congested.
+    struct CongestedTransport {
+        inner: jackdaw_pie_protocol::LoopbackTransport,
+        congested: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    impl PieTransport for CongestedTransport {
+        fn send(&mut self, channel: PieChannel, bytes: &[u8]) {
+            self.inner.send(channel, bytes);
+        }
+        fn drain_received(&mut self) -> Vec<(PieChannel, Vec<u8>)> {
+            self.inner.drain_received()
+        }
+        fn congested(&self) -> bool {
+            self.congested.get()
+        }
+    }
+
+    /// An editor that stopped reading holds up what can wait, not what cannot, and
+    /// the stream picks up where it left off, each changing component once.
+    #[test]
+    fn a_congested_link_pauses_the_stream_but_not_a_despawn() {
+        let (mut editor, game) = jackdaw_pie_protocol::LoopbackTransport::pair();
+        let congested = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.register_type::<Transform>();
+        install_link(
+            &mut app,
+            Box::new(CongestedTransport {
+                inner: game,
+                congested: congested.clone(),
+            }),
+        );
+        let moved = app.world_mut().spawn(Transform::default()).id();
+        let doomed = app.world_mut().spawn(Transform::default()).id();
+        app.update();
+        app.update();
+        assert_eq!(state_events(&mut editor).len(), 2, "both spawned");
+
+        congested.set(true);
+        let late = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().despawn(doomed);
+        for x in 0..10 {
+            app.world_mut()
+                .get_mut::<Transform>(moved)
+                .expect("it")
+                .translation
+                .x = x as f32;
+            app.update();
+        }
+        let held = state_events(&mut editor);
+        assert!(
+            matches!(held.as_slice(), [StateEvent::EntityDespawned { .. }]),
+            "{held:?}"
+        );
+
+        congested.set(false);
+        app.update();
+        app.update();
+        let resumed = state_events(&mut editor);
+        let changes = resumed
+            .iter()
+            .filter(|event| matches!(event, StateEvent::ComponentChanged { .. }))
+            .count();
+        assert_eq!(changes, 1, "{resumed:?}");
+        assert!(resumed.iter().any(|event| matches!(
+            event,
+            StateEvent::EntitySpawned { entity } if entity.entity == late.to_bits()
+        )));
+    }
+
+    /// More changes each frame than the budget covers never drain, and spawns
+    /// still reach the editor.
+    #[test]
+    fn sustained_changes_do_not_starve_a_spawn() {
+        const CHANGING: usize = 4000;
+        const LATE: usize = 20;
+        let (mut app, mut editor) = streaming_app(CHANGING);
+        for _ in 0..100_000 {
+            app.update();
+            let spawned = state_events(&mut editor).len();
+            if spawned == 0 {
+                break;
+            }
+        }
+        for index in 0..LATE {
+            app.world_mut()
+                .spawn((Name::new(format!("late {index}")), Transform::default()));
+        }
+
+        let mut late_spawns = 0;
+        for frame in 0..200 {
+            let mut transforms = app.world_mut().query::<&mut Transform>();
+            for mut transform in transforms.iter_mut(app.world_mut()) {
+                transform.translation.x = frame as f32 + 1.0;
+            }
+            app.update();
+            late_spawns += state_events(&mut editor)
+                .iter()
+                .filter(|event| matches!(event, StateEvent::EntitySpawned { .. }))
+                .count();
+            if late_spawns == LATE {
+                return;
+            }
+        }
+        panic!("{late_spawns} of {LATE} spawns went out");
+    }
+
     /// Once the editor is caught up, a frame sends only what changed: nothing at
     /// all when idle, and the one component that moved otherwise.
     #[test]
@@ -1238,7 +1329,10 @@ mod tests {
         assert_eq!(spawns.len(), 3, "{spawns:?}");
 
         app.update();
-        assert!(state_events(&mut editor).is_empty(), "an idle frame is silent");
+        assert!(
+            state_events(&mut editor).is_empty(),
+            "an idle frame is silent"
+        );
 
         app.world_mut()
             .get_mut::<Transform>(entity)
@@ -1259,7 +1353,9 @@ mod tests {
             .get_mut::<Transform>(entity)
             .expect("a transform")
             .set_if_neq(same);
-        *app.world_mut().get_mut::<Transform>(entity).expect("a transform") = same;
+        *app.world_mut()
+            .get_mut::<Transform>(entity)
+            .expect("a transform") = same;
         app.update();
         assert!(
             state_events(&mut editor).is_empty(),
@@ -1271,7 +1367,9 @@ mod tests {
         let events = state_events(&mut editor);
         assert_eq!(
             events,
-            vec![StateEvent::EntityDespawned { entity: entity.to_bits() }]
+            vec![StateEvent::EntityDespawned {
+                entity: entity.to_bits()
+            }]
         );
     }
 

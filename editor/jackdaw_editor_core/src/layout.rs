@@ -1173,12 +1173,10 @@ fn pie_view_toggle(icon_font: Handle<Font>) -> impl Bundle {
                     if current == new_mode {
                         return;
                     }
-                    // Both directions despawn and replace the previewed
-                    // entities (revert respawns authored entities with new
-                    // ids; reproject despawns the ephemerals), so any
-                    // selected entity becomes invalid across the toggle.
-                    // Clear selection before teardown so we are not holding
-                    // ids that are about to be despawned.
+                    // Going to Live despawns the ephemeral entities, and going
+                    // to Scene does the same and may respawn the authored ones
+                    // under new ids, so a selected entity can be invalid across
+                    // the toggle. Clear the selection before teardown.
                     crate::selection::clear_selection_in_world(world);
                     match new_mode {
                         PieViewMode::Live => {

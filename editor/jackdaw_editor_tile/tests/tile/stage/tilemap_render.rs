@@ -447,6 +447,9 @@ fn chunks_are_drawn_again_after_a_tab_swap_and_play_stop() {
     assert_ne!(swapped, map, "the map respawns from the document");
     assert_eq!(drawn(&mut app, swapped), before);
 
+    app.world_mut()
+        .resource_mut::<jackdaw_editor_core::pie_projection::PieProjection>()
+        .needs_respawn = true;
     jackdaw_editor_core::pie_projection::revert_preview(app.world_mut());
     settle(&mut app);
     let stopped = the_map(&mut app);

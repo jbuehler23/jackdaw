@@ -302,11 +302,15 @@ impl Plugin for JackdawPlugin {
                 .after(jackdaw_bind::BindEvaluationSystems),
         );
 
+        let scene_loader = JackdawSceneLoader::default();
+        #[cfg(feature = "pie")]
+        app.insert_resource(LeaveParseToSpawn(scene_loader.leave_parse_to_spawn.clone()));
         app.init_asset::<JackdawScene>()
-            .init_asset_loader::<JackdawSceneLoader>()
+            .register_asset_loader(scene_loader)
             .init_resource::<JackdawCatalog>();
 
         app.add_systems(Startup, load_asset_files);
+        app.add_systems(Update, drop_unspawned_documents);
         app.add_systems(
             Update,
             (
@@ -425,6 +429,14 @@ pub struct JackdawCatalogPath(pub PathBuf);
 #[derive(Asset, TypePath)]
 pub struct JackdawScene {
     bsn: String,
+    /// The document the loader parsed from `bsn`, which the first spawn takes
+    /// instead of parsing again. A further spawn parses `bsn`. Asset trait bounds
+    /// need `Sync` and only the main thread touches this, so the lock is never
+    /// contended. Dropped unused after [`PARSED_SCENE_KEPT_FOR`]: a large document
+    /// costs far more than its text, and a preloaded scene may never spawn.
+    parsed: std::sync::Mutex<Option<jackdaw_bsn::SceneBsnAst>>,
+    /// When the loader parsed `parsed`.
+    parsed_at: std::time::Instant,
     parent_path: PathBuf,
     /// Source file stem (`starter` from `zones/starter.bsn`), captured at
     /// load time. Used to give the spawned scene root a readable `Name` so
@@ -434,15 +446,26 @@ pub struct JackdawScene {
 }
 
 impl JackdawScene {
+    /// The document the loader parsed, for the first spawn to use.
+    fn take_parsed(&self) -> Option<jackdaw_bsn::SceneBsnAst> {
+        self.parsed.lock().ok()?.take()
+    }
+
+    /// Drop a parsed document no spawn took in time. A spawn after this parses
+    /// `bsn`.
+    fn drop_parsed_older_than(&self, age: std::time::Duration) {
+        if self.parsed_at.elapsed() >= age
+            && let Ok(mut parsed) = self.parsed.lock()
+        {
+            *parsed = None;
+        }
+    }
+
     /// Build a scene asset directly from in-memory `.bsn` text.
     /// Used by integration tests that drive scene-load codepaths
     /// without a real `.bsn` file on disk.
     pub fn new(bsn: String, parent_path: PathBuf) -> Self {
-        Self {
-            bsn,
-            parent_path,
-            stem: None,
-        }
+        Self::with_stem(bsn, parent_path, None)
     }
 
     /// Like [`JackdawScene::new`] but with an explicit source file stem, so
@@ -450,6 +473,8 @@ impl JackdawScene {
     pub fn with_stem(bsn: String, parent_path: PathBuf, stem: Option<String>) -> Self {
         Self {
             bsn,
+            parsed: std::sync::Mutex::new(None),
+            parsed_at: std::time::Instant::now(),
             parent_path,
             stem,
         }
@@ -506,8 +531,36 @@ pub struct ServedScene;
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SceneRefused;
 
+/// How long a parsed document waits for a spawn to take it.
+const PARSED_SCENE_KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Drop the parsed documents of loaded scenes nothing has spawned.
+fn drop_unspawned_documents(
+    scenes: Res<Assets<JackdawScene>>,
+    mut next_check: Local<Option<std::time::Instant>>,
+) {
+    let now = std::time::Instant::now();
+    if next_check.is_some_and(|next| now < next) {
+        return;
+    }
+    *next_check = Some(now + std::time::Duration::from_secs(5));
+    for (_, scene) in scenes.iter() {
+        scene.drop_parsed_older_than(PARSED_SCENE_KEPT_FOR);
+    }
+}
+
 #[derive(TypePath, Default)]
-struct JackdawSceneLoader;
+struct JackdawSceneLoader {
+    /// Set when a link to the editor comes up. A game under Play spawns the
+    /// editor's document rather than this file, so the parse is left to a spawn,
+    /// which only happens if the editor sends the game to the file.
+    leave_parse_to_spawn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The switch that makes [`JackdawSceneLoader`] leave its parse to the spawn.
+#[cfg(feature = "pie")]
+#[derive(Resource)]
+pub(crate) struct LeaveParseToSpawn(pub(crate) std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl AssetLoader for JackdawSceneLoader {
     type Asset = JackdawScene;
@@ -529,16 +582,21 @@ impl AssetLoader for JackdawSceneLoader {
         let text = jackdaw_bsn::document_text_from_bytes(&bytes, load_context.path().path())
             .map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
 
-        // Parse once at load so a malformed scene fails here with a clear
-        // error rather than silently spawning nothing later. The document is
-        // rebuilt from `bsn` on spawn (it owns a `World` and cannot be stored
-        // in the asset).
-        let ast = parse_bsn_text(&text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
-
-        // A document naming a component the engine does not have would load as
-        // a scene missing part of itself, so the load fails here by name.
-        jackdaw_bsn::reject_retired_ui_components(&ast)
-            .map_err(|e| JackdawLoadError::RetiredComponents(e.to_string()))?;
+        // Parse here, off the main thread, so a malformed scene fails with a clear
+        // error and the spawn can take the result.
+        let parsed = if self
+            .leave_parse_to_spawn
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            None
+        } else {
+            let ast = parse_bsn_text(&text).map_err(|e| JackdawLoadError::Parse(e.to_string()))?;
+            // A document naming a component the engine does not have would load as
+            // a scene missing part of itself, so the load fails here by name.
+            jackdaw_bsn::reject_retired_ui_components(&ast)
+                .map_err(|e| JackdawLoadError::RetiredComponents(e.to_string()))?;
+            Some(ast)
+        };
 
         let source_path = load_context.path().path();
         let parent_path = source_path.parent().unwrap_or(Path::new("")).to_owned();
@@ -548,6 +606,8 @@ impl AssetLoader for JackdawSceneLoader {
 
         Ok(JackdawScene {
             bsn: text,
+            parsed: std::sync::Mutex::new(parsed),
+            parsed_at: std::time::Instant::now(),
             parent_path,
             stem,
         })
@@ -661,6 +721,18 @@ pub(crate) fn spawn_loaded_scenes(
             }
         }
 
+        let parsed = world
+            .resource::<Assets<JackdawScene>>()
+            .get(&handle)
+            .and_then(JackdawScene::take_parsed);
+        if let Some(ast) = parsed {
+            let scenes = world.resource::<Assets<JackdawScene>>();
+            let (parent_path, stem) = scenes.get(&handle).map_or_else(Default::default, |scene| {
+                (scene.parent_path.clone(), scene.stem.clone())
+            });
+            spawn_scene_document(world, root_entity, ast, &parent_path, stem);
+            continue;
+        }
         let loaded = {
             let scenes = world.resource::<Assets<JackdawScene>>();
             scenes.get(&handle).map(|scene| {
@@ -711,7 +783,7 @@ fn spawn_scene_text(
     parent_path: &Path,
     stem: Option<String>,
 ) {
-    let mut ast = match parse_bsn_text(bsn) {
+    let ast = match parse_bsn_text(bsn) {
         Ok(ast) => ast,
         Err(err) => {
             warn!("Failed to parse scene .bsn: {err}");
@@ -721,7 +793,18 @@ fn spawn_scene_text(
             return;
         }
     };
+    spawn_scene_document(world, root_entity, ast, parent_path, stem);
+}
 
+/// Spawn a parsed document under `root_entity`. A document that cannot spawn
+/// leaves the root marked [`SceneRefused`].
+fn spawn_scene_document(
+    world: &mut World,
+    root_entity: Entity,
+    mut ast: SceneBsnAst,
+    parent_path: &Path,
+    stem: Option<String>,
+) {
     // A served document's assets loaded when its answer arrived, and the handles
     // made then are the ones later definitions write into.
     if world.get::<ServedScene>(root_entity).is_some() {
@@ -1866,6 +1949,36 @@ fn asset_registration(world: &World, type_path: &str) -> Option<bool> {
         .map(|registration| registration.data::<ReflectAsset>().is_some())
 }
 
+/// Whether this app loads `type_path` as an asset, noting a type it does not for
+/// the walk's report. A registered non-asset is only worth noting when the file's
+/// header claimed it held an asset.
+fn loads_as_asset(
+    world: &World,
+    type_path: &str,
+    has_header: bool,
+    skipped: &mut SkippedTypes,
+) -> bool {
+    match asset_registration(world, type_path) {
+        None => {
+            *skipped
+                .unregistered
+                .entry(type_path.to_string())
+                .or_default() += 1;
+            false
+        }
+        Some(false) => {
+            if has_header {
+                *skipped
+                    .unreflected
+                    .entry(type_path.to_string())
+                    .or_default() += 1;
+            }
+            false
+        }
+        Some(true) => true,
+    }
+}
+
 /// Load the asset the file at `path` holds, or nothing when it holds a scene,
 /// a prefab, or a type this app has not registered as an asset.
 ///
@@ -1902,6 +2015,18 @@ fn load_asset_file(
             Some(true) => {}
         }
     }
+    // Most of the parse a large scene would cost is avoided here: a file whose
+    // first root can only be a scene, or a type this app does not load, is done.
+    match jackdaw_bsn::read_document_opening(&text) {
+        jackdaw_bsn::DocumentOpening::Hierarchy => return None,
+        jackdaw_bsn::DocumentOpening::Value(type_path)
+            if !text.contains(jackdaw_bsn::PREFAB_TYPE)
+                && !loads_as_asset(world, &type_path, header.is_some(), skipped) =>
+        {
+            return None;
+        }
+        _ => {}
+    }
     let ast = match parse_bsn_text(&text) {
         Ok(ast) => ast,
         Err(err) => {
@@ -1919,18 +2044,8 @@ fn load_asset_file(
     }
     let type_path = jackdaw_bsn::root_type_path(&ast, root).or(header.clone())?;
 
-    match asset_registration(world, &type_path) {
-        None => {
-            *skipped.unregistered.entry(type_path).or_default() += 1;
-            return None;
-        }
-        Some(false) => {
-            if header.is_some() {
-                *skipped.unreflected.entry(type_path).or_default() += 1;
-            }
-            return None;
-        }
-        Some(true) => {}
+    if !loads_as_asset(world, &type_path, header.is_some(), skipped) {
+        return None;
     }
     if ast.roots.len() > 1 {
         warn!(
@@ -2195,6 +2310,91 @@ mod asset_file_tests {
 
         assert!(app.world().resource::<JackdawCatalog>().is_empty());
         assert!(app.world().resource::<Assets<Recipe>>().is_empty());
+    }
+
+    const HIERARCHY: &str = "#Root\nbevy_transform::components::transform::Transform\nbevy_ecs::hierarchy::Children [\n    bevy_transform::components::transform::Transform\n]\n";
+
+    /// The walk reads a scene file for nothing, so it must not cost a parse.
+    #[test]
+    fn the_walk_does_not_parse_a_scene_or_a_type_it_cannot_load() {
+        let mut app = runtime_app();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write(tmp.path(), "zones/starter.bsn", HIERARCHY);
+        write(
+            tmp.path(),
+            "lone.bsn",
+            "bevy_transform::components::transform::Transform\n",
+        );
+
+        let before = jackdaw_bsn::parses_on_this_thread();
+        load_walked_assets(app.world_mut(), tmp.path(), None);
+        assert_eq!(jackdaw_bsn::parses_on_this_thread(), before);
+        assert!(app.world().resource::<JackdawCatalog>().is_empty());
+    }
+
+    /// A scene nothing spawns does not keep its document for long, and can still
+    /// spawn from its text.
+    #[test]
+    fn a_parsed_document_nothing_spawns_is_dropped() {
+        let scene = JackdawScene {
+            bsn: HIERARCHY.to_string(),
+            parsed: std::sync::Mutex::new(Some(
+                jackdaw_bsn::parse_bsn_text(HIERARCHY).expect("it parses"),
+            )),
+            parsed_at: std::time::Instant::now(),
+            parent_path: PathBuf::new(),
+            stem: None,
+        };
+        scene.drop_parsed_older_than(PARSED_SCENE_KEPT_FOR);
+        assert!(scene.parsed.lock().expect("a lock").is_some(), "too soon");
+        scene.drop_parsed_older_than(std::time::Duration::ZERO);
+        assert!(scene.take_parsed().is_none());
+    }
+
+    /// The load parses and the first spawn takes the result, adding no parse; a
+    /// later spawn has only the text.
+    #[test]
+    fn a_scene_file_parses_once_from_load_to_spawn() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write(tmp.path(), "scene.bsn", HIERARCHY);
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            AssetPlugin {
+                file_path: tmp.path().to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            bevy::world_serialization::WorldSerializationPlugin,
+            JackdawPlugin,
+        ));
+        app.update();
+        let handle: Handle<JackdawScene> = app.world().resource::<AssetServer>().load("scene.bsn");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app
+            .world()
+            .resource::<Assets<JackdawScene>>()
+            .get(&handle)
+            .is_none()
+        {
+            assert!(std::time::Instant::now() < deadline, "never loaded");
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        let before = jackdaw_bsn::parses_on_this_thread();
+        let root = app.world_mut().spawn(JackdawSceneRoot(handle.clone())).id();
+        app.update();
+        assert!(app.world().get::<SceneSpawned>(root).is_some());
+        assert_eq!(jackdaw_bsn::parses_on_this_thread(), before);
+        let scenes = app.world().resource::<Assets<JackdawScene>>();
+        let scene = scenes.get(&handle).expect("the scene loaded");
+        assert!(scene.take_parsed().is_none(), "the spawn took the document");
+
+        let second = app.world_mut().spawn(JackdawSceneRoot(handle)).id();
+        app.update();
+        assert!(app.world().get::<SceneSpawned>(second).is_some());
+        assert_eq!(jackdaw_bsn::parses_on_this_thread(), before + 1);
     }
 
     #[test]

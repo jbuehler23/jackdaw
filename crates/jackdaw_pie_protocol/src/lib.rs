@@ -16,4 +16,4 @@ pub use snapshot::{
 };
 pub use transport::{LoopbackTransport, PieTransport};
 #[cfg(feature = "ipc")]
-pub use transport_ipc::{IpcChannelTransport, IpcLaneSender, connect, serve};
+pub use transport_ipc::{IpcChannelTransport, IpcLaneSender, QueuedSendTransport, connect, serve};

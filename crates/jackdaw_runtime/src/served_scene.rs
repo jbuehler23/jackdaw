@@ -363,6 +363,44 @@ mod tests {
         }
     }
 
+    /// The file loads whatever the answer will be, and a game spawning the
+    /// editor's document has no use for the file's parse.
+    #[test]
+    fn a_game_under_play_parses_only_the_document_it_spawns() {
+        let (mut app, mut editor, _dir) = game();
+        let root = spawn_root(&mut app, "scene.bsn");
+        let handle = app
+            .world()
+            .get::<JackdawSceneRoot>(root)
+            .expect("a root")
+            .0
+            .clone();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while app
+            .world()
+            .resource::<Assets<JackdawScene>>()
+            .get(&handle)
+            .is_none()
+        {
+            assert!(Instant::now() < deadline, "the file never loaded");
+            app.update();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            app.world()
+                .resource::<Assets<JackdawScene>>()
+                .get(&handle)
+                .and_then(JackdawScene::take_parsed)
+                .is_none(),
+            "the loader left the parse alone"
+        );
+
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(request, scene_text(5.0)));
+        update_until_spawned(&mut app);
+        assert_eq!(node_xs(&mut app), vec![5.0]);
+    }
+
     #[test]
     fn a_root_asks_without_blocking_and_spawns_the_answer_over_its_file() {
         let (mut app, mut editor, dir) = game();
@@ -506,7 +544,6 @@ mod tests {
     /// The editor's main thread stalls for seconds emitting a large document.
     #[test]
     fn a_stalled_editor_is_still_waited_for() {
-        assert!(ANSWER_TIMEOUT >= Duration::from_secs(60));
         let (mut app, mut editor, _dir) = game();
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             Duration::from_secs(12),

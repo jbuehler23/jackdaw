@@ -652,7 +652,9 @@ pub fn index_files_named(world: &mut World, text: &str) {
             continue;
         }
         let file = document_file(&assets, &relative);
-        let type_path = world.get_resource_or_init::<AssetKindCache>().type_of(&file);
+        let type_path = world
+            .get_resource_or_init::<AssetKindCache>()
+            .type_of(&file);
         let kinds = world.resource::<AssetKinds>();
         let Some(kind) = type_path.and_then(|type_path| claimed_kind(&type_path, kinds)) else {
             continue;
@@ -898,6 +900,8 @@ pub fn open_asset_index(world: &mut World) {
     // nothing about this one; dropping it also lets this project ask for one.
     world.remove_resource::<AssetWalkTask>();
     world.get_resource_or_init::<AssetScanPending>().0 = false;
+    // No walk of this project has landed, so `index_files_named` has work again.
+    world.get_resource_or_init::<AssetWalks>().0 = 0;
     watch_asset_files(world);
     start_asset_walk(world);
 }
@@ -1187,6 +1191,25 @@ mod tests {
             assets.join("materials/grass.bsn"),
             "and the text file is the one it is read from"
         );
+    }
+
+    /// `index_files_named` only works before a project's first walk lands, and a
+    /// walk of the project before says nothing about the one opening now.
+    #[test]
+    fn opening_a_project_forgets_the_walks_of_the_last_one() {
+        bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut world = World::new();
+        world.init_resource::<AssetIndex>();
+        world.insert_resource(AssetWalks(3));
+        world.insert_resource(ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: crate::project::ProjectConfig::default(),
+        });
+
+        open_asset_index(&mut world);
+
+        assert_eq!(world.resource::<AssetWalks>().0, 0);
     }
 
     #[test]
