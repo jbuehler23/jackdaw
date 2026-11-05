@@ -138,16 +138,21 @@ impl IpcLaneSender {
     /// Send one payload on this lane. A send failure (peer hung up) is
     /// logged once per call and otherwise dropped, matching the transport.
     pub fn send(&self, bytes: Vec<u8>) {
-        let frame = Frame {
-            channel: self.channel,
-            bytes,
-        };
-        if let Err(err) = self.tx.send(frame) {
+        if let Err(err) = self.try_send(bytes) {
             warn!(
                 "PIE ipc transport: dropping {:?} frame, send failed: {err}",
                 self.channel
             );
         }
+    }
+
+    /// Send one payload on this lane, leaving a failure to the caller.
+    pub fn try_send(&self, bytes: Vec<u8>) -> std::io::Result<()> {
+        let frame = Frame {
+            channel: self.channel,
+            bytes,
+        };
+        self.tx.send(frame).map_err(ipc_error_to_io)
     }
 }
 

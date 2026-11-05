@@ -638,6 +638,7 @@ impl ReflectSerializerProcessor for GameValueProcessor<'_> {
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
 
     use jackdaw_bsn::{BsnValue, component_to_bsn_patch, set_bsn_field};
     use jackdaw_pie_protocol::event::from_bytes;
@@ -733,18 +734,30 @@ mod tests {
             .x = x;
     }
 
-    /// The translations the game end received, in order.
-    fn received_x(game: &mut IpcChannelTransport) -> Vec<f64> {
-        game.drain_received()
-            .into_iter()
-            .filter_map(|(_, bytes)| match from_bytes(&bytes) {
-                Ok(ControlEvent::NodeComponents { node, set, .. }) if node == NODE => set
-                    .into_iter()
-                    .find(|(path, _)| path == TRANSFORM)
-                    .and_then(|(_, value)| value["translation"][0].as_f64()),
-                _ => None,
-            })
-            .collect()
+    /// The translations the game end received, in order. Sends leave on a
+    /// writer thread, so this queues a marker behind them and reads up to it,
+    /// which covers everything sent so far.
+    fn received_x(world: &mut World, game: &mut IpcChannelTransport) -> Vec<f64> {
+        crate::pie::broadcast_control(world, ControlEvent::Resume);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut translations = Vec::new();
+        while Instant::now() < deadline {
+            for (_, bytes) in game.drain_received() {
+                match from_bytes(&bytes) {
+                    Ok(ControlEvent::Resume) => return translations,
+                    Ok(ControlEvent::NodeComponents { node, set, .. }) if node == NODE => {
+                        translations.extend(
+                            set.into_iter()
+                                .find(|(path, _)| path == TRANSFORM)
+                                .and_then(|(_, value)| value["translation"][0].as_f64()),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::yield_now();
+        }
+        panic!("the marker did not arrive");
     }
 
     #[test]
@@ -780,10 +793,13 @@ mod tests {
         }
         move_to(&mut world, entity, 6.0);
         sync_document_to_game(&mut world);
-        assert_eq!(received_x(&mut game_end), vec![6.0]);
+        assert_eq!(received_x(&mut world, &mut game_end), vec![6.0]);
 
         sync_document_to_game(&mut world);
-        assert!(received_x(&mut game_end).is_empty(), "an edit goes once");
+        assert!(
+            received_x(&mut world, &mut game_end).is_empty(),
+            "an edit goes once"
+        );
     }
 
     #[test]
@@ -801,7 +817,7 @@ mod tests {
             .non_send_mut::<PieSession>()
             .insert_test_live(key(2), child(), editor_end);
         sync_document_to_game(&mut world);
-        assert_eq!(received_x(&mut game_end), vec![2.0]);
+        assert_eq!(received_x(&mut world, &mut game_end), vec![2.0]);
     }
 
     #[test]
@@ -816,11 +832,11 @@ mod tests {
         move_to(&mut world, entity, 8.0);
         absorb_document_changes(&mut world);
         sync_document_to_game(&mut world);
-        assert!(received_x(&mut game_end).is_empty());
+        assert!(received_x(&mut world, &mut game_end).is_empty());
 
         move_to(&mut world, entity, 1.0);
         sync_document_to_game(&mut world);
-        assert_eq!(received_x(&mut game_end), vec![1.0]);
+        assert_eq!(received_x(&mut world, &mut game_end), vec![1.0]);
     }
 
     #[test]
@@ -850,7 +866,7 @@ mod tests {
             .insert_test_live(key(2), child(), editor_end);
         sync_document_to_game(&mut world);
         assert!(
-            received_x(&mut game_end).is_empty(),
+            received_x(&mut world, &mut game_end).is_empty(),
             "the next launch starts from the document as it is then"
         );
     }

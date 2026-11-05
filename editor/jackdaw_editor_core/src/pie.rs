@@ -4,7 +4,8 @@
 //! executable as a child process, and drives it over an `ipc-channel`
 //! connection. Children stream `StateEvent`s back and respond to
 //! `ControlEvent`s (Pause / Resume / Stop). Stop reaps the children; the
-//! authored scene is never mutated.
+//! authored scene is never mutated. Messages to a child leave on its own
+//! writer thread (`GameOutbox`), so the main thread never waits on a game.
 //!
 //! Instances are keyed by [`InstanceKey`] (config label plus 1-based
 //! instance number). All run configurations of a project share one
@@ -31,6 +32,7 @@ use jackdaw_pie_protocol::{
 
 use crate::ext_build::BuildProgress;
 use crate::pie_mirror::{PieInstances, PieViewMode};
+use crate::pie_outbox::GameOutbox;
 use crate::project_build::BuildLoad;
 use crate::project_build::shim::ShimSpec;
 use crate::run_config::RunConfigs;
@@ -88,12 +90,31 @@ enum ChildStage {
         stderr_tail: StderrTail,
         since: Instant,
     },
-    /// The child is connected and running; its transport is held here.
+    /// The child is connected and running. Messages to it go through `outbox`;
+    /// `transport` receives from it.
     Live {
         child: Child,
         transport: IpcChannelTransport,
+        outbox: GameOutbox,
         stderr_tail: StderrTail,
     },
+}
+
+impl ChildStage {
+    /// Kill the child and wait for its process to end.
+    fn kill_and_reap(&mut self) {
+        match self {
+            ChildStage::Connecting { child, .. } => {
+                child.kill().ok();
+                child.wait().ok();
+            }
+            ChildStage::Live { child, outbox, .. } => {
+                outbox.mark_closing();
+                child.kill().ok();
+                child.wait().ok();
+            }
+        }
+    }
 }
 
 /// The product of a completed game build: the executable Play runs. The
@@ -146,12 +167,7 @@ impl Drop for PieSession {
     /// and Windows by the kernel as well.
     fn drop(&mut self) {
         for (_key, mut stage) in self.children.drain() {
-            match &mut stage {
-                ChildStage::Connecting { child, .. } | ChildStage::Live { child, .. } => {
-                    child.kill().ok();
-                    child.wait().ok();
-                }
-            }
+            stage.kill_and_reap();
         }
     }
 }
@@ -585,11 +601,13 @@ impl PieSession {
         child: Child,
         transport: IpcChannelTransport,
     ) {
+        let outbox = GameOutbox::new(&transport).expect("a writer thread");
         self.children.insert(
             key,
             ChildStage::Live {
                 child,
                 transport,
+                outbox,
                 stderr_tail: StderrTail::default(),
             },
         );
@@ -1058,19 +1076,10 @@ pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
     let Some(mut stage) = session.children.remove(key) else {
         return;
     };
-    match &mut stage {
-        ChildStage::Live {
-            child, transport, ..
-        } => {
-            send_control_to(transport, ControlEvent::Stop);
-            child.kill().ok();
-            child.wait().ok();
-        }
-        ChildStage::Connecting { child, .. } => {
-            child.kill().ok();
-            child.wait().ok();
-        }
+    if let ChildStage::Live { outbox, .. } = &stage {
+        send_control_to(outbox, ControlEvent::Stop);
     }
+    stage.kill_and_reap();
     drop(stage);
 
     if world.non_send::<PieSession>().children.is_empty()
@@ -1137,12 +1146,7 @@ pub fn handle_stop(world: &mut World) {
     let mut session = world.non_send_mut::<PieSession>();
     session.launch_modes.clear();
     for (_key, mut stage) in session.children.drain() {
-        match &mut stage {
-            ChildStage::Connecting { child, .. } | ChildStage::Live { child, .. } => {
-                child.kill().ok();
-                child.wait().ok();
-            }
-        }
+        stage.kill_and_reap();
     }
     // Dropping the in-flight build tasks aborts them.
     session.builds.clear();
@@ -1155,9 +1159,9 @@ pub fn handle_stop(world: &mut World) {
     }
 }
 
-/// Encode and send a single control message on the reliable channel to
-/// one child's transport. An encode failure logs and skips.
-fn send_control_to(transport: &mut IpcChannelTransport, event: ControlEvent) {
+/// Encode a single control message and queue it for one child. An encode
+/// failure logs and skips.
+fn send_control_to(outbox: &GameOutbox, event: ControlEvent) {
     let bytes = match to_bytes(&event) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -1165,16 +1169,16 @@ fn send_control_to(transport: &mut IpcChannelTransport, event: ControlEvent) {
             return;
         }
     };
-    transport.send(PieChannel::Reliable, &bytes);
+    outbox.queue(bytes);
 }
 
 /// Send a control message to every live child. Connecting children
 /// (not yet holding a transport) are skipped.
 pub(crate) fn broadcast_control(world: &mut World, event: ControlEvent) {
-    let mut session = world.non_send_mut::<PieSession>();
-    for stage in session.children.values_mut() {
-        if let ChildStage::Live { transport, .. } = stage {
-            send_control_to(transport, event.clone());
+    let session = world.non_send::<PieSession>();
+    for stage in session.children.values() {
+        if let ChildStage::Live { outbox, .. } = stage {
+            send_control_to(outbox, event.clone());
         }
     }
 }
@@ -1191,12 +1195,12 @@ pub(crate) fn send_control_to_focused(world: &mut World, event: ControlEvent) {
         debug!("PIE: control dropped. No focused instance.");
         return;
     };
-    let Some(mut session) = world.get_non_send_mut::<PieSession>() else {
+    let Some(session) = world.get_non_send::<PieSession>() else {
         debug!("PIE: control dropped. PieSession not present.");
         return;
     };
-    if let Some(ChildStage::Live { transport, .. }) = session.children.get_mut(&key) {
-        send_control_to(transport, event);
+    if let Some(ChildStage::Live { outbox, .. }) = session.children.get(&key) {
+        send_control_to(outbox, event);
     } else {
         debug!("PIE: control dropped. Focused instance {key} is not live.");
     }
@@ -1575,14 +1579,23 @@ fn advance_child(key: &InstanceKey, stage: ChildStage) -> Option<ChildStage> {
                         })
                     }
                 }
-                Some(Ok(transport)) => {
-                    info!("PIE: {key} connected");
-                    Some(ChildStage::Live {
-                        child,
-                        transport,
-                        stderr_tail,
-                    })
-                }
+                Some(Ok(transport)) => match GameOutbox::new(&transport) {
+                    Ok(outbox) => {
+                        info!("PIE: {key} connected");
+                        Some(ChildStage::Live {
+                            child,
+                            transport,
+                            outbox,
+                            stderr_tail,
+                        })
+                    }
+                    Err(err) => {
+                        error!("PIE: {key} could not start its writer thread: {err}");
+                        child.kill().ok();
+                        child.wait().ok();
+                        None
+                    }
+                },
                 Some(Err(err)) => {
                     error!("PIE: {key} failed to connect: {err}");
                     child.kill().ok();
@@ -1595,11 +1608,13 @@ fn advance_child(key: &InstanceKey, stage: ChildStage) -> Option<ChildStage> {
         ChildStage::Live {
             mut child,
             transport,
+            outbox,
             stderr_tail,
         } => match child.try_wait() {
             Ok(None) => Some(ChildStage::Live {
                 child,
                 transport,
+                outbox,
                 stderr_tail,
             }),
             Ok(Some(status)) => {
@@ -2458,5 +2473,194 @@ mod build_failure_tests {
         let error = crate::project_build::ProjectBuildError::Compile { log: String::new() };
 
         assert_eq!(failure_summary(&error, ""), error.to_string());
+    }
+}
+
+#[cfg(test)]
+mod control_outbox_tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    use jackdaw_pie_protocol::{connect, event::from_bytes};
+
+    use super::*;
+
+    const LARGE: usize = 8 * 1024 * 1024;
+    const GUARD: Duration = Duration::from_secs(30);
+
+    fn key() -> InstanceKey {
+        InstanceKey {
+            config: "Game".to_string(),
+            instance: 1,
+        }
+    }
+
+    /// A process standing in for the game; it exits on its own.
+    fn child() -> Child {
+        Command::new(std::env::current_exe().expect("the test binary"))
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child process")
+    }
+
+    fn link() -> (IpcChannelTransport, IpcChannelTransport) {
+        let (server, name) = serve().expect("a rendezvous");
+        let accept = thread::spawn(move || server.accept());
+        let game = connect(&name).expect("the game connects");
+        let editor = accept
+            .join()
+            .expect("accept ran")
+            .expect("the editor accepts");
+        (editor, game)
+    }
+
+    /// A multi-megabyte control message, told apart by `node`.
+    fn large_event(node: u64) -> ControlEvent {
+        ControlEvent::NodeComponents {
+            node,
+            set: Vec::new(),
+            removed: vec!["x".repeat(LARGE)],
+        }
+    }
+
+    /// A small control message, told apart by `node`.
+    fn small_event(node: u64) -> ControlEvent {
+        ControlEvent::NodeComponents {
+            node,
+            set: Vec::new(),
+            removed: Vec::new(),
+        }
+    }
+
+    fn world_with_game(editor: IpcChannelTransport) -> World {
+        let mut session = PieSession::default();
+        session.insert_test_live(key(), child(), editor);
+        let mut world = World::new();
+        world.init_resource::<State<PlayState>>();
+        world.init_resource::<NextState<PlayState>>();
+        world.insert_non_send(session);
+        world
+    }
+
+    /// Run `work` on its own thread, failing rather than hanging if it stalls.
+    fn guarded<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || done.send(work()));
+        result
+            .recv_timeout(GUARD)
+            .unwrap_or_else(|_| panic!("{what} did not finish in {GUARD:?}"))
+    }
+
+    /// The `node` and removed-path length of each of the next `count` messages.
+    fn read_nodes(transport: &mut IpcChannelTransport, count: usize) -> Vec<(u64, usize)> {
+        let deadline = Instant::now() + GUARD;
+        let mut nodes = Vec::new();
+        while nodes.len() < count {
+            assert!(Instant::now() < deadline, "only {} arrived", nodes.len());
+            for (_, bytes) in transport.drain_received() {
+                let Ok(ControlEvent::NodeComponents { node, removed, .. }) = from_bytes(&bytes)
+                else {
+                    panic!("an unexpected message");
+                };
+                nodes.push((node, removed.iter().map(String::len).sum()));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        nodes
+    }
+
+    fn sees_close(transport: &mut IpcChannelTransport) -> bool {
+        let deadline = Instant::now() + GUARD;
+        while Instant::now() < deadline {
+            transport.drain_received();
+            if transport.peer_gone() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    #[test]
+    fn a_large_send_returns_at_once_and_arrives_in_order_with_later_ones() {
+        let (editor, mut game) = link();
+        let (sent, all_sent) = mpsc::channel();
+        let (read, all_read) = mpsc::channel::<()>();
+        let editor_side = thread::spawn(move || {
+            let mut world = world_with_game(editor);
+            broadcast_control(&mut world, large_event(1));
+            broadcast_control(&mut world, small_event(2));
+            broadcast_control(&mut world, small_event(3));
+            sent.send(()).ok();
+            all_read.recv().ok();
+        });
+
+        all_sent
+            .recv_timeout(GUARD)
+            .expect("sending returns while the game reads nothing");
+        assert_eq!(
+            read_nodes(&mut game, 3),
+            vec![(1, LARGE), (2, 0), (3, 0)],
+            "the game reads them whole, in the order they were sent"
+        );
+        read.send(()).ok();
+        editor_side.join().expect("the editor side ran");
+    }
+
+    #[test]
+    fn both_ends_sending_large_payloads_do_not_deadlock() {
+        let (editor, mut game) = link();
+        let game_side = thread::spawn(move || {
+            let bytes = to_bytes(&large_event(7)).expect("encode");
+            game.send(PieChannel::Reliable, &bytes);
+            read_nodes(&mut game, 1)
+        });
+        let at_editor = guarded("the editor side", move || {
+            let mut world = world_with_game(editor);
+            broadcast_control(&mut world, large_event(8));
+            let mut session = world.non_send_mut::<PieSession>();
+            let Some(ChildStage::Live { transport, .. }) = session.children.get_mut(&key()) else {
+                panic!("the instance is live");
+            };
+            read_nodes(transport, 1)
+        });
+
+        assert_eq!(at_editor, vec![(7, LARGE)]);
+        let at_game = guarded("the game side", move || game_side.join().expect("it ran"));
+        assert_eq!(at_game, vec![(8, LARGE)]);
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "ipc-channel on Windows keeps a copy of a transferred sender in the receiving \
+                  process, so the editor end closes only when that process exits"
+    )]
+    fn dropping_the_stage_returns_at_once_and_the_game_sees_the_close_after_draining() {
+        let (editor, mut game) = link();
+        guarded("dropping the stage", move || {
+            let mut world = world_with_game(editor);
+            broadcast_control(&mut world, large_event(1));
+            broadcast_control(&mut world, small_event(2));
+            let stage = world.non_send_mut::<PieSession>().children.remove(&key());
+            drop(stage);
+        });
+
+        assert_eq!(read_nodes(&mut game, 2), vec![(1, LARGE), (2, 0)]);
+        assert!(sees_close(&mut game), "no sender outlives the writer");
+    }
+
+    #[test]
+    fn stopping_with_a_stalled_game_returns_at_once() {
+        let (editor, game) = link();
+        guarded("stopping", move || {
+            let mut world = world_with_game(editor);
+            broadcast_control(&mut world, large_event(1));
+            stop_instance(&mut world, &key());
+            assert!(!world.non_send::<PieSession>().is_running(&key()));
+        });
+        drop(game);
     }
 }
