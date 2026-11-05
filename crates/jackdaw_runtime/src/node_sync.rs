@@ -6,14 +6,18 @@
 //! writes a node's changed components to each of those entities through
 //! reflection.
 //!
-//! A change for a node no entity carries yet (an edit made while the game was
-//! building or loading its scene) is held in [`PendingNodeChanges`] and
-//! applied once the first entity for that node is indexed, after the scene
-//! that spawned it has finished inserting its components. Held changes are
-//! bounded by the number of distinct node ids, and once the first scene
-//! entity has been indexed each one is dropped [`PENDING_LIFETIME`] after it
-//! was last changed (or after that first entity, if later): a node that does
-//! not appear by then is not one the game spawns.
+//! While a scene root has yet to spawn, every change is also held in
+//! [`PendingNodeChanges`] and applied to the entities that spawn, after the
+//! scene has finished inserting its components. The document a root spawns from
+//! may be older than a change that reached the game first. A value naming an
+//! asset nothing has loaded yet is tried again on the entities it missed, alone,
+//! since the root may bring the asset. With no root waiting the held changes are
+//! dropped: a scene that spawns later asks for the document as it stands then.
+//!
+//! [`load_scene_assets`] takes the asset definitions the editor sends ahead of an
+//! edit naming an asset this game has not been given, and [`load_asset_files`]
+//! the asset files the editor sends by path. Either writes a new definition into
+//! the handle already held, so everything using the asset updates.
 
 use bevy::asset::{AssetServer, ReflectHandle, UntypedHandle};
 use bevy::ecs::component::ComponentId;
@@ -24,7 +28,6 @@ use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserialize
 use bevy::reflect::{PartialReflect, ReflectFromReflect, TypeRegistration, TypeRegistry};
 use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_scene_types::SceneNodeId;
-use std::time::Duration;
 
 use crate::JackdawCatalog;
 use serde::Deserialize;
@@ -40,13 +43,11 @@ impl SceneNodeIndex {
         self.0.get(&node).map_or(&[], Vec::as_slice)
     }
 
-    /// Index `entity` under `node`, answering whether it is the node's first.
-    fn add(&mut self, node: SceneNodeId, entity: Entity) -> bool {
+    fn add(&mut self, node: SceneNodeId, entity: Entity) {
         let entities = self.0.entry(node).or_default();
         if !entities.contains(&entity) {
             entities.push(entity);
         }
-        entities.len() == 1
     }
 
     fn remove(&mut self, node: SceneNodeId, entity: Entity) {
@@ -59,23 +60,14 @@ impl SceneNodeIndex {
     }
 }
 
-/// Type paths and expired nodes a node sync already warned about, so each
-/// warns once.
+/// Type paths a node sync already warned about, so each warns once.
 #[derive(Resource, Default)]
 struct NodeSyncWarnings(HashSet<String>);
 
-/// How long a held change waits for its node once the game has indexed its
-/// first scene entity.
-pub const PENDING_LIFETIME: Duration = Duration::from_secs(30);
-
-/// Node changes that arrived before any entity carried their node, by node.
+/// Node changes that arrived while a scene root had yet to spawn, by node.
 #[derive(Resource, Default)]
 pub struct PendingNodeChanges {
     nodes: HashMap<u64, PendingNode>,
-    /// Held nodes that gained their first entity, applied next update.
-    ready: Vec<u64>,
-    /// Real time at which the first scene entity was indexed.
-    first_indexed: Option<Duration>,
 }
 
 impl PendingNodeChanges {
@@ -96,23 +88,35 @@ impl PendingNodeChanges {
 
     /// Merge a change into what `node` holds: a value replaces an earlier
     /// value or removal of its type, and a removal replaces an earlier value.
+    /// `delivered` are the entities the change is being applied to directly.
+    /// `missed` are the types in `set` whose value named an asset nothing has
+    /// loaded yet, so those entities take that value again once something has.
     fn hold(
         &mut self,
         node: u64,
         set: &[(String, serde_json::Value)],
         removed: &[String],
-        now: Duration,
+        delivered: &[Entity],
+        missed: &[String],
     ) {
         let held = self.nodes.entry(node).or_default();
-        held.changed = now;
+        held.delivered.extend(delivered.iter().copied());
         for (type_path, value) in set {
+            held.missed.remove(type_path);
             held.removed.retain(|path| path != type_path);
             match held.set.iter_mut().find(|(path, _)| path == type_path) {
                 Some((_, held_value)) => *held_value = value.clone(),
                 None => held.set.push((type_path.clone(), value.clone())),
             }
         }
+        for type_path in missed {
+            held.missed
+                .entry(type_path.clone())
+                .or_default()
+                .extend(delivered.iter().copied());
+        }
         for type_path in removed {
+            held.missed.remove(type_path);
             held.set.retain(|(path, _)| path != type_path);
             if !held.removed.contains(type_path) {
                 held.removed.push(type_path.clone());
@@ -125,13 +129,12 @@ impl PendingNodeChanges {
 struct PendingNode {
     set: Vec<(String, serde_json::Value)>,
     removed: Vec<String>,
-    changed: Duration,
-}
-
-fn real_now(world: &World) -> Duration {
-    world
-        .get_resource::<Time<Real>>()
-        .map_or(Duration::ZERO, Time::elapsed)
+    /// Entities that already have what is held. A root spawned earlier keeps
+    /// whatever the game has done to them since.
+    delivered: HashSet<Entity>,
+    /// The entities still owed the held value of a type, which named an asset
+    /// nothing has loaded yet.
+    missed: HashMap<String, HashSet<Entity>>,
 }
 
 /// Install [`SceneNodeIndex`] and the observers that keep it current, indexing
@@ -162,65 +165,102 @@ fn index_node_insert(
     insert: On<Insert<SceneNodeId>>,
     nodes: Query<&SceneNodeId>,
     mut index: ResMut<SceneNodeIndex>,
-    mut pending: ResMut<PendingNodeChanges>,
-    time: Option<Res<Time<Real>>>,
 ) {
-    let Ok(node) = nodes.get(insert.entity) else {
-        return;
-    };
-    let first = index.add(*node, insert.entity);
-    if pending.first_indexed.is_none() {
-        pending.first_indexed = Some(time.map_or(Duration::ZERO, |time| time.elapsed()));
-    }
-    if first && pending.contains(node.0) && !pending.ready.contains(&node.0) {
-        pending.ready.push(node.0);
+    if let Ok(node) = nodes.get(insert.entity) {
+        index.add(*node, insert.entity);
     }
 }
 
-/// Apply the held changes of nodes that gained their first entity, and drop
-/// held changes older than [`PENDING_LIFETIME`]. Runs after scenes spawn, so
-/// a held value is not overwritten by a component the spawn inserts later.
+/// Apply held changes to the entities that spawned since they were held, and
+/// drop them once no scene root is waiting. Runs after scenes spawn, so a held
+/// value is not overwritten by a component the spawn inserts later.
 fn apply_pending_node_changes(world: &mut World) {
-    let now = real_now(world);
-    let ready: Vec<(u64, PendingNode)> = {
+    if world.resource::<PendingNodeChanges>().is_empty() {
+        return;
+    }
+    let nodes: Vec<u64> = world
+        .resource::<PendingNodeChanges>()
+        .nodes
+        .keys()
+        .copied()
+        .collect();
+    for node in nodes {
+        let entities: Vec<Entity> = world
+            .resource::<SceneNodeIndex>()
+            .entities(SceneNodeId(node))
+            .to_vec();
         let mut pending = world.resource_mut::<PendingNodeChanges>();
-        let ready = std::mem::take(&mut pending.ready);
-        ready
+        let Some(held) = pending.nodes.get_mut(&node) else {
+            continue;
+        };
+        let fresh: Vec<Entity> = entities
             .into_iter()
-            .filter_map(|node| pending.nodes.remove(&node).map(|held| (node, held)))
-            .collect()
-    };
-    for (node, held) in ready {
-        apply_node_components(world, node, &held.set, &held.removed);
-    }
-    let mut pending = world.resource_mut::<PendingNodeChanges>();
-    let Some(first_indexed) = pending.first_indexed else {
-        return;
-    };
-    let mut expired = Vec::new();
-    pending.nodes.retain(|&node, held| {
-        let alive = now.saturating_sub(held.changed.max(first_indexed)) < PENDING_LIFETIME;
-        if !alive {
-            let paths: Vec<&str> = held
-                .set
-                .iter()
-                .map(|(path, _)| path.as_str())
-                .chain(held.removed.iter().map(String::as_str))
-                .collect();
-            expired.push((node, paths.join(", ")));
+            .filter(|entity| !held.delivered.contains(entity))
+            .collect();
+        held.delivered.extend(fresh.iter().copied());
+        let (set, removed) = (held.set.clone(), held.removed.clone());
+        retry_missed_values(world, node);
+        let missed = apply_to_entities(world, &fresh, &set, &removed, true);
+        if let Some(held) = world
+            .resource_mut::<PendingNodeChanges>()
+            .nodes
+            .get_mut(&node)
+        {
+            for type_path in missed {
+                held.missed
+                    .entry(type_path)
+                    .or_default()
+                    .extend(fresh.iter().copied());
+            }
         }
-        alive
-    });
-    if expired.is_empty() {
-        return;
     }
-    let mut warnings = world.get_resource_or_init::<NodeSyncWarnings>();
-    for (node, paths) in expired {
-        if warnings.0.insert(format!("expired {node}")) {
-            warn!(
-                "PIE: dropped changes to node {node} ({paths}): no entity in the game carries \
-                 that node; the scene the game loaded may not name it"
-            );
+    if !crate::scene_root_awaiting_spawn(world) {
+        let nodes = std::mem::take(&mut world.resource_mut::<PendingNodeChanges>().nodes);
+        for held in nodes.into_values() {
+            for type_path in held.missed.into_keys() {
+                warn_once(
+                    world,
+                    &type_path,
+                    &format!("`{type_path}`: it names an asset this game never loaded"),
+                );
+            }
+        }
+    }
+}
+
+/// Write each value `node` still owes an entity if the asset it names has loaded.
+fn retry_missed_values(world: &mut World, node: u64) {
+    let Some(held) = world.resource::<PendingNodeChanges>().nodes.get(&node) else {
+        return;
+    };
+    let owed: Vec<(String, serde_json::Value, Vec<Entity>)> = held
+        .missed
+        .iter()
+        .filter_map(|(type_path, entities)| {
+            let (_, value) = held.set.iter().find(|(path, _)| path == type_path)?;
+            Some((
+                type_path.clone(),
+                value.clone(),
+                entities.iter().copied().collect(),
+            ))
+        })
+        .collect();
+    for (type_path, value, entities) in owed {
+        match decode_component(world, &type_path, &value) {
+            Err(DecodeFailure::UnresolvedAsset(_)) => continue,
+            Err(DecodeFailure::Other(reason)) => warn_once(world, &type_path, &reason),
+            Ok(decoded) => {
+                for entity in entities {
+                    write_component(world, entity, &decoded);
+                }
+            }
+        }
+        if let Some(held) = world
+            .resource_mut::<PendingNodeChanges>()
+            .nodes
+            .get_mut(&node)
+        {
+            held.missed.remove(&type_path);
         }
     }
 }
@@ -238,11 +278,15 @@ fn index_node_replace(
 /// Reads an asset handle as the reference the editor sent: a `#Name` or
 /// `@Name` the loaded scene or the project catalog answers to, else an asset
 /// path loaded through the asset server. `null` reads as the handle type's
-/// default. A `#Name` or `@Name` nothing answers to is refused.
+/// default. A `#Name` or `@Name` nothing answers to is refused, and so is a path
+/// to a document the catalog does not hold, since only a scene has a loader for
+/// one and the editor sends any other by path ahead of the edit naming it.
 struct HandleReferenceProcessor<'a> {
     server: Option<&'a AssetServer>,
     scene: Option<&'a BsnSceneAssets>,
     catalog: Option<&'a JackdawCatalog>,
+    /// Whether a reference was refused.
+    refused: bool,
 }
 
 impl HandleReferenceProcessor<'_> {
@@ -273,7 +317,8 @@ impl ReflectDeserializerProcessor for HandleReferenceProcessor<'_> {
             None => UntypedHandle::default_for_type(asset_type),
             Some(reference) => match self.named(&reference, asset_type) {
                 Some(handle) => handle,
-                None if reference.starts_with('#') || reference.starts_with('@') => {
+                None if refused_when_unresolved(&reference, asset_type) => {
+                    self.refused = true;
                     return Err(serde::de::Error::custom(format!(
                         "the asset reference `{reference}` names nothing this game loaded"
                     )));
@@ -285,6 +330,30 @@ impl ReflectDeserializerProcessor for HandleReferenceProcessor<'_> {
             },
         };
         Ok(Ok(reflect_handle.typed(untyped).into_partial_reflect()))
+    }
+}
+
+/// Whether nothing but a loaded asset can answer to `reference`.
+fn refused_when_unresolved(reference: &str, asset_type: std::any::TypeId) -> bool {
+    reference.starts_with('#')
+        || reference.starts_with('@')
+        || (jackdaw_bsn::is_document_path(std::path::Path::new(reference))
+            && asset_type != std::any::TypeId::of::<crate::JackdawScene>())
+}
+
+/// Why a component value could not be read.
+pub(crate) enum DecodeFailure {
+    /// It names an asset nothing has loaded, which a later load can fix.
+    UnresolvedAsset(String),
+    /// Anything else, which trying again cannot fix.
+    Other(String),
+}
+
+impl std::fmt::Display for DecodeFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnresolvedAsset(reason) | Self::Other(reason) => formatter.write_str(reason),
+        }
     }
 }
 
@@ -302,28 +371,38 @@ pub(crate) fn decode_component(
     world: &World,
     type_path: &str,
     value: &serde_json::Value,
-) -> Result<DecodedComponent, String> {
+) -> Result<DecodedComponent, DecodeFailure> {
     let registry = world.resource::<AppTypeRegistry>().read();
     let registration = registry
         .get_with_type_path(type_path)
-        .ok_or_else(|| format!("unknown type path `{type_path}`"))?;
+        .ok_or_else(|| DecodeFailure::Other(format!("unknown type path `{type_path}`")))?;
     let reflect = registration
         .data::<ReflectComponent>()
-        .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))?
+        .ok_or_else(|| DecodeFailure::Other(format!("`{type_path}` has no ReflectComponent")))?
         .clone();
     let mut processor = HandleReferenceProcessor {
         server: world.get_resource::<AssetServer>(),
         scene: world.get_resource::<BsnSceneAssets>(),
         catalog: world.get_resource::<JackdawCatalog>(),
+        refused: false,
     };
     let value = TypedReflectDeserializer::with_processor(registration, &registry, &mut processor)
         .deserialize(value)
-        .map_err(|err| format!("failed to deserialize `{type_path}`: {err}"))?;
+        .map_err(|err| {
+            let reason = format!("failed to deserialize `{type_path}`: {err}");
+            if processor.refused {
+                DecodeFailure::UnresolvedAsset(reason)
+            } else {
+                DecodeFailure::Other(reason)
+            }
+        })?;
     let from_reflect = registration.data::<ReflectFromReflect>().cloned();
     let value = match &from_reflect {
         Some(from_reflect) => from_reflect
             .from_reflect(value.as_ref())
-            .ok_or_else(|| format!("`{type_path}` cannot be built from the value sent"))?
+            .ok_or_else(|| {
+                DecodeFailure::Other(format!("`{type_path}` cannot be built from the value sent"))
+            })?
             .into_partial_reflect(),
         None => value,
     };
@@ -446,8 +525,9 @@ fn warn_kept_once(world: &mut World, type_path: &str) {
 /// `removed` is removed. A removed component that a component staying on the
 /// entity requires is left as it is, with a warning once per type path. A
 /// type the game does not know, or a value that does not deserialize, is
-/// skipped with a warning once per type path. When no entity carries `node`
-/// yet, the change is held in [`PendingNodeChanges`] until one does.
+/// skipped with a warning once per type path. While a scene root has yet to
+/// spawn the change is also held for the entities it brings; see
+/// [`PendingNodeChanges`].
 pub fn apply_node_components(
     world: &mut World,
     node: u64,
@@ -458,21 +538,100 @@ pub fn apply_node_components(
         .get_resource::<SceneNodeIndex>()
         .map(|index| index.entities(SceneNodeId(node)).to_vec())
         .unwrap_or_default();
-    if entities.is_empty() {
-        let now = real_now(world);
-        if let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() {
-            pending.hold(node, set, removed, now);
+    let awaiting = crate::scene_root_awaiting_spawn(world);
+    let missed = apply_to_entities(world, &entities, set, removed, awaiting);
+    if awaiting && let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() {
+        pending.hold(node, set, removed, &entities, &missed);
+    }
+}
+
+/// Load the named asset definitions in `text` into their asset stores and
+/// [`BsnSceneAssets`], under both reference spellings. A name that already answers
+/// to a live asset of its type has the definition written into that asset, so
+/// every entity holding it updates.
+pub fn load_scene_assets(world: &mut World, text: &str) {
+    let held = world
+        .get_resource::<BsnSceneAssets>()
+        .map(|assets| assets.0.clone())
+        .unwrap_or_default();
+    let entries =
+        match load_with_textures(world, text, |name| held.get(&format!("#{name}")).cloned()) {
+            Ok(entries) => entries,
+            Err(err) => {
+                warn!("PIE: could not read the asset definitions the editor sent: {err}");
+                return;
+            }
+        };
+    let mut assets = world.get_resource_or_init::<BsnSceneAssets>();
+    for entry in entries {
+        assets
+            .0
+            .insert(format!("#{}", entry.name), entry.handle.clone());
+        assets.0.insert(format!("@{}", entry.name), entry.handle);
+    }
+}
+
+/// Load each asset file the editor sent, as `(path, text)`, into
+/// [`JackdawCatalog`]: a file the catalog holds has the definition written into its
+/// asset, so every entity holding it updates, and a new one joins under its path.
+pub fn load_asset_files(world: &mut World, files: &[(String, String)]) {
+    for (path, text) in files {
+        let held = world
+            .get_resource::<JackdawCatalog>()
+            .and_then(|catalog| catalog.files.get(path).cloned());
+        match load_with_textures(world, text, |_| held.clone()) {
+            Ok(entries) => {
+                let (Some(entry), Some(mut catalog)) = (
+                    entries.into_iter().next(),
+                    world.get_resource_mut::<JackdawCatalog>(),
+                ) else {
+                    warn!("PIE: the editor sent no asset this game can hold for {path}");
+                    continue;
+                };
+                catalog.files.insert(path.clone(), entry.handle);
+            }
+            Err(err) => warn!("PIE: could not read the asset file {path} the editor sent: {err}"),
         }
-        return;
+    }
+}
+
+/// Load definitions as a scene spawn does: each texture with its slot's colour
+/// space, ahead of the generic resolve reaching the same path.
+fn load_with_textures(
+    world: &mut World,
+    text: &str,
+    held: impl Fn(&str) -> Option<UntypedHandle>,
+) -> Result<Vec<jackdaw_bsn::CatalogEntry>, jackdaw_bsn::BsnLoadError> {
+    #[cfg(feature = "render")]
+    let _preloaded_textures = jackdaw_bsn::parse_bsn_text(text)
+        .map(|ast| crate::preload_textures(world, &ast))
+        .unwrap_or_default();
+    jackdaw_bsn::load_bsn_assets_onto(world, text, held)
+}
+
+/// Write a node's change to `entities`. Returns the types whose value named an
+/// asset nothing has loaded yet. With `retry`, such a value is left to be tried
+/// again rather than warned about. Any other value that fails is warned about.
+fn apply_to_entities(
+    world: &mut World,
+    entities: &[Entity],
+    set: &[(String, serde_json::Value)],
+    removed: &[String],
+    retry: bool,
+) -> Vec<String> {
+    let mut missed = Vec::new();
+    if entities.is_empty() {
+        return missed;
     }
     for (type_path, value) in set {
         match decode_component(world, type_path, value) {
             Ok(decoded) => {
-                for &entity in &entities {
+                for &entity in entities {
                     write_component(world, entity, &decoded);
                 }
             }
-            Err(reason) => warn_once(world, type_path, &reason),
+            Err(DecodeFailure::UnresolvedAsset(_)) if retry => missed.push(type_path.clone()),
+            Err(failure) => warn_once(world, type_path, &failure.to_string()),
         }
     }
     let mut removals = Vec::new();
@@ -484,7 +643,7 @@ pub fn apply_node_components(
     }
     let leaving: Vec<ComponentId> = removals.iter().filter_map(|removal| removal.id).collect();
     for removal in &removals {
-        for &entity in &entities {
+        for &entity in entities {
             if let Some(id) = removal.id
                 && required_on(world, entity, id, &leaving)
             {
@@ -496,6 +655,7 @@ pub fn apply_node_components(
             }
         }
     }
+    missed
 }
 
 #[cfg(test)]
@@ -682,8 +842,8 @@ mod tests {
             .x
     }
 
-    #[test]
-    fn a_held_edit_lands_after_a_scene_spawns_the_node() {
+    /// A headless game that loads scenes, with the node index installed.
+    fn scene_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::transform::TransformPlugin);
@@ -691,23 +851,50 @@ mod tests {
         app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
         install_node_index(&mut app);
         app.add_plugins(crate::JackdawPlugin);
-
-        let scene = "\
-bevy_ecs::hierarchy::Children [
-    jackdaw_scene_types::node_id::SceneNodeId(21)
-    bevy_transform::components::transform::Transform {
-        translation: glam::Vec3 { x: 1.0, y: 0.0, z: 0.0 },
+        app
     }
-]
-";
+
+    fn scene_with_node(node: u64, x: f32) -> crate::JackdawScene {
+        let text = format!(
+            "bevy_ecs::hierarchy::Children [\n    \
+             jackdaw_scene_types::node_id::SceneNodeId({node})\n    \
+             bevy_transform::components::transform::Transform {{\n        \
+             translation: glam::Vec3 {{ x: {x:?}, y: 0.0, z: 0.0 }},\n    }}\n]\n"
+        );
+        crate::JackdawScene::new(text, std::path::PathBuf::new())
+    }
+
+    /// A root whose scene has yet to arrive, and the handle to deliver it on.
+    fn waiting_root(app: &mut App) -> Handle<crate::JackdawScene> {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<crate::JackdawScene>>()
-            .add(crate::JackdawScene::new(
-                scene.to_string(),
-                std::path::PathBuf::new(),
-            ));
+            .reserve_handle();
+        app.world_mut()
+            .spawn(crate::JackdawSceneRoot(handle.clone()));
+        handle
+    }
 
+    fn deliver(app: &mut App, handle: &Handle<crate::JackdawScene>, scene: crate::JackdawScene) {
+        app.world_mut()
+            .resource_mut::<Assets<crate::JackdawScene>>()
+            .insert(handle.id(), scene)
+            .expect("a live handle");
+    }
+
+    fn node_xs(app: &mut App, node: u64) -> Vec<f32> {
+        let mut query = app.world_mut().query::<(&SceneNodeId, &Transform)>();
+        query
+            .iter(app.world())
+            .filter(|(id, _)| id.0 == node)
+            .map(|(_, transform)| transform.translation.x)
+            .collect()
+    }
+
+    #[test]
+    fn an_edit_made_while_a_root_waits_lands_after_the_scene_spawns() {
+        let mut app = scene_app();
+        let handle = waiting_root(&mut app);
         apply_node_components(
             app.world_mut(),
             21,
@@ -716,23 +903,23 @@ bevy_ecs::hierarchy::Children [
         );
         assert!(app.world().resource::<PendingNodeChanges>().contains(21));
 
-        app.world_mut().spawn(crate::JackdawSceneRoot(handle));
+        deliver(&mut app, &handle, scene_with_node(21, 1.0));
         app.update();
-        app.update();
-
-        let mut query = app.world_mut().query::<(&SceneNodeId, &Transform)>();
-        let found: Vec<f32> = query
-            .iter(app.world())
-            .filter(|(id, _)| id.0 == 21)
-            .map(|(_, transform)| transform.translation.x)
-            .collect();
-        assert_eq!(found, vec![9.0], "the held edit wins over the scene value");
+        assert_eq!(
+            node_xs(&mut app, 21),
+            vec![9.0],
+            "the held edit wins over the scene value"
+        );
+        assert!(
+            app.world().resource::<PendingNodeChanges>().is_empty(),
+            "nothing is held once no root waits"
+        );
     }
 
-    /// An edit for a node no entity carries yet waits, and lands on the
-    /// entity spawned for it, after the spawn's own components.
+    /// The document a later root spawns from already holds the edit, so with no
+    /// root waiting there is nothing to keep.
     #[test]
-    fn an_edit_before_its_node_spawns_lands_when_it_spawns() {
+    fn an_edit_with_no_root_waiting_is_not_held() {
         let mut app = app();
         apply_node_components(
             app.world_mut(),
@@ -740,33 +927,15 @@ bevy_ecs::hierarchy::Children [
             &[(TRANSFORM.to_string(), transform_json(3.0))],
             &[],
         );
-        assert!(app.world().resource::<PendingNodeChanges>().contains(8));
-
-        let entity = app.world_mut().spawn(SceneNodeId(8)).id();
-        app.world_mut()
-            .entity_mut(entity)
-            .insert(Transform::default());
-        app.update();
-        assert_eq!(x_of(&app, entity), 3.0);
         assert!(app.world().resource::<PendingNodeChanges>().is_empty());
-
-        let twin = app
-            .world_mut()
-            .spawn((SceneNodeId(8), Transform::default()))
-            .id();
-        app.update();
-        assert_eq!(
-            x_of(&app, twin),
-            0.0,
-            "an applied change is not held for later entities"
-        );
     }
 
     /// A removal cancels a held value of its type, and a later value cancels
     /// a held removal.
     #[test]
     fn held_changes_merge_per_type() {
-        let mut app = app();
+        let mut app = scene_app();
+        let handle = waiting_root(&mut app);
         let name = |text: &str| (NAME.to_string(), serde_json::json!(text));
         let world = app.world_mut();
         apply_node_components(
@@ -785,6 +954,7 @@ bevy_ecs::hierarchy::Children [
         let renamed = world
             .spawn((SceneNodeId(9), Name::new("Spawned"), Transform::default()))
             .id();
+        deliver(&mut app, &handle, scene_with_node(30, 0.0));
         app.update();
         assert!(app.world().get::<Name>(removed).is_none());
         assert_eq!(x_of(&app, removed), 1.0);
@@ -794,40 +964,96 @@ bevy_ecs::hierarchy::Children [
         );
     }
 
-    /// Held changes wait as long as no scene entity exists, and expire
-    /// [`PENDING_LIFETIME`] after one does.
+    /// Nothing about how long a root waits drops what is held for it, however
+    /// long ago the first scene spawned.
     #[test]
-    fn held_changes_expire_after_the_first_scene_entity() {
-        let mut app = app();
+    fn a_held_edit_waits_as_long_as_the_root_does() {
+        let mut app = scene_app();
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            PENDING_LIFETIME / 3,
+            std::time::Duration::from_secs(31),
         ));
+        let first = waiting_root(&mut app);
+        deliver(&mut app, &first, scene_with_node(1, 0.0));
+        app.update();
+        assert_eq!(node_xs(&mut app, 1).len(), 1, "a first scene spawned");
+
+        let later = waiting_root(&mut app);
         apply_node_components(
             app.world_mut(),
-            8,
-            &[(TRANSFORM.to_string(), transform_json(3.0))],
+            22,
+            &[(TRANSFORM.to_string(), transform_json(7.0))],
             &[],
         );
-        for _ in 0..6 {
-            app.update();
-        }
-        assert!(
-            app.world().resource::<PendingNodeChanges>().contains(8),
-            "nothing expires before the scene spawns"
-        );
-
-        app.world_mut().spawn(SceneNodeId(1));
         app.update();
-        assert!(app.world().resource::<PendingNodeChanges>().contains(8));
-        for _ in 0..4 {
+        app.update();
+        assert!(app.world().resource::<PendingNodeChanges>().contains(22));
+
+        deliver(&mut app, &later, scene_with_node(22, 1.0));
+        app.update();
+        assert_eq!(node_xs(&mut app, 22), vec![7.0]);
+    }
+
+    /// Under the link a later scene adds to the references live sync reads; a
+    /// game with no link has no use for an earlier scene's and lets them go.
+    #[test]
+    fn a_later_scene_keeps_earlier_references_only_under_the_link() {
+        let spawn_over_earlier_reference = |app: &mut App| {
             app.update();
-        }
-        assert!(app.world().resource::<PendingNodeChanges>().is_empty());
-        assert!(
+            let earlier = UntypedHandle::default_for_type(std::any::TypeId::of::<Swatch>());
+            let mut names = bevy::platform::collections::HashMap::default();
+            names.insert("#Earlier".to_string(), earlier);
+            app.world_mut().insert_resource(BsnSceneAssets(names));
+            let root = waiting_root(app);
+            deliver(app, &root, scene_with_node(40, 0.0));
+            app.update();
             app.world()
-                .get_resource::<NodeSyncWarnings>()
-                .is_some_and(|warnings| warnings.0.contains("expired 8")),
-            "the dropped node is reported"
+                .resource::<BsnSceneAssets>()
+                .0
+                .contains_key("#Earlier")
+        };
+        assert!(spawn_over_earlier_reference(&mut scene_app()));
+
+        let mut plain = App::new();
+        plain.add_plugins(MinimalPlugins);
+        plain.add_plugins(bevy::transform::TransformPlugin);
+        plain.add_plugins(bevy::asset::AssetPlugin::default());
+        plain.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+        plain.add_plugins(crate::JackdawPlugin);
+        assert!(!spawn_over_earlier_reference(&mut plain));
+    }
+
+    /// A root spawned earlier has the change directly and is not written again
+    /// when a later root spawns, so what the game did to it since stays.
+    #[test]
+    fn a_held_edit_is_not_written_again_to_entities_that_already_had_it() {
+        let mut app = scene_app();
+        let first = waiting_root(&mut app);
+        deliver(&mut app, &first, scene_with_node(23, 1.0));
+        app.update();
+
+        let later = waiting_root(&mut app);
+        apply_node_components(
+            app.world_mut(),
+            23,
+            &[(TRANSFORM.to_string(), transform_json(5.0))],
+            &[],
+        );
+        assert_eq!(node_xs(&mut app, 23), vec![5.0], "applied on arrival");
+        let mut query = app
+            .world_mut()
+            .query_filtered::<&mut Transform, With<SceneNodeId>>();
+        for mut transform in query.iter_mut(app.world_mut()) {
+            transform.translation.x = 40.0;
+        }
+
+        deliver(&mut app, &later, scene_with_node(23, 1.0));
+        app.update();
+        let mut xs = node_xs(&mut app, 23);
+        xs.sort_by(f32::total_cmp);
+        assert_eq!(
+            xs,
+            vec![5.0, 40.0],
+            "the new entity gets it, the old keeps 40"
         );
     }
 

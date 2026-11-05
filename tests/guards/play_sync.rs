@@ -297,17 +297,19 @@ fn pie_sync_undoing_a_derived_component_edit_sends_its_value() {
     assert_eq!(sent(&set, VISIBILITY), &Value::from("Inherited"));
 }
 
-/// A material the open scene embeds as `#Stone`, as a loaded scene file's
-/// named asset entries are.
-fn embed_stone(world: &mut World) -> Handle<StandardMaterial> {
+/// A material the open scene embeds as `name`, as a loaded scene file's named
+/// asset entries are.
+fn embed_as(world: &mut World, name: &str) -> Handle<StandardMaterial> {
     let stone = world
         .resource_mut::<Assets<StandardMaterial>>()
         .add(StandardMaterial::default());
     let mut assets = world.get_resource_or_init::<BsnSceneAssets>();
-    assets
-        .0
-        .insert("#Stone".to_string(), stone.clone().untyped());
+    assets.0.insert(name.to_string(), stone.clone().untyped());
     stone
+}
+
+fn embed_stone(world: &mut World) -> Handle<StandardMaterial> {
+    embed_as(world, "#Stone")
 }
 
 #[test]
@@ -316,14 +318,18 @@ fn pie_sync_a_brush_face_edit_reaches_the_game_with_its_material() {
     embed_stone(app.world_mut());
     set_field(&mut app, rock, BRUSH, "faces[0].material", "\"#Stone\"");
     let (_, set, _) = only(collect_node_changes(app.world_mut()));
-    assert_eq!(sent(&set, BRUSH)["faces"][0]["material"], "#Stone");
+    let name = sent(&set, BRUSH)["faces"][0]["material"]
+        .as_str()
+        .expect("the material is named")
+        .to_string();
+    assert!(name.starts_with("#Play"), "a session name: {name}");
 
     let (mut game, entity) = game(rock);
     game.add_plugins(bevy::asset::AssetPlugin::default());
     game.init_asset::<StandardMaterial>();
     game.register_asset_reflect::<StandardMaterial>();
     game.register_type::<Brush>();
-    let game_stone = embed_stone(game.world_mut());
+    let game_stone = embed_as(game.world_mut(), &name);
     game.world_mut()
         .entity_mut(entity)
         .insert(Brush::cuboid(0.5, 0.5, 0.5));
@@ -336,30 +342,31 @@ fn pie_sync_a_brush_face_edit_reaches_the_game_with_its_material() {
     assert_eq!(brush.faces[0].material, game_stone);
 }
 
+/// A handle whose asset is gone from its store has no definition to send.
 #[test]
-fn pie_sync_an_unnamed_material_is_held_back_until_it_can_be_sent() {
+fn pie_sync_a_material_with_no_definition_is_held_back_until_it_can_be_sent() {
     let (mut app, _dir, rock) = playing();
     let stone = embed_stone(app.world_mut());
     set_field(&mut app, rock, BRUSH, "faces[0].material", "\"#Stone\"");
     app.world_mut()
-        .resource_mut::<BsnSceneAssets>()
-        .0
-        .remove("#Stone");
+        .resource_mut::<Assets<StandardMaterial>>()
+        .remove(&stone);
     assert!(
         collect_node_changes(app.world_mut()).is_empty(),
-        "a material the game's scene does not name is not sent"
+        "a material that cannot be embedded is not sent"
     );
 
     app.world_mut()
-        .resource_mut::<BsnSceneAssets>()
-        .0
-        .insert("#Stone".to_string(), stone.untyped());
+        .resource_mut::<Assets<StandardMaterial>>()
+        .insert(stone.id(), StandardMaterial::default())
+        .expect("a live handle");
     move_to(&mut app, rock, 2.0);
     let (_, set, _) = only(collect_node_changes(app.world_mut()));
     assert_eq!(translation_x(&set), 2.0);
-    assert_eq!(
-        sent(&set, BRUSH)["faces"][0]["material"],
-        "#Stone",
+    assert!(
+        sent(&set, BRUSH)["faces"][0]["material"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("#Play")),
         "the held-back component goes with the node's next edit"
     );
 }
@@ -432,20 +439,51 @@ fn game_x(game: &App, entity: Entity) -> f32 {
         .x
 }
 
+/// An edit reaching the game while a scene root waits to spawn lands on the
+/// entity that root brings, over the older value in the text it spawned from.
 #[test]
 fn pie_sync_an_edit_made_before_the_scene_spawns_lands_once_it_spawns() {
+    use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
+
     let (mut app, _dir, rock) = playing();
-    let mut game = unspawned_game();
+    let mut game = App::new();
+    game.add_plugins(MinimalPlugins);
+    game.add_plugins(bevy::transform::TransformPlugin);
+    game.add_plugins(bevy::asset::AssetPlugin::default());
+    game.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    jackdaw_runtime::node_sync::install_node_index(&mut game);
+    game.add_plugins(JackdawPlugin);
+    game.register_type::<Name>();
+    let scene = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .reserve_handle();
+    game.world_mut().spawn(JackdawSceneRoot(scene.clone()));
     let (mut link, mut game_end) = LoopbackTransport::pair();
 
     move_to(&mut app, rock, 6.0);
     rename(&mut app, rock, "Boulder");
     deliver(&mut app, &mut link, &mut game_end, &mut game);
+
+    let text = format!(
+        "#Rock\njackdaw_scene_types::node_id::SceneNodeId({})\n{TRANSFORM}\n",
+        rock.0
+    );
+    game.world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .insert(
+            scene.id(),
+            JackdawScene::new(text, std::path::PathBuf::new()),
+        )
+        .expect("a live handle");
+    game.update();
     let entity = game
         .world_mut()
-        .spawn((rock, Transform::default(), Name::new("Rock")))
-        .id();
-    game.update();
+        .query::<(Entity, &SceneNodeId)>()
+        .iter(game.world())
+        .find(|(_, node)| **node == rock)
+        .map(|(entity, _)| entity)
+        .expect("the scene spawned the node");
     assert_eq!(game_x(&game, entity), 6.0);
     assert_eq!(
         game.world().get::<Name>(entity).map(Name::as_str),
@@ -470,17 +508,13 @@ fn edit_brush(app: &mut App, rock: SceneNodeId, edit: impl FnOnce(&mut Brush)) {
 }
 
 #[test]
-fn pie_sync_an_unsaved_material_goes_by_the_name_the_save_gave_it() {
+fn pie_sync_a_saved_material_goes_by_a_session_name_no_file_holds() {
     let (mut app, dir, rock) = playing();
     let material = app
         .world_mut()
         .resource_mut::<Assets<StandardMaterial>>()
         .add(StandardMaterial::default());
     edit_brush(&mut app, rock, |brush| brush.faces[0].material = material);
-    assert!(
-        collect_node_changes(app.world_mut()).is_empty(),
-        "the game cannot name the material before a save embeds it"
-    );
     let path = dir.path().join("assets/scenes/level.bsn");
     std::fs::create_dir_all(path.parent().expect("a parent")).expect("a scenes dir");
     app.world_mut()
@@ -502,8 +536,8 @@ fn pie_sync_an_unsaved_material_goes_by_the_name_the_save_gave_it() {
         .as_str()
         .expect("the material is named");
     assert!(
-        name.starts_with('#') && saved.contains(name),
-        "the name is the one the saved file embeds the material as: {name}"
+        name.starts_with("#Play") && !saved.contains(name),
+        "the saved file's name is not reused: {name}"
     );
 }
 

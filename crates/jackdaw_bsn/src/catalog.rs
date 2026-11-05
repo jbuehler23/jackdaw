@@ -51,6 +51,17 @@ pub fn load_bsn_assets(
     world: &mut World,
     bsn_text: &str,
 ) -> Result<Vec<CatalogEntry>, BsnLoadError> {
+    load_bsn_assets_onto(world, bsn_text, |_| None)
+}
+
+/// [`load_bsn_assets`], writing an entry into the handle `held` answers for its
+/// name when that handle is a live asset of the entry's type. Everything holding
+/// the handle sees the new value. An entry with no such handle gets a new one.
+pub fn load_bsn_assets_onto(
+    world: &mut World,
+    bsn_text: &str,
+    held: impl Fn(&str) -> Option<UntypedHandle>,
+) -> Result<Vec<CatalogEntry>, BsnLoadError> {
     let ast = parse_bsn_text(bsn_text)?;
 
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -84,7 +95,12 @@ pub fn load_bsn_assets(
             continue;
         };
 
-        let handle = reflect_asset.add(world, &*value);
+        let replaced = held(&name)
+            .filter(|handle| {
+                handle.type_id() == type_id && reflect_asset.get(world, handle.id()).is_some()
+            })
+            .filter(|handle| reflect_asset.insert(world, handle.id(), &*value).is_ok());
+        let handle = replaced.unwrap_or_else(|| reflect_asset.add(world, &*value));
         entries.push(CatalogEntry { name, handle });
     }
 
@@ -473,6 +489,31 @@ mod tests {
             .resource::<Assets<TestMaterial>>()
             .get(&handle.clone().typed::<TestMaterial>())
             .expect("asset should exist")
+    }
+
+    #[test]
+    fn loading_onto_a_held_handle_writes_the_value_into_its_asset() {
+        let mut world = scalar_world();
+        let path = "jackdaw_bsn::catalog::tests::TestMaterial";
+        let first = load_bsn_assets(&mut world, &format!("#Stone\n{path} {{ metallic: 0.5 }}\n"))
+            .expect("it parses")
+            .remove(0)
+            .handle;
+        let text = format!("#Stone\n{path} {{ metallic: 0.75 }}\n");
+
+        let held = first.clone();
+        let onto = load_bsn_assets_onto(&mut world, &text, |_| Some(held.clone()))
+            .expect("it parses")
+            .remove(0)
+            .handle;
+        assert_eq!(onto.id(), first.id());
+        assert_eq!(get_material(&world, &first).metallic, 0.75);
+
+        let fresh = load_bsn_assets_onto(&mut world, &text, |_| None)
+            .expect("it parses")
+            .remove(0)
+            .handle;
+        assert_ne!(fresh.id(), first.id(), "with nothing held, a new asset");
     }
 
     /// A copied subtree carries the assets its components name, and paste

@@ -1,5 +1,6 @@
-//! Play saves the modified scenes before it starts the game, so the game
-//! loads what the editor shows, unless the project turned that off.
+//! Play saves the modified scenes before it starts the game, unless the project
+//! turned that off. A scene it cannot save is still played: the game takes the
+//! document rather than the file.
 
 use crate::util::{self, OperatorResultExt as _};
 
@@ -93,8 +94,10 @@ fn with_save_before_play_off_play_leaves_the_file_alone() {
     );
 }
 
+/// A scene with no file is served to the game, so Play has nothing to refuse
+/// and no file to write it to.
 #[test]
-fn an_edited_scene_never_saved_is_not_played_and_says_why() {
+fn an_edited_scene_never_saved_plays_and_stays_unsaved() {
     let (mut app, _tmp, scene) = edited_scene();
     run_op_clause(app.world_mut(), "scene.new")
         .expect("a new scene opens")
@@ -107,17 +110,75 @@ fn an_edited_scene_never_saved_is_not_played_and_says_why() {
 
     play(&mut app);
 
-    assert_eq!(
-        app.world()
-            .resource::<jackdaw::status_bar::StatusNotice>()
-            .text(),
-        "Save the scene before playing"
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(!notice.contains("before playing"), "{notice}");
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    let untitled = &scenes.tabs[scenes.active];
+    assert!(untitled.path.is_none(), "no Save As was asked for");
+    assert!(
+        std::fs::read_to_string(&scene)
+            .expect("scene read")
+            .contains("Props"),
+        "the saved scene behind it still saves"
     );
+}
+
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
+#[type_path = "game"]
+struct NamesAnAsset {
+    #[reflect(@jackdaw_scene_types::AssetRef("game::Item"))]
+    item: String,
+}
+
+/// A save refuses an absolute asset path. Play warns and goes on, since the
+/// game takes the document rather than the file.
+#[test]
+fn an_absolute_asset_path_warns_and_still_plays() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("assets")).expect("assets folder");
+    let scene = tmp.path().join("assets/zone.bsn");
+    let text = "#Zone\nbevy_transform::components::transform::Transform\n\
+                game::NamesAnAsset { item: \"/elsewhere/rock.item\" }\n";
+    std::fs::write(&scene, text).expect("scene written");
+    let mut app = util::editor_test_app();
+    app.register_type::<NamesAnAsset>();
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    jackdaw::run_config::read_run_configs(app.world_mut());
+    run_op_clause(app.world_mut(), "scene.open path=assets/zone.bsn")
+        .expect("the scene opens")
+        .assert_finished();
+    app.update();
+    run_op_clause_as_user(app.world_mut(), "entity.add.group name=Props parent=Zone")
+        .expect("the group dispatched")
+        .assert_finished();
+    app.update();
+
+    play(&mut app);
+
     assert_eq!(
         std::fs::read_to_string(&scene).expect("scene read"),
-        ZONE_SCENE,
-        "no other scene was written in its place"
+        text,
+        "the save was refused"
     );
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(!notice.contains("Not playing"), "{notice}");
 }
 
 #[test]
@@ -216,4 +277,50 @@ fn a_scene_path_that_leaves_the_project_is_refused() {
     let result = run_op_clause(app.world_mut(), "scene.save path=../../x.bsn")
         .expect("scene.save dispatches");
     assert_eq!(result, OperatorResult::Cancelled);
+}
+
+/// A prefab is not served, so the game would read the stale file: unlike a scene,
+/// one a save refuses stops Play.
+#[test]
+fn a_prefab_tab_refused_for_an_absolute_path_stops_play() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("assets")).expect("assets folder");
+    let prefab = tmp.path().join("assets/rock.bsn");
+    let text = "#Rock\nbevy_transform::components::transform::Transform\n\
+                game::NamesAnAsset { item: \"/elsewhere/rock.item\" }\n";
+    std::fs::write(&prefab, text).expect("prefab written");
+    let mut app = util::editor_test_app();
+    app.register_type::<NamesAnAsset>();
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    jackdaw::run_config::read_run_configs(app.world_mut());
+    run_op_clause(app.world_mut(), "scene.open path=assets/rock.bsn")
+        .expect("the prefab opens")
+        .assert_finished();
+    app.update();
+    run_op_clause_as_user(app.world_mut(), "entity.add.group name=Props parent=Rock")
+        .expect("the group dispatched")
+        .assert_finished();
+    app.update();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let active = scenes.active;
+        scenes.tabs[active].kind = jackdaw::scenes::TabKind::Prefab;
+    }
+
+    play(&mut app);
+
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(notice.contains("Not playing"), "{notice}");
 }

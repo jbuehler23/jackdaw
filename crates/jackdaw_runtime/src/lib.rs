@@ -92,6 +92,8 @@ mod pie_frames;
 #[cfg(feature = "pie")]
 mod pie_windowless;
 #[cfg(feature = "pie")]
+mod served_scene;
+#[cfg(feature = "pie")]
 pub use pie_windowless::{maybe_windowless, windowless_requested};
 
 pub mod frame_work;
@@ -488,6 +490,12 @@ struct SceneInstanceMembers(Vec<Entity>);
 #[derive(Component)]
 struct SceneSpawned;
 
+/// Marks a scene root spawned from the document the editor served under Play
+/// rather than from its file, so a change to the file does not respawn it: the
+/// document already reaches the game through live sync.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServedScene;
+
 /// Marks a scene root the loader would not spawn.
 ///
 /// A refused scene and a scene that held nothing both leave the root with no
@@ -568,7 +576,10 @@ pub enum JackdawLoadError {
 /// hot reload of `assets/scene.bsn` in the standalone game binary.
 fn clear_modified_scene_roots(
     mut events: bevy::ecs::message::MessageReader<bevy::asset::AssetEvent<JackdawScene>>,
-    roots: Query<(Entity, &JackdawSceneRoot, &SceneInstanceMembers), With<SceneSpawned>>,
+    roots: Query<
+        (Entity, &JackdawSceneRoot, &SceneInstanceMembers),
+        (With<SceneSpawned>, Without<ServedScene>),
+    >,
     mut commands: Commands,
 ) {
     use bevy::asset::AssetEvent;
@@ -628,11 +639,25 @@ pub(crate) fn spawn_loaded_scenes(
         .map(|(e, root)| (e, root.0.clone()))
         .collect();
 
+    #[cfg(feature = "pie")]
+    served_scene::begin_pass(world);
+
     for (root_entity, handle) in to_spawn {
         // The reload path removes `SceneSpawned` when the document changes, so
         // the previous attempt's verdict does not carry over.
         if world.get::<SceneRefused>(root_entity).is_some() {
             world.entity_mut(root_entity).remove::<SceneRefused>();
+        }
+
+        #[cfg(feature = "pie")]
+        match served_scene::gate(world, root_entity, &handle) {
+            served_scene::Gate::File => {}
+            served_scene::Gate::Hold => continue,
+            served_scene::Gate::Document { text, dir, stem } => {
+                world.entity_mut(root_entity).insert(ServedScene);
+                spawn_scene_text(world, root_entity, &text, Path::new(&dir), Some(stem));
+                continue;
+            }
         }
 
         let loaded = {
@@ -657,73 +682,113 @@ pub(crate) fn spawn_loaded_scenes(
             }
             continue;
         };
+        spawn_scene_text(world, root_entity, &bsn, &parent_path, stem);
+    }
 
-        let ast = match parse_bsn_text(&bsn) {
-            Ok(ast) => ast,
-            Err(err) => {
-                warn!("Failed to parse scene .bsn: {err}");
-                world
-                    .entity_mut(root_entity)
-                    .insert((SceneSpawned, SceneRefused));
-                continue;
-            }
-        };
+    #[cfg(feature = "pie")]
+    served_scene::end_pass(world);
+}
 
-        // Names this scene in anything the prefab pass has to refuse, so a game
-        // loading several at once can tell which one degraded.
-        let scene_name = match stem.as_deref().filter(|s| !s.is_empty()) {
-            Some(stem) => parent_path
-                .join(format!("{stem}.bsn"))
-                .display()
-                .to_string(),
-            None => "a scene built in memory".to_string(),
-        };
-        let (ast, expanded) = resolve_prefab_references(world, ast, &scene_name, &parent_path);
+/// Whether a scene root has yet to spawn, for any reason: its file is loading,
+/// or it is waiting on the editor's document.
+pub(crate) fn scene_root_awaiting_spawn(world: &mut World) -> bool {
+    world
+        .query_filtered::<(), (With<JackdawSceneRoot>, Without<SceneSpawned>)>()
+        .iter(world)
+        .next()
+        .is_some()
+}
 
-        // Spawning is the one place every route meets, including in-memory
-        // text through `JackdawScene::new`, and it reads the resolved document
-        // because a prefab base can hand retired vocabulary to an instance
-        // whose own file never names it.
-        if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&ast) {
-            warn!("Cannot spawn scene '{scene_name}': {err}");
+/// Spawn a document's text under `root_entity`, whichever source it came from.
+/// `parent_path` is the folder it counts as being in, relative to the asset
+/// folder, and `stem` the name it goes by. Text that cannot spawn leaves the
+/// root marked [`SceneRefused`].
+fn spawn_scene_text(
+    world: &mut World,
+    root_entity: Entity,
+    bsn: &str,
+    parent_path: &Path,
+    stem: Option<String>,
+) {
+    let mut ast = match parse_bsn_text(bsn) {
+        Ok(ast) => ast,
+        Err(err) => {
+            warn!("Failed to parse scene .bsn: {err}");
             world
                 .entity_mut(root_entity)
                 .insert((SceneSpawned, SceneRefused));
-            continue;
+            return;
         }
+    };
 
-        let members = spawn_scene_entities(world, root_entity, &ast, &parent_path, &expanded);
+    // A served document's assets loaded when its answer arrived, and the handles
+    // made then are the ones later definitions write into.
+    if world.get::<ServedScene>(root_entity).is_some() {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let roots: Vec<Entity> = ast
+            .roots
+            .iter()
+            .copied()
+            .filter(|&root| !is_asset_root(&ast, root, &reg))
+            .collect();
+        ast.roots = roots;
+    }
+
+    // Names this scene in anything the prefab pass has to refuse, so a game
+    // loading several at once can tell which one degraded.
+    let scene_name = match stem.as_deref().filter(|s| !s.is_empty()) {
+        Some(stem) => parent_path
+            .join(format!("{stem}.bsn"))
+            .display()
+            .to_string(),
+        None => "a scene built in memory".to_string(),
+    };
+    let (ast, expanded) = resolve_prefab_references(world, ast, &scene_name, parent_path);
+
+    // Spawning is the one place every route meets, including in-memory
+    // text through `JackdawScene::new`, and it reads the resolved document
+    // because a prefab base can hand retired vocabulary to an instance
+    // whose own file never names it.
+    if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&ast) {
+        warn!("Cannot spawn scene '{scene_name}': {err}");
         world
             .entity_mut(root_entity)
-            .insert(SceneInstanceMembers(members));
-
-        // A bake is saved under the scene's own name, which is known here.
-        #[cfg(feature = "navmesh")]
-        navmesh::attach_navmesh(world, root_entity, &parent_path, stem.as_deref());
-
-        // Give the container root a readable name from the scene's file
-        // stem so the editor's Live tree shows the scene name instead of an
-        // entity id. Never overwrite an author-supplied name, and never
-        // insert an empty one.
-        if world.get::<Name>(root_entity).is_none()
-            && let Some(stem) = stem.filter(|s| !s.is_empty())
-        {
-            world.entity_mut(root_entity).insert(Name::new(stem));
-        }
-
-        // Tag the container so the editor's outliner classifies it as a scene
-        // root and shows the scene icon. The tag streams in the snapshot.
-        if world
-            .get::<jackdaw_scene_types::SceneRootTag>(root_entity)
-            .is_none()
-        {
-            world
-                .entity_mut(root_entity)
-                .insert(jackdaw_scene_types::SceneRootTag);
-        }
-
-        world.entity_mut(root_entity).insert(SceneSpawned);
+            .insert((SceneSpawned, SceneRefused));
+        return;
     }
+
+    let members = spawn_scene_entities(world, root_entity, &ast, parent_path, &expanded);
+    world
+        .entity_mut(root_entity)
+        .insert(SceneInstanceMembers(members));
+
+    // A bake is saved under the scene's own name, which is known here.
+    #[cfg(feature = "navmesh")]
+    navmesh::attach_navmesh(world, root_entity, parent_path, stem.as_deref());
+
+    // Give the container root a readable name from the scene's file
+    // stem so the editor's Live tree shows the scene name instead of an
+    // entity id. Never overwrite an author-supplied name, and never
+    // insert an empty one.
+    if world.get::<Name>(root_entity).is_none()
+        && let Some(stem) = stem.filter(|s| !s.is_empty())
+    {
+        world.entity_mut(root_entity).insert(Name::new(stem));
+    }
+
+    // Tag the container so the editor's outliner classifies it as a scene
+    // root and shows the scene icon. The tag streams in the snapshot.
+    if world
+        .get::<jackdaw_scene_types::SceneRootTag>(root_entity)
+        .is_none()
+    {
+        world
+            .entity_mut(root_entity)
+            .insert(jackdaw_scene_types::SceneRootTag);
+    }
+
+    world.entity_mut(root_entity).insert(SceneSpawned);
 }
 
 /// Materialize the prefab instances a scene document names.
@@ -865,7 +930,15 @@ fn spawn_scene_entities(
             local_assets.entry(name).or_insert(handle);
         }
     }
-    let mut scene_assets = bevy::platform::collections::HashMap::default();
+    // Under the editor's link, live sync can name an asset of any scene the
+    // game has spawned, so a later scene adds to the map rather than replacing
+    // it. The scene spawning now wins a name both spell.
+    let keep_earlier = world.contains_resource::<node_sync::SceneNodeIndex>();
+    let mut scene_assets = world
+        .remove_resource::<BsnSceneAssets>()
+        .filter(|_| keep_earlier)
+        .map(|assets| assets.0)
+        .unwrap_or_default();
     for (name, handle) in &local_assets {
         scene_assets.insert(name.clone(), handle.clone());
     }

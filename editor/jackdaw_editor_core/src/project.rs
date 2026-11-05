@@ -7,6 +7,7 @@ use std::{
 use bevy::prelude::*;
 use jackdaw_env::paths::{last_new_project_location_path, recent_file_path};
 use jackdaw_project_build::project_manifest::{DEFAULT_ASSETS_DIR, ProjectManifest};
+use path_slash::PathExt as _;
 use serde::{Deserialize, Serialize};
 
 /// Resource holding the active project root directory and its config.
@@ -156,6 +157,15 @@ impl ProjectRoot {
             .strip_prefix(resolve_existing(root))
             .map(Path::to_path_buf)
             .unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// `path` as an asset path under the project's assets folder, in either
+    /// spelling of a symlinked root. `None` for a path outside it.
+    pub fn to_asset_path(&self, path: impl AsRef<Path>) -> Option<String> {
+        let assets = self.to_relative(self.assets_dir());
+        let path = self.to_relative(path);
+        let relative = path.strip_prefix(assets).ok()?;
+        (!relative.as_os_str().is_empty()).then(|| relative.to_slash_lossy().into_owned())
     }
 }
 
@@ -436,6 +446,20 @@ mod tests {
             project.to_relative(link.join("assets/level.bsn")),
             Path::new("assets/level.bsn")
         );
+    }
+
+    #[test]
+    fn an_asset_path_reads_through_a_symlinked_root() {
+        let (_tmp, real, link) = linked_project();
+        let project = ProjectRoot::new(link.clone(), ProjectConfig::default());
+        for held in [
+            real.join("assets/levels/a.bsn"),
+            link.join("assets/levels/a.bsn"),
+        ] {
+            assert_eq!(project.to_asset_path(held).as_deref(), Some("levels/a.bsn"));
+        }
+        assert_eq!(project.to_asset_path(real.join("other/a.bsn")), None);
+        assert_eq!(project.to_asset_path(real.join("assets")), None);
     }
 
     #[test]

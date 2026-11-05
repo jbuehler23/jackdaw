@@ -47,6 +47,10 @@ pub fn absolute_asset_fields(
     found
 }
 
+/// How a save refusing an absolute path starts its reason, for Play to tell it
+/// from a save that failed.
+pub(crate) const ABSOLUTE_PATH_REFUSAL: &str = "an asset is named by an absolute path";
+
 /// The message a save refuses with, naming every field that holds one.
 pub fn refusal(fields: &[AbsoluteAssetField]) -> String {
     let named = fields
@@ -55,7 +59,7 @@ pub fn refusal(fields: &[AbsoluteAssetField]) -> String {
         .collect::<Vec<_>>()
         .join("; ");
     format!(
-        "an asset is named by an absolute path, which holds only on this machine: {named}. \
+        "{ABSOLUTE_PATH_REFUSAL}, which holds only on this machine: {named}. \
          Name it relative to the project's assets folder"
     )
 }

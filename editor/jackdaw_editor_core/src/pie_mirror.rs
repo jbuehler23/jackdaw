@@ -91,7 +91,8 @@ impl InstanceBuffer {
             jackdaw_pie_protocol::StateEvent::EntityDespawned { entity } => {
                 self.entities.remove(entity);
             }
-            jackdaw_pie_protocol::StateEvent::CursorState { .. } => {}
+            jackdaw_pie_protocol::StateEvent::CursorState { .. }
+            | jackdaw_pie_protocol::StateEvent::RequestScene { .. } => {}
         }
     }
 }

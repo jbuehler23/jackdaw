@@ -4,7 +4,7 @@
 //! ECS entities; there is no separate viewport renderer for the running
 //! game.)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
@@ -31,6 +31,10 @@ pub struct PieProjection {
     /// keyed by the parent's game-side bits. Reparented when the parent's
     /// `EntitySpawned` arrives.
     pub pending_children: HashMap<u64, Vec<Entity>>,
+    /// Authored entities that have taken a streamed value and not been respawned
+    /// since. They hold the game's state, so what an emit writes for them comes
+    /// from the document alone.
+    pub overlaid: HashSet<Entity>,
 }
 
 /// Type path of the hierarchy component naming an entity's parent. Streamed
@@ -147,6 +151,14 @@ fn apply_child_of(world: &mut World, child: Entity, value: &serde_json::Value) {
 pub fn revert_preview(world: &mut World) {
     clear_projection(world);
     crate::scenes::swap::respawn_scene_from_ast(world);
+    forget_overlays(world);
+}
+
+/// The authored entities were respawned, so none holds a streamed value.
+fn forget_overlays(world: &mut World) {
+    if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
+        projection.overlaid.clear();
+    }
 }
 
 /// Despawn every ephemeral preview entity and clear the projection maps,
@@ -209,6 +221,7 @@ fn replay_buffer(world: &mut World, key: &crate::pie::InstanceKey) {
 /// game is running.
 pub fn reproject_focused(world: &mut World) {
     clear_projection(world);
+    forget_overlays(world);
     let live = world
         .get_resource::<crate::pie_mirror::PieViewMode>()
         .is_some_and(|mode| *mode == crate::pie_mirror::PieViewMode::Live);
@@ -261,16 +274,22 @@ pub fn project_event(world: &mut World, event: StateEvent) {
     match event {
         StateEvent::EntitySpawned { entity } => {
             let bits = entity.entity;
-            let preview = entity
+            let authored = entity
                 .scene_node_id
-                .and_then(|id| world.resource::<SceneBsnAst>().entity_for_stable_id(id))
-                .unwrap_or_else(|| {
-                    // Seed Transform/Visibility so children inherit before
-                    // streamed values overwrite the defaults.
-                    world
-                        .spawn((PieEphemeral, Transform::default(), Visibility::default()))
-                        .id()
-                });
+                .and_then(|id| world.resource::<SceneBsnAst>().entity_for_stable_id(id));
+            let preview = authored.unwrap_or_else(|| {
+                // Seed Transform/Visibility so children inherit before
+                // streamed values overwrite the defaults.
+                world
+                    .spawn((PieEphemeral, Transform::default(), Visibility::default()))
+                    .id()
+            });
+            if authored.is_some() {
+                world
+                    .resource_mut::<PieProjection>()
+                    .overlaid
+                    .insert(preview);
+            }
             world
                 .resource_mut::<PieProjection>()
                 .by_bits
@@ -352,7 +371,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 }
             }
         }
-        StateEvent::CursorState { .. } => {}
+        StateEvent::CursorState { .. } | StateEvent::RequestScene { .. } => {}
     }
 }
 
@@ -445,6 +464,20 @@ pub fn apply_component_value(
         }
     };
 
+    // A stream never carries a handle, so the value's are all defaults; the
+    // entity's own stay.
+    let mut reflected = reflected;
+    if present
+        && let Ok(entity_ref) = world.get_entity(entity)
+        && let Some(held) = reflect_component.reflect(entity_ref)
+    {
+        keep_held_handles(
+            reflected.as_mut(),
+            held.as_partial_reflect(),
+            &registry_guard,
+        );
+    }
+
     drop(registry_guard);
 
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
@@ -461,6 +494,76 @@ pub fn apply_component_value(
         );
     } else {
         reflect_component.apply(entity_mut, reflected.as_partial_reflect());
+    }
+}
+
+/// Copy every asset handle in `held` over the same field of `value`. Fields
+/// that do not line up, such as a list of another length, are left.
+fn keep_held_handles(
+    value: &mut dyn PartialReflect,
+    held: &dyn PartialReflect,
+    registry: &bevy::reflect::TypeRegistry,
+) {
+    use bevy::reflect::{ReflectMut, ReflectRef};
+    if held.try_as_reflect().is_some_and(|held| {
+        registry
+            .get_type_data::<bevy::asset::ReflectHandle>(held.reflect_type_info().type_id())
+            .is_some()
+    }) {
+        if let Err(err) = value.try_apply(held) {
+            debug!("apply_component_value: could not keep a handle: {err}");
+        }
+        return;
+    }
+    match (value.reflect_mut(), held.reflect_ref()) {
+        (ReflectMut::Struct(value), ReflectRef::Struct(held)) => {
+            for index in 0..held.field_len() {
+                if let (Some(name), Some(field)) = (held.name_at(index), held.field_at(index))
+                    && let Some(slot) = value.field_mut(name)
+                {
+                    keep_held_handles(slot, field, registry);
+                }
+            }
+        }
+        (ReflectMut::TupleStruct(value), ReflectRef::TupleStruct(held)) => {
+            for index in 0..held.field_len() {
+                if let (Some(slot), Some(field)) = (value.field_mut(index), held.field(index)) {
+                    keep_held_handles(slot, field, registry);
+                }
+            }
+        }
+        (ReflectMut::Tuple(value), ReflectRef::Tuple(held)) => {
+            for index in 0..held.field_len() {
+                if let (Some(slot), Some(field)) = (value.field_mut(index), held.field(index)) {
+                    keep_held_handles(slot, field, registry);
+                }
+            }
+        }
+        (ReflectMut::List(value), ReflectRef::List(held)) if value.len() == held.len() => {
+            for index in 0..held.len() {
+                if let (Some(slot), Some(item)) = (value.get_mut(index), held.get(index)) {
+                    keep_held_handles(slot, item, registry);
+                }
+            }
+        }
+        (ReflectMut::Array(value), ReflectRef::Array(held)) if value.len() == held.len() => {
+            for index in 0..held.len() {
+                if let (Some(slot), Some(item)) = (value.get_mut(index), held.get(index)) {
+                    keep_held_handles(slot, item, registry);
+                }
+            }
+        }
+        (ReflectMut::Enum(value), ReflectRef::Enum(held))
+            if value.variant_name() == held.variant_name() =>
+        {
+            for index in 0..held.field_len() {
+                if let (Some(slot), Some(field)) = (value.field_at_mut(index), held.field_at(index))
+                {
+                    keep_held_handles(slot, field, registry);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
