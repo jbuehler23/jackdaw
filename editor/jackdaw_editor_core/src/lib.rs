@@ -119,6 +119,7 @@ pub mod perf_probe;
 pub mod pie;
 pub mod pie_menu;
 pub mod pie_mirror;
+mod pie_outbox;
 pub mod pie_projection;
 pub mod play_settings;
 pub mod play_sync;
