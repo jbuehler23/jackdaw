@@ -213,6 +213,15 @@ impl PieSession {
     /// least one is connected (others may still be launching), `Launching`
     /// while instances build or connect and none is connected yet, `None`
     /// with no instance launched.
+    /// The instances connected and able to take control messages.
+    pub(crate) fn live_keys(&self) -> Vec<InstanceKey> {
+        self.children
+            .iter()
+            .filter(|(_, stage)| matches!(stage, ChildStage::Live { .. }))
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     pub(crate) fn sync_target(&self) -> SyncTarget {
         let mut connecting = false;
         for stage in self.children.values() {
@@ -825,6 +834,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
                 session.launch_modes.insert(key.clone(), mode);
                 session.note_launch_scene(&key, scene);
                 session.children.insert(key, stage);
+                crate::viewport_redraw::note_game_started(world);
             }
             return;
         }
@@ -892,13 +902,16 @@ pub(crate) fn open_scene_asset_path(world: &World) -> Option<String> {
     if tab.kind != crate::scenes::TabKind::Scene {
         return None;
     }
-    let assets = crate::asset_index::assets_dir(world)?;
-    crate::preview_model::relative_to_assets(&assets, tab.path.as_deref()?)
+    world
+        .get_resource::<crate::project::ProjectRoot>()?
+        .to_asset_path(tab.path.as_deref()?)
 }
 
 /// Save the modified scenes the game may load, unless the project turned
 /// that off. A scene with no file is served to the game unsaved. So is one a
-/// save refuses for naming an asset by an absolute path, which warns.
+/// save refuses for naming an asset by an absolute path, which warns. A prefab
+/// is not served, so the game would read a stale file, and one that does not
+/// save stops Play.
 fn save_before_play(world: &mut World) -> Result<(), String> {
     if !world
         .get_resource::<crate::project_build::EditorBuildSettings>()
@@ -906,26 +919,33 @@ fn save_before_play(world: &mut World) -> Result<(), String> {
     {
         return Ok(());
     }
-    let (absolute, failures): (Vec<String>, Vec<String>) =
+    let (absolute, failures): (Vec<_>, Vec<_>) =
         crate::scenes::operators::save_modified_scenes(world)
             .into_iter()
             .partition(|failure| {
-                failure.contains(crate::scene_io::asset_fields::ABSOLUTE_PATH_REFUSAL)
+                failure.kind == crate::scenes::TabKind::Scene
+                    && failure
+                        .message
+                        .contains(crate::scene_io::asset_fields::ABSOLUTE_PATH_REFUSAL)
             });
-    if failures.is_empty() {
-        if !absolute.is_empty() {
-            crate::status_bar::notify_warn(
-                world,
-                format!("Playing unsaved: could not save {}", absolute.join("; ")),
-            );
-        }
-        Ok(())
-    } else {
-        Err(format!(
+    let messages = |failures: Vec<crate::scenes::operators::TabSaveFailure>| {
+        failures
+            .into_iter()
+            .map(|failure| failure.message)
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    if !failures.is_empty() {
+        return Err(format!(
             "Not playing: could not save {}",
-            failures.join("; ")
-        ))
+            messages(failures)
+        ));
     }
+    if !absolute.is_empty() {
+        let message = format!("Playing unsaved: could not save {}", messages(absolute));
+        crate::status_bar::notify_warn(world, message);
+    }
+    Ok(())
 }
 
 /// Whether the built game binary is newer than the project's source. A
@@ -1095,6 +1115,9 @@ pub(crate) fn spawn_game_build(
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
 /// Returns to authoring mode once no children remain.
 pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
+    if let Some(mut names) = world.get_resource_mut::<crate::play_scene::PlayAssetNames>() {
+        names.retain_games(|held| held != key);
+    }
     let mut session = world.non_send_mut::<PieSession>();
     session.launch_modes.remove(key);
     session.launch_scenes.remove(key);
@@ -1193,10 +1216,16 @@ fn answer_scene_request(world: &mut World, key: &InstanceKey, request: u64, path
         .launch_scenes
         .get(key)
         .cloned();
-    let answer = crate::play_scene::scene_answer(world, launch.as_ref(), path);
+    let answer = crate::play_scene::serve_scene(world, key, launch.as_ref(), path);
+    crate::viewport_redraw::note_game_request(world);
+    send_control_to_instance(world, key, ControlEvent::SceneDocument { request, answer });
+}
+
+/// Queue a control message for one instance, if it is live.
+pub(crate) fn send_control_to_instance(world: &World, key: &InstanceKey, event: ControlEvent) {
     let session = world.non_send::<PieSession>();
     if let Some(ChildStage::Live { outbox, .. }) = session.children.get(key) {
-        send_control_to(outbox, ControlEvent::SceneDocument { request, answer });
+        send_control_to(outbox, event);
     }
 }
 
@@ -1548,12 +1577,16 @@ fn poll_builds(world: &mut World) {
         }
     }
 
+    let started = !spawned.is_empty();
     let mut session = world.non_send_mut::<PieSession>();
     session.builds = builds;
     for (key, stage, mode, scene) in spawned {
         session.launch_modes.insert(key.clone(), mode);
         session.note_launch_scene(&key, scene);
         session.children.insert(key, stage);
+    }
+    if started {
+        crate::viewport_redraw::note_game_started(world);
     }
 }
 
@@ -1578,7 +1611,10 @@ fn poll_children(world: &mut World) {
     session
         .launch_scenes
         .retain(|key, _| survivors.contains_key(key));
-    session.children = survivors;
+    if let Some(mut names) = world.get_resource_mut::<crate::play_scene::PlayAssetNames>() {
+        names.retain_games(|key| survivors.contains_key(key));
+    }
+    world.non_send_mut::<PieSession>().children = survivors;
 }
 
 /// Step one child's stage by value, returning the stage it should

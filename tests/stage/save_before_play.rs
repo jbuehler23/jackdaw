@@ -278,3 +278,49 @@ fn a_scene_path_that_leaves_the_project_is_refused() {
         .expect("scene.save dispatches");
     assert_eq!(result, OperatorResult::Cancelled);
 }
+
+/// A prefab is not served, so the game would read the stale file: unlike a scene,
+/// one a save refuses stops Play.
+#[test]
+fn a_prefab_tab_refused_for_an_absolute_path_stops_play() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("assets")).expect("assets folder");
+    let prefab = tmp.path().join("assets/rock.bsn");
+    let text = "#Rock\nbevy_transform::components::transform::Transform\n\
+                game::NamesAnAsset { item: \"/elsewhere/rock.item\" }\n";
+    std::fs::write(&prefab, text).expect("prefab written");
+    let mut app = util::editor_test_app();
+    app.register_type::<NamesAnAsset>();
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    jackdaw::run_config::read_run_configs(app.world_mut());
+    run_op_clause(app.world_mut(), "scene.open path=assets/rock.bsn")
+        .expect("the prefab opens")
+        .assert_finished();
+    app.update();
+    run_op_clause_as_user(app.world_mut(), "entity.add.group name=Props parent=Rock")
+        .expect("the group dispatched")
+        .assert_finished();
+    app.update();
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let active = scenes.active;
+        scenes.tabs[active].kind = jackdaw::scenes::TabKind::Prefab;
+    }
+
+    play(&mut app);
+
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(notice.contains("Not playing"), "{notice}");
+}

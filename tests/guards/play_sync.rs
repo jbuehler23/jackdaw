@@ -336,24 +336,24 @@ fn pie_sync_a_brush_face_edit_reaches_the_game_with_its_material() {
     assert_eq!(brush.faces[0].material, game_stone);
 }
 
+/// A handle whose asset is gone from its store has no definition to send.
 #[test]
-fn pie_sync_an_unnamed_material_is_held_back_until_it_can_be_sent() {
+fn pie_sync_a_material_with_no_definition_is_held_back_until_it_can_be_sent() {
     let (mut app, _dir, rock) = playing();
     let stone = embed_stone(app.world_mut());
     set_field(&mut app, rock, BRUSH, "faces[0].material", "\"#Stone\"");
     app.world_mut()
-        .resource_mut::<BsnSceneAssets>()
-        .0
-        .remove("#Stone");
+        .resource_mut::<Assets<StandardMaterial>>()
+        .remove(&stone);
     assert!(
         collect_node_changes(app.world_mut()).is_empty(),
-        "a material the game's scene does not name is not sent"
+        "a material that cannot be embedded is not sent"
     );
 
     app.world_mut()
-        .resource_mut::<BsnSceneAssets>()
-        .0
-        .insert("#Stone".to_string(), stone.untyped());
+        .resource_mut::<Assets<StandardMaterial>>()
+        .insert(stone.id(), StandardMaterial::default())
+        .expect("a live handle");
     move_to(&mut app, rock, 2.0);
     let (_, set, _) = only(collect_node_changes(app.world_mut()));
     assert_eq!(translation_x(&set), 2.0);
@@ -508,10 +508,6 @@ fn pie_sync_an_unsaved_material_goes_by_the_name_the_save_gave_it() {
         .resource_mut::<Assets<StandardMaterial>>()
         .add(StandardMaterial::default());
     edit_brush(&mut app, rock, |brush| brush.faces[0].material = material);
-    assert!(
-        collect_node_changes(app.world_mut()).is_empty(),
-        "the game cannot name the material before a save embeds it"
-    );
     let path = dir.path().join("assets/scenes/level.bsn");
     std::fs::create_dir_all(path.parent().expect("a parent")).expect("a scenes dir");
     app.world_mut()

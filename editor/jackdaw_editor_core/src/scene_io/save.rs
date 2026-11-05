@@ -542,6 +542,55 @@ pub(crate) fn asset_reference_seed(
     seed
 }
 
+/// The two halves of how text a game takes names an asset: what no Play session
+/// can rename (asset paths and catalog names), and the `#Name`s a save or the
+/// open document gave a runtime asset, which
+/// [`crate::play_scene::PlayAssetNames`] takes up as that asset's one name for
+/// the session, so a later save cannot make the served text and an edit differ.
+pub(crate) fn play_reference_seeds(
+    world: &World,
+) -> (
+    bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    bevy::platform::collections::HashMap<UntypedAssetId, String>,
+) {
+    let (mut suggested, fixed): (
+        bevy::platform::collections::HashMap<_, _>,
+        bevy::platform::collections::HashMap<_, _>,
+    ) = asset_reference_seed(world)
+        .into_iter()
+        .partition(|(_, name)| name.starts_with('#'));
+    for (id, name) in saved_asset_names(world) {
+        if !fixed.contains_key(id) {
+            suggested.entry(*id).or_insert_with(|| name.clone());
+        }
+    }
+    (fixed, suggested)
+}
+
+/// The runtime assets `value`, a component about to go to a game, holds handles
+/// to, named for the session. `fixed` is the first half of
+/// [`play_reference_seeds`]: handles found in it are not listed.
+pub(crate) fn play_assets_in(
+    world: &World,
+    registry: &TypeRegistry,
+    value: &dyn PartialReflect,
+    fixed: &mut bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    suggested: &bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    names: &mut crate::play_scene::PlayAssetNames,
+) -> Vec<jackdaw_bsn::CatalogAssetRef> {
+    let mut refs = Vec::new();
+    let mut namer = AssetNamer::Session {
+        world,
+        names,
+        suggested,
+    };
+    collect_bsn_handles_from_reflect(value, registry, fixed, &mut refs, &mut namer);
+    for asset in &refs {
+        fixed.remove(&asset.asset_id);
+    }
+    refs
+}
+
 /// The runtime inline assets referenced by a BSN document's kept components,
 /// collected at emit time so they can be embedded and resolved.
 pub(crate) struct BsnInlineAssetPass {
@@ -601,13 +650,24 @@ enum AssetNamer<'a> {
     /// Per-type counters in document order, as a file writes them: an asset
     /// added earlier in the document renumbers the ones after it.
     PerDocument(HashMap<String, usize>),
-    /// Stable for the Play session.
-    Session(&'a mut crate::play_scene::PlayAssetNames),
+    /// One name for the Play session, from [`crate::play_scene::PlayAssetNames`].
+    Session {
+        world: &'a World,
+        names: &'a mut crate::play_scene::PlayAssetNames,
+        /// The names a save or the open document gave assets, by asset.
+        suggested: &'a bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    },
 }
 
 impl AssetNamer<'_> {
-    /// The name for the asset `id` of the type `asset_type_path`, without `#`.
-    fn name(&mut self, id: UntypedAssetId, asset_type_path: &str) -> String {
+    /// The name for the asset `id` of the type `asset_type_path`, without `#`,
+    /// or `None` when it cannot be embedded for a game.
+    fn name(
+        &mut self,
+        id: UntypedAssetId,
+        type_id: std::any::TypeId,
+        asset_type_path: &str,
+    ) -> Option<String> {
         let short_name = asset_type_path
             .rsplit("::")
             .next()
@@ -617,9 +677,16 @@ impl AssetNamer<'_> {
                 let counter = counters.entry(asset_type_path.to_string()).or_insert(0);
                 let name = format!("{short_name}{counter}");
                 *counter += 1;
-                name
+                Some(name)
             }
-            Self::Session(names) => names.name_of(id, short_name),
+            Self::Session {
+                world,
+                names,
+                suggested,
+            } => {
+                let suggested = suggested.get(&id).map(String::as_str);
+                names.resolve(world, id, type_id, short_name, suggested)
+            }
         }
     }
 }
@@ -765,7 +832,9 @@ fn collect_bsn_handles_from_reflect(
             .type_path_table()
             .path()
             .to_string();
-        let ref_name = namer.name(id, &asset_type_path);
+        let Some(ref_name) = namer.name(id, asset_type_id, &asset_type_path) else {
+            return true;
+        };
 
         names.insert(id, format!("#{ref_name}"));
         refs.push(jackdaw_bsn::CatalogAssetRef {
@@ -1168,12 +1237,13 @@ fn author(
         SourceSpelling::ServedToGame => {
             world.init_resource::<crate::play_scene::PlayAssetNames>();
             world.resource_scope(|world, mut names: Mut<crate::play_scene::PlayAssetNames>| {
-                let mut seed = asset_reference_seed(world);
-                for (id, name) in saved_asset_names(world) {
-                    seed.entry(*id).or_insert_with(|| name.clone());
-                }
-                let mut namer = AssetNamer::Session(&mut names);
-                name_handles_with(world, &mut ast, &entities, parent_path, seed, &mut namer)
+                let (fixed, suggested) = play_reference_seeds(world);
+                let mut namer = AssetNamer::Session {
+                    world,
+                    names: &mut names,
+                    suggested: &suggested,
+                };
+                name_handles_with(world, &mut ast, &entities, parent_path, fixed, &mut namer)
             })
         }
         SourceSpelling::AsHeld | SourceSpelling::RelativeToFile => {
@@ -1264,18 +1334,38 @@ fn name_handles_with(
     namer: &mut AssetNamer<'_>,
 ) -> BsnInlineAssetPass {
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let pass = {
+    let mut pass = {
         let reg = registry.read();
         collect_inline_assets_named(world, &reg, entities, seed, namer)
     };
     if pass.touched.is_empty() {
         return pass;
     }
+    if matches!(namer, AssetNamer::Session { .. }) {
+        one_root_per_session_name(ast, &mut pass.refs);
+    }
     if !pass.refs.is_empty() {
         jackdaw_bsn::append_assets_to_ast(ast, world, &pass.refs);
     }
     rederive_handle_patches(world, ast, &registry, parent_path, &pass);
     pass
+}
+
+/// Session names can be shared by assets of one definition and can match a root
+/// the document already holds. Keep one ref per name and drop any such root, so
+/// the root appended from the asset store is the only one by that name.
+fn one_root_per_session_name(
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    refs: &mut Vec<jackdaw_bsn::CatalogAssetRef>,
+) {
+    let mut seen = std::collections::HashSet::new();
+    refs.retain(|asset| seen.insert(asset.name.clone()));
+    let held: Vec<Entity> = ast.roots.clone();
+    let replaced: Vec<Entity> = held
+        .into_iter()
+        .filter(|&root| ast.get_name(root).is_some_and(|name| seen.contains(name)))
+        .collect();
+    ast.roots.retain(|root| !replaced.contains(root));
 }
 
 /// Re-derive every component patch listed in `pass.touched` from its live ECS
@@ -1372,42 +1462,169 @@ fn keep_unresolved_references(
 ) {
     use jackdaw_bsn::BsnPatch;
     match (authored, &mut *fresh) {
-        (BsnPatch::Struct(authored), BsnPatch::Struct(fresh)) => {
-            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+        (BsnPatch::Struct(authored), BsnPatch::Struct(fresh))
+            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
+        {
+            keep_in_fields(
+                reg,
+                type_id,
+                &authored.type_path,
+                &authored.fields,
+                &mut fresh.fields,
+                kept,
+            );
         }
-        (BsnPatch::TupleStruct(authored), BsnPatch::TupleStruct(fresh)) => {
-            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+        (BsnPatch::TupleStruct(authored), BsnPatch::TupleStruct(fresh))
+            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
+        {
+            keep_in_values(
+                reg,
+                type_id,
+                &authored.type_path,
+                &authored.values,
+                &mut fresh.values,
+                kept,
+            );
         }
-        (BsnPatch::Struct(authored), BsnPatch::Type(type_path)) => {
+        (BsnPatch::Struct(authored), BsnPatch::Type(type_path))
+            if same_variant(reg, type_id, &authored.type_path, type_path) =>
+        {
             let type_path = type_path.clone();
             let mut fields = jackdaw_bsn::BsnStructFields::default();
-            keep_in_fields(reg, type_id, &authored.fields, &mut fields, kept);
+            keep_in_fields(
+                reg,
+                type_id,
+                &authored.type_path,
+                &authored.fields,
+                &mut fields,
+                kept,
+            );
             if !fields.0.is_empty() {
                 *fresh = BsnPatch::Struct(jackdaw_bsn::BsnStructData { type_path, fields });
+            }
+        }
+        (BsnPatch::TupleStruct(authored), BsnPatch::Type(type_path))
+            if same_variant(reg, type_id, &authored.type_path, type_path) =>
+        {
+            let Some(mut values) = default_tuple_values(reg, type_id) else {
+                return;
+            };
+            let before = values.clone();
+            keep_in_values(
+                reg,
+                type_id,
+                &authored.type_path,
+                &authored.values,
+                &mut values,
+                kept,
+            );
+            if values != before {
+                *fresh = BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                    type_path: type_path.clone(),
+                    values,
+                });
             }
         }
         _ => {}
     }
 }
 
+/// What a bare tuple component's fields read back as.
+fn default_tuple_values(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+) -> Option<Vec<jackdaw_bsn::BsnValue>> {
+    let default = reg
+        .get_type_data::<bevy::prelude::ReflectDefault>(type_id)?
+        .default();
+    match jackdaw_bsn::component_to_bsn_patch(default.as_partial_reflect(), reg) {
+        jackdaw_bsn::BsnPatch::TupleStruct(data) => Some(data.values),
+        _ => None,
+    }
+}
+
+/// Whether two spellings name one shape of `type_id`: always for a struct, and
+/// for an enum when they are the same variant. The two sides of another variant
+/// have nothing to line up.
+fn same_variant(reg: &TypeRegistry, type_id: std::any::TypeId, a: &str, b: &str) -> bool {
+    match reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    {
+        Some(TypeInfo::Enum(_)) => a == b,
+        _ => true,
+    }
+}
+
+/// The variant `type_path`, `Enum::Variant`, spells of the enum `type_id`.
+fn enum_variant<'a>(
+    reg: &'a TypeRegistry,
+    type_id: std::any::TypeId,
+    type_path: &str,
+) -> Option<&'a bevy::reflect::enums::VariantInfo> {
+    let Some(TypeInfo::Enum(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    else {
+        return None;
+    };
+    info.variant(type_path.rsplit("::").next()?)
+}
+
+/// The type of the field `name` of `type_path`, a struct or a struct variant.
+fn named_field_type(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    type_path: &str,
+    name: &str,
+) -> Option<std::any::TypeId> {
+    if let Some(TypeInfo::Struct(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    {
+        return info.field(name).map(bevy::reflect::NamedField::type_id);
+    }
+    match enum_variant(reg, type_id, type_path)? {
+        bevy::reflect::enums::VariantInfo::Struct(variant) => {
+            variant.field(name).map(bevy::reflect::NamedField::type_id)
+        }
+        _ => None,
+    }
+}
+
+/// The type of field `index` of `type_path`, a tuple struct or a tuple variant.
+fn tuple_field_type(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    type_path: &str,
+    index: usize,
+) -> Option<std::any::TypeId> {
+    if let Some(TypeInfo::TupleStruct(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    {
+        return info
+            .field_at(index)
+            .map(bevy::reflect::UnnamedField::type_id);
+    }
+    match enum_variant(reg, type_id, type_path)? {
+        bevy::reflect::enums::VariantInfo::Tuple(variant) => variant
+            .field_at(index)
+            .map(bevy::reflect::UnnamedField::type_id),
+        _ => None,
+    }
+}
+
 fn keep_in_fields(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
+    type_path: &str,
     authored: &jackdaw_bsn::BsnStructFields,
     fresh: &mut jackdaw_bsn::BsnStructFields,
     kept: &mut Vec<String>,
 ) {
-    let Some(TypeInfo::Struct(info)) = reg
-        .get(type_id)
-        .map(bevy::reflect::TypeRegistration::type_info)
-    else {
-        return;
-    };
     for field in &mut fresh.0 {
-        let Some(field_type) = info
-            .field(&field.name)
-            .map(bevy::reflect::NamedField::type_id)
-        else {
+        let Some(field_type) = named_field_type(reg, type_id, type_path, &field.name) else {
             continue;
         };
         let Some(was) = authored.0.iter().find(|other| other.name == field.name) else {
@@ -1419,46 +1636,79 @@ fn keep_in_fields(
         if fresh.0.iter().any(|field| field.name == was.name) {
             continue;
         }
-        let Some(field_type) = info
-            .field(&was.name)
-            .map(bevy::reflect::NamedField::type_id)
-        else {
+        let Some(field_type) = named_field_type(reg, type_id, type_path, &was.name) else {
             continue;
         };
-        let jackdaw_bsn::BsnValue::String(reference) = &was.value else {
+        let Some(value) = only_references(reg, field_type, &was.value, kept) else {
             continue;
         };
-        if reference.is_empty() || !crate::typed_values::takes_asset_path(reg, field_type) {
-            continue;
-        }
-        if !kept.contains(reference) {
-            kept.push(reference.clone());
-        }
         fresh.0.push(jackdaw_bsn::BsnField {
             name: was.name.clone(),
-            value: was.value.clone(),
+            value,
         });
+    }
+}
+
+/// `value`, a field a document leaves out, reduced to the references it holds:
+/// a struct names only the fields it sets, so its other fields keep reading back
+/// as their defaults. `None` when it holds none, or none that can be separated
+/// from the values around it.
+fn only_references(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    value: &jackdaw_bsn::BsnValue,
+    kept: &mut Vec<String>,
+) -> Option<jackdaw_bsn::BsnValue> {
+    use jackdaw_bsn::BsnValue;
+    match value {
+        BsnValue::String(reference)
+            if !reference.is_empty() && crate::typed_values::takes_asset_path(reg, type_id) =>
+        {
+            if !kept.contains(reference) {
+                kept.push(reference.clone());
+            }
+            Some(value.clone())
+        }
+        BsnValue::Struct(data)
+            if matches!(
+                reg.get(type_id)
+                    .map(bevy::reflect::TypeRegistration::type_info),
+                Some(TypeInfo::Struct(_))
+            ) =>
+        {
+            let fields: Vec<jackdaw_bsn::BsnField> = data
+                .fields
+                .0
+                .iter()
+                .filter_map(|field| {
+                    let field_type = named_field_type(reg, type_id, &data.type_path, &field.name)?;
+                    Some(jackdaw_bsn::BsnField {
+                        name: field.name.clone(),
+                        value: only_references(reg, field_type, &field.value, kept)?,
+                    })
+                })
+                .collect();
+            (!fields.is_empty()).then(|| {
+                BsnValue::Struct(jackdaw_bsn::BsnStructData {
+                    type_path: data.type_path.clone(),
+                    fields: jackdaw_bsn::BsnStructFields(fields),
+                })
+            })
+        }
+        _ => None,
     }
 }
 
 fn keep_in_values(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
+    type_path: &str,
     authored: &[jackdaw_bsn::BsnValue],
     fresh: &mut [jackdaw_bsn::BsnValue],
     kept: &mut Vec<String>,
 ) {
-    let Some(TypeInfo::TupleStruct(info)) = reg
-        .get(type_id)
-        .map(bevy::reflect::TypeRegistration::type_info)
-    else {
-        return;
-    };
     for (index, value) in fresh.iter_mut().enumerate() {
-        let Some(field_type) = info
-            .field_at(index)
-            .map(bevy::reflect::UnnamedField::type_id)
-        else {
+        let Some(field_type) = tuple_field_type(reg, type_id, type_path, index) else {
             continue;
         };
         let Some(was) = authored.get(index) else {
@@ -1477,11 +1727,11 @@ fn keep_in_value(
 ) {
     use jackdaw_bsn::BsnValue;
     if crate::typed_values::takes_asset_path(reg, type_id) {
-        if let (BsnValue::String(was), BsnValue::String(now)) = (authored, &mut *fresh)
-            && now.is_empty()
+        if let BsnValue::String(was) = authored
             && !was.is_empty()
+            && !matches!(fresh, BsnValue::String(now) if !now.is_empty())
         {
-            now.clone_from(was);
+            *fresh = BsnValue::String(was.clone());
             if !kept.contains(was) {
                 kept.push(was.clone());
             }
@@ -1489,28 +1739,73 @@ fn keep_in_value(
         return;
     }
     match (authored, fresh) {
-        (BsnValue::Struct(authored), BsnValue::Struct(fresh)) => {
-            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+        (BsnValue::Struct(authored), BsnValue::Struct(fresh))
+            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
+        {
+            keep_in_fields(
+                reg,
+                type_id,
+                &authored.type_path,
+                &authored.fields,
+                &mut fresh.fields,
+                kept,
+            );
         }
-        (BsnValue::TupleStruct(authored), BsnValue::TupleStruct(fresh)) => {
-            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+        (BsnValue::TupleStruct(authored), BsnValue::TupleStruct(fresh))
+            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
+        {
+            keep_in_values(
+                reg,
+                type_id,
+                &authored.type_path,
+                &authored.values,
+                &mut fresh.values,
+                kept,
+            );
         }
         (BsnValue::List(authored), BsnValue::List(fresh)) => {
-            let Some(TypeInfo::List(info)) = reg
-                .get(type_id)
-                .map(bevy::reflect::TypeRegistration::type_info)
-            else {
-                return;
-            };
-            let item = info.item_ty().id();
             for (index, value) in fresh.iter_mut().enumerate() {
-                let Some(was) = authored.get(index) else {
+                let (Some(item), Some(was)) =
+                    (list_item_type(reg, type_id, index), authored.get(index))
+                else {
                     continue;
                 };
                 keep_in_value(reg, item, was, value, kept);
             }
         }
+        (BsnValue::Map(authored), BsnValue::Map(fresh)) => {
+            let Some(TypeInfo::Map(info)) = reg
+                .get(type_id)
+                .map(bevy::reflect::TypeRegistration::type_info)
+            else {
+                return;
+            };
+            let item = info.value_ty().id();
+            for (key, value) in fresh {
+                if let Some((_, was)) = authored.iter().find(|(other, _)| other == key) {
+                    keep_in_value(reg, item, was, value, kept);
+                }
+            }
+        }
         _ => {}
+    }
+}
+
+/// The type of item `index` of a value the document writes as a list: a list,
+/// an array, a set or a tuple.
+fn list_item_type(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    index: usize,
+) -> Option<std::any::TypeId> {
+    match reg.get(type_id)?.type_info() {
+        TypeInfo::List(info) => Some(info.item_ty().id()),
+        TypeInfo::Array(info) => Some(info.item_ty().id()),
+        TypeInfo::Set(info) => Some(info.value_ty().id()),
+        TypeInfo::Tuple(info) => info
+            .field_at(index)
+            .map(bevy::reflect::UnnamedField::type_id),
+        _ => None,
     }
 }
 

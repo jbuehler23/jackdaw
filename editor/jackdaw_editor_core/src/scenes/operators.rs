@@ -7,7 +7,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 
 use crate::scene_io::SceneFilePath;
-use crate::scenes::{SceneTab, Scenes, swap::swap_active_tab};
+use crate::scenes::{SceneTab, Scenes, TabKind, swap::swap_active_tab};
 
 /// Counter for default `untitled-N` names. Persists across the editor
 /// session so closing unsaved tabs and creating new ones doesn't reuse
@@ -758,7 +758,7 @@ pub fn scene_save_all_system(world: &mut World) -> bool {
 
 /// Save every tab that has a file and unsaved changes, leaving clean and
 /// untitled tabs alone. Returns a message for each tab that did not save.
-pub fn save_modified_scenes(world: &mut World) -> Vec<String> {
+pub fn save_modified_scenes(world: &mut World) -> Vec<TabSaveFailure> {
     let active_modified = active_tab_modified(world);
     let scenes = world.resource::<Scenes>();
     let modified: Vec<usize> = scenes
@@ -790,23 +790,34 @@ pub fn active_tab_modified(world: &World) -> bool {
     tab.dirty || depth > tab.history_depth_at_last_check
 }
 
+/// A tab that did not save.
+pub struct TabSaveFailure {
+    /// What the tab holds.
+    pub kind: TabKind,
+    /// The tab's name and why it did not save.
+    pub message: String,
+}
+
 /// Save the tabs at `indices`, switching to each in turn, then return to the
-/// tab that was active. Returns a message for each tab that did not save.
-fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
+/// tab that was active. Returns a failure for each tab that did not save.
+fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<TabSaveFailure> {
     let original_active = world.resource::<Scenes>().active;
     let mut failures = Vec::new();
 
     for &i in indices {
-        let (path, name) = {
+        let (path, name, kind) = {
             let tab = &world.resource::<Scenes>().tabs[i];
-            (tab.path.clone(), tab.display_name.clone())
+            (tab.path.clone(), tab.display_name.clone(), tab.kind.clone())
         };
         let Some(path) = path else {
             continue;
         };
 
         if i != world.resource::<Scenes>().active && !swap_active_tab(world, i) {
-            failures.push(format!("{name} (could not switch to it)"));
+            failures.push(TabSaveFailure {
+                kind: kind.clone(),
+                message: format!("{name} (could not switch to it)"),
+            });
             continue;
         }
 
@@ -820,7 +831,10 @@ fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
 
         if let Err(err) = crate::scene_io::save_scene_inner(world) {
             warn!("failed to save {path:?}: {err}");
-            failures.push(format!("{name} ({err})"));
+            failures.push(TabSaveFailure {
+                kind,
+                message: format!("{name} ({err})"),
+            });
         }
     }
 
@@ -830,7 +844,11 @@ fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<String> {
         swap_active_tab(world, original_active);
     }
     if !failures.is_empty() {
-        crate::status_bar::notify_error(world, format!("Not saved: {}", failures.join("; ")));
+        let names: Vec<&str> = failures
+            .iter()
+            .map(|failure| failure.message.as_str())
+            .collect();
+        crate::status_bar::notify_error(world, format!("Not saved: {}", names.join("; ")));
     }
     let scenes = world.resource::<Scenes>();
     let active_path = scenes

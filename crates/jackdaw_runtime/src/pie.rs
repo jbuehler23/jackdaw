@@ -282,7 +282,8 @@ fn stream_state(world: &mut World) {
 /// gameplay systems keyed on `Time<Virtual>`. `SetComponent`,
 /// `AddComponent`, `RemoveComponent` apply reflected edits to live entities,
 /// and `NodeComponents` to every entity spawned from a scene node.
-/// `SceneDocument` answers a scene root waiting on the editor.
+/// `SceneDocument` answers a scene root waiting on the editor, and
+/// `SceneAssets` loads asset definitions an edit that follows will name.
 /// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
@@ -346,6 +347,9 @@ fn apply_control(world: &mut World) {
             }
             ControlEvent::SceneDocument { request, answer } => {
                 crate::served_scene::receive(world, request, answer);
+            }
+            ControlEvent::SceneAssets { text } => {
+                crate::node_sync::load_scene_assets(world, &text);
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity

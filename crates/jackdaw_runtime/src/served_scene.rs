@@ -175,16 +175,21 @@ fn ask(world: &mut World, path: &str) -> u64 {
     request
 }
 
-/// Take the editor's answer to `request`. One that gave up already is ignored.
+/// Take the editor's answer to `request`. A root that gave up already stays on
+/// its file, but the assets of a late document still load: the editor counts
+/// them as given, so edits it sends from here on name them.
 pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
     let Some(mut requests) = world.get_resource_mut::<SceneRequests>() else {
         return;
     };
-    if requests.open.remove(&request).is_none() {
-        debug!("PIE: ignoring a late answer to scene request {request}");
+    if requests.open.remove(&request).is_some() {
+        requests.answered.insert(request, answer);
         return;
     }
-    requests.answered.insert(request, answer);
+    debug!("PIE: ignoring a late answer to scene request {request}");
+    if let SceneAnswer::Document { text, .. } = answer {
+        crate::node_sync::load_scene_assets(world, &text);
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +200,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
+    use bevy::asset::ReflectAsset;
     use bevy::ecs::message::Messages;
     use jackdaw_pie_protocol::event::{ControlEvent, from_bytes};
     use jackdaw_pie_protocol::{LoopbackTransport, PieTransport, connect, serve};
@@ -560,23 +566,162 @@ mod tests {
         );
     }
 
-    /// The edit made long ago is in the document the later scene is served.
-    #[test]
-    fn an_edit_long_before_a_later_scene_is_present_when_it_spawns() {
-        let (mut app, mut editor, _dir) = game();
-        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            Duration::from_secs(1),
-        ));
-        send(&mut editor, &node_edit(8.0));
-        for _ in 0..32 {
-            app.update();
+    #[derive(Asset, Reflect, Default, Clone)]
+    #[reflect(Asset, Default)]
+    #[type_path = "game"]
+    struct Swatch {
+        tone: u32,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component, Default)]
+    #[type_path = "game"]
+    struct Painted {
+        level: u32,
+        swatch: Handle<Swatch>,
+    }
+
+    const PAINTED: &str = "game::Painted";
+
+    fn with_swatches(app: &mut App) {
+        app.init_asset::<Swatch>();
+        app.register_asset_reflect::<Swatch>();
+        app.register_type::<Painted>();
+    }
+
+    fn stone_text(tone: u32) -> String {
+        format!("#Stone\ngame::Swatch {{ tone: {tone} }}\n")
+    }
+
+    fn painted(level: u32, reference: &str) -> ControlEvent {
+        ControlEvent::NodeComponents {
+            node: NODE,
+            set: vec![(
+                PAINTED.to_string(),
+                serde_json::json!({ "level": level, "swatch": reference }),
+            )],
+            removed: Vec::new(),
         }
-        spawn_root(&mut app, "other.bsn");
+    }
+
+    fn painted_tone(app: &mut App, entity: Entity) -> Option<(u32, u32)> {
+        let painted = app.world().get::<Painted>(entity)?;
+        let tone = app
+            .world()
+            .resource::<Assets<Swatch>>()
+            .get(&painted.swatch)?
+            .tone;
+        Some((painted.level, tone))
+    }
+
+    /// The definition reaches the game ahead of the edit naming it, including
+    /// its fields that are no handle.
+    #[test]
+    fn scene_assets_load_ahead_of_the_edit_naming_them() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        spawn_root(&mut app, "scene.bsn");
         app.update();
         let (request, _) = requests_from(&mut editor)[0];
-        send(&mut editor, &document(request, scene_text(8.0)));
+        send(&mut editor, &document(request, scene_text(1.0)));
         app.update();
-        assert_eq!(node_xs(&mut app), vec![8.0]);
+        let entity = node_entities(&mut app)[0];
+
+        send(&mut editor, &painted(3, "#Stone"));
+        app.update();
+        assert!(
+            app.world().get::<Painted>(entity).is_none(),
+            "without the definition the edit goes nowhere"
+        );
+
+        send(
+            &mut editor,
+            &ControlEvent::SceneAssets {
+                text: stone_text(7),
+            },
+        );
+        send(&mut editor, &painted(4, "#Stone"));
+        app.update();
+        assert_eq!(painted_tone(&mut app, entity), Some((4, 7)));
+    }
+
+    /// The editor counts a document's assets as given once it answers, even if
+    /// this game had given up on the answer.
+    #[test]
+    fn a_late_document_still_gives_its_assets() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            ANSWER_TIMEOUT,
+        ));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        update_until_spawned(&mut app);
+        let entity = node_entities(&mut app)[0];
+
+        let text = format!(
+            "bevy_ecs::hierarchy::Children [\n    #Stone\n    game::Swatch {{ tone: 7 }}\n    --\n    #Other\n    {TRANSFORM}\n]\n"
+        );
+        send(&mut editor, &document(request, text));
+        send(&mut editor, &painted(4, "#Stone"));
+        app.update();
+        assert_eq!(painted_tone(&mut app, entity), Some((4, 7)));
+    }
+
+    /// An edit can arrive after the document that embeds its asset and before
+    /// that document spawns. An entity spawned earlier takes it once it has.
+    #[test]
+    fn an_edit_naming_an_asset_of_a_waiting_document_reaches_an_earlier_root() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (first, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(first, scene_text(1.0)));
+        app.update();
+        let earlier = node_entities(&mut app)[0];
+
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (second, _) = requests_from(&mut editor)[0];
+        let text = format!(
+            "bevy_ecs::hierarchy::Children [\n    #Stone\n    game::Swatch {{ tone: 7 }}\n    --\n    {}\n]\n",
+            scene_text(1.0).trim_end().replace('\n', "\n    ")
+        );
+        send(&mut editor, &document(second, text));
+        send(&mut editor, &painted(4, "#Stone"));
+        app.update();
+        assert_eq!(painted_tone(&mut app, earlier), Some((4, 7)));
+    }
+
+    /// The folder an answer names is what a source spelled beside the document
+    /// resolves against.
+    #[test]
+    fn a_document_served_with_a_folder_resolves_a_prefab_beside_it() {
+        let (mut app, mut editor, dir) = game();
+        std::fs::create_dir_all(dir.path().join("levels/parts")).expect("a folder");
+        std::fs::write(dir.path().join("levels/parts/rock.bsn"), scene_text(3.0))
+            .expect("a prefab");
+        spawn_root(&mut app, "levels/meadow.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        send(
+            &mut editor,
+            &ControlEvent::SceneDocument {
+                request,
+                answer: SceneAnswer::Document {
+                    text: format!(
+                        "#Boulder\n{} {{ source: \"parts/rock.bsn\", deleted: [] }}\n",
+                        jackdaw_prefab::ISA_TYPE
+                    ),
+                    dir: "levels".to_string(),
+                    stem: "meadow".to_string(),
+                },
+            },
+        );
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![3.0], "the prefab's own value");
     }
 
     /// The file finishing its load, or changing on disk, after the document

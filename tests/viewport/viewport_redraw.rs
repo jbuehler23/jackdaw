@@ -89,10 +89,10 @@ fn realtime_off_lets_the_window_wait_for_events() {
     );
 }
 
-/// With realtime off the editor still has to drain a running game's messages,
-/// a scene request among them.
+/// A running game asks for no frames by itself: every update draws. Only the
+/// bounded windows around its scene requests do.
 #[test]
-fn a_running_game_keeps_the_frames_coming() {
+fn a_running_game_alone_lets_the_editor_fall_quiet() {
     use jackdaw_api::pie::PlayState;
 
     let dir = tempfile::tempdir().unwrap();
@@ -103,12 +103,25 @@ fn a_running_game_keeps_the_frames_coming() {
     app.world_mut()
         .resource_mut::<NextState<PlayState>>()
         .set(PlayState::Playing);
+    app.update();
+    assert!(
+        falls_quiet(&mut app),
+        "a running game alone does not ask for frames"
+    );
+
+    jackdaw::viewport_redraw::note_game_started(app.world_mut());
     app.world_mut().resource_mut::<Redraws>().0 = 0;
     app.update();
     app.update();
     assert!(
         app.world().resource::<Redraws>().0 > 0,
-        "a running instance counts as busy"
+        "a game that just started gets answered at once"
+    );
+
+    jackdaw::viewport_redraw::note_game_request(app.world_mut());
+    assert!(
+        falls_quiet(&mut app),
+        "and the window closes after a request"
     );
 }
 

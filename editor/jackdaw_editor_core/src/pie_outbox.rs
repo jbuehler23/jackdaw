@@ -503,6 +503,23 @@ mod tests {
         );
     }
 
+    /// An edit naming an asset must not merge into an edit queued ahead of the
+    /// asset's definition.
+    #[test]
+    fn an_edit_stays_behind_the_asset_message_it_needs() {
+        let assets = ControlEvent::SceneAssets {
+            text: "#Stone\ngame::Swatch\n".to_string(),
+        };
+        let shared = Shared::new();
+        shared.push_edit(edit(1, &[(A, 1)], &[]));
+        shared.push(to_bytes(&assets).expect("encode"));
+        shared.push_edit(edit(1, &[(A, 2)], &[]));
+        assert_eq!(
+            drain(&shared),
+            vec![sent(1, &[(A, 1)], &[]), assets, sent(1, &[(A, 2)], &[])]
+        );
+    }
+
     #[test]
     fn an_edit_already_taken_by_the_writer_is_not_merged_into() {
         let shared = Shared::new();

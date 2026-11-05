@@ -12,6 +12,9 @@
 //! may be older than a change that reached the game first. With no root waiting
 //! the held changes are dropped: a scene that spawns later asks for the document
 //! as it stands then.
+//!
+//! [`load_scene_assets`] takes the asset definitions the editor sends ahead of an
+//! edit naming an asset this game has not been given.
 
 use bevy::asset::{AssetServer, ReflectHandle, UntypedHandle};
 use bevy::ecs::component::ComponentId;
@@ -83,15 +86,22 @@ impl PendingNodeChanges {
     /// Merge a change into what `node` holds: a value replaces an earlier
     /// value or removal of its type, and a removal replaces an earlier value.
     /// `delivered` are the entities the change is being applied to directly.
+    /// With `missed`, a value named an asset the root still to spawn brings, so
+    /// those entities take everything held again once it has.
     fn hold(
         &mut self,
         node: u64,
         set: &[(String, serde_json::Value)],
         removed: &[String],
         delivered: &[Entity],
+        missed: bool,
     ) {
         let held = self.nodes.entry(node).or_default();
-        held.delivered.extend(delivered.iter().copied());
+        if missed {
+            held.delivered.retain(|entity| !delivered.contains(entity));
+        } else {
+            held.delivered.extend(delivered.iter().copied());
+        }
         for (type_path, value) in set {
             held.removed.retain(|path| path != type_path);
             match held.set.iter_mut().find(|(path, _)| path == type_path) {
@@ -182,7 +192,7 @@ fn apply_pending_node_changes(world: &mut World) {
         }
         held.delivered.extend(fresh.iter().copied());
         let (set, removed) = (held.set.clone(), held.removed.clone());
-        apply_to_entities(world, &fresh, &set, &removed);
+        apply_to_entities(world, &fresh, &set, &removed, false);
     }
     if !crate::scene_root_awaiting_spawn(world) {
         world.resource_mut::<PendingNodeChanges>().nodes.clear();
@@ -423,23 +433,45 @@ pub fn apply_node_components(
         .get_resource::<SceneNodeIndex>()
         .map(|index| index.entities(SceneNodeId(node)).to_vec())
         .unwrap_or_default();
-    if crate::scene_root_awaiting_spawn(world)
-        && let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>()
-    {
-        pending.hold(node, set, removed, &entities);
+    let awaiting = crate::scene_root_awaiting_spawn(world);
+    let missed = apply_to_entities(world, &entities, set, removed, awaiting);
+    if awaiting && let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() {
+        pending.hold(node, set, removed, &entities, missed);
     }
-    apply_to_entities(world, &entities, set, removed);
 }
 
+/// Load the named asset definitions in `text` into their asset stores and
+/// [`BsnSceneAssets`], under both reference spellings.
+pub fn load_scene_assets(world: &mut World, text: &str) {
+    let entries = match jackdaw_bsn::load_bsn_assets(world, text) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!("PIE: could not read the asset definitions the editor sent: {err}");
+            return;
+        }
+    };
+    let mut assets = world.get_resource_or_init::<BsnSceneAssets>();
+    for entry in entries {
+        assets
+            .0
+            .insert(format!("#{}", entry.name), entry.handle.clone());
+        assets.0.insert(format!("@{}", entry.name), entry.handle);
+    }
+}
+
+/// Write a node's change to `entities`. Returns whether a value failed to read.
+/// With `retry`, such a value is held for after a spawn rather than warned about.
 fn apply_to_entities(
     world: &mut World,
     entities: &[Entity],
     set: &[(String, serde_json::Value)],
     removed: &[String],
-) {
+    retry: bool,
+) -> bool {
     if entities.is_empty() {
-        return;
+        return false;
     }
+    let mut missed = false;
     for (type_path, value) in set {
         match decode_component(world, type_path, value) {
             Ok(decoded) => {
@@ -447,6 +479,7 @@ fn apply_to_entities(
                     write_component(world, entity, &decoded);
                 }
             }
+            Err(_) if retry => missed = true,
             Err(reason) => warn_once(world, type_path, &reason),
         }
     }
@@ -471,6 +504,7 @@ fn apply_to_entities(
             }
         }
     }
+    missed
 }
 
 #[cfg(test)]

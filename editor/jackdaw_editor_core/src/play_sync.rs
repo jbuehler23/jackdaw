@@ -11,6 +11,10 @@
 //! goes as its current value instead of a removal. Commands, undo, redo and
 //! remote edits all change the document, so no command needs to report its
 //! own edit.
+//!
+//! An edit naming a runtime asset a game has not been given goes behind a
+//! [`ControlEvent::SceneAssets`] holding the asset's definition, the way served
+//! text embeds it. Both go through the instance's one queue, in that order.
 
 use std::any::TypeId;
 use std::collections::hash_map::DefaultHasher;
@@ -25,12 +29,12 @@ use bevy::prelude::*;
 use bevy::reflect::serde::{ReflectSerializerProcessor, TypedReflectSerializer};
 use bevy::reflect::{PartialReflect, ReflectRef, TypePath, TypeRegistry};
 use jackdaw_api::pie::PlayState;
-use jackdaw_bsn::{BsnPatch, BsnPatches, SceneBsnAst, patch_type_path};
+use jackdaw_bsn::{BsnPatch, BsnPatches, CatalogAssetRef, SceneBsnAst, patch_type_path};
 use jackdaw_pie_protocol::ControlEvent;
 use jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 use serde::Serializer;
 
-use crate::pie::SyncTarget;
+use crate::pie::{InstanceKey, SyncTarget};
 use crate::pie_mirror::PieViewMode;
 use crate::pie_projection::PieProjection;
 use crate::prefab::resolver_bsn::ISA_TYPE;
@@ -84,6 +88,12 @@ fn forget_on_stop(mut sync: ResMut<DocumentSync>) {
     sync.forget();
 }
 
+/// A node event, and the runtime assets its values name.
+struct NodeChange {
+    event: ControlEvent,
+    assets: Vec<CatalogAssetRef>,
+}
+
 /// Send the document's node changes to every live instance. A launching
 /// instance is not sent to: it asks for the document when it starts. With no
 /// instance live, the first launch records the document as the baseline,
@@ -110,8 +120,9 @@ pub(crate) fn sync_document_to_game(world: &mut World) {
             }
         }
         SyncTarget::Live => {
-            for event in collect_node_changes(world) {
-                crate::pie::broadcast_control(world, event);
+            let keys = world.non_send::<crate::pie::PieSession>().live_keys();
+            for (key, event) in collect_changes_for(world, &keys) {
+                crate::pie::send_control_to_instance(world, &key, event);
             }
         }
     }
@@ -133,13 +144,74 @@ pub(crate) fn absorb_document_changes(world: &mut World) {
 /// changed node. The first call after [`DocumentSync::forget`] records the
 /// document and returns nothing.
 pub fn collect_node_changes(world: &mut World) -> Vec<ControlEvent> {
+    collect_changes(world)
+        .into_iter()
+        .map(|change| change.event)
+        .collect()
+}
+
+/// [`collect_node_changes`] as each of the games `keys` takes it, in send order:
+/// an edit naming an asset a game was not given, or was given another definition
+/// of, comes behind the definition.
+pub fn collect_changes_for(
+    world: &mut World,
+    keys: &[InstanceKey],
+) -> Vec<(InstanceKey, ControlEvent)> {
+    let mut sends = Vec::new();
+    for change in collect_changes(world) {
+        for key in keys {
+            if let Some(event) = assets_missing_from(world, key, &change.assets) {
+                sends.push((key.clone(), event));
+            }
+            sends.push((key.clone(), change.event.clone()));
+        }
+    }
+    sends
+}
+
+/// The definitions of those of `assets` the game `key` does not hold, now counted
+/// as given.
+fn assets_missing_from(
+    world: &mut World,
+    key: &InstanceKey,
+    assets: &[CatalogAssetRef],
+) -> Option<ControlEvent> {
+    let mut names = world.get_resource_mut::<crate::play_scene::PlayAssetNames>()?;
+    let mut missing: Vec<CatalogAssetRef> = Vec::new();
+    for asset in assets {
+        let name = format!("#{}", asset.name);
+        let definition = names.definition(&name)?;
+        if !names.has_given(key, &name, definition) {
+            names.note_given(key, name, definition);
+            missing.push(CatalogAssetRef {
+                name: asset.name.clone(),
+                type_id: asset.type_id,
+                asset_id: asset.asset_id,
+            });
+        }
+    }
+    (!missing.is_empty()).then(|| ControlEvent::SceneAssets {
+        text: jackdaw_bsn::serialize_assets_to_bsn(world, &missing),
+    })
+}
+
+fn collect_changes(world: &mut World) -> Vec<NodeChange> {
     if !world.contains_resource::<SceneBsnAst>() || !world.contains_resource::<DocumentSync>() {
         return Vec::new();
     }
-    world.resource_scope(|world, mut sync: Mut<DocumentSync>| collect(world, &mut sync))
+    world.init_resource::<crate::play_scene::PlayAssetNames>();
+    world.resource_scope(|world, mut sync: Mut<DocumentSync>| {
+        world.resource_scope(|world, mut names: Mut<crate::play_scene::PlayAssetNames>| {
+            collect(world, &mut sync, &mut names)
+        })
+    })
 }
 
-fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
+fn collect(
+    world: &mut World,
+    sync: &mut DocumentSync,
+    names: &mut crate::play_scene::PlayAssetNames,
+) -> Vec<NodeChange> {
     let world_now = world.change_tick();
     world.increment_change_tick();
     let document_changed =
@@ -173,12 +245,30 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
     let project = world.get_resource::<ProjectTypes>();
+    let mut references = AssetReferences::with(world, names);
     let touched: Vec<Touched> = authored
         .into_iter()
-        .map(|(id, node, patches)| Touched {
-            id,
-            node,
-            components: by_component(patches, &registry, project),
+        .map(|(id, node, patches)| {
+            let mut components = by_component(patches, &registry, project);
+            let entity = world
+                .resource::<SceneBsnAst>()
+                .ecs_for_ast(node)
+                .filter(|&entity| world.get_entity(entity).is_ok());
+            if let Some(entity) = entity {
+                fold_in_references(
+                    world,
+                    &registry,
+                    &mut references,
+                    names,
+                    entity,
+                    &mut components,
+                );
+            }
+            Touched {
+                id,
+                node,
+                components,
+            }
         })
         .collect();
 
@@ -202,7 +292,6 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
     seen.retry.clear();
 
     let projected = projected_entities(world);
-    let mut references: Option<AssetReferences> = None;
     let mut events = Vec::new();
     for Touched {
         id,
@@ -236,7 +325,7 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
         };
         set_paths.sort();
         left.sort();
-        let references = references.get_or_insert_with(|| AssetReferences::of(world));
+        let references = &mut references;
         let mut recorded = components.clone();
         let mut keep_previous = |path: &String| match before.get(path) {
             Some(digest) => {
@@ -248,8 +337,18 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
         };
         let mut set = Vec::new();
         let mut removed = Vec::new();
+        let mut assets = Vec::new();
         for path in set_paths {
-            match component_value(world, &registry, references, entity, node, path) {
+            match component_value(
+                world,
+                &registry,
+                references,
+                names,
+                &mut assets,
+                entity,
+                node,
+                path,
+            ) {
                 Ok(value) => set.push((path.clone(), value)),
                 Err(unsent) => {
                     keep_previous(path);
@@ -267,6 +366,13 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
                 seen.retry.insert(id);
                 continue;
             }
+            references.take_up(
+                world,
+                &registry,
+                held.as_partial_reflect(),
+                names,
+                &mut assets,
+            );
             match game_value(held.as_partial_reflect(), &registry, references) {
                 Ok(value) => set.push((path.clone(), value)),
                 Err(unsent) => {
@@ -278,10 +384,13 @@ fn collect(world: &mut World, sync: &mut DocumentSync) -> Vec<ControlEvent> {
         seen.nodes.insert(id, recorded);
         if !set.is_empty() || !removed.is_empty() {
             set.sort_by(|a, b| a.0.cmp(&b.0));
-            events.push(ControlEvent::NodeComponents {
-                node: id,
-                set,
-                removed,
+            events.push(NodeChange {
+                event: ControlEvent::NodeComponents {
+                    node: id,
+                    set,
+                    removed,
+                },
+                assets,
             });
         }
     }
@@ -379,6 +488,33 @@ fn authored_patches(ast: &SceneBsnAst, node: Entity) -> Authored {
         .collect()
 }
 
+/// Fold the asset references `entity`'s components hold into their digests. The
+/// document mirrors a handle field without an asset context, so its patch reads
+/// the same whichever asset the field points at. Hashing the reference rather
+/// than the handle's id keeps a reparse, which changes ids, from reading as an
+/// edit.
+fn fold_in_references(
+    world: &World,
+    registry: &TypeRegistry,
+    references: &mut AssetReferences,
+    names: &mut crate::play_scene::PlayAssetNames,
+    entity: Entity,
+    components: &mut Components,
+) {
+    for (path, digest) in components.iter_mut() {
+        let Some(value) = held_component(world, registry, entity, path) else {
+            continue;
+        };
+        let held = references.references_in(world, registry, value.as_partial_reflect(), names);
+        if !held.is_empty() {
+            let mut hasher = DefaultHasher::new();
+            digest.hash(&mut hasher);
+            held.hash(&mut hasher);
+            *digest = hasher.finish();
+        }
+    }
+}
+
 /// Fold a node's patch digests into one digest per component type path.
 fn by_component(
     patches: Authored,
@@ -448,31 +584,142 @@ impl Unsent {
 }
 
 /// How the game's scene loader names each asset a handle can point at: the
-/// asset path, the `#Name` the loaded scene embeds it as (including the names
-/// this Play session gave its runtime assets and the names the last save of the
-/// open scene gave them), or the catalog's `@Name`, the same references a scene
-/// save writes.
-pub(crate) struct AssetReferences(HashMap<UntypedAssetId, String>);
+/// asset path, the catalog's `@Name`, or the one `#Name` the Play session gave a
+/// runtime asset (see [`crate::play_scene::PlayAssetNames`]). Served text and
+/// edits read names from the same place.
+pub(crate) struct AssetReferences {
+    fixed: HashMap<UntypedAssetId, String>,
+    session: HashMap<UntypedAssetId, String>,
+    suggested: HashMap<UntypedAssetId, String>,
+    /// The assets named since this was made, none of which need looking at again.
+    current: HashSet<UntypedAssetId>,
+}
 
 impl AssetReferences {
-    pub(crate) fn of(world: &World) -> Self {
-        let mut seed = crate::scene_io::save::asset_reference_seed(world);
-        if let Some(names) = world.get_resource::<crate::play_scene::PlayAssetNames>() {
-            for (id, name) in names.iter() {
-                seed.entry(*id).or_insert_with(|| name.clone());
-            }
+    pub(crate) fn with(world: &World, names: &crate::play_scene::PlayAssetNames) -> Self {
+        let (fixed, suggested) = crate::scene_io::save::play_reference_seeds(world);
+        let session = names.iter().map(|(id, name)| (*id, name.clone())).collect();
+        Self {
+            fixed,
+            session,
+            suggested,
+            current: HashSet::new(),
         }
-        for (id, name) in crate::scene_io::save::saved_asset_names(world) {
-            seed.entry(*id).or_insert_with(|| name.clone());
+    }
+
+    /// The reference of each handle `value` holds, in order, `None` for a default
+    /// handle or an asset with no reference.
+    fn references_in(
+        &mut self,
+        world: &World,
+        registry: &TypeRegistry,
+        value: &dyn PartialReflect,
+        names: &mut crate::play_scene::PlayAssetNames,
+    ) -> Vec<Option<String>> {
+        let mut handles = Vec::new();
+        handles_in(value, registry, &mut handles);
+        if handles
+            .iter()
+            .any(|handle| !self.current.contains(&handle.id()))
+        {
+            self.take_up(world, registry, value, names, &mut Vec::new());
+            self.current.extend(handles.iter().map(UntypedHandle::id));
         }
-        Self(seed)
+        handles
+            .iter()
+            .map(|handle| self.reference(handle))
+            .collect()
+    }
+
+    /// Name the runtime assets `value` holds handles to, listing them in `used`.
+    fn take_up(
+        &mut self,
+        world: &World,
+        registry: &TypeRegistry,
+        value: &dyn PartialReflect,
+        names: &mut crate::play_scene::PlayAssetNames,
+        used: &mut Vec<CatalogAssetRef>,
+    ) {
+        let assets = crate::scene_io::save::play_assets_in(
+            world,
+            registry,
+            value,
+            &mut self.fixed,
+            &self.suggested,
+            names,
+        );
+        for asset in assets {
+            self.session
+                .insert(asset.asset_id, format!("#{}", asset.name));
+            used.push(asset);
+        }
     }
 
     pub(crate) fn reference(&self, handle: &UntypedHandle) -> Option<String> {
+        let id = handle.id();
         handle
             .path()
             .map(ToString::to_string)
-            .or_else(|| self.0.get(&handle.id()).cloned())
+            .or_else(|| self.fixed.get(&id).cloned())
+            .or_else(|| self.session.get(&id).cloned())
+    }
+}
+
+/// Every asset handle in `value`, in the order reflection visits them.
+fn handles_in(value: &dyn PartialReflect, registry: &TypeRegistry, out: &mut Vec<UntypedHandle>) {
+    if let Some(concrete) = value.try_as_reflect() {
+        let type_id = concrete.reflect_type_info().type_id();
+        if let Some(reflect_handle) = registry.get_type_data::<ReflectHandle>(type_id) {
+            out.extend(reflect_handle.downcast_handle_untyped(concrete.as_any()));
+            return;
+        }
+    }
+    match value.reflect_ref() {
+        ReflectRef::Struct(value) => {
+            for index in 0..value.field_len() {
+                if let Some(field) = value.field_at(index) {
+                    handles_in(field, registry, out);
+                }
+            }
+        }
+        ReflectRef::TupleStruct(value) => {
+            for index in 0..value.field_len() {
+                if let Some(field) = value.field(index) {
+                    handles_in(field, registry, out);
+                }
+            }
+        }
+        ReflectRef::Tuple(value) => {
+            for index in 0..value.field_len() {
+                if let Some(field) = value.field(index) {
+                    handles_in(field, registry, out);
+                }
+            }
+        }
+        ReflectRef::List(value) => value
+            .iter()
+            .for_each(|item| handles_in(item, registry, out)),
+        ReflectRef::Array(value) => value
+            .iter()
+            .for_each(|item| handles_in(item, registry, out)),
+        ReflectRef::Map(value) => {
+            value
+                .iter()
+                .for_each(|(_, item)| handles_in(item, registry, out));
+        }
+        ReflectRef::Set(value) => {
+            value
+                .iter()
+                .for_each(|item| handles_in(item, registry, out));
+        }
+        ReflectRef::Enum(value) => {
+            for index in 0..value.field_len() {
+                if let Some(field) = value.field_at(index) {
+                    handles_in(field, registry, out);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -493,10 +740,16 @@ fn held_component<'w>(
 /// The full current value of `type_path` on the node, in the form the game's
 /// reflection deserializer reads: the editor entity's component for a type
 /// the editor registers, else the document's value for a project type.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the naming state and the assets used travel alongside the value's address"
+)]
 fn component_value(
     world: &World,
     registry: &TypeRegistry,
-    references: &AssetReferences,
+    references: &mut AssetReferences,
+    names: &mut crate::play_scene::PlayAssetNames,
+    used: &mut Vec<CatalogAssetRef>,
     entity: Entity,
     node: Entity,
     type_path: &str,
@@ -508,6 +761,7 @@ fn component_value(
         let value = reflect
             .reflect(world.entity(entity))
             .ok_or_else(|| Unsent::whole("the editor entity does not hold it"))?;
+        references.take_up(world, registry, value.as_partial_reflect(), names, used);
         return game_value(value.as_partial_reflect(), registry, references);
     }
     let schema = world
@@ -555,7 +809,7 @@ fn first_unsendable(
             let sendable = handle.is_some_and(|handle| {
                 handle.id() == default.id() || references.reference(&handle).is_some()
             });
-            return (!sendable).then_some("holds an asset the game's scene does not name");
+            return (!sendable).then_some("holds an asset that cannot be embedded for the game");
         }
         if type_id == TypeId::of::<Entity>() {
             return Some("holds an entity reference");

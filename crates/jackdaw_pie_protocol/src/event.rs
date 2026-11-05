@@ -111,6 +111,11 @@ pub enum ControlEvent {
         request: u64,
         answer: SceneAnswer,
     },
+    /// Named asset definitions, as the roots a served document embeds them with.
+    /// Sent ahead of an edit naming an asset this game has not been given.
+    SceneAssets {
+        text: String,
+    },
 }
 
 /// Serialize a protocol message to bytes. Uses JSON so component payloads
@@ -225,6 +230,15 @@ mod tests {
             let bytes = to_bytes(&ev).unwrap();
             assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
         }
+    }
+
+    #[test]
+    fn scene_assets_round_trip() {
+        let ev = ControlEvent::SceneAssets {
+            text: "#Stone\ngame::Swatch\n".to_string(),
+        };
+        let bytes = to_bytes(&ev).unwrap();
+        assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
     }
 
     #[test]

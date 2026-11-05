@@ -1,19 +1,20 @@
 //! What the editor answers when a running game asks for a scene, spawned by the
 //! runtime's own loader where the answer is a document.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
-use jackdaw::play_scene::{LaunchScene, PlayScene, launch_scene, scene_answer};
-use jackdaw::play_sync::collect_node_changes;
+use jackdaw::pie::InstanceKey;
+use jackdaw::play_scene::{LaunchScene, PlayScene, launch_scene, scene_answer, serve_scene};
+use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
 use jackdaw::scenes::{Scenes, TabKind, TabRefusal};
 use jackdaw_api::prelude::*;
 use jackdaw_pie_protocol::manifest::RunConfig;
 use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
-use jackdaw_runtime::node_sync::{apply_node_components, install_node_index};
+use jackdaw_runtime::node_sync::{apply_node_components, install_node_index, load_scene_assets};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
-use jackdaw_scene_types::SceneNodeId;
+use jackdaw_scene_types::{Brush, SceneNodeId};
 
 use crate::util::{self, OperatorResultExt as _};
 
@@ -373,4 +374,357 @@ fn absolute_field_scene() -> String {
     "#Rock\nbevy_transform::components::transform::Transform\n\
      game::NamesAnAsset { item: \"/elsewhere/rock.item\" }\n"
         .to_string()
+}
+
+const KEY_CONFIG: &str = "default";
+
+fn instance() -> InstanceKey {
+    InstanceKey {
+        config: KEY_CONFIG.to_string(),
+        instance: 1,
+    }
+}
+
+/// A game taking materials and brushes, spawning `text` from the asset folder
+/// `assets` as if it were in `dir` under it.
+fn game_with_assets(assets: &Path, text: String, dir: &str) -> App {
+    let mut game = App::new();
+    game.add_plugins(MinimalPlugins);
+    game.add_plugins(bevy::transform::TransformPlugin);
+    game.add_plugins(bevy::asset::AssetPlugin {
+        file_path: assets.to_string_lossy().into_owned(),
+        ..default()
+    });
+    game.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    game.init_asset::<StandardMaterial>();
+    game.register_asset_reflect::<StandardMaterial>();
+    game.init_asset::<Image>();
+    game.register_type::<Brush>();
+    install_node_index(&mut game);
+    game.add_plugins(JackdawPlugin);
+    let scene = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .add(JackdawScene::new(text, PathBuf::from(dir)));
+    game.world_mut().spawn(JackdawSceneRoot(scene));
+    game.update();
+    game
+}
+
+fn take_in_game(game: &mut App, events: Vec<(InstanceKey, ControlEvent)>) {
+    for (_, event) in events {
+        match event {
+            ControlEvent::NodeComponents { node, set, removed } => {
+                apply_node_components(game.world_mut(), node, &set, &removed);
+            }
+            ControlEvent::SceneAssets { text } => load_scene_assets(game.world_mut(), &text),
+            other => panic!("not an edit: {other:?}"),
+        }
+    }
+    game.update();
+}
+
+fn asset_messages(events: &[(InstanceKey, ControlEvent)]) -> usize {
+    events
+        .iter()
+        .filter(|(_, event)| matches!(event, ControlEvent::SceneAssets { .. }))
+        .count()
+}
+
+/// A new cube in the document, with a new material of `roughness` on its first
+/// face.
+fn cube_with_material(app: &mut App, roughness: f32) -> Entity {
+    let before: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .collect();
+    run_op_clause_as_user(app.world_mut(), "entity.add.cube")
+        .expect("the cube dispatched")
+        .assert_finished();
+    app.update();
+    let cube = app
+        .world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .find(|entity| !before.contains(entity))
+        .expect("a cube");
+    assign_material(app, cube, roughness);
+    cube
+}
+
+fn assign_material(app: &mut App, cube: Entity, roughness: f32) -> Handle<StandardMaterial> {
+    let material = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            perceptual_roughness: roughness,
+            ..default()
+        });
+    let held = material.clone();
+    edit_brush(app, cube, |brush| brush.faces[0].material = held);
+    material
+}
+
+fn edit_brush(app: &mut App, cube: Entity, edit: impl FnOnce(&mut Brush)) {
+    let world = app.world_mut();
+    let mut brush = world.get::<Brush>(cube).expect("a brush").clone();
+    edit(&mut brush);
+    world.entity_mut(cube).insert(brush.clone());
+    jackdaw::brush::sync_brush_to_ast(world, cube, &brush);
+    app.update();
+}
+
+/// The only brush in `world`, as the game holds it.
+fn game_brush(game: &mut App) -> Brush {
+    game.world_mut()
+        .query::<&Brush>()
+        .iter(game.world())
+        .next()
+        .expect("the game holds the brush")
+        .clone()
+}
+
+fn game_roughness(game: &mut App) -> f32 {
+    let brush = game_brush(game);
+    game.world()
+        .resource::<Assets<StandardMaterial>>()
+        .get(&brush.faces[0].material)
+        .expect("the handle resolves to an asset")
+        .perceptual_roughness
+}
+
+fn first_cube(app: &mut App) -> Entity {
+    app.world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .next()
+        .expect("a cube")
+}
+
+fn save(app: &mut App, tmp: &tempfile::TempDir) {
+    app.world_mut()
+        .operator("scene.save")
+        .param("path", zone_file(tmp).to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches")
+        .assert_finished();
+    app.update();
+}
+
+fn served_material_name(text: &str) -> String {
+    let start = text
+        .find("material: \"#")
+        .expect("the face names a material")
+        + 11;
+    let rest = &text[start..];
+    rest[..rest.find('"').expect("a closing quote")].to_string()
+}
+
+/// A material assigned and saved before Play: the live document holds no root for
+/// it, the text reuses the name the save gave it, and embeds it all the same.
+#[test]
+fn a_saved_runtime_material_is_embedded_under_its_saved_name() {
+    let (mut app, tmp) = editor();
+    cube_with_material(&mut app, 0.25);
+    save(&mut app, &tmp);
+    let saved = std::fs::read_to_string(zone_file(&tmp)).expect("the saved scene");
+
+    let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    let name = served_material_name(&text);
+    assert!(saved.contains(&name), "the file's name {name}:\n{saved}");
+    assert!(!name.starts_with("#Play"), "{name}");
+    assert!(
+        text.contains(&format!("{name}\n")),
+        "embedded as a root:\n{text}"
+    );
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+    assert_eq!(game_roughness(&mut game), 0.25);
+}
+
+/// Saving during Play renumbers a file's names. An edit and a respawn keep
+/// spelling the one name the game holds.
+#[test]
+fn a_save_during_play_does_not_split_the_served_name_from_the_edit() {
+    let (mut app, tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let SceneAnswer::Document { text, .. } = serve_scene(app.world_mut(), &key, None, "zone.bsn")
+    else {
+        panic!("a document");
+    };
+    let name = served_material_name(&text);
+    assert!(name.starts_with("#Play"), "nothing saved it yet: {name}");
+
+    save(&mut app, &tmp);
+    let (after, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    assert_eq!(served_material_name(&after), name);
+
+    edit_brush(&mut app, cube, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.5, 0.25);
+    });
+    let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    assert_eq!(asset_messages(&sends), 0, "the game has it: {sends:?}");
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+    take_in_game(&mut game, sends);
+    assert_eq!(
+        game_brush(&mut game).faces[0].uv_offset,
+        Vec2::new(0.5, 0.25)
+    );
+    assert_eq!(game_roughness(&mut game), 0.25);
+}
+
+/// A view toggle re-emits and reparses the document, so each asset comes back
+/// with a new id and its handle fields with a new per-document name. The running
+/// game only knows the first, and still takes the edit, without a new copy.
+#[test]
+fn an_edit_after_the_document_respawns_reaches_the_game() {
+    let (mut app, tmp) = editor();
+    cube_with_material(&mut app, 0.25);
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let SceneAnswer::Document { text, .. } = serve_scene(app.world_mut(), &key, None, "zone.bsn")
+    else {
+        panic!("a document");
+    };
+    let name = served_material_name(&text);
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+    assert_eq!(game_roughness(&mut game), 0.25);
+    let spawned = game_brush(&mut game).faces[0].material.clone();
+
+    for offset in [0.5, 0.75] {
+        jackdaw::pie_projection::revert_preview(app.world_mut());
+        app.update();
+        let cube = first_cube(&mut app);
+        edit_brush(&mut app, cube, |brush| {
+            brush.faces[0].uv_offset = Vec2::new(offset, 0.0);
+        });
+        let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+        assert_eq!(asset_messages(&sends), 0, "no copy per reparse: {sends:?}");
+        take_in_game(&mut game, sends);
+        let brush = game_brush(&mut game);
+        assert_eq!(brush.faces[0].uv_offset, Vec2::new(offset, 0.0));
+        assert_eq!(brush.faces[0].material, spawned, "the same material");
+    }
+    let (again, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    assert_eq!(served_material_name(&again), name);
+}
+
+/// A material new to the game arrives ahead of the edit naming it.
+#[test]
+fn a_material_assigned_during_play_shows_up_in_the_game() {
+    let (mut app, tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let SceneAnswer::Document { text, .. } = serve_scene(app.world_mut(), &key, None, "zone.bsn")
+    else {
+        panic!("a document");
+    };
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+
+    assign_material(&mut app, cube, 0.75);
+    let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    assert!(
+        matches!(
+            sends.as_slice(),
+            [
+                (_, ControlEvent::SceneAssets { .. }),
+                (_, ControlEvent::NodeComponents { .. })
+            ]
+        ),
+        "the definition goes first: {sends:?}"
+    );
+    take_in_game(&mut game, sends);
+    assert_eq!(game_roughness(&mut game), 0.75);
+
+    edit_brush(&mut app, cube, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.5, 0.25);
+    });
+    let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    assert_eq!(asset_messages(&sends), 0, "sent once: {sends:?}");
+
+    let other = InstanceKey {
+        config: KEY_CONFIG.to_string(),
+        instance: 2,
+    };
+    edit_brush(&mut app, cube, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.75, 0.25);
+    });
+    let sends = collect_changes_for(app.world_mut(), &[key, other.clone()]);
+    let to_other: Vec<_> = sends.iter().filter(|(to, _)| *to == other).collect();
+    assert!(
+        matches!(to_other[0].1, ControlEvent::SceneAssets { .. }),
+        "each game is tracked on its own: {sends:?}"
+    );
+    assert_eq!(asset_messages(&sends), 1);
+}
+
+/// An edit made long before a later scene spawns comes from the document that
+/// scene is served, whatever time passed in the game.
+#[test]
+fn an_edit_long_before_a_later_scene_is_in_the_document_it_is_served() {
+    let (mut app, tmp) = editor();
+    let zone = entity_named(&mut app, "Zone");
+    collect_node_changes(app.world_mut());
+    let mut game = game_with_assets(&tmp.path().join("assets"), MEADOW.to_string(), "levels");
+    game.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_secs(1),
+    ));
+
+    move_to(&mut app, zone, 8.0);
+    for event in collect_node_changes(app.world_mut()) {
+        let ControlEvent::NodeComponents { node, set, removed } = event else {
+            panic!("a node edit");
+        };
+        apply_node_components(game.world_mut(), node, &set, &removed);
+    }
+    for _ in 0..32 {
+        game.update();
+    }
+
+    let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    let scene = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .add(JackdawScene::new(text, PathBuf::new()));
+    game.world_mut().spawn(JackdawSceneRoot(scene));
+    game.update();
+    assert_eq!(game_x(&mut game, "Zone"), 8.0);
+}
+
+/// A scene in a folder with a prefab instance whose source is spelled beside the
+/// scene: the served text still reaches the prefab, so its content spawns.
+#[test]
+fn a_served_scene_in_a_folder_spawns_its_prefab() {
+    let (mut app, tmp) = editor();
+    std::fs::create_dir_all(tmp.path().join("assets/levels/parts")).expect("a folder");
+    std::fs::write(
+        tmp.path().join("assets/levels/parts/rock.bsn"),
+        "#Rock\nbevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n    #Pebble\n    \
+         bevy_transform::components::transform::Transform\n]\n",
+    )
+    .expect("a prefab");
+    std::fs::write(
+        tmp.path().join("assets/levels/meadow.bsn"),
+        "#Meadow\nbevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n    \
+         #Boulder\n    jackdaw::prefab::components::IsA { source: \"parts/rock.bsn\", deleted: [] }\n\
+         ]\n",
+    )
+    .expect("a scene");
+    open(&mut app, "assets/levels/meadow.bsn");
+
+    let (text, dir, _) = document(scene_answer(app.world_mut(), None, "levels/meadow.bsn"));
+    assert_eq!(dir, "levels");
+    assert!(text.contains("rock.bsn"), "{text}");
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, &dir);
+    let pebble = game
+        .world_mut()
+        .query::<&Name>()
+        .iter(game.world())
+        .any(|name| name.as_str() == "Pebble");
+    assert!(pebble, "the prefab's content spawned");
 }

@@ -5,16 +5,19 @@
 //! otherwise once every [`IDLE_REDRAW`], and asks for frames while anything
 //! is still moving on its own: a fly, dolly or other move of the camera, a
 //! modal tool, a long task, assets or meshes arriving, a scripted pointer or
-//! key gesture still playing, a running game whose messages need draining, or
-//! the short settle after the last input.
+//! key gesture still playing, the short settle after the last input, or the
+//! bounded window in which a game is likely to ask for its scenes.
 //! Shaders that animate with time stand still between those frames.
+//!
+//! Every update draws, so a running game does not count by itself: a game that
+//! asks for a scene outside the window is answered by the next idle update,
+//! within [`IDLE_REDRAW`], and holds that root without blocking until then.
 
 use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::window::RequestRedraw;
 use bevy::winit::{UpdateMode, WinitSettings};
-use jackdaw_api::pie::PlayState;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use crate::viewport::CameraFlyActive;
@@ -28,8 +31,13 @@ pub const IDLE_REDRAW: Duration = Duration::from_secs(1);
 /// and UI that settles over a few frames finish drawing.
 pub const INPUT_SETTLE: Duration = Duration::from_millis(500);
 
+/// How long frames keep coming after a game starts, for the scene requests it
+/// makes as it boots. A first request shortens it to [`INPUT_SETTLE`].
+pub const GAME_START_WINDOW: Duration = Duration::from_secs(10);
+
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<LastActivity>()
+        .init_resource::<GameRequestWindow>()
         .add_systems(
             PreUpdate,
             follow_realtime_setting.run_if(resource_changed::<ViewportSettings>),
@@ -65,6 +73,29 @@ fn follow_realtime_setting(settings: Res<ViewportSettings>, winit: Option<ResMut
 #[derive(Resource, Default)]
 struct LastActivity(Option<Duration>);
 
+/// Until when a running game's scene requests get answered at once.
+#[derive(Resource, Default)]
+struct GameRequestWindow(Option<Duration>);
+
+fn open_game_request_window(world: &mut World, length: Duration) {
+    let Some(now) = world.get_resource::<Time<Real>>().map(Time::elapsed) else {
+        return;
+    };
+    if let Some(mut window) = world.get_resource_mut::<GameRequestWindow>() {
+        window.0 = Some(now + length);
+    }
+}
+
+/// A game process just started.
+pub fn note_game_started(world: &mut World) {
+    open_game_request_window(world, GAME_START_WINDOW);
+}
+
+/// A game asked for a scene, and may ask for more right after.
+pub fn note_game_request(world: &mut World) {
+    open_game_request_window(world, INPUT_SETTLE);
+}
+
 /// Whatever is still moving on its own and needs another frame.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Busy<'w, 's> {
@@ -83,11 +114,11 @@ pub(crate) struct Busy<'w, 's> {
     >,
     spawned: Query<'w, 's, (), Added<Mesh3d>>,
     gestures: Option<Res<'w, crate::test_input::SyntheticInput>>,
-    play: Option<Res<'w, State<PlayState>>>,
+    game_requests: Option<Res<'w, GameRequestWindow>>,
 }
 
 impl Busy<'_, '_> {
-    fn any(&self) -> bool {
+    fn any(&self, now: Duration) -> bool {
         self.fly.as_ref().is_some_and(|fly| fly.0)
             || !self.modal.is_empty()
             || self
@@ -102,9 +133,10 @@ impl Busy<'_, '_> {
                 .as_ref()
                 .is_some_and(|gestures| !gestures.is_idle())
             || self
-                .play
+                .game_requests
                 .as_ref()
-                .is_some_and(|play| *play.get() != PlayState::Stopped)
+                .and_then(|window| window.0)
+                .is_some_and(|until| now < until)
     }
 }
 
@@ -129,7 +161,7 @@ fn keep_drawing_while_busy(
         || wheel.read().count() > 0;
     let arriving = images.read().count() > 0 || meshes.read().count() > 0;
     let now = time.elapsed();
-    if input || arriving || busy.any() {
+    if input || arriving || busy.any(now) {
         last.0 = Some(now);
     }
     if settings.realtime {
