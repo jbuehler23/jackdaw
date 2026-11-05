@@ -426,8 +426,9 @@ pub(crate) fn send_state(world: &mut World, event: &StateEvent) {
 /// `AddComponent`, `RemoveComponent` apply reflected edits to live entities,
 /// and `NodeComponents` to every entity spawned from a scene node.
 /// `SceneDocument` answers a scene root waiting on the editor, and
-/// `SceneAssets` loads asset definitions an edit that follows will name, and
-/// `AssetFiles` the asset files the catalog walk at startup could not hold.
+/// `SceneAssets` loads asset definitions an edit that follows will name,
+/// `AssetFiles` the asset files the catalog walk at startup could not hold, and
+/// `PrefabFiles` the unsaved prefabs read in place of their files.
 /// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
@@ -497,6 +498,9 @@ fn apply_control(world: &mut World) {
             }
             ControlEvent::AssetFiles { files } => {
                 crate::node_sync::load_asset_files(world, &files);
+            }
+            ControlEvent::PrefabFiles { files } => {
+                crate::play_overlay::load_prefab_files(world, &files);
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity

@@ -323,11 +323,15 @@ impl Plugin for PiePlugin {
                     crate::live_frame::clear_stream,
                     crate::live_edits_ui::open_stop_prompt_if_dirty,
                     crate::play_scene::forget_asset_names,
+                    crate::play_overlay::clear_play_sidecars,
                 ),
             )
             .add_systems(
                 OnExit(PlayState::Stopped),
-                crate::live_edits_ui::review_handoff_on_replay,
+                (
+                    crate::live_edits_ui::review_handoff_on_replay,
+                    crate::play_overlay::clear_play_sidecars,
+                ),
             )
             .add_observer(wire_pie_button);
     }
@@ -819,6 +823,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         crate::status_bar::notify_error(world, reason);
         return;
     }
+    crate::play_overlay::notice_unsaved_model_settings(world);
     let scene = crate::play_scene::launch_scene(world, &run);
     let run = run_with_open_scene(world, run);
 
@@ -910,8 +915,7 @@ pub(crate) fn open_scene_asset_path(world: &World) -> Option<String> {
 /// Save the modified scenes the game may load, unless the project turned
 /// that off. A scene with no file is served to the game unsaved. So is one a
 /// save refuses for naming an asset by an absolute path, which warns. A prefab
-/// is not served, so the game would read a stale file, and one that does not
-/// save stops Play.
+/// that does not save stops Play.
 fn save_before_play(world: &mut World) -> Result<(), String> {
     if !world
         .get_resource::<crate::project_build::EditorBuildSettings>()
@@ -1218,8 +1222,8 @@ fn answer_scene_request(world: &mut World, key: &InstanceKey, request: u64, path
         .cloned();
     let served = crate::play_scene::serve_scene(world, key, launch.as_ref(), path);
     crate::viewport_redraw::note_game_request(world);
-    if let Some(files) = served.files {
-        send_control_to_instance(world, key, files);
+    for ahead in [served.files, served.prefabs].into_iter().flatten() {
+        send_control_to_instance(world, key, ahead);
     }
     send_control_to_instance(
         world,

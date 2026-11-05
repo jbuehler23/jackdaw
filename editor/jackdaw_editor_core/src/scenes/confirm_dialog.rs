@@ -526,7 +526,7 @@ pub fn on_dialog_button_click(
 /// The Save / Discard / Cancel decision for a pending tab close, factored
 /// out of the click observer so it is callable (and testable) directly
 /// with a target index rather than only through `PendingTabClose`.
-fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, target: usize) {
+pub fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, target: usize) {
     match action {
         ConfirmDialogButton::Save => {
             let tab_count = world.resource::<crate::scenes::Scenes>().tabs.len();
@@ -577,11 +577,13 @@ fn apply_confirm_dialog_action(world: &mut World, action: ConfirmDialogButton, t
                     target
                 );
                 world.resource_mut::<PendingTabClose>().tab_index = None;
+                crate::scenes::operators::discard_tab_edits(world, target);
                 crate::scenes::operators::scene_close_system_unprompted(world, target);
             }
         }
         ConfirmDialogButton::Discard => {
             world.resource_mut::<PendingTabClose>().tab_index = None;
+            crate::scenes::operators::discard_tab_edits(world, target);
             crate::scenes::operators::scene_close_system_unprompted(world, target);
         }
         ConfirmDialogButton::Cancel => {

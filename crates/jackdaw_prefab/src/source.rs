@@ -230,14 +230,16 @@ pub fn read_prefab_document(
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
     let mut ast = jackdaw_bsn::parse_bsn_text(&text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    let display_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scene");
-    normalize_as_prefab_source(&mut ast, display_name);
-    absolutize_isa_sources(
-        &mut ast,
-        assets_root,
-        path.parent().unwrap_or(Path::new("")),
-    );
+    prepare_prefab_document(&mut ast, path, assets_root);
     Ok(ast)
+}
+
+/// Make a document parsed for the file at `path` ready to instance, wherever its
+/// text came from.
+pub fn prepare_prefab_document(ast: &mut SceneBsnAst, path: &Path, assets_root: &Path) {
+    let display_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scene");
+    normalize_as_prefab_source(ast, display_name);
+    absolutize_isa_sources(ast, assets_root, path.parent().unwrap_or(Path::new("")));
 }
 
 /// The `PrefabEntityId(id)` whole-component value.

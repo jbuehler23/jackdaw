@@ -10,6 +10,7 @@
 //! between tabs.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use crate::region::RegionCoord;
@@ -138,6 +139,19 @@ pub struct TerrainDataStore {
     /// saved: a file whose mtime has not moved holds nothing the store does
     /// not already have.
     read_mtimes: HashMap<String, std::time::SystemTime>,
+    /// The paths written since they were last read or written to their file,
+    /// each with a revision unique to its latest write. A file newer than a path
+    /// not listed here holds what the author wants; see [`Self::has_unsaved_edits`].
+    edits: HashMap<String, u64>,
+}
+
+static NEXT_EDIT: AtomicU64 = AtomicU64::new(1);
+
+fn note_edit(edits: &mut HashMap<String, u64>, data_path: &str) {
+    edits.insert(
+        data_path.to_string(),
+        NEXT_EDIT.fetch_add(1, Ordering::Relaxed),
+    );
 }
 
 /// A terrain's heights ready to sample, with the height range a raycast needs
@@ -295,10 +309,12 @@ impl TerrainDataStore {
             crate::sidecar::GridGeometry { cell_size, anchor },
         );
         self.retire_heightmap(data_path);
+        note_edit(&mut self.edits, data_path);
     }
 
     /// Records the geometry a document's cells are drawn at, so every later
-    /// reader takes it from the document rather than re-deriving it.
+    /// reader takes it from the document rather than re-deriving it. Settling a
+    /// loaded document onto its geometry moves no cell, so this is no edit.
     pub fn set_grid(&mut self, data_path: &str, grid: crate::sidecar::GridGeometry) {
         if let Some(data) = self.entries.get_mut(data_path) {
             data.grid = Some(grid);
@@ -428,11 +444,13 @@ impl TerrainDataStore {
             entries,
             load_failed,
             heightmaps,
+            edits,
             ..
         } = self;
         let Some(data) = Self::document_in(entries, load_failed, terrain) else {
             return false;
         };
+        note_edit(edits, &terrain.data_path);
         // A grid that is one whole region is brushed where it lives. One that
         // spans regions has no single slice to hand out, so it is gathered,
         // brushed and scattered back.
@@ -529,8 +547,11 @@ impl TerrainDataStore {
     ///
     /// The control map is marked for upload: a document that arrives with paint
     /// on it has to reach the GPU without the user touching a brush first.
+    ///
+    /// Counts as an edit until [`Self::note_read`] says the file holds it.
     pub fn insert(&mut self, data_path: impl Into<String>, data: RegionTerrainData) {
         let data_path = data_path.into();
+        note_edit(&mut self.edits, &data_path);
         self.retire_heightmap(&data_path);
         self.load_failed.remove(&data_path);
         self.mark_control_dirty(&data_path, GridRect::whole(data.grid_resolution()));
@@ -560,12 +581,26 @@ impl TerrainDataStore {
     pub fn remove(&mut self, data_path: &str) -> Option<RegionTerrainData> {
         self.cached().remove(data_path);
         self.read_mtimes.remove(data_path);
+        self.edits.remove(data_path);
         self.entries.remove(data_path)
     }
 
-    /// Record that `data_path` was just read from a file last modified at
-    /// `mtime`.
+    /// Whether `data_path` was written since it was last read or written to its
+    /// file. Settling a document onto its geometry does not count.
+    pub fn has_unsaved_edits(&self, data_path: &str) -> bool {
+        self.edits.contains_key(data_path)
+    }
+
+    /// The revision of the latest edit of `data_path`, while it has unsaved
+    /// edits. Unique across every store.
+    pub fn edit_revision(&self, data_path: &str) -> Option<u64> {
+        self.edits.get(data_path).copied()
+    }
+
+    /// Record that `data_path` was just read from, or written to, a file last
+    /// modified at `mtime`, which so holds what the store does.
     pub fn note_read(&mut self, data_path: &str, mtime: Option<std::time::SystemTime>) {
+        self.edits.remove(data_path);
         match mtime {
             Some(mtime) => {
                 self.read_mtimes.insert(data_path.to_string(), mtime);
@@ -646,7 +681,9 @@ impl TerrainDataStore {
         // An entry is handed out to be written through, so this terrain's
         // cached heightmap is stale from here whether the caller writes or not.
         self.retire_heightmap(&terrain.data_path);
-        Self::document_in(&mut self.entries, &self.load_failed, terrain).map(TerrainEntry::new)
+        let entry = Self::document_in(&mut self.entries, &self.load_failed, terrain)?;
+        note_edit(&mut self.edits, &terrain.data_path);
+        Some(TerrainEntry::new(entry))
     }
 
     /// A terrain's document by sidecar path, writable.
@@ -655,7 +692,9 @@ impl TerrainDataStore {
     /// heightmap: it is for the parts of a document that are not per-cell,
     /// where a write cannot change the ground the mesher samples.
     pub fn document_mut(&mut self, data_path: &str) -> Option<&mut RegionTerrainData> {
-        self.entries.get_mut(data_path)
+        let data = self.entries.get_mut(data_path)?;
+        note_edit(&mut self.edits, data_path);
+        Some(data)
     }
 
     /// Every (sidecar path, document) pair currently held.
@@ -725,6 +764,7 @@ impl TerrainDataStore {
         if self.load_failed.contains_key(&data_path) {
             return Err(TerrainMaterialError::LoadFailed);
         }
+        note_edit(&mut self.edits, &data_path);
         match self.entries.get_mut(&data_path) {
             Some(data) => data.materials = materials,
             // A list can be set before the terrain has been edited or
@@ -767,6 +807,7 @@ impl TerrainDataStore {
             return Err(TerrainMaterialError::LoadFailed);
         }
         let settings = settings.sanitized();
+        note_edit(&mut self.edits, &data_path);
         match self.entries.get_mut(&data_path) {
             Some(data) => data.autoterrain = settings,
             None if settings != AutoTerrainSettings::default() => {
@@ -854,9 +895,11 @@ impl TerrainDataStore {
             entries,
             load_failed,
             control_dirty,
+            edits,
             ..
         } = self;
         let document = Self::document_in(entries, load_failed, terrain)?;
+        note_edit(edits, &terrain.data_path);
         let dirty = control_dirty
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
@@ -939,6 +982,7 @@ impl TerrainDataStore {
             return Err(TerrainMaterialError::LoadFailed);
         }
         let settings = settings.sanitized();
+        note_edit(&mut self.edits, &data_path);
         match self.entries.get_mut(&data_path) {
             Some(data) => data.surface = settings,
             None if settings != SurfaceSettings::default() => {
@@ -1008,9 +1052,11 @@ impl TerrainDataStore {
             entries,
             load_failed,
             tint_dirty,
+            edits,
             ..
         } = self;
         let document = Self::document_in(entries, load_failed, terrain)?;
+        note_edit(edits, &terrain.data_path);
         let dirty = tint_dirty.get_mut().unwrap_or_else(PoisonError::into_inner);
         dirty
             .entry(terrain.data_path.clone())
@@ -1524,6 +1570,38 @@ mod tests {
     ///
     /// A real document uses [`RegionSize::DEFAULT`], which would make every
     /// fixture here a quarter of a million cells.
+    #[test]
+    fn an_edit_counts_until_the_file_holds_it() {
+        let terrain = jackdaw_scene_types::Terrain {
+            data_path: "a.jdterrain".to_string(),
+            ..default()
+        };
+        let mut store = TerrainDataStore::default();
+        assert!(!store.has_unsaved_edits("a.jdterrain"));
+
+        store.insert("a.jdterrain", RegionTerrainData::default());
+        store.note_read("a.jdterrain", None);
+        assert!(!store.has_unsaved_edits("a.jdterrain"), "as read");
+
+        store.set_grid("a.jdterrain", crate::sidecar::GridGeometry::DEFAULT);
+        assert!(
+            !store.has_unsaved_edits("a.jdterrain"),
+            "settling moves no cell"
+        );
+
+        store.read_for(&terrain);
+        assert!(!store.has_unsaved_edits("a.jdterrain"), "a read is no edit");
+
+        store.entry_for(&terrain);
+        let first = store.edit_revision("a.jdterrain").expect("edited");
+        store.control_mut(&terrain);
+        let second = store.edit_revision("a.jdterrain").expect("edited");
+        assert_ne!(first, second, "each edit has its own revision");
+
+        store.note_read("a.jdterrain", None);
+        assert!(!store.has_unsaved_edits("a.jdterrain"), "as written");
+    }
+
     fn store_for(terrain: &jackdaw_scene_types::Terrain) -> TerrainDataStore {
         let mut regions = crate::TerrainRegions::new(editor_region_size(terrain.resolution));
         // Nothing allocates implicitly, so a terrain these tests write to has

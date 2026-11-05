@@ -280,6 +280,48 @@ fn drain_changes(world: &mut World) {
     }
 }
 
+/// Make the cache hold the file at `path` again, throwing away the cached edits,
+/// so whatever reads the entry reads what is on disk. With `reload`, the document in
+/// front re-resolves its instances now; pass `false` when it is about to go. A file
+/// that does not read leaves no entry.
+pub(crate) fn return_prefab_to_file(world: &mut World, path: &Path, reload: bool) {
+    let sparse_text = if reload {
+        capture_sparse_scene_text(world)
+    } else {
+        None
+    };
+    let file = jackdaw_bsn::existing_form(path).unwrap_or_else(|| path.to_path_buf());
+    let assets_root = crate::prefab::save_load::source_root_of(world, &file);
+    let (read, fingerprint) = crate::prefab::cache::read_fingerprinted(&file, || {
+        crate::prefab::save_load::read_prefab_ast(&file, &assets_root)
+    });
+    let mut cache = world.resource_mut::<PrefabAstCache>();
+    match read {
+        Ok(ast) => {
+            cache.insert(path, ast);
+            cache.settle_fingerprint(&file, fingerprint);
+        }
+        Err(err) => {
+            warn!(
+                "prefab {} does not read after a discard: {err}",
+                file.display()
+            );
+            cache.invalidate(path);
+        }
+    }
+    let Some(sparse_text) = sparse_text else {
+        return;
+    };
+    match reload_instances_of(world, &sparse_text, path) {
+        PrefabReload::Instances => rebuild_outliner(world),
+        PrefabReload::Unhandled => {
+            respawn_scene(world, &sparse_text);
+            rebuild_outliner(world);
+        }
+        PrefabReload::Nothing => {}
+    }
+}
+
 /// What a per-file reload did, and so what the caller has left to do.
 pub enum PrefabReload {
     /// The file's instances were respawned in place; other entities kept
