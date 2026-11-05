@@ -1184,7 +1184,7 @@ pub(crate) fn broadcast_control(world: &mut World, event: ControlEvent) {
 }
 
 /// Send a control message (live edits, frame stream start/stop) only to the
-/// focused instance's child transport. If no instance is focused, or the
+/// focused instance's outbox. If no instance is focused, or the
 /// focused child is not yet live, the message is dropped with a debug log.
 /// Safe no-op when `PieInstances` or `PieSession` are absent (headless worlds).
 pub(crate) fn send_control_to_focused(world: &mut World, event: ControlEvent) {
