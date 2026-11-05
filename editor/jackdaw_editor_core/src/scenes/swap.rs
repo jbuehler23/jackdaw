@@ -250,6 +250,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
     let refusal = match jackdaw_bsn::reject_retired_ui_components(spawning) {
         Ok(()) => {
             let resolved_text = jackdaw_bsn::emit_scene(spawning);
+            crate::asset_index::index_files_named(world, &resolved_text);
             match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
                 Ok(_) => None,
                 Err(err) => {

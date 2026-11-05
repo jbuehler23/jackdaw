@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use bevy::{
     asset::{ReflectHandle, UntypedHandle},
+    ecs::{archetype::{Archetype, ArchetypeId}, component::ComponentId, reflect::ReflectComponent, world::EntityRef},
     prelude::*,
     reflect::{
         TypeRegistration, TypeRegistry,
@@ -175,6 +176,50 @@ impl ReflectDeserializerProcessor for RemoteDeserializerProcessor {
     }
 }
 
+/// One component an entity of some archetype streams, resolved from the type
+/// registry once per archetype so a frame never walks the whole registry.
+#[derive(Clone)]
+pub struct SnapshotColumn {
+    pub id: ComponentId,
+    pub type_path: &'static str,
+    reflect: ReflectComponent,
+}
+
+impl SnapshotColumn {
+    /// The component's serialized value on `entity`, if it has one that serializes.
+    pub fn value(&self, entity: EntityRef, registry: &TypeRegistry) -> Option<Value> {
+        let component = self.reflect.reflect(entity)?;
+        let processor = RemoteSerializerProcessor;
+        let serializer = TypedReflectSerializer::with_processor(component, registry, &processor);
+        serde_json::to_value(&serializer).ok()
+    }
+}
+
+/// The components of `archetype` that stream: registered as reflectable
+/// components and not on a skip list.
+pub fn snapshot_columns(
+    world: &World,
+    registry: &TypeRegistry,
+    archetype: &Archetype,
+) -> Vec<SnapshotColumn> {
+    archetype
+        .iter_components()
+        .filter_map(|id| {
+            let type_id = world.components().get_info(id)?.type_id()?;
+            let registration = registry.get(type_id)?;
+            let type_path = registration.type_info().type_path_table().path();
+            if should_skip(type_path) {
+                return None;
+            }
+            Some(SnapshotColumn {
+                id,
+                type_path,
+                reflect: registration.data::<ReflectComponent>()?.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Reflection-serialize `entities` for remote display, applying the skip lists
 /// and `RemoteSerializerProcessor` edge-case handling.
 pub fn build_snapshot(
@@ -182,35 +227,22 @@ pub fn build_snapshot(
     registry: &TypeRegistry,
     entities: &[Entity],
 ) -> Vec<RemoteEntity> {
-    let processor = RemoteSerializerProcessor;
-
+    let mut columns: HashMap<ArchetypeId, Vec<SnapshotColumn>> = HashMap::new();
     entities
         .iter()
         .map(|&entity| {
             let entity_ref = world.entity(entity);
-            let mut components = HashMap::new();
-
-            for registration in registry.iter() {
-                let type_path = registration.type_info().type_path_table().path();
-
-                if should_skip(type_path) {
-                    continue;
-                }
-
-                let Some(reflect_component) = registration.data::<ReflectComponent>() else {
-                    continue;
-                };
-                let Some(component) = reflect_component.reflect(entity_ref) else {
-                    continue;
-                };
-
-                let serializer =
-                    TypedReflectSerializer::with_processor(component, registry, &processor);
-                if let Ok(value) = serde_json::to_value(&serializer) {
-                    components.insert(type_path.to_string(), value);
-                }
-            }
-
+            let archetype = entity_ref.archetype();
+            let columns = columns
+                .entry(archetype.id())
+                .or_insert_with(|| snapshot_columns(world, registry, archetype));
+            let components = columns
+                .iter()
+                .filter_map(|column| {
+                    let value = column.value(entity_ref, registry)?;
+                    Some((column.type_path.to_string(), value))
+                })
+                .collect();
             RemoteEntity {
                 entity: entity.to_bits(),
                 components,
@@ -219,6 +251,26 @@ pub fn build_snapshot(
         })
         .collect()
 }
+
+// TEMP_TIMING start
+pub fn temp_should_skip(path: &str) -> bool { should_skip(path) }
+pub fn temp_legacy_snapshot(world: &World, registry: &TypeRegistry, entities: &[Entity]) -> Vec<RemoteEntity> {
+    let processor = RemoteSerializerProcessor;
+    entities.iter().map(|&entity| {
+        let entity_ref = world.entity(entity);
+        let mut components = HashMap::new();
+        for registration in registry.iter() {
+            let type_path = registration.type_info().type_path_table().path();
+            if should_skip(type_path) { continue; }
+            let Some(reflect_component) = registration.data::<ReflectComponent>() else { continue; };
+            let Some(component) = reflect_component.reflect(entity_ref) else { continue; };
+            let serializer = TypedReflectSerializer::with_processor(component, registry, &processor);
+            if let Ok(value) = serde_json::to_value(&serializer) { components.insert(type_path.to_string(), value); }
+        }
+        RemoteEntity { entity: entity.to_bits(), components, scene_node_id: None }
+    }).collect()
+}
+// TEMP_TIMING end
 
 #[cfg(test)]
 mod tests {

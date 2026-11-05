@@ -609,6 +609,78 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
     scan
 }
 
+/// Index the asset files `text` names, for a document about to spawn before the
+/// project's first walk has landed.
+///
+/// That walk runs off the main thread and reads every document, so a large
+/// scene opened with the project spawns first. A file not yet in the index
+/// resolves to nothing there, so a load reads the few files it names up front;
+/// the walk then finds them held. Once a walk has landed the index is complete
+/// and this does nothing.
+pub fn index_files_named(world: &mut World, text: &str) {
+    if world.get_resource_or_init::<AssetWalks>().0 > 0 {
+        return;
+    }
+    let Some(assets) = assets_dir(world) else {
+        return;
+    };
+    if !world.contains_resource::<AssetKinds>() {
+        return;
+    }
+    let documents: Vec<PathBuf> = walk_document_files(&assets)
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(&assets).ok()?;
+            match jackdaw_bsn::is_binary_path(relative) {
+                true => Some(jackdaw_bsn::text_twin(relative)),
+                false => Some(relative.to_path_buf()),
+            }
+        })
+        .collect();
+    world
+        .get_resource_or_init::<AssetIndex>()
+        .bypass_change_detection()
+        .set_documents(documents);
+
+    let mut added = false;
+    for reference in crate::asset_files::spelled_references(text) {
+        let index = world.resource::<AssetIndex>();
+        let Some(relative) = referenced_path(index, &assets, &reference) else {
+            continue;
+        };
+        if !jackdaw_bsn::is_document_path(&relative) || index.get(&relative).is_some() {
+            continue;
+        }
+        let file = document_file(&assets, &relative);
+        let type_path = world.get_resource_or_init::<AssetKindCache>().type_of(&file);
+        let kinds = world.resource::<AssetKinds>();
+        let Some(kind) = type_path.and_then(|type_path| claimed_kind(&type_path, kinds)) else {
+            continue;
+        };
+        let Ok(mtime) = std::fs::metadata(&file).and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        let Some(value) = load_asset_value(world, &kind, &file) else {
+            continue;
+        };
+        publish_name(world, &relative, &kind, &value);
+        world.resource_mut::<AssetIndex>().insert(AssetEntry {
+            path: relative,
+            kind: kind.kind.clone(),
+            type_path: kind.type_path.clone(),
+            file_kind: AssetFileKind::Asset {
+                type_path: kind.type_path.clone(),
+            },
+            value,
+            mtime,
+        });
+        added = true;
+    }
+    if added {
+        publish_reference_map(world);
+    }
+}
+
 /// Take what each document spells as the documents referring to each file, so
 /// a card can say what a file is used by and a delete can say what it breaks.
 fn record_referrers(world: &mut World, spelled: Vec<(PathBuf, Vec<String>)>) {

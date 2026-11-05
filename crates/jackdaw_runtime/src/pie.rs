@@ -5,15 +5,26 @@
 //! (ECS state to editor as [`StateEvent`]s) and an apply system
 //! ([`ControlEvent`]s from the editor driving pause / resume / stop).
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use bevy::app::AppExit;
+use bevy::ecs::archetype::ArchetypeId;
+use bevy::ecs::change_detection::Tick;
+use bevy::ecs::component::ComponentId;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
+use bevy::ecs::world::EntityRef;
 use bevy::prelude::*;
+use bevy::reflect::TypeRegistry;
 use bevy::time::Virtual;
 
 use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
-use jackdaw_pie_protocol::{ControlEvent, build_snapshot};
+use jackdaw_pie_protocol::{ControlEvent, SnapshotColumn, snapshot_columns};
 use jackdaw_scene_types::SceneNodeId;
 
 /// The active PIE link parameters, read from the environment.
@@ -46,13 +57,29 @@ pub(crate) struct PieTransportRes(pub(crate) Box<dyn PieTransport>);
 #[derive(Resource, Default)]
 struct HighlightedEntity(Option<Entity>);
 
-/// Tracks whether the initial full snapshot has been streamed, and the last
-/// serialized component values per entity for value-diff delta streaming.
+/// How long one frame may spend serializing world state for the editor. Work
+/// past this waits for the next frame, so entity count never sets the game's
+/// frame time; at least one item goes out each frame so the stream always moves.
+const STREAM_BUDGET: Duration = Duration::from_millis(4);
+
+/// What the editor has been sent, and what it still has to be sent.
 #[derive(Resource, Default)]
 struct PieStreamState {
-    sent_initial: bool,
-    /// Last-sent component values keyed by entity bits then type path.
-    last_sent: std::collections::HashMap<u64, std::collections::HashMap<String, serde_json::Value>>,
+    /// A digest of the last value sent, per entity then component. Entities are
+    /// here once their `EntitySpawned` went out.
+    sent: HashMap<u64, HashMap<ComponentId, u64>>,
+    /// Entities waiting for their `EntitySpawned`, oldest first.
+    unsent: VecDeque<Entity>,
+    /// `unsent` as a set.
+    queued: HashSet<Entity>,
+    /// Components of sent entities whose value may have changed, oldest first.
+    dirty: VecDeque<(Entity, ComponentId)>,
+    /// `dirty` as a set, so a component changing every frame holds one place.
+    dirty_set: HashSet<(Entity, ComponentId)>,
+    /// The tick of the last scan; changes newer than this are not yet queued.
+    last_scan: Option<Tick>,
+    /// What each archetype streams, resolved once.
+    columns: HashMap<ArchetypeId, Arc<[SnapshotColumn]>>,
 }
 
 /// Install the PIE transport and the stream / apply systems.
@@ -103,31 +130,6 @@ pub(crate) fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
     app.add_systems(Update, stream_state);
 }
 
-/// Lift the `SceneNodeId` component out of a snapshot's `components` map and
-/// into its `scene_node_id` field.
-///
-/// `build_snapshot` serializes every reflectable component it finds, including
-/// `SceneNodeId`. The editor treats `scene_node_id` as the canonical authored-
-/// node link and should not also see `SceneNodeId` as a regular user component,
-/// so we remove the entry from `components` and populate `scene_node_id`
-/// instead. When the entity has no `SceneNodeId` component the snapshot is left
-/// unchanged and `scene_node_id` stays `None`.
-fn lift_scene_node_id(
-    world: &World,
-    entity_bits: u64,
-    remote: &mut jackdaw_pie_protocol::RemoteEntity,
-) {
-    remote
-        .components
-        .remove(jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH);
-    let entity = Entity::from_bits(entity_bits);
-    if let Ok(entity_ref) = world.get_entity(entity)
-        && let Some(node_id) = entity_ref.get::<SceneNodeId>()
-    {
-        remote.scene_node_id = Some(node_id.0);
-    }
-}
-
 /// The entities whose state streams to the editor. Derived face meshes are
 /// left out (the editor regenerates faces from the streamed `Brush`), as are
 /// everything the runtime adds for itself ([`crate::RuntimeOnly`]).
@@ -145,133 +147,274 @@ fn streamed_entities(world: &mut World) -> Vec<Entity> {
 
 /// Stream the scene's ECS state to the editor.
 ///
-/// On the first run, ships a full `EntitySpawned` snapshot for every entity
-/// with a `Transform` on the reliable channel and records those component values
-/// in `last_sent`. On subsequent runs, calls `build_snapshot` for all
-/// `With<Transform>` entities and value-diffs against `last_sent`:
-///   - New entity bits: emit `EntitySpawned` (reliable) and record all components.
-///   - Known entity bits: emit `ComponentChanged` (unreliable) for each component
-///     whose serialized value differs from the last-sent value.
-///   - Bits present in `last_sent` but absent from the current set: emit
-///     `EntityDespawned` (reliable) and drop from `last_sent`.
+/// A scan finds what the editor is behind on from entity membership and
+/// component change ticks, reading no component values, so an idle frame costs a
+/// walk of the streamed entities. Queued work then goes out until
+/// [`STREAM_BUDGET`] is spent:
+///   - A component whose tick moved emits `ComponentChanged`, unless its value
+///     serializes the same as the one last sent.
+///   - An entity not yet sent emits `EntitySpawned` with all its components.
+///
+/// An entity gone from the streamed set emits `EntityDespawned` straight away.
 fn stream_state(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;
     }
-
-    let sent_initial = world.resource::<PieStreamState>().sent_initial;
-
-    let entities = streamed_entities(world);
     let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let entities = streamed_entities(world);
+    let this_scan = world.change_tick();
 
-    if !sent_initial {
-        let snapshots = {
-            let registry = registry.read();
-            build_snapshot(world, &registry, &entities)
+    let mut state = std::mem::take(&mut *world.resource_mut::<PieStreamState>());
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+
+    let t0_scan = Instant::now(); // TEMP_TIMING
+    scan_stream(world, &registry, &entities, this_scan, &mut state, &mut frames);
+    let t_scan = t0_scan.elapsed(); // TEMP_TIMING
+    let began = Instant::now();
+    let mut sent_one = false;
+    while !sent_one || began.elapsed() < STREAM_BUDGET {
+        if !send_next(world, &registry, &mut state, &mut frames) {
+            break;
+        }
+        sent_one = true;
+    }
+
+    state.last_scan = Some(this_scan);
+    world.increment_change_tick();
+    let t_sent = began.elapsed(); // TEMP_TIMING
+    let pending = state.unsent.len() + state.dirty.len(); // TEMP_TIMING
+    let sent_map = state.sent.len(); // TEMP_TIMING
+    *world.resource_mut::<PieStreamState>() = state;
+    let transport = &mut world.non_send_mut::<PieTransportRes>().0;
+    for bytes in &frames {
+        transport.send(PieChannel::Reliable, bytes);
+    }
+    temp_timing(world, &registry, &entities, t_scan, t_sent, pending, sent_map, frames.len()); // TEMP_TIMING
+}
+
+// TEMP_TIMING start
+#[allow(clippy::too_many_arguments)]
+fn temp_timing(world: &mut World, registry: &TypeRegistry, entities: &[Entity], t_scan: Duration, t_sent: Duration, pending: usize, sent_map: usize, frames: usize) {
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<(Instant, Instant, u32)>> = Mutex::new(None);
+    let now = Instant::now();
+    let mut guard = LAST.lock().unwrap();
+    let (mut last_frame, mut last_log, mut count) = guard.unwrap_or((now, now, 0));
+    let dt = now - last_frame;
+    last_frame = now;
+    count += 1;
+    if entities.len() > 100 && now - last_log > Duration::from_secs(5) {
+        let t0 = Instant::now();
+        let mut lookups = 0usize;
+        for registration in registry.iter() {
+            let path = registration.type_info().type_path_table().path();
+            let _ = jackdaw_pie_protocol::snapshot::temp_should_skip(path);
+            lookups += 1;
+        }
+        let one_pass = t0.elapsed();
+        let t1 = Instant::now();
+        let snap = jackdaw_pie_protocol::build_snapshot(world, registry, entities);
+        let new_full = t1.elapsed();
+        let t2 = Instant::now();
+        let legacy = jackdaw_pie_protocol::snapshot::temp_legacy_snapshot(world, registry, entities);
+        let old_snapshot = t2.elapsed();
+        let t3 = Instant::now();
+        let mut total = 0usize;
+        for r in &legacy { total += serde_json::to_vec(r).map_or(0, |b| b.len()); }
+        let encode = t3.elapsed();
+        info!("TEMP_TIMING frame_dt={dt:?} frames_since={count} entities={} sent={sent_map} pending={pending} out={frames} scan={t_scan:?} send={t_sent:?} | old_full_snapshot={old_snapshot:?} (registry walk one entity={one_pass:?}, {lookups} types) columns_full_snapshot={new_full:?} json_bytes={total} encode={encode:?} snap={}", entities.len(), snap.len());
+        last_log = Instant::now();
+        last_frame = last_log;
+        count = 0;
+    }
+    *guard = Some((last_frame, last_log, count));
+}
+// TEMP_TIMING end
+
+/// Queue what changed since the last scan and report what went away.
+fn scan_stream(
+    world: &World,
+    registry: &TypeRegistry,
+    entities: &[Entity],
+    this_scan: Tick,
+    state: &mut PieStreamState,
+    frames: &mut Vec<Vec<u8>>,
+) {
+    let current: HashSet<u64> = entities.iter().map(|entity| entity.to_bits()).collect();
+    state.sent.retain(|&bits, _| {
+        let alive = current.contains(&bits);
+        if !alive && let Ok(bytes) = to_bytes(&StateEvent::EntityDespawned { entity: bits }) {
+            frames.push(bytes);
+        }
+        alive
+    });
+    let last_scan = state.last_scan;
+    for &entity in entities {
+        if !state.sent.contains_key(&entity.to_bits()) {
+            if state.queued.insert(entity) {
+                state.unsent.push_back(entity);
+            }
+            continue;
+        }
+        let Some(last_scan) = last_scan else {
+            continue;
         };
-
-        let mut spawn_frames: Vec<Vec<u8>> = Vec::new();
-        let mut new_last_sent: std::collections::HashMap<
-            u64,
-            std::collections::HashMap<String, serde_json::Value>,
-        > = std::collections::HashMap::new();
-
-        for mut remote in snapshots {
-            lift_scene_node_id(world, remote.entity, &mut remote);
-            new_last_sent.insert(remote.entity, remote.components.clone());
-            if let Ok(bytes) = to_bytes(&StateEvent::EntitySpawned { entity: remote }) {
-                spawn_frames.push(bytes);
+        let entity_ref = world.entity(entity);
+        for column in columns_of(world, registry, entity_ref, state).iter() {
+            let changed = entity_ref
+                .get_change_ticks_by_id(column.id)
+                .is_some_and(|ticks| ticks.is_changed(last_scan, this_scan));
+            if changed && state.dirty_set.insert((entity, column.id)) {
+                state.dirty.push_back((entity, column.id));
             }
         }
+    }
+}
 
-        let transport = &mut world.non_send_mut::<PieTransportRes>().0;
-        for bytes in &spawn_frames {
-            transport.send(PieChannel::Reliable, bytes);
-        }
-        let mut pie_state = world.resource_mut::<PieStreamState>();
-        pie_state.sent_initial = true;
-        pie_state.last_sent = new_last_sent;
+/// What `entity`'s archetype streams, resolved on first sight of the archetype.
+fn columns_of(
+    world: &World,
+    registry: &TypeRegistry,
+    entity: EntityRef,
+    state: &mut PieStreamState,
+) -> Arc<[SnapshotColumn]> {
+    let archetype = entity.archetype();
+    Arc::clone(state.columns.entry(archetype.id()).or_insert_with(|| {
+        snapshot_columns(world, registry, archetype)
+            .into_iter()
+            .filter(|column| column.type_path != jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH)
+            .collect()
+    }))
+}
+
+/// Encode one queued item, changes ahead of spawns so an edit in a running game
+/// is not held behind the rest of a large scene. False when nothing was queued.
+fn send_next(
+    world: &World,
+    registry: &TypeRegistry,
+    state: &mut PieStreamState,
+    frames: &mut Vec<Vec<u8>>,
+) -> bool {
+    if let Some((entity, id)) = state.dirty.pop_front() {
+        state.dirty_set.remove(&(entity, id));
+        send_change(world, registry, state, entity, id, frames);
+        return true;
+    }
+    let Some(entity) = state.unsent.pop_front() else {
+        return false;
+    };
+    state.queued.remove(&entity);
+    send_spawn(world, registry, state, entity, frames);
+    true
+}
+
+fn send_change(
+    world: &World,
+    registry: &TypeRegistry,
+    state: &mut PieStreamState,
+    entity: Entity,
+    id: ComponentId,
+    frames: &mut Vec<Vec<u8>>,
+) {
+    let bits = entity.to_bits();
+    let Ok(entity_ref) = world.get_entity(entity) else {
+        return;
+    };
+    let columns = columns_of(world, registry, entity_ref, state);
+    let Some(column) = columns.iter().find(|column| column.id == id) else {
+        return;
+    };
+    let Some(value) = column.value(entity_ref, registry) else {
+        return;
+    };
+    let digest = value_digest(&value);
+    let Some(sent) = state.sent.get_mut(&bits) else {
+        return;
+    };
+    if sent.insert(id, digest) == Some(digest) {
         return;
     }
-
-    let current_bits: std::collections::HashSet<u64> =
-        entities.iter().map(|e| e.to_bits()).collect();
-
-    let snapshots = {
-        let registry = registry.read();
-        build_snapshot(world, &registry, &entities)
+    let event = StateEvent::ComponentChanged {
+        entity: bits,
+        type_path: column.type_path.to_string(),
+        value,
     };
+    if let Ok(bytes) = to_bytes(&event) {
+        frames.push(bytes);
+    }
+}
 
-    let mut spawn_frames: Vec<Vec<u8>> = Vec::new();
-    let mut changed_frames: Vec<Vec<u8>> = Vec::new();
-    let mut despawn_frames: Vec<Vec<u8>> = Vec::new();
-
-    {
-        let pie_state = world.resource::<PieStreamState>();
-        let known_bits: Vec<u64> = pie_state
-            .last_sent
-            .keys()
-            .filter(|b| !current_bits.contains(b))
-            .copied()
-            .collect();
-        for bits in known_bits {
-            if let Ok(bytes) = to_bytes(&StateEvent::EntityDespawned { entity: bits }) {
-                despawn_frames.push(bytes);
-            }
+fn send_spawn(
+    world: &World,
+    registry: &TypeRegistry,
+    state: &mut PieStreamState,
+    entity: Entity,
+    frames: &mut Vec<Vec<u8>>,
+) {
+    let Ok(entity_ref) = world.get_entity(entity) else {
+        return;
+    };
+    let columns = columns_of(world, registry, entity_ref, state);
+    let mut digests = HashMap::with_capacity(columns.len());
+    let mut components = std::collections::HashMap::with_capacity(columns.len());
+    for column in columns.iter() {
+        if let Some(value) = column.value(entity_ref, registry) {
+            digests.insert(column.id, value_digest(&value));
+            components.insert(column.type_path.to_string(), value);
         }
     }
+    state.sent.insert(entity.to_bits(), digests);
+    let event = StateEvent::EntitySpawned {
+        entity: jackdaw_pie_protocol::RemoteEntity {
+            entity: entity.to_bits(),
+            components,
+            scene_node_id: entity_ref.get::<SceneNodeId>().map(|node_id| node_id.0),
+        },
+    };
+    if let Ok(bytes) = to_bytes(&event) {
+        frames.push(bytes);
+    }
+}
 
-    let mut updates: Vec<(u64, std::collections::HashMap<String, serde_json::Value>)> = Vec::new();
-
-    for mut remote in snapshots {
-        lift_scene_node_id(world, remote.entity, &mut remote);
-        let bits = remote.entity;
-        let pie_state = world.resource::<PieStreamState>();
-        if let Some(last_components) = pie_state.last_sent.get(&bits) {
-            for (type_path, value) in &remote.components {
-                if last_components.get(type_path) != Some(value) {
-                    let event = StateEvent::ComponentChanged {
-                        entity: bits,
-                        type_path: type_path.clone(),
-                        value: value.clone(),
-                    };
-                    if let Ok(bytes) = to_bytes(&event) {
-                        changed_frames.push(bytes);
-                    }
+/// A digest of a serialized value, which is all the stream needs to keep to tell
+/// a rewrite of the same value from a change.
+fn value_digest(value: &serde_json::Value) -> u64 {
+    fn feed(value: &serde_json::Value, hasher: &mut DefaultHasher) {
+        match value {
+            serde_json::Value::Null => 0u8.hash(hasher),
+            serde_json::Value::Bool(flag) => flag.hash(hasher),
+            serde_json::Value::Number(number) => number.to_string().hash(hasher),
+            serde_json::Value::String(text) => text.hash(hasher),
+            serde_json::Value::Array(items) => {
+                items.len().hash(hasher);
+                for item in items {
+                    feed(item, hasher);
                 }
             }
-            updates.push((bits, remote.components));
-        } else {
-            updates.push((bits, remote.components.clone()));
-            if let Ok(bytes) = to_bytes(&StateEvent::EntitySpawned { entity: remote }) {
-                spawn_frames.push(bytes);
+            serde_json::Value::Object(fields) => {
+                fields.len().hash(hasher);
+                for (name, field) in fields {
+                    name.hash(hasher);
+                    feed(field, hasher);
+                }
             }
         }
     }
+    let mut hasher = DefaultHasher::new();
+    feed(value, &mut hasher);
+    hasher.finish()
+}
 
-    let transport = &mut world.non_send_mut::<PieTransportRes>().0;
-    for bytes in &spawn_frames {
-        transport.send(PieChannel::Reliable, bytes);
-    }
-    for bytes in &changed_frames {
-        transport.send(PieChannel::Reliable, bytes);
-    }
-    for bytes in &despawn_frames {
-        transport.send(PieChannel::Reliable, bytes);
-    }
-
-    let mut pie_state = world.resource_mut::<PieStreamState>();
-    for (bits, components) in updates {
-        pie_state.last_sent.insert(bits, components);
-    }
-    let despawned: Vec<u64> = pie_state
-        .last_sent
-        .keys()
-        .filter(|b| !current_bits.contains(b))
-        .copied()
-        .collect();
-    for bits in despawned {
-        pie_state.last_sent.remove(&bits);
+/// Send one state event to the editor, if the link is up.
+pub(crate) fn send_state(world: &mut World, event: &StateEvent) {
+    match to_bytes(event) {
+        Ok(bytes) => {
+            if let Some(mut transport) = world.get_non_send_mut::<PieTransportRes>() {
+                transport.0.send(PieChannel::Reliable, &bytes);
+            }
+        }
+        Err(err) => error!("PIE: failed to encode a state event: {err}"),
     }
 }
 
@@ -1027,6 +1170,104 @@ mod tests {
                     if type_path == NAME_TYPE_PATH)
             }),
             "editor should receive a ComponentChanged for Name after mutation; got {received:?}"
+        );
+    }
+
+    /// A game with its link on loopback and `count` entities, every entity's
+    /// `Name` a long string so one spawn is measurable work.
+    fn streaming_app(count: usize) -> (App, jackdaw_pie_protocol::LoopbackTransport) {
+        let (editor, game) = jackdaw_pie_protocol::LoopbackTransport::pair();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.register_type::<Name>();
+        app.register_type::<Transform>();
+        install_link(&mut app, Box::new(game));
+        for index in 0..count {
+            app.world_mut()
+                .spawn((Name::new(format!("{index}{}", "x".repeat(4096))), Transform::default()));
+        }
+        (app, editor)
+    }
+
+    fn state_events(editor: &mut impl PieTransport) -> Vec<StateEvent> {
+        editor
+            .drain_received()
+            .into_iter()
+            .filter_map(|(_, bytes)| jackdaw_pie_protocol::event::from_bytes(&bytes).ok())
+            .collect()
+    }
+
+    /// The first frame after a large scene spawns must not serialize all of it.
+    #[test]
+    fn a_large_world_reaches_the_editor_over_several_frames() {
+        const COUNT: usize = 5000;
+        let (mut app, mut editor) = streaming_app(COUNT);
+
+        app.update();
+        let first = state_events(&mut editor).len();
+        assert!(first > 0 && first < COUNT, "one frame sent {first} spawns");
+
+        let mut total = first;
+        for _ in 0..100_000 {
+            if total == COUNT {
+                break;
+            }
+            app.update();
+            total += state_events(&mut editor).len();
+        }
+        assert_eq!(total, COUNT);
+    }
+
+    /// Once the editor is caught up, a frame sends only what changed: nothing at
+    /// all when idle, and the one component that moved otherwise.
+    #[test]
+    fn a_caught_up_stream_sends_only_changes() {
+        let (mut app, mut editor) = streaming_app(3);
+        let entity = {
+            let mut query = app.world_mut().query_filtered::<Entity, With<Name>>();
+            query.iter(app.world()).next().expect("an entity")
+        };
+        for _ in 0..50 {
+            app.update();
+        }
+        let spawns = state_events(&mut editor);
+        assert_eq!(spawns.len(), 3, "{spawns:?}");
+
+        app.update();
+        assert!(state_events(&mut editor).is_empty(), "an idle frame is silent");
+
+        app.world_mut()
+            .get_mut::<Transform>(entity)
+            .expect("a transform")
+            .translation
+            .x = 4.0;
+        app.update();
+        let events = state_events(&mut editor);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(
+            &events[0],
+            StateEvent::ComponentChanged { entity: bits, type_path, .. }
+                if *bits == entity.to_bits() && type_path.ends_with("Transform")
+        ));
+
+        let same = *app.world().get::<Transform>(entity).expect("a transform");
+        app.world_mut()
+            .get_mut::<Transform>(entity)
+            .expect("a transform")
+            .set_if_neq(same);
+        *app.world_mut().get_mut::<Transform>(entity).expect("a transform") = same;
+        app.update();
+        assert!(
+            state_events(&mut editor).is_empty(),
+            "writing the same value is not a change"
+        );
+
+        app.world_mut().despawn(entity);
+        app.update();
+        let events = state_events(&mut editor);
+        assert_eq!(
+            events,
+            vec![StateEvent::EntityDespawned { entity: entity.to_bits() }]
         );
     }
 

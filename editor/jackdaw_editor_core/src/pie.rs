@@ -203,7 +203,7 @@ impl PieSession {
     }
 
     /// Whether an instance is waiting on a build before it spawns.
-    fn is_launching(&self) -> bool {
+    pub(crate) fn is_launching(&self) -> bool {
         self.builds.values().any(
             |build| matches!(build, BuildState::Running { pending, .. } if !pending.is_empty()),
         )
@@ -2016,6 +2016,23 @@ pub(crate) fn drain_game_events(world: &mut World) {
             }
             if let StateEvent::RequestScene { request, path } = &event {
                 answer_scene_request(world, &key, *request, path);
+                continue;
+            }
+            if let StateEvent::SceneRequestAbandoned { path } = &event {
+                let message = format!(
+                    "{key} stopped waiting for {path} and loaded the file, so it has no unsaved \
+                     edits and may not follow further ones"
+                );
+                warn!("PIE: {message}");
+                crate::status_bar::notify_warn(world, message);
+                continue;
+            }
+            if matches!(event, StateEvent::OwnWindow) {
+                if is_focused {
+                    world
+                        .resource_mut::<crate::live_frame::LiveFrameStream>()
+                        .game_has_own_window = true;
+                }
                 continue;
             }
 

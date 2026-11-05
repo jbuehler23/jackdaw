@@ -12,6 +12,13 @@ authors = ["{{authors}}"]
 # Delete to join the surrounding workspace instead.
 [workspace]
 
+# Bevy and the runtime compile optimised so scenes load and run at a usable
+# speed; your own crate stays unoptimised so it rebuilds quickly. This costs a
+# few extra minutes on the very first build.
+[profile.dev.package."*"]
+opt-level = 2
+debug = "line-tables-only"
+
 [dependencies]
 {{bevy_pin_note}}
 bevy = {{bevy_dependency}}

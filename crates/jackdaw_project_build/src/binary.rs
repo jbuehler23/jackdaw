@@ -17,8 +17,9 @@ use crate::shim::ShimSpec;
 
 /// A completed binary build.
 pub struct ProjectBinaryBuild {
-    /// The game executable cargo produced. This is the same artifact a
-    /// plain `cargo run` in the project would produce.
+    /// The game executable cargo produced. The same program a plain `cargo run`
+    /// in the project would produce, with its dependencies optimised unless the
+    /// project chose otherwise.
     pub binary: PathBuf,
     /// The project's type schema, extracted by running the binary in
     /// schema mode. `None` when extraction could not run; the editor
@@ -95,10 +96,11 @@ pub fn game_target_dir(jackdaw_dir: &Path) -> PathBuf {
 /// the editor's watcher and where the build's own artifacts land. It builds
 /// against the user's own manifest, lockfile and toolchain, but into
 /// [`game_target_dir`] rather than the project's `target/`: the editor builds
-/// the plain package while a developer's own build carries the features their
-/// game needs, and the two must not overwrite each other's binary. It travels
-/// as a flag rather than as `CARGO_TARGET_DIR`, which `detach_from_host_build`
-/// strips along with the rest of the editor's own build environment.
+/// the plain package with optimised dependencies ([`GAME_DEPENDENCY_PROFILE`])
+/// while a developer's own build carries the features and profile their game
+/// needs, and the two must not overwrite each other's binary. It travels as a
+/// flag rather than as `CARGO_TARGET_DIR`, which `detach_from_host_build` strips
+/// along with the rest of the editor's own build environment.
 pub fn build_project_binary(
     spec: &ShimSpec,
     jackdaw_dir: &Path,
@@ -192,6 +194,46 @@ pub fn build_project_binary_with_load(
     Ok(ProjectBinaryBuild { binary, schema })
 }
 
+/// Profile overrides for a game the editor builds. A game spends its load and
+/// its frames in Bevy and the runtime, which are many times slower unoptimised,
+/// while the game's own crate stays at the profile's level so a rebuild is quick.
+/// Line tables keep backtraces readable without the memory and link time of full
+/// debug info on optimised code.
+const GAME_DEPENDENCY_PROFILE: [&str; 2] = [
+    "profile.dev.package.\"*\".opt-level=2",
+    "profile.dev.package.\"*\".debug=\"line-tables-only\"",
+];
+
+/// Whether the project picks its own optimisation for its dependencies, in the
+/// manifest cargo reads profiles from or its `.cargo/config.toml`. Config given
+/// on the command line outranks both, so such a project is left out of
+/// [`GAME_DEPENDENCY_PROFILE`].
+fn project_sets_dependency_profile(project_root: &Path) -> bool {
+    let root_manifest = project_root
+        .ancestors()
+        .map(|dir| dir.join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .find(|manifest| read_toml(manifest).is_some_and(|toml| toml.get("workspace").is_some()))
+        .unwrap_or_else(|| project_root.join("Cargo.toml"));
+    [root_manifest, project_root.join(".cargo/config.toml")]
+        .iter()
+        .filter_map(|file| read_toml(file))
+        .any(|toml| {
+            let Some(dev) = toml.get("profile").and_then(|profile| profile.get("dev")) else {
+                return false;
+            };
+            dev.get("opt-level").is_some()
+                || dev
+                    .get("package")
+                    .and_then(|package| package.get("*"))
+                    .is_some()
+        })
+}
+
+fn read_toml(file: &Path) -> Option<toml::Value> {
+    toml::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
 /// The `cargo build` that compiles the game, run by the project's own
 /// toolchain and detached from the editor's build environment.
 fn game_build_command(spec: &ShimSpec, target_dir: &Path, load: BuildLoad) -> Command {
@@ -200,7 +242,13 @@ fn game_build_command(spec: &ShimSpec, target_dir: &Path, load: BuildLoad) -> Co
         .arg("build")
         .args(["-p", &spec.package_name])
         .arg("--target-dir")
-        .arg(target_dir)
+        .arg(target_dir);
+    if !project_sets_dependency_profile(&spec.project_root) {
+        for setting in GAME_DEPENDENCY_PROFILE {
+            command.arg("--config").arg(setting);
+        }
+    }
+    command
         // Plain `json`, not `json-render-diagnostics`: that variant renders
         // diagnostics to cargo's own stderr and emits no `compiler-message`
         // records, leaving the parser below with nothing to report.
@@ -620,6 +668,74 @@ mod tests {
         assert!(!is_host_build_var("PATH"));
         assert!(!is_host_build_var("CARGO_HOME"));
         assert!(!is_host_build_var("RUSTUP_HOME"));
+    }
+
+    fn build_args(project: &Path) -> Vec<String> {
+        let spec = ShimSpec {
+            package_name: "game".to_string(),
+            crate_name: "game".to_string(),
+            project_root: project.to_path_buf(),
+            extension_type: None,
+        };
+        game_build_command(&spec, Path::new("/target"), BuildLoad::Foreground)
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn project_with_manifest(manifest: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        std::fs::write(dir.path().join("Cargo.toml"), manifest).expect("a manifest");
+        dir
+    }
+
+    const PLAIN: &str = "[package]\nname = \"game\"\n[workspace]\n";
+
+    /// An existing project's manifest stays as it is, and still gets a game
+    /// that loads a large scene at a usable speed.
+    #[test]
+    fn a_plain_project_builds_with_optimised_dependencies() {
+        let project = project_with_manifest(PLAIN);
+        let args = build_args(project.path());
+        for setting in GAME_DEPENDENCY_PROFILE {
+            let position = args.iter().position(|arg| arg == setting);
+            let position = position.expect("the override is on the command line");
+            assert_eq!(args[position - 1], "--config");
+        }
+        assert!(!args.iter().any(|arg| arg.contains("profile.dev.opt-level")));
+    }
+
+    #[test]
+    fn a_project_that_picks_its_own_optimisation_keeps_it() {
+        for profile in [
+            "[profile.dev]\nopt-level = 1\n",
+            "[profile.dev.package.\"*\"]\nopt-level = 3\n",
+        ] {
+            let project = project_with_manifest(&format!("{PLAIN}{profile}"));
+            let args = build_args(project.path());
+            assert!(!args.iter().any(|arg| arg == "--config"), "{profile}");
+        }
+
+        let project = project_with_manifest(PLAIN);
+        std::fs::create_dir(project.path().join(".cargo")).expect("a folder");
+        std::fs::write(
+            project.path().join(".cargo/config.toml"),
+            "[profile.dev.package.\"*\"]\nopt-level = 1\n",
+        )
+        .expect("a config");
+        assert!(!build_args(project.path()).iter().any(|arg| arg == "--config"));
+    }
+
+    #[test]
+    fn a_workspace_members_profile_comes_from_the_workspace_root() {
+        let root = project_with_manifest(
+            "[workspace]\nmembers = [\"game\"]\n[profile.dev.package.\"*\"]\nopt-level = 3\n",
+        );
+        let member = root.path().join("game");
+        std::fs::create_dir(&member).expect("a member");
+        std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"game\"\n")
+            .expect("a manifest");
+        assert!(!build_args(&member).iter().any(|arg| arg == "--config"));
     }
 
     #[test]

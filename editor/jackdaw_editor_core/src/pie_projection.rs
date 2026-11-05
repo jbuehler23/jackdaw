@@ -31,10 +31,27 @@ pub struct PieProjection {
     /// keyed by the parent's game-side bits. Reparented when the parent's
     /// `EntitySpawned` arrives.
     pub pending_children: HashMap<u64, Vec<Entity>>,
-    /// Authored entities that have taken a streamed value and not been respawned
-    /// since. They hold the game's state, so what an emit writes for them comes
-    /// from the document alone.
+    /// Authored entities holding a streamed value their document does not, and
+    /// not respawned since. They hold the game's state, so what an emit writes
+    /// for them comes from the document alone.
     pub overlaid: HashSet<Entity>,
+    /// Components the stream added to authored entities, by type path, which a
+    /// revert takes back off.
+    pub added: HashMap<Entity, Vec<String>>,
+    /// The stream moved an authored entity in the hierarchy, which only a respawn
+    /// puts back.
+    pub reparented: bool,
+}
+
+/// What [`apply_component_value`] did to the entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Applied {
+    /// Nothing: the value did not apply, or the entity already held it.
+    Nothing,
+    /// The component's value changed.
+    Changed,
+    /// The entity gained the component.
+    Added,
 }
 
 /// Type path of the hierarchy component naming an entity's parent. Streamed
@@ -86,8 +103,16 @@ fn parent_bits_from_value(value: &serde_json::Value) -> Option<u64> {
 }
 
 fn reparent_preview(world: &mut World, child: Entity, parent: Entity) {
-    if child == parent || would_cycle(world, child, parent) {
+    if child == parent
+        || world.get::<ChildOf>(child).is_some_and(|held| held.0 == parent)
+        || would_cycle(world, child, parent)
+    {
         return;
+    }
+    if world.get::<PieEphemeral>(child).is_none()
+        && let Some(mut projection) = world.get_resource_mut::<PieProjection>()
+    {
+        projection.reparented = true;
     }
     if let Ok(mut entity_mut) = world.get_entity_mut(child) {
         entity_mut.insert(ChildOf(parent));
@@ -141,23 +166,72 @@ fn apply_child_of(world: &mut World, child: Entity, value: &serde_json::Value) {
 
 /// Tear down all projected live state and restore the authored preview.
 ///
-/// Despawns every ephemeral entity, clears the projection map, then
-/// re-spawns the scene from the AST so authored overlays revert to their
-/// authored values. The AST is the untouched baseline; this reuses the same
-/// re-spawn that tab activation uses on a tab switch.
-///
-/// Safe to call when nothing was projected: no ephemerals, empty `by_bits`,
-/// and re-spawning an unchanged scene is harmless.
+/// Despawns every ephemeral entity and clears the projection map. The AST is the
+/// untouched baseline, so the authored entities the game actually changed take
+/// their values back from it, which leaves a large scene the game left alone
+/// without a respawn. A hierarchy the stream moved, or an edit made live in the
+/// panels, respawns the scene the way a tab switch does.
 pub fn revert_preview(world: &mut World) {
+    let revert = world
+        .get_resource_mut::<PieProjection>()
+        .map(|mut projection| Revert {
+            overlaid: std::mem::take(&mut projection.overlaid),
+            added: std::mem::take(&mut projection.added),
+            reparented: std::mem::take(&mut projection.reparented),
+        })
+        .unwrap_or_default();
     clear_projection(world);
-    crate::scenes::swap::respawn_scene_from_ast(world);
-    forget_overlays(world);
+    let live_edits = world
+        .get_resource::<crate::live_edits::LiveEditLog>()
+        .is_some_and(|log| !log.entries.is_empty());
+    if revert.reparented || live_edits || !world.contains_resource::<PieProjection>() {
+        crate::scenes::swap::respawn_scene_from_ast(world);
+        return;
+    }
+    debug!(
+        "PIE: reverting {} overlaid entities in place",
+        revert.overlaid.len()
+    );
+    for (entity, type_paths) in revert.added {
+        for type_path in type_paths {
+            remove_component_by_path(world, entity, &type_path);
+        }
+    }
+    for entity in revert.overlaid {
+        if world.get_entity(entity).is_ok() {
+            jackdaw_bsn::apply_ast_to_ecs(world, entity);
+        }
+    }
+}
+
+/// What a revert has to undo.
+#[derive(Default)]
+struct Revert {
+    overlaid: HashSet<Entity>,
+    added: HashMap<Entity, Vec<String>>,
+    reparented: bool,
+}
+
+fn remove_component_by_path(world: &mut World, entity: Entity, type_path: &str) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let Some(reflect) = registry
+        .get_with_type_path(type_path)
+        .and_then(|registration| registration.data::<ReflectComponent>())
+    else {
+        return;
+    };
+    if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        reflect.remove(&mut entity_mut);
+    }
 }
 
 /// The authored entities were respawned, so none holds a streamed value.
 fn forget_overlays(world: &mut World) {
     if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
         projection.overlaid.clear();
+        projection.added.clear();
+        projection.reparented = false;
     }
 }
 
@@ -284,12 +358,6 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                     .spawn((PieEphemeral, Transform::default(), Visibility::default()))
                     .id()
             });
-            if authored.is_some() {
-                world
-                    .resource_mut::<PieProjection>()
-                    .overlaid
-                    .insert(preview);
-            }
             world
                 .resource_mut::<PieProjection>()
                 .by_bits
@@ -313,7 +381,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 if projection_skips(&type_path) {
                     continue;
                 }
-                apply_component_value(world, preview, &type_path, &value);
+                apply_streamed_value(world, preview, type_path, &value);
             }
             if let Some(value) = child_of {
                 apply_child_of(world, preview, &value);
@@ -346,7 +414,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 if type_path == CHILD_OF_PATH {
                     apply_child_of(world, preview, &value);
                 } else {
-                    apply_component_value(world, preview, &type_path, &value);
+                    apply_streamed_value(world, preview, type_path, &value);
                 }
             }
         }
@@ -371,7 +439,30 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 }
             }
         }
-        StateEvent::CursorState { .. } | StateEvent::RequestScene { .. } => {}
+        StateEvent::CursorState { .. }
+        | StateEvent::RequestScene { .. }
+        | StateEvent::SceneRequestAbandoned { .. }
+        | StateEvent::OwnWindow => {}
+    }
+}
+
+/// Apply a value from the stream, and note on an authored entity what a revert
+/// has to undo.
+fn apply_streamed_value(
+    world: &mut World,
+    preview: Entity,
+    type_path: String,
+    value: &serde_json::Value,
+) {
+    let applied = apply_component_value(world, preview, &type_path, value);
+    if applied == Applied::Nothing || world.get::<PieEphemeral>(preview).is_some() {
+        return;
+    }
+    let mut projection = world.resource_mut::<PieProjection>();
+    projection.overlaid.insert(preview);
+    if applied == Applied::Added {
+        debug!("PIE: the game added {type_path} to an authored entity");
+        projection.added.entry(preview).or_default().push(type_path);
     }
 }
 
@@ -415,24 +506,26 @@ fn detach_authored_descendants_guarded(
 /// by the component's mutability. A mutable component is mutated in place (no
 /// `on_add`/`on_insert`; `Changed` fires). An immutable component is re-inserted
 /// so its value changes and its hooks run. No-op (debug log) if the type is not
-/// registered, has no `ReflectComponent`, or the value does not deserialize.
+/// registered, has no `ReflectComponent`, or the value does not deserialize, and
+/// silently when the entity already holds this value, so a game streaming the
+/// scene it was given dirties nothing in the editor.
 pub fn apply_component_value(
     world: &mut World,
     entity: Entity,
     type_path: &str,
     value: &serde_json::Value,
-) {
+) -> Applied {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
 
     let Some(registration) = registry_guard.get_with_type_path(type_path) else {
         debug!("apply_component_value: type not registered: {type_path}");
-        return;
+        return Applied::Nothing;
     };
 
     let Some(reflect_component) = registration.data::<ReflectComponent>().cloned() else {
         debug!("apply_component_value: no ReflectComponent for: {type_path}");
-        return;
+        return Applied::Nothing;
     };
 
     let mut processor = jackdaw_pie_protocol::RemoteDeserializerProcessor;
@@ -442,7 +535,7 @@ pub fn apply_component_value(
         Ok(v) => v,
         Err(e) => {
             debug!("apply_component_value: deserialization failed for {type_path}: {e}");
-            return;
+            return Applied::Nothing;
         }
     };
 
@@ -460,7 +553,7 @@ pub fn apply_component_value(
         Ok(entity_ref) => reflect_component.contains(entity_ref),
         Err(_) => {
             debug!("apply_component_value: entity {entity:?} does not exist");
-            return;
+            return Applied::Nothing;
         }
     };
 
@@ -476,13 +569,16 @@ pub fn apply_component_value(
             held.as_partial_reflect(),
             &registry_guard,
         );
+        if held.reflect_partial_eq(reflected.as_partial_reflect()) == Some(true) {
+            return Applied::Nothing;
+        }
     }
 
     drop(registry_guard);
 
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
         debug!("apply_component_value: entity {entity:?} was despawned concurrently");
-        return;
+        return Applied::Nothing;
     };
 
     if !is_mutable || !present {
@@ -494,6 +590,11 @@ pub fn apply_component_value(
         );
     } else {
         reflect_component.apply(entity_mut, reflected.as_partial_reflect());
+    }
+    if present {
+        Applied::Changed
+    } else {
+        Applied::Added
     }
 }
 

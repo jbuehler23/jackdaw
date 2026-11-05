@@ -37,6 +37,13 @@ pub enum StateEvent {
         request: u64,
         path: String,
     },
+    /// No answer to a [`StateEvent::RequestScene`] came in time, so the game
+    /// loaded the scene's file instead of the editor's document.
+    SceneRequestAbandoned {
+        path: String,
+    },
+    /// The game declined a frame stream because it opened its own window.
+    OwnWindow,
 }
 
 /// What the game spawns a requested scene from.

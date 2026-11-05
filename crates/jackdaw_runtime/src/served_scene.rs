@@ -6,7 +6,7 @@
 //! share a request. The answer either carries the text to spawn or sends the
 //! root to its file. The main thread never waits: a root is only looked at again
 //! the next update, and after [`ANSWER_TIMEOUT`] of real time without an answer
-//! it loads its file and a late answer is ignored.
+//! it loads its file, says so to the editor, and a late answer is ignored.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,13 +16,15 @@ use bevy::asset::io::AssetSourceId;
 use bevy::asset::{AssetPath, AssetServer};
 use bevy::prelude::*;
 use jackdaw_pie_protocol::SceneAnswer;
-use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
+use jackdaw_pie_protocol::event::StateEvent;
 
-use crate::pie::PieTransportRes;
 use crate::{JackdawScene, JackdawSceneRoot};
 
-/// How long a root waits for the editor before it loads its file.
-pub(crate) const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a root waits for the editor before it loads its file. The editor
+/// answers from its main thread and a large document takes seconds to emit, so
+/// this only has to catch an editor that will never answer; giving up early
+/// costs the unsaved edits and node ids only the document holds.
+pub(crate) const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The requests sent to the editor and the answers not yet taken.
 #[derive(Resource, Default)]
@@ -84,6 +86,7 @@ pub(crate) fn begin_pass(world: &mut World) {
     let Some(mut requests) = world.get_resource_mut::<SceneRequests>() else {
         return;
     };
+    let mut abandoned = Vec::new();
     requests.open.retain(|_, open| {
         let alive = now.saturating_sub(open.asked_at) < ANSWER_TIMEOUT;
         if !alive {
@@ -92,9 +95,13 @@ pub(crate) fn begin_pass(world: &mut World) {
                 open.path,
                 ANSWER_TIMEOUT.as_secs()
             );
+            abandoned.push(open.path.clone());
         }
         alive
     });
+    for path in abandoned {
+        crate::pie::send_state(world, &StateEvent::SceneRequestAbandoned { path });
+    }
 }
 
 /// Every root waiting on an answer took it during the pass, so none are kept.
@@ -160,18 +167,13 @@ fn ask(world: &mut World, path: &str) -> u64 {
             asked_at: now,
         },
     );
-    let event = StateEvent::RequestScene {
-        request,
-        path: path.to_string(),
-    };
-    match to_bytes(&event) {
-        Ok(bytes) => {
-            if let Some(mut transport) = world.get_non_send_mut::<PieTransportRes>() {
-                transport.0.send(PieChannel::Reliable, &bytes);
-            }
-        }
-        Err(err) => error!("PIE: failed to encode a scene request: {err}"),
-    }
+    crate::pie::send_state(
+        world,
+        &StateEvent::RequestScene {
+            request,
+            path: path.to_string(),
+        },
+    );
     request
 }
 
@@ -203,7 +205,7 @@ mod tests {
 
     use bevy::asset::ReflectAsset;
     use bevy::ecs::message::Messages;
-    use jackdaw_pie_protocol::event::{ControlEvent, from_bytes};
+    use jackdaw_pie_protocol::event::{ControlEvent, PieChannel, from_bytes, to_bytes};
     use jackdaw_pie_protocol::{LoopbackTransport, PieTransport, connect, serve};
     use jackdaw_scene_types::SceneNodeId;
 
@@ -458,6 +460,17 @@ mod tests {
         ));
         update_until_spawned(&mut app);
         assert_eq!(node_xs(&mut app), vec![1.0], "the file");
+        assert!(
+            editor
+                .drain_received()
+                .into_iter()
+                .filter_map(|(_, bytes)| from_bytes::<StateEvent>(&bytes).ok())
+                .any(|event| matches!(
+                    event,
+                    StateEvent::SceneRequestAbandoned { path } if path == "scene.bsn"
+                )),
+            "the editor hears the game gave up"
+        );
 
         send(&mut editor, &document(request, scene_text(9.0)));
         for _ in 0..3 {
@@ -469,6 +482,24 @@ mod tests {
             "the late answer changes nothing"
         );
         assert!(app.world().get::<ServedScene>(root).is_none());
+    }
+
+    /// The editor's main thread stalls for seconds emitting a large document.
+    #[test]
+    fn a_stalled_editor_is_still_waited_for() {
+        assert!(ANSWER_TIMEOUT >= Duration::from_secs(60));
+        let (mut app, mut editor, _dir) = game();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs(12),
+        ));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        app.update();
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(request, scene_text(5.0)));
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![5.0], "the document, not the file");
     }
 
     #[test]

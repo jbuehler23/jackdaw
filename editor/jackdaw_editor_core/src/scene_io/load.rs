@@ -368,6 +368,7 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         }
 
         clear_scene_entities(world);
+        crate::asset_index::index_files_named(world, &resolved_text);
 
         match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
             Ok(loaded) => {

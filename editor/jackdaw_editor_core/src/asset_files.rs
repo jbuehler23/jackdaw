@@ -134,7 +134,7 @@ fn without_label(value: &str) -> &str {
 }
 
 /// The references a document's values spell, in the order it spells them.
-fn spelled_references(text: &str) -> Vec<String> {
+pub(crate) fn spelled_references(text: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut characters = text.chars();
     while let Some(character) = characters.next() {

@@ -4,6 +4,7 @@
 mod asset_ingest;
 mod bsn_scene_fixpoint;
 mod external_reload;
+mod first_open_materials;
 mod headless;
 mod integration;
 mod jsn_conversion_commit;
