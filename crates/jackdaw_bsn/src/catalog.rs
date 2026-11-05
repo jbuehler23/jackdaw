@@ -171,7 +171,15 @@ pub fn load_bsn_document(world: &mut World, ast: SceneBsnAst) -> LoadedBsnScene 
         .map(|project| project.0.clone())
         .unwrap_or_default();
     for entry in &assets {
-        names.insert(format!("#{}", entry.name), entry.handle.clone());
+        if names
+            .insert(format!("#{}", entry.name), entry.handle.clone())
+            .is_some()
+        {
+            bevy::log::warn!(
+                "the scene defines `#{}` more than once; every use reads the last definition",
+                entry.name
+            );
+        }
         names.insert(format!("@{}", entry.name), entry.handle.clone());
     }
     world.insert_resource(crate::BsnSceneAssets(names));
