@@ -111,7 +111,7 @@ impl ser::Serializer for ValueSerializer {
         Ok(i128::try_from(v).map_or_else(|_| BsnValue::String(v.to_string()), BsnValue::Int))
     }
     fn serialize_f32(self, v: f32) -> Result<BsnValue, ValueError> {
-        Ok(BsnValue::Float(v.into()))
+        Ok(BsnValue::Float(super::compact::shortest_f32(v)))
     }
     fn serialize_f64(self, v: f64) -> Result<BsnValue, ValueError> {
         Ok(BsnValue::Float(v))

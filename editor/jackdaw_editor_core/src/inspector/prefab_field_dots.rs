@@ -164,8 +164,10 @@ pub(crate) fn decorate_prefab_field_rows(
     new_rows: Query<(Entity, &InspectorFieldRow), Added<InspectorFieldRow>>,
     ast: Res<SceneBsnAst>,
     prefab_cache: Res<PrefabAstCache>,
+    type_registry: Res<AppTypeRegistry>,
     mut commands: Commands,
 ) {
+    let registry = type_registry.read();
     for (row_entity, row) in &new_rows {
         let Some(node) = ast.ast_for(row.source_entity) else {
             continue;
@@ -180,6 +182,7 @@ pub(crate) fn decorate_prefab_field_rows(
             node,
             &row.type_path,
             Some(&row.field_path),
+            &registry,
         );
         let inheritance = crate::prefab::overrides_bsn::resolve_inheritance(&ast, node);
         let instance_entity = ast
@@ -316,11 +319,13 @@ pub(crate) fn decorate_prefab_field_rows(
 pub(crate) fn refresh_prefab_field_dots(
     ast: Res<SceneBsnAst>,
     prefab_cache: Res<PrefabAstCache>,
+    type_registry: Res<AppTypeRegistry>,
     mut dots: Query<(&PrefabFieldOverrideDot, &mut BackgroundColor)>,
 ) {
     if !ast.is_changed() && !prefab_cache.is_changed() {
         return;
     }
+    let registry = type_registry.read();
     let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
     for (dot, mut bg) in &mut dots {
         let Some(node) = ast.ast_for(dot.entity) else {
@@ -332,6 +337,7 @@ pub(crate) fn refresh_prefab_field_dots(
             node,
             &dot.type_path,
             Some(&dot.field_path),
+            &registry,
         );
         bg.0 = override_dot_color(overridden);
     }

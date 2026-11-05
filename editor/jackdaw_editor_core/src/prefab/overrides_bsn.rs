@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use bevy::ecs::entity::Entity;
 
-use jackdaw_bsn::{BsnValue, SceneBsnAst, bsn_value_eq, get_bsn_field};
+use bevy::reflect::TypeRegistry;
+use jackdaw_bsn::{BsnValue, SceneBsnAst, bsn_value_eq, get_bsn_field, held_bsn_field};
 
 use crate::prefab::resolver_bsn::{
     ISA_TYPE, PREFAB_ENTITY_ID_TYPE, PrefabLookup, read_isa_source, read_prefab_entity_id,
@@ -50,6 +51,7 @@ pub fn field_is_overridden(
     node: Entity,
     type_path: &str,
     field_path: Option<&str>,
+    registry: &TypeRegistry,
 ) -> bool {
     if get_bsn_field(ast, node, type_path, "").is_none() {
         return false;
@@ -73,8 +75,8 @@ pub fn field_is_overridden(
     }
 
     let path = field_path.unwrap_or("");
-    let scene_leaf = get_bsn_field(ast, node, type_path, path);
-    let prefab_leaf = get_bsn_field(prefab, prefab_node, type_path, path);
+    let scene_leaf = held_bsn_field(ast, node, type_path, path, registry);
+    let prefab_leaf = held_bsn_field(prefab, prefab_node, type_path, path, registry);
     match (scene_leaf, prefab_leaf) {
         (Some(a), Some(b)) => !bsn_value_eq(&a, &b),
         (None, None) => false,
@@ -136,6 +138,7 @@ fn walk_leaves(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::prelude::{ReflectComponent, ReflectDefault};
     use jackdaw_bsn::{
         BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue,
     };
@@ -232,6 +235,77 @@ mod tests {
         );
     }
 
+    #[derive(bevy::prelude::Reflect, Clone, Default)]
+    #[reflect(Default)]
+    struct Row {
+        weight: f32,
+    }
+
+    #[derive(bevy::prelude::Component, bevy::prelude::Reflect, Clone, Default)]
+    #[reflect(Component, Default)]
+    struct Rows {
+        rows: Vec<Row>,
+    }
+
+    /// A `Rows` patch with one row, its `weight` written only when given.
+    fn rows_patch(weight: Option<f64>) -> BsnPatch {
+        let row_path = <Row as bevy::reflect::TypePath>::type_path().to_string();
+        let row = match weight {
+            Some(weight) => BsnValue::Struct(BsnStructData {
+                type_path: row_path,
+                fields: BsnStructFields(vec![BsnField {
+                    name: "weight".to_string(),
+                    value: BsnValue::Float(weight),
+                }]),
+            }),
+            None => BsnValue::Type(row_path),
+        };
+        BsnPatch::Struct(BsnStructData {
+            type_path: <Rows as bevy::reflect::TypePath>::type_path().to_string(),
+            fields: BsnStructFields(vec![BsnField {
+                name: "rows".to_string(),
+                value: BsnValue::List(vec![row]),
+            }]),
+        })
+    }
+
+    #[test]
+    fn a_field_a_list_element_leaves_out_compares_as_its_default() {
+        let mut registry = bevy::reflect::TypeRegistry::default();
+        registry.register::<Rows>();
+        let overridden = |scene_weight: Option<f64>, prefab_weight: Option<f64>| {
+            let mut prefab = SceneBsnAst::default();
+            let root = prefab
+                .create_entity_node(vec![BsnPatch::Type(PREFAB_TYPE.to_string()), peid_patch(0)]);
+            let prefab_child =
+                prefab.create_entity_node(vec![peid_patch(1), rows_patch(prefab_weight)]);
+            prefab.add_to_roots(root);
+            prefab.add_child_to_ast(root, prefab_child);
+            let mut prefabs = std::collections::HashMap::new();
+            prefabs.insert(PathBuf::from("prefab.bsn"), prefab);
+            let get = lookup(&prefabs);
+
+            let mut scene = SceneBsnAst::default();
+            let instance = scene.create_entity_node(vec![isa_patch("prefab.bsn")]);
+            let child = scene.create_entity_node(vec![peid_patch(1), rows_patch(scene_weight)]);
+            scene.add_to_roots(instance);
+            scene.add_child_to_ast(instance, child);
+            field_is_overridden(
+                &scene,
+                &get,
+                child,
+                <Rows as bevy::reflect::TypePath>::type_path(),
+                Some("rows[0].weight"),
+                &registry,
+            )
+        };
+        assert!(overridden(Some(5.0), None));
+        assert!(overridden(None, Some(5.0)));
+        assert!(!overridden(None, None));
+        assert!(!overridden(Some(0.0), None), "a reverted field");
+        assert!(!overridden(None, Some(0.0)), "an older prefab");
+    }
+
     #[test]
     fn field_is_overridden_true_for_diverged_field() {
         let mut prefabs = std::collections::HashMap::new();
@@ -246,9 +320,17 @@ mod tests {
             child,
             TRANSFORM,
             Some("translation.y"),
+            &TypeRegistry::default(),
         ));
         // The whole component also differs.
-        assert!(field_is_overridden(&scene, &get, child, TRANSFORM, None));
+        assert!(field_is_overridden(
+            &scene,
+            &get,
+            child,
+            TRANSFORM,
+            None,
+            &TypeRegistry::default()
+        ));
     }
 
     #[test]
@@ -265,7 +347,15 @@ mod tests {
             child,
             TRANSFORM,
             Some("translation.y"),
+            &TypeRegistry::default(),
         ));
-        assert!(!field_is_overridden(&scene, &get, child, TRANSFORM, None));
+        assert!(!field_is_overridden(
+            &scene,
+            &get,
+            child,
+            TRANSFORM,
+            None,
+            &TypeRegistry::default()
+        ));
     }
 }

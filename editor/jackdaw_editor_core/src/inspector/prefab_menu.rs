@@ -154,11 +154,7 @@ fn on_prefab_menu_action(
                 return;
             };
             commands.queue(move |world: &mut World| {
-                let value: Option<BsnValue> = {
-                    let ast = world.resource::<SceneBsnAst>();
-                    ast.ast_for(entity)
-                        .and_then(|node| get_bsn_field(ast, node, &type_path, &field_path))
-                };
+                let value = field_value_to_apply(world, entity, &type_path, &field_path);
                 let Some(value) = value else { return };
                 let value_json = match serde_json::to_string(&bsn_leaf_to_json(&value)) {
                     Ok(s) => s,
@@ -303,6 +299,19 @@ fn resolve_prefab_value(
     get_bsn_field(prefab, prefab_node, type_path, "")
 }
 
+/// What "apply field to source" writes for one field of `entity`.
+fn field_value_to_apply(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<BsnValue> {
+    let ast = world.resource::<SceneBsnAst>();
+    let node = ast.ast_for(entity)?;
+    let registry = world.resource::<AppTypeRegistry>().read();
+    jackdaw_bsn::held_bsn_field(ast, node, type_path, field_path, &registry)
+}
+
 /// Structural JSON form of an override leaf for the `value_json` operator
 /// params. Scalars map cleanly; lists, maps, and tuple structs map to
 /// arrays / objects (the operators apply them structurally). Struct leaves
@@ -354,6 +363,38 @@ mod tests {
     use super::*;
     use crate::prefab::overrides_bsn::collect_overridden_paths;
     use jackdaw_bsn::{BsnField, BsnStructData, BsnStructFields, bsn_value_eq};
+
+    #[test]
+    fn apply_to_source_reads_a_field_a_list_element_leaves_out() {
+        use jackdaw_geometry::BrushFaceData;
+        use jackdaw_scene_types::Brush;
+
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        registry.write().register::<Brush>();
+        let brush = Brush {
+            faces: vec![BrushFaceData::default()],
+            ..default()
+        };
+        let patch = jackdaw_bsn::component_to_bsn_patch(&brush, &registry.read());
+        let entity = world.spawn_empty().id();
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(vec![patch]);
+        ast.add_to_roots(node);
+        ast.link(entity, node);
+        world.insert_resource(ast);
+
+        assert_eq!(
+            field_value_to_apply(
+                &world,
+                entity,
+                "jackdaw_scene_types::types::Brush",
+                "faces[0].uv_rotation",
+            ),
+            Some(BsnValue::Float(0.0)),
+        );
+    }
 
     fn f(name: &str, value: BsnValue) -> BsnField {
         BsnField {

@@ -299,16 +299,16 @@ fn respawn(
 /// instances, despawn the scene and load the text in its place. Undo history
 /// is kept. Text that does not parse leaves the scene as it is.
 pub(crate) fn reload_document_text(world: &mut World, text: &str) {
-    let resolved = jackdaw_bsn::parse_emitted(text).and_then(|authored| {
+    let resolved = jackdaw_bsn::parse_emitted(text).map(|authored| {
         let Some(cache) = world.get_resource::<crate::prefab::PrefabAstCache>() else {
-            return Ok(authored);
+            return authored;
         };
         let get_prefab = |p: &std::path::Path| cache.get(p);
         match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-            Ok(resolved) => jackdaw_bsn::parse_emitted(&jackdaw_bsn::emit_scene(&resolved)),
+            Ok(resolved) => resolved,
             Err(e) => {
                 warn!("undo snapshot: resolver failed: {e}; spawning unresolved");
-                Ok(authored)
+                authored
             }
         }
     });

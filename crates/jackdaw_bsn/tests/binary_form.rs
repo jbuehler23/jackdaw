@@ -5,9 +5,9 @@ use std::path::Path;
 use jackdaw_bsn::binary::{self, BinaryError, MAGIC, VERSION};
 use jackdaw_bsn::{
     ASSET_HEADER, BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, DocumentError,
-    DocumentForm, SceneBsnAst, convert_to_binary, convert_to_text, document_as_text, emit_scene,
-    export_binary, leading_comments, parse_bsn_text, read_asset_header, read_document,
-    read_document_text, with_asset_header, write_document_text,
+    DocumentForm, SceneBsnAst, convert_to_binary, convert_to_text, document_as_text,
+    document_from_bytes, emit_scene, export_binary, leading_comments, parse_bsn_text,
+    read_asset_header, read_document, read_document_text, with_asset_header, write_document_text,
 };
 
 const SCENE: &str = r#"#Root
@@ -469,4 +469,69 @@ fn bytes_after_the_last_root_are_refused_with_the_offset_they_start_at() {
         matches!(refused, Some(BinaryError::Trailing { at, left }) if at == ended && left == 4),
         "got {refused:?}"
     );
+}
+
+const OLD_BODY: &str = "\
+bevy_ui::ui_node::Node { border_radius: bevy_ui::ui_node::BorderRadius { top_left: bevy_ui::geometry::Val::Px(6.0) } }
+bevy_ui::widget::text_input_layout::TextScroll(glam::Vec2 { x: 0.0, y: 0.0 })
+bevy_core_pipeline::tonemapping::Tonemapping::None
+";
+
+fn stamped_binary(bevy: &str) -> Vec<u8> {
+    let preamble = format!("// jackdaw 0.19.0 | bevy {bevy}\n");
+    binary::encode(
+        &parse_bsn_text(OLD_BODY).expect("it parses"),
+        Some(&preamble),
+    )
+}
+
+#[test]
+fn a_binary_scene_stamped_by_an_older_bevy_is_migrated() {
+    let bytes = stamped_binary("0.19");
+    let document = document_from_bytes(&bytes, Path::new("old.bsb")).expect("it reads");
+    assert_eq!(document.form, DocumentForm::Binary);
+    assert_eq!(
+        document.preamble.as_deref(),
+        Some("// jackdaw 0.19.0 | bevy 0.19\n")
+    );
+    let text = emit_scene(&document.ast);
+    assert!(text.contains("bevy_render::view::Tonemapping"), "{text}");
+    assert!(!text.contains("TextScroll"), "{text}");
+    assert!(
+        text.contains("top_left: bevy_ui::geometry::CornerRadius"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_binary_scene_stamped_by_the_current_bevy_reads_as_written() {
+    let bytes = stamped_binary("main");
+    let before = jackdaw_bsn::parses_on_this_thread();
+    let document = document_from_bytes(&bytes, Path::new("new.bsb")).expect("it reads");
+    assert_eq!(jackdaw_bsn::parses_on_this_thread(), before);
+    let text = emit_scene(&document.ast);
+    assert!(text.contains("bevy_core_pipeline::tonemapping"), "{text}");
+    assert!(text.contains("TextScroll"), "{text}");
+}
+
+#[test]
+fn a_binary_scene_stamped_main_renames_moved_types() {
+    for stamp in [Some("// jackdaw 0.19.0 | bevy main\n"), None] {
+        let ast = parse_bsn_text(
+            "jackdaw::reference_image::ReferenceImage { path: \"a.png\" }\njackdaw::entity_ops::SceneLight\n",
+        )
+        .expect("it parses");
+        let bytes = binary::encode(&ast, stamp);
+        let document = document_from_bytes(&bytes, Path::new("moved.bsb")).expect("it reads");
+        let text = emit_scene(&document.ast);
+        assert!(
+            text.contains("jackdaw_editor_core::reference_image::ReferenceImage"),
+            "{text}"
+        );
+        assert!(
+            text.contains("jackdaw_editor_core::entity_ops::SceneLight"),
+            "{text}"
+        );
+        assert!(!text.contains("jackdaw::"), "{text}");
+    }
 }

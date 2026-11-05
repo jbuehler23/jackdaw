@@ -880,6 +880,7 @@ fn field_is_overridden_detects_changed_field() {
         instance,
         "bevy_transform::components::transform::Transform",
         None,
+        &bevy::reflect::TypeRegistry::default(),
     ));
     assert!(jackdaw::prefab::overrides_bsn::field_is_overridden(
         &scene,
@@ -887,6 +888,7 @@ fn field_is_overridden_detects_changed_field() {
         instance,
         "bevy_transform::components::transform::Transform",
         Some("translation"),
+        &bevy::reflect::TypeRegistry::default(),
     ));
     assert!(!jackdaw::prefab::overrides_bsn::field_is_overridden(
         &scene,
@@ -894,6 +896,7 @@ fn field_is_overridden_detects_changed_field() {
         instance,
         "bevy_transform::components::transform::Transform",
         Some("rotation"),
+        &bevy::reflect::TypeRegistry::default(),
     ));
 }
 
@@ -913,6 +916,7 @@ fn field_is_overridden_returns_false_outside_isa_subtree() {
         entity,
         "bevy_transform::components::transform::Transform",
         None,
+        &bevy::reflect::TypeRegistry::default(),
     ));
 }
 
@@ -1224,6 +1228,121 @@ fn apply_to_prefab_source_writes_value_into_prefab_ast() {
     assert!(
         matches!(scale_x, Some(jackdaw_bsn::BsnValue::Float(v)) if (v - 2.0).abs() < 1e-9),
         "cache reflects applied value"
+    );
+}
+
+const BRUSH: &str = "jackdaw_scene_types::types::Brush";
+
+/// A prefab whose brush face holds `uv_rotation` as `face` spells it, with one
+/// spawned instance.
+fn brush_instance_app(
+    tmp: &std::path::Path,
+    face: &str,
+) -> (bevy::prelude::App, std::path::PathBuf) {
+    let prefab_path = tmp.join("p.bsn");
+    std::fs::write(
+        &prefab_path,
+        format!(
+            "jackdaw::prefab::components::Prefab\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             {BRUSH} {{ faces: [{face}] }}\n"
+        ),
+    )
+    .unwrap();
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &prefab_path,
+        bevy::math::Vec3::ZERO,
+    );
+    (app, prefab_path)
+}
+
+fn set_uv_rotation(app: &mut bevy::prelude::App, value: f64) {
+    let node = sole_isa_node(app);
+    let registry = app.world().resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let mut live = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    jackdaw_bsn::set_bsn_field(
+        &mut live,
+        node,
+        BRUSH,
+        "faces[0].uv_rotation",
+        jackdaw_bsn::BsnValue::Float(value),
+        &registry,
+    );
+}
+
+fn overridden(app: &bevy::prelude::App) -> bool {
+    let node = sole_isa_node(app);
+    let live = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
+    let get_prefab = |path: &std::path::Path| cache.get(path);
+    jackdaw::prefab::overrides_bsn::field_is_overridden(
+        live,
+        &get_prefab,
+        node,
+        BRUSH,
+        Some("faces[0].uv_rotation"),
+        &app.world().resource::<AppTypeRegistry>().read(),
+    )
+}
+
+#[test]
+fn revert_field_restores_a_field_the_prefab_list_element_leaves_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, _) = brush_instance_app(tmp.path(), "jackdaw_geometry::BrushFaceData");
+    set_uv_rotation(&mut app, 5.0);
+    assert!(overridden(&app));
+
+    let node = sole_isa_node(&app);
+    assert!(jackdaw::prefab::operators::revert_field(
+        app.world_mut(),
+        node,
+        BRUSH,
+        "faces[0].uv_rotation",
+    ));
+
+    assert!(!overridden(&app));
+    let node = sole_isa_node(&app);
+    let registry = app.world().resource::<AppTypeRegistry>().clone();
+    let held = jackdaw_bsn::held_bsn_field(
+        app.world().resource::<jackdaw_bsn::SceneBsnAst>(),
+        node,
+        BRUSH,
+        "faces[0].uv_rotation",
+        &registry.read(),
+    );
+    assert_eq!(held, Some(jackdaw_bsn::BsnValue::Float(0.0)));
+}
+
+#[test]
+fn a_field_applied_to_source_writes_through_a_list_element() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, prefab_path) = brush_instance_app(
+        tmp.path(),
+        "jackdaw_geometry::BrushFaceData { uv_rotation: 5.0 }",
+    );
+    let node = sole_isa_node(&app);
+    jackdaw::prefab::operators::apply_to_prefab_source(
+        app.world_mut(),
+        node,
+        0,
+        BRUSH,
+        "faces[0].uv_rotation",
+        jackdaw_bsn::BsnValue::Float(0.0),
+    );
+    let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
+    let prefab = cache.get(&prefab_path).expect("prefab in cache");
+    let root = prefab
+        .entities_with_component("jackdaw::prefab::components::Prefab")
+        .first()
+        .copied()
+        .unwrap();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    assert_eq!(
+        jackdaw_bsn::held_bsn_field(prefab, root, BRUSH, "faces[0].uv_rotation", &registry),
+        Some(jackdaw_bsn::BsnValue::Float(0.0)),
     );
 }
 

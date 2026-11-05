@@ -59,8 +59,9 @@ pub struct PrefabPlugin;
 
 impl Plugin for PrefabPlugin {
     fn build(&self, app: &mut App) {
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
         app.add_plugins(jackdaw_prefab::PrefabTypesPlugin)
-            .init_resource::<PrefabAstCache>()
+            .insert_resource(PrefabAstCache::with_registry(registry))
             .init_resource::<sync::LastResolvedEpoch>()
             .add_systems(
                 Update,

@@ -246,7 +246,8 @@ fn default_field_json(
 
 /// Read one authored field from the live BSN document as reflect-format
 /// JSON, matching the serialization the live protocol uses. `None` when the
-/// component or field is not authored on the node.
+/// component or field is not authored on the node. A field a list element
+/// leaves out is authored as its default.
 fn authored_field_json(
     ast: &SceneBsnAst,
     node: Entity,
@@ -257,7 +258,7 @@ fn authored_field_json(
     use bevy::reflect::GetPath;
     use bevy::reflect::serde::TypedReflectSerializer;
 
-    jackdaw_bsn::get_bsn_field(ast, node, type_path, field_path)?;
+    jackdaw_bsn::held_bsn_field(ast, node, type_path, field_path, registry)?;
     let whole = jackdaw_bsn::get_bsn_field(ast, node, type_path, "")?;
     let registration = registry.get_with_type_path(type_path)?;
     let reflected =
@@ -1368,6 +1369,67 @@ mod tests {
             world.get::<Health>(preview).is_some(),
             "demote keeps the live component that predated the author"
         );
+    }
+
+    #[test]
+    fn revert_restores_a_field_a_list_element_leaves_out() {
+        use jackdaw_geometry::BrushFaceData;
+        use jackdaw_scene_types::Brush;
+        const BRUSH: &str = "jackdaw_scene_types::types::Brush";
+
+        let (mut world, _, _) = build_world();
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        registry.write().register::<Brush>();
+        let authored = Brush {
+            faces: vec![BrushFaceData::default()],
+            ..default()
+        };
+        let mut edited = authored.clone();
+        edited.faces[0].uv_rotation = 2.0;
+        let preview = world.spawn((Name::new("block"), edited)).id();
+        let node_id = SceneNodeId::next();
+        let patches = vec![
+            jackdaw_bsn::component_to_bsn_patch(&authored, &registry.read()),
+            jackdaw_bsn::BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                type_path: jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH.to_string(),
+                values: vec![jackdaw_bsn::BsnValue::Int(node_id.0 as i128)],
+            }),
+        ];
+        {
+            let mut ast = world.resource_mut::<SceneBsnAst>();
+            let node = ast.create_entity_node(patches);
+            ast.add_to_roots(node);
+            ast.link(preview, node);
+        }
+        world
+            .resource_mut::<PieProjection>()
+            .by_bits
+            .insert(9, preview);
+
+        record_live_edit(
+            &mut world,
+            preview,
+            9,
+            BRUSH,
+            "faces[0].uv_rotation",
+            serde_json::json!(2.0),
+        );
+        assert_eq!(
+            world.resource::<LiveEditLog>().entries[0].1.baseline,
+            Some(serde_json::json!(0.0))
+        );
+
+        revert_entry(
+            &mut world,
+            &LiveEditKey {
+                bits: 9,
+                type_path: BRUSH.to_string(),
+                field_path: "faces[0].uv_rotation".to_string(),
+            },
+        );
+        assert!(world.resource::<LiveEditLog>().entries.is_empty());
+        let brush = world.get::<Brush>(preview).expect("the brush");
+        assert_eq!(brush.faces[0].uv_rotation, 0.0);
     }
 
     #[test]

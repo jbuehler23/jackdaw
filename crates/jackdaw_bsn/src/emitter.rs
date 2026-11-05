@@ -7,6 +7,10 @@
 //! `Children` lists): every emit function walks those vectors in their stored
 //! order and never consults `ecs_to_ast`/`ast_to_ecs`, so emitting the same
 //! document twice yields byte-identical text.
+//!
+//! Vectors and small structs sit on one line, so a large list keeps one row per
+//! line and a change to one row touches one line. A brush's fields carry no
+//! indentation, which is most of what such a file would otherwise hold.
 
 use std::fmt::Write;
 
@@ -19,6 +23,35 @@ use crate::{
 
 /// The line between sibling entities, Bevy 0.20's `--` (0.19 wrote `,`).
 const ENTITY_SEPARATOR: &str = "--\n";
+
+/// The component whose fields are written without indentation.
+pub(crate) const BRUSH_TYPE_PATH: &str = "jackdaw_scene_types::types::Brush";
+
+/// The most numbers, strings and the like a value may hold and stay on one
+/// line. A brush face at its largest is 16.
+const MAX_INLINE_LEAVES: usize = 16;
+
+/// How far the rows of a value are indented.
+#[derive(Clone, Copy)]
+enum Indent {
+    Depth(usize),
+    Flat,
+}
+
+impl Indent {
+    fn deeper(self) -> Self {
+        match self {
+            Indent::Depth(depth) => Indent::Depth(depth + 1),
+            Indent::Flat => Indent::Flat,
+        }
+    }
+
+    fn write(self, out: &mut String) {
+        if let Indent::Depth(depth) = self {
+            write_indent(depth, out);
+        }
+    }
+}
 
 /// Emits a complete `.bsn` file from the document AST.
 ///
@@ -121,6 +154,29 @@ pub fn emit_entities(ast: &SceneBsnAst, entities: &[Entity]) -> String {
     out
 }
 
+/// How many bytes of text the document's brushes take up.
+pub fn brush_text_len(ast: &SceneBsnAst) -> usize {
+    let mut total = 0;
+    let mut text = String::new();
+    for &root in &ast.roots {
+        for node in std::iter::once(root).chain(ast.descendants_of(root)) {
+            let Some(patches) = ast.get_patches(node) else {
+                continue;
+            };
+            for patch in patches.0.iter().filter_map(|&patch| ast.get_patch(patch)) {
+                if let BsnPatch::Struct(data) = patch
+                    && data.type_path == BRUSH_TYPE_PATH
+                {
+                    text.clear();
+                    emit_struct_patch(data, 0, &mut text);
+                    total += text.len();
+                }
+            }
+        }
+    }
+    total
+}
+
 /// Emit all patches for one entity (one "block" in BSN), in the order they
 /// are stored in the entity's [`crate::BsnPatches`] list.
 fn emit_patches(ast: &SceneBsnAst, patches_entity: Entity, indent: usize, out: &mut String) {
@@ -196,7 +252,7 @@ fn emit_patch(ast: &SceneBsnAst, patch: &BsnPatch, indent: usize, out: &mut Stri
                     writeln!(out, "@{type_path}").unwrap();
                 } else {
                     writeln!(out, "@{type_path} {{").unwrap();
-                    emit_fields(&fields.0, indent + 1, out);
+                    emit_fields(&fields.0, Indent::Depth(indent + 1), out);
                     write_indent(indent, out);
                     writeln!(out, "}}").unwrap();
                 }
@@ -231,7 +287,11 @@ fn emit_struct_patch(data: &BsnStructData, indent: usize, out: &mut String) {
         writeln!(out, "{}", data.type_path).unwrap();
     } else {
         writeln!(out, "{} {{", data.type_path).unwrap();
-        emit_fields(&data.fields.0, indent + 1, out);
+        let rows = match data.type_path == BRUSH_TYPE_PATH {
+            true => Indent::Flat,
+            false => Indent::Depth(indent + 1),
+        };
+        emit_fields(&data.fields.0, rows, out);
         write_indent(indent, out);
         writeln!(out, "}}").unwrap();
     }
@@ -249,9 +309,9 @@ fn emit_tuple_struct_patch(data: &BsnTupleStructData, indent: usize, out: &mut S
     writeln!(out, ")").unwrap();
 }
 
-fn emit_fields(fields: &[BsnField], indent: usize, out: &mut String) {
+fn emit_fields(fields: &[BsnField], indent: Indent, out: &mut String) {
     for field in fields {
-        write_indent(indent, out);
+        indent.write(out);
         write!(out, "{}: ", field.name).unwrap();
         emit_value_maybe_multiline(&field.value, indent, out);
         writeln!(out, ",").unwrap();
@@ -267,15 +327,7 @@ pub fn emit_value_text(value: &BsnValue) -> String {
 
 fn emit_value(value: &BsnValue, out: &mut String) {
     match value {
-        BsnValue::Float(f) => {
-            // Always emit at least one decimal place so the value re-parses
-            // as a float rather than an int.
-            if f.fract() == 0.0 {
-                write!(out, "{f:.1}").unwrap();
-            } else {
-                write!(out, "{f}").unwrap();
-            }
-        }
+        BsnValue::Float(f) => emit_float(*f, out),
         BsnValue::Int(i) => write!(out, "{i}").unwrap(),
         BsnValue::Bool(b) => write!(out, "{b}").unwrap(),
         BsnValue::String(s) => write!(out, "\"{}\"", escape_string(s)).unwrap(),
@@ -330,6 +382,55 @@ fn emit_value(value: &BsnValue, out: &mut String) {
     }
 }
 
+/// A float in its shortest text that reads back as the same `f64`, with a
+/// decimal point so it re-parses as a float rather than an int. The text holds
+/// the value as the document does: whether it is an `f32` is not known here, so
+/// shortening one belongs to whatever knows its type.
+fn emit_float(value: f64, out: &mut String) {
+    let start = out.len();
+    write!(out, "{value}").unwrap();
+    if value.is_finite() && !out[start..].contains('.') {
+        out.push_str(".0");
+    }
+}
+
+/// Whether `value` is small enough to write on one line: it holds no list of
+/// anything but plain values, and no more than [`MAX_INLINE_LEAVES`] of them.
+fn fits_on_one_line(value: &BsnValue) -> bool {
+    inline_leaves(value).is_some_and(|leaves| leaves <= MAX_INLINE_LEAVES)
+}
+
+fn inline_leaves(value: &BsnValue) -> Option<usize> {
+    fn sum<'a>(values: impl Iterator<Item = &'a BsnValue>) -> Option<usize> {
+        let mut total = 0;
+        for value in values {
+            total += inline_leaves(value)?;
+            if total > MAX_INLINE_LEAVES {
+                return None;
+            }
+        }
+        Some(total)
+    }
+    match value {
+        BsnValue::Struct(data) => sum(data.fields.0.iter().map(|field| &field.value)),
+        BsnValue::TupleStruct(data) => sum(data.values.iter()),
+        BsnValue::List(items) => {
+            let plain = items.iter().all(|item| {
+                !matches!(
+                    item,
+                    BsnValue::Struct(_)
+                        | BsnValue::TupleStruct(_)
+                        | BsnValue::List(_)
+                        | BsnValue::Map(_)
+                )
+            });
+            plain.then(|| sum(items.iter())).flatten()
+        }
+        BsnValue::Map(entries) => entries.is_empty().then_some(0),
+        _ => Some(1),
+    }
+}
+
 /// Render each map entry's key to text and return the entries sorted by that
 /// key text. Sorting on the emitted key makes map emission deterministic
 /// regardless of the source insertion order.
@@ -346,32 +447,37 @@ fn sorted_map_entries(entries: &[(BsnValue, BsnValue)]) -> Vec<(String, &BsnValu
     rendered
 }
 
-/// Emit a value, using multiline format for nested structs and lists.
-fn emit_value_maybe_multiline(value: &BsnValue, indent: usize, out: &mut String) {
+/// Emit a value on one line when it fits, otherwise with its fields or rows
+/// each on their own line.
+fn emit_value_maybe_multiline(value: &BsnValue, indent: Indent, out: &mut String) {
+    if fits_on_one_line(value) {
+        emit_value(value, out);
+        return;
+    }
     match value {
         BsnValue::Struct(data) if !data.fields.0.is_empty() => {
             writeln!(out, "{} {{", data.type_path).unwrap();
-            emit_fields(&data.fields.0, indent + 1, out);
-            write_indent(indent, out);
+            emit_fields(&data.fields.0, indent.deeper(), out);
+            indent.write(out);
             write!(out, "}}").unwrap();
         }
         BsnValue::List(items) if !items.is_empty() => {
             writeln!(out, "[").unwrap();
             for item in items {
-                write_indent(indent + 1, out);
-                emit_value_maybe_multiline(item, indent + 1, out);
+                indent.deeper().write(out);
+                emit_value_maybe_multiline(item, indent.deeper(), out);
                 writeln!(out, ",").unwrap();
             }
-            write_indent(indent, out);
+            indent.write(out);
             write!(out, "]").unwrap();
         }
         BsnValue::Map(entries) if !entries.is_empty() => {
             writeln!(out, "map[").unwrap();
             let sorted = sorted_map_entries(entries);
             for (i, (key, value)) in sorted.iter().enumerate() {
-                write_indent(indent + 1, out);
+                indent.deeper().write(out);
                 write!(out, "({key}, ").unwrap();
-                emit_value_maybe_multiline(value, indent + 1, out);
+                emit_value_maybe_multiline(value, indent.deeper(), out);
                 write!(out, ")").unwrap();
                 if i + 1 < sorted.len() {
                     writeln!(out, ",").unwrap();
@@ -379,7 +485,7 @@ fn emit_value_maybe_multiline(value: &BsnValue, indent: usize, out: &mut String)
                     writeln!(out).unwrap();
                 }
             }
-            write_indent(indent, out);
+            indent.write(out);
             write!(out, "]").unwrap();
         }
         _ => emit_value(value, out),
@@ -523,7 +629,7 @@ mod tests {
         let entity = ast.world.spawn(BsnPatches(vec![patch])).id();
         ast.roots.push(entity);
 
-        let expected = "test::ItemDef {\n    loot: [\n        test::LootRoll {\n            item: \"coin\",\n        },\n        test::LootRoll {\n            item: \"gem\",\n        },\n    ],\n}\n";
+        let expected = "test::ItemDef {\n    loot: [\n        test::LootRoll { item: \"coin\" },\n        test::LootRoll { item: \"gem\" },\n    ],\n}\n";
         assert_eq!(emit_scene(&ast), expected);
     }
 

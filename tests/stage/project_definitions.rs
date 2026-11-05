@@ -820,14 +820,8 @@ definition_project::content::ItemDef {
     stack_size: 12,
     rarity: definition_project::content::Rarity::Rare,
     loot: [
-        definition_project::content::LootRoll {
-            item: \"coin\",
-            weight: 3,
-        },
-        definition_project::content::LootRoll {
-            item: \"gem\",
-            weight: 7,
-        },
+        definition_project::content::LootRoll { item: \"coin\", weight: 3 },
+        definition_project::content::LootRoll { item: \"gem\", weight: 7 },
     ],
 }
 ";

@@ -218,7 +218,7 @@ pub fn normalize_as_prefab_source(ast: &mut SceneBsnAst, display_name: &str) {
 
 /// Read a prefab source document from disk, ready to instance.
 ///
-/// The file is parsed as `.bsn` and normalized, so a plain scene comes back
+/// The file is read in either form and normalized, so a plain scene comes back
 /// instanceable, and its own prefab references are resolved against
 /// `assets_root`. The file stem names a synthetic root when the
 /// document needs one.
@@ -226,10 +226,9 @@ pub fn read_prefab_document(
     path: &Path,
     assets_root: &Path,
 ) -> Result<SceneBsnAst, std::io::Error> {
-    let text = jackdaw_bsn::read_document_text(path)
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?;
-    let mut ast = jackdaw_bsn::parse_bsn_text(&text)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let mut ast = jackdaw_bsn::read_document(path)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?
+        .ast;
     prepare_prefab_document(&mut ast, path, assets_root);
     Ok(ast)
 }
@@ -284,9 +283,9 @@ fn vec3_value(x: f32, y: f32, z: f32) -> BsnValue {
     BsnValue::Struct(BsnStructData {
         type_path: "glam::Vec3".to_string(),
         fields: BsnStructFields(vec![
-            field("x", BsnValue::Float(f64::from(x))),
-            field("y", BsnValue::Float(f64::from(y))),
-            field("z", BsnValue::Float(f64::from(z))),
+            field("x", BsnValue::from_f32(x)),
+            field("y", BsnValue::from_f32(y)),
+            field("z", BsnValue::from_f32(z)),
         ]),
     })
 }
@@ -295,10 +294,10 @@ fn quat_value(x: f32, y: f32, z: f32, w: f32) -> BsnValue {
     BsnValue::Struct(BsnStructData {
         type_path: "glam::Quat".to_string(),
         fields: BsnStructFields(vec![
-            field("x", BsnValue::Float(f64::from(x))),
-            field("y", BsnValue::Float(f64::from(y))),
-            field("z", BsnValue::Float(f64::from(z))),
-            field("w", BsnValue::Float(f64::from(w))),
+            field("x", BsnValue::from_f32(x)),
+            field("y", BsnValue::from_f32(y)),
+            field("z", BsnValue::from_f32(z)),
+            field("w", BsnValue::from_f32(w)),
         ]),
     })
 }
@@ -316,6 +315,21 @@ mod tests {
         let node = ast.create_entity_node(vec![BsnPatch::Struct(data)]);
         ast.add_to_roots(node);
         ast
+    }
+
+    #[test]
+    fn a_binary_prefab_stamped_by_an_older_bevy_is_migrated() {
+        let body = jackdaw_bsn::parse_bsn_text(
+            "#Rock\nbevy_core_pipeline::tonemapping::Tonemapping::None\n",
+        )
+        .expect("it parses");
+        let bytes = jackdaw_bsn::binary::encode(&body, Some("// jackdaw 0.19.0 | bevy 0.19\n"));
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("rock.bsb");
+        std::fs::write(&path, bytes).expect("the prefab");
+        let ast = read_prefab_document(&path, dir.path()).expect("it reads");
+        let text = jackdaw_bsn::emit_scene(&ast);
+        assert!(text.contains("bevy_render::view::Tonemapping"), "{text}");
     }
 
     fn source_of(ast: &SceneBsnAst) -> String {

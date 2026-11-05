@@ -7,6 +7,7 @@ use bevy::reflect::{PartialReflect, ReflectRef, ReflectSerialize, TypeRegistry};
 use path_slash::PathExt as _;
 use serde::Serialize as _;
 
+use super::compact::{TypeDefaults, compact_lists_in, shortest_f32};
 use super::serde_value::ValueSerializer;
 use super::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue};
 
@@ -108,7 +109,7 @@ impl BsnValue {
         value: &dyn PartialReflect,
         type_registry: &TypeRegistry,
     ) -> Result<Self, UnencodableValue> {
-        Self::from_reflect_inner(value, type_registry, None)
+        Self::compacted_from_reflect(value, type_registry, None)
     }
 
     /// [`BsnValue::try_from_reflect`], resolving `Handle<T>` fields to
@@ -118,7 +119,17 @@ impl BsnValue {
         type_registry: &TypeRegistry,
         ctx: &BsnAssetContext,
     ) -> Result<Self, UnencodableValue> {
-        Self::from_reflect_inner(value, type_registry, Some(ctx))
+        Self::compacted_from_reflect(value, type_registry, Some(ctx))
+    }
+
+    fn compacted_from_reflect(
+        value: &dyn PartialReflect,
+        type_registry: &TypeRegistry,
+        ctx: Option<&BsnAssetContext>,
+    ) -> Result<Self, UnencodableValue> {
+        let mut encoded = Self::from_reflect_inner(value, type_registry, ctx)?;
+        compact_lists_in(&mut encoded, &mut TypeDefaults::new(type_registry));
+        Ok(encoded)
     }
 
     fn encode_or_type(
@@ -126,20 +137,21 @@ impl BsnValue {
         type_registry: &TypeRegistry,
         ctx: Option<&BsnAssetContext>,
     ) -> Self {
-        Self::from_reflect_inner(value, type_registry, ctx).unwrap_or_else(|err| {
+        Self::compacted_from_reflect(value, type_registry, ctx).unwrap_or_else(|err| {
             log::warn!("{err}; writing its type alone");
             BsnValue::Type(type_path_or_unknown(value))
         })
     }
 
-    fn from_reflect_inner(
+    /// The value as the document holds it, with list elements still whole.
+    pub(super) fn from_reflect_inner(
         value: &dyn PartialReflect,
         type_registry: &TypeRegistry,
         ctx: Option<&BsnAssetContext>,
     ) -> Result<Self, UnencodableValue> {
         // Try primitives first.
         if let Some(v) = value.try_downcast_ref::<f32>() {
-            return Ok(BsnValue::Float(*v as f64));
+            return Ok(BsnValue::Float(shortest_f32(*v)));
         }
         if let Some(v) = value.try_downcast_ref::<f64>() {
             return Ok(BsnValue::Float(*v));
@@ -543,7 +555,12 @@ pub fn component_to_bsn_patch(
     reflected: &dyn PartialReflect,
     type_registry: &TypeRegistry,
 ) -> BsnPatch {
-    component_to_bsn_patch_inner(reflected, type_registry, None)
+    component_to_bsn_patch_inner(
+        reflected,
+        type_registry,
+        None,
+        &mut TypeDefaults::new(type_registry),
+    )
 }
 
 /// Convert a component's reflected data into a BSN AST patch, resolving
@@ -553,10 +570,49 @@ pub fn component_to_bsn_patch_with_assets(
     type_registry: &TypeRegistry,
     ctx: &BsnAssetContext,
 ) -> BsnPatch {
-    component_to_bsn_patch_inner(reflected, type_registry, Some(ctx))
+    component_to_bsn_patch_inner(
+        reflected,
+        type_registry,
+        Some(ctx),
+        &mut TypeDefaults::new(type_registry),
+    )
+}
+
+/// [`component_to_bsn_patch_with_assets`] for a pass over many components, which
+/// computes each type's default once through `defaults`.
+pub fn component_to_bsn_patch_in_pass(
+    reflected: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: &BsnAssetContext,
+    defaults: &mut TypeDefaults,
+) -> BsnPatch {
+    component_to_bsn_patch_inner(reflected, type_registry, Some(ctx), defaults)
 }
 
 fn component_to_bsn_patch_inner(
+    reflected: &dyn PartialReflect,
+    type_registry: &TypeRegistry,
+    ctx: Option<&BsnAssetContext>,
+    defaults: &mut TypeDefaults,
+) -> BsnPatch {
+    let mut patch = whole_component_patch(reflected, type_registry, ctx);
+    match &mut patch {
+        BsnPatch::Struct(data) => {
+            for field in &mut data.fields.0 {
+                compact_lists_in(&mut field.value, defaults);
+            }
+        }
+        BsnPatch::TupleStruct(data) => {
+            for value in &mut data.values {
+                compact_lists_in(value, defaults);
+            }
+        }
+        _ => {}
+    }
+    patch
+}
+
+fn whole_component_patch(
     reflected: &dyn PartialReflect,
     type_registry: &TypeRegistry,
     ctx: Option<&BsnAssetContext>,

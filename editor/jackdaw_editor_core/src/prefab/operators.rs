@@ -89,9 +89,9 @@ fn vec3_value(x: f32, y: f32, z: f32) -> BsnValue {
     BsnValue::Struct(BsnStructData {
         type_path: "glam::Vec3".to_string(),
         fields: BsnStructFields(vec![
-            field("x", BsnValue::Float(f64::from(x))),
-            field("y", BsnValue::Float(f64::from(y))),
-            field("z", BsnValue::Float(f64::from(z))),
+            field("x", BsnValue::from_f32(x)),
+            field("y", BsnValue::from_f32(y)),
+            field("z", BsnValue::from_f32(z)),
         ]),
     })
 }
@@ -109,10 +109,10 @@ fn quat_value(x: f32, y: f32, z: f32, w: f32) -> BsnValue {
     BsnValue::Struct(BsnStructData {
         type_path: "glam::Quat".to_string(),
         fields: BsnStructFields(vec![
-            field("x", BsnValue::Float(f64::from(x))),
-            field("y", BsnValue::Float(f64::from(y))),
-            field("z", BsnValue::Float(f64::from(z))),
-            field("w", BsnValue::Float(f64::from(w))),
+            field("x", BsnValue::from_f32(x)),
+            field("y", BsnValue::from_f32(y)),
+            field("z", BsnValue::from_f32(z)),
+            field("w", BsnValue::from_f32(w)),
         ]),
     })
 }
@@ -176,9 +176,9 @@ fn shift_bsn_translation(value: &mut BsnValue, offset: Vec3) {
     };
     for (axis, delta) in [("x", offset.x), ("y", offset.y), ("z", offset.z)] {
         if let Some(comp) = vec3.fields.0.iter_mut().find(|f| f.name == axis)
-            && let BsnValue::Float(current) = &mut comp.value
+            && let BsnValue::Float(current) = comp.value
         {
-            *current += f64::from(delta);
+            comp.value = BsnValue::from_f32(current as f32 + delta);
         }
     }
 }
@@ -1514,7 +1514,8 @@ fn resolve_prefab_value(
     };
     let prefab = expanded_prefab_source(world, &source)?;
     let prefab_node = prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(peid))?;
-    get_bsn_field(&prefab, prefab_node, type_path, field_path)
+    let registry = world.resource::<AppTypeRegistry>().read();
+    jackdaw_bsn::held_bsn_field(&prefab, prefab_node, type_path, field_path, &registry)
 }
 
 /// Revert one component field on a prefab-instance entity to its inherited

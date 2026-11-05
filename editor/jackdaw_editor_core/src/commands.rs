@@ -88,8 +88,9 @@ fn peek_live_at_begin(
         .cloned()
 }
 
-/// Undo baseline for one target: authored document field, else `None` when
-/// the component patch exists but the field does not (sparse absence), else
+/// Undo baseline for one target: authored document field, else what a list
+/// element that leaves the field out holds, else `None` when the component
+/// patch exists but the field does not (sparse absence), else
 /// the live value captured at begin (derived), else the current live field.
 fn resolve_field_edit_old_value(
     world: &World,
@@ -99,6 +100,9 @@ fn resolve_field_edit_old_value(
 ) -> Option<jackdaw_bsn::BsnValue> {
     if let Some(authored) = authored_bsn_field(world, entity, type_path, field_path) {
         return Some(authored);
+    }
+    if let Some(omitted) = omitted_list_field(world, entity, type_path, field_path) {
+        return Some(omitted);
     }
     if document_has_component_patch(world, entity, type_path) {
         // Sparse patch: field was not authored. Undo must remove it, not
@@ -1612,6 +1616,10 @@ impl SetBsnField {
         if self.old_value.is_none() && !self.field_path.is_empty() && live_before && !had_patch {
             self.old_value = live_bsn_field(world, self.entity, &self.type_path, &self.field_path);
         }
+        if self.old_value.is_none() {
+            self.old_value =
+                omitted_list_field(world, self.entity, &self.type_path, &self.field_path);
+        }
         {
             let registry = world.resource::<AppTypeRegistry>().clone();
             let registry = registry.read();
@@ -2063,6 +2071,19 @@ pub(crate) fn authored_bsn_field(
     let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
     let node = ast.ast_for(entity)?;
     jackdaw_bsn::get_bsn_field(ast, node, type_path, field_path)
+}
+
+/// What `field_path` holds where a list element in `entity`'s document node
+/// leaves it out.
+fn omitted_list_field(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> Option<jackdaw_bsn::BsnValue> {
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    let registry = world.get_resource::<AppTypeRegistry>()?.read();
+    jackdaw_bsn::omitted_list_field(ast, ast.ast_for(entity)?, type_path, field_path, &registry)
 }
 
 /// The path to author a field edit at and the value to author there.
@@ -2964,6 +2985,43 @@ mod set_bsn_field_tests {
         app.init_resource::<Selection>();
         app.init_resource::<CommandHistory>();
         app
+    }
+
+    #[derive(Component, Reflect, Default, Clone)]
+    #[reflect(Component, Default)]
+    struct WideFloat {
+        wide: f64,
+    }
+
+    /// Two `f64` values that round to one `f32` are two values.
+    #[test]
+    fn an_f64_edit_that_narrows_to_the_same_f32_is_a_change() {
+        let mut app = field_app();
+        app.init_resource::<AppTypeRegistry>();
+        app.register_type::<WideFloat>();
+        let entity = app.world_mut().spawn(WideFloat { wide: 0.1 }).id();
+        create_entity_in_ast(app.world_mut(), entity, None);
+        let type_path = <WideFloat as bevy::reflect::TypePath>::type_path();
+        let authored = BsnValue::Float(0.1);
+        SetBsnField {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: "wide".to_string(),
+            old_value: None,
+            new_value: authored.clone(),
+            was_derived: false,
+        }
+        .execute(app.world_mut());
+
+        let widened = BsnValue::Float(f64::from(0.1_f32));
+        assert!(
+            set_bsn_field_command(app.world(), entity, type_path, "wide", widened).is_ok(),
+            "the edit was read as no change"
+        );
+        assert!(matches!(
+            set_bsn_field_command(app.world(), entity, type_path, "wide", authored),
+            Err(FieldEditSkip::Unchanged)
+        ));
     }
 
     /// A model's material overrides, by the model's material name.

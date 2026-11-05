@@ -28,9 +28,22 @@ pub struct PrefabAstCache {
     /// epoch its change moved the cache to.
     changes: Vec<(u64, CanonicalPrefabPath)>,
     last_saved_fingerprints: HashMap<CanonicalPrefabPath, SavedFingerprint>,
+    /// Puts each entry in the form live values take, so a value compared
+    /// against a prefab read from an older file reads as an override only if
+    /// it is one. Without it entries stay as they were read.
+    registry: Option<AppTypeRegistry>,
 }
 
 impl PrefabAstCache {
+    /// A cache whose entries compare against the values this registry's types
+    /// write.
+    pub fn with_registry(registry: AppTypeRegistry) -> Self {
+        Self {
+            registry: Some(registry),
+            ..Self::default()
+        }
+    }
+
     pub fn get(&self, path: &Path) -> Option<&SceneBsnAst> {
         self.entries.get(&canonical_prefab_path(path))
     }
@@ -39,7 +52,10 @@ impl PrefabAstCache {
         self.entries.get(path)
     }
 
-    pub fn insert(&mut self, path: impl AsRef<Path>, ast: SceneBsnAst) {
+    pub fn insert(&mut self, path: impl AsRef<Path>, mut ast: SceneBsnAst) {
+        if let Some(registry) = &self.registry {
+            jackdaw_bsn::compact_document(&mut ast, &registry.read());
+        }
         let key = canonical_prefab_path(path);
         self.entries.insert(key.clone(), ast);
         self.note_change(key);
