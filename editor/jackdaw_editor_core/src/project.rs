@@ -131,8 +131,9 @@ impl ProjectRoot {
 
     /// The `.jackdaw/` directory: gitignored, regenerated build artifacts
     /// (schema, plan, shim, target) plus local editor state
-    /// (`project.json`) and caches (`registry.json`). Committed project data
-    /// (the manifest, scenes, the asset catalog) lives outside it.
+    /// (`project.json`), caches (`registry.json`) and `play/`, the sidecars a
+    /// running game reads ahead of a save. Committed project data (the manifest,
+    /// scenes, the asset catalog) lives outside it.
     pub fn jackdaw_dir(&self) -> PathBuf {
         self.root.join(".jackdaw")
     }

@@ -102,6 +102,7 @@ mod live_levels;
 #[cfg(feature = "render")]
 mod lod;
 pub mod node_sync;
+pub mod play_overlay;
 #[cfg(feature = "render")]
 pub use live_levels::{
     AwaitingModelSettings, LiveLevelProgress, LiveLevelSettings, LiveLevels, LiveLevelsPlugin,
@@ -827,7 +828,7 @@ fn resolve_prefab_references(
     let document_dir = jackdaw_prefab::normalize_path(&assets_root.join(scene_dir));
     jackdaw_prefab::absolutize_isa_sources(&mut ast, &assets_root, &document_dir);
 
-    let sources = match read_prefab_sources(&ast, &assets_root, scene_name) {
+    let sources = match read_prefab_sources(world, &ast, &assets_root, scene_name) {
         Ok(sources) => sources,
         Err(outside) => {
             warn!(
@@ -857,8 +858,10 @@ fn resolve_prefab_references(
 /// Sources are normalized to real paths first, so a loop between two prefabs
 /// ends here. A source outside `assets_root` returns `Err(source)` before that
 /// file is opened, checked as it comes off the queue so a prefab reached
-/// through another is checked too.
+/// through another is checked too. Under Play, the unsaved text the editor sent
+/// for a prefab stands in for its file.
 fn read_prefab_sources(
+    world: &World,
     ast: &SceneBsnAst,
     assets_root: &Path,
     scene_name: &str,
@@ -871,6 +874,11 @@ fn read_prefab_sources(
         }
         if !path.starts_with(assets_root) {
             return Err(path);
+        }
+        if let Some(document) = play_overlay::overlaid_prefab(world, &path, assets_root) {
+            pending.extend(isa_sources(&document));
+            documents.insert(path, document);
+            continue;
         }
         let file = jackdaw_bsn::existing_form(&path).unwrap_or_else(|| path.clone());
         match jackdaw_prefab::read_prefab_document(&file, assets_root) {
@@ -1003,7 +1011,7 @@ fn spawn_scene_entities(
     // Sidecars are named relative to the document that wrote them, the scene
     // or a prefab, which is known here.
     #[cfg(any(feature = "terrain", feature = "tilemap"))]
-    if let Some(dirs) = sidecar_dirs(world, &spawned, parent_path, expanded) {
+    if let Some(dirs) = sidecar_dirs(world, root_entity, &spawned, parent_path, expanded) {
         #[cfg(feature = "terrain")]
         terrain::attach_sidecars(world, &dirs);
         #[cfg(feature = "tilemap")]
@@ -1018,15 +1026,27 @@ fn spawn_scene_entities(
     members
 }
 
-/// The folder each spawned terrain or tilemap names its sidecar against: the
-/// prefab it inherits from when that prefab really expanded, else the scene's.
+/// Where a spawned terrain or tilemap finds its sidecar.
+#[cfg(any(feature = "terrain", feature = "tilemap"))]
+pub(crate) struct SidecarDir {
+    entity: Entity,
+    /// The folder its `data_path` names its file against.
+    dir: PathBuf,
+    /// The folder that path names an unsaved copy against, under Play.
+    copies: Option<PathBuf>,
+}
+
+/// The folders each spawned terrain or tilemap under `scene_root` names its sidecar
+/// against: the prefab it inherits from when that prefab really expanded, else the
+/// scene's.
 #[cfg(any(feature = "terrain", feature = "tilemap"))]
 fn sidecar_dirs(
     world: &World,
+    scene_root: Entity,
     spawned: &[Entity],
     parent_path: &Path,
     expanded: &HashSet<PathBuf>,
-) -> Option<Vec<(Entity, PathBuf)>> {
+) -> Option<Vec<SidecarDir>> {
     let has_sidecar = |entity: Entity| {
         world.get::<jackdaw_scene_types::Terrain>(entity).is_some()
             || world.get::<jackdaw_scene_types::Tilemap>(entity).is_some()
@@ -1052,7 +1072,12 @@ fn sidecar_dirs(
                 .unwrap_or_default(),
             None => scene_dir.clone(),
         };
-        (entity, dir)
+        let copies = play_overlay::overlaid_sidecar_dir(world, scene_root, &root, &dir);
+        SidecarDir {
+            entity,
+            dir,
+            copies,
+        }
     })
     .collect();
     Some(dirs)
@@ -1859,6 +1884,9 @@ fn load_asset_file(
         }
     };
     let header = jackdaw_bsn::read_asset_header(&text);
+    if header.as_deref() == Some(jackdaw_bsn::PREFAB_TYPE) {
+        return None;
+    }
     if let Some(header) = header.clone() {
         match asset_registration(world, &header) {
             None => {
@@ -1992,6 +2020,29 @@ mod asset_file_tests {
     use super::*;
     use bevy::app::App;
     use bevy::asset::{AssetApp, AssetPlugin};
+
+    /// A prefab's header names a component, which no app loads as an asset. A
+    /// prefab is read when something instances it, so the walk says nothing of it.
+    #[test]
+    fn a_prefab_file_is_not_reported_as_a_skipped_asset() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("door.bsn");
+        std::fs::write(
+            &path,
+            jackdaw_bsn::with_asset_header(
+                jackdaw_bsn::PREFAB_TYPE,
+                "#Door\njackdaw::prefab::components::Prefab\n",
+            ),
+        )
+        .expect("a prefab");
+        let mut app = runtime_app();
+        app.add_plugins(jackdaw_prefab::PrefabTypesPlugin);
+        let mut skipped = SkippedTypes::default();
+        assert!(load_asset_file(app.world_mut(), &path, &mut skipped).is_none());
+        assert!(skipped.unreflected.is_empty(), "{:?}", skipped.unreflected);
+        assert!(skipped.unregistered.is_empty());
+        assert_eq!(skipped.on_header, 0);
+    }
 
     /// A game's own asset type, registered by the app rather than compiled
     /// into the runtime.

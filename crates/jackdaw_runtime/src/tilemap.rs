@@ -40,6 +40,8 @@ pub struct TilemapSidecarMissing;
 struct TilemapSource {
     /// Folder of the document that names the map.
     dir: PathBuf,
+    /// Where unsaved copies of its sidecars stand in for the files, under Play.
+    copies: Option<PathBuf>,
     /// The data path `data` was read from.
     read: Option<String>,
     data: TilemapData,
@@ -49,11 +51,17 @@ struct TilemapSource {
 }
 
 /// Give every freshly spawned map the folder its sidecar resolves against.
-pub(crate) fn attach_sidecars(world: &mut World, dirs: &[(Entity, PathBuf)]) {
-    for (entity, dir) in dirs {
+pub(crate) fn attach_sidecars(world: &mut World, dirs: &[crate::SidecarDir]) {
+    for crate::SidecarDir {
+        entity,
+        dir,
+        copies,
+    } in dirs
+    {
         if (world.get::<Tilemap>(*entity)).is_some_and(|map| !map.data_path.is_empty()) {
             world.entity_mut(*entity).insert(TilemapSource {
                 dir: dir.clone(),
+                copies: copies.clone(),
                 read: None,
                 data: TilemapData::default(),
                 tilesets: Vec::new(),
@@ -140,7 +148,14 @@ fn draw_map(world: &mut World, map: Entity, tilesets: &mut Tilesets) {
         return;
     };
     if source.read.as_deref() != Some(tilemap.data_path.as_str()) {
-        source.data = read_sidecar(world, map, &source.dir, &tilemap.data_path, &name);
+        source.data = read_sidecar(
+            world,
+            map,
+            &source.dir,
+            source.copies.as_deref(),
+            &tilemap.data_path,
+            &name,
+        );
         source.read = Some(tilemap.data_path.clone());
     }
     let old: Vec<Entity> = (world.get::<Children>(map).into_iter().flatten())
@@ -224,6 +239,7 @@ fn read_sidecar(
     world: &mut World,
     map: Entity,
     dir: &Path,
+    copies: Option<&Path>,
     data_path: &str,
     name: &str,
 ) -> TilemapData {
@@ -235,7 +251,8 @@ fn read_sidecar(
         }
     };
     world.entity_mut(map).remove::<TilemapSidecarMissing>();
-    match std::fs::read(&path) {
+    let copy = copies.and_then(|copies| jackdaw_tilemap::resolve_path(copies, data_path).ok());
+    match crate::play_overlay::read_sidecar(copy.as_deref(), &path) {
         Ok(bytes) => jackdaw_tilemap::decode(&bytes).unwrap_or_else(|err| {
             warn!(
                 "Tilemap {name} draws nothing: its sidecar {} is unreadable ({err})",

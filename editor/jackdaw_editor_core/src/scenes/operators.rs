@@ -658,6 +658,25 @@ pub fn scene_close_system(world: &mut World, target: usize) {
     scene_close_system_unprompted(world, target);
 }
 
+/// Throw away what tab `target` holds as unsaved outside its own document, so
+/// nothing reads those edits after the tab goes: its prefab's cache entry, which
+/// open scenes and a running game read, and what the document hooks hold. Runs while
+/// the tab is still open.
+pub fn discard_tab_edits(world: &mut World, target: usize) {
+    let Some(tab) = world.resource::<Scenes>().tabs.get(target) else {
+        return;
+    };
+    let prefab = match &tab.content {
+        crate::scenes::TabContent::Prefab(path) => Some(path.as_path().to_path_buf()),
+        crate::scenes::TabContent::Scene(_) => None,
+    };
+    crate::scene_io::hooks::discard_document(world, target);
+    if let Some(path) = prefab {
+        let in_front = world.resource::<Scenes>().active == target;
+        crate::prefab::watcher::return_prefab_to_file(world, &path, !in_front);
+    }
+}
+
 /// The actual close logic, called either directly (clean tab) or from
 /// the dialog's Save/Discard branches (after the user has confirmed).
 /// Does not check the dirty flag.

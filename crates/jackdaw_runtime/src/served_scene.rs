@@ -123,11 +123,20 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
     if answer.is_none() && requests.open.contains_key(&request) {
         return Gate::Hold;
     }
+    let overlay = answer
+        .as_ref()
+        .and_then(answer_sidecars)
+        .and_then(|named| crate::play_overlay::sidecar_overlay(world, named));
     let mut root_entity = world.entity_mut(root);
-    root_entity.remove::<AwaitingDocument>();
+    root_entity.remove::<(AwaitingDocument, crate::play_overlay::SidecarOverlay)>();
+    if let Some(overlay) = overlay {
+        root_entity.insert(overlay);
+    }
     match answer {
-        Some(SceneAnswer::Document { text, dir, stem }) => Gate::Document { text, dir, stem },
-        Some(SceneAnswer::UseFile { path: file }) if file != path => {
+        Some(SceneAnswer::Document {
+            text, dir, stem, ..
+        }) => Gate::Document { text, dir, stem },
+        Some(SceneAnswer::UseFile { path: file, .. }) if file != path => {
             root_entity.insert(SceneFromFile);
             let handle = world
                 .resource::<AssetServer>()
@@ -140,6 +149,14 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
         Some(SceneAnswer::UseFile { .. }) | None => {
             root_entity.insert(SceneFromFile);
             Gate::File
+        }
+    }
+}
+
+fn answer_sidecars(answer: &SceneAnswer) -> Option<&str> {
+    match answer {
+        SceneAnswer::Document { sidecars, .. } | SceneAnswer::UseFile { sidecars, .. } => {
+            sidecars.as_deref()
         }
     }
 }
@@ -293,6 +310,7 @@ mod tests {
                 text,
                 dir: String::new(),
                 stem: "scene".to_string(),
+                sidecars: None,
             },
         }
     }
@@ -302,6 +320,7 @@ mod tests {
             request,
             answer: SceneAnswer::UseFile {
                 path: path.to_string(),
+                sidecars: None,
             },
         }
     }
@@ -973,6 +992,7 @@ mod tests {
                     ),
                     dir: "levels".to_string(),
                     stem: "meadow".to_string(),
+                    sidecars: None,
                 },
             },
         );
@@ -1086,5 +1106,105 @@ mod tests {
         stop.store(true, Ordering::Release);
         game.join().expect("the game ran");
         editor.join().expect("the editor ran");
+    }
+
+    /// Over the link: the prefab text ahead of the answer stands in for the file,
+    /// and the answer's folder is where sidecars are looked for.
+    #[test]
+    fn prefab_files_and_the_sidecar_folder_arrive_over_the_link() {
+        let project = tempfile::tempdir().expect("a temp dir");
+        let assets = project.path().join("assets");
+        std::fs::create_dir_all(&assets).expect("assets");
+        let door = |x: f32| {
+            format!(
+                "#Door\n\
+                 jackdaw::prefab::components::Prefab\n\
+                 jackdaw::prefab::components::PrefabEntityId(0)\n\
+                 jackdaw_scene_types::node_id::SceneNodeId({NODE})\n\
+                 bevy_transform::components::transform::Transform {{\n    \
+                 translation: glam::Vec3 {{ x: {x:?}, y: 0.0, z: 0.0 }},\n}}\n"
+            )
+        };
+        std::fs::write(assets.join("door.bsn"), door(1.0)).expect("a prefab");
+        std::fs::write(assets.join("scene.bsn"), scene_text(2.0)).expect("a scene");
+        let (mut editor, game) = LoopbackTransport::pair();
+        let mut app = base_app(&assets);
+        install_link(&mut app, Box::new(game));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+
+        send(
+            &mut editor,
+            &ControlEvent::PrefabFiles {
+                files: vec![("door.bsn".to_string(), Some(door(9.0)))],
+            },
+        );
+        let play = project.path().join(".jackdaw/play/scene");
+        send(
+            &mut editor,
+            &ControlEvent::SceneDocument {
+                request,
+                answer: SceneAnswer::Document {
+                    text: format!(
+                        "#Placed\n{} {{ source: \"door.bsn\", deleted: [] }}\n\
+                         jackdaw::prefab::components::PrefabEntityId(0)\n",
+                        jackdaw_prefab::ISA_TYPE
+                    ),
+                    dir: String::new(),
+                    stem: "scene".to_string(),
+                    sidecars: Some(play.to_string_lossy().into_owned()),
+                },
+            },
+        );
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![9.0], "the unsaved prefab");
+
+        #[cfg(any(feature = "terrain", feature = "tilemap"))]
+        {
+            let root = app
+                .world_mut()
+                .query_filtered::<Entity, With<JackdawSceneRoot>>()
+                .single(app.world())
+                .expect("the root");
+            assert_eq!(
+                crate::play_overlay::overlaid_sidecar_dir(app.world(), root, &assets, &assets),
+                Some(jackdaw_prefab::normalize_path(&play)),
+                "the folder the answer named"
+            );
+        }
+    }
+
+    /// A file answer names a folder too: the file can instance a prefab with
+    /// unsaved sidecars.
+    #[cfg(any(feature = "terrain", feature = "tilemap"))]
+    #[test]
+    fn a_file_answer_gives_its_root_the_sidecar_folder() {
+        let project = tempfile::tempdir().expect("a temp dir");
+        let assets = project.path().join("assets");
+        std::fs::create_dir_all(&assets).expect("assets");
+        std::fs::write(assets.join("scene.bsn"), scene_text(2.0)).expect("a scene");
+        let (mut editor, game) = LoopbackTransport::pair();
+        let mut app = base_app(&assets);
+        install_link(&mut app, Box::new(game));
+        let root = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        let play = project.path().join(".jackdaw/play/scene");
+        send(
+            &mut editor,
+            &ControlEvent::SceneDocument {
+                request,
+                answer: SceneAnswer::UseFile {
+                    path: "scene.bsn".to_string(),
+                    sidecars: Some(play.to_string_lossy().into_owned()),
+                },
+            },
+        );
+        app.update();
+        assert_eq!(
+            crate::play_overlay::overlaid_sidecar_dir(app.world(), root, &assets, &assets),
+            Some(jackdaw_prefab::normalize_path(&play))
+        );
     }
 }
