@@ -16,7 +16,8 @@
 //! [`ControlEvent::SceneAssets`] holding the asset's definition, the way served
 //! text embeds it, and one naming an asset file behind a
 //! [`ControlEvent::AssetFiles`]. Both go through the instance's one queue, in that
-//! order. A change to a material file goes to every game the same way, on its own.
+//! order. A changed material goes on its own, under the path or session name a game
+//! holds it by, and the game writes it into the asset it holds.
 
 use std::any::TypeId;
 use std::collections::hash_map::DefaultHasher;
@@ -59,6 +60,9 @@ pub struct DocumentSync {
     seen: Option<Seen>,
     warned: HashSet<String>,
     material_events: MessageCursor<AssetEvent<StandardMaterial>>,
+    /// An asset took a new session name, so the next collection looks at every
+    /// node, whether or not the document changed.
+    rescan: bool,
 }
 
 impl DocumentSync {
@@ -66,6 +70,7 @@ impl DocumentSync {
     /// as it is then and sends nothing for it.
     pub fn forget(&mut self) {
         self.seen = None;
+        self.rescan = false;
     }
 }
 
@@ -135,9 +140,9 @@ pub(crate) fn sync_document_to_game(world: &mut World) {
         }
         SyncTarget::Live => {
             let keys = world.non_send::<crate::pie::PieSession>().live_keys();
-            let material_files = collect_material_file_changes(world, &keys);
+            let materials = collect_material_changes(world, &keys);
             let changes = collect_changes_for(world, &keys);
-            for (key, event) in material_files.into_iter().chain(changes) {
+            for (key, event) in materials.into_iter().chain(changes) {
                 crate::pie::send_control_to_instance(world, &key, event);
             }
         }
@@ -188,11 +193,12 @@ pub fn collect_changes_for(
     sends
 }
 
-/// The material files changed since the last call, as each of the games `keys`
-/// takes them: covers a value set in the editor, an undo of one, and an edit to
-/// the file. A game holds the definition under the path, so everything using the
-/// material updates with no edit to any component.
-pub fn collect_material_file_changes(
+/// The materials changed since the last call, as each of the games `keys` takes
+/// them: covers a value set in the editor, an undo of one, and an edit to a file. A
+/// game holds the definition under the path or session name, so everything using
+/// the material updates with no edit to any component. A definition a game already
+/// holds goes nowhere.
+pub fn collect_material_changes(
     world: &mut World,
     keys: &[InstanceKey],
 ) -> Vec<(InstanceKey, ControlEvent)> {
@@ -213,26 +219,74 @@ pub fn collect_material_file_changes(
                 })
                 .collect()
         });
-    let mut sends = Vec::new();
-    let Some(paths) = world.get_resource::<jackdaw_bsn::BsnAssetPaths>() else {
-        return sends;
-    };
-    let mut files: Vec<AssetFile> = changed
-        .into_iter()
-        .filter_map(|id| {
-            let path = paths.0.get(&id)?.clone();
-            jackdaw_bsn::is_document_path(std::path::Path::new(&path)).then(|| AssetFile {
-                path,
-                type_id: id.type_id(),
-                id,
-            })
-        })
-        .collect();
+    let paths = world.get_resource::<jackdaw_bsn::BsnAssetPaths>();
+    let mut files: Vec<AssetFile> = Vec::new();
+    let mut runtime: Vec<UntypedAssetId> = Vec::new();
+    for id in changed {
+        match paths.and_then(|paths| paths.0.get(&id)) {
+            Some(path) if jackdaw_bsn::is_document_path(std::path::Path::new(path)) => {
+                files.push(AssetFile {
+                    path: path.clone(),
+                    type_id: id.type_id(),
+                    id,
+                });
+            }
+            Some(_) => {}
+            None if runtime.contains(&id) => {}
+            None => runtime.push(id),
+        }
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     files.dedup_by(|a, b| a.path == b.path);
+    let mut sends = Vec::new();
     for key in keys {
         if let Some(event) = asset_files_missing_from(world, key, &files) {
             sends.push((key.clone(), event));
+        }
+    }
+    sends.extend(session_material_changes(world, keys, runtime));
+    sends
+}
+
+/// The new definitions of `changed`, for each of the games `keys` given them under
+/// a session name. An asset sharing its name with another asset keeps that one's
+/// definition from changing by taking a new name, which only an edit of what holds
+/// it can tell a game, so the next collection looks for those.
+fn session_material_changes(
+    world: &mut World,
+    keys: &[InstanceKey],
+    changed: Vec<UntypedAssetId>,
+) -> Vec<(InstanceKey, ControlEvent)> {
+    let mut sends = Vec::new();
+    world.init_resource::<crate::play_scene::PlayAssetNames>();
+    for id in changed {
+        let type_id = id.type_id();
+        let named =
+            world.resource_scope(|world, mut names: Mut<crate::play_scene::PlayAssetNames>| {
+                let before = names.name_of(id)?;
+                Some((before, names.resolve(world, id, type_id)?))
+            });
+        let Some((before, name)) = named else {
+            continue;
+        };
+        if before != name {
+            world.resource_mut::<DocumentSync>().rescan = true;
+            continue;
+        }
+        let asset = CatalogAssetRef {
+            name: name.trim_start_matches('#').to_string(),
+            type_id,
+            asset_id: id,
+        };
+        for key in keys {
+            let given = world
+                .resource::<crate::play_scene::PlayAssetNames>()
+                .was_given(key, &name);
+            if given
+                && let Some(event) = assets_missing_from(world, key, std::slice::from_ref(&asset))
+            {
+                sends.push((key.clone(), event));
+            }
         }
     }
     sends
@@ -283,8 +337,9 @@ fn collect(
 ) -> Vec<NodeChange> {
     let world_now = world.change_tick();
     world.increment_change_tick();
-    let document_changed =
-        world
+    let rescan = std::mem::take(&mut sync.rescan);
+    let document_changed = rescan
+        || world
             .get_resource_ref::<SceneBsnAst>()
             .is_some_and(|ast| match &sync.seen {
                 Some(seen) => ast.last_changed().is_newer_than(seen.world_tick, world_now),
@@ -305,7 +360,7 @@ fn collect(
         let since = sync
             .seen
             .as_ref()
-            .filter(|seen| seen.document == document)
+            .filter(|seen| !rescan && seen.document == document)
             .map(|seen| (seen.document_tick, &seen.retry));
         let (authored, present) = touched_nodes(ast, since, now);
         ast.world.increment_change_tick();
@@ -330,6 +385,7 @@ fn collect(
                     &mut references,
                     names,
                     entity,
+                    node,
                     &mut components,
                 );
             }
@@ -561,27 +617,147 @@ fn authored_patches(ast: &SceneBsnAst, node: Entity) -> Authored {
 /// document mirrors a handle field without an asset context, so its patch reads
 /// the same whichever asset the field points at. Hashing the reference rather
 /// than the handle's id keeps a reparse, which changes ids, from reading as an
-/// edit.
+/// edit. A project component's patch names its assets as the document does, so its
+/// session names go in the same way.
 fn fold_in_references(
     world: &World,
     registry: &TypeRegistry,
     references: &mut AssetReferences,
     names: &mut crate::play_scene::PlayAssetNames,
     entity: Entity,
+    node: Entity,
     components: &mut Components,
 ) {
+    fn fold(digest: &mut u64, held: impl Hash) {
+        let mut hasher = DefaultHasher::new();
+        digest.hash(&mut hasher);
+        held.hash(&mut hasher);
+        *digest = hasher.finish();
+    }
     for (path, digest) in components.iter_mut() {
-        let Some(value) = held_component(world, registry, entity, path) else {
-            continue;
-        };
-        let held = references.references_in(world, registry, value.as_partial_reflect(), names);
-        if !held.is_empty() {
-            let mut hasher = DefaultHasher::new();
-            digest.hash(&mut hasher);
-            held.hash(&mut hasher);
-            *digest = hasher.finish();
+        if let Some(value) = held_component(world, registry, entity, path) {
+            let held = references.references_in(world, registry, value.as_partial_reflect(), names);
+            if !held.is_empty() {
+                fold(digest, held);
+            }
+        } else if let Some(schema) = world
+            .get_resource::<ProjectTypes>()
+            .and_then(|types| types.component(path))
+        {
+            let (_, session) = project_value(
+                world,
+                registry,
+                names,
+                &mut UsedAssets::default(),
+                node,
+                schema,
+            );
+            if !session.is_empty() {
+                fold(digest, session);
+            }
         }
     }
+}
+
+/// A project component's value as the document holds it, with every reference to
+/// an asset the document embeds under its session name, as served text writes it,
+/// and those names. The assets it names that a game may not hold go in `used`.
+fn project_value(
+    world: &World,
+    registry: &TypeRegistry,
+    names: &mut crate::play_scene::PlayAssetNames,
+    used: &mut UsedAssets,
+    node: Entity,
+    schema: &jackdaw_schema::TypeSchema,
+) -> (serde_json::Value, Vec<String>) {
+    let mut value =
+        crate::inspector::project_component_display::project_component_json(world, node, schema);
+    let mut session = Vec::new();
+    name_references_in_json(world, registry, names, used, &mut value, &mut session);
+    (value, session)
+}
+
+fn name_references_in_json(
+    world: &World,
+    registry: &TypeRegistry,
+    names: &mut crate::play_scene::PlayAssetNames,
+    used: &mut UsedAssets,
+    value: &mut serde_json::Value,
+    session: &mut Vec<String>,
+) {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => {
+            if let Some((name, asset)) = names.session_reference(world, registry, text) {
+                text.clone_from(&name);
+                session.push(name);
+                if let Some(asset) = asset
+                    && !used
+                        .runtime
+                        .iter()
+                        .any(|held| held.asset_id == asset.asset_id)
+                {
+                    used.runtime.push(asset);
+                }
+            } else if let Some(handle) = world
+                .get_resource::<jackdaw_bsn::BsnProjectAssets>()
+                .and_then(|project| project.0.get(text.as_str()))
+                .filter(|_| jackdaw_bsn::is_document_path(std::path::Path::new(text.as_str())))
+                && !used.files.iter().any(|file| file.id == handle.id())
+            {
+                used.files.push(AssetFile {
+                    path: text.clone(),
+                    type_id: handle.type_id(),
+                    id: handle.id(),
+                });
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                name_references_in_json(world, registry, names, used, item, session);
+            }
+        }
+        Value::Object(fields) => {
+            for (_, field) in fields.iter_mut() {
+                name_references_in_json(world, registry, names, used, field, session);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every asset the live document uses: those it embeds and those a component of
+/// one of its entities holds.
+pub(crate) fn assets_in_document(world: &World) -> HashSet<UntypedAssetId> {
+    let mut used: HashSet<UntypedAssetId> = world
+        .get_resource::<jackdaw_bsn::BsnSceneAssets>()
+        .into_iter()
+        .flat_map(|assets| assets.0.values().map(UntypedHandle::id))
+        .collect();
+    let Some(ast) = world.get_resource::<SceneBsnAst>() else {
+        return used;
+    };
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let mut handles = Vec::new();
+    for entity in crate::scene_io::save::doc_entities_in_order(ast) {
+        let Ok(entity) = world.get_entity(entity) else {
+            continue;
+        };
+        for &component in entity.archetype().components() {
+            let Some(value) = world
+                .components()
+                .get_info(component)
+                .and_then(|info| registry.get(info.type_id()?))
+                .and_then(|registration| registration.data::<ReflectComponent>())
+                .and_then(|reflect| reflect.reflect(entity))
+            else {
+                continue;
+            };
+            handles_in(value.as_partial_reflect(), &registry, &mut handles);
+        }
+    }
+    used.extend(handles.iter().map(UntypedHandle::id));
+    used
 }
 
 /// Fold a node's patch digests into one digest per component type path.
@@ -829,7 +1005,8 @@ fn held_component<'w>(
 
 /// The full current value of `type_path` on the node, in the form the game's
 /// reflection deserializer reads: the editor entity's component for a type
-/// the editor registers, else the document's value for a project type.
+/// the editor registers, else the document's value for a project type, naming
+/// assets as the game holds them.
 #[expect(
     clippy::too_many_arguments,
     reason = "the naming state and the assets used travel alongside the value's address"
@@ -858,7 +1035,7 @@ fn component_value(
         .get_resource::<ProjectTypes>()
         .and_then(|types| types.component(type_path))
         .ok_or_else(|| Unsent::whole("the type is not registered"))?;
-    Ok(crate::inspector::project_component_display::project_component_json(world, node, schema))
+    Ok(project_value(world, registry, names, used, node, schema).0)
 }
 
 /// Serialize a component for the game. An asset handle goes as the reference

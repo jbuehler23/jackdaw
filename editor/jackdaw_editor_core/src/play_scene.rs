@@ -480,8 +480,9 @@ impl PlayAssetNames {
     ) -> Option<String> {
         let definition = asset_definition(world, id, type_id)?;
         if let Some(name) = self.names.get(&id).cloned() {
-            let shared = self.names.values().filter(|held| **held == name).count() > 1;
-            if !shared || self.definitions.get(&name) == Some(&definition) {
+            if self.definitions.get(&name) == Some(&definition)
+                || !self.shared_in_document(world, id, &name)
+            {
                 self.definitions.insert(name.clone(), definition);
                 return Some(name);
             }
@@ -490,6 +491,63 @@ impl PlayAssetNames {
         let name = self.of_definition(definition);
         self.names.insert(id, name.clone());
         Some(name)
+    }
+
+    /// Whether an asset other than `id` that the live document uses goes by `name`.
+    /// A reparse leaves ids no document uses behind, which something like an undo
+    /// step may keep alive, so those go here.
+    fn shared_in_document(&mut self, world: &World, id: UntypedAssetId, name: &str) -> bool {
+        if self
+            .names
+            .iter()
+            .all(|(held, other)| *held == id || other != name)
+        {
+            return false;
+        }
+        let used = crate::play_sync::assets_in_document(world);
+        self.names
+            .retain(|held, _| *held == id || used.contains(held));
+        self.names
+            .iter()
+            .any(|(held, other)| *held != id && other == name)
+    }
+
+    /// The `#Name` a reference to a root of the live document goes by, as
+    /// [`with_session_names`] spells it, and the asset behind it where the live
+    /// stores hold it. `None` when `reference` names no such root.
+    pub(crate) fn session_reference(
+        &mut self,
+        world: &World,
+        registry: &bevy::reflect::TypeRegistry,
+        reference: &str,
+    ) -> Option<(String, Option<CatalogAssetRef>)> {
+        let bare = reference.strip_prefix(['#', '@'])?;
+        let ast = world.get_resource::<SceneBsnAst>()?;
+        let root = jackdaw_bsn::asset_roots(ast, registry)
+            .into_iter()
+            .find(|&root| ast.get_name(root) == Some(bare))?;
+        let (type_path, _) = jackdaw_bsn::asset_value_from_root(ast, root)?;
+        let type_id = registry.get_with_type_path(&type_path)?.type_id();
+        let live = world
+            .get_resource::<jackdaw_bsn::BsnSceneAssets>()
+            .and_then(|assets| assets.0.get(&format!("#{bare}")))
+            .map(bevy::asset::UntypedHandle::id)
+            .filter(|id| id.type_id() == type_id)
+            .and_then(|asset_id| {
+                let name = self.resolve(world, asset_id, type_id)?;
+                let asset = CatalogAssetRef {
+                    name: name.trim_start_matches('#').to_string(),
+                    type_id,
+                    asset_id,
+                };
+                Some((name, Some(asset)))
+            });
+        live.or_else(|| Some((self.of_definition(root_definition(ast, root)?), None)))
+    }
+
+    /// The `#Name` the asset `id` goes by, if it has one.
+    pub(crate) fn name_of(&self, id: UntypedAssetId) -> Option<String> {
+        self.names.get(&id).cloned()
     }
 
     /// The `#Name` standing for `definition`, minted if none does.
@@ -533,6 +591,13 @@ impl PlayAssetNames {
             .get(key)
             .and_then(|given| given.get(name))
             .is_some_and(|held| *held == definition)
+    }
+
+    /// Whether the game `key` holds any definition under `name`.
+    pub(crate) fn was_given(&self, key: &InstanceKey, name: &str) -> bool {
+        self.given
+            .get(key)
+            .is_some_and(|given| given.contains_key(name))
     }
 
     /// The game `key` holds `definition` under `name` from here on. A name a

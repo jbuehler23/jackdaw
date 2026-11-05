@@ -526,7 +526,7 @@ pub(crate) struct BsnInlineAssetPass {
 /// by its descendants). Asset roots have no ECS mapping and are skipped. A
 /// deterministic order makes the generated inline-asset names stable across
 /// repeated captures of the same state.
-fn doc_entities_in_order(ast: &jackdaw_bsn::SceneBsnAst) -> Vec<Entity> {
+pub(crate) fn doc_entities_in_order(ast: &jackdaw_bsn::SceneBsnAst) -> Vec<Entity> {
     fn visit(ast: &jackdaw_bsn::SceneBsnAst, node: Entity, out: &mut Vec<Entity>) {
         if let Some(ecs) = ast.ecs_for_ast(node) {
             out.push(ecs);
@@ -1065,9 +1065,10 @@ pub(crate) fn emit_snapshot_for_game(
     }
 }
 
-/// Run `visit` over every string in `ast`'s component values, each of which may
-/// be an asset reference. A field the registry types as a plain `String` holds
-/// text, so it is passed over.
+/// Run `visit` over every string in `ast`'s component values that can be an asset
+/// reference: one the registry types as taking an asset path, and one of a type
+/// it does not know, such as a field of a project type. For the second, `visit`
+/// must act only on a value that exactly names something it knows.
 pub(crate) fn visit_asset_references(
     ast: &mut jackdaw_bsn::SceneBsnAst,
     reg: &TypeRegistry,
@@ -1138,7 +1139,7 @@ fn visit_in_value(
     use jackdaw_bsn::BsnValue;
     match value {
         BsnValue::String(text) => {
-            if value_type != Some(std::any::TypeId::of::<String>()) {
+            if value_type.is_none_or(|ty| crate::typed_values::takes_asset_path(reg, ty)) {
                 visit(text);
             }
         }
@@ -1155,8 +1156,12 @@ fn visit_in_value(
             }
         }
         BsnValue::Map(entries) => {
+            let item_type = value_type.and_then(|owner| match reg.get(owner)?.type_info() {
+                TypeInfo::Map(info) => Some(info.value_ty().id()),
+                _ => None,
+            });
             for (_, item) in entries {
-                visit_in_value(reg, None, item, visit);
+                visit_in_value(reg, item_type, item, visit);
             }
         }
         _ => {}
@@ -1409,13 +1414,7 @@ fn rederive_handle_patches(
             let Some(mut document) = ast.get_patch(patch_entity).cloned() else {
                 continue;
             };
-            keep_unresolved_references(
-                &reg,
-                registration.type_id(),
-                &new_patch,
-                &mut document,
-                &mut Vec::new(),
-            );
+            take_live_references(&reg, registration.type_id(), &new_patch, &mut document);
             ast.set_patch(patch_entity, document);
             continue;
         }
@@ -1452,64 +1451,201 @@ fn keep_unresolved_references(
 ) {
     use jackdaw_bsn::BsnPatch;
     match (authored, &mut *fresh) {
-        (BsnPatch::Struct(authored), BsnPatch::Struct(fresh))
-            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
-        {
-            keep_in_fields(
-                reg,
-                type_id,
-                &authored.type_path,
-                &authored.fields,
-                &mut fresh.fields,
-                kept,
-            );
+        (BsnPatch::Struct(authored), BsnPatch::Struct(fresh)) => {
+            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
         }
-        (BsnPatch::TupleStruct(authored), BsnPatch::TupleStruct(fresh))
-            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
-        {
-            keep_in_values(
-                reg,
-                type_id,
-                &authored.type_path,
-                &authored.values,
-                &mut fresh.values,
-                kept,
-            );
+        (BsnPatch::TupleStruct(authored), BsnPatch::TupleStruct(fresh)) => {
+            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
         }
-        (BsnPatch::Struct(authored), BsnPatch::Type(type_path))
-            if same_variant(reg, type_id, &authored.type_path, type_path) =>
-        {
+        (BsnPatch::Struct(authored), BsnPatch::Type(type_path)) => {
             let type_path = type_path.clone();
             let mut fields = jackdaw_bsn::BsnStructFields::default();
-            keep_in_fields(
-                reg,
-                type_id,
-                &authored.type_path,
-                &authored.fields,
-                &mut fields,
-                kept,
-            );
+            keep_in_fields(reg, type_id, &authored.fields, &mut fields, kept);
             if !fields.0.is_empty() {
                 *fresh = BsnPatch::Struct(jackdaw_bsn::BsnStructData { type_path, fields });
             }
         }
-        (BsnPatch::TupleStruct(authored), BsnPatch::Type(type_path))
-            if same_variant(reg, type_id, &authored.type_path, type_path) =>
+        _ => {}
+    }
+}
+
+fn keep_in_fields(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &jackdaw_bsn::BsnStructFields,
+    fresh: &mut jackdaw_bsn::BsnStructFields,
+    kept: &mut Vec<String>,
+) {
+    let Some(TypeInfo::Struct(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    else {
+        return;
+    };
+    for field in &mut fresh.0 {
+        let Some(field_type) = info
+            .field(&field.name)
+            .map(bevy::reflect::NamedField::type_id)
+        else {
+            continue;
+        };
+        let Some(was) = authored.0.iter().find(|other| other.name == field.name) else {
+            continue;
+        };
+        keep_in_value(reg, field_type, &was.value, &mut field.value, kept);
+    }
+    for was in &authored.0 {
+        if fresh.0.iter().any(|field| field.name == was.name) {
+            continue;
+        }
+        let Some(field_type) = info
+            .field(&was.name)
+            .map(bevy::reflect::NamedField::type_id)
+        else {
+            continue;
+        };
+        let jackdaw_bsn::BsnValue::String(reference) = &was.value else {
+            continue;
+        };
+        if reference.is_empty() || !crate::typed_values::takes_asset_path(reg, field_type) {
+            continue;
+        }
+        if !kept.contains(reference) {
+            kept.push(reference.clone());
+        }
+        fresh.0.push(jackdaw_bsn::BsnField {
+            name: was.name.clone(),
+            value: was.value.clone(),
+        });
+    }
+}
+
+fn keep_in_values(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &[jackdaw_bsn::BsnValue],
+    fresh: &mut [jackdaw_bsn::BsnValue],
+    kept: &mut Vec<String>,
+) {
+    let Some(TypeInfo::TupleStruct(info)) = reg
+        .get(type_id)
+        .map(bevy::reflect::TypeRegistration::type_info)
+    else {
+        return;
+    };
+    for (index, value) in fresh.iter_mut().enumerate() {
+        let Some(field_type) = info
+            .field_at(index)
+            .map(bevy::reflect::UnnamedField::type_id)
+        else {
+            continue;
+        };
+        let Some(was) = authored.get(index) else {
+            continue;
+        };
+        keep_in_value(reg, field_type, was, value, kept);
+    }
+}
+
+fn keep_in_value(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    authored: &jackdaw_bsn::BsnValue,
+    fresh: &mut jackdaw_bsn::BsnValue,
+    kept: &mut Vec<String>,
+) {
+    use jackdaw_bsn::BsnValue;
+    if crate::typed_values::takes_asset_path(reg, type_id) {
+        if let (BsnValue::String(was), BsnValue::String(now)) = (authored, &mut *fresh)
+            && now.is_empty()
+            && !was.is_empty()
+        {
+            now.clone_from(was);
+            if !kept.contains(was) {
+                kept.push(was.clone());
+            }
+        }
+        return;
+    }
+    match (authored, fresh) {
+        (BsnValue::Struct(authored), BsnValue::Struct(fresh)) => {
+            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+        }
+        (BsnValue::TupleStruct(authored), BsnValue::TupleStruct(fresh)) => {
+            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+        }
+        (BsnValue::List(authored), BsnValue::List(fresh)) => {
+            let Some(TypeInfo::List(info)) = reg
+                .get(type_id)
+                .map(bevy::reflect::TypeRegistration::type_info)
+            else {
+                return;
+            };
+            let item = info.item_ty().id();
+            for (index, value) in fresh.iter_mut().enumerate() {
+                let Some(was) = authored.get(index) else {
+                    continue;
+                };
+                keep_in_value(reg, item, was, value, kept);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Give `document`, the patch of an entity holding streamed game values, the
+/// references `live` names where it has none. A stream never carries a handle,
+/// so a handle on such an entity is the editor's own, wherever the value holds it.
+fn take_live_references(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    live: &jackdaw_bsn::BsnPatch,
+    document: &mut jackdaw_bsn::BsnPatch,
+) {
+    use jackdaw_bsn::BsnPatch;
+    match (live, &mut *document) {
+        (BsnPatch::Struct(live), BsnPatch::Struct(document))
+            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
+        {
+            take_in_fields(
+                reg,
+                type_id,
+                &live.type_path,
+                &live.fields,
+                &mut document.fields,
+            );
+        }
+        (BsnPatch::TupleStruct(live), BsnPatch::TupleStruct(document))
+            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
+        {
+            take_in_values(
+                reg,
+                type_id,
+                &live.type_path,
+                &live.values,
+                &mut document.values,
+            );
+        }
+        (BsnPatch::Struct(live), BsnPatch::Type(type_path))
+            if same_variant(reg, type_id, &live.type_path, type_path) =>
+        {
+            let type_path = type_path.clone();
+            let mut fields = jackdaw_bsn::BsnStructFields::default();
+            take_in_fields(reg, type_id, &live.type_path, &live.fields, &mut fields);
+            if !fields.0.is_empty() {
+                *document = BsnPatch::Struct(jackdaw_bsn::BsnStructData { type_path, fields });
+            }
+        }
+        (BsnPatch::TupleStruct(live), BsnPatch::Type(type_path))
+            if same_variant(reg, type_id, &live.type_path, type_path) =>
         {
             let Some(mut values) = default_tuple_values(reg, type_id) else {
                 return;
             };
             let before = values.clone();
-            keep_in_values(
-                reg,
-                type_id,
-                &authored.type_path,
-                &authored.values,
-                &mut values,
-                kept,
-            );
+            take_in_values(reg, type_id, &live.type_path, &live.values, &mut values);
             if values != before {
-                *fresh = BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                *document = BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
                     type_path: type_path.clone(),
                     values,
                 });
@@ -1605,41 +1741,40 @@ fn tuple_field_type(
     }
 }
 
-fn keep_in_fields(
+fn take_in_fields(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
     type_path: &str,
-    authored: &jackdaw_bsn::BsnStructFields,
-    fresh: &mut jackdaw_bsn::BsnStructFields,
-    kept: &mut Vec<String>,
+    live: &jackdaw_bsn::BsnStructFields,
+    document: &mut jackdaw_bsn::BsnStructFields,
 ) {
-    for field in &mut fresh.0 {
+    for field in &mut document.0 {
         let Some(field_type) = named_field_type(reg, type_id, type_path, &field.name) else {
             continue;
         };
-        let Some(was) = authored.0.iter().find(|other| other.name == field.name) else {
+        let Some(was) = live.0.iter().find(|other| other.name == field.name) else {
             continue;
         };
-        keep_in_value(reg, field_type, &was.value, &mut field.value, kept);
+        take_in_value(reg, field_type, &was.value, &mut field.value);
     }
-    for was in &authored.0 {
-        if fresh.0.iter().any(|field| field.name == was.name) {
+    for was in &live.0 {
+        if document.0.iter().any(|field| field.name == was.name) {
             continue;
         }
         let Some(field_type) = named_field_type(reg, type_id, type_path, &was.name) else {
             continue;
         };
-        let Some(value) = only_references(reg, field_type, &was.value, kept) else {
+        let Some(value) = only_references(reg, field_type, &was.value) else {
             continue;
         };
-        fresh.0.push(jackdaw_bsn::BsnField {
+        document.0.push(jackdaw_bsn::BsnField {
             name: was.name.clone(),
             value,
         });
     }
 }
 
-/// `value`, a field a document leaves out, reduced to the references it holds:
+/// `value`, a field the document leaves out, reduced to the references it holds:
 /// a struct names only the fields it sets, so its other fields keep reading back
 /// as their defaults. `None` when it holds none, or none that can be separated
 /// from the values around it.
@@ -1647,16 +1782,12 @@ fn only_references(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
     value: &jackdaw_bsn::BsnValue,
-    kept: &mut Vec<String>,
 ) -> Option<jackdaw_bsn::BsnValue> {
     use jackdaw_bsn::BsnValue;
     match value {
         BsnValue::String(reference)
             if !reference.is_empty() && crate::typed_values::takes_asset_path(reg, type_id) =>
         {
-            if !kept.contains(reference) {
-                kept.push(reference.clone());
-            }
             Some(value.clone())
         }
         BsnValue::Struct(data)
@@ -1674,7 +1805,7 @@ fn only_references(
                     let field_type = named_field_type(reg, type_id, &data.type_path, &field.name)?;
                     Some(jackdaw_bsn::BsnField {
                         name: field.name.clone(),
-                        value: only_references(reg, field_type, &field.value, kept)?,
+                        value: only_references(reg, field_type, &field.value)?,
                     })
                 })
                 .collect();
@@ -1689,81 +1820,74 @@ fn only_references(
     }
 }
 
-fn keep_in_values(
+fn take_in_values(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
     type_path: &str,
-    authored: &[jackdaw_bsn::BsnValue],
-    fresh: &mut [jackdaw_bsn::BsnValue],
-    kept: &mut Vec<String>,
+    live: &[jackdaw_bsn::BsnValue],
+    document: &mut [jackdaw_bsn::BsnValue],
 ) {
-    for (index, value) in fresh.iter_mut().enumerate() {
+    for (index, value) in document.iter_mut().enumerate() {
         let Some(field_type) = tuple_field_type(reg, type_id, type_path, index) else {
             continue;
         };
-        let Some(was) = authored.get(index) else {
+        let Some(was) = live.get(index) else {
             continue;
         };
-        keep_in_value(reg, field_type, was, value, kept);
+        take_in_value(reg, field_type, was, value);
     }
 }
 
-fn keep_in_value(
+fn take_in_value(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
-    authored: &jackdaw_bsn::BsnValue,
-    fresh: &mut jackdaw_bsn::BsnValue,
-    kept: &mut Vec<String>,
+    live: &jackdaw_bsn::BsnValue,
+    document: &mut jackdaw_bsn::BsnValue,
 ) {
     use jackdaw_bsn::BsnValue;
     if crate::typed_values::takes_asset_path(reg, type_id) {
-        if let BsnValue::String(was) = authored
+        if let BsnValue::String(was) = live
             && !was.is_empty()
-            && !matches!(fresh, BsnValue::String(now) if !now.is_empty())
+            && !matches!(document, BsnValue::String(now) if !now.is_empty())
         {
-            *fresh = BsnValue::String(was.clone());
-            if !kept.contains(was) {
-                kept.push(was.clone());
-            }
+            *document = BsnValue::String(was.clone());
         }
         return;
     }
-    match (authored, fresh) {
-        (BsnValue::Struct(authored), BsnValue::Struct(fresh))
-            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
+    match (live, document) {
+        (BsnValue::Struct(live), BsnValue::Struct(document))
+            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
         {
-            keep_in_fields(
+            take_in_fields(
                 reg,
                 type_id,
-                &authored.type_path,
-                &authored.fields,
-                &mut fresh.fields,
-                kept,
+                &live.type_path,
+                &live.fields,
+                &mut document.fields,
             );
         }
-        (BsnValue::TupleStruct(authored), BsnValue::TupleStruct(fresh))
-            if same_variant(reg, type_id, &authored.type_path, &fresh.type_path) =>
+        (BsnValue::TupleStruct(live), BsnValue::TupleStruct(document))
+            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
         {
-            keep_in_values(
+            take_in_values(
                 reg,
                 type_id,
-                &authored.type_path,
-                &authored.values,
-                &mut fresh.values,
-                kept,
+                &live.type_path,
+                &live.values,
+                &mut document.values,
             );
         }
-        (BsnValue::List(authored), BsnValue::List(fresh)) => {
-            for (index, value) in fresh.iter_mut().enumerate() {
+        (BsnValue::List(live), BsnValue::List(document)) => {
+            for (index, value) in document.iter_mut().enumerate() {
                 let (Some(item), Some(was)) =
-                    (list_item_type(reg, type_id, index), authored.get(index))
+                    (list_item_type(reg, type_id, index), live.get(index))
                 else {
                     continue;
                 };
-                keep_in_value(reg, item, was, value, kept);
+                take_in_value(reg, item, was, value);
             }
         }
-        (BsnValue::Map(authored), BsnValue::Map(fresh)) => {
+        (BsnValue::Map(live), BsnValue::Map(document)) => {
             let Some(TypeInfo::Map(info)) = reg
                 .get(type_id)
                 .map(bevy::reflect::TypeRegistration::type_info)
@@ -1771,9 +1895,9 @@ fn keep_in_value(
                 return;
             };
             let item = info.value_ty().id();
-            for (key, value) in fresh {
-                if let Some((_, was)) = authored.iter().find(|(other, _)| other == key) {
-                    keep_in_value(reg, item, was, value, kept);
+            for (key, value) in document {
+                if let Some((_, was)) = live.iter().find(|(other, _)| other == key) {
+                    take_in_value(reg, item, was, value);
                 }
             }
         }
@@ -2133,6 +2257,46 @@ mod tests {
     /// C2: `write_atomic` must fully replace an existing file's content
     /// (proving the write goes through a rename, not an in-place
     /// truncate) and must not leave its temp file behind.
+    /// A field re-derived as something other than an empty reference says what the
+    /// entity holds, so a normal save leaves it. An overlaid entity's says nothing.
+    #[test]
+    fn only_an_overlaid_entity_replaces_a_field_that_is_not_an_empty_reference() {
+        use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue};
+
+        #[derive(Component, Reflect, Default)]
+        #[type_path = "game"]
+        struct Holder {
+            maybe: Option<Handle<Image>>,
+        }
+        let mut registry = TypeRegistry::default();
+        registry.register::<Holder>();
+        registry.register_type_data::<Handle<Image>, ReflectHandle>();
+        let type_id = std::any::TypeId::of::<Holder>();
+        let patch = |value: BsnValue| {
+            BsnPatch::Struct(BsnStructData {
+                type_path: "game::Holder".to_string(),
+                fields: BsnStructFields(vec![BsnField {
+                    name: "maybe".to_string(),
+                    value,
+                }]),
+            })
+        };
+        let named = patch(BsnValue::String("#Stone".to_string()));
+        let bare = patch(BsnValue::Type("None".to_string()));
+
+        let mut fresh = bare.clone();
+        keep_unresolved_references(&registry, type_id, &named, &mut fresh, &mut Vec::new());
+        assert_eq!(format!("{fresh:?}"), format!("{bare:?}"), "a normal save");
+
+        let mut document = bare;
+        take_live_references(&registry, type_id, &named, &mut document);
+        assert_eq!(
+            format!("{document:?}"),
+            format!("{named:?}"),
+            "an overlaid entity"
+        );
+    }
+
     #[test]
     fn write_atomic_replaces_existing_content_and_cleans_up_its_temp_file() {
         let tmp = tempfile::tempdir().expect("temp directory");
