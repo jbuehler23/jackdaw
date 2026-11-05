@@ -72,23 +72,19 @@ pub fn populate_module_picker_denylist(denylist: &mut PickerDenylist) {
 }
 
 /// Empty group string is the Game section.
-fn picker_section(type_path: &str, authored_category: &str, group: &str) -> (String, i32) {
-    let name = if group.is_empty() {
+fn picker_section_name(group: &str) -> String {
+    if group.is_empty() {
         String::from("Game")
     } else {
         group.to_string()
-    };
-    (
-        name,
-        crate::type_metadata::group_order(type_path, authored_category),
-    )
+    }
 }
 
 struct ComponentInfo {
     short_name: String,
     module_path: String,
     group: String,
-    authored_category: String,
+    group_order: i32,
     description: String,
     type_path_full: String,
 }
@@ -148,7 +144,7 @@ pub fn enumerate_pickable_components(
         out.push(PickableComponent {
             short_name: table.short_path().to_string(),
             module_path: table.module_path().unwrap_or("").to_string(),
-            category: chrome.group(full_path),
+            category: chrome.group(full_path, project_types),
             authored_category: chrome.category.clone(),
             description: chrome.description,
             type_path_full: full_path.to_string(),
@@ -163,11 +159,9 @@ impl Matchable for ComponentInfo {
     }
 
     fn category(&self) -> Category {
-        let (name, order) =
-            picker_section(&self.type_path_full, &self.authored_category, &self.group);
         Category {
-            name: Some(name),
-            order,
+            name: Some(picker_section_name(&self.group)),
+            order: self.group_order,
         }
     }
 }
@@ -230,10 +224,14 @@ pub(crate) fn on_add_component_button_click(
     )
     .into_iter()
     .map(|p| ComponentInfo {
+        group_order: crate::type_metadata::group_order(
+            &p.type_path_full,
+            &p.authored_category,
+            &project_types,
+        ),
         short_name: p.short_name,
         module_path: p.module_path,
         group: p.category,
-        authored_category: p.authored_category,
         description: p.description,
         type_path_full: p.type_path_full,
     })
@@ -260,8 +258,12 @@ pub(crate) fn on_add_component_button_click(
         searchable_components.push(ComponentInfo {
             short_name: schema.short_name.clone(),
             module_path: schema.module_path.clone(),
-            group: chrome.group(&schema.type_path),
-            authored_category: chrome.category.clone(),
+            group: chrome.group(&schema.type_path, &project_types),
+            group_order: crate::type_metadata::group_order(
+                &schema.type_path,
+                &chrome.category,
+                &project_types,
+            ),
             description: chrome.description,
             type_path_full: schema.type_path.clone(),
         });
@@ -315,7 +317,7 @@ fn spawn_item(
 ) -> Result {
     let info = items.get(entities.picker)?.at(matched.index)?;
 
-    let (category, _) = picker_section(&info.type_path_full, &info.authored_category, &info.group);
+    let category = picker_section_name(&info.group);
     let description = info.description.clone();
     let module_path = info.module_path.clone();
 

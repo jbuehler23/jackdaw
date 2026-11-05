@@ -1656,6 +1656,7 @@ fn cleanup_editor(world: &mut World) {
     scene_io::hooks::forget_project(world);
     scenes::reset_scene_resources(world);
     world.insert_resource(brush::BrushSelection::default());
+    project_build::forget_project_types(world);
 
     // 6. Remove project root
     world.remove_resource::<project::ProjectRoot>();

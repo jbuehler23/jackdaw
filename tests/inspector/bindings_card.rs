@@ -101,6 +101,7 @@ fn fixture_schema() -> ProjectSchema {
     );
 
     ProjectSchema {
+        project_crates: Vec::new(),
         components: vec![
             schema_type(
                 "demo_game::Health",

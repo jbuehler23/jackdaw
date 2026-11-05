@@ -415,6 +415,32 @@ fn opening_another_project_leaves_the_first_projects_tabs_behind() {
 }
 
 #[test]
+fn going_home_forgets_the_projects_types() {
+    let project = project_with_tabs(&["a"]);
+    let mut app = editor_opening(project.path());
+    for _ in 0..16 {
+        app.update();
+    }
+    app.world_mut()
+        .resource_mut::<jackdaw::project_types::ProjectTypes>()
+        .set_project_crates(["bevy_jam".to_string()]);
+
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::ProjectSelect);
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert!(
+        !app.world()
+            .resource::<jackdaw::project_types::ProjectTypes>()
+            .is_project_type("bevy_jam::Health"),
+        "the next project does not inherit this one's crates"
+    );
+}
+
+#[test]
 fn going_home_closes_the_projects_tabs() {
     let project = project_with_tabs(&["a", "b"]);
     let mut app = editor_opening(project.path());

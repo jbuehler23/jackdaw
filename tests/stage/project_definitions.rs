@@ -155,6 +155,7 @@ fn a_kind_the_editor_compiled_in_wins_over_the_schemas() {
         .resource_mut::<jackdaw::project_types::ProjectTypes>()
         .update(
             &jackdaw_schema::ProjectSchema {
+                project_crates: Vec::new(),
                 assets: vec![material_schema()],
                 ..default()
             },
@@ -184,6 +185,7 @@ fn a_compiled_kind_survives_the_project_that_reported_its_type() {
         .resource_mut::<jackdaw::project_types::ProjectTypes>()
         .update(
             &jackdaw_schema::ProjectSchema {
+                project_crates: Vec::new(),
                 assets: vec![material_schema()],
                 ..default()
             },
@@ -746,6 +748,7 @@ fn a_colour_field_on_a_project_component_takes_channels() {
     let mut app = util::editor_test_app();
     let day_cycle = "definition_project::world::DayCycle";
     let schema = jackdaw_schema::ProjectSchema {
+        project_crates: Vec::new(),
         components: vec![jackdaw_schema::TypeSchema {
             type_path: day_cycle.to_string(),
             short_name: "DayCycle".to_string(),
@@ -1033,6 +1036,7 @@ fn a_tuple_struct_definition_is_saved_by_position_and_read_back() {
         .resource_mut::<jackdaw::project_types::ProjectTypes>()
         .update(
             &jackdaw_schema::ProjectSchema {
+                project_crates: Vec::new(),
                 assets: vec![tint_schema()],
                 ..default()
             },

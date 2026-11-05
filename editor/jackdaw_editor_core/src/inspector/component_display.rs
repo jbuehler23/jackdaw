@@ -651,7 +651,8 @@ fn listed_component(
         let table = registration.type_info().type_path_table();
         let full_path = table.path();
         let chrome = type_metadata.resolve(full_path, registry, project_types);
-        if !offered_as_card(full_path, &chrome) {
+        let is_project_type = project_types.is_project_type(full_path);
+        if !is_project_type && !offered_as_card(full_path, &chrome) {
             return None;
         }
         // AST filter: hide Bevy-internal components that
@@ -666,13 +667,14 @@ fn listed_component(
         // field whose `Reflect` impl can't round-trip
         // through `TypedReflectSerializer`), leaving the
         // user wondering whether the click registered.
-        let is_user_type = !full_path.starts_with("bevy")
-            && !full_path.starts_with("core")
-            && !full_path.starts_with("std")
-            && (!full_path.starts_with("jackdaw")
-                || ModuleCatalog::builtin()
-                    .component_module(full_path)
-                    .is_some());
+        let is_user_type = is_project_type
+            || (!full_path.starts_with("bevy")
+                && !full_path.starts_with("core")
+                && !full_path.starts_with("std")
+                && (!full_path.starts_with("jackdaw")
+                    || ModuleCatalog::builtin()
+                        .component_module(full_path)
+                        .is_some()));
         if !is_user_type
             && !crate::worn_material::material_component_paths().contains(&full_path)
             && !authored_type_paths.is_empty()
@@ -683,7 +685,7 @@ fn listed_component(
         {
             return None;
         }
-        let group = chrome.group(full_path);
+        let group = chrome.group(full_path, project_types);
         return Some(ListedComponent {
             name: table.short_path().to_string(),
             group,
@@ -696,7 +698,9 @@ fn listed_component(
     // Unreflected components fall back to the `Components` name.
     let name = components.get_name(component_id)?;
     // An unreflected engine component holds nothing an author can set.
-    if hidden_by_namespace(&name) || name.starts_with("bevy_") {
+    if !project_types.is_project_type(&name)
+        && (hidden_by_namespace(&name) || name.starts_with("bevy_"))
+    {
         return None;
     }
     Some(ListedComponent {
@@ -910,10 +914,11 @@ fn build_inspector_cards(
             )
     };
     comp_list.sort_by(|a, b| {
-        crate::type_metadata::group_order(&b.type_path, &b.chrome.category)
+        crate::type_metadata::group_order(&b.type_path, &b.chrome.category, project_types)
             .cmp(&crate::type_metadata::group_order(
                 &a.type_path,
                 &a.chrome.category,
+                project_types,
             ))
             .then_with(|| a.group.cmp(&b.group))
             .then_with(|| is_derived_path(&a.type_path).cmp(&is_derived_path(&b.type_path)))

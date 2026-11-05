@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use jackdaw_env::process::StderrCapture;
 use jackdaw_env::user_toolchain_command;
-use jackdaw_schema::{ProjectSchema, SCHEMA_FLAG, parse_from_stdout, write_schema};
+use jackdaw_schema::{
+    PROJECT_CRATES_ENV, ProjectSchema, SCHEMA_FLAG, parse_from_stdout, write_schema,
+};
 
 use crate::build::{BuildEvent, ProjectBuildError, parse_build_line};
 use crate::shim::ShimSpec;
@@ -170,7 +172,7 @@ pub fn build_project_binary_with_load(
 
     // Ask the freshly built game for its types: a throwaway run that prints and
     // exits. A failure here is not fatal, and the editor keeps its prior schema.
-    let schema = match run_binary_extractor(&binary, &spec.project_root) {
+    let schema = match run_binary_extractor(&binary, spec) {
         Ok(schema) => Some(schema),
         Err(err) => {
             tracing::warn!("project schema extraction skipped: {err}");
@@ -292,18 +294,13 @@ fn extractor_timeout() -> Duration {
 /// The run is under a deadline, because the extractor answers from inside the
 /// game's own `App` build and a project whose plugins block would otherwise hang
 /// the editor's build. A kill becomes an ordinary extractor failure.
-fn run_binary_extractor(binary: &Path, cwd: &Path) -> Result<ProjectSchema, String> {
+fn run_binary_extractor(binary: &Path, spec: &ShimSpec) -> Result<ProjectSchema, String> {
     if !binary.is_file() {
         return Err(format!("game binary not found at {}", binary.display()));
     }
-    let mut command = Command::new(binary);
-    command
-        .arg(SCHEMA_FLAG)
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    prepare_game_command(&mut command, binary);
-    let child = command
+    let project_crates =
+        crate::cargo_meta::project_crates(&spec.project_root, &spec.package_name, &spec.crate_name);
+    let child = extractor_command(binary, spec, &project_crates)
         .spawn()
         .map_err(|e| format!("spawn extractor: {e}"))?;
     let output = wait_with_deadline(child, extractor_timeout())?;
@@ -313,7 +310,21 @@ fn run_binary_extractor(binary: &Path, cwd: &Path) -> Result<ProjectSchema, Stri
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    parse_from_stdout(&output.stdout)
+    let mut schema = parse_from_stdout(&output.stdout)?;
+    schema.project_crates = project_crates;
+    Ok(schema)
+}
+
+fn extractor_command(binary: &Path, spec: &ShimSpec, project_crates: &[String]) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg(SCHEMA_FLAG)
+        .current_dir(&spec.project_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    prepare_game_command(&mut command, binary);
+    command.env(PROJECT_CRATES_ENV, project_crates.join(","));
+    command
 }
 
 /// Collect a child's output, killing it if it outlives `timeout`.
@@ -559,6 +570,26 @@ mod tests {
         assert!(is_host_build_var("CARGO_PKG_VERSION"));
         assert!(is_host_build_var("CARGO_FEATURE_DEFAULT"));
         assert!(is_host_build_var("LD_LIBRARY_PATH"));
+    }
+
+    #[test]
+    fn the_extractor_is_told_the_project_s_crates() {
+        let spec = ShimSpec {
+            package_name: "bevy-jam".to_string(),
+            crate_name: "bevy_jam".to_string(),
+            project_root: PathBuf::from("/game"),
+            extension_type: None,
+        };
+
+        let crates = ["bevy_jam".to_string(), "bevy_jam_core".to_string()];
+        let command = extractor_command(Path::new("/game/bin"), &spec, &crates);
+
+        let told = command
+            .get_envs()
+            .find(|(key, _)| *key == PROJECT_CRATES_ENV)
+            .and_then(|(_, value)| value)
+            .expect("the crate list is set");
+        assert_eq!(told, "bevy_jam,bevy_jam_core");
     }
 
     #[test]

@@ -320,6 +320,14 @@ impl Default for ProjectSchemaWatch {
     }
 }
 
+/// Drop what the closing project's schema taught the editor, so the next project
+/// starts empty and reads its own schema even if the file's time is the same.
+pub(crate) fn forget_project_types(world: &mut World) {
+    world.insert_resource(crate::project_types::ProjectTypes::default());
+    world.insert_resource(ProjectSchemaWatch::default());
+    crate::project_types::publish_document_only_types(world);
+}
+
 /// Refresh the editor's known project component types from
 /// `<project>/.jackdaw/schema.json` whenever that file changes. This is
 /// the single pickup path for project types: the editor's own build and

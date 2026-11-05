@@ -331,6 +331,7 @@ fn a_preview_session_leaves_the_document_untouched() {
 fn a_schema_only_type_previews_as_a_disabled_row() {
     let mut app = util::editor_test_app();
     let schema = ProjectSchema {
+        project_crates: Vec::new(),
         components: vec![TypeSchema {
             type_path: "demo_game::Health".to_string(),
             short_name: "Health".to_string(),
@@ -1679,6 +1680,7 @@ fn a_widget_edit_during_preview_cannot_write_a_resource_the_editor_holds() {
 fn a_degraded_section_carries_its_reason_as_a_badge() {
     let mut app = previewing_schema(
         ProjectSchema {
+            project_crates: Vec::new(),
             components: vec![schema_type(
                 "demo_game::Charge",
                 TypeKind::TupleStruct,
@@ -1784,6 +1786,7 @@ fn a_linked_type_the_editor_cannot_build_says_that_instead() {
 fn only_an_all_digit_schema_field_is_read_as_a_tuple_index() {
     let mut app = previewing_schema(
         ProjectSchema {
+            project_crates: Vec::new(),
             components: vec![schema_type(
                 "demo_game::Mixed",
                 TypeKind::Struct,
@@ -1817,6 +1820,7 @@ fn only_an_all_digit_schema_field_is_read_as_a_tuple_index() {
 fn a_schema_only_resource_previews_as_disabled_rows() {
     let mut app = previewing_schema(
         ProjectSchema {
+            project_crates: Vec::new(),
             resources: vec![schema_type(
                 "demo_game::CharCreateForm",
                 TypeKind::Struct,

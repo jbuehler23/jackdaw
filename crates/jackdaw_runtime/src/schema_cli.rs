@@ -33,8 +33,9 @@ pub fn schema_extraction_requested() -> bool {
 /// Only a registry an `App` filled carries `ReflectAsset`, so the link-time
 /// inventory answers this with an empty asset bucket.
 fn schema_of(registry: &TypeRegistry) -> ProjectSchema {
-    let mut schema = jackdaw_schema::extract_from_registry(registry);
-    schema.assets = jackdaw_schema::extract_asset_types(registry);
+    let project = jackdaw_schema::ProjectCrates::from_env();
+    let mut schema = jackdaw_schema::extract_from_registry(registry, &project);
+    schema.assets = jackdaw_schema::extract_asset_types(registry, &project);
     schema
 }
 
@@ -95,6 +96,12 @@ fn print_and_exit(schema: &ProjectSchema) -> ! {
 pub fn extract_schema_and_exit_if_requested(app: &mut App) {
     if !schema_extraction_requested() {
         return;
+    }
+    if std::env::var_os(jackdaw_schema::PROJECT_CRATES_ENV).is_none() {
+        eprintln!(
+            "{} is not set, so crates named bevy_* or jackdaw_* are treated as the engine's",
+            jackdaw_schema::PROJECT_CRATES_ENV
+        );
     }
     install_inventory_fallback_hook();
     app.set_runner(|app| -> AppExit { print_and_exit(&extract_schema_from_world(app.world())) });
