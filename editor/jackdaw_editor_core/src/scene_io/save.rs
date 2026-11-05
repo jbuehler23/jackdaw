@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
@@ -591,7 +591,14 @@ fn collect_bsn_inline_assets(
     registry: &TypeRegistry,
     entities: &[Entity],
     mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    mut taken: HashSet<String>,
 ) -> BsnInlineAssetPass {
+    taken.extend(
+        names
+            .values()
+            .filter_map(|reference| reference.get(1..))
+            .map(str::to_owned),
+    );
     let kept = KeptComponents::new(registry);
     let sprite_render = crate::scene_io::sprite_render_component_paths();
 
@@ -626,6 +633,7 @@ fn collect_bsn_inline_assets(
                 &mut names,
                 &mut refs,
                 &mut counters,
+                &mut taken,
             );
             if found {
                 touched.push((entity, type_path.to_string()));
@@ -638,6 +646,20 @@ fn collect_bsn_inline_assets(
         refs,
         touched,
     }
+}
+
+/// Every `#Name` a document root or descendant already carries, entity and
+/// asset alike, so a generated asset name cannot share a spelling with one.
+fn names_in_document(ast: &jackdaw_bsn::SceneBsnAst) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for &root in &ast.roots {
+        for node in std::iter::once(root).chain(ast.descendants_of(root)) {
+            if let Some(name) = ast.get_name(node) {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names
 }
 
 /// The reflected components a saved document keeps, in type registry order,
@@ -687,6 +709,7 @@ fn collect_bsn_handles_from_reflect(
     names: &mut bevy::platform::collections::HashMap<UntypedAssetId, String>,
     refs: &mut Vec<jackdaw_bsn::CatalogAssetRef>,
     counters: &mut HashMap<String, usize>,
+    taken: &mut HashSet<String>,
 ) -> bool {
     let Some(value) = value.try_as_reflect() else {
         return false;
@@ -732,8 +755,13 @@ fn collect_bsn_handles_from_reflect(
             .rsplit("::")
             .next()
             .unwrap_or(&asset_type_path);
-        let ref_name = format!("{short_name}{counter}");
-        *counter += 1;
+        let ref_name = loop {
+            let candidate = format!("{short_name}{counter}");
+            *counter += 1;
+            if taken.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
 
         names.insert(id, format!("#{ref_name}"));
         refs.push(jackdaw_bsn::CatalogAssetRef {
@@ -757,58 +785,66 @@ fn collect_bsn_handles_from_reflect(
         bevy::reflect::ReflectRef::Struct(s) => {
             for i in 0..s.field_len() {
                 if let Some(field) = s.field_at(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters, taken,
+                    );
                 }
             }
         }
         bevy::reflect::ReflectRef::TupleStruct(ts) => {
             for i in 0..ts.field_len() {
                 if let Some(field) = ts.field(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters, taken,
+                    );
                 }
             }
         }
         bevy::reflect::ReflectRef::Tuple(t) => {
             for i in 0..t.field_len() {
                 if let Some(field) = t.field(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters, taken,
+                    );
                 }
             }
         }
         bevy::reflect::ReflectRef::List(l) => {
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(
+                        item, registry, names, refs, counters, taken,
+                    );
                 }
             }
         }
         bevy::reflect::ReflectRef::Array(a) => {
             for i in 0..a.len() {
                 if let Some(item) = a.get(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(
+                        item, registry, names, refs, counters, taken,
+                    );
                 }
             }
         }
         bevy::reflect::ReflectRef::Map(m) => {
             for (_k, v) in m.iter() {
-                found |= collect_bsn_handles_from_reflect(v, registry, names, refs, counters);
+                found |=
+                    collect_bsn_handles_from_reflect(v, registry, names, refs, counters, taken);
             }
         }
         bevy::reflect::ReflectRef::Set(s) => {
             for item in s.iter() {
-                found |= collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
+                found |=
+                    collect_bsn_handles_from_reflect(item, registry, names, refs, counters, taken);
             }
         }
         bevy::reflect::ReflectRef::Enum(e) => {
             for i in 0..e.field_len() {
                 if let Some(field) = e.field_at(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(
+                        field, registry, names, refs, counters, taken,
+                    );
                 }
             }
         }
@@ -1166,7 +1202,7 @@ pub(crate) fn name_handles_in(
     let seed = asset_reference_seed(world);
     let pass = {
         let reg = registry.read();
-        collect_bsn_inline_assets(world, &reg, entities, seed)
+        collect_bsn_inline_assets(world, &reg, entities, seed, names_in_document(ast))
     };
     if pass.touched.is_empty() {
         return pass;
@@ -1448,7 +1484,7 @@ fn emit_bsn_entities_authored(world: &mut World, parent_path: &Path, nodes: &[En
 
     let pass = {
         let reg = registry.read();
-        collect_bsn_inline_assets(world, &reg, &entities, seed)
+        collect_bsn_inline_assets(world, &reg, &entities, seed, names_in_document(&ast))
     };
 
     // Strip stable node ids from the copied subtrees: paste mints fresh ones before
