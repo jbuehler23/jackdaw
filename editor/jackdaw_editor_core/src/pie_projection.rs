@@ -48,7 +48,14 @@ const CHILDREN_PATH: &str = "bevy_ecs::hierarchy::Children";
 /// pass (the default image is not renderable). Current game builds do not send
 /// these, but the projector refuses them regardless so an older game binary
 /// cannot crash the editor.
-const PROJECTION_SKIP_PREFIXES: &[&str] = &["bevy_camera::camera::", "bevy_camera::components::"];
+const PROJECTION_SKIP_PREFIXES: &[&str] = &[
+    "bevy_camera::camera::",
+    "bevy_camera::components::",
+    // A windowless game marks its own camera. Applied to an editor entity it
+    // makes a second default UI camera, and the tie is broken by entity id, so
+    // the editor's UI can move to an inactive camera and stop drawing.
+    "bevy_ui::ui_node::IsDefaultUiCamera",
+];
 
 /// Streamed but never saved: these must reach the preview even though the
 /// save filter rejects them. The graph playback is what the Graph window
@@ -1072,6 +1079,41 @@ mod tests {
         assert_eq!(
             ephemeral_count, 1,
             "exactly one ephemeral entity was spawned"
+        );
+    }
+
+    #[test]
+    fn streamed_default_ui_camera_marker_is_refused() {
+        use bevy::ui::IsDefaultUiCamera;
+        let path = <IsDefaultUiCamera as bevy::reflect::TypePath>::type_path();
+        assert!(projection_skips(path));
+        assert!(
+            !crate::scene_io::should_skip_component(path),
+            "a game's scene may still author it"
+        );
+
+        let (mut world, preview_entity, node_id) = build_projection_world();
+        world
+            .resource::<AppTypeRegistry>()
+            .write()
+            .register::<IsDefaultUiCamera>();
+        let mut components = std::collections::HashMap::new();
+        components.insert(path.to_string(), serde_json::json!({}));
+        project_event(
+            &mut world,
+            StateEvent::EntitySpawned {
+                entity: RemoteEntity {
+                    entity: 9,
+                    components,
+                    scene_node_id: Some(node_id.0),
+                },
+            },
+        );
+        assert!(
+            world
+                .entity(preview_entity)
+                .get::<IsDefaultUiCamera>()
+                .is_none()
         );
     }
 
