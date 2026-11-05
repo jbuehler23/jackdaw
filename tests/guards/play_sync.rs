@@ -432,20 +432,51 @@ fn game_x(game: &App, entity: Entity) -> f32 {
         .x
 }
 
+/// An edit reaching the game while a scene root waits to spawn lands on the
+/// entity that root brings, over the older value in the text it spawned from.
 #[test]
 fn pie_sync_an_edit_made_before_the_scene_spawns_lands_once_it_spawns() {
+    use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
+
     let (mut app, _dir, rock) = playing();
-    let mut game = unspawned_game();
+    let mut game = App::new();
+    game.add_plugins(MinimalPlugins);
+    game.add_plugins(bevy::transform::TransformPlugin);
+    game.add_plugins(bevy::asset::AssetPlugin::default());
+    game.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+    jackdaw_runtime::node_sync::install_node_index(&mut game);
+    game.add_plugins(JackdawPlugin);
+    game.register_type::<Name>();
+    let scene = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .reserve_handle();
+    game.world_mut().spawn(JackdawSceneRoot(scene.clone()));
     let (mut link, mut game_end) = LoopbackTransport::pair();
 
     move_to(&mut app, rock, 6.0);
     rename(&mut app, rock, "Boulder");
     deliver(&mut app, &mut link, &mut game_end, &mut game);
+
+    let text = format!(
+        "#Rock\njackdaw_scene_types::node_id::SceneNodeId({})\n{TRANSFORM}\n",
+        rock.0
+    );
+    game.world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .insert(
+            scene.id(),
+            JackdawScene::new(text, std::path::PathBuf::new()),
+        )
+        .expect("a live handle");
+    game.update();
     let entity = game
         .world_mut()
-        .spawn((rock, Transform::default(), Name::new("Rock")))
-        .id();
-    game.update();
+        .query::<(Entity, &SceneNodeId)>()
+        .iter(game.world())
+        .find(|(_, node)| **node == rock)
+        .map(|(entity, _)| entity)
+        .expect("the scene spawned the node");
     assert_eq!(game_x(&game, entity), 6.0);
     assert_eq!(
         game.world().get::<Name>(entity).map(Name::as_str),

@@ -7,7 +7,7 @@ pub mod transport;
 #[cfg(feature = "ipc")]
 pub mod transport_ipc;
 
-pub use event::{ControlEvent, PieChannel, StateEvent};
+pub use event::{ControlEvent, PieChannel, SceneAnswer, StateEvent};
 pub use frame::{FrameRef, decode_frame, encode_frame};
 pub use input::PieInputEvent;
 pub use manifest::{Manifest, RunConfig};

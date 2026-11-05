@@ -86,9 +86,10 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
 /// Install the control and stream systems over `transport`. Control drains
 /// in `PreUpdate` whatever the virtual clock says, so edits from the editor
 /// land while the game is paused.
-fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
+pub(crate) fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
     app.insert_non_send(PieTransportRes(transport));
     app.init_resource::<PieStreamState>();
+    app.init_resource::<crate::served_scene::SceneRequests>();
     app.init_resource::<HighlightedEntity>();
     crate::node_sync::install_node_index(app);
     // Drain control in PreUpdate, before input processing so forwarded editor
@@ -281,6 +282,7 @@ fn stream_state(world: &mut World) {
 /// gameplay systems keyed on `Time<Virtual>`. `SetComponent`,
 /// `AddComponent`, `RemoveComponent` apply reflected edits to live entities,
 /// and `NodeComponents` to every entity spawned from a scene node.
+/// `SceneDocument` answers a scene root waiting on the editor.
 /// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
@@ -341,6 +343,9 @@ fn apply_control(world: &mut World) {
             ControlEvent::Input(event) => apply_input(world, event),
             ControlEvent::NodeComponents { node, set, removed } => {
                 crate::node_sync::apply_node_components(world, node, &set, &removed);
+            }
+            ControlEvent::SceneDocument { request, answer } => {
+                crate::served_scene::receive(world, request, answer);
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity

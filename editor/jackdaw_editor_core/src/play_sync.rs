@@ -85,7 +85,7 @@ fn forget_on_stop(mut sync: ResMut<DocumentSync>) {
 }
 
 /// Send the document's node changes to every live instance. A launching
-/// instance is not sent to: it loads the scene when it starts. With no
+/// instance is not sent to: it asks for the document when it starts. With no
 /// instance live, the first launch records the document as the baseline,
 /// and with nothing live or launching (play stopped, or a launch whose build
 /// failed) the baseline is dropped.
@@ -449,20 +449,26 @@ impl Unsent {
 
 /// How the game's scene loader names each asset a handle can point at: the
 /// asset path, the `#Name` the loaded scene embeds it as (including the names
-/// the last save of the open scene gave its runtime assets), or the catalog's
-/// `@Name`, the same references a scene save writes.
-struct AssetReferences(HashMap<UntypedAssetId, String>);
+/// this Play session gave its runtime assets and the names the last save of the
+/// open scene gave them), or the catalog's `@Name`, the same references a scene
+/// save writes.
+pub(crate) struct AssetReferences(HashMap<UntypedAssetId, String>);
 
 impl AssetReferences {
-    fn of(world: &World) -> Self {
+    pub(crate) fn of(world: &World) -> Self {
         let mut seed = crate::scene_io::save::asset_reference_seed(world);
+        if let Some(names) = world.get_resource::<crate::play_scene::PlayAssetNames>() {
+            for (id, name) in names.iter() {
+                seed.entry(*id).or_insert_with(|| name.clone());
+            }
+        }
         for (id, name) in crate::scene_io::save::saved_asset_names(world) {
             seed.entry(*id).or_insert_with(|| name.clone());
         }
         Self(seed)
     }
 
-    fn reference(&self, handle: &UntypedHandle) -> Option<String> {
+    pub(crate) fn reference(&self, handle: &UntypedHandle) -> Option<String> {
         handle
             .path()
             .map(ToString::to_string)
@@ -758,6 +764,89 @@ mod tests {
             std::thread::yield_now();
         }
         panic!("the marker did not arrive");
+    }
+
+    /// The document as a tab holding `zone.bsn`, in an open project, with what
+    /// the event drain needs.
+    fn serving(world: &mut World, dir: &std::path::Path) {
+        world.insert_resource(crate::project::ProjectRoot::new(
+            dir.to_path_buf(),
+            crate::project::ProjectConfig::default(),
+        ));
+        let mut tab = crate::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(dir.join("assets/zone.bsn"));
+        world.insert_resource(crate::scenes::Scenes {
+            tabs: vec![tab],
+            active: 0,
+        });
+        world.insert_resource(crate::pie_mirror::PieInstances {
+            buffers: Default::default(),
+            focused: Some(key(1)),
+        });
+        world.insert_resource(PieViewMode::Scene);
+        world.init_resource::<PieProjection>();
+    }
+
+    /// A game asks over `game` for the scene, and the editor's drain replies.
+    fn answer_over_link(world: &mut World, game: &mut IpcChannelTransport) -> String {
+        let request = jackdaw_pie_protocol::StateEvent::RequestScene {
+            request: 7,
+            path: "zone.bsn".to_string(),
+        };
+        game.send(
+            jackdaw_pie_protocol::PieChannel::Reliable,
+            &jackdaw_pie_protocol::event::to_bytes(&request).expect("encode"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            crate::pie::drain_game_events(world);
+            for (_, bytes) in game.drain_received() {
+                if let Ok(ControlEvent::SceneDocument { request, answer }) = from_bytes(&bytes) {
+                    assert_eq!(request, 7);
+                    let jackdaw_pie_protocol::SceneAnswer::Document { text, .. } = answer else {
+                        panic!("the open scene answers with its document: {answer:?}");
+                    };
+                    return text;
+                }
+            }
+            std::thread::yield_now();
+        }
+        panic!("no answer arrived");
+    }
+
+    /// An instance launched while another runs gets the edits made while it
+    /// built and connected from the document it spawns, and those after its
+    /// reply over the link, with the instance already live.
+    #[test]
+    fn a_second_instance_gets_the_edits_made_while_it_built_and_connected() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (mut world, entity) = editor_world();
+        serving(&mut world, dir.path());
+        let (first_editor, mut first_game) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(1), child(), first_editor);
+        session.insert_test_pending_build(key(2));
+        world.insert_non_send(session);
+        sync_document_to_game(&mut world);
+
+        move_to(&mut world, entity, 6.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut first_game), vec![6.0]);
+
+        let (second_editor, mut second_game) = link();
+        world
+            .non_send_mut::<PieSession>()
+            .insert_test_live(key(2), child(), second_editor);
+        let text = answer_over_link(&mut world, &mut second_game);
+        assert!(
+            text.contains("x: 6.0"),
+            "the edit is in the document:\n{text}"
+        );
+
+        move_to(&mut world, entity, 9.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut first_game), vec![9.0]);
+        assert_eq!(received_x(&mut world, &mut second_game), vec![9.0]);
     }
 
     #[test]

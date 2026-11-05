@@ -89,6 +89,29 @@ fn realtime_off_lets_the_window_wait_for_events() {
     );
 }
 
+/// With realtime off the editor still has to drain a running game's messages,
+/// a scene request among them.
+#[test]
+fn a_running_game_keeps_the_frames_coming() {
+    use jackdaw_api::pie::PlayState;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_with_viewport(dir.path());
+    set_realtime(&mut app, false);
+    assert!(falls_quiet(&mut app), "an idle editor stops asking");
+
+    app.world_mut()
+        .resource_mut::<NextState<PlayState>>()
+        .set(PlayState::Playing);
+    app.world_mut().resource_mut::<Redraws>().0 = 0;
+    app.update();
+    app.update();
+    assert!(
+        app.world().resource::<Redraws>().0 > 0,
+        "a running instance counts as busy"
+    );
+}
+
 #[test]
 fn an_idle_editor_stops_asking_for_frames_and_held_input_asks_again() {
     let dir = tempfile::tempdir().unwrap();

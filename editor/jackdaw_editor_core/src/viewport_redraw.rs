@@ -5,7 +5,8 @@
 //! otherwise once every [`IDLE_REDRAW`], and asks for frames while anything
 //! is still moving on its own: a fly, dolly or other move of the camera, a
 //! modal tool, a long task, assets or meshes arriving, a scripted pointer or
-//! key gesture still playing, or the short settle after the last input.
+//! key gesture still playing, a running game whose messages need draining, or
+//! the short settle after the last input.
 //! Shaders that animate with time stand still between those frames.
 
 use std::time::Duration;
@@ -13,6 +14,7 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::window::RequestRedraw;
 use bevy::winit::{UpdateMode, WinitSettings};
+use jackdaw_api::pie::PlayState;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 
 use crate::viewport::CameraFlyActive;
@@ -81,6 +83,7 @@ pub(crate) struct Busy<'w, 's> {
     >,
     spawned: Query<'w, 's, (), Added<Mesh3d>>,
     gestures: Option<Res<'w, crate::test_input::SyntheticInput>>,
+    play: Option<Res<'w, State<PlayState>>>,
 }
 
 impl Busy<'_, '_> {
@@ -98,6 +101,10 @@ impl Busy<'_, '_> {
                 .gestures
                 .as_ref()
                 .is_some_and(|gestures| !gestures.is_idle())
+            || self
+                .play
+                .as_ref()
+                .is_some_and(|play| *play.get() != PlayState::Stopped)
     }
 }
 

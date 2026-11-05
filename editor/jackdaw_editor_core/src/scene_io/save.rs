@@ -590,14 +590,52 @@ fn collect_bsn_inline_assets(
     world: &World,
     registry: &TypeRegistry,
     entities: &[Entity],
+    names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+) -> BsnInlineAssetPass {
+    let mut namer = AssetNamer::PerDocument(HashMap::new());
+    collect_inline_assets_named(world, registry, entities, names, &mut namer)
+}
+
+/// How a pathless runtime asset gets its name.
+enum AssetNamer<'a> {
+    /// Per-type counters in document order, as a file writes them: an asset
+    /// added earlier in the document renumbers the ones after it.
+    PerDocument(HashMap<String, usize>),
+    /// Stable for the Play session.
+    Session(&'a mut crate::play_scene::PlayAssetNames),
+}
+
+impl AssetNamer<'_> {
+    /// The name for the asset `id` of the type `asset_type_path`, without `#`.
+    fn name(&mut self, id: UntypedAssetId, asset_type_path: &str) -> String {
+        let short_name = asset_type_path
+            .rsplit("::")
+            .next()
+            .unwrap_or(asset_type_path);
+        match self {
+            Self::PerDocument(counters) => {
+                let counter = counters.entry(asset_type_path.to_string()).or_insert(0);
+                let name = format!("{short_name}{counter}");
+                *counter += 1;
+                name
+            }
+            Self::Session(names) => names.name_of(id, short_name),
+        }
+    }
+}
+
+fn collect_inline_assets_named(
+    world: &World,
+    registry: &TypeRegistry,
+    entities: &[Entity],
     mut names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    namer: &mut AssetNamer<'_>,
 ) -> BsnInlineAssetPass {
     let kept = KeptComponents::new(registry);
     let sprite_render = crate::scene_io::sprite_render_component_paths();
 
     let mut refs: Vec<jackdaw_bsn::CatalogAssetRef> = Vec::new();
     let mut touched: Vec<(Entity, String)> = Vec::new();
-    let mut counters: HashMap<String, usize> = HashMap::new();
     let mut slots: HashMap<ComponentId, Option<usize>> = HashMap::new();
 
     for &entity in entities {
@@ -625,7 +663,7 @@ fn collect_bsn_inline_assets(
                 registry,
                 &mut names,
                 &mut refs,
-                &mut counters,
+                namer,
             );
             if found {
                 touched.push((entity, type_path.to_string()));
@@ -686,7 +724,7 @@ fn collect_bsn_handles_from_reflect(
     registry: &TypeRegistry,
     names: &mut bevy::platform::collections::HashMap<UntypedAssetId, String>,
     refs: &mut Vec<jackdaw_bsn::CatalogAssetRef>,
-    counters: &mut HashMap<String, usize>,
+    namer: &mut AssetNamer<'_>,
 ) -> bool {
     let Some(value) = value.try_as_reflect() else {
         return false;
@@ -727,13 +765,7 @@ fn collect_bsn_handles_from_reflect(
             .type_path_table()
             .path()
             .to_string();
-        let counter = counters.entry(asset_type_path.clone()).or_insert(0);
-        let short_name = asset_type_path
-            .rsplit("::")
-            .next()
-            .unwrap_or(&asset_type_path);
-        let ref_name = format!("{short_name}{counter}");
-        *counter += 1;
+        let ref_name = namer.name(id, &asset_type_path);
 
         names.insert(id, format!("#{ref_name}"));
         refs.push(jackdaw_bsn::CatalogAssetRef {
@@ -757,58 +789,52 @@ fn collect_bsn_handles_from_reflect(
         bevy::reflect::ReflectRef::Struct(s) => {
             for i in 0..s.field_len() {
                 if let Some(field) = s.field_at(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(field, registry, names, refs, namer);
                 }
             }
         }
         bevy::reflect::ReflectRef::TupleStruct(ts) => {
             for i in 0..ts.field_len() {
                 if let Some(field) = ts.field(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(field, registry, names, refs, namer);
                 }
             }
         }
         bevy::reflect::ReflectRef::Tuple(t) => {
             for i in 0..t.field_len() {
                 if let Some(field) = t.field(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(field, registry, names, refs, namer);
                 }
             }
         }
         bevy::reflect::ReflectRef::List(l) => {
             for i in 0..l.len() {
                 if let Some(item) = l.get(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(item, registry, names, refs, namer);
                 }
             }
         }
         bevy::reflect::ReflectRef::Array(a) => {
             for i in 0..a.len() {
                 if let Some(item) = a.get(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(item, registry, names, refs, namer);
                 }
             }
         }
         bevy::reflect::ReflectRef::Map(m) => {
             for (_k, v) in m.iter() {
-                found |= collect_bsn_handles_from_reflect(v, registry, names, refs, counters);
+                found |= collect_bsn_handles_from_reflect(v, registry, names, refs, namer);
             }
         }
         bevy::reflect::ReflectRef::Set(s) => {
             for item in s.iter() {
-                found |= collect_bsn_handles_from_reflect(item, registry, names, refs, counters);
+                found |= collect_bsn_handles_from_reflect(item, registry, names, refs, namer);
             }
         }
         bevy::reflect::ReflectRef::Enum(e) => {
             for i in 0..e.field_len() {
                 if let Some(field) = e.field_at(i) {
-                    found |=
-                        collect_bsn_handles_from_reflect(field, registry, names, refs, counters);
+                    found |= collect_bsn_handles_from_reflect(field, registry, names, refs, namer);
                 }
             }
         }
@@ -838,6 +864,9 @@ fn normalize_derived_button_styles(
 
     let reg = registry.read();
     for entity in doc_entities_in_order(ast) {
+        if holds_streamed_values(world, entity) {
+            continue;
+        }
         let Ok(entity_ref) = world.get_entity(entity) else {
             continue;
         };
@@ -863,6 +892,14 @@ fn normalize_derived_button_styles(
         replace_patch(ast, entity, &reg, &ThemeBackgroundColor(background));
         replace_patch(ast, entity, &reg, &InheritableThemeTextColor(text));
     }
+}
+
+/// Whether `entity` has taken values from a running game, so its components
+/// do not say what the document authors.
+fn holds_streamed_values(world: &World, entity: Entity) -> bool {
+    world
+        .get_resource::<crate::pie_projection::PieProjection>()
+        .is_some_and(|projection| projection.overlaid.contains(&entity))
 }
 
 /// Take the values a widget derives for itself -- a progress fill's `width`, a
@@ -987,6 +1024,30 @@ pub fn emit_bsn_scene_for_file(world: &mut World, parent_path: &Path) -> Result<
     }
 }
 
+/// The live document as text the game spawns in place of its file at
+/// `parent_path`, and the fields naming an asset by an absolute path, which a
+/// save would refuse and Play only warns about. Writes nothing.
+pub(crate) fn emit_bsn_scene_for_game(
+    world: &mut World,
+    parent_path: &Path,
+) -> (String, Vec<AbsoluteAssetField>) {
+    emit_bsn_scene(world, parent_path, SourceSpelling::ServedToGame)
+}
+
+/// `document`, an inactive tab's snapshot, the way [`emit_bsn_scene_for_game`]
+/// writes the live one. Its handles were named when the tab was captured.
+pub(crate) fn emit_snapshot_for_game(
+    world: &World,
+    document: &jackdaw_bsn::SceneBsnAst,
+    parent_path: &Path,
+) -> (String, Vec<AbsoluteAssetField>) {
+    let mut ast = document.deep_clone();
+    crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
+    drop_inherited_visibility(&mut ast);
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    emitted(world, &ast, SourceSpelling::ServedToGame, &registry)
+}
+
 /// How the emitted document spells the prefabs its instances point at.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SourceSpelling {
@@ -994,6 +1055,16 @@ enum SourceSpelling {
     AsHeld,
     /// Relative to the file being written.
     RelativeToFile,
+    /// As [`Self::RelativeToFile`], for text the game takes in place of the
+    /// file: nothing is written, and runtime assets keep one name for the Play
+    /// session.
+    ServedToGame,
+}
+
+impl SourceSpelling {
+    fn relative(self) -> bool {
+        !matches!(self, Self::AsHeld)
+    }
 }
 
 /// Every emission of the live document passes through here, with preview
@@ -1093,7 +1164,22 @@ fn author(
     // and compared against a prefab baseline that names the asset, an unchanged
     // inherited component would read as an override.
     let entities = doc_entities_in_order(&ast);
-    let pass = name_handles_in(world, &mut ast, &entities, parent_path);
+    let pass = match spelling {
+        SourceSpelling::ServedToGame => {
+            world.init_resource::<crate::play_scene::PlayAssetNames>();
+            world.resource_scope(|world, mut names: Mut<crate::play_scene::PlayAssetNames>| {
+                let mut seed = asset_reference_seed(world);
+                for (id, name) in saved_asset_names(world) {
+                    seed.entry(*id).or_insert_with(|| name.clone());
+                }
+                let mut namer = AssetNamer::Session(&mut names);
+                name_handles_with(world, &mut ast, &entities, parent_path, seed, &mut namer)
+            })
+        }
+        SourceSpelling::AsHeld | SourceSpelling::RelativeToFile => {
+            name_handles_in(world, &mut ast, &entities, parent_path)
+        }
+    };
 
     // Reduce inherited prefab-instance content to sparse override entries
     // (`PrefabEntityId` plus only diverged fields). No-op when there is no
@@ -1108,7 +1194,7 @@ fn author(
     }
 
     // After sparsifying, which reads sources as the cache keys them.
-    if spelling == SourceSpelling::RelativeToFile {
+    if spelling.relative() {
         crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
         drop_inherited_visibility(&mut ast);
     }
@@ -1141,11 +1227,13 @@ fn emitted(
     registry: &AppTypeRegistry,
 ) -> (String, Vec<AbsoluteAssetField>) {
     let named = match spelling {
-        SourceSpelling::RelativeToFile => crate::scene_io::asset_fields::absolute_asset_fields(
-            ast,
-            &registry.read(),
-            world.get_resource::<crate::project_types::ProjectTypes>(),
-        ),
+        SourceSpelling::RelativeToFile | SourceSpelling::ServedToGame => {
+            crate::scene_io::asset_fields::absolute_asset_fields(
+                ast,
+                &registry.read(),
+                world.get_resource::<crate::project_types::ProjectTypes>(),
+            )
+        }
         SourceSpelling::AsHeld => Vec::new(),
     };
     (jackdaw_bsn::emit_scene(ast), named)
@@ -1162,11 +1250,23 @@ pub(crate) fn name_handles_in(
     entities: &[Entity],
     parent_path: &Path,
 ) -> BsnInlineAssetPass {
-    let registry = world.resource::<AppTypeRegistry>().clone();
     let seed = asset_reference_seed(world);
+    let mut namer = AssetNamer::PerDocument(HashMap::new());
+    name_handles_with(world, ast, entities, parent_path, seed, &mut namer)
+}
+
+fn name_handles_with(
+    world: &World,
+    ast: &mut jackdaw_bsn::SceneBsnAst,
+    entities: &[Entity],
+    parent_path: &Path,
+    seed: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    namer: &mut AssetNamer<'_>,
+) -> BsnInlineAssetPass {
+    let registry = world.resource::<AppTypeRegistry>().clone();
     let pass = {
         let reg = registry.read();
-        collect_bsn_inline_assets(world, &reg, entities, seed)
+        collect_inline_assets_named(world, &reg, entities, seed, namer)
     };
     if pass.touched.is_empty() {
         return pass;
@@ -1181,6 +1281,9 @@ pub(crate) fn name_handles_in(
 /// Re-derive every component patch listed in `pass.touched` from its live ECS
 /// value with the asset context, so `Handle<T>` fields emit reference names
 /// or asset paths instead of the placeholder an asset-blind capture stored.
+/// An entity holding streamed game values keeps the values the document has
+/// and takes only the references its handle fields lack: a stream never carries
+/// a handle, so those are the editor's own.
 fn rederive_handle_patches(
     world: &World,
     ast: &mut jackdaw_bsn::SceneBsnAst,
@@ -1222,6 +1325,20 @@ fn rederive_handle_patches(
             &reg,
             &ctx,
         );
+        if holds_streamed_values(world, *entity) {
+            let Some(mut document) = ast.get_patch(patch_entity).cloned() else {
+                continue;
+            };
+            keep_unresolved_references(
+                &reg,
+                registration.type_id(),
+                &new_patch,
+                &mut document,
+                &mut Vec::new(),
+            );
+            ast.set_patch(patch_entity, document);
+            continue;
+        }
         if let Some(authored) = ast.get_patch(patch_entity) {
             keep_unresolved_references(
                 &reg,

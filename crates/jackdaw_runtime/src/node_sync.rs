@@ -6,14 +6,12 @@
 //! writes a node's changed components to each of those entities through
 //! reflection.
 //!
-//! A change for a node no entity carries yet (an edit made while the game was
-//! building or loading its scene) is held in [`PendingNodeChanges`] and
-//! applied once the first entity for that node is indexed, after the scene
-//! that spawned it has finished inserting its components. Held changes are
-//! bounded by the number of distinct node ids, and once the first scene
-//! entity has been indexed each one is dropped [`PENDING_LIFETIME`] after it
-//! was last changed (or after that first entity, if later): a node that does
-//! not appear by then is not one the game spawns.
+//! While a scene root has yet to spawn, every change is also held in
+//! [`PendingNodeChanges`] and applied to the entities that spawn, after the
+//! scene has finished inserting its components. The document a root spawns from
+//! may be older than a change that reached the game first. With no root waiting
+//! the held changes are dropped: a scene that spawns later asks for the document
+//! as it stands then.
 
 use bevy::asset::{AssetServer, ReflectHandle, UntypedHandle};
 use bevy::ecs::component::ComponentId;
@@ -24,7 +22,6 @@ use bevy::reflect::serde::{ReflectDeserializerProcessor, TypedReflectDeserialize
 use bevy::reflect::{PartialReflect, ReflectFromReflect, TypeRegistration, TypeRegistry};
 use jackdaw_bsn::BsnSceneAssets;
 use jackdaw_scene_types::SceneNodeId;
-use std::time::Duration;
 
 use crate::JackdawCatalog;
 use serde::Deserialize;
@@ -40,13 +37,11 @@ impl SceneNodeIndex {
         self.0.get(&node).map_or(&[], Vec::as_slice)
     }
 
-    /// Index `entity` under `node`, answering whether it is the node's first.
-    fn add(&mut self, node: SceneNodeId, entity: Entity) -> bool {
+    fn add(&mut self, node: SceneNodeId, entity: Entity) {
         let entities = self.0.entry(node).or_default();
         if !entities.contains(&entity) {
             entities.push(entity);
         }
-        entities.len() == 1
     }
 
     fn remove(&mut self, node: SceneNodeId, entity: Entity) {
@@ -59,23 +54,14 @@ impl SceneNodeIndex {
     }
 }
 
-/// Type paths and expired nodes a node sync already warned about, so each
-/// warns once.
+/// Type paths a node sync already warned about, so each warns once.
 #[derive(Resource, Default)]
 struct NodeSyncWarnings(HashSet<String>);
 
-/// How long a held change waits for its node once the game has indexed its
-/// first scene entity.
-pub const PENDING_LIFETIME: Duration = Duration::from_secs(30);
-
-/// Node changes that arrived before any entity carried their node, by node.
+/// Node changes that arrived while a scene root had yet to spawn, by node.
 #[derive(Resource, Default)]
 pub struct PendingNodeChanges {
     nodes: HashMap<u64, PendingNode>,
-    /// Held nodes that gained their first entity, applied next update.
-    ready: Vec<u64>,
-    /// Real time at which the first scene entity was indexed.
-    first_indexed: Option<Duration>,
 }
 
 impl PendingNodeChanges {
@@ -96,15 +82,16 @@ impl PendingNodeChanges {
 
     /// Merge a change into what `node` holds: a value replaces an earlier
     /// value or removal of its type, and a removal replaces an earlier value.
+    /// `delivered` are the entities the change is being applied to directly.
     fn hold(
         &mut self,
         node: u64,
         set: &[(String, serde_json::Value)],
         removed: &[String],
-        now: Duration,
+        delivered: &[Entity],
     ) {
         let held = self.nodes.entry(node).or_default();
-        held.changed = now;
+        held.delivered.extend(delivered.iter().copied());
         for (type_path, value) in set {
             held.removed.retain(|path| path != type_path);
             match held.set.iter_mut().find(|(path, _)| path == type_path) {
@@ -125,13 +112,9 @@ impl PendingNodeChanges {
 struct PendingNode {
     set: Vec<(String, serde_json::Value)>,
     removed: Vec<String>,
-    changed: Duration,
-}
-
-fn real_now(world: &World) -> Duration {
-    world
-        .get_resource::<Time<Real>>()
-        .map_or(Duration::ZERO, Time::elapsed)
+    /// Entities that already have what is held. A root spawned earlier keeps
+    /// whatever the game has done to them since.
+    delivered: HashSet<Entity>,
 }
 
 /// Install [`SceneNodeIndex`] and the observers that keep it current, indexing
@@ -162,66 +145,47 @@ fn index_node_insert(
     insert: On<Insert<SceneNodeId>>,
     nodes: Query<&SceneNodeId>,
     mut index: ResMut<SceneNodeIndex>,
-    mut pending: ResMut<PendingNodeChanges>,
-    time: Option<Res<Time<Real>>>,
 ) {
-    let Ok(node) = nodes.get(insert.entity) else {
-        return;
-    };
-    let first = index.add(*node, insert.entity);
-    if pending.first_indexed.is_none() {
-        pending.first_indexed = Some(time.map_or(Duration::ZERO, |time| time.elapsed()));
-    }
-    if first && pending.contains(node.0) && !pending.ready.contains(&node.0) {
-        pending.ready.push(node.0);
+    if let Ok(node) = nodes.get(insert.entity) {
+        index.add(*node, insert.entity);
     }
 }
 
-/// Apply the held changes of nodes that gained their first entity, and drop
-/// held changes older than [`PENDING_LIFETIME`]. Runs after scenes spawn, so
-/// a held value is not overwritten by a component the spawn inserts later.
+/// Apply held changes to the entities that spawned since they were held, and
+/// drop them once no scene root is waiting. Runs after scenes spawn, so a held
+/// value is not overwritten by a component the spawn inserts later.
 fn apply_pending_node_changes(world: &mut World) {
-    let now = real_now(world);
-    let ready: Vec<(u64, PendingNode)> = {
+    if world.resource::<PendingNodeChanges>().is_empty() {
+        return;
+    }
+    let nodes: Vec<u64> = world
+        .resource::<PendingNodeChanges>()
+        .nodes
+        .keys()
+        .copied()
+        .collect();
+    for node in nodes {
+        let entities: Vec<Entity> = world
+            .resource::<SceneNodeIndex>()
+            .entities(SceneNodeId(node))
+            .to_vec();
         let mut pending = world.resource_mut::<PendingNodeChanges>();
-        let ready = std::mem::take(&mut pending.ready);
-        ready
+        let Some(held) = pending.nodes.get_mut(&node) else {
+            continue;
+        };
+        let fresh: Vec<Entity> = entities
             .into_iter()
-            .filter_map(|node| pending.nodes.remove(&node).map(|held| (node, held)))
-            .collect()
-    };
-    for (node, held) in ready {
-        apply_node_components(world, node, &held.set, &held.removed);
-    }
-    let mut pending = world.resource_mut::<PendingNodeChanges>();
-    let Some(first_indexed) = pending.first_indexed else {
-        return;
-    };
-    let mut expired = Vec::new();
-    pending.nodes.retain(|&node, held| {
-        let alive = now.saturating_sub(held.changed.max(first_indexed)) < PENDING_LIFETIME;
-        if !alive {
-            let paths: Vec<&str> = held
-                .set
-                .iter()
-                .map(|(path, _)| path.as_str())
-                .chain(held.removed.iter().map(String::as_str))
-                .collect();
-            expired.push((node, paths.join(", ")));
+            .filter(|entity| !held.delivered.contains(entity))
+            .collect();
+        if fresh.is_empty() {
+            continue;
         }
-        alive
-    });
-    if expired.is_empty() {
-        return;
+        held.delivered.extend(fresh.iter().copied());
+        let (set, removed) = (held.set.clone(), held.removed.clone());
+        apply_to_entities(world, &fresh, &set, &removed);
     }
-    let mut warnings = world.get_resource_or_init::<NodeSyncWarnings>();
-    for (node, paths) in expired {
-        if warnings.0.insert(format!("expired {node}")) {
-            warn!(
-                "PIE: dropped changes to node {node} ({paths}): no entity in the game carries \
-                 that node; the scene the game loaded may not name it"
-            );
-        }
+    if !crate::scene_root_awaiting_spawn(world) {
+        world.resource_mut::<PendingNodeChanges>().nodes.clear();
     }
 }
 
@@ -446,8 +410,9 @@ fn warn_kept_once(world: &mut World, type_path: &str) {
 /// `removed` is removed. A removed component that a component staying on the
 /// entity requires is left as it is, with a warning once per type path. A
 /// type the game does not know, or a value that does not deserialize, is
-/// skipped with a warning once per type path. When no entity carries `node`
-/// yet, the change is held in [`PendingNodeChanges`] until one does.
+/// skipped with a warning once per type path. While a scene root has yet to
+/// spawn the change is also held for the entities it brings; see
+/// [`PendingNodeChanges`].
 pub fn apply_node_components(
     world: &mut World,
     node: u64,
@@ -458,17 +423,27 @@ pub fn apply_node_components(
         .get_resource::<SceneNodeIndex>()
         .map(|index| index.entities(SceneNodeId(node)).to_vec())
         .unwrap_or_default();
+    if crate::scene_root_awaiting_spawn(world)
+        && let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>()
+    {
+        pending.hold(node, set, removed, &entities);
+    }
+    apply_to_entities(world, &entities, set, removed);
+}
+
+fn apply_to_entities(
+    world: &mut World,
+    entities: &[Entity],
+    set: &[(String, serde_json::Value)],
+    removed: &[String],
+) {
     if entities.is_empty() {
-        let now = real_now(world);
-        if let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() {
-            pending.hold(node, set, removed, now);
-        }
         return;
     }
     for (type_path, value) in set {
         match decode_component(world, type_path, value) {
             Ok(decoded) => {
-                for &entity in &entities {
+                for &entity in entities {
                     write_component(world, entity, &decoded);
                 }
             }
@@ -484,7 +459,7 @@ pub fn apply_node_components(
     }
     let leaving: Vec<ComponentId> = removals.iter().filter_map(|removal| removal.id).collect();
     for removal in &removals {
-        for &entity in &entities {
+        for &entity in entities {
             if let Some(id) = removal.id
                 && required_on(world, entity, id, &leaving)
             {
@@ -682,8 +657,8 @@ mod tests {
             .x
     }
 
-    #[test]
-    fn a_held_edit_lands_after_a_scene_spawns_the_node() {
+    /// A headless game that loads scenes, with the node index installed.
+    fn scene_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::transform::TransformPlugin);
@@ -691,23 +666,50 @@ mod tests {
         app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
         install_node_index(&mut app);
         app.add_plugins(crate::JackdawPlugin);
-
-        let scene = "\
-bevy_ecs::hierarchy::Children [
-    jackdaw_scene_types::node_id::SceneNodeId(21)
-    bevy_transform::components::transform::Transform {
-        translation: glam::Vec3 { x: 1.0, y: 0.0, z: 0.0 },
+        app
     }
-]
-";
+
+    fn scene_with_node(node: u64, x: f32) -> crate::JackdawScene {
+        let text = format!(
+            "bevy_ecs::hierarchy::Children [\n    \
+             jackdaw_scene_types::node_id::SceneNodeId({node})\n    \
+             bevy_transform::components::transform::Transform {{\n        \
+             translation: glam::Vec3 {{ x: {x:?}, y: 0.0, z: 0.0 }},\n    }}\n]\n"
+        );
+        crate::JackdawScene::new(text, std::path::PathBuf::new())
+    }
+
+    /// A root whose scene has yet to arrive, and the handle to deliver it on.
+    fn waiting_root(app: &mut App) -> Handle<crate::JackdawScene> {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<crate::JackdawScene>>()
-            .add(crate::JackdawScene::new(
-                scene.to_string(),
-                std::path::PathBuf::new(),
-            ));
+            .reserve_handle();
+        app.world_mut()
+            .spawn(crate::JackdawSceneRoot(handle.clone()));
+        handle
+    }
 
+    fn deliver(app: &mut App, handle: &Handle<crate::JackdawScene>, scene: crate::JackdawScene) {
+        app.world_mut()
+            .resource_mut::<Assets<crate::JackdawScene>>()
+            .insert(handle.id(), scene)
+            .expect("a live handle");
+    }
+
+    fn node_xs(app: &mut App, node: u64) -> Vec<f32> {
+        let mut query = app.world_mut().query::<(&SceneNodeId, &Transform)>();
+        query
+            .iter(app.world())
+            .filter(|(id, _)| id.0 == node)
+            .map(|(_, transform)| transform.translation.x)
+            .collect()
+    }
+
+    #[test]
+    fn an_edit_made_while_a_root_waits_lands_after_the_scene_spawns() {
+        let mut app = scene_app();
+        let handle = waiting_root(&mut app);
         apply_node_components(
             app.world_mut(),
             21,
@@ -716,23 +718,23 @@ bevy_ecs::hierarchy::Children [
         );
         assert!(app.world().resource::<PendingNodeChanges>().contains(21));
 
-        app.world_mut().spawn(crate::JackdawSceneRoot(handle));
+        deliver(&mut app, &handle, scene_with_node(21, 1.0));
         app.update();
-        app.update();
-
-        let mut query = app.world_mut().query::<(&SceneNodeId, &Transform)>();
-        let found: Vec<f32> = query
-            .iter(app.world())
-            .filter(|(id, _)| id.0 == 21)
-            .map(|(_, transform)| transform.translation.x)
-            .collect();
-        assert_eq!(found, vec![9.0], "the held edit wins over the scene value");
+        assert_eq!(
+            node_xs(&mut app, 21),
+            vec![9.0],
+            "the held edit wins over the scene value"
+        );
+        assert!(
+            app.world().resource::<PendingNodeChanges>().is_empty(),
+            "nothing is held once no root waits"
+        );
     }
 
-    /// An edit for a node no entity carries yet waits, and lands on the
-    /// entity spawned for it, after the spawn's own components.
+    /// The document a later root spawns from already holds the edit, so with no
+    /// root waiting there is nothing to keep.
     #[test]
-    fn an_edit_before_its_node_spawns_lands_when_it_spawns() {
+    fn an_edit_with_no_root_waiting_is_not_held() {
         let mut app = app();
         apply_node_components(
             app.world_mut(),
@@ -740,33 +742,15 @@ bevy_ecs::hierarchy::Children [
             &[(TRANSFORM.to_string(), transform_json(3.0))],
             &[],
         );
-        assert!(app.world().resource::<PendingNodeChanges>().contains(8));
-
-        let entity = app.world_mut().spawn(SceneNodeId(8)).id();
-        app.world_mut()
-            .entity_mut(entity)
-            .insert(Transform::default());
-        app.update();
-        assert_eq!(x_of(&app, entity), 3.0);
         assert!(app.world().resource::<PendingNodeChanges>().is_empty());
-
-        let twin = app
-            .world_mut()
-            .spawn((SceneNodeId(8), Transform::default()))
-            .id();
-        app.update();
-        assert_eq!(
-            x_of(&app, twin),
-            0.0,
-            "an applied change is not held for later entities"
-        );
     }
 
     /// A removal cancels a held value of its type, and a later value cancels
     /// a held removal.
     #[test]
     fn held_changes_merge_per_type() {
-        let mut app = app();
+        let mut app = scene_app();
+        let handle = waiting_root(&mut app);
         let name = |text: &str| (NAME.to_string(), serde_json::json!(text));
         let world = app.world_mut();
         apply_node_components(
@@ -785,6 +769,7 @@ bevy_ecs::hierarchy::Children [
         let renamed = world
             .spawn((SceneNodeId(9), Name::new("Spawned"), Transform::default()))
             .id();
+        deliver(&mut app, &handle, scene_with_node(30, 0.0));
         app.update();
         assert!(app.world().get::<Name>(removed).is_none());
         assert_eq!(x_of(&app, removed), 1.0);
@@ -794,40 +779,96 @@ bevy_ecs::hierarchy::Children [
         );
     }
 
-    /// Held changes wait as long as no scene entity exists, and expire
-    /// [`PENDING_LIFETIME`] after one does.
+    /// Nothing about how long a root waits drops what is held for it, however
+    /// long ago the first scene spawned.
     #[test]
-    fn held_changes_expire_after_the_first_scene_entity() {
-        let mut app = app();
+    fn a_held_edit_waits_as_long_as_the_root_does() {
+        let mut app = scene_app();
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            PENDING_LIFETIME / 3,
+            std::time::Duration::from_secs(31),
         ));
+        let first = waiting_root(&mut app);
+        deliver(&mut app, &first, scene_with_node(1, 0.0));
+        app.update();
+        assert_eq!(node_xs(&mut app, 1).len(), 1, "a first scene spawned");
+
+        let later = waiting_root(&mut app);
         apply_node_components(
             app.world_mut(),
-            8,
-            &[(TRANSFORM.to_string(), transform_json(3.0))],
+            22,
+            &[(TRANSFORM.to_string(), transform_json(7.0))],
             &[],
         );
-        for _ in 0..6 {
-            app.update();
-        }
-        assert!(
-            app.world().resource::<PendingNodeChanges>().contains(8),
-            "nothing expires before the scene spawns"
-        );
-
-        app.world_mut().spawn(SceneNodeId(1));
         app.update();
-        assert!(app.world().resource::<PendingNodeChanges>().contains(8));
-        for _ in 0..4 {
+        app.update();
+        assert!(app.world().resource::<PendingNodeChanges>().contains(22));
+
+        deliver(&mut app, &later, scene_with_node(22, 1.0));
+        app.update();
+        assert_eq!(node_xs(&mut app, 22), vec![7.0]);
+    }
+
+    /// Under the link a later scene adds to the references live sync reads; a
+    /// game with no link has no use for an earlier scene's and lets them go.
+    #[test]
+    fn a_later_scene_keeps_earlier_references_only_under_the_link() {
+        let spawn_over_earlier_reference = |app: &mut App| {
             app.update();
-        }
-        assert!(app.world().resource::<PendingNodeChanges>().is_empty());
-        assert!(
+            let earlier = UntypedHandle::default_for_type(std::any::TypeId::of::<Swatch>());
+            let mut names = bevy::platform::collections::HashMap::default();
+            names.insert("#Earlier".to_string(), earlier);
+            app.world_mut().insert_resource(BsnSceneAssets(names));
+            let root = waiting_root(app);
+            deliver(app, &root, scene_with_node(40, 0.0));
+            app.update();
             app.world()
-                .get_resource::<NodeSyncWarnings>()
-                .is_some_and(|warnings| warnings.0.contains("expired 8")),
-            "the dropped node is reported"
+                .resource::<BsnSceneAssets>()
+                .0
+                .contains_key("#Earlier")
+        };
+        assert!(spawn_over_earlier_reference(&mut scene_app()));
+
+        let mut plain = App::new();
+        plain.add_plugins(MinimalPlugins);
+        plain.add_plugins(bevy::transform::TransformPlugin);
+        plain.add_plugins(bevy::asset::AssetPlugin::default());
+        plain.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+        plain.add_plugins(crate::JackdawPlugin);
+        assert!(!spawn_over_earlier_reference(&mut plain));
+    }
+
+    /// A root spawned earlier has the change directly and is not written again
+    /// when a later root spawns, so what the game did to it since stays.
+    #[test]
+    fn a_held_edit_is_not_written_again_to_entities_that_already_had_it() {
+        let mut app = scene_app();
+        let first = waiting_root(&mut app);
+        deliver(&mut app, &first, scene_with_node(23, 1.0));
+        app.update();
+
+        let later = waiting_root(&mut app);
+        apply_node_components(
+            app.world_mut(),
+            23,
+            &[(TRANSFORM.to_string(), transform_json(5.0))],
+            &[],
+        );
+        assert_eq!(node_xs(&mut app, 23), vec![5.0], "applied on arrival");
+        let mut query = app
+            .world_mut()
+            .query_filtered::<&mut Transform, With<SceneNodeId>>();
+        for mut transform in query.iter_mut(app.world_mut()) {
+            transform.translation.x = 40.0;
+        }
+
+        deliver(&mut app, &later, scene_with_node(23, 1.0));
+        app.update();
+        let mut xs = node_xs(&mut app, 23);
+        xs.sort_by(f32::total_cmp);
+        assert_eq!(
+            xs,
+            vec![5.0, 40.0],
+            "the new entity gets it, the old keeps 40"
         );
     }
 
