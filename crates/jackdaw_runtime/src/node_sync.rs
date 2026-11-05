@@ -9,12 +9,15 @@
 //! While a scene root has yet to spawn, every change is also held in
 //! [`PendingNodeChanges`] and applied to the entities that spawn, after the
 //! scene has finished inserting its components. The document a root spawns from
-//! may be older than a change that reached the game first. With no root waiting
-//! the held changes are dropped: a scene that spawns later asks for the document
-//! as it stands then.
+//! may be older than a change that reached the game first. A value naming an
+//! asset nothing has loaded yet is tried again on the entities it missed, alone,
+//! since the root may bring the asset. With no root waiting the held changes are
+//! dropped: a scene that spawns later asks for the document as it stands then.
 //!
 //! [`load_scene_assets`] takes the asset definitions the editor sends ahead of an
-//! edit naming an asset this game has not been given.
+//! edit naming an asset this game has not been given, and [`load_asset_files`]
+//! the asset files the editor sends by path. Either writes a new definition into
+//! the handle already held, so everything using the asset updates.
 
 use bevy::asset::{AssetServer, ReflectHandle, UntypedHandle};
 use bevy::ecs::component::ComponentId;
@@ -86,30 +89,34 @@ impl PendingNodeChanges {
     /// Merge a change into what `node` holds: a value replaces an earlier
     /// value or removal of its type, and a removal replaces an earlier value.
     /// `delivered` are the entities the change is being applied to directly.
-    /// With `missed`, a value named an asset the root still to spawn brings, so
-    /// those entities take everything held again once it has.
+    /// `missed` are the types in `set` whose value named an asset nothing has
+    /// loaded yet, so those entities take that value again once something has.
     fn hold(
         &mut self,
         node: u64,
         set: &[(String, serde_json::Value)],
         removed: &[String],
         delivered: &[Entity],
-        missed: bool,
+        missed: &[String],
     ) {
         let held = self.nodes.entry(node).or_default();
-        if missed {
-            held.delivered.retain(|entity| !delivered.contains(entity));
-        } else {
-            held.delivered.extend(delivered.iter().copied());
-        }
+        held.delivered.extend(delivered.iter().copied());
         for (type_path, value) in set {
+            held.missed.remove(type_path);
             held.removed.retain(|path| path != type_path);
             match held.set.iter_mut().find(|(path, _)| path == type_path) {
                 Some((_, held_value)) => *held_value = value.clone(),
                 None => held.set.push((type_path.clone(), value.clone())),
             }
         }
+        for type_path in missed {
+            held.missed
+                .entry(type_path.clone())
+                .or_default()
+                .extend(delivered.iter().copied());
+        }
         for type_path in removed {
+            held.missed.remove(type_path);
             held.set.retain(|(path, _)| path != type_path);
             if !held.removed.contains(type_path) {
                 held.removed.push(type_path.clone());
@@ -125,6 +132,9 @@ struct PendingNode {
     /// Entities that already have what is held. A root spawned earlier keeps
     /// whatever the game has done to them since.
     delivered: HashSet<Entity>,
+    /// The entities still owed the held value of a type, which named an asset
+    /// nothing has loaded yet.
+    missed: HashMap<String, HashSet<Entity>>,
 }
 
 /// Install [`SceneNodeIndex`] and the observers that keep it current, indexing
@@ -187,15 +197,71 @@ fn apply_pending_node_changes(world: &mut World) {
             .into_iter()
             .filter(|entity| !held.delivered.contains(entity))
             .collect();
-        if fresh.is_empty() {
-            continue;
-        }
         held.delivered.extend(fresh.iter().copied());
         let (set, removed) = (held.set.clone(), held.removed.clone());
-        apply_to_entities(world, &fresh, &set, &removed, false);
+        retry_missed_values(world, node);
+        let missed = apply_to_entities(world, &fresh, &set, &removed, true);
+        if let Some(held) = world
+            .resource_mut::<PendingNodeChanges>()
+            .nodes
+            .get_mut(&node)
+        {
+            for type_path in missed {
+                held.missed
+                    .entry(type_path)
+                    .or_default()
+                    .extend(fresh.iter().copied());
+            }
+        }
     }
     if !crate::scene_root_awaiting_spawn(world) {
-        world.resource_mut::<PendingNodeChanges>().nodes.clear();
+        let nodes = std::mem::take(&mut world.resource_mut::<PendingNodeChanges>().nodes);
+        for held in nodes.into_values() {
+            for type_path in held.missed.into_keys() {
+                warn_once(
+                    world,
+                    &type_path,
+                    &format!("`{type_path}`: it names an asset this game never loaded"),
+                );
+            }
+        }
+    }
+}
+
+/// Write each value `node` still owes an entity if the asset it names has loaded.
+fn retry_missed_values(world: &mut World, node: u64) {
+    let Some(held) = world.resource::<PendingNodeChanges>().nodes.get(&node) else {
+        return;
+    };
+    let owed: Vec<(String, serde_json::Value, Vec<Entity>)> = held
+        .missed
+        .iter()
+        .filter_map(|(type_path, entities)| {
+            let (_, value) = held.set.iter().find(|(path, _)| path == type_path)?;
+            Some((
+                type_path.clone(),
+                value.clone(),
+                entities.iter().copied().collect(),
+            ))
+        })
+        .collect();
+    for (type_path, value, entities) in owed {
+        match decode_component(world, &type_path, &value) {
+            Err(DecodeFailure::UnresolvedAsset(_)) => continue,
+            Err(DecodeFailure::Other(reason)) => warn_once(world, &type_path, &reason),
+            Ok(decoded) => {
+                for entity in entities {
+                    write_component(world, entity, &decoded);
+                }
+            }
+        }
+        if let Some(held) = world
+            .resource_mut::<PendingNodeChanges>()
+            .nodes
+            .get_mut(&node)
+        {
+            held.missed.remove(&type_path);
+        }
     }
 }
 
@@ -212,11 +278,15 @@ fn index_node_replace(
 /// Reads an asset handle as the reference the editor sent: a `#Name` or
 /// `@Name` the loaded scene or the project catalog answers to, else an asset
 /// path loaded through the asset server. `null` reads as the handle type's
-/// default. A `#Name` or `@Name` nothing answers to is refused.
+/// default. A `#Name` or `@Name` nothing answers to is refused, and so is a path
+/// to a document the catalog does not hold, since only a scene has a loader for
+/// one and the editor sends any other by path ahead of the edit naming it.
 struct HandleReferenceProcessor<'a> {
     server: Option<&'a AssetServer>,
     scene: Option<&'a BsnSceneAssets>,
     catalog: Option<&'a JackdawCatalog>,
+    /// Whether a reference was refused.
+    refused: bool,
 }
 
 impl HandleReferenceProcessor<'_> {
@@ -247,7 +317,8 @@ impl ReflectDeserializerProcessor for HandleReferenceProcessor<'_> {
             None => UntypedHandle::default_for_type(asset_type),
             Some(reference) => match self.named(&reference, asset_type) {
                 Some(handle) => handle,
-                None if reference.starts_with('#') || reference.starts_with('@') => {
+                None if refused_when_unresolved(&reference, asset_type) => {
+                    self.refused = true;
                     return Err(serde::de::Error::custom(format!(
                         "the asset reference `{reference}` names nothing this game loaded"
                     )));
@@ -259,6 +330,30 @@ impl ReflectDeserializerProcessor for HandleReferenceProcessor<'_> {
             },
         };
         Ok(Ok(reflect_handle.typed(untyped).into_partial_reflect()))
+    }
+}
+
+/// Whether nothing but a loaded asset can answer to `reference`.
+fn refused_when_unresolved(reference: &str, asset_type: std::any::TypeId) -> bool {
+    reference.starts_with('#')
+        || reference.starts_with('@')
+        || (jackdaw_bsn::is_document_path(std::path::Path::new(reference))
+            && asset_type != std::any::TypeId::of::<crate::JackdawScene>())
+}
+
+/// Why a component value could not be read.
+pub(crate) enum DecodeFailure {
+    /// It names an asset nothing has loaded, which a later load can fix.
+    UnresolvedAsset(String),
+    /// Anything else, which trying again cannot fix.
+    Other(String),
+}
+
+impl std::fmt::Display for DecodeFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnresolvedAsset(reason) | Self::Other(reason) => formatter.write_str(reason),
+        }
     }
 }
 
@@ -276,28 +371,38 @@ pub(crate) fn decode_component(
     world: &World,
     type_path: &str,
     value: &serde_json::Value,
-) -> Result<DecodedComponent, String> {
+) -> Result<DecodedComponent, DecodeFailure> {
     let registry = world.resource::<AppTypeRegistry>().read();
     let registration = registry
         .get_with_type_path(type_path)
-        .ok_or_else(|| format!("unknown type path `{type_path}`"))?;
+        .ok_or_else(|| DecodeFailure::Other(format!("unknown type path `{type_path}`")))?;
     let reflect = registration
         .data::<ReflectComponent>()
-        .ok_or_else(|| format!("`{type_path}` has no ReflectComponent"))?
+        .ok_or_else(|| DecodeFailure::Other(format!("`{type_path}` has no ReflectComponent")))?
         .clone();
     let mut processor = HandleReferenceProcessor {
         server: world.get_resource::<AssetServer>(),
         scene: world.get_resource::<BsnSceneAssets>(),
         catalog: world.get_resource::<JackdawCatalog>(),
+        refused: false,
     };
     let value = TypedReflectDeserializer::with_processor(registration, &registry, &mut processor)
         .deserialize(value)
-        .map_err(|err| format!("failed to deserialize `{type_path}`: {err}"))?;
+        .map_err(|err| {
+            let reason = format!("failed to deserialize `{type_path}`: {err}");
+            if processor.refused {
+                DecodeFailure::UnresolvedAsset(reason)
+            } else {
+                DecodeFailure::Other(reason)
+            }
+        })?;
     let from_reflect = registration.data::<ReflectFromReflect>().cloned();
     let value = match &from_reflect {
         Some(from_reflect) => from_reflect
             .from_reflect(value.as_ref())
-            .ok_or_else(|| format!("`{type_path}` cannot be built from the value sent"))?
+            .ok_or_else(|| {
+                DecodeFailure::Other(format!("`{type_path}` cannot be built from the value sent"))
+            })?
             .into_partial_reflect(),
         None => value,
     };
@@ -436,20 +541,27 @@ pub fn apply_node_components(
     let awaiting = crate::scene_root_awaiting_spawn(world);
     let missed = apply_to_entities(world, &entities, set, removed, awaiting);
     if awaiting && let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() {
-        pending.hold(node, set, removed, &entities, missed);
+        pending.hold(node, set, removed, &entities, &missed);
     }
 }
 
 /// Load the named asset definitions in `text` into their asset stores and
-/// [`BsnSceneAssets`], under both reference spellings.
+/// [`BsnSceneAssets`], under both reference spellings. A name that already answers
+/// to a live asset of its type has the definition written into that asset, so
+/// every entity holding it updates.
 pub fn load_scene_assets(world: &mut World, text: &str) {
-    let entries = match jackdaw_bsn::load_bsn_assets(world, text) {
-        Ok(entries) => entries,
-        Err(err) => {
-            warn!("PIE: could not read the asset definitions the editor sent: {err}");
-            return;
-        }
-    };
+    let held = world
+        .get_resource::<BsnSceneAssets>()
+        .map(|assets| assets.0.clone())
+        .unwrap_or_default();
+    let entries =
+        match load_with_textures(world, text, |name| held.get(&format!("#{name}")).cloned()) {
+            Ok(entries) => entries,
+            Err(err) => {
+                warn!("PIE: could not read the asset definitions the editor sent: {err}");
+                return;
+            }
+        };
     let mut assets = world.get_resource_or_init::<BsnSceneAssets>();
     for entry in entries {
         assets
@@ -459,19 +571,58 @@ pub fn load_scene_assets(world: &mut World, text: &str) {
     }
 }
 
-/// Write a node's change to `entities`. Returns whether a value failed to read.
-/// With `retry`, such a value is held for after a spawn rather than warned about.
+/// Load each asset file the editor sent, as `(path, text)`, into
+/// [`JackdawCatalog`]: a file the catalog holds has the definition written into its
+/// asset, so every entity holding it updates, and a new one joins under its path.
+pub fn load_asset_files(world: &mut World, files: &[(String, String)]) {
+    for (path, text) in files {
+        let held = world
+            .get_resource::<JackdawCatalog>()
+            .and_then(|catalog| catalog.files.get(path).cloned());
+        match load_with_textures(world, text, |_| held.clone()) {
+            Ok(entries) => {
+                let (Some(entry), Some(mut catalog)) = (
+                    entries.into_iter().next(),
+                    world.get_resource_mut::<JackdawCatalog>(),
+                ) else {
+                    warn!("PIE: the editor sent no asset this game can hold for {path}");
+                    continue;
+                };
+                catalog.files.insert(path.clone(), entry.handle);
+            }
+            Err(err) => warn!("PIE: could not read the asset file {path} the editor sent: {err}"),
+        }
+    }
+}
+
+/// Load definitions as a scene spawn does: each texture with its slot's colour
+/// space, ahead of the generic resolve reaching the same path.
+fn load_with_textures(
+    world: &mut World,
+    text: &str,
+    held: impl Fn(&str) -> Option<UntypedHandle>,
+) -> Result<Vec<jackdaw_bsn::CatalogEntry>, jackdaw_bsn::BsnLoadError> {
+    #[cfg(feature = "render")]
+    let _preloaded_textures = jackdaw_bsn::parse_bsn_text(text)
+        .map(|ast| crate::preload_textures(world, &ast))
+        .unwrap_or_default();
+    jackdaw_bsn::load_bsn_assets_onto(world, text, held)
+}
+
+/// Write a node's change to `entities`. Returns the types whose value named an
+/// asset nothing has loaded yet. With `retry`, such a value is left to be tried
+/// again rather than warned about. Any other value that fails is warned about.
 fn apply_to_entities(
     world: &mut World,
     entities: &[Entity],
     set: &[(String, serde_json::Value)],
     removed: &[String],
     retry: bool,
-) -> bool {
+) -> Vec<String> {
+    let mut missed = Vec::new();
     if entities.is_empty() {
-        return false;
+        return missed;
     }
-    let mut missed = false;
     for (type_path, value) in set {
         match decode_component(world, type_path, value) {
             Ok(decoded) => {
@@ -479,8 +630,8 @@ fn apply_to_entities(
                     write_component(world, entity, &decoded);
                 }
             }
-            Err(_) if retry => missed = true,
-            Err(reason) => warn_once(world, type_path, &reason),
+            Err(DecodeFailure::UnresolvedAsset(_)) if retry => missed.push(type_path.clone()),
+            Err(failure) => warn_once(world, type_path, &failure.to_string()),
         }
     }
     let mut removals = Vec::new();

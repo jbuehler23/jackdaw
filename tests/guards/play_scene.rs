@@ -7,12 +7,16 @@ use bevy::prelude::*;
 use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::pie::InstanceKey;
 use jackdaw::play_scene::{LaunchScene, PlayScene, launch_scene, scene_answer, serve_scene};
-use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
+use jackdaw::play_sync::{
+    collect_changes_for, collect_material_file_changes, collect_node_changes,
+};
 use jackdaw::scenes::{Scenes, TabKind, TabRefusal};
 use jackdaw_api::prelude::*;
 use jackdaw_pie_protocol::manifest::RunConfig;
 use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
-use jackdaw_runtime::node_sync::{apply_node_components, install_node_index, load_scene_assets};
+use jackdaw_runtime::node_sync::{
+    apply_node_components, install_node_index, load_asset_files, load_scene_assets,
+};
 use jackdaw_runtime::{JackdawPlugin, JackdawScene, JackdawSceneRoot};
 use jackdaw_scene_types::{Brush, SceneNodeId};
 
@@ -418,6 +422,7 @@ fn take_in_game(game: &mut App, events: Vec<(InstanceKey, ControlEvent)>) {
                 apply_node_components(game.world_mut(), node, &set, &removed);
             }
             ControlEvent::SceneAssets { text } => load_scene_assets(game.world_mut(), &text),
+            ControlEvent::AssetFiles { files } => load_asset_files(game.world_mut(), &files),
             other => panic!("not an edit: {other:?}"),
         }
     }
@@ -521,10 +526,19 @@ fn served_material_name(text: &str) -> String {
     rest[..rest.find('"').expect("a closing quote")].to_string()
 }
 
+fn served_text(app: &mut App, key: &InstanceKey) -> String {
+    let SceneAnswer::Document { text, .. } =
+        serve_scene(app.world_mut(), key, None, "zone.bsn").answer
+    else {
+        panic!("a document");
+    };
+    text
+}
+
 /// A material assigned and saved before Play: the live document holds no root for
-/// it, the text reuses the name the save gave it, and embeds it all the same.
+/// it, the text gives it a session name the file does not hold, and embeds it.
 #[test]
-fn a_saved_runtime_material_is_embedded_under_its_saved_name() {
+fn a_saved_runtime_material_is_embedded_under_a_session_name() {
     let (mut app, tmp) = editor();
     cube_with_material(&mut app, 0.25);
     save(&mut app, &tmp);
@@ -532,14 +546,300 @@ fn a_saved_runtime_material_is_embedded_under_its_saved_name() {
 
     let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
     let name = served_material_name(&text);
-    assert!(saved.contains(&name), "the file's name {name}:\n{saved}");
-    assert!(!name.starts_with("#Play"), "{name}");
+    assert!(name.starts_with("#Play"), "{name}");
+    assert!(!saved.contains(&name), "{name} is in the file:\n{saved}");
     assert!(
         text.contains(&format!("{name}\n")),
         "embedded as a root:\n{text}"
     );
     let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
     assert_eq!(game_roughness(&mut game), 0.25);
+}
+
+/// A saved scene with a material, reopened so the document holds a root for it
+/// and its face names that root. The brush entity comes with it.
+fn reopened_scene_with_a_material(app: &mut App, tmp: &tempfile::TempDir) -> (Entity, String) {
+    cube_with_material(app, 0.25);
+    save(app, tmp);
+    let saved = std::fs::read_to_string(zone_file(tmp)).expect("the saved scene");
+    let name = served_material_name(&saved);
+    jackdaw::pie_projection::revert_preview(app.world_mut());
+    app.update();
+    (first_cube(app), name)
+}
+
+/// A document's own root and each reference to it are renamed together, for an
+/// ordinary entity and one Live view fills with game values, whose patch the
+/// emit does not derive again.
+#[test]
+fn a_document_s_own_asset_root_is_renamed_with_every_reference() {
+    let (mut app, tmp) = editor();
+    let (cube, file_name) = reopened_scene_with_a_material(&mut app, &tmp);
+    for overlaid in [false, true] {
+        if overlaid {
+            app.world_mut()
+                .resource_mut::<jackdaw::pie_projection::PieProjection>()
+                .overlaid
+                .insert(cube);
+        }
+        let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+        assert!(
+            !text.contains(&file_name),
+            "overlaid {overlaid}: {file_name} is still in\n{text}"
+        );
+        let served = served_material_name(&text);
+        assert!(served.starts_with("#Play"), "{served}");
+        let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+        assert_eq!(game_roughness(&mut game), 0.25, "overlaid {overlaid}");
+    }
+}
+
+/// A tab behind the one in front holds a snapshot with no entities: its roots and
+/// references still go by session names, and a store holding the same spelling for
+/// the front tab's asset does not answer for it.
+#[test]
+fn an_inactive_tab_s_asset_root_is_renamed_with_every_reference() {
+    let (mut app, tmp) = editor();
+    let (_, file_name) = reopened_scene_with_a_material(&mut app, &tmp);
+    open(&mut app, "assets/levels/meadow.bsn");
+    cube_with_material(&mut app, 0.75);
+
+    let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    assert!(!text.contains(&file_name), "{text}");
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+    assert_eq!(game_roughness(&mut game), 0.25);
+}
+
+/// Another scene spawned from its file holds the name the served scene's file
+/// holds. It takes nothing from the served scene, and an edit keeps the material.
+#[test]
+fn a_scene_loaded_from_its_file_does_not_take_an_edit_s_material() {
+    let (mut app, tmp) = editor();
+    let (cube, file_name) = reopened_scene_with_a_material(&mut app, &tmp);
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let text = served_text(&mut app, &key);
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+
+    let level2 = format!(
+        "bevy_ecs::hierarchy::Children [\n    {file_name}\n    \
+         bevy_pbr::pbr_material::StandardMaterial {{ perceptual_roughness: 0.9 }}\n    --\n    \
+         #Other\n    bevy_transform::components::transform::Transform\n]\n"
+    );
+    let scene = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .add(JackdawScene::new(level2, PathBuf::new()));
+    game.world_mut().spawn(JackdawSceneRoot(scene));
+    game.update();
+
+    edit_brush(&mut app, cube, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.5, 0.25);
+    });
+    take_in_game(
+        &mut game,
+        collect_changes_for(app.world_mut(), std::slice::from_ref(&key)),
+    );
+    assert_eq!(
+        game_brush(&mut game).faces[0].uv_offset,
+        Vec2::new(0.5, 0.25)
+    );
+    assert_eq!(game_roughness(&mut game), 0.25, "main's own material");
+}
+
+/// A root entity and an embedded asset may share a name. Only the asset renames.
+#[test]
+fn a_root_entity_named_like_an_embedded_asset_stays() {
+    let (mut app, tmp) = editor();
+    std::fs::write(
+        tmp.path().join("assets/levels/meadow.bsn"),
+        "bevy_ecs::hierarchy::Children [\n    #Stone\n    \
+         bevy_pbr::pbr_material::StandardMaterial { perceptual_roughness: 0.3 }\n    --\n    \
+         #Stone\n    bevy_transform::components::transform::Transform\n]\n",
+    )
+    .expect("a scene");
+    open(&mut app, "assets/levels/meadow.bsn");
+
+    let (text, dir, _) = document(scene_answer(app.world_mut(), None, "levels/meadow.bsn"));
+    assert!(text.contains("#Play"), "{text}");
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, &dir);
+    assert_eq!(game_x(&mut game, "Stone"), 0.0, "the entity spawned");
+}
+
+/// Brushes sharing a material: its definition changes, one of them is edited, and
+/// the one asset the game holds changes for both.
+#[test]
+fn a_changed_definition_reaches_every_brush_sharing_the_material() {
+    let (mut app, tmp) = editor();
+    let first = cube_with_material(&mut app, 0.25);
+    let material = app.world().get::<Brush>(first).expect("a brush").faces[0]
+        .material
+        .clone();
+    run_op_clause_as_user(app.world_mut(), "entity.add.cube")
+        .expect("the cube dispatched")
+        .assert_finished();
+    app.update();
+    let second = app
+        .world_mut()
+        .query_filtered::<Entity, With<Brush>>()
+        .iter(app.world())
+        .find(|&entity| entity != first)
+        .expect("the second cube");
+    let shared = material.clone();
+    edit_brush(&mut app, second, |brush| brush.faces[0].material = shared);
+
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let text = served_text(&mut app, &key);
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+
+    app.world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .get_mut(&material)
+        .expect("the material")
+        .perceptual_roughness = 0.8;
+    edit_brush(&mut app, first, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.5, 0.25);
+    });
+    let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    assert_eq!(asset_messages(&sends), 1, "{sends:?}");
+    take_in_game(&mut game, sends);
+
+    let roughness: Vec<f32> = game
+        .world_mut()
+        .query::<&Brush>()
+        .iter(game.world())
+        .map(|brush| {
+            game.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&brush.faces[0].material)
+                .expect("the handle resolves to an asset")
+                .perceptual_roughness
+        })
+        .collect();
+    assert_eq!(roughness, vec![0.8, 0.8]);
+}
+
+fn create_material_file(app: &mut App, clause: &str) -> Handle<StandardMaterial> {
+    run_op_clause(app.world_mut(), &format!("material.create {clause}"))
+        .expect("the material dispatched")
+        .assert_finished();
+    app.update();
+    let world = app.world();
+    jackdaw::material_assets::material_of_reference(
+        world.get_resource::<jackdaw::asset_index::AssetIndex>(),
+        world.resource::<jackdaw::material_assets::MaterialRegistry>(),
+        "materials/granite.bsn",
+    )
+    .expect("the material file is indexed")
+}
+
+/// A material file made after the game read its asset folder, with no copy of it
+/// in the game: the definition goes ahead of the edit naming its path, so the face
+/// holds an asset rather than a handle no loader fills.
+#[test]
+fn a_material_file_created_during_play_shows_up_in_the_game() {
+    let (mut app, tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let text = served_text(&mut app, &key);
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+
+    let file = create_material_file(&mut app, "name=granite roughness=0.6");
+    edit_brush(&mut app, cube, |brush| brush.faces[0].material = file);
+    let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    assert!(
+        matches!(
+            sends.as_slice(),
+            [
+                (_, ControlEvent::AssetFiles { .. }),
+                (_, ControlEvent::NodeComponents { .. })
+            ]
+        ),
+        "the definition goes first: {sends:?}"
+    );
+    take_in_game(&mut game, sends);
+    assert_eq!(game_roughness(&mut game), 0.6);
+
+    edit_brush(&mut app, cube, |brush| {
+        brush.faces[0].uv_offset = Vec2::new(0.5, 0.25);
+    });
+    let sends = collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    assert!(sends.len() == 1, "the game holds it: {sends:?}");
+}
+
+/// A document naming a file the game's walk never saw brings its definition.
+#[test]
+fn a_served_document_brings_the_material_files_it_names() {
+    let (mut app, tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let mut game = game_with_assets(&tmp.path().join("assets"), ZONE.to_string(), "");
+
+    let file = create_material_file(&mut app, "name=granite roughness=0.6");
+    edit_brush(&mut app, cube, |brush| brush.faces[0].material = file);
+    let key = instance();
+    let served = serve_scene(app.world_mut(), &key, None, "zone.bsn");
+    let Some(ControlEvent::AssetFiles { files }) = served.files else {
+        panic!("the file goes ahead of the answer: {:?}", served.files);
+    };
+    load_asset_files(game.world_mut(), &files);
+    let SceneAnswer::Document { text, .. } = served.answer else {
+        panic!("a document");
+    };
+    let scene = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .add(JackdawScene::new(text, PathBuf::new()));
+    game.world_mut().spawn(JackdawSceneRoot(scene));
+    game.update();
+    assert_eq!(game_roughness(&mut game), 0.6);
+
+    let again = serve_scene(app.world_mut(), &key, None, "zone.bsn");
+    assert!(again.files.is_none(), "sent once");
+}
+
+/// A value set on a material file reaches every mesh using it, with no component
+/// edited, and so does its undo.
+#[test]
+fn a_set_on_a_material_file_reaches_the_game_and_undo_reverts_it() {
+    let (mut app, tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let file = create_material_file(&mut app, "name=granite roughness=0.6");
+    edit_brush(&mut app, cube, |brush| brush.faces[0].material = file);
+    let key = instance();
+    collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
+    let text = served_text(&mut app, &key);
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+    assert_eq!(game_roughness(&mut game), 0.6);
+    let held = game_brush(&mut game).faces[0].material.clone();
+    collect_material_file_changes(app.world_mut(), std::slice::from_ref(&key));
+
+    run_op_clause(
+        app.world_mut(),
+        "material.set material=materials/granite.bsn field=roughness value=0.9",
+    )
+    .expect("the set dispatched")
+    .assert_finished();
+    app.update();
+    take_in_game(
+        &mut game,
+        collect_material_file_changes(app.world_mut(), std::slice::from_ref(&key)),
+    );
+    assert_eq!(game_roughness(&mut game), 0.9);
+    assert_eq!(game_brush(&mut game).faces[0].material, held, "in place");
+
+    app.world_mut().resource_scope(
+        |world, mut history: Mut<jackdaw::commands::CommandHistory>| {
+            history.undo(world);
+        },
+    );
+    app.update();
+    take_in_game(
+        &mut game,
+        collect_material_file_changes(app.world_mut(), std::slice::from_ref(&key)),
+    );
+    assert_eq!(game_roughness(&mut game), 0.6);
 }
 
 /// Saving during Play renumbers a file's names. An edit and a respawn keep
@@ -550,12 +850,9 @@ fn a_save_during_play_does_not_split_the_served_name_from_the_edit() {
     let cube = cube_with_material(&mut app, 0.25);
     let key = instance();
     collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
-    let SceneAnswer::Document { text, .. } = serve_scene(app.world_mut(), &key, None, "zone.bsn")
-    else {
-        panic!("a document");
-    };
+    let text = served_text(&mut app, &key);
     let name = served_material_name(&text);
-    assert!(name.starts_with("#Play"), "nothing saved it yet: {name}");
+    assert!(name.starts_with("#Play"), "{name}");
 
     save(&mut app, &tmp);
     let (after, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
@@ -584,10 +881,7 @@ fn an_edit_after_the_document_respawns_reaches_the_game() {
     cube_with_material(&mut app, 0.25);
     let key = instance();
     collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
-    let SceneAnswer::Document { text, .. } = serve_scene(app.world_mut(), &key, None, "zone.bsn")
-    else {
-        panic!("a document");
-    };
+    let text = served_text(&mut app, &key);
     let name = served_material_name(&text);
     let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
     assert_eq!(game_roughness(&mut game), 0.25);
@@ -618,10 +912,7 @@ fn a_material_assigned_during_play_shows_up_in_the_game() {
     let cube = cube_with_material(&mut app, 0.25);
     let key = instance();
     collect_changes_for(app.world_mut(), std::slice::from_ref(&key));
-    let SceneAnswer::Document { text, .. } = serve_scene(app.world_mut(), &key, None, "zone.bsn")
-    else {
-        panic!("a document");
-    };
+    let text = served_text(&mut app, &key);
     let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
 
     assign_material(&mut app, cube, 0.75);

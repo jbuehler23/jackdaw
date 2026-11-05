@@ -1216,9 +1216,19 @@ fn answer_scene_request(world: &mut World, key: &InstanceKey, request: u64, path
         .launch_scenes
         .get(key)
         .cloned();
-    let answer = crate::play_scene::serve_scene(world, key, launch.as_ref(), path);
+    let served = crate::play_scene::serve_scene(world, key, launch.as_ref(), path);
     crate::viewport_redraw::note_game_request(world);
-    send_control_to_instance(world, key, ControlEvent::SceneDocument { request, answer });
+    if let Some(files) = served.files {
+        send_control_to_instance(world, key, files);
+    }
+    send_control_to_instance(
+        world,
+        key,
+        ControlEvent::SceneDocument {
+            request,
+            answer: served.answer,
+        },
+    );
 }
 
 /// Queue a control message for one instance, if it is live.

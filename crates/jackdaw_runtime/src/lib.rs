@@ -710,7 +710,7 @@ fn spawn_scene_text(
     parent_path: &Path,
     stem: Option<String>,
 ) {
-    let ast = match parse_bsn_text(bsn) {
+    let mut ast = match parse_bsn_text(bsn) {
         Ok(ast) => ast,
         Err(err) => {
             warn!("Failed to parse scene .bsn: {err}");
@@ -720,6 +720,20 @@ fn spawn_scene_text(
             return;
         }
     };
+
+    // A served document's assets loaded when its answer arrived, and the handles
+    // made then are the ones later definitions write into.
+    if world.get::<ServedScene>(root_entity).is_some() {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let roots: Vec<Entity> = ast
+            .roots
+            .iter()
+            .copied()
+            .filter(|&root| !is_asset_root(&ast, root, &reg))
+            .collect();
+        ast.roots = roots;
+    }
 
     // Names this scene in anything the prefab pass has to refuse, so a game
     // loading several at once can tell which one degraded.

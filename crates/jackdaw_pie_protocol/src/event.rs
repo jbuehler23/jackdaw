@@ -116,6 +116,12 @@ pub enum ControlEvent {
     SceneAssets {
         text: String,
     },
+    /// Asset files the game may not hold as the editor does, as `(path, text)`,
+    /// each text holding the file's one asset root. Sent ahead of anything naming
+    /// the path, and when the asset changes.
+    AssetFiles {
+        files: Vec<(String, String)>,
+    },
 }
 
 /// Serialize a protocol message to bytes. Uses JSON so component payloads

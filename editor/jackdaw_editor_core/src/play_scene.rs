@@ -5,22 +5,27 @@
 //! in a tab, or tells the game to load the file. Nothing is written: the text
 //! holds the node ids a file saved before they existed lacks, and unsaved edits.
 //!
+//! The text is never written anywhere, so each asset it embeds goes by a name
+//! that is unique for the Play session ([`PlayAssetNames`]). A scene the game
+//! loads from a file cannot spell one, so it cannot take an edit's asset away.
+//!
 //! [`StateEvent::RequestScene`]: jackdaw_pie_protocol::StateEvent::RequestScene
 
 use std::any::TypeId;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::UntypedAssetId;
 use bevy::prelude::*;
 use jackdaw_bsn::{CatalogAssetRef, SceneBsnAst};
-use jackdaw_pie_protocol::SceneAnswer;
 use jackdaw_pie_protocol::manifest::RunConfig;
+use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
 
 use crate::pie::{InstanceKey, MAIN_SCENE, open_scene_asset_path};
 use crate::scene_io::asset_fields::{AbsoluteAssetField, refusal};
+use crate::scene_io::save::GameDocument;
 use crate::scenes::{Scenes, TabContent, TabKind};
 
 /// What an instance plays in place of the scene its game usually asks for.
@@ -83,6 +88,14 @@ pub fn scene_answer(
     answer_with_assets(world, launch, requested).0
 }
 
+/// What goes to a game asking for a scene, in send order.
+pub struct ServedScene {
+    /// The asset files the document names that the game may not hold as the
+    /// editor does.
+    pub files: Option<ControlEvent>,
+    pub answer: SceneAnswer,
+}
+
 /// [`scene_answer`] for the instance `key`, which counts as holding every asset
 /// the text embeds from here on.
 pub fn serve_scene(
@@ -90,22 +103,68 @@ pub fn serve_scene(
     key: &InstanceKey,
     launch: Option<&LaunchScene>,
     requested: &str,
-) -> SceneAnswer {
+) -> ServedScene {
     let (answer, assets) = answer_with_assets(world, launch, requested);
+    let files = asset_files_missing_from(world, key, &assets.files);
     let mut names = world.get_resource_or_init::<PlayAssetNames>();
-    for (name, definition) in assets {
+    for (name, definition) in assets.embedded {
         names.note_given(key, name, definition);
     }
-    answer
+    ServedScene { files, answer }
 }
 
-/// The answer and, for a document, the `#Name` and definition of each asset root
-/// its text holds.
+/// The definitions of those of `files` the game `key` does not hold, now counted
+/// as given.
+pub(crate) fn asset_files_missing_from(
+    world: &mut World,
+    key: &InstanceKey,
+    files: &[AssetFile],
+) -> Option<ControlEvent> {
+    let mut sent = Vec::new();
+    for file in files {
+        let Some(definition) = asset_definition(world, file.id, file.type_id) else {
+            continue;
+        };
+        let mut names = world.get_resource_or_init::<PlayAssetNames>();
+        if names.has_given(key, &file.path, definition) {
+            continue;
+        }
+        names.note_given(key, file.path.clone(), definition);
+        let asset = CatalogAssetRef {
+            name: "File".to_string(),
+            type_id: file.type_id,
+            asset_id: file.id,
+        };
+        sent.push((
+            file.path.clone(),
+            jackdaw_bsn::serialize_assets_to_bsn(world, &[asset]),
+        ));
+    }
+    (!sent.is_empty()).then_some(ControlEvent::AssetFiles { files: sent })
+}
+
+/// An asset file a game is told about by path.
+pub(crate) struct AssetFile {
+    pub(crate) path: String,
+    pub(crate) type_id: TypeId,
+    pub(crate) id: UntypedAssetId,
+}
+
+/// What a document's text holds or names, for tracking what a game was given.
+#[derive(Default)]
+struct DocumentAssets {
+    /// The `#Name` and definition of each asset root its text holds.
+    embedded: Vec<(String, u64)>,
+    /// The asset files it names.
+    files: Vec<AssetFile>,
+}
+
+/// The answer and, for a document, what its text holds or names.
 fn answer_with_assets(
     world: &mut World,
     launch: Option<&LaunchScene>,
     requested: &str,
-) -> (SceneAnswer, Vec<(String, u64)>) {
+) -> (SceneAnswer, DocumentAssets) {
     let requested = requested.replace('\\', "/");
     let target = match launch {
         Some(launch) if launch.replaces == requested => launch.scene.clone(),
@@ -119,7 +178,10 @@ fn answer_with_assets(
         PlayScene::Path(path) => path.clone(),
         PlayScene::Untitled(_) => requested.clone(),
     };
-    let use_file = (SceneAnswer::UseFile { path: file }, Vec::new());
+    let use_file = (
+        SceneAnswer::UseFile { path: file },
+        DocumentAssets::default(),
+    );
 
     let Some(assets) = crate::asset_index::assets_dir(world) else {
         return use_file;
@@ -135,18 +197,22 @@ fn answer_with_assets(
         return use_file;
     };
     let parent = tab_folder(world, tab, &assets, &served.dir);
-    let Some((text, absolute)) = document_of_tab(world, tab, &parent) else {
+    let Some(document) = document_of_tab(world, tab, &parent) else {
         return use_file;
     };
-    let parsed = match jackdaw_bsn::parse_emitted(&text) {
-        Ok(parsed) => parsed,
+    let session_text = with_session_names(world, &document);
+    let (text, mut parsed) = match session_text {
+        Ok(served) => served,
         Err(err) => {
             warn!("PIE: the document for {requested} does not parse back, using its file: {err}");
             return use_file;
         }
     };
-    warn_absolute(world, &absolute);
-    let held = embedded_assets(world, &parsed);
+    warn_absolute(world, &document.absolute);
+    let held = DocumentAssets {
+        embedded: embedded_assets(world, &parsed),
+        files: asset_files_named(world, &mut parsed),
+    };
     (
         SceneAnswer::Document {
             text,
@@ -155,6 +221,95 @@ fn answer_with_assets(
         },
         held,
     )
+}
+
+/// `document`'s text with every embedded asset under its session name, and the
+/// text parsed back. A root and every reference to it are renamed together,
+/// including the `@Name` spelling a load also answers to, whatever wrote them. A
+/// root whose asset the live stores hold is written from the store, which an edit
+/// reads too.
+fn with_session_names(
+    world: &mut World,
+    document: &GameDocument,
+) -> Result<(String, SceneBsnAst), jackdaw_bsn::UnparsableEmit> {
+    let mut ast = jackdaw_bsn::parse_emitted(&document.text)?;
+    world.init_resource::<PlayAssetNames>();
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let mut renames: HashMap<String, String> = HashMap::new();
+    let mut from_store: Vec<CatalogAssetRef> = Vec::new();
+    let mut named: HashSet<String> = HashSet::new();
+    world.resource_scope(|world, mut names: Mut<PlayAssetNames>| {
+        for root in jackdaw_bsn::asset_roots(&ast, &registry) {
+            let Some(old) = ast.get_name(root).map(str::to_owned) else {
+                continue;
+            };
+            let Some(type_id) =
+                jackdaw_bsn::asset_value_from_root(&ast, root).and_then(|(type_path, _)| {
+                    registry
+                        .get_with_type_path(&type_path)
+                        .map(bevy::reflect::TypeRegistration::type_id)
+                })
+            else {
+                continue;
+            };
+            let live = document
+                .live_assets
+                .get(&old)
+                .filter(|id| id.type_id() == type_id)
+                .and_then(|&id| Some((id, names.resolve(world, id, type_id)?)));
+            let new = match live {
+                Some((asset_id, new)) => {
+                    ast.roots.retain(|&held| held != root);
+                    if named.insert(new.clone()) {
+                        from_store.push(CatalogAssetRef {
+                            name: new.trim_start_matches('#').to_string(),
+                            type_id,
+                            asset_id,
+                        });
+                    }
+                    new
+                }
+                None => {
+                    let Some(definition) = root_definition(&ast, root) else {
+                        continue;
+                    };
+                    let new = names.of_definition(definition);
+                    if named.insert(new.clone()) {
+                        rename_root(&mut ast, root, new.trim_start_matches('#'));
+                    } else {
+                        ast.roots.retain(|&held| held != root);
+                    }
+                    new
+                }
+            };
+            renames.insert(format!("@{old}"), new.clone());
+            renames.insert(format!("#{old}"), new);
+        }
+    });
+    crate::scene_io::save::visit_asset_references(&mut ast, &registry, |reference| {
+        if let Some(new) = renames.get(reference.as_str()) {
+            reference.clone_from(new);
+        }
+    });
+    drop(registry);
+    jackdaw_bsn::append_assets_to_ast(&mut ast, world, &from_store);
+    let text = jackdaw_bsn::emit_scene(&ast);
+    let parsed = jackdaw_bsn::parse_emitted(&text)?;
+    Ok((text, parsed))
+}
+
+fn rename_root(ast: &mut SceneBsnAst, root: Entity, name: &str) {
+    let name_patch = ast.get_patches(root).and_then(|patches| {
+        patches
+            .0
+            .iter()
+            .copied()
+            .find(|&patch| matches!(ast.get_patch(patch), Some(jackdaw_bsn::BsnPatch::Name(_))))
+    });
+    if let Some(patch) = name_patch {
+        ast.set_patch(patch, jackdaw_bsn::BsnPatch::Name(name.to_string()));
+    }
 }
 
 /// The `#Name` and definition of each asset root in `ast`.
@@ -167,6 +322,31 @@ fn embedded_assets(world: &World, ast: &SceneBsnAst) -> Vec<(String, u64)> {
             Some((format!("#{name}"), root_definition(ast, root)?))
         })
         .collect()
+}
+
+/// The project's asset files `ast` names by path.
+fn asset_files_named(world: &World, ast: &mut SceneBsnAst) -> Vec<AssetFile> {
+    let Some(project) = world.get_resource::<jackdaw_bsn::BsnProjectAssets>() else {
+        return Vec::new();
+    };
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let mut files: BTreeMap<String, AssetFile> = BTreeMap::new();
+    crate::scene_io::save::visit_asset_references(ast, &registry, |reference| {
+        if !jackdaw_bsn::is_document_path(Path::new(reference.as_str())) {
+            return;
+        }
+        if let Some(handle) = project.0.get(reference.as_str()) {
+            files.insert(
+                reference.clone(),
+                AssetFile {
+                    path: reference.clone(),
+                    type_id: handle.type_id(),
+                    id: handle.id(),
+                },
+            );
+        }
+    });
+    files.into_values().collect()
 }
 
 /// A digest of what an asset root defines, leaving out its name.
@@ -244,11 +424,7 @@ fn tab_folder(world: &World, tab: usize, assets: &Path, dir: &str) -> PathBuf {
 
 /// The text of the document in tab `index`, read from the document: the live one
 /// for the tab in front, and the snapshot for any other.
-fn document_of_tab(
-    world: &mut World,
-    index: usize,
-    parent: &Path,
-) -> Option<(String, Vec<AbsoluteAssetField>)> {
+fn document_of_tab(world: &mut World, index: usize, parent: &Path) -> Option<GameDocument> {
     let scenes = world.resource::<Scenes>();
     if scenes.active == index {
         if !world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
@@ -278,10 +454,8 @@ fn warn_absolute(world: &mut World, absolute: &[AbsoluteAssetField]) {
 /// The one `#Name` each runtime asset goes by for this Play session, for served
 /// text and live sync alike, and what each running game has been given.
 ///
-/// An asset takes the name a save or the open document gave it if that name is
-/// free, and otherwise a minted one spelled so it cannot collide with a name a
-/// file embeds. Either way it keeps the name until Play stops, whatever a later
-/// save or re-emit numbers it. A reparse of the document gives an asset a new id,
+/// Every name is minted here and held until Play stops, whatever a save or a
+/// re-emit numbers the asset. A reparse of the document gives an asset a new id,
 /// so an id with no name takes the name of an asset with the same definition,
 /// rather than sending the game a copy per reparse.
 #[derive(Resource, Default)]
@@ -290,49 +464,47 @@ pub struct PlayAssetNames {
     /// The definition each name stands for, by `#Name`.
     definitions: BTreeMap<String, u64>,
     next: usize,
-    /// The definition each game last received under each `#Name`.
+    /// The definition each game last received under each `#Name`, or under the
+    /// path of an asset file.
     given: HashMap<InstanceKey, HashMap<String, u64>>,
 }
 
 impl PlayAssetNames {
-    /// The name of the asset `id`, without the `#`, or `None` when the asset
-    /// cannot be embedded for a game. `suggested` is a `#Name` it already goes by.
+    /// The `#Name` of the asset `id`, or `None` when the asset cannot be embedded
+    /// for a game.
     pub(crate) fn resolve(
         &mut self,
         world: &World,
         id: UntypedAssetId,
         type_id: TypeId,
-        short_type_name: &str,
-        suggested: Option<&str>,
     ) -> Option<String> {
         let definition = asset_definition(world, id, type_id)?;
         if let Some(name) = self.names.get(&id).cloned() {
             let shared = self.names.values().filter(|held| **held == name).count() > 1;
             if !shared || self.definitions.get(&name) == Some(&definition) {
                 self.definitions.insert(name.clone(), definition);
-                return Some(name.trim_start_matches('#').to_string());
+                return Some(name);
             }
             self.names.remove(&id);
         }
+        let name = self.of_definition(definition);
+        self.names.insert(id, name.clone());
+        Some(name)
+    }
+
+    /// The `#Name` standing for `definition`, minted if none does.
+    pub(crate) fn of_definition(&mut self, definition: u64) -> String {
         let same = self
             .definitions
             .iter()
             .find(|(_, held)| **held == definition)
             .map(|(name, _)| name.clone());
-        let name = same
-            .or_else(|| {
-                suggested
-                    .filter(|name| !self.definitions.contains_key(*name))
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| {
-                let name = format!("#Play{short_type_name}{}", self.next);
-                self.next += 1;
-                name
-            });
-        self.definitions.insert(name.clone(), definition);
-        self.names.insert(id, name.clone());
-        Some(name.trim_start_matches('#').to_string())
+        same.unwrap_or_else(|| {
+            let name = format!("#Play{}", self.next);
+            self.next += 1;
+            self.definitions.insert(name.clone(), definition);
+            name
+        })
     }
 
     /// Each asset named so far with its `#Name`.

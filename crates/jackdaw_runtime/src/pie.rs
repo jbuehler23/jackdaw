@@ -283,7 +283,8 @@ fn stream_state(world: &mut World) {
 /// `AddComponent`, `RemoveComponent` apply reflected edits to live entities,
 /// and `NodeComponents` to every entity spawned from a scene node.
 /// `SceneDocument` answers a scene root waiting on the editor, and
-/// `SceneAssets` loads asset definitions an edit that follows will name.
+/// `SceneAssets` loads asset definitions an edit that follows will name, and
+/// `AssetFiles` the asset files the catalog walk at startup could not hold.
 /// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
@@ -350,6 +351,9 @@ fn apply_control(world: &mut World) {
             }
             ControlEvent::SceneAssets { text } => {
                 crate::node_sync::load_scene_assets(world, &text);
+            }
+            ControlEvent::AssetFiles { files } => {
+                crate::node_sync::load_asset_files(world, &files);
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity

@@ -175,20 +175,21 @@ fn ask(world: &mut World, path: &str) -> u64 {
     request
 }
 
-/// Take the editor's answer to `request`. A root that gave up already stays on
-/// its file, but the assets of a late document still load: the editor counts
-/// them as given, so edits it sends from here on name them.
+/// Take the editor's answer to `request`. A document's assets load now, whether
+/// or not a root still waits on it: the editor counts them as given, so edits it
+/// sends from here on name them.
 pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
-    let Some(mut requests) = world.get_resource_mut::<SceneRequests>() else {
-        return;
-    };
-    if requests.open.remove(&request).is_some() {
-        requests.answered.insert(request, answer);
+    if !world.contains_resource::<SceneRequests>() {
         return;
     }
-    debug!("PIE: ignoring a late answer to scene request {request}");
-    if let SceneAnswer::Document { text, .. } = answer {
-        crate::node_sync::load_scene_assets(world, &text);
+    if let SceneAnswer::Document { text, .. } = &answer {
+        crate::node_sync::load_scene_assets(world, text);
+    }
+    let mut requests = world.resource_mut::<SceneRequests>();
+    if requests.open.remove(&request).is_some() {
+        requests.answered.insert(request, answer);
+    } else {
+        debug!("PIE: too late for a root, the answer to scene request {request}");
     }
 }
 
@@ -667,6 +668,261 @@ mod tests {
         send(&mut editor, &painted(4, "#Stone"));
         app.update();
         assert_eq!(painted_tone(&mut app, entity), Some((4, 7)));
+    }
+
+    /// The only root waiting is gone when the answer arrives. Its assets load all
+    /// the same, since the editor counts them as given.
+    #[test]
+    fn a_document_gives_its_assets_when_its_only_root_has_gone() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        let earlier = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (first, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(first, scene_text(1.0)));
+        app.update();
+        assert!(app.world().get::<ServedScene>(earlier).is_some());
+        let entity = node_entities(&mut app)[0];
+
+        let gone = spawn_root(&mut app, "other.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        app.world_mut().despawn(gone);
+
+        send(&mut editor, &document(request, stone_document(7)));
+        send(&mut editor, &painted(4, "#Stone"));
+        app.update();
+        assert_eq!(painted_tone(&mut app, entity), Some((4, 7)));
+    }
+
+    /// A document holding `#Stone` and one node.
+    fn stone_document(tone: u32) -> String {
+        format!(
+            "bevy_ecs::hierarchy::Children [\n    #Stone\n    game::Swatch {{ tone: {tone} }}\n    --\n    {}\n]\n",
+            scene_text(1.0).trim_end().replace('\n', "\n    ")
+        )
+    }
+
+    /// A served asset's handle stays the same through a respawn and a later
+    /// definition, so the entities of every root show the one value.
+    #[test]
+    fn a_later_definition_writes_into_the_asset_every_root_holds() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        for _ in 0..2 {
+            spawn_root(&mut app, "scene.bsn");
+            app.update();
+            let (request, _) = requests_from(&mut editor)[0];
+            let text = stone_document(7).replace(
+                "SceneNodeId(21)",
+                "SceneNodeId(21)\n    game::Painted { swatch: \"#Stone\" }",
+            );
+            send(&mut editor, &document(request, text));
+            app.update();
+        }
+        let entities = node_entities(&mut app);
+        assert_eq!(entities.len(), 2);
+
+        send(
+            &mut editor,
+            &ControlEvent::SceneAssets {
+                text: stone_text(9),
+            },
+        );
+        app.update();
+        for entity in entities {
+            assert_eq!(painted_tone(&mut app, entity), Some((0, 9)));
+        }
+    }
+
+    /// One value of an edit fails for a reason a load cannot fix. The rest applied
+    /// once, so nothing writes over what the game did to them since.
+    #[test]
+    fn a_value_that_cannot_be_read_does_not_apply_the_rest_again() {
+        let (mut app, mut editor, _dir) = game();
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (first, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(first, scene_text(1.0)));
+        app.update();
+        let earlier = node_entities(&mut app)[0];
+
+        spawn_root(&mut app, "other.bsn");
+        app.update();
+        let (second, _) = requests_from(&mut editor)[0];
+        crate::node_sync::apply_node_components(
+            app.world_mut(),
+            NODE,
+            &[
+                ("game::Unknown".to_string(), serde_json::json!({})),
+                (TRANSFORM.to_string(), transform_json(5.0)),
+            ],
+            &[],
+        );
+        assert_eq!(node_xs(&mut app), vec![5.0], "applied on arrival");
+        app.world_mut()
+            .get_mut::<Transform>(earlier)
+            .expect("a transform")
+            .translation
+            .x = 40.0;
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![40.0], "gameplay keeps it");
+
+        send(&mut editor, &document(second, scene_text(2.0)));
+        app.update();
+        let mine = app.world().get::<Transform>(earlier).expect("a transform");
+        assert_eq!(mine.translation.x, 40.0, "not written again");
+        assert_eq!(node_xs(&mut app), vec![5.0, 40.0], "the new entity has it");
+    }
+
+    /// Only the value that named the missing asset is owed: it lands when the
+    /// asset does, even with a later edit of the node in between, and the held
+    /// Transform does not go back over what the game did.
+    #[test]
+    fn a_missed_reference_lands_alone_after_a_later_edit_of_the_node() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (first, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(first, scene_text(1.0)));
+        app.update();
+        let earlier = node_entities(&mut app)[0];
+
+        spawn_root(&mut app, "other.bsn");
+        app.update();
+        let (second, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &painted(4, "#Stone"));
+        send(&mut editor, &node_edit(5.0));
+        app.update();
+        assert!(app.world().get::<Painted>(earlier).is_none(), "it missed");
+        assert_eq!(node_xs(&mut app), vec![5.0]);
+        app.world_mut()
+            .get_mut::<Transform>(earlier)
+            .expect("a transform")
+            .translation
+            .x = 40.0;
+
+        send(&mut editor, &document(second, stone_document(7)));
+        app.update();
+        assert_eq!(painted_tone(&mut app, earlier), Some((4, 7)));
+        assert_eq!(
+            app.world()
+                .get::<Transform>(earlier)
+                .expect("a transform")
+                .translation
+                .x,
+            40.0,
+            "only the value that missed"
+        );
+    }
+
+    /// A path to a material file the game has not been sent. Nothing can load it
+    /// as a material, so the edit is left out and the face keeps its asset.
+    #[test]
+    fn a_document_path_nothing_holds_keeps_the_old_value() {
+        let (mut app, mut editor, _dir) = game();
+        with_swatches(&mut app);
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(request, scene_text(1.0)));
+        app.update();
+        let entity = node_entities(&mut app)[0];
+        send(
+            &mut editor,
+            &ControlEvent::SceneAssets {
+                text: stone_text(7),
+            },
+        );
+        send(&mut editor, &painted(4, "#Stone"));
+        app.update();
+
+        send(&mut editor, &painted(5, "materials/new.bsn"));
+        app.update();
+        assert_eq!(painted_tone(&mut app, entity), Some((4, 7)), "unchanged");
+
+        send(
+            &mut editor,
+            &ControlEvent::AssetFiles {
+                files: vec![("materials/new.bsn".to_string(), stone_text(3))],
+            },
+        );
+        send(&mut editor, &painted(6, "materials/new.bsn"));
+        app.update();
+        assert_eq!(painted_tone(&mut app, entity), Some((6, 3)));
+
+        send(
+            &mut editor,
+            &ControlEvent::AssetFiles {
+                files: vec![("materials/new.bsn".to_string(), stone_text(8))],
+            },
+        );
+        app.update();
+        assert_eq!(
+            painted_tone(&mut app, entity),
+            Some((6, 8)),
+            "a held file takes a new definition in place"
+        );
+    }
+
+    const TWO_BY_TWO_PNG: [u8; 74] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6,
+        0, 0, 0, 114, 182, 13, 36, 0, 0, 0, 17, 73, 68, 65, 84, 120, 156, 99, 224, 18, 145, 251,
+        15, 194, 12, 48, 6, 0, 38, 140, 4, 237, 162, 200, 71, 131, 0, 0, 0, 0, 73, 69, 78, 68, 174,
+        66, 96, 130,
+    ];
+
+    /// A definition arriving during Play loads a normal map as linear data, as a
+    /// scene spawn does, and the colour map beside it as sRGB.
+    #[test]
+    fn a_definition_loads_each_texture_in_its_slot_s_colour_space() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        std::fs::write(dir.path().join("a.png"), TWO_BY_TWO_PNG).expect("an image");
+        std::fs::write(dir.path().join("n.png"), TWO_BY_TWO_PNG).expect("an image");
+        let mut app = base_app(dir.path());
+        app.add_plugins(bevy::image::ImagePlugin::default());
+        app.register_asset_loader(bevy::image::ImageLoader::new(
+            bevy::image::CompressedImageFormats::NONE,
+        ));
+        app.init_asset::<StandardMaterial>();
+        app.register_asset_reflect::<StandardMaterial>();
+        crate::node_sync::load_scene_assets(
+            app.world_mut(),
+            "#Tile\nbevy_pbr::pbr_material::StandardMaterial {\n    \
+             base_color_texture: \"a.png\",\n    normal_map_texture: \"n.png\",\n}\n",
+        );
+        let material = app.world().resource::<jackdaw_bsn::BsnSceneAssets>().0["#Tile"]
+            .clone()
+            .typed::<StandardMaterial>();
+        let (albedo, normal) = {
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let material = materials.get(&material).expect("the material");
+            (
+                material.base_color_texture.clone().expect("a colour map"),
+                material.normal_map_texture.clone().expect("a normal map"),
+            )
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            app.update();
+            let images = app.world().resource::<Assets<Image>>();
+            if images.contains(&albedo) && images.contains(&normal) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the images never loaded");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let images = app.world().resource::<Assets<Image>>();
+        let format = |handle: &Handle<Image>| {
+            images
+                .get(handle)
+                .expect("the image")
+                .texture_descriptor
+                .format
+        };
+        assert!(format(&albedo).is_srgb());
+        assert!(!format(&normal).is_srgb(), "a normal map holds linear data");
     }
 
     /// An edit can arrive after the document that embeds its asset and before
