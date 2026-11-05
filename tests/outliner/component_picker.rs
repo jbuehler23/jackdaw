@@ -212,15 +212,24 @@ fn denylisted_prefix_filters_component() {
 fn avian_paths_fall_back_to_physics_category() {
     let chrome = TypeChrome::default();
     assert_eq!(
-        chrome.group("avian3d::dynamics::rigid_body::RigidBody"),
+        chrome.group(
+            "avian3d::dynamics::rigid_body::RigidBody",
+            &jackdaw::project_types::ProjectTypes::default()
+        ),
         "Avian3d",
     );
     assert_eq!(
-        chrome.group("avian3d::collision::collider::Collider"),
+        chrome.group(
+            "avian3d::collision::collider::Collider",
+            &jackdaw::project_types::ProjectTypes::default()
+        ),
         "Avian3d",
     );
     assert_eq!(
-        chrome.group("jackdaw_avian_integration::AvianCollider"),
+        chrome.group(
+            "jackdaw_avian_integration::AvianCollider",
+            &jackdaw::project_types::ProjectTypes::default()
+        ),
         "Avian3d",
     );
 }
@@ -229,9 +238,18 @@ fn avian_paths_fall_back_to_physics_category() {
 #[test]
 fn non_avian_paths_have_no_category_fallback() {
     let chrome = TypeChrome::default();
-    assert_eq!(chrome.group("my_game::PlayerSpawn"), "");
     assert_eq!(
-        chrome.group("editor::outliner::component_picker::WithDefault"),
+        chrome.group(
+            "my_game::PlayerSpawn",
+            &jackdaw::project_types::ProjectTypes::default()
+        ),
+        ""
+    );
+    assert_eq!(
+        chrome.group(
+            "editor::outliner::component_picker::WithDefault",
+            &jackdaw::project_types::ProjectTypes::default()
+        ),
         ""
     );
 }

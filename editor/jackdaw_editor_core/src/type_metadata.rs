@@ -53,7 +53,7 @@ impl TypeChrome {
     /// Grouping key for the picker and inspector card list: authored
     /// category, else the group a module names for its crates' components,
     /// the Bevy crate name or Jackdaw, else empty (Game).
-    pub fn group(&self, type_path: &str) -> String {
+    pub fn group(&self, type_path: &str, project: &ProjectTypes) -> String {
         if !self.category.is_empty() {
             return self.category.clone();
         }
@@ -62,6 +62,8 @@ impl TypeChrome {
             .and_then(|module| module.component_group.as_ref())
         {
             group.clone()
+        } else if project.is_project_type(type_path) {
+            String::new()
         } else if type_path.starts_with("bevy") {
             type_path.split("::").next().unwrap_or("bevy").to_string()
         } else if type_path.starts_with("jackdaw") {
@@ -72,18 +74,18 @@ impl TypeChrome {
     }
 }
 
-fn is_game_type(type_path: &str) -> bool {
+fn is_game_type(type_path: &str, project: &ProjectTypes) -> bool {
     ModuleCatalog::builtin()
         .component_module(type_path)
         .is_none()
-        && !type_path.starts_with("bevy")
-        && !type_path.starts_with("jackdaw")
+        && (project.is_project_type(type_path)
+            || (!type_path.starts_with("bevy") && !type_path.starts_with("jackdaw")))
 }
 
 /// Greater rank appears first. Game `@EditorCategory` groups, then Game,
 /// then engine groups (including engine types that have a category).
-pub fn group_order(type_path: &str, authored_category: &str) -> i32 {
-    if is_game_type(type_path) {
+pub fn group_order(type_path: &str, authored_category: &str, project: &ProjectTypes) -> i32 {
+    if is_game_type(type_path, project) {
         if !authored_category.is_empty() { 3 } else { 2 }
     } else {
         1
@@ -400,6 +402,7 @@ mod tests {
         let mut project_types = ProjectTypes::default();
         project_types.update(
             &jackdaw_schema::ProjectSchema {
+                project_crates: Vec::new(),
                 components: vec![schema],
                 resources: Vec::new(),
                 events: Vec::new(),
@@ -543,35 +546,68 @@ mod tests {
     fn group_falls_back_from_type_path() {
         let unspecified = TypeChrome::default();
         let (module_path, module_group) = module_component();
-        assert_eq!(unspecified.group(&module_path), module_group);
+        let project = ProjectTypes::default();
+        assert_eq!(unspecified.group(&module_path, &project), module_group);
         for (path, expected) in [
             ("bevy_pbr::pbr_material::StandardMaterial", "bevy_pbr"),
             ("bevy::ecs::Name", "bevy"),
             ("jackdaw_scene_types::Brush", "Jackdaw"),
             ("my_game::PlayerSpawn", ""),
         ] {
-            assert_eq!(unspecified.group(path), expected, "{path}");
+            assert_eq!(unspecified.group(path, &project), expected, "{path}");
         }
 
         let authored = TypeChrome {
             category: "Gameplay".into(),
             ..Default::default()
         };
-        assert_eq!(authored.group(&module_path), "Gameplay");
+        assert_eq!(authored.group(&module_path, &project), "Gameplay");
     }
 
     #[test]
     fn game_editor_categories_rank_above_game_and_engine() {
-        assert!(group_order("my_game::PlayerSpawn", "Actor") > group_order("my_game::Health", ""));
-        assert!(group_order("my_game::Health", "") > group_order("bevy_transform::Transform", ""));
+        let project = ProjectTypes::default();
+        let order = |path: &str, category: &str| group_order(path, category, &project);
+        assert!(order("my_game::PlayerSpawn", "Actor") > order("my_game::Health", ""));
+        assert!(order("my_game::Health", "") > order("bevy_transform::Transform", ""));
         assert_eq!(
-            group_order("jackdaw_scene_types::Brush", "Mesh"),
-            group_order("bevy_transform::Transform", ""),
+            order("jackdaw_scene_types::Brush", "Mesh"),
+            order("bevy_transform::Transform", ""),
         );
         assert_eq!(
-            group_order("jackdaw_scene_types::Brush", "Mesh"),
-            group_order(&module_component().0, ""),
+            order("jackdaw_scene_types::Brush", "Mesh"),
+            order(&module_component().0, ""),
         );
+    }
+
+    #[test]
+    fn a_game_named_like_the_engine_or_a_module_groups_and_ranks_as_a_game() {
+        let mut project = ProjectTypes::default();
+        project.update(
+            &jackdaw_schema::ProjectSchema {
+                project_crates: vec![
+                    "bevy_jam".to_string(),
+                    "jackdaw_game".to_string(),
+                    "jackdaw_multiplayer_arena".to_string(),
+                ],
+                ..Default::default()
+            },
+            &std::collections::HashSet::new(),
+        );
+        let chrome = TypeChrome::default();
+        for path in [
+            "bevy_jam::Health",
+            "jackdaw_game::Health",
+            "jackdaw_multiplayer_arena::Health",
+        ] {
+            assert_eq!(chrome.group(path, &project), "", "{path}");
+            assert_eq!(
+                group_order(path, "", &project),
+                group_order("my_game::Health", "", &project),
+                "{path}"
+            );
+        }
+        assert_eq!(chrome.group("bevy_ui::Node", &project), "bevy_ui");
     }
 
     #[test]

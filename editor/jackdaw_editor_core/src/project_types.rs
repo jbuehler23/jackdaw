@@ -32,9 +32,20 @@ pub struct ProjectTypes {
     assets: HashMap<String, TypeSchema>,
     field_types: HashMap<String, TypeSchema>,
     functions: Vec<FunctionSchema>,
+    project_crates: HashSet<String>,
 }
 
 impl ProjectTypes {
+    /// Whether `type_path` lives in one of the project's own crates, whatever
+    /// that crate is called. Decides how a type is grouped and whether it is
+    /// shown, so a game named like the engine still reads as a game.
+    pub fn is_project_type(&self, type_path: &str) -> bool {
+        type_path
+            .split("::")
+            .next()
+            .is_some_and(|crate_name| self.project_crates.contains(crate_name))
+    }
+
     /// The schema for a project component type, or `None` if the editor
     /// knows the type natively or has never seen it.
     pub fn component(&self, type_path: &str) -> Option<&TypeSchema> {
@@ -45,6 +56,12 @@ impl ProjectTypes {
     /// type). The apply and inspector paths branch on this.
     pub fn is_project_component(&self, type_path: &str) -> bool {
         self.components.contains_key(type_path)
+    }
+
+    /// Record the project's crates for a project with no schema to carry them,
+    /// which is what an extension-only project is.
+    pub fn set_project_crates(&mut self, crates: impl IntoIterator<Item = String>) {
+        self.project_crates = crates.into_iter().collect();
     }
 
     /// Every project component type, for the picker.
@@ -142,6 +159,7 @@ impl ProjectTypes {
             .map(|reached| (reached.type_path.clone(), reached.clone()))
             .collect();
         self.functions = schema.functions.clone();
+        self.project_crates = schema.project_crates.iter().cloned().collect();
     }
 }
 
@@ -215,6 +233,7 @@ mod tests {
     #[test]
     fn native_filtering_skips_events_and_functions() {
         let schema = ProjectSchema {
+            project_crates: Vec::new(),
             components: vec![type_schema("bevy_transform::components::Transform")],
             resources: Vec::new(),
             events: vec![type_schema("bevy_ui_widgets::Activate")],

@@ -319,6 +319,7 @@ fn project_schema() -> jackdaw_schema::ProjectSchema {
         }
     };
     jackdaw_schema::ProjectSchema {
+        project_crates: Vec::new(),
         components: vec![
             entry(PROJECT_MARKER, jackdaw_schema::TypeKind::Struct, Vec::new()),
             entry(

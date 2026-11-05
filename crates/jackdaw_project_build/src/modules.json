@@ -54,6 +54,6 @@
       }
     ],
     "provides": ["jackdaw_multiplayer"],
-    "component_prefixes": ["jackdaw_multiplayer"]
+    "component_prefixes": ["jackdaw_multiplayer::"]
   }
 ]

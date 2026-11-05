@@ -452,6 +452,15 @@ fn load_built_extension(world: &mut World) {
         );
         return;
     }
+    if let Ok(spec) = crate::project_build::shim_spec_for_project(&job.root)
+        && let Some(mut types) = world.get_resource_mut::<crate::project_types::ProjectTypes>()
+    {
+        types.set_project_crates(jackdaw_project_build::cargo_meta::workspace_crates(
+            &spec.project_root,
+            &spec.package_name,
+            &spec.crate_name,
+        ));
+    }
     let stamp = LibraryStamp::read(&dylib);
     world.resource_mut::<ExtensionBuild>().attempted = stamp.clone();
     if stamp.is_some() && world.resource::<ExtensionBuild>().loaded == stamp {

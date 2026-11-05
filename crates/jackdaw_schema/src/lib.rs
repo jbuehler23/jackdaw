@@ -16,6 +16,55 @@ use serde::{Deserialize, Serialize};
 /// One constant so the two halves cannot drift.
 pub const SCHEMA_FLAG: &str = "--jackdaw-extract-schema";
 
+/// Comma-separated crate names the build pipeline hands the extractor: the
+/// project's own crates, whatever they are called.
+pub const PROJECT_CRATES_ENV: &str = "JACKDAW_PROJECT_CRATES";
+
+/// Which crates hold the game's own code rather than the engine's or the
+/// editor's.
+///
+/// A crate the build named counts whatever it is called, so a game called
+/// `bevy_jam` keeps its types. Any other crate counts unless its name looks like
+/// one the engine or the editor ships, which is all that can be said without the
+/// build's list. The standard library never counts: a type path cannot tell a
+/// crate named `core` from the real one.
+#[derive(Clone, Debug, Default)]
+pub struct ProjectCrates(std::collections::HashSet<String>);
+
+impl ProjectCrates {
+    /// The crates the build named in [`PROJECT_CRATES_ENV`].
+    pub fn from_env() -> Self {
+        let names = std::env::var(PROJECT_CRATES_ENV).unwrap_or_default();
+        Self::named(
+            names
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty()),
+        )
+    }
+
+    pub fn named<S: Into<String>>(names: impl IntoIterator<Item = S>) -> Self {
+        Self(names.into_iter().map(Into::into).collect())
+    }
+
+    /// Whether the build named this crate as the project's.
+    pub fn names(&self, crate_name: &str) -> bool {
+        !is_standard_library(crate_name) && self.0.contains(crate_name)
+    }
+
+    pub fn includes(&self, crate_name: &str) -> bool {
+        self.names(crate_name)
+            || (!is_standard_library(crate_name)
+                && !matches!(crate_name, "bevy" | "jackdaw")
+                && !crate_name.starts_with("bevy_")
+                && !crate_name.starts_with("jackdaw_"))
+    }
+}
+
+fn is_standard_library(crate_name: &str) -> bool {
+    matches!(crate_name, "std" | "core" | "alloc")
+}
+
 /// Parse an extractor's stdout into a [`ProjectSchema`].
 ///
 /// The whole stream is tried first. Games may print during startup, so
@@ -86,6 +135,10 @@ pub struct ProjectSchema {
     /// components, so the inspector can edit an enum or nested struct.
     #[serde(default)]
     pub field_types: Vec<TypeSchema>,
+    /// The crates holding the project's own code, as the build resolved them.
+    /// The editor reads a type's ownership from this, not from its crate's name.
+    #[serde(default)]
+    pub project_crates: Vec<String>,
 }
 
 /// The shape and editor metadata of one reflected type.
@@ -239,25 +292,16 @@ mod extract {
         AssetRef, EditorCategory, EditorDescription, EditorHidden, EditorPreview,
     };
 
-    /// Build the schema for this process's reflected types.
-    ///
-    /// Reads the link-time auto-registration inventory rather than a
-    /// running `App`, so it does not matter whether (or in what order)
-    /// the game's plugins have been added. That is what lets a game
-    /// answer the schema flag before it builds anything.
-    pub fn extract_derived_schema() -> ProjectSchema {
-        let mut registry = TypeRegistry::default();
-        registry.register_derived_types();
-        extract_from_registry(&registry)
-    }
-
     /// Builds the schema for every reflected `Component`, `Resource` and
     /// `Event` in `registry`.
     ///
     /// A type can land in more than one bucket, so no picker loses it: every
     /// resource lands in two, since `ReflectResource` registers
     /// `ReflectComponent` beside itself.
-    pub fn extract_from_registry(registry: &TypeRegistry) -> ProjectSchema {
+    pub fn extract_from_registry(
+        registry: &TypeRegistry,
+        project: &ProjectCrates,
+    ) -> ProjectSchema {
         let mut schema = ProjectSchema::default();
         for registration in registry.iter() {
             let is_component = registration.data::<ReflectComponent>().is_some();
@@ -282,10 +326,10 @@ mod extract {
             schema
                 .components
                 .iter()
-                .filter(|component| is_project_crate(crate_segment(&component.type_path)))
+                .filter(|component| project.includes(crate_segment(&component.type_path)))
                 .map(|component| component.type_path.as_str()),
             false,
-            |path| is_project_crate(crate_segment(path)),
+            |path| project.includes(crate_segment(path)),
         );
         schema
     }
@@ -552,36 +596,30 @@ mod extract {
     /// Describes every type the game registers as a reflected asset, plus the
     /// project types their fields reach.
     ///
-    /// "Project" means the crate segment of a discovered root: a field whose
-    /// type comes from one of those crates is described too, recursively,
-    /// while an engine type is named but not walked into.
-    pub fn extract_asset_types(registry: &TypeRegistry) -> Vec<TypeSchema> {
+    /// "Project" means a crate the build named or the crate segment of a
+    /// discovered root: a field whose type comes from one of those is described
+    /// too, recursively, while an engine type is named but not walked into.
+    pub fn extract_asset_types(
+        registry: &TypeRegistry,
+        project: &ProjectCrates,
+    ) -> Vec<TypeSchema> {
         let resolved: Vec<&str> = registry
             .iter()
             .filter(|registration| registration.data::<ReflectAsset>().is_some())
             .map(|registration| registration.type_info().type_path())
-            .filter(|path| is_project_crate(crate_segment(path)))
+            .filter(|path| project.includes(crate_segment(path)))
             .collect();
         let crates: HashSet<&str> = resolved.iter().map(|path| crate_segment(path)).collect();
         let root_paths: HashSet<&str> = resolved.iter().copied().collect();
         describe_types_reached_by(registry, resolved.iter().copied(), true, |path| {
-            root_paths.contains(path) || crates.contains(crate_segment(path))
+            let crate_name = crate_segment(path);
+            root_paths.contains(path) || crates.contains(crate_name) || project.names(crate_name)
         })
     }
 
     /// The part of a reflect type path before its first `::`.
     fn crate_segment(type_path: &str) -> &str {
         type_path.split("::").next().unwrap_or(type_path)
-    }
-
-    /// Whether a crate segment names the game's own code rather than the
-    /// engine, the editor, or the standard library. Only crate names the
-    /// engine itself ships are excluded, so a game crate that merely reads
-    /// like one keeps its types.
-    fn is_project_crate(segment: &str) -> bool {
-        !matches!(segment, "bevy" | "jackdaw" | "std" | "core" | "alloc")
-            && !segment.starts_with("bevy_")
-            && !segment.starts_with("jackdaw_")
     }
 
     /// Type paths a type's own fields name, with containers flattened to
@@ -676,9 +714,7 @@ mod extract {
 }
 
 #[cfg(feature = "reflect")]
-pub use extract::{
-    extract_asset_types, extract_derived_schema, extract_from_registry, extract_functions,
-};
+pub use extract::{extract_asset_types, extract_from_registry, extract_functions};
 
 #[cfg(test)]
 mod tests {
@@ -745,6 +781,7 @@ mod tests {
     #[test]
     fn functions_survive_a_json_round_trip() {
         let schema = ProjectSchema {
+            project_crates: Vec::new(),
             functions: vec![function("my_game::double")],
             ..ProjectSchema::default()
         };
@@ -783,6 +820,7 @@ mod tests {
     fn the_last_schema_line_on_stdout_wins() {
         let fallback = ProjectSchema::default();
         let full = ProjectSchema {
+            project_crates: Vec::new(),
             functions: vec![function("my_game::double")],
             ..ProjectSchema::default()
         };
@@ -868,7 +906,7 @@ mod extract_tests {
     fn schema_of<T: GetTypeRegistration>() -> ProjectSchema {
         let mut registry = TypeRegistry::default();
         registry.register::<T>();
-        extract_from_registry(&registry)
+        extract_from_registry(&registry, &ProjectCrates::default())
     }
 
     fn find<'a>(types: &'a [TypeSchema], short_name: &str) -> &'a TypeSchema {
@@ -911,7 +949,7 @@ mod extract_tests {
         let mut registry = TypeRegistry::default();
         registry.register::<Door>();
         registry.register::<Latch>();
-        let schema = extract_from_registry(&registry);
+        let schema = extract_from_registry(&registry, &ProjectCrates::default());
         let latch = find(&schema.field_types, "Latch");
         assert_eq!(latch.kind, TypeKind::Enum);
         let names: Vec<&str> = latch.variants.iter().map(|v| v.name.as_str()).collect();
@@ -1045,7 +1083,7 @@ mod extract_tests {
     fn assets_of<T: GetTypeRegistration + Reflect + FromReflect + Asset>() -> Vec<TypeSchema> {
         let mut registry = TypeRegistry::default();
         register_asset::<T>(&mut registry);
-        extract_asset_types(&registry)
+        extract_asset_types(&registry, &ProjectCrates::default())
     }
 
     #[test]
@@ -1083,7 +1121,7 @@ mod extract_tests {
         let mut registry = TypeRegistry::default();
         register_asset::<ItemDef>(&mut registry);
         register_asset::<Image>(&mut registry);
-        let assets = extract_asset_types(&registry);
+        let assets = extract_asset_types(&registry, &ProjectCrates::default());
 
         let paths: Vec<&str> = assets.iter().map(|d| d.type_path.as_str()).collect();
         assert!(paths.contains(&ItemDef::type_path()), "got {paths:?}");
@@ -1105,6 +1143,99 @@ mod extract_tests {
         assert!(paths.contains(&SpellDef::type_path()), "got {paths:?}");
     }
 
+    #[derive(Reflect, Default)]
+    #[type_path = "bevy_jam_core::stats"]
+    struct JamStats {
+        health: u32,
+    }
+
+    #[derive(Asset, Reflect, Default)]
+    #[type_path = "bevy_jam::levels"]
+    #[reflect(Default)]
+    struct JamLevel {
+        stats: JamStats,
+    }
+
+    #[test]
+    fn an_asset_field_from_a_sibling_project_crate_is_described() {
+        let mut registry = TypeRegistry::default();
+        register_asset::<JamLevel>(&mut registry);
+        registry.register::<JamStats>();
+
+        let assets = extract_asset_types(
+            &registry,
+            &ProjectCrates::named(["bevy_jam", "bevy_jam_core"]),
+        );
+
+        let stats = assets
+            .iter()
+            .find(|described| described.type_path == JamStats::type_path())
+            .expect("a project crate's field type is described");
+        assert!(!stats.asset, "it is a field type, not a kind of asset");
+    }
+
+    #[test]
+    fn the_standard_library_is_never_a_project_crate() {
+        let project = ProjectCrates::named(["core", "bevy_jam"]);
+        assert!(!project.names("core"));
+        assert!(!project.includes("core"));
+        assert!(project.includes("bevy_jam"));
+    }
+
+    /// An asset in a game crate whose name starts like one the engine ships.
+    #[derive(Asset, Reflect, Default)]
+    #[type_path = "bevy_jam::content"]
+    #[reflect(Default)]
+    struct JamDef {
+        item_id: String,
+    }
+
+    #[test]
+    fn a_crate_the_build_named_keeps_its_assets_despite_an_engine_like_name() {
+        let mut registry = TypeRegistry::default();
+        register_asset::<JamDef>(&mut registry);
+        register_asset::<Image>(&mut registry);
+
+        let unnamed = extract_asset_types(&registry, &ProjectCrates::default());
+        assert!(unnamed.is_empty(), "got {unnamed:?}");
+
+        let named = extract_asset_types(&registry, &ProjectCrates::named(["bevy_jam"]));
+        let paths: Vec<&str> = named.iter().map(|d| d.type_path.as_str()).collect();
+        assert_eq!(paths, [JamDef::type_path()], "the engine's stay out");
+        assert!(named[0].asset);
+    }
+
+    #[derive(Reflect, Default)]
+    #[type_path = "jackdaw_test::content"]
+    struct NestedStats {
+        speed: f32,
+    }
+
+    #[derive(Component, Reflect, Default)]
+    #[type_path = "jackdaw_test::content"]
+    #[reflect(Component, Default)]
+    struct StatHolder {
+        stats: NestedStats,
+    }
+
+    #[test]
+    fn a_crate_the_build_named_has_its_component_field_types_described() {
+        let mut registry = TypeRegistry::default();
+        registry.register::<StatHolder>();
+        registry.register::<NestedStats>();
+
+        let unnamed = extract_from_registry(&registry, &ProjectCrates::default());
+        assert!(unnamed.field_types.is_empty());
+
+        let named = extract_from_registry(&registry, &ProjectCrates::named(["jackdaw_test"]));
+        let paths: Vec<&str> = named
+            .field_types
+            .iter()
+            .map(|d| d.type_path.as_str())
+            .collect();
+        assert_eq!(paths, [NestedStats::type_path()]);
+    }
+
     #[test]
     fn a_type_reached_only_through_a_field_carries_no_asset_mark() {
         let assets = assets_of::<ItemDef>();
@@ -1117,7 +1248,7 @@ mod extract_tests {
     fn a_registry_with_no_assets_reports_none() {
         let mut registry = TypeRegistry::default();
         registry.register::<ItemDef>();
-        assert!(extract_asset_types(&registry).is_empty());
+        assert!(extract_asset_types(&registry, &ProjectCrates::default()).is_empty());
     }
 
     /// A type holding more of itself, which the closure must walk once.
@@ -1233,7 +1364,7 @@ mod extract_tests {
         let mut registry = TypeRegistry::default();
         register_asset::<ItemDef>(&mut registry);
         registry.register::<Unreachable>();
-        let assets = extract_asset_types(&registry);
+        let assets = extract_asset_types(&registry, &ProjectCrates::default());
 
         let paths: Vec<&str> = assets
             .iter()

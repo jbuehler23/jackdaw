@@ -3,10 +3,18 @@
 //! so the build pipeline and the CLI can resolve a project from the
 //! filesystem alone.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use jackdaw_env::user_toolchain_command;
 use serde::Deserialize;
+
+/// Where the engine and the editor are developed. A package from one of these
+/// is theirs however it is named or wherever it is checked out, forks included.
+const ENGINE_REPOSITORIES: [&str; 2] = [
+    "https://github.com/bevyengine/bevy",
+    "https://github.com/jbuehler23/jackdaw",
+];
 
 /// A project's cargo metadata: packages and their targets.
 #[derive(Deserialize)]
@@ -16,6 +24,20 @@ pub struct CargoMeta {
     workspace_root: String,
     #[serde(default)]
     workspace_members: Vec<String>,
+    /// The dependency graph, absent from `--no-deps` output.
+    #[serde(default)]
+    resolve: Option<MetaResolve>,
+}
+
+#[derive(Deserialize)]
+struct MetaResolve {
+    nodes: Vec<MetaNode>,
+}
+
+#[derive(Deserialize)]
+struct MetaNode {
+    id: String,
+    dependencies: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -29,6 +51,11 @@ struct MetaPackage {
     id: String,
     #[serde(default)]
     manifest_path: String,
+    #[serde(default)]
+    repository: Option<String>,
+    /// Where the package comes from; absent for a local one.
+    #[serde(default)]
+    source: Option<String>,
     targets: Vec<MetaTarget>,
     #[serde(default)]
     dependencies: Vec<MetaDep>,
@@ -43,6 +70,30 @@ struct MetaTarget {
 #[derive(Deserialize)]
 struct MetaDep {
     name: String,
+}
+
+impl MetaPackage {
+    fn belongs_to_engine(&self) -> bool {
+        self.repository.as_deref().is_some_and(|repository| {
+            let repository = repository.trim_end_matches('/').trim_end_matches(".git");
+            ENGINE_REPOSITORIES.contains(&repository)
+        })
+    }
+
+    /// The crate names this package's code appears under in a type path.
+    fn crate_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.targets
+            .iter()
+            .filter(|target| {
+                target.kind.iter().any(|kind| {
+                    matches!(
+                        kind.as_str(),
+                        "lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro" | "bin"
+                    )
+                })
+            })
+            .map(|target| target.name.replace('-', "_"))
+    }
 }
 
 /// One candidate package, flattened out of the metadata into what the
@@ -149,6 +200,21 @@ impl CargoMeta {
         Self::load_or_error(project_dir).ok()
     }
 
+    /// The metadata with its dependency graph, leaving the lockfile alone.
+    /// `None` when the lockfile is missing or out of date, or a package the graph
+    /// needs cannot be fetched. May download packages a build does not need.
+    fn load_resolved(project_dir: &Path) -> Option<Self> {
+        let out = user_toolchain_command("cargo")
+            .current_dir(project_dir)
+            .args(["metadata", "--locked", "--format-version", "1"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Self::parse(&String::from_utf8_lossy(&out.stdout)).ok()
+    }
+
     /// As [`CargoMeta::load`], keeping cargo's diagnostics so an import
     /// can tell the user why their manifest was rejected. Runs under the
     /// project's own toolchain, which need not be the editor's.
@@ -208,6 +274,61 @@ impl CargoMeta {
                 }
             })
             .collect()
+    }
+
+    /// The crates holding the project's own code: `game`, the other workspace
+    /// members and the local packages they reach, stopping at packages of the
+    /// engine and the editor.
+    ///
+    /// Local packages come from the resolved graph, which also sees `[patch]`
+    /// entries. Metadata without one yields the workspace members alone.
+    fn crates_of_project(&self, game_package: &str, game_crate: &str) -> Vec<String> {
+        let mut names = vec![game_crate.to_string()];
+        let mut pending: Vec<&str> = self
+            .packages
+            .iter()
+            .filter(|package| self.is_member(package))
+            .map(|package| package.id.as_str())
+            .collect();
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(package) = self.packages.iter().find(|package| package.id == id) else {
+                continue;
+            };
+            if package.source.is_some()
+                || (package.belongs_to_engine() && package.name != game_package)
+            {
+                continue;
+            }
+            for name in package.crate_names() {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+            if let Some(node) = self
+                .resolve
+                .iter()
+                .flat_map(|resolve| &resolve.nodes)
+                .find(|node| node.id == id)
+            {
+                pending.extend(node.dependencies.iter().map(String::as_str));
+            }
+        }
+        names.sort_by(|a, b| {
+            (a != game_crate)
+                .cmp(&(b != game_crate))
+                .then_with(|| a.cmp(b))
+        });
+        names
+    }
+
+    fn is_member(&self, package: &MetaPackage) -> bool {
+        self.workspace_members.is_empty()
+            || package.id.is_empty()
+            || self.workspace_members.contains(&package.id)
     }
 
     /// The project's lib crate name (underscored), the name the generated
@@ -303,9 +424,36 @@ pub fn resolve_project_package(
     root: &Path,
     preferred: Option<&str>,
 ) -> Result<PackageInfo, ResolveError> {
-    let mut package = CargoMeta::load_or_error(root)?.resolve_package(preferred)?;
+    let meta = CargoMeta::load_or_error(root)?;
+    let mut package = meta.resolve_package(preferred)?;
     package.dir = spelled_under(root, package.dir);
     Ok(package)
+}
+
+/// The crates holding the code of the project at `root`, whose game is
+/// `game_package`. Asked after a game build, when the lockfile is settled. May
+/// reach the network; [`workspace_crates`] does not.
+pub fn project_crates(root: &Path, game_package: &str, game_crate: &str) -> Vec<String> {
+    let resolved = CargoMeta::load_resolved(root);
+    if resolved.is_none() {
+        tracing::warn!(
+            "could not read the dependency graph of {}; only its workspace crates count as \
+             project code",
+            root.display()
+        );
+    }
+    resolved
+        .map(|meta| meta.crates_of_project(game_package, game_crate))
+        .unwrap_or_else(|| workspace_crates(root, game_package, game_crate))
+}
+
+/// [`project_crates`] from the workspace members alone, without the network or
+/// the lockfile.
+pub fn workspace_crates(root: &Path, game_package: &str, game_crate: &str) -> Vec<String> {
+    CargoMeta::load(root).map_or_else(
+        || vec![game_crate.to_string()],
+        |meta| meta.crates_of_project(game_package, game_crate),
+    )
 }
 
 /// Whether cargo can resolve the full dependency graph of the project at
@@ -393,6 +541,119 @@ mod tests {
 
     fn meta(json: &str) -> CargoMeta {
         CargoMeta::parse(json).expect("metadata parses")
+    }
+
+    fn crates_of_game(packages: &[(&str, &str, &[&str], bool)]) -> Vec<String> {
+        let meta = meta(&workspace_json(packages));
+        meta.crates_of_project("bevy-jam", "bevy_jam")
+    }
+
+    #[test]
+    fn every_workspace_member_is_a_project_crate() {
+        let crates = crates_of_game(&[
+            ("bevy-jam", "/w/game", &["bevy"], true),
+            ("bevy_jam_core", "/w/core", &["bevy"], true),
+        ]);
+        assert_eq!(crates, ["bevy_jam", "bevy_jam_core"]);
+    }
+
+    fn package(name: &str, repository: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "id": format!("id-{name}"),
+            "manifest_path": format!("/w/{name}/Cargo.toml"),
+            "repository": repository,
+            "targets": [{ "name": name.replace('-', "_"), "kind": ["lib"] }],
+            "dependencies": [],
+        })
+    }
+
+    fn workspace_of(packages: Vec<serde_json::Value>) -> CargoMeta {
+        let members: Vec<&serde_json::Value> = packages.iter().map(|p| &p["id"]).collect();
+        let json = serde_json::json!({
+            "packages": packages,
+            "workspace_root": "/w",
+            "workspace_members": members,
+        });
+        meta(&json.to_string())
+    }
+
+    #[test]
+    fn engine_and_editor_members_are_told_apart_by_repository_not_name() {
+        let meta = workspace_of(vec![
+            package("bevy-jam", None),
+            package("bevy_jam_core", Some("https://github.com/someone/jam")),
+            package("jackdaw_jam_tools", None),
+            package("bevy_ui", Some("https://github.com/bevyengine/bevy")),
+            package("bevy", Some("https://github.com/bevyengine/bevy/")),
+            package("jackdaw_api", Some("https://github.com/jbuehler23/jackdaw")),
+            package(
+                "jackdaw_runtime",
+                Some("https://github.com/jbuehler23/jackdaw.git"),
+            ),
+        ]);
+        assert_eq!(
+            meta.crates_of_project("bevy-jam", "bevy_jam"),
+            ["bevy_jam", "bevy_jam_core", "jackdaw_jam_tools"]
+        );
+    }
+
+    #[test]
+    fn a_game_inside_the_engine_s_repository_still_counts() {
+        let meta = workspace_of(vec![package(
+            "bevy-jam",
+            Some("https://github.com/bevyengine/bevy"),
+        )]);
+        assert_eq!(meta.crates_of_project("bevy-jam", "bevy_jam"), ["bevy_jam"]);
+    }
+
+    #[test]
+    fn every_library_and_binary_name_is_listed() {
+        let mut game = package("bevy-jam", None);
+        game["targets"] = serde_json::json!([
+            { "name": "jam_logic", "kind": ["cdylib"] },
+            { "name": "bevy-game", "kind": ["bin"] },
+            { "name": "a_demo", "kind": ["example"] },
+            { "name": "a_test", "kind": ["test"] },
+        ]);
+        let meta = workspace_of(vec![game]);
+        let crates = meta.crates_of_project("bevy-jam", "bevy_jam");
+        assert!(crates.contains(&"jam_logic".to_string()), "got {crates:?}");
+        assert!(crates.contains(&"bevy_game".to_string()), "got {crates:?}");
+        assert!(!crates.contains(&"a_demo".to_string()), "got {crates:?}");
+        assert!(!crates.contains(&"a_test".to_string()), "got {crates:?}");
+    }
+
+    #[test]
+    fn local_packages_in_the_graph_count_and_engine_ones_end_the_walk() {
+        let game = package("bevy-jam", None);
+        let mut registry = package("serde", None);
+        registry["source"] =
+            serde_json::json!("registry+https://github.com/rust-lang/crates.io-index");
+        let bevy = package("bevy", Some("https://github.com/bevyengine/bevy"));
+        let json = serde_json::json!({
+            "packages": [
+                game,
+                package("bevy_mylib", None),
+                package("jackdaw_shared", None),
+                registry,
+                bevy,
+                package("bevy_ecs_macros", None),
+            ],
+            "workspace_root": "/w",
+            "workspace_members": ["id-bevy-jam"],
+            "resolve": { "nodes": [
+                { "id": "id-bevy-jam", "dependencies": ["id-bevy_mylib", "id-bevy", "id-serde"] },
+                { "id": "id-bevy_mylib", "dependencies": ["id-jackdaw_shared", "id-bevy-jam"] },
+                { "id": "id-jackdaw_shared", "dependencies": [] },
+                { "id": "id-bevy", "dependencies": ["id-bevy_ecs_macros"] },
+            ]},
+        });
+        let meta = meta(&json.to_string());
+        assert_eq!(
+            meta.crates_of_project("bevy-jam", "bevy_jam"),
+            ["bevy_jam", "bevy_mylib", "jackdaw_shared"]
+        );
     }
 
     /// A metadata document with the fields the resolver reads.
