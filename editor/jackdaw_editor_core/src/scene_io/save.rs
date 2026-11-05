@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
@@ -640,16 +640,21 @@ fn collect_bsn_inline_assets(
     registry: &TypeRegistry,
     entities: &[Entity],
     names: bevy::platform::collections::HashMap<UntypedAssetId, String>,
+    taken: HashSet<String>,
 ) -> BsnInlineAssetPass {
-    let mut namer = AssetNamer::PerDocument(HashMap::new());
+    let mut namer = AssetNamer::per_document(&names, taken);
     collect_inline_assets_named(world, registry, entities, names, &mut namer)
 }
 
 /// How a pathless runtime asset gets its name.
 enum AssetNamer<'a> {
     /// Per-type counters in document order, as a file writes them: an asset
-    /// added earlier in the document renumbers the ones after it.
-    PerDocument(HashMap<String, usize>),
+    /// added earlier in the document renumbers the ones after it. A name in
+    /// `taken` is skipped.
+    PerDocument {
+        counters: HashMap<String, usize>,
+        taken: HashSet<String>,
+    },
     /// One name for the Play session, from [`crate::play_scene::PlayAssetNames`].
     Session {
         world: &'a World,
@@ -660,6 +665,23 @@ enum AssetNamer<'a> {
 }
 
 impl AssetNamer<'_> {
+    /// A per-document namer that skips `taken` and every name `names` holds.
+    fn per_document(
+        names: &bevy::platform::collections::HashMap<UntypedAssetId, String>,
+        mut taken: HashSet<String>,
+    ) -> Self {
+        taken.extend(
+            names
+                .values()
+                .filter_map(|reference| reference.get(1..))
+                .map(str::to_owned),
+        );
+        Self::PerDocument {
+            counters: HashMap::new(),
+            taken,
+        }
+    }
+
     /// The name for the asset `id` of the type `asset_type_path`, without `#`,
     /// or `None` when it cannot be embedded for a game.
     fn name(
@@ -673,11 +695,15 @@ impl AssetNamer<'_> {
             .next()
             .unwrap_or(asset_type_path);
         match self {
-            Self::PerDocument(counters) => {
+            Self::PerDocument { counters, taken } => {
                 let counter = counters.entry(asset_type_path.to_string()).or_insert(0);
-                let name = format!("{short_name}{counter}");
-                *counter += 1;
-                Some(name)
+                Some(loop {
+                    let candidate = format!("{short_name}{counter}");
+                    *counter += 1;
+                    if taken.insert(candidate.clone()) {
+                        break candidate;
+                    }
+                })
             }
             Self::Session {
                 world,
@@ -743,6 +769,20 @@ fn collect_inline_assets_named(
         refs,
         touched,
     }
+}
+
+/// Every `#Name` a document root or descendant already carries, entity and
+/// asset alike, so a generated asset name cannot share a spelling with one.
+fn names_in_document(ast: &jackdaw_bsn::SceneBsnAst) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for &root in &ast.roots {
+        for node in std::iter::once(root).chain(ast.descendants_of(root)) {
+            if let Some(name) = ast.get_name(node) {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names
 }
 
 /// The reflected components a saved document keeps, in type registry order,
@@ -1321,7 +1361,7 @@ pub(crate) fn name_handles_in(
     parent_path: &Path,
 ) -> BsnInlineAssetPass {
     let seed = asset_reference_seed(world);
-    let mut namer = AssetNamer::PerDocument(HashMap::new());
+    let mut namer = AssetNamer::per_document(&seed, names_in_document(ast));
     name_handles_with(world, ast, entities, parent_path, seed, &mut namer)
 }
 
@@ -1860,7 +1900,7 @@ fn emit_bsn_entities_authored(world: &mut World, parent_path: &Path, nodes: &[En
 
     let pass = {
         let reg = registry.read();
-        collect_bsn_inline_assets(world, &reg, &entities, seed)
+        collect_bsn_inline_assets(world, &reg, &entities, seed, names_in_document(&ast))
     };
 
     // Strip stable node ids from the copied subtrees: paste mints fresh ones before

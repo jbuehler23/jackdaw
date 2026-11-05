@@ -338,3 +338,136 @@ fn a_terrain_that_authored_no_bake_settings_reads_them_back_at_their_defaults() 
         "an elided climb has to be the height the baker used before the field"
     );
 }
+
+fn brush_face_color(world: &mut World, name: &str) -> LinearRgba {
+    use bevy::pbr::StandardMaterial;
+    use jackdaw_scene_types::Brush;
+
+    let mut q = world.query::<(&Name, &Brush)>();
+    let handle = q
+        .iter(world)
+        .find(|(n, _)| n.as_str() == name)
+        .map(|(_, b)| b.faces[0].material.clone())
+        .unwrap_or_else(|| panic!("brush named {name} after reload"));
+    world
+        .resource::<Assets<StandardMaterial>>()
+        .get(&handle)
+        .unwrap_or_else(|| panic!("{name} material asset resolved"))
+        .base_color
+        .to_linear()
+}
+
+fn spawn_registered_brush(app: &mut App, name: &'static str, color: Color) {
+    use bevy::pbr::StandardMaterial;
+    use jackdaw_scene_types::Brush;
+
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color: color,
+            ..Default::default()
+        });
+    let mut brush = Brush::cuboid(1.0, 1.0, 1.0);
+    brush.faces[0].material = handle;
+    let entity = app
+        .world_mut()
+        .spawn((
+            Name::new(name),
+            Transform::default(),
+            Visibility::Inherited,
+            brush,
+        ))
+        .id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
+}
+
+fn assert_color(got: LinearRgba, want: Color, what: &str) {
+    let want = want.to_linear();
+    assert!(
+        (want.red - got.red).abs() < 1e-4
+            && (want.green - got.green).abs() < 1e-4
+            && (want.blue - got.blue).abs() < 1e-4,
+        "{what}: want {want:?}, got {got:?}"
+    );
+}
+
+/// A material added after a reload must not take the name of one the loaded
+/// document already embeds, or the old brush picks up the new colour.
+#[test]
+fn a_new_material_saved_after_a_reload_does_not_take_an_embedded_name() {
+    let mut app = make_app();
+    let old = Color::srgb(0.9, 0.1, 0.1);
+    let new = Color::srgb(0.1, 0.1, 0.9);
+
+    spawn_registered_brush(&mut app, "Old", old);
+    let text1 = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text1);
+
+    spawn_registered_brush(&mut app, "New", new);
+    let text2 = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    let roots: Vec<&str> = text2
+        .lines()
+        .filter(|l| l.trim_start().starts_with("#StandardMaterial"))
+        .collect();
+    let distinct: std::collections::HashSet<&&str> = roots.iter().collect();
+    assert_eq!(roots.len(), 2, "two material roots:\n{text2}");
+    assert_eq!(distinct.len(), 2, "material roots are unique:\n{text2}");
+
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &text2);
+    let world = app.world_mut();
+    let got_old = brush_face_color(world, "Old");
+    let got_new = brush_face_color(world, "New");
+    assert_color(got_old, old, "Old keeps its material");
+    assert_color(got_new, new, "New keeps its material");
+
+    let text3 = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    assert_eq!(text2, text3, "a second save is byte-identical");
+}
+
+/// An entity already called `StandardMaterial0` keeps its name, and the
+/// generated material name steps past it.
+#[test]
+fn a_generated_material_name_steps_past_an_entity_name() {
+    let mut app = make_app();
+    spawn_registered_brush(&mut app, "StandardMaterial0", Color::srgb(0.9, 0.1, 0.1));
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    let defining = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("#StandardMaterial0"))
+        .count();
+    assert_eq!(defining, 1, "one root spells #StandardMaterial0:\n{text}");
+    assert!(text.contains("#StandardMaterial1"), "{text}");
+}
+
+/// A file holding two roots of one name loads, and the later root wins the
+/// name; the earlier root's users read the later material.
+#[test]
+fn a_file_with_two_roots_of_one_name_loads_last_wins() {
+    let mut app = make_app();
+    spawn_registered_brush(&mut app, "A", Color::srgb(0.9, 0.1, 0.1));
+    spawn_registered_brush(&mut app, "B", Color::srgb(0.1, 0.1, 0.9));
+    let text = jackdaw::scene_io::emit_bsn_scene_with_inline_assets(
+        app.world_mut(),
+        std::path::Path::new(""),
+    );
+    let dup = text.replace("#StandardMaterial1", "#StandardMaterial0");
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &dup);
+    let world = app.world_mut();
+    let a = brush_face_color(world, "A");
+    let b = brush_face_color(world, "B");
+    assert_color(a, Color::srgb(0.1, 0.1, 0.9), "A reads the last definition");
+    assert_color(b, Color::srgb(0.1, 0.1, 0.9), "B reads the last definition");
+}
