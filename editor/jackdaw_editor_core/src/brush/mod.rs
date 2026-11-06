@@ -406,14 +406,31 @@ fn apply_brush(world: &mut World, entity: Entity, target: &Brush) {
         *brush = target.clone();
     }
     sync_brush_to_ast(world, entity, target);
-    if world.get::<BrushHalfedge>(entity).is_some() && !target.topology.polygons.is_empty() {
-        let halfedge = BrushHalfedge::from_topology(&target.topology);
-        if let Ok(mut ec) = world.get_entity_mut(entity) {
-            ec.insert(halfedge);
-        }
-    }
+    relift_halfedge(world, entity);
     if let Ok(mut ec) = world.get_entity_mut(entity) {
         ec.insert(crate::inspector::InspectorDirty);
+    }
+}
+
+/// Lift `entity`'s live half-edge mesh again from its brush, when it holds one:
+/// the mesh rebuild reads that mesh instead of the brush during an element edit.
+/// A brush without topology drops it, so edit mode lifts it once migrated.
+pub(crate) fn relift_halfedge(world: &mut World, entity: Entity) {
+    if world.get::<BrushHalfedge>(entity).is_none() {
+        return;
+    }
+    let Some(brush) = world.get::<Brush>(entity) else {
+        return;
+    };
+    if brush.topology.polygons.is_empty() {
+        if let Ok(mut entity) = world.get_entity_mut(entity) {
+            entity.remove::<BrushHalfedge>();
+        }
+        return;
+    }
+    let halfedge = BrushHalfedge::from_topology(&brush.topology);
+    if let Ok(mut entity) = world.get_entity_mut(entity) {
+        entity.insert(halfedge);
     }
 }
 
@@ -449,12 +466,15 @@ pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
 /// also strip a material that had been applied beforehand).
 ///
 /// A value the game streamed stays out, so the document keeps what the editor
-/// authored; a change made after that write is the editor's and goes in.
+/// authored; a change made after that write is the editor's and goes in. A
+/// value the document itself just wrote stays out as well, so a load or an undo
+/// leaves the patches of everything else untouched.
 ///
 /// Cloning the Brush per change is cheap (a small `Vec<BrushFaceData>`),
 /// and in practice `Changed<Brush>` is near-empty every frame.
 fn sync_changed_brushes_to_ast(
     changed: Query<(Entity, Ref<Brush>), Changed<Brush>>,
+    live: Option<Res<jackdaw_bsn::SceneBsnAst>>,
     projection: Option<Res<crate::pie_projection::PieProjection>>,
     mut commands: Commands,
 ) {
@@ -468,6 +488,16 @@ fn sync_changed_brushes_to_ast(
             !projection.as_deref().is_some_and(|projection| {
                 projection.stream_wrote(*entity, BRUSH_TYPE_PATH, brush.last_changed())
             })
+        })
+        .filter(|(entity, brush)| {
+            let waits_on_a_name = brush
+                .faces
+                .iter()
+                .any(|face| jackdaw_bsn::is_placeholder(&face.material));
+            waits_on_a_name
+                || !live.as_deref().is_some_and(|live| {
+                    applied_from_document(live, *entity, BRUSH_TYPE_PATH, brush)
+                })
         })
         .map(|(e, b)| (e, (*b).clone()))
         .collect();
@@ -507,6 +537,20 @@ fn sync_changed_brushes_to_ast(
     });
 }
 
+/// Whether `component` is still what applying `entity`'s document node inserted:
+/// not written since it was added, under a node holding a patch for its type.
+fn applied_from_document<T: Component>(
+    live: &jackdaw_bsn::SceneBsnAst,
+    entity: Entity,
+    type_path: &str,
+    component: &Ref<T>,
+) -> bool {
+    component.added() == component.last_changed()
+        && live
+            .ast_for(entity)
+            .is_some_and(|node| live.find_patch_by_type_path(node, type_path).is_some())
+}
+
 /// Mirror `ModifierStack` changes and removals into the scene AST, the same
 /// way [`sync_changed_brushes_to_ast`] does for `Brush`. The modifier
 /// operators insert the component directly (rather than through the
@@ -520,6 +564,7 @@ fn sync_changed_modifier_stacks_to_ast(
         Changed<jackdaw_geometry::ModifierStack>,
     >,
     mut removed: RemovedComponents<jackdaw_geometry::ModifierStack>,
+    live: Option<Res<jackdaw_bsn::SceneBsnAst>>,
     projection: Option<Res<crate::pie_projection::PieProjection>>,
     mut commands: Commands,
 ) {
@@ -531,6 +576,11 @@ fn sync_changed_modifier_stacks_to_ast(
             !projection.is_some_and(|projection| {
                 projection.stream_wrote(*entity, type_path, stack.last_changed())
             })
+        })
+        .filter(|(entity, stack)| {
+            !live
+                .as_deref()
+                .is_some_and(|live| applied_from_document(live, *entity, type_path, stack))
         })
         .map(|(e, s)| (e, (*s).clone()))
         .collect();
@@ -552,6 +602,12 @@ fn sync_changed_modifier_stacks_to_ast(
             crate::commands::sync_component_to_ast(world, entity, type_path, &stack);
         }
         for entity in removed_entities {
+            if world
+                .get::<jackdaw_geometry::ModifierStack>(entity)
+                .is_some()
+            {
+                continue;
+            }
             let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
             if let Some(node) = ast.ast_for(entity) {
                 ast.remove_component_patch(node, type_path);

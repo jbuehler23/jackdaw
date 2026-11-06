@@ -254,6 +254,7 @@ fn replace_own_patches(world: &mut World, entity: Entity, patches: Vec<BsnPatch>
         }
     }
     crate::scene_io::resync_entity_from_ast(world, entity);
+    crate::brush::relift_halfedge(world, entity);
 }
 
 /// Graft `root` of `document` into the live document under `parent` and spawn
