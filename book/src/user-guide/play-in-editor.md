@@ -25,6 +25,23 @@ the cost of compiling the dependencies once more. `.jackdaw/` is
 gitignored, so none of it is committed; a project that does not ignore it
 should.
 
+The editor compiles your dependencies optimised (`opt-level = 2`, line
+tables only) and your own crate as your profile says, because a game
+spends its load and its frames in Bevy and the runtime. A project that sets
+a dev `opt-level` for itself or its dependencies keeps that setting, whether
+in its manifest, a `.cargo/config.toml` in its folder or a parent, cargo's
+home, or `CARGO_PROFILE_DEV_OPT_LEVEL`. So the first build compiles every
+dependency once, which takes several minutes, and later builds only compile
+your crate. A plain `cargo run` follows your manifest; new projects start
+with the same profile in theirs.
+
+To opt out, set `opt-level` under `[profile.dev.package."*"]`: `0` builds
+dependencies as cargo would by default. While the override stands, stepping
+into a dependency in a debugger is limited: the code is optimised and carries
+line tables only, so it has no local variables to show. Setting `debug = true`
+under `[profile.dev.package."*"]` keeps full debug info, on code still
+optimised.
+
 The Play dropdown is filled from the **run configurations** in your
 project's `jackdaw.toml` (`[[run]]` entries carrying a name, environment
 variables, arguments, an instance count, and a working directory). A

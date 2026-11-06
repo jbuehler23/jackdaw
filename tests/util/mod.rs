@@ -327,11 +327,12 @@ pub fn run_windowless_game(
         let _ = child.kill();
         panic!("the game never connected to the PIE link. Its output was:\n{captured}");
     }
-    let _transport = accepted.expect("checked above").expect("ipc accept failed");
+    let mut transport = accepted.expect("checked above").expect("ipc accept failed");
 
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut loaded = false;
     while Instant::now() < deadline {
+        send_scene_requests_to_their_files(&mut transport);
         {
             let buf = stderr_buf.lock().unwrap();
             if buf.contains("BSN_SCENE_LOADED") && buf.contains("has_target=true") {
@@ -346,6 +347,29 @@ pub fn run_windowless_game(
     let _ = child.wait();
     let stderr = stderr_buf.lock().unwrap().clone();
     (loaded, stderr)
+}
+
+/// Answer each scene the game asks for as an editor with no document for it does.
+#[expect(clippy::allow_attributes, reason = "shared across test binaries")]
+#[allow(dead_code, reason = "only game-launching test binaries use this")]
+fn send_scene_requests_to_their_files(editor: &mut impl jackdaw_pie_protocol::PieTransport) {
+    use jackdaw_pie_protocol::event::{ControlEvent, StateEvent, from_bytes, to_bytes};
+    for (_, bytes) in editor.drain_received() {
+        let Ok(StateEvent::RequestScene { request, path }) = from_bytes(&bytes) else {
+            continue;
+        };
+        let answer = ControlEvent::SceneDocument {
+            request,
+            answer: jackdaw_pie_protocol::SceneAnswer::UseFile {
+                path,
+                sidecars: None,
+            },
+        };
+        editor.send(
+            jackdaw_pie_protocol::PieChannel::Reliable,
+            &to_bytes(&answer).expect("encode the answer"),
+        );
+    }
 }
 
 /// Capture a scene snapshot via the `ActiveSnapshotter`. Wrapper around

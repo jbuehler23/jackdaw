@@ -6,7 +6,9 @@
 //! on the focused instance, the panel's pixel size, and stream freshness.
 //! Resize requests debounce so a panel drag does not spam restarts, and a
 //! stale stream is re-requested on a backoff so a dead game-side capture
-//! recovers without flooding the channel.
+//! recovers without flooding the channel. A game keeps a running stream when
+//! asked again at the same size, so a request costs a game that is only busy
+//! nothing.
 
 use std::time::Instant;
 
@@ -29,7 +31,7 @@ const RESTART_BACKOFF_MS: u128 = 2000;
 /// Size last requested from the focused game, and the debounce window for
 /// resize requests.
 #[derive(Resource, Default)]
-struct StreamRequest {
+pub(crate) struct StreamRequest {
     /// Size of the last `StartFrameStream` sent; `None` while stopped.
     requested: Option<UVec2>,
     /// Candidate size waiting out the debounce window before it is sent.
@@ -40,6 +42,13 @@ struct StreamRequest {
     /// When the last `StartFrameStream` went out; gates stale-stream
     /// restarts to one per [`RESTART_BACKOFF_MS`] window.
     last_start: Option<Instant>,
+}
+
+impl StreamRequest {
+    /// Whether a stream has been asked of the game and not stopped since.
+    pub(crate) fn is_requested(&self) -> bool {
+        self.requested.is_some()
+    }
 }
 
 pub struct LiveFrameViewPlugin;

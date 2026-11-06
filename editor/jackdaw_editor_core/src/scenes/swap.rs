@@ -62,19 +62,22 @@ pub fn reactivate_after_close(world: &mut World, target: usize) {
 /// Used by PIE stop to revert projected live state after the game process ends.
 /// Safe to call when nothing is projected (clear + respawn of an unchanged
 /// scene is harmless).
-pub(crate) fn respawn_scene_from_ast(world: &mut World) {
+///
+/// False when the document could not be captured, which leaves the scene as it is.
+pub(crate) fn respawn_scene_from_ast(world: &mut World) -> bool {
     let active = world.resource::<Scenes>().active;
     if world.resource::<Scenes>().tabs.is_empty() {
-        return;
+        return true;
     }
     if let Err(err) = capture_active_tab(world) {
         let message = format!("Scene not reverted: it could not be captured: {err}");
         error!("{message}");
         crate::status_bar::notify_error(world, message);
-        return;
+        return false;
     }
     clear_scene_entities(world);
     activate_tab(world, active);
+    true
 }
 
 /// Capture the live scene document into the active tab and stash the
@@ -250,6 +253,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
     let refusal = match jackdaw_bsn::reject_retired_ui_components(spawning) {
         Ok(()) => {
             let resolved_text = jackdaw_bsn::emit_scene(spawning);
+            crate::asset_index::index_files_named(world, &resolved_text);
             match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
                 Ok(_) => None,
                 Err(err) => {

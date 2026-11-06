@@ -15,6 +15,8 @@ pub struct LiveFrameStream {
     pub last_seq: u64,
     /// When the newest frame arrived; `None` until the first frame.
     pub received_at: Option<Instant>,
+    /// The game said it opened its own window, so no frame will ever come.
+    pub game_has_own_window: bool,
 }
 
 impl LiveFrameStream {
@@ -22,6 +24,11 @@ impl LiveFrameStream {
     pub fn is_fresh(&self) -> bool {
         self.received_at
             .is_some_and(|at| at.elapsed().as_secs_f32() < 1.0)
+    }
+
+    /// True once any frame has arrived, fresh or not.
+    pub fn has_frame(&self) -> bool {
+        self.image.is_some()
     }
 
     /// Drop all stream state (focus change, play stop).

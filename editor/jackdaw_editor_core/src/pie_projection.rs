@@ -31,10 +31,45 @@ pub struct PieProjection {
     /// keyed by the parent's game-side bits. Reparented when the parent's
     /// `EntitySpawned` arrives.
     pub pending_children: HashMap<u64, Vec<Entity>>,
-    /// Authored entities that have taken a streamed value and not been respawned
-    /// since. They hold the game's state, so what an emit writes for them comes
-    /// from the document alone.
+    /// The parent each queued child last asked for. The game can move a child on
+    /// while it waits, which leaves it queued under a parent it no longer names.
+    waiting_on: HashMap<Entity, u64>,
+    /// The game-side bits last mapped to each preview entity, so a respawn under
+    /// new bits finds the old alias without scanning `by_bits`.
+    bits_of: HashMap<Entity, u64>,
+    /// Authored entities holding a streamed value their document does not, and
+    /// not respawned since. They hold the game's state, so what an emit writes
+    /// for them comes from the document alone.
     pub overlaid: HashSet<Entity>,
+    /// What authored entities held before the stream first overwrote a component,
+    /// by type path, which a revert puts back.
+    priors: HashMap<Entity, HashMap<String, KeptPrior>>,
+    /// Authored roots the stream put under a parent, as the game parents a scene's
+    /// roots under its own container. A revert makes them roots again.
+    moved_roots: HashSet<Entity>,
+    /// The stream did something only a respawn undoes: it moved an authored entity
+    /// that had a parent, added a component and so whatever that component requires,
+    /// or overwrote a value that cannot be copied.
+    pub needs_respawn: bool,
+}
+
+/// A value an authored entity held before the stream overwrote it.
+struct KeptPrior {
+    value: Box<dyn Reflect>,
+    /// [`document_digest`] when the value was kept. The value only stands for the
+    /// document while this still matches.
+    document: Option<u64>,
+}
+
+/// What [`apply_component_value`] did to the entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Applied {
+    /// Nothing: the value did not apply, or the entity already held it.
+    Nothing,
+    /// The component's value changed.
+    Changed,
+    /// The entity gained the component.
+    Added,
 }
 
 /// Type path of the hierarchy component naming an entity's parent. Streamed
@@ -86,8 +121,24 @@ fn parent_bits_from_value(value: &serde_json::Value) -> Option<u64> {
 }
 
 fn reparent_preview(world: &mut World, child: Entity, parent: Entity) {
-    if child == parent || would_cycle(world, child, parent) {
+    if child == parent
+        || world
+            .get::<ChildOf>(child)
+            .is_some_and(|held| held.0 == parent)
+        || would_cycle(world, child, parent)
+    {
         return;
+    }
+    let held_parent = world.get::<ChildOf>(child).is_some();
+    if world.get::<PieEphemeral>(child).is_none()
+        && let Some(mut projection) = world.get_resource_mut::<PieProjection>()
+        && !projection.moved_roots.contains(&child)
+    {
+        if held_parent {
+            projection.needs_respawn = true;
+        } else {
+            projection.moved_roots.insert(child);
+        }
     }
     if let Ok(mut entity_mut) = world.get_entity_mut(child) {
         entity_mut.insert(ChildOf(parent));
@@ -128,36 +179,193 @@ fn apply_child_of(world: &mut World, child: Entity, value: &serde_json::Value) {
         .by_bits
         .get(&parent_bits)
         .copied();
+    let mut projection = world.resource_mut::<PieProjection>();
     match parent {
-        Some(parent) => reparent_preview(world, child, parent),
-        None => world
-            .resource_mut::<PieProjection>()
-            .pending_children
-            .entry(parent_bits)
-            .or_default()
-            .push(child),
+        Some(parent) => {
+            projection.waiting_on.remove(&child);
+            reparent_preview(world, child, parent);
+        }
+        None => {
+            projection.waiting_on.insert(child, parent_bits);
+            projection
+                .pending_children
+                .entry(parent_bits)
+                .or_default()
+                .push(child);
+        }
+    }
+}
+
+/// Parent to `parent` the children queued for `parent_bits` that still name it.
+fn adopt_waiting_children(world: &mut World, parent_bits: u64, parent: Entity) {
+    let mut projection = world.resource_mut::<PieProjection>();
+    let Some(queued) = projection.pending_children.remove(&parent_bits) else {
+        return;
+    };
+    let children: Vec<Entity> = queued
+        .into_iter()
+        .filter(|child| {
+            let waiting = projection.waiting_on.get(child) == Some(&parent_bits);
+            if waiting {
+                projection.waiting_on.remove(child);
+            }
+            waiting
+        })
+        .collect();
+    for child in children {
+        reparent_preview(world, child, parent);
     }
 }
 
 /// Tear down all projected live state and restore the authored preview.
 ///
-/// Despawns every ephemeral entity, clears the projection map, then
-/// re-spawns the scene from the AST so authored overlays revert to their
-/// authored values. The AST is the untouched baseline; this reuses the same
-/// re-spawn that tab activation uses on a tab switch.
+/// Despawns every ephemeral entity and clears the projection map. Each authored
+/// entity the game changed takes back the values it held before those components
+/// changed, which are what its document stands for while the document is unedited.
+/// A large scene the game left alone then needs no respawn. What
+/// [`PieProjection::needs_respawn`] names, an edit made live in the panels, a
+/// document edit to a component or name the game also changed, a root the user
+/// moved under another entity, or a value that could not be put back respawns the
+/// scene the way a tab switch does.
 ///
-/// Safe to call when nothing was projected: no ephemerals, empty `by_bits`,
-/// and re-spawning an unchanged scene is harmless.
+/// The respawn captures the document first, so entities stay marked as holding
+/// game state until it is done: the capture must not take their values for
+/// authored ones. A capture that fails leaves them marked and sets
+/// [`PieProjection::needs_respawn`], which the next revert retries and a switch of
+/// the view to Live leaves alone.
 pub fn revert_preview(world: &mut World) {
+    let revert = world
+        .get_resource_mut::<PieProjection>()
+        .map(|mut projection| Revert {
+            priors: std::mem::take(&mut projection.priors),
+            moved_roots: std::mem::take(&mut projection.moved_roots),
+            needs_respawn: std::mem::take(&mut projection.needs_respawn),
+        })
+        .unwrap_or_default();
+    let root_reparented = revert
+        .moved_roots
+        .iter()
+        .any(|&root| !is_document_root(world, root));
+    for &root in &revert.moved_roots {
+        if let Ok(mut entity_mut) = world.get_entity_mut(root) {
+            entity_mut.remove::<ChildOf>();
+        }
+    }
     clear_projection(world);
-    crate::scenes::swap::respawn_scene_from_ast(world);
+    let live_edits = world
+        .get_resource::<crate::live_edits::LiveEditLog>()
+        .is_some_and(|log| !log.entries.is_empty());
+    let document_edited = revert.priors.iter().any(|(&entity, values)| {
+        values.iter().any(|(type_path, prior)| {
+            world.get_entity(entity).is_ok()
+                && document_digest(world, entity, type_path) != prior.document
+        })
+    });
+    let mut respawn = revert.needs_respawn || live_edits || document_edited || root_reparented;
+    for (entity, values) in revert.priors {
+        for (type_path, prior) in values {
+            respawn |= !restore_component(world, entity, &type_path, prior.value);
+        }
+    }
+    if respawn && !crate::scenes::swap::respawn_scene_from_ast(world) {
+        if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
+            projection.needs_respawn = true;
+        }
+        return;
+    }
     forget_overlays(world);
+}
+
+/// True when the document lists `entity`'s node as a scene root. An entity with no
+/// node, or gone, is not one the user could have moved.
+fn is_document_root(world: &World, entity: Entity) -> bool {
+    let Some(ast) = world.get_resource::<SceneBsnAst>() else {
+        return true;
+    };
+    ast.ast_for(entity)
+        .is_none_or(|node| ast.roots.contains(&node))
+}
+
+/// What a revert has to undo.
+#[derive(Default)]
+struct Revert {
+    priors: HashMap<Entity, HashMap<String, KeptPrior>>,
+    moved_roots: HashSet<Entity>,
+    needs_respawn: bool,
+}
+
+/// Identifies what the document says for `entity`'s component, if anything.
+fn document_digest(world: &World, entity: Entity, type_path: &str) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let ast = world.get_resource::<SceneBsnAst>()?;
+    let node = ast.ast_for(entity)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if type_path == <Name as bevy::reflect::TypePath>::type_path() {
+        ast.get_name(node)?.hash(&mut hasher);
+    } else {
+        let patch = ast.find_patch_by_type_path(node, type_path)?;
+        format!("{:?}", ast.get_patch(patch)?).hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
+/// Put back a value [`apply_streamed_value`] kept, whole, so a list the game grew
+/// comes back at its old length. A component the entity has lost since, to an
+/// undo say, stays gone. False when the entity holds the component but the value
+/// could not be set on it.
+fn restore_component(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    value: Box<dyn Reflect>,
+) -> bool {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let Some(registration) = registry.get_with_type_path(type_path) else {
+        return true;
+    };
+    let Some(reflect_component) = registration.data::<ReflectComponent>() else {
+        return true;
+    };
+    let is_mutable = component_is_mutable(world, registration.type_id());
+    let Ok(entity_ref) = world.get_entity(entity) else {
+        return true;
+    };
+    if !reflect_component.contains(entity_ref) {
+        return true;
+    }
+    let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+        return true;
+    };
+    if !is_mutable {
+        reflect_component.insert(&mut entity_mut, value.as_partial_reflect(), &registry);
+        return true;
+    }
+    if let Some(mut held) = reflect_component.reflect_mut(&mut entity_mut)
+        && held.set(value).is_err()
+    {
+        debug!("revert_preview: the value kept for {type_path} is of another type");
+        return false;
+    }
+    true
+}
+
+fn component_is_mutable(world: &World, type_id: std::any::TypeId) -> bool {
+    world
+        .components()
+        .get_id(type_id)
+        .and_then(|id: ComponentId| world.components().get_info(id))
+        .map(bevy::ecs::component::ComponentInfo::mutable)
+        .unwrap_or(true)
 }
 
 /// The authored entities were respawned, so none holds a streamed value.
 fn forget_overlays(world: &mut World) {
     if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
         projection.overlaid.clear();
+        projection.priors.clear();
+        projection.moved_roots.clear();
+        projection.needs_respawn = false;
     }
 }
 
@@ -185,6 +393,26 @@ fn clear_projection(world: &mut World) {
     };
     projection.by_bits.clear();
     projection.pending_children.clear();
+    projection.waiting_on.clear();
+    projection.bits_of.clear();
+    forget_dead_selection(world);
+}
+
+/// Drop despawned entities from the selection. A respawn clears it anyway, but a
+/// stream despawning an ephemeral or a revert without one does not.
+fn forget_dead_selection(world: &mut World) {
+    let Some(selection) = world.get_resource::<crate::selection::Selection>() else {
+        return;
+    };
+    let alive: Vec<Entity> = selection
+        .entities
+        .iter()
+        .copied()
+        .filter(|&entity| world.get_entity(entity).is_ok())
+        .collect();
+    if alive.len() != selection.entities.len() {
+        world.resource_mut::<crate::selection::Selection>().entities = alive;
+    }
 }
 
 /// Replay an instance's full buffered snapshot into the preview world.
@@ -222,6 +450,18 @@ fn replay_buffer(world: &mut World, key: &crate::pie::InstanceKey) {
 pub fn reproject_focused(world: &mut World) {
     clear_projection(world);
     forget_overlays(world);
+    replay_focused(world);
+}
+
+/// Project the focused instance again without a respawn, as when the view
+/// switches to Live. Authored entities keep the streamed values and the prior
+/// values kept for them, so what a revert owes is not lost.
+pub fn reproject_view(world: &mut World) {
+    clear_projection(world);
+    replay_focused(world);
+}
+
+fn replay_focused(world: &mut World) {
     let live = world
         .get_resource::<crate::pie_mirror::PieViewMode>()
         .is_some_and(|mode| *mode == crate::pie_mirror::PieViewMode::Live);
@@ -284,24 +524,20 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                     .spawn((PieEphemeral, Transform::default(), Visibility::default()))
                     .id()
             });
-            if authored.is_some() {
-                world
-                    .resource_mut::<PieProjection>()
-                    .overlaid
-                    .insert(preview);
-            }
-            world
-                .resource_mut::<PieProjection>()
-                .by_bits
-                .insert(bits, preview);
             // A zone hot-reload respawns an authored node under new bits and
-            // sends the new spawn before the old despawn, so drop any other
-            // bits still aliasing this preview entity. Otherwise a reverse
-            // lookup could resolve dead bits.
-            world
-                .resource_mut::<PieProjection>()
-                .by_bits
-                .retain(|&b, &mut mapped| b == bits || mapped != preview);
+            // sends the new spawn before the old despawn, so drop the bits that
+            // still alias this preview entity. Otherwise a reverse lookup could
+            // resolve dead bits.
+            {
+                let mut projection = world.resource_mut::<PieProjection>();
+                projection.by_bits.insert(bits, preview);
+                if let Some(old) = projection.bits_of.insert(preview, bits)
+                    && old != bits
+                    && projection.by_bits.get(&old) == Some(&preview)
+                {
+                    projection.by_bits.remove(&old);
+                }
+            }
             // Hierarchy is remapped, not applied: stash ChildOf for after the
             // value components land.
             let mut child_of: Option<serde_json::Value> = None;
@@ -313,21 +549,13 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 if projection_skips(&type_path) {
                     continue;
                 }
-                apply_component_value(world, preview, &type_path, &value);
+                apply_streamed_value(world, preview, type_path, &value);
             }
             if let Some(value) = child_of {
                 apply_child_of(world, preview, &value);
             }
             // This entity may be the parent earlier children were waiting for.
-            let waiting = world
-                .resource_mut::<PieProjection>()
-                .pending_children
-                .remove(&bits);
-            if let Some(children) = waiting {
-                for child in children {
-                    reparent_preview(world, child, preview);
-                }
-            }
+            adopt_waiting_children(world, bits, preview);
         }
         StateEvent::ComponentChanged {
             entity,
@@ -346,7 +574,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 if type_path == CHILD_OF_PATH {
                     apply_child_of(world, preview, &value);
                 } else {
-                    apply_component_value(world, preview, &type_path, &value);
+                    apply_streamed_value(world, preview, type_path, &value);
                 }
             }
         }
@@ -356,11 +584,20 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                 .by_bits
                 .remove(&entity);
             // Children queued for a parent that will never spawn again.
-            world
-                .resource_mut::<PieProjection>()
-                .pending_children
-                .remove(&entity);
+            {
+                let mut projection = world.resource_mut::<PieProjection>();
+                let queued = projection.pending_children.remove(&entity);
+                for child in queued.into_iter().flatten() {
+                    if projection.waiting_on.get(&child) == Some(&entity) {
+                        projection.waiting_on.remove(&child);
+                    }
+                }
+            }
             if let Some(preview) = preview {
+                let mut projection = world.resource_mut::<PieProjection>();
+                if projection.bits_of.get(&preview) == Some(&entity) {
+                    projection.bits_of.remove(&preview);
+                }
                 // Only despawn entities this projector created; authored
                 // entities are reverted on stop, not despawned here.
                 if world.get::<PieEphemeral>(preview).is_some() {
@@ -368,11 +605,77 @@ pub fn project_event(world: &mut World, event: StateEvent) {
                     if let Ok(e) = world.get_entity_mut(preview) {
                         e.despawn();
                     }
+                    forget_dead_selection(world);
                 }
             }
         }
-        StateEvent::CursorState { .. } | StateEvent::RequestScene { .. } => {}
+        StateEvent::CursorState { .. }
+        | StateEvent::RequestScene { .. }
+        | StateEvent::SceneRequestAbandoned { .. }
+        | StateEvent::OwnWindow => {}
     }
+}
+
+/// Apply a value from the stream, and note on an authored entity what a revert
+/// has to undo.
+fn apply_streamed_value(
+    world: &mut World,
+    preview: Entity,
+    type_path: String,
+    value: &serde_json::Value,
+) {
+    let authored = world.get::<PieEphemeral>(preview).is_none();
+    let keep_prior = authored
+        && !world
+            .resource::<PieProjection>()
+            .priors
+            .get(&preview)
+            .is_some_and(|values| values.contains_key(&type_path));
+    let (applied, prior) = apply_value(world, preview, &type_path, value, keep_prior);
+    if applied == Applied::Nothing || !authored {
+        return;
+    }
+    let kept = matches!(prior, Prior::Kept(_));
+    let document = if kept {
+        document_digest(world, preview, &type_path)
+    } else {
+        None
+    };
+    let mid_edit = kept && edit_in_flight(world);
+    let mut projection = world.resource_mut::<PieProjection>();
+    projection.overlaid.insert(preview);
+    if applied == Applied::Added {
+        projection.needs_respawn = true;
+        return;
+    }
+    match prior {
+        Prior::CannotCopy => projection.needs_respawn = true,
+        Prior::Kept(value) => {
+            projection.needs_respawn |= mid_edit;
+            projection
+                .priors
+                .entry(preview)
+                .or_default()
+                .insert(type_path, KeptPrior { value, document });
+        }
+        Prior::NotKept => {}
+    }
+}
+
+/// True while a modal operator runs or document patches wait to be applied, when
+/// an entity can hold a value its document does not.
+fn edit_in_flight(world: &mut World) -> bool {
+    use jackdaw_api_internal::lifecycle::ActiveModalOperator;
+    world
+        .query_filtered::<(), With<ActiveModalOperator>>()
+        .iter(world)
+        .next()
+        .is_some()
+        || world
+            .query_filtered::<(), With<jackdaw_bsn::AstDirty>>()
+            .iter(world)
+            .next()
+            .is_some()
 }
 
 /// Rescue authored previews from an ephemeral subtree about to be despawned.
@@ -415,24 +718,46 @@ fn detach_authored_descendants_guarded(
 /// by the component's mutability. A mutable component is mutated in place (no
 /// `on_add`/`on_insert`; `Changed` fires). An immutable component is re-inserted
 /// so its value changes and its hooks run. No-op (debug log) if the type is not
-/// registered, has no `ReflectComponent`, or the value does not deserialize.
+/// registered, has no `ReflectComponent`, or the value does not deserialize, and
+/// silently when the entity already holds this value, so a game streaming the
+/// scene it was given dirties nothing in the editor.
 pub fn apply_component_value(
     world: &mut World,
     entity: Entity,
     type_path: &str,
     value: &serde_json::Value,
-) {
+) -> Applied {
+    apply_value(world, entity, type_path, value, false).0
+}
+
+/// The value a write replaced.
+enum Prior {
+    NotKept,
+    Kept(Box<dyn Reflect>),
+    CannotCopy,
+}
+
+/// [`apply_component_value`], also returning the value it overwrote when asked
+/// to keep it.
+fn apply_value(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    value: &serde_json::Value,
+    keep_prior: bool,
+) -> (Applied, Prior) {
+    let nothing = (Applied::Nothing, Prior::NotKept);
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry_guard = registry.read();
 
     let Some(registration) = registry_guard.get_with_type_path(type_path) else {
         debug!("apply_component_value: type not registered: {type_path}");
-        return;
+        return nothing;
     };
 
     let Some(reflect_component) = registration.data::<ReflectComponent>().cloned() else {
         debug!("apply_component_value: no ReflectComponent for: {type_path}");
-        return;
+        return nothing;
     };
 
     let mut processor = jackdaw_pie_protocol::RemoteDeserializerProcessor;
@@ -442,31 +767,27 @@ pub fn apply_component_value(
         Ok(v) => v,
         Err(e) => {
             debug!("apply_component_value: deserialization failed for {type_path}: {e}");
-            return;
+            return nothing;
         }
     };
 
     let type_id = registration.type_id();
 
-    let is_mutable = world
-        .components()
-        .get_id(type_id)
-        .and_then(|id: ComponentId| world.components().get_info(id))
-        .map(bevy::ecs::component::ComponentInfo::mutable)
-        .unwrap_or(true);
+    let is_mutable = component_is_mutable(world, type_id);
 
     // Check presence while we still have shared world access (before the &mut borrow).
     let present = match world.get_entity(entity) {
         Ok(entity_ref) => reflect_component.contains(entity_ref),
         Err(_) => {
             debug!("apply_component_value: entity {entity:?} does not exist");
-            return;
+            return nothing;
         }
     };
 
     // A stream never carries a handle, so the value's are all defaults; the
     // entity's own stay.
     let mut reflected = reflected;
+    let mut prior = Prior::NotKept;
     if present
         && let Ok(entity_ref) = world.get_entity(entity)
         && let Some(held) = reflect_component.reflect(entity_ref)
@@ -476,13 +797,22 @@ pub fn apply_component_value(
             held.as_partial_reflect(),
             &registry_guard,
         );
+        if held.reflect_partial_eq(reflected.as_partial_reflect()) == Some(true) {
+            return nothing;
+        }
+        if keep_prior {
+            prior = match held.reflect_clone() {
+                Ok(value) => Prior::Kept(value),
+                Err(_) => Prior::CannotCopy,
+            };
+        }
     }
 
     drop(registry_guard);
 
     let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
         debug!("apply_component_value: entity {entity:?} was despawned concurrently");
-        return;
+        return nothing;
     };
 
     if !is_mutable || !present {
@@ -495,6 +825,12 @@ pub fn apply_component_value(
     } else {
         reflect_component.apply(entity_mut, reflected.as_partial_reflect());
     }
+    let applied = if present {
+        Applied::Changed
+    } else {
+        Applied::Added
+    };
+    (applied, prior)
 }
 
 /// Copy every asset handle in `held` over the same field of `value`. Fields
@@ -1118,16 +1454,13 @@ mod tests {
     //
     // The full re-spawn path in `respawn_scene_from_ast` requires the Scenes
     // resource, scene-load plumbing, and hierarchy systems that are not
-    // available in a unit-test world. These tests verify the ephemeral-despawn
-    // and by_bits-clear halves of `revert_preview`; the re-spawn half is
-    // covered by integration tests for `swap_active_tab`.
+    // available in a unit-test world. These tests cover the in-place half of
+    // `revert_preview`; the re-spawn half is covered in tests/guards/play_scene.rs.
 
     fn build_revert_world() -> (World, Entity, SceneNodeId) {
         // Same as build_projection_world but also inserts the Scenes resource
         // (empty, so respawn_scene_from_ast's tab-empty guard returns early)
-        // and CommandHistory (required by capture_active_tab). With an empty
-        // Scenes, the re-spawn step is skipped and the test only covers the
-        // ephemeral-despawn and by_bits-clear portions of revert_preview.
+        // and CommandHistory (required by capture_active_tab).
         use crate::scenes::Scenes;
         let (mut world, preview_entity, node_id) = build_projection_world();
         world.init_resource::<jackdaw_commands::CommandHistory>();
@@ -1281,12 +1614,160 @@ mod tests {
             "revert must clear by_bits"
         );
 
-        // The authored preview entity must still exist (re-spawn recreates it;
-        // in this minimal test world the re-spawn path no-ops because Scenes
-        // has no loaded content, but the entity was not despawned by revert itself).
+        // The game only changed a value, so the entity is restored in place.
         assert!(
             world.get_entity(preview_entity).is_ok(),
             "authored preview entity must survive revert"
+        );
+    }
+
+    #[derive(Component, Reflect, Default, PartialEq, Debug, Clone)]
+    #[reflect(Component)]
+    #[type_path = "pie_projection_tests"]
+    struct Inventory {
+        items: Vec<i32>,
+    }
+
+    fn change_mutable(world: &mut World, node_id: SceneNodeId, value: i32) {
+        project_event(
+            world,
+            StateEvent::EntitySpawned {
+                entity: RemoteEntity {
+                    entity: 1,
+                    components: [(
+                        <Mutable as bevy::reflect::TypePath>::type_path().to_string(),
+                        serde_json::json!(value),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    scene_node_id: Some(node_id.0),
+                },
+            },
+        );
+    }
+
+    /// An undo during Live took off a component the game had changed.
+    #[test]
+    fn a_stop_does_not_panic_on_a_component_the_entity_lost() {
+        let (mut world, preview, node_id) = build_revert_world();
+        change_mutable(&mut world, node_id, 5);
+        world.entity_mut(preview).remove::<Mutable>();
+
+        revert_preview(&mut world);
+
+        assert!(world.get::<Mutable>(preview).is_none());
+    }
+
+    #[test]
+    fn a_stop_does_not_put_back_an_immutable_component_the_entity_lost() {
+        let (mut world, preview, node_id) = build_revert_world();
+        world.entity_mut(preview).insert(Frozen(1));
+        project_event(
+            &mut world,
+            StateEvent::EntitySpawned {
+                entity: RemoteEntity {
+                    entity: 1,
+                    components: [(
+                        <Frozen as bevy::reflect::TypePath>::type_path().to_string(),
+                        serde_json::json!(5),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    scene_node_id: Some(node_id.0),
+                },
+            },
+        );
+        world.entity_mut(preview).remove::<Frozen>();
+
+        revert_preview(&mut world);
+
+        assert!(world.get::<Frozen>(preview).is_none());
+    }
+
+    /// A list the game grew comes back at its old length.
+    #[test]
+    fn a_stop_shrinks_a_list_the_game_grew() {
+        let (mut world, preview, node_id) = build_revert_world();
+        world
+            .resource::<AppTypeRegistry>()
+            .write()
+            .register::<Inventory>();
+        world
+            .entity_mut(preview)
+            .insert(Inventory { items: vec![] });
+        project_event(
+            &mut world,
+            StateEvent::EntitySpawned {
+                entity: RemoteEntity {
+                    entity: 1,
+                    components: [(
+                        <Inventory as bevy::reflect::TypePath>::type_path().to_string(),
+                        serde_json::json!({ "items": [1, 2, 3] }),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    scene_node_id: Some(node_id.0),
+                },
+            },
+        );
+        assert_eq!(
+            world.get::<Inventory>(preview).map(|held| held.items.len()),
+            Some(3)
+        );
+
+        revert_preview(&mut world);
+
+        assert_eq!(
+            world.get::<Inventory>(preview),
+            Some(&Inventory { items: vec![] })
+        );
+    }
+
+    /// A child queued for a parent, then moved to another by the game, stays with
+    /// the second when the first spawns late.
+    #[test]
+    fn a_late_parent_does_not_take_back_a_child_the_game_moved_on() {
+        use bevy::prelude::ChildOf;
+        let (mut world, _preview, _node_id) = build_projection_world();
+        let (first_bits, child_bits, path, first_value) = wire_child_of();
+        project_event(
+            &mut world,
+            spawn_event(child_bits, vec![(path.clone(), first_value)]),
+        );
+        let child = world.resource::<PieProjection>().by_bits[&child_bits];
+
+        let second_bits = Entity::from_raw_u32(4242).expect("an index").to_bits();
+        project_event(&mut world, spawn_event(second_bits, vec![]));
+        let second = world.resource::<PieProjection>().by_bits[&second_bits];
+        project_event(
+            &mut world,
+            StateEvent::ComponentChanged {
+                entity: child_bits,
+                type_path: path,
+                value: serde_json::json!(format!("{}", Entity::from_bits(second_bits))),
+            },
+        );
+        assert_eq!(world.get::<ChildOf>(child).map(|c| c.0), Some(second));
+
+        project_event(&mut world, spawn_event(first_bits, vec![]));
+
+        assert_eq!(world.get::<ChildOf>(child).map(|c| c.0), Some(second));
+    }
+
+    /// A selected Live entity goes from the selection with the entity.
+    #[test]
+    fn a_stop_leaves_no_dead_entity_selected() {
+        let (mut world, preview, _node_id) = build_revert_world();
+        world.init_resource::<crate::selection::Selection>();
+        project_event(&mut world, spawn_event(2, vec![]));
+        let ephemeral = world.resource::<PieProjection>().by_bits[&2];
+        world.resource_mut::<crate::selection::Selection>().entities = vec![preview, ephemeral];
+
+        revert_preview(&mut world);
+
+        assert_eq!(
+            world.resource::<crate::selection::Selection>().entities,
+            vec![preview]
         );
     }
 

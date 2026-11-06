@@ -2213,17 +2213,37 @@ fn a_scene_whose_text_does_not_parse_back_survives_a_tab_switch() {
     );
 }
 
+/// Stop a Play in which the game did something only a respawn undoes.
+fn stop_with_a_respawn(app: &mut bevy::app::App) {
+    app.world_mut()
+        .get_resource_or_init::<jackdaw::pie_projection::PieProjection>()
+        .needs_respawn = true;
+    jackdaw::pie_projection::revert_preview(app.world_mut());
+}
+
 #[test]
 fn stopping_play_keeps_a_scene_whose_text_does_not_parse_back() {
     let mut app = make_app_with_n_tabs(1);
     app.init_resource::<jackdaw::status_bar::StatusNotice>();
     let (keeper, _) = live_scene_with_an_unparsable_node(&mut app);
+    app.world_mut()
+        .get_resource_or_init::<jackdaw::pie_projection::PieProjection>()
+        .overlaid
+        .insert(keeper);
 
-    jackdaw::pie_projection::revert_preview(app.world_mut());
+    stop_with_a_respawn(&mut app);
 
     assert!(
         app.world().get_entity(keeper).is_ok(),
         "keeper was despawned"
+    );
+    let projection = app
+        .world()
+        .resource::<jackdaw::pie_projection::PieProjection>();
+    assert!(projection.needs_respawn, "the respawn is still owed");
+    assert!(
+        projection.overlaid.contains(&keeper),
+        "keeper still holds game state, so a save takes nothing from it"
     );
     assert_eq!(
         app.world()
@@ -2455,7 +2475,7 @@ fn tilemap_cells_survive_play_stop() {
     let map = spawn_tilemap(&mut app, "map", "zone.tilemap-0.jdtiles");
     put_map(&mut app, "map", painted.clone());
 
-    jackdaw::pie_projection::revert_preview(app.world_mut());
+    stop_with_a_respawn(&mut app);
 
     assert!(
         app.world().get_entity(map).is_err(),

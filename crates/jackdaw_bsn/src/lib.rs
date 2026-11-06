@@ -30,9 +30,9 @@ pub use catalog::{
 };
 
 pub use header::{
-    ASSET_HEADER, AssetFileError, PREFAB_TYPE, StemIndex, asset_file_type, asset_stem,
-    asset_text_type, document_type_path, path_stem, read_asset_file, read_asset_header,
-    read_asset_text, root_type_path, walk_asset_files, walk_document_files,
+    ASSET_HEADER, AssetFileError, DocumentOpening, PREFAB_TYPE, StemIndex, asset_file_type,
+    asset_stem, asset_text_type, document_type_path, path_stem, read_asset_file, read_asset_header,
+    read_asset_text, read_document_opening, root_type_path, walk_asset_files, walk_document_files,
     walk_files_with_extensions, with_asset_header,
 };
 
@@ -60,7 +60,7 @@ pub use emitter::{
     UnparsableEmit, emit_entities, emit_entity, emit_entity_without_children, emit_scene,
     emit_scene_checked, emit_value_text, parse_emitted,
 };
-pub use loader::{BsnLoadError, parse_bsn_text};
+pub use loader::{BsnLoadError, parse_bsn_text, parses_on_this_thread};
 pub use retired::{RETIRED_UI_PREFIX, RetiredUiComponents, reject_retired_ui_components};
 
 pub use apply::{

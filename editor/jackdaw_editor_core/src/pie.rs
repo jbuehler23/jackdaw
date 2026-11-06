@@ -203,10 +203,21 @@ impl PieSession {
     }
 
     /// Whether an instance is waiting on a build before it spawns.
-    fn is_launching(&self) -> bool {
+    pub(crate) fn is_launching(&self) -> bool {
         self.builds.values().any(
             |build| matches!(build, BuildState::Running { pending, .. } if !pending.is_empty()),
         )
+    }
+
+    /// How long the longest-waiting launched instance has gone without connecting.
+    pub(crate) fn connecting_for(&self) -> Option<Duration> {
+        self.children
+            .values()
+            .filter_map(|stage| match stage {
+                ChildStage::Connecting { since, .. } => Some(since.elapsed()),
+                ChildStage::Live { .. } => None,
+            })
+            .max()
     }
 
     /// Whether any instance can take document edits now: `Live` while at
@@ -365,7 +376,7 @@ fn cleanup_session_on_stop(world: &mut World) {
 /// revert when play stops.
 pub(crate) fn enter_live_view(world: &mut World) {
     *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
-    crate::pie_projection::reproject_focused(world);
+    crate::pie_projection::reproject_view(world);
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
@@ -2022,6 +2033,23 @@ pub(crate) fn drain_game_events(world: &mut World) {
                 answer_scene_request(world, &key, *request, path);
                 continue;
             }
+            if let StateEvent::SceneRequestAbandoned { path } = &event {
+                let message = format!(
+                    "{key} stopped waiting for {path} and loaded the file, so it has no unsaved \
+                     edits and may not follow further ones"
+                );
+                warn!("PIE: {message}");
+                crate::status_bar::notify_warn(world, message);
+                continue;
+            }
+            if matches!(event, StateEvent::OwnWindow) {
+                if is_focused {
+                    world
+                        .resource_mut::<crate::live_frame::LiveFrameStream>()
+                        .game_has_own_window = true;
+                }
+                continue;
+            }
 
             // Always accumulate into the per-instance buffer.
             world
@@ -2433,6 +2461,19 @@ mod enter_live_tests {
         enter_live_view(&mut world);
 
         assert_eq!(*world.resource::<PieViewMode>(), PieViewMode::Live);
+    }
+
+    #[test]
+    fn enter_live_view_keeps_an_owed_respawn() {
+        let mut world = World::new();
+        world.insert_resource(PieViewMode::Scene);
+        world.init_resource::<PieInstances>();
+        world.init_resource::<PieProjection>();
+        world.resource_mut::<PieProjection>().needs_respawn = true;
+
+        enter_live_view(&mut world);
+
+        assert!(world.resource::<PieProjection>().needs_respawn);
     }
 
     #[test]

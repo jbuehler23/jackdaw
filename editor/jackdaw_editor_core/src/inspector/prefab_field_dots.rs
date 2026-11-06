@@ -123,6 +123,13 @@ pub(crate) fn revert_component_to_baseline(
         return;
     };
 
+    if !world
+        .get_entity(entity)
+        .is_ok_and(|held| reflect_component.contains(held))
+    {
+        return;
+    }
+
     let deserializer = TypedReflectDeserializer::new(registration, &registry);
     let Ok(reflected) = deserializer.deserialize(baseline_val) else {
         warn!("Failed to deserialize baseline for '{type_path}'");

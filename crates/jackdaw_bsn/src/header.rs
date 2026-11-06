@@ -14,6 +14,8 @@ use bevy::ecs::entity::Entity;
 use bevy::reflect::{FromReflect, GetTypeRegistration, TypePath, TypeRegistry};
 
 use crate::catalog::asset_value_from_root;
+use crate::syntax::lex::Token;
+use crate::syntax::span::Span;
 use crate::{BsnLoadError, SceneBsnAst, bsn_value_to_reflect, parse_bsn_text};
 
 /// The comment marker that introduces an asset file's type header.
@@ -143,10 +145,118 @@ pub fn root_type_path(ast: &SceneBsnAst, root: Entity) -> Option<String> {
     asset_value_from_root(ast, root).map(|(type_path, _)| type_path)
 }
 
+/// What a document's first root looks like, read from its first tokens so that
+/// telling a large scene from an asset file never costs parsing the scene.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentOpening {
+    /// The first root has children, so the document spawns a hierarchy.
+    Hierarchy,
+    /// The first root has no children and this is the first type it names. A
+    /// parse has the last word, since the list it opens may turn out not to be
+    /// a multi-root wrapper.
+    Value(String),
+    /// Only a parse can tell.
+    Unclear,
+}
+
+/// Read a document's first root as far as [`DocumentOpening`] needs, taking the
+/// type it names through the migrations a parse would apply.
+pub fn read_document_opening(text: &str) -> DocumentOpening {
+    let (opening, end) = scan_first_root(text);
+    if !matches!(opening, DocumentOpening::Value(_)) {
+        return opening;
+    }
+    let first_root = crate::migrate::migrate_stamped(&text[..end]);
+    scan_first_root(&first_root).0
+}
+
+/// Walk the tokens of the first root, or of the first entity of a leading
+/// multi-root `Children` list, without building anything. Also returns where
+/// the walk stopped.
+fn scan_first_root(text: &str) -> (DocumentOpening, usize) {
+    let mut path = String::new();
+    let mut first_type: Option<String> = None;
+    let mut entries = 0usize;
+    let mut in_root_list = false;
+    let mut naming = false;
+    let mut value_depth = 0usize;
+    let mut end = text.len();
+
+    fn finish_path(path: &mut String, first_type: &mut Option<String>, entries: &mut usize) {
+        if !path.is_empty() {
+            first_type.get_or_insert_with(|| path.clone());
+            path.clear();
+            *entries += 1;
+        }
+    }
+
+    for token in Span::from(text) {
+        let Ok(token) = token else {
+            return (DocumentOpening::Unclear, end);
+        };
+        if value_depth > 0 {
+            match token.token {
+                Token::LBrace | Token::LParen | Token::LBracket => value_depth += 1,
+                Token::RBrace | Token::RParen | Token::RBracket => value_depth -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        if naming {
+            naming = false;
+            if matches!(token.token, Token::Ident(_) | Token::StringLit(_)) {
+                continue;
+            }
+            return (DocumentOpening::Unclear, end);
+        }
+        match token.token {
+            Token::Hash => {
+                finish_path(&mut path, &mut first_type, &mut entries);
+                entries += 1;
+                naming = true;
+            }
+            Token::Ident(segment) => {
+                if !path.is_empty() && !path.ends_with("::") {
+                    finish_path(&mut path, &mut first_type, &mut entries);
+                }
+                path.push_str(&segment);
+            }
+            Token::DoubleColon => path.push_str("::"),
+            Token::LBrace | Token::LParen => {
+                finish_path(&mut path, &mut first_type, &mut entries);
+                value_depth = 1;
+            }
+            Token::LBracket => {
+                if path.is_empty() {
+                    return (DocumentOpening::Unclear, end);
+                }
+                path.clear();
+                if entries > 0 || in_root_list {
+                    return (DocumentOpening::Hierarchy, end);
+                }
+                in_root_list = true;
+            }
+            Token::Comma | Token::DoubleMinus | Token::RBracket => {
+                end = token.span.offset;
+                break;
+            }
+            _ => return (DocumentOpening::Unclear, end),
+        }
+    }
+    finish_path(&mut path, &mut first_type, &mut entries);
+    match first_type {
+        Some(type_path) => (DocumentOpening::Value(type_path), end),
+        None => (DocumentOpening::Unclear, end),
+    }
+}
+
 /// The type a document names as the one it holds: [`PREFAB_TYPE`] for a
 /// document whose roots carry the prefab marker, else its first root's type.
 /// `None` for a document that spawns a hierarchy rather than holding one value.
 pub fn document_type_path(text: &str) -> Option<String> {
+    if !text.contains(PREFAB_TYPE) && read_document_opening(text) == DocumentOpening::Hierarchy {
+        return None;
+    }
     let ast = parse_bsn_text(text).ok()?;
     if text.contains(PREFAB_TYPE)
         && ast
@@ -335,6 +445,86 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_document_opening_a_hierarchy_is_known_from_its_first_tokens() {
+        for opening in [
+            "#Root\nmy::Transform\nbevy_ecs::hierarchy::Children [\n",
+            "#Root bevy_ecs::hierarchy::Children [",
+            "// jackdaw 0.21.0-dev | bevy main\nbevy_ecs::hierarchy::Children [\n #Root\n my::A { list: [1, 2], text: \"[\" }\n bevy_ecs::hierarchy::Children [\n",
+            "jackdaw_bsn::__SceneRootGroup\nbevy_ecs::hierarchy::Children [\n #One\n my::A\n",
+        ] {
+            assert_eq!(
+                read_document_opening(&format!("{opening} what follows does not lex: ~~~")),
+                DocumentOpening::Hierarchy,
+                "{opening}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flat_first_root_opens_with_the_type_it_names() {
+        for (text, named) in [
+            (
+                "#grass\nmy::Grass {\n  list: [1, 2],\n}\nmy::Other\n",
+                "my::Grass",
+            ),
+            ("my::Tuple(1, [2])\n", "my::Tuple"),
+            ("#\"A name\"\nmy::Unit", "my::Unit"),
+            (
+                "bevy_ecs::hierarchy::Children [\n #a\n my::A,\n #b\n my::B\n]\n",
+                "my::A",
+            ),
+            (
+                "#a\nmy::A\n--\n#b\nbevy_ecs::hierarchy::Children [\n]\n",
+                "my::A",
+            ),
+        ] {
+            assert_eq!(
+                read_document_opening(text),
+                DocumentOpening::Value(named.to_string()),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn what_the_tokens_cannot_settle_is_left_to_a_parse() {
+        for text in [
+            "",
+            "#only_a_name\n",
+            ":\"base.bsn\"\n",
+            "my::Generic<u32>\n",
+            "12\n",
+        ] {
+            assert_eq!(
+                read_document_opening(text),
+                DocumentOpening::Unclear,
+                "{text}"
+            );
+        }
+    }
+
+    /// The type a parse would read is the type the opening names, once an old
+    /// document's paths are migrated.
+    #[test]
+    fn the_opening_agrees_with_a_parse_on_a_moved_type() {
+        let (old, new) = crate::migrate::MOVED_TYPES[0];
+        assert_eq!(
+            read_document_opening(&format!("{old}\n")),
+            DocumentOpening::Value(new.to_string())
+        );
+    }
+
+    #[test]
+    fn typing_a_scene_costs_no_parse() {
+        let before = crate::parses_on_this_thread();
+        assert_eq!(
+            document_type_path("#Root\nmy::A\nbevy_ecs::hierarchy::Children [\n my::B\n]\n"),
+            None
+        );
+        assert_eq!(crate::parses_on_this_thread(), before);
+    }
+
     use super::*;
     use crate::parse_bsn_text;
 

@@ -152,6 +152,12 @@ impl AssetIndex {
         self.writes += 1;
     }
 
+    /// Put the write count back after a `set_documents` that changed nothing an
+    /// in-flight walk would lose.
+    fn restore_writes(&mut self, writes: u64) {
+        self.writes = writes;
+    }
+
     /// The documents whose patches reference the file at `path`, as the index
     /// keys them. A document answers to either form it could be held in.
     pub fn referrers(&self, path: &Path) -> &[PathBuf] {
@@ -609,6 +615,93 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
     scan
 }
 
+/// Index the asset files `text` names, for a document about to spawn before the
+/// project's first walk has landed.
+///
+/// That walk runs off the main thread and reads every document, so a large
+/// scene opened with the project spawns first. A file not yet in the index
+/// resolves to nothing there, so a load reads the few files it names up front;
+/// the walk then finds them held. Once a walk has landed the index is complete
+/// and this does nothing.
+pub fn index_files_named(world: &mut World, text: &str) {
+    if world.get_resource_or_init::<AssetWalks>().0 > 0 {
+        return;
+    }
+    let Some(assets) = assets_dir(world) else {
+        return;
+    };
+    if !world.contains_resource::<AssetKinds>() {
+        return;
+    }
+    let documents: Vec<PathBuf> = walk_document_files(&assets)
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path.strip_prefix(&assets).ok()?;
+            if is_catalog_file(relative) {
+                return None;
+            }
+            match jackdaw_bsn::is_binary_path(relative) {
+                true => Some(jackdaw_bsn::text_twin(relative)),
+                false => Some(relative.to_path_buf()),
+            }
+        })
+        .collect();
+    let writes_before = world.get_resource_or_init::<AssetIndex>().writes();
+    world
+        .get_resource_or_init::<AssetIndex>()
+        .bypass_change_detection()
+        .set_documents(documents);
+
+    let mut added = false;
+    for reference in crate::asset_files::spelled_references(text) {
+        let index = world.resource::<AssetIndex>();
+        let Some(relative) = referenced_path(index, &assets, &reference) else {
+            continue;
+        };
+        if !jackdaw_bsn::is_document_path(&relative) {
+            continue;
+        }
+        let relative = jackdaw_bsn::text_twin(&relative);
+        if index.get(&relative).is_some() {
+            continue;
+        }
+        let file = document_file(&assets, &relative);
+        let type_path = world
+            .get_resource_or_init::<AssetKindCache>()
+            .type_of(&file);
+        let kinds = world.resource::<AssetKinds>();
+        let Some(kind) = type_path.and_then(|type_path| claimed_kind(&type_path, kinds)) else {
+            continue;
+        };
+        let Ok(mtime) = std::fs::metadata(&file).and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        let Some(value) = load_asset_value(world, &kind, &file) else {
+            continue;
+        };
+        publish_name(world, &relative, &kind, &value);
+        world.resource_mut::<AssetIndex>().insert(AssetEntry {
+            path: relative,
+            kind: kind.kind.clone(),
+            type_path: kind.type_path.clone(),
+            file_kind: AssetFileKind::Asset {
+                type_path: kind.type_path.clone(),
+            },
+            value,
+            mtime,
+        });
+        added = true;
+    }
+    if added {
+        publish_reference_map(world);
+    } else {
+        world
+            .resource_mut::<AssetIndex>()
+            .bypass_change_detection()
+            .restore_writes(writes_before);
+    }
+}
+
 /// Take what each document spells as the documents referring to each file, so
 /// a card can say what a file is used by and a delete can say what it breaks.
 fn record_referrers(world: &mut World, spelled: Vec<(PathBuf, Vec<String>)>) {
@@ -826,6 +919,8 @@ pub fn open_asset_index(world: &mut World) {
     // nothing about this one; dropping it also lets this project ask for one.
     world.remove_resource::<AssetWalkTask>();
     world.get_resource_or_init::<AssetScanPending>().0 = false;
+    // No walk of this project has landed, so `index_files_named` has work again.
+    world.get_resource_or_init::<AssetWalks>().0 = 0;
     watch_asset_files(world);
     start_asset_walk(world);
 }
@@ -1098,6 +1193,25 @@ mod tests {
     }
 
     #[test]
+    fn a_file_named_before_the_walk_is_keyed_by_its_text_twin() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = material_project(tmp.path());
+        write_asset(tmp.path(), "materials/soil.bsb", GRASS);
+        write_asset(tmp.path(), "catalog.bsb", GRASS);
+
+        index_files_named(app.world_mut(), "\"materials/soil.bsb\"");
+
+        let index = app.world().resource::<AssetIndex>();
+        assert!(index.get(Path::new("materials/soil.bsn")).is_some());
+        assert!(index.get(Path::new("materials/soil.bsb")).is_none());
+        assert!(index.get(Path::new("catalog.bsn")).is_none());
+        assert!(
+            index.stems().unique("catalog").is_none(),
+            "the catalog is not a document"
+        );
+    }
+
+    #[test]
     fn a_document_held_in_both_forms_is_keyed_once_and_read_from_its_text() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut app = material_project(tmp.path());
@@ -1115,6 +1229,25 @@ mod tests {
             assets.join("materials/grass.bsn"),
             "and the text file is the one it is read from"
         );
+    }
+
+    /// `index_files_named` only works before a project's first walk lands, and a
+    /// walk of the project before says nothing about the one opening now.
+    #[test]
+    fn opening_a_project_forgets_the_walks_of_the_last_one() {
+        bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut world = World::new();
+        world.init_resource::<AssetIndex>();
+        world.insert_resource(AssetWalks(3));
+        world.insert_resource(ProjectRoot {
+            root: tmp.path().to_path_buf(),
+            config: crate::project::ProjectConfig::default(),
+        });
+
+        open_asset_index(&mut world);
+
+        assert_eq!(world.resource::<AssetWalks>().0, 0);
     }
 
     #[test]

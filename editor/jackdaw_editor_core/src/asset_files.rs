@@ -134,8 +134,9 @@ fn without_label(value: &str) -> &str {
 }
 
 /// The references a document's values spell, in the order it spells them.
-fn spelled_references(text: &str) -> Vec<String> {
+pub(crate) fn spelled_references(text: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut characters = text.chars();
     while let Some(character) = characters.next() {
         if character != '"' {
@@ -156,7 +157,7 @@ fn spelled_references(text: &str) -> Vec<String> {
             }
         }
         let named = without_label(&value);
-        if could_name_a_file(named) && !found.iter().any(|held| held == named) {
+        if could_name_a_file(named) && seen.insert(named.to_string()) {
             found.push(named.to_string());
         }
     }
@@ -180,9 +181,26 @@ fn read_file_facts(path: &Path, opened: Option<&HashSet<String>>) -> FileFacts {
     };
     let header = jackdaw_bsn::read_asset_header(&text);
     let trusted = header.filter(|header| opened.is_some_and(|opened| !opened.contains(header)));
+    let named = trusted.or_else(|| first_root_nothing_opens(&text, opened));
     FileFacts {
-        type_path: trusted.or_else(|| jackdaw_bsn::asset_text_type(&text, path)),
+        type_path: named.or_else(|| jackdaw_bsn::asset_text_type(&text, path)),
         references: spelled_references(&text),
+    }
+}
+
+/// The type a document's first root names, when the editor has nothing to open
+/// that type as. A parse could only confirm a type nothing acts on, and it would
+/// cost a large scene's whole length.
+fn first_root_nothing_opens(text: &str, opened: Option<&HashSet<String>>) -> Option<String> {
+    let opened = opened?;
+    if text.contains(PREFAB_TYPE) {
+        return None;
+    }
+    match jackdaw_bsn::read_document_opening(text) {
+        jackdaw_bsn::DocumentOpening::Value(type_path) if !opened.contains(&type_path) => {
+            Some(type_path)
+        }
+        _ => None,
     }
 }
 
@@ -254,6 +272,30 @@ pub use jackdaw_bsn::walk_document_files;
 mod tests {
     use super::*;
     use jackdaw_api::prelude::AssetKind;
+
+    /// The walk reads every document off the main thread, and a large scene must
+    /// not cost it a parse the spawn is about to repeat.
+    #[test]
+    fn reading_a_scene_s_facts_costs_no_parse() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let hierarchy = dir.path().join("hierarchy.bsn");
+        std::fs::write(
+            &hierarchy,
+            "#Root\nmy::A\nbevy_ecs::hierarchy::Children [\n my::B { texture: \"a.png\" }\n]\n",
+        )
+        .expect("a scene");
+        let flat = dir.path().join("flat.bsn");
+        std::fs::write(&flat, "my::A\n--\nmy::B\n").expect("a scene");
+
+        let opened = HashSet::from([ITEM_TYPE.to_string()]);
+        let before = jackdaw_bsn::parses_on_this_thread();
+        let facts = read_file_facts(&hierarchy, Some(&opened));
+        assert_eq!(facts.type_path, None);
+        assert_eq!(facts.references, vec!["a.png".to_string()]);
+        let facts = read_file_facts(&flat, Some(&opened));
+        assert_eq!(facts.type_path.as_deref(), Some("my::A"));
+        assert_eq!(jackdaw_bsn::parses_on_this_thread(), before);
+    }
 
     const ITEM_TYPE: &str = "my_game::content::ItemDef";
 

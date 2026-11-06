@@ -6,7 +6,7 @@
 //! share a request. The answer either carries the text to spawn or sends the
 //! root to its file. The main thread never waits: a root is only looked at again
 //! the next update, and after [`ANSWER_TIMEOUT`] of real time without an answer
-//! it loads its file and a late answer is ignored.
+//! it loads its file, says so to the editor, and a late answer is ignored.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,13 +16,18 @@ use bevy::asset::io::AssetSourceId;
 use bevy::asset::{AssetPath, AssetServer};
 use bevy::prelude::*;
 use jackdaw_pie_protocol::SceneAnswer;
-use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
+use jackdaw_pie_protocol::event::StateEvent;
 
-use crate::pie::PieTransportRes;
 use crate::{JackdawScene, JackdawSceneRoot};
 
-/// How long a root waits for the editor before it loads its file.
-pub(crate) const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a root waits for the editor before it loads its file. The editor
+/// answers from its main thread and a large document takes seconds to emit, so
+/// this only has to catch an editor that will never answer; giving up early
+/// costs the unsaved edits and node ids only the document holds.
+pub(crate) const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long an unanswered request waits before the game says it is waiting.
+const SLOW_ANSWER: Duration = Duration::from_secs(15);
 
 /// The requests sent to the editor and the answers not yet taken.
 #[derive(Resource, Default)]
@@ -32,11 +37,15 @@ pub(crate) struct SceneRequests {
     /// Answers that arrived this update, taken by the roots waiting on them in
     /// the next spawn pass.
     answered: HashMap<u64, SceneAnswer>,
+    /// Set when a request timed out and cleared by any answer. While set, new
+    /// roots load their file without asking.
+    editor_silent: bool,
 }
 
 struct OpenRequest {
     path: String,
     asked_at: Duration,
+    warned: bool,
 }
 
 /// A root waiting on the request it holds.
@@ -84,17 +93,36 @@ pub(crate) fn begin_pass(world: &mut World) {
     let Some(mut requests) = world.get_resource_mut::<SceneRequests>() else {
         return;
     };
+    let mut abandoned = Vec::new();
+    let mut timed_out = false;
     requests.open.retain(|_, open| {
-        let alive = now.saturating_sub(open.asked_at) < ANSWER_TIMEOUT;
+        let waited = now.saturating_sub(open.asked_at);
+        let alive = waited < ANSWER_TIMEOUT;
+        if alive && waited >= SLOW_ANSWER && !open.warned {
+            open.warned = true;
+            warn!(
+                "PIE: waiting for the editor's scene {}; the file loads at {} s if it does not answer",
+                open.path,
+                ANSWER_TIMEOUT.as_secs()
+            );
+        }
         if !alive {
+            timed_out = true;
             warn!(
                 "PIE: the editor did not answer for scene {} within {} s; loading its file",
                 open.path,
                 ANSWER_TIMEOUT.as_secs()
             );
+            abandoned.push(open.path.clone());
         }
         alive
     });
+    if timed_out {
+        requests.editor_silent = true;
+    }
+    for path in abandoned {
+        crate::pie::send_state(world, &StateEvent::SceneRequestAbandoned { path });
+    }
 }
 
 /// Every root waiting on an answer took it during the pass, so none are kept.
@@ -113,6 +141,9 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
         return Gate::File;
     };
     let Some(&AwaitingDocument(request)) = world.get::<AwaitingDocument>(root) else {
+        if world.resource::<SceneRequests>().editor_silent {
+            return Gate::File;
+        }
         let request = ask(world, &path);
         world.entity_mut(root).insert(AwaitingDocument(request));
         return Gate::Hold;
@@ -175,20 +206,16 @@ fn ask(world: &mut World, path: &str) -> u64 {
         OpenRequest {
             path: path.to_string(),
             asked_at: now,
+            warned: false,
         },
     );
-    let event = StateEvent::RequestScene {
-        request,
-        path: path.to_string(),
-    };
-    match to_bytes(&event) {
-        Ok(bytes) => {
-            if let Some(mut transport) = world.get_non_send_mut::<PieTransportRes>() {
-                transport.0.send(PieChannel::Reliable, &bytes);
-            }
-        }
-        Err(err) => error!("PIE: failed to encode a scene request: {err}"),
-    }
+    crate::pie::send_state(
+        world,
+        &StateEvent::RequestScene {
+            request,
+            path: path.to_string(),
+        },
+    );
     request
 }
 
@@ -203,6 +230,7 @@ pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
         crate::node_sync::load_scene_assets(world, text);
     }
     let mut requests = world.resource_mut::<SceneRequests>();
+    requests.editor_silent = false;
     if requests.open.remove(&request).is_some() {
         requests.answered.insert(request, answer);
     } else {
@@ -220,7 +248,7 @@ mod tests {
 
     use bevy::asset::ReflectAsset;
     use bevy::ecs::message::Messages;
-    use jackdaw_pie_protocol::event::{ControlEvent, from_bytes};
+    use jackdaw_pie_protocol::event::{ControlEvent, PieChannel, from_bytes, to_bytes};
     use jackdaw_pie_protocol::{LoopbackTransport, PieTransport, connect, serve};
     use jackdaw_scene_types::SceneNodeId;
 
@@ -361,6 +389,44 @@ mod tests {
         }
     }
 
+    /// The file loads whatever the answer will be, and a game spawning the
+    /// editor's document has no use for the file's parse.
+    #[test]
+    fn a_game_under_play_parses_only_the_document_it_spawns() {
+        let (mut app, mut editor, _dir) = game();
+        let root = spawn_root(&mut app, "scene.bsn");
+        let handle = app
+            .world()
+            .get::<JackdawSceneRoot>(root)
+            .expect("a root")
+            .0
+            .clone();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while app
+            .world()
+            .resource::<Assets<JackdawScene>>()
+            .get(&handle)
+            .is_none()
+        {
+            assert!(Instant::now() < deadline, "the file never loaded");
+            app.update();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            app.world()
+                .resource::<Assets<JackdawScene>>()
+                .get(&handle)
+                .and_then(JackdawScene::take_parsed)
+                .is_none(),
+            "the loader left the parse alone"
+        );
+
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(request, scene_text(5.0)));
+        update_until_spawned(&mut app);
+        assert_eq!(node_xs(&mut app), vec![5.0]);
+    }
+
     #[test]
     fn a_root_asks_without_blocking_and_spawns_the_answer_over_its_file() {
         let (mut app, mut editor, dir) = game();
@@ -477,6 +543,17 @@ mod tests {
         ));
         update_until_spawned(&mut app);
         assert_eq!(node_xs(&mut app), vec![1.0], "the file");
+        assert!(
+            editor
+                .drain_received()
+                .into_iter()
+                .filter_map(|(_, bytes)| from_bytes::<StateEvent>(&bytes).ok())
+                .any(|event| matches!(
+                    event,
+                    StateEvent::SceneRequestAbandoned { path } if path == "scene.bsn"
+                )),
+            "the editor hears the game gave up"
+        );
 
         send(&mut editor, &document(request, scene_text(9.0)));
         for _ in 0..3 {
@@ -488,6 +565,61 @@ mod tests {
             "the late answer changes nothing"
         );
         assert!(app.world().get::<ServedScene>(root).is_none());
+    }
+
+    #[test]
+    fn after_a_silence_later_roots_load_their_file_until_an_answer_arrives() {
+        let (mut app, mut editor, _dir) = game();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            ANSWER_TIMEOUT / 4,
+        ));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            ANSWER_TIMEOUT,
+        ));
+        update_until_spawned(&mut app);
+        editor.drain_received();
+
+        spawn_root(&mut app, "other.bsn");
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            requests_from(&mut editor).is_empty(),
+            "a silent editor is not asked again"
+        );
+        assert!(app.world().resource::<SceneRequests>().open.is_empty());
+
+        send(&mut editor, &document(request, scene_text(9.0)));
+        app.update();
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        app.update();
+        assert_eq!(
+            requests_from(&mut editor).len(),
+            1,
+            "an answer ends the silence"
+        );
+    }
+
+    /// The editor's main thread stalls for seconds emitting a large document.
+    #[test]
+    fn a_stalled_editor_is_still_waited_for() {
+        let (mut app, mut editor, _dir) = game();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs(12),
+        ));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        app.update();
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(request, scene_text(5.0)));
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![5.0], "the document, not the file");
     }
 
     #[test]

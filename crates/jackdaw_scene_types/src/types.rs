@@ -66,7 +66,7 @@ impl std::error::Error for RevolveBrushError {}
 
 /// Canonical brush data. Serialized. Geometry derived from this.
 #[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component, Default, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]
+#[reflect(Component, Default, Clone, @crate::EditorCategory::new("Brush"), @crate::EditorHidden)]
 pub struct Brush {
     pub faces: Vec<BrushFaceData>,
     /// Explicit half-edge topology. Empty for legacy brushes loaded from `.jsn` without topology

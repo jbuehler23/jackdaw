@@ -2,6 +2,8 @@
 //! streamed frame. A click on the frame engages input capture. The panel is
 //! a pure monitor: no editor camera, no overlay, no compositing.
 
+use std::time::{Duration, Instant};
+
 use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
@@ -33,8 +35,8 @@ pub struct GamePanelImage;
 #[derive(Component)]
 pub struct GamePanelIdleLabel;
 
-/// Marker on the "no signal" chip shown while an instance is focused but no
-/// fresh frame has arrived.
+/// Marker on the "no signal" chip shown while the focused instance's stream
+/// has gone quiet.
 #[derive(Component)]
 pub struct GameNoSignalChip;
 
@@ -91,8 +93,8 @@ pub(crate) fn surface_remap(
     (top_left, panel)
 }
 
-/// Engage input capture on a click on the frame surface. Clicks with no
-/// focused fresh stream do nothing (the idle label is showing).
+/// Engage input capture on a click on the frame surface. Clicks while the
+/// stream is not fresh do nothing, though the last frame stays up.
 fn surface_clicked(world: &mut World, surface: Entity) {
     let fresh = world
         .get_resource::<LiveFrameStream>()
@@ -179,8 +181,8 @@ pub fn game_panel_content() -> impl Bundle {
     )
 }
 
-/// Build the "no signal" chip, shown while an instance is focused but no
-/// fresh frame has arrived.
+/// Build the "no signal" chip, shown while the focused instance's stream has
+/// gone quiet.
 fn game_no_signal_chip() -> impl Bundle {
     (
         GameNoSignalChip,
@@ -249,16 +251,15 @@ fn game_play_input_button() -> impl Bundle {
     )
 }
 
-/// Point the frame image at the current stream and show it when fresh, else
-/// show the idle label.
+/// Point the frame image at the current stream and show it once a frame has
+/// arrived, else show the idle label. A slow game's last frame stays up.
 fn sync_game_panel_image(
     stream: Res<LiveFrameStream>,
     mut images: Query<(&mut ImageNode, &mut Node), With<GamePanelImage>>,
     mut idle: Query<&mut Node, (With<GamePanelIdleLabel>, Without<GamePanelImage>)>,
 ) {
-    let fresh = stream.is_fresh();
     let handle = stream.image.clone();
-    let show_image = fresh && handle.is_some();
+    let show_image = handle.is_some();
     let image_display = if show_image {
         Display::Flex
     } else {
@@ -287,26 +288,112 @@ fn sync_game_panel_image(
 }
 
 const IDLE_STOPPED: &str = "Press Play to run the game here";
+const IDLE_BUILDING: &str = "Building the game...";
 const IDLE_WINDOWED: &str = "Running in its own window";
-const IDLE_WAITING: &str = "Waiting for the game's first frame. A game whose main.rs does not pass \
-     DefaultPlugins through jackdaw_runtime::maybe_windowless opens its own window instead.";
+const IDLE_LOADING: &str = "Loading the game...";
+const IDLE_STARTING: &str = "Starting the game...";
+const IDLE_OWN_WINDOW: &str = "This game opened its own window. To show it here, pass DefaultPlugins \
+     through jackdaw_runtime::maybe_windowless in its main.rs.";
 
-/// Say where the game is while the panel has no frame to show.
+/// How long a launched game may stay unconnected before the panel says why it
+/// might never connect. It is stopped soon after, at the session's own timeout.
+const SLOW_CONNECT: Duration = Duration::from_secs(10);
+
+/// How long a game may take to its first frame before the panel remarks on it.
+const SLOW_FIRST_FRAME: Duration = Duration::from_secs(60);
+
+/// What the game is doing, for the label shown while the panel has no frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GameWait {
+    Stopped,
+    Building,
+    Windowed,
+    OwnWindow,
+    /// Launched and not yet connected, for this long. A game connects when
+    /// `JackdawPlugin` builds, so one without it never does.
+    Connecting(Duration),
+    /// Connected and not yet showing a frame, for this long.
+    Loading(Duration),
+}
+
+fn idle_message(wait: GameWait) -> String {
+    match wait {
+        GameWait::Stopped => IDLE_STOPPED.to_string(),
+        GameWait::Building => IDLE_BUILDING.to_string(),
+        GameWait::Windowed => IDLE_WINDOWED.to_string(),
+        GameWait::OwnWindow => IDLE_OWN_WINDOW.to_string(),
+        GameWait::Connecting(waited) if waited >= SLOW_CONNECT => {
+            "The game has not connected to the editor yet. It connects when its app adds \
+             JackdawPlugin, and is stopped if it does not."
+                .to_string()
+        }
+        GameWait::Connecting(_) => IDLE_STARTING.to_string(),
+        GameWait::Loading(waited) if waited >= SLOW_FIRST_FRAME => format!(
+            "Still loading the game ({} s). A large scene takes a while, and a game with its \
+             own window on an older runtime will not show here.",
+            waited.as_secs()
+        ),
+        GameWait::Loading(_) => IDLE_LOADING.to_string(),
+    }
+}
+
+/// Say where the game is while the panel has no frame to show, and report a
+/// first frame that took unusually long.
 fn update_game_panel_idle_label(
     play_state: Option<Res<State<PlayState>>>,
     launched: crate::pie::LaunchedWindowMode,
+    stream: Res<LiveFrameStream>,
+    request: Option<Res<crate::live_frame_view::StreamRequest>>,
+    session: Option<NonSend<crate::pie::PieSession>>,
+    mut loading_since: Local<Option<Instant>>,
     mut labels: Query<&mut Text, With<GamePanelIdleLabel>>,
+    mut commands: Commands,
 ) {
     let running = play_state.is_some_and(|state| *state.get() != PlayState::Stopped);
     let windowed = launched.get() == PieWindowMode::Windowed;
-    let message = match (running, windowed) {
-        (false, _) => IDLE_STOPPED,
-        (true, true) => IDLE_WINDOWED,
-        (true, false) => IDLE_WAITING,
+    if !running || windowed || stream.game_has_own_window {
+        *loading_since = None;
+    } else if stream.has_frame() {
+        if let Some(waited) = loading_since.take().map(|since| since.elapsed())
+            && waited >= SLOW_FIRST_FRAME
+        {
+            commands.queue(move |world: &mut World| {
+                crate::status_bar::notify_info(
+                    world,
+                    format!(
+                        "The game took {} s to show its first frame",
+                        waited.as_secs()
+                    ),
+                );
+            });
+        }
+    } else if request.is_some_and(|request| request.is_requested()) {
+        loading_since.get_or_insert_with(Instant::now);
+    }
+
+    let wait = if running {
+        if windowed {
+            GameWait::Windowed
+        } else if stream.game_has_own_window {
+            GameWait::OwnWindow
+        } else {
+            GameWait::Loading(loading_since.map_or(Duration::ZERO, |since| since.elapsed()))
+        }
+    } else if let Some(session) = session {
+        if session.is_launching() {
+            GameWait::Building
+        } else if let Some(waited) = session.connecting_for() {
+            GameWait::Connecting(waited)
+        } else {
+            GameWait::Stopped
+        }
+    } else {
+        GameWait::Stopped
     };
+    let message = idle_message(wait);
     for mut text in &mut labels {
         if text.0 != message {
-            text.0 = message.to_string();
+            text.0.clone_from(&message);
         }
     }
 }
@@ -395,6 +482,12 @@ fn layout_game_panel_image(
     }
 }
 
+/// A stream that showed frames and has stopped. A game still on its way to its
+/// first frame is loading, which the idle label says.
+fn went_quiet(stream: &LiveFrameStream) -> bool {
+    stream.has_frame() && !stream.is_fresh()
+}
+
 /// Drive the no-signal chip, the playing chip, and the capture accent border.
 fn update_game_panel_chips(
     capture: Res<crate::live_input::LiveInputCapture>,
@@ -404,7 +497,7 @@ fn update_game_panel_chips(
     mut playing: Query<&mut Node, (With<GamePlayingChip>, Without<GameNoSignalChip>)>,
     mut roots: Query<&mut BorderColor, With<GamePanel>>,
 ) {
-    let no_signal_display = if instances.focused.is_some() && !stream.is_fresh() {
+    let no_signal_display = if instances.focused.is_some() && went_quiet(&stream) {
         Display::Flex
     } else {
         Display::None
@@ -484,6 +577,43 @@ mod tests {
                 .resource::<crate::live_input::LiveInputCapture>()
                 .active
         );
+    }
+
+    /// Only a game that said it has its own window is told to change main.rs.
+    #[test]
+    fn a_busy_game_reads_as_loading_and_is_not_blamed() {
+        let loading = idle_message(GameWait::Loading(Duration::from_secs(5)));
+        assert_eq!(loading, IDLE_LOADING);
+        assert!(!loading.contains("maybe_windowless"));
+
+        let long = idle_message(GameWait::Loading(Duration::from_secs(200)));
+        assert!(long.contains("200 s"), "{long}");
+        assert!(!long.contains("maybe_windowless"));
+
+        assert!(idle_message(GameWait::OwnWindow).contains("maybe_windowless"));
+        assert_eq!(
+            idle_message(GameWait::Connecting(Duration::from_secs(1))),
+            IDLE_STARTING
+        );
+        let unconnected = idle_message(GameWait::Connecting(SLOW_CONNECT));
+        assert!(unconnected.contains("JackdawPlugin"), "{unconnected}");
+        assert!(!unconnected.contains("oading"), "{unconnected}");
+        assert_eq!(idle_message(GameWait::Stopped), IDLE_STOPPED);
+        assert_eq!(idle_message(GameWait::Building), IDLE_BUILDING);
+        assert_eq!(idle_message(GameWait::Windowed), IDLE_WINDOWED);
+    }
+
+    #[test]
+    fn only_a_stream_that_showed_frames_can_go_quiet() {
+        let mut stream = LiveFrameStream::default();
+        assert!(!went_quiet(&stream), "still loading");
+
+        let mut images = Assets::<Image>::default();
+        stream.image = Some(images.add(Image::default()));
+        assert!(went_quiet(&stream));
+
+        stream.received_at = Some(Instant::now());
+        assert!(!went_quiet(&stream));
     }
 
     #[test]

@@ -123,16 +123,25 @@ fn log_start_declined_once(world: &mut World, reason: &str) {
     }
 }
 
-/// Begin streaming and install the [`FrameStream`] state. An already running
-/// stream restarts at the new size. A game with its own window declines,
-/// logging once and leaving nothing behind.
+/// Begin streaming and install the [`FrameStream`] state. A stream already
+/// running at this size and with its readback alive is left alone, so a frame
+/// in flight survives however often the editor asks; one at another size
+/// restarts. A game with its own window declines, tells the editor, and logs
+/// once.
 pub(crate) fn start_frame_stream(world: &mut World, width: u32, height: u32) {
-    stop_frame_stream(world);
     let size = round_stream_size(width, height);
+    if let Some(stream) = world.get_resource::<FrameStream>()
+        && stream.size == size
+        && world.get_entity(stream.readback).is_ok()
+    {
+        return;
+    }
+    stop_frame_stream(world);
     if world.contains_resource::<crate::pie_windowless::WindowlessTarget>() {
         start_windowless_stream(world, size);
     } else {
         log_start_declined_once(world, "the game has its own window");
+        crate::pie::send_state(world, &jackdaw_pie_protocol::StateEvent::OwnWindow);
     }
 }
 
@@ -274,6 +283,41 @@ mod tests {
         app.init_asset::<Image>();
         start_frame_stream(app.world_mut(), 640, 480);
         assert!(app.world().get_resource::<FrameStream>().is_none());
+    }
+
+    /// A slow game holds the frame the editor is waiting for in its readback. A
+    /// repeated request must not tear that down, or the frame never arrives.
+    #[test]
+    fn asking_again_at_the_same_size_keeps_the_stream_running() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        crate::pie_windowless::install_windowless_world(app.world_mut());
+
+        start_frame_stream(app.world_mut(), 1000, 700);
+        let readback = app.world().resource::<FrameStream>().readback;
+        app.world_mut().resource_mut::<FrameStream>().seq = 41;
+
+        start_frame_stream(app.world_mut(), 1000, 700);
+        assert_eq!(app.world().resource::<FrameStream>().readback, readback);
+        assert_eq!(app.world().resource::<FrameStream>().seq, 41);
+        assert!(app.world().get_entity(readback).is_ok());
+
+        start_frame_stream(app.world_mut(), 1280, 720);
+        assert_ne!(
+            app.world().resource::<FrameStream>().readback,
+            readback,
+            "another size is a new stream"
+        );
+
+        let readback = app.world().resource::<FrameStream>().readback;
+        app.world_mut().despawn(readback);
+        start_frame_stream(app.world_mut(), 1280, 720);
+        assert_ne!(
+            app.world().resource::<FrameStream>().readback,
+            readback,
+            "a capture that died comes back"
+        );
     }
 
     #[test]

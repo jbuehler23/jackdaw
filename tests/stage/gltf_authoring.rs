@@ -604,8 +604,6 @@ fn a_lod_groups_levels_get_no_model_instance_until_the_group_goes() {
                 .id()
         })
         .collect();
-    app.update();
-    app.update();
 
     let placed = |app: &App| -> Vec<bool> {
         children
@@ -613,13 +611,16 @@ fn a_lod_groups_levels_get_no_model_instance_until_the_group_goes() {
             .map(|child| app.world().get::<WorldAssetRoot>(*child).is_some())
             .collect()
     };
+    let wait = std::time::Duration::from_secs(30);
+    util::update_until(&mut app, "the model past the last level", wait, |app| {
+        placed(app)[2]
+    });
     assert_eq!(placed(&app), [false, false, true]);
 
     app.world_mut()
         .entity_mut(group)
         .remove::<jackdaw_scene_types::LodGroup>();
-    app.update();
-    app.update();
-
-    assert_eq!(placed(&app), [true, true, true]);
+    util::update_until(&mut app, "the former levels", wait, |app| {
+        placed(app) == [true, true, true]
+    });
 }

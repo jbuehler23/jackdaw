@@ -131,6 +131,17 @@ pub fn record_live_edit(
     field_path: &str,
     field_value: serde_json::Value,
 ) {
+    // The edit is not written to the entity first, so the game's echo is normally
+    // a change that marks the preview as holding game state. Marking it here
+    // covers an echo equal to the held value, which the projection ignores.
+    if world
+        .get::<crate::pie_projection::PieEphemeral>(preview)
+        .is_none()
+        && let Some(mut projection) =
+            world.get_resource_mut::<crate::pie_projection::PieProjection>()
+    {
+        projection.overlaid.insert(preview);
+    }
     let node_id = node_id_for_entity(world, preview);
     let key = LiveEditKey {
         bits,
@@ -762,6 +773,27 @@ mod tests {
         world.insert_resource(ast);
 
         (world, preview_entity, node_id)
+    }
+
+    /// The game's echo of an edit changes nothing on the entity, so the edit itself
+    /// has to say that the entity no longer holds what its document does.
+    #[test]
+    fn a_live_edit_marks_the_entity_as_holding_game_state() {
+        let (mut world, preview, _) = build_world();
+        record_live_edit(
+            &mut world,
+            preview,
+            7,
+            "bevy_transform::components::transform::Transform",
+            "scale",
+            serde_json::json!([3.0, 3.0, 3.0]),
+        );
+        assert!(
+            world
+                .resource::<PieProjection>()
+                .overlaid
+                .contains(&preview)
+        );
     }
 
     #[test]

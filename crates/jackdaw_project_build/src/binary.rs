@@ -17,8 +17,9 @@ use crate::shim::ShimSpec;
 
 /// A completed binary build.
 pub struct ProjectBinaryBuild {
-    /// The game executable cargo produced. This is the same artifact a
-    /// plain `cargo run` in the project would produce.
+    /// The game executable cargo produced. The same program a plain `cargo run`
+    /// in the project would produce, with its dependencies optimised unless the
+    /// project chose otherwise.
     pub binary: PathBuf,
     /// The project's type schema, extracted by running the binary in
     /// schema mode. `None` when extraction could not run; the editor
@@ -95,10 +96,11 @@ pub fn game_target_dir(jackdaw_dir: &Path) -> PathBuf {
 /// the editor's watcher and where the build's own artifacts land. It builds
 /// against the user's own manifest, lockfile and toolchain, but into
 /// [`game_target_dir`] rather than the project's `target/`: the editor builds
-/// the plain package while a developer's own build carries the features their
-/// game needs, and the two must not overwrite each other's binary. It travels
-/// as a flag rather than as `CARGO_TARGET_DIR`, which `detach_from_host_build`
-/// strips along with the rest of the editor's own build environment.
+/// the plain package with optimised dependencies
+/// while a developer's own build carries the features and profile their game
+/// needs, and the two must not overwrite each other's binary. It travels as a
+/// flag rather than as `CARGO_TARGET_DIR`, which `detach_from_host_build` strips
+/// along with the rest of the editor's own build environment.
 pub fn build_project_binary(
     spec: &ShimSpec,
     jackdaw_dir: &Path,
@@ -192,15 +194,133 @@ pub fn build_project_binary_with_load(
     Ok(ProjectBinaryBuild { binary, schema })
 }
 
+/// Profile overrides for a game the editor builds. A game spends its load and
+/// its frames in Bevy and the runtime, which are many times slower unoptimised,
+/// while the game's own crate stays at the profile's level so a rebuild is quick.
+/// Line tables keep backtraces readable without the memory and link time of full
+/// debug info on optimised code.
+const GAME_DEPENDENCY_OPT_LEVEL: &str = "profile.dev.package.\"*\".opt-level=2";
+const GAME_DEPENDENCY_DEBUG: &str = "profile.dev.package.\"*\".debug=\"line-tables-only\"";
+
+/// The profile overrides a game's build takes. Config on the command line outranks
+/// the manifest and every config file, so each override stands aside for a project
+/// that says anything about it, wherever cargo would read that from. A project that
+/// chose a dev optimisation of its own gets neither: line tables are only the right
+/// trade on code built optimised. A dev debug setting, in a profile file or
+/// `CARGO_PROFILE_DEV_DEBUG`, is a choice about debug info too.
+fn game_dependency_profile(project_root: &Path) -> Vec<&'static str> {
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| std::path::PathBuf::from(home).join(".cargo"))
+        });
+    let env_opt_level = std::env::var_os("CARGO_PROFILE_DEV_OPT_LEVEL").is_some();
+    let env_debug = std::env::var_os("CARGO_PROFILE_DEV_DEBUG").is_some();
+    dependency_profile_for(
+        project_root,
+        cargo_home.as_deref(),
+        DevProfileEnv {
+            opt_level: env_opt_level,
+            debug: env_debug,
+        },
+    )
+}
+
+/// Which `CARGO_PROFILE_DEV_*` variables are set.
+#[derive(Clone, Copy)]
+struct DevProfileEnv {
+    opt_level: bool,
+    debug: bool,
+}
+
+fn dependency_profile_for(
+    project_root: &Path,
+    cargo_home: Option<&Path>,
+    env: DevProfileEnv,
+) -> Vec<&'static str> {
+    let files = profile_files(project_root, cargo_home);
+    let dev_profiles: Vec<toml::Value> = files
+        .iter()
+        .filter_map(|file| read_toml(file))
+        .filter_map(|toml| toml.get("profile")?.get("dev").cloned())
+        .collect();
+    let dependencies_set = |key: &str| {
+        dev_profiles.iter().any(|dev| {
+            dev.get("package")
+                .and_then(|package| package.get("*"))
+                .and_then(|dependencies| dependencies.get(key))
+                .is_some()
+        })
+    };
+    let chose_optimisation = env.opt_level
+        || dependencies_set("opt-level")
+        || dev_profiles
+            .iter()
+            .any(|dev| dev.get("opt-level").is_some());
+    if chose_optimisation {
+        return Vec::new();
+    }
+    let mut settings = vec![GAME_DEPENDENCY_OPT_LEVEL];
+    let chose_debug = env.debug
+        || dependencies_set("debug")
+        || dev_profiles.iter().any(|dev| dev.get("debug").is_some());
+    if !chose_debug {
+        settings.push(GAME_DEPENDENCY_DEBUG);
+    }
+    settings
+}
+
+/// Where cargo reads a dev profile from for `project_root`: the manifest it takes
+/// profiles from, the config files of the project's folder and every parent, and
+/// the one in cargo's home.
+fn profile_files(project_root: &Path, cargo_home: Option<&Path>) -> Vec<std::path::PathBuf> {
+    let root_manifest = project_root
+        .ancestors()
+        .map(|dir| dir.join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .find(|manifest| read_toml(manifest).is_some_and(|toml| toml.get("workspace").is_some()))
+        .unwrap_or_else(|| project_root.join("Cargo.toml"));
+    let mut files = vec![root_manifest];
+    let config_dirs = project_root
+        .ancestors()
+        .map(|dir| dir.join(".cargo"))
+        .chain(cargo_home.map(Path::to_path_buf));
+    for dir in config_dirs {
+        files.push(dir.join("config.toml"));
+        files.push(dir.join("config"));
+    }
+    files
+}
+
+fn read_toml(file: &Path) -> Option<toml::Value> {
+    toml::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
 /// The `cargo build` that compiles the game, run by the project's own
 /// toolchain and detached from the editor's build environment.
 fn game_build_command(spec: &ShimSpec, target_dir: &Path, load: BuildLoad) -> Command {
+    let profile = game_dependency_profile(&spec.project_root);
+    game_build_command_with(spec, target_dir, load, &profile)
+}
+
+fn game_build_command_with(
+    spec: &ShimSpec,
+    target_dir: &Path,
+    load: BuildLoad,
+    profile: &[&str],
+) -> Command {
     let mut command = user_toolchain_command("cargo");
     command
         .arg("build")
         .args(["-p", &spec.package_name])
         .arg("--target-dir")
-        .arg(target_dir)
+        .arg(target_dir);
+    for setting in profile {
+        command.arg("--config").arg(setting);
+    }
+    command
         // Plain `json`, not `json-render-diagnostics`: that variant renders
         // diagnostics to cargo's own stderr and emits no `compiler-message`
         // records, leaving the parser below with nothing to report.
@@ -620,6 +740,162 @@ mod tests {
         assert!(!is_host_build_var("PATH"));
         assert!(!is_host_build_var("CARGO_HOME"));
         assert!(!is_host_build_var("RUSTUP_HOME"));
+    }
+
+    const NO_ENV: DevProfileEnv = DevProfileEnv {
+        opt_level: false,
+        debug: false,
+    };
+
+    fn build_args(project: &Path) -> Vec<String> {
+        let spec = ShimSpec {
+            package_name: "game".to_string(),
+            crate_name: "game".to_string(),
+            project_root: project.to_path_buf(),
+            extension_type: None,
+        };
+        let profile = dependency_profile_for(project, None, NO_ENV);
+        game_build_command_with(&spec, Path::new("/target"), BuildLoad::Foreground, &profile)
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn project_with_manifest(manifest: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        std::fs::write(dir.path().join("Cargo.toml"), manifest).expect("a manifest");
+        dir
+    }
+
+    const PLAIN: &str = "[package]\nname = \"game\"\n[workspace]\n";
+
+    /// An existing project's manifest stays as it is, and still gets a game
+    /// that loads a large scene at a usable speed.
+    #[test]
+    fn a_plain_project_builds_with_optimised_dependencies() {
+        let project = project_with_manifest(PLAIN);
+        assert_eq!(
+            dependency_profile_for(project.path(), None, NO_ENV),
+            vec![GAME_DEPENDENCY_OPT_LEVEL, GAME_DEPENDENCY_DEBUG]
+        );
+        let args = build_args(project.path());
+        for setting in [GAME_DEPENDENCY_OPT_LEVEL, GAME_DEPENDENCY_DEBUG] {
+            let position = args.iter().position(|arg| arg == setting);
+            let position = position.expect("the override is on the command line");
+            assert_eq!(args[position - 1], "--config");
+        }
+        assert!(!args.iter().any(|arg| arg.contains("profile.dev.opt-level")));
+    }
+
+    #[test]
+    fn a_project_that_picks_its_own_optimisation_keeps_it() {
+        for profile in [
+            "[profile.dev]\nopt-level = 1\n",
+            "[profile.dev.package.\"*\"]\nopt-level = 3\n",
+        ] {
+            let project = project_with_manifest(&format!("{PLAIN}{profile}"));
+            let args = build_args(project.path());
+            assert!(!args.iter().any(|arg| arg == "--config"), "{profile}");
+        }
+
+        let project = project_with_manifest(PLAIN);
+        std::fs::create_dir(project.path().join(".cargo")).expect("a folder");
+        std::fs::write(
+            project.path().join(".cargo/config.toml"),
+            "[profile.dev.package.\"*\"]\nopt-level = 1\n",
+        )
+        .expect("a config");
+        assert!(
+            !build_args(project.path())
+                .iter()
+                .any(|arg| arg == "--config")
+        );
+    }
+
+    /// Cargo reads config from every parent folder and its home, and from the
+    /// environment, and a setting in any of them is the project's choice.
+    #[test]
+    fn a_dev_profile_in_any_config_cargo_reads_is_kept() {
+        const CHOSEN: &str = "[profile.dev.package.\"*\"]\nopt-level = 1\n";
+        let write_config = |folder: &Path| {
+            std::fs::create_dir_all(folder).expect("a folder");
+            std::fs::write(folder.join("config.toml"), CHOSEN).expect("a config");
+        };
+
+        let parent = tempfile::tempdir().expect("a temp dir");
+        let project = parent.path().join("game");
+        std::fs::create_dir(&project).expect("a project");
+        std::fs::write(project.join("Cargo.toml"), PLAIN).expect("a manifest");
+        assert_eq!(dependency_profile_for(&project, None, NO_ENV).len(), 2);
+        assert!(
+            dependency_profile_for(
+                &project,
+                None,
+                DevProfileEnv {
+                    opt_level: true,
+                    ..NO_ENV
+                }
+            )
+            .is_empty(),
+            "the environment"
+        );
+        assert_eq!(
+            dependency_profile_for(
+                &project,
+                None,
+                DevProfileEnv {
+                    debug: true,
+                    ..NO_ENV
+                }
+            ),
+            vec![GAME_DEPENDENCY_OPT_LEVEL],
+            "the debug environment variable"
+        );
+
+        let home = tempfile::tempdir().expect("a temp dir");
+        write_config(home.path());
+        assert!(
+            dependency_profile_for(&project, Some(home.path()), NO_ENV).is_empty(),
+            "cargo's home"
+        );
+
+        write_config(&parent.path().join(".cargo"));
+        assert!(
+            dependency_profile_for(&project, None, NO_ENV).is_empty(),
+            "a parent folder"
+        );
+    }
+
+    #[test]
+    fn a_project_that_sets_only_dependency_debug_info_keeps_it() {
+        let project = project_with_manifest(&format!(
+            "{PLAIN}[profile.dev.package.\"*\"]\ndebug = true\n"
+        ));
+        assert_eq!(
+            dependency_profile_for(project.path(), None, NO_ENV),
+            vec![GAME_DEPENDENCY_OPT_LEVEL]
+        );
+    }
+
+    #[test]
+    fn a_project_that_sets_the_dev_debug_level_keeps_it() {
+        let project = project_with_manifest(&format!("{PLAIN}[profile.dev]\ndebug = 0\n"));
+        assert_eq!(
+            dependency_profile_for(project.path(), None, NO_ENV),
+            vec![GAME_DEPENDENCY_OPT_LEVEL]
+        );
+    }
+
+    #[test]
+    fn a_workspace_members_profile_comes_from_the_workspace_root() {
+        let root = project_with_manifest(
+            "[workspace]\nmembers = [\"game\"]\n[profile.dev.package.\"*\"]\nopt-level = 3\n",
+        );
+        let member = root.path().join("game");
+        std::fs::create_dir(&member).expect("a member");
+        std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"game\"\n")
+            .expect("a manifest");
+        assert!(!build_args(&member).iter().any(|arg| arg == "--config"));
     }
 
     #[test]
