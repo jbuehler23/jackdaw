@@ -11,6 +11,9 @@ use jackdaw_api_internal::lifecycle::{
 };
 
 const ID: &str = "app_plugin_sample";
+/// The config file is one per test process, so the test that turns an extension
+/// off does it under an id no other test reads.
+const TURNED_OFF_ID: &str = "app_plugin_sample_turned_off";
 
 #[derive(Resource, Default)]
 struct Ticks(u32);
@@ -62,12 +65,33 @@ impl JackdawExtension for RebuiltExtension {
     }
 }
 
+#[derive(Default)]
+struct TurnedOffExtension;
+
+impl JackdawExtension for TurnedOffExtension {
+    fn id(&self) -> String {
+        TURNED_OFF_ID.to_string()
+    }
+
+    fn app_plugin(&self) -> Option<Box<dyn Plugin>> {
+        Some(Box::new(sample_plugin))
+    }
+
+    fn register(&self, ctx: &mut ExtensionContext) {
+        ctx.insert_resource(Registered);
+    }
+}
+
 fn is_loaded(app: &mut App) -> bool {
+    is_loaded_as(app, ID)
+}
+
+fn is_loaded_as(app: &mut App, id: &str) -> bool {
     let world = app.world_mut();
     world
         .query::<&Extension>()
         .iter(world)
-        .any(|extension| extension.id == ID)
+        .any(|extension| extension.id == id)
 }
 
 fn started(mut app: App) -> App {
@@ -115,20 +139,20 @@ fn an_extension_loaded_after_launch_waits_for_a_restart() {
 #[test]
 fn an_extension_turned_off_at_launch_waits_for_a_restart_when_enabled() {
     util::isolate_config_dir();
-    jackdaw_api_internal::extensions_config::set_extension_enabled(ID, false);
+    jackdaw_api_internal::extensions_config::set_extension_enabled(TURNED_OFF_ID, false);
     let mut app = util::headless_app();
-    app.register_extension::<PluginExtension>();
+    app.register_extension::<TurnedOffExtension>();
     let mut app = started(app);
 
-    assert!(!is_loaded(&mut app));
+    assert!(!is_loaded_as(&mut app, TURNED_OFF_ID));
     assert!(!app.world().contains_resource::<Ticks>());
 
-    assert!(enable_extension(app.world_mut(), ID).is_none());
-    assert!(!is_loaded(&mut app));
+    assert!(enable_extension(app.world_mut(), TURNED_OFF_ID).is_none());
+    assert!(!is_loaded_as(&mut app, TURNED_OFF_ID));
     assert!(
         app.world()
             .resource::<ExtensionAppPlugins>()
-            .restart_required(ID)
+            .restart_required(TURNED_OFF_ID)
     );
 }
 
