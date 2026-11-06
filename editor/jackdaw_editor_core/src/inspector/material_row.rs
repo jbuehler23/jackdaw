@@ -346,9 +346,10 @@ impl EditorCommand for ClearEntityMaterial {
     }
 }
 
-/// The file behind the material the inspected entity wears, as the empty
-/// string when it wears one no file holds.
-fn material_path(world: &World, source: Entity) -> String {
+/// The file behind the material the inspected entity wears, or the one it came
+/// from if that has gone, as the empty string when it wears one no file holds.
+#[doc(hidden)]
+pub fn material_path(world: &World, source: Entity) -> String {
     use path_slash::PathExt as _;
 
     let Some(worn) = worn_material(world, source) else {
@@ -360,6 +361,12 @@ fn material_path(world: &World, source: Entity) -> String {
         .and_then(|index| index.by_handle(&untyped))
     {
         return indexed.path.to_slash_lossy().into_owned();
+    }
+    if let Some(left) = world
+        .get_resource::<jackdaw_bsn::UnresolvedReferences>()
+        .and_then(|table| table.name_of(untyped.id()))
+    {
+        return left;
     }
     world
         .get_resource::<AssetServer>()

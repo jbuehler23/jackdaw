@@ -1319,3 +1319,178 @@ fn a_refused_create_keeps_a_card_holding_edits_that_are_not_on_disk() {
         "and the card holding edits that are not on disk is not dropped under it",
     );
 }
+
+/// A new item file, and the handle the index holds it under.
+fn new_torch(app: &mut App, tmp: &tempfile::TempDir) -> bevy::asset::UntypedHandle {
+    call(
+        app,
+        "asset.new",
+        &[
+            ("type", "item".into()),
+            ("name", "torch".into()),
+            ("path", items_dir(tmp).to_string_lossy().into_owned().into()),
+        ],
+    );
+    indexed(app, TORCH)
+        .and_then(|value| value.handle().cloned())
+        .expect("the new file is indexed")
+}
+
+const TORCH: &str = "content/items/torch.bsn";
+
+fn name_of(app: &App, id: bevy::asset::UntypedAssetId) -> Option<String> {
+    app.world()
+        .resource::<jackdaw_bsn::UnresolvedReferences>()
+        .name_of(id)
+}
+
+fn write_torch(tmp: &tempfile::TempDir, stack_size: u32) {
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::fs::write(
+        item_path(tmp, "torch"),
+        format!(
+            "#torch\n{} {{ stack_size: {stack_size} }}\n",
+            ItemDef::type_path()
+        ),
+    )
+    .expect("the file is written");
+}
+
+/// However often a file goes and returns, what held it keeps one handle, which
+/// reads what the file says now.
+#[test]
+fn a_definition_file_that_returns_reads_back_into_its_handle() {
+    let (mut app, tmp) = editor_with_items();
+    let held = new_torch(&mut app, &tmp);
+
+    for stack_size in [9, 12] {
+        std::fs::remove_file(item_path(&tmp, "torch")).expect("the file goes");
+        jackdaw::asset_index::rescan_asset_index(app.world_mut());
+        let retired = app
+            .world()
+            .resource::<jackdaw_bsn::UnresolvedReferences>()
+            .retired();
+        assert_eq!(retired.len(), 1, "one id for the one path");
+        assert_eq!(retired[0].1.id(), held.id());
+
+        write_torch(&tmp, stack_size);
+        jackdaw::asset_index::rescan_asset_index(app.world_mut());
+        assert_eq!(
+            indexed(&app, TORCH)
+                .and_then(|value| value.handle().map(bevy::asset::UntypedHandle::id)),
+            Some(held.id()),
+            "the file returns to its handle"
+        );
+        let stored = app.world().resource::<Assets<ItemDef>>();
+        assert_eq!(
+            stored
+                .get(held.id().typed::<ItemDef>())
+                .map(|item| item.stack_size),
+            Some(stack_size),
+            "holding what the file says now"
+        );
+        assert!(
+            !app.world()
+                .resource::<jackdaw_bsn::UnresolvedReferences>()
+                .is_retired(held.id()),
+            "with a file again"
+        );
+    }
+}
+
+/// `asset.delete` is the file leaving: what names it keeps the name.
+#[test]
+fn deleting_a_definition_keeps_the_name_of_what_holds_it() {
+    let (mut app, tmp) = editor_with_items();
+    let held = new_torch(&mut app, &tmp);
+
+    call(
+        &mut app,
+        "asset.delete",
+        &[(
+            "path",
+            item_path(&tmp, "torch")
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+        )],
+    );
+
+    assert!(indexed(&app, TORCH).is_none());
+    assert_eq!(name_of(&app, held.id()), Some(TORCH.to_string()));
+}
+
+/// A file that comes to hold another kind of asset leaves the old handle named.
+#[test]
+fn a_file_changing_kind_keeps_the_name_of_what_held_it() {
+    let (mut app, tmp) = editor_with_items();
+    let held = new_torch(&mut app, &tmp);
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::fs::write(
+        item_path(&tmp, "torch"),
+        "// jackdaw asset bevy_pbr::pbr_material::StandardMaterial\n\
+         #material\n\
+         bevy_pbr::pbr_material::StandardMaterial { perceptual_roughness: 0.5 }\n",
+    )
+    .expect("the file is rewritten");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    assert_ne!(
+        indexed(&app, TORCH).and_then(|value| value.handle().map(bevy::asset::UntypedHandle::id)),
+        Some(held.id()),
+        "the file holds another asset now"
+    );
+    assert_eq!(name_of(&app, held.id()), Some(TORCH.to_string()));
+}
+
+/// A kind leaving takes its entries from the index, not the names off what holds
+/// them, and a kind coming back reads into the same handle.
+#[test]
+fn a_kind_going_keeps_the_name_of_what_holds_its_files() {
+    let (mut app, tmp) = editor_with_items();
+    let held = new_torch(&mut app, &tmp);
+
+    app.world_mut()
+        .resource_mut::<AssetKinds>()
+        .unregister("item");
+    app.update();
+    assert!(
+        indexed(&app, TORCH).is_none(),
+        "the entry goes with its kind"
+    );
+    assert_eq!(name_of(&app, held.id()), Some(TORCH.to_string()));
+
+    app.world_mut()
+        .resource_mut::<AssetKinds>()
+        .register(item_type());
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+    assert_eq!(
+        indexed(&app, TORCH).and_then(|value| value.handle().map(bevy::asset::UntypedHandle::id)),
+        Some(held.id()),
+    );
+}
+
+/// A file still on disk has not gone, whatever it holds now.
+#[test]
+fn a_file_of_an_unknown_type_is_not_said_to_have_gone() {
+    let (mut app, tmp) = editor_with_items();
+    let held = new_torch(&mut app, &tmp);
+    app.world_mut()
+        .resource_mut::<jackdaw::status_bar::StatusNotice>()
+        .show("before");
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::fs::write(item_path(&tmp, "torch"), "#torch\nsome_game::Unknown\n")
+        .expect("the file is rewritten");
+    jackdaw::asset_index::rescan_asset_index(app.world_mut());
+
+    assert!(indexed(&app, TORCH).is_none());
+    assert_eq!(name_of(&app, held.id()), Some(TORCH.to_string()));
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::status_bar::StatusNotice>()
+            .text(),
+        "before",
+    );
+}

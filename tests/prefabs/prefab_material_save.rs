@@ -1,10 +1,9 @@
 //! Saving a scene keeps an instance sparse when its inherited content names an
 //! asset file.
 //!
-//! The live document holds the asset-blind placeholder (`""`) the ECS mirror
-//! stores for a `Handle<T>`. A save has to name the asset again before it
-//! compares an instance with its prefab, or an unchanged brush whose faces use
-//! a material file reads as an override and is written out whole.
+//! A save compares an instance with its prefab by the names they hold, so an
+//! unchanged brush whose faces use a material file must name the same file on
+//! both sides, or it reads as an override and is written out whole.
 
 use bevy::prelude::*;
 use jackdaw::project::{ProjectConfig, ProjectRoot};

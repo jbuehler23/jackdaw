@@ -734,7 +734,7 @@ mod tests {
 
     use super::*;
     use crate::pie_projection::{PieProjection, project_event};
-    use crate::play_sync::AssetReferences;
+    use crate::play_sync::PlayReferences;
 
     const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
     const PAINTED: &str = "game::Painted";
@@ -1086,7 +1086,7 @@ mod tests {
         assert_eq!(game_painted(&mut game, 8), (1, 6));
         assert_eq!(game_painted(&mut game, 9), (2, 3));
         assert_eq!(
-            AssetReferences::with(app.world(), app.world().resource::<PlayAssetNames>())
+            PlayReferences::with(app.world(), app.world().resource::<PlayAssetNames>())
                 .reference(&late.untyped()),
             Some(name),
             "live sync sends the same name"

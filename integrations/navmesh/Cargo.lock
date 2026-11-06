@@ -4273,6 +4273,7 @@ dependencies = [
  "bevy",
  "jackdaw_api",
  "jackdaw_api_internal",
+ "jackdaw_bsn",
  "jackdaw_commands",
  "jackdaw_editor_core",
  "jackdaw_feathers",

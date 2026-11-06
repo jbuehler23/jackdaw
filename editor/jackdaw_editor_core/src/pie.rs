@@ -1359,9 +1359,13 @@ pub(crate) fn can_save_live_to_scene(world: &World) -> bool {
 /// `AppTypeRegistry`, and paths matched by [`should_skip_component`](crate::scene_io::should_skip_component) are
 /// silently omitted. The result is sorted by type path for deterministic undo
 /// batching.
+///
+/// A handle the game's stream left without a name keeps the one the document
+/// spells; a name with nowhere left to go is added to `dropped`.
 fn preview_entity_components_as_bsn(
     world: &World,
     entity: Entity,
+    dropped: &mut Vec<String>,
 ) -> Vec<(String, jackdaw_bsn::BsnValue)> {
     use bevy::ecs::reflect::AppTypeRegistry;
 
@@ -1373,6 +1377,9 @@ fn preview_entity_components_as_bsn(
     };
 
     let skip_ids = crate::scene_io::doc_skip_type_ids();
+    let references = crate::scene_io::asset_names::AssetReferences::new(world);
+    let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(entity);
 
     let mut out: Vec<(String, jackdaw_bsn::BsnValue)> = registry
         .iter()
@@ -1384,8 +1391,20 @@ fn preview_entity_components_as_bsn(
             }
             let reflect_component = reg.data::<ReflectComponent>()?;
             let component = reflect_component.reflect(entity_ref)?;
-            let value =
-                jackdaw_bsn::BsnValue::from_reflect(component.as_partial_reflect(), &registry);
+            let mut value = references
+                .document_value(component.as_partial_reflect(), &registry)
+                .inspect_err(|err| warn!("save to scene: leaving {type_path} out: {err}"))
+                .ok()?;
+            if let Some(authored) =
+                node.and_then(|node| jackdaw_bsn::get_bsn_field(ast, node, type_path, ""))
+            {
+                dropped.extend(crate::scene_io::save::keep_document_names(
+                    &registry,
+                    reg.type_id(),
+                    &authored,
+                    &mut value,
+                ));
+            }
             Some((type_path.to_string(), value))
         })
         .collect();
@@ -1413,7 +1432,7 @@ fn preview_entity_components_as_bsn(
 ///
 /// No-op with a `warn!` when nothing is selected, the preview entity is gone,
 /// or the entity carries neither a node binding nor `PieEphemeral`.
-pub(crate) fn save_live_entity_to_scene(world: &mut World) {
+pub fn save_live_entity_to_scene(world: &mut World) {
     use crate::pie_projection::PieEphemeral;
 
     if *world.resource::<PieViewMode>() != PieViewMode::Live {
@@ -1463,7 +1482,17 @@ fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
         ast.stable_id_of(node).unwrap_or(0)
     };
 
-    let entries = preview_entity_components_as_bsn(world, preview);
+    let mut dropped = Vec::new();
+    let entries = preview_entity_components_as_bsn(world, preview, &mut dropped);
+    let mut held: Vec<(String, Box<dyn Reflect>)> = entries
+        .iter()
+        .filter_map(|(type_path, _)| {
+            Some((
+                type_path.clone(),
+                component_copy(world, preview, type_path)?,
+            ))
+        })
+        .collect();
 
     let mut sub_commands: Vec<Box<dyn EditorCommand>> = Vec::new();
     for (type_path, new_value) in entries {
@@ -1501,9 +1530,83 @@ fn promote_authored_overlay(world: &mut World, preview: Entity, bits: u64) {
     // the write, then count the write itself as already sent.
     crate::play_sync::sync_document_to_game(world);
     cmd.execute(world);
+    held.retain(|(type_path, held)| {
+        crate::pie_projection::restore_cleared_handles(world, preview, type_path, held.as_ref())
+    });
+    if !held.is_empty() {
+        cmd = Box::new(KeepingUnnamedHandles {
+            inner: cmd,
+            entity: preview,
+            held,
+        });
+    }
     world.resource_mut::<CommandHistory>().push_executed(cmd);
     crate::play_sync::absorb_document_changes(world);
     info!("save to scene: promoted runtime values into node {node_id}");
+    if !dropped.is_empty() {
+        let message = format!(
+            "save to scene dropped {}: no element matches it now",
+            dropped.join(", ")
+        );
+        warn!("{message}");
+        crate::status_bar::notify_warn(world, message);
+    }
+}
+
+fn component_copy(world: &World, entity: Entity, type_path: &str) -> Option<Box<dyn Reflect>> {
+    let registry = world.resource::<AppTypeRegistry>().read();
+    registry
+        .get_with_type_path(type_path)?
+        .data::<ReflectComponent>()?
+        .reflect(world.get_entity(entity).ok()?)?
+        .reflect_clone()
+        .ok()
+}
+
+/// A write of the live values into the document that leaves the handles it has no
+/// name for, such as an unsaved material, on the live entity. Applying the document
+/// clears them, so each step of the write puts them back.
+struct KeepingUnnamedHandles {
+    inner: Box<dyn crate::commands::EditorCommand>,
+    entity: Entity,
+    held: Vec<(String, Box<dyn Reflect>)>,
+}
+
+impl KeepingUnnamedHandles {
+    fn restore(&self, world: &mut World) {
+        let entity = crate::scene_nodes::live_entity(world, self.entity);
+        for (type_path, held) in &self.held {
+            crate::pie_projection::restore_cleared_handles(world, entity, type_path, held.as_ref());
+        }
+    }
+}
+
+impl crate::commands::EditorCommand for KeepingUnnamedHandles {
+    fn execute(&mut self, world: &mut World) {
+        self.inner.execute(world);
+        self.restore(world);
+    }
+
+    fn undo(&mut self, world: &mut World) {
+        self.inner.undo(world);
+        self.restore(world);
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn sync_after_external_execute(&self, world: &mut World) {
+        self.inner.sync_after_external_execute(world);
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.inner.heap_bytes()
+    }
+
+    fn gone(&self, world: &World) -> Option<String> {
+        self.inner.gone(world)
+    }
 }
 
 /// Path B: preview entity has no AST node (game-spawned runtime entity).

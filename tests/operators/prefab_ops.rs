@@ -872,9 +872,8 @@ fn material_file(app: &mut App, path: &str) -> Handle<StandardMaterial> {
     handle
 }
 
-/// Packing copies the live document, where a brush face's material is the
-/// asset-blind placeholder its ECS mirror stored, so the prefab has to name
-/// the material from the live value or the brush loses it.
+/// Packing copies the live document, so the prefab has to name a brush face's
+/// material or the brush loses it.
 #[test]
 fn pack_keeps_a_brush_face_material_that_names_a_file() {
     let (mut app, dir) = app_in_project();
@@ -918,6 +917,6 @@ fn pack_keeps_a_brush_face_material_that_names_a_file() {
     );
     assert!(
         !written.contains("material: \"\""),
-        "no face lost its material to the placeholder:\n{written}"
+        "no face lost its material:\n{written}"
     );
 }

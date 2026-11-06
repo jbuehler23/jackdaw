@@ -348,7 +348,8 @@ fn component_field_text(
     };
     let server = world.get_resource::<AssetServer>();
     let index = world.get_resource::<AssetIndex>();
-    let json = crate::typed_values::asset_path_json(&registry, server, index, field)?;
+    let unresolved = world.get_resource::<jackdaw_bsn::UnresolvedReferences>();
+    let json = crate::typed_values::asset_path_json(&registry, server, index, unresolved, field)?;
     Some(json.as_str().unwrap_or_default().to_string())
 }
 

@@ -12,6 +12,8 @@ mod live_edit_dots;
 pub(crate) mod material_card_routing;
 mod material_display;
 pub(crate) mod material_row;
+#[doc(hidden)]
+pub use material_row::material_path;
 mod modifier_display;
 pub mod node_card;
 pub(crate) mod ops;

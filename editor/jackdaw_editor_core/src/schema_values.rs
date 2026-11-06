@@ -7,11 +7,12 @@
 
 use bevy::prelude::*;
 use bevy::reflect::PartialReflect;
-use jackdaw_bsn::{BsnAssetContext, BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue};
+use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue};
 use jackdaw_schema::{FieldSchema, TypeKind, TypeSchema};
 use serde_json::Value;
 
 use crate::project_types::ProjectTypes;
+use crate::scene_io::asset_names::AssetReferences;
 
 /// One step of a field path: `loot[0].item` is a field, an index and a field.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -513,6 +514,7 @@ fn native_json_for_bsn(world: &World, type_path: &str, value: &BsnValue) -> Opti
     let assets = server.map(|server| jackdaw_bsn::BsnApplyAssets {
         server,
         local: None,
+        unresolved: None,
     });
     let reflected = jackdaw_bsn::bsn_value_to_reflect(value, type_id, &registry, assets.as_ref())?;
     crate::inspector::reflect_fields::reflect_to_json(reflected.as_ref(), &registry)
@@ -681,19 +683,8 @@ fn native_bsn_for_json(world: &World, type_path: &str, json: &Value) -> Option<B
     let server = world.get_resource::<AssetServer>();
     let references = jackdaw_bsn::apply_reference_map(world);
     let reflected = native_value_for_json(&registry, server, Some(&references), type_path, json)?;
-    let written = match server {
-        Some(server) => BsnValue::try_from_reflect_with_assets(
-            reflected.as_ref(),
-            &registry,
-            &BsnAssetContext {
-                asset_server: server,
-                parent_path: std::path::Path::new(""),
-                asset_names: None,
-            },
-        ),
-        None => BsnValue::try_from_reflect(reflected.as_ref(), &registry),
-    };
-    written
+    AssetReferences::new(world)
+        .document_value(reflected.as_ref(), &registry)
         .inspect_err(|err| warn!("cannot write a '{type_path}': {err}"))
         .ok()
 }

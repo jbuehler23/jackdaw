@@ -70,6 +70,17 @@ pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut Wor
 /// stamps `AstNodeRef` back references that would otherwise point into a
 /// document the editor still owns.
 pub fn entity_bsn(world: &mut World, root: Entity) -> Result<String, String> {
+    let no_names = bevy::platform::collections::HashMap::default();
+    entity_bsn_naming(world, root, &no_names)
+}
+
+/// [`entity_bsn`] for a world that knows names for assets the asset server holds
+/// no path for. Written `""` means cleared, so a handle with a name has to say it.
+pub fn entity_bsn_naming(
+    world: &mut World,
+    root: Entity,
+    names: &dyn jackdaw_bsn::AssetNames,
+) -> Result<String, String> {
     if world.get_entity(root).is_err() {
         return Err(format!("entity {root} does not exist"));
     }
@@ -86,7 +97,7 @@ pub fn entity_bsn(world: &mut World, root: Entity) -> Result<String, String> {
         visited.push(entity);
 
         for type_id in reflected_component_type_ids(world, entity) {
-            jackdaw_bsn::sync_to_ast(world, entity, type_id);
+            jackdaw_bsn::sync_to_ast_naming(world, entity, type_id, names);
         }
 
         let children: Vec<Entity> = world

@@ -64,6 +64,20 @@ fn report_catalog_entries(world: &mut World, count: usize) {
     );
 }
 
+impl AssetCatalog {
+    /// The entries no file holds, by reference. A file's own name goes through
+    /// the asset index, which leaves out a name two files share.
+    pub(crate) fn kept_inline(
+        &self,
+        filed: impl Fn(UntypedAssetId) -> bool,
+    ) -> impl Iterator<Item = (String, UntypedHandle)> {
+        self.handles
+            .iter()
+            .filter(move |(_, handle)| !filed(handle.id()))
+            .map(|(name, handle)| (name.clone(), handle.clone()))
+    }
+}
+
 /// Whether a catalog entry is a `StandardMaterial`, and so belongs in a file
 /// of its own rather than in the catalog file.
 fn is_material(handle: &UntypedHandle) -> bool {
@@ -87,6 +101,33 @@ fn is_empty_catalog_text(text: &str) -> bool {
 /// Inline material entries load normally; `project.migrate_asset_references`
 /// writes them out as files of their own.
 pub fn load_catalog(world: &mut World) {
+    read_catalog_file(world);
+    let entries: Vec<(String, UntypedHandle)> = {
+        let paths = world.get_resource::<jackdaw_bsn::BsnAssetPaths>();
+        world
+            .resource::<AssetCatalog>()
+            .kept_inline(|id| paths.is_some_and(|paths| paths.0.contains_key(&id)))
+            .collect()
+    };
+    if entries.is_empty() {
+        return;
+    }
+    if let Some(mut project) = world.get_resource_mut::<jackdaw_bsn::BsnProjectAssets>() {
+        for (name, handle) in &entries {
+            project
+                .0
+                .entry(name.clone())
+                .or_insert_with(|| handle.clone());
+        }
+    }
+    if let Some(mut scene) = world.get_resource_mut::<jackdaw_bsn::BsnSceneAssets>() {
+        for (name, handle) in entries {
+            scene.0.entry(name).or_insert(handle);
+        }
+    }
+}
+
+fn read_catalog_file(world: &mut World) {
     let catalog_path = catalog_file_path(world);
     let Some(catalog_path) = catalog_path else {
         info!("No project root, skipping catalog load");

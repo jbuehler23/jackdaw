@@ -37,17 +37,9 @@ pub fn register_entity_in_ast(world: &mut World, entity: Entity) {
 
     let registry = world.resource::<AppTypeRegistry>().clone();
     let skip_ids = doc_skip_type_ids();
-    let asset_server = world.get_resource::<AssetServer>().cloned();
-    // Asset paths in the document are relative to the assets folder, which is
-    // what a handle's own path already is.
-    let ctx = asset_server
-        .as_ref()
-        .map(|asset_server| jackdaw_bsn::BsnAssetContext {
-            asset_server,
-            parent_path: std::path::Path::new(""),
-            asset_names: None,
-        });
     let patches: Vec<(String, jackdaw_bsn::BsnPatch)> = {
+        let references = super::asset_names::AssetReferences::new(world);
+        let ctx = references.context();
         let reg = registry.read();
         let entity_ref = world.entity(entity);
         reg.iter()

@@ -10,7 +10,8 @@ use super::{
 
 /// Resolve which `Handle<StandardMaterial>` to display for a brush entity.
 ///
-/// Priority: selected face (face edit mode + at least one face selected) ->
+/// A selected face (face edit mode + at least one face selected) answers for
+/// itself, including with None when it holds no material. With none selected, the
 /// first face that has a non-default material handle -> None.
 pub(crate) fn resolve_brush_material_handle(
     world: &World,
@@ -32,15 +33,13 @@ pub(crate) fn resolve_brush_material_handle(
         let face_idx = sel.faces[0];
         if let Some(face) = brush.faces.get(face_idx) {
             let h = face.material.clone();
-            if h != Handle::default() {
-                return Some(h);
-            }
+            return (!jackdaw_bsn::holds_no_asset(&h)).then_some(h);
         }
     }
 
     // Fall back to the first face that has an explicit (non-default) material.
     for face in &brush.faces {
-        if face.material != Handle::default() {
+        if !jackdaw_bsn::holds_no_asset(&face.material) {
             return Some(face.material.clone());
         }
     }
@@ -208,5 +207,51 @@ mod refresh_card_matches_tests {
             "material_card::settings",
             "material_card::settings"
         ));
+    }
+}
+
+#[cfg(test)]
+mod brush_material_tests {
+    use bevy::asset::uuid::Uuid;
+    use bevy::prelude::*;
+
+    use super::resolve_brush_material_handle;
+    use crate::brush::{Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode};
+
+    fn world_with_two_faces() -> (World, Entity, Handle<StandardMaterial>) {
+        let leaf = Handle::<StandardMaterial>::Uuid(Uuid::from_u128(7), std::marker::PhantomData);
+        let brush = Brush {
+            faces: vec![
+                BrushFaceData {
+                    material: leaf.clone(),
+                    ..default()
+                },
+                BrushFaceData::default(),
+            ],
+            ..default()
+        };
+        let mut world = World::new();
+        let entity = world.spawn(brush).id();
+        (world, entity, leaf)
+    }
+
+    #[test]
+    fn a_selected_face_with_no_material_shows_nothing() {
+        let (mut world, entity, _) = world_with_two_faces();
+        let mut selection = BrushSelection {
+            active_brush: Some(entity),
+            ..default()
+        };
+        selection.sub_mut(entity).faces = vec![1];
+        world.insert_resource(selection);
+        world.insert_resource(EditMode::BrushEdit(BrushEditMode::Face));
+
+        assert_eq!(resolve_brush_material_handle(&world, entity), None);
+    }
+
+    #[test]
+    fn with_no_face_selected_the_first_material_shows() {
+        let (world, entity, leaf) = world_with_two_faces();
+        assert_eq!(resolve_brush_material_handle(&world, entity), Some(leaf));
     }
 }

@@ -110,7 +110,10 @@ fn draw_brush_wireframe(
         // In Clip mode, hide wireframe on selected default-material brushes so
         // the clip plane and cut preview are clearly visible.
         if in_clip_mode {
-            let all_default = brush.faces.iter().all(|f| f.material == Handle::default());
+            let all_default = brush
+                .faces
+                .iter()
+                .all(|f| jackdaw_bsn::holds_no_asset(&f.material));
             if all_default {
                 continue;
             }
@@ -219,7 +222,7 @@ fn draw_face_grids(
             default_style::FACE_GRID_UNSELECTED
         };
         for (face_idx, face_data) in brush.faces.iter().enumerate() {
-            if face_data.material == Handle::default() {
+            if jackdaw_bsn::holds_no_asset(&face_data.material) {
                 continue; // Skip default-material faces, checkerboard provides its own structure.
             }
             let Some(polygon_indices) = cache.face_polygons.get(face_idx) else {

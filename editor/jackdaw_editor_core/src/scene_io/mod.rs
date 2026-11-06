@@ -9,6 +9,7 @@ use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 
 pub(crate) mod asset_fields;
+pub(crate) mod asset_names;
 pub mod hooks;
 mod legacy;
 mod load;
@@ -317,11 +318,26 @@ pub(crate) fn resync_entity_from_ast(world: &mut World, entity: Entity) {
     jackdaw_bsn::apply_ast_to_ecs(world, entity);
 }
 
+/// Forget the references left unresolved, which name assets of the project being
+/// left.
+pub fn forget_unresolved_references(world: &World) {
+    if let Some(unresolved) = world.get_resource::<jackdaw_bsn::UnresolvedReferences>() {
+        unresolved.clear();
+    }
+}
+
 pub struct SceneIoPlugin;
 
 impl Plugin for SceneIoPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SceneFilePath>()
+            .init_resource::<jackdaw_bsn::UnresolvedReferences>()
+            .init_resource::<asset_names::EmbeddedNames>()
+            .add_systems(
+                Update,
+                asset_names::relink_arrived_references
+                    .run_if(resource_exists_and_changed::<jackdaw_bsn::BsnSceneAssets>),
+            )
             .init_resource::<hooks::DocumentIoHooks>()
             .init_resource::<SceneDirtyState>()
             .add_systems(

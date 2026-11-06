@@ -241,17 +241,15 @@ impl AssetIndex {
         Some(entry)
     }
 
-    /// Drop every entry whose kind is no longer registered.
-    fn retain_kinds(&mut self, kinds: &[String]) {
+    /// Drop every entry whose kind is no longer registered, and hand them over.
+    fn retain_kinds(&mut self, kinds: &[String]) -> Vec<AssetEntry> {
         let gone: Vec<PathBuf> = self
             .entries
             .values()
             .filter(|entry| !kinds.contains(&entry.kind))
             .map(|entry| entry.path.clone())
             .collect();
-        for path in gone {
-            self.remove(&path);
-        }
+        gone.iter().filter_map(|path| self.remove(path)).collect()
     }
 }
 
@@ -461,6 +459,42 @@ fn reload_in_place(
     Some(move_value(world, kind, fresh_handle, held))
 }
 
+/// Take a file out of the index while what holds its value keeps its path as a
+/// name: the handle stays what the path resolves to until a file returns there.
+pub fn remove_keeping_name(world: &mut World, path: &Path) -> Option<AssetEntry> {
+    let entry = world.resource_mut::<AssetIndex>().remove(path)?;
+    retire_entry(world, &entry);
+    Some(entry)
+}
+
+fn retire_entry(world: &World, entry: &AssetEntry) {
+    if let Some(handle) = entry.value.handle()
+        && let Some(unresolved) = world.get_resource::<jackdaw_bsn::UnresolvedReferences>()
+    {
+        unresolved.retire(&entry.path.to_slash_lossy(), handle);
+    }
+}
+
+/// Read a file that has returned into the handle retired when it went, so what
+/// still holds that handle follows the file.
+fn reclaim_retired(
+    world: &mut World,
+    kind: &AssetKind,
+    path: &Path,
+    value: AssetValue,
+) -> AssetValue {
+    let Some(fresh) = value.handle() else {
+        return value;
+    };
+    let held = world
+        .get_resource::<jackdaw_bsn::UnresolvedReferences>()
+        .and_then(|table| table.retired_at(&path.to_slash_lossy(), fresh.type_id()));
+    let Some(held) = held else {
+        return value;
+    };
+    move_value(world, kind, fresh, &held)
+}
+
 /// Move a freshly read value into the handle the editor is already handing
 /// out, leaving the fresh one empty.
 fn move_value(
@@ -497,7 +531,8 @@ fn move_value(
 /// edits, which are what the user meant to keep. A file that has gone leaves
 /// the index and closes its card, unless that card holds unsaved edits and so
 /// has somewhere to write the file back from; its handle stays alive so
-/// whatever already references it keeps rendering.
+/// whatever already references it keeps rendering, and keeps naming that path. A
+/// file that returns reads back into that handle.
 pub fn rescan_asset_index(world: &mut World) -> AssetRescan {
     let Some(assets) = assets_dir(world) else {
         return AssetRescan::default();
@@ -553,13 +588,23 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
         if crate::definition_assets::card_has_unsaved_edits(world, &path) {
             continue;
         }
-        if assets.join(&path).is_file() {
+        let on_disk = jackdaw_bsn::existing_form(&assets.join(&path)).is_some();
+        if on_disk {
             warn!(
                 "{} no longer holds a type this project knows",
                 path.display()
             );
         }
-        world.resource_mut::<AssetIndex>().remove(&path);
+        if let Some(entry) = remove_keeping_name(world, &path)
+            && entry.value.handle().is_some()
+            && !on_disk
+        {
+            let path_text = path.to_slash_lossy();
+            warn!(
+                "{path_text} has gone; what names it keeps the name and holds nothing after a reload"
+            );
+            crate::status_bar::notify_warn(world, format!("Missing file: {path_text}"));
+        }
         crate::definition_assets::close_card_for(world, &path);
         scan.removed.push(path);
     }
@@ -573,12 +618,12 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
         let value = match held {
             Some((known, _, _)) if known == mtime => continue,
             Some((_, _, known_kind)) if known_kind != kind.kind => {
-                world.resource_mut::<AssetIndex>().remove(&relative);
+                remove_keeping_name(world, &relative);
                 let Some(value) = load_asset_value(world, &kind, &file) else {
                     continue;
                 };
                 scan.added.push(relative.clone());
-                value
+                reclaim_retired(world, &kind, &relative, value)
             }
             Some((_, held, _)) => {
                 if crate::definition_assets::card_has_unsaved_edits(world, &relative) {
@@ -595,7 +640,7 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
                     continue;
                 };
                 scan.added.push(relative.clone());
-                value
+                reclaim_retired(world, &kind, &relative, value)
             }
         };
         publish_name(world, &relative, &kind, &value);
@@ -633,6 +678,7 @@ pub fn index_files_named_in<'a>(
     world: &mut World,
     text: impl FnOnce() -> std::borrow::Cow<'a, str>,
 ) {
+    tell_references_where_files_are(world);
     if world.get_resource_or_init::<AssetWalks>().0 > 0 {
         return;
     }
@@ -709,6 +755,13 @@ pub fn index_files_named_in<'a>(
             .resource_mut::<AssetIndex>()
             .bypass_change_detection()
             .restore_writes(writes_before);
+    }
+}
+
+/// A document spawning next tells a path with no file by looking here.
+fn tell_references_where_files_are(world: &World) {
+    if let Some(unresolved) = world.get_resource::<jackdaw_bsn::UnresolvedReferences>() {
+        unresolved.set_assets_dir(assets_dir(world));
     }
 }
 
@@ -792,6 +845,7 @@ fn publish_name(world: &mut World, path: &Path, kind: &AssetKind, value: &AssetV
 /// wins the spellings they share. Only its `#` entries are the document's own,
 /// so a name published for a file that has since gone is not carried over.
 pub fn publish_reference_map(world: &mut World) {
+    tell_references_where_files_are(world);
     let mut references: bevy::platform::collections::HashMap<String, UntypedHandle> =
         bevy::platform::collections::HashMap::default();
     let mut paths: bevy::platform::collections::HashMap<UntypedAssetId, String> =
@@ -810,7 +864,18 @@ pub fn publish_reference_map(world: &mut World) {
             references.entry(name).or_insert_with(|| handle.clone());
         }
     }
+    if let Some(catalog) = world.get_resource::<crate::asset_catalog::AssetCatalog>() {
+        for (name, handle) in catalog.kept_inline(|id| paths.contains_key(&id)) {
+            references.entry(name).or_insert(handle);
+        }
+    }
     let mut scene = references.clone();
+    if let Some(unresolved) = world.get_resource::<jackdaw_bsn::UnresolvedReferences>() {
+        unresolved.refile(|id| paths.contains_key(&id));
+        for (path, handle) in unresolved.retired() {
+            scene.entry(path).or_insert(handle);
+        }
+    }
     if let Some(embedded) = world.get_resource::<jackdaw_bsn::BsnSceneAssets>() {
         for (reference, handle) in &embedded.0 {
             let Some(name) = reference.strip_prefix('#') else {
@@ -1040,7 +1105,10 @@ fn follow_asset_kinds(world: &mut World) {
         .get_resource::<AssetKinds>()
         .map(|kinds| kinds.iter().map(|kind| kind.kind.clone()).collect())
         .unwrap_or_default();
-    world.resource_mut::<AssetIndex>().retain_kinds(&kinds);
+    let gone = world.resource_mut::<AssetIndex>().retain_kinds(&kinds);
+    for entry in &gone {
+        retire_entry(world, entry);
+    }
     crate::definition_assets::close_card_of_missing_kind(world, &kinds);
     world.resource_mut::<AssetScanPending>().0 = true;
 }

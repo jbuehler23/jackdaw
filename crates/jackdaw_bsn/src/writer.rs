@@ -55,7 +55,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::Entity;
 
 use crate::{
-    BsnAssetContext, BsnPatch, SceneBsnAst, component_to_bsn_patch,
+    AssetNames, BsnAssetContext, BsnPatch, SceneBsnAst, component_to_bsn_patch,
     component_to_bsn_patch_with_assets, emit_scene,
 };
 
@@ -261,7 +261,7 @@ pub fn append_world_to_ast(
                 let ctx = BsnAssetContext {
                     asset_server: server,
                     parent_path,
-                    asset_names,
+                    asset_names: asset_names.map(|names| names as &dyn AssetNames),
                 };
                 component_to_bsn_patch_with_assets(reflected.as_partial_reflect(), &reg, &ctx)
             } else {

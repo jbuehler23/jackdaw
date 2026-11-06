@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use bevy::asset::{AssetServer, ReflectHandle};
+use std::sync::Arc;
+
+use bevy::asset::uuid::Uuid;
+use bevy::asset::{AssetServer, ReflectHandle, StrongHandle, UntypedAssetId, UntypedHandle};
 use bevy::platform::collections::HashMap;
 use bevy::reflect::enums::VariantType;
 use bevy::reflect::{PartialReflect, ReflectRef, ReflectSerialize, TypeRegistry};
@@ -27,6 +30,28 @@ fn type_path_or_unknown(value: &dyn PartialReflect) -> String {
         .to_string()
 }
 
+/// What a [`BsnAssetContext`] calls an asset the asset server has no path for:
+/// a catalog or scene-inline reference name, or the path of the file it was
+/// read from.
+pub trait AssetNames {
+    fn name_of(&self, id: bevy::asset::UntypedAssetId) -> Option<String>;
+
+    /// What [`Self::remember`] was told about `id`. A table made for one pass
+    /// keeps these, so the pass reads each asset once.
+    fn remembered(&self, _id: bevy::asset::UntypedAssetId) -> Option<String> {
+        None
+    }
+
+    /// Keep what a handle to `id` was emitted as.
+    fn remember(&self, _id: bevy::asset::UntypedAssetId, _reference: &str) {}
+}
+
+impl AssetNames for HashMap<bevy::asset::UntypedAssetId, String> {
+    fn name_of(&self, id: bevy::asset::UntypedAssetId) -> Option<String> {
+        self.get(&id).cloned()
+    }
+}
+
 /// Context for resolving `Handle<T>` fields to asset-path strings during BSN
 /// emission. `parent_path` is the directory the emitted `.bsn` file lives in,
 /// used to make emitted asset paths relative. `asset_names` maps assets that
@@ -35,7 +60,7 @@ fn type_path_or_unknown(value: &dyn PartialReflect) -> String {
 pub struct BsnAssetContext<'a> {
     pub asset_server: &'a AssetServer,
     pub parent_path: &'a Path,
-    pub asset_names: Option<&'a HashMap<bevy::asset::UntypedAssetId, String>>,
+    pub asset_names: Option<&'a dyn AssetNames>,
 }
 
 impl BsnAssetContext<'_> {
@@ -43,23 +68,59 @@ impl BsnAssetContext<'_> {
     /// asset came from disk, else its catalog/inline reference name, else an
     /// empty string.
     fn handle_string(&self, id: bevy::asset::UntypedAssetId) -> String {
+        if let Some(known) = self.asset_names.and_then(|names| names.remembered(id)) {
+            return known;
+        }
+        let reference = self.read_handle_string(id);
+        if let Some(names) = self.asset_names {
+            names.remember(id, &reference);
+        }
+        reference
+    }
+
+    fn read_handle_string(&self, id: bevy::asset::UntypedAssetId) -> String {
         if let Some(path) = self.asset_server.get_path(id) {
             let path_str = path.to_string();
             if self.parent_path.as_os_str().is_empty() {
-                return path_str;
+                return slashed_source_path(&path_str);
             }
             if let Some(relative) = pathdiff::diff_paths(&path_str, self.parent_path) {
                 return relative.to_slash_lossy().into_owned();
             }
-            return Path::new(&path_str).to_slash_lossy().into_owned();
+            return slashed_source_path(&path_str);
         }
-        if let Some(names) = self.asset_names
-            && let Some(name) = names.get(&id)
-        {
-            return name.clone();
-        }
-        String::new()
+        self.asset_names
+            .and_then(|names| names.name_of(id))
+            .unwrap_or_default()
     }
+}
+
+/// An asset path as written, separators made forward. A source such as
+/// `embedded://x/y.png` is not a file path, so this does not read it as one.
+fn slashed_source_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+/// What a dynamic `Handle<T>` holds, which is the enum the handle reflects as with
+/// no handle to downcast to.
+fn dynamic_handle_id(
+    value: &dyn PartialReflect,
+    registry: &TypeRegistry,
+) -> Option<UntypedAssetId> {
+    let info = value.get_represented_type_info()?;
+    let reflect_handle = registry.get_type_data::<ReflectHandle>(info.type_id())?;
+    let ReflectRef::Enum(handle) = value.reflect_ref() else {
+        return None;
+    };
+    let held = handle.field_at(0)?;
+    if let Some(strong) = held.try_downcast_ref::<Arc<StrongHandle>>() {
+        return Some(UntypedHandle::Strong(strong.clone()).id());
+    }
+    held.try_downcast_ref::<Uuid>()
+        .map(|uuid| UntypedAssetId::Uuid {
+            type_id: reflect_handle.asset_type_id(),
+            uuid: *uuid,
+        })
 }
 
 /// Name a variant of `type_path`, dropping the type's generic arguments.
@@ -226,10 +287,7 @@ impl BsnValue {
         // context is available. Without a context a handle has no stable text
         // form, so emit an empty string rather than descending into its
         // `AssetId` (whose `Uuid` / `Index` has no BSN representation and only
-        // produces "no BSN representation" noise on every sync). This is
-        // recognised regardless of `ctx` so a context-free sync (e.g. the live
-        // brush-confirm mirror, whose material handles are runtime-only) does
-        // not fall through to the reflect walk.
+        // produces "no BSN representation" noise on every sync).
         if let Some(concrete) = value.try_as_reflect() {
             let type_id = concrete.reflect_type_info().type_id();
             if let Some(reflect_handle) = type_registry.get_type_data::<ReflectHandle>(type_id) {
@@ -252,12 +310,17 @@ impl BsnValue {
         // produce "no BSN representation" noise on every world->BSN sync.
         // Recognise any handle by its type path and drop it to an empty
         // string, the same graceful degradation the registered-but-
-        // unresolvable case above uses.
+        // unresolvable case above uses. A dynamic copy of a registered handle
+        // reaches here too, and still says what it holds.
         if value
             .get_represented_type_info()
             .is_some_and(|info| is_handle_type_path(info.type_path()))
         {
-            return Ok(BsnValue::String(String::new()));
+            return Ok(BsnValue::String(
+                ctx.zip(dynamic_handle_id(value, type_registry))
+                    .map(|(ctx, id)| ctx.handle_string(id))
+                    .unwrap_or_default(),
+            ));
         }
 
         // Option<Handle<T>> fields: emit the inner asset path (Some) or an
@@ -303,6 +366,12 @@ impl BsnValue {
                                     ctx.handle_string(untyped_handle.id()),
                                 ));
                             }
+                        }
+                        if let Some(id) = e
+                            .field_at(0)
+                            .and_then(|inner| dynamic_handle_id(inner, type_registry))
+                        {
+                            return Ok(BsnValue::String(ctx.handle_string(id)));
                         }
                     }
                     _ => {}
@@ -736,4 +805,25 @@ fn whole_component_patch(
 fn unencodable_patch(type_path: String, err: &UnencodableValue) -> BsnPatch {
     log::warn!("{type_path}: {err}; writing the component with its defaults");
     BsnPatch::Type(type_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slashed_source_path;
+
+    #[test]
+    fn a_source_path_keeps_its_source_and_uses_forward_slashes() {
+        assert_eq!(
+            slashed_source_path("embedded://x/y.png"),
+            "embedded://x/y.png"
+        );
+        assert_eq!(
+            slashed_source_path("materials\\soil.bsn"),
+            "materials/soil.bsn"
+        );
+        assert_eq!(
+            slashed_source_path("embedded://x\\y.png#label"),
+            "embedded://x/y.png#label"
+        );
+    }
 }

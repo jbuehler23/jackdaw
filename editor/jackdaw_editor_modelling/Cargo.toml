@@ -16,6 +16,7 @@ jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev",
 bevy.workspace = true
 jackdaw_api.workspace = true
 jackdaw_api_internal.workspace = true
+jackdaw_bsn.workspace = true
 jackdaw_commands.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_geometry.workspace = true
@@ -37,7 +38,6 @@ jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev",
     "embed-recipe",
 ] }
 jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
-jackdaw_bsn.workspace = true
 jackdaw_widgets.workspace = true
 tempfile = "3"
 
