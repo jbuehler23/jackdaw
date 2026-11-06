@@ -500,9 +500,9 @@ fn write_prefab_from_roots(
         }
     }
 
-    // The copied patches hold what the live document holds, and for a handle
-    // (a brush face's material) that is the asset-blind placeholder its ECS
-    // mirror stored. Name the assets from the live values, as a save does.
+    // The copied patches hold what the live document holds, which has no name
+    // for an asset held only in memory. Name the assets from the live values,
+    // as a save does.
     for (&entity, &node) in &ecs_to_prefab {
         prefab.link(entity, node);
     }

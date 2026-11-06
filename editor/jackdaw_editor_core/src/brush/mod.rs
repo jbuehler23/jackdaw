@@ -431,19 +431,12 @@ pub(crate) fn replace_brush(world: &mut World, entity: Entity, brush: &Brush) {
     }
 }
 
+/// The reflected type path of [`Brush`], the key of its document patch.
+const BRUSH_TYPE_PATH: &str = "jackdaw_scene_types::types::Brush";
+
 /// Write a Brush component into the live scene document.
 pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
-    // `jackdaw_scene_types::types::Brush` is the canonical reflected type
-    // path (Brush lives directly in the crate's `types` module, not a
-    // `types::brush` submodule; getting this string wrong leaves the
-    // document with a `types::brush::Brush` key the loader skips with an
-    // `Unknown type` warning, silently losing the Brush on reload).
-    crate::commands::sync_component_to_ast(
-        world,
-        entity,
-        "jackdaw_scene_types::types::Brush",
-        brush,
-    );
+    crate::commands::sync_component_to_ast(world, entity, BRUSH_TYPE_PATH, brush);
 }
 
 /// Watch for any `Changed<Brush>` and mirror the new state into the
@@ -455,19 +448,56 @@ pub fn sync_brush_to_ast(world: &mut World, entity: Entity, brush: &Brush) {
 /// would wipe the prior Brush edit (e.g. undoing a new brush would
 /// also strip a material that had been applied beforehand).
 ///
+/// A value the game streamed stays out, so the document keeps what the editor
+/// authored; a change made after that write is the editor's and goes in.
+///
 /// Cloning the Brush per change is cheap (a small `Vec<BrushFaceData>`),
 /// and in practice `Changed<Brush>` is near-empty every frame.
 fn sync_changed_brushes_to_ast(
-    changed: Query<(Entity, &Brush), Changed<Brush>>,
+    changed: Query<(Entity, Ref<Brush>), Changed<Brush>>,
+    projection: Option<Res<crate::pie_projection::PieProjection>>,
     mut commands: Commands,
 ) {
-    let entries: Vec<(Entity, Brush)> = changed.iter().map(|(e, b)| (e, b.clone())).collect();
+    let entries: Vec<(Entity, Brush)> = changed
+        .iter()
+        .filter(|(entity, brush)| {
+            !projection.as_deref().is_some_and(|projection| {
+                projection.stream_wrote(*entity, BRUSH_TYPE_PATH, brush.last_changed())
+            })
+        })
+        .map(|(e, b)| (e, (*b).clone()))
+        .collect();
     if entries.is_empty() {
         return;
     }
     commands.queue(move |world: &mut World| {
-        for (entity, brush) in entries {
-            sync_brush_to_ast(world, entity, &brush);
+        let mut entries = entries;
+        for (entity, brush) in &mut entries {
+            if crate::scene_io::asset_names::relink_brush_faces(world, brush)
+                && let Some(mut live) = world.get_mut::<Brush>(*entity)
+            {
+                *live = brush.clone();
+            }
+        }
+        let patches: Vec<_> = {
+            let references = crate::scene_io::asset_names::AssetReferences::new(world);
+            let registry = world.resource::<AppTypeRegistry>().read();
+            let mut defaults = jackdaw_bsn::TypeDefaults::new(&registry);
+            entries
+                .iter()
+                .filter_map(|(entity, brush)| {
+                    let patch = references.document_patch_in_pass(
+                        *entity,
+                        brush,
+                        &registry,
+                        &mut defaults,
+                    )?;
+                    Some((*entity, patch))
+                })
+                .collect()
+        };
+        for (entity, patch) in patches {
+            crate::commands::upsert_bsn_patch(world, entity, BRUSH_TYPE_PATH, patch);
         }
     });
 }
@@ -481,15 +511,24 @@ fn sync_changed_brushes_to_ast(
 /// the stack is added or removed.
 fn sync_changed_modifier_stacks_to_ast(
     changed: Query<
-        (Entity, &jackdaw_geometry::ModifierStack),
+        (Entity, Ref<jackdaw_geometry::ModifierStack>),
         Changed<jackdaw_geometry::ModifierStack>,
     >,
     mut removed: RemovedComponents<jackdaw_geometry::ModifierStack>,
+    projection: Option<Res<crate::pie_projection::PieProjection>>,
     mut commands: Commands,
 ) {
     let type_path = <jackdaw_geometry::ModifierStack as bevy::reflect::TypePath>::type_path();
-    let entries: Vec<(Entity, jackdaw_geometry::ModifierStack)> =
-        changed.iter().map(|(e, s)| (e, s.clone())).collect();
+    let projection = projection.as_deref();
+    let entries: Vec<(Entity, jackdaw_geometry::ModifierStack)> = changed
+        .iter()
+        .filter(|(entity, stack)| {
+            !projection.is_some_and(|projection| {
+                projection.stream_wrote(*entity, type_path, stack.last_changed())
+            })
+        })
+        .map(|(e, s)| (e, (*s).clone()))
+        .collect();
     let removed_entities: Vec<Entity> = removed.read().collect();
     if entries.is_empty() && removed_entities.is_empty() {
         return;

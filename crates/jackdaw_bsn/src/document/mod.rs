@@ -20,8 +20,8 @@ pub(crate) mod serde_value;
 pub use compact::{TypeDefaults, compact_document};
 pub(crate) use compact::{compact_list_element, compact_value};
 pub use from_reflect::{
-    BsnAssetContext, UnencodableValue, component_to_bsn_patch, component_to_bsn_patch_in_pass,
-    component_to_bsn_patch_with_assets,
+    AssetNames, BsnAssetContext, UnencodableValue, component_to_bsn_patch,
+    component_to_bsn_patch_in_pass, component_to_bsn_patch_with_assets,
 };
 pub use mutate::{MAX_AST_DEPTH, clone_node_into, clone_subtree_into};
 pub use query::{bsn_value_as_int, is_enum_variant_of, patch_type_path, type_paths_include};

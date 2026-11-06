@@ -16,7 +16,7 @@ use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::ecs::world::World;
 
 use crate::{
-    BsnAssetContext, BsnPatch, BsnPatches, BsnValue, SceneBsnAst, bsn_value_to_reflect,
+    AssetNames, BsnAssetContext, BsnPatch, BsnPatches, BsnValue, SceneBsnAst, bsn_value_to_reflect,
     component_to_bsn_patch, component_to_bsn_patch_with_assets, emit_scene, parse_bsn_text,
 };
 
@@ -69,6 +69,7 @@ pub fn load_bsn_assets_onto(
     let assets_ctx = server.as_ref().map(|s| crate::BsnApplyAssets {
         server: s,
         local: None,
+        unresolved: None,
     });
     let reg = registry.read();
 
@@ -348,6 +349,7 @@ fn load_asset_value(
     let assets_ctx = server.as_ref().map(|s| crate::BsnApplyAssets {
         server: s,
         local: None,
+        unresolved: None,
     });
     let value = bsn_value_to_reflect(asset_value, type_id, reg, assets_ctx.as_ref())?;
     Some(reflect_asset.add(world, &*value))
@@ -451,7 +453,7 @@ pub fn append_assets_to_ast(
             let ctx = BsnAssetContext {
                 asset_server: server,
                 parent_path: Path::new(""),
-                asset_names: paths.as_ref().map(|paths| &paths.0),
+                asset_names: paths.as_ref().map(|paths| &paths.0 as &dyn AssetNames),
             };
             component_to_bsn_patch_with_assets(asset_value.as_partial_reflect(), &reg, &ctx)
         } else {

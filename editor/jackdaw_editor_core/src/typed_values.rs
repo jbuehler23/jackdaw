@@ -95,6 +95,7 @@ pub fn text_value_for_field(
         let assets = server.map(|server| BsnApplyAssets {
             server,
             local: references,
+            unresolved: None,
         });
         return bsn_value_to_reflect(
             &BsnValue::String(text.to_string()),
@@ -109,12 +110,14 @@ pub fn text_value_for_field(
     None
 }
 
-/// The path a `Handle<T>` or `Option<Handle<T>>` field points at, as the JSON
-/// string that sets it again. `None` when the field takes no asset path.
+/// The path a `Handle<T>` or `Option<Handle<T>>` field points at, or the name a
+/// reference with no asset behind it stands for, as the JSON string that sets it
+/// again. `None` when the field takes no asset path.
 pub fn asset_path_json(
     registry: &TypeRegistry,
     server: Option<&AssetServer>,
     index: Option<&crate::asset_index::AssetIndex>,
+    unresolved: Option<&jackdaw_bsn::UnresolvedReferences>,
     field: &dyn PartialReflect,
 ) -> Option<serde_json::Value> {
     if !takes_asset_path(registry, field.get_represented_type_info()?.type_id()) {
@@ -128,9 +131,11 @@ pub fn asset_path_json(
     });
     let path = indexed
         .or_else(|| {
-            handle
-                .and_then(|handle| server.and_then(|server| server.get_path(handle.id())))
+            let handle = handle.as_ref()?;
+            server
+                .and_then(|server| server.get_path(handle.id()))
                 .map(|path| path.to_string())
+                .or_else(|| unresolved?.name_of(handle.id()))
         })
         .unwrap_or_default();
     Some(serde_json::Value::String(path))

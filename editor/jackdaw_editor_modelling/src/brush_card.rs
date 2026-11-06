@@ -12,12 +12,14 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, TextEdit};
 use bevy::ui_widgets::ValueChange;
 use jackdaw_api::prelude::*;
+use jackdaw_bsn::{BsnSceneAssets, UnresolvedReferences};
 use jackdaw_editor_core::EditorEntity;
 use jackdaw_editor_core::brush::{
     Brush, BrushEditMode, BrushFaceData, BrushSelection, EditMode, SetBrush,
 };
 use jackdaw_editor_core::commands::CommandHistory;
 use jackdaw_editor_core::inspector::InspectorDirty;
+use jackdaw_editor_core::material_assets::MaterialRegistry;
 use jackdaw_editor_core::selection::Selection;
 use jackdaw_feathers::{button::ButtonOperatorCall, tokens};
 
@@ -162,21 +164,47 @@ fn spawn_group(commands: &mut Commands, parent: Entity, caption: &str) -> Entity
         .id()
 }
 
-fn resolve_material_label(
-    mat_handle: &Handle<StandardMaterial>,
-    materials: &Assets<StandardMaterial>,
-) -> String {
-    if let Some(path) = mat_handle.path() {
-        return path.to_string();
+/// What the card reads to call a material something.
+struct MaterialLabels<'a> {
+    materials: &'a Assets<StandardMaterial>,
+    registry: Option<&'a MaterialRegistry>,
+    unresolved: Option<&'a UnresolvedReferences>,
+    scene: Option<&'a BsnSceneAssets>,
+}
+
+impl MaterialLabels<'_> {
+    /// Which name is missing, else the name the material lists under, the name the
+    /// scene embeds it as, its path, or the file its base colour comes from.
+    fn label(&self, handle: &Handle<StandardMaterial>) -> String {
+        let id = handle.id().untyped();
+        if let Some(name) = self.unresolved.and_then(|table| table.name_of(id)) {
+            return format!("missing: {name}");
+        }
+        if let Some(name) = self.registry.and_then(|registry| registry.name_of(handle)) {
+            return name.to_string();
+        }
+        let embedded = self.scene.and_then(|scene| {
+            scene
+                .0
+                .iter()
+                .find(|(reference, held)| reference.starts_with('#') && held.id() == id)
+        });
+        if let Some((reference, _)) = embedded {
+            return reference.trim_start_matches('#').to_string();
+        }
+        if let Some(path) = handle.path() {
+            return path.to_string();
+        }
+        self.materials
+            .get(handle)
+            .and_then(|material| material.base_color_texture.as_ref())
+            .and_then(|texture| texture.path())
+            .and_then(|path| path.path().file_name())
+            .map_or_else(
+                || "Unnamed material".to_string(),
+                |name| name.to_string_lossy().to_string(),
+            )
     }
-    if let Some(mat) = materials.get(mat_handle)
-        && let Some(ref tex) = mat.base_color_texture
-        && let Some(path) = tex.path()
-        && let Some(filename) = path.path().file_name()
-    {
-        return filename.to_string_lossy().to_string();
-    }
-    format!("Material {:?}", mat_handle.id())
 }
 
 /// Fill the `Brush` card body for `source`.
@@ -191,6 +219,12 @@ pub(crate) fn fill_brush_card_body(world: &mut World, source: Entity, body: Enti
         body,
         brush,
         world.resource::<Assets<StandardMaterial>>(),
+        &MaterialLabels {
+            materials: world.resource::<Assets<StandardMaterial>>(),
+            registry: world.get_resource(),
+            unresolved: world.get_resource(),
+            scene: world.get_resource(),
+        },
     );
     queue.apply(world);
 }
@@ -200,6 +234,7 @@ fn spawn_brush_display(
     parent: Entity,
     brush: &Brush,
     materials: &Assets<StandardMaterial>,
+    labels: &MaterialLabels,
 ) {
     // Brushes always have populated topology in normal flow; the
     // plane-intersection fallback only fires for the degenerate
@@ -305,7 +340,7 @@ fn spawn_brush_display(
     }
 
     // Material summary: shows unique materials used by this brush.
-    spawn_material_summary(commands, body, brush, materials);
+    spawn_material_summary(commands, body, brush, materials, labels);
 
     // Face properties container -- populated dynamically by update_brush_face_properties
     commands.spawn((
@@ -326,6 +361,7 @@ fn spawn_material_summary(
     parent: Entity,
     brush: &Brush,
     materials: &Assets<StandardMaterial>,
+    labels: &MaterialLabels,
 ) {
     // Collect unique materials with face counts
     let mut material_counts: Vec<(Handle<StandardMaterial>, usize)> = Vec::new();
@@ -383,7 +419,7 @@ fn spawn_material_summary(
         let mat_label = if is_default {
             "No Material".to_string()
         } else {
-            resolve_material_label(mat_handle, materials)
+            labels.label(mat_handle)
         };
         commands.spawn((
             Text::new(mat_label),
@@ -463,6 +499,9 @@ pub(crate) fn update_brush_face_properties(
     container_query: Query<(Entity, Option<&Children>), With<BrushFacePropsContainer>>,
     mut local_state: Local<BrushFacePropsState>,
     materials: Res<Assets<StandardMaterial>>,
+    unresolved: Option<Res<UnresolvedReferences>>,
+    registry: Option<Res<MaterialRegistry>>,
+    scene: Option<Res<BsnSceneAssets>>,
 ) {
     // `iter().next()` rather than `single()`: during an inspector rebuild the
     // old container is despawned while the new one spawns, so there is a window
@@ -539,7 +578,13 @@ pub(crate) fn update_brush_face_properties(
     // Material info
     let has_material = face.material != Handle::default();
     if has_material {
-        let mat_label = resolve_material_label(&face.material, &materials);
+        let mat_label = MaterialLabels {
+            materials: &materials,
+            registry: registry.as_deref(),
+            unresolved: unresolved.as_deref(),
+            scene: scene.as_deref(),
+        }
+        .label(&face.material);
 
         let mat_row = commands
             .spawn((
@@ -855,6 +900,7 @@ fn brush_face_with_selection(
     label = "Clear Material",
     description = "Remove the material/texture from the selected faces.",
     is_available = brush_face_with_selection,
+    allows_undo = false,
 )]
 pub(crate) fn brush_face_clear_material(
     _: In<OperatorParameters>,
@@ -893,6 +939,7 @@ pub(crate) fn brush_face_clear_material(
     label = "Apply Material to All Faces",
     description = "Copy the first selected face's material and UV transform onto every face of the brush.",
     is_available = brush_face_with_selection,
+    allows_undo = false,
 )]
 pub(crate) fn brush_face_apply_texture_to_all(
     _: In<OperatorParameters>,
@@ -936,6 +983,7 @@ pub(crate) fn brush_face_apply_texture_to_all(
     description = "Set the UV scale of the selected faces to the given uniform value.",
     is_available = brush_face_with_selection,
     params(scale(f64, doc = "Uniform UV scale (the same value for U and V).")),
+    allows_undo = false,
 )]
 pub(crate) fn brush_face_set_uv_scale_preset(
     In(params): In<OperatorParameters>,
@@ -972,7 +1020,8 @@ pub(crate) fn brush_face_set_uv_scale_preset(
 #[operator(
     id = "brush.clear_all_materials",
     label = "Clear All Materials",
-    description = "Clear materials from every face of the selected brushes (expanding any selected non-brush parents into their child brushes)."
+    description = "Clear materials from every face of the selected brushes (expanding any selected non-brush parents into their child brushes).",
+    allows_undo = false
 )]
 pub(crate) fn brush_clear_all_materials(
     _: In<OperatorParameters>,

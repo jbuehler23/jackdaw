@@ -8,13 +8,37 @@ use std::any::TypeId;
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::prelude::*;
 
-use crate::{AstNodeRef, SceneBsnAst, component_to_bsn_patch};
+use crate::{
+    AssetNames, AstNodeRef, BsnAssetContext, SceneBsnAst, component_to_bsn_patch,
+    component_to_bsn_patch_with_assets,
+};
 
 /// After modifying an ECS component, sync its current value to the BSN AST.
 ///
 /// Should be called after every ECS component mutation that needs to persist
 /// to the scene file.
 pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId) {
+    sync_to_ast_named(world, entity, component_type_id, None);
+}
+
+/// [`sync_to_ast`] with handles written as asset paths or as what `names` calls
+/// them. With no asset server a handle has nothing to read a path from, and
+/// `names` alone is not asked.
+pub fn sync_to_ast_naming(
+    world: &mut World,
+    entity: Entity,
+    component_type_id: TypeId,
+    names: &dyn AssetNames,
+) {
+    sync_to_ast_named(world, entity, component_type_id, Some(names));
+}
+
+fn sync_to_ast_named(
+    world: &mut World,
+    entity: Entity,
+    component_type_id: TypeId,
+    names: Option<&dyn AssetNames>,
+) {
     let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
         return;
     };
@@ -33,7 +57,19 @@ pub fn sync_to_ast(world: &mut World, entity: Entity, component_type_id: TypeId)
         return;
     };
 
-    let patch = component_to_bsn_patch(reflected, &registry);
+    let server = world.get_resource::<AssetServer>();
+    let patch = match names.zip(server) {
+        Some((names, asset_server)) => component_to_bsn_patch_with_assets(
+            reflected,
+            &registry,
+            &BsnAssetContext {
+                asset_server,
+                parent_path: std::path::Path::new(""),
+                asset_names: Some(names),
+            },
+        ),
+        None => component_to_bsn_patch(reflected, &registry),
+    };
 
     let type_path = reflected
         .get_represented_type_info()

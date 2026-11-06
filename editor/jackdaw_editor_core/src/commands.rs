@@ -17,6 +17,7 @@ use serde::de::DeserializeSeed;
 pub use jackdaw_commands::{CommandGroup, CommandHistory, EditorCommand};
 
 use crate::EditorEntity;
+use crate::scene_io::asset_names::AssetReferences;
 use crate::scene_nodes::live_entity;
 use crate::selection::{Selected, Selection};
 
@@ -281,7 +282,7 @@ pub(crate) fn try_field_edit_commit_on(
         Err(FieldEditSkip::Unchanged) => {
             // Nothing to record, but the live component may have drifted
             // from the document; put the document's value back on it.
-            mirror_document_component(world, entity, type_path);
+            mirror_document_field(world, entity, type_path, &path);
             Ok(())
         }
         Err(FieldEditSkip::Previewed) => Err(previewed(type_path)),
@@ -1576,10 +1577,10 @@ impl SetBsnField {
         }
     }
 
-    /// Re-apply this command's component patch from the document to the live
-    /// entity, so ECS matches the document after execute or undo.
+    /// Re-apply this command's field from the document to the live entity, so
+    /// ECS matches the document after execute or undo.
     fn mirror_patch_to_ecs(&self, world: &mut World) {
-        mirror_document_component(world, self.entity, &self.type_path);
+        mirror_document_field(world, self.entity, &self.type_path, &self.field_path);
     }
 }
 
@@ -1611,9 +1612,15 @@ impl SetBsnField {
         // author that undo should drop entirely.
         let live_before =
             !is_project && entity_has_reflected_component(world, self.entity, &self.type_path);
-        // First override of a derived component: capture the pre-edit live
-        // field when the caller did not supply a baseline.
-        if self.old_value.is_none() && !self.field_path.is_empty() && live_before && !had_patch {
+        // First override of a derived component, or a field of a sparse patch
+        // that removing cannot restore because the type's default has no such
+        // field: capture the pre-edit live field when the caller did not supply
+        // a baseline.
+        if self.old_value.is_none()
+            && !self.field_path.is_empty()
+            && live_before
+            && (!had_patch || !default_holds_field(world, &self.type_path, &self.field_path))
+        {
             self.old_value = live_bsn_field(world, self.entity, &self.type_path, &self.field_path);
         }
         if self.old_value.is_none() {
@@ -1809,21 +1816,27 @@ impl EditorCommand for SetBsnField {
     }
 }
 
-/// Re-apply `entity`'s `type_path` patch from the document to the live
-/// component.
-pub(crate) fn mirror_document_component(world: &mut World, entity: Entity, type_path: &str) {
-    let patch = {
-        let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-        let Some(patches_entity) = ast.ast_for(entity) else {
-            return;
-        };
-        ast.find_patch_by_type_path(patches_entity, type_path)
-            .and_then(|pe| ast.get_patch(pe))
-            .cloned()
-    };
-    if let Some(patch) = patch {
-        jackdaw_bsn::apply_component_patch(world, entity, &patch);
-    }
+/// Re-apply `field_path` of `entity`'s `type_path` patch from the document to
+/// the live component, leaving the rest of it as it stands.
+pub(crate) fn mirror_document_field(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    jackdaw_bsn::apply_component_patch_field(world, entity, type_path, field_path);
+}
+
+/// Whether the type's default has a value at `field_path`.
+fn default_holds_field(world: &World, type_path: &str, field_path: &str) -> bool {
+    use bevy::reflect::GetPath;
+    use bevy::reflect::prelude::ReflectDefault;
+
+    let registry = world.resource::<AppTypeRegistry>().read();
+    registry
+        .get_with_type_path(type_path)
+        .and_then(|registration| registration.data::<ReflectDefault>())
+        .is_some_and(|reflect_default| reflect_default.default().reflect_path(field_path).is_ok())
 }
 
 /// A [`SetBsnField`] wrote a field of `type_path` on `entity`, on execute or
@@ -2040,8 +2053,9 @@ pub(crate) fn apply_json_to_reflect(
 }
 
 /// Look up the field's `TypeRegistration` via its represented type info and run
-/// `TypedReflectDeserializer` on the JSON, then apply the result. Whether the
-/// JSON read as the field's type.
+/// `TypedReflectDeserializer` on the JSON, then apply the result, which replaces
+/// a list, map or set rather than applying over it. Whether the JSON read as the
+/// field's type.
 fn try_typed_deserialize(
     field: &mut dyn bevy::reflect::PartialReflect,
     value: &serde_json::Value,
@@ -2054,9 +2068,22 @@ fn try_typed_deserialize(
         return false;
     };
     let deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, registry);
-    deserializer
-        .deserialize(value)
-        .is_ok_and(|reflected| field.try_apply(reflected.as_ref()).is_ok())
+    let Ok(reflected) = deserializer.deserialize(value) else {
+        return false;
+    };
+    match field.reflect_mut() {
+        bevy::reflect::ReflectMut::List(list) => {
+            list.drain();
+        }
+        bevy::reflect::ReflectMut::Map(map) => {
+            map.drain();
+        }
+        bevy::reflect::ReflectMut::Set(set) => {
+            set.drain();
+        }
+        _ => {}
+    }
+    field.try_apply(reflected.as_ref()).is_ok()
 }
 
 /// The authored value of one field on `entity`'s document node, read from the
@@ -2204,7 +2231,7 @@ fn map_entry_edit(
     } else {
         merged.reflect_path(map_path.as_str()).ok()?
     };
-    Some((map_path.clone(), authorable(map, &registry)?))
+    Some((map_path.clone(), authorable(world, map, &registry)?))
 }
 
 /// Write `value` into the live map entry `field_path` names. Whether the path
@@ -2323,7 +2350,7 @@ pub(crate) fn json_field_edit(
         let reflected = deserializer
             .deserialize(value)
             .map_err(|err| refused(format!("{value} does not read as the component: {err}")))?;
-        let authored = authorable(reflected.as_ref(), &registry).ok_or_else(unsaveable)?;
+        let authored = authorable(world, reflected.as_ref(), &registry).ok_or_else(unsaveable)?;
         return Ok((String::new(), authored));
     }
     let component = registration
@@ -2377,7 +2404,7 @@ pub(crate) fn json_field_edit(
     let (path, authored) = whole.unwrap_or((field_path.to_string(), field));
     Ok((
         path,
-        authorable(authored, &registry).ok_or_else(unsaveable)?,
+        authorable(world, authored, &registry).ok_or_else(unsaveable)?,
     ))
 }
 
@@ -2486,10 +2513,12 @@ fn expected_shape(
 /// document form: an edit that cannot be saved is refused rather than saved
 /// as text that reads back as something else.
 fn authorable(
+    world: &World,
     value: &dyn bevy::reflect::PartialReflect,
     registry: &bevy::reflect::TypeRegistry,
 ) -> Option<jackdaw_bsn::BsnValue> {
-    jackdaw_bsn::BsnValue::try_from_reflect(value, registry)
+    AssetReferences::new(world)
+        .document_value(value, registry)
         .inspect_err(|err| warn!("cannot author the edit: {err}"))
         .ok()
 }
@@ -2910,20 +2939,19 @@ fn restore_ast_component_patch(
 }
 
 /// Upsert one component's patch on the entity's BSN document node from a
-/// reflected value.
+/// reflected value, its handles named as the document names assets.
 pub(crate) fn sync_component_to_bsn_doc(
     world: &mut World,
     entity: Entity,
     value: &dyn bevy::reflect::PartialReflect,
 ) {
-    let patch = {
-        let registry = world.resource::<AppTypeRegistry>().read();
-        jackdaw_bsn::component_to_bsn_patch(value, &registry)
-    };
     let Some(info) = value.get_represented_type_info() else {
         return;
     };
-    upsert_bsn_patch(world, entity, info.type_path(), patch);
+    let patch = AssetReferences::new(world).document_patch(entity, value);
+    if let Some(patch) = patch {
+        upsert_bsn_patch(world, entity, info.type_path(), patch);
+    }
 }
 
 /// Put `patch` on the entity's BSN document node as its `type_path` patch,
@@ -2967,7 +2995,9 @@ pub(crate) fn live_bsn_field(
     let entity_ref = world.get_entity(entity).ok()?;
     let component = reflect_component.reflect(entity_ref)?;
     let field = component.reflect_path(field_path).ok()?;
-    jackdaw_bsn::BsnValue::try_from_reflect(field.as_partial_reflect(), &registry).ok()
+    AssetReferences::new(world)
+        .document_value(field.as_partial_reflect(), &registry)
+        .ok()
 }
 
 #[cfg(test)]

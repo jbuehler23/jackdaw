@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use bevy::ecs::change_detection::Tick;
 use bevy::ecs::component::ComponentId;
 use bevy::prelude::*;
 use bevy::reflect::serde::TypedReflectDeserializer;
@@ -41,6 +42,11 @@ pub struct PieProjection {
     /// not respawned since. They hold the game's state, so what an emit writes
     /// for them comes from the document alone.
     pub overlaid: HashSet<Entity>,
+    /// The components of authored entities the stream wrote, by type path, with
+    /// the change tick of that write. A later change is the editor's.
+    streamed: HashMap<Entity, HashMap<String, Option<Tick>>>,
+    /// References that arrived while an entity naming them held the game's values.
+    relink_after: bevy::platform::collections::HashSet<String>,
     /// What authored entities held before the stream first overwrote a component,
     /// by type path, which a revert puts back.
     priors: HashMap<Entity, HashMap<String, KeptPrior>>,
@@ -51,6 +57,53 @@ pub struct PieProjection {
     /// that had a parent, added a component and so whatever that component requires,
     /// or overwrote a value that cannot be copied.
     pub needs_respawn: bool,
+}
+
+impl PieProjection {
+    /// Whether the change `entity`'s `type_path` holds at `last_changed` is the
+    /// stream's own write.
+    pub fn stream_wrote(&self, entity: Entity, type_path: &str, last_changed: Tick) -> bool {
+        self.streamed
+            .get(&entity)
+            .and_then(|types| types.get(type_path))
+            .is_some_and(|written| *written == Some(last_changed))
+    }
+
+    /// Link fields naming `names` once no entity holds the game's values.
+    pub(crate) fn relink_after_overlays(
+        &mut self,
+        names: &bevy::platform::collections::HashSet<String>,
+    ) {
+        self.relink_after.extend(names.iter().cloned());
+    }
+}
+
+/// Note that the stream just wrote `type_path` on `entity`. Call it straight after
+/// the write: the component's change tick now is what identifies that write.
+pub fn mark_streamed(world: &mut World, entity: Entity, type_path: &str) {
+    let written = component_changed_tick(world, entity, type_path);
+    if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
+        projection.overlaid.insert(entity);
+        projection
+            .streamed
+            .entry(entity)
+            .or_default()
+            .insert(type_path.to_string(), written);
+    }
+}
+
+fn component_changed_tick(world: &World, entity: Entity, type_path: &str) -> Option<Tick> {
+    let type_id = world
+        .resource::<AppTypeRegistry>()
+        .read()
+        .get_with_type_path(type_path)?
+        .type_id();
+    let component = world.components().get_id(type_id)?;
+    let ticks = world
+        .get_entity(entity)
+        .ok()?
+        .get_change_ticks_by_id(component)?;
+    Some(ticks.changed)
 }
 
 /// A value an authored entity held before the stream overwrote it.
@@ -361,11 +414,17 @@ fn component_is_mutable(world: &World, type_id: std::any::TypeId) -> bool {
 
 /// The authored entities were respawned, so none holds a streamed value.
 fn forget_overlays(world: &mut World) {
-    if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
-        projection.overlaid.clear();
-        projection.priors.clear();
-        projection.moved_roots.clear();
-        projection.needs_respawn = false;
+    let Some(mut projection) = world.get_resource_mut::<PieProjection>() else {
+        return;
+    };
+    projection.overlaid.clear();
+    projection.streamed.clear();
+    projection.priors.clear();
+    projection.moved_roots.clear();
+    projection.needs_respawn = false;
+    let names = std::mem::take(&mut projection.relink_after);
+    if !names.is_empty() {
+        crate::scene_io::asset_names::relink_references(world, &names);
     }
 }
 
@@ -642,8 +701,8 @@ fn apply_streamed_value(
         None
     };
     let mid_edit = kept && edit_in_flight(world);
+    mark_streamed(world, preview, &type_path);
     let mut projection = world.resource_mut::<PieProjection>();
-    projection.overlaid.insert(preview);
     if applied == Applied::Added {
         projection.needs_respawn = true;
         return;
@@ -796,6 +855,7 @@ fn apply_value(
             reflected.as_mut(),
             held.as_partial_reflect(),
             &registry_guard,
+            KeepHandles::All,
         );
         if held.reflect_partial_eq(reflected.as_partial_reflect()) == Some(true) {
             return nothing;
@@ -833,59 +893,118 @@ fn apply_value(
     (applied, prior)
 }
 
+/// Put back on `entity`'s component the handles of `held` where it now holds a
+/// cleared one. Whether any changed.
+pub(crate) fn restore_cleared_handles(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    held: &dyn Reflect,
+) -> bool {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    let Some(reflect_component) = registry
+        .get_with_type_path(type_path)
+        .and_then(|registration| registration.data::<ReflectComponent>())
+    else {
+        return false;
+    };
+    let Some(mut restored) = world
+        .get_entity(entity)
+        .ok()
+        .and_then(|now| reflect_component.reflect(now))
+        .and_then(|now| now.reflect_clone().ok())
+    else {
+        return false;
+    };
+    let changed = keep_held_handles(
+        restored.as_partial_reflect_mut(),
+        held.as_partial_reflect(),
+        &registry,
+        KeepHandles::OverCleared,
+    );
+    if changed && let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+        reflect_component.insert(&mut entity_mut, restored.as_partial_reflect(), &registry);
+    }
+    changed
+}
+
+/// Which handles of `value` [`keep_held_handles`] writes over.
+#[derive(Clone, Copy, PartialEq)]
+enum KeepHandles {
+    All,
+    OverCleared,
+}
+
 /// Copy every asset handle in `held` over the same field of `value`. Fields
-/// that do not line up, such as a list of another length, are left.
+/// that do not line up, such as a list of another length, are left. Whether any
+/// handle was written.
 fn keep_held_handles(
     value: &mut dyn PartialReflect,
     held: &dyn PartialReflect,
     registry: &bevy::reflect::TypeRegistry,
-) {
+    keep: KeepHandles,
+) -> bool {
     use bevy::reflect::{ReflectMut, ReflectRef};
-    if held.try_as_reflect().is_some_and(|held| {
-        registry
-            .get_type_data::<bevy::asset::ReflectHandle>(held.reflect_type_info().type_id())
-            .is_some()
-    }) {
-        if let Err(err) = value.try_apply(held) {
-            debug!("apply_component_value: could not keep a handle: {err}");
+    let handle_type = held.try_as_reflect().and_then(|held| {
+        registry.get_type_data::<bevy::asset::ReflectHandle>(held.reflect_type_info().type_id())
+    });
+    if let Some(handle_type) = handle_type {
+        if keep == KeepHandles::OverCleared {
+            let cleared = bevy::asset::UntypedHandle::default_for_type(handle_type.asset_type_id());
+            let id_of = |of: &dyn PartialReflect| {
+                of.try_as_reflect()
+                    .and_then(|of| handle_type.downcast_handle_untyped(of.as_any()))
+                    .map(|handle| handle.id())
+            };
+            if id_of(value) != Some(cleared.id()) || id_of(held) == Some(cleared.id()) {
+                return false;
+            }
         }
-        return;
+        return match value.try_apply(held) {
+            Ok(()) => true,
+            Err(err) => {
+                debug!("apply_component_value: could not keep a handle: {err}");
+                false
+            }
+        };
     }
+    let mut kept = false;
     match (value.reflect_mut(), held.reflect_ref()) {
         (ReflectMut::Struct(value), ReflectRef::Struct(held)) => {
             for index in 0..held.field_len() {
                 if let (Some(name), Some(field)) = (held.name_at(index), held.field_at(index))
                     && let Some(slot) = value.field_mut(name)
                 {
-                    keep_held_handles(slot, field, registry);
+                    kept |= keep_held_handles(slot, field, registry, keep);
                 }
             }
         }
         (ReflectMut::TupleStruct(value), ReflectRef::TupleStruct(held)) => {
             for index in 0..held.field_len() {
                 if let (Some(slot), Some(field)) = (value.field_mut(index), held.field(index)) {
-                    keep_held_handles(slot, field, registry);
+                    kept |= keep_held_handles(slot, field, registry, keep);
                 }
             }
         }
         (ReflectMut::Tuple(value), ReflectRef::Tuple(held)) => {
             for index in 0..held.field_len() {
                 if let (Some(slot), Some(field)) = (value.field_mut(index), held.field(index)) {
-                    keep_held_handles(slot, field, registry);
+                    kept |= keep_held_handles(slot, field, registry, keep);
                 }
             }
         }
         (ReflectMut::List(value), ReflectRef::List(held)) if value.len() == held.len() => {
             for index in 0..held.len() {
                 if let (Some(slot), Some(item)) = (value.get_mut(index), held.get(index)) {
-                    keep_held_handles(slot, item, registry);
+                    kept |= keep_held_handles(slot, item, registry, keep);
                 }
             }
         }
         (ReflectMut::Array(value), ReflectRef::Array(held)) if value.len() == held.len() => {
             for index in 0..held.len() {
                 if let (Some(slot), Some(item)) = (value.get_mut(index), held.get(index)) {
-                    keep_held_handles(slot, item, registry);
+                    kept |= keep_held_handles(slot, item, registry, keep);
                 }
             }
         }
@@ -895,12 +1014,13 @@ fn keep_held_handles(
             for index in 0..held.field_len() {
                 if let (Some(slot), Some(field)) = (value.field_at_mut(index), held.field_at(index))
                 {
-                    keep_held_handles(slot, field, registry);
+                    kept |= keep_held_handles(slot, field, registry, keep);
                 }
             }
         }
         _ => {}
     }
+    kept
 }
 
 #[cfg(test)]

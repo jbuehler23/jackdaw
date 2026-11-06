@@ -518,7 +518,10 @@ fn asset_field_json(
     };
     let server = world.get_resource::<AssetServer>();
     let index = world.get_resource::<crate::asset_index::AssetIndex>();
-    if let Some(path) = crate::typed_values::asset_path_json(&registry, server, index, field) {
+    let unresolved = world.get_resource::<jackdaw_bsn::UnresolvedReferences>();
+    if let Some(path) =
+        crate::typed_values::asset_path_json(&registry, server, index, unresolved, field)
+    {
         return Some(path);
     }
     crate::inspector::reflect_fields::reflect_to_json(field, &registry)
@@ -1712,7 +1715,7 @@ fn delete_definition(world: &mut World, path: &Path) {
     let Some(indexed) = indexed_path(world, path) else {
         return;
     };
-    world.resource_mut::<AssetIndex>().remove(&indexed);
+    crate::asset_index::remove_keeping_name(world, &indexed);
     close_card_for(world, &indexed);
 }
 

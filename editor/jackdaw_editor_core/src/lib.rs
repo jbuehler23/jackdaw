@@ -824,8 +824,9 @@ fn auto_hide_internal_entities(
                 continue;
             }
 
+            // Something later this frame may despawn a transient entity.
             if let Ok(mut ec) = commands.get_entity(entity) {
-                ec.insert(EditorHidden);
+                ec.try_insert(EditorHidden);
             }
         }
     }

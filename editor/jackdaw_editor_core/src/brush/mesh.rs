@@ -367,7 +367,7 @@ pub fn regenerate_brush_meshes(
         let mut chunk_entities = Vec::with_capacity(chunks.len());
 
         for chunk in chunks {
-            let uses_default = chunk.material == Handle::default();
+            let uses_default = jackdaw_bsn::holds_no_asset(&chunk.material);
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, chunk.positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, chunk.normals);

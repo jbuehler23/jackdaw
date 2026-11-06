@@ -137,10 +137,8 @@ pub fn record_live_edit(
     if world
         .get::<crate::pie_projection::PieEphemeral>(preview)
         .is_none()
-        && let Some(mut projection) =
-            world.get_resource_mut::<crate::pie_projection::PieProjection>()
     {
-        projection.overlaid.insert(preview);
+        crate::pie_projection::mark_streamed(world, preview, type_path);
     }
     let node_id = node_id_for_entity(world, preview);
     let key = LiveEditKey {

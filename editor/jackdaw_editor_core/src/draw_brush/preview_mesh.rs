@@ -331,10 +331,11 @@ pub(crate) fn manage_draw_preview_mesh(
                     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, buf.uvs);
                     mesh.insert_indices(Indices::U32(buf.indices));
 
-                    let material = if face_data.material != Handle::default() {
-                        face_data.material.clone()
-                    } else {
+                    let no_asset = jackdaw_bsn::holds_no_asset(&face_data.material);
+                    let material = if no_asset {
                         palette.default_material.clone()
+                    } else {
+                        face_data.material.clone()
                     };
 
                     let face_world_verts: Vec<Vec3> =
@@ -349,7 +350,7 @@ pub(crate) fn manage_draw_preview_mesh(
                         CutPreviewFace {
                             world_vertices: face_world_verts,
                             world_normal: face_data.plane.normal,
-                            is_default_material: face_data.material == Handle::default(),
+                            is_default_material: no_asset,
                             is_cap: face_data.is_cap,
                         },
                         NotShadowCaster,

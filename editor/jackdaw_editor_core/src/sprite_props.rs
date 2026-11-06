@@ -348,7 +348,7 @@ pub(crate) fn field_edits(
         match crate::commands::set_bsn_field_command(world, entity, type_path, &path, value) {
             Ok(edit) => edits.push(edit),
             Err(FieldEditSkip::Unchanged) => {
-                crate::commands::mirror_document_component(world, entity, type_path);
+                crate::commands::mirror_document_field(world, entity, type_path, &path);
             }
             Err(FieldEditSkip::Previewed) => {}
         }

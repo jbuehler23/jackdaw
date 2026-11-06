@@ -608,7 +608,9 @@ pub fn entity_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpRe
     check_enabled(world)?;
     let params = params.ok_or_else(|| invalid_params("expected an \"entity\" or a \"name\""))?;
     let entity = entity_from_params(world, &params)?;
-    let bsn = jackdaw_remote::bsn_methods::entity_bsn(world, entity).map_err(invalid_params)?;
+    let names = jackdaw_editor_core::scene_io::save::asset_reference_seed(world);
+    let bsn = jackdaw_remote::bsn_methods::entity_bsn_naming(world, entity, &names)
+        .map_err(invalid_params)?;
     let mut answer = json!({ "entity": entity.to_bits(), "bsn": bsn });
     if let Some(masks) = terrain_masks(world, entity) {
         answer["masks"] = masks;

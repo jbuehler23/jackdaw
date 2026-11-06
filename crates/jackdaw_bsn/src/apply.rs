@@ -6,7 +6,8 @@
 
 use std::any::TypeId;
 
-use bevy::asset::{AssetServer, ReflectHandle};
+use bevy::asset::uuid::Uuid;
+use bevy::asset::{Asset, AssetServer, ReflectHandle};
 use bevy::ecs::reflect::{AppTypeRegistry, ReflectComponent};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -17,6 +18,7 @@ use bevy::reflect::{
     map::{DynamicMap, Map},
     prelude::ReflectDefault,
 };
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::{
     AstNodeRef, BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue,
@@ -34,6 +36,201 @@ pub struct AstDirty;
 pub struct BsnApplyAssets<'a> {
     pub server: &'a AssetServer,
     pub local: Option<&'a bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>>,
+    /// Where a reference `local` has no entry for is noted, when the caller
+    /// follows up on references that start resolving later.
+    pub unresolved: Option<&'a UnresolvedReferences>,
+}
+
+/// The high half of a placeholder's id, which says what it is with no lookup.
+const PLACEHOLDER_HIGH: u64 = u64::from_be_bytes(*b"jackdaw\0");
+
+/// Whether `handle` holds a name with no asset behind it yet.
+pub fn is_placeholder<A: Asset>(handle: &Handle<A>) -> bool {
+    match handle {
+        Handle::Uuid(uuid, _) => is_placeholder_uuid(*uuid),
+        Handle::Strong(_) => false,
+    }
+}
+
+/// [`is_placeholder`] for an id.
+pub fn is_placeholder_id(id: bevy::asset::UntypedAssetId) -> bool {
+    matches!(id, bevy::asset::UntypedAssetId::Uuid { uuid, .. } if is_placeholder_uuid(uuid))
+}
+
+fn is_placeholder_uuid(uuid: Uuid) -> bool {
+    uuid.as_u64_pair().0 == PLACEHOLDER_HIGH
+}
+
+/// Whether `handle` has nothing to draw: it is cleared, or waits on a name.
+pub fn holds_no_asset<A: Asset>(handle: &Handle<A>) -> bool {
+    *handle == Handle::default() || is_placeholder(handle)
+}
+
+/// What the editor holds for references with no asset behind them.
+///
+/// A `#Name`, an `@Name` or a document path with no file that does not resolve
+/// becomes a placeholder handle, as any other path that does not load is still a
+/// handle holding its path. It is weak and keeps nothing alive, it travels with
+/// whatever copies the field, and a default handle therefore only ever means
+/// cleared. Only the editor installs this: a game reading the same document holds
+/// the default handle for a name, and asks its asset server for a path.
+#[derive(Resource, Default, Clone)]
+pub struct UnresolvedReferences(Arc<Mutex<Unresolved>>);
+
+#[derive(Default)]
+struct Unresolved {
+    /// References no asset has answered yet, the paths of failed loads among them.
+    waiting: HashSet<(String, TypeId)>,
+    placeholders: bevy::platform::collections::HashMap<(String, TypeId), Uuid>,
+    /// Kept after a name arrives: an undo record may still hold the placeholder.
+    names: bevy::platform::collections::HashMap<Uuid, (String, TypeId)>,
+    /// Assets whose file went while they stayed held, with the path it was at.
+    retired: bevy::platform::collections::HashMap<
+        bevy::asset::UntypedAssetId,
+        (String, bevy::asset::UntypedHandle),
+    >,
+    /// Where the open project's files are, to tell a document path with no file.
+    assets_dir: Option<std::path::PathBuf>,
+}
+
+impl UnresolvedReferences {
+    fn held(&self) -> MutexGuard<'_, Unresolved> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The one placeholder for `reference` as an asset of `type_id`.
+    pub fn placeholder(&self, reference: &str, type_id: TypeId) -> bevy::asset::UntypedHandle {
+        let key = (reference.to_string(), type_id);
+        let mut held = self.held();
+        if held.waiting.insert(key.clone()) {
+            log::warn!(
+                "asset reference '{reference}' did not resolve in the project catalog or \
+                 embedded assets; it stays named and holds no asset"
+            );
+        }
+        let uuid = match held.placeholders.get(&key) {
+            Some(uuid) => *uuid,
+            None => {
+                let uuid = Uuid::from_u64_pair(PLACEHOLDER_HIGH, held.names.len() as u64);
+                held.placeholders.insert(key.clone(), uuid);
+                held.names.insert(uuid, key);
+                uuid
+            }
+        };
+        bevy::asset::UntypedHandle::Uuid { type_id, uuid }
+    }
+
+    /// Say where the open project's files are.
+    pub fn set_assets_dir(&self, assets: Option<std::path::PathBuf>) {
+        self.held().assets_dir = assets;
+    }
+
+    /// Whether `reference` is a document path the open project has no file for.
+    /// A path to any other asset type is the asset server's to find. A path already
+    /// waiting is not looked for again: its file arrives through the asset index,
+    /// so a scene naming it on every face costs one look.
+    fn names_missing_document(&self, reference: &str, type_id: TypeId) -> bool {
+        let path = std::path::Path::new(reference);
+        if !crate::file::is_document_path(path) || reference.contains("://") {
+            return false;
+        }
+        let assets = {
+            let held = self.held();
+            let key = (reference.to_string(), type_id);
+            if held.waiting.contains(&key) && held.placeholders.contains_key(&key) {
+                return true;
+            }
+            held.assets_dir.clone()
+        };
+        assets.is_some_and(|assets| crate::file::existing_form(&assets.join(path)).is_none())
+    }
+
+    /// Hold `reference`, a path, as something a later asset may answer.
+    pub fn note(&self, reference: &str, type_id: TypeId) {
+        self.held().waiting.insert((reference.to_string(), type_id));
+    }
+
+    /// The name a placeholder stands for, or the path of a retired asset's file.
+    pub fn name_of(&self, id: bevy::asset::UntypedAssetId) -> Option<String> {
+        let held = self.held();
+        if let bevy::asset::UntypedAssetId::Uuid { uuid, .. } = id
+            && is_placeholder_uuid(uuid)
+        {
+            return held.names.get(&uuid).map(|(name, _)| name.clone());
+        }
+        held.retired.get(&id).map(|(path, _)| path.clone())
+    }
+
+    /// Every asset [`Self::name_of`] has a name for.
+    pub fn named_ids(&self) -> Vec<bevy::asset::UntypedAssetId> {
+        let held = self.held();
+        held.names
+            .iter()
+            .map(|(uuid, (_, type_id))| bevy::asset::UntypedAssetId::Uuid {
+                type_id: *type_id,
+                uuid: *uuid,
+            })
+            .chain(held.retired.keys().copied())
+            .collect()
+    }
+
+    /// Hold on to an asset whose file at `path` has gone: what names it keeps the
+    /// path, as a reference that cannot be found does, and it stays what the path
+    /// resolves to until the file returns.
+    pub fn retire(&self, path: &str, handle: &bevy::asset::UntypedHandle) {
+        self.held()
+            .retired
+            .insert(handle.id(), (path.to_string(), handle.clone()));
+    }
+
+    /// Whether `id`'s file has gone.
+    pub fn is_retired(&self, id: bevy::asset::UntypedAssetId) -> bool {
+        self.held().retired.contains_key(&id)
+    }
+
+    /// The retired assets by the path their file was at, in a settled order so the
+    /// same one answers for a path each time.
+    pub fn retired(&self) -> Vec<(String, bevy::asset::UntypedHandle)> {
+        let mut retired: Vec<_> = self.held().retired.values().cloned().collect();
+        retired.sort_by_key(|(_, handle)| handle.id());
+        retired
+    }
+
+    /// The asset of `type_id` retired from `path`, for a file returning there.
+    pub fn retired_at(&self, path: &str, type_id: TypeId) -> Option<bevy::asset::UntypedHandle> {
+        self.retired()
+            .into_iter()
+            .find(|(from, handle)| from == path && handle.type_id() == type_id)
+            .map(|(_, handle)| handle)
+    }
+
+    /// Forget the retired assets `filed` says have a file again.
+    pub fn refile(&self, filed: impl Fn(bevy::asset::UntypedAssetId) -> bool) {
+        self.held().retired.retain(|id, _| !filed(*id));
+    }
+
+    /// Stop waiting on anything and let go of retired assets, as opening another
+    /// project does. Placeholders stay, since the ones held by name mean the same
+    /// in the next project.
+    pub fn clear(&self) {
+        let mut held = self.held();
+        held.waiting.clear();
+        held.retired.clear();
+    }
+
+    /// Stop waiting on the references `arrived` accepts, and hand them over.
+    pub fn take_arrived(&self, arrived: impl Fn(&str, TypeId) -> bool) -> HashSet<String> {
+        let mut held = self.held();
+        let mut taken = HashSet::new();
+        held.waiting.retain(|(reference, type_id)| {
+            let answered = arrived(reference, *type_id);
+            if answered {
+                taken.insert(reference.clone());
+            }
+            !answered
+        });
+        taken
+    }
 }
 
 /// The references the open scene resolves: the paths of the project's asset
@@ -376,6 +573,246 @@ pub fn apply_component_patch(world: &mut World, entity: Entity, patch: &BsnPatch
     }
 }
 
+/// Apply what `field_path` of `entity`'s `type_path` patch holds to the live
+/// component, leaving the rest of it as it stands.
+///
+/// A field a list element leaves out is written as the default it reads back
+/// as. When the live component cannot take the path, the deepest step of it that
+/// both sides hold is written. An empty path, a component the entity does not
+/// hold yet, or a patch the path cannot read into, applies the patch whole.
+pub fn apply_component_patch_field(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    apply_component_patch_fields(world, entity, type_path, &[field_path]);
+}
+
+/// [`apply_component_patch_field`] for several fields of one component, which is
+/// written once.
+pub fn apply_component_patch_fields(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_paths: &[&str],
+) {
+    if let Some(written) = live_with_patch_fields(world, entity, type_path, field_paths) {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        if let Some(reflect_component) = reg
+            .get_with_type_path(type_path)
+            .and_then(|registration| registration.data::<ReflectComponent>())
+            && let Ok(mut entity_mut) = world.get_entity_mut(entity)
+        {
+            reflect_component.insert(&mut entity_mut, written.as_partial_reflect(), &reg);
+        }
+        return;
+    }
+    let ast = world.resource::<SceneBsnAst>();
+    let patch = ast
+        .ast_for(entity)
+        .and_then(|node| ast.find_patch_by_type_path(node, type_path))
+        .and_then(|patch| ast.get_patch(patch))
+        .cloned();
+    if let Some(patch) = patch {
+        apply_component_patch(world, entity, &patch);
+    }
+}
+
+/// A copy of `entity`'s live component with `field_paths` taken from its patch.
+fn live_with_patch_fields(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_paths: &[&str],
+) -> Option<Box<dyn PartialReflect>> {
+    let ast = world.resource::<SceneBsnAst>();
+    let node = ast.ast_for(entity)?;
+    let patch = ast.get_patch(ast.find_patch_by_type_path(node, type_path)?)?;
+    let root = patch_to_value(patch)?;
+    if matches!(root, BsnValue::Type(_)) {
+        return None;
+    }
+    let registry = world.resource::<AppTypeRegistry>().read();
+    let held = registry
+        .get_with_type_path(type_path)?
+        .data::<ReflectComponent>()?
+        .reflect(world.get_entity(entity).ok()?)?;
+    let mut live = held.to_dynamic().ok()?;
+    let server = world.get_resource::<AssetServer>();
+    let assets = server.map(|server| BsnApplyAssets {
+        server,
+        local: world
+            .get_resource::<BsnSceneAssets>()
+            .map(|assets| &assets.0),
+        unresolved: world.get_resource::<UnresolvedReferences>(),
+    });
+    for field_path in field_paths {
+        if field_path.is_empty() {
+            return None;
+        }
+        let steps = path_steps(field_path)?;
+        if document_value_at(&root, &steps).is_none()
+            && let Some(omitted) = omitted_list_field(ast, node, type_path, field_path, &registry)
+            && let Some(target) = live_value_at(&mut *live, &steps, &registry)
+        {
+            merge_bsn_value_into_reflect(target, &omitted, &registry, assets.as_ref());
+            continue;
+        }
+        let depth = (0..=steps.len()).rev().find(|&depth| {
+            document_value_at(&root, &steps[..depth]).is_some()
+                && live_value_at(&mut *live, &steps[..depth], &registry).is_some()
+        })?;
+        let value = document_value_at(&root, &steps[..depth])?;
+        let target = live_value_at(&mut *live, &steps[..depth], &registry)?;
+        if reached_through_list(&root, &steps[..depth]) {
+            write_whole(target, value, &registry, assets.as_ref())?;
+        } else {
+            merge_bsn_value_into_reflect(target, value, &registry, assets.as_ref());
+        }
+    }
+    Some(live)
+}
+
+/// Whether `steps` go through a list element, whose left-out fields hold their
+/// defaults rather than inherit what the live value holds.
+fn reached_through_list(root: &BsnValue, steps: &[PathStep]) -> bool {
+    let mut held = root;
+    for step in steps {
+        if matches!(held, BsnValue::List(_)) {
+            return true;
+        }
+        let Some(next) = navigate_step(held, *step) else {
+            return false;
+        };
+        held = next;
+    }
+    false
+}
+
+/// Replace `target` with what `value` reads as on its own.
+fn write_whole(
+    target: &mut dyn PartialReflect,
+    value: &BsnValue,
+    registry: &TypeRegistry,
+    assets: Option<&BsnApplyAssets>,
+) -> Option<()> {
+    let type_id = target.get_represented_type_info()?.type_id();
+    let reflected = bsn_value_to_reflect(value, type_id, registry, assets)?;
+    apply_authored_value(target, &*reflected);
+    Some(())
+}
+
+/// The field paths of `patch` that hold one of `names`, as
+/// [`apply_component_patch_fields`] takes them. A map is one path: a reference
+/// in it is written with the rest of the map.
+pub fn fields_naming(patch: &BsnPatch, names: &HashSet<String>) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut path = String::new();
+    match patch {
+        BsnPatch::Struct(data) => {
+            collect_in_fields(&data.fields, &mut path, names, &mut found);
+        }
+        BsnPatch::Template(_, Some(fields)) => {
+            collect_in_fields(fields, &mut path, names, &mut found);
+        }
+        BsnPatch::TupleStruct(data) => {
+            collect_in_values(&data.values, &mut path, names, &mut found);
+        }
+        _ => {}
+    }
+    found
+}
+
+fn collect_in_fields(
+    fields: &BsnStructFields,
+    path: &mut String,
+    names: &HashSet<String>,
+    found: &mut Vec<String>,
+) {
+    for field in &fields.0 {
+        let at = path.len();
+        if at > 0 {
+            path.push('.');
+        }
+        path.push_str(&field.name);
+        collect_naming(&field.value, path, names, found);
+        path.truncate(at);
+    }
+}
+
+fn collect_in_values(
+    values: &[BsnValue],
+    path: &mut String,
+    names: &HashSet<String>,
+    found: &mut Vec<String>,
+) {
+    for (index, value) in values.iter().enumerate() {
+        let at = path.len();
+        if at > 0 {
+            path.push('.');
+        }
+        path.push_str(&index.to_string());
+        collect_naming(value, path, names, found);
+        path.truncate(at);
+    }
+}
+
+fn collect_naming(
+    value: &BsnValue,
+    path: &mut String,
+    names: &HashSet<String>,
+    found: &mut Vec<String>,
+) {
+    match value {
+        BsnValue::String(reference) => {
+            if names.contains(reference) {
+                found.push(path.clone());
+            }
+        }
+        BsnValue::Struct(data) => collect_in_fields(&data.fields, path, names, found),
+        BsnValue::TupleStruct(data) => collect_in_values(&data.values, path, names, found),
+        BsnValue::List(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let at = path.len();
+                path.push_str(&format!("[{index}]"));
+                collect_naming(item, path, names, found);
+                path.truncate(at);
+            }
+        }
+        BsnValue::Map(entries) => {
+            let before = found.len();
+            for (_, item) in entries {
+                collect_naming(item, path, names, found);
+            }
+            if found.len() > before {
+                found.truncate(before);
+                found.push(path.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn document_value_at<'a>(root: &'a BsnValue, steps: &[PathStep]) -> Option<&'a BsnValue> {
+    steps
+        .iter()
+        .try_fold(root, |value, step| navigate_step(value, *step))
+}
+
+fn live_value_at<'a>(
+    root: &'a mut dyn PartialReflect,
+    steps: &[PathStep],
+    registry: &TypeRegistry,
+) -> Option<&'a mut dyn PartialReflect> {
+    let mut current = root;
+    for step in steps {
+        current = reflect_step_mut(current, *step, registry)?;
+    }
+    Some(current)
+}
+
 /// Apply a bare type patch (unit struct or enum variant with all defaults).
 fn apply_type_patch(world: &mut World, entity: Entity, type_path: &str) {
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -501,9 +938,11 @@ fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
     let local = world
         .get_resource::<BsnSceneAssets>()
         .map(|assets| assets.0.clone());
+    let unresolved = world.get_resource::<UnresolvedReferences>().cloned();
     let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
         server: s,
         local: local.as_ref(),
+        unresolved: unresolved.as_ref(),
     });
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
@@ -778,9 +1217,11 @@ fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleSt
     let local = world
         .get_resource::<BsnSceneAssets>()
         .map(|assets| assets.0.clone());
+    let unresolved = world.get_resource::<UnresolvedReferences>().cloned();
     let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
         server: s,
         local: local.as_ref(),
+        unresolved: unresolved.as_ref(),
     });
     let registry = world.resource::<AppTypeRegistry>().clone();
     let reg = registry.read();
@@ -1001,13 +1442,25 @@ pub fn bsn_value_to_reflect(
                 let typed = reflect_handle.typed(handle.clone());
                 return Some(typed.into_partial_reflect());
             }
-            if path.starts_with('#') || path.starts_with('@') {
+            let asset_type_id = reflect_handle.asset_type_id();
+            let waits = path.starts_with('#')
+                || path.starts_with('@')
+                || assets
+                    .unresolved
+                    .is_some_and(|table| table.names_missing_document(path, asset_type_id));
+            if waits {
+                if let Some(unresolved) = assets.unresolved {
+                    let waiting = unresolved.placeholder(path, asset_type_id);
+                    return Some(reflect_handle.typed(waiting).into_partial_reflect());
+                }
                 log::warn!(
                     "asset reference '{path}' did not resolve in the project catalog or \
                      embedded assets; using the default handle"
                 );
             } else {
-                let asset_type_id = reflect_handle.asset_type_id();
+                if let Some(unresolved) = assets.unresolved {
+                    unresolved.note(path, asset_type_id);
+                }
                 let untyped = assets
                     .server
                     .load_builder()
@@ -1016,8 +1469,10 @@ pub fn bsn_value_to_reflect(
                 return Some(typed.into_partial_reflect());
             }
         }
-        // Empty string or no asset server: the handle a field holds when it
-        // names nothing.
+        // An empty string, no asset server, or a non-string value: the handle
+        // a field holds when it names nothing. With a table of unresolved
+        // references a name became a placeholder above; a game has no table and
+        // falls through to here.
         let cleared = reflect_handle.typed(bevy::asset::UntypedHandle::default_for_type(
             reflect_handle.asset_type_id(),
         ));
@@ -1889,6 +2344,35 @@ fn reflect_step<'a>(
             .iter()
             .find(|(key, _)| key_matches(&BsnValue::from_reflect(*key, registry), at))
             .map(|(_, value)| value),
+        _ => None,
+    }
+}
+
+/// [`reflect_step`] for writing.
+fn reflect_step_mut<'a>(
+    value: &'a mut dyn PartialReflect,
+    step: PathStep,
+    registry: &TypeRegistry,
+) -> Option<&'a mut dyn PartialReflect> {
+    let (PathStep::Name(at) | PathStep::Key(at)) = step;
+    let index = at.parse::<usize>().ok();
+    match value.reflect_mut() {
+        ReflectMut::Struct(s) => s.field_mut(at),
+        ReflectMut::TupleStruct(t) => t.field_mut(index?),
+        ReflectMut::Tuple(t) => t.field_mut(index?),
+        ReflectMut::Enum(e) => match e.variant_type() {
+            VariantType::Struct => e.field_mut(at),
+            _ => e.field_at_mut(index?),
+        },
+        ReflectMut::List(l) => l.get_mut(index?),
+        ReflectMut::Array(a) => a.get_mut(index?),
+        ReflectMut::Map(m) => {
+            let key = m
+                .iter()
+                .find(|(key, _)| key_matches(&BsnValue::from_reflect(*key, registry), at))
+                .and_then(|(key, _)| key.to_dynamic().ok())?;
+            m.get_mut(&*key)
+        }
         _ => None,
     }
 }

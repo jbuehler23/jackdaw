@@ -216,6 +216,8 @@ impl<'a> TypeDefaults<'a> {
             return None;
         }
         let default = registration.data::<ReflectDefault>()?.default();
+        // No asset context: a handle reads as `""` whatever names it, so the
+        // result holds for every pass, and a named handle never matches it.
         let encoded =
             BsnValue::from_reflect_inner(default.as_partial_reflect(), self.registry, None).ok()?;
         let BsnValue::Struct(mut data) = encoded else {

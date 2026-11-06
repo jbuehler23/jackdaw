@@ -1570,6 +1570,7 @@ fn load_embedded_assets(
         let assets_ctx = BsnApplyAssets {
             server: &server,
             local: None,
+            unresolved: None,
         };
         let Some(value) = bsn_value_to_reflect(&asset_value, type_id, &reg, Some(&assets_ctx))
         else {
