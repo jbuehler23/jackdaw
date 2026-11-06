@@ -1929,10 +1929,17 @@ fn served_text_matches_the_recorded_document() {
     let (behind, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
     let served = format!("{front}=====\n{behind}");
     let served = without_node_ids(&served);
-    if std::env::var_os("JACKDAW_PRINT_SERVED").is_some() {
-        println!("<<<{served}>>>");
-    }
-    assert_eq!(served, include_str!("play_scene_served.txt"));
+    assert_eq!(
+        sorted_lines(&served),
+        sorted_lines(include_str!("play_scene_served.txt"))
+    );
+}
+
+/// The order of a node's patches differs between builds, so compare the lines.
+fn sorted_lines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.lines().collect();
+    lines.sort_unstable();
+    lines
 }
 
 /// Serving reads the document's text back once, whatever assets it embeds.

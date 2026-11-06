@@ -11,7 +11,7 @@
 //! loads from a file cannot spell one, so it cannot take an edit's asset away.
 //!
 //! The names are given on a copy of the document, in a frame's time. The text is
-//! written from that copy and read back on a worker ([`WriteJob`]): text that does
+//! written from that copy and read back on a worker (`WriteJob`): text that does
 //! not read never goes to a game, which loads the file and the user is told. The
 //! game asks without blocking, so the answer can arrive frames later, and its place
 //! in the instance's outbox is held from the moment of asking.
