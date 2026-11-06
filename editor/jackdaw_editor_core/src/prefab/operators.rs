@@ -494,6 +494,12 @@ fn write_prefab_from_roots(
                 continue;
             };
             let mut patches = copy_component_patches(live, node, true);
+            // An undo brings the packed nodes back, and an instance of the file
+            // must not repeat their ids.
+            patches.retain(|patch| {
+                patch_type_path(patch).is_none_or(|path| !path.ends_with("SceneNodeId"))
+            });
+            patches.push(crate::scene_nodes::node_id_patch(SceneNodeId::next()));
             patches.push(peid_patch((i + 1) as u32));
             let prefab_node = prefab.create_entity_node(patches);
             ecs_to_prefab.insert(entity, prefab_node);

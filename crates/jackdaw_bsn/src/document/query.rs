@@ -1,6 +1,8 @@
 //! Read-only queries over the document: node lookups, hierarchy walks,
 //! and component-patch searches.
 
+use std::sync::atomic::Ordering;
+
 use bevy::ecs::entity::Entity;
 
 use super::{BsnPatch, BsnPatches, BsnValue, SceneBsnAst};
@@ -101,16 +103,27 @@ impl SceneBsnAst {
     /// The stable node id carried by a document node's `SceneNodeId(id)`
     /// tuple-struct patch, if the node has one.
     pub fn stable_id_of(&self, patches_entity: Entity) -> Option<u64> {
+        let patch = self.stable_id_patch(patches_entity)?;
+        let Some(BsnPatch::TupleStruct(data)) = self.get_patch(patch) else {
+            return None;
+        };
+        let Some(BsnValue::Int(v)) = data.values.first() else {
+            return None;
+        };
+        u64::try_from(*v).ok()
+    }
+
+    /// The patch [`stable_id_of`](Self::stable_id_of) reads the id from.
+    pub fn stable_id_patch(&self, patches_entity: Entity) -> Option<Entity> {
         let patches = self.get_patches(patches_entity)?;
-        for &pe in &patches.0 {
-            if let Some(BsnPatch::TupleStruct(data)) = self.get_patch(pe)
-                && data.type_path.ends_with("SceneNodeId")
-                && let Some(BsnValue::Int(v)) = data.values.first()
-            {
-                return u64::try_from(*v).ok();
-            }
-        }
-        None
+        patches.0.iter().copied().find(|&pe| {
+            matches!(
+                self.get_patch(pe),
+                Some(BsnPatch::TupleStruct(data))
+                    if data.type_path.ends_with("SceneNodeId")
+                        && matches!(data.values.first(), Some(BsnValue::Int(_)))
+            )
+        })
     }
 
     /// Find the document node carrying the given stable node id, i.e. a
@@ -203,9 +216,18 @@ impl SceneBsnAst {
         None
     }
 
+    /// How many times this document has been searched for a node's parent. Each
+    /// search walks the tree, so a test can bound a path's cost by this count
+    /// instead of by its time.
+    #[doc(hidden)]
+    pub fn parent_walks(&self) -> u64 {
+        self.parent_walks.load(Ordering::Relaxed)
+    }
+
     /// Find which AST entity contains `child_ast` in a Children patch.
     /// Returns `None` if `child_ast` is a root (or not found).
     pub fn find_ast_parent_of(&self, child_ast: Entity) -> Option<Entity> {
+        self.parent_walks.fetch_add(1, Ordering::Relaxed);
         if self.roots.contains(&child_ast) {
             return None;
         }

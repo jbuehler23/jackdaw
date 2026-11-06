@@ -113,3 +113,54 @@ bevy_ecs::hierarchy::Children [
     assert_eq!(out.matches("PointLight").count(), 1, "{out}");
     assert_eq!(out.matches("Camera3d").count(), 1, "{out}");
 }
+
+const NODE_ID: &str = "jackdaw_scene_types::node_id::SceneNodeId";
+
+fn lamp_with_inner_id(inner: &str) -> String {
+    format!(
+        r#"#Lamp
+jackdaw::prefab::components::Prefab
+jackdaw::prefab::components::PrefabEntityId(0)
+bevy_ecs::hierarchy::Children [
+    #Bulb
+    bevy_light::point_light::PointLight
+    jackdaw::prefab::components::PrefabEntityId(1)
+    {inner}
+]
+"#
+    )
+}
+
+fn lamp_scene_with_inner_id(id: u64) -> String {
+    format!(
+        r#"#Level
+jackdaw::prefab::components::IsA {{ source: "lamp.bsn", deleted: [] }}
+jackdaw::prefab::components::PrefabEntityId(0)
+bevy_ecs::hierarchy::Children [
+    jackdaw::prefab::components::PrefabEntityId(1)
+    {NODE_ID}({id})
+]
+"#
+    )
+}
+
+#[test]
+fn a_saved_inner_id_does_not_override_the_files() {
+    let lamp = lamp_with_inner_id(&format!("{NODE_ID}(222)"));
+    let out = resolve(&[("lamp.bsn", &lamp)], &lamp_scene_with_inner_id(111));
+    assert!(out.contains(&format!("{NODE_ID}(222)")), "{out}");
+    assert!(!out.contains(&format!("{NODE_ID}(111)")), "{out}");
+}
+
+#[test]
+fn an_id_survives_save_when_the_file_node_has_none() {
+    let lamp = lamp_with_inner_id("");
+    let prefabs: HashMap<PathBuf, SceneBsnAst> =
+        HashMap::from([(PathBuf::from("lamp.bsn"), parse_bsn_text(&lamp).unwrap())]);
+    let get = |p: &Path| prefabs.get(p);
+    let scene = parse_bsn_text(&lamp_scene_with_inner_id(111)).unwrap();
+    let mut resolved = resolve_scene(&scene, &get).unwrap();
+    jackdaw_prefab::sparsify_inherited_descendants(&mut resolved, &get, &|_| None);
+    let out = emit_scene(&resolved);
+    assert!(out.contains(&format!("{NODE_ID}(111)")), "{out}");
+}

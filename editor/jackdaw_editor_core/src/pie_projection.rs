@@ -570,7 +570,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
             let bits = entity.entity;
             let authored = entity
                 .scene_node_id
-                .and_then(|id| world.resource::<SceneBsnAst>().entity_for_stable_id(id));
+                .and_then(|id| crate::scene_nodes::authored_entity(world, id));
             let preview = authored.unwrap_or_else(|| {
                 // Seed Transform/Visibility so children inherit before
                 // streamed values overwrite the defaults.

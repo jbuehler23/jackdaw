@@ -291,7 +291,19 @@ pub fn activate_tab(world: &mut World, target: usize) {
                 .in_scope(|| crate::prefab::resolver_bsn::resolve_scene(&new_doc, &get_prefab))
         });
         match resolved {
-            Some(Ok(resolved)) => Some(resolved),
+            Some(Ok(mut resolved)) => {
+                if matches!(content, TabContent::Scene(_))
+                    && history.undo_stack.is_empty()
+                    && history.redo_stack.is_empty()
+                {
+                    let registry = world.resource::<AppTypeRegistry>().clone();
+                    crate::scene_nodes::separate_from_inherited_ids(
+                        &mut resolved,
+                        &registry.read(),
+                    );
+                }
+                Some(resolved)
+            }
             Some(Err(e)) => {
                 warn!("activate_tab: prefab resolution failed: {e}; spawning unresolved");
                 None
@@ -475,7 +487,6 @@ fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
     use crate::selection::{Selected, Selection};
     use crate::viewport::MainViewportCamera;
     use crate::viewport_2d::Viewport2dPanelHost;
-    use jackdaw_scene_types::SceneNodeId;
 
     // Camera transform.
     let mut cam_q = world.query_filtered::<&mut Transform, With<MainViewportCamera>>();
@@ -515,14 +526,10 @@ fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
     }
 
     // Object selection: rebuild from scene node ids.
-    let mut nid_q = world.query::<(Entity, &SceneNodeId)>();
-    let nid_map: std::collections::HashMap<SceneNodeId, Entity> =
-        nid_q.iter(world).map(|(e, nid)| (*nid, e)).collect();
-
     let entities: Vec<Entity> = view_state
         .selection
         .iter()
-        .filter_map(|nid| nid_map.get(nid).copied())
+        .filter_map(|&nid| crate::scene_nodes::unit_holder(world, nid))
         .collect();
 
     if let Some(mut selection) = world.get_resource_mut::<Selection>() {
