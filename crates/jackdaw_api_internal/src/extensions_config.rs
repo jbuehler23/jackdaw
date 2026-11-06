@@ -23,15 +23,14 @@ pub fn persist_current_enabled(world: &mut World) {
             }
         }
     }
-    let mut config = read_extension_config().unwrap_or_default();
-    for (id, ext_config) in config.iter_mut() {
-        if !enabled.contains(id) {
-            ext_config.enabled = false;
+    update_extension_config(|config| {
+        for (id, ext_config) in config.iter_mut() {
+            if !enabled.contains(id) {
+                ext_config.enabled = false;
+            }
         }
-    }
-    for id in enabled {
-        config.entry(id).or_default().enabled = true;
-    }
-
-    write_enabled_list(&config);
+        for id in enabled {
+            config.entry(id).or_default().enabled = true;
+        }
+    });
 }

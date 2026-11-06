@@ -6,6 +6,10 @@ use std::{
     collections::BTreeMap,
     ops::{Deref, DerefMut},
     path::PathBuf,
+    sync::{
+        Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -49,6 +53,13 @@ fn config_path() -> Option<PathBuf> {
 
 // TODO: This should all be an `Asset` instead of raw file access
 
+/// Held across a read and the write made from it, so a write in another thread
+/// does not lose this one's entry.
+fn config_update() -> MutexGuard<'static, ()> {
+    static UPDATE: Mutex<()> = Mutex::new(());
+    UPDATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Read the enabled list from disk. Returns `None` if the file doesn't
 /// exist; callers should interpret that as "enable everything".
 pub fn read_extension_config() -> Option<ExtensionsConfig> {
@@ -61,6 +72,7 @@ pub fn read_extension_config() -> Option<ExtensionsConfig> {
 /// Add the extension with the given ID to the enabled list if it is not already present.
 pub fn init_extension(id: impl Into<String>) {
     let id = id.into();
+    let _update = config_update();
     let mut config = read_extension_config().unwrap_or_default();
     if config.contains_key(&id) {
         return;
@@ -79,12 +91,22 @@ pub fn is_extension_enabled(id: &str) -> bool {
 
 /// Persist one extension's desired state without requiring a running editor.
 pub fn set_extension_enabled(id: impl Into<String>, enabled: bool) {
+    update_extension_config(|config| {
+        config.entry(id.into()).or_default().enabled = enabled;
+    });
+}
+
+/// Change the config on disk with nothing else writing between the read and the
+/// write.
+pub fn update_extension_config(update: impl FnOnce(&mut ExtensionsConfig)) {
+    let _update = config_update();
     let mut config = read_extension_config().unwrap_or_default();
-    config.entry(id.into()).or_default().enabled = enabled;
+    update(&mut config);
     write_enabled_list(&config);
 }
 
-/// Write the currently-enabled list to disk.
+/// Write the currently-enabled list to disk, replacing the file in one step so
+/// a reader never sees it half written.
 pub fn write_enabled_list(config: &ExtensionsConfig) {
     let Some(path) = config_path() else {
         return;
@@ -92,7 +114,16 @@ pub fn write_enabled_list(config: &ExtensionsConfig) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(data) = serde_json::to_string_pretty(&config) {
-        let _ = std::fs::write(&path, data);
+    let Ok(data) = serde_json::to_string_pretty(&config) else {
+        return;
+    };
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let written = path.with_extension(format!(
+        "json.{}.{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&written, data).is_err() || std::fs::rename(&written, &path).is_err() {
+        let _ = std::fs::remove_file(&written);
     }
 }
