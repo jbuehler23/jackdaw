@@ -478,13 +478,14 @@ fn spawn_ast_node_to_depth(
 /// Applies AST patches to all dirty entities, then removes the marker. Called
 /// explicitly during scene load; it is not registered as a per-frame system.
 pub fn apply_dirty_ast_patches(world: &mut World) {
+    let references = scene_references(world);
     let dirty: Vec<Entity> = world
         .query_filtered::<Entity, With<AstDirty>>()
         .iter(world)
         .collect();
 
     for entity in dirty {
-        apply_ast_to_ecs(world, entity);
+        apply_ast_to_entity(world, entity, references.as_ref());
         if let Ok(mut ec) = world.get_entity_mut(entity) {
             ec.remove::<AstDirty>();
         }
@@ -493,6 +494,21 @@ pub fn apply_dirty_ast_patches(world: &mut World) {
 
 /// Read an entity's AST patches and apply them to the ECS entity via reflection.
 pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
+    let references = scene_references(world);
+    apply_ast_to_entity(world, entity, references.as_ref());
+}
+
+type SceneReferences = bevy::platform::collections::HashMap<String, bevy::asset::UntypedHandle>;
+
+/// A copy of [`BsnSceneAssets`], held across a pass that writes to the world
+/// while resolving references, and made once for the whole of it.
+fn scene_references(world: &World) -> Option<SceneReferences> {
+    world
+        .get_resource::<BsnSceneAssets>()
+        .map(|assets| assets.0.clone())
+}
+
+fn apply_ast_to_entity(world: &mut World, entity: Entity, references: Option<&SceneReferences>) {
     let Some(ast_ref) = world.get::<AstNodeRef>(entity) else {
         return;
     };
@@ -502,24 +518,16 @@ pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
     let Some(patches) = ast.get_patches(patches_entity) else {
         return;
     };
-
-    // Clone patch data to avoid borrow conflicts with world mutations.
     let patch_entities: Vec<Entity> = patches.0.clone();
-    let mut patch_data = Vec::new();
-    for &pe in &patch_entities {
-        if let Some(patch) = ast.get_patch(pe) {
-            patch_data.push(patch.clone());
-        }
-    }
 
     // Sibling entities are comma-separated; a hand-edited file that
     // drops the comma silently folds the next entity's patches into
     // this one, with only the extra Name patch as evidence. Merged
     // camera-plus-light entities from exactly this mistake shipped in
     // the scaffold template once, so the trap deserves a loud pointer.
-    let names = patch_data
+    let names = patch_entities
         .iter()
-        .filter(|p| matches!(p, BsnPatch::Name(_)))
+        .filter(|&&pe| matches!(ast.get_patch(pe), Some(BsnPatch::Name(_))))
         .count();
     if names > 1 {
         log::warn!(
@@ -529,22 +537,28 @@ pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
         );
     }
 
-    for patch in patch_data {
-        match patch {
+    for pe in patch_entities {
+        let Some((patch, moved)) = patch_to_apply(world, pe) else {
+            continue;
+        };
+        match &patch {
             BsnPatch::Name(name) => {
-                world.entity_mut(entity).insert(Name::new(name));
+                world.entity_mut(entity).insert(Name::new(name.clone()));
             }
-            BsnPatch::Type(ref type_path) => {
+            BsnPatch::Type(type_path) => {
                 apply_type_patch(world, entity, type_path);
             }
-            BsnPatch::Struct(ref data) => {
-                apply_struct_patch(world, entity, data);
+            BsnPatch::Struct(data) => {
+                apply_struct_patch(world, entity, data, references);
             }
-            BsnPatch::TupleStruct(ref data) => {
-                apply_tuple_struct_patch(world, entity, data);
+            BsnPatch::TupleStruct(data) => {
+                apply_tuple_struct_patch(world, entity, data, references);
             }
             // Base, Template, Children handled elsewhere.
             _ => {}
+        }
+        if moved {
+            restore_applied_patch(world, pe, patch);
         }
     }
 
@@ -558,14 +572,47 @@ pub fn apply_ast_to_ecs(world: &mut World, entity: Entity) {
     }
 }
 
+/// `pe`'s patch, free of the document so the world can be written while it is
+/// read, and whether it was moved out and has to go back. A brush holds most of a
+/// large document, so it is moved rather than copied; nothing reads a brush's
+/// patch while the component goes in, since its observers only queue work.
+fn patch_to_apply(world: &mut World, pe: Entity) -> Option<(BsnPatch, bool)> {
+    let mut ast = world.resource_mut::<SceneBsnAst>();
+    let ast = ast.bypass_change_detection();
+    let mut slot = ast.world.get_mut::<BsnPatch>(pe)?;
+    let is_brush = matches!(&*slot, BsnPatch::Struct(data) if data.type_path == crate::emitter::BRUSH_TYPE_PATH);
+    if !is_brush {
+        return Some((slot.clone(), false));
+    }
+    let moved = std::mem::replace(
+        slot.bypass_change_detection(),
+        BsnPatch::Type(String::new()),
+    );
+    Some((moved, true))
+}
+
+fn restore_applied_patch(world: &mut World, pe: Entity, patch: BsnPatch) {
+    let mut ast = world.resource_mut::<SceneBsnAst>();
+    let ast = ast.bypass_change_detection();
+    if let Some(mut slot) = ast.world.get_mut::<BsnPatch>(pe) {
+        *slot.bypass_change_detection() = patch;
+    }
+}
+
 /// Apply a single component patch to an ECS entity. The editor's field-edit
 /// command uses this to mirror a document change onto the live entity through
 /// the same code paths as scene load.
 pub fn apply_component_patch(world: &mut World, entity: Entity, patch: &BsnPatch) {
     match patch {
         BsnPatch::Type(type_path) => apply_type_patch(world, entity, type_path),
-        BsnPatch::Struct(data) => apply_struct_patch(world, entity, data),
-        BsnPatch::TupleStruct(data) => apply_tuple_struct_patch(world, entity, data),
+        BsnPatch::Struct(data) => {
+            let references = scene_references(world);
+            apply_struct_patch(world, entity, data, references.as_ref());
+        }
+        BsnPatch::TupleStruct(data) => {
+            let references = scene_references(world);
+            apply_tuple_struct_patch(world, entity, data, references.as_ref());
+        }
         BsnPatch::Name(_)
         | BsnPatch::Base(_)
         | BsnPatch::Template(_, _)
@@ -933,15 +980,17 @@ fn dynamic_struct_from_patch(
     dynamic_struct
 }
 
-fn apply_struct_patch(world: &mut World, entity: Entity, data: &BsnStructData) {
+fn apply_struct_patch(
+    world: &mut World,
+    entity: Entity,
+    data: &BsnStructData,
+    references: Option<&SceneReferences>,
+) {
     let server = world.get_resource::<AssetServer>().cloned();
-    let local = world
-        .get_resource::<BsnSceneAssets>()
-        .map(|assets| assets.0.clone());
     let unresolved = world.get_resource::<UnresolvedReferences>().cloned();
     let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
         server: s,
-        local: local.as_ref(),
+        local: references,
         unresolved: unresolved.as_ref(),
     });
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -1212,15 +1261,17 @@ fn apply_tuple_variant_patch(
     true
 }
 
-fn apply_tuple_struct_patch(world: &mut World, entity: Entity, data: &BsnTupleStructData) {
+fn apply_tuple_struct_patch(
+    world: &mut World,
+    entity: Entity,
+    data: &BsnTupleStructData,
+    references: Option<&SceneReferences>,
+) {
     let server = world.get_resource::<AssetServer>().cloned();
-    let local = world
-        .get_resource::<BsnSceneAssets>()
-        .map(|assets| assets.0.clone());
     let unresolved = world.get_resource::<UnresolvedReferences>().cloned();
     let assets_ctx = server.as_ref().map(|s| BsnApplyAssets {
         server: s,
-        local: local.as_ref(),
+        local: references,
         unresolved: unresolved.as_ref(),
     });
     let registry = world.resource::<AppTypeRegistry>().clone();

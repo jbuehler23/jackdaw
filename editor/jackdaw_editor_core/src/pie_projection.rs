@@ -283,9 +283,7 @@ fn adopt_waiting_children(world: &mut World, parent_bits: u64, parent: Entity) {
 ///
 /// The respawn captures the document first, so entities stay marked as holding
 /// game state until it is done: the capture must not take their values for
-/// authored ones. A capture that fails leaves them marked and sets
-/// [`PieProjection::needs_respawn`], which the next revert retries and a switch of
-/// the view to Live leaves alone.
+/// authored ones.
 pub fn revert_preview(world: &mut World) {
     let revert = world
         .get_resource_mut::<PieProjection>()
@@ -320,11 +318,8 @@ pub fn revert_preview(world: &mut World) {
             respawn |= !restore_component(world, entity, &type_path, prior.value);
         }
     }
-    if respawn && !crate::scenes::swap::respawn_scene_from_ast(world) {
-        if let Some(mut projection) = world.get_resource_mut::<PieProjection>() {
-            projection.needs_respawn = true;
-        }
-        return;
+    if respawn {
+        crate::scenes::swap::respawn_scene_from_ast(world);
     }
     forget_overlays(world);
 }

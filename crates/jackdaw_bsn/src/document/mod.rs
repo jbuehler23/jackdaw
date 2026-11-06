@@ -112,6 +112,21 @@ pub struct SceneBsnAst {
     pub ast_to_ecs: HashMap<Entity, Entity>,
 }
 
+/// How many entities a document must hold to be freed away from the caller.
+const LARGE_DOCUMENT_ENTITIES: u32 = 1024;
+
+/// Free `document`, on another thread when it is large: freeing one costs a large
+/// scene about as long as a frame budget ten times over.
+pub fn drop_document(document: SceneBsnAst) {
+    if document.world.entities().count_spawned() < LARGE_DOCUMENT_ENTITIES {
+        return;
+    }
+    // A thread that cannot start drops its closure, and the document with it, here.
+    let _ = std::thread::Builder::new()
+        .name("document-drop".to_string())
+        .spawn(move || drop(document));
+}
+
 /// Component on every ECS entity that was spawned from (or synced to) BSN.
 /// Points back to the AST node entity in [`SceneBsnAst::world`].
 #[derive(Component)]

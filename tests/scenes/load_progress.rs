@@ -376,25 +376,23 @@ fn a_lod_group_whose_coarsest_model_is_missing_draws_its_other_level_and_the_loa
     settle_load(&mut app);
     util::update_until(
         &mut app,
-        "the group to draw its loaded level",
+        "the group to draw and place its most detailed level",
         std::time::Duration::from_secs(30),
         |app| {
-            app.world()
+            let drawn = app
+                .world()
                 .resource::<jackdaw_runtime::LiveLevelProgress>()
                 .drawn
-                == 1
+                == 1;
+            let mut parts = app
+                .world_mut()
+                .query_filtered::<&jackdaw_runtime::LodPartLevel, With<jackdaw_runtime::LodPart>>();
+            drawn && parts.iter(app.world()).any(|level| level.0 == 0)
         },
     );
 
     let progress = *app.world().resource::<jackdaw_runtime::LiveLevelProgress>();
     assert_eq!(progress.groups, 1);
-    let mut parts = app
-        .world_mut()
-        .query_filtered::<&jackdaw_runtime::LodPartLevel, With<jackdaw_runtime::LodPart>>();
-    assert!(
-        parts.iter(app.world()).any(|level| level.0 == 0),
-        "the most detailed level is placed"
-    );
 }
 
 /// A wanted level whose model never loads is not waited for.

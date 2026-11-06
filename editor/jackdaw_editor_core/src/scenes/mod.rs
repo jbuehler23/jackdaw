@@ -36,7 +36,12 @@ impl Plugin for ScenesPlugin {
                 ui::update_scene_tab_label_abbreviation,
                 ui::show_scene_tab_close_on_hover,
                 intercept_window_close,
+                swap::report_read_back_checks.run_if(resource_exists::<swap::ReadBackChecks>),
             ),
+        );
+        app.add_systems(
+            First,
+            ui::run_pending_tab_switch.run_if(resource_exists::<ui::PendingTabSwitch>),
         );
         app.add_observer(ui::on_scene_tab_context_action);
         app.add_plugins(external_watch::ExternalSceneWatchPlugin);
@@ -126,6 +131,8 @@ impl Default for TabContent {
 }
 
 pub struct SceneTab {
+    /// Which tab this is, whatever index it has moved to.
+    pub id: u64,
     pub path: Option<PathBuf>,
     pub display_name: String,
     pub dirty: bool,
@@ -156,15 +163,13 @@ pub struct SceneTab {
 pub enum TabRefusal {
     /// The document names vocabulary this build will not spawn.
     Rejected(String),
-    /// The spawn was attempted and failed.
-    SpawnFailed(String),
 }
 
 impl TabRefusal {
     /// The message shown for a save this refusal blocks.
     pub fn reason(&self) -> &str {
         match self {
-            Self::Rejected(reason) | Self::SpawnFailed(reason) => reason,
+            Self::Rejected(reason) => reason,
         }
     }
 }
@@ -176,7 +181,9 @@ impl SceneTab {
     }
 
     pub fn new_untitled(n: u32) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         Self {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             path: None,
             display_name: format!("untitled-{n}"),
             dirty: false,

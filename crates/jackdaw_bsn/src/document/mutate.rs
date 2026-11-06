@@ -38,6 +38,13 @@ impl SceneBsnAst {
         self.ast_to_ecs.insert(ast_entity, ecs_entity);
     }
 
+    /// Forget every entity this document was spawned as. A document nobody is
+    /// showing has none, and an id kept past its despawn can be handed out again.
+    pub fn clear_links(&mut self) {
+        self.ecs_to_ast.clear();
+        self.ast_to_ecs.clear();
+    }
+
     /// Remove an ECS entity mapping.
     pub fn unlink(&mut self, ecs_entity: Entity) {
         if let Some(ast_entity) = self.ecs_to_ast.remove(&ecs_entity) {
