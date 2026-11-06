@@ -31,6 +31,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     writes_disk = true,
     label = "Save",
     allows_undo = false,
+    invoke = scene_save_in_background,
     params(path(
         String,
         doc = "Where to save. Defaults to where the scene already lives, \
@@ -47,7 +48,30 @@ pub fn scene_save(params: In<OperatorParameters>, world: &mut World) -> Operator
         jackdaw_api_internal::operator::warn_caller(world, format!("scene.save: {why}"));
         return OperatorResult::Cancelled;
     }
-    crate::scene_io::save_scene(world);
+    if crate::scene_io::save_scene_with_outcome(world) == crate::scene_io::SaveOutcome::Failed {
+        let why = world
+            .get_resource::<crate::status_bar::StatusNotice>()
+            .map_or_else(
+                || "not saved".to_string(),
+                |notice| notice.text().to_string(),
+            );
+        jackdaw_api_internal::operator::warn_caller(world, format!("scene.save: {why}"));
+        return OperatorResult::Cancelled;
+    }
+    OperatorResult::Finished
+}
+
+/// `scene.save` from the user interface, which goes on while the file is written.
+/// Called any other way, the operator has the file on disk when it returns, as
+/// remote tools and extensions rely on.
+fn scene_save_in_background(params: In<OperatorParameters>, world: &mut World) -> OperatorResult {
+    if let Some(path) = params.as_str("path").filter(|path| !path.is_empty())
+        && let Err(why) = crate::scene_io::retarget_active_scene(world, path)
+    {
+        jackdaw_api_internal::operator::warn_caller(world, format!("scene.save: {why}"));
+        return OperatorResult::Cancelled;
+    }
+    crate::scene_io::save_in_background(world);
     OperatorResult::Finished
 }
 

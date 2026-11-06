@@ -3,13 +3,15 @@ use std::path::{Path, PathBuf};
 
 use bevy::asset::{ReflectAsset, ReflectHandle, UntypedAssetId};
 use bevy::ecs::component::ComponentId;
+use bevy::platform::cell::SyncCell;
 use bevy::reflect::{TypeInfo, TypeRegistry};
 use bevy::{ecs::reflect::AppTypeRegistry, prelude::*, tasks::AsyncComputeTaskPool};
 
 use super::asset_fields::AbsoluteAssetField;
 use super::asset_names::AssetReferences;
 use super::load::SceneDialogTask;
-use super::{SceneDirtyState, SceneFilePath, doc_skip_type_ids, should_skip_component};
+use super::save_worker::{PreparedSave, SceneWrite, WaitingSave, WrittenScene};
+use super::{SceneFilePath, doc_skip_type_ids, should_skip_component};
 use jackdaw_bsn::AssetNames as _;
 
 pub use jackdaw_api_internal::document::write_atomic;
@@ -96,6 +98,22 @@ pub fn save_scene(world: &mut World) -> bool {
 /// Save the active scene, distinguishing an opened Save As dialog from
 /// an outright failure. See [`SaveOutcome`].
 pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
+    if let Some(outcome) = ready_to_save(world) {
+        return outcome;
+    }
+    match save_scene_inner(world) {
+        Ok(()) => SaveOutcome::Saved,
+        Err(err) => {
+            error!("scene save failed: {err}");
+            crate::status_bar::notify_error(world, format!("Not saved: {err}"));
+            SaveOutcome::Failed
+        }
+    }
+}
+
+/// Point the global scene path at the active tab, or say why there is nothing to
+/// write: a refused tab, or an untitled one, for which Save As has been opened.
+pub(crate) fn ready_to_save(world: &mut World) -> Option<SaveOutcome> {
     // The active scene tab is the source of truth for which file to
     // save to. Re-sync the global `SceneFilePath` from it so a stale
     // path from a previous tab can never cause us to overwrite the
@@ -111,7 +129,7 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
             world,
             "Not saved: this tab's scene was not loaded".to_string(),
         );
-        return SaveOutcome::Failed;
+        return Some(SaveOutcome::Failed);
     }
 
     let active_tab_path: Option<String> = world
@@ -125,17 +143,9 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
     let has_path = world.resource::<SceneFilePath>().path.is_some();
     if !has_path {
         save_scene_as(world);
-        return SaveOutcome::DialogOpened;
+        return Some(SaveOutcome::DialogOpened);
     }
-
-    match save_scene_inner(world) {
-        Ok(()) => SaveOutcome::Saved,
-        Err(err) => {
-            error!("scene save failed: {err}");
-            crate::status_bar::notify_error(world, format!("Not saved: {err}"));
-            SaveOutcome::Failed
-        }
-    }
+    None
 }
 
 /// Point the active tab, and the global scene path, at `path`.
@@ -144,6 +154,7 @@ pub fn save_scene_with_outcome(world: &mut World) -> SaveOutcome {
 /// save writes there, and everything that lives beside a scene follows it. A
 /// relative path names a file in the project and is refused when it leaves it.
 pub fn retarget_active_scene(world: &mut World, path: &str) -> Result<(), String> {
+    super::save_worker::land_saves(world);
     let path = crate::scenes::operators::project_scene_path(world, Path::new(path))?;
     let display_name = path
         .file_stem()
@@ -193,28 +204,14 @@ pub(crate) fn active_tab_refusal(world: &World) -> Option<String> {
         .map(|refusal| refusal.reason().to_string())
 }
 
-/// Save the active tab's scene text and terrain sidecars, synchronously,
-/// on the calling (main) thread.
+/// Save the active tab's scene text and terrain sidecars, the file on disk and the
+/// tab settled when this returns. Waits for any save still being written first.
 ///
-/// The write is not spawned onto an async task, because ordering has to
-/// hold across the whole boundary -- sidecars before scene text, dirty
-/// state cleared only after every authoritative write lands (see the
-/// ordering comments below) -- and that is far simpler to
-/// reason about, and to keep correct under future edits, as a single
-/// synchronous call than as a task whose completion has to be raced
-/// against the next save, the next tab swap, or the app closing mid-write.
-///
-/// The tradeoff: this blocks the main thread for the duration of the
-/// write, and `scene.save_all` (`scenes/operators.rs`) calls this once
-/// per dirty tab in a loop, so the block time is `O(tabs)`, not `O(1)`.
-/// Scene text and terrain sidecars are not sized to make that
-/// noticeable in practice, but a project with many large open tabs is
-/// the case to watch. If it ever needs revisiting, the fix is a
-/// different concurrency shape for `scene.save_all` specifically, not an
-/// async version of this function -- the ordering argument above applies
-/// to any single save.
+/// The steps are those of a background save, see
+/// [`super::save_worker`], with the write run here and not forced to the disk.
 pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     let _span = info_span!("save").entered();
+    super::save_worker::land_saves(world);
     // Every write of the world to the active tab's file ends here, so the
     // refusal is enforced here too; callers check only for a better message.
     if let Some(reason) = active_tab_refusal(world) {
@@ -249,34 +246,50 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let pending = super::hooks::begin_save(world, &path.to_string_lossy());
-        let written = write_prefab_files(world, &path, &parent, &pending);
+        let mut pending = super::hooks::begin_save(world, &path.to_string_lossy());
+        let written = write_prefab_files(world, &path, &parent, &mut pending);
         super::hooks::finish_save(world, pending, written.is_ok());
         written?;
         write_alongside(world, &path.to_string_lossy())?;
-        // Clear dirty bit + sync history depth so the tab stops showing
-        // as unsaved.
-        let history_len = world
-            .resource::<jackdaw_commands::CommandHistory>()
-            .undo_stack
-            .len();
-        world.resource_mut::<SceneDirtyState>().undo_len_at_save = history_len;
-        if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
-            let active = scenes.active;
-            if let Some(tab) = scenes.tabs.get_mut(active) {
-                tab.dirty = false;
-                tab.history_depth_at_last_check = history_len;
-            }
-        }
+        let (tab, state) = active_tab_and_state(world)?;
+        settle_tab_after_save(world, tab, state, None, false);
         return Ok(());
     }
 
+    let mut prepared = prepare_scene_save(world)?;
+    prepared.write.expect_known_file(world);
+    let written = prepared.write.write();
+    finish_scene_save(world, prepared.waiting, written)
+}
+
+fn active_tab_and_state(world: &World) -> Result<(u64, u64), BevyError> {
+    let scenes = world.resource::<crate::scenes::Scenes>();
+    let tab = scenes.tabs.get(scenes.active).ok_or("no tab to save")?;
+    let history = world.resource::<jackdaw_commands::CommandHistory>();
+    Ok((tab.id, history.state()))
+}
+
+/// Whether the tab in front holds a prefab, which saves through its cache.
+pub(crate) fn active_tab_is_prefab(world: &World) -> bool {
+    let scenes = world.resource::<crate::scenes::Scenes>();
+    scenes
+        .tabs
+        .get(scenes.active)
+        .is_some_and(|tab| matches!(tab.content, crate::scenes::TabContent::Prefab(_)))
+}
+
+/// The part of a scene save that needs the world: the moment the file will hold,
+/// and the sidecars of that moment, encoded. It writes nothing.
+///
+/// Sidecars land once the document has read back, ahead of its rename. There is no
+/// rollback across files: when the rename then fails, the sidecars stay updated, no
+/// state on the tab's history counts as saved, so the tab reads dirty until the next
+/// save writes both.
+pub(crate) fn prepare_scene_save(world: &mut World) -> Result<PreparedSave, BevyError> {
+    let _span = info_span!("save.prepare").entered();
     let path = {
         let scene_path = world.resource::<SceneFilePath>();
-        scene_path
-            .path
-            .clone()
-            .expect("save_scene_inner called without a path set")
+        scene_path.path.clone().ok_or("no file to save to")?
     };
 
     // Scenes persist as BSN text. A legacy `.jsn` path redirects to its
@@ -303,39 +316,158 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
         scene_path.metadata.name = "Untitled".to_string();
     }
 
-    let pending = super::hooks::begin_save(world, &path);
-    let written = write_scene_files(world, &path, legacy_backup.as_deref(), &pending);
-    super::hooks::finish_save(world, pending, written.is_ok());
-    written?;
+    let scenes = world.resource::<crate::scenes::Scenes>();
+    let tab = scenes.tabs.get(scenes.active).ok_or("no tab to save")?;
+    let (tab_id, tab_name, tab_kind) = (tab.id, tab.display_name.clone(), tab.kind.clone());
+    let state = world.resource::<jackdaw_commands::CommandHistory>().state();
 
+    let mut pending = super::hooks::begin_save(world, &path);
+    let (ast, sidecars) = match snapshot_with_sidecars(world, &path, &mut pending) {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            super::hooks::finish_save(world, pending, false);
+            return Err(err);
+        }
+    };
+    let redirected = legacy_backup.is_some();
+    let write = SceneWrite::new(ast, path.clone(), legacy_backup, sidecars);
+    let sidecars_started = write.sidecars_started.clone();
+    Ok(PreparedSave {
+        write,
+        waiting: WaitingSave {
+            tab: tab_id,
+            tab_name,
+            tab_kind,
+            state,
+            history_revision: world
+                .resource::<jackdaw_commands::CommandHistory>()
+                .revision(),
+            document: document_revision(world),
+            sidecars_started,
+            path,
+            redirected,
+            hooks: SyncCell::new(pending),
+        },
+    })
+}
+
+/// Stands for the live document's contents: it moves when anything writes to the
+/// document, history or not.
+pub(crate) fn document_revision(world: &World) -> Option<u32> {
+    world
+        .get_resource_ref::<jackdaw_bsn::SceneBsnAst>()
+        .map(|ast| ast.last_changed().get())
+}
+
+/// The live document as the file at `path` will hold it, and its sidecars.
+fn snapshot_with_sidecars(
+    world: &mut World,
+    path: &str,
+    pending: &mut super::hooks::PendingSave,
+) -> Result<
+    (
+        Option<jackdaw_bsn::SceneBsnAst>,
+        Vec<super::hooks::SidecarWrite>,
+    ),
+    BevyError,
+> {
+    let parent_path = Path::new(path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let held = crate::preview_context::suspend_preview_writes(world);
+    let authored = authored_document(world, &parent_path, SourceSpelling::RelativeToFile);
+    crate::preview_context::resume_preview_writes(world, held);
+    if let Some(ast) = &authored {
+        let registry = world.resource::<AppTypeRegistry>().clone();
+        let named = absolute_fields(world, ast, &registry);
+        if !named.is_empty() {
+            let refusal = crate::scene_io::asset_fields::refusal(&named);
+            return Err(BevyError::from(format!("cannot save {path}: {refusal}")));
+        }
+    }
+
+    // A folder that cannot be made fails the writes below, which say which.
+    // Only a project's own folders are made.
+    if let Some(folder) = Path::new(path).parent()
+        && world.contains_resource::<crate::project::ProjectRoot>()
+        && crate::scenes::operators::resolve_scene_path(world, folder).is_ok()
+        && let Err(err) = std::fs::create_dir_all(folder)
+    {
+        warn!("cannot make the folder for {path}: {err}");
+    }
+    let sidecars = info_span!("save.sidecars")
+        .in_scope(|| super::hooks::encode_sidecars(world, path, pending))?;
+    Ok((authored, sidecars))
+}
+
+/// The last part of a scene save, on the main thread with the saved tab in front:
+/// note what is on disk, say so, and clear the tab's dirty state if nothing changed
+/// since the snapshot.
+pub(crate) fn finish_scene_save(
+    world: &mut World,
+    waiting: WaitingSave,
+    written: WrittenScene,
+) -> Result<(), BevyError> {
+    let _span = info_span!("save.finish").entered();
+    let WaitingSave {
+        tab,
+        state,
+        history_revision,
+        document,
+        sidecars_started,
+        path,
+        redirected,
+        hooks,
+        ..
+    } = waiting;
+    let landed = written.outcome.as_ref().ok().copied();
+    if let Some(hash) = landed {
+        // So the open-tab watcher does not read this write back as an outside edit.
+        crate::scenes::external_watch::note_known_hash(world, Path::new(&path), hash);
+    }
+    if let Err(err) = written.outcome {
+        if sidecars_started.load(std::sync::atomic::Ordering::Relaxed) {
+            let scenes = world.resource::<crate::scenes::Scenes>();
+            if let Some(index) = scenes.tabs.iter().position(|held| held.id == tab) {
+                crate::scenes::mark_tab_unsaved(world, index);
+            }
+        }
+        super::hooks::finish_save(world, SyncCell::to_inner(hooks), false);
+        return Err(BevyError::from(err));
+    }
+    info!("Scene saved to {path}");
+
+    if !jackdaw_bsn::is_binary_path(Path::new(&path)) {
+        note_brush_text_size(world, &path, written.brush_bytes);
+    }
+
+    // A step along the history writes to the document too, and the states say what
+    // that means. The document moving with the history still is an edit it never saw.
+    let document_moved = world
+        .resource::<jackdaw_commands::CommandHistory>()
+        .revision()
+        == history_revision
+        && document_revision(world) != document;
+    let alongside = info_span!("save.alongside").in_scope(|| write_alongside(world, &path));
+    if alongside.is_ok() {
+        settle_tab_after_save(
+            world,
+            tab,
+            state,
+            redirected.then_some(&path),
+            document_moved,
+        );
+    }
+
+    // Last of what says the save is over, the tab settled: either may save again.
+    super::hooks::finish_save(world, SyncCell::to_inner(hooks), true);
     info_span!("save.saved_observers").in_scope(|| {
         world.trigger(jackdaw_api_internal::document::SceneSaved {
             path: PathBuf::from(&path),
         });
     });
-
-    info_span!("save.alongside").in_scope(|| write_alongside(world, &path))?;
-
-    // The authoritative scene and sidecars are now on disk. Only now clear
-    // dirty state and retarget a redirected tab at its new `.bsn` path.
-    let history_len = world
-        .resource::<jackdaw_commands::CommandHistory>()
-        .undo_stack
-        .len();
-    world.resource_mut::<SceneDirtyState>().undo_len_at_save = history_len;
-    if legacy_backup.is_some() {
-        world.resource_mut::<SceneFilePath>().path = Some(path.clone());
-    }
-    if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
-        let active = scenes.active;
-        if let Some(tab) = scenes.tabs.get_mut(active) {
-            tab.dirty = false;
-            tab.history_depth_at_last_check = history_len;
-            if legacy_backup.is_some() {
-                tab.path = Some(PathBuf::from(&path));
-            }
-        }
-    }
+    alongside?;
 
     // Persist current editor layout to project.jsn
     info_span!("save.layout").in_scope(|| save_layout_to_project(world));
@@ -346,12 +478,58 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     Ok(())
 }
 
+/// The file holds the tab as of history state `state`: the tab reads saved if it is
+/// in that state, and dirty if it has moved on, and again once an undo or a redo
+/// takes it elsewhere. `redirected` is the new file of a legacy scene. `document_moved`
+/// says the document was written to since the snapshot with no history entry, so the
+/// file holds no state of the history.
+fn settle_tab_after_save(
+    world: &mut World,
+    tab: u64,
+    state: u64,
+    redirected: Option<&String>,
+    document_moved: bool,
+) {
+    let scenes = world.resource::<crate::scenes::Scenes>();
+    let Some(index) = scenes.tabs.iter().position(|held| held.id == tab) else {
+        return;
+    };
+    let in_front = index == scenes.active;
+    if redirected.is_some() && in_front {
+        world.resource_mut::<SceneFilePath>().path = redirected.cloned();
+    }
+    let dirty = if in_front {
+        let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
+        if document_moved {
+            history.forget_saved();
+        } else {
+            history.mark_saved(state);
+        }
+        !history.is_saved()
+    } else {
+        let mut scenes = world.resource_mut::<crate::scenes::Scenes>();
+        let history = &mut scenes.tabs[index].history;
+        history.mark_saved(state);
+        !history.is_saved()
+    };
+    let current = world.resource::<jackdaw_commands::CommandHistory>().state();
+    let mut scenes = world.resource_mut::<crate::scenes::Scenes>();
+    let saved = &mut scenes.tabs[index];
+    saved.dirty = dirty;
+    if in_front {
+        saved.history_state_at_last_check = Some(current);
+    }
+    if let Some(path) = redirected {
+        saved.path = Some(PathBuf::from(path));
+    }
+}
+
 /// The prefab tab's document, sidecars and file, for [`save_scene_inner`].
 fn write_prefab_files(
     world: &mut World,
     path: &Path,
     parent: &Path,
-    pending: &super::hooks::PendingSave,
+    pending: &mut super::hooks::PendingSave,
 ) -> Result<(), BevyError> {
     let text = emit_bsn_scene_with_inline_assets(world, parent);
     let bsn = jackdaw_bsn::parse_emitted(&text)
@@ -360,9 +538,15 @@ fn write_prefab_files(
         .resource_mut::<crate::prefab::PrefabAstCache>()
         .insert(path, bsn);
     let sidecar_base = path.to_string_lossy();
-    super::hooks::export_sidecars(world, &sidecar_base, pending)?;
-    crate::prefab::operators::save_prefab_to_disk(world, path)
-        .map_err(|err| BevyError::from(format!("prefab save failed: {err}")))?;
+    let sidecars = super::hooks::encode_sidecars(world, &sidecar_base, pending)?;
+    super::hooks::write_sidecars(&sidecars, false)?;
+    if let Err(err) = crate::prefab::operators::save_prefab_to_disk(world, path) {
+        if !sidecars.is_empty() {
+            let active = world.resource::<crate::scenes::Scenes>().active;
+            crate::scenes::mark_tab_unsaved(world, active);
+        }
+        return Err(BevyError::from(format!("prefab save failed: {err}")));
+    }
     Ok(())
 }
 
@@ -406,80 +590,6 @@ fn brush_notice_possible(world: &World, path: &str, bytes: usize) -> bool {
 fn large_scene_message(bytes: usize) -> String {
     let megabytes = bytes as f64 / 1_000_000.0;
     format!("Large scene may be slow ({megabytes:.1} MB)")
-}
-
-/// The scene's sidecars and text, for [`save_scene_inner`]. Sidecars land
-/// first so a failed one leaves the tab dirty.
-fn write_scene_files(
-    world: &mut World,
-    path: &str,
-    legacy_backup: Option<&str>,
-    pending: &super::hooks::PendingSave,
-) -> Result<(), BevyError> {
-    let contents = {
-        let parent_path = Path::new(&path)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
-        let body = emit_bsn_scene_for_file(world, &parent_path)
-            .map_err(|refusal| BevyError::from(format!("cannot save {path}: {refusal}")))?;
-        let parsed = jackdaw_bsn::parse_emitted(&body)
-            .map_err(|err| BevyError::from(format!("cannot save {path}: {err}")))?;
-        if brush_notice_possible(world, path, body.len())
-            && !jackdaw_bsn::is_binary_path(Path::new(path))
-        {
-            note_brush_text_size(world, path, jackdaw_bsn::brush_text_len(&parsed));
-        }
-        jackdaw_bsn::drop_document(parsed);
-        // Record the jackdaw + Bevy version at the disk boundary only, so
-        // the in-memory undo / tab-swap snapshots from the same emitter stay
-        // stamp-free.
-        crate::scene_io::stamp::with_stamp(&body)
-    };
-
-    // Sidecars (terrain heights and paint channels, tilemap data) are
-    // authoritative authored data. Complete those writes before the scene text is committed and before
-    // the tab is marked clean, so failures remain visible and repeated saves
-    // cannot finish out of order. Each write lands via write_atomic, so a
-    // sidecar failure partway through never truncates one that already
-    // landed; the scene text below is written the same way. There is no
-    // cross-file rollback if the scene text write fails after sidecars
-    // already landed -- the sidecars stay updated and the tab stays dirty,
-    // so the next save retries the scene text with the same sidecars.
-    // A folder that cannot be made fails the writes below, which say which.
-    // Only a project's own folders are made.
-    if let Some(folder) = Path::new(&path).parent()
-        && world.contains_resource::<crate::project::ProjectRoot>()
-        && crate::scenes::operators::resolve_scene_path(world, folder).is_ok()
-        && let Err(err) = std::fs::create_dir_all(folder)
-    {
-        warn!("cannot make the folder for {path}: {err}");
-    }
-    info_span!("save.sidecars").in_scope(|| super::hooks::export_sidecars(world, path, pending))?;
-
-    // A redirected save renames the legacy source to `.jsn.bak` first so a
-    // stale `.jsn` cannot shadow the fresh `.bsn` on the next open.
-    if let Some(old_path) = legacy_backup.as_ref() {
-        let backup = format!("{old_path}.bak");
-        std::fs::rename(old_path, &backup).map_err(|err| {
-            BevyError::from(format!(
-                "could not back up legacy scene {old_path} to {backup}: {err}"
-            ))
-        })?;
-    }
-    let contents = jackdaw_bsn::document_bytes(Path::new(&path), &contents)
-        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
-    info_span!("save.write")
-        .in_scope(|| write_atomic(Path::new(&path), &contents))
-        .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
-    info!("Scene saved to {path}");
-
-    // Record the written bytes so the open-tab watcher does not read this
-    // write back as an outside edit.
-    info_span!("save.hash").in_scope(|| {
-        crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
-    });
-    Ok(())
 }
 
 pub fn save_layout_to_project(world: &mut World) {
@@ -2233,7 +2343,6 @@ mod tests {
         }
         world.init_resource::<jackdaw_commands::CommandHistory>();
         world.init_resource::<SceneFilePath>();
-        world.init_resource::<SceneDirtyState>();
 
         // Authored node: Transform translation [1, 2, 3], bound to a preview
         // entity whose live ECS Transform is the [9, 9, 9] overlay.
@@ -2312,19 +2421,13 @@ mod tests {
             .resource_mut::<super::super::hooks::DocumentIoHooks>()
             .register(BlockedSidecar);
 
-        let baseline = world.resource::<SceneDirtyState>().undo_len_at_save;
         let error = save_scene_inner(&mut world).expect_err("the blocked sidecar fails the save");
 
         assert!(error.to_string().contains(BlockedSidecar::NAME));
         assert!(world.resource::<crate::scenes::Scenes>().tabs[0].dirty);
-        assert_eq!(
-            world.resource::<SceneDirtyState>().undo_len_at_save,
-            baseline,
-            "failed saves must not advance the clean-history baseline",
-        );
     }
 
-    /// A sidecar whose write always fails.
+    /// A sidecar that always fails to encode.
     struct BlockedSidecar;
 
     impl BlockedSidecar {
@@ -2336,12 +2439,12 @@ mod tests {
             Box::new(())
         }
 
-        fn export_sidecars(
+        fn encode_sidecars(
             &self,
             _world: &mut World,
             _path: &str,
-            _state: &(dyn std::any::Any + Send),
-        ) -> Result<(), BevyError> {
+            _state: &mut (dyn std::any::Any + Send),
+        ) -> Result<Vec<super::super::hooks::SidecarWrite>, BevyError> {
             Err(BevyError::from(format!("cannot write {}", Self::NAME)))
         }
 

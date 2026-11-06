@@ -94,6 +94,14 @@ pub struct CommandHistory {
     /// Which state of the document the history last left, drawn from one
     /// process-wide counter so no two histories ever share a value.
     revision: u64,
+    /// The states of the document along this history, oldest first, each named
+    /// by a value no other state has. Undo and redo move along it, and an edit
+    /// after an undo cuts off what lay ahead.
+    states: Vec<u64>,
+    /// Where in `states` the document is.
+    at: usize,
+    /// The state the document's file holds, if it is still on this history.
+    saved: Option<u64>,
 }
 
 /// The source of every [`CommandHistory::revision`].
@@ -110,12 +118,16 @@ pub struct HistorySpan(u64);
 
 impl Default for CommandHistory {
     fn default() -> Self {
+        let state = next_revision();
         Self {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             budget_bytes: HISTORY_BUDGET_BYTES,
             pushes: 0,
             revision: next_revision(),
+            states: vec![state],
+            at: 0,
+            saved: Some(state),
         }
     }
 }
@@ -126,8 +138,43 @@ impl CommandHistory {
         self.undo_stack.push(command);
         self.pushes += 1;
         self.revision = next_revision();
+        self.enter_new_state();
         self.redo_stack.clear();
         self.trim_to_budget();
+    }
+
+    fn enter_new_state(&mut self) {
+        self.states.truncate(self.at + 1);
+        self.states.push(next_revision());
+        self.at = self.states.len() - 1;
+    }
+
+    /// Which state of the document the history is at. Unlike
+    /// [`revision`](Self::revision), an undo back to a state gives the value that
+    /// state had.
+    pub fn state(&self) -> u64 {
+        self.states[self.at]
+    }
+
+    /// Record `state`, from [`state`](Self::state), as what the document's file
+    /// holds.
+    pub fn mark_saved(&mut self, state: u64) {
+        self.saved = Some(state);
+    }
+
+    /// Record the state the history is at as what the document's file holds.
+    pub fn mark_current_saved(&mut self) {
+        self.saved = Some(self.state());
+    }
+
+    /// Record that no state on this history is what the document's file holds.
+    pub fn forget_saved(&mut self) {
+        self.saved = None;
+    }
+
+    /// Whether the document is in the state its file holds.
+    pub fn is_saved(&self) -> bool {
+        self.saved == Some(self.state())
     }
 
     /// Which state of the document this history last left. It rises on every
@@ -136,11 +183,17 @@ impl CommandHistory {
         self.revision
     }
 
-    /// Forget both stacks, as opening another scene does.
+    /// Forget both stacks, as opening another scene does. The document stays as
+    /// saved, or as unsaved, as it was.
     pub fn clear(&mut self) {
+        let was_saved = self.is_saved();
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.revision = next_revision();
+        let state = next_revision();
+        self.states = vec![state];
+        self.at = 0;
+        self.saved = was_saved.then_some(state);
     }
 
     /// Start collecting entries for one undo entry. Spans nest: an inner
@@ -162,7 +215,10 @@ impl CommandHistory {
             }
             // One entry is already one entry; wrapping it would only bury
             // the description the user reads in the undo menu.
-            1 => self.undo_stack.push(pushed.remove(0)),
+            1 => {
+                self.undo_stack.push(pushed.remove(0));
+                self.at = (self.at + 1).min(self.states.len() - 1);
+            }
             _ => self.push_executed(Box::new(CommandGroup {
                 label: label.into(),
                 commands: pushed,
@@ -185,6 +241,7 @@ impl CommandHistory {
         let produced = self.pushes.saturating_sub(span.0) as usize;
         let take = produced.min(self.undo_stack.len());
         let at = self.undo_stack.len() - take;
+        self.at = self.at.saturating_sub(take);
         self.undo_stack.split_off(at)
     }
 
@@ -221,6 +278,10 @@ impl CommandHistory {
             command.undo(world);
             self.redo_stack.push(command);
             self.revision = next_revision();
+            self.at = self.at.saturating_sub(1);
+        }
+        if dropped.is_some() {
+            self.saved = None;
         }
         dropped
     }
@@ -233,6 +294,15 @@ impl CommandHistory {
             command.execute(world);
             self.undo_stack.push(command);
             self.revision = next_revision();
+            // A rolled-back batch can leave more to redo than states ahead.
+            if self.at + 1 == self.states.len() {
+                self.enter_new_state();
+            } else {
+                self.at += 1;
+            }
+        }
+        if dropped.is_some() {
+            self.saved = None;
         }
         dropped
     }
@@ -241,6 +311,7 @@ impl CommandHistory {
         self.undo_stack.push(command);
         self.pushes += 1;
         self.revision = next_revision();
+        self.enter_new_state();
         self.redo_stack.clear();
         self.trim_to_budget();
     }
@@ -367,6 +438,95 @@ mod tests {
         assert_eq!(history.redo(&mut world), None);
     }
 
+    fn rolled_back_edit(history: &mut CommandHistory) {
+        let redo = std::mem::take(&mut history.redo_stack);
+        let span = history.begin_span();
+        history.push_executed(Box::new(Weighty(1)));
+        let _ = history.take_span(span);
+        history.redo_stack = redo;
+    }
+
+    #[test]
+    fn redoing_past_a_rolled_back_batch_gives_each_entry_its_own_state() {
+        let mut world = World::new();
+        let mut history = CommandHistory::default();
+        history.push_executed(Box::new(Weighty(1)));
+        history.push_executed(Box::new(Weighty(1)));
+        history.undo(&mut world);
+        history.undo(&mut world);
+        rolled_back_edit(&mut history);
+
+        history.redo(&mut world);
+        let first = history.state();
+        history.mark_current_saved();
+        history.redo(&mut world);
+        assert_ne!(history.state(), first);
+        assert!(
+            !history.is_saved(),
+            "the second entry is not what was saved"
+        );
+        history.undo(&mut world);
+        assert!(history.is_saved());
+    }
+
+    #[test]
+    fn a_rolled_back_batch_leaves_the_saved_state_saved() {
+        let mut history = CommandHistory::default();
+        rolled_back_edit(&mut history);
+        assert!(history.is_saved());
+    }
+
+    #[test]
+    fn a_rolled_back_batch_that_cut_off_the_saved_state_does_not_read_saved_on_redo() {
+        let mut world = World::new();
+        let mut history = CommandHistory::default();
+        history.push_executed(Box::new(Weighty(1)));
+        history.mark_current_saved();
+        history.undo(&mut world);
+        rolled_back_edit(&mut history);
+        history.redo(&mut world);
+        assert!(!history.is_saved());
+    }
+
+    #[test]
+    fn trimming_keeps_the_saved_state_where_it_was() {
+        let mut world = World::new();
+        let mut history = CommandHistory {
+            budget_bytes: 25,
+            ..default()
+        };
+        let opened = history.state();
+        history.push_executed(Box::new(Weighty(10)));
+        history.push_executed(Box::new(Weighty(10)));
+        history.mark_current_saved();
+        history.push_executed(Box::new(Weighty(10)));
+        history.push_executed(Box::new(Weighty(10)));
+        assert_eq!(history.undo_stack.len(), 2, "two entries were trimmed");
+
+        history.undo(&mut world);
+        history.undo(&mut world);
+        assert!(history.is_saved(), "the oldest state left is the saved one");
+        assert_ne!(history.state(), opened);
+        history.redo(&mut world);
+        assert!(!history.is_saved());
+    }
+
+    #[test]
+    fn a_saved_state_trimmed_away_cannot_read_saved() {
+        let mut world = World::new();
+        let mut history = CommandHistory {
+            budget_bytes: 15,
+            ..default()
+        };
+        history.push_executed(Box::new(Weighty(10)));
+        history.push_executed(Box::new(Weighty(10)));
+        history.undo(&mut world);
+        assert!(
+            !history.is_saved(),
+            "the opened state was trimmed from reach"
+        );
+    }
+
     #[test]
     fn a_history_inside_its_budget_keeps_every_entry() {
         let mut history = CommandHistory {
@@ -485,6 +645,67 @@ mod tests {
 
         assert_eq!(history.undo_stack.len(), 2);
         assert_eq!(history.undo_stack[0].description(), "weighty");
+    }
+
+    #[test]
+    fn a_saved_state_is_found_again_by_undo_and_redo_and_lost_to_a_new_edit() {
+        struct Noop;
+        impl EditorCommand for Noop {
+            fn execute(&mut self, _world: &mut World) {}
+            fn undo(&mut self, _world: &mut World) {}
+            fn description(&self) -> &str {
+                "noop"
+            }
+        }
+        let mut world = World::new();
+        let mut history = CommandHistory::default();
+        assert!(history.is_saved(), "a new document is as its file");
+
+        history.execute(Box::new(Noop), &mut world);
+        assert!(!history.is_saved());
+        history.undo(&mut world);
+        assert!(history.is_saved());
+
+        history.execute(Box::new(Noop), &mut world);
+        history.mark_current_saved();
+        history.undo(&mut world);
+        assert!(!history.is_saved());
+        history.redo(&mut world);
+        assert!(history.is_saved());
+
+        history.undo(&mut world);
+        history.execute(Box::new(Noop), &mut world);
+        assert!(!history.is_saved(), "the same depth, another state");
+        history.undo(&mut world);
+        assert!(!history.is_saved(), "the saved state is out of reach");
+    }
+
+    #[test]
+    fn a_span_of_one_entry_keeps_the_state_and_of_several_makes_one() {
+        struct Noop;
+        impl EditorCommand for Noop {
+            fn execute(&mut self, _world: &mut World) {}
+            fn undo(&mut self, _world: &mut World) {}
+            fn description(&self) -> &str {
+                "noop"
+            }
+        }
+        let mut world = World::new();
+        let mut history = CommandHistory::default();
+        let span = history.begin_span();
+        history.push_executed(Box::new(Noop));
+        let one = history.state();
+        history.end_span(span, "one");
+        assert_eq!(history.state(), one);
+        history.mark_current_saved();
+
+        let span = history.begin_span();
+        history.push_executed(Box::new(Noop));
+        history.push_executed(Box::new(Noop));
+        history.end_span(span, "two");
+        assert!(!history.is_saved());
+        history.undo(&mut world);
+        assert!(history.is_saved(), "one undo goes back over the group");
     }
 
     #[test]

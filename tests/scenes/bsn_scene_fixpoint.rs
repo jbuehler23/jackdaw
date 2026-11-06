@@ -27,7 +27,6 @@ fn make_app() -> App {
     app.add_plugins(jackdaw::prefab::PrefabPlugin);
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw_bsn::UnresolvedReferences>();
     app

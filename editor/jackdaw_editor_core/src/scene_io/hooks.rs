@@ -15,21 +15,38 @@ use jackdaw_bsn::SceneBsnAst;
 use super::SidecarImport;
 
 /// One feature's part in saving, loading and closing documents.
+///
+/// A save runs [`Self::begin_save`] and [`Self::encode_sidecars`] on the main thread,
+/// writes what they encoded on another thread, and runs [`Self::finish_save`] on the
+/// main thread once the document is on disk. Frames run and the user goes on editing
+/// between the second and the third, so `finish_save` must not take the world to be
+/// what `encode_sidecars` saw. What switches or closes a tab waits for a save first,
+/// so the saved tab is normally still in front.
 pub trait DocumentIoHook: Send + Sync + 'static {
+    /// Whether a save to `path`, asked for with the world as it is, must run from
+    /// [`Self::begin_save`] to [`Self::finish_save`] with no frame in between.
+    fn holds_the_frame(&self, _world: &mut World, _path: &str) -> bool {
+        false
+    }
+
     /// Runs ahead of writing the document to `path`, returning what
-    /// [`Self::export_sidecars`] and [`Self::finish_save`] need of it.
+    /// [`Self::encode_sidecars`] and [`Self::finish_save`] need of it.
     fn begin_save(&self, world: &mut World, path: &str) -> Box<dyn Any + Send>;
 
-    /// Writes the feature's files beside the document at `path`, before the
-    /// document itself. An error fails the save.
-    fn export_sidecars(
+    /// The feature's files beside the document at `path` and their bytes, encoded
+    /// from the moment the document's snapshot was taken. Writes nothing: they
+    /// reach the disk once the document has been read back, just ahead of it. An
+    /// error fails the save.
+    fn encode_sidecars(
         &self,
         world: &mut World,
         path: &str,
-        state: &(dyn Any + Send),
-    ) -> Result<(), BevyError>;
+        state: &mut (dyn Any + Send),
+    ) -> Result<Vec<SidecarWrite>, BevyError>;
 
-    /// Runs once the save is over; `written` says whether every file landed.
+    /// Runs once the save is over; `written` says whether every file landed. A
+    /// save replaced by a newer one before it began writing ends here with
+    /// `written` false.
     fn finish_save(&self, world: &mut World, state: Box<dyn Any + Send>, written: bool);
 
     /// Reads the feature's files beside the document at `path`.
@@ -54,6 +71,27 @@ pub trait DocumentIoHook: Send + Sync + 'static {
     /// Drops what the feature holds as unsaved for the document in tab `tab`, whose
     /// edits the author just chose to throw away. The tab is still open.
     fn discard_document(&self, _world: &mut World, _tab: usize) {}
+}
+
+/// A file beside a document and the bytes it is to hold.
+pub type SidecarWrite = (PathBuf, Vec<u8>);
+
+/// Put `writes` on disk, in order, each complete or not at all. `durable` forces
+/// each to the disk, which is for off the main thread.
+pub fn write_sidecars(writes: &[SidecarWrite], durable: bool) -> Result<(), String> {
+    for (path, bytes) in writes {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("cannot make the folder of {}: {err}", path.display()))?;
+        }
+        let written = if durable {
+            jackdaw_api_internal::document::write_durable(path, bytes, || Ok(()))
+        } else {
+            jackdaw_api_internal::document::write_atomic(path, bytes)
+        };
+        written.map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// A document a running game is about to spawn.
@@ -231,15 +269,23 @@ pub fn begin_save(world: &mut World, path: &str) -> PendingSave {
     )
 }
 
-pub fn export_sidecars(
+/// Whether a hook needs a save to `path` to run with no frame in between.
+pub fn holds_the_frame(world: &mut World, path: &str) -> bool {
+    hooks(world)
+        .iter()
+        .any(|hook| hook.holds_the_frame(world, path))
+}
+
+pub fn encode_sidecars(
     world: &mut World,
     path: &str,
-    pending: &PendingSave,
-) -> Result<(), BevyError> {
-    for (hook, state) in &pending.0 {
-        hook.export_sidecars(world, path, state.as_ref())?;
+    pending: &mut PendingSave,
+) -> Result<Vec<SidecarWrite>, BevyError> {
+    let mut writes = Vec::new();
+    for (hook, state) in &mut pending.0 {
+        writes.extend(hook.encode_sidecars(world, path, state.as_mut())?);
     }
-    Ok(())
+    Ok(writes)
 }
 
 pub fn finish_save(world: &mut World, pending: PendingSave, written: bool) {

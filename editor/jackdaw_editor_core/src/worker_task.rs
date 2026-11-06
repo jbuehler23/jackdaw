@@ -34,6 +34,25 @@ impl<T: Send + 'static> WorkerTask<T> {
         }
     }
 
+    /// Work on a thread of its own, for work no long job on the pool may hold up.
+    pub(crate) fn spawn_thread(
+        name: &str,
+        stack_size: usize,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let (sender, outcome) = mpsc::channel();
+        std::thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(stack_size)
+            .spawn(move || {
+                sender.send(work()).ok();
+            })?;
+        Ok(Self {
+            outcome: Mutex::new(outcome),
+            _task: None,
+        })
+    }
+
     /// A task whose work is already done.
     pub(crate) fn done(value: T) -> Self {
         let (sender, outcome) = mpsc::channel();
@@ -41,6 +60,18 @@ impl<T: Send + 'static> WorkerTask<T> {
         Self {
             outcome: Mutex::new(outcome),
             _task: None,
+        }
+    }
+
+    /// Block until the work is over.
+    pub(crate) fn wait(&mut self) -> WorkerOutcome<T> {
+        let outcome = self
+            .outcome
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        match outcome.recv() {
+            Ok(value) => WorkerOutcome::Done(value),
+            Err(_) => WorkerOutcome::Panicked,
         }
     }
 

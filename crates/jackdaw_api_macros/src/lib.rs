@@ -37,6 +37,8 @@ use syn::{
 ///   keeps the description.
 /// - `cancel`: path to a Bevy system invoked when the operator is
 ///   cancelled.
+/// - `invoke`: path to the Bevy system UI, keybinds and F3 search run, when it
+///   differs from the function itself, which every other call runs.
 /// - `name`: override the generated struct name. Default is
 ///   `PascalCase(fn_name) + "Op"`.
 ///
@@ -89,6 +91,7 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
     let mut name_override: Option<String> = None;
     let mut is_available: Option<Path> = None;
     let mut cancel: Option<Path> = None;
+    let mut invoke: Option<Path> = None;
     let mut params: Option<TokenStream2> = None;
 
     for arg in &args {
@@ -168,6 +171,18 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
                             return syn::Error::new(
                                 nv.value.span(),
                                 "`is_available` must be the path of a Bevy system returning `bool`",
+                            )
+                            .into_compile_error()
+                            .into();
+                        }
+                    }
+                    "invoke" => {
+                        if let Some(p) = as_path(&nv.value) {
+                            invoke = Some(p);
+                        } else {
+                            return syn::Error::new(
+                                nv.value.span(),
+                                "`invoke` must be the path of a Bevy system",
                             )
                             .into_compile_error()
                             .into();
@@ -255,6 +270,19 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
         }
     });
 
+    let invoke_impl = invoke.map(|path| {
+        quote! {
+            fn register_invoke(
+                commands: &mut ::bevy::ecs::system::Commands,
+            ) -> #api_crate::prelude::OperatorSystemId {
+                commands.register_system(::bevy::ecs::system::IntoSystem::map(
+                    ::bevy::ecs::system::IntoSystem::into_system(#path),
+                    #api_crate::prelude::IntoOperatorResult::into_operator_result,
+                ))
+            }
+        }
+    });
+
     let cancel_impl = cancel.map(|path| {
         quote! {
             fn register_cancel(
@@ -312,6 +340,8 @@ fn expand_operator(attr: TokenStream, item: TokenStream, api_crate: TokenStream2
             #availability_impl
 
             #cancel_impl
+
+            #invoke_impl
         }
 
         #item_fn

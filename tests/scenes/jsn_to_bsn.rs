@@ -631,7 +631,6 @@ fn editor_opens_and_saves_bsn_scenes() {
     fn editor_app() -> App {
         let mut app = headless_app();
         app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-        app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
         app.init_resource::<jackdaw::selection::Selection>();
         app.init_resource::<jackdaw_commands::CommandHistory>();
         app

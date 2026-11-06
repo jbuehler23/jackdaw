@@ -210,6 +210,7 @@ fn on_file_delete_confirmed(
 
 /// Remove a path from disk and put the Project window back in step with it.
 fn delete_path(world: &mut World, path: &Path) {
+    crate::scene_io::save_worker::land_saves(world);
     world.resource_mut::<PendingFileDelete>().path = None;
     let result = if path.is_dir() {
         std::fs::remove_dir_all(path)
@@ -391,6 +392,7 @@ fn body_starts_at(lines: &[String]) -> usize {
 /// on it. Reports the copy's path, so a caller with no viewport knows where it
 /// landed.
 fn duplicate_file(world: &mut World, path: &Path, name: Option<&str>) -> Option<PathBuf> {
+    crate::scene_io::save_worker::land_saves(world);
     let path = crate::definition_assets::resolve_project_path(world, path);
     let path = jackdaw_bsn::existing_form(&path).unwrap_or(path);
     if !path.is_file() {

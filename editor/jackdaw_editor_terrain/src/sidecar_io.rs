@@ -1,15 +1,14 @@
 //! Each terrain's bulk data, kept in a sidecar file beside the scene that
-//! holds it: written before the scene on save, and read back into the
+//! holds it: written just ahead of the scene on save, and read back into the
 //! [`TerrainDataStore`] when a scene opens or its tab comes to the front.
 
 use std::any::Any;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use jackdaw_api_internal::document::write_atomic;
 use jackdaw_editor_core::scene_io::SidecarImport;
 use jackdaw_editor_core::scene_io::hooks::{
-    DocumentIoHook, DocumentIoHooks, PlayCopies, PlayDocument, play_copy_stamp,
+    DocumentIoHook, DocumentIoHooks, PlayCopies, PlayDocument, SidecarWrite, play_copy_stamp,
 };
 use jackdaw_editor_core::scenes::Scenes;
 
@@ -27,19 +26,28 @@ struct TerrainSidecars;
 
 impl DocumentIoHook for TerrainSidecars {
     fn begin_save(&self, _world: &mut World, _path: &str) -> Box<dyn Any + Send> {
-        Box::new(())
+        Box::new(Vec::<EncodedTerrain>::new())
     }
 
-    fn export_sidecars(
+    fn encode_sidecars(
         &self,
         world: &mut World,
         path: &str,
-        _state: &(dyn Any + Send),
-    ) -> Result<(), BevyError> {
-        export_terrain_sidecars(world, path)
+        state: &mut (dyn Any + Send),
+    ) -> Result<Vec<SidecarWrite>, BevyError> {
+        let encoded = state
+            .downcast_mut::<Vec<EncodedTerrain>>()
+            .ok_or("terrain save state of the wrong type")?;
+        let (terrains, writes) = encode_terrain_sidecars(world, path)?;
+        *encoded = terrains;
+        Ok(writes)
     }
 
-    fn finish_save(&self, _world: &mut World, _state: Box<dyn Any + Send>, _written: bool) {}
+    fn finish_save(&self, world: &mut World, state: Box<dyn Any + Send>, written: bool) {
+        if written && let Ok(terrains) = state.downcast::<Vec<EncodedTerrain>>() {
+            note_written_terrains(world, &terrains);
+        }
+    }
 
     fn import_sidecars(&self, world: &mut World, path: &str, mode: SidecarImport) {
         import_terrain_sidecars(world, path, mode);
@@ -142,14 +150,20 @@ fn sidecar_holds(
     })
 }
 
-/// Write every terrain's bulk data to its sidecar beside the scene.
+/// A terrain whose sidecar a save has encoded, for when the save is over.
+struct EncodedTerrain {
+    data_path: String,
+    file: PathBuf,
+    /// Its latest edit as of the encoding, so a later one stays unsaved.
+    revision: Option<u64>,
+}
+
+/// Encode every terrain's bulk data for its sidecar beside the scene. Writes nothing.
 ///
-/// A scene with no terrain is a clean no-op. Each write completes before
-/// returning (atomically, via `write_atomic`), and an invalid path,
-/// encoding failure, or filesystem error is returned to the save boundary
-/// so the tab stays dirty. One file per terrain is named by the
-/// scene-relative `data_path` the `Terrain` component carries, so a scene
-/// and its terrain data move together.
+/// A scene with no terrain is a clean no-op. An invalid path or encoding failure is
+/// returned to the save boundary so the tab stays dirty. One file per terrain is
+/// named by the scene-relative `data_path` the `Terrain` component carries, so a
+/// scene and its terrain data move together.
 ///
 /// A path with no store entry (never loaded -- its sidecar was missing --
 /// and never edited) is silently skipped: there is nothing to write and
@@ -162,14 +176,14 @@ fn sidecar_holds(
 /// can outlive them -- an undo can bring one back, and other tabs keep
 /// their own entries -- so writing the whole store would scatter files
 /// for terrains this scene does not own.
-pub(crate) fn export_terrain_sidecars(
+fn encode_terrain_sidecars(
     world: &mut World,
     scene_path: &str,
-) -> Result<(), BevyError> {
+) -> Result<(Vec<EncodedTerrain>, Vec<SidecarWrite>), BevyError> {
     use jackdaw_terrain::sidecar;
 
     if world.get_resource::<TerrainDataStore>().is_none() {
-        return Ok(());
+        return Ok(Default::default());
     }
     let scene_dir = Path::new(scene_path)
         .parent()
@@ -185,7 +199,8 @@ pub(crate) fn export_terrain_sidecars(
     }
 
     let store = world.resource::<TerrainDataStore>();
-    let mut writes: Vec<(String, PathBuf, Vec<u8>)> = Vec::new();
+    let mut terrains = Vec::new();
+    let mut writes = Vec::new();
     for data_path in paths {
         let path = match sidecar::resolve_path(&scene_dir, &data_path) {
             Ok(path) => path,
@@ -214,35 +229,39 @@ pub(crate) fn export_terrain_sidecars(
                 "terrain sidecar {data_path:?} cannot be written: {err}"
             ))
         })?;
-        writes.push((data_path, path, bytes));
+        terrains.push(EncodedTerrain {
+            revision: store.edit_revision(&data_path),
+            data_path,
+            file: path.clone(),
+        });
+        writes.push((path, bytes));
     }
+    Ok((terrains, writes))
+}
 
-    for (data_path, path, bytes) in writes {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| {
-                BevyError::from(format!(
-                    "failed to create terrain data directory {} for {}: {err}",
-                    parent.display(),
-                    path.display()
-                ))
-            })?;
-        }
-        write_atomic(&path, &bytes).map_err(|err| {
-            BevyError::from(format!(
-                "failed to write terrain data {}: {err}",
-                path.display()
-            ))
-        })?;
-        info!("Terrain data written to {}", path.display());
-        // Without noting the write, the store keeps the mtime it loaded from
-        // and every later activation re-imports the whole terrain.
-        let mtime = std::fs::metadata(&path)
+/// Without noting the write, the store keeps the mtime it loaded from and every
+/// later activation re-imports the whole terrain.
+fn note_written_terrains(world: &mut World, terrains: &[EncodedTerrain]) {
+    let Some(mut store) = world.get_resource_mut::<TerrainDataStore>() else {
+        return;
+    };
+    for terrain in terrains {
+        let mtime = std::fs::metadata(&terrain.file)
             .and_then(|meta| meta.modified())
             .ok();
-        world
-            .resource_mut::<TerrainDataStore>()
-            .note_read(&data_path, mtime);
+        store.note_written(&terrain.data_path, mtime, terrain.revision);
     }
+}
+
+/// The whole of what a save does with the sidecars, in one go.
+#[cfg(test)]
+pub(crate) fn export_terrain_sidecars(
+    world: &mut World,
+    scene_path: &str,
+) -> Result<(), BevyError> {
+    let (terrains, writes) = encode_terrain_sidecars(world, scene_path)?;
+    jackdaw_editor_core::scene_io::hooks::write_sidecars(&writes, false)?;
+    note_written_terrains(world, &terrains);
     Ok(())
 }
 

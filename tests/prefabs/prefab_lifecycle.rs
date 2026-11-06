@@ -324,7 +324,6 @@ fn make_app_for_prefab_tests() -> bevy::prelude::App {
     app.add_plugins(jackdaw::prefab::PrefabPlugin);
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
     app.init_resource::<jackdaw::selection::Selection>();
     app
 }
@@ -2110,7 +2109,7 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     }
     jackdaw::scenes::swap::activate_tab(app.world_mut(), 0);
 
-    // Drift `undo_len_at_save` so the status bar would otherwise show unsaved.
+    // An edit, so the status bar would otherwise show unsaved.
     struct NoOpCommand;
     impl jackdaw_commands::EditorCommand for NoOpCommand {
         fn execute(&mut self, _world: &mut bevy::prelude::World) {}
@@ -2125,7 +2124,6 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     {
         let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
         scenes.tabs[0].dirty = true;
-        scenes.tabs[0].history_depth_at_last_check = 1;
     }
     assert!(jackdaw::scene_io::is_scene_dirty(app.world()));
 
@@ -2137,31 +2135,23 @@ fn scene_save_on_prefab_tab_clears_dirty_state() {
     );
     assert!(
         !jackdaw::scene_io::is_scene_dirty(app.world()),
-        "global SceneDirtyState must report clean after save"
+        "the scene must report clean after save"
     );
 
     let _ = app
         .world_mut()
-        .run_system_cached(jackdaw::scenes::mark_active_dirty_on_history_growth);
+        .run_system_cached(jackdaw::scenes::track_active_dirty_from_history);
     assert!(
         !app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
-        "mark_active_dirty_on_history_growth must not re-dirty the tab post-save"
+        "track_active_dirty_from_history must not re-dirty the tab post-save"
     );
 
-    // The cache-epoch driver clears the command history; `undo_len_at_save`
-    // must be reset with it or the status bar stays stuck on unsaved.
+    // The cache-epoch driver clears the command history, which must not leave the
+    // status bar stuck on unsaved.
     jackdaw::prefab::sync::drive_respawn_on_prefab_cache_change(app.world_mut());
     assert!(
         !jackdaw::scene_io::is_scene_dirty(app.world()),
-        "after the respawn-on-cache-change driver fires, the scene must still report clean; \
-         got undo_stack.len()={} undo_len_at_save={}",
-        app.world()
-            .resource::<jackdaw_commands::CommandHistory>()
-            .undo_stack
-            .len(),
-        app.world()
-            .resource::<jackdaw::scene_io::SceneDirtyState>()
-            .undo_len_at_save,
+        "after the respawn-on-cache-change driver fires, the scene must still report clean"
     );
     assert!(
         !app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty,
@@ -2180,7 +2170,6 @@ fn save_scene_as_prefab_converts_tab_to_prefab() {
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
     app.init_resource::<jackdaw::selection::Selection>();
 
     {
@@ -2248,7 +2237,6 @@ fn save_scene_as_prefab_with_multiple_roots_uses_synthetic_root() {
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
     app.init_resource::<jackdaw::selection::Selection>();
 
     {

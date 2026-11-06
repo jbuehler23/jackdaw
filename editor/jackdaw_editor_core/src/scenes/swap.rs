@@ -75,6 +75,7 @@ pub(crate) fn respawn_scene_from_ast(world: &mut World) {
 /// the refusal does not come as a surprise.
 pub(crate) fn capture_active_tab(world: &mut World) {
     let _span = info_span!("tab.capture").entered();
+    crate::scene_io::save_worker::land_saves(world);
     let active = world.resource::<Scenes>().active;
 
     // A refused tab never got its document into the world, so there is nothing
@@ -387,7 +388,6 @@ pub fn activate_tab(world: &mut World, target: usize) {
         scenes.tabs[target].refusal = refusal;
     }
 
-    let history_depth = history.undo_stack.len();
     *world.resource_mut::<CommandHistory>() = history;
     info_span!("tab.view_state").in_scope(|| apply_view_state(world, &view_state, spawned_ok));
 
@@ -422,7 +422,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
 
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;
-    scenes.tabs[target].history_depth_at_last_check = history_depth;
+    scenes.tabs[target].history_state_at_last_check = None;
     info_span!("tab.opened_observers").in_scope(|| {
         world.trigger(jackdaw_api_internal::document::SceneOpened { path: tab_path });
     });

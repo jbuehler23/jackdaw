@@ -11,7 +11,7 @@ use crate::{
     gizmos::{GizmoAxis, GizmoSpace},
     modal_transform::{ModalOp, ModalTransformState},
     numeric_transform::NumericTransformState,
-    scene_io::{SceneDirtyState, SceneFilePath},
+    scene_io::SceneFilePath,
 };
 
 /// Git branch + short commit hash, read once at startup.
@@ -221,18 +221,14 @@ fn update_status_left(
 
 fn update_status_center(
     scene_path: Res<SceneFilePath>,
-    scene_dirty: Res<SceneDirtyState>,
-    history: Res<jackdaw_commands::CommandHistory>,
+    scenes: Option<Res<crate::scenes::Scenes>>,
     project: Option<Res<crate::project::ProjectRoot>>,
     mut had_project: Local<bool>,
     mut text_query: Query<&mut Text, With<StatusBarCenter>>,
 ) {
     let had = std::mem::replace(&mut *had_project, project.is_some());
     let project_changed = project.as_ref().is_some_and(Res::is_changed) || had != project.is_some();
-    if !scene_path.is_changed()
-        && !scene_dirty.is_changed()
-        && !history.is_changed()
-        && !project_changed
+    if !scene_path.is_changed() && !scenes.as_ref().is_some_and(Res::is_changed) && !project_changed
     {
         return;
     }
@@ -241,7 +237,10 @@ fn update_status_center(
     };
 
     let version = env!("CARGO_PKG_VERSION");
-    let dirty = history.undo_stack.len() != scene_dirty.undo_len_at_save;
+    let dirty = scenes
+        .as_ref()
+        .and_then(|scenes| scenes.tabs.get(scenes.active))
+        .is_some_and(|tab| tab.dirty);
     let dirty_marker = if dirty { "*" } else { "" };
     let path_str = scene_path
         .path

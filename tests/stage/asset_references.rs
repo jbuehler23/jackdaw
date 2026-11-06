@@ -390,7 +390,7 @@ fn converting_a_document_a_tab_has_open_is_refused() {
             history: jackdaw::commands::CommandHistory::default(),
             terrain_data_store: jackdaw::terrain_mode::TerrainDataStore::default(),
             scene_resources: Default::default(),
-            history_depth_at_last_check: 0,
+            history_state_at_last_check: None,
             refusal: None,
         });
 

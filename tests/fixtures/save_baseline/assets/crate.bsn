@@ -1,0 +1,4 @@
+#Crate
+jackdaw::prefab::components::Prefab
+jackdaw::prefab::components::PrefabEntityId(0)
+bevy_transform::components::transform::Transform { translation: glam::Vec3 { x: 1.0, y: 0.0, z: 0.0 } }

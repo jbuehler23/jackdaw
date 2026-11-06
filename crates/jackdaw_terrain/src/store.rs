@@ -626,6 +626,22 @@ impl TerrainDataStore {
             .is_ok_and(|mtime| mtime != *read_at)
     }
 
+    /// Record that `data_path` as of edit `revision`, from
+    /// [`Self::edit_revision`], was just written to a file last modified at
+    /// `mtime`. An edit since then stays unsaved.
+    pub fn note_written(
+        &mut self,
+        data_path: &str,
+        mtime: Option<std::time::SystemTime>,
+        revision: Option<u64>,
+    ) {
+        let edits = self.edits.get(data_path).copied();
+        self.note_read(data_path, mtime);
+        if let Some(edit) = edits.filter(|edit| Some(*edit) != revision) {
+            self.edits.insert(data_path.to_string(), edit);
+        }
+    }
+
     /// Whether a sidecar path has data.
     pub fn contains(&self, data_path: &str) -> bool {
         self.entries.contains_key(data_path)
