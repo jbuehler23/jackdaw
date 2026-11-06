@@ -599,12 +599,11 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
             && entry.value.handle().is_some()
             && !on_disk
         {
-            let message = format!(
-                "{} has gone; what names it keeps the name and holds nothing after a reload",
-                path.to_slash_lossy()
+            let path_text = path.to_slash_lossy();
+            warn!(
+                "{path_text} has gone; what names it keeps the name and holds nothing after a reload"
             );
-            warn!("{message}");
-            crate::status_bar::notify_warn(world, message);
+            crate::status_bar::notify_warn(world, format!("Missing file: {path_text}"));
         }
         crate::definition_assets::close_card_for(world, &path);
         scan.removed.push(path);
