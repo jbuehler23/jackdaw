@@ -67,10 +67,11 @@ pub(crate) fn history_undo(_: In<OperatorParameters>, mut commands: Commands) ->
         }
         cancel_active_modal_if_any(world);
         crate::ui_stage::cancel_canvas_gestures(world);
-        let dropped =
+        let dropped = info_span!("history.undo").in_scope(|| {
             world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
                 history.undo(world)
-            });
+            })
+        });
         if let Some(why) = dropped {
             jackdaw_api_internal::operator::warn_caller(world, why);
         }
@@ -99,10 +100,11 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
         }
         cancel_active_modal_if_any(world);
         crate::ui_stage::cancel_canvas_gestures(world);
-        let dropped =
+        let dropped = info_span!("history.redo").in_scope(|| {
             world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
                 history.redo(world)
-            });
+            })
+        });
         if let Some(why) = dropped {
             jackdaw_api_internal::operator::warn_caller(world, why);
         }
@@ -115,6 +117,7 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
 /// rows re-resolve their icons, and touch every brush's change tick so the
 /// viewport mesh cache and edit overlays regenerate from the restored topology.
 fn refresh_views_after_history(world: &mut World) {
+    let _span = info_span!("history.refresh").entered();
     let _ = crate::hierarchy::rebuild_hierarchy(world);
     let mut brushes = world.query::<&mut jackdaw_scene_types::Brush>();
     for mut brush in brushes.iter_mut(world) {

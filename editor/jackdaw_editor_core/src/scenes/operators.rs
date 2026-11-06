@@ -419,6 +419,7 @@ fn reselect_by_name(world: &mut World, names: &[String]) {
 /// Sync system body. Public so tests and the Project window can call it
 /// without going through the file-dialog path.
 pub fn scene_open_system(world: &mut World, path: &std::path::Path) {
+    let _span = info_span!("open.scene_open").entered();
     let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if switch_to_open_tab(world, &canonical) {
         return;
@@ -468,6 +469,7 @@ pub fn read_scene_for_load(world: &mut World, canonical: &std::path::Path) -> Op
 /// Read and parse the scene at `canonical`, converting a legacy `.jsn` in
 /// memory.
 fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScene, String> {
+    let _span = info_span!("open.read_scene").entered();
     let file_text = jackdaw_bsn::read_document_text(canonical)
         .map_err(|err| format!("failed to read {}: {err}", canonical.display()))?;
 
@@ -528,6 +530,7 @@ fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScen
 
 /// Give a read scene its tab and spawn it.
 pub fn open_read_scene(world: &mut World, read: ReadScene) {
+    let _span = info_span!("open.read_scene_done").entered();
     let ReadScene {
         canonical,
         file_text,

@@ -57,6 +57,7 @@ struct Read {
 /// The document cut into units as a save writes it, or `None` when it cannot
 /// be cut (a node without an id).
 pub(crate) fn capture(world: &mut World, parent_path: &Path) -> Option<Arc<Units>> {
+    let _span = info_span!("capture").entered();
     let last = world
         .get_resource_mut::<DocumentCapture>()
         .and_then(|mut capture| capture.last.take());
@@ -93,9 +94,11 @@ fn mark_document(world: &mut World) -> Option<(WorldId, Tick)> {
 }
 
 fn read_whole(world: &mut World, parent_path: &Path) -> Option<Read> {
+    let _span = info_span!("capture.whole").entered();
     let authored = crate::scene_io::save::authored_live_for_history(world, parent_path)?;
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let units = Units::split(&authored.ast, &registry.read())?;
+    let units =
+        info_span!("capture.split").in_scope(|| Units::split(&authored.ast, &registry.read()))?;
     Some(Read {
         units,
         handles: handle_components(world, &authored.handles),
@@ -104,6 +107,7 @@ fn read_whole(world: &mut World, parent_path: &Path) -> Option<Read> {
 }
 
 fn read_changed(world: &mut World, parent_path: &Path, last: Captured) -> Option<Read> {
+    let _span = info_span!("capture.changed").entered();
     if last.names_new_assets
         || last.parent_path != parent_path
         || Inputs::of(world).changed_since(&last.inputs, last.world_tick, world)
@@ -116,7 +120,7 @@ fn read_changed(world: &mut World, parent_path: &Path, last: Captured) -> Option
         if live.world.id() != last.document {
             return None;
         }
-        Plan::of(world, live, &registry.read(), &last)?
+        info_span!("capture.plan").in_scope(|| Plan::of(world, live, &registry.read(), &last))?
     };
     if plan.reread.len() > 64 && plan.reread.len() * 4 > plan.layout.len() {
         return None;

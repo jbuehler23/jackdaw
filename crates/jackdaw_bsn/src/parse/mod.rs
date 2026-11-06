@@ -51,7 +51,9 @@ impl From<syntax::parse_stream::ParseError> for ParseError {
 /// entity of the top-level patch group (which may be a multi-root `Children`
 /// wrapper; the loader unwraps it).
 pub fn parse_bsn(text: &str) -> Result<(SceneBsnAst, Entity), ParseError> {
-    let root = ParseStream::from(Span::from(text)).parse::<BsnListRoot>()?;
+    let root = bevy::log::info_span!("parse.syntax")
+        .in_scope(|| ParseStream::from(Span::from(text)).parse::<BsnListRoot>())?;
+    let _build = bevy::log::info_span!("parse.build").entered();
     let mut ast = SceneBsnAst::default();
     let mut entities = root.0.0;
     let top = match entities.len() {
@@ -69,7 +71,8 @@ pub fn parse_bsn(text: &str) -> Result<(SceneBsnAst, Entity), ParseError> {
             ast.world.spawn(BsnPatches(vec![children])).id()
         }
     };
-    check_duplicate_fields(&mut ast)?;
+    bevy::log::info_span!("parse.check_duplicates")
+        .in_scope(|| check_duplicate_fields(&mut ast))?;
     Ok((ast, top))
 }
 

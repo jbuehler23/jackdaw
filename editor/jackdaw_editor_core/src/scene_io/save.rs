@@ -214,6 +214,7 @@ pub(crate) fn active_tab_refusal(world: &World) -> Option<String> {
 /// async version of this function -- the ordering argument above applies
 /// to any single save.
 pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
+    let _span = info_span!("save").entered();
     // Every write of the world to the active tab's file ends here, so the
     // refusal is enforced here too; callers check only for a better message.
     if let Some(reason) = active_tab_refusal(world) {
@@ -307,11 +308,13 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     super::hooks::finish_save(world, pending, written.is_ok());
     written?;
 
-    world.trigger(jackdaw_api_internal::document::SceneSaved {
-        path: PathBuf::from(&path),
+    info_span!("save.saved_observers").in_scope(|| {
+        world.trigger(jackdaw_api_internal::document::SceneSaved {
+            path: PathBuf::from(&path),
+        });
     });
 
-    write_alongside(world, &path)?;
+    info_span!("save.alongside").in_scope(|| write_alongside(world, &path))?;
 
     // The authoritative scene and sidecars are now on disk. Only now clear
     // dirty state and retarget a redirected tab at its new `.bsn` path.
@@ -335,9 +338,10 @@ pub(crate) fn save_scene_inner(world: &mut World) -> Result<(), BevyError> {
     }
 
     // Persist current editor layout to project.jsn
-    save_layout_to_project(world);
+    info_span!("save.layout").in_scope(|| save_layout_to_project(world));
 
-    crate::thumbnail::capture_scene_thumbnail(world, Path::new(&path));
+    info_span!("save.thumbnail")
+        .in_scope(|| crate::thumbnail::capture_scene_thumbnail(world, Path::new(&path)));
 
     Ok(())
 }
@@ -426,6 +430,7 @@ fn write_scene_files(
         {
             note_brush_text_size(world, path, jackdaw_bsn::brush_text_len(&parsed));
         }
+        info_span!("doc.drop").in_scope(|| drop(parsed));
         // Record the jackdaw + Bevy version at the disk boundary only, so
         // the in-memory undo / tab-swap snapshots from the same emitter stay
         // stamp-free.
@@ -450,7 +455,7 @@ fn write_scene_files(
     {
         warn!("cannot make the folder for {path}: {err}");
     }
-    super::hooks::export_sidecars(world, path, pending)?;
+    info_span!("save.sidecars").in_scope(|| super::hooks::export_sidecars(world, path, pending))?;
 
     // A redirected save renames the legacy source to `.jsn.bak` first so a
     // stale `.jsn` cannot shadow the fresh `.bsn` on the next open.
@@ -464,13 +469,16 @@ fn write_scene_files(
     }
     let contents = jackdaw_bsn::document_bytes(Path::new(&path), &contents)
         .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
-    write_atomic(Path::new(&path), &contents)
+    info_span!("save.write")
+        .in_scope(|| write_atomic(Path::new(&path), &contents))
         .map_err(|err| BevyError::from(format!("failed to write scene file {path}: {err}")))?;
     info!("Scene saved to {path}");
 
     // Record the written bytes so the open-tab watcher does not read this
     // write back as an outside edit.
-    crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
+    info_span!("save.hash").in_scope(|| {
+        crate::scenes::external_watch::note_known_content(world, Path::new(&path), &contents);
+    });
     Ok(())
 }
 
@@ -1229,7 +1237,9 @@ fn emit_bsn_scene_authored(
         return (String::new(), Vec::new());
     };
     let registry = world.resource::<AppTypeRegistry>().clone();
-    emitted(world, &ast, spelling, &registry)
+    let text = emitted(world, &ast, spelling, &registry);
+    info_span!("doc.drop").in_scope(|| drop(ast));
+    text
 }
 
 /// The live document as a save writes it, held as a document rather than
@@ -1306,6 +1316,7 @@ fn author(
     parent_path: &Path,
     spelling: SourceSpelling,
 ) -> AuthoredDocument {
+    let _span = info_span!("doc.author").entered();
     let registry = world.resource::<AppTypeRegistry>().clone();
     normalize_derived_button_styles(world, &mut ast, &registry);
 
@@ -1313,7 +1324,8 @@ fn author(
     // against a prefab baseline that names the asset, an inherited component the
     // live document holds no name for would read as an override.
     let entities = doc_entities_in_order(&ast);
-    let pass = name_handles_in(world, &mut ast, &entities, parent_path);
+    let pass = info_span!("author.name_handles")
+        .in_scope(|| name_handles_in(world, &mut ast, &entities, parent_path));
 
     // Reduce inherited prefab-instance content to sparse override entries
     // (`PrefabEntityId` plus only diverged fields). No-op when there is no
@@ -1322,6 +1334,7 @@ fn author(
         .get_resource::<crate::prefab::PrefabAstCache>()
         .is_some()
     {
+        let _sparsify = info_span!("author.sparsify").entered();
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
         let get_prefab = |p: &Path| cache.get(p);
         let references = AssetReferences::new(world);
@@ -1341,11 +1354,12 @@ fn author(
 
     // After sparsifying, which reads sources as the cache keys them.
     if spelling == SourceSpelling::RelativeToFile {
+        let _relativize = info_span!("author.relativize").entered();
         crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
         drop_inherited_visibility(&mut ast);
     }
 
-    normalize_runtime_derived_values(world, &mut ast);
+    info_span!("author.normalize").in_scope(|| normalize_runtime_derived_values(world, &mut ast));
     AuthoredDocument {
         ast,
         names_new_assets: !pass.refs.is_empty(),
@@ -1367,11 +1381,13 @@ fn emitted(
     registry: &AppTypeRegistry,
 ) -> (String, Vec<AbsoluteAssetField>) {
     let named = match spelling {
-        SourceSpelling::RelativeToFile => crate::scene_io::asset_fields::absolute_asset_fields(
-            ast,
-            &registry.read(),
-            world.get_resource::<crate::project_types::ProjectTypes>(),
-        ),
+        SourceSpelling::RelativeToFile => info_span!("emit.absolute_fields").in_scope(|| {
+            crate::scene_io::asset_fields::absolute_asset_fields(
+                ast,
+                &registry.read(),
+                world.get_resource::<crate::project_types::ProjectTypes>(),
+            )
+        }),
         SourceSpelling::AsHeld => Vec::new(),
     };
     (jackdaw_bsn::emit_scene(ast), named)

@@ -162,6 +162,7 @@ pub mod sdk_paths;
 pub mod sdk_setup;
 pub mod selection;
 pub mod snapping;
+mod span_log;
 pub mod sprite_gizmo;
 pub mod sprite_ops;
 pub mod sprite_props;
@@ -433,6 +434,7 @@ impl Plugin for EditorCorePlugin {
             (
                 sdk_setup::SdkSetupPlugin,
                 scrolling_log::ScrollingLogPlugin,
+                span_log::SpanLogPlugin,
                 inspector::InspectorPlugin,
                 hierarchy::HierarchyPlugin,
                 viewport::ViewportPlugin,
