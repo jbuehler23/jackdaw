@@ -643,6 +643,65 @@ fn a_prefab_whose_text_stops_parsing_sends_the_game_back_to_its_file() {
     );
 }
 
+/// A refused prefab counts its asset names as not given to a game that never held
+/// them, and leaves them with a game that got them from an earlier answer.
+#[test]
+fn a_refused_prefab_gives_back_only_what_it_counted() {
+    let scene = instance_of("door.bsn");
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    let with_material = roots(&[
+        door(2.0),
+        "#Stone\nbevy_pbr::pbr_material::StandardMaterial { perceptual_roughness: 0.25 }\n"
+            .to_string(),
+    ]);
+    set_cached_prefab(&mut app, &tmp, "door.bsn", &with_material);
+    let served = serve(&mut app, "zone.bsn");
+    let text = prefab_files(&served)[0].1.clone().expect("the text");
+    let name = text
+        .lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("#Play"))
+        .expect("a session name")
+        .to_string();
+
+    let full = tmp.path().join("assets/door.bsn");
+    let mut broken = jackdaw_bsn::parse_bsn_text(&with_material).expect("the text parses");
+    jackdaw_prefab::prepare_prefab_document(&mut broken, &full, &tmp.path().join("assets"));
+    let node = broken.create_entity_node(vec![jackdaw_bsn::BsnPatch::Struct(
+        jackdaw_bsn::BsnStructData {
+            type_path: String::new(),
+            fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                name: "0".into(),
+                value: jackdaw_bsn::BsnValue::Int(1),
+            }]),
+        },
+    )]);
+    broken.add_to_roots(node);
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(&full, broken);
+
+    assert_eq!(
+        prefab_files(&serve(&mut app, "zone.bsn")),
+        vec![("door.bsn".to_string(), None)],
+        "the prefab is refused"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::status_bar::StatusNotice>()
+            .text(),
+        "door.bsn: unsaved edits not sent, the game reads the saved file"
+    );
+    let never_held = key_of(2);
+    serve_scene(app.world_mut(), &never_held, None, "zone.bsn");
+    let names = app
+        .world()
+        .resource::<jackdaw::play_scene::PlayAssetNames>();
+    assert!(names.was_given(&key(), &name), "held from the first answer");
+    assert!(!names.was_given(&never_held, &name), "never reached it");
+}
+
 /// A prefab spawned directly as a root goes by its unsaved text wherever the editor
 /// holds it: the tab in front, a tab behind, or only the cache.
 #[test]

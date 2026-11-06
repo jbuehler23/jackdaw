@@ -2,7 +2,7 @@
 //! tested independently of UI and operator wiring.
 
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future::poll_once};
+use bevy::tasks::AsyncComputeTaskPool;
 use jackdaw_api::prelude::*;
 
 use jackdaw_api_internal::operator::warn_caller;
@@ -10,6 +10,7 @@ use jackdaw_api_internal::operator::warn_caller;
 use crate::commands::CommandHistory;
 use crate::scene_io::clear_scene_entities;
 use crate::scenes::{Scenes, TabContent, ViewState};
+use crate::worker_task::{WorkerOutcome, WorkerTask};
 
 /// Switch the active tab to `target`, returning whether `target` is now
 /// active. No-op if `target == active`. Cancels any in-flight modal first to
@@ -148,7 +149,7 @@ pub(crate) fn capture_active_tab(world: &mut World) {
 
 /// Parses still running for edited documents that left the world, by tab name.
 #[derive(Resource, Default)]
-pub struct ReadBackChecks(Vec<(String, Task<Option<String>>)>);
+pub struct ReadBackChecks(Vec<(String, WorkerTask<Option<String>>)>);
 
 /// Emit an edited tab's document and parse the text on a worker, so a document
 /// that a save would refuse is reported without holding up the switch.
@@ -166,7 +167,7 @@ fn check_read_back_if_edited(world: &mut World, tab: usize, document: &jackdaw_b
         return;
     }
     let text = jackdaw_bsn::emit_scene(document);
-    let task = pool.spawn(async move {
+    let task = WorkerTask::spawn(pool, move || {
         jackdaw_bsn::parse_emitted(&text)
             .err()
             .map(|err| err.to_string())
@@ -178,14 +179,17 @@ fn check_read_back_if_edited(world: &mut World, tab: usize, document: &jackdaw_b
 pub(crate) fn report_read_back_checks(world: &mut World) {
     let mut checks = world.resource_mut::<ReadBackChecks>();
     let mut failed = Vec::new();
-    checks.0.retain_mut(|(name, task)| {
-        let Some(outcome) = block_on(poll_once(task)) else {
-            return true;
-        };
-        if let Some(detail) = outcome {
+    checks.0.retain_mut(|(name, task)| match task.outcome() {
+        WorkerOutcome::Running => true,
+        WorkerOutcome::Done(None) => false,
+        WorkerOutcome::Done(Some(detail)) => {
             failed.push((std::mem::take(name), detail));
+            false
         }
-        false
+        WorkerOutcome::Panicked => {
+            failed.push((std::mem::take(name), "the check panicked".to_string()));
+            false
+        }
     });
     if checks.0.is_empty() {
         world.remove_resource::<ReadBackChecks>();
@@ -539,5 +543,35 @@ fn apply_view_state(world: &mut World, view_state: &ViewState, spawned: bool) {
         if let Ok(mut ec) = world.get_entity_mut(e) {
             ec.insert(Selected);
         }
+    }
+}
+
+#[cfg(test)]
+mod read_back_check_tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// A check that panics is reported like one that failed, on a main thread that
+    /// goes on.
+    #[test]
+    fn a_read_back_check_that_panics_is_reported() {
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut world = World::new();
+        world.init_resource::<crate::status_bar::StatusNotice>();
+        let task = WorkerTask::spawn(pool, || -> Option<String> {
+            panic!("a check that panics, as a test expects")
+        });
+        world.insert_resource(ReadBackChecks(vec![("zone".to_string(), task)]));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while world.contains_resource::<ReadBackChecks>() {
+            assert!(Instant::now() < deadline, "the check never finished");
+            report_read_back_checks(&mut world);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            world.resource::<crate::status_bar::StatusNotice>().text(),
+            "zone will not save: unreadable text"
+        );
     }
 }

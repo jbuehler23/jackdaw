@@ -2,6 +2,7 @@
 //! deep cloning.
 
 use bevy::ecs::entity::Entity;
+use bevy::ecs::query::{Or, With};
 
 use super::{BsnPatch, BsnPatches, SceneBsnAst};
 
@@ -275,6 +276,34 @@ impl SceneBsnAst {
             link_cloned_subtree(&mut dst, self, root, new_root);
         }
         dst
+    }
+
+    /// Free every node and patch no root reaches, so that a walk over all the
+    /// patches sees only what the document says, as it would after a parse.
+    pub fn drop_unreachable(&mut self) {
+        let mut reached = bevy::platform::collections::HashSet::new();
+        let mut pending = self.roots.clone();
+        while let Some(node) = pending.pop() {
+            if !reached.insert(node) {
+                continue;
+            }
+            if let Some(patches) = self.get_patches(node) {
+                reached.extend(patches.0.iter().copied());
+            }
+            pending.extend(self.get_children_ast(node));
+        }
+        let unreached: Vec<Entity> = self
+            .world
+            .query_filtered::<Entity, Or<(With<BsnPatch>, With<BsnPatches>)>>()
+            .iter(&self.world)
+            .filter(|entity| !reached.contains(entity))
+            .collect();
+        for entity in unreached {
+            self.world.despawn(entity);
+            if let Some(ecs) = self.ast_to_ecs.remove(&entity) {
+                self.ecs_to_ast.remove(&ecs);
+            }
+        }
     }
 
     /// Clone `node`'s component patches into a fresh vector, dropping the

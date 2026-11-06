@@ -419,6 +419,20 @@ mod query_tests {
     }
 
     #[test]
+    fn dropping_the_unreachable_keeps_what_the_roots_reach() {
+        let mut t = build_tree();
+        let text = crate::emit_scene(&t.ast);
+        let spawned = t.ast.world.entities().count_spawned();
+        let orphan_patch = t.ast.world.spawn(BsnPatch::Name("Orphan".to_string())).id();
+        let orphan = t.ast.world.spawn(BsnPatches(vec![orphan_patch])).id();
+        t.ast.drop_unreachable();
+        assert!(t.ast.world.get_entity(orphan).is_err());
+        assert!(t.ast.world.get_entity(orphan_patch).is_err());
+        assert_eq!(t.ast.world.entities().count_spawned(), spawned);
+        assert_eq!(crate::emit_scene(&t.ast), text);
+    }
+
+    #[test]
     fn entities_with_component_spans_all_depths() {
         let t = build_tree();
         let mut found = t.ast.entities_with_component(TRANSFORM);

@@ -20,10 +20,10 @@ use jackdaw_pie_protocol::event::StateEvent;
 
 use crate::{JackdawScene, JackdawSceneRoot};
 
-/// How long a root waits for the editor before it loads its file. The editor
-/// answers from its main thread and a large document takes seconds to emit, so
-/// this only has to catch an editor that will never answer; giving up early
-/// costs the unsaved edits and node ids only the document holds.
+/// How long a root waits for the editor before it loads its file. A large
+/// document takes the editor seconds to write, so this only has to catch an editor
+/// that will never answer; giving up early costs the unsaved edits and node ids
+/// only the document holds.
 pub(crate) const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long an unanswered request waits before the game says it is waiting.

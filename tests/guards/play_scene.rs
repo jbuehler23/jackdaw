@@ -1860,3 +1860,200 @@ fn stop_respawns_after_a_live_edit() {
         Vec3::ONE
     );
 }
+
+/// A scene with an asset root of every kind: `#Stone` loaded from the file into the
+/// stores, `#Waiting` in the document with no store holding it, and a material made
+/// at runtime that the emit generates a root for.
+fn scene_with_every_kind_of_asset(app: &mut App, tmp: &tempfile::TempDir) {
+    std::fs::write(
+        zone_file(tmp),
+        "bevy_ecs::hierarchy::Children [\n    #Stone\n    \
+         bevy_pbr::pbr_material::StandardMaterial { perceptual_roughness: 0.3 }\n    --\n    \
+         #Rock\n    bevy_transform::components::transform::Transform { translation: \
+         glam::Vec3 { x: 1.5, y: 0.1, z: -2.0 } }\n    bevy_ecs::hierarchy::Children [\n        \
+         #Pebble\n        bevy_transform::components::transform::Transform\n    ]\n]\n",
+    )
+    .expect("a scene");
+    run_op_clause(app.world_mut(), "scene.new")
+        .expect("a new scene opens")
+        .assert_finished();
+    app.update();
+    let zone = app
+        .world()
+        .resource::<Scenes>()
+        .tabs
+        .iter()
+        .position(|tab| tab.path.as_deref() == Some(zone_file(tmp).as_path()))
+        .expect("the scene's tab");
+    jackdaw::scenes::operators::scene_close_system_unprompted(app.world_mut(), zone);
+    app.update();
+    open(app, "assets/zone.bsn");
+    cube_with_material(app, 0.25);
+    let world = app.world_mut();
+    let mut ast = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    let waiting = ast.create_entity_node(vec![
+        jackdaw_bsn::BsnPatch::Name("Waiting".to_string()),
+        jackdaw_bsn::BsnPatch::Struct(jackdaw_bsn::BsnStructData {
+            type_path: "bevy_pbr::pbr_material::StandardMaterial".to_string(),
+            fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                name: "perceptual_roughness".into(),
+                value: jackdaw_bsn::BsnValue::Float(0.75),
+            }]),
+        }),
+    ]);
+    ast.add_to_roots(waiting);
+}
+
+/// `text` with each node id, which is minted at random, written as `N`.
+fn without_node_ids(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("SceneNodeId(") {
+        let (head, tail) = rest.split_at(at + "SceneNodeId(".len());
+        out.push_str(head);
+        out.push('N');
+        rest = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What a game gets, byte for byte, for the scene in front and for the same scene
+/// behind another.
+#[test]
+fn served_text_matches_the_recorded_document() {
+    let (mut app, tmp) = editor();
+    scene_with_every_kind_of_asset(&mut app, &tmp);
+    let (front, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    open(&mut app, "assets/levels/meadow.bsn");
+    let (behind, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    let served = format!("{front}=====\n{behind}");
+    let served = without_node_ids(&served);
+    assert_eq!(
+        sorted_lines(&served),
+        sorted_lines(include_str!("play_scene_served.txt"))
+    );
+}
+
+/// The order of a node's patches differs between builds, so compare the lines.
+fn sorted_lines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.lines().collect();
+    lines.sort_unstable();
+    lines
+}
+
+/// Serving reads the document's text back once, whatever assets it embeds.
+#[test]
+fn serving_a_scene_reads_its_text_back_once() {
+    let (mut app, tmp) = editor();
+    scene_with_every_kind_of_asset(&mut app, &tmp);
+    let before = jackdaw_bsn::parses_on_this_thread();
+    serve_scene(app.world_mut(), &instance(), None, "zone.bsn");
+    assert_eq!(jackdaw_bsn::parses_on_this_thread() - before, 1);
+    let before = jackdaw_bsn::parses_on_this_thread();
+    serve_scene(app.world_mut(), &instance(), None, "zone.bsn");
+    assert_eq!(
+        jackdaw_bsn::parses_on_this_thread() - before,
+        1,
+        "and so does a respawn"
+    );
+}
+
+fn add_unreadable_root(app: &mut App) {
+    let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Struct(
+        jackdaw_bsn::BsnStructData {
+            type_path: String::new(),
+            fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                name: "0".into(),
+                value: jackdaw_bsn::BsnValue::Int(1),
+            }]),
+        },
+    )]);
+    ast.add_to_roots(node);
+}
+
+/// Text that would not read back never goes to a game. It loads the file, and the
+/// user is told why the edits are missing.
+#[test]
+fn a_document_that_does_not_read_back_is_refused_with_a_message() {
+    let (mut app, _tmp) = editor();
+    add_unreadable_root(&mut app);
+    let answer = scene_answer(app.world_mut(), None, "zone.bsn");
+    assert_eq!(answer, use_file("zone.bsn"));
+    let notice = app.world().resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(notice.is_active(), "the user is told");
+    assert_eq!(
+        notice.text(),
+        "zone.bsn: unsaved edits not sent, the game reads the saved file"
+    );
+}
+
+/// A refused document leaves nothing counted as given: the game never got its text,
+/// so an edit of a material it embedded is not sent.
+#[test]
+fn a_refused_document_counts_nothing_as_given() {
+    let (mut app, _tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    add_unreadable_root(&mut app);
+    let key = instance();
+    let served = serve_scene(app.world_mut(), &key, None, "zone.bsn");
+    assert!(matches!(served.answer, SceneAnswer::UseFile { .. }));
+    collect_material_changes(app.world_mut(), std::slice::from_ref(&key));
+
+    let material = app.world().get::<Brush>(cube).expect("a brush").faces[0]
+        .material
+        .clone();
+    app.world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .get_mut(&material)
+        .expect("the material")
+        .perceptual_roughness = 0.9;
+    app.update();
+    let events = collect_material_changes(app.world_mut(), std::slice::from_ref(&key));
+    assert_eq!(asset_messages(&events), 0, "{events:?}");
+}
+
+/// A file counted as given at the refused answer still goes to the game: another
+/// answer on its way may be relying on it.
+#[test]
+fn a_refused_document_still_sends_the_files_it_names() {
+    let (mut app, _tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let file = create_material_file(&mut app, "name=granite roughness=0.6");
+    edit_brush(&mut app, cube, |brush| brush.faces[0].material = file);
+    add_unreadable_root(&mut app);
+    let served = serve_scene(app.world_mut(), &instance(), None, "zone.bsn");
+    assert!(matches!(served.answer, SceneAnswer::UseFile { .. }));
+    let Some(ControlEvent::AssetFiles { files }) = served.files else {
+        panic!("the file still goes: {:?}", served.files);
+    };
+    assert_eq!(files[0].0, "materials/granite.bsn");
+}
+
+/// A name the game got with an earlier answer is still held after a refusal, so an
+/// edit of the material keeps reaching the root that spawned from that answer.
+#[test]
+fn a_refused_document_keeps_a_name_the_game_held_earlier() {
+    let (mut app, _tmp) = editor();
+    let cube = cube_with_material(&mut app, 0.25);
+    let key = instance();
+    serve_scene(app.world_mut(), &key, None, "zone.bsn");
+    collect_material_changes(app.world_mut(), std::slice::from_ref(&key));
+    add_unreadable_root(&mut app);
+    let served = serve_scene(app.world_mut(), &key, None, "zone.bsn");
+    assert!(matches!(served.answer, SceneAnswer::UseFile { .. }));
+    collect_material_changes(app.world_mut(), std::slice::from_ref(&key));
+
+    let material = app.world().get::<Brush>(cube).expect("a brush").faces[0]
+        .material
+        .clone();
+    app.world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .get_mut(&material)
+        .expect("the material")
+        .perceptual_roughness = 0.9;
+    app.update();
+    let events = collect_material_changes(app.world_mut(), std::slice::from_ref(&key));
+    assert_eq!(asset_messages(&events), 1, "{events:?}");
+}

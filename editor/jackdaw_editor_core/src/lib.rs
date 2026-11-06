@@ -208,6 +208,7 @@ pub mod viewport_settings_menu;
 pub mod viewport_util;
 pub mod views;
 pub mod windowing;
+mod worker_task;
 pub mod workspace_dropdown;
 pub mod world_units;
 pub mod worn_material;

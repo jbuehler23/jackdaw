@@ -2,5 +2,6 @@
 *.bsn text eol=lf
 *.jsn text eol=lf
 *.meta text eol=lf
+tests/guards/*.txt text eol=lf
 # Signed extension fixtures are compared byte for byte.
 crates/jackdaw_package/tests/fixtures/* -text
