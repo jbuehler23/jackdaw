@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::binary::{self, BinaryError};
 use crate::header::read_asset_header;
+use crate::migrate::{migrates_from, read_stamp};
 use crate::{BsnLoadError, SceneBsnAst, UnparsableEmit, emit_scene, parse_bsn_text, parse_emitted};
 
 /// The extension a text document carries.
@@ -123,8 +124,20 @@ pub fn document_from_bytes(bytes: &[u8], path: &Path) -> Result<Document, Docume
     if binary::is_binary(bytes) {
         let decoded =
             binary::decode(bytes).map_err(|err| DocumentError::Binary(path.to_path_buf(), err))?;
+        let stale = decoded
+            .preamble
+            .as_deref()
+            .and_then(read_stamp)
+            .is_some_and(|stamp| migrates_from(&stamp.bevy));
+        // A migration rewrites text, so a stale document reads through its text.
+        let ast = if stale {
+            let text = document_as_text(&decoded.ast, decoded.preamble.as_deref());
+            parse_bsn_text(&text).map_err(|err| DocumentError::Parse(path.to_path_buf(), err))?
+        } else {
+            decoded.ast
+        };
         return Ok(Document {
-            ast: decoded.ast,
+            ast,
             preamble: decoded.preamble,
             form: DocumentForm::Binary,
         });

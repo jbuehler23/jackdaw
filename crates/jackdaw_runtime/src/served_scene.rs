@@ -254,7 +254,7 @@ mod tests {
 
     use super::*;
     use crate::pie::install_link;
-    use crate::{JackdawPlugin, ServedScene};
+    use crate::{JackdawPlugin, SceneRefused, ServedScene};
 
     const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
     const NAME: &str = "bevy_ecs::name::Name";
@@ -498,6 +498,54 @@ mod tests {
             .collect();
         asked.sort();
         assert_eq!(asked, vec!["hud.bsn", "levels/meadow.bsn"]);
+    }
+
+    /// Under Play the loader does not decode a binary scene either. Sent to the
+    /// file, the game decodes it at spawn, and a damaged one is refused there.
+    #[test]
+    fn a_game_under_play_decodes_a_binary_scene_only_when_sent_to_the_file() {
+        let (mut app, mut editor, dir) = game();
+        let ast = jackdaw_bsn::parse_bsn_text(&scene_text(3.0)).expect("the text parses");
+        let bytes = jackdaw_bsn::binary::encode(&ast, None);
+        std::fs::write(dir.path().join("whole.bsb"), &bytes).expect("a scene");
+        spawn_root(&mut app, "whole.bsb");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &use_file(request, "whole.bsb"));
+        update_until_spawned(&mut app);
+        assert_eq!(node_xs(&mut app), vec![3.0]);
+
+        let (mut app, mut editor, dir) = game();
+        std::fs::write(dir.path().join("damaged.bsb"), &bytes[..bytes.len() / 2]).expect("a scene");
+        let root = spawn_root(&mut app, "damaged.bsb");
+        let handle = app
+            .world()
+            .get::<JackdawSceneRoot>(root)
+            .expect("a root")
+            .0
+            .clone();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !app
+            .world()
+            .resource::<Assets<JackdawScene>>()
+            .contains(&handle)
+        {
+            assert!(Instant::now() < deadline, "the loader refused the bytes");
+            app.update();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &use_file(request, "damaged.bsb"));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while app.world().get::<SceneRefused>(root).is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the damaged scene was not refused"
+            );
+            app.update();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(node_xs(&mut app).is_empty());
     }
 
     #[test]

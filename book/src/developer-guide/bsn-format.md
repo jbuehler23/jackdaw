@@ -109,6 +109,32 @@ bevy_ecs::hierarchy::Children [
 - `bevy_ecs::hierarchy::Children [ .. ]` nests child nodes, and
   `--` separates sibling entities, there and between several
   roots.
+- Inside a list, a struct element leaves out the fields equal to
+  its type's default, so `jackdaw_geometry::BrushFaceData { .. }`
+  names only what differs. Outside a list a struct keeps every
+  field it was given, since a field left out of a prefab override
+  means "inherit".
+
+A field left out reads as its type's current default, in a list
+element and in a component alike. A scene does not record those
+defaults, so a default changed by a later version changes what older
+scenes mean. List elements leave fields out for every registered type
+with a `ReflectDefault`.
+
+Vectors and small structs are written on one line, and a list of
+them keeps one row per line, so a change to one row is one line of
+a diff. The fields of a `jackdaw_scene_types::types::Brush` carry
+no indentation. An `f32` is written as its shortest text, `0.1`
+rather than `0.10000000149011612`, and reads back with the same
+bits. An `f64`, and any float of a type the editor has not
+registered, is written exactly as held. Scenes in the older, longer
+form open as they are, and the next save writes this one, except that
+an `f32` inside an opaque value such as a `Range<f32>` stays long, with
+its value unchanged.
+
+A save says so in the status bar and the log when a scene holds
+more than about 512 KB of brush text, once for each scene unless it
+grows by half again.
 
 Scenes written for Bevy 0.19 separated siblings with `,`. They
 still open: the reader rewrites that separator before parsing,

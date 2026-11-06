@@ -448,7 +448,7 @@ fn a_duplicate_run_places_every_copy_in_one_undo_step() {
     let text = scene_text(&mut app);
     for x in 1..=5 {
         assert!(
-            text.contains(&format!("x: {x}.0,\n            y: 0.6")),
+            text.contains(&format!("x: {x}.0, y: 0.6")),
             "copy {x} is authored where it stands: {text}"
         );
     }

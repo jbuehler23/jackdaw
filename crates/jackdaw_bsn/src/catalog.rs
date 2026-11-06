@@ -161,11 +161,15 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
 
 /// [`load_bsn_scene`] for a document already parsed, so a caller can parse
 /// before clearing the scene it replaces.
-pub fn load_bsn_document(world: &mut World, ast: SceneBsnAst) -> LoadedBsnScene {
+pub fn load_bsn_document(world: &mut World, mut ast: SceneBsnAst) -> LoadedBsnScene {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let mut assets = Vec::new();
     {
         let reg = registry.read();
+        // A file written before list elements left out their defaults reads
+        // the same as one written after, so values in it compare equal to the
+        // values the live world writes back.
+        crate::compact_document(&mut ast, &reg);
         for root in asset_roots(&ast, &reg) {
             let Some(name) = ast.get_name(root).map(str::to_owned) else {
                 continue;
@@ -272,8 +276,8 @@ pub fn adopt_asset_roots(world: &mut World, source: &SceneBsnAst) -> Vec<String>
             match existing {
                 None => fresh.push((Some(root), entry)),
                 Some(existing)
-                    if asset_value_from_root(live, existing)
-                        == asset_value_from_root(source, root) =>
+                    if compact_asset_value(live, existing, &registry)
+                        == compact_asset_value(source, root, &registry) =>
                 {
                     fresh.push((None, entry));
                 }
@@ -347,6 +351,18 @@ fn load_asset_value(
     });
     let value = bsn_value_to_reflect(asset_value, type_id, reg, assets_ctx.as_ref())?;
     Some(reflect_asset.add(world, &*value))
+}
+
+/// [`asset_value_from_root`] in the form live values take, so two spellings of
+/// one value compare equal.
+fn compact_asset_value(
+    ast: &SceneBsnAst,
+    root: bevy::ecs::entity::Entity,
+    registry: &AppTypeRegistry,
+) -> Option<(String, BsnValue)> {
+    let (type_path, mut value) = asset_value_from_root(ast, root)?;
+    crate::document::compact_value(&mut value, &registry.read());
+    Some((type_path, value))
 }
 
 /// The type path and value a document root's first non-name patch names.
@@ -514,6 +530,69 @@ mod tests {
             .remove(0)
             .handle;
         assert_ne!(fresh.id(), first.id(), "with nothing held, a new asset");
+    }
+
+    #[derive(Reflect, Clone, Default)]
+    #[reflect(Default)]
+    struct TestLayer {
+        weight: f32,
+        tint: f32,
+    }
+
+    #[derive(Asset, Reflect, Clone, Default)]
+    #[reflect(Default)]
+    struct TestLayers {
+        layers: Vec<TestLayer>,
+    }
+
+    /// Older clipboard text spells every field of a list element and widens
+    /// its floats; it is still the value the scene holds.
+    #[test]
+    fn older_text_of_an_asset_the_scene_holds_is_adopted_as_the_same_asset() {
+        let mut world = World::new();
+        let registry = AppTypeRegistry::default();
+        {
+            let mut w = registry.write();
+            w.register::<TestLayers>();
+            w.register::<TestLayer>();
+            w.register::<Vec<TestLayer>>();
+            w.register_type_data::<TestLayers, ReflectAsset>();
+        }
+        world.insert_resource(registry);
+        world.insert_resource(Assets::<TestLayers>::default());
+        world.insert_resource(SceneBsnAst::default());
+
+        let handle = world.resource_mut::<Assets<TestLayers>>().add(TestLayers {
+            layers: vec![TestLayer {
+                weight: 0.0,
+                tint: 0.1,
+            }],
+        });
+        let mut current = SceneBsnAst::default();
+        append_assets_to_ast(
+            &mut current,
+            &world,
+            &[CatalogAssetRef {
+                name: "Shared".into(),
+                type_id: TypeId::of::<TestLayers>(),
+                asset_id: handle.id().untyped(),
+            }],
+        );
+        assert!(adopt_asset_roots(&mut world, &current).is_empty());
+
+        let path = "jackdaw_bsn::catalog::tests";
+        let older = parse_bsn_text(&format!(
+            "#Shared\n{path}::TestLayers {{ layers: [{path}::TestLayer {{ weight: 0.0, tint: {} }}] }}\n",
+            f64::from(0.1_f32)
+        ))
+        .expect("it parses");
+        assert!(adopt_asset_roots(&mut world, &older).is_empty());
+
+        let other = parse_bsn_text(&format!(
+            "#Shared\n{path}::TestLayers {{ layers: [{path}::TestLayer {{ tint: 0.75 }}] }}\n"
+        ))
+        .expect("it parses");
+        assert_eq!(adopt_asset_roots(&mut world, &other), vec!["Shared"]);
     }
 
     /// A copied subtree carries the assets its components name, and paste

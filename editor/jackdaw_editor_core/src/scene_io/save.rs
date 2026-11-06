@@ -360,6 +360,48 @@ fn write_prefab_files(
     Ok(())
 }
 
+/// How much brush text a scene holds before a save says it is large.
+const LARGE_BRUSH_TEXT_BYTES: usize = 512_000;
+
+/// How many times over a scene's brush text has to grow before a save says so
+/// again.
+const LARGE_BRUSH_TEXT_GROWTH: f64 = 1.5;
+
+/// The brush text size each large scene was last told about, by path. Kept for
+/// the session, so saving the same scene again does not repeat the message.
+#[derive(Resource, Default)]
+struct LargeSceneNotices(HashMap<String, usize>);
+
+/// Say a scene is large, once for each scene unless it grows well past what
+/// was last said.
+fn note_brush_text_size(world: &mut World, path: &str, bytes: usize) {
+    if !brush_notice_possible(world, path, bytes) {
+        return;
+    }
+    let mut notices = world.get_resource_or_init::<LargeSceneNotices>();
+    notices.0.insert(path.to_string(), bytes);
+    let message = large_scene_message(bytes);
+    warn!("{message}");
+    crate::status_bar::notify_warn(world, message);
+}
+
+/// Whether a scene whose brush text is at most `bytes` could earn a notice,
+/// which it cannot once the user was told of one nearly as large.
+fn brush_notice_possible(world: &World, path: &str, bytes: usize) -> bool {
+    if bytes < LARGE_BRUSH_TEXT_BYTES {
+        return false;
+    }
+    let told = world
+        .get_resource::<LargeSceneNotices>()
+        .and_then(|notices| notices.0.get(path).copied());
+    !told.is_some_and(|told| (bytes as f64) < told as f64 * LARGE_BRUSH_TEXT_GROWTH)
+}
+
+fn large_scene_message(bytes: usize) -> String {
+    let megabytes = bytes as f64 / 1_000_000.0;
+    format!("Large scene may be slow ({megabytes:.1} MB)")
+}
+
 /// The scene's sidecars and text, for [`save_scene_inner`]. Sidecars land
 /// first so a failed one leaves the tab dirty.
 fn write_scene_files(
@@ -375,8 +417,13 @@ fn write_scene_files(
             .unwrap_or_default();
         let body = emit_bsn_scene_for_file(world, &parent_path)
             .map_err(|refusal| BevyError::from(format!("cannot save {path}: {refusal}")))?;
-        jackdaw_bsn::parse_emitted(&body)
+        let parsed = jackdaw_bsn::parse_emitted(&body)
             .map_err(|err| BevyError::from(format!("cannot save {path}: {err}")))?;
+        if brush_notice_possible(world, path, body.len())
+            && !jackdaw_bsn::is_binary_path(Path::new(path))
+        {
+            note_brush_text_size(world, path, jackdaw_bsn::brush_text_len(&parsed));
+        }
         // Record the jackdaw + Bevy version at the disk boundary only, so
         // the in-memory undo / tab-swap snapshots from the same emitter stay
         // stamp-free.
@@ -1386,6 +1433,7 @@ fn rederive_handle_patches(
         asset_names: Some(&pass.names),
     };
     let mut kept: Vec<String> = Vec::new();
+    let mut defaults = jackdaw_bsn::TypeDefaults::new(&reg);
     for (entity, type_path) in &pass.touched {
         let Some(patches_entity) = ast.ast_for(*entity) else {
             continue;
@@ -1405,10 +1453,11 @@ fn rederive_handle_patches(
         let Some(component) = reflect_component.reflect(entity_ref) else {
             continue;
         };
-        let mut new_patch = jackdaw_bsn::component_to_bsn_patch_with_assets(
+        let mut new_patch = jackdaw_bsn::component_to_bsn_patch_in_pass(
             component.as_partial_reflect(),
             &reg,
             &ctx,
+            &mut defaults,
         );
         if holds_streamed_values(world, *entity) {
             let Some(mut document) = ast.get_patch(patch_entity).cloned() else {
@@ -1452,15 +1501,29 @@ fn keep_unresolved_references(
     use jackdaw_bsn::BsnPatch;
     match (authored, &mut *fresh) {
         (BsnPatch::Struct(authored), BsnPatch::Struct(fresh)) => {
-            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+            keep_in_fields(
+                reg,
+                type_id,
+                &authored.fields,
+                &mut fresh.fields,
+                false,
+                kept,
+            );
         }
         (BsnPatch::TupleStruct(authored), BsnPatch::TupleStruct(fresh)) => {
-            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+            keep_in_values(
+                reg,
+                type_id,
+                &authored.values,
+                &mut fresh.values,
+                false,
+                kept,
+            );
         }
         (BsnPatch::Struct(authored), BsnPatch::Type(type_path)) => {
             let type_path = type_path.clone();
             let mut fields = jackdaw_bsn::BsnStructFields::default();
-            keep_in_fields(reg, type_id, &authored.fields, &mut fields, kept);
+            keep_in_fields(reg, type_id, &authored.fields, &mut fields, false, kept);
             if !fields.0.is_empty() {
                 *fresh = BsnPatch::Struct(jackdaw_bsn::BsnStructData { type_path, fields });
             }
@@ -1474,6 +1537,7 @@ fn keep_in_fields(
     type_id: std::any::TypeId,
     authored: &jackdaw_bsn::BsnStructFields,
     fresh: &mut jackdaw_bsn::BsnStructFields,
+    in_list: bool,
     kept: &mut Vec<String>,
 ) {
     let Some(TypeInfo::Struct(info)) = reg
@@ -1492,7 +1556,7 @@ fn keep_in_fields(
         let Some(was) = authored.0.iter().find(|other| other.name == field.name) else {
             continue;
         };
-        keep_in_value(reg, field_type, &was.value, &mut field.value, kept);
+        keep_in_value(reg, field_type, &was.value, &mut field.value, in_list, kept);
     }
     for was in &authored.0 {
         if fresh.0.iter().any(|field| field.name == was.name) {
@@ -1504,19 +1568,68 @@ fn keep_in_fields(
         else {
             continue;
         };
-        let jackdaw_bsn::BsnValue::String(reference) = &was.value else {
+        // Only a list element leaves a struct out for being at its default, so
+        // only there can a reference be inside what the live value left out.
+        let references = match &was.value {
+            jackdaw_bsn::BsnValue::Struct(_) if !in_list => None,
+            value => only_references(reg, field_type, value),
+        };
+        let Some(references) = references else {
             continue;
         };
-        if reference.is_empty() || !crate::typed_values::takes_asset_path(reg, field_type) {
-            continue;
-        }
-        if !kept.contains(reference) {
-            kept.push(reference.clone());
-        }
+        note_references(reg, field_type, &references, kept);
         fresh.0.push(jackdaw_bsn::BsnField {
             name: was.name.clone(),
-            value: was.value.clone(),
+            value: references,
         });
+    }
+}
+
+/// Add the references in `value`, the result of [`only_references`], to `kept`.
+fn note_references(
+    reg: &TypeRegistry,
+    type_id: std::any::TypeId,
+    value: &jackdaw_bsn::BsnValue,
+    kept: &mut Vec<String>,
+) {
+    use jackdaw_bsn::BsnValue;
+    match value {
+        BsnValue::String(reference) => {
+            if !reference.is_empty()
+                && crate::typed_values::takes_asset_path(reg, type_id)
+                && !kept.contains(reference)
+            {
+                kept.push(reference.clone());
+            }
+        }
+        BsnValue::Struct(data) => {
+            for field in &data.fields.0 {
+                if let Some(field_type) =
+                    named_field_type(reg, type_id, &data.type_path, &field.name)
+                {
+                    note_references(reg, field_type, &field.value, kept);
+                }
+            }
+        }
+        BsnValue::TupleStruct(data) => {
+            for (index, item) in data.values.iter().enumerate() {
+                if let Some(item_type) = tuple_field_type(reg, type_id, &data.type_path, index)
+                    && only_references(reg, item_type, item).is_some()
+                {
+                    note_references(reg, item_type, item, kept);
+                }
+            }
+        }
+        BsnValue::List(items) => {
+            for (index, item) in items.iter().enumerate() {
+                if let Some(item_type) = list_item_type(reg, type_id, index)
+                    && only_references(reg, item_type, item).is_some()
+                {
+                    note_references(reg, item_type, item, kept);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1525,6 +1638,7 @@ fn keep_in_values(
     type_id: std::any::TypeId,
     authored: &[jackdaw_bsn::BsnValue],
     fresh: &mut [jackdaw_bsn::BsnValue],
+    in_list: bool,
     kept: &mut Vec<String>,
 ) {
     let Some(TypeInfo::TupleStruct(info)) = reg
@@ -1543,7 +1657,7 @@ fn keep_in_values(
         let Some(was) = authored.get(index) else {
             continue;
         };
-        keep_in_value(reg, field_type, was, value, kept);
+        keep_in_value(reg, field_type, was, value, in_list, kept);
     }
 }
 
@@ -1552,6 +1666,7 @@ fn keep_in_value(
     type_id: std::any::TypeId,
     authored: &jackdaw_bsn::BsnValue,
     fresh: &mut jackdaw_bsn::BsnValue,
+    in_list: bool,
     kept: &mut Vec<String>,
 ) {
     use jackdaw_bsn::BsnValue;
@@ -1569,24 +1684,48 @@ fn keep_in_value(
     }
     match (authored, fresh) {
         (BsnValue::Struct(authored), BsnValue::Struct(fresh)) => {
-            keep_in_fields(reg, type_id, &authored.fields, &mut fresh.fields, kept);
+            keep_in_fields(
+                reg,
+                type_id,
+                &authored.fields,
+                &mut fresh.fields,
+                in_list,
+                kept,
+            );
+        }
+        // A list element at its default comes back as its bare type.
+        (BsnValue::Struct(authored), fresh @ BsnValue::Type(_)) if matches!(&*fresh, BsnValue::Type(path) if *path == authored.type_path) =>
+        {
+            let mut fields = jackdaw_bsn::BsnStructFields::default();
+            keep_in_fields(reg, type_id, &authored.fields, &mut fields, in_list, kept);
+            if !fields.0.is_empty() {
+                *fresh = BsnValue::Struct(jackdaw_bsn::BsnStructData {
+                    type_path: authored.type_path.clone(),
+                    fields,
+                });
+            }
         }
         (BsnValue::TupleStruct(authored), BsnValue::TupleStruct(fresh)) => {
-            keep_in_values(reg, type_id, &authored.values, &mut fresh.values, kept);
+            keep_in_values(
+                reg,
+                type_id,
+                &authored.values,
+                &mut fresh.values,
+                in_list,
+                kept,
+            );
         }
         (BsnValue::List(authored), BsnValue::List(fresh)) => {
-            let Some(TypeInfo::List(info)) = reg
-                .get(type_id)
-                .map(bevy::reflect::TypeRegistration::type_info)
-            else {
+            if !lines_up_by_index(reg, type_id) {
                 return;
-            };
-            let item = info.item_ty().id();
+            }
             for (index, value) in fresh.iter_mut().enumerate() {
-                let Some(was) = authored.get(index) else {
+                let (Some(item), Some(was)) =
+                    (list_item_type(reg, type_id, index), authored.get(index))
+                else {
                     continue;
                 };
-                keep_in_value(reg, item, was, value, kept);
+                keep_in_value(reg, item, was, value, true, kept);
             }
         }
         _ => {}
@@ -1776,8 +1915,9 @@ fn take_in_fields(
 
 /// `value`, a field the document leaves out, reduced to the references it holds:
 /// a struct names only the fields it sets, so its other fields keep reading back
-/// as their defaults. `None` when it holds none, or none that can be separated
-/// from the values around it.
+/// as their defaults. A tuple struct, array or tuple has no way to leave a place
+/// out, so its other places stay as `value` holds them. `None` when it holds no
+/// reference, or none that can be separated from the values around it.
 fn only_references(
     reg: &TypeRegistry,
     type_id: std::any::TypeId,
@@ -1816,8 +1956,54 @@ fn only_references(
                 })
             })
         }
+        BsnValue::TupleStruct(data)
+            if matches!(
+                reg.get(type_id)
+                    .map(bevy::reflect::TypeRegistration::type_info),
+                Some(TypeInfo::TupleStruct(_))
+            ) =>
+        {
+            let values = references_in_place(reg, &data.values, |index| {
+                tuple_field_type(reg, type_id, &data.type_path, index)
+            })?;
+            Some(BsnValue::TupleStruct(jackdaw_bsn::BsnTupleStructData {
+                type_path: data.type_path.clone(),
+                values,
+            }))
+        }
+        BsnValue::List(items)
+            if matches!(
+                reg.get(type_id)
+                    .map(bevy::reflect::TypeRegistration::type_info),
+                Some(TypeInfo::Array(_) | TypeInfo::Tuple(_))
+            ) =>
+        {
+            references_in_place(reg, items, |index| list_item_type(reg, type_id, index))
+                .map(BsnValue::List)
+        }
         _ => None,
     }
+}
+
+/// `items` with each one that holds references reduced to them, or `None` when
+/// none does.
+fn references_in_place(
+    reg: &TypeRegistry,
+    items: &[jackdaw_bsn::BsnValue],
+    item_type: impl Fn(usize) -> Option<std::any::TypeId>,
+) -> Option<Vec<jackdaw_bsn::BsnValue>> {
+    let reduced: Vec<Option<jackdaw_bsn::BsnValue>> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| only_references(reg, item_type(index)?, item))
+        .collect();
+    reduced.iter().any(Option::is_some).then(|| {
+        reduced
+            .into_iter()
+            .zip(items)
+            .map(|(reference, item)| reference.unwrap_or_else(|| item.clone()))
+            .collect()
+    })
 }
 
 fn take_in_values(
@@ -1855,6 +2041,12 @@ fn take_in_value(
         return;
     }
     match (live, document) {
+        // A list element at its default is held as its bare type.
+        (BsnValue::Struct(data), document @ BsnValue::Type(_)) if matches!(&*document, BsnValue::Type(path) if *path == data.type_path) => {
+            if let Some(references) = only_references(reg, type_id, live) {
+                *document = references;
+            }
+        }
         (BsnValue::Struct(live), BsnValue::Struct(document))
             if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
         {
@@ -1903,6 +2095,16 @@ fn take_in_value(
         }
         _ => {}
     }
+}
+
+/// Whether the places of a value of `type_id` a document holds as a list keep
+/// their order, which a set's do not.
+fn lines_up_by_index(reg: &TypeRegistry, type_id: std::any::TypeId) -> bool {
+    matches!(
+        reg.get(type_id)
+            .map(bevy::reflect::TypeRegistration::type_info),
+        Some(TypeInfo::List(_) | TypeInfo::Array(_) | TypeInfo::Tuple(_))
+    )
 }
 
 /// The type of item `index` of a value the document writes as a list: a list,
@@ -2295,6 +2497,37 @@ mod tests {
             format!("{named:?}"),
             "an overlaid entity"
         );
+    }
+
+    #[test]
+    fn a_large_scene_is_told_about_once_until_it_grows_well_past_that() {
+        let mut world = World::new();
+        world.insert_resource(crate::status_bar::StatusNotice::default());
+        let notice = |world: &mut World| {
+            let mut notice = world.resource_mut::<crate::status_bar::StatusNotice>();
+            let text = notice.is_active().then(|| notice.text().to_string());
+            *notice = crate::status_bar::StatusNotice::default();
+            text
+        };
+
+        note_brush_text_size(&mut world, "a/scene.bsn", LARGE_BRUSH_TEXT_BYTES - 1);
+        assert_eq!(notice(&mut world), None, "a smaller scene says nothing");
+
+        note_brush_text_size(&mut world, "a/scene.bsn", 1_000_000);
+        let said = notice(&mut world).expect("a large scene says so");
+        assert_eq!(said, "Large scene may be slow (1.0 MB)");
+
+        note_brush_text_size(&mut world, "a/scene.bsn", 1_400_000);
+        assert_eq!(notice(&mut world), None, "saving again does not nag");
+
+        note_brush_text_size(&mut world, "a/scene.bsn", 1_500_000);
+        assert!(
+            notice(&mut world).is_some(),
+            "much larger, so it says again"
+        );
+
+        note_brush_text_size(&mut world, "a/other.bsn", 600_000);
+        assert!(notice(&mut world).is_some(), "each scene has its own");
     }
 
     #[test]

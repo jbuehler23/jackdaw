@@ -223,6 +223,9 @@ pub fn entity_separators(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// The Bevy minor that last changed the form of a saved value, beyond renames.
+const LATEST_FORM_CHANGE: &str = "0.20";
+
 /// Apply type-path migrations to raw scene text for a scene written under
 /// `from_bevy`. Each Bevy minor's renames apply only to scenes older than
 /// that minor, so opening an old scene rewrites every rename between its
@@ -240,12 +243,21 @@ pub fn migrate_type_paths<'a>(text: &'a str, from_bevy: &str) -> Cow<'a, str> {
             }
         }
     }
-    if bevy_minor_lt(from_bevy, "0.20") {
+    if bevy_minor_lt(from_bevy, LATEST_FORM_CHANGE) {
         out = circular_corner_radii(out);
         // Bevy 0.20 keeps an editable text's scroll in `EditableText` itself.
         out = without_component(out, "bevy_ui::widget::text_input_layout::TextScroll(");
     }
     out
+}
+
+/// Whether [`migrate_type_paths`] has anything to do for a scene written under
+/// `from_bevy`.
+pub(crate) fn migrates_from(from_bevy: &str) -> bool {
+    bevy_minor_lt(from_bevy, LATEST_FORM_CHANGE)
+        || RENAMES
+            .iter()
+            .any(|(introduced_in, _)| bevy_minor_lt(from_bevy, introduced_in))
 }
 
 /// Drop every line that holds only the tuple component `opening` starts, as a

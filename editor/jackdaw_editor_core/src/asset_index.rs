@@ -624,6 +624,15 @@ fn apply_walk(world: &mut World, walk: AssetWalk) -> AssetRescan {
 /// the walk then finds them held. Once a walk has landed the index is complete
 /// and this does nothing.
 pub fn index_files_named(world: &mut World, text: &str) {
+    index_files_named_in(world, || std::borrow::Cow::Borrowed(text));
+}
+
+/// [`index_files_named`] for text that costs something to produce, which is
+/// only produced when there is indexing to do.
+pub fn index_files_named_in<'a>(
+    world: &mut World,
+    text: impl FnOnce() -> std::borrow::Cow<'a, str>,
+) {
     if world.get_resource_or_init::<AssetWalks>().0 > 0 {
         return;
     }
@@ -652,8 +661,9 @@ pub fn index_files_named(world: &mut World, text: &str) {
         .bypass_change_detection()
         .set_documents(documents);
 
+    let text = text();
     let mut added = false;
-    for reference in crate::asset_files::spelled_references(text) {
+    for reference in crate::asset_files::spelled_references(&text) {
         let index = world.resource::<AssetIndex>();
         let Some(relative) = referenced_path(index, &assets, &reference) else {
             continue;

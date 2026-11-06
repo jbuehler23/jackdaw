@@ -1678,7 +1678,7 @@ pub fn try_set_bsn_field(
                 .map_or("", bevy::reflect::TypeInfo::type_path);
             let rest = spell_steps(&steps[at..]);
             let segments: Vec<&str> = rest.split('.').filter(|s| !s.is_empty()).collect();
-            set_nested_value(&mut whole, &segments, value, holder_type, registry)
+            set_nested_value(&mut whole, &segments, value, holder_type, false, registry)
                 .map_err(|refusal| refusal.for_path(type_path, field_path))?;
             (spell_steps(&steps[..at]), whole)
         }
@@ -1725,8 +1725,15 @@ pub fn try_set_bsn_field(
     };
 
     let segments: Vec<&str> = field_path.split('.').filter(|s| !s.is_empty()).collect();
-    set_nested_value(&mut root, &segments, value, &root_type_path, registry)
-        .map_err(|refusal| refusal.for_path(type_path, &field_path))?;
+    set_nested_value(
+        &mut root,
+        &segments,
+        value,
+        &root_type_path,
+        false,
+        registry,
+    )
+    .map_err(|refusal| refusal.for_path(type_path, &field_path))?;
 
     let Some(written) = value_to_patch(root) else {
         return Err(Refusal::Missing.for_path(type_path, &field_path));
@@ -2000,6 +2007,72 @@ fn index_into_value<'a>(value: &'a BsnValue, inner: &str) -> Option<&'a BsnValue
     }
 }
 
+/// What a field left out of a list element holds: the default of the struct
+/// that leaves it out, or of the type a bare value names. A list replaces whole,
+/// so unlike a field left out of a sparse patch it has a value of its own, and
+/// that value is what an edit to the field undoes to.
+///
+/// `None` when the document holds the field, the path does not run through a
+/// list, or no element is there.
+pub fn omitted_list_field(
+    ast: &SceneBsnAst,
+    patches_entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    registry: &TypeRegistry,
+) -> Option<BsnValue> {
+    let steps = path_steps(field_path)?;
+    let patch = ast.find_patch_by_type_path(patches_entity, type_path)?;
+    let root = patch_to_value(ast.get_patch(patch)?)?;
+    let mut held = &root;
+    let mut in_list = false;
+    for (at, step) in steps.iter().enumerate() {
+        if in_list && let BsnValue::Type(path) = held {
+            return default_at(path, &steps[at..], registry);
+        }
+        match navigate_step(held, *step) {
+            Some(next) => {
+                in_list |= matches!(held, BsnValue::List(_));
+                held = next;
+            }
+            None if in_list => {
+                let BsnValue::Struct(data) = held else {
+                    return None;
+                };
+                return default_at(&data.type_path, &steps[at..], registry);
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
+/// What a field of a document holds: the value written there or, where a list
+/// element leaves the field out, the [`omitted_list_field`] it reads back as.
+pub fn held_bsn_field(
+    ast: &SceneBsnAst,
+    patches_entity: Entity,
+    type_path: &str,
+    field_path: &str,
+    registry: &TypeRegistry,
+) -> Option<BsnValue> {
+    get_bsn_field(ast, patches_entity, type_path, field_path)
+        .or_else(|| omitted_list_field(ast, patches_entity, type_path, field_path, registry))
+}
+
+/// The value `steps` reach in the default of the type at `type_path`.
+fn default_at(type_path: &str, steps: &[PathStep], registry: &TypeRegistry) -> Option<BsnValue> {
+    let default = registry
+        .get_with_type_path(type_path)?
+        .data::<ReflectDefault>()?
+        .default();
+    let mut at = default.as_partial_reflect();
+    for step in steps {
+        at = reflect_step(at, *step, registry)?;
+    }
+    BsnValue::try_from_reflect(at, registry).ok()
+}
+
 /// Remove one named field from a component's sparse patch: the inverse of a
 /// [`set_bsn_field`] that authored a previously-absent field. Only dotted
 /// struct paths are supported; the leaf field is dropped from its enclosing
@@ -2058,12 +2131,18 @@ fn set_nested_value(
     segments: &[&str],
     value: BsnValue,
     current_type_path: &str,
+    in_list: bool,
     registry: &TypeRegistry,
 ) -> Result<(), Refusal> {
     let Some((segment, rest)) = segments.split_first() else {
         *current = value;
         return Ok(());
     };
+    if let BsnValue::Type(path) = &*current
+        && let Some(seeded) = empty_struct_value_for_type(path, registry)
+    {
+        *current = seeded;
+    }
 
     // Bracket navigation: `name[inner]` or `[inner]`.
     if let Some(bracket_pos) = segment.find('[') {
@@ -2072,15 +2151,30 @@ fn set_nested_value(
         }
         let key = &segment[..bracket_pos];
         let inner = &segment[bracket_pos + 1..segment.len() - 1];
+        if in_list
+            && !key.is_empty()
+            && let BsnValue::Struct(data) = &mut *current
+            && !data.fields.0.iter().any(|field| field.name == key)
+            && let Some(seeded) = owner_default_field(&data.type_path, key, registry)
+        {
+            data.fields.0.push(BsnField {
+                name: key.to_string(),
+                value: seeded,
+            });
+        }
         let base: Option<&mut BsnValue> = if key.is_empty() {
             Some(current)
         } else {
             navigate_named_mut(current, key)
         };
+        let is_list = matches!(base, Some(BsnValue::List(_)));
         let target = base
             .and_then(|base| index_into_value_mut(base, inner))
             .ok_or(Refusal::Missing)?;
-        return set_nested_value(target, rest, value, "", registry);
+        return match is_list {
+            true => set_in_list_element(target, rest, value, registry),
+            false => set_nested_value(target, rest, value, "", in_list, registry),
+        };
     }
 
     match current {
@@ -2101,14 +2195,22 @@ fn set_nested_value(
                 }
                 return Ok(());
             }
+            let owner = match current_type_path {
+                "" => data.type_path.as_str(),
+                known => known,
+            };
             let nested_type_path =
-                get_field_type_path(current_type_path, segment, registry).unwrap_or_default();
+                get_field_type_path(owner, segment, registry).unwrap_or_default();
             let pos = match data.fields.0.iter().position(|f| f.name == *segment) {
                 Some(p) => p,
                 None => {
+                    let omitted = in_list
+                        .then(|| owner_default_field(owner, segment, registry))
+                        .flatten();
                     data.fields.0.push(BsnField {
                         name: segment.to_string(),
-                        value: empty_struct_value_for_type(&nested_type_path, registry)
+                        value: omitted
+                            .or_else(|| empty_struct_value_for_type(&nested_type_path, registry))
                             .ok_or(Refusal::Unseeded)?,
                     });
                     data.fields.0.len() - 1
@@ -2116,10 +2218,16 @@ fn set_nested_value(
             };
             let field = &mut data.fields.0[pos];
             if !is_container(&field.value) {
-                field.value = empty_struct_value_for_type(&nested_type_path, registry)
-                    .ok_or(Refusal::Unseeded)?;
+                field.value = seed_in_place_of(&field.value, &nested_type_path, registry)?;
             }
-            set_nested_value(&mut field.value, rest, value, &nested_type_path, registry)
+            set_nested_value(
+                &mut field.value,
+                rest,
+                value,
+                &nested_type_path,
+                in_list,
+                registry,
+            )
         }
         BsnValue::TupleStruct(data) => {
             let index = segment.parse::<usize>().map_err(|_| Refusal::Missing)?;
@@ -2144,14 +2252,15 @@ fn set_nested_value(
                 return Ok(());
             }
             if !is_container(&data.values[index]) {
-                data.values[index] = empty_struct_value_for_type(&nested_type_path, registry)
-                    .ok_or(Refusal::Unseeded)?;
+                data.values[index] =
+                    seed_in_place_of(&data.values[index], &nested_type_path, registry)?;
             }
             set_nested_value(
                 &mut data.values[index],
                 rest,
                 value,
                 &nested_type_path,
+                in_list,
                 registry,
             )
         }
@@ -2161,17 +2270,68 @@ fn set_nested_value(
                 .ok()
                 .and_then(|i| items.get_mut(i))
                 .ok_or(Refusal::Missing)?;
-            set_nested_value(target, rest, value, "", registry)
+            set_in_list_element(target, rest, value, registry)
         }
         BsnValue::Map(entries) => {
             let (_, target) = entries
                 .iter_mut()
                 .find(|(k, _)| key_matches(k, segment))
                 .ok_or(Refusal::Missing)?;
-            set_nested_value(target, rest, value, "", registry)
+            set_nested_value(target, rest, value, "", in_list, registry)
         }
         _ => Err(Refusal::Missing),
     }
+}
+
+/// Write through one element of a list. An element leaves out fields at their
+/// defaults, and a bare element leaves out all of them, so the write names the
+/// element's own type to seed what it reaches through, an omitted field starting
+/// from the value it holds, and what it leaves at a default comes out again.
+fn set_in_list_element(
+    target: &mut BsnValue,
+    rest: &[&str],
+    value: BsnValue,
+    registry: &TypeRegistry,
+) -> Result<(), Refusal> {
+    if !rest.is_empty()
+        && let BsnValue::Type(type_path) = &*target
+        && let Some(seeded) = empty_struct_value_for_type(type_path, registry)
+    {
+        *target = seeded;
+    }
+    let item_type_path = match &*target {
+        BsnValue::Struct(data) => data.type_path.clone(),
+        BsnValue::TupleStruct(data) => data.type_path.clone(),
+        _ => String::new(),
+    };
+    set_nested_value(target, rest, value, &item_type_path, true, registry)?;
+    crate::document::compact_list_element(
+        target,
+        &mut crate::document::TypeDefaults::new(registry),
+    );
+    Ok(())
+}
+
+/// What `owner`, part of a list element, holds in a field it leaves out.
+fn owner_default_field(owner: &str, field: &str, registry: &TypeRegistry) -> Option<BsnValue> {
+    default_at(owner, &[PathStep::Name(field)], registry)
+}
+
+/// The empty struct a write goes through in place of `held`: of the type a bare
+/// value names, which holds that type's default whatever its owner defaults to,
+/// else of the type the path expects there.
+fn seed_in_place_of(
+    held: &BsnValue,
+    expected_type_path: &str,
+    registry: &TypeRegistry,
+) -> Result<BsnValue, Refusal> {
+    let named = match held {
+        BsnValue::Type(path) => empty_struct_value_for_type(path, registry),
+        _ => None,
+    };
+    named
+        .or_else(|| empty_struct_value_for_type(expected_type_path, registry))
+        .ok_or(Refusal::Unseeded)
 }
 
 fn is_container(value: &BsnValue) -> bool {

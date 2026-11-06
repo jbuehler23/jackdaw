@@ -274,3 +274,158 @@ fn field_set_writes_into_an_enum_variant_at_its_default() {
     ));
     assert_eq!(history_len(&app), depth + 2);
 }
+
+const BRUSH: &str = "jackdaw_scene_types::types::Brush";
+
+fn history(app: &mut App, id: &'static str) {
+    app.world_mut()
+        .operator(id)
+        .call()
+        .unwrap_or_else(|err| panic!("{id}: {err}"))
+        .assert_finished();
+    app.update();
+}
+
+fn scene_text(app: &mut App) -> String {
+    jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), std::path::Path::new("."))
+        .expect("the scene emits")
+}
+
+fn crate_face(app: &mut App, read: impl Fn(&jackdaw_geometry::BrushFaceData) -> f32) -> f32 {
+    let world = app.world_mut();
+    let mut brushes = world.query::<(&Name, &jackdaw_scene_types::Brush)>();
+    brushes
+        .iter(world)
+        .find(|(name, _)| name.as_str() == "Crate")
+        .map(|(_, brush)| read(&brush.faces[0]))
+        .expect("the crate is in the scene")
+}
+
+fn scene_with_a_crate() -> (App, Entity) {
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .operator("scene.new")
+        .call()
+        .expect("scene.new dispatches")
+        .assert_finished();
+    app.update();
+    app.world_mut()
+        .operator("entity.add.cube")
+        .param("name", "Crate".to_owned())
+        .call()
+        .expect("entity.add.cube dispatches")
+        .assert_finished();
+    app.update();
+    let world = app.world_mut();
+    let mut brushes = world.query::<(Entity, &Name)>();
+    let entity = brushes
+        .iter(world)
+        .find(|(_, name)| name.as_str() == "Crate")
+        .map(|(entity, _)| entity)
+        .expect("the crate spawned");
+    (app, entity)
+}
+
+/// `edit` writes through a field the document leaves out of a list element;
+/// `read` is that field. The edit undoes, redoes and survives a save, and the
+/// undo takes it back out of the file.
+fn an_edit_undoes_and_saves(
+    edit: impl Fn(&mut App, Entity),
+    read: impl Fn(&jackdaw_geometry::BrushFaceData) -> f32 + Copy,
+    was: f32,
+    now: f32,
+) {
+    let (mut app, entity) = scene_with_a_crate();
+    let before = scene_text(&mut app);
+    assert_eq!(crate_face(&mut app, read), was);
+
+    edit(&mut app, entity);
+    assert_eq!(crate_face(&mut app, read), now);
+    assert_ne!(
+        scene_text(&mut app),
+        before,
+        "the edit reached the document"
+    );
+
+    history(&mut app, "history.undo");
+    assert_eq!(
+        crate_face(&mut app, read),
+        was,
+        "undo restores the live value"
+    );
+    assert_eq!(scene_text(&mut app), before, "undo restores the document");
+
+    history(&mut app, "history.redo");
+    assert_eq!(crate_face(&mut app, read), now, "redo writes it again");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("scene.bsn");
+    let reload = |app: &mut App| {
+        let text = jackdaw::scene_io::emit_bsn_scene_for_file(app.world_mut(), dir.path())
+            .expect("the scene emits");
+        std::fs::write(&path, text).expect("the scene writes");
+        jackdaw::scene_io::load_scene_from_file(app.world_mut(), &path);
+        app.update();
+    };
+    reload(&mut app);
+    assert_eq!(crate_face(&mut app, read), now, "the edit is in the file");
+
+    let (mut app, entity) = scene_with_a_crate();
+    let clean = scene_text(&mut app);
+    edit(&mut app, entity);
+    history(&mut app, "history.undo");
+    reload(&mut app);
+    assert_eq!(
+        crate_face(&mut app, read),
+        was,
+        "the undone edit is not in the file"
+    );
+    assert_eq!(scene_text(&mut app), clean);
+}
+
+#[test]
+fn an_operator_edit_to_a_field_a_list_element_leaves_out_undoes() {
+    an_edit_undoes_and_saves(
+        |app, entity| set_field(app, entity, BRUSH, "faces[0].uv_rotation", "1"),
+        |face| face.uv_rotation,
+        0.0,
+        1.0,
+    );
+}
+
+#[test]
+fn an_operator_edit_through_a_nested_field_a_list_element_leaves_out_undoes() {
+    an_edit_undoes_and_saves(
+        |app, entity| set_field(app, entity, BRUSH, "faces[0].uv_offset.x", "0.5"),
+        |face| face.uv_offset.x,
+        0.0,
+        0.5,
+    );
+}
+
+#[test]
+fn an_inspector_edit_to_a_field_a_list_element_leaves_out_undoes() {
+    an_edit_undoes_and_saves(
+        |app, entity| {
+            assert!(jackdaw::commands::field_edit_commit_on(
+                app.world_mut(),
+                entity,
+                BRUSH,
+                "faces[0].uv_rotation",
+                &serde_json::json!(2.0),
+            ));
+            app.update();
+        },
+        |face| face.uv_rotation,
+        0.0,
+        2.0,
+    );
+}
+
+#[test]
+fn writing_the_value_an_omitted_list_field_already_holds_records_nothing() {
+    let (mut app, entity) = scene_with_a_crate();
+    let depth = history_len(&app);
+    set_field(&mut app, entity, BRUSH, "faces[0].uv_rotation", "0");
+    assert_eq!(history_len(&app), depth);
+}

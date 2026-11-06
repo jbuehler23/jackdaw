@@ -342,10 +342,6 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         }
         let scene_kind = declared_scene_kind(&authored);
         pending_upgrade = upgrade;
-        let resolved_text = match &resolved {
-            Some(resolved) => jackdaw_bsn::emit_scene(resolved),
-            None => bsn_text.clone(),
-        };
 
         // The document passed the gate, so the conversion can be written.
         if let Some(pending) = pending_conversion {
@@ -368,9 +364,18 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
         }
 
         clear_scene_entities(world);
-        crate::asset_index::index_files_named(world, &resolved_text);
+        crate::asset_index::index_files_named_in(world, || match &resolved {
+            Some(resolved) => std::borrow::Cow::Owned(jackdaw_bsn::emit_scene(resolved)),
+            None => std::borrow::Cow::Borrowed(bsn_text.as_str()),
+        });
 
-        match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
+        // The resolved document is spawned as it stands, not written out and
+        // read back. Without one the file's own text is what spawns.
+        let loading = match resolved {
+            Some(resolved) => Ok(jackdaw_bsn::load_bsn_document(world, resolved)),
+            None => jackdaw_bsn::load_bsn_scene(world, &bsn_text),
+        };
+        match loading {
             Ok(loaded) => {
                 // Fill the JSN AST so the remaining mirror readers keep
                 // working; the loaded entities already carry their BSN

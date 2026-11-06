@@ -52,13 +52,14 @@ pub use delta::{apply_deltas, bsn_value_eq, shallow_diff};
 
 pub use document::{
     AstNodeRef, BsnAssetContext, BsnField, BsnPatch, BsnPatches, BsnStructData, BsnStructFields,
-    BsnTupleStructData, BsnValue, MAX_AST_DEPTH, SceneBsnAst, UnencodableValue, bsn_value_as_int,
-    clone_node_into, clone_subtree_into, component_to_bsn_patch,
-    component_to_bsn_patch_with_assets, is_enum_variant_of, patch_type_path, type_paths_include,
+    BsnTupleStructData, BsnValue, MAX_AST_DEPTH, SceneBsnAst, TypeDefaults, UnencodableValue,
+    bsn_value_as_int, clone_node_into, clone_subtree_into, compact_document,
+    component_to_bsn_patch, component_to_bsn_patch_in_pass, component_to_bsn_patch_with_assets,
+    is_enum_variant_of, patch_type_path, type_paths_include,
 };
 pub use emitter::{
-    UnparsableEmit, emit_entities, emit_entity, emit_entity_without_children, emit_scene,
-    emit_scene_checked, emit_value_text, parse_emitted,
+    UnparsableEmit, brush_text_len, emit_entities, emit_entity, emit_entity_without_children,
+    emit_scene, emit_scene_checked, emit_value_text, parse_emitted,
 };
 pub use loader::{BsnLoadError, parse_bsn_text, parses_on_this_thread};
 pub use retired::{RETIRED_UI_PREFIX, RetiredUiComponents, reject_retired_ui_components};
@@ -67,8 +68,8 @@ pub use apply::{
     AstDirty, BsnApplyAssets, BsnAssetPaths, BsnProjectAssets, BsnSceneAssets, DocumentOnlyTypes,
     FieldWriteError, UnresolvedTypes, apply_ast_to_ecs, apply_component_patch,
     apply_dirty_ast_patches, apply_reference_map, bsn_value_to_reflect, get_bsn_field,
-    remove_bsn_field, set_bsn_field, spawn_ast_node, spawn_from_ast, try_set_bsn_field,
-    whole_value_write,
+    held_bsn_field, omitted_list_field, remove_bsn_field, set_bsn_field, spawn_ast_node,
+    spawn_from_ast, try_set_bsn_field, whole_value_write,
 };
 
 pub use sync::{

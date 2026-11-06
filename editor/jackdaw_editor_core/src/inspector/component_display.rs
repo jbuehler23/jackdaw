@@ -973,6 +973,7 @@ fn build_inspector_cards(
                 node,
                 type_path,
                 None,
+                &registry,
             )
         });
 
