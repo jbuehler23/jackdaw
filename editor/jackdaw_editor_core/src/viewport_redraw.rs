@@ -5,13 +5,15 @@
 //! otherwise once every [`IDLE_REDRAW`], and asks for frames while anything
 //! is still moving on its own: a fly, dolly or other move of the camera, a
 //! modal tool, a long task, assets or meshes arriving, a scripted pointer or
-//! key gesture still playing, the short settle after the last input, or the
-//! bounded window in which a game is likely to ask for its scenes.
+//! key gesture still playing, the short settle after the last input, a scene
+//! answer being written for a game, or the bounded window in which a game is
+//! likely to ask for its scenes.
 //! Shaders that animate with time stand still between those frames.
 //!
-//! Every update draws, so a running game does not count by itself: a game that
-//! asks for a scene outside the window is answered by the next idle update,
-//! within [`IDLE_REDRAW`], and holds that root without blocking until then.
+//! Every update draws, so a running game does not count by itself: a request
+//! outside the window is picked up by the next idle update, within
+//! [`IDLE_REDRAW`], and frames keep coming from there until its answer goes out.
+//! The game holds that root without blocking until then.
 
 use std::time::Duration;
 
@@ -32,7 +34,7 @@ pub const IDLE_REDRAW: Duration = Duration::from_secs(1);
 pub const INPUT_SETTLE: Duration = Duration::from_millis(500);
 
 /// How long frames keep coming after a game starts, for the scene requests it
-/// makes as it boots. A first request shortens it to [`INPUT_SETTLE`].
+/// makes as it boots. The first answer to go out shortens it to [`INPUT_SETTLE`].
 pub const GAME_START_WINDOW: Duration = Duration::from_secs(10);
 
 pub(crate) fn plugin(app: &mut App) {
@@ -77,6 +79,11 @@ struct LastActivity(Option<Duration>);
 #[derive(Resource, Default)]
 struct GameRequestWindow(Option<Duration>);
 
+#[cfg(test)]
+pub(crate) fn init_game_request_window(world: &mut World) {
+    world.init_resource::<GameRequestWindow>();
+}
+
 fn open_game_request_window(world: &mut World, length: Duration) {
     let Some(now) = world.get_resource::<Time<Real>>().map(Time::elapsed) else {
         return;
@@ -91,7 +98,7 @@ pub fn note_game_started(world: &mut World) {
     open_game_request_window(world, GAME_START_WINDOW);
 }
 
-/// A game asked for a scene, and may ask for more right after.
+/// A scene answer went out to a game, which may ask for more right after.
 pub fn note_game_request(world: &mut World) {
     open_game_request_window(world, INPUT_SETTLE);
 }
@@ -115,10 +122,11 @@ pub(crate) struct Busy<'w, 's> {
     spawned: Query<'w, 's, (), Added<Mesh3d>>,
     gestures: Option<Res<'w, crate::test_input::SyntheticInput>>,
     game_requests: Option<Res<'w, GameRequestWindow>>,
+    session: Option<NonSend<'w, crate::pie::PieSession>>,
 }
 
 impl Busy<'_, '_> {
-    fn any(&self, now: Duration) -> bool {
+    pub(crate) fn any(&self, now: Duration) -> bool {
         self.fly.as_ref().is_some_and(|fly| fly.0)
             || !self.modal.is_empty()
             || self
@@ -137,6 +145,10 @@ impl Busy<'_, '_> {
                 .as_ref()
                 .and_then(|window| window.0)
                 .is_some_and(|until| now < until)
+            || self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.answers_being_written() > 0)
     }
 }
 

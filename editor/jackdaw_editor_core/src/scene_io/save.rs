@@ -1036,9 +1036,9 @@ pub fn emit_bsn_scene_for_file(world: &mut World, parent_path: &Path) -> Result<
     }
 }
 
-/// A document as text for a running game, written as a save would write it.
+/// A document for a running game, authored as a save authors it.
 pub(crate) struct GameDocument {
-    pub(crate) text: String,
+    pub(crate) ast: jackdaw_bsn::SceneBsnAst,
     /// The fields naming an asset by an absolute path, which a save would refuse
     /// and Play only warns about.
     pub(crate) absolute: Vec<AbsoluteAssetField>,
@@ -1047,26 +1047,21 @@ pub(crate) struct GameDocument {
     pub(crate) live_assets: bevy::platform::collections::HashMap<String, UntypedAssetId>,
 }
 
-/// The live document as text the game spawns in place of its file at
+/// The live document as the game spawns it in place of its file at
 /// `parent_path`. Writes nothing.
-pub(crate) fn emit_bsn_scene_for_game(world: &mut World, parent_path: &Path) -> GameDocument {
+pub(crate) fn live_document_for_game(world: &mut World, parent_path: &Path) -> GameDocument {
     let held = crate::preview_context::suspend_preview_writes(world);
     let authored = authored_live(world, parent_path, SourceSpelling::RelativeToFile);
     crate::preview_context::resume_preview_writes(world, held);
     let Some(authored) = authored else {
         return GameDocument {
-            text: String::new(),
+            ast: jackdaw_bsn::SceneBsnAst::default(),
             absolute: Vec::new(),
             live_assets: Default::default(),
         };
     };
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let (text, absolute) = emitted(
-        world,
-        &authored.ast,
-        SourceSpelling::RelativeToFile,
-        &registry,
-    );
+    let absolute = absolute_fields(world, &authored.ast, &registry);
     let mut live_assets: bevy::platform::collections::HashMap<String, UntypedAssetId> = world
         .get_resource::<jackdaw_bsn::BsnSceneAssets>()
         .into_iter()
@@ -1077,16 +1072,16 @@ pub(crate) fn emit_bsn_scene_for_game(world: &mut World, parent_path: &Path) -> 
         .collect();
     live_assets.extend(authored.embedded);
     GameDocument {
-        text,
+        ast: authored.ast,
         absolute,
         live_assets,
     }
 }
 
-/// `document`, an inactive tab's snapshot, the way [`emit_bsn_scene_for_game`]
-/// writes the live one. Its handles were named when the tab was captured, and
+/// `document`, an inactive tab's snapshot, the way [`live_document_for_game`]
+/// makes the live one. Its handles were named when the tab was captured, and
 /// no store holds its assets under those names.
-pub(crate) fn emit_snapshot_for_game(
+pub(crate) fn snapshot_for_game(
     world: &World,
     document: &jackdaw_bsn::SceneBsnAst,
     parent_path: &Path,
@@ -1095,9 +1090,9 @@ pub(crate) fn emit_snapshot_for_game(
     crate::prefab::save_load::relativize_for_file(world, &mut ast, parent_path);
     drop_inherited_visibility(&mut ast);
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let (text, absolute) = emitted(world, &ast, SourceSpelling::RelativeToFile, &registry);
+    let absolute = absolute_fields(world, &ast, &registry);
     GameDocument {
-        text,
+        ast,
         absolute,
         live_assets: Default::default(),
     }
@@ -1400,16 +1395,25 @@ fn emitted(
     registry: &AppTypeRegistry,
 ) -> (String, Vec<AbsoluteAssetField>) {
     let named = match spelling {
-        SourceSpelling::RelativeToFile => info_span!("emit.absolute_fields").in_scope(|| {
-            crate::scene_io::asset_fields::absolute_asset_fields(
-                ast,
-                &registry.read(),
-                world.get_resource::<crate::project_types::ProjectTypes>(),
-            )
-        }),
+        SourceSpelling::RelativeToFile => absolute_fields(world, ast, registry),
         SourceSpelling::AsHeld => Vec::new(),
     };
     (jackdaw_bsn::emit_scene(ast), named)
+}
+
+/// The fields of `ast` naming a file by an absolute path.
+fn absolute_fields(
+    world: &World,
+    ast: &jackdaw_bsn::SceneBsnAst,
+    registry: &AppTypeRegistry,
+) -> Vec<AbsoluteAssetField> {
+    info_span!("emit.absolute_fields").in_scope(|| {
+        crate::scene_io::asset_fields::absolute_asset_fields(
+            ast,
+            &registry.read(),
+            world.get_resource::<crate::project_types::ProjectTypes>(),
+        )
+    })
 }
 
 /// Name the assets `entities` reference in `ast`, a document other than the

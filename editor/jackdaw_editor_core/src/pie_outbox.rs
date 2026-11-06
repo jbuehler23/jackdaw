@@ -11,6 +11,10 @@
 //! value in the earlier edit's place. Edits of different nodes touch different
 //! entities, so the merge moves a value ahead of those only. Any other message
 //! starts a new stretch, so no edit or value crosses it.
+//!
+//! A message that takes a while to make, such as a document being written on a
+//! worker, holds its place with an [`OutboxSlot`]. What is queued behind it waits
+//! until the slot is filled.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -56,6 +60,8 @@ struct Shared {
 struct Queued {
     bytes: Vec<u8>,
     edit: Option<NodeEdit>,
+    /// The slot this place is held for, until it is filled.
+    slot: Option<u64>,
 }
 
 /// A queued [`ControlEvent::NodeComponents`].
@@ -106,13 +112,42 @@ struct State {
     bytes: usize,
     open: bool,
     warned: bool,
+    next_slot: u64,
 }
 
 impl State {
     /// Returns true when this push first crossed the backlog threshold.
     fn push(&mut self, bytes: Vec<u8>) -> bool {
         self.edits.clear();
-        self.append(Queued { bytes, edit: None })
+        self.append(Queued {
+            bytes,
+            edit: None,
+            slot: None,
+        })
+    }
+
+    fn reserve(&mut self) -> u64 {
+        self.edits.clear();
+        let slot = self.next_slot;
+        self.next_slot += 1;
+        self.queue.push_back(Queued {
+            bytes: Vec::new(),
+            edit: None,
+            slot: Some(slot),
+        });
+        slot
+    }
+
+    /// Put `bytes`, if any, in the place `slot` holds. Returns true when this first
+    /// crossed the backlog threshold.
+    fn fill(&mut self, slot: u64, bytes: Option<Vec<u8>>) -> bool {
+        let Some(queued) = self.queue.iter_mut().find(|held| held.slot == Some(slot)) else {
+            return false;
+        };
+        queued.slot = None;
+        queued.bytes = bytes.unwrap_or_default();
+        self.bytes = self.bytes.saturating_add(queued.bytes.len());
+        self.crossed_threshold()
     }
 
     /// Queue `edit`, or merge it into the queued edit of its node. Returns true
@@ -128,6 +163,7 @@ impl State {
                     self.append(Queued {
                         bytes,
                         edit: Some(edit),
+                        slot: None,
                     })
                 }
                 Err(err) => {
@@ -167,19 +203,28 @@ impl State {
         true
     }
 
+    /// The next message to send: none while the front holds a place for one, and a
+    /// slot filled with nothing is passed over.
     fn pop(&mut self) -> Option<Vec<u8>> {
-        let queued = self.queue.pop_front()?;
-        if let Some(edit) = &queued.edit
-            && self.edits.get(&edit.node) == Some(&self.taken)
-        {
-            self.edits.remove(&edit.node);
+        loop {
+            if self.queue.front()?.slot.is_some() {
+                return None;
+            }
+            let queued = self.queue.pop_front()?;
+            if let Some(edit) = &queued.edit
+                && self.edits.get(&edit.node) == Some(&self.taken)
+            {
+                self.edits.remove(&edit.node);
+            }
+            self.taken += 1;
+            self.bytes = self.bytes.saturating_sub(queued.bytes.len());
+            if self.bytes < BACKLOG_WARN_BYTES / 2 {
+                self.warned = false;
+            }
+            if !queued.bytes.is_empty() {
+                return Some(queued.bytes);
+            }
         }
-        self.taken += 1;
-        self.bytes = self.bytes.saturating_sub(queued.bytes.len());
-        if self.bytes < BACKLOG_WARN_BYTES / 2 {
-            self.warned = false;
-        }
-        Some(queued.bytes)
     }
 }
 
@@ -212,7 +257,16 @@ impl Shared {
         crossed
     }
 
-    /// Block until a message is queued, or return `None` once closed and empty.
+    fn fill(&self, slot: u64, bytes: Option<Vec<u8>>) {
+        let crossed = self.lock().fill(slot, bytes);
+        self.ready.notify_one();
+        if crossed {
+            warn_backlog();
+        }
+    }
+
+    /// Block until a message is queued, or return `None` once closed with nothing
+    /// to send.
     fn next(&self) -> Option<Vec<u8>> {
         let mut state = self.lock();
         loop {
@@ -282,10 +336,41 @@ impl GameOutbox {
         }
     }
 
+    /// Hold the next place in the queue for a message made later.
+    pub(crate) fn reserve(&self) -> OutboxSlot {
+        let slot = self.shared.lock().reserve();
+        OutboxSlot {
+            shared: self.shared.clone(),
+            slot,
+            bytes: None,
+        }
+    }
+
     /// Note that the game is about to be killed, so failed sends are expected
     /// and the backlog is discarded when the outbox is dropped.
     pub(crate) fn mark_closing(&self) {
         self.closing.store(true, Ordering::Release);
+    }
+}
+
+/// A place held in a [`GameOutbox`]. Dropped unfilled, it gives the place up, so
+/// what waits behind it goes on.
+pub(crate) struct OutboxSlot {
+    shared: Arc<Shared>,
+    slot: u64,
+    bytes: Option<Vec<u8>>,
+}
+
+impl OutboxSlot {
+    /// Put the message in the place held.
+    pub(crate) fn fill(mut self, bytes: Vec<u8>) {
+        self.bytes = Some(bytes);
+    }
+}
+
+impl Drop for OutboxSlot {
+    fn drop(&mut self) {
+        self.shared.fill(self.slot, self.bytes.take());
     }
 }
 
@@ -412,6 +497,66 @@ mod tests {
         discarded.close(true);
         assert_eq!(discarded.next(), None);
         assert_eq!(discarded.lock().bytes, 0);
+    }
+
+    #[test]
+    fn what_is_queued_behind_a_slot_waits_until_it_is_filled() {
+        let shared = Arc::new(Shared::new());
+        shared.push(vec![1]);
+        let slot = shared.lock().reserve();
+        shared.push(vec![3]);
+        assert_eq!(shared.lock().pop(), Some(vec![1]));
+        assert_eq!(shared.lock().pop(), None, "the place is held");
+
+        shared.fill(slot, Some(vec![2]));
+        assert_eq!(shared.lock().pop(), Some(vec![2]));
+        assert_eq!(shared.lock().pop(), Some(vec![3]));
+        assert_eq!(shared.lock().bytes, 0);
+    }
+
+    #[test]
+    fn a_slot_given_up_lets_what_waits_behind_it_go() {
+        let shared = Arc::new(Shared::new());
+        let given_up = OutboxSlot {
+            slot: shared.lock().reserve(),
+            shared: shared.clone(),
+            bytes: None,
+        };
+        shared.push(vec![1]);
+        assert_eq!(shared.lock().pop(), None);
+        drop(given_up);
+        assert_eq!(shared.lock().pop(), Some(vec![1]));
+        assert_eq!(shared.lock().pop(), None);
+    }
+
+    #[test]
+    fn a_closed_outbox_does_not_wait_for_a_slot() {
+        let shared = Shared::new();
+        shared.lock().reserve();
+        shared.push(vec![1]);
+        shared.close(false);
+        assert_eq!(shared.next(), None);
+    }
+
+    #[test]
+    fn an_edit_does_not_merge_across_a_slot() {
+        let shared = Shared::new();
+        let edit = |node| NodeEdit {
+            node,
+            set: Vec::new(),
+            removed: Vec::new(),
+        };
+        shared.push_edit(edit(5));
+        let slot = shared.lock().reserve();
+        shared.push_edit(edit(5));
+        assert_eq!(shared.lock().queue.len(), 3);
+        shared.fill(slot, None);
+        assert!(shared.lock().pop().is_some());
+        assert!(
+            shared.lock().pop().is_some(),
+            "the empty slot is passed over"
+        );
+        assert!(shared.lock().pop().is_none());
     }
 
     const A: &str = "game::A";

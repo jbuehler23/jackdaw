@@ -10,6 +10,12 @@
 //! that is unique for the Play session ([`PlayAssetNames`]). A scene the game
 //! loads from a file cannot spell one, so it cannot take an edit's asset away.
 //!
+//! The names are given on a copy of the document, in a frame's time. The text is
+//! written from that copy and read back on a worker ([`WriteJob`]): text that does
+//! not read never goes to a game, which loads the file and the user is told. The
+//! game asks without blocking, so the answer can arrive frames later, and its place
+//! in the instance's outbox is held from the moment of asking.
+//!
 //! What the scene reaches beyond its text goes with the answer: see
 //! [`crate::play_overlay`].
 //!
@@ -24,10 +30,14 @@ use std::path::{Path, PathBuf};
 use bevy::asset::UntypedAssetId;
 use bevy::prelude::*;
 use jackdaw_bsn::{CatalogAssetRef, SceneBsnAst};
+use jackdaw_pie_protocol::event::{from_bytes, to_bytes};
 use jackdaw_pie_protocol::manifest::RunConfig;
 use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
 
+use crate::asset_files::asset_file_text;
 use crate::pie::{InstanceKey, MAIN_SCENE, open_scene_asset_path};
+use crate::play_overlay::{UnsavedPrefab, UnwrittenPrefab};
+use crate::prefab::resolver_bsn::PREFAB_TYPE;
 use crate::scene_io::asset_fields::{AbsoluteAssetField, refusal};
 use crate::scene_io::save::GameDocument;
 use crate::scenes::{Scenes, TabContent, TabKind};
@@ -85,13 +95,16 @@ pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
 /// What the game spawns for a root asking for the asset path `requested`, for an
 /// instance launched with `launch`. The document the path resolves to, if open in
 /// a tab or an edited prefab in the cache, answers with its text; anything else
-/// answers with the file.
+/// answers with the file. Waits for the text to be written and read back.
 pub fn scene_answer(
     world: &mut World,
     launch: Option<&LaunchScene>,
     requested: &str,
 ) -> SceneAnswer {
-    answer_with_assets(world, launch, requested).answer
+    let answered = answer_with_assets(world, launch, requested);
+    let prepared = prepare(world, None, answered, 0);
+    let finished = write_now(world, None, prepared);
+    decoded_answer(finished.answer, requested)
 }
 
 /// What goes to a game asking for a scene, in send order.
@@ -113,21 +126,387 @@ pub fn serve_scene(
     launch: Option<&LaunchScene>,
     requested: &str,
 ) -> ServedScene {
-    let Answered {
-        answer,
-        assets,
-        prefabs,
-    } = answer_with_assets(world, launch, requested);
-    let files = asset_files_missing_from(world, key, &assets.files);
-    let mut names = world.get_resource_or_init::<PlayAssetNames>();
-    for (name, definition) in assets.embedded {
-        names.note_given(key, name, definition);
-    }
-    let prefabs = crate::play_overlay::prefab_files_missing_from(world, key, prefabs);
+    let prepared = prepare_scene(world, key, launch, requested, 0);
+    let finished = write_now(world, Some(key), prepared);
     ServedScene {
+        files: finished.files,
+        prefabs: finished.prefabs,
+        answer: decoded_answer(finished.answer, requested),
+    }
+}
+
+/// An answer written and finished on this thread, fallback included.
+fn write_now(
+    world: &mut World,
+    key: Option<&InstanceKey>,
+    mut prepared: PreparedScene,
+) -> FinishedScene {
+    loop {
+        let written = prepared.job.write();
+        match finish_scene(world, key, prepared.waiting, written, &mut []) {
+            Finishing::Done(finished) => return finished,
+            Finishing::Again(next) => prepared = next,
+        }
+    }
+}
+
+fn decoded_answer(encoded: Option<Vec<u8>>, requested: &str) -> SceneAnswer {
+    match encoded.map(|bytes| from_bytes(&bytes)) {
+        Some(Ok(ControlEvent::SceneDocument { answer, .. })) => answer,
+        _ => SceneAnswer::UseFile {
+            path: requested.to_string(),
+            sidecars: None,
+        },
+    }
+}
+
+/// An answer on its way: what a worker writes, and what is done with the result.
+pub(crate) struct PreparedScene {
+    pub(crate) job: WriteJob,
+    pub(crate) waiting: WaitingAnswer,
+}
+
+/// The first part of answering request `request` of the instance `key`: everything
+/// that needs the world. The instance counts as holding every asset the text embeds
+/// from here on, so an edit made before the answer goes out is sent behind it.
+pub(crate) fn prepare_scene(
+    world: &mut World,
+    key: &InstanceKey,
+    launch: Option<&LaunchScene>,
+    requested: &str,
+    request: u64,
+) -> PreparedScene {
+    let answered = answer_with_assets(world, launch, requested);
+    prepare(world, Some(key), answered, request)
+}
+
+fn prepare(
+    world: &mut World,
+    key: Option<&InstanceKey>,
+    answered: Answered,
+    request: u64,
+) -> PreparedScene {
+    let Answered {
+        body,
+        assets,
+        own_names,
+        prefabs,
+        file,
+        requested,
+    } = answered;
+    let mut files = None;
+    let mut held = Vec::new();
+    let mut before = HashMap::new();
+    if let Some(key) = key {
+        files = asset_files_missing_from(world, key, &assets.files);
+        let mut names = world.get_resource_or_init::<PlayAssetNames>();
+        for (name, definition) in &assets.embedded {
+            let earlier = names.given_definition(key, name);
+            before.entry(name.clone()).or_insert(earlier);
+            names.note_given(key, name.clone(), *definition);
+        }
+        let reached = prefabs.iter().map(|prefab| prefab.path.clone()).collect();
+        held = crate::play_overlay::unsaved_prefabs_beyond(world, key, &reached);
+    }
+    let prefab_names = prefabs
+        .iter()
+        .map(|prefab| (prefab.path.clone(), prefab.embedded.clone()))
+        .collect();
+    PreparedScene {
+        job: WriteJob {
+            request,
+            body,
+            prefabs,
+            held,
+        },
+        waiting: WaitingAnswer {
+            request,
+            requested,
+            file,
+            files,
+            before,
+            own_names,
+            prefab_names,
+        },
+    }
+}
+
+/// What an answer says, before its text exists.
+enum AnswerBody {
+    File(SceneAnswer),
+    Document {
+        ast: Box<SceneBsnAst>,
+        dir: String,
+        stem: String,
+        sidecars: Option<String>,
+    },
+}
+
+/// The part of an answer that does not need the world: writing each document as
+/// text and reading the text back. Runs on a worker; frees the documents too.
+pub(crate) struct WriteJob {
+    request: u64,
+    body: AnswerBody,
+    prefabs: Vec<UnwrittenPrefab>,
+    /// Unsaved prefabs a game holds that the scene no longer reaches, by path.
+    held: Vec<(String, SceneBsnAst)>,
+}
+
+/// What a [`WriteJob`] made.
+pub(crate) struct WrittenScene {
+    /// The encoded [`ControlEvent::SceneDocument`], or why it cannot go.
+    answer: Result<Vec<u8>, String>,
+    prefabs: Vec<(String, Result<String, String>)>,
+    /// Those of the held prefabs whose text does not read back.
+    unreadable: Vec<String>,
+}
+
+impl WrittenScene {
+    /// What stands for the result of a worker that panicked: nothing it was to
+    /// write can go.
+    pub(crate) fn lost(waiting: &WaitingAnswer) -> Self {
+        let detail = || "the worker writing it panicked".to_string();
+        Self {
+            answer: Err(detail()),
+            prefabs: waiting
+                .prefab_names
+                .iter()
+                .map(|(path, _)| (path.clone(), Err(detail())))
+                .collect(),
+            unreadable: Vec::new(),
+        }
+    }
+}
+
+impl WriteJob {
+    /// Whether there is nothing here worth a worker: no document to write.
+    pub(crate) fn is_immediate(&self) -> bool {
+        matches!(self.body, AnswerBody::File(_)) && self.prefabs.is_empty() && self.held.is_empty()
+    }
+
+    pub(crate) fn write(self) -> WrittenScene {
+        let _span = info_span!("play.write_scene").entered();
+        let request = self.request;
+        let encode = |answer: SceneAnswer| {
+            to_bytes(&ControlEvent::SceneDocument { request, answer })
+                .map_err(|err| err.to_string())
+        };
+        let answer = match self.body {
+            AnswerBody::File(answer) => encode(answer),
+            AnswerBody::Document {
+                ast,
+                dir,
+                stem,
+                sidecars,
+            } => text_read_back(&ast).and_then(|text| {
+                encode(SceneAnswer::Document {
+                    text,
+                    dir,
+                    stem,
+                    sidecars,
+                })
+            }),
+        };
+        WrittenScene {
+            answer,
+            prefabs: self
+                .prefabs
+                .into_iter()
+                .map(|prefab| {
+                    let text =
+                        text_read_back(&prefab.ast).map(|body| asset_file_text(PREFAB_TYPE, &body));
+                    (prefab.path, text)
+                })
+                .collect(),
+            unreadable: self
+                .held
+                .into_iter()
+                .filter(|(_, ast)| text_read_back(ast).is_err())
+                .map(|(path, _)| path)
+                .collect(),
+        }
+    }
+}
+
+/// `ast`'s text, or why a reader would refuse it.
+fn text_read_back(ast: &SceneBsnAst) -> Result<String, String> {
+    let text = jackdaw_bsn::emit_scene(ast);
+    jackdaw_bsn::parse_emitted(&text).map_err(|err| err.to_string())?;
+    Ok(text)
+}
+
+/// What the last part of an answer needs from the first.
+pub(crate) struct WaitingAnswer {
+    request: u64,
+    requested: String,
+    /// The file the game loads if the document does not read back.
+    file: Option<String>,
+    files: Option<ControlEvent>,
+    /// The `#Name` of each asset root the scene and its prefabs hold, with what the
+    /// game held under it before this answer counted it as given.
+    before: HashMap<String, Option<u64>>,
+    /// Those the scene's own text holds.
+    own_names: Vec<String>,
+    /// Those each unsaved prefab's text holds, by path.
+    prefab_names: Vec<(String, Vec<String>)>,
+}
+
+/// What is ready to send, in send order.
+pub(crate) struct FinishedScene {
+    pub(crate) files: Option<ControlEvent>,
+    pub(crate) prefabs: Option<ControlEvent>,
+    /// The encoded [`ControlEvent::SceneDocument`].
+    pub(crate) answer: Option<Vec<u8>>,
+}
+
+/// Where an answer stands after [`finish_scene`].
+pub(crate) enum Finishing {
+    Done(FinishedScene),
+    /// The document was refused, so this file answer takes its place.
+    Again(PreparedScene),
+}
+
+/// What the status bar says when `path`'s unsaved edits cannot go to a game.
+fn edits_not_sent(path: &str) -> String {
+    format!("{path}: unsaved edits not sent, the game reads the saved file")
+}
+
+/// The last part of an answer, given what the worker wrote. Answers of one game
+/// finish in the order they were asked for, so what is counted here is what the game
+/// reads in that order; `later` holds that game's answers still to finish. A scene
+/// whose text does not read back is refused: the game loads the file and the user
+/// hears why. A prefab that does not read back leaves the game on that prefab's file.
+pub(crate) fn finish_scene(
+    world: &mut World,
+    key: Option<&InstanceKey>,
+    waiting: WaitingAnswer,
+    written: WrittenScene,
+    later: &mut [&mut WaitingAnswer],
+) -> Finishing {
+    let WaitingAnswer {
+        request,
+        requested,
+        file,
+        files,
+        mut before,
+        own_names,
+        prefab_names,
+    } = waiting;
+    let WrittenScene {
+        answer,
+        prefabs,
+        unreadable,
+    } = written;
+    let answer = match (answer, file) {
+        (Ok(bytes), _) => Some(bytes),
+        (Err(detail), Some(file)) => {
+            warn!("PIE: the document for {requested} does not read back, using its file: {detail}");
+            crate::status_bar::notify_error(world, edits_not_sent(&requested));
+            if let Some(key) = key {
+                let names: Vec<String> = before.keys().cloned().collect();
+                give_back(world, key, &names, &mut before, later);
+            }
+            let fallback = Answered::use_file(world, file);
+            let mut prepared = prepare(world, key, fallback, request);
+            prepared.waiting.files = merged_files(files, prepared.waiting.files.take());
+            return Finishing::Again(prepared);
+        }
+        (Err(detail), None) => {
+            error!("PIE: could not answer for {requested}: {detail}");
+            crate::status_bar::notify_error(world, edits_not_sent(&requested));
+            to_bytes(&ControlEvent::SceneDocument {
+                request,
+                answer: SceneAnswer::UseFile {
+                    path: requested.clone(),
+                    sidecars: None,
+                },
+            })
+            .ok()
+        }
+    };
+
+    let mut unsaved = Vec::new();
+    let mut refused = Vec::new();
+    for (path, text) in prefabs {
+        match text {
+            Ok(text) => unsaved.push(UnsavedPrefab { path, text }),
+            Err(detail) => {
+                warn!("PIE: the unsaved prefab {path} does not read back: {detail}");
+                crate::status_bar::notify_warn(world, edits_not_sent(&path));
+                refused.push(path);
+            }
+        }
+    }
+    let Some(key) = key else {
+        return Finishing::Done(FinishedScene {
+            files,
+            prefabs: None,
+            answer,
+        });
+    };
+    if !refused.is_empty() {
+        let stays = |name: &String| {
+            own_names.contains(name)
+                || prefab_names
+                    .iter()
+                    .any(|(path, names)| !refused.contains(path) && names.contains(name))
+        };
+        let gone: Vec<String> = prefab_names
+            .iter()
+            .filter(|(path, _)| refused.contains(path))
+            .flat_map(|(_, names)| names.iter().filter(|name| !stays(name)).cloned())
+            .collect();
+        give_back(world, key, &gone, &mut before, later);
+    }
+    let reached = prefab_names.into_iter().map(|(path, _)| path).collect();
+    let saved = crate::play_overlay::saved_prefabs_beyond(world, key, &reached);
+    let to_files = saved.into_iter().chain(unreadable).chain(refused).collect();
+    let prefabs = crate::play_overlay::prefab_files_missing_from(world, key, unsaved, to_files);
+    Finishing::Done(FinishedScene {
         files,
         prefabs,
         answer,
+    })
+}
+
+/// `names` never reached the game with this answer. Each goes back to what the game
+/// held before it, unless a later answer still on its way holds it: then that answer
+/// goes back to it, if it never reaches the game either.
+fn give_back(
+    world: &mut World,
+    key: &InstanceKey,
+    names: &[String],
+    before: &mut HashMap<String, Option<u64>>,
+    later: &mut [&mut WaitingAnswer],
+) {
+    let mut held = world.get_resource_or_init::<PlayAssetNames>();
+    for name in names {
+        let Some(earlier) = before.remove(name) else {
+            continue;
+        };
+        match later
+            .iter_mut()
+            .find(|answer| answer.before.contains_key(name))
+        {
+            Some(answer) => {
+                answer.before.insert(name.clone(), earlier);
+            }
+            None => held.restore_given(key, name, earlier),
+        }
+    }
+}
+
+/// Two sets of asset files as one message.
+fn merged_files(first: Option<ControlEvent>, second: Option<ControlEvent>) -> Option<ControlEvent> {
+    match (first, second) {
+        (
+            Some(ControlEvent::AssetFiles { mut files }),
+            Some(ControlEvent::AssetFiles { files: more }),
+        ) => {
+            files.extend(more);
+            Some(ControlEvent::AssetFiles { files })
+        }
+        (first, second) => first.or(second),
     }
 }
 
@@ -178,22 +557,27 @@ pub(crate) struct DocumentAssets {
 }
 
 impl DocumentAssets {
-    /// What `text`, parsed as `parsed`, holds or names.
-    pub(crate) fn of(world: &World, parsed: &mut SceneBsnAst) -> Self {
+    /// What `ast`, under session names, holds or names.
+    pub(crate) fn of(world: &World, ast: &mut SceneBsnAst) -> Self {
         Self {
-            embedded: embedded_assets(world, parsed),
-            files: asset_files_named(world, parsed),
+            embedded: embedded_assets(world, ast),
+            files: asset_files_named(world, ast),
         }
     }
 }
 
 /// An answer and what goes with it.
 struct Answered {
-    answer: SceneAnswer,
+    body: AnswerBody,
     /// For a document, what its text and its prefabs' texts hold or name.
     assets: DocumentAssets,
+    /// The `#Name` of each asset root its own text holds.
+    own_names: Vec<String>,
     /// The unsaved prefabs the scene reaches.
-    prefabs: Vec<crate::play_overlay::UnsavedPrefab>,
+    prefabs: Vec<UnwrittenPrefab>,
+    /// The file to fall back on, for a document.
+    file: Option<String>,
+    requested: String,
 }
 
 impl Answered {
@@ -201,12 +585,15 @@ impl Answered {
     fn use_file(world: &mut World, path: String) -> Self {
         let overlay = crate::play_overlay::overlay_of_file(world, &path);
         Self {
-            answer: SceneAnswer::UseFile {
+            requested: path.clone(),
+            body: AnswerBody::File(SceneAnswer::UseFile {
                 path,
                 sidecars: overlay.sidecars,
-            },
+            }),
             assets: overlay.assets,
+            own_names: Vec::new(),
             prefabs: overlay.prefabs,
+            file: None,
         }
     }
 }
@@ -253,48 +640,39 @@ fn answer_with_assets(
     let Some(document) = document else {
         return Answered::use_file(world, file);
     };
-    let session_text = with_session_names(world, &document);
-    let (text, mut parsed) = match session_text {
-        Ok(served) => served,
-        Err(err) => {
-            warn!("PIE: the document for {requested} does not parse back, using its file: {err}");
-            return Answered::use_file(world, file);
-        }
-    };
     warn_absolute(world, &document.absolute);
-    let mut held = DocumentAssets::of(world, &mut parsed);
-    let overlay = crate::play_overlay::overlay_of_document(
-        world,
-        tab,
-        &target,
-        &parsed,
-        &parent,
-        &served.dir,
-    );
+    let mut ast = with_session_names(world, document);
+    let mut held = DocumentAssets::of(world, &mut ast);
+    let own_names = held.embedded.iter().map(|(name, _)| name.clone()).collect();
+    let overlay =
+        crate::play_overlay::overlay_of_document(world, tab, &target, &ast, &parent, &served.dir);
     held.embedded.extend(overlay.assets.embedded);
     held.files.extend(overlay.assets.files);
     Answered {
-        answer: SceneAnswer::Document {
-            text,
+        body: AnswerBody::Document {
+            ast: Box::new(ast),
             dir: served.dir,
             stem: served.stem,
             sidecars: overlay.sidecars,
         },
         assets: held,
+        own_names,
         prefabs: overlay.prefabs,
+        file: Some(file),
+        requested,
     }
 }
 
-/// `document`'s text with every embedded asset under its session name, and the
-/// text parsed back. A root and every reference to it are renamed together,
-/// including the `@Name` spelling a load also answers to, whatever wrote them. A
-/// root whose asset the live stores hold is written from the store, which an edit
-/// reads too.
-pub(crate) fn with_session_names(
-    world: &mut World,
-    document: &GameDocument,
-) -> Result<(String, SceneBsnAst), jackdaw_bsn::UnparsableEmit> {
-    let mut ast = jackdaw_bsn::parse_emitted(&document.text)?;
+/// `document` with every embedded asset under its session name. A root and every
+/// reference to it are renamed together, including the `@Name` spelling a load also
+/// answers to, whatever wrote them. A root whose asset the live stores hold is
+/// written from the store, which an edit reads too.
+pub(crate) fn with_session_names(world: &mut World, document: GameDocument) -> SceneBsnAst {
+    let GameDocument {
+        mut ast,
+        live_assets,
+        ..
+    } = document;
     world.init_resource::<PlayAssetNames>();
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
@@ -315,8 +693,7 @@ pub(crate) fn with_session_names(
             else {
                 continue;
             };
-            let live = document
-                .live_assets
+            let live = live_assets
                 .get(&old)
                 .filter(|id| id.type_id() == type_id)
                 .and_then(|&id| Some((id, names.resolve(world, id, type_id)?)));
@@ -356,9 +733,8 @@ pub(crate) fn with_session_names(
     });
     drop(registry);
     jackdaw_bsn::append_assets_to_ast(&mut ast, world, &from_store);
-    let text = jackdaw_bsn::emit_scene(&ast);
-    let parsed = jackdaw_bsn::parse_emitted(&text)?;
-    Ok((text, parsed))
+    ast.drop_unreachable();
+    ast
 }
 
 fn rename_root(ast: &mut SceneBsnAst, root: Entity, name: &str) {
@@ -413,26 +789,25 @@ fn asset_files_named(world: &World, ast: &mut SceneBsnAst) -> Vec<AssetFile> {
 
 /// A digest of what an asset root defines, leaving out its name.
 fn root_definition(ast: &SceneBsnAst, root: Entity) -> Option<u64> {
-    let value = jackdaw_bsn::asset_value_from_root(ast, root)?;
+    let (type_path, value) = jackdaw_bsn::asset_value_from_root(ast, root)?;
     let mut hasher = DefaultHasher::new();
-    format!("{value:?}").hash(&mut hasher);
+    (type_path, jackdaw_bsn::emit_value_text(&value)).hash(&mut hasher);
     Some(hasher.finish())
 }
 
-/// A digest of the asset `id` as a document would embed it, read back from text
-/// so it compares with [`root_definition`] of a served document. `None` when the
-/// asset cannot be embedded.
+/// A digest of the asset `id` as a document would embed it, which compares with
+/// [`root_definition`] of a served document. `None` when the asset cannot be
+/// embedded.
 fn asset_definition(world: &World, id: UntypedAssetId, type_id: TypeId) -> Option<u64> {
     let asset = CatalogAssetRef {
         name: "Asset".to_string(),
         type_id,
         asset_id: id,
     };
-    let (text, skipped) = jackdaw_bsn::serialize_assets_to_bsn_reporting(world, &[asset]);
-    if !skipped.is_empty() {
+    let mut ast = SceneBsnAst::default();
+    if !jackdaw_bsn::append_assets_to_ast(&mut ast, world, &[asset]).is_empty() {
         return None;
     }
-    let ast = jackdaw_bsn::parse_emitted(&text).ok()?;
     root_definition(&ast, *ast.roots.first()?)
 }
 
@@ -484,7 +859,7 @@ fn tab_folder(world: &World, tab: usize, assets: &Path, dir: &str) -> PathBuf {
         .map_or_else(|| assets.join(dir), Path::to_path_buf)
 }
 
-/// The text of the document in tab `index`, read from the document: the live one
+/// The document in tab `index`, authored for a game: the live one
 /// for the tab in front, the snapshot for any other, or the cache entry for a
 /// prefab behind.
 pub(crate) fn document_of_tab(
@@ -497,18 +872,16 @@ pub(crate) fn document_of_tab(
         if !world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
             return None;
         }
-        return Some(crate::scene_io::save::emit_bsn_scene_for_game(
-            world, parent,
-        ));
+        return Some(crate::scene_io::save::live_document_for_game(world, parent));
     }
     match &scenes.tabs[index].content {
-        TabContent::Scene(Some(document)) => Some(crate::scene_io::save::emit_snapshot_for_game(
+        TabContent::Scene(Some(document)) => Some(crate::scene_io::save::snapshot_for_game(
             world, document, parent,
         )),
         TabContent::Prefab(path) => world
             .get_resource::<crate::prefab::PrefabAstCache>()?
             .get(path.as_path())
-            .map(|document| crate::scene_io::save::emit_snapshot_for_game(world, document, parent)),
+            .map(|document| crate::scene_io::save::snapshot_for_game(world, document, parent)),
         TabContent::Scene(None) => None,
     }
 }
@@ -668,7 +1041,7 @@ impl PlayAssetNames {
     }
 
     /// Whether the game `key` holds any definition under `name`.
-    pub(crate) fn was_given(&self, key: &InstanceKey, name: &str) -> bool {
+    pub fn was_given(&self, key: &InstanceKey, name: &str) -> bool {
         self.given
             .get(key)
             .is_some_and(|given| given.contains_key(name))
@@ -681,6 +1054,27 @@ impl PlayAssetNames {
             .entry(key.clone())
             .or_default()
             .insert(name, definition);
+    }
+
+    /// The definition the game `key` holds under `name`.
+    pub(crate) fn given_definition(&self, key: &InstanceKey, name: &str) -> Option<u64> {
+        self.given.get(key)?.get(name).copied()
+    }
+
+    /// What the game `key` was to get under `name` never reached it, so it holds
+    /// `earlier` there.
+    pub(crate) fn restore_given(&mut self, key: &InstanceKey, name: &str, earlier: Option<u64>) {
+        let Some(given) = self.given.get_mut(key) else {
+            return;
+        };
+        match earlier {
+            Some(definition) => {
+                given.insert(name.to_string(), definition);
+            }
+            None => {
+                given.remove(name);
+            }
+        }
     }
 
     /// Keep what games were given only for those `keep` accepts.
@@ -1277,6 +1671,127 @@ mod tests {
             Some("zone.bsn"),
             "and it plays as the scene in front"
         );
+    }
+
+    /// A key for tests that prepare answers by hand.
+    fn game_key() -> InstanceKey {
+        InstanceKey {
+            config: "game".to_string(),
+            instance: 1,
+        }
+    }
+
+    fn unreadable_root(app: &mut App) -> Entity {
+        let mut ast = app.world_mut().resource_mut::<SceneBsnAst>();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::Struct(
+            jackdaw_bsn::BsnStructData {
+                type_path: String::new(),
+                fields: jackdaw_bsn::BsnStructFields(vec![jackdaw_bsn::BsnField {
+                    name: "0".into(),
+                    value: jackdaw_bsn::BsnValue::Int(1),
+                }]),
+            },
+        )]);
+        ast.add_to_roots(node);
+        node
+    }
+
+    /// An earlier answer refused while a later one holds the same name leaves the
+    /// name given, and if the later one is refused too the game holds nothing.
+    #[test]
+    fn a_refusal_leaves_a_name_a_later_answer_holds() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let mut app = editor(dir.path());
+        let color = swatch(&mut app, 4);
+        add_node(
+            &mut app,
+            5,
+            Painted {
+                level: 1,
+                swatch: color,
+            },
+            1,
+        );
+        unreadable_root(&mut app);
+        let key = game_key();
+        let world = app.world_mut();
+        let first = prepare_scene(world, &key, None, "zone.bsn", 1);
+        let mut second = prepare_scene(world, &key, None, "zone.bsn", 2);
+        let name = second
+            .waiting
+            .before
+            .keys()
+            .next()
+            .expect("the answer holds a name")
+            .clone();
+
+        let written = first.job.write();
+        let refused = finish_scene(
+            world,
+            Some(&key),
+            first.waiting,
+            written,
+            &mut [&mut second.waiting],
+        );
+        assert!(matches!(refused, Finishing::Again(_)));
+        assert!(
+            world.resource::<PlayAssetNames>().was_given(&key, &name),
+            "the later answer still holds it"
+        );
+
+        let written = second.job.write();
+        finish_scene(world, Some(&key), second.waiting, written, &mut []);
+        assert!(
+            !world.resource::<PlayAssetNames>().was_given(&key, &name),
+            "neither answer reached the game"
+        );
+    }
+
+    /// `depth` nodes, each the only child of the one before, the last named `Leaf`.
+    fn nested_nodes(depth: usize) -> String {
+        let mut text = "#Leaf\nbevy_transform::components::transform::Transform\n".to_string();
+        for _ in 1..depth {
+            text = format!("#Node\nbevy_ecs::hierarchy::Children [\n{text}]\n");
+        }
+        text
+    }
+
+    /// A component holding lists nested `depth` deep.
+    fn nested_values(depth: usize) -> String {
+        format!(
+            "#Node\ngame::Deep {{ value: {}{} }}\n",
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+    }
+
+    fn reads_back_at_the_depth_limit() {
+        let text = nested_nodes(jackdaw_bsn::MAX_AST_DEPTH);
+        let ast = jackdaw_bsn::parse_bsn_text(&text).expect("the nodes parse");
+        let emitted = text_read_back(&ast).expect("the nodes read back");
+        assert!(emitted.contains("#Leaf"), "every level was written");
+        let text = nested_values(jackdaw_bsn::MAX_AST_DEPTH);
+        let ast = jackdaw_bsn::parse_bsn_text(&text).expect("the values parse");
+        text_read_back(&ast).expect("the values read back");
+    }
+
+    /// The deepest document the emitter writes, written and read back on a worker,
+    /// whose stack is smaller than the main thread's.
+    #[test]
+    fn a_document_at_the_depth_limit_reads_back_on_a_worker() {
+        let pool = bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        bevy::tasks::block_on(pool.spawn(async { reads_back_at_the_depth_limit() }));
+    }
+
+    /// And with half a worker's stack to spare.
+    #[test]
+    fn a_document_at_the_depth_limit_fits_half_a_worker_stack() {
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(reads_back_at_the_depth_limit)
+            .expect("a thread")
+            .join()
+            .expect("it read back");
     }
 
     #[test]

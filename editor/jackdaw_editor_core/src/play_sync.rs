@@ -1342,6 +1342,60 @@ mod tests {
         panic!("no answer arrived");
     }
 
+    /// Asked for a scene, the editor's main thread parses nothing and goes on: the
+    /// text is written on a worker, and an edit made meanwhile reaches the game
+    /// behind the answer, however late that is.
+    #[test]
+    fn an_answer_comes_from_a_worker_ahead_of_edits_made_while_it_is_written() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let (mut world, entity) = editor_world();
+        serving(&mut world, dir.path());
+        let (editor_end, mut game) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(1), child(), editor_end);
+        world.insert_non_send(session);
+        sync_document_to_game(&mut world);
+
+        let parses = jackdaw_bsn::parses_on_this_thread();
+        let request = jackdaw_pie_protocol::StateEvent::RequestScene {
+            request: 7,
+            path: "zone.bsn".to_string(),
+        };
+        game.send(
+            jackdaw_pie_protocol::PieChannel::Reliable,
+            &jackdaw_pie_protocol::event::to_bytes(&request).expect("encode"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while world.non_send::<PieSession>().answers_being_written() == 0 {
+            assert!(Instant::now() < deadline, "the request was never taken up");
+            crate::pie::drain_game_events(&mut world);
+            std::thread::yield_now();
+        }
+        move_to(&mut world, entity, 6.0);
+        sync_document_to_game(&mut world);
+
+        let mut order = Vec::new();
+        while order.len() < 2 {
+            assert!(Instant::now() < deadline, "got only {order:?}");
+            crate::pie::drain_game_events(&mut world);
+            for (_, bytes) in game.drain_received() {
+                match from_bytes(&bytes) {
+                    Ok(ControlEvent::SceneDocument { .. }) => order.push("answer"),
+                    Ok(ControlEvent::NodeComponents { .. }) => order.push("edit"),
+                    _ => {}
+                }
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(order, ["answer", "edit"]);
+        assert_eq!(
+            jackdaw_bsn::parses_on_this_thread(),
+            parses,
+            "nothing is parsed on the main thread"
+        );
+    }
+
     /// An instance launched while another runs gets the edits made while it
     /// built and connected from the document it spawns, and those after its
     /// reply over the link, with the instance already live.
