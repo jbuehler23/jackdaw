@@ -284,8 +284,8 @@ fn reload_tab_from_disk(world: &mut World, path: &Path) -> Result<(), RefusedRel
     if was_active != index && !crate::scenes::swap::swap_active_tab(world, index) {
         return Err(RefusedReload {
             path: path.to_path_buf(),
-            category: crate::scene_io::RefusalCategory::NotSpawned,
-            reason: "the scene in front could not be captured to switch to this tab".to_string(),
+            category: crate::scene_io::RefusalCategory::Unreadable,
+            reason: format!("{} is no longer open", path.display()),
         });
     }
 

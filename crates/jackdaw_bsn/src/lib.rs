@@ -55,7 +55,7 @@ pub use document::{
     BsnStructFields, BsnTupleStructData, BsnValue, MAX_AST_DEPTH, SceneBsnAst, TypeDefaults,
     UnencodableValue, bsn_value_as_int, clone_node_into, clone_subtree_into, compact_document,
     component_to_bsn_patch, component_to_bsn_patch_in_pass, component_to_bsn_patch_with_assets,
-    is_enum_variant_of, patch_type_path, type_paths_include,
+    drop_document, is_enum_variant_of, patch_type_path, type_paths_include,
 };
 pub use emitter::{
     UnparsableEmit, brush_text_len, emit_entities, emit_entity, emit_entity_without_children,

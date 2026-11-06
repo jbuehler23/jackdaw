@@ -18,7 +18,7 @@ use jackdaw_widgets::context_menu::{ContextMenuAction, ContextMenuState};
 
 use crate::scenes::{
     Scenes,
-    operators::{scene_close_system, scene_new_system, scene_switch_system},
+    operators::{scene_close_system, scene_new_system},
 };
 
 const TAB_ACTIVE_BG: Color = tokens::DOC_TAB_ACTIVE_BG;
@@ -42,6 +42,48 @@ pub struct SceneTabStrip;
 /// Per-tab marker holding its index into `Scenes.tabs`.
 #[derive(Component, Clone, Copy)]
 pub struct SceneTabIndex(pub usize);
+
+/// A clicked tab, already drawn as selected, whose scene comes forward once that
+/// has been painted. A large scene takes long enough for the click to look lost.
+#[derive(Resource)]
+pub struct PendingTabSwitch {
+    target: usize,
+    tab_id: u64,
+}
+
+/// Show `target` as selected and bring its scene forward at the start of the next
+/// frame, once this one has painted it. A request made after this frame's strip
+/// update comes forward unpainted.
+pub fn request_tab_switch(world: &mut World, target: usize) {
+    let mut scenes = world.resource_mut::<Scenes>();
+    // The strip redraws on a change to the tabs.
+    scenes.set_changed();
+    let tab_id = (target != scenes.active)
+        .then(|| scenes.tabs.get(target).map(|tab| tab.id))
+        .flatten();
+    match tab_id {
+        Some(tab_id) => world.insert_resource(PendingTabSwitch { target, tab_id }),
+        None => {
+            world.remove_resource::<PendingTabSwitch>();
+        }
+    }
+}
+
+/// Runs in `First`, with no edit of this frame made yet and all of the last one's
+/// applied.
+pub fn run_pending_tab_switch(world: &mut World) {
+    let Some(pending) = world.remove_resource::<PendingTabSwitch>() else {
+        return;
+    };
+    let mut scenes = world.resource_mut::<Scenes>();
+    // Tabs closed or opened in between have moved the indices. Redraw what is in
+    // front.
+    if scenes.tabs.get(pending.target).map(|tab| tab.id) != Some(pending.tab_id) {
+        scenes.set_changed();
+        return;
+    }
+    crate::scenes::operators::scene_switch_system(world, pending.target);
+}
 
 /// Marker on the close (`x`) child so its click handler can be
 /// distinguished from the parent tab's.
@@ -213,7 +255,7 @@ fn spawn_scene_tab(
                 match click.event().button {
                     PointerButton::Primary => {
                         commands.queue(move |world: &mut World| {
-                            scene_switch_system(world, idx);
+                            request_tab_switch(world, idx);
                         });
                     }
                     PointerButton::Middle => {
@@ -534,6 +576,7 @@ pub fn update_scene_tab_label_abbreviation(
 /// per-entity observers.
 pub fn update_scene_tab_visuals(
     scenes: Res<Scenes>,
+    pending: Option<Res<PendingTabSwitch>>,
     tabs: Query<(Entity, &SceneTabIndex)>,
     mut bg_query: Query<&mut BackgroundColor>,
     mut border_query: Query<&mut BorderColor>,
@@ -576,7 +619,7 @@ pub fn update_scene_tab_visuals(
             *tip = Tooltip::title(tab.display_name.clone()).with_description(path_display);
         }
     }
-    let active = scenes.active;
+    let active = pending.map_or(scenes.active, |pending| pending.target);
 
     for (tab_entity, &SceneTabIndex(idx)) in tabs.iter() {
         let is_active = idx == active;

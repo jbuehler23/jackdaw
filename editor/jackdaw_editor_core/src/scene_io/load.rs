@@ -627,9 +627,8 @@ fn forget_drag_resource<R: Resource<Mutability = bevy::ecs::component::Mutable> 
 /// Remove scene entities from the world (named non-editor entities + their descendants).
 pub(crate) fn clear_scene_entities(world: &mut World) {
     let _span = info_span!("scene.clear").entered();
-    if world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
-        info_span!("doc.drop")
-            .in_scope(|| world.insert_resource(jackdaw_bsn::SceneBsnAst::default()));
+    if let Some(mut live) = world.get_resource_mut::<jackdaw_bsn::SceneBsnAst>() {
+        jackdaw_bsn::drop_document(std::mem::take(&mut *live));
     }
 
     // Extensions' per-scene state belongs to the scene being cleared, not to the tab it was

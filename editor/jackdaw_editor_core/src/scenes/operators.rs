@@ -445,7 +445,8 @@ pub fn switch_to_open_tab(world: &mut World, canonical: &std::path::Path) -> boo
 /// tab.
 pub struct ReadScene {
     canonical: std::path::PathBuf,
-    file_text: String,
+    /// The bytes the document was read from, as the watcher will read them back.
+    known: Vec<u8>,
     doc: jackdaw_bsn::SceneBsnAst,
     saved_camera: Option<Transform>,
     pending_conversion: Option<crate::jsn_to_bsn::PendingConversion>,
@@ -470,7 +471,9 @@ pub fn read_scene_for_load(world: &mut World, canonical: &std::path::Path) -> Op
 /// memory.
 fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScene, String> {
     let _span = info_span!("open.read_scene").entered();
-    let file_text = jackdaw_bsn::read_document_text(canonical)
+    let bytes = std::fs::read(canonical)
+        .map_err(|err| format!("failed to read {}: {err}", canonical.display()))?;
+    let file_text = jackdaw_bsn::document_text_from_bytes(&bytes, canonical)
         .map_err(|err| format!("failed to read {}: {err}", canonical.display()))?;
 
     // A BSN document parses directly. Legacy `.jsn` converts to a `.bsn`
@@ -519,9 +522,14 @@ fn read_scene(world: &mut World, canonical: &std::path::Path) -> Result<ReadScen
     jackdaw_bsn::reject_retired_ui_components(&doc)
         .map_err(|err| format!("cannot open {}: {err}", opened.display()))?;
 
+    // A conversion is written as its text, once it is accepted.
+    let known = match pending_conversion {
+        Some(_) => file_text.into_bytes(),
+        None => bytes,
+    };
     Ok(ReadScene {
         canonical,
-        file_text,
+        known,
         doc,
         saved_camera,
         pending_conversion,
@@ -533,7 +541,7 @@ pub fn open_read_scene(world: &mut World, read: ReadScene) {
     let _span = info_span!("open.read_scene_done").entered();
     let ReadScene {
         canonical,
-        file_text,
+        known,
         mut doc,
         saved_camera,
         pending_conversion,
@@ -554,7 +562,6 @@ pub fn open_read_scene(world: &mut World, read: ReadScene) {
     let dirty = false;
     // Record the bytes before the tab exists: the watcher starts with the tab,
     // and an edit landing in that gap still has to be reported.
-    let known = std::fs::read(&canonical).unwrap_or_else(|_| file_text.clone().into_bytes());
     crate::scenes::external_watch::note_known_content(world, &canonical, &known);
 
     let is_prefab = document_is_prefab(&doc);
@@ -716,7 +723,10 @@ pub fn scene_close_system_unprompted(world: &mut World, target: usize) {
         world.resource_mut::<Scenes>().active = new_target;
         crate::scenes::swap::reactivate_after_close(world, new_target);
     } else {
-        world.resource_mut::<Scenes>().tabs.remove(target);
+        let closed = world.resource_mut::<Scenes>().tabs.remove(target);
+        if let crate::scenes::TabContent::Scene(Some(document)) = closed.content {
+            jackdaw_bsn::drop_document(*document);
+        }
         let mut scenes = world.resource_mut::<Scenes>();
         if scenes.active > target {
             scenes.active -= 1;
@@ -838,7 +848,7 @@ fn save_tabs(world: &mut World, indices: &[usize]) -> Vec<TabSaveFailure> {
         if i != world.resource::<Scenes>().active && !swap_active_tab(world, i) {
             failures.push(TabSaveFailure {
                 kind: kind.clone(),
-                message: format!("{name} (could not switch to it)"),
+                message: format!("{name} (it is no longer open)"),
             });
             continue;
         }
@@ -908,7 +918,7 @@ pub fn scene_cycle_next(_: In<OperatorParameters>, mut commands: Commands) -> Op
             return;
         }
         let target = (scenes.active + 1) % count;
-        scene_switch_system(world, target);
+        crate::scenes::ui::request_tab_switch(world, target);
     });
     OperatorResult::Finished
 }
@@ -927,7 +937,7 @@ pub fn scene_cycle_prev(_: In<OperatorParameters>, mut commands: Commands) -> Op
             return;
         }
         let target = (scenes.active + count - 1) % count;
-        scene_switch_system(world, target);
+        crate::scenes::ui::request_tab_switch(world, target);
     });
     OperatorResult::Finished
 }

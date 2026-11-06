@@ -430,7 +430,7 @@ fn write_scene_files(
         {
             note_brush_text_size(world, path, jackdaw_bsn::brush_text_len(&parsed));
         }
-        info_span!("doc.drop").in_scope(|| drop(parsed));
+        jackdaw_bsn::drop_document(parsed);
         // Record the jackdaw + Bevy version at the disk boundary only, so
         // the in-memory undo / tab-swap snapshots from the same emitter stay
         // stamp-free.
@@ -1238,7 +1238,7 @@ fn emit_bsn_scene_authored(
     };
     let registry = world.resource::<AppTypeRegistry>().clone();
     let text = emitted(world, &ast, spelling, &registry);
-    info_span!("doc.drop").in_scope(|| drop(ast));
+    jackdaw_bsn::drop_document(ast);
     text
 }
 
@@ -1289,6 +1289,25 @@ pub(crate) struct AuthoredDocument {
     pub(crate) names_new_assets: bool,
     /// The runtime assets it named itself, by name without the `#`.
     pub(crate) embedded: Vec<(String, UntypedAssetId)>,
+}
+
+/// The live document taken out of the world for a tab to hold while inactive,
+/// authored in place as an emission would author a copy: handles named, inherited
+/// prefab content sparse, values the world derives gone. It holds no links, since
+/// the entities are about to go. `None` when the world holds no document.
+pub(crate) fn take_live_document(
+    world: &mut World,
+    parent_path: &Path,
+) -> Option<jackdaw_bsn::SceneBsnAst> {
+    let held = crate::preview_context::suspend_preview_writes(world);
+    let live = world
+        .get_resource_mut::<jackdaw_bsn::SceneBsnAst>()
+        .map(|mut live| std::mem::take(&mut *live));
+    let authored = live.map(|ast| author(world, ast, parent_path, SourceSpelling::AsHeld).ast);
+    crate::preview_context::resume_preview_writes(world, held);
+    let mut authored = authored?;
+    authored.clear_links();
+    Some(authored)
 }
 
 fn authored_document(

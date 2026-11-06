@@ -958,6 +958,7 @@ fn swap_does_not_keep_a_jsn_scene_snapshot_field() {
     // Compile-only: the literal omits `snapshot`, so a re-added field fails to
     // build.
     let _tab = jackdaw::scenes::SceneTab {
+        id: 0,
         path: None,
         display_name: "x".to_string(),
         dirty: false,
@@ -1412,14 +1413,18 @@ fn a_ui_scene_tab_that_fails_to_spawn_does_not_steal_the_viewport() {
             chosen: false,
         });
 
-    // Declares a UI root, but carries a patch that cannot survive the
-    // emit-and-reparse round trip `activate_tab` spawns through.
-    let mut doc = jackdaw_bsn::SceneBsnAst::default();
-    let node = doc.create_entity_node(vec![
-        jackdaw_bsn::BsnPatch::Type("jackdaw_scene_types::UiSceneRoot".to_string()),
-        jackdaw_bsn::BsnPatch::Type("Unclosed [ bracket".to_string()),
-    ]);
-    doc.add_to_roots(node);
+    // Declares a UI root, but names the removed UI vocabulary, which refuses the
+    // activation.
+    let doc = jackdaw_bsn::parse_bsn_text(
+        r#"
+bevy_ecs::hierarchy::Children [
+    #Overlay
+    jackdaw_scene_types::UiSceneRoot
+    jackdaw_ui::UiCanvas
+]
+"#,
+    )
+    .expect("the fixture parses");
     assert!(
         jackdaw::scene_io::declares_ui_scene_root(&doc),
         "the fixture must still read as a UI scene, or it proves nothing",
@@ -2171,21 +2176,22 @@ fn status_text(app: &bevy::app::App) -> String {
 fn a_scene_whose_text_does_not_parse_back_survives_a_tab_switch() {
     let mut app = make_app_with_n_tabs(2);
     app.init_resource::<jackdaw::status_bar::StatusNotice>();
-    let (keeper, odd) = live_scene_with_an_unparsable_node(&mut app);
+    live_scene_with_an_unparsable_node(&mut app);
 
     assert!(
-        !jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1),
-        "the switch is refused while the scene cannot be captured"
+        jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1),
+        "the document moves to its tab whatever its text would read back as"
     );
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
-    assert_eq!(scenes.active, 0, "the scene stays in front");
+    let TabContent::Scene(Some(held)) = &scenes.tabs[0].content else {
+        panic!("the tab holds its document");
+    };
+    assert_eq!(held.roots.len(), 2, "with both its roots");
+
+    assert!(jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0));
     assert!(
-        matches!(scenes.tabs[0].content, TabContent::Scene(None)),
-        "the tab was not given a captured document in place of the live one"
-    );
-    assert!(
-        app.world().get_entity(keeper).is_ok(),
-        "keeper was despawned"
+        spawned_names(&mut app).iter().any(|name| name == "keeper"),
+        "keeper comes back with its tab"
     );
     assert_eq!(
         app.world()
@@ -2195,22 +2201,8 @@ fn a_scene_whose_text_does_not_parse_back_survives_a_tab_switch() {
         2,
         "the live document keeps both roots"
     );
-    assert!(
-        status_text(&app).contains("Cannot switch tabs"),
-        "the refusal is shown: {:?}",
-        status_text(&app)
-    );
-
-    app.world_mut()
-        .resource_mut::<jackdaw_bsn::SceneBsnAst>()
-        .roots
-        .retain(|&root| root != odd);
-    assert!(jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1));
-    assert!(jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0));
-    assert!(
-        spawned_names(&mut app).iter().any(|name| name == "keeper"),
-        "keeper comes back with its tab"
-    );
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert!(scenes.tabs[0].refusal.is_none(), "the tab stays editable");
 }
 
 /// Stop a Play in which the game did something only a respawn undoes.
@@ -2222,7 +2214,7 @@ fn stop_with_a_respawn(app: &mut bevy::app::App) {
 }
 
 #[test]
-fn stopping_play_keeps_a_scene_whose_text_does_not_parse_back() {
+fn stopping_play_reverts_a_scene_whose_text_does_not_parse_back() {
     let mut app = make_app_with_n_tabs(1);
     app.init_resource::<jackdaw::status_bar::StatusNotice>();
     let (keeper, _) = live_scene_with_an_unparsable_node(&mut app);
@@ -2234,17 +2226,18 @@ fn stopping_play_keeps_a_scene_whose_text_does_not_parse_back() {
     stop_with_a_respawn(&mut app);
 
     assert!(
-        app.world().get_entity(keeper).is_ok(),
-        "keeper was despawned"
+        app.world().get_entity(keeper).is_err(),
+        "keeper held game state, and the respawn replaced it"
+    );
+    assert!(
+        spawned_names(&mut app).iter().any(|name| name == "keeper"),
+        "keeper comes back from the document"
     );
     let projection = app
         .world()
         .resource::<jackdaw::pie_projection::PieProjection>();
-    assert!(projection.needs_respawn, "the respawn is still owed");
-    assert!(
-        projection.overlaid.contains(&keeper),
-        "keeper still holds game state, so a save takes nothing from it"
-    );
+    assert!(!projection.needs_respawn, "the respawn is paid");
+    assert!(projection.overlaid.is_empty());
     assert_eq!(
         app.world()
             .resource::<jackdaw_bsn::SceneBsnAst>()
@@ -2253,18 +2246,32 @@ fn stopping_play_keeps_a_scene_whose_text_does_not_parse_back() {
         2,
         "the live document keeps both roots"
     );
-    assert!(
-        matches!(
-            app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].content,
-            TabContent::Scene(None)
-        ),
-        "the tab was not given a captured document in place of the live one"
+}
+
+#[test]
+fn a_scene_whose_text_does_not_parse_back_is_refused_by_a_save_after_a_switch() {
+    let mut app = make_app_with_n_tabs(2);
+    app.init_resource::<jackdaw::status_bar::StatusNotice>();
+    let tmp = tempfile::tempdir().expect("temp directory");
+    let scene_path = tmp.path().join("zone.bsn");
+    let original = "#keeper\n";
+    std::fs::write(&scene_path, original).expect("write the scene the tab names");
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        scenes.tabs[0].path = Some(scene_path.clone());
+        scenes.tabs[0].dirty = true;
+    }
+    live_scene_with_an_unparsable_node(&mut app);
+    assert!(jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1));
+    assert!(jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 0));
+
+    assert!(!jackdaw::scene_io::save_scene(app.world_mut()));
+
+    assert_eq!(
+        std::fs::read_to_string(&scene_path).expect("the file is still there"),
+        original,
     );
-    assert!(
-        status_text(&app).contains("Scene not reverted"),
-        "the refusal is shown: {:?}",
-        status_text(&app)
-    );
+    assert!(app.world().resource::<jackdaw::scenes::Scenes>().tabs[0].dirty);
 }
 
 #[test]

@@ -196,6 +196,20 @@ fn an_inactive_tab_answers_with_its_document_and_its_folder() {
 }
 
 #[test]
+fn an_inactive_tab_answers_with_the_text_it_answered_with_in_front() {
+    let (mut app, _tmp) = editor();
+    open(&mut app, "assets/levels/meadow.bsn");
+    let meadow = entity_named(&mut app, "Meadow");
+    move_to(&mut app, meadow, 3.0);
+    let (front, ..) = document(scene_answer(app.world_mut(), None, "levels/meadow.bsn"));
+
+    open(&mut app, "assets/zone.bsn");
+
+    let (behind, ..) = document(scene_answer(app.world_mut(), None, "levels/meadow.bsn"));
+    assert_eq!(behind, front);
+}
+
+#[test]
 fn a_scene_not_open_or_refused_uses_its_file() {
     let (mut app, _tmp) = editor();
     assert_eq!(

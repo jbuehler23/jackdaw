@@ -164,6 +164,7 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
 /// before clearing the scene it replaces.
 pub fn load_bsn_document(world: &mut World, mut ast: SceneBsnAst) -> LoadedBsnScene {
     let _span = bevy::log::info_span!("doc.load").entered();
+    ast.clear_links();
     let registry = world.resource::<AppTypeRegistry>().clone();
     let mut assets = Vec::new();
     {

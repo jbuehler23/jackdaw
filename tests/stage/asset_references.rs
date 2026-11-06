@@ -380,6 +380,7 @@ fn converting_a_document_a_tab_has_open_is_refused() {
     app.world_mut()
         .resource_mut::<jackdaw::scenes::Scenes>()
         .push_tab(jackdaw::scenes::SceneTab {
+            id: 0,
             path: Some(open.clone()),
             display_name: "zone".to_string(),
             dirty: false,
