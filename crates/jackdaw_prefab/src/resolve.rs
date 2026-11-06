@@ -329,10 +329,12 @@ fn merge_descendant_overrides(
             }
         }
 
+        let file_id = prefab_match_id_value(prefab, prefab_match);
         let overrides: Vec<(String, BsnValue)> = ast
             .component_type_paths(node)
             .into_iter()
             .filter(|tp| tp != PREFAB_ENTITY_ID_TYPE && tp != ISA_TYPE)
+            .filter(|tp| !(file_id.is_some() && tp.ends_with("SceneNodeId")))
             .filter_map(|tp| get_bsn_field(ast, node, &tp, "").map(|delta| (tp, delta)))
             .collect();
         for (type_path, delta) in overrides {
@@ -343,6 +345,12 @@ fn merge_descendant_overrides(
                 apply_deltas(&mut merged, &delta);
                 set_whole_component(ast, node, &type_path, merged);
             }
+        }
+
+        if let Some((type_path, value)) = file_id
+            && ast.stable_id_patch(node).is_some()
+        {
+            set_whole_component(ast, node, &type_path, value);
         }
 
         // The name is a reference patch, not a component patch, so the
@@ -357,6 +365,18 @@ fn merge_descendant_overrides(
             }
         }
     }
+}
+
+/// The `SceneNodeId` component of a prefab node by type path and value, when the
+/// file numbers it.
+fn prefab_match_id_value(prefab: &SceneBsnAst, node: Entity) -> Option<(String, BsnValue)> {
+    prefab.stable_id_of(node)?;
+    let type_path = prefab
+        .component_type_paths(node)
+        .into_iter()
+        .find(|tp| tp.ends_with("SceneNodeId"))?;
+    let value = get_bsn_field(prefab, node, &type_path, "")?;
+    Some((type_path, value))
 }
 
 /// Reduce inherited descendants of prefab instances to sparse override entries
@@ -431,6 +451,16 @@ pub fn sparsify_inherited_descendants(
             &[PREFAB_ENTITY_ID_TYPE],
             filed_name,
         );
+        // A file that names the node owns its id, so one left over from before
+        // the file was written again is not an override.
+        if prefab.stable_id_of(prefab_match).is_some()
+            && let Some(patch) = ast.stable_id_patch(node)
+        {
+            if let Some(patches) = ast.get_patches_mut(node) {
+                patches.0.retain(|&held| held != patch);
+            }
+            ast.world.despawn(patch);
+        }
     }
 }
 

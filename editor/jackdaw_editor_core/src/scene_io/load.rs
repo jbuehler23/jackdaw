@@ -322,7 +322,16 @@ fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome
             let cache = world.resource::<crate::prefab::PrefabAstCache>();
             let get_prefab = |p: &Path| cache.get(p);
             match crate::prefab::resolver_bsn::resolve_scene(&authored, &get_prefab) {
-                Ok(resolved) => Some(resolved),
+                Ok(mut resolved) => {
+                    if !crate::scenes::operators::document_is_prefab(&authored) {
+                        let registry = world.resource::<AppTypeRegistry>().clone();
+                        crate::scene_nodes::separate_from_inherited_ids(
+                            &mut resolved,
+                            &registry.read(),
+                        );
+                    }
+                    Some(resolved)
+                }
                 Err(e) => {
                     warn!("prefab resolution failed: {e}; spawning unresolved scene");
                     None

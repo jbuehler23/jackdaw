@@ -110,6 +110,8 @@ pub struct SceneBsnAst {
     pub ecs_to_ast: HashMap<Entity, Entity>,
     /// Maps AST patches entities to ECS scene entities (reverse of above).
     pub ast_to_ecs: HashMap<Entity, Entity>,
+    /// See [`SceneBsnAst::parent_walks`].
+    parent_walks: std::sync::atomic::AtomicU64,
 }
 
 /// How many entities a document must hold to be freed away from the caller.

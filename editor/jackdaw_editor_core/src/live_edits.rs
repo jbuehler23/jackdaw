@@ -203,7 +203,7 @@ pub fn resolve_entry_entity(
     entry: &LiveEditEntry,
 ) -> Option<Entity> {
     if let Some(node_id) = entry.node_id
-        && let Some(entity) = ast.entity_for_stable_id(node_id)
+        && let Some(entity) = crate::scene_nodes::unit_entity_for_stable_id(ast, node_id)
     {
         return Some(entity);
     }

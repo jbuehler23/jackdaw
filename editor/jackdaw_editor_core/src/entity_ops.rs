@@ -1937,11 +1937,7 @@ impl PasteTarget {
                 index: self.index,
             };
         };
-        let parent = world
-            .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
-            .iter(world)
-            .find(|(_, id)| **id == wanted)
-            .map(|(entity, _)| entity);
+        let parent = crate::scene_nodes::unit_holder(world, wanted);
         HierarchyLocation {
             parent,
             index: if parent.is_some() {
@@ -2014,9 +2010,32 @@ fn graft_and_spawn_at(
     spawned
 }
 
+/// Remove the `PrefabEntityId` from every node in `ast` that no instance root in
+/// `ast` sits above. A copy of one node from inside an instance has no file to
+/// match that id against, and would read as an override of the original.
+fn drop_orphaned_prefab_entity_ids(ast: &mut jackdaw_bsn::SceneBsnAst) {
+    use crate::prefab::resolver_bsn::{ISA_TYPE, PREFAB_ENTITY_ID_TYPE};
+
+    let mut stack: Vec<(Entity, bool)> = ast.roots.iter().map(|&root| (root, false)).collect();
+    let mut seen: std::collections::HashSet<Entity> = ast.roots.iter().copied().collect();
+    while let Some((node, below)) = stack.pop() {
+        let instance_root = ast.find_patch_by_type_path(node, ISA_TYPE).is_some();
+        if !below && !instance_root {
+            ast.remove_component_patch(node, PREFAB_ENTITY_ID_TYPE);
+        }
+        let children_below = below || instance_root;
+        for child in ast.get_children_ast(node) {
+            if seen.insert(child) {
+                stack.push((child, children_below));
+            }
+        }
+    }
+}
+
 /// Ensure every entity node in `ast` carries a fresh `SceneNodeId` patch so
 /// spawn/apply installs unique ids.
 fn mint_scene_node_ids(world: &World, ast: &mut jackdaw_bsn::SceneBsnAst) {
+    drop_orphaned_prefab_entity_ids(ast);
     let registry = world.resource::<AppTypeRegistry>().clone();
     let asset_roots: std::collections::HashSet<Entity> = {
         let reg = registry.read();

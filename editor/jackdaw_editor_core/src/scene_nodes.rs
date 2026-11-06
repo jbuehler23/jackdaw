@@ -22,8 +22,8 @@ pub(crate) fn plugin(app: &mut App) {
 /// entity held.
 ///
 /// The nodes inside a prefab instance carry the ids the prefab file gave them,
-/// so two instances of one prefab share them. A node held by more than one
-/// entity resolves to none.
+/// so two instances of one prefab share them, and a file an older pack wrote can
+/// repeat the id of a node in the scene.
 #[derive(Resource, Default)]
 pub struct SceneNodes {
     live: HashMap<SceneNodeId, Entity>,
@@ -35,12 +35,26 @@ pub struct SceneNodes {
 }
 
 impl SceneNodes {
-    /// The one entity holding `node` now.
-    pub fn entity(&self, node: SceneNodeId) -> Option<Entity> {
+    /// The entity holding `node` as a unit of its own in the document, however
+    /// many entities below instance roots repeat the id. An instance's inner
+    /// node is never returned, even when it is the only holder.
+    pub(crate) fn unit(&self, world: &World, node: SceneNodeId) -> Option<Entity> {
+        self.holders(node).find(|&entity| is_unit(world, entity))
+    }
+
+    fn only_holder(&self, node: SceneNodeId) -> Option<Entity> {
         if self.shared.contains_key(&node) {
             return None;
         }
         self.live.get(&node).copied()
+    }
+
+    fn holders(&self, node: SceneNodeId) -> impl Iterator<Item = Entity> + '_ {
+        let held = match self.shared.get(&node) {
+            Some(holders) => holders.as_slice(),
+            None => self.live.get(&node).map_or(&[][..], std::slice::from_ref),
+        };
+        held.iter().copied()
     }
 
     /// How many despawned entities are remembered: a few times the live
@@ -91,6 +105,70 @@ impl SceneNodes {
     }
 }
 
+/// Whether `entity` is a node of the document that no instance root sits above.
+/// Everything below an instance root belongs to that instance's unit, whether its
+/// file or the scene added it.
+fn is_unit(world: &World, entity: Entity) -> bool {
+    world
+        .get_resource::<SceneBsnAst>()
+        .is_some_and(|document| document.ast_for(entity).is_some())
+        && !below_instance_root(world, entity)
+}
+
+fn below_instance_root(world: &World, entity: Entity) -> bool {
+    let mut at = world.get::<ChildOf>(entity);
+    while let Some(child_of) = at {
+        let parent = child_of.parent();
+        if world.get::<crate::prefab::IsA>(parent).is_some() {
+            return true;
+        }
+        at = world.get::<ChildOf>(parent);
+    }
+    false
+}
+
+/// The entity `node` means to someone holding only the id: the unit holding it,
+/// else the only holder, so one instance's inner node still resolves after a
+/// respawn. Inner nodes that several instances share resolve to none.
+pub fn unit_holder(world: &World, node: SceneNodeId) -> Option<Entity> {
+    let nodes = world.get_resource::<SceneNodes>()?;
+    nodes.unit(world, node).or_else(|| nodes.only_holder(node))
+}
+
+/// The entity of the document node `id` names: the one the live index holds for
+/// it, which costs no scan, else [`unit_entity_for_stable_id`].
+pub fn authored_entity(world: &World, id: u64) -> Option<Entity> {
+    let ast = world.resource::<SceneBsnAst>();
+    unit_holder(world, SceneNodeId(id))
+        .filter(|&entity| ast.ast_for(entity).is_some())
+        .or_else(|| unit_entity_for_stable_id(ast, id))
+}
+
+/// The entity of the document node carrying `id`: the unit carrying it, else the
+/// first node inside an instance that does. Linear over nodes.
+pub fn unit_entity_for_stable_id(ast: &SceneBsnAst, id: u64) -> Option<Entity> {
+    let mut inner = None;
+    let mut stack: Vec<(Entity, bool)> = ast.roots.iter().map(|&root| (root, false)).collect();
+    while let Some((node, below)) = stack.pop() {
+        if ast.stable_id_of(node) == Some(id) {
+            if !below {
+                return ast.ecs_for_ast(node);
+            }
+            inner.get_or_insert(node);
+        }
+        let children_below = below
+            || ast
+                .find_patch_by_type_path(node, crate::prefab::resolver_bsn::ISA_TYPE)
+                .is_some();
+        stack.extend(
+            ast.get_children_ast(node)
+                .into_iter()
+                .map(|child| (child, children_below)),
+        );
+    }
+    inner.and_then(|node| ast.ecs_for_ast(node))
+}
+
 fn index_node(
     added: On<Insert<SceneNodeId>>,
     ids: Query<&SceneNodeId>,
@@ -126,7 +204,7 @@ pub fn live_entity(world: &World, entity: Entity) -> Entity {
         .get_resource::<SceneNodes>()
         .and_then(|nodes| {
             let node = nodes.retired.get(&entity)?;
-            nodes.entity(*node)
+            unit_holder(world, *node)
         })
         .unwrap_or(entity)
 }
@@ -152,7 +230,7 @@ pub fn rename_node(world: &mut World, entity: Entity, node: SceneNodeId) {
     let Some(document_node) = ast.ast_for(entity) else {
         return;
     };
-    match ast.find_patch_by_type_path(document_node, SCENE_NODE_ID_TYPE_PATH) {
+    match ast.stable_id_patch(document_node) {
         Some(patch) => ast.set_patch(patch, node_id_patch(node)),
         None => {
             let patch = ast.world.spawn(node_id_patch(node)).id();
@@ -164,30 +242,87 @@ pub fn rename_node(world: &mut World, entity: Entity, node: SceneNodeId) {
     world.entity_mut(entity).insert(node);
 }
 
-/// Give every entity node in `ast` that the scene owns and that has no node id
-/// a fresh one, so a hand-written or older scene names each node the way the
-/// editor and a running game address it. Named asset roots spawn no entity and
-/// are left alone.
-///
-/// The nodes inside a prefab instance carry a `PrefabEntityId` and take their
-/// ids from the prefab file, so they are left as they are. An instance root
-/// carries one too, but it is the scene's own node.
-pub fn name_scene_nodes(ast: &mut SceneBsnAst, registry: &bevy::reflect::TypeRegistry) {
-    let mut stack = jackdaw_bsn::catalog::entity_roots(ast, registry);
+/// One entity node of a document, as a walk from the roots finds it.
+struct WalkedNode {
+    node: Entity,
+    instance_root: bool,
+    /// Below an instance root and numbered by its file, so the file names it.
+    /// A child the scene added below an instance is not inherited.
+    inherited: bool,
+}
+
+/// Every entity node of `ast`, in document order. Named asset roots spawn no
+/// entity and are left out.
+fn walk_nodes(ast: &SceneBsnAst, registry: &bevy::reflect::TypeRegistry) -> Vec<WalkedNode> {
+    let mut stack: Vec<(Entity, bool)> = jackdaw_bsn::catalog::entity_roots(ast, registry)
+        .into_iter()
+        .rev()
+        .map(|root| (root, false))
+        .collect();
     let mut seen = HashSet::new();
-    let mut unnamed = Vec::new();
-    while let Some(node) = stack.pop() {
+    let mut walked = Vec::new();
+    while let Some((node, below)) = stack.pop() {
         if !seen.insert(node) {
             continue;
         }
         let instance_root = ast
             .find_patch_by_type_path(node, crate::prefab::resolver_bsn::ISA_TYPE)
             .is_some();
-        let from_prefab = crate::prefab::overrides_bsn::is_inside_prefab_instance(ast, node);
-        if ast.stable_id_of(node).is_none() && (instance_root || !from_prefab) {
-            unnamed.push(node);
+        let inherited = below
+            && ast
+                .find_patch_by_type_path(node, crate::prefab::resolver_bsn::PREFAB_ENTITY_ID_TYPE)
+                .is_some();
+        walked.push(WalkedNode {
+            node,
+            instance_root,
+            inherited,
+        });
+        let children_below = below || instance_root;
+        stack.extend(
+            ast.get_children_ast(node)
+                .into_iter()
+                .rev()
+                .map(|child| (child, children_below)),
+        );
+    }
+    walked
+}
+
+fn give_fresh_ids(ast: &mut SceneBsnAst, repeating: &[Entity]) {
+    if repeating.is_empty() {
+        return;
+    }
+    warn!(
+        "{} scene nodes repeated a node id and got fresh ones",
+        repeating.len()
+    );
+    for &node in repeating {
+        if let Some(patch) = ast.stable_id_patch(node) {
+            ast.set_patch(patch, node_id_patch(SceneNodeId::next()));
         }
-        stack.extend(ast.get_children_ast(node));
+    }
+}
+
+/// Give every entity node in `ast` that the scene owns and that has no node id
+/// a fresh one, so a hand-written or older scene names each node the way the
+/// editor and a running game address it. A node repeating an id the scene
+/// already gave another of its own nodes gets a fresh one too, keeping both
+/// nodes; the first in the document keeps the id. Named asset roots spawn no
+/// entity and are left alone.
+///
+/// The nodes inside a prefab instance carry a `PrefabEntityId` and take their
+/// ids from the prefab file, so they are left as they are. An instance root
+/// carries one too, but it is the scene's own node.
+pub fn name_scene_nodes(ast: &mut SceneBsnAst, registry: &bevy::reflect::TypeRegistry) {
+    let mut ids = HashSet::new();
+    let mut unnamed = Vec::new();
+    let mut repeating = Vec::new();
+    for walked in walk_nodes(ast, registry) {
+        match ast.stable_id_of(walked.node) {
+            None if walked.instance_root || !walked.inherited => unnamed.push(walked.node),
+            Some(id) if !walked.inherited && !ids.insert(id) => repeating.push(walked.node),
+            _ => {}
+        }
     }
     for node in unnamed {
         let patch = ast.world.spawn(node_id_patch(SceneNodeId::next())).id();
@@ -195,6 +330,36 @@ pub fn name_scene_nodes(ast: &mut SceneBsnAst, registry: &bevy::reflect::TypeReg
             patches.0.push(patch);
         }
     }
+    give_fresh_ids(ast, &repeating);
+}
+
+/// Give a fresh id to every node the scene owns in `resolved` that repeats an id
+/// an instance inherited from its file, which only shows once the instances are
+/// expanded. The inherited node keeps the id, since the file says so.
+///
+/// Renames what a history entry would name, so a caller runs this only on a
+/// document with no history.
+pub fn separate_from_inherited_ids(
+    resolved: &mut SceneBsnAst,
+    registry: &bevy::reflect::TypeRegistry,
+) {
+    let walked = walk_nodes(resolved, registry);
+    let inherited: HashSet<u64> = walked
+        .iter()
+        .filter(|walked| walked.inherited)
+        .filter_map(|walked| resolved.stable_id_of(walked.node))
+        .collect();
+    let repeating: Vec<Entity> = walked
+        .iter()
+        .filter(|walked| !walked.inherited)
+        .filter(|walked| {
+            resolved
+                .stable_id_of(walked.node)
+                .is_some_and(|id| inherited.contains(&id))
+        })
+        .map(|walked| walked.node)
+        .collect();
+    give_fresh_ids(resolved, &repeating);
 }
 
 #[cfg(test)]

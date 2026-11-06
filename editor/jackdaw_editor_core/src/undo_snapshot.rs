@@ -437,14 +437,9 @@ fn restore_selection(world: &mut World, wanted: &[jackdaw_scene_types::SceneNode
     if wanted.is_empty() {
         return;
     }
-    let by_id: std::collections::HashMap<jackdaw_scene_types::SceneNodeId, Entity> = world
-        .query::<(Entity, &jackdaw_scene_types::SceneNodeId)>()
-        .iter(world)
-        .map(|(entity, id)| (*id, entity))
-        .collect();
     let restored: Vec<Entity> = wanted
         .iter()
-        .filter_map(|id| by_id.get(id).copied())
+        .filter_map(|&id| crate::scene_nodes::unit_holder(world, id))
         .collect();
     for &entity in &restored {
         if let Ok(mut entity) = world.get_entity_mut(entity) {
