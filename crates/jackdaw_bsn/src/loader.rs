@@ -52,8 +52,10 @@ pub fn parses_on_this_thread() -> u64 {
 /// paths of text stamped by an older Bevy, and reading the Bevy 0.19 entity
 /// separator (see [`crate::migrate`]).
 pub fn parse_bsn_text(text: &str) -> Result<SceneBsnAst, BsnLoadError> {
+    let _span = bevy::log::info_span!("doc.parse").entered();
     PARSES_ON_THIS_THREAD.set(PARSES_ON_THIS_THREAD.get() + 1);
-    let text = crate::migrate::migrate_stamped(text);
+    let text =
+        bevy::log::info_span!("parse.migrate").in_scope(|| crate::migrate::migrate_stamped(text));
     let (mut ast, root) = match crate::parse::parse_bsn(&text) {
         Ok(parsed) => parsed,
         Err(err) => match crate::migrate::entity_separators(&text) {

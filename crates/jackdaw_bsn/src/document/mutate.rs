@@ -258,6 +258,7 @@ impl SceneBsnAst {
     /// the linked ECS entities carry over. Useful for read-only emission or
     /// resolution passes that must not mutate the live document.
     pub fn deep_clone(&self) -> SceneBsnAst {
+        let _span = bevy::log::info_span!("doc.clone").entered();
         let mut dst = SceneBsnAst::default();
         for &root in &self.roots {
             let new_root = clone_subtree_into(&mut dst, self, root, None);

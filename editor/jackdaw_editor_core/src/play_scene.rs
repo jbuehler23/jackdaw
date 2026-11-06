@@ -54,6 +54,7 @@ pub enum PlayScene {
 /// or project setting that names a scene keeps it, so the scene in front does
 /// not take its place.
 pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
+    let _span = info_span!("play.launch_scene").entered();
     let names_scene = run.env.contains_key("JACKDAW_PIE_SCENE")
         || world
             .get_resource::<crate::play_settings::PlaySettings>()

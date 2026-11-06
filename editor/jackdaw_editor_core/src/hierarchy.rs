@@ -733,6 +733,7 @@ fn live_tree_roots(world: &mut World, live: &std::collections::HashSet<Entity>) 
 }
 
 pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
+    let _span = info_span!("outliner.rebuild").entered();
     fn rebuild_hierarchy_inner(
         world: &mut World,
         containers: &mut QueryState<Entity, With<HierarchyTreeContainer>>,
@@ -1017,6 +1018,7 @@ fn spawn_rows_for_new_roots(world: &mut World) {
     if entities.is_empty() {
         return;
     }
+    let _span = info_span!("outliner.new_roots").entered();
     let containers: Vec<Entity> = world
         .run_system_cached(collect_hierarchy_containers)
         .unwrap_or_default();

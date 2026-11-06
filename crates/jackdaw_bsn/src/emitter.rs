@@ -59,6 +59,7 @@ impl Indent {
 /// `Children [...]` relation so the result re-parses as a single top-level
 /// entity.
 pub fn emit_scene(ast: &SceneBsnAst) -> String {
+    let _span = bevy::log::info_span!("doc.emit").entered();
     let mut out = String::new();
 
     if ast.roots.len() <= 1 {
@@ -156,6 +157,7 @@ pub fn emit_entities(ast: &SceneBsnAst, entities: &[Entity]) -> String {
 
 /// How many bytes of text the document's brushes take up.
 pub fn brush_text_len(ast: &SceneBsnAst) -> usize {
+    let _span = bevy::log::info_span!("doc.brush_text_len").entered();
     let mut total = 0;
     let mut text = String::new();
     for &root in &ast.roots {

@@ -458,6 +458,10 @@ fn sync_changed_brushes_to_ast(
     projection: Option<Res<crate::pie_projection::PieProjection>>,
     mut commands: Commands,
 ) {
+    if changed.is_empty() {
+        return;
+    }
+    let _span = info_span!("brush.sync_back").entered();
     let entries: Vec<(Entity, Brush)> = changed
         .iter()
         .filter(|(entity, brush)| {
@@ -471,6 +475,7 @@ fn sync_changed_brushes_to_ast(
         return;
     }
     commands.queue(move |world: &mut World| {
+        let _span = info_span!("brush.sync_back_apply").entered();
         let mut entries = entries;
         for (entity, brush) in &mut entries {
             if crate::scene_io::asset_names::relink_brush_faces(world, brush)

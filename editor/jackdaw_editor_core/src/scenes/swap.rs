@@ -17,6 +17,7 @@ use crate::scenes::{Scenes, TabContent, ViewState};
 /// A scene that cannot be captured stays in front, untouched, with the reason
 /// in the status bar.
 pub fn swap_active_tab(world: &mut World, target: usize) -> bool {
+    let _span = info_span!("tab.swap").entered();
     let current = world.resource::<Scenes>().active;
     if current == target {
         return true;
@@ -65,6 +66,7 @@ pub fn reactivate_after_close(world: &mut World, target: usize) {
 ///
 /// False when the document could not be captured, which leaves the scene as it is.
 pub(crate) fn respawn_scene_from_ast(world: &mut World) -> bool {
+    let _span = info_span!("tab.respawn").entered();
     let active = world.resource::<Scenes>().active;
     if world.resource::<Scenes>().tabs.is_empty() {
         return true;
@@ -87,6 +89,7 @@ pub(crate) fn respawn_scene_from_ast(world: &mut World) -> bool {
 /// A document whose text does not parse back is refused before anything is
 /// taken from the world, so the caller can leave the scene as it is.
 pub(crate) fn capture_active_tab(world: &mut World) -> Result<(), jackdaw_bsn::UnparsableEmit> {
+    let _span = info_span!("tab.capture").entered();
     let active = world.resource::<Scenes>().active;
 
     // A refused tab never got its document into the world, so there is nothing
@@ -155,6 +158,7 @@ pub(crate) fn capture_active_tab(world: &mut World) -> Result<(), jackdaw_bsn::U
 /// Spawn the target tab's document into the live world and restore per-tab
 /// history and view state.
 pub fn activate_tab(world: &mut World, target: usize) {
+    let _span = info_span!("tab.activate").entered();
     let has_terrain_data_store = world.contains_resource::<crate::terrain_mode::TerrainDataStore>();
     let (mut content, view_state, history, tab_path, terrain_data_store, scene_resources) = {
         let mut scenes = world.resource_mut::<Scenes>();
@@ -212,6 +216,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
         .is_some()
     {
         {
+            let _populate = info_span!("tab.prefab_cache").entered();
             let mut cache = world.resource_mut::<crate::prefab::PrefabAstCache>();
             crate::prefab::save_load::populate_cache_for_scene_bsn(
                 &new_doc,
@@ -232,7 +237,9 @@ pub fn activate_tab(world: &mut World, target: usize) {
         }
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
         let get_prefab = |p: &std::path::Path| cache.get(p);
-        match crate::prefab::resolver_bsn::resolve_scene(&new_doc, &get_prefab) {
+        let resolved = info_span!("tab.resolve")
+            .in_scope(|| crate::prefab::resolver_bsn::resolve_scene(&new_doc, &get_prefab));
+        match resolved {
             Ok(resolved) => Some(resolved),
             Err(e) => {
                 warn!("activate_tab: prefab resolution failed: {e}; spawning unresolved");
@@ -253,7 +260,8 @@ pub fn activate_tab(world: &mut World, target: usize) {
     let refusal = match jackdaw_bsn::reject_retired_ui_components(spawning) {
         Ok(()) => {
             let resolved_text = jackdaw_bsn::emit_scene(spawning);
-            crate::asset_index::index_files_named(world, &resolved_text);
+            info_span!("tab.index_assets")
+                .in_scope(|| crate::asset_index::index_files_named(world, &resolved_text));
             match jackdaw_bsn::load_bsn_scene(world, &resolved_text) {
                 Ok(_) => None,
                 Err(err) => {
@@ -306,7 +314,7 @@ pub fn activate_tab(world: &mut World, target: usize) {
 
     let history_depth = history.undo_stack.len();
     *world.resource_mut::<CommandHistory>() = history;
-    apply_view_state(world, &view_state, spawned_ok);
+    info_span!("tab.view_state").in_scope(|| apply_view_state(world, &view_state, spawned_ok));
 
     // Critical: sync the global `SceneFilePath` to whichever tab is now
     // active. Without this, `save_scene` sees the previous tab's path
@@ -333,13 +341,16 @@ pub fn activate_tab(world: &mut World, target: usize) {
             crate::scene_io::SidecarImport::RefreshChanged
         };
         let path = path.to_string_lossy();
-        crate::scene_io::hooks::import_sidecars(world, &path, mode);
+        info_span!("tab.sidecars")
+            .in_scope(|| crate::scene_io::hooks::import_sidecars(world, &path, mode));
     }
 
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;
     scenes.tabs[target].history_depth_at_last_check = history_depth;
-    world.trigger(jackdaw_api_internal::document::SceneOpened { path: tab_path });
+    info_span!("tab.opened_observers").in_scope(|| {
+        world.trigger(jackdaw_api_internal::document::SceneOpened { path: tab_path });
+    });
 }
 
 /// Captures camera transform, edit mode, and selection as scene node ids.

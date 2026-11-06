@@ -163,6 +163,7 @@ pub fn load_bsn_scene(world: &mut World, text: &str) -> Result<LoadedBsnScene, B
 /// [`load_bsn_scene`] for a document already parsed, so a caller can parse
 /// before clearing the scene it replaces.
 pub fn load_bsn_document(world: &mut World, mut ast: SceneBsnAst) -> LoadedBsnScene {
+    let _span = bevy::log::info_span!("doc.load").entered();
     let registry = world.resource::<AppTypeRegistry>().clone();
     let mut assets = Vec::new();
     {
@@ -170,7 +171,8 @@ pub fn load_bsn_document(world: &mut World, mut ast: SceneBsnAst) -> LoadedBsnSc
         // A file written before list elements left out their defaults reads
         // the same as one written after, so values in it compare equal to the
         // values the live world writes back.
-        crate::compact_document(&mut ast, &reg);
+        bevy::log::info_span!("doc.compact").in_scope(|| crate::compact_document(&mut ast, &reg));
+        let _assets = bevy::log::info_span!("doc.load_assets").entered();
         for root in asset_roots(&ast, &reg) {
             let Some(name) = ast.get_name(root).map(str::to_owned) else {
                 continue;
@@ -209,8 +211,8 @@ pub fn load_bsn_document(world: &mut World, mut ast: SceneBsnAst) -> LoadedBsnSc
     if let Some(mut unresolved) = world.get_resource_mut::<crate::UnresolvedTypes>() {
         unresolved.start_scene();
     }
-    let entities = crate::spawn_from_ast(world);
-    crate::apply_dirty_ast_patches(world);
+    let entities = bevy::log::info_span!("doc.spawn").in_scope(|| crate::spawn_from_ast(world));
+    bevy::log::info_span!("doc.apply").in_scope(|| crate::apply_dirty_ast_patches(world));
     report_unresolved_types(world);
 
     LoadedBsnScene { entities, assets }

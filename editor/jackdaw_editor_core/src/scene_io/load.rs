@@ -130,6 +130,7 @@ pub fn load_scene_from_file_with_outcome(
 }
 
 fn finish_load_scene(world: &mut World, chosen: &std::path::Path) -> LoadOutcome {
+    let _span = info_span!("open.finish_load").entered();
     let mut path = chosen.to_string_lossy().to_string();
 
     let bytes = match std::fs::read(&path) {
@@ -625,8 +626,10 @@ fn forget_drag_resource<R: Resource<Mutability = bevy::ecs::component::Mutable> 
 
 /// Remove scene entities from the world (named non-editor entities + their descendants).
 pub(crate) fn clear_scene_entities(world: &mut World) {
+    let _span = info_span!("scene.clear").entered();
     if world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
-        world.insert_resource(jackdaw_bsn::SceneBsnAst::default());
+        info_span!("doc.drop")
+            .in_scope(|| world.insert_resource(jackdaw_bsn::SceneBsnAst::default()));
     }
 
     // Extensions' per-scene state belongs to the scene being cleared, not to the tab it was
@@ -638,7 +641,9 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
         .entities
         .clear();
 
-    if let Err(err) = world.run_system_cached(crate::hierarchy::clear_all_tree_rows) {
+    let rows = info_span!("outliner.clear")
+        .in_scope(|| world.run_system_cached(crate::hierarchy::clear_all_tree_rows));
+    if let Err(err) = rows {
         error!("Failed to clear tree rows: {err}");
     }
     // The rows the outliner was still waiting on, and the ones it gave up on,
@@ -671,6 +676,7 @@ pub(crate) fn clear_scene_entities(world: &mut World) {
 /// carries a name, so an instance that inherited nothing leaves with its
 /// scene rather than standing in the next one.
 pub(crate) fn despawn_scene_entities(world: &mut World) -> Result<(), BevyError> {
+    let _span = info_span!("scene.despawn").entered();
     forget_dragged_entities(world);
     let editor_set = world.run_system_cached(collect_editor_entities)?;
 

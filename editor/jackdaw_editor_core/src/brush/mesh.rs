@@ -249,6 +249,10 @@ pub fn regenerate_brush_meshes(
     palette: Res<BrushMaterialPalette>,
     halfedge_q: Query<&crate::brush::BrushHalfedge>,
 ) {
+    if changed_brushes.is_empty() {
+        return;
+    }
+    let _span = info_span!("brush.mesh_rebuild").entered();
     for (entity, brush, stack, children) in &changed_brushes {
         // Despawn all Mesh3d children from previous regen cycles.
         if let Some(children) = children {

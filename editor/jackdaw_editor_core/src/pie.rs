@@ -360,6 +360,7 @@ fn reset_view_mode_on_stop(mut mode: ResMut<PieViewMode>) {
 /// survive a crash, and the dead key blocks the next session's auto-enter
 /// (focus is only established when none exists).
 fn cleanup_session_on_stop(world: &mut World) {
+    let _span = info_span!("play.cleanup").entered();
     if let Some(mut instances) = world.get_resource_mut::<PieInstances>() {
         instances.buffers.clear();
         instances.focused = None;
@@ -928,6 +929,7 @@ pub(crate) fn open_scene_asset_path(world: &World) -> Option<String> {
 /// save refuses for naming an asset by an absolute path, which warns. A prefab
 /// that does not save stops Play.
 fn save_before_play(world: &mut World) -> Result<(), String> {
+    let _span = info_span!("play.save_before").entered();
     if !world
         .get_resource::<crate::project_build::EditorBuildSettings>()
         .is_none_or(|settings| settings.save_before_play)
@@ -1158,6 +1160,7 @@ pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
 /// (building it if needed). From Paused, resumes every live child. No-op
 /// if already Playing or if the project has no run configurations.
 pub fn handle_play(world: &mut World) {
+    let _span = info_span!("play.start").entered();
     let current = world.resource::<State<PlayState>>().get().clone();
     match current {
         PlayState::Stopped => {
@@ -1202,6 +1205,7 @@ pub fn handle_pause(world: &mut World) {
 /// Stop every instance: ask the live children to exit, then reap and
 /// drop them all and discard pending builds. Returns to authoring mode.
 pub fn handle_stop(world: &mut World) {
+    let _span = info_span!("play.stop").entered();
     let current = world.resource::<State<PlayState>>().get().clone();
 
     broadcast_control(world, ControlEvent::Stop);
@@ -1226,6 +1230,7 @@ pub fn handle_stop(world: &mut World) {
 /// Answer a scene root's request for its document. The reply goes through the
 /// instance's outbox, ahead of any edit sent after this.
 fn answer_scene_request(world: &mut World, key: &InstanceKey, request: u64, path: &str) {
+    let _span = info_span!("play.serve_scene").entered();
     let launch = world
         .non_send::<PieSession>()
         .launch_scenes
