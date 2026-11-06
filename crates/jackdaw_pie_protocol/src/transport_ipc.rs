@@ -164,7 +164,8 @@ impl IpcLaneSender {
 ///
 /// The queue itself has no bound: every send is kept, since some events only go
 /// once. [`PieTransport::congested`] tells the game to hold what it can resend, so
-/// an editor that stopped reading costs at most about `SEND_BACKLOG_LIMIT`.
+/// an editor that stopped reading costs about `SEND_BACKLOG_LIMIT` of resendable
+/// state. Despawns and scene requests are queued past it, since they go once.
 pub struct QueuedSendTransport {
     link: IpcChannelTransport,
     queue: std::sync::mpsc::Sender<Vec<u8>>,

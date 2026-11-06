@@ -26,6 +26,9 @@ use crate::{JackdawScene, JackdawSceneRoot};
 /// costs the unsaved edits and node ids only the document holds.
 pub(crate) const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long an unanswered request waits before the game says it is waiting.
+const SLOW_ANSWER: Duration = Duration::from_secs(15);
+
 /// The requests sent to the editor and the answers not yet taken.
 #[derive(Resource, Default)]
 pub(crate) struct SceneRequests {
@@ -34,11 +37,15 @@ pub(crate) struct SceneRequests {
     /// Answers that arrived this update, taken by the roots waiting on them in
     /// the next spawn pass.
     answered: HashMap<u64, SceneAnswer>,
+    /// Set when a request timed out and cleared by any answer. While set, new
+    /// roots load their file without asking.
+    editor_silent: bool,
 }
 
 struct OpenRequest {
     path: String,
     asked_at: Duration,
+    warned: bool,
 }
 
 /// A root waiting on the request it holds.
@@ -87,9 +94,20 @@ pub(crate) fn begin_pass(world: &mut World) {
         return;
     };
     let mut abandoned = Vec::new();
+    let mut timed_out = false;
     requests.open.retain(|_, open| {
-        let alive = now.saturating_sub(open.asked_at) < ANSWER_TIMEOUT;
+        let waited = now.saturating_sub(open.asked_at);
+        let alive = waited < ANSWER_TIMEOUT;
+        if alive && waited >= SLOW_ANSWER && !open.warned {
+            open.warned = true;
+            warn!(
+                "PIE: waiting for the editor's scene {}; the file loads at {} s if it does not answer",
+                open.path,
+                ANSWER_TIMEOUT.as_secs()
+            );
+        }
         if !alive {
+            timed_out = true;
             warn!(
                 "PIE: the editor did not answer for scene {} within {} s; loading its file",
                 open.path,
@@ -99,6 +117,9 @@ pub(crate) fn begin_pass(world: &mut World) {
         }
         alive
     });
+    if timed_out {
+        requests.editor_silent = true;
+    }
     for path in abandoned {
         crate::pie::send_state(world, &StateEvent::SceneRequestAbandoned { path });
     }
@@ -120,6 +141,9 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
         return Gate::File;
     };
     let Some(&AwaitingDocument(request)) = world.get::<AwaitingDocument>(root) else {
+        if world.resource::<SceneRequests>().editor_silent {
+            return Gate::File;
+        }
         let request = ask(world, &path);
         world.entity_mut(root).insert(AwaitingDocument(request));
         return Gate::Hold;
@@ -182,6 +206,7 @@ fn ask(world: &mut World, path: &str) -> u64 {
         OpenRequest {
             path: path.to_string(),
             asked_at: now,
+            warned: false,
         },
     );
     crate::pie::send_state(
@@ -205,6 +230,7 @@ pub(crate) fn receive(world: &mut World, request: u64, answer: SceneAnswer) {
         crate::node_sync::load_scene_assets(world, text);
     }
     let mut requests = world.resource_mut::<SceneRequests>();
+    requests.editor_silent = false;
     if requests.open.remove(&request).is_some() {
         requests.answered.insert(request, answer);
     } else {
@@ -539,6 +565,44 @@ mod tests {
             "the late answer changes nothing"
         );
         assert!(app.world().get::<ServedScene>(root).is_none());
+    }
+
+    #[test]
+    fn after_a_silence_later_roots_load_their_file_until_an_answer_arrives() {
+        let (mut app, mut editor, _dir) = game();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            ANSWER_TIMEOUT / 4,
+        ));
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            ANSWER_TIMEOUT,
+        ));
+        update_until_spawned(&mut app);
+        editor.drain_received();
+
+        spawn_root(&mut app, "other.bsn");
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            requests_from(&mut editor).is_empty(),
+            "a silent editor is not asked again"
+        );
+        assert!(app.world().resource::<SceneRequests>().open.is_empty());
+
+        send(&mut editor, &document(request, scene_text(9.0)));
+        app.update();
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        app.update();
+        assert_eq!(
+            requests_from(&mut editor).len(),
+            1,
+            "an answer ends the silence"
+        );
     }
 
     /// The editor's main thread stalls for seconds emitting a large document.

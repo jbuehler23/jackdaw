@@ -31,7 +31,7 @@ const RESTART_BACKOFF_MS: u128 = 2000;
 /// Size last requested from the focused game, and the debounce window for
 /// resize requests.
 #[derive(Resource, Default)]
-struct StreamRequest {
+pub(crate) struct StreamRequest {
     /// Size of the last `StartFrameStream` sent; `None` while stopped.
     requested: Option<UVec2>,
     /// Candidate size waiting out the debounce window before it is sent.
@@ -42,6 +42,13 @@ struct StreamRequest {
     /// When the last `StartFrameStream` went out; gates stale-stream
     /// restarts to one per [`RESTART_BACKOFF_MS`] window.
     last_start: Option<Instant>,
+}
+
+impl StreamRequest {
+    /// Whether a stream has been asked of the game and not stopped since.
+    pub(crate) fn is_requested(&self) -> bool {
+        self.requested.is_some()
+    }
 }
 
 pub struct LiveFrameViewPlugin;

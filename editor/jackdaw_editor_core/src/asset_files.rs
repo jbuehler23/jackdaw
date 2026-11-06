@@ -136,6 +136,7 @@ fn without_label(value: &str) -> &str {
 /// The references a document's values spell, in the order it spells them.
 pub(crate) fn spelled_references(text: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut characters = text.chars();
     while let Some(character) = characters.next() {
         if character != '"' {
@@ -156,7 +157,7 @@ pub(crate) fn spelled_references(text: &str) -> Vec<String> {
             }
         }
         let named = without_label(&value);
-        if could_name_a_file(named) && !found.iter().any(|held| held == named) {
+        if could_name_a_file(named) && seen.insert(named.to_string()) {
             found.push(named.to_string());
         }
     }

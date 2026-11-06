@@ -152,6 +152,12 @@ impl AssetIndex {
         self.writes += 1;
     }
 
+    /// Put the write count back after a `set_documents` that changed nothing an
+    /// in-flight walk would lose.
+    fn restore_writes(&mut self, writes: u64) {
+        self.writes = writes;
+    }
+
     /// The documents whose patches reference the file at `path`, as the index
     /// keys them. A document answers to either form it could be held in.
     pub fn referrers(&self, path: &Path) -> &[PathBuf] {
@@ -631,12 +637,16 @@ pub fn index_files_named(world: &mut World, text: &str) {
         .into_iter()
         .filter_map(|path| {
             let relative = path.strip_prefix(&assets).ok()?;
+            if is_catalog_file(relative) {
+                return None;
+            }
             match jackdaw_bsn::is_binary_path(relative) {
                 true => Some(jackdaw_bsn::text_twin(relative)),
                 false => Some(relative.to_path_buf()),
             }
         })
         .collect();
+    let writes_before = world.get_resource_or_init::<AssetIndex>().writes();
     world
         .get_resource_or_init::<AssetIndex>()
         .bypass_change_detection()
@@ -648,7 +658,11 @@ pub fn index_files_named(world: &mut World, text: &str) {
         let Some(relative) = referenced_path(index, &assets, &reference) else {
             continue;
         };
-        if !jackdaw_bsn::is_document_path(&relative) || index.get(&relative).is_some() {
+        if !jackdaw_bsn::is_document_path(&relative) {
+            continue;
+        }
+        let relative = jackdaw_bsn::text_twin(&relative);
+        if index.get(&relative).is_some() {
             continue;
         }
         let file = document_file(&assets, &relative);
@@ -680,6 +694,11 @@ pub fn index_files_named(world: &mut World, text: &str) {
     }
     if added {
         publish_reference_map(world);
+    } else {
+        world
+            .resource_mut::<AssetIndex>()
+            .bypass_change_detection()
+            .restore_writes(writes_before);
     }
 }
 
@@ -1170,6 +1189,25 @@ mod tests {
             index.by_stem("grass").map(|entry| entry.path.clone()),
             Some(PathBuf::from("materials/grass.bsn")),
             "and the one name it carries is not made ambiguous by its own form"
+        );
+    }
+
+    #[test]
+    fn a_file_named_before_the_walk_is_keyed_by_its_text_twin() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = material_project(tmp.path());
+        write_asset(tmp.path(), "materials/soil.bsb", GRASS);
+        write_asset(tmp.path(), "catalog.bsb", GRASS);
+
+        index_files_named(app.world_mut(), "\"materials/soil.bsb\"");
+
+        let index = app.world().resource::<AssetIndex>();
+        assert!(index.get(Path::new("materials/soil.bsn")).is_some());
+        assert!(index.get(Path::new("materials/soil.bsb")).is_none());
+        assert!(index.get(Path::new("catalog.bsn")).is_none());
+        assert!(
+            index.stems().unique("catalog").is_none(),
+            "the catalog is not a document"
         );
     }
 

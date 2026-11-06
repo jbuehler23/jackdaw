@@ -168,7 +168,9 @@ fn streamed_entities(world: &mut World) -> Vec<Entity> {
 ///
 /// An entity gone from the streamed set emits `EntityDespawned` straight away.
 /// While the link reads congested no queued work goes out. It stays queued, each
-/// component in one place, so what the game holds back is bounded by its world.
+/// component in one place, so a component changing every frame holds one place.
+/// An entity spawned and despawned while congested can leave its place held until
+/// the link clears, so the held work grows with that churn.
 fn stream_state(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;

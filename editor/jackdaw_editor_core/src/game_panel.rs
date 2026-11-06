@@ -93,8 +93,8 @@ pub(crate) fn surface_remap(
     (top_left, panel)
 }
 
-/// Engage input capture on a click on the frame surface. Clicks with no
-/// focused fresh stream do nothing (the idle label is showing).
+/// Engage input capture on a click on the frame surface. Clicks while the
+/// stream is not fresh do nothing, though the last frame stays up.
 fn surface_clicked(world: &mut World, surface: Entity) {
     let fresh = world
         .get_resource::<LiveFrameStream>()
@@ -329,7 +329,8 @@ fn idle_message(wait: GameWait) -> String {
         }
         GameWait::Connecting(_) => IDLE_STARTING.to_string(),
         GameWait::Loading(waited) if waited >= SLOW_FIRST_FRAME => format!(
-            "Still loading the game ({} s). A large scene takes a while.",
+            "Still loading the game ({} s). A large scene takes a while, and a game with its \
+             own window on an older runtime will not show here.",
             waited.as_secs()
         ),
         GameWait::Loading(_) => IDLE_LOADING.to_string(),
@@ -342,6 +343,7 @@ fn update_game_panel_idle_label(
     play_state: Option<Res<State<PlayState>>>,
     launched: crate::pie::LaunchedWindowMode,
     stream: Res<LiveFrameStream>,
+    request: Option<Res<crate::live_frame_view::StreamRequest>>,
     session: Option<NonSend<crate::pie::PieSession>>,
     mut loading_since: Local<Option<Instant>>,
     mut labels: Query<&mut Text, With<GamePanelIdleLabel>>,
@@ -365,7 +367,7 @@ fn update_game_panel_idle_label(
                 );
             });
         }
-    } else {
+    } else if request.is_some_and(|request| request.is_requested()) {
         loading_since.get_or_insert_with(Instant::now);
     }
 

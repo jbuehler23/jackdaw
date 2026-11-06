@@ -66,12 +66,6 @@ pub fn apply_frame(
     }
     // The lane is ordered, so a lower seq means the game restarted; treat the
     // frame as the start of a new stream rather than a stale duplicate.
-    if stream.image.is_none() {
-        info!(
-            "PIE: first frame of the stream arrived ({}x{})",
-            frame.width, frame.height
-        );
-    }
     stream.last_seq = frame.seq;
     stream.received_at = Some(Instant::now());
     let size = UVec2::new(frame.width, frame.height);
