@@ -365,7 +365,7 @@ fn entity_bsn_preserves_host_scene_ast() {
     let restored = app
         .world()
         .get_resource::<SceneBsnAst>()
-        .expect("host SceneBsnAst restored after entity_bsn");
+        .expect("entity_bsn leaves the host SceneBsnAst alone");
     assert_eq!(restored.roots.len(), 1, "host AST roots preserved");
 }
 

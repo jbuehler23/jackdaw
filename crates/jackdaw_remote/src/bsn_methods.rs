@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult, error_codes};
-use jackdaw_bsn::{AstNodeRef, BsnSceneAssets, SceneBsnAst};
+use jackdaw_bsn::{AstNodeRef, BsnPatch, BsnSceneAssets, SceneBsnAst};
 use serde_json::{Value, json};
 
 fn invalid_params(message: String) -> BrpError {
@@ -30,7 +30,7 @@ pub fn jackdaw_apply_bsn_handler(In(params): In<Option<Value>>, world: &mut Worl
     jackdaw_bsn::apply_dirty_ast_patches(world);
 
     // The AST resource is transient here; strip the back references so a
-    // later apply or entity_bsn call starts from a clean world.
+    // later apply starts from a clean world.
     for &entity in &spawned {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove::<AstNodeRef>();
@@ -59,17 +59,13 @@ pub fn jackdaw_entity_bsn_handler(In(params): In<Option<Value>>, world: &mut Wor
     Ok(json!({ "bsn": text }))
 }
 
-/// The BSN text for `root` and its descendants.
+/// The BSN text for `root` and its descendants, read from the world without
+/// writing to it.
 ///
 /// The pure half of [`jackdaw_entity_bsn_handler`], so the editor's own
 /// remote surface emits one node exactly the way the game side does
 /// rather than growing a second conversion.
-///
-/// The world's live [`SceneBsnAst`], if it has one, is lifted out for the
-/// duration and put back afterwards: the conversion builds its own AST and
-/// stamps `AstNodeRef` back references that would otherwise point into a
-/// document the editor still owns.
-pub fn entity_bsn(world: &mut World, root: Entity) -> Result<String, String> {
+pub fn entity_bsn(world: &World, root: Entity) -> Result<String, String> {
     let no_names = bevy::platform::collections::HashMap::default();
     entity_bsn_naming(world, root, &no_names)
 }
@@ -77,7 +73,7 @@ pub fn entity_bsn(world: &mut World, root: Entity) -> Result<String, String> {
 /// [`entity_bsn`] for a world that knows names for assets the asset server holds
 /// no path for. Written `""` means cleared, so a handle with a name has to say it.
 pub fn entity_bsn_naming(
-    world: &mut World,
+    world: &World,
     root: Entity,
     names: &dyn jackdaw_bsn::AssetNames,
 ) -> Result<String, String> {
@@ -85,53 +81,47 @@ pub fn entity_bsn_naming(
         return Err(format!("entity {root} does not exist"));
     }
 
-    let prior_ast = world.remove_resource::<SceneBsnAst>();
-    world.init_resource::<SceneBsnAst>();
+    let mut ast = SceneBsnAst::default();
+    let mut root_node = None;
 
-    // Build AST nodes for the entity and its descendants, parents first so
-    // children attach to an existing parent node.
+    // Parents first, so children attach to an existing parent node.
     let mut stack = vec![(root, None::<Entity>)];
-    let mut visited = Vec::new();
-    while let Some((entity, parent)) = stack.pop() {
-        jackdaw_bsn::create_entity_in_ast(world, entity, parent);
-        visited.push(entity);
+    while let Some((entity, parent_node)) = stack.pop() {
+        let name = world
+            .get::<Name>(entity)
+            .map(|name| BsnPatch::Name(name.to_string()));
+        let node = ast.create_entity_node(name.into_iter().collect());
+        match parent_node {
+            Some(parent_node) => ast.add_child_to_ast(parent_node, node),
+            None => {
+                ast.add_to_roots(node);
+                root_node = Some(node);
+            }
+        }
 
         for type_id in reflected_component_type_ids(world, entity) {
-            jackdaw_bsn::sync_to_ast_naming(world, entity, type_id, names);
+            jackdaw_bsn::sync::component_to_node(world, entity, type_id, names, &mut ast, node);
         }
 
-        let children: Vec<Entity> = world
-            .get::<Children>(entity)
-            .map(|children| children.iter().collect())
-            .unwrap_or_default();
-        for child in children.into_iter().rev() {
-            stack.push((child, Some(entity)));
+        if let Some(children) = world.get::<Children>(entity) {
+            for child in children.iter().rev() {
+                if world.get_entity(child).is_err() {
+                    continue;
+                }
+                stack.push((child, Some(node)));
+            }
         }
     }
 
-    let emitted = {
-        let ast = world.resource::<SceneBsnAst>();
-        ast.ast_for(root)
-            .map(|root_ast| jackdaw_bsn::emit_entity(ast, root_ast))
-    };
-
-    for entity in visited {
-        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
-            entity_mut.remove::<AstNodeRef>();
-        }
-    }
-    world.remove_resource::<SceneBsnAst>();
-
-    if let Some(prior_ast) = prior_ast {
-        world.insert_resource(prior_ast);
-    }
-
-    emitted.ok_or_else(|| format!("no AST node for entity {root}"))
+    root_node
+        .map(|node| jackdaw_bsn::emit_entity(&ast, node))
+        .ok_or_else(|| format!("no AST node for entity {root}"))
 }
 
 /// Type ids of the entity's reflected components, minus the ones BSN
-/// encodes structurally (Name via the #label, hierarchy via Children)
-/// and the conversion's own bookkeeping components.
+/// encodes structurally (Name via the #label, hierarchy via Children),
+/// the document's bookkeeping components, and `VisibilityClass`, which a hook
+/// on the mesh components fills in and which has no document form.
 fn reflected_component_type_ids(world: &World, entity: Entity) -> Vec<std::any::TypeId> {
     use std::any::TypeId;
 
@@ -143,6 +133,7 @@ fn reflected_component_type_ids(world: &World, entity: Entity) -> Vec<std::any::
         TypeId::of::<ChildOf>(),
         TypeId::of::<AstNodeRef>(),
         TypeId::of::<jackdaw_bsn::AstDirty>(),
+        TypeId::of::<bevy::camera::visibility::VisibilityClass>(),
     ];
 
     let Ok(entity_ref) = world.get_entity(entity) else {

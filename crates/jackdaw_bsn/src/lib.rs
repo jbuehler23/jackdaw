@@ -76,7 +76,7 @@ pub use apply::{
 
 pub use sync::{
     create_entity_in_ast, delete_entity_from_ast, sync_hierarchy_to_ast, sync_hierarchy_to_ast_at,
-    sync_to_ast, sync_to_ast_naming,
+    sync_to_ast,
 };
 
 pub use writer::{

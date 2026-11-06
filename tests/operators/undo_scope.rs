@@ -7,9 +7,12 @@ use crate::util;
 use crate::util::OperatorResultExt as _;
 
 use bevy::ecs::change_detection::Tick;
+use bevy::ecs::component::ComponentId;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use jackdaw::brush::{BrushHalfedge, BrushMeshCache, BrushMeshChunk, BrushSelection};
 use jackdaw::project::{ProjectConfig, ProjectRoot};
+use jackdaw::remote::server::entity_handler;
 use jackdaw::selection::Selection;
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::{BsnPatch, SceneBsnAst};
@@ -651,4 +654,197 @@ fn undoing_the_add_of_a_modifier_stack_removes_its_document_patch() {
         "the live stack is gone"
     );
     assert!(!stack_patch_present(&app, brush), "the patch is gone");
+}
+
+/// Read `entity` the way `jackdaw/entity` answers a caller, and hand back the text.
+fn read_over_remote(app: &mut App, entity: Entity) -> String {
+    let answer = app
+        .world_mut()
+        .run_system_cached_with(entity_handler, Some(json!({ "entity": entity.to_bits() })))
+        .expect("the handler ran")
+        .unwrap_or_else(|err| panic!("the read refused: {}", err.message));
+    answer["bsn"].as_str().expect("bsn text").to_string()
+}
+
+/// The corners and the face count of a brush.
+fn shape_of(app: &App, entity: Entity) -> (Vec<Vec3>, usize) {
+    let brush = app.world().get::<Brush>(entity).expect("a brush");
+    (
+        brush
+            .topology
+            .vertices
+            .iter()
+            .map(|vertex| vertex.position)
+            .collect(),
+        brush.topology.polygons.len(),
+    )
+}
+
+#[test]
+fn a_component_added_after_a_read_undoes() {
+    let (mut app, _dir) = editor_app();
+    let block = row(&mut app, 1)[0];
+    read_over_remote(&mut app, block);
+
+    let added = call(
+        &mut app,
+        "component.add",
+        json!({ "entity": block.to_bits(), "type_path": "bevy_light::NotShadowCaster" }),
+    );
+    assert_eq!(added["result"], "finished", "{added}");
+    settle(&mut app);
+    assert!(
+        app.world().get::<NotShadowCaster>(block).is_some(),
+        "the add shows"
+    );
+
+    undo(&mut app);
+    assert!(
+        app.world().get::<NotShadowCaster>(block).is_none(),
+        "undo removes the component a read came before"
+    );
+}
+
+/// Select by `rule` on a read brush, run `op`, and undo: the brush is what it was.
+#[track_caller]
+fn assert_undoes_after_a_read(
+    kind: &str,
+    rule: serde_json::Value,
+    op: &str,
+    params: serde_json::Value,
+) {
+    let (mut app, _dir) = editor_app();
+    let block = row(&mut app, 1)[0];
+    read_over_remote(&mut app, block);
+    let before = shape_of(&app, block);
+
+    let selected = call(
+        &mut app,
+        "brush.select_elements",
+        json!({ "entity": block.to_bits(), "kind": kind, "where": rule }),
+    );
+    assert_eq!(selected["result"], "finished", "{selected}");
+    app.update();
+    let outcome = call(&mut app, op, params);
+    assert_eq!(outcome["result"], "finished", "{op}: {outcome}");
+    settle(&mut app);
+    assert_ne!(shape_of(&app, block), before, "{op} changes the brush");
+
+    undo(&mut app);
+    assert_eq!(shape_of(&app, block), before, "{op} undoes after a read");
+    assert_views_match(&mut app);
+}
+
+#[test]
+fn an_extrude_after_a_read_undoes() {
+    assert_undoes_after_a_read(
+        "face",
+        json!({ "normal": "+y" }),
+        "brush.mesh.extrude_region",
+        json!({ "distance": 0.5 }),
+    );
+}
+
+#[test]
+fn a_deleted_face_after_a_read_undoes() {
+    assert_undoes_after_a_read(
+        "face",
+        json!({ "normal": "+y" }),
+        "brush.delete_element",
+        json!({}),
+    );
+}
+
+#[test]
+fn a_dissolve_after_a_read_undoes() {
+    assert_undoes_after_a_read(
+        "face",
+        json!({ "normal": "+y" }),
+        "brush.mesh.dissolve_faces",
+        json!({}),
+    );
+}
+
+#[test]
+fn a_vertex_move_after_a_read_undoes() {
+    assert_undoes_after_a_read(
+        "vertex",
+        json!({ "extreme": "max_y" }),
+        "brush.elements.transform",
+        json!({ "translate": [0.0, 0.5, 0.0] }),
+    );
+}
+
+/// Every component of `root` and its descendants, with when each was added and
+/// last changed.
+fn component_ticks(app: &App, root: Entity) -> Vec<(Entity, ComponentId, Tick, Tick)> {
+    let world = app.world();
+    let mut ticks = Vec::new();
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        let entity_ref = world.entity(entity);
+        for &id in entity_ref.archetype().components() {
+            let of = entity_ref.get_change_ticks_by_id(id).expect("ticks");
+            ticks.push((entity, id, of.added, of.changed));
+        }
+        if let Some(children) = entity_ref.get::<Children>() {
+            stack.extend(children.iter());
+        }
+    }
+    ticks
+}
+
+#[test]
+fn a_read_changes_nothing() {
+    let (mut app, _dir) = editor_app();
+    let block = row(&mut app, 1)[0];
+    let child = call(
+        &mut app,
+        "entity.add.cube",
+        json!({ "name": "Child", "parent": block.to_bits() }),
+    );
+    let child = entity_of(&child["entities"][0]);
+    settle(&mut app);
+    assert!(
+        app.world().get::<ChildOf>(child).is_some(),
+        "the child is parented"
+    );
+
+    let components = component_ticks(&app, block);
+    let patches = [patch_ticks(&app, block), patch_ticks(&app, child)];
+    let node = app.world().resource::<SceneBsnAst>().ast_for(block);
+    let resource = app
+        .world()
+        .get_resource_change_ticks::<SceneBsnAst>()
+        .expect("a document")
+        .changed;
+
+    let text = read_over_remote(&mut app, block);
+    assert!(
+        text.contains("#Child"),
+        "the read covers the subtree: {text}"
+    );
+
+    assert_eq!(component_ticks(&app, block), components);
+    assert_eq!(
+        [patch_ticks(&app, block), patch_ticks(&app, child)],
+        patches
+    );
+    let live = app.world().resource::<SceneBsnAst>();
+    assert_eq!(live.ast_for(block), node);
+    assert_eq!(
+        app.world()
+            .get_resource_change_ticks::<SceneBsnAst>()
+            .expect("a document")
+            .changed,
+        resource,
+    );
+}
+
+#[test]
+fn a_read_leaves_out_the_visibility_class() {
+    let (mut app, _dir) = editor_app();
+    let block = row(&mut app, 1)[0];
+    let text = read_over_remote(&mut app, block);
+    assert!(!text.contains("VisibilityClass"), "{text}");
 }
