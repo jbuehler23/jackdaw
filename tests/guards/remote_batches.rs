@@ -839,8 +839,7 @@ fn a_plain_batch_that_stops_early_says_its_checks_did_not_run() {
 
 /// Operators whose ids read like a write but that only read files or edit
 /// what is in memory.
-const READS_ONLY: [&str; 8] = [
-    "pie.live_edit_save",
+const READS_ONLY: [&str; 7] = [
     "viewport.bookmark.save",
     "terrain.import.pick",
     "terrain.import.image.add",

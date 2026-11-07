@@ -24,7 +24,7 @@ fn panel(width: f32) -> App {
         .id();
     let content = app
         .world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()))
+        .spawn(jackdaw::layout::inspector_components_content())
         .id();
     app.world_mut().entity_mut(content).insert(ChildOf(leaf));
     let entity = app

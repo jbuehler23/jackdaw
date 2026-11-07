@@ -1,4 +1,4 @@
-//! The Scene/Live bar and the workspace tab strip.
+//! The workspace tab strip.
 //!
 //! Both are radio groups: the bar carries `RadioGroup`, each segment
 //! carries `RadioButton`, the current choice carries `Checked`, and a
@@ -16,8 +16,6 @@ use bevy::prelude::*;
 use bevy::ui::Checked;
 use bevy::ui_widgets::{RadioButton, RadioGroup};
 use bevy::window::{PrimaryWindow, WindowRef};
-
-use jackdaw::pie_mirror::{PieViewMode, PieViewSegment};
 
 /// Click `entity` the way a user does: the `PointerClick` the radio
 /// widget is watching for.
@@ -47,18 +45,6 @@ fn click(app: &mut App, entity: Entity) {
     app.update();
 }
 
-fn segment_of<T: Component + PartialEq>(app: &mut App, wanted: &T) -> Entity {
-    let found: Vec<Entity> = app
-        .world_mut()
-        .query::<(Entity, &T)>()
-        .iter(app.world())
-        .filter(|(_, segment)| *segment == wanted)
-        .map(|(entity, _)| entity)
-        .collect();
-    assert_eq!(found.len(), 1, "one segment per choice");
-    found[0]
-}
-
 fn assert_is_a_segment(app: &App, segment: Entity) {
     assert!(
         app.world().get::<RadioButton>(segment).is_some(),
@@ -73,34 +59,6 @@ fn assert_is_a_segment(app: &App, segment: Entity) {
         app.world().get::<RadioGroup>(bar).is_some(),
         "the bar the segments share is the radio group",
     );
-}
-
-/// The Scene/Live toggle is a radio group too, with Scene checked while
-/// the editor is showing the authored scene.
-#[test]
-fn the_scene_live_toggle_is_a_radio_group() {
-    let mut app = util::editor_test_app();
-    app.world_mut()
-        .spawn(jackdaw::layout::hierarchy_content(default()));
-    app.update();
-    // The appearance pass is scheduled behind `AppState::Editor`, which a
-    // headless test never enters.
-    app.world_mut()
-        .run_system_cached(jackdaw::layout::update_pie_view_toggle_appearance)
-        .expect("the toggle's appearance pass runs");
-    app.update();
-
-    let scene = segment_of(&mut app, &PieViewSegment::Scene);
-    let live = segment_of(&mut app, &PieViewSegment::Live);
-    assert_is_a_segment(&app, scene);
-    assert_is_a_segment(&app, live);
-
-    assert_eq!(*app.world().resource::<PieViewMode>(), PieViewMode::Scene);
-    assert!(
-        app.world().get::<Checked>(scene).is_some(),
-        "the view the editor is in is the checked segment",
-    );
-    assert!(app.world().get::<Checked>(live).is_none());
 }
 
 /// The workspace tab strip is a radio group: the strip is the group,

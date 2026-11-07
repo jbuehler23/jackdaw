@@ -273,12 +273,7 @@ impl JackdawExtension for InspectorExtension {
                 .with_default_area(DefaultArea::RightSidebar)
                 .with_priority(0)
                 .with_build(|window| {
-                    let icon_font = window
-                        .world()
-                        .get_resource::<jackdaw_feathers::icons::IconFont>()
-                        .map(|f| f.0.clone())
-                        .unwrap_or_default();
-                    window.spawn(crate::layout::inspector_components_content(icon_font));
+                    window.spawn(crate::layout::inspector_components_content());
                 }),
         );
 

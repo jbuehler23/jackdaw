@@ -909,30 +909,6 @@ fn a_tab_switch_brings_the_selection_back_on_the_scene_node() {
     assert_eq!(selected, vec![wall], "the selection came back elsewhere");
 }
 
-#[test]
-fn a_live_edit_lands_on_the_scene_node() {
-    let (mut app, _dir, id) = scene_beside_an_older_file();
-    let wall = holder_placed(&mut app, "Wall", false);
-    let projection = jackdaw::pie_projection::PieProjection::default();
-    let key = jackdaw::live_edits::LiveEditKey {
-        bits: 1,
-        type_path: TRANSFORM.to_string(),
-        field_path: "translation".to_string(),
-    };
-    let entry = jackdaw::live_edits::LiveEditEntry {
-        node_id: Some(id.0),
-        baseline: None,
-        live_value: json!(null),
-        label: String::new(),
-    };
-    let ast = app.world().resource::<SceneBsnAst>();
-    assert_eq!(
-        jackdaw::live_edits::resolve_entry_entity(ast, &projection, &key, &entry),
-        Some(wall),
-        "the save would land on the instance's inner node"
-    );
-}
-
 fn dead_entity_of(app: &mut App, id: SceneNodeId) -> Entity {
     let dead = app.world_mut().spawn(id).id();
     app.world_mut().despawn(dead);

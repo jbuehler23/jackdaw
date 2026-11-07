@@ -35,7 +35,7 @@ fn editor_with_mobs() -> (App, tempfile::TempDir) {
         .resource_mut::<AssetKinds>()
         .register(AssetKind::extension("mob", "Mob", MobDef::type_path()));
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);

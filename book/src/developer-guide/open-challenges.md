@@ -38,14 +38,13 @@ share.
 PIE is the "click play to run your game" flow. The process model
 is settled: the game always runs out of process as its own cargo
 binary over IPC, with zero play-time compilation once built. Frame
-streaming into the Game panel, input capture, click-to-select
-picking, and the Live entity tree all shipped; see
+streaming into the Game panel, input capture and live sync of
+document edits to the running game all shipped; see
 [Play-in-editor](../user-guide/play-in-editor.md).
 
-What's not done: deeper live editing (a broader set of
-component edits riding back into the running game and into the
-authored scene), richer widget metadata for live values, and
-protocol maturity across more component types.
+What's not done: seeing the running game's own entities and
+values from the editor, and protocol maturity across more
+component types.
 
 Where to dig in: pick one component family that doesn't
 round-trip yet and follow it through the IPC lanes.

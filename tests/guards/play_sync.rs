@@ -256,6 +256,60 @@ fn pie_sync_an_edit_and_its_undo_land_in_the_game() {
     assert_eq!(x(&game), 4.0);
 }
 
+/// An inspector edit during Play authors the document as it does when stopped: the
+/// game takes it, it undoes, and the tab reads as modified.
+#[test]
+fn pie_sync_an_inspector_edit_during_play_authors_the_document() {
+    let (mut app, _dir, rock) = playing();
+    let (mut game, entity) = game(rock);
+    let (mut link, mut game_end) = LoopbackTransport::pair();
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw_api::pie::PlayState>>()
+        .set(jackdaw_api::pie::PlayState::Playing);
+    app.update();
+    let world = app.world_mut();
+    let mut scenes = world.resource_mut::<jackdaw::scenes::Scenes>();
+    let active = scenes.active;
+    scenes.tabs[active].dirty = false;
+
+    let target = entity_of(&mut app, rock);
+    let authored = |app: &App| {
+        let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+        let node = ast.ast_for(target).expect("a node");
+        jackdaw_bsn::get_bsn_field(ast, node, TRANSFORM, "translation.x")
+    };
+    let depth = app.world().resource::<CommandHistory>().undo_stack.len();
+    assert!(jackdaw::commands::field_edit_commit_on(
+        app.world_mut(),
+        target,
+        TRANSFORM,
+        "translation.x",
+        &serde_json::json!(4.0),
+    ));
+    app.update();
+
+    assert!(
+        matches!(authored(&app), Some(jackdaw_bsn::BsnValue::Float(x)) if x == 4.0),
+        "the document holds the edit: {:?}",
+        authored(&app)
+    );
+    assert_eq!(
+        app.world().resource::<CommandHistory>().undo_stack.len(),
+        depth + 1
+    );
+    assert!(app.world().resource::<jackdaw::scenes::Scenes>().tabs[active].dirty);
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(game_x(&game, entity), 4.0);
+
+    history(&mut app, "history.undo");
+    assert!(
+        !matches!(authored(&app), Some(jackdaw_bsn::BsnValue::Float(x)) if x == 4.0),
+        "the undo takes it out of the document"
+    );
+    deliver(&mut app, &mut link, &mut game_end, &mut game);
+    assert_eq!(game_x(&game, entity), 0.0);
+}
+
 const VISIBILITY: &str = "bevy_camera::visibility::Visibility";
 const BRUSH: &str = "jackdaw_scene_types::types::Brush";
 

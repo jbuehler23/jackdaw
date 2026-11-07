@@ -139,6 +139,7 @@ pub fn game_panel_content() -> impl Bundle {
                     game_no_signal_chip(),
                     game_playing_chip(),
                     game_play_input_button(),
+                    game_instance_button(),
                 ],
             ),
             (
@@ -249,6 +250,68 @@ fn game_play_input_button() -> impl Bundle {
                 .call();
         }),
     )
+}
+
+/// Marker on the button naming the shown instance, there with several running.
+#[derive(Component)]
+pub struct GameInstanceButton;
+
+/// Build the button that steps the panel to the next running instance.
+fn game_instance_button() -> impl Bundle {
+    (
+        GameInstanceButton,
+        jackdaw_feathers::tooltip::Tooltip::title("Show the next running instance"),
+        button(ButtonProps::new("").hidden()),
+        observe(|_: On<PointerClick>, mut commands: Commands| {
+            commands
+                .operator(crate::pie::PieNextInstanceOp::ID)
+                .settings(CallOperatorSettings {
+                    execution_context: ExecutionContext::Invoke,
+                    creates_history_entry: false,
+                })
+                .call();
+        }),
+        children![(
+            Text::new(String::new()),
+            TextFont {
+                font_size: tokens::TEXT_SIZE_SM,
+                ..Default::default()
+            },
+            TextColor(tokens::TEXT_SECONDARY),
+        )],
+    )
+}
+
+/// Show the instance button with several instances running, naming the focused one.
+fn update_game_instance_button(
+    session: Option<NonSend<crate::pie::PieSession>>,
+    instances: Res<crate::pie::PieInstances>,
+    mut buttons: Query<(&mut Node, &Children), With<GameInstanceButton>>,
+    mut labels: Query<&mut Text>,
+) {
+    let several = session.is_some_and(|session| session.live_keys().len() > 1);
+    let display = if several {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    let label = instances
+        .focused
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    for (mut node, children) in &mut buttons {
+        if node.display != display {
+            node.display = display;
+        }
+        for child in children.iter() {
+            if let Ok(mut text) = labels.get_mut(child)
+                && text.0 != label
+            {
+                text.0 = label.clone();
+            }
+        }
+    }
 }
 
 /// Point the frame image at the current stream and show it once a frame has
@@ -492,7 +555,7 @@ fn went_quiet(stream: &LiveFrameStream) -> bool {
 fn update_game_panel_chips(
     capture: Res<crate::live_input::LiveInputCapture>,
     stream: Res<LiveFrameStream>,
-    instances: Res<crate::pie_mirror::PieInstances>,
+    instances: Res<crate::pie::PieInstances>,
     mut no_signal: Query<&mut Node, With<GameNoSignalChip>>,
     mut playing: Query<&mut Node, (With<GamePlayingChip>, Without<GameNoSignalChip>)>,
     mut roots: Query<&mut BorderColor, With<GamePanel>>,
@@ -542,6 +605,7 @@ impl Plugin for GamePanelPlugin {
                     update_game_panel_idle_label,
                     layout_game_panel_image,
                     update_game_panel_chips,
+                    update_game_instance_button,
                 ),
             );
     }

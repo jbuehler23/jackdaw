@@ -446,15 +446,6 @@ fn chunks_are_drawn_again_after_a_tab_swap_and_play_stop() {
     let swapped = the_map(&mut app);
     assert_ne!(swapped, map, "the map respawns from the document");
     assert_eq!(drawn(&mut app, swapped), before);
-
-    app.world_mut()
-        .resource_mut::<jackdaw_editor_core::pie_projection::PieProjection>()
-        .needs_respawn = true;
-    jackdaw_editor_core::pie_projection::revert_preview(app.world_mut());
-    settle(&mut app);
-    let stopped = the_map(&mut app);
-    assert_ne!(stopped, swapped);
-    assert_eq!(drawn(&mut app, stopped), before);
     let total = (app.world_mut().query::<&TilemapChunkOf>().iter(app.world())).count();
     assert_eq!(total, 2, "no chunk outlives its map");
 }

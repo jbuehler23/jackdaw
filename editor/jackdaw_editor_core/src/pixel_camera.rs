@@ -200,7 +200,7 @@ pub(crate) fn camera_pixel_canvas(
         return refuse(world, format!("the running preview drives {camera}"));
     }
     let ast = world.resource::<jackdaw_bsn::SceneBsnAst>();
-    if ast.ast_for(camera).is_none() && !crate::sprite_props::goes_to_the_game(world, camera) {
+    if ast.ast_for(camera).is_none() {
         return refuse(world, format!("{camera} is not in the scene document"));
     }
     let current = world.get::<PixelCanvas>(camera).copied();

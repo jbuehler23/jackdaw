@@ -48,17 +48,6 @@ pub enum StructureChange {
         follows: Option<u64>,
         scene: String,
     },
-    /// The runtime entity `entity`, as bits, takes the id `node`. If it has gone, the
-    /// node spawns from the rest, as for [`Self::Spawn`].
-    Adopt {
-        entity: u64,
-        node: u64,
-        parent: Option<u64>,
-        follows: Option<u64>,
-        scene: String,
-        dir: String,
-        bsn: String,
-    },
 }
 
 /// The asset path a root asked the editor for, which outlives its handle being
@@ -78,31 +67,6 @@ struct Held {
 
 /// Apply `change` to what has spawned, and hold it for any root yet to spawn.
 pub fn apply_structure_change(world: &mut World, change: StructureChange) {
-    let change = match change {
-        StructureChange::Adopt {
-            entity,
-            node,
-            parent,
-            follows,
-            scene,
-            dir,
-            bsn,
-        } => match world.get_entity_mut(Entity::from_bits(entity)) {
-            Ok(mut held) => {
-                held.insert(SceneNodeId(node));
-                return;
-            }
-            Err(_) => StructureChange::Spawn {
-                node,
-                parent,
-                follows,
-                scene,
-                dir,
-                bsn,
-            },
-        },
-        other => other,
-    };
     apply_within(world, &change, None);
     if scene_root_awaiting_spawn(world) {
         let delivered = spawned_roots(world).into_iter().collect();
@@ -162,7 +126,6 @@ fn apply_within(world: &mut World, change: &StructureChange, only: Option<Entity
             follows,
             scene,
         } => reparent_node(world, *node, *parent, *follows, scene, only),
-        StructureChange::Adopt { .. } => {}
     }
 }
 
@@ -407,7 +370,7 @@ fn place_after(world: &mut World, entity: Entity, follows: Option<u64>) {
 
 /// The entities holding `node` as a node of the scene rather than as part of a
 /// prefab instance.
-fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
+pub(crate) fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
     let Some(index) = world.get_resource::<SceneNodeIndex>() else {
         return Vec::new();
     };
@@ -419,9 +382,8 @@ fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
         .collect()
 }
 
-/// The entities of `node` under a root playing `scene`, or under no root at all: a
-/// runtime entity saved as a node, which only this document names. Another file the
-/// game plays can share the document's ids.
+/// The entities of `node` under a root playing `scene`, or under no root at all.
+/// Another file the game plays can share the document's ids.
 fn holders_in_scene(world: &World, node: u64, scene: &str) -> Vec<Entity> {
     unit_holders(world, node)
         .into_iter()
@@ -633,58 +595,6 @@ mod tests {
         );
         assert_eq!(in_other(&mut app, 1).len(), 1, "the copy keeps its node");
         assert_eq!(holders(&mut app, 1).len(), 1);
-    }
-
-    #[test]
-    fn a_runtime_entity_takes_the_id_it_is_given_and_goes_with_it() {
-        let mut app = app();
-        root_with(&mut app, "level.bsn", &node_text(1));
-        let runtime = app.world_mut().spawn(Transform::default()).id();
-        apply_structure_change(
-            app.world_mut(),
-            StructureChange::Adopt {
-                entity: runtime.to_bits(),
-                node: 5,
-                parent: None,
-                follows: None,
-                scene: "level.bsn".to_string(),
-                dir: String::new(),
-                bsn: node_text(5),
-            },
-        );
-        assert_eq!(holders(&mut app, 5), vec![runtime]);
-        apply_structure_change(
-            app.world_mut(),
-            StructureChange::Despawn {
-                node: 5,
-                scene: "level.bsn".to_string(),
-            },
-        );
-        assert!(app.world().get_entity(runtime).is_err());
-    }
-
-    /// The game can lose a runtime entity between the save and this arriving.
-    #[test]
-    fn a_runtime_entity_gone_by_its_adoption_is_spawned_as_the_node() {
-        let mut app = app();
-        let root = root_with(&mut app, "level.bsn", &node_text(1));
-        let runtime = app.world_mut().spawn(Transform::default()).id();
-        app.world_mut().despawn(runtime);
-        apply_structure_change(
-            app.world_mut(),
-            StructureChange::Adopt {
-                entity: runtime.to_bits(),
-                node: 5,
-                parent: None,
-                follows: Some(1),
-                scene: "level.bsn".to_string(),
-                dir: String::new(),
-                bsn: node_text(5),
-            },
-        );
-        let spawned = holders(&mut app, 5);
-        assert_eq!(spawned.len(), 1);
-        assert_eq!(parent_of(&app, spawned[0]), Some(root));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use jackdaw_scene_types::{Environment, InstanceMaterialOverrides, MaterialOverri
 fn app_with(components: impl Bundle) -> App {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app
         .world_mut()
         .spawn((Name::new("meadow"), Transform::default(), components))

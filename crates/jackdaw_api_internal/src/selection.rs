@@ -172,9 +172,7 @@ impl Selection {
 /// Clear the selection directly against the world, removing the `Selected`
 /// marker from each entity through guarded access so a despawned entry is
 /// skipped rather than panicking. Used by paths that mutate selection inside
-/// a `&mut World` closure, such as the PIE Scene/Live view toggle, which must
-/// drop the selection before the previewed entities are despawned and
-/// replaced.
+/// a `&mut World` closure.
 pub fn clear_selection_in_world(world: &mut World) {
     let entities: Vec<Entity> = std::mem::take(&mut world.resource_mut::<Selection>().entities);
     for entity in entities {

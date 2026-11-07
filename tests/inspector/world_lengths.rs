@@ -36,7 +36,7 @@ fn call(app: &mut App, id: &'static str, key: &'static str, value: impl Into<Pro
 fn app_with_sprite() -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
@@ -164,7 +164,7 @@ fn the_unit_display_shows_world_units_and_leaves_z_rotation_and_scale_alone() {
 fn a_3d_entity_keeps_world_units() {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     call(&mut app, "project.set_pixels_per_unit", "value", 16.0);
     let entity = app
         .world_mut()

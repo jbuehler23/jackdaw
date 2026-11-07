@@ -145,8 +145,8 @@ mod fallback_camera;
 pub use fallback_camera::FallbackCamera2d;
 
 /// Marks what the runtime spawns for itself, such as the fallback camera and
-/// the pixel canvas helpers: never saved, never streamed to the editor and
-/// never taken for the game's own camera.
+/// the pixel canvas helpers: never saved and never taken for the game's own
+/// camera.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct RuntimeOnly;
 
@@ -432,7 +432,7 @@ pub struct JackdawScene {
     parent_path: PathBuf,
     /// Source file stem (`starter` from `zones/starter.bsn`), captured at
     /// load time. Used to give the spawned scene root a readable `Name` so
-    /// the editor's Live tree shows the scene name instead of an entity id.
+    /// the scene root shows the scene name instead of an entity id.
     /// `None` when the asset was built without a source path.
     stem: Option<String>,
 }
@@ -854,7 +854,7 @@ fn spawn_scene_document(
     navmesh::attach_navmesh(world, root_entity, parent_path, stem.as_deref());
 
     // Give the container root a readable name from the scene's file
-    // stem so the editor's Live tree shows the scene name instead of an
+    // stem so the scene root shows the scene name instead of an
     // entity id. Never overwrite an author-supplied name, and never
     // insert an empty one.
     if world.get::<Name>(root_entity).is_none()

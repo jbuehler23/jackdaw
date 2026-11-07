@@ -605,40 +605,20 @@ fn reopened_scene_with_a_material(app: &mut App, tmp: &tempfile::TempDir) -> (En
     (cube, name)
 }
 
-/// Bring the scene back the way a Stop does when the game did something only a
-/// respawn undoes.
-fn respawn_as_stop_does(app: &mut App) {
-    app.world_mut()
-        .resource_mut::<jackdaw::pie_projection::PieProjection>()
-        .needs_respawn = true;
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-}
-
-/// A document's own root and each reference to it are renamed together, for an
-/// ordinary entity and one Live view fills with game values, whose patch the
-/// emit does not derive again.
+/// A document's own root and each reference to it are renamed together.
 #[test]
 fn a_document_s_own_asset_root_is_renamed_with_every_reference() {
     let (mut app, tmp) = editor();
-    let (cube, file_name) = reopened_scene_with_a_material(&mut app, &tmp);
-    for overlaid in [false, true] {
-        if overlaid {
-            app.world_mut()
-                .resource_mut::<jackdaw::pie_projection::PieProjection>()
-                .overlaid
-                .insert(cube);
-        }
-        let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
-        assert!(
-            !text.contains(&file_name),
-            "overlaid {overlaid}: {file_name} is still in\n{text}"
-        );
-        let served = served_material_name(&text);
-        assert!(served.starts_with("#Play"), "{served}");
-        let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
-        assert_eq!(game_roughness(&mut game), 0.25, "overlaid {overlaid}");
-    }
+    let (_, file_name) = reopened_scene_with_a_material(&mut app, &tmp);
+    let (text, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
+    assert!(
+        !text.contains(&file_name),
+        "{file_name} is still in\n{text}"
+    );
+    let served = served_material_name(&text);
+    assert!(served.starts_with("#Play"), "{served}");
+    let mut game = game_with_assets(&tmp.path().join("assets"), text, "");
+    assert_eq!(game_roughness(&mut game), 0.25);
 }
 
 /// A tab behind the one in front holds a snapshot with no entities: its roots and
@@ -1043,8 +1023,6 @@ struct Nested {
     inner: Inner,
 }
 
-const NESTED_REFERENCES: usize = 3;
-
 /// An entity whose handles the document names `#Stone` at every depth, then
 /// cleared on the entity.
 fn cleared_nested_handles(app: &mut App, tmp: &tempfile::TempDir) -> Entity {
@@ -1077,22 +1055,13 @@ fn saved_references(app: &mut App, tmp: &tempfile::TempDir) -> (usize, String) {
     (text.matches("\"#Stone\"").count(), text)
 }
 
-/// A normal save writes what the entity holds: a handle cleared at any depth stays
-/// cleared. An entity Live view overlays keeps the document's references, since a
-/// stream carries no handle.
+/// A save writes what the entity holds: a handle cleared at any depth stays cleared.
 #[test]
-fn a_cleared_nested_handle_stays_cleared_unless_the_entity_is_overlaid() {
+fn a_cleared_nested_handle_stays_cleared() {
     let (mut app, tmp) = editor();
-    let rock = cleared_nested_handles(&mut app, &tmp);
+    cleared_nested_handles(&mut app, &tmp);
     let (count, text) = saved_references(&mut app, &tmp);
     assert_eq!(count, 0, "{text}");
-
-    app.world_mut()
-        .resource_mut::<jackdaw::pie_projection::PieProjection>()
-        .overlaid
-        .insert(rock);
-    let (count, text) = saved_references(&mut app, &tmp);
-    assert_eq!(count, NESTED_REFERENCES, "{text}");
 }
 
 #[derive(Component, Reflect, Default)]
@@ -1289,9 +1258,24 @@ fn a_save_during_play_does_not_split_the_served_name_from_the_edit() {
     assert_eq!(game_roughness(&mut game), 0.25);
 }
 
-/// A view toggle re-emits and reparses the document, so each asset comes back
-/// with a new id and its handle fields with a new per-document name. The running
-/// game only knows the first, and still takes the edit, without a new copy.
+/// Respawn the document by switching to another tab and back.
+fn away_and_back(app: &mut App) {
+    let world = app.world_mut();
+    let other = {
+        let mut scenes = world.resource_mut::<jackdaw::scenes::Scenes>();
+        if scenes.tabs.len() < 2 {
+            scenes.tabs.push(jackdaw::scenes::SceneTab::new_untitled(2));
+        }
+        scenes.tabs.len() - 1
+    };
+    assert!(jackdaw::scenes::swap::swap_active_tab(world, other));
+    assert!(jackdaw::scenes::swap::swap_active_tab(world, 0));
+    app.update();
+}
+
+/// A tab switch re-emits and reparses the document, so each asset comes back with a
+/// new id and its handle fields with a new per-document name. The running game only
+/// knows the first, and still takes the edit, without a new copy.
 #[test]
 fn an_edit_after_the_document_respawns_reaches_the_game() {
     let (mut app, tmp) = editor();
@@ -1306,7 +1290,7 @@ fn an_edit_after_the_document_respawns_reaches_the_game() {
 
     for offset in [0.5, 0.75] {
         let before = first_cube(&mut app);
-        respawn_as_stop_does(&mut app);
+        away_and_back(&mut app);
         let cube = first_cube(&mut app);
         assert_ne!(cube, before, "the document respawned");
         edit_brush(&mut app, cube, |brush| {
@@ -1436,422 +1420,6 @@ fn a_served_scene_in_a_folder_spawns_its_prefab() {
         .iter(game.world())
         .any(|name| name.as_str() == "Pebble");
     assert!(pebble, "the prefab's content spawned");
-}
-
-/// A saved cube reopened, its node id, and a stream of the game's own value for
-/// its `Transform` and `Visibility`.
-fn streamed_cube(
-    app: &mut App,
-    tmp: &tempfile::TempDir,
-) -> (Entity, jackdaw_pie_protocol::RemoteEntity) {
-    let (cube, _) = reopened_scene_with_a_material(app, tmp);
-    let node = app.world().get::<SceneNodeId>(cube).expect("a node id").0;
-    let entity = jackdaw_pie_protocol::RemoteEntity {
-        entity: 77,
-        scene_node_id: Some(node),
-        components: [
-            (
-                "bevy_transform::components::transform::Transform".to_string(),
-                serde_json::json!({
-                    "translation": [9.0, 9.0, 9.0],
-                    "rotation": [0.0, 1.0, 0.0, 0.0],
-                    "scale": [3.0, 3.0, 3.0],
-                }),
-            ),
-            (
-                "bevy_camera::visibility::Visibility".to_string(),
-                serde_json::json!("Hidden"),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    };
-    (cube, entity)
-}
-
-fn project(app: &mut App, entity: jackdaw_pie_protocol::RemoteEntity) {
-    jackdaw::pie_projection::project_event(
-        app.world_mut(),
-        jackdaw_pie_protocol::StateEvent::EntitySpawned { entity },
-    );
-    app.update();
-}
-
-/// Stop puts back everything the game changed, including what the document does
-/// not name, and leaves a scene the game only changed the values of unspawned.
-#[test]
-fn stop_restores_what_the_game_changed_in_place() {
-    let (mut app, tmp) = editor();
-    let (cube, streamed) = streamed_cube(&mut app, &tmp);
-    let transform = *app.world().get::<Transform>(cube).expect("a transform");
-    let visibility = *app.world().get::<Visibility>(cube).expect("a visibility");
-    let material = app.world().get::<Brush>(cube).expect("a brush").faces[0]
-        .material
-        .clone();
-
-    project(&mut app, streamed);
-    let shown = *app.world().get::<Transform>(cube).expect("a transform");
-    assert_eq!(shown.scale, Vec3::splat(3.0), "the stream reached the cube");
-    assert_eq!(
-        app.world().get::<Visibility>(cube),
-        Some(&Visibility::Hidden)
-    );
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_ok(), "no respawn");
-    assert_eq!(app.world().get::<Transform>(cube), Some(&transform));
-    assert_eq!(app.world().get::<Visibility>(cube), Some(&visibility));
-    let brush = app.world().get::<Brush>(cube).expect("a brush");
-    assert_eq!(brush.faces[0].material, material);
-}
-
-/// A brush field and a transform's x were edited after the game first changed
-/// them: Stop returns to the document for those, not to what the entity held when
-/// Play started. The transform's other fields are not asserted: the operator
-/// writes whole values, a separate known issue.
-#[test]
-fn stop_keeps_a_brush_edit_and_a_moved_x_made_during_play() {
-    let (mut app, tmp) = editor();
-    let (cube, streamed) = streamed_cube(&mut app, &tmp);
-    let brush_value = streamed_brush_value(&mut app, cube, |brush| {
-        brush.faces[0].uv_offset = Vec2::new(9.0, 9.0);
-    });
-    let mut streamed = streamed;
-    streamed
-        .components
-        .insert(<Brush as TypePath>::type_path().to_string(), brush_value);
-    project(&mut app, streamed);
-
-    edit_brush(&mut app, cube, |brush| {
-        brush.faces[0].uv_offset = Vec2::new(0.5, 0.0);
-    });
-    app.world_mut()
-        .operator("entity.set_transform")
-        .param("entity", cube)
-        .param("x", 2.0)
-        .call()
-        .expect("entity.set_transform dispatches")
-        .assert_finished();
-    app.update();
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    let cube = first_cube(&mut app);
-    let brush = app.world().get::<Brush>(cube).expect("a brush");
-    assert_eq!(brush.faces[0].uv_offset, Vec2::new(0.5, 0.0));
-    let transform = app.world().get::<Transform>(cube).expect("a transform");
-    assert_eq!(transform.translation.x, 2.0, "the edit stays");
-    let hidden = app.world().get::<Visibility>(cube);
-    assert_ne!(
-        hidden,
-        Some(&Visibility::Hidden),
-        "what the edit did not write goes back"
-    );
-}
-
-/// A field the user took out of the document after the game changed the component:
-/// what the entity held at Play still names it, and the document no longer does.
-#[test]
-fn stop_drops_a_field_reset_out_of_the_document_during_play() {
-    const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
-    let (mut app, tmp) = editor();
-    let (cube, streamed) = streamed_cube(&mut app, &tmp);
-    move_to(&mut app, cube, 4.0);
-    project(&mut app, streamed);
-
-    let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
-    let node = ast.ast_for(cube).expect("the cube is in the document");
-    let patch = ast
-        .find_patch_by_type_path(node, TRANSFORM)
-        .expect("the document names the transform");
-    ast.set_patch(patch, jackdaw_bsn::BsnPatch::Type(TRANSFORM.to_string()));
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    let cube = first_cube(&mut app);
-    let transform = app.world().get::<Transform>(cube).expect("a transform");
-    assert_eq!(transform.translation.x, 0.0, "what the document says");
-}
-
-/// A stream's value for the cube's brush, with `change` made to it. The game's
-/// handles do not travel, so the value holds defaults for them.
-fn streamed_brush_value(
-    app: &mut App,
-    cube: Entity,
-    change: impl FnOnce(&mut Brush),
-) -> serde_json::Value {
-    let mut brush = app.world().get::<Brush>(cube).expect("a brush").clone();
-    change(&mut brush);
-    let world = app.world_mut();
-    let probe = world.spawn(brush).id();
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let snapshot = jackdaw_pie_protocol::build_snapshot(world, &registry.read(), &[probe]);
-    world.entity_mut(probe).despawn();
-    snapshot[0].components[<Brush as TypePath>::type_path()].clone()
-}
-
-/// A saved cube with an authored field in its brush, and a stream changing that
-/// field to the game's own.
-fn cube_with_streamed_brush(
-    app: &mut App,
-    tmp: &tempfile::TempDir,
-) -> (Entity, jackdaw_pie_protocol::RemoteEntity, String) {
-    let (cube, mut streamed) = streamed_cube(app, tmp);
-    edit_brush(app, cube, |brush| {
-        brush.faces[0].uv_offset = Vec2::new(0.25, 0.75);
-    });
-    save(app, tmp);
-    let authored = std::fs::read_to_string(zone_file(tmp)).expect("the saved scene");
-    let value = streamed_brush_value(app, cube, |brush| {
-        brush.faces[0].uv_offset = Vec2::new(0.5, 0.125);
-    });
-    streamed
-        .components
-        .insert(<Brush as TypePath>::type_path().to_string(), value);
-    (cube, streamed, authored)
-}
-
-/// The game's value of a handle-bearing component never reaches the document or
-/// the file, whichever way Stop brings the scene back.
-#[track_caller]
-fn assert_holds_the_authored_brush(app: &mut App, tmp: &tempfile::TempDir, authored: &str) {
-    let cube = first_cube(app);
-    let brush = app.world().get::<Brush>(cube).expect("a brush");
-    assert_eq!(brush.faces[0].uv_offset, Vec2::new(0.25, 0.75));
-    let (served, ..) = document(scene_answer(app.world_mut(), None, "zone.bsn"));
-    assert!(!served.contains("0.125"), "the document: {served}");
-    save(app, tmp);
-    let saved = std::fs::read_to_string(zone_file(tmp)).expect("the saved scene");
-    assert!(!saved.contains("0.125"), "the file: {saved}");
-    assert_eq!(saved, authored, "the file is as it was");
-}
-
-#[test]
-fn a_stop_that_respawns_writes_no_game_value_to_the_document() {
-    let (mut app, tmp) = editor();
-    let (cube, mut streamed, authored) = cube_with_streamed_brush(&mut app, &tmp);
-    streamed.components.insert(
-        "bevy_light::point_light::PointLight".to_string(),
-        serde_json::json!({}),
-    );
-    project(&mut app, streamed);
-    let shown = app.world().get::<Brush>(cube).expect("a brush");
-    assert_eq!(shown.faces[0].uv_offset, Vec2::new(0.5, 0.125));
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_err(), "a respawn");
-    assert_holds_the_authored_brush(&mut app, &tmp, &authored);
-}
-
-#[test]
-fn a_stop_that_restores_in_place_writes_no_game_value_to_the_document() {
-    let (mut app, tmp) = editor();
-    let (cube, streamed, authored) = cube_with_streamed_brush(&mut app, &tmp);
-    project(&mut app, streamed);
-    let shown = app.world().get::<Brush>(cube).expect("a brush");
-    assert_eq!(shown.faces[0].uv_offset, Vec2::new(0.5, 0.125));
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_ok(), "no respawn");
-    assert_holds_the_authored_brush(&mut app, &tmp, &authored);
-}
-
-/// A component the game added brought whatever it requires, which only a respawn
-/// takes back off.
-#[test]
-fn stop_respawns_when_the_game_added_a_component() {
-    let (mut app, tmp) = editor();
-    let (cube, mut streamed) = streamed_cube(&mut app, &tmp);
-    streamed.components.clear();
-    streamed.components.insert(
-        "bevy_light::point_light::PointLight".to_string(),
-        serde_json::json!({}),
-    );
-    let before = app.world().entity(cube).archetype().components().len();
-    project(&mut app, streamed);
-    assert!(app.world().entity(cube).archetype().components().len() > before);
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_err(), "a respawn");
-    let cube = first_cube(&mut app);
-    assert!(app.world().get::<PointLight>(cube).is_none());
-}
-
-/// The game parents a scene's roots under its own container, so this happens on
-/// every Play. The root comes back without a respawn.
-#[test]
-fn stop_makes_a_root_the_game_parented_a_root_again() {
-    let (mut app, tmp) = editor();
-    let (cube, mut streamed) = streamed_cube(&mut app, &tmp);
-    project(&mut app, container());
-    streamed.components.insert(
-        "bevy_ecs::hierarchy::ChildOf".to_string(),
-        serde_json::json!(5),
-    );
-    project(&mut app, streamed);
-    assert!(
-        app.world().get::<ChildOf>(cube).is_some(),
-        "the game moved it"
-    );
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_ok(), "no respawn");
-    assert!(app.world().get::<ChildOf>(cube).is_none());
-}
-
-/// A rename made during Play, on an entity the game also renamed, survives Stop.
-#[test]
-fn stop_keeps_a_rename_made_during_play() {
-    let (mut app, tmp) = editor();
-    let (cube, mut streamed) = streamed_cube(&mut app, &tmp);
-    streamed.components.insert(
-        <Name as TypePath>::type_path().to_string(),
-        serde_json::json!("GameName"),
-    );
-    project(&mut app, streamed);
-    assert_eq!(
-        app.world().get::<Name>(cube).map(Name::as_str),
-        Some("GameName")
-    );
-
-    app.world_mut()
-        .operator("entity.rename")
-        .param("entity", cube)
-        .param("name", "UserName".to_string())
-        .call()
-        .expect("entity.rename dispatches")
-        .assert_finished();
-    app.update();
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    let cube = first_cube(&mut app);
-    assert_eq!(
-        app.world().get::<Name>(cube).map(Name::as_str),
-        Some("UserName")
-    );
-}
-
-/// A root the user dragged under another entity during Play stays there on Stop,
-/// though the game had parented it under its container too.
-#[test]
-fn stop_keeps_a_root_the_user_reparented_during_play() {
-    let (mut app, tmp) = editor();
-    let (cube, mut streamed) = streamed_cube(&mut app, &tmp);
-    streamed.components.clear();
-    project(&mut app, container());
-    streamed.components.insert(
-        "bevy_ecs::hierarchy::ChildOf".to_string(),
-        serde_json::json!(5),
-    );
-    project(&mut app, streamed);
-
-    run_op_clause(app.world_mut(), "entity.add.group name=Folder")
-        .expect("a folder is added")
-        .assert_finished();
-    app.update();
-    let folder = entity_named(&mut app, "Folder");
-    app.world_mut()
-        .operator("entity.reparent")
-        .param("child", cube)
-        .param("parent", folder)
-        .call()
-        .expect("entity.reparent dispatches")
-        .assert_finished();
-    app.update();
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    let cube = first_cube(&mut app);
-    let folder = entity_named(&mut app, "Folder");
-    let parent = app.world().get::<ChildOf>(cube).map(|held| held.0);
-    assert_eq!(parent, Some(folder), "the cube stays in the folder");
-}
-
-/// Putting a child back under its parent could change its place among its
-/// siblings, so a child the game moved brings the scene back by a respawn.
-#[test]
-fn stop_respawns_when_the_game_moved_a_child() {
-    let (mut app, tmp) = editor();
-    let (cube, mut streamed) = streamed_cube(&mut app, &tmp);
-    let transform = *app.world().get::<Transform>(cube).expect("a transform");
-    let parent = app.world_mut().spawn_empty().id();
-    app.world_mut().entity_mut(cube).insert(ChildOf(parent));
-    project(&mut app, container());
-    streamed.components.insert(
-        "bevy_ecs::hierarchy::ChildOf".to_string(),
-        serde_json::json!(5),
-    );
-    project(&mut app, streamed);
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_err(), "a respawn");
-    let cube = first_cube(&mut app);
-    assert_eq!(app.world().get::<Transform>(cube), Some(&transform));
-    assert!(app.world().get::<ChildOf>(cube).is_none());
-}
-
-/// An entity of the game's own that the editor shows as an ephemeral.
-fn container() -> jackdaw_pie_protocol::RemoteEntity {
-    jackdaw_pie_protocol::RemoteEntity {
-        entity: 5,
-        scene_node_id: None,
-        components: Default::default(),
-    }
-}
-
-/// An edit made live in the panels is held in the log and the game, not the
-/// document, so Stop brings the scene back by a respawn.
-#[test]
-fn stop_respawns_after_a_live_edit() {
-    let (mut app, tmp) = editor();
-    let (cube, streamed) = streamed_cube(&mut app, &tmp);
-    project(&mut app, streamed);
-    app.world_mut()
-        .resource_mut::<jackdaw::live_edits::LiveEditLog>()
-        .entries
-        .push((
-            jackdaw::live_edits::LiveEditKey {
-                bits: 77,
-                type_path: "bevy_transform::components::transform::Transform".to_string(),
-                field_path: "scale".to_string(),
-            },
-            jackdaw::live_edits::LiveEditEntry {
-                node_id: None,
-                baseline: None,
-                live_value: serde_json::json!([3.0, 3.0, 3.0]),
-                label: "cube / Transform.scale".to_string(),
-            },
-        ));
-
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-    app.update();
-
-    assert!(app.world().get_entity(cube).is_err(), "a respawn");
-    let cube = first_cube(&mut app);
-    assert_eq!(
-        app.world()
-            .get::<Transform>(cube)
-            .expect("a transform")
-            .scale,
-        Vec3::ONE
-    );
 }
 
 /// A scene with an asset root of every kind: `#Stone` loaded from the file into the

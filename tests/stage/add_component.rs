@@ -101,7 +101,7 @@ fn add_component_is_offered_on_the_view_the_inspector_opens_on() {
         .id();
     let content = app
         .world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()))
+        .spawn(jackdaw::layout::inspector_components_content())
         .id();
     app.world_mut().entity_mut(content).insert(ChildOf(leaf));
 

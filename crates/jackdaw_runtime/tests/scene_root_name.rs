@@ -1,6 +1,6 @@
 //! The container entity that scene content spawns under (`JackdawSceneRoot`)
-//! gets a readable `Name` from the scene's source file stem, so the editor's
-//! Live tree shows the scene name instead of a bare entity id. An author-set
+//! gets a readable `Name` from the scene's source file stem, so the
+//! root shows the scene name instead of a bare entity id. An author-set
 //! name on the root is preserved.
 
 use std::path::PathBuf;

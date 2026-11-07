@@ -305,15 +305,12 @@ fn write_fields(
 /// through the shared field edit path, or `None` after telling the caller.
 /// Every target is checked before anything is written: one the running
 /// preview drives, or a value that does not convert, refuses the whole call.
-/// A target projected from the running game in Live view takes its write
-/// there instead, as the inspector's own rows do.
 pub(crate) fn field_edits(
     world: &mut World,
     id: &str,
     type_path: &str,
     writes: Vec<(Entity, &str, serde_json::Value)>,
 ) -> Option<Vec<crate::commands::SetBsnField>> {
-    let mut routed = Vec::new();
     let mut authored = Vec::new();
     for (entity, field_path, json) in writes {
         if crate::preview_context::preview_writes_type_path(world, entity, type_path) {
@@ -322,10 +319,6 @@ pub(crate) fn field_edits(
                 format!("{id}: the running preview drives this on {entity}"),
             );
             return None;
-        }
-        if goes_to_the_game(world, entity) {
-            routed.push((entity, field_path, json));
-            continue;
         }
         let (path, value) = match crate::commands::field_edit_to_bsn_value(
             world, entity, type_path, field_path, &json,
@@ -338,11 +331,6 @@ pub(crate) fn field_edits(
         };
         authored.push((entity, path, value));
     }
-    for (entity, field_path, json) in routed {
-        crate::inspector::reflect_fields::try_route_pie_live_field_edit(
-            world, entity, type_path, field_path, json,
-        );
-    }
     let mut edits = Vec::new();
     for (entity, path, value) in authored {
         match crate::commands::set_bsn_field_command(world, entity, type_path, &path, value) {
@@ -354,18 +342,6 @@ pub(crate) fn field_edits(
         }
     }
     Some(edits)
-}
-
-/// Whether an edit of `entity` goes to the running game: Live view shows it
-/// projected from a game entity.
-pub(crate) fn goes_to_the_game(world: &World, entity: Entity) -> bool {
-    world
-        .get_resource::<crate::pie_mirror::PieViewMode>()
-        .is_some_and(|mode| *mode == crate::pie_mirror::PieViewMode::Live)
-        && world
-            .get_resource::<crate::pie_projection::PieProjection>()
-            .and_then(|projection| crate::live_edits::live_bits_for_preview(projection, entity))
-            .is_some()
 }
 
 fn has_scene_sprite(sprites: Query<(), (With<Sprite>, Without<crate::EditorEntity>)>) -> bool {

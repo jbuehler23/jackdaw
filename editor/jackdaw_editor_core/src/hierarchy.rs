@@ -118,7 +118,6 @@ impl Plugin for HierarchyPlugin {
                     populate_prefab_dialog,
                     update_show_all_button_appearance,
                     on_show_all_changed,
-                    sync_pie_live_outliner,
                     jackdaw_feathers::tree_view::tree_keyboard_navigation,
                 )
                     .run_if(in_state(crate::AppState::Editor)),
@@ -338,64 +337,13 @@ pub(crate) fn is_inherited_descendant(world: &World, entity: Entity) -> bool {
 }
 
 /// Check if an entity has any children that would actually produce an
-/// outliner row. This mirrors the expansion filter exactly, including the
-/// active view mode, so the expand chevron only appears when expanding the
-/// row would spawn something.
+/// outliner row. This mirrors the expansion filter exactly, so the expand chevron
+/// only appears when expanding the row would spawn something.
 pub(crate) fn has_visible_children(world: &World, entity: Entity) -> bool {
-    let live = outliner_in_live_mode(world);
-    let live_set = if live {
-        live_preview_set(world)
-    } else {
-        std::collections::HashSet::new()
-    };
-    has_visible_children_in_mode(world, entity, live, &live_set)
-}
-
-/// `has_visible_children` with the view mode already resolved, for callers
-/// judging many entities at once.
-fn has_visible_children_in_mode(
-    world: &World,
-    entity: Entity,
-    live: bool,
-    live_set: &std::collections::HashSet<Entity>,
-) -> bool {
     let Some(children) = world.get::<Children>(entity) else {
         return false;
     };
-    children
-        .iter()
-        .any(|child| child_visible_in_mode(world, child, live, live_set))
-}
-
-/// True when the outliner is currently showing the Live (running game) tree.
-fn outliner_in_live_mode(world: &World) -> bool {
-    world
-        .get_resource::<crate::pie_mirror::PieViewMode>()
-        .copied()
-        .unwrap_or_default()
-        == crate::pie_mirror::PieViewMode::Live
-}
-
-/// Whether `child` should appear as an outliner row under the active view mode.
-/// Scene mode shows authored entities and hides live preview entities; Live mode
-/// shows only the entities the running game spawned. Editor-only and derived
-/// children are excluded in both modes via [`is_outliner_child`].
-fn child_visible_in_mode(
-    world: &World,
-    child: Entity,
-    live: bool,
-    live_set: &std::collections::HashSet<Entity>,
-) -> bool {
-    if !is_outliner_child(world, child) {
-        return false;
-    }
-    if live {
-        live_set.contains(&child)
-    } else {
-        world
-            .get::<crate::pie_projection::PieEphemeral>(child)
-            .is_none()
-    }
+    children.iter().any(|child| is_outliner_child(world, child))
 }
 
 /// Whether a child entity should appear in the outliner. A `Children` list can
@@ -702,36 +650,6 @@ fn rebuild_hierarchy_on_container_added(
     }
 }
 
-/// Preview entities that exist in the focused game right now: the values of
-/// the projection's bits map. The Live tab shows exactly this set.
-fn live_preview_set(world: &World) -> std::collections::HashSet<Entity> {
-    world
-        .resource::<crate::pie_projection::PieProjection>()
-        .by_bits
-        .values()
-        .copied()
-        .collect()
-}
-
-/// Roots of the Live tree: live entities whose parent is missing or not
-/// itself live (the game hierarchy can hang under authored containers the
-/// game never spawned).
-fn live_tree_roots(world: &mut World, live: &std::collections::HashSet<Entity>) -> Vec<Entity> {
-    let mut roots: Vec<Entity> = live
-        .iter()
-        .copied()
-        .filter(|&entity| {
-            world.get_entity(entity).is_ok()
-                && match world.get::<ChildOf>(entity) {
-                    Some(child_of) => !live.contains(&child_of.0),
-                    None => true,
-                }
-        })
-        .collect();
-    roots.sort_by_key(|entity| entity.index());
-    roots
-}
-
 pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     let _span = info_span!("outliner.rebuild").entered();
     fn rebuild_hierarchy_inner(
@@ -754,26 +672,14 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             return;
         }
 
-        // Live roots are the live preview entities whose parent is not itself
-        // live; Scene roots are the authored, unparented ones, filtered by
-        // `Name` unless show-all is on.
-        let live = world
-            .get_resource::<crate::pie_mirror::PieViewMode>()
-            .copied()
-            .unwrap_or_default()
-            == crate::pie_mirror::PieViewMode::Live;
-
-        let root_entities: Vec<Entity> = if live {
-            let live_set = live_preview_set(world);
-            live_tree_roots(world, &live_set)
-        } else {
-            let roots: Vec<Entity> = roots.iter(world).collect();
-            let show_all = world.resource::<HierarchyShowAll>().0;
-            roots
-                .into_iter()
-                .filter(|&e| show_all || world.get::<Name>(e).is_some() || names_a_prefab(world, e))
-                .collect()
-        };
+        // The authored, unparented entities, filtered by `Name` unless show-all
+        // is on.
+        let roots: Vec<Entity> = roots.iter(world).collect();
+        let show_all = world.resource::<HierarchyShowAll>().0;
+        let root_entities: Vec<Entity> = roots
+            .into_iter()
+            .filter(|&e| show_all || world.get::<Name>(e).is_some() || names_a_prefab(world, e))
+            .collect();
 
         let mut root_data: Vec<(Entity, EntityCategory, String)> = root_entities
             .into_iter()
@@ -800,46 +706,6 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
     world
         .run_system_cached(rebuild_hierarchy_inner)
         .map_err(BevyError::from)
-}
-
-/// Despawn every tree row in every Outliner container and forget those
-/// containers' `TreeIndex` entries. Used by the view-mode transition
-/// handler so a switch starts from a clean slate.
-fn teardown_outliner_rows(world: &mut World) {
-    let containers: Vec<Entity> = world
-        .run_system_cached(collect_hierarchy_containers)
-        .unwrap_or_default();
-    for container in &containers {
-        let children: Vec<Entity> = world
-            .get::<Children>(*container)
-            .map(|c| c.iter().collect())
-            .unwrap_or_default();
-        for child in children {
-            if world.get::<TreeNode>(child).is_some()
-                && let Ok(ec) = world.get_entity_mut(child)
-            {
-                ec.despawn();
-            }
-        }
-        world
-            .resource_mut::<TreeIndex>()
-            .clear_container(*container);
-    }
-}
-
-/// Rebuild the outliner on view-mode transitions. When the mode changes to
-/// Scene, tear down any ephemeral rows left from Live and rebuild from the
-/// preview ECS. When the mode changes to Live, the preview ECS already holds
-/// the live overlay (projected by `drain_game_events`), so a normal rebuild
-/// picks it up without special handling.
-fn sync_pie_live_outliner(mode: Res<crate::pie_mirror::PieViewMode>, mut commands: Commands) {
-    if !mode.is_changed() {
-        return;
-    }
-    commands.queue(|world: &mut World| {
-        teardown_outliner_rows(world);
-        rebuild_hierarchy(world)
-    });
 }
 
 /// Ancestor entities whose rows must expand, top down, so that `target`'s
@@ -1228,19 +1094,13 @@ fn refresh_chevrons_on_document_change(
 }
 
 fn refresh_all_row_chevrons(world: &mut World) {
-    let live = outliner_in_live_mode(world);
-    let live_set = if live {
-        live_preview_set(world)
-    } else {
-        std::collections::HashSet::new()
-    };
     let rows: Vec<(Entity, Entity)> = world
         .query::<(Entity, &TreeNode)>()
         .iter(world)
         .map(|(row, node)| (row, node.0))
         .collect();
     for (row, source) in rows {
-        let has_children = has_visible_children_in_mode(world, source, live, &live_set);
+        let has_children = has_visible_children(world, source);
         set_row_expand_toggle(world, row, has_children);
     }
 }
@@ -1346,7 +1206,7 @@ fn on_entity_reparented(
                 || populated_query.get(parent_tree).is_ok_and(|p| p.0))
         {
             if let Some(parent_children_container) = parent_children_container {
-                // Rows churn with live-mode despawns; a row can die between
+                // A row can die between
                 // queueing and apply, and the row sync rebuilds it anyway.
                 commands
                     .entity(tree_entity)
@@ -1543,18 +1403,6 @@ fn on_tree_node_expanded(
             .map(|c| c.iter().collect())
             .unwrap_or_default();
 
-        // In Live mode the tree shows only the running game's entities, so a
-        // child that is not itself live (an authored container the game never
-        // spawned) is skipped. In Scene mode the inverse holds: live preview
-        // entities a running game parented under an authored counterpart are
-        // hidden so the authored tree stays clean.
-        let live = outliner_in_live_mode(world);
-        let live_set = if live {
-            live_preview_set(world)
-        } else {
-            std::collections::HashSet::new()
-        };
-
         // Resolve the `HierarchyTreeContainer` that owns this
         // expansion by walking up from the per-row children container.
         // `TreeIndex` keys rows by their owning `HierarchyTreeContainer`,
@@ -1564,7 +1412,7 @@ fn on_tree_node_expanded(
 
         let mut child_data: Vec<(Entity, String, EntityCategory)> = Vec::new();
         for child in source_children {
-            if !child_visible_in_mode(world, child, live, &live_set) {
+            if !is_outliner_child(world, child) {
                 if is_generated_part(world, child) {
                     withhold_row(world, container, child);
                 }
@@ -3699,22 +3547,6 @@ mod tests {
     }
 
     #[test]
-    fn scene_mode_hides_live_preview_children() {
-        // An authored entity that a running game parented a preview entity
-        // under should read as a leaf in the Scene tree: the preview child is
-        // a Live-only artifact and must not give the authored row a chevron.
-        let mut world = World::new();
-        let authored = world.spawn_empty().id();
-        let plain_child = world.spawn(ChildOf(authored)).id();
-        let _ = plain_child;
-        assert!(has_visible_children(&world, authored));
-
-        let ephemeral_host = world.spawn_empty().id();
-        world.spawn((ChildOf(ephemeral_host), crate::pie_projection::PieEphemeral));
-        assert!(!has_visible_children(&world, ephemeral_host));
-    }
-
-    #[test]
     fn dead_child_refs_are_not_outliner_children() {
         // A `Children` list can still name a despawned entity: duplicating a
         // brush copies its `Children`, and the scene mapper rewrites the runtime
@@ -3978,29 +3810,5 @@ mod tests {
         let params = empty_params();
         let selection = Selection::default();
         assert_eq!(resolve_rename_target(&params, &selection), None);
-    }
-
-    #[test]
-    fn live_set_roots_are_live_entities_without_live_parents() {
-        let mut world = World::new();
-        world.init_resource::<crate::pie_projection::PieProjection>();
-        let authored_parent = world.spawn_empty().id();
-        let live_root = world.spawn(ChildOf(authored_parent)).id();
-        let live_child = world.spawn(ChildOf(live_root)).id();
-        let _not_live = world.spawn_empty().id();
-        {
-            let mut projection = world.resource_mut::<crate::pie_projection::PieProjection>();
-            projection.by_bits.insert(1, live_root);
-            projection.by_bits.insert(2, live_child);
-        }
-        let live = live_preview_set(&world);
-        assert!(live.contains(&live_root) && live.contains(&live_child));
-
-        let roots = live_tree_roots(&mut world, &live);
-        assert_eq!(
-            roots,
-            vec![live_root],
-            "live child of a non-live parent is the root"
-        );
     }
 }

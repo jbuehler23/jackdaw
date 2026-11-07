@@ -911,12 +911,7 @@ fn spawn_enum_combo(
 
 /// Write path shared by both enum controls, minting the same undo-backed
 /// commit the generic enum menu does.
-fn commit_variant(
-    commands: &mut Commands,
-    source: Entity,
-    field: &'static NodeEnumField,
-    index: usize,
-) {
+fn commit_variant(commands: &mut Commands, field: &'static NodeEnumField, index: usize) {
     let Some(variant) = field.variants.get(index).copied() else {
         warn!(
             "a variant pick on '{}' was dropped: no variant {index} of {}",
@@ -928,7 +923,6 @@ fn commit_variant(
     commands.queue(move |world: &mut World| {
         super::reflect_fields::apply_enum_variant_with_undo(
             world,
-            source,
             node_type_path(),
             field.path,
             variant,
@@ -948,7 +942,7 @@ fn on_segment_change(
     if card_edit_skipped(Some(segment.source), &remote_proxies) {
         return;
     }
-    commit_variant(&mut commands, segment.source, segment.field, segment.index);
+    commit_variant(&mut commands, segment.field, segment.index);
 }
 
 pub(crate) fn on_node_enum_change(
@@ -963,7 +957,7 @@ pub(crate) fn on_node_enum_change(
     if card_edit_skipped(Some(combo.source), &remote_proxies) {
         return;
     }
-    commit_variant(&mut commands, combo.source, combo.field, event.selected);
+    commit_variant(&mut commands, combo.field, event.selected);
 }
 
 /// Keep the segmented controls showing what the component holds.
@@ -1107,21 +1101,12 @@ fn commit_optional_number(world: &mut World, root: Entity, is_final: bool) {
     let Some(state) = world.get::<NodeOptionalNumber>(root) else {
         return;
     };
-    let (source, field, value) = (state.source, state.field, state.value);
+    let (field, value) = (state.field, state.value);
     let json = match value.and_then(|value| field.settle(value)) {
         Some(value) if field.integer => serde_json::json!(value.round() as i64),
         Some(value) => serde_json::json!(value),
         None => serde_json::Value::Null,
     };
-    if super::reflect_fields::try_route_pie_live_field_edit(
-        world,
-        source,
-        node_type_path(),
-        field.path,
-        json.clone(),
-    ) {
-        return;
-    }
     if is_final {
         crate::commands::field_edit_commit(
             world,

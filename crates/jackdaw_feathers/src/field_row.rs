@@ -64,8 +64,8 @@ impl FieldRowProps {
 #[derive(Component)]
 pub struct FieldRowNode;
 
-/// Marker on a mark hung off a field row: the prefab override dot, the live-edit
-/// dot, the keyframe diamond. Goes on the mark's own absolutely-positioned
+/// Marker on a mark hung off a field row: the prefab override dot, the keyframe
+/// diamond. Goes on the mark's own absolutely-positioned
 /// wrapper, a direct child of the row.
 ///
 /// A mark anchors to the row's right edge, so a row showing one has to give up

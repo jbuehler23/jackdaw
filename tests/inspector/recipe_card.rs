@@ -36,7 +36,7 @@ fn recipe_inspector() -> (App, tempfile::TempDir) {
     std::fs::create_dir_all(dir.path().join("assets/recipes")).expect("an assets dir");
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.world_mut().insert_resource(ProjectRoot::new(
         dir.path().to_path_buf(),
         ProjectConfig::default(),

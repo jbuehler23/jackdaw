@@ -4,114 +4,128 @@
 
 use bevy::prelude::*;
 
+use crate::pie::{InstanceKey, PieInstances};
 use crate::selection::Selection;
 
-/// Last highlight bits sent to the focused game, to send only on change.
+/// The last highlight sent, to send only on change: the game it went to and the
+/// document node it named.
 #[derive(Resource, Default)]
-pub(crate) struct LastHighlight(pub(crate) Option<u64>);
+pub(crate) struct LastHighlight(Option<(InstanceKey, Option<u64>)>);
 
-/// Mirror the editor selection into the focused game as a highlight box.
-/// Resolves the primary selected preview entity to its live game bits and
-/// sends a `Highlight` control event when it differs from the last sent.
+/// Mirror the editor selection into the focused game as a highlight box: the
+/// document node of the primary selected entity, sent as a `Highlight` control
+/// event when that or the focused game differs from the last sent.
 pub(crate) fn sync_selection_highlight(world: &mut World) {
-    let desired = {
-        let primary = world.resource::<Selection>().primary();
-        match primary {
-            Some(entity) => {
-                let projection = world.resource::<crate::pie_projection::PieProjection>();
-                crate::live_edits::live_bits_for_preview(projection, entity)
-            }
-            None => None,
-        }
-    };
-    let last = world.get_resource::<LastHighlight>().and_then(|l| l.0);
-    if desired == last {
+    let Some(focused) = world.resource::<PieInstances>().focused.clone() else {
+        world.get_resource_or_insert_with(LastHighlight::default).0 = None;
         return;
-    }
-    // Record only what was actually sent. While no instance is focused the
-    // memo stays stale, so a selection made before an instance focuses still
-    // pushes its box once focus arrives rather than being silently swallowed.
-    let focused = world
-        .resource::<crate::pie_mirror::PieInstances>()
-        .focused
-        .is_some();
-    if !focused {
+    };
+    let node = world
+        .resource::<Selection>()
+        .primary()
+        .and_then(|entity| selected_node(world, entity));
+    let desired = Some((focused, node));
+    if world
+        .get_resource::<LastHighlight>()
+        .is_some_and(|last| last.0 == desired)
+    {
         return;
     }
     crate::pie::send_control_to_focused(
         world,
-        jackdaw_pie_protocol::ControlEvent::Highlight { entity: desired },
+        jackdaw_pie_protocol::ControlEvent::Highlight { node },
     );
     world.get_resource_or_insert_with(LastHighlight::default).0 = desired;
 }
 
+fn selected_node(world: &World, entity: Entity) -> Option<u64> {
+    let ast = world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
+    ast.stable_id_of(ast.ast_for(entity)?)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::pie_mirror::PieInstances;
-    use crate::pie_projection::PieProjection;
+    use jackdaw_bsn::SceneBsnAst;
+    use jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 
-    fn focus_world() -> (World, Entity) {
-        let mut world = World::new();
-        world.init_resource::<Selection>();
-        world.init_resource::<PieProjection>();
-        world.init_resource::<LastHighlight>();
-        world.init_resource::<PieInstances>();
-        let preview = world.spawn_empty().id();
-        world
-            .resource_mut::<PieProjection>()
-            .by_bits
-            .insert(7, preview);
-        (world, preview)
+    use super::*;
+
+    const NODE: u64 = 7;
+
+    fn game(instance: u32) -> InstanceKey {
+        InstanceKey {
+            config: "game".to_string(),
+            instance,
+        }
     }
 
-    fn focus_an_instance(world: &mut World) {
-        world.resource_mut::<PieInstances>().focused = Some(crate::pie::InstanceKey {
-            config: "game".to_string(),
-            instance: 0,
-        });
+    fn world_with_node() -> (World, Entity) {
+        let mut world = World::new();
+        world.init_resource::<Selection>();
+        world.init_resource::<LastHighlight>();
+        world.init_resource::<PieInstances>();
+        let entity = world.spawn_empty().id();
+        let mut ast = SceneBsnAst::default();
+        let node = ast.create_entity_node(vec![jackdaw_bsn::BsnPatch::TupleStruct(
+            jackdaw_bsn::BsnTupleStructData {
+                type_path: SCENE_NODE_ID_TYPE_PATH.to_string(),
+                values: vec![jackdaw_bsn::BsnValue::Int(NODE as i128)],
+            },
+        )]);
+        ast.add_to_roots(node);
+        ast.link(entity, node);
+        world.insert_resource(ast);
+        (world, entity)
+    }
+
+    fn sent(world: &World) -> Option<(InstanceKey, Option<u64>)> {
+        world.resource::<LastHighlight>().0.clone()
     }
 
     #[test]
-    fn highlight_syncs_on_selection_change_while_focused() {
-        let (mut world, preview) = focus_world();
-        focus_an_instance(&mut world);
-        // The send is a no-op (no PieSession), so only LastHighlight moves.
-        world.resource_mut::<Selection>().entities.push(preview);
+    fn the_highlight_names_the_selected_node_of_the_document() {
+        let (mut world, entity) = world_with_node();
+        world.resource_mut::<PieInstances>().focused = Some(game(1));
+        world.resource_mut::<Selection>().entities.push(entity);
 
         sync_selection_highlight(&mut world);
-        assert_eq!(
-            world.resource::<LastHighlight>().0,
-            Some(7),
-            "selecting the mapped preview records its live bits"
-        );
+        assert_eq!(sent(&world), Some((game(1), Some(NODE))));
 
         world.resource_mut::<Selection>().entities.clear();
         sync_selection_highlight(&mut world);
-        assert_eq!(
-            world.resource::<LastHighlight>().0,
-            None,
-            "clearing the selection clears the highlight"
-        );
+        assert_eq!(sent(&world), Some((game(1), None)));
     }
 
     #[test]
-    fn highlight_waits_for_focus_before_recording() {
-        let (mut world, preview) = focus_world();
-        world.resource_mut::<Selection>().entities.push(preview);
+    fn a_selection_made_before_focus_or_kept_across_it_reaches_the_game() {
+        let (mut world, entity) = world_with_node();
+        world.resource_mut::<Selection>().entities.push(entity);
 
-        // No focused instance yet: the box cannot be drawn, so nothing is
-        // recorded and the memo stays stale.
         sync_selection_highlight(&mut world);
-        assert_eq!(
-            world.resource::<LastHighlight>().0,
-            None,
-            "an unfocused session records nothing, so a later focus re-sends"
-        );
+        assert_eq!(sent(&world), None, "nothing goes with no focused game");
 
-        // Once an instance focuses, the standing selection pushes its box.
-        focus_an_instance(&mut world);
+        world.resource_mut::<PieInstances>().focused = Some(game(1));
         sync_selection_highlight(&mut world);
-        assert_eq!(world.resource::<LastHighlight>().0, Some(7));
+        assert_eq!(sent(&world), Some((game(1), Some(NODE))));
+
+        world.resource_mut::<PieInstances>().focused = Some(game(2));
+        sync_selection_highlight(&mut world);
+        assert_eq!(sent(&world), Some((game(2), Some(NODE))));
+    }
+
+    #[test]
+    fn a_new_session_highlights_the_standing_selection_again() {
+        let (mut world, entity) = world_with_node();
+        world.resource_mut::<Selection>().entities.push(entity);
+        world.resource_mut::<PieInstances>().focused = Some(game(1));
+        sync_selection_highlight(&mut world);
+
+        world.resource_mut::<PieInstances>().focused = None;
+        sync_selection_highlight(&mut world);
+        assert_eq!(sent(&world), None);
+
+        world.resource_mut::<PieInstances>().focused = Some(game(1));
+        sync_selection_highlight(&mut world);
+        assert_eq!(sent(&world), Some((game(1), Some(NODE))));
     }
 }

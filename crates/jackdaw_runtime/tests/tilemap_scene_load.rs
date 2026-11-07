@@ -197,7 +197,7 @@ fn chunks_of(
         .iter(app.world())
         .filter(|(_, parent, ..)| parent.parent() == map)
         .map(|(of, _, chunk, data, transform, runtime_only)| {
-            assert!(runtime_only, "a drawn chunk is never streamed or saved");
+            assert!(runtime_only, "a drawn chunk is never saved");
             (
                 of.layer,
                 of.chunk.0,

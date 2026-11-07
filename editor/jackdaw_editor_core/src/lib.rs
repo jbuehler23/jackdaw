@@ -28,7 +28,6 @@ pub mod cli;
 pub mod clip_ops;
 pub mod command_palette;
 pub mod commands;
-pub mod component_json;
 pub mod creation_taxonomy;
 pub mod custom_properties;
 pub mod default_style;
@@ -89,8 +88,6 @@ pub mod hot_reload;
 pub mod launch;
 pub mod launcher_mode;
 pub mod layout;
-pub mod live_edits;
-pub mod live_edits_ui;
 pub mod live_frame;
 pub mod live_frame_view;
 pub mod live_highlight;
@@ -118,9 +115,7 @@ pub mod operator_tooltip;
 pub mod perf_probe;
 pub mod pie;
 pub mod pie_menu;
-pub mod pie_mirror;
 mod pie_outbox;
-pub mod pie_projection;
 pub mod play_overlay;
 pub mod play_scene;
 pub mod play_settings;
@@ -566,7 +561,6 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(live_input::LiveInputPlugin)
         .add_plugins(game_panel::GamePanelPlugin)
-        .add_plugins(live_edits_ui::LiveEditsUiPlugin)
         .add_plugins(pie_menu::PieMenuPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
         .add_systems(Startup, (register_workspaces, sync_icon_font))
@@ -574,7 +568,7 @@ impl Plugin for EditorCorePlugin {
             Update,
             EditorInteractionSystems
                 .run_if(in_state(AppState::Editor))
-                .run_if(no_dialog_open.and_then(crate::live_edits_ui::stop_prompt_closed)),
+                .run_if(no_dialog_open),
         )
         .configure_sets(
             PostUpdate,
@@ -631,12 +625,8 @@ impl Plugin for EditorCorePlugin {
                 layout::update_grid_size_label,
                 layout::update_active_document_display,
                 layout::update_tab_strip_highlights,
-                layout::update_pie_view_toggle_appearance,
-                layout::update_pie_view_header_accent,
-                layout::update_save_to_scene_button,
-                layout::update_pie_instance_cycle_button,
+                layout::update_playing_edge,
                 layout::update_window_mode_button,
-                layout::update_live_badge,
                 auto_hide_internal_entities,
                 register_animation_entities_in_ast,
                 drop_imported_clip_entities.after(register_animation_entities_in_ast),

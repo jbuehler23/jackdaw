@@ -7,7 +7,6 @@ use crate::util::OperatorResultExt as _;
 
 use bevy::prelude::*;
 use jackdaw::migrate_dialog::request_open_with_conversion;
-use jackdaw::pie_projection::PieProjection;
 use jackdaw::project::{ProjectConfig, ProjectRoot};
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
@@ -1020,36 +1019,6 @@ fn an_inherited_face_links_up_when_its_name_arrives() {
     assert!(!holds_no_asset(&face(&opened.app)), "the instance links up");
 }
 
-/// An entity holding the game's streamed values is not the editor's to mirror:
-/// what the stream wrote stays out of the document, so out of a save.
-#[test]
-fn a_streamed_brush_value_stays_out_of_the_document() {
-    let mut opened = open_scene();
-    let brush = opened.brush;
-    let authored = opened.document_material(0);
-    assert_eq!(authored, Some(BsnValue::String(SOIL.to_string())));
-
-    let world = opened.app.world_mut();
-    let mut written = world.get_mut::<Brush>(brush).expect("the brush is live");
-    written.faces[1].uv_rotation = 0.5;
-    written.faces[0].material = Handle::default();
-    jackdaw::pie_projection::mark_streamed(world, brush, BRUSH);
-    opened.settle();
-
-    let ast = opened.app.world().resource::<SceneBsnAst>();
-    let node = ast.ast_for(brush).expect("the brush is in the document");
-    assert_ne!(
-        get_bsn_field(ast, node, BRUSH, "faces[1].uv_rotation"),
-        Some(BsnValue::Float(0.5)),
-        "the streamed rotation stays out of the document"
-    );
-    assert_eq!(
-        opened.document_material(0),
-        authored,
-        "the streamed handle stays out of the document"
-    );
-}
-
 /// An asset held only in memory has no name yet, so the document cannot bring
 /// it back; a field edit leaves it alone and a save still embeds it.
 #[test]
@@ -1329,52 +1298,6 @@ fn undoing_a_brush_command_recorded_before_a_name_linked_keeps_the_name() {
     assert!(!holds_no_asset(&opened.handles()[0]), "still linked");
 }
 
-/// A stream writing one component says nothing about the entity's others.
-#[test]
-fn an_edit_on_an_entity_streaming_another_component_reaches_the_document() {
-    use jackdaw_geometry::{MeshMirror, Modifier, ModifierEntry, ModifierStack};
-
-    let mut opened = open_scene();
-    let brush = opened.brush;
-    let world = opened.app.world_mut();
-    world
-        .resource_mut::<PieProjection>()
-        .by_bits
-        .insert(77, brush);
-    jackdaw::pie_projection::project_event(
-        world,
-        jackdaw_pie_protocol::StateEvent::ComponentChanged {
-            entity: 77,
-            type_path: "bevy_transform::components::transform::Transform".to_string(),
-            value: serde_json::json!({
-                "translation": [4.0, 0.0, 0.0],
-                "rotation": [0.0, 0.0, 0.0, 1.0],
-                "scale": [1.0, 1.0, 1.0],
-            }),
-        },
-    );
-    assert!(
-        world.resource::<PieProjection>().overlaid.contains(&brush),
-        "the stream wrote to the entity"
-    );
-
-    world.entity_mut(brush).insert(ModifierStack {
-        modifiers: vec![ModifierEntry::new(Modifier::Mirror(MeshMirror::default()))],
-    });
-    opened.settle();
-
-    let ast = opened.app.world().resource::<SceneBsnAst>();
-    let node = ast.ast_for(brush).expect("the brush is in the document");
-    assert!(
-        ast.find_patch_by_type_path(
-            node,
-            <ModifierStack as bevy::reflect::TypePath>::type_path()
-        )
-        .is_some(),
-        "the stack is in the document"
-    );
-}
-
 const SMALL_PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
@@ -1605,32 +1528,6 @@ impl Opened {
             .count()
     }
 
-    /// Write `change` of the live brush to it as the game's stream does.
-    fn stream_brush(&mut self, change: impl FnOnce(&mut Brush)) {
-        let brush = self.brush;
-        let mut streamed = self.live();
-        change(&mut streamed);
-        let world = self.app.world_mut();
-        let probe = world.spawn(streamed).id();
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let snapshot = jackdaw_pie_protocol::build_snapshot(world, &registry.read(), &[probe]);
-        world.entity_mut(probe).despawn();
-        let value = snapshot[0].components[BRUSH].clone();
-        world
-            .resource_mut::<PieProjection>()
-            .by_bits
-            .insert(77, brush);
-        jackdaw::pie_projection::project_event(
-            world,
-            jackdaw_pie_protocol::StateEvent::ComponentChanged {
-                entity: 77,
-                type_path: BRUSH.to_string(),
-                value,
-            },
-        );
-        self.settle();
-    }
-
     /// Run an operator with its own history entry.
     fn call_op(&mut self, id: &str, params: &[(&'static str, f64)]) {
         let mut call = self.app.world_mut().operator(id.to_string());
@@ -1853,26 +1750,6 @@ fn a_tab_switch_keeps_unresolved_names_and_clears() {
     assert_eq!(opened.document_material(3), None, "after a sync too");
 }
 
-/// Play then Stop: the game's value goes back, and the names with the live brush.
-#[test]
-fn play_then_stop_keeps_unresolved_names() {
-    let mut opened = open_scene_naming(NEVER);
-    opened.stream_brush(|brush| brush.faces[0].uv_rotation = 0.5);
-    assert_eq!(opened.live().faces[0].uv_rotation, 0.5, "the stream landed");
-    assert_ne!(
-        opened.handles()[3],
-        Handle::default(),
-        "a stream writes no handle"
-    );
-
-    jackdaw::pie_projection::revert_preview(opened.app.world_mut());
-    opened.settle();
-    opened.refind_brush();
-
-    assert_eq!(opened.live().faces[0].uv_rotation, 0.0, "the prior is back");
-    assert_never_kept(&opened.save(), "after Stop");
-}
-
 /// A name cleared by hand is not waiting: its arrival changes nothing, and only
 /// undo brings it back.
 #[test]
@@ -1924,88 +1801,6 @@ fn a_face_waiting_on_its_name_wears_the_default_material() {
         assert!(uses_default, "drawn as the default");
         assert!(stored.contains(&material), "with a material that exists");
     }
-}
-
-/// An edit on a brush the game has streamed reaches the document, so Stop keeps
-/// it and its undo entry stands for something. The value the stream wrote alone
-/// stays out, as [`a_streamed_brush_value_stays_out_of_the_document`] holds.
-#[test]
-fn a_card_edit_on_a_streamed_brush_survives_stop() {
-    let mut opened = open_scene();
-    opened.stream_brush(|brush| brush.faces[0].uv_offset = Vec2::new(9.0, 9.0));
-    assert_eq!(
-        opened.live().faces[0].uv_offset,
-        Vec2::new(9.0, 9.0),
-        "the stream landed"
-    );
-    assert!(
-        !opened
-            .app
-            .world()
-            .resource::<SceneBsnAst>()
-            .ast_for(opened.brush)
-            .is_some_and(|node| get_bsn_field(
-                opened.app.world().resource::<SceneBsnAst>(),
-                node,
-                BRUSH,
-                "faces[0].uv_offset"
-            )
-            .is_some()),
-        "the write alone stays out"
-    );
-
-    opened.pick_faces(vec![1]);
-    let before = opened.live().faces[1].uv_scale;
-    opened.call_op("brush.face.set_uv_scale_preset", &[("scale", 4.0)]);
-
-    jackdaw::pie_projection::revert_preview(opened.app.world_mut());
-    opened.settle();
-    opened.refind_brush();
-    assert_eq!(
-        opened.live().faces[1].uv_scale,
-        Vec2::splat(4.0),
-        "the edit stays through Stop"
-    );
-
-    opened.history("history.undo");
-    opened.settle();
-    assert_eq!(
-        opened.live().faces[1].uv_scale,
-        before,
-        "and its undo entry takes it back"
-    );
-}
-
-/// The same for a live edit in the inspector, which the game has yet to echo.
-#[test]
-fn a_card_edit_after_a_live_inspector_edit_survives_stop() {
-    let mut opened = open_scene();
-    let brush = opened.brush;
-    jackdaw::live_edits::record_live_edit(
-        opened.app.world_mut(),
-        brush,
-        77,
-        BRUSH,
-        "faces[0].uv_rotation",
-        serde_json::json!(0.25),
-    );
-    opened.pick_faces(vec![1]);
-    opened.call_op("brush.face.set_uv_scale_preset", &[("scale", 4.0)]);
-    assert_eq!(
-        get_bsn_field(
-            opened.app.world().resource::<SceneBsnAst>(),
-            opened
-                .app
-                .world()
-                .resource::<SceneBsnAst>()
-                .ast_for(brush)
-                .expect("the brush is in the document"),
-            BRUSH,
-            "faces[1].uv_scale.x"
-        ),
-        Some(BsnValue::Float(4.0)),
-        "the edit reaches the document"
-    );
 }
 
 /// Other asset types and shapes of field hold a placeholder as a face does, and
@@ -2088,42 +1883,6 @@ fn applying_an_unresolved_material_to_all_faces_names_them_all() {
 
 /// Faces naming files, and names nothing answers for.
 const NAMED_AND_WAITING: [&str; 6] = [SOIL, "#Still", "@still", MOSS, SOIL, MOSS];
-
-/// Saving a live entity to the scene writes the game's values and leaves the
-/// references alone: a stream never carries a handle.
-#[test]
-fn saving_a_live_brush_to_the_scene_keeps_named_and_waiting_materials() {
-    let mut opened = open_scene_naming(NAMED_AND_WAITING);
-    let brush = opened.brush;
-    let handles = opened.handles();
-    let world = opened.app.world_mut();
-    *world.resource_mut::<jackdaw::pie_mirror::PieViewMode>() =
-        jackdaw::pie_mirror::PieViewMode::Live;
-    world
-        .resource_mut::<PieProjection>()
-        .by_bits
-        .insert(77, brush);
-    world.resource_mut::<Selection>().entities = vec![brush];
-    world.get_mut::<Brush>(brush).expect("live").faces[1].uv_rotation = 0.5;
-    jackdaw::pie_projection::mark_streamed(world, brush, BRUSH);
-    opened.settle();
-
-    jackdaw::pie::save_live_entity_to_scene(opened.app.world_mut());
-    opened.settle();
-
-    for (face, name) in NAMED_AND_WAITING.iter().enumerate() {
-        assert_eq!(opened.document_material(face), named(name), "face {face}");
-    }
-    assert_eq!(opened.handles(), handles, "the live handles stay");
-    let ast = opened.app.world().resource::<SceneBsnAst>();
-    let node = ast.ast_for(brush).expect("the brush is in the document");
-    assert_eq!(
-        get_bsn_field(ast, node, BRUSH, "faces[1].uv_rotation"),
-        Some(BsnValue::Float(0.5)),
-        "the game's value is what was asked for"
-    );
-    assert_eq!(opened.saved_materials(), NAMED_AND_WAITING);
-}
 
 /// A material file that goes away while the scene is open.
 fn file_goes(opened: &mut Opened, file: &str) {
@@ -2245,40 +2004,6 @@ fn renaming_a_material_in_the_editor_names_the_new_file() {
     );
     let saved = opened.saved_materials();
     assert_eq!(saved[0], "materials/loam.bsn", "{saved:?}");
-}
-
-/// A file arriving during Play leaves an entity holding the game's values alone,
-/// so nothing it holds reaches the document with no edit. A stop links it.
-#[test]
-fn a_file_arriving_during_play_waits_for_the_stop() {
-    let mut opened = open_scene_naming(LATE);
-    let brush = opened.brush;
-    let waiting = opened.handles();
-    let world = opened.app.world_mut();
-    world.get_mut::<Brush>(brush).expect("live").faces[4].uv_rotation = 0.5;
-    jackdaw::pie_projection::mark_streamed(world, brush, BRUSH);
-    opened.settle();
-
-    file_appears(&mut opened);
-    opened.settle();
-
-    let ast = opened.app.world().resource::<SceneBsnAst>();
-    let node = ast.ast_for(brush).expect("the brush is in the document");
-    assert_ne!(
-        get_bsn_field(ast, node, BRUSH, "faces[4].uv_rotation"),
-        Some(BsnValue::Float(0.5)),
-        "the game's value stays out of the document"
-    );
-    assert_eq!(opened.handles(), waiting, "the entity is left alone");
-
-    jackdaw::pie_projection::revert_preview(opened.app.world_mut());
-    opened.settle();
-
-    assert!(
-        !holds_no_asset(&opened.handles()[1]),
-        "the stop links @late"
-    );
-    assert_eq!(opened.saved_materials()[2], LATE_FILE);
 }
 
 /// A name answering again for what a brush already holds writes nothing, so the
@@ -2424,9 +2149,8 @@ fn a_brush_default_holding_a_handle_names_it_in_the_document() {
     assert_eq!(get_bsn_field(ast, node, path, "spare"), named(SOIL));
 }
 
-/// The stream only ever writes a stack, so one coming off an entity is the editor's.
 #[test]
-fn removing_a_stack_the_stream_wrote_reaches_the_document() {
+fn removing_a_stack_reaches_the_document() {
     use jackdaw_geometry::{MeshMirror, Modifier, ModifierEntry, ModifierStack};
 
     let type_path = <ModifierStack as bevy::reflect::TypePath>::type_path();
@@ -2440,9 +2164,11 @@ fn removing_a_stack_the_stream_wrote_reaches_the_document() {
             modifiers: vec![ModifierEntry::new(Modifier::Mirror(MeshMirror::default()))],
         });
     opened.settle();
-    let world = opened.app.world_mut();
-    jackdaw::pie_projection::mark_streamed(world, brush, type_path);
-    world.entity_mut(brush).remove::<ModifierStack>();
+    opened
+        .app
+        .world_mut()
+        .entity_mut(brush)
+        .remove::<ModifierStack>();
     opened.settle();
 
     let ast = opened.app.world().resource::<SceneBsnAst>();
@@ -2616,23 +2342,6 @@ fn a_path_with_a_file_or_of_another_asset_type_loads_through_the_server() {
 }
 
 impl Opened {
-    /// Save the brush's live values to the scene, as the Live view's action does.
-    fn save_live_to_scene(&mut self) {
-        let brush = self.brush;
-        let world = self.app.world_mut();
-        world.resource_mut::<Selection>().entities = vec![brush];
-        jackdaw::pie::save_live_entity_to_scene(world);
-        self.settle();
-    }
-
-    fn view_live(&mut self) {
-        *self
-            .app
-            .world_mut()
-            .resource_mut::<jackdaw::pie_mirror::PieViewMode>() =
-            jackdaw::pie_mirror::PieViewMode::Live;
-    }
-
     fn notice(&self) -> String {
         self.app
             .world()
@@ -2640,97 +2349,6 @@ impl Opened {
             .text()
             .to_string()
     }
-}
-
-/// A material held only in memory has no name to write, so the document leaves it
-/// out and the live face keeps it, through undo and redo, for a save to embed.
-#[test]
-fn saving_a_live_brush_to_the_scene_keeps_a_material_held_only_in_memory() {
-    let mut opened = open_scene();
-    let handmade = opened
-        .app
-        .world_mut()
-        .resource_mut::<Assets<StandardMaterial>>()
-        .add(StandardMaterial::default());
-    let held = handmade.clone();
-    opened.mutate_brush(move |brush| brush.faces[0].material = held);
-    opened.view_live();
-    opened.stream_brush(|brush| brush.faces[1].uv_rotation = 0.5);
-    assert_eq!(opened.handles()[0], handmade, "the stream keeps it");
-
-    opened.save_live_to_scene();
-    assert_eq!(opened.handles()[0], handmade, "after the save to scene");
-    assert_eq!(opened.document_material(1), named(MOSS));
-
-    opened.history("history.undo");
-    opened.settle();
-    assert_eq!(opened.handles()[0], handmade, "after undo");
-    opened.history("history.redo");
-    opened.settle();
-    assert_eq!(opened.handles()[0], handmade, "after redo");
-
-    let saved = opened.saved_materials();
-    assert!(
-        saved[0].starts_with('#'),
-        "embedded under a name: {saved:?}"
-    );
-}
-
-/// A face the game added, outside the brush, so it changes no other.
-fn another_face() -> jackdaw_geometry::BrushFaceData {
-    jackdaw_geometry::BrushFaceData {
-        plane: jackdaw_geometry::BrushPlane {
-            normal: Vec3::Y,
-            distance: 2.0,
-        },
-        ..default()
-    }
-}
-
-/// The game changing a list's length leaves every streamed element without a
-/// handle. The names stay on the elements that still match, by content.
-#[test]
-fn saving_a_live_list_of_another_length_keeps_the_names_of_matching_elements() {
-    let mut opened = open_scene_naming(NAMED_AND_WAITING);
-    opened.view_live();
-    opened.stream_brush(|brush| brush.faces.push(another_face()));
-
-    opened.save_live_to_scene();
-
-    assert_eq!(opened.live().faces.len(), 7);
-    for (face, name) in NAMED_AND_WAITING.iter().enumerate() {
-        assert_eq!(opened.document_material(face), named(name), "face {face}");
-    }
-    assert_eq!(
-        opened.document_material(6),
-        None,
-        "the new face names nothing"
-    );
-    assert_eq!(opened.notice(), "", "nothing was dropped");
-    assert_eq!(opened.saved_materials(), NAMED_AND_WAITING);
-}
-
-/// An element the game changed has nothing to match, so its name goes, and the
-/// user is told.
-#[test]
-fn a_name_with_no_matching_element_is_dropped_with_a_warning() {
-    let mut opened = open_scene_naming(NAMED_AND_WAITING);
-    opened.view_live();
-    opened.stream_brush(|brush| {
-        brush.faces.push(another_face());
-        brush.faces[1].uv_rotation = 0.5;
-    });
-
-    opened.save_live_to_scene();
-
-    assert_eq!(opened.document_material(0), named(SOIL));
-    assert_eq!(opened.document_material(1), None);
-    assert_eq!(opened.document_material(2), named("@still"));
-    assert!(
-        opened.notice().contains("#Still"),
-        "says which name went: {:?}",
-        opened.notice()
-    );
 }
 
 /// A file going is put in front of the user, once.

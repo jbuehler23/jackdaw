@@ -987,9 +987,6 @@ fn normalize_derived_button_styles(
 
     let reg = registry.read();
     for entity in doc_entities_in_order(ast) {
-        if holds_streamed_values(world, entity) {
-            continue;
-        }
         let Ok(entity_ref) = world.get_entity(entity) else {
             continue;
         };
@@ -1015,14 +1012,6 @@ fn normalize_derived_button_styles(
         replace_patch(ast, entity, &reg, &ThemeBackgroundColor(background));
         replace_patch(ast, entity, &reg, &InheritableThemeTextColor(text));
     }
-}
-
-/// Whether `entity` has taken values from a running game, so its components
-/// do not say what the document authors.
-fn holds_streamed_values(world: &World, entity: Entity) -> bool {
-    world
-        .get_resource::<crate::pie_projection::PieProjection>()
-        .is_some_and(|projection| projection.overlaid.contains(&entity))
 }
 
 /// Take the values a widget derives for itself -- a progress fill's `width`, a
@@ -1569,9 +1558,7 @@ pub(crate) fn name_handles_in(
 }
 
 /// Re-derive every component patch in `pass.touched` from its live value, so
-/// `Handle<T>` fields emit names or paths. An entity holding streamed game values
-/// keeps what the document has and takes only the references its fields lack: a
-/// stream never carries a handle.
+/// `Handle<T>` fields emit names or paths.
 fn rederive_handle_patches(
     world: &World,
     ast: &mut jackdaw_bsn::SceneBsnAst,
@@ -1614,14 +1601,6 @@ fn rederive_handle_patches(
             &ctx,
             &mut defaults,
         );
-        if holds_streamed_values(world, *entity) {
-            let Some(mut document) = ast.get_patch(patch_entity).cloned() else {
-                continue;
-            };
-            take_live_references(&reg, registration.type_id(), &new_patch, &mut document);
-            ast.set_patch(patch_entity, document);
-            continue;
-        }
         if let Some(authored) = ast.get_patch(patch_entity) {
             write_clears(&reg, registration.type_id(), authored, &mut new_patch);
         }
@@ -1698,113 +1677,6 @@ fn clears_in_fields(
     }
 }
 
-/// Give `live`, a value read off an entity holding streamed values, the names
-/// `document` spells where it has none: a stream never carries a handle. An element
-/// of a list of another length takes the name of an element with the same content.
-/// The names left with no element to go on are returned.
-pub(crate) fn keep_document_names(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    document: &jackdaw_bsn::BsnValue,
-    live: &mut jackdaw_bsn::BsnValue,
-) -> Vec<String> {
-    let mut dropped = Vec::new();
-    take_in_value(reg, type_id, document, live, &mut dropped);
-    dropped
-}
-
-/// Give `document`, the patch of an entity holding streamed values, the
-/// references `live` names where it has none.
-fn take_live_references(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    live: &jackdaw_bsn::BsnPatch,
-    document: &mut jackdaw_bsn::BsnPatch,
-) {
-    use jackdaw_bsn::BsnPatch;
-    let dropped = &mut Vec::new();
-    match (live, &mut *document) {
-        (BsnPatch::Struct(live), BsnPatch::Struct(document))
-            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
-        {
-            take_in_fields(
-                reg,
-                type_id,
-                &live.type_path,
-                &live.fields,
-                &mut document.fields,
-                dropped,
-            );
-        }
-        (BsnPatch::TupleStruct(live), BsnPatch::TupleStruct(document))
-            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
-        {
-            take_in_values(
-                reg,
-                type_id,
-                &live.type_path,
-                &live.values,
-                &mut document.values,
-                dropped,
-            );
-        }
-        (BsnPatch::Struct(live), BsnPatch::Type(type_path))
-            if same_variant(reg, type_id, &live.type_path, type_path) =>
-        {
-            let type_path = type_path.clone();
-            let mut fields = jackdaw_bsn::BsnStructFields::default();
-            take_in_fields(
-                reg,
-                type_id,
-                &live.type_path,
-                &live.fields,
-                &mut fields,
-                dropped,
-            );
-            if !fields.0.is_empty() {
-                *document = BsnPatch::Struct(jackdaw_bsn::BsnStructData { type_path, fields });
-            }
-        }
-        (BsnPatch::TupleStruct(live), BsnPatch::Type(type_path))
-            if same_variant(reg, type_id, &live.type_path, type_path) =>
-        {
-            let Some(mut values) = default_tuple_values(reg, type_id) else {
-                return;
-            };
-            let before = values.clone();
-            take_in_values(
-                reg,
-                type_id,
-                &live.type_path,
-                &live.values,
-                &mut values,
-                dropped,
-            );
-            if values != before {
-                *document = BsnPatch::TupleStruct(jackdaw_bsn::BsnTupleStructData {
-                    type_path: type_path.clone(),
-                    values,
-                });
-            }
-        }
-        _ => {}
-    }
-}
-
-/// What a bare tuple component's fields read back as.
-fn default_tuple_values(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-) -> Option<Vec<jackdaw_bsn::BsnValue>> {
-    let default = reg
-        .get_type_data::<bevy::prelude::ReflectDefault>(type_id)?
-        .default();
-    match jackdaw_bsn::component_to_bsn_patch(default.as_partial_reflect(), reg) {
-        jackdaw_bsn::BsnPatch::TupleStruct(data) => Some(data.values),
-        _ => None,
-    }
-}
-
 /// Whether two spellings name one shape of `type_id`: always for a struct, and
 /// for an enum when they are the same variant. The two sides of another variant
 /// have nothing to line up.
@@ -1874,332 +1746,6 @@ fn tuple_field_type(
             .field_at(index)
             .map(bevy::reflect::UnnamedField::type_id),
         _ => None,
-    }
-}
-
-fn take_in_fields(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    type_path: &str,
-    live: &jackdaw_bsn::BsnStructFields,
-    document: &mut jackdaw_bsn::BsnStructFields,
-    dropped: &mut Vec<String>,
-) {
-    for field in &mut document.0 {
-        let Some(field_type) = named_field_type(reg, type_id, type_path, &field.name) else {
-            continue;
-        };
-        let Some(was) = live.0.iter().find(|other| other.name == field.name) else {
-            continue;
-        };
-        take_in_value(reg, field_type, &was.value, &mut field.value, dropped);
-    }
-    for was in &live.0 {
-        if document.0.iter().any(|field| field.name == was.name) {
-            continue;
-        }
-        let Some(field_type) = named_field_type(reg, type_id, type_path, &was.name) else {
-            continue;
-        };
-        let Some(value) = only_references(reg, field_type, &was.value) else {
-            continue;
-        };
-        document.0.push(jackdaw_bsn::BsnField {
-            name: was.name.clone(),
-            value,
-        });
-    }
-}
-
-/// `value`, a field the document leaves out, reduced to the references in it. A
-/// struct names only the fields it sets. A tuple struct, array or tuple cannot
-/// leave a place out, so its other places stay. `None` when it holds no reference.
-fn only_references(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    value: &jackdaw_bsn::BsnValue,
-) -> Option<jackdaw_bsn::BsnValue> {
-    use jackdaw_bsn::BsnValue;
-    match value {
-        BsnValue::String(reference)
-            if !reference.is_empty() && crate::typed_values::takes_asset_path(reg, type_id) =>
-        {
-            Some(value.clone())
-        }
-        BsnValue::Struct(data)
-            if matches!(
-                reg.get(type_id)
-                    .map(bevy::reflect::TypeRegistration::type_info),
-                Some(TypeInfo::Struct(_))
-            ) =>
-        {
-            let fields: Vec<jackdaw_bsn::BsnField> = data
-                .fields
-                .0
-                .iter()
-                .filter_map(|field| {
-                    let field_type = named_field_type(reg, type_id, &data.type_path, &field.name)?;
-                    Some(jackdaw_bsn::BsnField {
-                        name: field.name.clone(),
-                        value: only_references(reg, field_type, &field.value)?,
-                    })
-                })
-                .collect();
-            (!fields.is_empty()).then(|| {
-                BsnValue::Struct(jackdaw_bsn::BsnStructData {
-                    type_path: data.type_path.clone(),
-                    fields: jackdaw_bsn::BsnStructFields(fields),
-                })
-            })
-        }
-        BsnValue::TupleStruct(data)
-            if matches!(
-                reg.get(type_id)
-                    .map(bevy::reflect::TypeRegistration::type_info),
-                Some(TypeInfo::TupleStruct(_))
-            ) =>
-        {
-            let values = references_in_place(reg, &data.values, |index| {
-                tuple_field_type(reg, type_id, &data.type_path, index)
-            })?;
-            Some(BsnValue::TupleStruct(jackdaw_bsn::BsnTupleStructData {
-                type_path: data.type_path.clone(),
-                values,
-            }))
-        }
-        BsnValue::List(items)
-            if matches!(
-                reg.get(type_id)
-                    .map(bevy::reflect::TypeRegistration::type_info),
-                Some(TypeInfo::Array(_) | TypeInfo::Tuple(_))
-            ) =>
-        {
-            references_in_place(reg, items, |index| list_item_type(reg, type_id, index))
-                .map(BsnValue::List)
-        }
-        _ => None,
-    }
-}
-
-/// `items` with each one that holds references reduced to them, or `None` when
-/// none does.
-fn references_in_place(
-    reg: &TypeRegistry,
-    items: &[jackdaw_bsn::BsnValue],
-    item_type: impl Fn(usize) -> Option<std::any::TypeId>,
-) -> Option<Vec<jackdaw_bsn::BsnValue>> {
-    let reduced: Vec<Option<jackdaw_bsn::BsnValue>> = items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| only_references(reg, item_type(index)?, item))
-        .collect();
-    reduced.iter().any(Option::is_some).then(|| {
-        reduced
-            .into_iter()
-            .zip(items)
-            .map(|(reference, item)| reference.unwrap_or_else(|| item.clone()))
-            .collect()
-    })
-}
-
-fn take_in_values(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    type_path: &str,
-    live: &[jackdaw_bsn::BsnValue],
-    document: &mut [jackdaw_bsn::BsnValue],
-    dropped: &mut Vec<String>,
-) {
-    for (index, value) in document.iter_mut().enumerate() {
-        let Some(field_type) = tuple_field_type(reg, type_id, type_path, index) else {
-            continue;
-        };
-        let Some(was) = live.get(index) else {
-            continue;
-        };
-        take_in_value(reg, field_type, was, value, dropped);
-    }
-}
-
-fn take_in_value(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    live: &jackdaw_bsn::BsnValue,
-    document: &mut jackdaw_bsn::BsnValue,
-    dropped: &mut Vec<String>,
-) {
-    use jackdaw_bsn::BsnValue;
-    if crate::typed_values::takes_asset_path(reg, type_id) {
-        if let BsnValue::String(was) = live
-            && !was.is_empty()
-            && !matches!(document, BsnValue::String(now) if !now.is_empty())
-        {
-            *document = BsnValue::String(was.clone());
-        }
-        return;
-    }
-    match (live, document) {
-        // A list element at its default is held as its bare type.
-        (BsnValue::Struct(data), document @ BsnValue::Type(_)) if matches!(&*document, BsnValue::Type(path) if *path == data.type_path) => {
-            if let Some(references) = only_references(reg, type_id, live) {
-                *document = references;
-            }
-        }
-        (BsnValue::Struct(live), BsnValue::Struct(document))
-            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
-        {
-            take_in_fields(
-                reg,
-                type_id,
-                &live.type_path,
-                &live.fields,
-                &mut document.fields,
-                dropped,
-            );
-        }
-        (BsnValue::TupleStruct(live), BsnValue::TupleStruct(document))
-            if same_variant(reg, type_id, &live.type_path, &document.type_path) =>
-        {
-            take_in_values(
-                reg,
-                type_id,
-                &live.type_path,
-                &live.values,
-                &mut document.values,
-                dropped,
-            );
-        }
-        (BsnValue::List(live), BsnValue::List(document)) if live.len() != document.len() => {
-            take_by_content(reg, type_id, live, document, dropped);
-        }
-        (BsnValue::List(live), BsnValue::List(document)) => {
-            for (index, value) in document.iter_mut().enumerate() {
-                let (Some(item), Some(was)) =
-                    (list_item_type(reg, type_id, index), live.get(index))
-                else {
-                    continue;
-                };
-                take_in_value(reg, item, was, value, dropped);
-            }
-        }
-        (BsnValue::Map(live), BsnValue::Map(document)) => {
-            let Some(TypeInfo::Map(info)) = reg
-                .get(type_id)
-                .map(bevy::reflect::TypeRegistration::type_info)
-            else {
-                return;
-            };
-            let item = info.value_ty().id();
-            for (key, value) in document {
-                if let Some((_, was)) = live.iter().find(|(other, _)| other == key) {
-                    take_in_value(reg, item, was, value, dropped);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// [`take_in_value`] for lists of different lengths, where a position means
-/// nothing: each element takes from an unclaimed one with the same content.
-fn take_by_content(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    live: &[jackdaw_bsn::BsnValue],
-    document: &mut [jackdaw_bsn::BsnValue],
-    dropped: &mut Vec<String>,
-) {
-    let Some(item) = list_item_type(reg, type_id, 0) else {
-        return;
-    };
-    let mut unclaimed: Vec<(jackdaw_bsn::BsnValue, Vec<String>, &jackdaw_bsn::BsnValue)> = live
-        .iter()
-        .map(|was| {
-            let mut names = Vec::new();
-            let content = without_references(reg, item, was, &mut names);
-            (content, names, was)
-        })
-        .collect();
-    if unclaimed.iter().all(|(_, names, _)| names.is_empty()) {
-        return;
-    }
-    for value in document.iter_mut() {
-        let content = without_references(reg, item, value, &mut Vec::new());
-        if let Some(at) = unclaimed.iter().position(|(other, ..)| *other == content) {
-            let (_, _, was) = unclaimed.remove(at);
-            take_in_value(reg, item, was, value, dropped);
-        }
-    }
-    dropped.extend(unclaimed.into_iter().flat_map(|(_, names, _)| names));
-}
-
-/// `value` with the references it holds taken out into `names`, for comparing
-/// what is left. A struct left with no fields reads as its bare type, as a list
-/// holds an element at its default.
-fn without_references(
-    reg: &TypeRegistry,
-    type_id: std::any::TypeId,
-    value: &jackdaw_bsn::BsnValue,
-    names: &mut Vec<String>,
-) -> jackdaw_bsn::BsnValue {
-    use jackdaw_bsn::BsnValue;
-    if crate::typed_values::takes_asset_path(reg, type_id) {
-        if let BsnValue::String(name) = value
-            && !name.is_empty()
-        {
-            names.push(name.clone());
-        }
-        return BsnValue::String(String::new());
-    }
-    match value {
-        BsnValue::Struct(data) => {
-            let mut fields = Vec::new();
-            for field in &data.fields.0 {
-                let field_type = named_field_type(reg, type_id, &data.type_path, &field.name);
-                let Some(field_type) = field_type else {
-                    fields.push(field.clone());
-                    continue;
-                };
-                let value = without_references(reg, field_type, &field.value, names);
-                if !crate::typed_values::takes_asset_path(reg, field_type) {
-                    fields.push(jackdaw_bsn::BsnField {
-                        name: field.name.clone(),
-                        value,
-                    });
-                }
-            }
-            if fields.is_empty() {
-                return BsnValue::Type(data.type_path.clone());
-            }
-            BsnValue::Struct(jackdaw_bsn::BsnStructData {
-                type_path: data.type_path.clone(),
-                fields: jackdaw_bsn::BsnStructFields(fields),
-            })
-        }
-        BsnValue::TupleStruct(data) => {
-            let values =
-                data.values.iter().enumerate().map(|(index, value)| {
-                    match tuple_field_type(reg, type_id, &data.type_path, index) {
-                        Some(field_type) => without_references(reg, field_type, value, names),
-                        None => value.clone(),
-                    }
-                });
-            BsnValue::TupleStruct(jackdaw_bsn::BsnTupleStructData {
-                type_path: data.type_path.clone(),
-                values: values.collect(),
-            })
-        }
-        BsnValue::List(items) => BsnValue::List(
-            items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| match list_item_type(reg, type_id, index) {
-                    Some(item_type) => without_references(reg, item_type, item, names),
-                    None => item.clone(),
-                })
-                .collect(),
-        ),
-        other => other.clone(),
     }
 }
 
@@ -2341,11 +1887,8 @@ mod tests {
         );
     }
 
-    /// In Live view the preview world carries streamed game values, so a save
-    /// must persist the AST's authored entity payload, not the live overlay.
-    /// Authored Transform is `[1, 2, 3]`; the live ECS Transform is `[9, 9, 9]`.
-    /// The save must write the authored values.
-    fn build_live_save_world() -> World {
+    /// One node whose document Transform is `[1, 2, 3]`.
+    fn build_save_world() -> World {
         use jackdaw_bsn::SceneBsnAst;
         use jackdaw_scene_types::SceneNodeId;
 
@@ -2361,8 +1904,6 @@ mod tests {
         world.init_resource::<jackdaw_commands::CommandHistory>();
         world.init_resource::<SceneFilePath>();
 
-        // Authored node: Transform translation [1, 2, 3], bound to a preview
-        // entity whose live ECS Transform is the [9, 9, 9] overlay.
         let node_id = SceneNodeId::next();
         let preview = world
             .spawn((
@@ -2389,34 +1930,12 @@ mod tests {
         ast.link(preview, node);
         world.insert_resource(ast);
 
-        world.insert_resource(crate::pie_mirror::PieViewMode::Live);
         world
     }
 
     #[test]
-    fn live_mode_save_uses_authored_values_not_live_overlays() {
-        let mut world = build_live_save_world();
-
-        // A save emits the live document, which holds only authored values;
-        // live overlays exist solely on the ECS entities.
-        let text = emit_bsn_scene_with_inline_assets(&mut world, Path::new("."));
-        let saved = jackdaw_bsn::parse_bsn_text(&text).expect("saved text parses");
-        let node = *saved.roots.first().expect("one authored node saved");
-        let translation = jackdaw_bsn::get_bsn_field(
-            &saved,
-            node,
-            "bevy_transform::components::transform::Transform",
-            "translation.x",
-        );
-        assert!(
-            matches!(translation, Some(jackdaw_bsn::BsnValue::Float(x)) if (x - 1.0).abs() < 1e-6),
-            "Live save must persist authored values, not the live overlay",
-        );
-    }
-
-    #[test]
     fn failed_authoritative_write_keeps_the_scene_dirty() {
-        let mut world = build_live_save_world();
+        let mut world = build_save_world();
         let tmp = tempfile::tempdir().expect("temp directory");
         let blocked_parent = tmp.path().join("not-a-directory");
         std::fs::write(&blocked_parent, b"file blocks directory creation")
@@ -2487,7 +2006,7 @@ mod tests {
     /// save still in flight.
     #[test]
     fn save_scene_with_outcome_reports_saved_on_success() {
-        let mut world = build_live_save_world();
+        let mut world = build_save_world();
         let tmp = tempfile::tempdir().expect("temp directory");
         let scene_path = tmp.path().join("zone.bsn");
 
@@ -2504,7 +2023,7 @@ mod tests {
 
     #[test]
     fn save_scene_with_outcome_reports_failed_on_a_blocked_write() {
-        let mut world = build_live_save_world();
+        let mut world = build_save_world();
         let tmp = tempfile::tempdir().expect("temp directory");
         let blocked_parent = tmp.path().join("not-a-directory");
         std::fs::write(&blocked_parent, b"blocks directory creation").expect("seed blocker");
@@ -2523,7 +2042,7 @@ mod tests {
 
     #[test]
     fn successful_scene_write_finishes_before_the_tab_becomes_clean() {
-        let mut world = build_live_save_world();
+        let mut world = build_save_world();
         let tmp = tempfile::tempdir().expect("temp directory");
         let scene_path = tmp.path().join("zone.bsn");
 
@@ -2543,40 +2062,6 @@ mod tests {
             .expect("successful save has already reached disk on return");
         assert!(saved.contains("bevy_transform::components::transform::Transform"));
         assert!(!world.resource::<crate::scenes::Scenes>().tabs[0].dirty);
-    }
-
-    /// An overlaid entity's patch takes the reference its live field holds where
-    /// the document has none.
-    #[test]
-    fn an_overlaid_entity_takes_a_live_reference_the_document_lacks() {
-        use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue};
-
-        #[derive(Component, Reflect, Default)]
-        #[type_path = "game"]
-        struct Holder {
-            maybe: Option<Handle<Image>>,
-        }
-        let mut registry = TypeRegistry::default();
-        registry.register::<Holder>();
-        registry.register_type_data::<Handle<Image>, ReflectHandle>();
-        let patch = |value: BsnValue| {
-            BsnPatch::Struct(BsnStructData {
-                type_path: "game::Holder".to_string(),
-                fields: BsnStructFields(vec![BsnField {
-                    name: "maybe".to_string(),
-                    value,
-                }]),
-            })
-        };
-        let named = patch(BsnValue::String("#Stone".to_string()));
-        let mut document = patch(BsnValue::Type("None".to_string()));
-        take_live_references(
-            &registry,
-            std::any::TypeId::of::<Holder>(),
-            &named,
-            &mut document,
-        );
-        assert_eq!(format!("{document:?}"), format!("{named:?}"));
     }
 
     #[test]
