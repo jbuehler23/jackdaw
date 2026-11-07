@@ -3,8 +3,8 @@
 //! Builds the project with plain `cargo build`, launches the game's own
 //! executable as a child process, and drives it over an `ipc-channel`
 //! connection. Children send `StateEvent`s back and respond to
-//! `ControlEvent`s (Pause / Resume / Stop). Stop reaps the children; the
-//! authored scene is never mutated. Messages to a child leave on its own
+//! `ControlEvent`s (Pause / Resume / Stop). Stop reaps the children and leaves
+//! the scene document as it stands. Messages to a child leave on its own
 //! writer thread (`GameOutbox`), so the main thread never waits on a game.
 //!
 //! Instances are keyed by [`InstanceKey`] (config label plus 1-based
@@ -1322,7 +1322,7 @@ pub(crate) fn broadcast_control(world: &mut World, event: ControlEvent) {
     }
 }
 
-/// Send a control message (live edits, frame stream start/stop) only to the
+/// Send a control message (input, highlight, frame stream start/stop) only to the
 /// focused instance's outbox. If no instance is focused, or the
 /// focused child is not yet live, the message is dropped with a debug log.
 /// Safe no-op when `PieInstances` or `PieSession` are absent (headless worlds).

@@ -14,7 +14,9 @@ use jackdaw_pie_protocol::event::{PieChannel, StateEvent, to_bytes};
 use jackdaw_pie_protocol::transport::PieTransport;
 use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
 
-use crate::node_structure::{StructureChange, apply_structure_change};
+use crate::node_structure::{
+    NodePlace, PlaceStart, StructureChange, apply_structure_change, entities_at,
+};
 
 /// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,9 +47,9 @@ pub(crate) struct PieTransportRes(pub(crate) Box<dyn PieTransport>);
 /// What the editor asked to box in the rendered frame.
 #[derive(Resource, Default)]
 struct Highlight {
-    /// The scene node, or none.
-    node: Option<u64>,
-    /// The entities of `node` this frame.
+    /// Where the entities are; none clears the box.
+    places: Vec<jackdaw_pie_protocol::HighlightPlace>,
+    /// The entities at `places` this frame.
     entities: Vec<Entity>,
 }
 
@@ -223,8 +225,8 @@ fn apply_control(world: &mut World) {
                     },
                 );
             }
-            ControlEvent::Highlight { node } => {
-                world.resource_mut::<Highlight>().node = node;
+            ControlEvent::Highlight { places } => {
+                world.resource_mut::<Highlight>().places = places;
             }
         }
     }
@@ -275,14 +277,30 @@ fn highlight_boxes(
     boxes
 }
 
-/// Find this frame's entities of the highlighted node. A node with none is boxed
+/// Find this frame's entities at the highlighted places. A place with none is boxed
 /// again once they appear.
 fn resolve_highlight(world: &mut World) {
-    let entities = world
+    let places: Vec<NodePlace> = world
         .resource::<Highlight>()
-        .node
-        .map(|node| crate::node_structure::unit_holders(world, node))
-        .unwrap_or_default();
+        .places
+        .iter()
+        .map(|place| match place {
+            jackdaw_pie_protocol::HighlightPlace::Node { scene, node, inner } => NodePlace {
+                start: PlaceStart::Node {
+                    scene: scene.clone(),
+                    node: *node,
+                },
+                inner: inner.clone(),
+            },
+            jackdaw_pie_protocol::HighlightPlace::Instances { prefab, inner } => NodePlace {
+                start: PlaceStart::Instances {
+                    prefab: prefab.clone(),
+                },
+                inner: inner.clone(),
+            },
+        })
+        .collect();
+    let entities = entities_at(world, &places);
     world.resource_mut::<Highlight>().entities = entities;
 }
 
@@ -550,10 +568,10 @@ mod tests {
         assert!(!app.world().resource::<Messages<AppExit>>().is_empty());
     }
 
-    /// `Highlight` names a scene node, and the box follows the entities spawned
-    /// from it as they come and go.
+    /// The box follows the entities at the places `Highlight` names as they come
+    /// and go.
     #[test]
-    fn highlight_follows_the_entities_of_its_node() {
+    fn highlight_follows_the_entities_of_its_places() {
         let (mut editor, game) = jackdaw_pie_protocol::LoopbackTransport::pair();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -562,12 +580,17 @@ mod tests {
         let first = app.world_mut().spawn(SceneNodeId(7)).id();
         let second = app.world_mut().spawn(SceneNodeId(7)).id();
         app.world_mut().spawn(SceneNodeId(8));
-        let send = |editor: &mut jackdaw_pie_protocol::LoopbackTransport, node| {
-            let event = ControlEvent::Highlight { node };
+        let send = |editor: &mut jackdaw_pie_protocol::LoopbackTransport, places| {
+            let event = ControlEvent::Highlight { places };
             editor.send(PieChannel::Reliable, &to_bytes(&event).expect("encode"));
         };
+        let place = jackdaw_pie_protocol::HighlightPlace::Node {
+            scene: "zone.bsn".to_string(),
+            node: 7,
+            inner: Vec::new(),
+        };
 
-        send(&mut editor, Some(7));
+        send(&mut editor, vec![place]);
         app.update();
         assert_eq!(
             app.world().resource::<Highlight>().entities,
@@ -585,7 +608,7 @@ mod tests {
             vec![second, later]
         );
 
-        send(&mut editor, None);
+        send(&mut editor, Vec::new());
         app.update();
         assert!(app.world().resource::<Highlight>().entities.is_empty());
     }

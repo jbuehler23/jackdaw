@@ -175,8 +175,8 @@ impl Plugin for HierarchyPlugin {
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::UiSceneRoot>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Scene2dRoot>)
             .add_observer(refresh_icon_on_add::<jackdaw_prefab::components::IsA>)
-            // A row is spawned when `Transform` lands, so a streamed entity's
-            // kind arrives after its row.
+            // A row is spawned when `Transform` lands, so an entity's kind can
+            // arrive after its row.
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::Terrain>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::GltfSource>)
             .add_observer(refresh_icon_on_add::<jackdaw_scene_types::SceneRootTag>)
@@ -715,16 +715,9 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
 /// Expanding each in order spawns the next level until `target`'s row exists.
 fn reveal_path(world: &World, target: Entity) -> Vec<Entity> {
     let mut chain = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     let mut cursor = target;
-    seen.insert(cursor);
     while let Some(child_of) = world.get::<ChildOf>(cursor) {
         let parent = child_of.0;
-        // A streamed projection can momentarily form a parent cycle while
-        // entities respawn and reparent; stop rather than loop forever.
-        if !seen.insert(parent) {
-            break;
-        }
         chain.push(parent);
         cursor = parent;
     }
@@ -732,7 +725,7 @@ fn reveal_path(world: &World, target: Entity) -> Vec<Entity> {
     chain
 }
 
-/// The entity the Live tree should reveal (expand ancestors to), with a
+/// The entity the outliner should reveal (expand ancestors to), with a
 /// countdown so a target that never resolves does not spin forever.
 #[derive(Resource, Default)]
 pub(crate) struct RevealTarget {

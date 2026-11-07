@@ -310,6 +310,58 @@ fn pie_sync_an_inspector_edit_during_play_authors_the_document() {
     assert_eq!(game_x(&game, entity), 0.0);
 }
 
+/// Stop leaves the document alone: an edit made during Play stays on the entity and
+/// in the document, the tab stays modified, and the file still holds the last save.
+#[test]
+fn pie_sync_an_edit_during_play_survives_stop() {
+    let (mut app, dir, rock) = playing();
+    let path = dir.path().join("assets/stop.bsn");
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
+    app.world_mut()
+        .operator("scene.save")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches")
+        .assert_finished();
+    app.update();
+    let saved = std::fs::read(&path).expect("the saved scene");
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw_api::pie::PlayState>>()
+        .set(jackdaw_api::pie::PlayState::Playing);
+    app.update();
+
+    move_to(&mut app, rock, 4.0);
+    app.update();
+    app.world_mut()
+        .operator("pie.stop")
+        .call()
+        .expect("pie.stop dispatches")
+        .assert_finished();
+    for _ in 0..3 {
+        app.update();
+    }
+
+    assert_eq!(
+        *app.world()
+            .resource::<State<jackdaw_api::pie::PlayState>>()
+            .get(),
+        jackdaw_api::pie::PlayState::Stopped
+    );
+    assert_eq!(x_of(&mut app, rock), 4.0);
+    let target = entity_of(&mut app, rock);
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let node = ast.ast_for(target).expect("a node");
+    assert!(matches!(
+        jackdaw_bsn::get_bsn_field(ast, node, TRANSFORM, "translation.x"),
+        Some(jackdaw_bsn::BsnValue::Float(x)) if x == 4.0
+    ));
+    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
+    assert!(scenes.tabs[scenes.active].dirty, "the tab stays modified");
+    assert_eq!(std::fs::read(&path).expect("the file"), saved);
+    history(&mut app, "history.undo");
+    assert_eq!(x_of(&mut app, rock), 0.0, "and it still undoes");
+}
+
 const VISIBILITY: &str = "bevy_camera::visibility::Visibility";
 const BRUSH: &str = "jackdaw_scene_types::types::Brush";
 

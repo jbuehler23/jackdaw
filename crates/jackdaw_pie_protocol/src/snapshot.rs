@@ -232,7 +232,6 @@ mod tests {
         assert!(should_skip("bevy_camera::camera::RenderTarget"));
         assert!(should_skip("bevy_camera::components::Camera3d"));
         assert!(should_skip("bevy_camera::components::Camera2d"));
-        // The projection still streams: the editor's camera lock reads it.
         assert!(!should_skip("bevy_camera::projection::Projection"));
     }
 

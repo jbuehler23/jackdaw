@@ -174,10 +174,48 @@ pub(crate) fn field_edit_preview(
     field_edit_begin(world, type_path, field_path);
     let targets = field_edit_session_targets(world);
     for target in targets {
-        if !apply_json_map_entry_to_ecs(world, target, type_path, field_path, value) {
-            apply_json_field_to_ecs(world, target, type_path, field_path, value);
-        }
+        crate::play_sync::note_drag_tick(world, target, type_path, field_path);
+        apply_previewed_value(world, target, type_path, field_path, value);
     }
+}
+
+fn apply_previewed_value(
+    world: &mut World,
+    target: Entity,
+    type_path: &str,
+    field_path: &str,
+    value: &serde_json::Value,
+) {
+    if !apply_json_map_entry_to_ecs(world, target, type_path, field_path, value) {
+        apply_json_field_to_ecs(world, target, type_path, field_path, value);
+    }
+}
+
+/// Whether a field-edit gesture on `entity` is still open.
+pub(crate) fn field_edit_is_open(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> bool {
+    peek_live_at_begin(world, entity, type_path, field_path).is_some()
+}
+
+/// Close a field-edit gesture on `entity` that will not be committed.
+pub(crate) fn forget_field_edit_on(
+    world: &mut World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) {
+    world
+        .resource_mut::<FieldEditSessions>()
+        .live_at_begin
+        .remove(&FieldEditSessionKey {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: field_path.to_string(),
+        });
 }
 
 /// Commit a field edit: build [`SetBsnField`] commands from session / document
@@ -233,7 +271,14 @@ pub(crate) fn try_field_edit_commit(
             };
         match set_bsn_field_command(world, target, type_path, &path, new_value) {
             Ok(edit) => edits.push(edit),
-            Err(FieldEditSkip::Unchanged) => unchanged = true,
+            Err(FieldEditSkip::Unchanged) => {
+                unchanged = true;
+                // A drag released where it began: the document is right, the
+                // entity still holds the drag's last tick.
+                if crate::play_sync::drag_is_open(world, target, type_path, field_path) {
+                    apply_previewed_value(world, target, type_path, field_path, new_json);
+                }
+            }
             Err(FieldEditSkip::Previewed) => {
                 refused.get_or_insert(previewed(type_path));
             }

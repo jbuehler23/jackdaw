@@ -125,8 +125,13 @@ ordinary edit: it undoes, marks the tab as modified, and saves with the scene.
 Each edit also reaches every running instance straight away, including adds,
 deletes and reparents.
 
-Selecting an entity draws a bounding box around it in the game's frame, on every
-entity spawned from that node in the instance on show.
+Dragging a field in the Components panel moves the game on every tick. The edit
+joins the document when you let go, and a cancelled drag puts the game back. A
+transform gizmo drag reaches the game when you let go.
+
+Selecting an entity draws a bounding box in the game's frame around every entity
+spawned from that node by the scene in front. A child inside a prefab instance boxes
+that instance's child, and a node in an open prefab tab boxes it in every instance.
 
 The editor does not show entities the game spawned at runtime, or the values a
 running game holds.

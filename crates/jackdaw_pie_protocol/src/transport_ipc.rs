@@ -159,7 +159,7 @@ impl IpcLaneSender {
 /// An [`IpcChannelTransport`] whose reliable sends go out on their own thread.
 ///
 /// A socket write blocks while the peer is not reading, and an editor out of view
-/// reads once a second. The game's main thread sends state each frame, so writing
+/// reads once a second. The game's main thread sends as it runs, so writing
 /// from it would tie the game's frame rate to the editor's.
 ///
 /// The queue has no bound: every send is kept, since most events only go once.

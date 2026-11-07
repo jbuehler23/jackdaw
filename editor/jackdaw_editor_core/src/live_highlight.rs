@@ -3,28 +3,28 @@
 //! streamed frame.
 
 use bevy::prelude::*;
+use jackdaw_pie_protocol::HighlightPlace;
+use jackdaw_prefab::{IsA, Prefab, PrefabEntityId};
 
 use crate::pie::{InstanceKey, PieInstances};
+use crate::scenes::TabKind;
 use crate::selection::Selection;
 
 /// The last highlight sent, to send only on change: the game it went to and the
-/// document node it named.
+/// places it named.
 #[derive(Resource, Default)]
-pub(crate) struct LastHighlight(Option<(InstanceKey, Option<u64>)>);
+pub(crate) struct LastHighlight(Option<(InstanceKey, Vec<HighlightPlace>)>);
 
-/// Mirror the editor selection into the focused game as a highlight box: the
-/// document node of the primary selected entity, sent as a `Highlight` control
-/// event when that or the focused game differs from the last sent.
+/// Mirror the editor selection into the focused game as a highlight box, sent as a
+/// `Highlight` control event when the places or the focused game differ from the
+/// last sent.
 pub(crate) fn sync_selection_highlight(world: &mut World) {
     let Some(focused) = world.resource::<PieInstances>().focused.clone() else {
         world.get_resource_or_insert_with(LastHighlight::default).0 = None;
         return;
     };
-    let node = world
-        .resource::<Selection>()
-        .primary()
-        .and_then(|entity| selected_node(world, entity));
-    let desired = Some((focused, node));
+    let places = highlight_places(world, &focused);
+    let desired = Some((focused, places.clone()));
     if world
         .get_resource::<LastHighlight>()
         .is_some_and(|last| last.0 == desired)
@@ -33,14 +33,73 @@ pub(crate) fn sync_selection_highlight(world: &mut World) {
     }
     crate::pie::send_control_to_focused(
         world,
-        jackdaw_pie_protocol::ControlEvent::Highlight { node },
+        jackdaw_pie_protocol::ControlEvent::Highlight { places },
     );
     world.get_resource_or_insert_with(LastHighlight::default).0 = desired;
 }
 
-fn selected_node(world: &World, entity: Entity) -> Option<u64> {
-    let ast = world.get_resource::<jackdaw_bsn::SceneBsnAst>()?;
-    ast.stable_id_of(ast.ast_for(entity)?)
+/// Where the game `key` holds the primary selection, for the document in front: the
+/// scenes it plays that document as, and the instances of it if it is a prefab.
+#[doc(hidden)]
+pub fn highlight_places(world: &World, key: &InstanceKey) -> Vec<HighlightPlace> {
+    let Some(entity) = world.resource::<Selection>().primary() else {
+        return Vec::new();
+    };
+    let mut levels = vec![entity];
+    let mut at = entity;
+    while let Some(child_of) = world.get::<ChildOf>(at) {
+        at = child_of.parent();
+        if world.get::<IsA>(at).is_some() {
+            levels.push(at);
+        }
+    }
+    levels.reverse();
+    let top = levels[0];
+    let Some(inner) = levels[1..]
+        .iter()
+        .map(|&level| world.get::<PrefabEntityId>(level).map(|id| id.0))
+        .collect::<Option<Vec<u32>>>()
+    else {
+        return Vec::new();
+    };
+
+    let mut places = Vec::new();
+    let node = world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .and_then(|ast| ast.stable_id_of(ast.ast_for(top)?));
+    if let Some(node) = node {
+        for asked in crate::play_scene::scenes_playing_active_tab(world, key) {
+            places.push(HighlightPlace::Node {
+                scene: asked.requested,
+                node,
+                inner: inner.clone(),
+            });
+        }
+    }
+    if let Some(prefab) = front_prefab(world) {
+        let inner = if world.get::<Prefab>(top).is_some() {
+            Some(inner)
+        } else {
+            world.get::<PrefabEntityId>(top).map(|id| {
+                let mut below = vec![id.0];
+                below.extend(inner);
+                below
+            })
+        };
+        if let Some(inner) = inner {
+            places.push(HighlightPlace::Instances { prefab, inner });
+        }
+    }
+    places
+}
+
+/// The asset path of the prefab in the tab in front.
+fn front_prefab(world: &World) -> Option<String> {
+    let scenes = world.get_resource::<crate::scenes::Scenes>()?;
+    if scenes.tabs.get(scenes.active)?.kind != TabKind::Prefab {
+        return None;
+    }
+    crate::play_scene::tab_asset_path(world, scenes.active)
 }
 
 #[cfg(test)]
@@ -75,11 +134,38 @@ mod tests {
         ast.add_to_roots(node);
         ast.link(entity, node);
         world.insert_resource(ast);
+        let mut tab = crate::scenes::SceneTab::new_untitled(1);
+        tab.path = Some(std::path::PathBuf::from("/game/assets/zone.bsn"));
+        world.insert_resource(crate::scenes::Scenes {
+            tabs: vec![tab],
+            active: 0,
+        });
+        world.insert_resource(crate::project::ProjectRoot::new(
+            std::path::PathBuf::from("/game"),
+            crate::project::ProjectConfig::default(),
+        ));
+        world.init_resource::<crate::play_scene::PlayAssetNames>();
+        for instance in [1, 2] {
+            playing(&mut world, instance);
+        }
         (world, entity)
     }
 
-    fn sent(world: &World) -> Option<(InstanceKey, Option<u64>)> {
+    fn sent(world: &World) -> Option<(InstanceKey, Vec<HighlightPlace>)> {
         world.resource::<LastHighlight>().0.clone()
+    }
+
+    fn at_the_node() -> Vec<HighlightPlace> {
+        vec![HighlightPlace::Node {
+            scene: "zone.bsn".to_string(),
+            node: NODE,
+            inner: Vec::new(),
+        }]
+    }
+
+    /// The game `instance` has asked for the scene in front.
+    fn playing(world: &mut World, instance: u32) {
+        crate::play_scene::note_test_asked_scene(world, &game(instance), "zone.bsn");
     }
 
     #[test]
@@ -89,11 +175,11 @@ mod tests {
         world.resource_mut::<Selection>().entities.push(entity);
 
         sync_selection_highlight(&mut world);
-        assert_eq!(sent(&world), Some((game(1), Some(NODE))));
+        assert_eq!(sent(&world), Some((game(1), at_the_node())));
 
         world.resource_mut::<Selection>().entities.clear();
         sync_selection_highlight(&mut world);
-        assert_eq!(sent(&world), Some((game(1), None)));
+        assert_eq!(sent(&world), Some((game(1), Vec::new())));
     }
 
     #[test]
@@ -106,11 +192,11 @@ mod tests {
 
         world.resource_mut::<PieInstances>().focused = Some(game(1));
         sync_selection_highlight(&mut world);
-        assert_eq!(sent(&world), Some((game(1), Some(NODE))));
+        assert_eq!(sent(&world), Some((game(1), at_the_node())));
 
         world.resource_mut::<PieInstances>().focused = Some(game(2));
         sync_selection_highlight(&mut world);
-        assert_eq!(sent(&world), Some((game(2), Some(NODE))));
+        assert_eq!(sent(&world), Some((game(2), at_the_node())));
     }
 
     #[test]
@@ -126,6 +212,6 @@ mod tests {
 
         world.resource_mut::<PieInstances>().focused = Some(game(1));
         sync_selection_highlight(&mut world);
-        assert_eq!(sent(&world), Some((game(1), Some(NODE))));
+        assert_eq!(sent(&world), Some((game(1), at_the_node())));
     }
 }

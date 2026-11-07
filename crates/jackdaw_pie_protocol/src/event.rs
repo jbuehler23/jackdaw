@@ -50,6 +50,22 @@ pub enum SceneAnswer {
     },
 }
 
+/// Where the entities of a selected document node are in a game. `inner` goes down
+/// through prefab instances from where the place starts: each entry a
+/// `PrefabEntityId` below the instance found so far, the last one the selection.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum HighlightPlace {
+    /// Starts at the entities of the node `node` under a root playing the asset
+    /// path `scene`.
+    Node {
+        scene: String,
+        node: u64,
+        inner: Vec<u32>,
+    },
+    /// Starts at every instance of the prefab at the asset path `prefab`.
+    Instances { prefab: String, inner: Vec<u32> },
+}
+
 /// Editor-to-game messages.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum ControlEvent {
@@ -66,11 +82,11 @@ pub enum ControlEvent {
     StopFrameStream,
     /// Forwarded editor input while the Game panel has input capture.
     Input(crate::input::PieInputEvent),
-    /// Box every entity of the given scene node in the game's own render (gizmo
-    /// bounds), or clear the highlight with `None`. Sent when the editor selection
-    /// changes while an instance is focused.
+    /// Box the entities at `places` in the game's own render (gizmo bounds), or
+    /// clear the highlight with none. Sent when the editor selection changes while
+    /// an instance is focused.
     Highlight {
-        node: Option<u64>,
+        places: Vec<HighlightPlace>,
     },
     /// The authored components of one scene node changed in the editor's
     /// document. `set` holds the full current value of each changed
@@ -273,11 +289,23 @@ mod tests {
 
     #[test]
     fn highlight_events_round_trip() {
-        let ev = ControlEvent::Highlight { node: Some(7) };
+        let ev = ControlEvent::Highlight {
+            places: vec![
+                HighlightPlace::Node {
+                    scene: "zone.bsn".to_string(),
+                    node: 7,
+                    inner: vec![1, 2],
+                },
+                HighlightPlace::Instances {
+                    prefab: "door.bsn".to_string(),
+                    inner: Vec::new(),
+                },
+            ],
+        };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
 
-        let ev = ControlEvent::Highlight { node: None };
+        let ev = ControlEvent::Highlight { places: Vec::new() };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
     }
