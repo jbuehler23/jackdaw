@@ -56,6 +56,14 @@ struct AwaitingDocument(u64);
 #[derive(Component)]
 struct SceneFromFile;
 
+/// A root inserted again restarts: it asks the editor afresh, whatever it was told
+/// about the scene it held before.
+pub(crate) fn forget_answer_on_insert(insert: On<Insert<JackdawSceneRoot>>, mut commands: Commands) {
+    commands
+        .entity(insert.entity)
+        .remove::<(SceneFromFile, AwaitingDocument)>();
+}
+
 /// What a spawn pass does with a root.
 pub(crate) enum Gate {
     /// Spawn from the handle's loaded asset, as a game with no link does.
@@ -278,14 +286,7 @@ mod tests {
     }
 
     fn base_app(dir: &Path) -> App {
-        base_app_with(dir, None)
-    }
-
-    fn base_app_with(dir: &Path, play_scene: Option<crate::PieSceneOverride>) -> App {
         let mut app = App::new();
-        if let Some(play_scene) = play_scene {
-            app.insert_resource(play_scene);
-        }
         app.add_plugins(MinimalPlugins);
         app.add_plugins(bevy::transform::TransformPlugin);
         app.add_plugins(bevy::asset::AssetPlugin {
@@ -476,28 +477,45 @@ mod tests {
         assert_eq!(node_xs(&mut app), vec![5.0, 5.0, 6.0]);
     }
 
-    /// A game told to play a scene asks for that scene, not its usual one.
+    /// A root put back to restart a level asks again, so it gets the scene the
+    /// editor plays in its place and not the game's usual one.
     #[test]
-    fn a_redirected_root_asks_for_the_scene_it_was_told() {
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let (mut editor, game) = LoopbackTransport::pair();
-        let mut app = base_app_with(
-            dir.path(),
-            Some(crate::PieSceneOverride::new(
-                "levels/meadow.bsn",
-                "scene.bsn",
-            )),
-        );
-        install_link(&mut app, Box::new(game));
-        spawn_root(&mut app, "scene.bsn");
-        spawn_root(&mut app, "hud.bsn");
+    fn a_root_inserted_again_asks_the_editor_again() {
+        let (mut app, mut editor, _dir) = game();
+        let root = spawn_root(&mut app, "scene.bsn");
         app.update();
-        let mut asked: Vec<String> = requests_from(&mut editor)
-            .into_iter()
-            .map(|(_, path)| path)
-            .collect();
-        asked.sort();
-        assert_eq!(asked, vec!["hud.bsn", "levels/meadow.bsn"]);
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &use_file(request, "other.bsn"));
+        update_until_spawned(&mut app);
+
+        let handle: Handle<JackdawScene> = app.world().resource::<AssetServer>().load("scene.bsn");
+        app.world_mut()
+            .entity_mut(root)
+            .insert(JackdawSceneRoot(handle));
+        let mut asked = Vec::new();
+        for _ in 0..500 {
+            app.update();
+            asked.extend(requests_from(&mut editor));
+            if !asked.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(asked.len(), 1, "once the scene it now names has loaded");
+        assert_eq!(asked[0].1, "scene.bsn");
+    }
+
+    /// A scene answer naming a file with a hash loads that file, not a label of one.
+    #[test]
+    fn a_file_answer_whose_name_holds_a_hash_loads_as_a_file() {
+        let (mut app, mut editor, dir) = game();
+        std::fs::write(dir.path().join("boss#2.bsn"), scene_text(3.0)).expect("a scene");
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &use_file(request, "boss#2.bsn"));
+        update_until_spawned(&mut app);
+        assert_eq!(node_xs(&mut app), vec![3.0]);
     }
 
     /// Under Play the loader does not decode a binary scene either. Sent to the

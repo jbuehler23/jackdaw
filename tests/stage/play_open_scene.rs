@@ -2,6 +2,7 @@ use crate::util::{self, OperatorResultExt as _};
 
 use bevy::prelude::*;
 use jackdaw::boot_ops::run_op_clause;
+use jackdaw::play_scene::{LaunchScene, PlayScene, launch_scene};
 use jackdaw_pie_protocol::manifest::RunConfig;
 
 const MEADOW_SCENE: &str = "#Meadow\nbevy_transform::components::transform::Transform\n";
@@ -32,51 +33,33 @@ fn project_with_scene(relative: &str) -> (App, tempfile::TempDir) {
     (app, tmp)
 }
 
-fn launched(app: &App) -> RunConfig {
-    jackdaw::pie::run_with_open_scene(app.world(), RunConfig::default())
+fn launched(app: &App) -> Option<LaunchScene> {
+    launch_scene(app.world(), &RunConfig::default())
+}
+
+fn in_place_of_main(scene: &str) -> Option<LaunchScene> {
+    Some(LaunchScene {
+        replaces: "scene.bsn".to_string(),
+        scene: PlayScene::Path(scene.to_string()),
+    })
 }
 
 #[test]
 fn play_names_the_open_scene_by_its_asset_path() {
     let (app, _tmp) = project_with_scene("levels/meadow.bsn");
-
-    assert_eq!(
-        launched(&app)
-            .env
-            .get("JACKDAW_PIE_SCENE")
-            .map(String::as_str),
-        Some("levels/meadow.bsn")
-    );
-    assert_eq!(
-        launched(&app)
-            .env
-            .get("JACKDAW_PIE_REPLACES")
-            .map(String::as_str),
-        Some("scene.bsn"),
-        "in place of the game's main scene"
-    );
+    assert_eq!(launched(&app), in_place_of_main("levels/meadow.bsn"));
 }
 
 #[test]
 fn a_scene_whose_name_holds_a_hash_is_named_as_written() {
     let (app, _tmp) = project_with_scene("boss#2.bsn");
-
-    assert_eq!(
-        launched(&app)
-            .env
-            .get("JACKDAW_PIE_SCENE")
-            .map(String::as_str),
-        Some("boss#2.bsn")
-    );
+    assert_eq!(launched(&app), in_place_of_main("boss#2.bsn"));
 }
 
 #[test]
 fn with_the_main_scene_in_front_nothing_is_named() {
     let (app, _tmp) = project_with_scene("scene.bsn");
-
-    let run = launched(&app);
-    assert_eq!(run.env.get("JACKDAW_PIE_SCENE"), None);
-    assert_eq!(run.env.get("JACKDAW_PIE_REPLACES"), None);
+    assert_eq!(launched(&app), None);
 }
 
 #[test]
@@ -87,7 +70,7 @@ fn an_untitled_scene_in_front_names_nothing_so_the_game_loads_its_own() {
         .assert_finished();
     app.update();
 
-    assert_eq!(launched(&app).env.get("JACKDAW_PIE_SCENE"), None);
+    assert_eq!(launched(&app), None);
 }
 
 #[test]
@@ -97,10 +80,8 @@ fn a_scene_the_run_configuration_names_is_kept() {
     run.env
         .insert("JACKDAW_PIE_SCENE".to_string(), "boss.bsn".to_string());
 
-    let run = jackdaw::pie::run_with_open_scene(app.world(), run);
-
     assert_eq!(
-        run.env.get("JACKDAW_PIE_SCENE").map(String::as_str),
-        Some("boss.bsn")
+        launch_scene(app.world(), &run),
+        in_place_of_main("boss.bsn")
     );
 }

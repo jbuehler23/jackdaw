@@ -963,30 +963,20 @@ fn a_tab_switch_during_a_save_waits_and_the_save_lands_on_its_own_tab() {
 }
 
 #[test]
-fn play_starts_only_once_the_save_is_complete() {
+fn play_starts_without_waiting_on_a_save() {
     let mut project = project();
     jackdaw::run_config::read_run_configs(project.app.world_mut());
     jackdaw::pie::insert_build_in_progress(project.app.world_mut());
     let hold = hold_saves_before_writing(project.app.world_mut());
+    project.save_as_user();
     play(&mut project.app);
-    project.app.update();
-    assert_eq!(project.on_disk(), ZONE, "the save is held");
-    assert!(
-        jackdaw::scene_io::saves_in_flight(project.app.world()),
-        "and Play waits on it"
-    );
-    assert!(
-        jackdaw::pie::launches_waiting_on_build(project.app.world()).is_empty(),
-        "no game is started yet"
-    );
-
-    drop(hold);
-    project.settle();
     assert_eq!(
         jackdaw::pie::launches_waiting_on_build(project.app.world()).len(),
         1,
-        "the game starts now"
+        "the game starts while the save is held"
     );
+    drop(hold);
+    project.settle();
     let saved = project.on_disk();
     assert!(saved.contains("Props"), "{saved}");
     assert!(jackdaw_bsn::parse_bsn_text(&saved).is_ok());
@@ -1734,42 +1724,6 @@ fn a_failure_nobody_waited_for_is_not_held_against_the_next_wait() {
         project.app.world().resource::<Scenes>().tabs.len(),
         1,
         "the yard saved, so it closed"
-    );
-}
-
-#[test]
-fn a_redirected_scene_plays_under_its_new_name() {
-    let mut project = project();
-    jackdaw::run_config::read_run_configs(project.app.world_mut());
-    jackdaw::pie::insert_build_in_progress(project.app.world_mut());
-    let legacy = project.asset("zone.jsn");
-    std::fs::write(&legacy, "{}").expect("the legacy file");
-    std::fs::remove_file(&project.scene).expect("the new name is free");
-    {
-        let mut scenes = project.app.world_mut().resource_mut::<Scenes>();
-        let active = scenes.active;
-        scenes.tabs[active].path = Some(legacy.clone());
-    }
-    project
-        .app
-        .world_mut()
-        .resource_mut::<jackdaw::scene_io::SceneFilePath>()
-        .path = Some(legacy.to_string_lossy().into_owned());
-
-    play(&mut project.app);
-    project.app.update();
-    project.settle();
-
-    assert!(project.scene.is_file(), "the save redirected");
-    let launches = jackdaw::pie::launches_waiting_on_build(project.app.world());
-    let (run, scene) = launches.first().expect("the game starts");
-    assert_eq!(
-        run.env.get("JACKDAW_PIE_SCENE").map(String::as_str),
-        Some("zone.bsn")
-    );
-    assert_eq!(
-        scene.as_ref().map(|scene| scene.scene.clone()),
-        Some(jackdaw::play_scene::PlayScene::Path("zone.bsn".to_string()))
     );
 }
 

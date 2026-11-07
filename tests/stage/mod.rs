@@ -32,7 +32,7 @@ mod project_window;
 mod recipe_picker;
 mod reflection_probe;
 mod remote_placement;
-mod save_before_play;
+mod play_saves_nothing;
 mod scene_environment;
 mod scene_wind;
 mod selection_undo;

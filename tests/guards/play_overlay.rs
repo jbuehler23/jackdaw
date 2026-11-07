@@ -140,10 +140,6 @@ fn editor(files: &[(&str, &str)]) -> (App, tempfile::TempDir) {
             root: tmp.path().to_path_buf(),
             config: default(),
         });
-    run_op_clause(app.world_mut(), "project.toggle_save_before_play")
-        .expect("the toggle dispatches")
-        .assert_finished();
-    app.update();
     (app, tmp)
 }
 
@@ -1405,4 +1401,56 @@ fn a_plain_run_never_reads_the_overlay() {
     let handle = game.world().resource::<AssetServer>().load("zone.bsn");
     game.world_mut().spawn(JackdawSceneRoot(handle));
     assert_eq!(door_x(&mut game), 1.0);
+}
+
+/// Terrain the scene inherits from a prefab no tab holds is edited in the scene's
+/// store. Play saves nothing, so the game takes those edits from a copy.
+#[test]
+fn unsaved_terrain_on_an_inherited_instance_reaches_the_game() {
+    let prop = format!(
+        "#Prop\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         jackdaw_scene_types::types::Terrain {{ data_path: \"{TERRAIN_FILE}\" }}\n"
+    );
+    let scene = instance_of("prop.bsn");
+    let (mut app, tmp) = editor(&[("prop.bsn", &prop), ("field.bsn", &scene)]);
+    write_in(
+        &tmp.path().join("assets"),
+        TERRAIN_FILE,
+        &sidecar::save(&terrain_data(1.0)).expect("encodes"),
+    );
+    let saved = asset_file(&tmp, TERRAIN_FILE);
+    open(&mut app, "assets/field.bsn");
+    app.world_mut()
+        .resource_mut::<TerrainDataStore>()
+        .insert(TERRAIN_FILE, terrain_data(6.0));
+
+    let mut game = game_serving(&mut app, &tmp, "field.bsn");
+    assert_eq!(terrain_height(&mut game), 6.0);
+    assert_eq!(asset_file(&tmp, TERRAIN_FILE), saved);
+}
+
+/// The same for a tilemap: its cells are keyed by the scene's document.
+#[test]
+fn unsaved_tiles_on_an_inherited_instance_reach_the_game() {
+    let prop = format!(
+        "#Prop\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         {}",
+        tilemap_component(TILES_FILE)
+    );
+    let scene = instance_of("prop.bsn");
+    let (mut app, tmp) = editor(&[("prop.bsn", &prop), ("field.bsn", &scene)]);
+    open(&mut app, "assets/field.bsn");
+    let map = map_entity(&mut app);
+    let edited = store_key_of(app.world_mut(), map).expect("a key");
+    app.world_mut()
+        .resource_mut::<TilemapDataStore>()
+        .insert(edited, tiles(&[(1, 1), (2, 2)]));
+
+    let served = serve(&mut app, "field.bsn");
+    assert!(sidecars_of(&served).is_some(), "the answer names the copies");
+    assert_eq!(copies_named(&tmp, TILES_FILE).len(), 1);
 }

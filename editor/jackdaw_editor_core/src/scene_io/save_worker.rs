@@ -22,7 +22,7 @@
 //! Saving All writes the tabs behind in one blocking pass, each brought forward
 //! with no frame in between, and only the tab in front in the background. A save
 //! that moves a document to a new file also runs with no frame in between, see
-//! [`super::hooks::DocumentIoHook::holds_the_frame`]. Leaving, closing a tab and Play
+//! [`super::hooks::DocumentIoHook::holds_the_frame`]. Leaving and closing a tab
 //! wait on `AfterSaves` and say so in the footer, and run once no modal operator
 //! or held history needs the tabs to stay as they are. A caller that needs the file on
 //! return uses the blocking [`super::save::save_scene`]; the `scene.save` operator
@@ -44,10 +44,8 @@ use bevy::platform::cell::SyncCell;
 use bevy::prelude::*;
 use jackdaw_api_internal::lifecycle::ActiveModalOperator;
 use jackdaw_bsn::SceneBsnAst;
-use jackdaw_pie_protocol::manifest::RunConfig;
 
 use super::hooks::{PendingSave, SidecarWrite};
-use crate::pie::InstanceKey;
 use crate::scenes::external_watch::{canonical, hash_bytes, queue_recheck};
 use crate::scenes::operators::TabSaveFailure;
 use crate::scenes::{Scenes, TabKind};
@@ -287,13 +285,6 @@ pub(crate) enum AfterSaves {
     LeaveIfSaved { leaving_project: bool },
     /// Close this tab, if it saved, for the tab dialog's Save.
     CloseTabIfSaved(u64),
-    /// Start a game, if the saves allow it.
-    Play {
-        key: InstanceKey,
-        run: RunConfig,
-        /// The tab in front when Play was asked for, by id.
-        tab: Option<u64>,
-    },
 }
 
 impl AfterSaves {
@@ -303,7 +294,6 @@ impl AfterSaves {
                 true
             }
             (Self::CloseTab(a), Self::CloseTab(b)) => a == b,
-            (Self::Play { key: a, .. }, Self::Play { key: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -314,7 +304,6 @@ impl AfterSaves {
             Self::CloseWindow | Self::LeaveIfSaved { .. } => Some("closing"),
             Self::LeaveProject => Some("leaving the project"),
             Self::CloseTab(_) | Self::CloseTabIfSaved(_) => Some("closing the tab"),
-            Self::Play { .. } => Some("playing"),
         }
     }
 }
@@ -687,9 +676,6 @@ fn run_after_saves(world: &mut World) {
                 } else {
                     warn!("confirm_dialog: save failed; keeping tab {index} open");
                 }
-            }
-            AfterSaves::Play { key, run, tab } => {
-                crate::pie::launch_after_saves(world, key, run, tab, &failures);
             }
         }
     }

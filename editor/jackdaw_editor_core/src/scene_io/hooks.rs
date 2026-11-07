@@ -99,6 +99,9 @@ pub struct PlayDocument<'a> {
     /// The tab holding it, whose store holds its data. `None` for a prefab no tab
     /// holds, which has no data of its own beyond its files.
     pub tab: Option<usize>,
+    /// The tab of the scene that instances it. Data a scene inherits from a prefab
+    /// no tab holds is edited in this tab's store.
+    pub instanced_from: Option<usize>,
     /// Its file, or `None` for a tab that has none.
     pub file: Option<&'a Path>,
     pub ast: &'a SceneBsnAst,

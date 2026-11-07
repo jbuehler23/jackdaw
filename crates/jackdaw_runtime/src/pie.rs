@@ -128,6 +128,7 @@ pub(crate) fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
     app.insert_non_send(PieTransportRes(transport));
     app.init_resource::<PieStreamState>();
     app.init_resource::<crate::served_scene::SceneRequests>();
+    app.add_observer(crate::served_scene::forget_answer_on_insert);
     app.init_resource::<HighlightedEntity>();
     crate::node_sync::install_node_index(app);
     // Drain control in PreUpdate, before input processing so forwarded editor

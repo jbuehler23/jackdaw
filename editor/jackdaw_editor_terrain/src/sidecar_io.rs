@@ -88,7 +88,7 @@ fn export_play_terrain(
 ) -> Result<(), BevyError> {
     use jackdaw_terrain::sidecar;
 
-    let Some(store) = store_of_tab(world, document.tab) else {
+    let Some(store) = store_of_tab(world, document.tab.or(document.instanced_from)) else {
         return Ok(());
     };
     let type_path = <jackdaw_scene_types::Terrain as bevy::reflect::TypePath>::type_path();

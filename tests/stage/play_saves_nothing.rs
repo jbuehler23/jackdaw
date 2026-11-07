@@ -1,6 +1,5 @@
-//! Play saves the modified scenes before it starts the game, unless the project
-//! turned that off. A scene it cannot save is still played: the game takes the
-//! document rather than the file.
+//! Play writes nothing and marks nothing saved: the game takes the editor's
+//! documents, so a scene that could not be saved plays all the same.
 
 use crate::util::{self, OperatorResultExt as _};
 
@@ -56,34 +55,8 @@ fn play(app: &mut App) {
 }
 
 #[test]
-fn play_saves_the_edited_scene_before_the_game_starts() {
+fn play_leaves_the_edited_scene_unsaved() {
     let (mut app, _tmp, scene) = edited_scene();
-    assert!(
-        !std::fs::read_to_string(&scene)
-            .expect("scene read")
-            .contains("Props"),
-        "the edit is not on disk yet"
-    );
-
-    play(&mut app);
-
-    assert!(
-        std::fs::read_to_string(&scene)
-            .expect("scene read")
-            .contains("Props"),
-        "the file the game loads holds the edit"
-    );
-    let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
-    assert!(!scenes.tabs[scenes.active].dirty, "and the tab reads saved");
-}
-
-#[test]
-fn with_save_before_play_off_play_leaves_the_file_alone() {
-    let (mut app, _tmp, scene) = edited_scene();
-    run_op_clause(app.world_mut(), "project.toggle_save_before_play")
-        .expect("the toggle dispatches")
-        .assert_finished();
-    app.update();
 
     play(&mut app);
 
@@ -91,6 +64,10 @@ fn with_save_before_play_off_play_leaves_the_file_alone() {
         std::fs::read_to_string(&scene).expect("scene read"),
         ZONE_SCENE,
         "nothing was written"
+    );
+    assert!(
+        jackdaw::scenes::operators::active_tab_modified(app.world()),
+        "and the tab still reads modified"
     );
 }
 
@@ -119,11 +96,10 @@ fn an_edited_scene_never_saved_plays_and_stays_unsaved() {
     let scenes = app.world().resource::<jackdaw::scenes::Scenes>();
     let untitled = &scenes.tabs[scenes.active];
     assert!(untitled.path.is_none(), "no Save As was asked for");
-    assert!(
-        std::fs::read_to_string(&scene)
-            .expect("scene read")
-            .contains("Props"),
-        "the saved scene behind it still saves"
+    assert_eq!(
+        std::fs::read_to_string(&scene).expect("scene read"),
+        ZONE_SCENE,
+        "the saved scene behind it stays as it was"
     );
 }
 
@@ -135,8 +111,8 @@ struct NamesAnAsset {
     item: String,
 }
 
-/// A save refuses an absolute asset path. Play warns and goes on, since the
-/// game takes the document rather than the file.
+/// A save refuses an absolute asset path. Play starts anyway, since the game takes
+/// the document rather than the file.
 #[test]
 fn an_absolute_asset_path_warns_and_still_plays() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -157,6 +133,7 @@ fn an_absolute_asset_path_warns_and_still_plays() {
         .set(jackdaw::AppState::Editor);
     app.update();
     jackdaw::run_config::read_run_configs(app.world_mut());
+    jackdaw::pie::insert_build_in_progress(app.world_mut());
     run_op_clause(app.world_mut(), "scene.open path=assets/zone.bsn")
         .expect("the scene opens")
         .assert_finished();
@@ -171,14 +148,19 @@ fn an_absolute_asset_path_warns_and_still_plays() {
     assert_eq!(
         std::fs::read_to_string(&scene).expect("scene read"),
         text,
-        "the save was refused"
+        "nothing was written"
     );
     let notice = app
         .world()
         .resource::<jackdaw::status_bar::StatusNotice>()
         .text()
         .to_string();
-    assert!(!notice.contains("Not playing"), "{notice}");
+    assert!(notice.is_empty(), "{notice}");
+    assert_eq!(
+        jackdaw::pie::launches_waiting_on_build(app.world()).len(),
+        1,
+        "the game starts"
+    );
 }
 
 #[test]
@@ -210,7 +192,7 @@ fn a_new_scene_at_a_relative_path_saves_under_the_assets_folder() {
 }
 
 #[test]
-fn play_saves_a_new_scene_made_at_a_relative_path() {
+fn play_leaves_a_new_scene_made_at_a_relative_path_unwritten() {
     let (mut app, tmp, _scene) = edited_scene();
     run_op_clause(app.world_mut(), "scene.new path=scenes/played.bsn")
         .expect("a new scene opens")
@@ -223,18 +205,7 @@ fn play_saves_a_new_scene_made_at_a_relative_path() {
 
     play(&mut app);
 
-    let notice = app
-        .world()
-        .resource::<jackdaw::status_bar::StatusNotice>()
-        .text()
-        .to_string();
-    assert!(
-        !notice.contains("Not playing"),
-        "save-before-play went through: {notice}"
-    );
-    let saved = std::fs::read_to_string(tmp.path().join("assets/scenes/played.bsn"))
-        .expect("the scene was saved under assets");
-    assert!(saved.contains("Crates"), "with the edit:\n{saved}");
+    assert!(!tmp.path().join("assets/scenes/played.bsn").exists());
 }
 
 #[test]
@@ -282,7 +253,7 @@ fn a_scene_path_that_leaves_the_project_is_refused() {
 /// A prefab is not served, so the game would read the stale file: unlike a scene,
 /// one a save refuses stops Play.
 #[test]
-fn a_prefab_tab_refused_for_an_absolute_path_stops_play() {
+fn a_prefab_tab_a_save_would_refuse_still_plays() {
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("assets")).expect("assets folder");
     let prefab = tmp.path().join("assets/rock.bsn");
@@ -301,6 +272,7 @@ fn a_prefab_tab_refused_for_an_absolute_path_stops_play() {
         .set(jackdaw::AppState::Editor);
     app.update();
     jackdaw::run_config::read_run_configs(app.world_mut());
+    jackdaw::pie::insert_build_in_progress(app.world_mut());
     run_op_clause(app.world_mut(), "scene.open path=assets/rock.bsn")
         .expect("the prefab opens")
         .assert_finished();
@@ -317,10 +289,14 @@ fn a_prefab_tab_refused_for_an_absolute_path_stops_play() {
 
     play(&mut app);
 
-    let notice = app
-        .world()
-        .resource::<jackdaw::status_bar::StatusNotice>()
-        .text()
-        .to_string();
-    assert!(notice.contains("Not playing"), "{notice}");
+    assert_eq!(
+        jackdaw::pie::launches_waiting_on_build(app.world()).len(),
+        1,
+        "the game starts"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&prefab).expect("prefab read"),
+        text,
+        "nothing was written"
+    );
 }

@@ -190,6 +190,7 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
         world,
         &PlayDocument {
             tab: scene.tab,
+            instanced_from: None,
             file: scene.file,
             ast: scene.ast,
             overlay_dir: &copies_root.join(scene.dir),
@@ -214,6 +215,7 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
             world,
             &PlayDocument {
                 tab: held.tab,
+                instanced_from: scene.tab,
                 file: Some(&source),
                 ast: &held.ast,
                 overlay_dir: &copies_root.join(relative.parent().unwrap_or(Path::new(""))),
