@@ -447,7 +447,11 @@ fn source_size(world: &World, sprite: &Sprite) -> Option<Vec2> {
         if !matches!(path.source(), bevy::asset::io::AssetSourceId::Default) {
             return None;
         }
-        let file = crate::entity_ops::get_assets_base_dir()?.join(path.path());
+        let assets = match world.get_resource::<crate::project::ProjectRoot>() {
+            Some(project) => project.assets_dir(),
+            None => crate::entity_ops::get_assets_base_dir()?,
+        };
+        let file = assets.join(path.path());
         let (width, height) = image::image_dimensions(file).ok()?;
         Some(Vec2::new(width as f32, height as f32))
     })
