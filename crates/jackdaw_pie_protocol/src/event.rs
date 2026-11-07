@@ -144,6 +144,30 @@ pub enum ControlEvent {
     PrefabFiles {
         files: Vec<(String, Option<String>)>,
     },
+    /// A node joined the document the game plays. `bsn` is the node's subtree as
+    /// document text, without the nodes that already exist. The game spawns it
+    /// under every live entity of `parent`, or for `None` under every root playing
+    /// `scene`, the asset path the game asked for. `follows` is the sibling it comes
+    /// after, and `dir` the folder the text counts as being in under the asset folder.
+    SpawnNode {
+        node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+        scene: String,
+        dir: String,
+        bsn: String,
+    },
+    /// A node left the document: the game despawns every live entity of it.
+    DespawnNode {
+        node: u64,
+    },
+    /// A node moved in the document: under `parent`, or to the top of its scene for
+    /// `None`, after the sibling `follows`.
+    ReparentNode {
+        node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+    },
 }
 
 /// Serialize a protocol message to bytes. Uses JSON so component payloads

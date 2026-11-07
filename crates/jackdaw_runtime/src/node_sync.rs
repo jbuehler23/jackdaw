@@ -71,6 +71,11 @@ pub struct PendingNodeChanges {
 }
 
 impl PendingNodeChanges {
+    /// Drop what is held for `node`: text newer than it is on its way.
+    pub(crate) fn forget(&mut self, node: u64) {
+        self.nodes.remove(&node);
+    }
+
     /// Whether a change for `node` is held.
     pub fn contains(&self, node: u64) -> bool {
         self.nodes.contains_key(&node)
@@ -145,9 +150,15 @@ pub fn install_node_index(app: &mut App) {
     app.init_resource::<PendingNodeChanges>();
     app.add_observer(index_node_insert);
     app.add_observer(index_node_replace);
+    app.init_resource::<crate::node_structure::HeldStructure>();
     app.add_systems(
         Update,
-        apply_pending_node_changes.after(crate::spawn_loaded_scenes),
+        (
+            crate::node_structure::replay_held_structure,
+            apply_pending_node_changes,
+        )
+            .chain()
+            .after(crate::spawn_loaded_scenes),
     );
     let world = app.world_mut();
     let present: Vec<(Entity, SceneNodeId)> = world
@@ -588,7 +599,11 @@ pub fn load_asset_files(world: &mut World, files: &[(String, String)]) {
                     warn!("PIE: the editor sent no asset this game can hold for {path}");
                     continue;
                 };
-                catalog.files.insert(path.clone(), entry.handle);
+                catalog.files.insert(path.clone(), entry.handle.clone());
+                world
+                    .get_resource_or_init::<BsnSceneAssets>()
+                    .0
+                    .insert(path.clone(), entry.handle);
             }
             Err(err) => warn!("PIE: could not read the asset file {path} the editor sent: {err}"),
         }

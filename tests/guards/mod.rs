@@ -6,6 +6,7 @@ mod editor_remote;
 mod feathers_composition;
 mod play_overlay;
 mod play_scene;
+mod play_structure;
 mod play_sync;
 mod remote_batches;
 mod scaffolded_component_flow;

@@ -114,6 +114,33 @@ pub(crate) fn overlay_of_document(
         ast,
         folder,
         dir: Path::new(dir),
+        sidecars: true,
+    };
+    overlay_of(world, &scene)
+}
+
+/// [`overlay_of_document`] for part of the document, its unsaved prefabs alone. The
+/// copies stay as the whole document's walk left them.
+pub(crate) fn prefabs_of_document_part(
+    world: &mut World,
+    tab: usize,
+    target: &PlayScene,
+    ast: &SceneBsnAst,
+    folder: &Path,
+    dir: &str,
+) -> Overlay {
+    if !is_plain_relative(Path::new(dir)) {
+        return Overlay::default();
+    }
+    let file = world.resource::<Scenes>().tabs[tab].path.clone();
+    let scene = SceneInOverlay {
+        tab: Some(tab),
+        target,
+        file: file.as_deref(),
+        ast,
+        folder,
+        dir: Path::new(dir),
+        sidecars: false,
     };
     overlay_of(world, &scene)
 }
@@ -163,6 +190,7 @@ pub(crate) fn overlay_of_file(world: &mut World, path: &str) -> Overlay {
         ast: &ast,
         folder: &folder,
         dir: relative.parent().unwrap_or(Path::new("")),
+        sidecars: true,
     };
     overlay_of(world, &scene)
 }
@@ -175,6 +203,8 @@ struct SceneInOverlay<'a> {
     ast: &'a SceneBsnAst,
     folder: &'a Path,
     dir: &'a Path,
+    /// Whether to write the copies of unsaved sidecars.
+    sidecars: bool,
 }
 
 fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
@@ -185,17 +215,19 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
     };
     let namespace = source_root(world, scene.folder);
     let copies_root = scene_folder(&play, scene.target);
-    world.get_resource_or_init::<PlayCopies>().begin_walk();
-    export_copies(
-        world,
-        &PlayDocument {
-            tab: scene.tab,
-            instanced: false,
-            file: scene.file,
-            ast: scene.ast,
-            overlay_dir: &copies_root.join(scene.dir),
-        },
-    );
+    if scene.sidecars {
+        world.get_resource_or_init::<PlayCopies>().begin_walk();
+        export_copies(
+            world,
+            &PlayDocument {
+                tab: scene.tab,
+                instanced: false,
+                file: scene.file,
+                ast: scene.ast,
+                overlay_dir: &copies_root.join(scene.dir),
+            },
+        );
+    }
 
     let mut pending = sources_of(scene.ast, &namespace, scene.folder);
     let mut seen = HashSet::new();
@@ -211,22 +243,26 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
         };
         let parent = source.parent().map(Path::to_path_buf).unwrap_or_default();
         pending.extend(sources_of(&held.ast, &namespace, &parent));
-        export_copies(
-            world,
-            &PlayDocument {
-                tab: held.tab,
-                instanced: true,
-                file: Some(&source),
-                ast: &held.ast,
-                overlay_dir: &copies_root.join(relative.parent().unwrap_or(Path::new(""))),
-            },
-        );
+        if scene.sidecars {
+            export_copies(
+                world,
+                &PlayDocument {
+                    tab: held.tab,
+                    instanced: true,
+                    file: Some(&source),
+                    ast: &held.ast,
+                    overlay_dir: &copies_root.join(relative.parent().unwrap_or(Path::new(""))),
+                },
+            );
+        }
         if let Some(document) = held.unsaved {
             add_unsaved(world, &mut overlay, &relative, document);
         }
     }
-    let copied = world.resource_mut::<PlayCopies>().finish_walk(&copies_root);
-    overlay.sidecars = copied.then(|| copies_root.to_string_lossy().into_owned());
+    if scene.sidecars {
+        let copied = world.resource_mut::<PlayCopies>().finish_walk(&copies_root);
+        overlay.sidecars = copied.then(|| copies_root.to_string_lossy().into_owned());
+    }
     overlay
 }
 

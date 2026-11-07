@@ -9,6 +9,7 @@ use bevy::sprite_render::{TilemapChunkMaterial, TilemapChunkMeshCache};
 use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::pie::InstanceKey;
 use jackdaw::play_scene::{LaunchScene, PlayScene, ServedScene, launch_scene, serve_scene};
+use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
 use jackdaw::scenes::Scenes;
 use jackdaw::scenes::confirm_dialog::{ConfirmDialogButton, apply_confirm_dialog_action};
 use jackdaw::terrain_mode::TerrainDataStore;
@@ -1520,4 +1521,49 @@ fn a_scenes_terrain_does_not_reach_a_prefab_in_another_folder() {
 
     let mut game = game_serving(&mut app, &tmp, "levels/b.bsn");
     assert_eq!(terrain_height(&mut game), 1.0);
+}
+
+/// An instance added while playing reads its prefab as the editor holds it, which
+/// the game was not given when it asked for the scene.
+#[test]
+fn an_instance_spawned_while_playing_brings_its_unsaved_prefab_ahead_of_it() {
+    let scene = "#Lamp\nbevy_transform::components::transform::Transform\n";
+    let (mut app, tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", scene)]);
+    open(&mut app, "assets/zone.bsn");
+    assert!(collect_node_changes(app.world_mut()).is_empty());
+    serve(&mut app, "zone.bsn");
+
+    set_cached_prefab(&mut app, &tmp, "door.bsn", &door(9.0));
+    app.world_mut()
+        .operator("prefab.spawn_instance")
+        .param("path", "door.bsn")
+        .param("pos_x", 0.0)
+        .param("pos_y", 0.0)
+        .param("pos_z", 0.0)
+        .call()
+        .expect("prefab.spawn_instance dispatches")
+        .assert_finished();
+    app.update();
+
+    let events: Vec<ControlEvent> = collect_changes_for(app.world_mut(), &[key()])
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect();
+    let prefab = events
+        .iter()
+        .position(|event| matches!(event, ControlEvent::PrefabFiles { .. }))
+        .unwrap_or_else(|| panic!("the unsaved prefab goes: {events:?}"));
+    let spawn = events
+        .iter()
+        .position(|event| matches!(event, ControlEvent::SpawnNode { .. }))
+        .unwrap_or_else(|| panic!("the instance goes: {events:?}"));
+    assert!(prefab < spawn, "{events:?}");
+    let ControlEvent::PrefabFiles { files } = &events[prefab] else {
+        unreachable!();
+    };
+    assert!(
+        files.iter().any(|(path, text)| path == "door.bsn"
+            && text.as_deref().is_some_and(|text| text.contains("9.0"))),
+        "{files:?}"
+    );
 }

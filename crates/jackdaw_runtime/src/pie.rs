@@ -27,6 +27,8 @@ use jackdaw_pie_protocol::transport_ipc::IpcChannelTransport;
 use jackdaw_pie_protocol::{ControlEvent, SnapshotColumn, snapshot_columns};
 use jackdaw_scene_types::SceneNodeId;
 
+use crate::node_structure::{StructureChange, apply_structure_change};
+
 /// The active PIE link parameters, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PieConfig {
@@ -484,6 +486,43 @@ fn apply_control(world: &mut World) {
             }
             ControlEvent::PrefabFiles { files } => {
                 crate::play_overlay::load_prefab_files(world, &files);
+            }
+            ControlEvent::SpawnNode {
+                node,
+                parent,
+                follows,
+                scene,
+                dir,
+                bsn,
+            } => {
+                apply_structure_change(
+                    world,
+                    StructureChange::Spawn {
+                        node,
+                        parent,
+                        follows,
+                        scene,
+                        dir,
+                        bsn,
+                    },
+                );
+            }
+            ControlEvent::DespawnNode { node } => {
+                apply_structure_change(world, StructureChange::Despawn { node });
+            }
+            ControlEvent::ReparentNode {
+                node,
+                parent,
+                follows,
+            } => {
+                apply_structure_change(
+                    world,
+                    StructureChange::Reparent {
+                        node,
+                        parent,
+                        follows,
+                    },
+                );
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity
