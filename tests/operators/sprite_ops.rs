@@ -868,36 +868,6 @@ fn set_anchor_without_an_entity_anchors_every_selected_sprite_in_one_entry() {
     }
 }
 
-/// Put the editor in Live view with `sprite` projected from game entity `bits`.
-fn project_live(app: &mut App, sprite: Entity, bits: u64) {
-    *app.world_mut()
-        .resource_mut::<jackdaw::pie_mirror::PieViewMode>() =
-        jackdaw::pie_mirror::PieViewMode::Live;
-    app.world_mut()
-        .resource_mut::<jackdaw::pie_projection::PieProjection>()
-        .by_bits
-        .insert(bits, sprite);
-}
-
-fn live_edits(app: &App) -> usize {
-    app.world()
-        .resource::<jackdaw::live_edits::LiveEditLog>()
-        .entries
-        .len()
-}
-
-#[test]
-fn set_anchor_in_live_view_goes_to_the_running_game() {
-    let (mut app, _root) = two_d_app();
-    add(&mut app, &[]);
-    let sprite = only_sprite(&mut app);
-    project_live(&mut app, sprite, 77);
-    let depth = history_len(&app);
-    set_anchor(&mut app, sprite, &[("preset", "bottom_left".into())]).assert_finished();
-    assert_eq!(live_edits(&app), 1, "the game is told");
-    assert_eq!(history_len(&app), depth, "the scene is not edited");
-}
-
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 struct SpriteVitals {
@@ -944,11 +914,11 @@ fn set_anchor_is_refused_while_the_preview_drives_the_anchor() {
 
 #[test]
 fn set_pixels_per_unit_refuses_all_when_one_target_is_previewed() {
-    let (mut app, _dir, projected) = sheet_app();
+    let (mut app, _dir, other) = sheet_app();
     add(&mut app, &[("path", SHEET.into())]);
     let previewed = sprites(&mut app)
         .into_iter()
-        .find(|&entity| entity != projected)
+        .find(|&entity| entity != other)
         .expect("a second sprite");
     util::update_until(
         &mut app,
@@ -960,10 +930,9 @@ fn set_pixels_per_unit_refuses_all_when_one_target_is_previewed() {
         },
     );
     preview_drives(&mut app, &[previewed], "Sprite.custom_size");
-    project_live(&mut app, projected, 88);
     app.world_mut()
         .resource_mut::<jackdaw::selection::Selection>()
-        .entities = vec![projected, previewed];
+        .entities = vec![other, previewed];
     let depth = history_len(&app);
     warnings(&mut app);
     let result = app
@@ -975,7 +944,6 @@ fn set_pixels_per_unit_refuses_all_when_one_target_is_previewed() {
     app.update();
     assert_eq!(result, OperatorResult::Cancelled);
     assert!(warnings(&mut app).iter().any(|w| w.contains("preview")));
-    assert_eq!(live_edits(&app), 0, "nothing reached the game");
     assert_eq!(history_len(&app), depth, "nothing was written");
     assert_eq!(custom_size(&app, previewed), None);
 }

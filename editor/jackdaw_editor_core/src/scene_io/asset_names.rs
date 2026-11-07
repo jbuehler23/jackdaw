@@ -258,30 +258,14 @@ pub(crate) fn relink_arrived_references(world: &mut World) {
     relink_references(world, &arrived.into_iter().collect());
 }
 
-/// Link the live fields the document spells `names` in. An entity holding the
-/// game's values waits: a write would read as the editor's own and take those
-/// values into the document, so the names are kept for when it stops holding them.
+/// Link the live fields the document spells `names` in.
 pub(crate) fn relink_references(
     world: &mut World,
     names: &bevy::platform::collections::HashSet<String>,
 ) {
-    let mut held_back = false;
     for (entity, type_path, fields) in fields_naming_in_document(world, names) {
-        if world
-            .get_resource::<crate::pie_projection::PieProjection>()
-            .is_some_and(|projection| projection.overlaid.contains(&entity))
-        {
-            held_back = true;
-            continue;
-        }
         let fields: Vec<&str> = fields.iter().map(String::as_str).collect();
         jackdaw_bsn::apply_component_patch_fields(world, entity, &type_path, &fields);
-    }
-    if held_back
-        && let Some(mut projection) =
-            world.get_resource_mut::<crate::pie_projection::PieProjection>()
-    {
-        projection.relink_after_overlays(names);
     }
 }
 

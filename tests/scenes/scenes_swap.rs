@@ -2202,49 +2202,6 @@ fn a_scene_whose_text_does_not_parse_back_survives_a_tab_switch() {
     assert!(scenes.tabs[0].refusal.is_none(), "the tab stays editable");
 }
 
-/// Stop a Play in which the game did something only a respawn undoes.
-fn stop_with_a_respawn(app: &mut bevy::app::App) {
-    app.world_mut()
-        .get_resource_or_init::<jackdaw::pie_projection::PieProjection>()
-        .needs_respawn = true;
-    jackdaw::pie_projection::revert_preview(app.world_mut());
-}
-
-#[test]
-fn stopping_play_reverts_a_scene_whose_text_does_not_parse_back() {
-    let mut app = make_app_with_n_tabs(1);
-    app.init_resource::<jackdaw::status_bar::StatusNotice>();
-    let (keeper, _) = live_scene_with_an_unparsable_node(&mut app);
-    app.world_mut()
-        .get_resource_or_init::<jackdaw::pie_projection::PieProjection>()
-        .overlaid
-        .insert(keeper);
-
-    stop_with_a_respawn(&mut app);
-
-    assert!(
-        app.world().get_entity(keeper).is_err(),
-        "keeper held game state, and the respawn replaced it"
-    );
-    assert!(
-        spawned_names(&mut app).iter().any(|name| name == "keeper"),
-        "keeper comes back from the document"
-    );
-    let projection = app
-        .world()
-        .resource::<jackdaw::pie_projection::PieProjection>();
-    assert!(!projection.needs_respawn, "the respawn is paid");
-    assert!(projection.overlaid.is_empty());
-    assert_eq!(
-        app.world()
-            .resource::<jackdaw_bsn::SceneBsnAst>()
-            .roots
-            .len(),
-        2,
-        "the live document keeps both roots"
-    );
-}
-
 #[test]
 fn a_scene_whose_text_does_not_parse_back_is_refused_by_a_save_after_a_switch() {
     let mut app = make_app_with_n_tabs(2);
@@ -2469,23 +2426,6 @@ fn tilemap_cells_survive_a_tab_swap() {
     assert_eq!(maps.len(), 1, "the tilemap respawns from the document");
     assert_eq!(maps[0].data_path, "zone.tilemap-0.jdtiles");
     assert_eq!(maps[0].layers[0].name, "Ground");
-    assert_eq!(stored(&mut app, "map"), Some(painted));
-}
-
-#[test]
-fn tilemap_cells_survive_play_stop() {
-    let mut app = tilemap_app(1);
-    let painted = painted_map(40, 7);
-    let map = spawn_tilemap(&mut app, "map", "zone.tilemap-0.jdtiles");
-    put_map(&mut app, "map", painted.clone());
-
-    stop_with_a_respawn(&mut app);
-
-    assert!(
-        app.world().get_entity(map).is_err(),
-        "stop respawns the scene"
-    );
-    assert_eq!(live_tilemaps(&mut app).len(), 1);
     assert_eq!(stored(&mut app, "map"), Some(painted));
 }
 

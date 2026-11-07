@@ -8,7 +8,6 @@ pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod definition_card;
 pub mod file_card;
-mod live_edit_dots;
 pub(crate) mod material_card_routing;
 mod material_display;
 pub(crate) mod material_row;
@@ -180,8 +179,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(custom_props_display::on_custom_property_checkbox_commit)
             .add_observer(custom_props_display::on_custom_property_text_commit)
             .add_observer(on_name_field_commit)
-            .init_resource::<live_edit_dots::LiveEditMenuTarget>()
-            .add_observer(live_edit_dots::on_live_edit_menu_action)
             .add_observer(on_category_strip_mount_added)
             .add_observer(add_header::on_add_header_mount_added)
             .add_observer(add_header::on_material_new_click)
@@ -229,14 +226,12 @@ impl Plugin for InspectorPlugin {
                         .after(category_strip::resolve_active_on_rebuild),
                     prefab_field_dots::decorate_prefab_field_rows,
                     prefab_field_dots::refresh_prefab_field_dots,
-                    live_edit_dots::refresh_live_edit_field_dots,
                     // After the three passes that spawn and remove the marks.
                     // Their spawns are deferred, so the gutter follows a new
                     // mark on the next pass rather than the same one.
                     jackdaw_feathers::field_row::reserve_decoration_gutters
                         .after(InspectorFieldDecorationSystems)
-                        .after(prefab_field_dots::decorate_prefab_field_rows)
-                        .after(live_edit_dots::refresh_live_edit_field_dots),
+                        .after(prefab_field_dots::decorate_prefab_field_rows),
                     refresh_name_field,
                     category_strip::paint_category_tabs
                         .after(category_strip::resolve_active_on_rebuild),
@@ -375,13 +370,6 @@ pub(super) struct ComponentDisplayBody;
 
 #[derive(Component)]
 pub struct AddComponentButton;
-
-/// Marker for the "Save to Scene" button in the inspector header. Visible
-/// only in Live (PIE) mode; promotes the selected running entity's current
-/// component values into its authored scene node. See
-/// `crate::pie::save_live_entity_to_scene`.
-#[derive(Component)]
-pub struct SaveToSceneButton;
 
 /// The component picker panel
 #[derive(Component)]

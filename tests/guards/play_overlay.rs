@@ -376,6 +376,190 @@ fn sidecars_of(served: &ServedScene) -> Option<String> {
     }
 }
 
+/// A door with a knob below it.
+fn door_with_knob() -> String {
+    "#Door\n\
+     jackdaw::prefab::components::Prefab\n\
+     jackdaw::prefab::components::PrefabEntityId(0)\n\
+     bevy_transform::components::transform::Transform\n\
+     bevy_ecs::hierarchy::Children [\n\
+     #Knob\n\
+     jackdaw::prefab::components::PrefabEntityId(1)\n\
+     bevy_transform::components::transform::Transform\n\
+     ]\n"
+    .to_string()
+}
+
+fn select_named(app: &mut App, name: &str) -> Entity {
+    let entity = named(app, name)[0];
+    app.world_mut()
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![entity];
+    entity
+}
+
+fn named(app: &mut App, name: &str) -> Vec<Entity> {
+    app.world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .filter(|(_, held)| held.as_str() == name)
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+/// The served root of `game` plays `path`, as a root that asked the editor does.
+fn played_as(game: &mut App, path: &str) {
+    let root = game
+        .world_mut()
+        .query_filtered::<Entity, With<JackdawSceneRoot>>()
+        .iter(game.world())
+        .next()
+        .expect("the served root");
+    game.world_mut()
+        .entity_mut(root)
+        .insert(jackdaw_runtime::node_structure::PlayedAs(path.to_string()));
+}
+
+/// What the game boxes for the editor's selection.
+fn boxed(app: &App, game: &mut App) -> Vec<Entity> {
+    use jackdaw_pie_protocol::HighlightPlace;
+    use jackdaw_runtime::node_structure::{NodePlace, PlaceStart, entities_at};
+    let places: Vec<NodePlace> = jackdaw::live_highlight::highlight_places(app.world(), &key())
+        .into_iter()
+        .map(|place| match place {
+            HighlightPlace::Node { scene, node, inner } => NodePlace {
+                start: PlaceStart::Node { scene, node },
+                inner,
+            },
+            HighlightPlace::Instances { prefab, inner } => NodePlace {
+                start: PlaceStart::Instances { prefab },
+                inner,
+            },
+        })
+        .collect();
+    let mut found = entities_at(game.world_mut(), &places);
+    found.sort();
+    found
+}
+
+fn sorted(mut entities: Vec<Entity>) -> Vec<Entity> {
+    entities.sort();
+    entities
+}
+
+/// A game playing two instances of the door, spawned.
+fn two_doors_playing() -> (App, tempfile::TempDir, App) {
+    let scene = roots(&[instance_of("props/door.bsn"), {
+        "#Other\n\
+         jackdaw::prefab::components::IsA { source: \"props/door.bsn\", deleted: [] }\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n"
+            .to_string()
+    }]);
+    let (mut app, tmp) = editor(&[("props/door.bsn", &door_with_knob()), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    let mut game = game_serving(&mut app, &tmp, "zone.bsn");
+    played_as(&mut game, "zone.bsn");
+    update_until(&mut game, "both knobs spawned", |game| {
+        named(game, "Knob").len() == 2
+    });
+    game.update();
+    (app, tmp, game)
+}
+
+/// A child inside an instance boxes that instance's child alone.
+#[test]
+fn selecting_a_child_inside_an_instance_boxes_it_in_the_game() {
+    let (mut app, _tmp, mut game) = two_doors_playing();
+    let placed = named(&mut game, "Placed")[0];
+    let in_placed: Vec<Entity> = named(&mut game, "Knob")
+        .into_iter()
+        .filter(|&knob| game.world().get::<ChildOf>(knob).map(ChildOf::parent) == Some(placed))
+        .collect();
+    assert_eq!(in_placed.len(), 1);
+
+    let in_editor = named(&mut app, "Placed")[0];
+    let knob = named(&mut app, "Knob")
+        .into_iter()
+        .find(|&knob| app.world().get::<ChildOf>(knob).map(ChildOf::parent) == Some(in_editor))
+        .expect("the editor's knob");
+    app.world_mut()
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![knob];
+    assert_eq!(boxed(&app, &mut game), in_placed);
+
+    select_named(&mut app, "Placed");
+    assert_eq!(boxed(&app, &mut game), vec![placed]);
+}
+
+/// A node in an open prefab tab boxes it in every instance the game plays.
+#[test]
+fn selecting_a_node_in_a_prefab_tab_boxes_every_instance_of_it() {
+    let (mut app, _tmp, mut game) = two_doors_playing();
+    open(&mut app, "assets/props/door.bsn");
+
+    select_named(&mut app, "Knob");
+    assert_eq!(boxed(&app, &mut game), sorted(named(&mut game, "Knob")));
+
+    select_named(&mut app, "Door");
+    let mut instances = named(&mut game, "Placed");
+    instances.extend(named(&mut game, "Other"));
+    assert_eq!(boxed(&app, &mut game), sorted(instances));
+}
+
+/// A prefab inside a prefab, selected from the scene and from the outer prefab's tab.
+#[test]
+fn selecting_inside_a_nested_instance_boxes_it_in_the_game() {
+    let outer = "#Gate\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n\
+         #Leaf\n\
+         jackdaw::prefab::components::PrefabEntityId(1)\n\
+         jackdaw::prefab::components::IsA { source: \"props/door.bsn\", deleted: [] }\n\
+         ]\n"
+    .to_string();
+    let scene = instance_of("gate.bsn");
+    let (mut app, tmp) = editor(&[
+        ("props/door.bsn", &door_with_knob()),
+        ("gate.bsn", &outer),
+        ("zone.bsn", &scene),
+    ]);
+    open(&mut app, "assets/zone.bsn");
+    let mut game = game_serving(&mut app, &tmp, "zone.bsn");
+    played_as(&mut game, "zone.bsn");
+    update_until(&mut game, "the knob spawned", |game| {
+        named(game, "Knob").len() == 1
+    });
+    game.update();
+    let knob = named(&mut game, "Knob");
+
+    select_named(&mut app, "Knob");
+    assert_eq!(boxed(&app, &mut game), knob);
+
+    open(&mut app, "assets/gate.bsn");
+    select_named(&mut app, "Knob");
+    assert_eq!(boxed(&app, &mut game), knob);
+}
+
+/// The selection boxes nothing in a game that plays another document.
+#[test]
+fn a_tab_the_game_does_not_play_boxes_nothing() {
+    let (mut app, _tmp, mut game) = two_doors_playing();
+    app.world_mut()
+        .resource_mut::<jackdaw::scenes::Scenes>()
+        .tabs
+        .push(jackdaw::scenes::SceneTab::new_untitled(9));
+    assert!(jackdaw::scenes::swap::swap_active_tab(app.world_mut(), 1));
+    app.update();
+    let lone = app.world_mut().spawn(Name::new("Lone")).id();
+    jackdaw::scene_io::register_entity_in_ast(app.world_mut(), lone);
+    app.world_mut()
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![lone];
+    assert!(boxed(&app, &mut game).is_empty());
+}
+
 #[test]
 fn an_unsaved_prefab_edit_shows_in_an_instance_and_the_file_stays() {
     let scene = instance_of("door.bsn");

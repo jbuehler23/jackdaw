@@ -52,7 +52,7 @@ fn inspected(component: impl Bundle) -> App {
     let mut app = util::editor_test_app();
     app.register_type::<Tuning>().register_type::<Weight>();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.update();
     let entity = app
         .world_mut()

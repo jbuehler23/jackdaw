@@ -921,7 +921,15 @@ impl AskedScene {
 }
 
 /// The path under the asset folder of the file tab `tab` holds, if it has one.
-fn tab_asset_path(world: &World, tab: usize) -> Option<String> {
+#[cfg(test)]
+pub(crate) fn note_test_asked_scene(world: &mut World, key: &InstanceKey, requested: &str) {
+    let asked = AskedScene::resolved(world, None, requested);
+    world
+        .resource_mut::<PlayAssetNames>()
+        .note_asked(key, asked);
+}
+
+pub(crate) fn tab_asset_path(world: &World, tab: usize) -> Option<String> {
     let path = world.get_resource::<Scenes>()?.tabs[tab].path.clone()?;
     world
         .get_resource::<crate::project::ProjectRoot>()?
@@ -1417,16 +1425,11 @@ pub(crate) fn forget_asset_names(mut names: ResMut<PlayAssetNames>) {
 mod tests {
     use bevy::asset::{AssetPlugin, ReflectAsset, ReflectHandle};
     use jackdaw_bsn::{SceneBsnAst, component_to_bsn_patch};
-    use jackdaw_pie_protocol::{RemoteEntity, StateEvent};
     use jackdaw_runtime::JackdawPlugin;
     use jackdaw_scene_types::SceneNodeId;
 
     use super::*;
-    use crate::pie_projection::{PieProjection, project_event};
     use crate::play_sync::PlayReferences;
-
-    const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
-    const PAINTED: &str = "game::Painted";
 
     #[derive(Asset, Reflect, Default, Clone)]
     #[reflect(Asset, Default)]
@@ -1523,7 +1526,6 @@ mod tests {
             tabs: vec![tab],
             active: 0,
         });
-        app.init_resource::<PieProjection>();
         app.init_resource::<PlayAssetNames>();
         app.init_resource::<SceneBsnAst>();
         app
@@ -1608,119 +1610,6 @@ mod tests {
         (swatch.0, tone)
     }
 
-    fn stream_spawn(id: u64, level: u32, x: f32) -> StateEvent {
-        StateEvent::EntitySpawned {
-            entity: RemoteEntity {
-                entity: 1,
-                components: [
-                    (
-                        TRANSFORM.to_string(),
-                        serde_json::json!({
-                            "translation": [x, 0.0, 0.0],
-                            "rotation": [0.0, 0.0, 0.0, 1.0],
-                            "scale": [1.0, 1.0, 1.0]
-                        }),
-                    ),
-                    (
-                        PAINTED.to_string(),
-                        serde_json::json!({ "level": level, "swatch": null }),
-                    ),
-                ]
-                .into_iter()
-                .collect(),
-                scene_node_id: Some(id),
-            },
-        }
-    }
-
-    #[test]
-    fn projected_game_state_never_reaches_the_text() {
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let mut app = editor(dir.path());
-        let color = swatch(&mut app, 4);
-        let entity = add_node(
-            &mut app,
-            5,
-            Painted {
-                level: 1,
-                swatch: color.clone(),
-            },
-            1,
-        );
-        let before = answer(&mut app);
-
-        project_event(app.world_mut(), stream_spawn(5, 99, 77.0));
-        let world = app.world();
-        let projected = world.get::<Painted>(entity).expect("the component");
-        assert_eq!(projected.level, 99, "the entity shows the game's value");
-        assert_eq!(
-            world
-                .get::<Transform>(entity)
-                .expect("a transform")
-                .translation
-                .x,
-            77.0
-        );
-        assert_eq!(projected.swatch, color, "the stream carries no handle");
-
-        let after = answer(&mut app);
-        assert_eq!(after, before, "the document alone decides the text");
-        assert!(!after.contains("99") && !after.contains("77"), "{after}");
-        assert_eq!(game_painted(&mut game_spawning(after), 5), (1, 4));
-    }
-
-    /// A document edit made while the entity is projected is in the text, next
-    /// to no game value.
-    #[test]
-    fn an_edit_of_a_projected_entity_is_read_from_the_document() {
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let mut app = editor(dir.path());
-        let color = swatch(&mut app, 4);
-        let entity = add_node(
-            &mut app,
-            5,
-            Painted {
-                level: 1,
-                swatch: color,
-            },
-            1,
-        );
-        project_event(app.world_mut(), stream_spawn(5, 99, 0.0));
-        let registry = app.world().resource::<AppTypeRegistry>().clone();
-        let registry = registry.read();
-        app.world_mut()
-            .resource_scope(|_, mut ast: Mut<SceneBsnAst>| {
-                let node = ast.ast_for(entity).expect("a node");
-                let value = jackdaw_bsn::BsnValue::from_reflect(&12u32, &registry);
-                jackdaw_bsn::set_bsn_field(&mut ast, node, PAINTED, "level", value, &registry);
-            });
-        drop(registry);
-        assert_eq!(
-            game_painted(&mut game_spawning(answer(&mut app)), 5),
-            (12, 4)
-        );
-    }
-
-    /// A tab switched away from while projected keeps the document's values.
-    #[test]
-    fn a_snapshot_taken_while_projected_holds_the_document() {
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let mut app = editor(dir.path());
-        let color = swatch(&mut app, 4);
-        add_node(
-            &mut app,
-            5,
-            Painted {
-                level: 1,
-                swatch: color,
-            },
-            1,
-        );
-        project_event(app.world_mut(), stream_spawn(5, 99, 0.0));
-        let text = crate::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), dir.path());
-        assert!(!text.contains("99"), "{text}");
-    }
-
     /// Asset names hold across emits with an asset added ahead in the document,
     /// and live sync's references read the same ones.
     #[test]
@@ -1780,165 +1669,6 @@ mod tests {
             Some(name),
             "live sync sends the same name"
         );
-    }
-
-    /// A node holding `live`, overlaid with game state, whose document holds
-    /// `patch`.
-    fn overlaid_node(app: &mut App, id: u64, live: impl Bundle, patch: jackdaw_bsn::BsnPatch) {
-        let world = app.world_mut();
-        let entity = world
-            .spawn((SceneNodeId(id), Transform::default(), live))
-            .id();
-        let registry = world.resource::<AppTypeRegistry>().clone();
-        let patches = vec![
-            component_to_bsn_patch(&SceneNodeId(id), &registry.read()),
-            component_to_bsn_patch(&Transform::default(), &registry.read()),
-            patch,
-        ];
-        let mut ast = world.resource_mut::<SceneBsnAst>();
-        let node = ast.create_entity_node(patches);
-        ast.add_to_roots(node);
-        ast.link(entity, node);
-        world
-            .resource_mut::<PieProjection>()
-            .overlaid
-            .insert(entity);
-    }
-
-    fn patch_of(app: &App, value: &dyn PartialReflect) -> jackdaw_bsn::BsnPatch {
-        component_to_bsn_patch(value, &app.world().resource::<AppTypeRegistry>().read())
-    }
-
-    fn tone_of(game: &App, handle: &Handle<Swatch>) -> u32 {
-        game.world()
-            .resource::<Assets<Swatch>>()
-            .get(handle)
-            .map_or(u32::MAX, |swatch| swatch.tone)
-    }
-
-    /// A save from Live view writes the document's values and takes only the
-    /// references from the entity: in an enum variant, a map value, a set, a tuple
-    /// component and a bare-type tuple component.
-    #[test]
-    fn a_save_of_an_overlaid_entity_keeps_every_kind_of_nested_handle() {
-        let dir = tempfile::tempdir().expect("a temp dir");
-        let mut app = editor(dir.path());
-        let (one, two, three) = (
-            swatch(&mut app, 1),
-            swatch(&mut app, 2),
-            swatch(&mut app, 3),
-        );
-        let (four, five, six) = (
-            swatch(&mut app, 4),
-            swatch(&mut app, 5),
-            swatch(&mut app, 6),
-        );
-
-        let doc = patch_of(
-            &app,
-            &Slotted {
-                level: 1,
-                first: Slot::Held(one.clone()),
-                second: Slot::Named {
-                    swatch: two.clone(),
-                },
-            },
-        );
-        overlaid_node(
-            &mut app,
-            1,
-            Slotted {
-                level: 99,
-                first: Slot::Held(one),
-                second: Slot::Named { swatch: two },
-            },
-            doc,
-        );
-        let doc = patch_of(
-            &app,
-            &Palette {
-                level: 1,
-                by_name: [("rock".to_string(), three.clone())].into_iter().collect(),
-            },
-        );
-        overlaid_node(
-            &mut app,
-            2,
-            Palette {
-                level: 99,
-                by_name: [("rock".to_string(), three)].into_iter().collect(),
-            },
-            doc,
-        );
-        let doc = patch_of(&app, &Tinted(four.clone()));
-        overlaid_node(&mut app, 3, Tinted(four), doc);
-        overlaid_node(
-            &mut app,
-            4,
-            Tinted(five),
-            jackdaw_bsn::BsnPatch::Type("game::Tinted".to_string()),
-        );
-        let doc = patch_of(&app, &Coat::Painted(six.clone()));
-        overlaid_node(&mut app, 5, Coat::Painted(six.clone()), doc);
-        let doc = patch_of(
-            &app,
-            &Bag {
-                level: 1,
-                set: [six.clone()].into_iter().collect(),
-            },
-        );
-        overlaid_node(
-            &mut app,
-            6,
-            Bag {
-                level: 99,
-                set: [six].into_iter().collect(),
-            },
-            doc,
-        );
-
-        let text = crate::scene_io::save::emit_bsn_scene_for_file(app.world_mut(), dir.path())
-            .expect("nothing is refused");
-        assert!(!text.contains("99"), "the document's values:\n{text}");
-
-        let mut game = game_spawning(text);
-        let mut slotted = game.world_mut().query::<&Slotted>();
-        let slotted = slotted.single(game.world()).expect("spawned");
-        assert_eq!(slotted.level, 1);
-        let Slot::Held(first) = &slotted.first else {
-            panic!("the first variant");
-        };
-        assert_eq!(tone_of(&game, first), 1, "a tuple variant");
-        let Slot::Named { swatch } = &slotted.second else {
-            panic!("the second variant");
-        };
-        assert_eq!(tone_of(&game, swatch), 2, "a struct variant");
-
-        let mut palette = game.world_mut().query::<&Palette>();
-        let palette = palette.single(game.world()).expect("spawned");
-        assert_eq!(palette.level, 1);
-        assert_eq!(tone_of(&game, &palette.by_name["rock"]), 3, "a map value");
-
-        let mut tones: Vec<u32> = game
-            .world_mut()
-            .query::<&Tinted>()
-            .iter(game.world())
-            .map(|tinted| tone_of(&game, &tinted.0))
-            .collect();
-        tones.sort_unstable();
-        assert_eq!(tones, vec![4, 5], "a tuple component, written and bare");
-
-        let mut coat = game.world_mut().query::<&Coat>();
-        let Coat::Painted(painted) = coat.single(game.world()).expect("spawned") else {
-            panic!("the variant");
-        };
-        assert_eq!(tone_of(&game, painted), 6, "an enum component");
-
-        let mut bag = game.world_mut().query::<&Bag>();
-        let bag = bag.single(game.world()).expect("spawned");
-        assert_eq!(bag.level, 1);
-        let item = bag.set.iter().next().expect("the item");
-        assert_eq!(tone_of(&game, item), 6, "a set item");
     }
 
     /// `tab.path` is canonical and the project root is not: the tab still answers.

@@ -45,8 +45,6 @@ use jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 use serde::Serializer;
 
 use crate::pie::{InstanceKey, SyncTarget};
-use crate::pie_mirror::PieViewMode;
-use crate::pie_projection::PieProjection;
 use crate::play_scene::{AskedScene, AssetFile, asset_files_missing_from};
 use crate::play_structure::{StructureStep, Tree};
 use crate::prefab::resolver_bsn::ISA_TYPE;
@@ -70,15 +68,6 @@ pub struct DocumentSync {
     /// An asset took a new session name, so the next collection looks at every
     /// node, whether or not the document changed.
     rescan: bool,
-    /// Document nodes that were runtime entities of a game, by node. That game takes
-    /// the id, and every other game takes the node as any new one.
-    adoptions: HashMap<u64, Adoption>,
-}
-
-/// The game holding a runtime entity, and the entity as bits.
-struct Adoption {
-    game: InstanceKey,
-    entity: u64,
 }
 
 impl DocumentSync {
@@ -87,13 +76,6 @@ impl DocumentSync {
     pub fn forget(&mut self) {
         self.seen = None;
         self.rescan = false;
-        self.adoptions.clear();
-    }
-
-    /// The entity `entity`, as bits, of the game `game` is the document's new node
-    /// `node` from here on.
-    pub(crate) fn note_adopted(&mut self, game: InstanceKey, entity: u64, node: u64) {
-        self.adoptions.insert(node, Adoption { game, entity });
     }
 }
 
@@ -123,6 +105,172 @@ struct Touched {
 
 fn forget_on_stop(mut sync: ResMut<DocumentSync>) {
     sync.forget();
+}
+
+/// One field being dragged on one entity.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Drag {
+    entity: Entity,
+    type_path: String,
+    field_path: String,
+}
+
+/// Inspector drags under way during Play. A drag writes the entity only, and the
+/// document only on release, so these carry it to the game in between.
+#[derive(Resource, Default)]
+pub(crate) struct DragTicks {
+    /// Drags that moved since the last send.
+    moved: HashSet<Drag>,
+    /// Every drag under way, with the component as it stood before the drag.
+    open: HashMap<Drag, Box<dyn Reflect>>,
+}
+
+/// Note a drag about to write `field_path` of `entity`, when a game can take it.
+pub(crate) fn note_drag_tick(world: &mut World, entity: Entity, type_path: &str, field_path: &str) {
+    let live = world
+        .get_non_send::<crate::pie::PieSession>()
+        .is_some_and(|session| session.sync_target() == SyncTarget::Live);
+    if !live {
+        return;
+    }
+    let drag = Drag {
+        entity,
+        type_path: type_path.to_string(),
+        field_path: field_path.to_string(),
+    };
+    let before = {
+        let registry = world.resource::<AppTypeRegistry>().read();
+        held_component(world, &registry, entity, type_path)
+            .and_then(|held| held.reflect_clone().ok())
+    };
+    let mut ticks = world.get_resource_or_init::<DragTicks>();
+    if let Some(before) = before {
+        ticks.open.entry(drag.clone()).or_insert(before);
+    }
+    ticks.moved.insert(drag);
+}
+
+/// Whether a drag of `field_path` on `entity` is being carried to a game.
+pub(crate) fn drag_is_open(
+    world: &World,
+    entity: Entity,
+    type_path: &str,
+    field_path: &str,
+) -> bool {
+    world.get_resource::<DragTicks>().is_some_and(|ticks| {
+        ticks.open.contains_key(&Drag {
+            entity,
+            type_path: type_path.to_string(),
+            field_path: field_path.to_string(),
+        })
+    })
+}
+
+/// Send the components drags moved this frame, each once. A drag that ended sends
+/// what its entity holds now. One whose entity left the selection with no release
+/// is cancelled, and its entity goes back to how the drag found it first.
+fn send_drags(world: &mut World, keys: &[InstanceKey]) {
+    let Some(mut ticks) = world.remove_resource::<DragTicks>() else {
+        return;
+    };
+    let mut sending: HashSet<(Entity, String)> = ticks
+        .moved
+        .drain()
+        .map(|drag| (drag.entity, drag.type_path))
+        .collect();
+    let drags: Vec<Drag> = ticks.open.keys().cloned().collect();
+    for drag in drags {
+        let Drag {
+            entity,
+            type_path,
+            field_path,
+        } = &drag;
+        if world.get_entity(*entity).is_err() {
+            ticks.open.remove(&drag);
+            sending.remove(&(*entity, type_path.clone()));
+            continue;
+        }
+        let open = crate::commands::field_edit_is_open(world, *entity, type_path, field_path);
+        let selected = world
+            .get_resource::<crate::selection::Selection>()
+            .is_some_and(|selection| selection.entities.contains(entity));
+        if open && selected {
+            continue;
+        }
+        let before = ticks.open.remove(&drag);
+        if open {
+            crate::commands::forget_field_edit_on(world, *entity, type_path, field_path);
+            if let Some(before) = before {
+                restore_component(world, *entity, type_path, before.as_ref());
+            }
+        }
+        sending.insert((*entity, type_path.clone()));
+    }
+    world.insert_resource(ticks);
+    for (entity, type_path) in sending {
+        send_held_component(world, keys, entity, &type_path);
+    }
+}
+
+fn restore_component(world: &mut World, entity: Entity, type_path: &str, value: &dyn Reflect) {
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let registry = registry.read();
+    if let Some(reflect) = registry
+        .get_with_type_path(type_path)
+        .and_then(|registration| registration.data::<ReflectComponent>())
+    {
+        reflect.apply(world.entity_mut(entity), value.as_partial_reflect());
+    }
+}
+
+/// Send `type_path` as `entity` holds it to the games `keys`, ahead of it what it
+/// names that a game does not hold. A value the game cannot be sent stays behind:
+/// the commit reports it.
+fn send_held_component(world: &mut World, keys: &[InstanceKey], entity: Entity, type_path: &str) {
+    let ast = world.resource::<SceneBsnAst>();
+    let Some(node) = ast.ast_for(entity) else {
+        return;
+    };
+    let Some(id) = ast.stable_id_of(node) else {
+        return;
+    };
+    world.init_resource::<crate::play_scene::PlayAssetNames>();
+    let change =
+        world.resource_scope(|world, mut names: Mut<crate::play_scene::PlayAssetNames>| {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            let mut references = PlayReferences::with(world, &names);
+            let mut assets = UsedAssets::default();
+            component_value(
+                world,
+                &registry,
+                &mut references,
+                &mut names,
+                &mut assets,
+                entity,
+                node,
+                type_path,
+            )
+            .ok()
+            .map(|value| (value, assets))
+        });
+    let Some((value, assets)) = change else {
+        return;
+    };
+    let event = ControlEvent::NodeComponents {
+        node: id,
+        set: vec![(type_path.to_string(), value)],
+        removed: Vec::new(),
+    };
+    for key in keys {
+        if let Some(needed) = assets_missing_from(world, key, &assets.runtime) {
+            crate::pie::send_control_to_instance(world, key, needed);
+        }
+        if let Some(needed) = asset_files_missing_from(world, key, &assets.files) {
+            crate::pie::send_control_to_instance(world, key, needed);
+        }
+        crate::pie::send_control_to_instance(world, key, event.clone());
+    }
 }
 
 /// A node event, and the assets its values name.
@@ -158,6 +306,9 @@ pub(crate) fn sync_document_to_game(world: &mut World) {
     let target = world
         .get_non_send::<crate::pie::PieSession>()
         .map_or(SyncTarget::None, crate::pie::PieSession::sync_target);
+    if target != SyncTarget::Live {
+        world.remove_resource::<DragTicks>();
+    }
     match target {
         SyncTarget::None => {
             if let Some(mut sync) = world.get_resource_mut::<DocumentSync>()
@@ -181,19 +332,8 @@ pub(crate) fn sync_document_to_game(world: &mut World) {
             for (key, event) in materials.into_iter().chain(changes) {
                 crate::pie::send_control_to_instance(world, &key, event);
             }
+            send_drags(world, &keys);
         }
-    }
-}
-
-/// Count the document as it stands now as sent, without sending it. For a
-/// write whose values came from the running game, which already holds them.
-/// Does nothing while no baseline is recorded.
-pub(crate) fn absorb_document_changes(world: &mut World) {
-    if world
-        .get_resource::<DocumentSync>()
-        .is_some_and(|sync| sync.seen.is_some())
-    {
-        collect_node_changes(world);
     }
 }
 
@@ -201,11 +341,7 @@ pub(crate) fn absorb_document_changes(world: &mut World) {
 /// changed node. The first call after [`DocumentSync::forget`] records the
 /// document and returns nothing.
 pub fn collect_node_changes(world: &mut World) -> Vec<ControlEvent> {
-    let collected = collect_changes(world);
-    if let Some(mut sync) = world.get_resource_mut::<DocumentSync>() {
-        sync.adoptions.clear();
-    }
-    collected
+    collect_changes(world)
         .edits
         .into_iter()
         .map(|change| change.event)
@@ -221,17 +357,7 @@ pub fn collect_changes_for(
     keys: &[InstanceKey],
 ) -> Vec<(InstanceKey, ControlEvent)> {
     let collected = collect_changes(world);
-    let adoptions = world
-        .get_resource_mut::<DocumentSync>()
-        .map(|mut sync| std::mem::take(&mut sync.adoptions))
-        .unwrap_or_default();
-    let mut sends = structure_sends(
-        world,
-        keys,
-        &collected.structure,
-        &collected.existing,
-        &adoptions,
-    );
+    let mut sends = structure_sends(world, keys, &collected.structure, &collected.existing);
     for change in collected.edits {
         for key in keys {
             if let Some(event) = assets_missing_from(world, key, &change.assets.runtime) {
@@ -248,15 +374,12 @@ pub fn collect_changes_for(
 
 /// What each of the games `keys` playing the document takes for `structure`: what
 /// the new subtrees name that it does not hold, then the steps in order, once per
-/// path it plays the document by. A node that was a runtime entity of a game goes to
-/// that game as an adoption, once, carrying what it needs to spawn if the entity has
-/// gone.
+/// path it plays the document by.
 fn structure_sends(
     world: &mut World,
     keys: &[InstanceKey],
     structure: &[StructureStep],
     existing: &HashSet<u64>,
-    adoptions: &HashMap<u64, Adoption>,
 ) -> Vec<(InstanceKey, ControlEvent)> {
     if structure.is_empty() {
         return Vec::new();
@@ -293,7 +416,7 @@ fn structure_sends(
                 sends.push((key.clone(), event));
             }
         }
-        for (place, scene) in asked.iter().enumerate() {
+        for scene in asked {
             for step in structure {
                 let event = match step {
                     StructureStep::Spawn {
@@ -307,27 +430,13 @@ fn structure_sends(
                             warn!("Play: the new node {node} could not be written for the game");
                             continue;
                         };
-                        let adopting = adoptions
-                            .get(node)
-                            .filter(|adoption| place == 0 && adoption.game == key);
-                        match adopting {
-                            Some(adoption) => ControlEvent::AdoptNode {
-                                entity: adoption.entity,
-                                node: *node,
-                                parent: *parent,
-                                follows: *follows,
-                                scene: scene.requested.clone(),
-                                dir: scene.dir.clone(),
-                                bsn: bsn.clone(),
-                            },
-                            None => ControlEvent::SpawnNode {
-                                node: *node,
-                                parent: *parent,
-                                follows: *follows,
-                                scene: scene.requested.clone(),
-                                dir: scene.dir.clone(),
-                                bsn: bsn.clone(),
-                            },
+                        ControlEvent::SpawnNode {
+                            node: *node,
+                            parent: *parent,
+                            follows: *follows,
+                            scene: scene.requested.clone(),
+                            dir: scene.dir.clone(),
+                            bsn: bsn.clone(),
                         }
                     }
                     StructureStep::Reparent {
@@ -645,7 +754,6 @@ fn collect(
         seen.tree = after;
     }
 
-    let projected = projected_entities(world);
     let events = &mut collected.edits;
     for Touched {
         id,
@@ -715,11 +823,6 @@ fn collect(
                 removed.push(path.clone());
                 continue;
             };
-            if projected.contains(&entity) {
-                keep_previous(path);
-                seen.retry.insert(id);
-                continue;
-            }
             references.take_up(
                 world,
                 &registry,
@@ -749,22 +852,6 @@ fn collect(
         }
     }
     collected
-}
-
-/// The editor entities Live view fills with a running instance's values. A
-/// component one of them keeps after its patch is gone holds that instance's
-/// state, not the document's, so it is not sent.
-fn projected_entities(world: &World) -> HashSet<Entity> {
-    let live = world
-        .get_resource::<PieViewMode>()
-        .is_some_and(|mode| *mode == PieViewMode::Live);
-    if !live {
-        return HashSet::new();
-    }
-    world
-        .get_resource::<PieProjection>()
-        .map(|projection| projection.by_bits.values().copied().collect())
-        .unwrap_or_default()
 }
 
 /// A node's authored patches as `(type path, digest)` pairs, in order.
@@ -1537,6 +1624,156 @@ mod tests {
         panic!("the marker did not arrive");
     }
 
+    /// [`editor_world`] playing over a link, the node selected and its first state
+    /// counted as sent.
+    fn dragging_world() -> (World, Entity, IpcChannelTransport) {
+        let (mut world, entity) = editor_world();
+        world.init_resource::<crate::commands::FieldEditSessions>();
+        world.init_resource::<crate::commands::CommandHistory>();
+        world.insert_resource(crate::selection::Selection {
+            entities: vec![entity],
+        });
+        let (editor_end, game_end) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(1), child(), editor_end);
+        world.insert_non_send(session);
+        sync_document_to_game(&mut world);
+        (world, entity, game_end)
+    }
+
+    fn drag_tick(world: &mut World, x: f64) {
+        crate::commands::field_edit_preview(
+            world,
+            TRANSFORM,
+            "translation.x",
+            &serde_json::json!(x),
+        );
+    }
+
+    fn undo_entries(world: &World) -> usize {
+        world
+            .resource::<crate::commands::CommandHistory>()
+            .undo_stack
+            .len()
+    }
+
+    fn authored_x(world: &World, entity: Entity) -> Option<BsnValue> {
+        let ast = world.resource::<SceneBsnAst>();
+        let node = ast.ast_for(entity)?;
+        jackdaw_bsn::get_bsn_field(ast, node, TRANSFORM, "translation.x")
+    }
+
+    /// Each frame of a drag reaches the game, the latest value only, and the
+    /// document holds none of it.
+    #[test]
+    fn a_drag_reaches_the_game_each_frame_without_authoring() {
+        let (mut world, entity, mut game) = dragging_world();
+        let before = authored_x(&world, entity);
+
+        drag_tick(&mut world, 1.0);
+        drag_tick(&mut world, 2.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game), vec![2.0]);
+
+        drag_tick(&mut world, 3.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game), vec![3.0]);
+
+        sync_document_to_game(&mut world);
+        assert!(
+            received_x(&mut world, &mut game).is_empty(),
+            "a held drag sends nothing"
+        );
+        assert_eq!(authored_x(&world, entity), before);
+        assert_eq!(undo_entries(&world), 0);
+    }
+
+    /// The release authors the value as one undo entry and the game ends on it.
+    #[test]
+    fn a_released_drag_authors_once_and_the_game_ends_on_it() {
+        let (mut world, entity, mut game) = dragging_world();
+        drag_tick(&mut world, 1.0);
+        sync_document_to_game(&mut world);
+        drag_tick(&mut world, 2.0);
+        sync_document_to_game(&mut world);
+        received_x(&mut world, &mut game);
+
+        crate::commands::field_edit_commit(
+            &mut world,
+            TRANSFORM,
+            "translation.x",
+            &serde_json::json!(5.0),
+            "drag",
+        );
+        sync_document_to_game(&mut world);
+        let received = received_x(&mut world, &mut game);
+        assert_eq!(received.last(), Some(&5.0), "{received:?}");
+        assert_eq!(undo_entries(&world), 1);
+        assert!(matches!(
+            authored_x(&world, entity),
+            Some(BsnValue::Float(x)) if x == 5.0
+        ));
+    }
+
+    /// A drag released where it began writes nothing, and the game goes back.
+    #[test]
+    fn a_drag_released_where_it_began_puts_the_game_back() {
+        let (mut world, entity, mut game) = dragging_world();
+        move_to(&mut world, entity, 1.0);
+        sync_document_to_game(&mut world);
+        drag_tick(&mut world, 2.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game).last(), Some(&2.0));
+
+        crate::commands::field_edit_commit(
+            &mut world,
+            TRANSFORM,
+            "translation.x",
+            &serde_json::json!(1.0),
+            "drag",
+        );
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game).last(), Some(&1.0));
+        assert_eq!(undo_entries(&world), 0);
+        assert_eq!(
+            world.get::<Transform>(entity).expect("it").translation.x,
+            1.0
+        );
+    }
+
+    /// A drag whose target leaves the selection before any release is cancelled:
+    /// the entity and the game both go back.
+    #[test]
+    fn a_cancelled_drag_sends_the_document_value_back() {
+        let (mut world, entity, mut game) = dragging_world();
+        drag_tick(&mut world, 2.0);
+        sync_document_to_game(&mut world);
+        received_x(&mut world, &mut game);
+
+        world
+            .resource_mut::<crate::selection::Selection>()
+            .entities
+            .clear();
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game), vec![0.0]);
+        assert_eq!(undo_entries(&world), 0);
+        assert_eq!(
+            world.get::<Transform>(entity).expect("it").translation.x,
+            0.0
+        );
+    }
+
+    #[test]
+    fn a_drag_with_no_game_running_sends_nothing_and_holds_nothing() {
+        let (mut world, entity) = editor_world();
+        world.init_resource::<crate::commands::FieldEditSessions>();
+        world.insert_resource(crate::selection::Selection {
+            entities: vec![entity],
+        });
+        drag_tick(&mut world, 2.0);
+        assert!(!world.contains_resource::<DragTicks>());
+    }
+
     /// The document as a tab holding `zone.bsn`, in an open project, with what
     /// the event drain needs.
     fn serving(world: &mut World, dir: &std::path::Path) {
@@ -1550,12 +1787,9 @@ mod tests {
             tabs: vec![tab],
             active: 0,
         });
-        world.insert_resource(crate::pie_mirror::PieInstances {
-            buffers: Default::default(),
+        world.insert_resource(crate::pie::PieInstances {
             focused: Some(key(1)),
         });
-        world.insert_resource(PieViewMode::Scene);
-        world.init_resource::<PieProjection>();
     }
 
     /// A game asks over `game` for the scene, and the editor's drain replies.
@@ -1735,25 +1969,6 @@ mod tests {
     }
 
     #[test]
-    fn a_save_to_scene_write_is_not_sent_back() {
-        let (mut world, entity) = editor_world();
-        let (editor_end, mut game_end) = link();
-        let mut session = PieSession::default();
-        session.insert_test_live(key(1), child(), editor_end);
-        world.insert_non_send(session);
-        sync_document_to_game(&mut world);
-
-        move_to(&mut world, entity, 8.0);
-        absorb_document_changes(&mut world);
-        sync_document_to_game(&mut world);
-        assert!(received_x(&mut world, &mut game_end).is_empty());
-
-        move_to(&mut world, entity, 1.0);
-        sync_document_to_game(&mut world);
-        assert_eq!(received_x(&mut world, &mut game_end), vec![1.0]);
-    }
-
-    #[test]
     fn a_failed_build_drops_the_baseline() {
         let (mut world, entity) = editor_world();
         let mut session = PieSession::default();
@@ -1783,36 +1998,6 @@ mod tests {
             received_x(&mut world, &mut game_end).is_empty(),
             "the next launch starts from the document as it is then"
         );
-    }
-
-    /// A derived component whose patch goes while Live view projects the
-    /// entity is held back, and goes with the node's next edit.
-    #[test]
-    fn a_derived_component_left_while_projected_is_sent_later() {
-        const VISIBILITY: &str = "bevy_camera::visibility::Visibility";
-        let (mut world, entity) = editor_world_with(Some(Visibility::Hidden));
-        collect_node_changes(&mut world);
-
-        world.insert_resource(PieViewMode::Live);
-        let mut projection = PieProjection::default();
-        projection.by_bits.insert(1, entity);
-        world.insert_resource(projection);
-        world.resource_scope(|_, mut ast: Mut<SceneBsnAst>| {
-            let node = ast.ast_for(entity).expect("a node");
-            ast.remove_component_patch(node, VISIBILITY);
-        });
-        *world.get_mut::<Visibility>(entity).expect("a visibility") = Visibility::Inherited;
-        assert!(collect_node_changes(&mut world).is_empty());
-
-        world.insert_resource(PieViewMode::Scene);
-        move_to(&mut world, entity, 1.0);
-        let events = collect_node_changes(&mut world);
-        let [ControlEvent::NodeComponents { set, removed, .. }] = events.as_slice() else {
-            panic!("one node event, got {events:?}");
-        };
-        assert!(removed.is_empty());
-        let sent: Vec<&str> = set.iter().map(|(path, _)| path.as_str()).collect();
-        assert_eq!(sent, vec![VISIBILITY, TRANSFORM]);
     }
 
     #[test]

@@ -14,11 +14,6 @@ pub trait PieTransport {
     fn peer_gone(&self) -> bool {
         false
     }
-    /// Whether sends are piling up faster than the peer takes them, so a sender
-    /// that can catch up later should hold what can wait.
-    fn congested(&self) -> bool {
-        false
-    }
 }
 
 /// In-process transport pair for tests: whatever one end sends the other

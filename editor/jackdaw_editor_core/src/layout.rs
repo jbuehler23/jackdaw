@@ -1,8 +1,5 @@
 use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
-use bevy::{
-    prelude::*,
-    ui_widgets::{ValueChange, observe},
-};
+use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
     button::{
@@ -10,7 +7,7 @@ use jackdaw_feathers::{
         IconButtonProps, button, icon_button,
     },
     icons::{EditorFont, IconFont, icon_scene},
-    menu_bar, segmented, status_bar,
+    menu_bar, status_bar,
     text_edit::{self, TextEditProps},
     tokens,
     tree_view::tree_container_drop_observers,
@@ -33,7 +30,6 @@ use crate::{
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
     pie::PieWindowModeToggleOp,
-    pie_mirror::{PieViewHeader, PieViewMode, PieViewSegment},
     snapping::SnapSettings,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
@@ -566,7 +562,6 @@ pub fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
 
 pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
     let add_entity_icon_font = icon_font.clone();
-    let toggle_font = icon_font.clone();
     (
         HierarchyPanel,
         Node {
@@ -578,7 +573,6 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
         },
         children![
             (
-                PieViewHeader,
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
@@ -588,7 +582,6 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                     border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
                     ..Default::default()
                 },
-                BackgroundColor(Color::NONE),
                 children![
                     (
                         Node {
@@ -604,10 +597,6 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                             ),
                         )],
                     ),
-                    pie_view_toggle(toggle_font),
-                    live_badge(),
-                    pie_instance_cycle_button(),
-                    crate::live_edits_ui::live_edits_badge(),
                     (
                         HierarchyShowAllButton,
                         jackdaw_feathers::tooltip::Tooltip::title("Show All Entities")
@@ -695,8 +684,8 @@ fn scene_view() -> impl Bundle {
         Node {
             width: percent(100),
             flex_grow: 1.0,
-            // Width reserved permanently so the Live accent border can be
-            // toggled by color alone without shifting the viewport bounds.
+            // Width reserved permanently so the playing edge can be toggled by
+            // color alone without shifting the viewport bounds.
             border: UiRect::all(px(2.0)),
             ..Default::default()
         },
@@ -972,8 +961,7 @@ pub fn editor_status_bar() -> impl Bundle {
     )
 }
 
-pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
-    let save_font = icon_font;
+pub fn inspector_components_content() -> impl Bundle {
     // Outer horizontal row: [strip | content column]
     (
         Node {
@@ -1004,7 +992,6 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                     // `rebuild_add_header` whenever `ActiveInspectorCategory` changes.
                     (crate::inspector::add_header::InspectorAddHeaderMount,),
                     (
-                        PieViewHeader,
                         Node {
                             flex_direction: FlexDirection::Column,
                             width: percent(100),
@@ -1014,7 +1001,6 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                             border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
                             ..Default::default()
                         },
-                        BackgroundColor(Color::NONE),
                         children![
                             (
                                 Node {
@@ -1040,7 +1026,6 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
                                 ),],
                             ),
                             (crate::tags::InspectorTagsMount,),
-                            save_to_scene_button(save_font),
                             crate::inspector::unavailable::unavailable_notice(),
                         ],
                     ),
@@ -1062,447 +1047,22 @@ pub fn inspector_components_content(icon_font: Handle<Font>) -> impl Bundle {
     )
 }
 
-/// "Save to Scene" button for the inspector header.
-///
-/// Promotes the selected running entity's runtime component values into its
-/// authored scene node. Hidden in Scene mode; in Live mode it is shown and
-/// enabled only when the selection maps back to an authored node (see
-/// [`update_save_to_scene_button`]). Click is gated the same way, so a
-/// dimmed button is inert.
-fn save_to_scene_button(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        crate::inspector::SaveToSceneButton,
-        // Hidden until Live mode; the appearance system flips this.
-        button(ButtonProps::new("").align_left().hidden()),
-        children![
-            (
-                Text::new(String::from(Icon::Save.unicode())),
-                TextFont {
-                    font: icon_font.into(),
-                    font_size: tokens::ICON_SM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-            ),
-            (
-                Text::new("Save to Scene"),
-                TextFont {
-                    font_size: tokens::TEXT_SIZE,
-                    weight: FontWeight::MEDIUM,
-                    ..Default::default()
-                },
-                TextColor(tokens::TEXT_PRIMARY),
-            ),
-        ],
-        observe(|_: On<PointerClick>, mut commands: Commands| {
-            commands.queue(|world: &mut World| {
-                if crate::pie::can_save_live_to_scene(world) {
-                    crate::pie::save_live_entity_to_scene(world);
-                }
-            });
-        }),
-    )
-}
-
-/// Show/enable the inspector's "Save to Scene" button.
-///
-/// Hidden in Scene mode. In Live mode it is shown; enabled (full color) when
-/// `can_save_live_to_scene` is true (a projected entity is selected), otherwise
-/// dimmed (the click and hover paths gate on the same condition, so dimmed is inert).
-pub fn update_save_to_scene_button(world: &mut World) {
-    let mode = *world.resource::<PieViewMode>();
-    let live = mode == PieViewMode::Live;
-    let enabled = live && crate::pie::can_save_live_to_scene(world);
-
-    let text_color = if enabled {
-        tokens::TEXT_PRIMARY
-    } else {
-        tokens::TEXT_DISABLED
-    };
-
-    let mut buttons: Vec<(Entity, Vec<Entity>)> = world
-        .query_filtered::<(Entity, &Children), With<crate::inspector::SaveToSceneButton>>()
-        .iter(world)
-        .map(|(e, c)| (e, c.iter().collect()))
-        .collect();
-
-    for (button, children) in buttons.drain(..) {
-        if let Ok(mut e) = world.get_entity_mut(button)
-            && let Some(mut node) = e.get_mut::<Node>()
-        {
-            let display = if live { Display::Flex } else { Display::None };
-            if node.display != display {
-                node.display = display;
-            }
-        }
-        for child in children {
-            if let Ok(mut e) = world.get_entity_mut(child)
-                && let Some(mut tc) = e.get_mut::<TextColor>()
-                && tc.0 != text_color
-            {
-                tc.0 = text_color;
-            }
-        }
-    }
-}
-
-/// Build the two-segment Scene/Live toggle pill.
-///
-/// Each segment carries [`PieViewSegment`]. The click observer and
-/// appearance system handle activation; only presentation lives here.
-fn pie_view_toggle(icon_font: Handle<Font>) -> impl Bundle {
-    (
-        segmented::segmented_bar(),
-        observe(
-            |change: On<ValueChange<Entity>>,
-             segments: Query<&PieViewSegment>,
-             play_state: Res<State<PlayState>>,
-             mut commands: Commands| {
-                let Ok(&segment) = segments.get(change.value) else {
-                    return;
-                };
-                if segment == PieViewSegment::Live && *play_state.get() == PlayState::Stopped {
-                    return;
-                }
-                commands.queue(move |world: &mut World| {
-                    let new_mode = match segment {
-                        PieViewSegment::Scene => PieViewMode::Scene,
-                        PieViewSegment::Live => PieViewMode::Live,
-                    };
-                    let current = *world.resource::<PieViewMode>();
-                    if current == new_mode {
-                        return;
-                    }
-                    // Going to Live despawns the ephemeral entities, and going
-                    // to Scene does the same and may respawn the authored ones
-                    // under new ids, so a selected entity can be invalid across
-                    // the toggle. Clear the selection before teardown.
-                    crate::selection::clear_selection_in_world(world);
-                    match new_mode {
-                        PieViewMode::Live => {
-                            crate::pie::enter_live_view(world);
-                        }
-                        PieViewMode::Scene => {
-                            *world.resource_mut::<PieViewMode>() = PieViewMode::Scene;
-                            crate::pie_projection::revert_preview(world);
-                        }
-                    }
-                });
-            },
-        ),
-        children![
-            pie_view_segment(PieViewSegment::Scene, "Scene", icon_font.clone()),
-            pie_view_segment(PieViewSegment::Live, "Live", icon_font),
-        ],
-    )
-}
-
-/// One segment inside the Scene/Live toggle.
-fn pie_view_segment(
-    segment: PieViewSegment,
-    label: &'static str,
-    icon_font: Handle<Font>,
-) -> impl Bundle {
-    (
-        segment,
-        Node {
-            column_gap: px(tokens::SPACING_XS),
-            ..segmented::segment_node()
-        },
-        segmented::segment_chrome(),
-        children![
-            segmented::segment_label(label),
-            // Live-dot: only visible when this is the Live segment and mode is Live.
-            (
-                PieViewLiveDot,
-                Text::new(String::from(Icon::Radio.unicode())),
-                TextFont {
-                    font: icon_font.into(),
-                    font_size: tokens::TEXT_SIZE_XS,
-                    ..Default::default()
-                },
-                TextColor(tokens::CATEGORY_SCENE),
-                Node {
-                    display: Display::None,
-                    ..Default::default()
-                },
-            ),
-        ],
-    )
-}
-
-/// Marker on the live-dot glyph inside the Live segment.
-#[derive(Component)]
-pub struct PieViewLiveDot;
-
-/// Update the appearance of all Scene/Live toggle segments across both panels.
-///
-/// Active segment gets primary text color and a filled background.
-/// Inactive segment gets secondary text. Live segment is dimmed when
-/// `PlayState` is `Stopped`.
-pub fn update_pie_view_toggle_appearance(
-    mode: Res<PieViewMode>,
+/// Draw the viewport's edge in the accent while a game runs. Runs every frame so a
+/// viewport node respawned by a dock rearrange picks it back up; the writes are
+/// guarded so unchanged frames do not dirty the UI.
+pub fn update_playing_edge(
     play_state: Res<State<PlayState>>,
-    mut segments: Query<(Entity, &PieViewSegment, &mut BackgroundColor, &Children)>,
-    mut texts: Query<(&mut TextColor, Option<&PieViewLiveDot>, Option<&mut Node>)>,
-    mut commands: Commands,
-) {
-    if !mode.is_changed() && !play_state.is_changed() {
-        return;
-    }
-    let stopped = *play_state.get() == PlayState::Stopped;
-    for (entity, segment, mut bg, children) in &mut segments {
-        let is_active = (*segment == PieViewSegment::Scene && *mode == PieViewMode::Scene)
-            || (*segment == PieViewSegment::Live && *mode == PieViewMode::Live);
-        let is_live_seg = *segment == PieViewSegment::Live;
-        let disabled = is_live_seg && stopped;
-
-        bg.0 = segmented::segment_background(is_active);
-        segmented::set_segment_checked(&mut commands, entity, is_active);
-
-        for child in children.iter() {
-            if let Ok((mut tc, dot, mut node_opt)) = texts.get_mut(child) {
-                if dot.is_some() {
-                    // Live-dot glyph: show only when Live is active.
-                    if let Some(ref mut node) = node_opt {
-                        node.display = if is_active && is_live_seg {
-                            Display::Flex
-                        } else {
-                            Display::None
-                        };
-                    }
-                } else {
-                    // Label text.
-                    tc.0 = if disabled {
-                        tokens::TEXT_DISABLED
-                    } else if is_active {
-                        tokens::TEXT_PRIMARY
-                    } else {
-                        tokens::TEXT_SECONDARY
-                    };
-                }
-            }
-        }
-    }
-}
-
-/// Signal Live mode with a subtle ambient tint: wash both panel header
-/// containers toward the accent and draw the viewport border in the accent.
-/// Restores both to their Scene-mode appearance on return.
-///
-/// Runs every frame so a header or viewport node respawned by a dock
-/// rearrange picks the tint back up; the writes are guarded so unchanged
-/// frames do not dirty the UI.
-pub fn update_pie_view_header_accent(
-    mode: Res<PieViewMode>,
-    mut headers: Query<&mut BackgroundColor, With<PieViewHeader>>,
     mut viewport_border: Query<&mut BorderColor, With<SceneViewport>>,
 ) {
-    let live = *mode == PieViewMode::Live;
-    let header_color = if live {
-        crate::default_style::LIVE_HEADER_TINT
-    } else {
+    let color = if *play_state.get() == PlayState::Stopped {
         Color::NONE
-    };
-    for mut bg in &mut headers {
-        if bg.0 != header_color {
-            bg.0 = header_color;
-        }
-    }
-    // The border width is reserved permanently on the viewport node, so only
-    // the color flips here; no layout shift on toggle.
-    let border_color = if live {
-        crate::default_style::LIVE_ACCENT
     } else {
-        Color::NONE
+        crate::default_style::PLAYING_ACCENT
     };
-    let target_border = BorderColor::all(border_color);
+    let target = BorderColor::all(color);
     for mut border in &mut viewport_border {
-        if *border != target_border {
-            *border = target_border;
-        }
-    }
-}
-
-/// Marker on the bold `LIVE` badge in the hierarchy header. Visible only
-/// while [`PieViewMode`] is `Live`; its text names the focused instance.
-#[derive(Component)]
-pub struct LiveBadge;
-
-/// Render the badge label for the focused instance: a bare `LIVE` when no
-/// instance is focused, otherwise `LIVE  <instance>` (the same instance
-/// label the picker shows, e.g. `LIVE  Client #1`).
-fn live_badge_label(focused: Option<&crate::pie::InstanceKey>) -> String {
-    match focused {
-        Some(key) => format!("LIVE  {key}"),
-        None => "LIVE".to_string(),
-    }
-}
-
-/// Build the bold `LIVE` badge that sits next to the consolidated mode
-/// control. Hidden outside Live mode; [`update_live_badge`] flips its
-/// display and keeps the focused-instance name current.
-fn live_badge() -> impl Bundle {
-    (
-        LiveBadge,
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            display: Display::None,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        children![(
-            Text::new("LIVE"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(crate::default_style::LIVE_ACCENT),
-        )],
-    )
-}
-
-/// Keep the `LIVE` badge's label and visibility in sync with the view mode
-/// and focused instance. Shown only in Live mode; the label tracks the
-/// focused instance the same way the instance picker renders it.
-///
-/// Runs every frame so a badge respawned by a dock rearrange recovers its
-/// state; the writes are guarded so unchanged frames do not dirty the UI.
-pub fn update_live_badge(
-    mode: Res<PieViewMode>,
-    instances: Res<crate::pie_mirror::PieInstances>,
-    mut badges: Query<(&mut Node, &Children), With<LiveBadge>>,
-    mut labels: Query<&mut Text>,
-) {
-    let display = if *mode == PieViewMode::Live {
-        Display::Flex
-    } else {
-        Display::None
-    };
-    let label = live_badge_label(instances.focused.as_ref());
-    for (mut node, children) in &mut badges {
-        if node.display != display {
-            node.display = display;
-        }
-        for child in children.iter() {
-            if let Ok(mut text) = labels.get_mut(child)
-                && text.0 != label
-            {
-                text.0 = label.clone();
-            }
-        }
-    }
-}
-
-/// Marker on the compact cycling button in the hierarchy header that steps
-/// through focused instances in Live mode.
-#[derive(Component)]
-pub struct PieInstanceCycleButton;
-
-/// Marker on the text node inside the cycle button that shows the focused
-/// instance label.
-#[derive(Component)]
-pub struct PieFocusedInstanceLabel;
-
-/// Build the compact cycling button that shows the focused instance label.
-///
-/// Hidden when not in Live mode. In Live mode, clicking it advances focus
-/// to the next running instance via [`crate::pie_projection::set_focused_instance`].
-/// Only visible/relevant when a play session is active.
-fn pie_instance_cycle_button() -> impl Bundle {
-    (
-        PieInstanceCycleButton,
-        // Hidden until Live mode; the appearance system flips this.
-        button(ButtonProps::new("").hidden()),
-        observe(|_: On<PointerClick>, mut commands: Commands| {
-            commands.queue(|world: &mut World| {
-                cycle_focused_instance(world);
-            });
-        }),
-        children![(
-            PieFocusedInstanceLabel,
-            Text::new(String::new()),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-    )
-}
-
-/// Advance focus to the next running instance, wrapping around. Called on
-/// cycle button click. A no-op when fewer than two instances are running.
-fn cycle_focused_instance(world: &mut World) {
-    let instances = world.resource::<crate::pie_mirror::PieInstances>();
-    let focused = instances.focused.clone();
-    let mut keys: Vec<crate::pie::InstanceKey> = instances.buffers.keys().cloned().collect();
-    if keys.len() <= 1 {
-        return;
-    }
-    keys.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
-    let next = match &focused {
-        None => keys.into_iter().next(),
-        Some(current) => {
-            let pos = keys.iter().position(|k| k == current);
-            match pos {
-                None => keys.into_iter().next(),
-                Some(idx) => {
-                    let next_idx = (idx + 1) % keys.len();
-                    keys.into_iter().nth(next_idx)
-                }
-            }
-        }
-    };
-    if let Some(key) = next {
-        crate::pie_projection::set_focused_instance(world, key);
-    }
-}
-
-/// Keep the instance cycle button's label and visibility in sync with the
-/// current [`PieViewMode`] and [`PieInstances`](crate::pie_mirror::PieInstances) state.
-///
-/// Hidden in Scene mode. In Live mode, shows the focused instance label;
-/// dims it when only one instance is running (cycling would be a no-op).
-pub fn update_pie_instance_cycle_button(
-    mode: Res<PieViewMode>,
-    instances: Res<crate::pie_mirror::PieInstances>,
-    play_state: Res<State<jackdaw_api::pie::PlayState>>,
-    mut buttons: Query<(&mut Node, &mut BackgroundColor, &Children), With<PieInstanceCycleButton>>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<PieFocusedInstanceLabel>>,
-) {
-    if !mode.is_changed() && !instances.is_changed() && !play_state.is_changed() {
-        return;
-    }
-    let live =
-        *mode == PieViewMode::Live && *play_state.get() != jackdaw_api::pie::PlayState::Stopped;
-
-    let running_count = instances.buffers.len();
-    let label_text = instances
-        .focused
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-
-    for (mut node, mut bg, children) in &mut buttons {
-        node.display = if live && running_count >= 1 {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        bg.0 = tokens::ELEVATED_BG;
-        for child in children.iter() {
-            if let Ok((mut text, mut tc)) = labels.get_mut(child) {
-                text.0 = label_text.clone();
-                tc.0 = if running_count > 1 {
-                    tokens::TEXT_PRIMARY
-                } else {
-                    tokens::TEXT_SECONDARY
-                };
-            }
+        if *border != target {
+            *border = target;
         }
     }
 }
@@ -1570,67 +1130,28 @@ pub fn update_window_mode_button(
 }
 
 #[cfg(test)]
-mod live_badge_tests {
+mod playing_edge_tests {
+    use bevy::ecs::system::RunSystemOnce;
+
     use super::*;
-    use crate::pie::InstanceKey;
 
     #[test]
-    fn label_without_focus_is_bare_live() {
-        assert_eq!(live_badge_label(None), "LIVE");
-    }
-
-    #[test]
-    fn label_with_focus_names_the_instance() {
-        let key = InstanceKey {
-            config: "Client".to_string(),
-            instance: 1,
-        };
-        assert_eq!(live_badge_label(Some(&key)), "LIVE  Client #1");
-    }
-
-    #[test]
-    fn header_accent_tracks_view_mode() {
-        use bevy::ecs::system::RunSystemOnce;
-
+    fn the_viewport_edge_shows_while_a_game_runs_or_is_paused() {
         let mut world = World::new();
-        let header = world
-            .spawn((PieViewHeader, BackgroundColor(Color::NONE)))
-            .id();
         let viewport = world
             .spawn((SceneViewport, BorderColor::all(Color::NONE)))
             .id();
-
-        world.insert_resource(PieViewMode::Live);
-        world
-            .run_system_once(update_pie_view_header_accent)
-            .expect("system runs");
-
-        assert_eq!(
-            world.get::<BackgroundColor>(header).unwrap().0,
-            crate::default_style::LIVE_HEADER_TINT,
-            "the header tints to the live wash"
-        );
-        assert_eq!(
-            world.get::<BorderColor>(viewport).unwrap().top,
-            crate::default_style::LIVE_ACCENT,
-            "the viewport border picks up the live accent"
-        );
-
-        world.insert_resource(PieViewMode::Scene);
-        world
-            .run_system_once(update_pie_view_header_accent)
-            .expect("system runs");
-
-        assert_eq!(
-            world.get::<BackgroundColor>(header).unwrap().0,
-            Color::NONE,
-            "the header clears back to transparent in Scene mode"
-        );
-        assert_eq!(
-            world.get::<BorderColor>(viewport).unwrap().top,
-            Color::NONE,
-            "the viewport border clears back to transparent in Scene mode"
-        );
+        for (state, edge) in [
+            (PlayState::Playing, crate::default_style::PLAYING_ACCENT),
+            (PlayState::Paused, crate::default_style::PLAYING_ACCENT),
+            (PlayState::Stopped, Color::NONE),
+        ] {
+            world.insert_resource(State::new(state));
+            world
+                .run_system_once(update_playing_edge)
+                .expect("system runs");
+            assert_eq!(world.get::<BorderColor>(viewport).unwrap().top, edge);
+        }
     }
 }
 

@@ -56,7 +56,7 @@ fn mount_shown(app: &mut App) -> bool {
 fn tags_show_as_chips_and_the_add_field_tags_the_selection() {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);
@@ -114,7 +114,7 @@ fn tags_show_as_chips_and_the_add_field_tags_the_selection() {
 fn the_chips_follow_an_in_place_edit_and_a_new_primary() {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);

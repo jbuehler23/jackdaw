@@ -65,7 +65,7 @@ fn app_with_project_schema() -> (App, tempfile::TempDir) {
             config: default(),
         });
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     app.world_mut()
         .resource_mut::<NextState<jackdaw::AppState>>()
         .set(jackdaw::AppState::Editor);

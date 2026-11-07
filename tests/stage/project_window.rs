@@ -56,7 +56,7 @@ fn editor_with_a_project() -> (App, tempfile::TempDir) {
         .set(jackdaw::AppState::Editor);
     app.update();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let icon_font = app
         .world()
         .resource::<jackdaw_feathers::icons::IconFont>()

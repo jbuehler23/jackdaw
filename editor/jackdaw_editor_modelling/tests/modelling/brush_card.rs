@@ -18,9 +18,7 @@ fn texts(app: &mut App) -> Vec<String> {
 fn a_selected_brush_shows_its_card_and_clears_its_materials() {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw_editor_core::layout::inspector_components_content(
-            default(),
-        ));
+        .spawn(jackdaw_editor_core::layout::inspector_components_content());
     app.update();
     app.world_mut()
         .operator("scene.new")
@@ -68,9 +66,7 @@ fn a_selected_brush_shows_its_card_and_clears_its_materials() {
 fn a_face_waiting_on_a_name_shows_the_name_as_missing() {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw_editor_core::layout::inspector_components_content(
-            default(),
-        ));
+        .spawn(jackdaw_editor_core::layout::inspector_components_content());
     app.update();
     app.world_mut()
         .operator("scene.new")
@@ -119,9 +115,7 @@ fn a_face_waiting_on_a_name_shows_the_name_as_missing() {
 fn a_face_with_a_listed_material_shows_its_name() {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw_editor_core::layout::inspector_components_content(
-            default(),
-        ));
+        .spawn(jackdaw_editor_core::layout::inspector_components_content());
     app.update();
     app.world_mut()
         .operator("scene.new")

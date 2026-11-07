@@ -48,23 +48,12 @@ pub enum StructureChange {
         follows: Option<u64>,
         scene: String,
     },
-    /// The runtime entity `entity`, as bits, takes the id `node`. If it has gone, the
-    /// node spawns from the rest, as for [`Self::Spawn`].
-    Adopt {
-        entity: u64,
-        node: u64,
-        parent: Option<u64>,
-        follows: Option<u64>,
-        scene: String,
-        dir: String,
-        bsn: String,
-    },
 }
 
 /// The asset path a root asked the editor for, which outlives its handle being
 /// sent to another file.
 #[derive(Component)]
-pub(crate) struct PlayedAs(pub(crate) String);
+pub struct PlayedAs(pub String);
 
 #[derive(Resource, Default)]
 pub(crate) struct HeldStructure(Vec<Held>);
@@ -78,31 +67,6 @@ struct Held {
 
 /// Apply `change` to what has spawned, and hold it for any root yet to spawn.
 pub fn apply_structure_change(world: &mut World, change: StructureChange) {
-    let change = match change {
-        StructureChange::Adopt {
-            entity,
-            node,
-            parent,
-            follows,
-            scene,
-            dir,
-            bsn,
-        } => match world.get_entity_mut(Entity::from_bits(entity)) {
-            Ok(mut held) => {
-                held.insert(SceneNodeId(node));
-                return;
-            }
-            Err(_) => StructureChange::Spawn {
-                node,
-                parent,
-                follows,
-                scene,
-                dir,
-                bsn,
-            },
-        },
-        other => other,
-    };
     apply_within(world, &change, None);
     if scene_root_awaiting_spawn(world) {
         let delivered = spawned_roots(world).into_iter().collect();
@@ -162,7 +126,6 @@ fn apply_within(world: &mut World, change: &StructureChange, only: Option<Entity
             follows,
             scene,
         } => reparent_node(world, *node, *parent, *follows, scene, only),
-        StructureChange::Adopt { .. } => {}
     }
 }
 
@@ -407,7 +370,7 @@ fn place_after(world: &mut World, entity: Entity, follows: Option<u64>) {
 
 /// The entities holding `node` as a node of the scene rather than as part of a
 /// prefab instance.
-fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
+pub(crate) fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
     let Some(index) = world.get_resource::<SceneNodeIndex>() else {
         return Vec::new();
     };
@@ -419,9 +382,90 @@ fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
         .collect()
 }
 
-/// The entities of `node` under a root playing `scene`, or under no root at all: a
-/// runtime entity saved as a node, which only this document names. Another file the
-/// game plays can share the document's ids.
+/// What a [`NodePlace`] starts from.
+#[derive(Clone, Debug)]
+pub enum PlaceStart {
+    /// The entities of `node` under a root playing the asset path `scene`.
+    Node { scene: String, node: u64 },
+    /// Every instance of the prefab at the asset path `prefab`.
+    Instances { prefab: String },
+}
+
+/// Where a document node's entities are. `inner` goes down through prefab
+/// instances from `start`: each entry a `PrefabEntityId` below the instance found
+/// so far.
+#[derive(Clone, Debug)]
+pub struct NodePlace {
+    pub start: PlaceStart,
+    pub inner: Vec<u32>,
+}
+
+/// The entities at `places`, each once.
+pub fn entities_at(world: &mut World, places: &[NodePlace]) -> Vec<Entity> {
+    let mut found = Vec::new();
+    for place in places {
+        let mut at = match &place.start {
+            PlaceStart::Node { scene, node } => holders_in_scene(world, *node, scene),
+            PlaceStart::Instances { prefab } => instances_of(world, prefab),
+        };
+        for &id in &place.inner {
+            at = inner_entities(world, &at, id);
+        }
+        for entity in at {
+            if !found.contains(&entity) {
+                found.push(entity);
+            }
+        }
+    }
+    found
+}
+
+/// The instances of the prefab at the asset path `prefab`.
+fn instances_of(world: &mut World, prefab: &str) -> Vec<Entity> {
+    let Some(assets) = crate::assets_root(world) else {
+        return Vec::new();
+    };
+    let assets = jackdaw_prefab::normalize_path(&assets);
+    let wanted = jackdaw_prefab::normalize_path(&assets.join(prefab));
+    world
+        .query::<(Entity, &jackdaw_prefab::IsA)>()
+        .iter(world)
+        .filter(|(_, isa)| jackdaw_prefab::normalize_path(&assets.join(&isa.source)) == wanted)
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+/// The entities with the `PrefabEntityId` `id` directly in one of `instances`, with
+/// no other instance between.
+fn inner_entities(world: &mut World, instances: &[Entity], id: u32) -> Vec<Entity> {
+    let holding: Vec<Entity> = world
+        .query::<(Entity, &jackdaw_prefab::PrefabEntityId)>()
+        .iter(world)
+        .filter(|(_, held)| held.0 == id)
+        .map(|(entity, _)| entity)
+        .collect();
+    holding
+        .into_iter()
+        .filter(|&entity| {
+            nearest_instance(world, entity).is_some_and(|instance| instances.contains(&instance))
+        })
+        .collect()
+}
+
+fn nearest_instance(world: &World, entity: Entity) -> Option<Entity> {
+    let mut at = world.get::<ChildOf>(entity);
+    while let Some(child_of) = at {
+        let parent = child_of.parent();
+        if world.get::<jackdaw_prefab::IsA>(parent).is_some() {
+            return Some(parent);
+        }
+        at = world.get::<ChildOf>(parent);
+    }
+    None
+}
+
+/// The entities of `node` under a root playing `scene`, or under no root at all.
+/// Another file the game plays can share the document's ids.
 fn holders_in_scene(world: &World, node: u64, scene: &str) -> Vec<Entity> {
     unit_holders(world, node)
         .into_iter()
@@ -485,6 +529,8 @@ fn plays(world: &World, root: Entity, scene: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+
+    use jackdaw_prefab::PrefabEntityId;
 
     use super::*;
     use crate::{JackdawPlugin, JackdawScene};
@@ -635,56 +681,65 @@ mod tests {
         assert_eq!(holders(&mut app, 1).len(), 1);
     }
 
-    #[test]
-    fn a_runtime_entity_takes_the_id_it_is_given_and_goes_with_it() {
-        let mut app = app();
-        root_with(&mut app, "level.bsn", &node_text(1));
-        let runtime = app.world_mut().spawn(Transform::default()).id();
-        apply_structure_change(
-            app.world_mut(),
-            StructureChange::Adopt {
-                entity: runtime.to_bits(),
-                node: 5,
-                parent: None,
-                follows: None,
-                scene: "level.bsn".to_string(),
-                dir: String::new(),
-                bsn: node_text(5),
+    fn node_place(scene: &str, node: u64, inner: &[u32]) -> NodePlace {
+        NodePlace {
+            start: PlaceStart::Node {
+                scene: scene.to_string(),
+                node,
             },
-        );
-        assert_eq!(holders(&mut app, 5), vec![runtime]);
-        apply_structure_change(
-            app.world_mut(),
-            StructureChange::Despawn {
-                node: 5,
-                scene: "level.bsn".to_string(),
-            },
-        );
-        assert!(app.world().get_entity(runtime).is_err());
+            inner: inner.to_vec(),
+        }
     }
 
-    /// The game can lose a runtime entity between the save and this arriving.
     #[test]
-    fn a_runtime_entity_gone_by_its_adoption_is_spawned_as_the_node() {
+    fn a_place_stays_in_the_scene_it_names_when_another_file_shares_its_ids() {
         let mut app = app();
         let root = root_with(&mut app, "level.bsn", &node_text(1));
-        let runtime = app.world_mut().spawn(Transform::default()).id();
-        app.world_mut().despawn(runtime);
-        apply_structure_change(
-            app.world_mut(),
-            StructureChange::Adopt {
-                entity: runtime.to_bits(),
-                node: 5,
-                parent: None,
-                follows: Some(1),
-                scene: "level.bsn".to_string(),
-                dir: String::new(),
-                bsn: node_text(5),
-            },
+        let other = root_with(&mut app, "copy.bsn", &node_text(1));
+        let found = entities_at(app.world_mut(), &[node_place("level.bsn", 1, &[])]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(instance_of(app.world(), found[0]), Some(root));
+        assert_ne!(instance_of(app.world(), found[0]), Some(other));
+    }
+
+    /// Instances of a prefab repeat each other's `PrefabEntityId`s, and nesting
+    /// repeats them again: a place follows its own instance down.
+    #[test]
+    fn a_place_goes_down_through_nested_instances_of_its_own_node() {
+        let mut app = app();
+        root_with(&mut app, "level.bsn", &node_text(1));
+        let unit = holders(&mut app, 1)[0];
+        let isa = |source: &str| jackdaw_prefab::IsA {
+            source: PathBuf::from(source),
+            deleted: Vec::new(),
+        };
+        let world = app.world_mut();
+        world.entity_mut(unit).insert(isa("gate.bsn"));
+        let leaf = world
+            .spawn((isa("door.bsn"), PrefabEntityId(1), ChildOf(unit)))
+            .id();
+        let knob = world.spawn((PrefabEntityId(2), ChildOf(leaf))).id();
+        let beside = world.spawn((PrefabEntityId(2), ChildOf(unit))).id();
+        let elsewhere = world.spawn(isa("gate.bsn")).id();
+        let other_leaf = world
+            .spawn((isa("door.bsn"), PrefabEntityId(1), ChildOf(elsewhere)))
+            .id();
+        world.spawn((PrefabEntityId(2), ChildOf(other_leaf)));
+        app.update();
+
+        let world = app.world_mut();
+        assert_eq!(
+            entities_at(world, &[node_place("level.bsn", 1, &[1, 2])]),
+            vec![knob]
         );
-        let spawned = holders(&mut app, 5);
-        assert_eq!(spawned.len(), 1);
-        assert_eq!(parent_of(&app, spawned[0]), Some(root));
+        assert_eq!(
+            entities_at(world, &[node_place("level.bsn", 1, &[2])]),
+            vec![beside]
+        );
+        assert_eq!(
+            entities_at(world, &[node_place("level.bsn", 1, &[])]),
+            vec![unit]
+        );
     }
 
     #[test]

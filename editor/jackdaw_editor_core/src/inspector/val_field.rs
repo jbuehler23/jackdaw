@@ -262,7 +262,7 @@ fn spawn_val_cell(
     let tp = type_path.to_string();
     let path = field_path.clone();
     let commit = move |world: &mut World, val: Val, is_final: bool| {
-        commit_val_to_field(world, source_entity, &tp, &path, val, is_final);
+        commit_val_to_field(world, &tp, &path, val, is_final);
     };
     let unit = ValUnit::of(value);
     let magnitude = val_magnitude(value);
@@ -369,22 +369,12 @@ fn spawn_val_cell(
 /// value mints one undo-backed document write.
 fn commit_val_to_field(
     world: &mut World,
-    source_entity: Entity,
     type_path: &str,
     field_path: &str,
     value: Val,
     is_final: bool,
 ) {
     let json = val_to_json(value);
-    if crate::inspector::reflect_fields::try_route_pie_live_field_edit(
-        world,
-        source_entity,
-        type_path,
-        field_path,
-        json.clone(),
-    ) {
-        return;
-    }
     if is_final {
         crate::commands::field_edit_commit(
             world,

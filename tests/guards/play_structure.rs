@@ -8,8 +8,6 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use jackdaw::boot_ops::run_op_clause;
 use jackdaw::pie::InstanceKey;
-use jackdaw::pie_mirror::{PieInstances, PieViewMode};
-use jackdaw::pie_projection::{PieEphemeral, PieProjection};
 use jackdaw::play_scene::{LaunchScene, PlayScene, serve_scene};
 use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
 use jackdaw_api::prelude::*;
@@ -215,26 +213,6 @@ fn read_in_game(world: &mut World, event: ControlEvent) {
                 parent,
                 follows,
                 scene,
-            },
-        ),
-        ControlEvent::AdoptNode {
-            entity,
-            node,
-            parent,
-            follows,
-            scene,
-            dir,
-            bsn,
-        } => apply_structure_change(
-            world,
-            StructureChange::Adopt {
-                entity,
-                node,
-                parent,
-                follows,
-                scene,
-                dir,
-                bsn,
             },
         ),
         other => panic!("not document sync: {other:?}"),
@@ -866,88 +844,6 @@ fn pie_structure_a_block_of_siblings_moved_lands_in_document_order() {
     s.assert_matches();
 }
 
-#[test]
-fn pie_structure_save_to_scene_gives_the_runtime_entity_the_id_and_spawns_nothing() {
-    let mut s = session(|_| {});
-    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
-    let runtime = s.game.world_mut().spawn(Transform::default()).id();
-    s.game
-        .world_mut()
-        .entity_mut(runtime)
-        .insert(ChildOf(s.root));
-
-    let world = s.app.world_mut();
-    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
-    let preview = world
-        .spawn((PieEphemeral, Transform::default(), Visibility::default()))
-        .id();
-    world
-        .resource_mut::<PieProjection>()
-        .by_bits
-        .insert(runtime.to_bits(), preview);
-    world
-        .resource_mut::<jackdaw::selection::Selection>()
-        .entities = vec![preview];
-    jackdaw::pie::save_live_entity_to_scene(world);
-    s.app.update();
-    let node = *s
-        .app
-        .world()
-        .get::<SceneNodeId>(preview)
-        .expect("the entity holds a node");
-
-    let events = s.deliver();
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, ControlEvent::SpawnNode { .. })),
-        "the game holds it already: {events:?}"
-    );
-    assert_eq!(
-        s.holders(node),
-        vec![runtime],
-        "the game's entity took the id"
-    );
-
-    delete(&mut s.app, node);
-    s.assert_matches();
-    assert!(
-        s.game.world().get_entity(runtime).is_err(),
-        "a delete takes it"
-    );
-}
-
-/// An edit elsewhere must not be lost with the promotion that shares its frame.
-#[test]
-fn pie_structure_save_to_scene_leaves_other_changes_of_the_frame_to_go() {
-    let mut s = session(|_| {});
-    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
-    let added = cube(&mut s.app);
-    let world = s.app.world_mut();
-    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
-    let preview = world.spawn((PieEphemeral, Transform::default())).id();
-    world
-        .resource_mut::<PieProjection>()
-        .by_bits
-        .insert(77, preview);
-    world
-        .resource_mut::<jackdaw::selection::Selection>()
-        .entities = vec![preview];
-    jackdaw::pie::save_live_entity_to_scene(world);
-    s.app.update();
-
-    let events: Vec<ControlEvent> = collect_changes_for(s.app.world_mut(), &[key()])
-        .into_iter()
-        .map(|(_, event)| event)
-        .collect();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, ControlEvent::SpawnNode { node, .. } if *node == added.0)),
-        "{events:?}"
-    );
-}
-
 /// Saving gives an unsaved tab a path, and a Save As moves one: the game goes on
 /// playing the document by the path it asked for.
 #[test]
@@ -1059,86 +955,6 @@ fn other_key() -> InstanceKey {
         config: "game".to_string(),
         instance: 2,
     }
-}
-
-/// A runtime entity of the game at `bits`, saved to the scene as a new node.
-fn save_runtime_entity(app: &mut App, bits: u64) -> SceneNodeId {
-    let world = app.world_mut();
-    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
-    let preview = world
-        .spawn((PieEphemeral, Transform::default(), Visibility::default()))
-        .id();
-    world
-        .resource_mut::<PieProjection>()
-        .by_bits
-        .insert(bits, preview);
-    world
-        .resource_mut::<jackdaw::selection::Selection>()
-        .entities = vec![preview];
-    jackdaw::pie::save_live_entity_to_scene(world);
-    app.update();
-    *app.world()
-        .get::<SceneNodeId>(preview)
-        .expect("the entity holds a node")
-}
-
-/// Only the game holding the entity adopts it. Any other game playing the document
-/// has nothing to adopt, and takes the node as a spawn.
-#[test]
-fn pie_structure_a_second_game_takes_a_saved_runtime_entity_as_a_spawn() {
-    let mut s = session(|_| {});
-    serve_scene(s.app.world_mut(), &other_key(), None, SCENE);
-    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
-    let node = save_runtime_entity(&mut s.app, 77);
-
-    let sends = collect_changes_for(s.app.world_mut(), &[key(), other_key()]);
-    let to = |game: InstanceKey| -> Vec<&ControlEvent> {
-        sends
-            .iter()
-            .filter(|(key, _)| *key == game)
-            .map(|(_, event)| event)
-            .collect()
-    };
-    assert!(
-        to(key()).iter().any(|event| matches!(
-            event,
-            ControlEvent::AdoptNode { entity: 77, node: held, .. } if *held == node.0
-        )),
-        "{sends:?}"
-    );
-    assert!(
-        !to(key())
-            .iter()
-            .any(|event| matches!(event, ControlEvent::SpawnNode { .. })),
-        "{sends:?}"
-    );
-    assert!(
-        to(other_key()).iter().any(
-            |event| matches!(event, ControlEvent::SpawnNode { node: held, .. } if *held == node.0)
-        ),
-        "{sends:?}"
-    );
-}
-
-/// With no game to adopt it, nothing else would ever bring the node.
-#[test]
-fn pie_structure_a_saved_runtime_entity_spawns_with_no_focused_game() {
-    let mut s = session(|_| {});
-    s.app.world_mut().resource_mut::<PieInstances>().focused = None;
-    let node = save_runtime_entity(&mut s.app, 77);
-    s.assert_matches();
-    assert_eq!(s.holders(node).len(), 1);
-}
-
-#[test]
-fn pie_structure_a_saved_runtime_entity_gone_from_the_game_spawns_there() {
-    let mut s = session(|_| {});
-    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
-    let runtime = s.game.world_mut().spawn(Transform::default()).id();
-    s.game.world_mut().despawn(runtime);
-    let node = save_runtime_entity(&mut s.app, runtime.to_bits());
-    s.assert_matches();
-    assert_eq!(s.holders(node).len(), 1);
 }
 
 /// A root asking during Play, after the unsaved tab it stands for was saved, gets

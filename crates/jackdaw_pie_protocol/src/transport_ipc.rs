@@ -159,53 +159,29 @@ impl IpcLaneSender {
 /// An [`IpcChannelTransport`] whose reliable sends go out on their own thread.
 ///
 /// A socket write blocks while the peer is not reading, and an editor out of view
-/// reads once a second. The game's main thread sends state each frame, so writing
+/// reads once a second. The game's main thread sends as it runs, so writing
 /// from it would tie the game's frame rate to the editor's.
 ///
-/// The queue itself has no bound: every send is kept, since some events only go
-/// once. [`PieTransport::congested`] tells the game to hold what it can resend, so
-/// an editor that stopped reading costs about `SEND_BACKLOG_LIMIT` of resendable
-/// state. Despawns and scene requests are queued past it, since they go once.
+/// The queue has no bound: every send is kept, since most events only go once.
 pub struct QueuedSendTransport {
     link: IpcChannelTransport,
     queue: std::sync::mpsc::Sender<Vec<u8>>,
-    backlog: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    limit: usize,
 }
-
-/// Bytes queued for the editor past which [`QueuedSendTransport`] reads congested.
-/// Far more than a healthy editor is ever behind by, and small enough not to
-/// matter to a game left running against one stopped in a debugger.
-const SEND_BACKLOG_LIMIT: usize = 64 * 1024 * 1024;
 
 impl QueuedSendTransport {
     /// Start the sending thread, handing `link` back if the thread cannot start.
     pub fn new(link: IpcChannelTransport) -> Result<Self, IpcChannelTransport> {
-        Self::with_limit(link, SEND_BACKLOG_LIMIT)
-    }
-
-    fn with_limit(link: IpcChannelTransport, limit: usize) -> Result<Self, IpcChannelTransport> {
-        use std::sync::atomic::Ordering;
         let lane = link.lane_sender(PieChannel::Reliable);
         let (queue, queued) = std::sync::mpsc::channel::<Vec<u8>>();
-        let backlog = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let sent = backlog.clone();
         let started = std::thread::Builder::new()
             .name("pie-state-sender".into())
             .spawn(move || {
                 while let Ok(bytes) = queued.recv() {
-                    let length = bytes.len();
                     lane.send(bytes);
-                    sent.fetch_sub(length, Ordering::Relaxed);
                 }
             });
         match started {
-            Ok(_) => Ok(Self {
-                link,
-                queue,
-                backlog,
-                limit,
-            }),
+            Ok(_) => Ok(Self { link, queue }),
             Err(err) => {
                 warn!("PIE ipc transport: could not start the sending thread: {err}");
                 Err(link)
@@ -216,14 +192,11 @@ impl QueuedSendTransport {
 
 impl PieTransport for QueuedSendTransport {
     fn send(&mut self, channel: PieChannel, bytes: &[u8]) {
-        use std::sync::atomic::Ordering;
         if channel != PieChannel::Reliable {
             self.link.send(channel, bytes);
             return;
         }
-        self.backlog.fetch_add(bytes.len(), Ordering::Relaxed);
         if self.queue.send(bytes.to_vec()).is_err() {
-            self.backlog.fetch_sub(bytes.len(), Ordering::Relaxed);
             self.link.send(channel, bytes);
         }
     }
@@ -234,10 +207,6 @@ impl PieTransport for QueuedSendTransport {
 
     fn peer_gone(&self) -> bool {
         self.link.peer_gone()
-    }
-
-    fn congested(&self) -> bool {
-        self.backlog.load(std::sync::atomic::Ordering::Relaxed) > self.limit
     }
 }
 
@@ -271,10 +240,10 @@ mod tests {
     use super::*;
     use crate::event::PieChannel;
 
-    /// A peer that stopped reading backs the queue up past its limit, every send
-    /// is still kept, and reading again clears the congestion.
+    /// A peer that stopped reading holds up no send, and every send arrives once
+    /// it reads again.
     #[test]
-    fn a_peer_that_stops_reading_congests_the_queue_until_it_reads() {
+    fn a_peer_that_stops_reading_keeps_every_send_until_it_reads() {
         const FRAME: usize = 256 * 1024;
         const FRAMES: usize = 64;
         let (handle, name) = serve().unwrap();
@@ -282,25 +251,19 @@ mod tests {
         let mut editor = handle.accept().unwrap();
         let game = game.join().unwrap();
 
-        let mut queued = QueuedSendTransport::with_limit(game, 4 * FRAME)
+        let mut queued = QueuedSendTransport::new(game)
             .map_err(|_| "no thread")
             .unwrap();
-        assert!(!queued.congested());
         let frame = vec![7u8; FRAME];
         for _ in 0..FRAMES {
             queued.send(PieChannel::Reliable, &frame);
         }
-        assert!(queued.congested(), "nothing reads what was sent");
 
         let mut received = 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while received < FRAMES {
             assert!(std::time::Instant::now() < deadline, "got {received}");
             received += editor.drain_received().len();
-        }
-        while queued.congested() {
-            assert!(std::time::Instant::now() < deadline, "still congested");
-            std::thread::yield_now();
         }
     }
 

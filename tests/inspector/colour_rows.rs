@@ -36,7 +36,7 @@ fn inspected() -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.register_type::<Tint>();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app
         .world_mut()
         .spawn((Name::new("tinted"), Transform::default(), Tint::default()))
@@ -158,7 +158,7 @@ fn a_long_colour_field_name_is_not_clipped() {
     let mut app = util::editor_test_app();
     app.register_type::<Swatches>();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app
         .world_mut()
         .spawn((Name::new("swatches"), Swatches::default()))

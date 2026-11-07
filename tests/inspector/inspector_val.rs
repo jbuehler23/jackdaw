@@ -637,7 +637,7 @@ fn a_selected_nodes_lengths_reach_the_inspector_as_unit_rows() {
     // card out of these composites rather than variant menus.
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app
         .world_mut()
         .spawn((
@@ -709,7 +709,7 @@ fn component_card_labels(app: &mut App) -> Vec<String> {
 fn app_with_node_card(node: Node) -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app.world_mut().spawn((Name::new("ui"), node)).id();
     jackdaw::scene_io::register_entity_in_ast(app.world_mut(), entity);
     let world = app.world_mut();

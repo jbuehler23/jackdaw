@@ -3118,7 +3118,7 @@ fn ui_scene_roots(app: &mut App) -> usize {
 fn selecting_by_name_builds_the_inspector_for_the_selected_node() {
     let mut app = op_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let root = app
         .world_mut()
         .spawn((

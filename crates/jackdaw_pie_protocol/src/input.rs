@@ -1,4 +1,4 @@
-//! Input events forwarded from the editor's Live viewport to the game.
+//! Input events forwarded from the editor's Game panel to the game.
 //!
 //! Carried inside [`ControlEvent::Input`](crate::event::ControlEvent) on the
 //! reliable channel: ordered with everything else, and a release must never

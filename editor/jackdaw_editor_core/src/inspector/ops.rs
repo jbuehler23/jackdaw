@@ -89,39 +89,6 @@ pub(crate) fn has_primary_selection(selection: Res<Selection>) -> bool {
     selection.primary().is_some()
 }
 
-/// When the inspector is in PIE Live mode and `entity` is a projected
-/// preview entity, returns its game-side bits so component add/remove can
-/// be streamed to the running game instead of mutating the authored scene.
-/// Returns `None` for ordinary Scene edits.
-fn pie_live_target_bits(world: &mut World, entity: Entity) -> Option<u64> {
-    use crate::pie_mirror::PieViewMode;
-
-    if *world.resource::<PieViewMode>() != PieViewMode::Live {
-        return None;
-    }
-    world
-        .resource::<crate::pie_projection::PieProjection>()
-        .by_bits
-        .iter()
-        .find_map(|(bits, &e)| if e == entity { Some(*bits) } else { None })
-}
-
-/// Build a default value for `type_path` in canonical reflect JSON (the
-/// form the game's `TypedReflectDeserializer` expects), for streaming an
-/// `AddComponent` to the running game. `None` when the type can't be
-/// default-constructed or serialized.
-fn default_component_json(world: &World, type_path: &str) -> Option<serde_json::Value> {
-    use bevy::reflect::serde::TypedReflectSerializer;
-
-    let registry = world.resource::<AppTypeRegistry>().clone();
-    let registry = registry.read();
-    let registration = registry.get_with_type_path(type_path)?;
-    let default =
-        crate::reflect_default::build_reflective_default(registration.type_id(), &registry)?;
-    let serializer = TypedReflectSerializer::new(default.as_partial_reflect(), &registry);
-    serde_json::to_value(&serializer).ok()
-}
-
 /// Look up `(ComponentId, TypeId)` for a type path, registering
 /// the component on a throwaway entity first if the world hasn't
 /// seen it yet. Without this, types only `register_type`'d
@@ -198,43 +165,14 @@ pub(crate) fn component_add(
     Some(OperatorResult::Finished)
 }
 
-/// Add `type_path` to `entity` as `component.add` does: streamed to the
-/// running game in Live view, else applied and returned as the executed
-/// history entry for the caller to push. `None` when nothing was recorded.
+/// Add `type_path` to `entity` as `component.add` does: applied and returned as
+/// the executed history entry for the caller to push. `None` when nothing was
+/// recorded.
 pub(crate) fn add_component_edit(
     world: &mut World,
     entity: Entity,
     type_path: String,
 ) -> Option<Box<dyn EditorCommand>> {
-    // Live mode: stream the add to the running game; the next state
-    // delta repopulates the mirror and the inspector.
-    if let Some(bits) = pie_live_target_bits(world, entity) {
-        // The running game has the project type registered for real, so
-        // a project component streams to it like any other; fall back to
-        // the extracted schema default when the editor cannot build one.
-        let value = default_component_json(world, &type_path)
-            .or_else(|| {
-                // The schema default is `ReflectSerializer`-wrapped
-                // (`{type_path: value}`); the game deserializes with
-                // `TypedReflectDeserializer`, which wants the inner value.
-                world
-                    .get_resource::<ProjectTypes>()
-                    .and_then(|pt| pt.component(&type_path))
-                    .and_then(|schema| schema.default.as_ref())
-                    .and_then(|d| d.as_object())
-                    .and_then(|o| o.get(&type_path).cloned())
-            })
-            .unwrap_or(serde_json::Value::Null);
-        crate::pie::send_control_to_focused(
-            world,
-            jackdaw_pie_protocol::ControlEvent::AddComponent {
-                entity: bits,
-                type_path,
-                value,
-            },
-        );
-        return None;
-    }
     if world
         .resource::<jackdaw_bsn::SceneBsnAst>()
         .ast_for(entity)
@@ -308,26 +246,14 @@ pub(crate) fn component_remove(
     Some(OperatorResult::Finished)
 }
 
-/// Remove `type_path` from `entity` as `component.remove` does: streamed to
-/// the running game in Live view, refused while a running preview drives it,
-/// else applied and returned as the executed history entry for the caller to
-/// push. `None` when nothing was recorded.
+/// Remove `type_path` from `entity` as `component.remove` does: refused while a
+/// running preview drives it, else applied and returned as the executed history
+/// entry for the caller to push. `None` when nothing was recorded.
 pub(crate) fn remove_component_edit(
     world: &mut World,
     entity: Entity,
     type_path: String,
 ) -> Option<Box<dyn EditorCommand>> {
-    // Live mode: stream the removal to the running game.
-    if let Some(bits) = pie_live_target_bits(world, entity) {
-        crate::pie::send_control_to_focused(
-            world,
-            jackdaw_pie_protocol::ControlEvent::RemoveComponent {
-                entity: bits,
-                type_path,
-            },
-        );
-        return None;
-    }
     // A running preview owns the components its evaluator writes.
     if crate::preview_context::preview_writes_type_path(world, entity, &type_path) {
         warn!(

@@ -2111,7 +2111,6 @@ impl Refusal {
 
 /// Set a field value at a dotted path within an entity's AST patches.
 ///
-/// Mirrors the JSON-path layer's `set_field_in_component_json`:
 /// - an unregistered `type_path` is a no-op (no patch is created),
 /// - an empty `field_path` replaces the whole component value,
 /// - dotted segments navigate named struct fields, numeric tuple-struct
@@ -2430,7 +2429,7 @@ fn reflect_step_mut<'a>(
 
 /// Get a field value at a dotted path within an entity's AST patches.
 ///
-/// Mirrors `get_field_in_component_json`: an empty `field_path` returns the
+/// An empty `field_path` returns the
 /// whole component value; dotted segments navigate named struct fields,
 /// numeric tuple-struct indices, `field[i]` list elements, and `field[key]`
 /// map entries.
@@ -3767,8 +3766,7 @@ mod field_navigation_matrix {
         assert!(matches!(result, Some(BsnValue::Float(f)) if (f - 7.0).abs() < f64::EPSILON));
     }
 
-    /// An empty path replaces the whole component value in one call, matching
-    /// the JSON layer's `set_field_in_component_json_empty_path_replaces_value`.
+    /// An empty path replaces the whole component value in one call.
     #[test]
     fn set_field_empty_path_replaces_whole_value() {
         let mut registry = TypeRegistry::new();
@@ -3797,8 +3795,7 @@ mod field_navigation_matrix {
     }
 
     /// `set_bsn_field` refuses to write a field for a type the reflect
-    /// `TypeRegistry` does not know about, matching the JSON layer's
-    /// `set_field_in_component_json_unregistered_type_is_noop`.
+    /// `TypeRegistry` does not know about.
     #[test]
     fn set_field_on_unregistered_type_is_noop() {
         let mut ast = SceneBsnAst::default();

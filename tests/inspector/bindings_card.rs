@@ -174,7 +174,7 @@ fn app_with_bindings_and_project(bindings: Bindings, project_components: &[&str]
             .update(&fixture_schema(), &native);
     }
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app
         .world_mut()
         .spawn((Name::new("hud"), Node::default(), bindings))

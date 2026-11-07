@@ -27,7 +27,7 @@ fn app_with(path: Option<&'static str>) -> (App, tempfile::TempDir, Entity) {
     std::fs::copy(util::OVERWORLD_SHEET, dir.path().join(SHEET)).expect("copy the sheet");
     let mut app = util::editor_test_app_reading(dir.path());
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
 
     jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
     app.update();

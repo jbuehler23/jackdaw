@@ -1,7 +1,7 @@
 //! The queue carrying every editor-to-game message of one Live instance.
 //!
 //! A large `ipc-channel` send blocks until the receiver reads, and the game's
-//! main thread can itself be blocked sending its state stream to the editor.
+//! main thread can itself be blocked sending to the editor.
 //! So the editor's main thread only queues; a writer thread does the sends, in
 //! queue order.
 //!

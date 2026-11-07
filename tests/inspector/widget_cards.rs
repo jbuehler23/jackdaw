@@ -20,7 +20,7 @@ const DROPDOWN: &str = "jackdaw_widgets_runtime::Dropdown";
 fn app_with(widget: impl Bundle) -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let entity = app
         .world_mut()
         .spawn((Name::new("widget"), Node::default(), widget))

@@ -2,21 +2,19 @@ use std::any::TypeId;
 use std::collections::HashMap;
 
 use bevy::{
-    asset::{ReflectHandle, UntypedHandle},
+    asset::ReflectHandle,
     ecs::{
         archetype::{Archetype, ArchetypeId},
-        component::ComponentId,
         reflect::ReflectComponent,
         world::EntityRef,
     },
     prelude::*,
     reflect::{
-        TypeRegistration, TypeRegistry,
-        serde::{ReflectDeserializerProcessor, ReflectSerializerProcessor, TypedReflectSerializer},
+        TypeRegistry,
+        serde::{ReflectSerializerProcessor, TypedReflectSerializer},
     },
 };
-use serde::de::IgnoredAny;
-use serde::{Deserializer, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 
 /// A single entity's full ECS state, serialized for remote inspection.
@@ -150,49 +148,16 @@ impl ReflectSerializerProcessor for RemoteSerializerProcessor {
     }
 }
 
-/// Deserializer counterpart to `RemoteSerializerProcessor`. The serializer emits
-/// `null` for every `Handle<T>` (the game's assets are not loaded in the editor).
-/// A plain reflect deserializer rejects that `null` and fails the whole component,
-/// which drops any brush whose face materials serialized to null. This turns the
-/// `null` back into the handle type's default, so the component deserializes and
-/// brush faces fall back to the editor's own material in `regenerate_brush_meshes`.
-pub struct RemoteDeserializerProcessor;
-
-impl ReflectDeserializerProcessor for RemoteDeserializerProcessor {
-    fn try_deserialize<'de, D>(
-        &mut self,
-        registration: &TypeRegistration,
-        _registry: &TypeRegistry,
-        deserializer: D,
-    ) -> Result<Result<Box<dyn PartialReflect>, D>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Intercept asset handles: the serializer emits `null` for each one, so
-        // consume that and rebuild the handle type's default. Bevy 0.19 dropped
-        // `Handle`'s `Default` impl (so `ReflectDefault` is no longer
-        // registered), so build the default through `ReflectHandle` instead.
-        if let Some(reflect_handle) = registration.data::<ReflectHandle>() {
-            deserializer.deserialize_option(IgnoredAny)?;
-            let untyped = UntypedHandle::default_for_type(reflect_handle.asset_type_id());
-            return Ok(Ok(reflect_handle.typed(untyped).into_partial_reflect()));
-        }
-        Ok(Err(deserializer))
-    }
-}
-
-/// One component an entity of some archetype streams, resolved from the type
-/// registry once per archetype so a frame never walks the whole registry.
-#[derive(Clone)]
-pub struct SnapshotColumn {
-    pub id: ComponentId,
-    pub type_path: &'static str,
+/// One component an entity of some archetype snapshots, resolved from the type
+/// registry once per archetype.
+struct SnapshotColumn {
+    type_path: &'static str,
     reflect: ReflectComponent,
 }
 
 impl SnapshotColumn {
     /// The component's serialized value on `entity`, if it has one that serializes.
-    pub fn value(&self, entity: EntityRef, registry: &TypeRegistry) -> Option<Value> {
+    fn value(&self, entity: EntityRef, registry: &TypeRegistry) -> Option<Value> {
         let component = self.reflect.reflect(entity)?;
         let processor = RemoteSerializerProcessor;
         let serializer = TypedReflectSerializer::with_processor(component, registry, &processor);
@@ -200,9 +165,9 @@ impl SnapshotColumn {
     }
 }
 
-/// The components of `archetype` that stream: registered as reflectable
+/// The components of `archetype` a snapshot holds: registered as reflectable
 /// components and not on a skip list.
-pub fn snapshot_columns(
+fn snapshot_columns(
     world: &World,
     registry: &TypeRegistry,
     archetype: &Archetype,
@@ -217,7 +182,6 @@ pub fn snapshot_columns(
                 return None;
             }
             Some(SnapshotColumn {
-                id,
                 type_path,
                 reflect: registration.data::<ReflectComponent>()?.clone(),
             })
@@ -268,7 +232,6 @@ mod tests {
         assert!(should_skip("bevy_camera::camera::RenderTarget"));
         assert!(should_skip("bevy_camera::components::Camera3d"));
         assert!(should_skip("bevy_camera::components::Camera2d"));
-        // The projection still streams: the editor's camera lock reads it.
         assert!(!should_skip("bevy_camera::projection::Projection"));
     }
 

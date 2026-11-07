@@ -1,6 +1,6 @@
 //! A segmented control: two or more mutually exclusive choices joined inside one
 //! bordered box, the compact form the editor uses for 3D/2D,
-//! Edit/Interact, Scene/Live and the Node card's enum fields.
+//! Edit/Interact and the Node card's enum fields.
 //!
 //! The behaviour is [`RadioGroup`] and [`RadioButton`]: the bar is the group,
 //! each segment is a radio whose caption is its label, and [`Checked`] marks the

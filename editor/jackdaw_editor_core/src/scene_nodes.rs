@@ -135,40 +135,6 @@ pub fn unit_holder(world: &World, node: SceneNodeId) -> Option<Entity> {
     nodes.unit(world, node).or_else(|| nodes.only_holder(node))
 }
 
-/// The entity of the document node `id` names: the one the live index holds for
-/// it, which costs no scan, else [`unit_entity_for_stable_id`].
-pub fn authored_entity(world: &World, id: u64) -> Option<Entity> {
-    let ast = world.resource::<SceneBsnAst>();
-    unit_holder(world, SceneNodeId(id))
-        .filter(|&entity| ast.ast_for(entity).is_some())
-        .or_else(|| unit_entity_for_stable_id(ast, id))
-}
-
-/// The entity of the document node carrying `id`: the unit carrying it, else the
-/// first node inside an instance that does. Linear over nodes.
-pub fn unit_entity_for_stable_id(ast: &SceneBsnAst, id: u64) -> Option<Entity> {
-    let mut inner = None;
-    let mut stack: Vec<(Entity, bool)> = ast.roots.iter().map(|&root| (root, false)).collect();
-    while let Some((node, below)) = stack.pop() {
-        if ast.stable_id_of(node) == Some(id) {
-            if !below {
-                return ast.ecs_for_ast(node);
-            }
-            inner.get_or_insert(node);
-        }
-        let children_below = below
-            || ast
-                .find_patch_by_type_path(node, crate::prefab::resolver_bsn::ISA_TYPE)
-                .is_some();
-        stack.extend(
-            ast.get_children_ast(node)
-                .into_iter()
-                .map(|child| (child, children_below)),
-        );
-    }
-    inner.and_then(|node| ast.ecs_for_ast(node))
-}
-
 fn index_node(
     added: On<Insert<SceneNodeId>>,
     ids: Query<&SceneNodeId>,

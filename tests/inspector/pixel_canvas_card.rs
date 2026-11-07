@@ -20,7 +20,7 @@ fn app_with_canvas(canvas: PixelCanvas) -> (App, Entity) {
 fn app_with(canvas: PixelCanvas, camera: bool) -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let root = jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
     let entity = app
         .world_mut()
@@ -165,7 +165,7 @@ fn a_size_off_the_presets_reads_custom() {
 fn app_with_plain_camera() -> (App, Entity) {
     let mut app = util::editor_test_app();
     app.world_mut()
-        .spawn(jackdaw::layout::inspector_components_content(default()));
+        .spawn(jackdaw::layout::inspector_components_content());
     let root = jackdaw::entity_ops::seed_2d_scene_root(app.world_mut());
     let camera = app
         .world_mut()

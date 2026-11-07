@@ -1171,6 +1171,12 @@ fn scrubber_on_drag_end(
 
 fn scrubber_on_drag_cancel(
     mut drag_cancel: On<PointerCancel>,
+    q_root: Query<(
+        Option<&SoftLimit>,
+        Option<&HardLimit>,
+        Option<&NumberInputPrecision>,
+        Has<InteractionDisabled>,
+    )>,
     q_parent: Query<&ChildOf>,
     mut q_text_input: Query<(&Hovered, &mut BackgroundGradient)>,
     mut q_scrubber: Query<&mut ScrubberDragState>,
@@ -1193,6 +1199,22 @@ fn scrubber_on_drag_cancel(
             &mut commands,
         );
         drag_cancel.propagate(false);
+        // A cancelled scrub settles on the value it began from.
+        if drag_state.dragging
+            && let Ok(&ChildOf(root_id)) = q_parent.get(text_id)
+            && let Ok((soft_limit, hard_limit, precision, false)) = q_root.get(root_id)
+        {
+            drag_state.value_offset = 0.0;
+            emit_drag_value_change(
+                &mut commands,
+                root_id,
+                soft_limit,
+                hard_limit,
+                precision,
+                &mut drag_state,
+                true,
+            );
+        }
         drag_state.dragging = false;
     }
 }
@@ -1435,6 +1457,70 @@ pub fn is_focused_for_editing(world: &World, root: Entity, focus: Option<Entity>
         children.iter().any(|&child| walk(world, child, focus))
     }
     walk(world, root, focus)
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::picking::backend::HitData;
+    use bevy::picking::events::Pointer;
+    use bevy::picking::pointer::{Location, PointerId};
+    use bevy::prelude::*;
+
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct Settled(Vec<(f64, bool)>);
+
+    /// A cancelled scrub settles on the value it began from, so whoever took its
+    /// ticks can put them back.
+    #[test]
+    fn a_cancelled_scrub_settles_on_the_value_it_began_from() {
+        let mut world = World::new();
+        world.init_resource::<UiTheme>();
+        world.init_resource::<InputFocus>();
+        world.init_resource::<Settled>();
+        world.add_observer(scrubber_on_drag_cancel);
+        world.add_observer(
+            |change: On<ValueChange<f64>>, mut settled: ResMut<Settled>| {
+                settled.0.push((change.value, change.is_final));
+            },
+        );
+        let root = world.spawn_empty().id();
+        let text = world
+            .spawn((Hovered(false), BackgroundGradient::default(), ChildOf(root)))
+            .id();
+        let scrubber = world
+            .spawn((
+                ScrubberDragState {
+                    dragging: true,
+                    drag_speed: 1.0,
+                    value_offset: 3.0,
+                    max_distance: 3.0,
+                    base_value: ScrubNumberInputValue::F64(0.25),
+                },
+                ChildOf(text),
+            ))
+            .id();
+
+        let camera = world.spawn_empty().id();
+        world.trigger(PointerCancel {
+            entity: scrubber,
+            pointer: Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::Image(Handle::default().into()),
+                    position: Vec2::ZERO,
+                },
+            ),
+            hit: HitData::new(camera, 0.0, None, None),
+        });
+        world.flush();
+
+        assert_eq!(world.resource::<Settled>().0, vec![(0.25, true)]);
+        let state = world.get::<ScrubberDragState>(scrubber).expect("the state");
+        assert!(!state.dragging);
+    }
 }
 
 #[cfg(test)]

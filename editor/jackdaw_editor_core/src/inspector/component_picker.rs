@@ -192,10 +192,7 @@ pub(crate) fn on_add_component_button_click(
         return;
     }
 
-    // The primary selection is the entity to add the component to in both
-    // Scene and Live mode. In Live mode it is the selected preview entity
-    // (which carries the projected live state), and the add operator
-    // routes the change to the running game via `pie_live_target_bits`.
+    // The primary selection is the entity to add the component to.
     let Some(primary) = selection.primary() else {
         return;
     };

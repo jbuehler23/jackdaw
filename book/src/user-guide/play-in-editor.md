@@ -1,8 +1,8 @@
 # Play-in-editor
 
 Play-in-editor (PIE) runs your game as a real process and streams its
-frames into the editor, so you can play, inspect, and live-edit a running
-build without leaving jackdaw. The game runs in its own process, so a
+frames into the editor, so you can play a running build and edit its scene
+without leaving jackdaw. The game runs in its own process, so a
 crash takes down the game, not the editor.
 
 PIE keeps two surfaces strictly separate:
@@ -94,11 +94,10 @@ The play controls header carries **Play**, **Pause**, **Stop**, and
 
 Hit **Play** to launch. The Game panel starts streaming immediately,
 beginning with whatever the game shows first (often a menu or title
-screen). The outliner shows a **LIVE** badge with the running instance's
-name.
+screen). The viewport's edge takes an accent colour while a game runs.
 
-When more than one instance is running, the **instance picker** in the
-outliner header switches which one the Game panel and Live tree follow.
+When more than one instance is running, the **instance button** in the Game
+panel header names the instance on show, and clicking it steps to the next.
 
 ## Playing the game
 
@@ -118,32 +117,29 @@ also releases on its own if you stop the game, switch instances, click away
 to another application, or close the panel, and any keys you were holding
 are released so nothing stays stuck down.
 
-## Selecting entities while playing
+## Editing while playing
 
-Select entities in the outliner's **Live** tab. The Components panel shows
-the selected entity's live values, and the game draws a bounding box around
-it in the frame.
+The editor stays as it is when stopped. The outliner, Components panel and
+viewport all work on the scene document, so anything you do during Play is an
+ordinary edit: it undoes, marks the tab as modified, and saves with the scene.
+Each edit also reaches every running instance straight away, including adds,
+deletes and reparents.
 
-## Scene and Live trees
+Dragging a field in the Components panel moves the game on every tick. The edit
+joins the document when you let go, and a cancelled drag puts the game back. A
+transform gizmo drag reaches the game when you let go.
 
-The outliner header has a **Scene | Live** tab switch:
+Selecting an entity draws a bounding box in the game's frame around every entity
+spawned from that node by the scene in front. A child inside a prefab instance boxes
+that instance's child, and a node in an open prefab tab boxes it in every instance.
 
-- **Scene** shows the authored tree of the open scene file. This is the
-  same hierarchy you edit when the game is not running.
-- **Live** shows the entities the focused game instance currently has,
-  including runtime-only ones. Authored entities the game has not spawned
-  do not appear here.
-
-The two trees are independent. When the game shows a menu, the Live tab
-shows the menu's entities while the Scene tab still shows your authored
-scene, and the Viewport keeps showing that scene with gizmos, fully
-editable. You can select and edit authored entities in the Viewport or
-Scene tab at any time without disturbing the running game's frame.
+The editor does not show entities the game spawned at runtime, or the values a
+running game holds.
 
 ## Stopping and reloading
 
 - **Stop** ends the game process. The Game panel returns to its idle state,
-  the panel that was in front before Play comes back, and the **LIVE** badge
-  clears.
+  the panel that was in front before Play comes back, and the viewport's edge
+  clears. Edits made during Play stay in the document.
 - **Reload** relaunches with the current window-mode setting, which is how
   you apply a change to the **Embedded** / **Windowed** button.
