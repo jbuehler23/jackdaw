@@ -1689,6 +1689,9 @@ pub(crate) fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, 
     world.entity_mut(preview).remove::<PieEphemeral>();
     world.entity_mut(preview).insert(node_id);
     crate::scene_io::register_entity_in_ast(world, preview);
+    if let Some(mut sync) = world.get_resource_mut::<crate::play_sync::DocumentSync>() {
+        sync.note_adopted(bits, node_id.0);
+    }
 
     info!(
         "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new authored node {}",

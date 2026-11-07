@@ -164,32 +164,53 @@ impl Tree {
         steps
     }
 
-    /// The nodes staying under their parent whose order among the others staying
-    /// there changed.
+    /// The nodes that must move for those staying under a parent to read in their
+    /// new order: all but the longest run already in it. The rest stay put, and each
+    /// that moves lands straight after its new predecessor, parents and earlier
+    /// siblings first, so the list ends in document order.
     fn reordered_in(&self, after: &Tree) -> HashSet<u64> {
         let mut reordered = HashSet::new();
         for (parent, now) in &after.children {
             let Some(was) = self.children.get(parent).filter(|was| *was != now) else {
                 continue;
             };
-            let kept_now: Vec<u64> = now.iter().copied().filter(|id| was.contains(id)).collect();
-            let kept_was: Vec<u64> = was.iter().copied().filter(|id| now.contains(id)).collect();
-            if kept_now == kept_was {
-                continue;
-            }
-            let before_in = |list: &[u64], id: u64| {
-                let at = list.iter().position(|held| *held == id)?;
-                at.checked_sub(1).map(|at| list[at])
-            };
-            reordered.extend(
-                kept_now
-                    .iter()
-                    .copied()
-                    .filter(|&id| before_in(&kept_now, id) != before_in(&kept_was, id)),
-            );
+            let was_at: HashMap<u64, usize> =
+                was.iter().enumerate().map(|(at, id)| (*id, at)).collect();
+            let staying: Vec<(u64, usize)> = now
+                .iter()
+                .filter_map(|id| Some((*id, *was_at.get(id)?)))
+                .collect();
+            reordered.extend(out_of_order(&staying));
         }
         reordered
     }
+}
+
+/// The ids of `staying`, in new order with their old places, outside a longest run
+/// of rising old places.
+fn out_of_order(staying: &[(u64, usize)]) -> Vec<u64> {
+    let mut run_ends: Vec<usize> = Vec::new();
+    let mut before: Vec<Option<usize>> = Vec::with_capacity(staying.len());
+    for (at, (_, place)) in staying.iter().enumerate() {
+        let length = run_ends.partition_point(|&end| staying[end].1 < *place);
+        before.push(length.checked_sub(1).map(|shorter| run_ends[shorter]));
+        match run_ends.get_mut(length) {
+            Some(end) => *end = at,
+            None => run_ends.push(at),
+        }
+    }
+    let mut in_run = vec![false; staying.len()];
+    let mut at = run_ends.last().copied();
+    while let Some(held) = at {
+        in_run[held] = true;
+        at = before[held];
+    }
+    staying
+        .iter()
+        .zip(in_run)
+        .filter(|(_, in_run)| !in_run)
+        .map(|((id, _), _)| *id)
+        .collect()
 }
 
 fn inner_digest(ast: &SceneBsnAst, instance: Entity) -> u64 {
@@ -264,9 +285,66 @@ mod tests {
         for id in [3, 1, 2] {
             node(&mut after, id, None);
         }
-        assert_eq!(
-            steps(&before, &after),
-            vec![reparent(3, None, None), reparent(1, None, Some(3))]
+        assert_eq!(steps(&before, &after), vec![reparent(3, None, None)]);
+    }
+
+    /// The steps played on the old list, each straight after what it follows.
+    fn played(start: &[u64], steps: &[StructureStep]) -> Vec<u64> {
+        let mut list = start.to_vec();
+        for step in steps {
+            let StructureStep::Reparent { node, follows, .. } = step else {
+                panic!("only moves here: {step:?}");
+            };
+            list.retain(|held| held != node);
+            let at = follows.map_or(0, |follows| {
+                list.iter()
+                    .position(|held| *held == follows)
+                    .expect("placed")
+                    + 1
+            });
+            list.insert(at, *node);
+        }
+        list
+    }
+
+    fn roots_of(ids: &[u64]) -> SceneBsnAst {
+        let mut ast = SceneBsnAst::default();
+        for &id in ids {
+            node(&mut ast, id, None);
+        }
+        ast
+    }
+
+    #[test]
+    fn a_block_of_siblings_moved_ends_in_document_order() {
+        for (from, to) in [
+            (vec![1, 2, 3, 4], vec![3, 4, 1, 2]),
+            (vec![1, 2, 3, 4, 5], vec![5, 4, 3, 2, 1]),
+            (vec![1, 2, 3, 4, 5, 6], vec![2, 3, 1, 6, 4, 5]),
+        ] {
+            let moves = steps(&roots_of(&from), &roots_of(&to));
+            assert_eq!(played(&from, &moves), to, "{moves:?}");
+        }
+        let moves = steps(&roots_of(&[1, 2, 3, 4]), &roots_of(&[3, 4, 1, 2]));
+        assert_eq!(moves.len(), 2, "only as many moves as it takes: {moves:?}");
+    }
+
+    /// One add among many siblings must not cost the square of them. The margin is
+    /// wide: the quadratic walk takes many times this.
+    #[test]
+    fn one_add_among_a_flat_document_is_linear() {
+        let ids: Vec<u64> = (1..=100_000).collect();
+        let before = roots_of(&ids);
+        let mut after = roots_of(&ids);
+        node(&mut after, 200_000, None);
+        let (tree, _) = Tree::of(&before);
+        let (next, walked) = Tree::of(&after);
+        let start = std::time::Instant::now();
+        assert_eq!(tree.steps_to(&next, &walked).len(), 1);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
         );
     }
 

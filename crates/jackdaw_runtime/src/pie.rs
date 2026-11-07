@@ -507,13 +507,14 @@ fn apply_control(world: &mut World) {
                     },
                 );
             }
-            ControlEvent::DespawnNode { node } => {
-                apply_structure_change(world, StructureChange::Despawn { node });
+            ControlEvent::DespawnNode { node, scene } => {
+                apply_structure_change(world, StructureChange::Despawn { node, scene });
             }
             ControlEvent::ReparentNode {
                 node,
                 parent,
                 follows,
+                scene,
             } => {
                 apply_structure_change(
                     world,
@@ -521,8 +522,12 @@ fn apply_control(world: &mut World) {
                         node,
                         parent,
                         follows,
+                        scene,
                     },
                 );
+            }
+            ControlEvent::AdoptNode { entity, node } => {
+                apply_structure_change(world, StructureChange::Adopt { entity, node });
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity

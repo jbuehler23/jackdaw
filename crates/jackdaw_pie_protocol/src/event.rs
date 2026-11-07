@@ -157,16 +157,25 @@ pub enum ControlEvent {
         dir: String,
         bsn: String,
     },
-    /// A node left the document: the game despawns every live entity of it.
+    /// A node left the document: the game despawns every live entity of it under a
+    /// root playing `scene`. Another file can share the document's ids.
     DespawnNode {
         node: u64,
+        scene: String,
     },
     /// A node moved in the document: under `parent`, or to the top of its scene for
-    /// `None`, after the sibling `follows`.
+    /// `None`, after the sibling `follows`, under every root playing `scene`.
     ReparentNode {
         node: u64,
         parent: Option<u64>,
         follows: Option<u64>,
+        scene: String,
+    },
+    /// A runtime entity of this game became the document's node `node`: it takes the
+    /// id and stays as it is. `entity` is the game's own entity, as bits.
+    AdoptNode {
+        entity: u64,
+        node: u64,
     },
 }
 

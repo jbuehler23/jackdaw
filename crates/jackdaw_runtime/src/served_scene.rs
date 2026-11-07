@@ -439,7 +439,13 @@ mod tests {
         app.update();
         assert_eq!(holders_of(&mut app, 32), 1);
 
-        send(&mut editor, &ControlEvent::DespawnNode { node: 32 });
+        send(
+            &mut editor,
+            &ControlEvent::DespawnNode {
+                node: 32,
+                scene: "scene.bsn".to_string(),
+            },
+        );
         app.update();
         assert_eq!(holders_of(&mut app, 32), 0);
     }

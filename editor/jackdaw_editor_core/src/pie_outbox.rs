@@ -652,7 +652,10 @@ mod tests {
     /// left, which the game would read ahead of the despawn.
     #[test]
     fn an_edit_stays_on_its_side_of_a_structural_change() {
-        let despawn = ControlEvent::DespawnNode { node: 1 };
+        let despawn = ControlEvent::DespawnNode {
+            node: 1,
+            scene: "level.bsn".to_string(),
+        };
         let shared = Shared::new();
         shared.push_edit(edit(1, &[(A, 1)], &[]));
         shared.push(to_bytes(&despawn).expect("encode"));

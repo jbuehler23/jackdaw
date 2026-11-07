@@ -8,9 +8,12 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use jackdaw::boot_ops::run_op_clause;
 use jackdaw::pie::InstanceKey;
+use jackdaw::pie_mirror::{PieInstances, PieViewMode};
+use jackdaw::pie_projection::{PieEphemeral, PieProjection};
 use jackdaw::play_scene::{LaunchScene, PlayScene, serve_scene};
 use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
 use jackdaw_api::prelude::*;
+use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, SceneBsnAst};
 use jackdaw_pie_protocol::event::{from_bytes, to_bytes};
 use jackdaw_pie_protocol::{ControlEvent, LoopbackTransport, PieChannel, PieTransport};
 use jackdaw_runtime::node_structure::{StructureChange, apply_structure_change};
@@ -195,21 +198,26 @@ fn read_in_game(world: &mut World, event: ControlEvent) {
                 bsn,
             },
         ),
-        ControlEvent::DespawnNode { node } => {
-            apply_structure_change(world, StructureChange::Despawn { node });
+        ControlEvent::DespawnNode { node, scene } => {
+            apply_structure_change(world, StructureChange::Despawn { node, scene });
         }
         ControlEvent::ReparentNode {
             node,
             parent,
             follows,
+            scene,
         } => apply_structure_change(
             world,
             StructureChange::Reparent {
                 node,
                 parent,
                 follows,
+                scene,
             },
         ),
+        ControlEvent::AdoptNode { entity, node } => {
+            apply_structure_change(world, StructureChange::Adopt { entity, node });
+        }
         other => panic!("not document sync: {other:?}"),
     }
 }
@@ -225,9 +233,15 @@ fn holders(world: &mut World, node: SceneNodeId) -> Vec<Entity> {
 
 /// What each node's entities are: their parent nodes, their place among the
 /// parent's nodes, their translation in thousandths and whether they hold a brush.
-/// Only the game has an entity above the top of the scene, so a place there is left
-/// out.
+/// The top of the scene is the document's roots in the editor, and the children of
+/// the scene root in the game.
 fn document_of(world: &mut World) -> BTreeMap<u64, Vec<(Option<u64>, usize, [i64; 3], bool)>> {
+    let roots: Option<Vec<u64>> = world.get_resource::<SceneBsnAst>().map(|ast| {
+        ast.roots
+            .iter()
+            .filter_map(|&root| ast.stable_id_of(root))
+            .collect()
+    });
     let mut query = world.query::<(Entity, &SceneNodeId, &Transform, Option<&Brush>)>();
     let mut held: BTreeMap<u64, Vec<(Option<u64>, usize, [i64; 3], bool)>> = BTreeMap::new();
     for (entity, node, transform, brush) in query.iter(world) {
@@ -239,16 +253,18 @@ fn document_of(world: &mut World) -> BTreeMap<u64, Vec<(Option<u64>, usize, [i64
             .translation
             .to_array()
             .map(|x| (x * 1000.0) as i64);
-        let place = parent
-            .filter(|_| parent_node.is_some())
-            .and_then(|parent| world.get::<Children>(parent))
-            .map_or(0, |children| {
-                children
-                    .iter()
-                    .filter(|child| world.get::<SceneNodeId>(*child).is_some())
-                    .position(|child| child == entity)
-                    .unwrap_or(0)
-            });
+        let place = match (&roots, parent_node) {
+            (Some(roots), None) => roots.iter().position(|root| *root == node.0).unwrap_or(0),
+            _ => parent
+                .and_then(|parent| world.get::<Children>(parent))
+                .map_or(0, |children| {
+                    children
+                        .iter()
+                        .filter(|child| world.get::<SceneNodeId>(*child).is_some())
+                        .position(|child| child == entity)
+                        .unwrap_or(0)
+                }),
+        };
         held.entry(node.0)
             .or_default()
             .push((parent_node, place, translation, brush.is_some()));
@@ -805,4 +821,226 @@ fn pie_structure_an_unsaved_tab_played_in_place_of_a_scene_goes_by_the_path_aske
         })
         .expect("the node goes to the game");
     assert_eq!(spawn, ("levels/main.bsn".to_string(), "levels".to_string()));
+}
+
+#[test]
+fn pie_structure_a_block_of_siblings_moved_lands_in_document_order() {
+    let mut made = Vec::new();
+    let mut s = session(|app| {
+        for _ in 0..4 {
+            made.push(cube(app));
+        }
+    });
+    s.assert_matches();
+    let block: Vec<Entity> = [made[2], made[3]]
+        .iter()
+        .map(|node| entity_of(&mut s.app, *node))
+        .collect();
+    jackdaw::selection::select_many(s.app.world_mut(), &block);
+    s.app.update();
+    menu(&mut s.app, "entity.move_up", true);
+    menu(&mut s.app, "entity.move_up", true);
+    s.assert_matches();
+
+    history(&mut s.app, "history.undo");
+    history(&mut s.app, "history.undo");
+    s.assert_matches();
+}
+
+#[test]
+fn pie_structure_save_to_scene_gives_the_runtime_entity_the_id_and_spawns_nothing() {
+    let mut s = session(|_| {});
+    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
+    let runtime = s.game.world_mut().spawn(Transform::default()).id();
+    s.game
+        .world_mut()
+        .entity_mut(runtime)
+        .insert(ChildOf(s.root));
+
+    let world = s.app.world_mut();
+    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
+    let preview = world
+        .spawn((PieEphemeral, Transform::default(), Visibility::default()))
+        .id();
+    world
+        .resource_mut::<PieProjection>()
+        .by_bits
+        .insert(runtime.to_bits(), preview);
+    world
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![preview];
+    jackdaw::pie::save_live_entity_to_scene(world);
+    s.app.update();
+    let node = *s
+        .app
+        .world()
+        .get::<SceneNodeId>(preview)
+        .expect("the entity holds a node");
+
+    let events = s.deliver();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ControlEvent::SpawnNode { .. })),
+        "the game holds it already: {events:?}"
+    );
+    assert_eq!(
+        s.holders(node),
+        vec![runtime],
+        "the game's entity took the id"
+    );
+
+    delete(&mut s.app, node);
+    s.assert_matches();
+    assert!(
+        s.game.world().get_entity(runtime).is_err(),
+        "a delete takes it"
+    );
+}
+
+/// An edit elsewhere must not be lost with the promotion that shares its frame.
+#[test]
+fn pie_structure_save_to_scene_leaves_other_changes_of_the_frame_to_go() {
+    let mut s = session(|_| {});
+    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
+    let added = cube(&mut s.app);
+    let world = s.app.world_mut();
+    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
+    let preview = world.spawn((PieEphemeral, Transform::default())).id();
+    world
+        .resource_mut::<PieProjection>()
+        .by_bits
+        .insert(77, preview);
+    world
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![preview];
+    jackdaw::pie::save_live_entity_to_scene(world);
+    s.app.update();
+
+    let events: Vec<ControlEvent> = collect_changes_for(s.app.world_mut(), &[key()])
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ControlEvent::SpawnNode { node, .. } if *node == added.0)),
+        "{events:?}"
+    );
+}
+
+/// Saving gives an unsaved tab a path, and a Save As moves one: the game goes on
+/// playing the document by the path it asked for.
+#[test]
+fn pie_structure_goes_on_after_the_tab_is_saved_and_saved_elsewhere() {
+    let (mut app, dir) = editor();
+    cube(&mut app);
+    assert!(collect_node_changes(app.world_mut()).is_empty());
+    let name = app
+        .world()
+        .resource::<jackdaw::scenes::Scenes>()
+        .tabs
+        .last()
+        .expect("a tab")
+        .display_name
+        .clone();
+    let launch = LaunchScene {
+        replaces: "main.bsn".to_string(),
+        scene: PlayScene::Untitled(name),
+    };
+    serve_scene(app.world_mut(), &key(), Some(&launch), "main.bsn");
+
+    for folder in ["first", "second"] {
+        let path = dir.path().join("assets").join(folder).join("level.bsn");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("a folder");
+        app.world_mut()
+            .operator("scene.save")
+            .param("path", path.to_string_lossy().into_owned())
+            .call()
+            .expect("scene.save dispatches")
+            .assert_finished();
+        app.update();
+
+        let added = cube(&mut app);
+        let spawn = collect_changes_for(app.world_mut(), &[key()])
+            .into_iter()
+            .find_map(|(_, event)| match event {
+                ControlEvent::SpawnNode {
+                    node, scene, dir, ..
+                } if node == added.0 => Some((scene, dir)),
+                _ => None,
+            });
+        assert_eq!(
+            spawn,
+            Some(("main.bsn".to_string(), folder.to_string())),
+            "after saving to {folder}"
+        );
+    }
+}
+
+#[test]
+fn pie_structure_a_game_takes_nothing_from_a_tab_opened_on_another_file() {
+    let (mut app, _dir) = editor();
+    cube(&mut app);
+    assert!(collect_node_changes(app.world_mut()).is_empty());
+    serve_scene(app.world_mut(), &key(), None, "elsewhere.bsn");
+    cube(&mut app);
+    let sends = collect_changes_for(app.world_mut(), &[key()]);
+    assert!(sends.is_empty(), "{sends:?}");
+}
+
+/// A node with a patch no reader takes.
+fn add_unreadable_node(app: &mut App) -> (SceneNodeId, Entity) {
+    let node = SceneNodeId::next();
+    let mut ast = app.world_mut().resource_mut::<SceneBsnAst>();
+    let unreadable = ast.world.spawn(BsnPatch::Struct(BsnStructData {
+        type_path: String::new(),
+        fields: BsnStructFields(vec![BsnField {
+            name: "0".into(),
+            value: BsnValue::Int(1),
+        }]),
+    }));
+    let unreadable = unreadable.id();
+    let held = ast.create_entity_node(vec![jackdaw::scene_nodes::node_id_patch(node)]);
+    ast.get_patches_mut(held)
+        .expect("patches")
+        .0
+        .push(unreadable);
+    ast.add_to_roots(held);
+    (node, unreadable)
+}
+
+/// Text that would not read never goes, the user hears, and the node goes once it
+/// reads: it was not counted as sent.
+#[test]
+fn pie_structure_text_that_does_not_read_back_is_refused_and_tried_again() {
+    let mut s = session(|_| {});
+    let (node, unreadable) = add_unreadable_node(&mut s.app);
+
+    let events = s.deliver();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ControlEvent::SpawnNode { .. })),
+        "{events:?}"
+    );
+    let notice = s
+        .app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>();
+    assert!(notice.is_active(), "the user is told");
+    assert!(notice.text().contains("game"), "{}", notice.text());
+
+    s.app
+        .world_mut()
+        .resource_mut::<SceneBsnAst>()
+        .set_patch(unreadable, BsnPatch::Name("Fixed".to_string()));
+    let events = s.deliver();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, ControlEvent::SpawnNode { node: sent, .. } if *sent == node.0)
+        ),
+        "{events:?}"
+    );
+    assert_eq!(s.holders(node).len(), 1);
 }

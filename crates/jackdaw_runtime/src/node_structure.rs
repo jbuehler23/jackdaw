@@ -37,15 +37,19 @@ pub enum StructureChange {
         dir: String,
         bsn: String,
     },
-    /// Despawn every entity of `node`, with everything below it.
-    Despawn { node: u64 },
-    /// Move every entity of `node` under `parent`, or for `None` to the top of its
-    /// scene, after the sibling `follows`.
+    /// Despawn every entity of `node` under a root playing `scene`, with everything
+    /// below it.
+    Despawn { node: u64, scene: String },
+    /// Move every entity of `node` under a root playing `scene` under `parent`, or
+    /// for `None` to the top of its scene, after the sibling `follows`.
     Reparent {
         node: u64,
         parent: Option<u64>,
         follows: Option<u64>,
+        scene: String,
     },
+    /// The runtime entity `entity`, as bits, takes the id `node`.
+    Adopt { entity: u64, node: u64 },
 }
 
 /// The asset path a root asked the editor for, which outlives its handle being
@@ -66,7 +70,7 @@ struct Held {
 /// Apply `change` to what has spawned, and hold it for any root yet to spawn.
 pub fn apply_structure_change(world: &mut World, change: StructureChange) {
     apply_within(world, &change, None);
-    if scene_root_awaiting_spawn(world) {
+    if !matches!(change, StructureChange::Adopt { .. }) && scene_root_awaiting_spawn(world) {
         let delivered = spawned_roots(world).into_iter().collect();
         world
             .get_resource_or_init::<HeldStructure>()
@@ -117,12 +121,14 @@ fn apply_within(world: &mut World, change: &StructureChange, only: Option<Entity
             },
             only,
         ),
-        StructureChange::Despawn { node } => despawn_node(world, *node, only),
+        StructureChange::Despawn { node, scene } => despawn_node(world, *node, scene, only),
         StructureChange::Reparent {
             node,
             parent,
             follows,
-        } => reparent_node(world, *node, *parent, *follows, only),
+            scene,
+        } => reparent_node(world, *node, *parent, *follows, scene, only),
+        StructureChange::Adopt { entity, node } => adopt_node(world, *entity, *node),
     }
 }
 
@@ -161,7 +167,7 @@ fn spawn_node(world: &mut World, spawn: &Spawning, only: Option<Entity>) {
             .map(|root| (root, None))
             .collect(),
         Some(parent) => {
-            let holders = unit_holders(world, parent);
+            let holders = holders_in_scene(world, parent, spawn.scene);
             if holders.is_empty() && !scene_root_awaiting_spawn(world) {
                 warn!(
                     "PIE: the node {} goes under {parent}, which this game does not have",
@@ -209,8 +215,17 @@ fn forget_older_edits(world: &mut World, ast: &jackdaw_bsn::SceneBsnAst) {
     }
 }
 
-fn despawn_node(world: &mut World, node: u64, only: Option<Entity>) {
-    for entity in unit_holders(world, node) {
+fn adopt_node(world: &mut World, entity: u64, node: u64) {
+    match world.get_entity_mut(Entity::from_bits(entity)) {
+        Ok(mut held) => {
+            held.insert(SceneNodeId(node));
+        }
+        Err(_) => warn!("PIE: the entity saved as the node {node} is gone from this game"),
+    }
+}
+
+fn despawn_node(world: &mut World, node: u64, scene: &str, only: Option<Entity>) {
+    for entity in holders_in_scene(world, node, scene) {
         if only.is_some_and(|only| instance_of(world, entity) != Some(only)) {
             continue;
         }
@@ -226,16 +241,17 @@ fn reparent_node(
     node: u64,
     parent: Option<u64>,
     follows: Option<u64>,
+    scene: &str,
     only: Option<Entity>,
 ) {
-    for entity in unit_holders(world, node) {
+    for entity in holders_in_scene(world, node, scene) {
         let root = instance_of(world, entity);
         if only.is_some_and(|only| root != Some(only)) {
             continue;
         }
         match parent {
             Some(parent) => {
-                let Some(target) = parent_in_instance(world, parent, root) else {
+                let Some(target) = parent_in_instance(world, parent, scene, root) else {
                     if !scene_root_awaiting_spawn(world) {
                         warn!(
                             "PIE: the node {node} moves under {parent}, which this game does not \
@@ -264,8 +280,13 @@ fn reparent_node(
 
 /// The entity of `parent` to move a child of the root `root` under: the one in that
 /// root, or the only one there is.
-fn parent_in_instance(world: &World, parent: u64, root: Option<Entity>) -> Option<Entity> {
-    let holders = unit_holders(world, parent);
+fn parent_in_instance(
+    world: &World,
+    parent: u64,
+    scene: &str,
+    root: Option<Entity>,
+) -> Option<Entity> {
+    let holders = holders_in_scene(world, parent, scene);
     holders
         .iter()
         .copied()
@@ -359,6 +380,16 @@ fn unit_holders(world: &World, node: u64) -> Vec<Entity> {
         .collect()
 }
 
+/// The entities of `node` under a root playing `scene`, or under no root at all: a
+/// runtime entity saved as a node, which only this document names. Another file the
+/// game plays can share the document's ids.
+fn holders_in_scene(world: &World, node: u64, scene: &str) -> Vec<Entity> {
+    unit_holders(world, node)
+        .into_iter()
+        .filter(|&entity| instance_of(world, entity).is_none_or(|root| plays(world, root, scene)))
+        .collect()
+}
+
 fn below_instance_root(world: &World, entity: Entity) -> bool {
     let mut at = world.get::<ChildOf>(entity);
     while let Some(child_of) = at {
@@ -394,21 +425,22 @@ fn spawned_roots(world: &mut World) -> Vec<Entity> {
 
 /// The spawned roots playing the asset path `scene`.
 fn roots_playing(world: &mut World, scene: &str) -> Vec<Entity> {
-    world
-        .query_filtered::<(Entity, &JackdawSceneRoot, Option<&PlayedAs>), With<SceneSpawned>>()
-        .iter(world)
-        .filter(|(_, root, played)| {
-            let path = match played {
-                Some(played) => Some(played.0.clone()),
-                None => root
-                    .0
-                    .path()
-                    .map(|path| path.path().to_string_lossy().into_owned()),
-            };
-            path.is_some_and(|path| path.replace('\\', "/") == scene)
-        })
-        .map(|(entity, ..)| entity)
+    spawned_roots(world)
+        .into_iter()
+        .filter(|&root| plays(world, root, scene))
         .collect()
+}
+
+/// Whether the root `root` plays the asset path `scene`.
+fn plays(world: &World, root: Entity, scene: &str) -> bool {
+    let path = match world.get::<PlayedAs>(root) {
+        Some(played) => Some(played.0.clone()),
+        None => world
+            .get::<JackdawSceneRoot>(root)
+            .and_then(|root| root.0.path())
+            .map(|path| path.path().to_string_lossy().into_owned()),
+    };
+    path.is_some_and(|path| path.replace('\\', "/") == scene)
 }
 
 #[cfg(test)]
@@ -491,6 +523,7 @@ mod tests {
                 node: 2,
                 parent: Some(1),
                 follows: None,
+                scene: "level.bsn".to_string(),
             },
         );
         for &entity in &added {
@@ -510,10 +543,80 @@ mod tests {
             );
         }
 
-        apply_structure_change(app.world_mut(), StructureChange::Despawn { node: 1 });
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Despawn {
+                node: 1,
+                scene: "level.bsn".to_string(),
+            },
+        );
         assert!(holders(&mut app, 1).is_empty());
         assert!(holders(&mut app, 2).is_empty());
         app.update();
+    }
+
+    /// A copy of a file keeps its ids, and a game can play both.
+    #[test]
+    fn a_change_stays_in_the_scene_it_names_when_another_file_shares_its_ids() {
+        let mut app = app();
+        let both = format!("{}--\n{}", node_text(1), node_text(2));
+        let text = format!("bevy_ecs::hierarchy::Children [\n{both}]\n");
+        root_with(&mut app, "level.bsn", &text);
+        let other = root_with(&mut app, "copy.bsn", &text);
+        let in_other = |app: &mut App, node: u64| -> Vec<Entity> {
+            holders(app, node)
+                .into_iter()
+                .filter(|&entity| instance_of(app.world(), entity) == Some(other))
+                .collect()
+        };
+        let copy_of_two = in_other(&mut app, 2)[0];
+
+        apply_structure_change(app.world_mut(), spawn_change(3, Some(1), None));
+        assert_eq!(holders(&mut app, 3).len(), 1, "under level.bsn alone");
+
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Reparent {
+                node: 2,
+                parent: Some(1),
+                follows: None,
+                scene: "level.bsn".to_string(),
+            },
+        );
+        assert_eq!(parent_of(&app, copy_of_two), Some(other), "the copy stays");
+
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Despawn {
+                node: 1,
+                scene: "level.bsn".to_string(),
+            },
+        );
+        assert_eq!(in_other(&mut app, 1).len(), 1, "the copy keeps its node");
+        assert_eq!(holders(&mut app, 1).len(), 1);
+    }
+
+    #[test]
+    fn a_runtime_entity_takes_the_id_it_is_given_and_goes_with_it() {
+        let mut app = app();
+        root_with(&mut app, "level.bsn", &node_text(1));
+        let runtime = app.world_mut().spawn(Transform::default()).id();
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Adopt {
+                entity: runtime.to_bits(),
+                node: 5,
+            },
+        );
+        assert_eq!(holders(&mut app, 5), vec![runtime]);
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Despawn {
+                node: 5,
+                scene: "level.bsn".to_string(),
+            },
+        );
+        assert!(app.world().get_entity(runtime).is_err());
     }
 
     #[test]
@@ -539,6 +642,7 @@ mod tests {
                 node: 1,
                 parent: Some(99),
                 follows: None,
+                scene: "level.bsn".to_string(),
             },
         );
         let entity = holders(&mut app, 1)[0];
@@ -568,7 +672,13 @@ mod tests {
         assert_eq!(added.len(), 1, "only the node of the scene takes the child");
         assert_eq!(parent_of(&app, added[0]), Some(unit));
 
-        apply_structure_change(app.world_mut(), StructureChange::Despawn { node: 1 });
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Despawn {
+                node: 1,
+                scene: "level.bsn".to_string(),
+            },
+        );
         assert!(app.world().get_entity(unit).is_err());
         assert!(
             app.world().get_entity(inner).is_ok(),
@@ -600,6 +710,7 @@ mod tests {
                 node: 4,
                 parent: None,
                 follows: Some(3),
+                scene: "level.bsn".to_string(),
             },
         );
         assert_eq!(order(&app), vec![1, 2, 3, 4]);
@@ -619,6 +730,7 @@ mod tests {
                 node: 2,
                 parent: None,
                 follows: None,
+                scene: "level.bsn".to_string(),
             },
         );
         assert_eq!(
@@ -633,7 +745,13 @@ mod tests {
                 .contains(&child)
         );
 
-        apply_structure_change(app.world_mut(), StructureChange::Despawn { node: 2 });
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Despawn {
+                node: 2,
+                scene: "level.bsn".to_string(),
+            },
+        );
         assert!(
             !app.world()
                 .get::<SceneInstanceMembers>(root)
