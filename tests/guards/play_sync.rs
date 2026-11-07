@@ -607,3 +607,50 @@ fn pie_sync_an_edit_to_a_nested_node_of_an_opened_scene_lands_in_the_game() {
     deliver(&mut app, &mut link, &mut game_end, &mut game);
     assert_eq!(game_x(&game, entity), 3.0);
 }
+
+#[test]
+fn a_list_field_set_shorter_by_path_loses_its_tail_and_undo_restores_it() {
+    let (mut app, _dir, rock) = playing();
+    app.register_type::<Waypoints>();
+    let waypoints = Waypoints::type_path();
+    add_component(&mut app, rock, waypoints);
+    set_field(&mut app, rock, waypoints, "points", "[1.0, 2.0, 3.0]");
+
+    set_field(&mut app, rock, waypoints, "points", "[7.0]");
+    let entity = entity_of(&mut app, rock);
+    let points = |app: &App| {
+        app.world()
+            .get::<Waypoints>(entity)
+            .map(|w| w.points.clone())
+    };
+    assert_eq!(points(&app), Some(vec![7.0]));
+    let (_, set, _) = only(collect_node_changes(app.world_mut()));
+    assert_eq!(sent(&set, waypoints)["points"], serde_json::json!([7.0]));
+
+    history(&mut app, "history.undo");
+    assert_eq!(points(&app), Some(vec![1.0, 2.0, 3.0]));
+}
+
+#[test]
+fn a_brush_field_set_by_path_keeps_the_face_materials() {
+    let (mut app, _dir, rock) = playing();
+    let stone = embed_stone(app.world_mut());
+    set_field(&mut app, rock, BRUSH, "faces[0].material", "\"#Stone\"");
+    let entity = entity_of(&mut app, rock);
+    let material = |app: &App| {
+        app.world()
+            .get::<Brush>(entity)
+            .map(|b| b.faces[0].material.clone())
+    };
+    assert_eq!(material(&app), Some(stone.clone()));
+
+    set_field(&mut app, rock, BRUSH, "faces[0].uv_scale", "[2.0, 2.0]");
+    assert_eq!(material(&app), Some(stone.clone()));
+    set_field(&mut app, rock, BRUSH, "faces[1].uv_offset", "[0.5, 0.5]");
+    assert_eq!(material(&app), Some(stone));
+    let (_, set, _) = only(collect_node_changes(app.world_mut()));
+    let sent_name = sent(&set, BRUSH)["faces"][0]["material"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(sent_name.starts_with("#Play"), "still named: {sent_name}");
+}

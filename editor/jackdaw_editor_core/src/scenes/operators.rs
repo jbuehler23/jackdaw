@@ -828,24 +828,6 @@ fn tabs_with_files(world: &World) -> Vec<usize> {
     with_path
 }
 
-/// Every tab that has a file and unsaved changes, leaving clean and untitled tabs
-/// out.
-pub(crate) fn modified_tabs(world: &World) -> Vec<usize> {
-    let active_modified = active_tab_modified(world);
-    let scenes = world.resource::<Scenes>();
-    scenes
-        .tabs
-        .iter()
-        .enumerate()
-        .filter(|(i, tab)| {
-            tab.path.is_some()
-                && !tab.is_refused()
-                && (tab.dirty || (*i == scenes.active && active_modified))
-        })
-        .map(|(i, _)| i)
-        .collect()
-}
-
 /// Whether the active tab has changes no save has written, counting an edit
 /// made this frame that the dirty tracking has not seen yet.
 pub fn active_tab_modified(world: &World) -> bool {

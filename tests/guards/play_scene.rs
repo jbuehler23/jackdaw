@@ -337,22 +337,15 @@ fn a_launch_scene_answers_for_the_scene_it_replaces() {
         "JACKDAW_PIE_SCENE".to_string(),
         "levels/meadow.bsn".to_string(),
     );
-    assert_eq!(launch_scene(app.world(), &named), None);
-    let redirected = jackdaw::pie::run_with_open_scene(app.world(), named);
-    assert_eq!(
-        redirected.env["JACKDAW_PIE_SCENE"], "levels/meadow.bsn",
-        "the run configuration's scene stands"
-    );
-    assert_eq!(
-        scene_answer(app.world_mut(), None, "levels/meadow.bsn"),
-        use_file("levels/meadow.bsn"),
-        "the game asks for the scene it was told, not the one in front"
-    );
-
     let launch = LaunchScene {
         replaces: "scene.bsn".to_string(),
         scene: PlayScene::Path("levels/meadow.bsn".to_string()),
     };
+    assert_eq!(
+        launch_scene(app.world(), &named),
+        Some(launch.clone()),
+        "the run configuration's scene stands, not the one in front"
+    );
     assert_eq!(
         scene_answer(app.world_mut(), Some(&launch), "scene.bsn"),
         use_file("levels/meadow.bsn"),

@@ -159,8 +159,6 @@ mod pixel_canvas;
 pub use pixel_canvas::{
     CANVAS_ORDER, CanvasCursor, PixelCanvasExpanded, PixelCanvasHelper, PixelCanvasPlugin,
 };
-mod play_scene;
-pub use play_scene::PieSceneOverride;
 #[cfg(feature = "render")]
 mod sampling;
 #[cfg(feature = "render")]
@@ -366,14 +364,6 @@ impl Plugin for JackdawPlugin {
         // When `JACKDAW_PIE` is set, open the ipc-channel link to the editor
         // and attach the PIE stream / control systems. A connect failure logs
         // and leaves the runtime untouched.
-        #[cfg(feature = "pie")]
-        if let Some(play_scene) = play_scene::override_from_env() {
-            app.insert_resource(play_scene);
-        }
-        if app.world().contains_resource::<PieSceneOverride>() {
-            app.add_observer(play_scene::redirect_scene_root);
-        }
-
         #[cfg(feature = "pie")]
         if let Some(cfg) = pie::pie_config() {
             match jackdaw_pie_protocol::connect(&cfg.server) {

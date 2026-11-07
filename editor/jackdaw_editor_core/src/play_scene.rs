@@ -60,50 +60,48 @@ pub enum PlayScene {
     Untitled(String),
 }
 
-/// The scene the scene in front makes `run` play, if any. A run configuration
-/// or project setting that names a scene keeps it, so the scene in front does
-/// not take its place.
+/// What `run` plays in place of the game's main scene, if anything: the scene a
+/// project setting or the run configuration names in `JACKDAW_PIE_SCENE`, or else
+/// the scene in front.
 pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
-    launch_scene_of_tab(world, run, world.get_resource::<Scenes>()?.active)
+    let _span = info_span!("play.launch_scene").entered();
+    let replaces =
+        named_path(world, run, "JACKDAW_PIE_REPLACES").unwrap_or_else(|| MAIN_SCENE.to_string());
+    let scene = match named_path(world, run, "JACKDAW_PIE_SCENE") {
+        Some(named) if named == replaces => return None,
+        Some(named) => PlayScene::Path(named),
+        None => scene_in_front(world)?,
+    };
+    Some(LaunchScene { replaces, scene })
 }
 
-/// [`launch_scene`] for the scene in tab `index`.
-pub(crate) fn launch_scene_of_tab(
-    world: &World,
-    run: &RunConfig,
-    index: usize,
-) -> Option<LaunchScene> {
-    let _span = info_span!("play.launch_scene").entered();
-    let names_scene = run.env.contains_key("JACKDAW_PIE_SCENE")
-        || world
-            .get_resource::<crate::play_settings::PlaySettings>()
-            .is_some_and(|settings| settings.env.contains_key("JACKDAW_PIE_SCENE"));
-    if names_scene {
-        return None;
-    }
+/// The asset path in the variable `key`, a project setting winning over the run
+/// configuration as it does in the game's environment. Empty names nothing.
+fn named_path(world: &World, run: &RunConfig, key: &str) -> Option<String> {
+    world
+        .get_resource::<crate::play_settings::PlaySettings>()
+        .and_then(|settings| settings.env.get(key))
+        .or_else(|| run.env.get(key))
+        .filter(|path| !path.is_empty())
+        .map(|path| path.replace('\\', "/"))
+}
+
+fn scene_in_front(world: &World) -> Option<PlayScene> {
     let scenes = world.get_resource::<Scenes>()?;
+    let index = scenes.active;
     let tab = scenes.tabs.get(index)?;
     if tab.kind != TabKind::Scene || tab.is_refused() {
         return None;
     }
-    let modified = if index == scenes.active {
-        crate::scenes::operators::active_tab_modified(world)
-    } else {
-        tab.dirty
-    };
-    let scene = match &tab.path {
-        None if modified => PlayScene::Untitled(tab.display_name.clone()),
-        None => return None,
-        Some(_) => PlayScene::Path(
-            crate::pie::scene_asset_path_of_tab(world, index).filter(|s| s != MAIN_SCENE)?,
-        ),
-    };
-    let replaces = run
-        .env
-        .get("JACKDAW_PIE_REPLACES")
-        .cloned()
-        .unwrap_or_else(|| MAIN_SCENE.to_string());
-    Some(LaunchScene { replaces, scene })
+    match &tab.path {
+        None if crate::scenes::operators::active_tab_modified(world) => {
+            Some(PlayScene::Untitled(tab.display_name.clone()))
+        }
+        None => None,
+        Some(_) => crate::pie::scene_asset_path_of_tab(world, index)
+            .filter(|path| path != MAIN_SCENE)
+            .map(PlayScene::Path),
+    }
 }
 
 /// What the game spawns for a root asking for the asset path `requested`, for an

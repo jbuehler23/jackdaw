@@ -165,10 +165,6 @@ pub(crate) struct EditorBuildSettings {
     /// When true, the editor compiles the game once in the background as
     /// the project opens, so the first Play is instant. On by default.
     pub(crate) prebuild: bool,
-    /// When true, Play saves every modified scene that has a file before it
-    /// starts the game, so the game loads what the editor shows. On by
-    /// default.
-    pub(crate) save_before_play: bool,
 }
 
 impl Default for EditorBuildSettings {
@@ -176,7 +172,6 @@ impl Default for EditorBuildSettings {
         Self {
             auto_build: false,
             prebuild: true,
-            save_before_play: true,
         }
     }
 }
@@ -473,7 +468,6 @@ mod tests {
         world.insert_resource(EditorBuildSettings {
             auto_build: false,
             prebuild,
-            save_before_play: true,
         });
         world.insert_resource(crate::project::ProjectRoot {
             root: std::env::temp_dir().join("jackdaw-prebuild-test-no-such-project"),
