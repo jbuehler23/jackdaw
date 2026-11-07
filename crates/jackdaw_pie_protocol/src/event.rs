@@ -44,6 +44,12 @@ pub enum StateEvent {
     },
     /// The game declined a frame stream because it opened its own window.
     OwnWindow,
+    /// The game could not spawn the node a [`ControlEvent::SpawnNode`] named, so it
+    /// no longer matches the document.
+    NodeSpawnFailed {
+        node: u64,
+        reason: String,
+    },
 }
 
 /// What the game spawns a requested scene from.
@@ -143,6 +149,46 @@ pub enum ControlEvent {
     /// file.
     PrefabFiles {
         files: Vec<(String, Option<String>)>,
+    },
+    /// A node joined the document the game plays. `bsn` is the node's subtree as
+    /// document text, without the nodes that already exist. The game spawns it
+    /// under every live entity of `parent`, or for `None` under every root playing
+    /// `scene`, the asset path the game asked for. `follows` is the sibling it comes
+    /// after, and `dir` the folder the text counts as being in under the asset folder.
+    SpawnNode {
+        node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+        scene: String,
+        dir: String,
+        bsn: String,
+    },
+    /// A node left the document: the game despawns every live entity of it under a
+    /// root playing `scene`. Another file can share the document's ids.
+    DespawnNode {
+        node: u64,
+        scene: String,
+    },
+    /// A node moved in the document: under `parent`, or to the top of its scene for
+    /// `None`, after the sibling `follows`, under every root playing `scene`.
+    ReparentNode {
+        node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+        scene: String,
+    },
+    /// A runtime entity of this game became the document's node `node`: it takes the
+    /// id and stays as it is. `entity` is the game's own entity, as bits. If that
+    /// entity has gone by now, the rest is what [`Self::SpawnNode`] holds, to spawn
+    /// the node from instead.
+    AdoptNode {
+        entity: u64,
+        node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+        scene: String,
+        dir: String,
+        bsn: String,
     },
 }
 

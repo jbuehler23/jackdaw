@@ -648,6 +648,24 @@ mod tests {
         );
     }
 
+    /// An edit made after a node came back must not merge into one from before it
+    /// left, which the game would read ahead of the despawn.
+    #[test]
+    fn an_edit_stays_on_its_side_of_a_structural_change() {
+        let despawn = ControlEvent::DespawnNode {
+            node: 1,
+            scene: "level.bsn".to_string(),
+        };
+        let shared = Shared::new();
+        shared.push_edit(edit(1, &[(A, 1)], &[]));
+        shared.push(to_bytes(&despawn).expect("encode"));
+        shared.push_edit(edit(1, &[(A, 2)], &[]));
+        assert_eq!(
+            drain(&shared),
+            vec![sent(1, &[(A, 1)], &[]), despawn, sent(1, &[(A, 2)], &[])]
+        );
+    }
+
     /// An edit naming an asset must not merge into an edit queued ahead of the
     /// asset's definition.
     #[test]

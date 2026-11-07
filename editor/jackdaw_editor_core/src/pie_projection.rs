@@ -666,6 +666,7 @@ pub fn project_event(world: &mut World, event: StateEvent) {
         StateEvent::CursorState { .. }
         | StateEvent::RequestScene { .. }
         | StateEvent::SceneRequestAbandoned { .. }
+        | StateEvent::NodeSpawnFailed { .. }
         | StateEvent::OwnWindow => {}
     }
 }

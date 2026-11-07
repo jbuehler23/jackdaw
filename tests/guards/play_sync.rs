@@ -20,7 +20,7 @@ use crate::util::OperatorResultExt as _;
 const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
 const NAME: &str = "bevy_ecs::name::Name";
 
-fn cube(app: &mut App) -> SceneNodeId {
+pub(super) fn cube(app: &mut App) -> SceneNodeId {
     let before = nodes(app);
     menu(app, "entity.add.cube", true);
     nodes(app)
@@ -29,7 +29,7 @@ fn cube(app: &mut App) -> SceneNodeId {
         .expect("the menu added a node")
 }
 
-fn nodes(app: &mut App) -> Vec<SceneNodeId> {
+pub(super) fn nodes(app: &mut App) -> Vec<SceneNodeId> {
     app.world_mut()
         .query::<&SceneNodeId>()
         .iter(app.world())
@@ -37,7 +37,7 @@ fn nodes(app: &mut App) -> Vec<SceneNodeId> {
         .collect()
 }
 
-fn entity_of(app: &mut App, node: SceneNodeId) -> Entity {
+pub(super) fn entity_of(app: &mut App, node: SceneNodeId) -> Entity {
     app.world_mut()
         .query::<(Entity, &SceneNodeId)>()
         .iter(app.world())
@@ -55,7 +55,7 @@ fn x_of(app: &mut App, node: SceneNodeId) -> f32 {
         .x
 }
 
-fn move_to(app: &mut App, node: SceneNodeId, x: f64) {
+pub(super) fn move_to(app: &mut App, node: SceneNodeId, x: f64) {
     let entity = entity_of(app, node);
     app.world_mut()
         .operator("entity.set_transform")
@@ -299,7 +299,7 @@ fn pie_sync_undoing_a_derived_component_edit_sends_its_value() {
 
 /// A material the open scene embeds as `name`, as a loaded scene file's named
 /// asset entries are.
-fn embed_as(world: &mut World, name: &str) -> Handle<StandardMaterial> {
+pub(super) fn embed_as(world: &mut World, name: &str) -> Handle<StandardMaterial> {
     let stone = world
         .resource_mut::<Assets<StandardMaterial>>()
         .add(StandardMaterial::default());
@@ -497,7 +497,7 @@ fn pie_sync_an_edit_made_before_the_scene_spawns_lands_once_it_spawns() {
 
 /// Change the brush the way the brush tools do: on the entity, which the
 /// editor mirrors into the document.
-fn edit_brush(app: &mut App, rock: SceneNodeId, edit: impl FnOnce(&mut Brush)) {
+pub(super) fn edit_brush(app: &mut App, rock: SceneNodeId, edit: impl FnOnce(&mut Brush)) {
     let entity = entity_of(app, rock);
     let world = app.world_mut();
     let mut brush = world.get::<Brush>(entity).expect("a brush").clone();

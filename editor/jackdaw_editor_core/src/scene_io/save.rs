@@ -1170,6 +1170,23 @@ pub(crate) fn live_document_for_game(world: &mut World, parent_path: &Path) -> G
             live_assets: Default::default(),
         };
     };
+    game_document(world, authored)
+}
+
+/// `part`, a copy of some of the live document's nodes still linked to their
+/// entities, the way [`live_document_for_game`] makes the whole document.
+pub(crate) fn part_of_live_document_for_game(
+    world: &mut World,
+    part: jackdaw_bsn::SceneBsnAst,
+    parent_path: &Path,
+) -> GameDocument {
+    let held = crate::preview_context::suspend_preview_writes(world);
+    let authored = author(world, part, parent_path, SourceSpelling::RelativeToFile);
+    crate::preview_context::resume_preview_writes(world, held);
+    game_document(world, authored)
+}
+
+fn game_document(world: &World, authored: AuthoredDocument) -> GameDocument {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let absolute = absolute_fields(world, &authored.ast, &registry);
     let mut live_assets: bevy::platform::collections::HashMap<String, UntypedAssetId> = world

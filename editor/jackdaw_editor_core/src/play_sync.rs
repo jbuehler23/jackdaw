@@ -12,6 +12,12 @@
 //! remote edits all change the document, so no command needs to report its
 //! own edit.
 //!
+//! A node added, removed or moved reaches a game playing the document as a
+//! [`ControlEvent::SpawnNode`], [`ControlEvent::DespawnNode`] or
+//! [`ControlEvent::ReparentNode`], worked out in `play_structure`. They go ahead of
+//! the frame's component edits, which never cross them in the outbox. Each frame
+//! the document's structure changed costs one walk of its tree.
+//!
 //! An edit naming a runtime asset a game has not been given goes behind a
 //! [`ControlEvent::SceneAssets`] holding the asset's definition, the way served
 //! text embeds it, and one naming an asset file behind a
@@ -41,7 +47,8 @@ use serde::Serializer;
 use crate::pie::{InstanceKey, SyncTarget};
 use crate::pie_mirror::PieViewMode;
 use crate::pie_projection::PieProjection;
-use crate::play_scene::{AssetFile, asset_files_missing_from};
+use crate::play_scene::{AskedScene, AssetFile, asset_files_missing_from};
+use crate::play_structure::{StructureStep, Tree};
 use crate::prefab::resolver_bsn::ISA_TYPE;
 use crate::project_types::ProjectTypes;
 
@@ -63,6 +70,15 @@ pub struct DocumentSync {
     /// An asset took a new session name, so the next collection looks at every
     /// node, whether or not the document changed.
     rescan: bool,
+    /// Document nodes that were runtime entities of a game, by node. That game takes
+    /// the id, and every other game takes the node as any new one.
+    adoptions: HashMap<u64, Adoption>,
+}
+
+/// The game holding a runtime entity, and the entity as bits.
+struct Adoption {
+    game: InstanceKey,
+    entity: u64,
 }
 
 impl DocumentSync {
@@ -71,6 +87,13 @@ impl DocumentSync {
     pub fn forget(&mut self) {
         self.seen = None;
         self.rescan = false;
+        self.adoptions.clear();
+    }
+
+    /// The entity `entity`, as bits, of the game `game` is the document's new node
+    /// `node` from here on.
+    pub(crate) fn note_adopted(&mut self, game: InstanceKey, entity: u64, node: u64) {
+        self.adoptions.insert(node, Adoption { game, entity });
     }
 }
 
@@ -79,6 +102,10 @@ struct Seen {
     document_tick: Tick,
     world_tick: Tick,
     nodes: HashMap<u64, Components>,
+    /// The tree as last sent, and the tab it belongs to.
+    tree: Tree,
+    tab: Option<u64>,
+    roots: Vec<Entity>,
     /// Changed nodes that had no editor entity, looked at again the next time
     /// the document changes.
     retry: HashSet<u64>,
@@ -102,6 +129,15 @@ fn forget_on_stop(mut sync: ResMut<DocumentSync>) {
 struct NodeChange {
     event: ControlEvent,
     assets: UsedAssets,
+}
+
+/// What one collection found.
+#[derive(Default)]
+struct Collected {
+    structure: Vec<StructureStep>,
+    /// The nodes that exist on both sides of `structure`.
+    existing: HashSet<u64>,
+    edits: Vec<NodeChange>,
 }
 
 /// The assets a value names that a game may not hold.
@@ -165,7 +201,12 @@ pub(crate) fn absorb_document_changes(world: &mut World) {
 /// changed node. The first call after [`DocumentSync::forget`] records the
 /// document and returns nothing.
 pub fn collect_node_changes(world: &mut World) -> Vec<ControlEvent> {
-    collect_changes(world)
+    let collected = collect_changes(world);
+    if let Some(mut sync) = world.get_resource_mut::<DocumentSync>() {
+        sync.adoptions.clear();
+    }
+    collected
+        .edits
         .into_iter()
         .map(|change| change.event)
         .collect()
@@ -173,13 +214,25 @@ pub fn collect_node_changes(world: &mut World) -> Vec<ControlEvent> {
 
 /// [`collect_node_changes`] as each of the games `keys` takes it, in send order:
 /// an edit naming an asset a game was not given, or was given another definition
-/// of, comes behind the definition.
+/// of, comes behind the definition. Structural changes come first, to the games
+/// playing the document.
 pub fn collect_changes_for(
     world: &mut World,
     keys: &[InstanceKey],
 ) -> Vec<(InstanceKey, ControlEvent)> {
-    let mut sends = Vec::new();
-    for change in collect_changes(world) {
+    let collected = collect_changes(world);
+    let adoptions = world
+        .get_resource_mut::<DocumentSync>()
+        .map(|mut sync| std::mem::take(&mut sync.adoptions))
+        .unwrap_or_default();
+    let mut sends = structure_sends(
+        world,
+        keys,
+        &collected.structure,
+        &collected.existing,
+        &adoptions,
+    );
+    for change in collected.edits {
         for key in keys {
             if let Some(event) = assets_missing_from(world, key, &change.assets.runtime) {
                 sends.push((key.clone(), event));
@@ -191,6 +244,148 @@ pub fn collect_changes_for(
         }
     }
     sends
+}
+
+/// What each of the games `keys` playing the document takes for `structure`: what
+/// the new subtrees name that it does not hold, then the steps in order, once per
+/// path it plays the document by. A node that was a runtime entity of a game goes to
+/// that game as an adoption, once, carrying what it needs to spawn if the entity has
+/// gone.
+fn structure_sends(
+    world: &mut World,
+    keys: &[InstanceKey],
+    structure: &[StructureStep],
+    existing: &HashSet<u64>,
+    adoptions: &HashMap<u64, Adoption>,
+) -> Vec<(InstanceKey, ControlEvent)> {
+    if structure.is_empty() {
+        return Vec::new();
+    }
+    let playing: Vec<(&InstanceKey, Vec<AskedScene>)> = keys
+        .iter()
+        .map(|key| {
+            (
+                key,
+                crate::play_scene::scenes_playing_active_tab(world, key),
+            )
+        })
+        .filter(|(_, asked)| !asked.is_empty())
+        .collect();
+    let Some((_, first)) = playing.first() else {
+        return Vec::new();
+    };
+    let spawns: Vec<(u64, Entity)> = structure
+        .iter()
+        .filter_map(|step| match step {
+            StructureStep::Spawn { node, at, .. } => Some((*node, *at)),
+            _ => None,
+        })
+        .collect();
+    let subtrees = match spawns.is_empty() {
+        true => None,
+        false => crate::play_scene::subtrees_for_game(world, &spawns, existing, &first[0]),
+    };
+    let mut sends = Vec::new();
+    for (key, asked) in &playing {
+        let key = (*key).clone();
+        if let Some(subtrees) = &subtrees {
+            for event in subtree_needs_for(world, &key, subtrees) {
+                sends.push((key.clone(), event));
+            }
+        }
+        for (place, scene) in asked.iter().enumerate() {
+            for step in structure {
+                let event = match step {
+                    StructureStep::Spawn {
+                        node,
+                        parent,
+                        follows,
+                        ..
+                    } => {
+                        let Some(bsn) = subtrees.as_ref().and_then(|held| held.texts.get(node))
+                        else {
+                            warn!("Play: the new node {node} could not be written for the game");
+                            continue;
+                        };
+                        let adopting = adoptions
+                            .get(node)
+                            .filter(|adoption| place == 0 && adoption.game == key);
+                        match adopting {
+                            Some(adoption) => ControlEvent::AdoptNode {
+                                entity: adoption.entity,
+                                node: *node,
+                                parent: *parent,
+                                follows: *follows,
+                                scene: scene.requested.clone(),
+                                dir: scene.dir.clone(),
+                                bsn: bsn.clone(),
+                            },
+                            None => ControlEvent::SpawnNode {
+                                node: *node,
+                                parent: *parent,
+                                follows: *follows,
+                                scene: scene.requested.clone(),
+                                dir: scene.dir.clone(),
+                                bsn: bsn.clone(),
+                            },
+                        }
+                    }
+                    StructureStep::Reparent {
+                        node,
+                        parent,
+                        follows,
+                    } => ControlEvent::ReparentNode {
+                        node: *node,
+                        parent: *parent,
+                        follows: *follows,
+                        scene: scene.requested.clone(),
+                    },
+                    StructureStep::Despawn { node } => ControlEvent::DespawnNode {
+                        node: *node,
+                        scene: scene.requested.clone(),
+                    },
+                };
+                sends.push((key.clone(), event));
+            }
+        }
+    }
+    sends
+}
+
+/// What the game `key` must hold before it reads `subtrees`, in send order, now
+/// counted as held.
+fn subtree_needs_for(
+    world: &mut World,
+    key: &InstanceKey,
+    subtrees: &crate::play_scene::SubtreesForGame,
+) -> Vec<ControlEvent> {
+    let mut events = Vec::new();
+    events.extend(asset_files_missing_from(world, key, &subtrees.files));
+    let prefabs = subtrees
+        .prefabs
+        .iter()
+        .map(|prefab| crate::play_overlay::UnsavedPrefab {
+            path: prefab.path.clone(),
+            text: prefab.text.clone(),
+        })
+        .collect();
+    events.extend(crate::play_overlay::prefab_files_missing_from(
+        world,
+        key,
+        prefabs,
+        Vec::new(),
+    ));
+    let mut names = world.get_resource_or_init::<crate::play_scene::PlayAssetNames>();
+    for (name, definition) in &subtrees.prefab_assets {
+        names.note_given(key, name.clone(), *definition);
+    }
+    for (name, definition, text) in &subtrees.assets {
+        if !names.has_given(key, name, *definition) {
+            names.note_given(key, name.clone(), *definition);
+            events.push(ControlEvent::SceneAssets { text: text.clone() });
+        }
+    }
+    events
 }
 
 /// The materials changed since the last call, as each of the games `keys` takes
@@ -318,9 +513,9 @@ fn assets_missing_from(
     })
 }
 
-fn collect_changes(world: &mut World) -> Vec<NodeChange> {
+fn collect_changes(world: &mut World) -> Collected {
     if !world.contains_resource::<SceneBsnAst>() || !world.contains_resource::<DocumentSync>() {
-        return Vec::new();
+        return Collected::default();
     }
     world.init_resource::<crate::play_scene::PlayAssetNames>();
     world.resource_scope(|world, mut sync: Mut<DocumentSync>| {
@@ -334,7 +529,7 @@ fn collect(
     world: &mut World,
     sync: &mut DocumentSync,
     names: &mut crate::play_scene::PlayAssetNames,
-) -> Vec<NodeChange> {
+) -> Collected {
     let world_now = world.change_tick();
     world.increment_change_tick();
     let rescan = std::mem::take(&mut sync.rescan);
@@ -349,10 +544,14 @@ fn collect(
         if let Some(seen) = sync.seen.as_mut() {
             seen.world_tick = world_now;
         }
-        return Vec::new();
+        return Collected::default();
     }
 
-    let (document, document_tick, authored, present) = {
+    let tab = world
+        .get_resource::<crate::scenes::Scenes>()
+        .and_then(|scenes| scenes.tabs.get(scenes.active))
+        .map(|tab| tab.id);
+    let (document, document_tick, authored, present, structure_after, roots) = {
         let mut ast = world.resource_mut::<SceneBsnAst>();
         let ast = ast.bypass_change_detection();
         let document = ast.world.id();
@@ -362,9 +561,15 @@ fn collect(
             .as_ref()
             .filter(|seen| !rescan && seen.document == document)
             .map(|seen| (seen.document_tick, &seen.retry));
-        let (authored, present) = touched_nodes(ast, since, now);
+        let (authored, present, structural) = touched_nodes(ast, since, now);
+        let moved = sync
+            .seen
+            .as_ref()
+            .is_none_or(|seen| seen.tab != tab || seen.roots != ast.roots);
+        let structure_after = (structural || moved).then(|| Tree::of(ast));
+        let roots = ast.roots.clone();
         ast.world.increment_change_tick();
-        (document, now, authored, present)
+        (document, now, authored, present, structure_after, roots)
     };
     let registry = world.resource::<AppTypeRegistry>().clone();
     let registry = registry.read();
@@ -406,18 +611,42 @@ fn collect(
                 .into_iter()
                 .map(|node| (node.id, node.components))
                 .collect(),
+            tree: structure_after.map(|(tree, _)| tree).unwrap_or_default(),
+            tab,
+            roots,
             retry: HashSet::new(),
         });
-        return Vec::new();
+        return Collected::default();
     };
     seen.document = document;
     seen.document_tick = document_tick;
     seen.world_tick = world_now;
     seen.nodes.retain(|id, _| present.contains(id));
     seen.retry.clear();
+    seen.roots = roots;
+    let same_tab = seen.tab == tab;
+    seen.tab = tab;
+    let mut collected = Collected::default();
+    if let Some((after, walked)) = structure_after {
+        if same_tab {
+            let steps = seen.tree.steps_to(&after, &walked);
+            if steps
+                .iter()
+                .any(|step| matches!(step, StructureStep::Spawn { .. }))
+            {
+                collected.existing = walked
+                    .iter()
+                    .map(|node| node.id)
+                    .filter(|id| seen.tree.holds(*id))
+                    .collect();
+            }
+            collected.structure = steps;
+        }
+        seen.tree = after;
+    }
 
     let projected = projected_entities(world);
-    let mut events = Vec::new();
+    let events = &mut collected.edits;
     for Touched {
         id,
         node,
@@ -519,7 +748,7 @@ fn collect(
             });
         }
     }
-    events
+    collected
 }
 
 /// The editor entities Live view fills with a running instance's values. A
@@ -541,27 +770,41 @@ fn projected_entities(world: &World) -> HashSet<Entity> {
 /// A node's authored patches as `(type path, digest)` pairs, in order.
 type Authored = Vec<(String, u64)>;
 
-/// Every node with a stable id, as the ids present, and the nodes among them
-/// whose patches changed since `since` (all of them when `since` is `None`).
+/// Every node with a stable id, as the ids present, the nodes among them whose
+/// patches changed since `since` (all of them when `since` is `None`), and whether
+/// a node's list of patches or children changed, which is all that moves a node
+/// other than the document's list of roots.
 fn touched_nodes(
     ast: &mut SceneBsnAst,
     since: Option<(Tick, &HashSet<u64>)>,
     now: Tick,
-) -> (Vec<(u64, Entity, Authored)>, HashSet<u64>) {
+) -> (Vec<(u64, Entity, Authored)>, HashSet<u64>, bool) {
     let mut query = ast.world.query::<(Entity, Ref<BsnPatches>)>();
+    let mut structural = since.is_none();
     let nodes: Vec<(Entity, bool)> = query
         .iter(&ast.world)
         .map(|(node, patches)| {
             let changed = since.is_none_or(|(tick, _)| {
                 let newer = |changed: Tick| changed.is_newer_than(tick, now);
-                newer(patches.last_changed())
-                    || patches.0.iter().any(|&patch| {
-                        ast.world
-                            .get_entity(patch)
-                            .ok()
-                            .and_then(|patch| patch.get_ref::<BsnPatch>())
-                            .is_none_or(|patch| newer(patch.last_changed()))
-                    })
+                let mut changed = newer(patches.last_changed());
+                structural |= changed;
+                for &patch in &patches.0 {
+                    let patch = ast
+                        .world
+                        .get_entity(patch)
+                        .ok()
+                        .and_then(|patch| patch.get_ref::<BsnPatch>());
+                    let Some(patch) = patch else {
+                        changed = true;
+                        structural = true;
+                        continue;
+                    };
+                    if newer(patch.last_changed()) {
+                        changed = true;
+                        structural |= matches!(*patch, BsnPatch::Children(_));
+                    }
+                }
+                changed
             });
             (node, changed)
         })
@@ -579,7 +822,7 @@ fn touched_nodes(
             touched.push((id, node, authored_patches(ast, node)));
         }
     }
-    (touched, present)
+    (touched, present, structural)
 }
 
 /// The patches `node` authors as components, with a digest of each. The

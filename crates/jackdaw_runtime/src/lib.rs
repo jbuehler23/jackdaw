@@ -101,6 +101,7 @@ pub mod frame_work;
 mod live_levels;
 #[cfg(feature = "render")]
 mod lod;
+pub mod node_structure;
 pub mod node_sync;
 pub mod play_overlay;
 #[cfg(feature = "render")]
@@ -1036,6 +1037,21 @@ fn spawn_scene_entities(
     }
     world.insert_resource(BsnSceneAssets(scene_assets));
 
+    spawn_document_nodes(world, root_entity, None, ast, parent_path, expanded)
+}
+
+/// Spawn `ast`'s entity roots parent-first, under `under` or at the top of the scene
+/// `root_entity`, along with what each entity reads beyond the document. Returns the
+/// entity of each root. The assets it names must be loaded already.
+pub(crate) fn spawn_document_nodes(
+    world: &mut World,
+    root_entity: Entity,
+    under: Option<Entity>,
+    ast: &SceneBsnAst,
+    parent_path: &Path,
+    expanded: &HashSet<PathBuf>,
+) -> Vec<Entity> {
+    let registry = world.resource::<AppTypeRegistry>().clone();
     let mut spawned: Vec<Entity> = Vec::new();
     let mut members: Vec<Entity> = Vec::new();
     for root in ast.roots.clone() {
@@ -1050,9 +1066,9 @@ fn spawn_scene_entities(
             world,
             ast,
             root,
+            under.unwrap_or(root_entity),
             root_entity,
-            root_entity,
-            true,
+            under.is_none(),
             &registry,
             &mut spawned,
         ) {

@@ -1689,6 +1689,15 @@ pub(crate) fn promote_ephemeral_to_authored(world: &mut World, preview: Entity, 
     world.entity_mut(preview).remove::<PieEphemeral>();
     world.entity_mut(preview).insert(node_id);
     crate::scene_io::register_entity_in_ast(world, preview);
+    let focused = world
+        .get_resource::<PieInstances>()
+        .and_then(|instances| instances.focused.clone());
+    if let (Some(game), Some(mut sync)) = (
+        focused,
+        world.get_resource_mut::<crate::play_sync::DocumentSync>(),
+    ) {
+        sync.note_adopted(game, bits, node_id.0);
+    }
 
     info!(
         "save to scene: promoted ephemeral {preview:?} (bits {bits:x}) to new authored node {}",
@@ -2217,6 +2226,14 @@ pub(crate) fn drain_game_events(world: &mut World) {
                 );
                 warn!("PIE: {message}");
                 crate::status_bar::notify_warn(world, message);
+                continue;
+            }
+            if let StateEvent::NodeSpawnFailed { node, reason } = &event {
+                warn!("PIE: {key} could not spawn the node {node}: {reason}");
+                crate::status_bar::notify_error(
+                    world,
+                    format!("{key} no longer matches the scene: a new entity failed: {reason}"),
+                );
                 continue;
             }
             if matches!(event, StateEvent::OwnWindow) {
@@ -2865,6 +2882,40 @@ mod control_outbox_tests {
         world.init_resource::<NextState<PlayState>>();
         world.insert_non_send(session);
         world
+    }
+
+    #[test]
+    fn a_spawn_the_game_refused_shows_in_the_status_bar() {
+        let (editor, mut game) = link();
+        let mut world = world_with_game(editor);
+        world.insert_resource(PieInstances {
+            buffers: HashMap::default(),
+            focused: Some(key()),
+        });
+        world.insert_resource(PieViewMode::Scene);
+        world.init_resource::<crate::pie_projection::PieProjection>();
+        world.init_resource::<crate::status_bar::StatusNotice>();
+        let failed = StateEvent::NodeSpawnFailed {
+            node: 7,
+            reason: "it does not parse".to_string(),
+        };
+        game.send(PieChannel::Reliable, &to_bytes(&failed).expect("encode"));
+
+        let deadline = Instant::now() + GUARD;
+        while !world
+            .resource::<crate::status_bar::StatusNotice>()
+            .is_active()
+        {
+            assert!(Instant::now() < deadline, "the user was never told");
+            drain_game_events(&mut world);
+            thread::sleep(Duration::from_millis(1));
+        }
+        let notice = world.resource::<crate::status_bar::StatusNotice>();
+        assert!(
+            notice.text().contains("it does not parse"),
+            "{}",
+            notice.text()
+        );
     }
 
     /// Run `work` on its own thread, failing rather than hanging if it stalls.

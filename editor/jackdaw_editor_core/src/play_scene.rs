@@ -188,6 +188,10 @@ pub(crate) fn prepare_scene(
     requested: &str,
     request: u64,
 ) -> PreparedScene {
+    let asked = AskedScene::resolved(world, launch, requested);
+    world
+        .get_resource_or_init::<PlayAssetNames>()
+        .note_asked(key, asked);
     let answered = answer_with_assets(world, launch, requested);
     prepare(world, Some(key), answered, request)
 }
@@ -616,15 +620,23 @@ fn answer_with_assets(
     launch: Option<&LaunchScene>,
     requested: &str,
 ) -> Answered {
-    let requested = requested.replace('\\', "/");
-    let target = match launch {
-        Some(launch) if launch.replaces == requested => launch.scene.clone(),
-        _ => PlayScene::Path(requested.clone()),
-    };
-    let served = match &target {
-        PlayScene::Path(path) => ServedAs::of(path, None),
-        PlayScene::Untitled(name) => ServedAs::of(&requested, Some(name.clone())),
-    };
+    let AskedScene {
+        requested,
+        target,
+        tab,
+        ..
+    } = AskedScene::resolved(world, launch, requested);
+    let tab = tab.and_then(|id| {
+        world
+            .get_resource::<Scenes>()?
+            .tabs
+            .iter()
+            .position(|held| held.id == id)
+    });
+    let served = tab.and_then(|tab| tab_asset_path(world, tab)).map_or_else(
+        || ServedAs::of_target(&target, &requested),
+        |path| ServedAs::of(&path, None),
+    );
     let file = match &target {
         PlayScene::Path(path) => path.clone(),
         PlayScene::Untitled(_) => requested.clone(),
@@ -633,7 +645,6 @@ fn answer_with_assets(
     let Some(assets) = crate::asset_index::assets_dir(world) else {
         return Answered::use_file(world, file);
     };
-    let tab = tab_of(world, &target);
     if let (None, PlayScene::Untitled(name)) = (tab, &target) {
         let message =
             format!("{name} was saved or closed during the build, so the game loads {requested}");
@@ -830,6 +841,13 @@ struct ServedAs {
 }
 
 impl ServedAs {
+    fn of_target(target: &PlayScene, requested: &str) -> Self {
+        match target {
+            PlayScene::Path(path) => Self::of(path, None),
+            PlayScene::Untitled(name) => Self::of(requested, Some(name.clone())),
+        }
+    }
+
     fn of(path: &str, name: Option<String>) -> Self {
         let path = Path::new(path);
         let dir = path
@@ -843,6 +861,260 @@ impl ServedAs {
         });
         Self { dir, stem }
     }
+}
+
+/// A scene a game asked for, whichever way it was answered.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct AskedScene {
+    /// The asset path the game knows it by.
+    pub(crate) requested: String,
+    /// What that path stands for.
+    pub(crate) target: PlayScene,
+    /// The folder it counts as being in, under the asset folder.
+    pub(crate) dir: String,
+    /// The tab holding it when it was asked for. A save can give that tab another
+    /// path and the game goes on playing it.
+    tab: Option<u64>,
+}
+
+impl AskedScene {
+    fn of(launch: Option<&LaunchScene>, requested: &str) -> Self {
+        let requested = requested.replace('\\', "/");
+        let target = match launch {
+            Some(launch) if launch.replaces == requested => launch.scene.clone(),
+            _ => PlayScene::Path(requested.clone()),
+        };
+        let dir = ServedAs::of_target(&target, &requested).dir;
+        Self {
+            requested,
+            target,
+            dir,
+            tab: None,
+        }
+    }
+
+    /// What `requested` stands for now. A tab holding the target decides, and failing
+    /// that the tab a game asked for it from earlier, since a save can have given that
+    /// tab another path or a first one. An unsaved tab saved before any game asked
+    /// stays unknown, and the game loads the file.
+    fn resolved(world: &World, launch: Option<&LaunchScene>, requested: &str) -> Self {
+        let mut asked = Self::of(launch, requested);
+        let Some(scenes) = world.get_resource::<Scenes>() else {
+            return asked;
+        };
+        asked.tab = tab_of(world, &asked.target)
+            .map(|tab| scenes.tabs[tab].id)
+            .or_else(|| {
+                let names = world.get_resource::<PlayAssetNames>()?;
+                names
+                    .asked
+                    .values()
+                    .flatten()
+                    .filter(|earlier| {
+                        earlier.requested == asked.requested && earlier.target == asked.target
+                    })
+                    .find_map(|earlier| earlier.tab)
+                    .filter(|id| scenes.tabs.iter().any(|tab| tab.id == *id))
+            });
+        asked
+    }
+}
+
+/// The path under the asset folder of the file tab `tab` holds, if it has one.
+fn tab_asset_path(world: &World, tab: usize) -> Option<String> {
+    let path = world.get_resource::<Scenes>()?.tabs[tab].path.clone()?;
+    world
+        .get_resource::<crate::project::ProjectRoot>()?
+        .to_asset_path(path)
+}
+
+/// The scenes the game `key` asked for that the document in front is, each with the
+/// folder the document counts as being in now. The tab it was asked from decides
+/// while that tab is open, and otherwise the path or name asked for.
+pub(crate) fn scenes_playing_active_tab(world: &World, key: &InstanceKey) -> Vec<AskedScene> {
+    let (Some(names), Some(scenes)) = (
+        world.get_resource::<PlayAssetNames>(),
+        world.get_resource::<Scenes>(),
+    ) else {
+        return Vec::new();
+    };
+    let Some(active) = scenes.tabs.get(scenes.active) else {
+        return Vec::new();
+    };
+    let held_dir = tab_asset_path(world, scenes.active).map(|path| ServedAs::of(&path, None).dir);
+    names
+        .asked
+        .get(key)
+        .into_iter()
+        .flatten()
+        .filter(|asked| {
+            match asked
+                .tab
+                .filter(|id| scenes.tabs.iter().any(|tab| tab.id == *id))
+            {
+                Some(id) => id == active.id,
+                None => tab_of(world, &asked.target) == Some(scenes.active),
+            }
+        })
+        .map(|asked| AskedScene {
+            dir: held_dir.clone().unwrap_or_else(|| asked.dir.clone()),
+            ..asked.clone()
+        })
+        .collect()
+}
+
+/// New subtrees of the live document as a game takes them.
+pub(crate) struct SubtreesForGame {
+    /// The text of each subtree, by the node at its top.
+    pub(crate) texts: HashMap<u64, String>,
+    /// The `#Name`, definition and text of each asset root the texts name.
+    pub(crate) assets: Vec<(String, u64, String)>,
+    /// The asset files they name.
+    pub(crate) files: Vec<AssetFile>,
+    /// The unsaved prefabs they reach.
+    pub(crate) prefabs: Vec<UnsavedPrefab>,
+    /// The `#Name` and definition of each asset root those prefabs' texts hold.
+    pub(crate) prefab_assets: Vec<(String, u64)>,
+}
+
+/// The subtrees of the live document at `spawns`, as `(node id, document node)`,
+/// under session names and spelled as `asked`'s text spells them. A child in
+/// `existing` is left out: it exists in the game and moves there on its own. One
+/// authoring pass covers them all, so its cost follows the nodes spawned and not the
+/// document. Unsaved sidecars of a new node arrive on a respawn. The texts are not
+/// read back here: the game parses them anyway and reports one it cannot.
+pub(crate) fn subtrees_for_game(
+    world: &mut World,
+    spawns: &[(u64, Entity)],
+    existing: &bevy::platform::collections::HashSet<u64>,
+    asked: &AskedScene,
+) -> Option<SubtreesForGame> {
+    let _span = info_span!("play.subtrees").entered();
+    let assets = crate::asset_index::assets_dir(world)?;
+    let tab = world.resource::<Scenes>().active;
+    let parent = tab_folder(world, tab, &assets, &asked.dir);
+    let registry = world.resource::<AppTypeRegistry>().clone();
+    let mut part = SceneBsnAst::default();
+    let copies: Vec<(u64, Entity)> = {
+        let live = world.resource::<SceneBsnAst>();
+        for root in jackdaw_bsn::asset_roots(live, &registry.read()) {
+            jackdaw_bsn::clone_subtree_into(&mut part, live, root, None);
+        }
+        spawns
+            .iter()
+            .map(|&(id, node)| {
+                (
+                    id,
+                    copy_new_nodes(&mut part, live, node, None, existing, false),
+                )
+            })
+            .collect()
+    };
+    let mut document = crate::scene_io::save::part_of_live_document_for_game(world, part, &parent);
+    warn_absolute(world, &document.absolute);
+    keep_assets_named(&mut document.ast, &registry.read());
+    let mut ast = with_session_names(world, document);
+    let held = DocumentAssets::of(world, &mut ast);
+    let overlay = crate::play_overlay::prefabs_of_document_part(
+        world,
+        tab,
+        &asked.target,
+        &ast,
+        &parent,
+        &asked.dir,
+    );
+    let texts = copies
+        .into_iter()
+        .map(|(id, copy)| (id, jackdaw_bsn::emit_entity(&ast, copy)))
+        .collect();
+    let roots = {
+        let registry = registry.read();
+        jackdaw_bsn::asset_roots(&ast, &registry)
+    };
+    let assets = held
+        .embedded
+        .into_iter()
+        .filter_map(|(name, definition)| {
+            let root = roots
+                .iter()
+                .copied()
+                .find(|&root| ast.get_name(root) == Some(name.trim_start_matches('#')))?;
+            let mut alone = SceneBsnAst::default();
+            jackdaw_bsn::clone_subtree_into(&mut alone, &ast, root, None);
+            Some((name, definition, jackdaw_bsn::emit_scene(&alone)))
+        })
+        .collect();
+    let mut files = held.files;
+    files.extend(overlay.assets.files);
+    let mut prefabs = Vec::new();
+    for prefab in overlay.prefabs {
+        match text_read_back(&prefab.ast) {
+            Ok(body) => prefabs.push(UnsavedPrefab {
+                path: prefab.path,
+                text: asset_file_text(PREFAB_TYPE, &body),
+            }),
+            Err(detail) => {
+                warn!(
+                    "PIE: the unsaved prefab {} does not read back: {detail}",
+                    prefab.path
+                );
+                crate::status_bar::notify_warn(world, edits_not_sent(&prefab.path));
+            }
+        }
+    }
+    Some(SubtreesForGame {
+        texts,
+        assets,
+        files,
+        prefabs,
+        prefab_assets: overlay.assets.embedded,
+    })
+}
+
+/// Copy `node` into `part`, linked to its entity, with the children `existing` does
+/// not hold. Everything below a prefab instance belongs to it (`whole`), whatever id
+/// it repeats.
+fn copy_new_nodes(
+    part: &mut SceneBsnAst,
+    live: &SceneBsnAst,
+    node: Entity,
+    parent: Option<Entity>,
+    existing: &bevy::platform::collections::HashSet<u64>,
+    whole: bool,
+) -> Entity {
+    let copy = part.create_entity_node(live.cloned_component_patches(node));
+    match parent {
+        Some(parent) => part.add_child_to_ast(parent, copy),
+        None => part.add_to_roots(copy),
+    }
+    if let Some(entity) = live.ecs_for_ast(node) {
+        part.link(entity, copy);
+    }
+    let whole = whole || crate::document_units::is_instance(live, node);
+    for child in live.get_children_ast(node) {
+        let exists = live
+            .stable_id_of(child)
+            .is_some_and(|id| existing.contains(&id));
+        if whole || !exists {
+            copy_new_nodes(part, live, child, Some(copy), existing, whole);
+        }
+    }
+    copy
+}
+
+/// Drop the asset roots of `ast` that nothing in it names.
+fn keep_assets_named(ast: &mut SceneBsnAst, registry: &bevy::reflect::TypeRegistry) {
+    let mut named: HashSet<String> = HashSet::new();
+    crate::scene_io::save::visit_asset_references(ast, registry, |reference| {
+        if let Some(bare) = reference.strip_prefix(['#', '@']) {
+            named.insert(bare.to_string());
+        }
+    });
+    let unused: Vec<Entity> = jackdaw_bsn::asset_roots(ast, registry)
+        .into_iter()
+        .filter(|&root| ast.get_name(root).is_none_or(|name| !named.contains(name)))
+        .collect();
+    ast.roots.retain(|root| !unused.contains(root));
 }
 
 /// The index of the tab holding `target`, when it holds a scene or prefab that
@@ -926,6 +1198,9 @@ pub struct PlayAssetNames {
     /// The digest of the unsaved text each game last received for each prefab, by
     /// path under the asset folder.
     given_prefabs: HashMap<InstanceKey, HashMap<String, u64>>,
+    /// The scenes each game asked for, so structural changes go only to a game
+    /// playing the document they were made in.
+    asked: HashMap<InstanceKey, Vec<AskedScene>>,
 }
 
 impl PlayAssetNames {
@@ -1089,10 +1364,17 @@ impl PlayAssetNames {
         }
     }
 
+    fn note_asked(&mut self, key: &InstanceKey, asked: AskedScene) {
+        let held = self.asked.entry(key.clone()).or_default();
+        held.retain(|earlier| earlier.requested != asked.requested);
+        held.push(asked);
+    }
+
     /// Keep what games were given only for those `keep` accepts.
     pub(crate) fn retain_games(&mut self, keep: impl Fn(&InstanceKey) -> bool) {
         self.given.retain(|key, _| keep(key));
         self.given_prefabs.retain(|key, _| keep(key));
+        self.asked.retain(|key, _| keep(key));
     }
 
     /// Whether the game `key` holds the unsaved prefab at `path` as `digest`.

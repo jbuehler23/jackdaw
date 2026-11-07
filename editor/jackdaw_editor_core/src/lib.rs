@@ -124,6 +124,7 @@ pub mod pie_projection;
 pub mod play_overlay;
 pub mod play_scene;
 pub mod play_settings;
+mod play_structure;
 pub mod play_sync;
 pub mod prefab;
 pub mod preflight;
