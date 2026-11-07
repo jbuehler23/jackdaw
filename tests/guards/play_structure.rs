@@ -15,7 +15,9 @@ use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
 use jackdaw_api::prelude::*;
 use jackdaw_bsn::{BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnValue, SceneBsnAst};
 use jackdaw_pie_protocol::event::{from_bytes, to_bytes};
-use jackdaw_pie_protocol::{ControlEvent, LoopbackTransport, PieChannel, PieTransport};
+use jackdaw_pie_protocol::{
+    ControlEvent, LoopbackTransport, PieChannel, PieTransport, SceneAnswer,
+};
 use jackdaw_runtime::node_structure::{StructureChange, apply_structure_change};
 use jackdaw_runtime::node_sync::{apply_node_components, load_asset_files, load_scene_assets};
 use jackdaw_runtime::play_overlay::load_prefab_files;
@@ -215,9 +217,26 @@ fn read_in_game(world: &mut World, event: ControlEvent) {
                 scene,
             },
         ),
-        ControlEvent::AdoptNode { entity, node } => {
-            apply_structure_change(world, StructureChange::Adopt { entity, node });
-        }
+        ControlEvent::AdoptNode {
+            entity,
+            node,
+            parent,
+            follows,
+            scene,
+            dir,
+            bsn,
+        } => apply_structure_change(
+            world,
+            StructureChange::Adopt {
+                entity,
+                node,
+                parent,
+                follows,
+                scene,
+                dir,
+                bsn,
+            },
+        ),
         other => panic!("not document sync: {other:?}"),
     }
 }
@@ -1010,37 +1029,166 @@ fn add_unreadable_node(app: &mut App) -> (SceneNodeId, Entity) {
     (node, unreadable)
 }
 
-/// Text that would not read never goes, the user hears, and the node goes once it
-/// reads: it was not counted as sent.
+/// The editor does not read its own text back: the game parses it anyway and says so
+/// when it cannot. A bad node holds nothing else back and is not sent twice.
 #[test]
-fn pie_structure_text_that_does_not_read_back_is_refused_and_tried_again() {
+fn pie_structure_an_unreadable_spawn_holds_nothing_back_and_goes_once() {
     let mut s = session(|_| {});
-    let (node, unreadable) = add_unreadable_node(&mut s.app);
+    let (bad, _) = add_unreadable_node(&mut s.app);
+    let good = cube(&mut s.app);
 
     let events = s.deliver();
+    let spawned = |events: &[ControlEvent], wanted: SceneNodeId| {
+        events
+            .iter()
+            .any(|event| matches!(event, ControlEvent::SpawnNode { node, .. } if *node == wanted.0))
+    };
+    assert!(spawned(&events, good), "{events:?}");
+    assert!(spawned(&events, bad), "{events:?}");
+    assert_eq!(s.holders(good).len(), 1);
+    assert!(s.holders(bad).is_empty());
+
+    let later = cube(&mut s.app);
+    let events = s.deliver();
+    assert!(spawned(&events, later), "{events:?}");
+    assert!(!spawned(&events, bad), "the baseline moved on: {events:?}");
+}
+
+fn other_key() -> InstanceKey {
+    InstanceKey {
+        config: "game".to_string(),
+        instance: 2,
+    }
+}
+
+/// A runtime entity of the game at `bits`, saved to the scene as a new node.
+fn save_runtime_entity(app: &mut App, bits: u64) -> SceneNodeId {
+    let world = app.world_mut();
+    *world.resource_mut::<PieViewMode>() = PieViewMode::Live;
+    let preview = world
+        .spawn((PieEphemeral, Transform::default(), Visibility::default()))
+        .id();
+    world
+        .resource_mut::<PieProjection>()
+        .by_bits
+        .insert(bits, preview);
+    world
+        .resource_mut::<jackdaw::selection::Selection>()
+        .entities = vec![preview];
+    jackdaw::pie::save_live_entity_to_scene(world);
+    app.update();
+    *app.world()
+        .get::<SceneNodeId>(preview)
+        .expect("the entity holds a node")
+}
+
+/// Only the game holding the entity adopts it. Any other game playing the document
+/// has nothing to adopt, and takes the node as a spawn.
+#[test]
+fn pie_structure_a_second_game_takes_a_saved_runtime_entity_as_a_spawn() {
+    let mut s = session(|_| {});
+    serve_scene(s.app.world_mut(), &other_key(), None, SCENE);
+    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
+    let node = save_runtime_entity(&mut s.app, 77);
+
+    let sends = collect_changes_for(s.app.world_mut(), &[key(), other_key()]);
+    let to = |game: InstanceKey| -> Vec<&ControlEvent> {
+        sends
+            .iter()
+            .filter(|(key, _)| *key == game)
+            .map(|(_, event)| event)
+            .collect()
+    };
     assert!(
-        !events
+        to(key()).iter().any(|event| matches!(
+            event,
+            ControlEvent::AdoptNode { entity: 77, node: held, .. } if *held == node.0
+        )),
+        "{sends:?}"
+    );
+    assert!(
+        !to(key())
             .iter()
             .any(|event| matches!(event, ControlEvent::SpawnNode { .. })),
-        "{events:?}"
+        "{sends:?}"
     );
-    let notice = s
-        .app
-        .world()
-        .resource::<jackdaw::status_bar::StatusNotice>();
-    assert!(notice.is_active(), "the user is told");
-    assert!(notice.text().contains("game"), "{}", notice.text());
-
-    s.app
-        .world_mut()
-        .resource_mut::<SceneBsnAst>()
-        .set_patch(unreadable, BsnPatch::Name("Fixed".to_string()));
-    let events = s.deliver();
     assert!(
-        events.iter().any(
-            |event| matches!(event, ControlEvent::SpawnNode { node: sent, .. } if *sent == node.0)
+        to(other_key()).iter().any(
+            |event| matches!(event, ControlEvent::SpawnNode { node: held, .. } if *held == node.0)
         ),
-        "{events:?}"
+        "{sends:?}"
     );
+}
+
+/// With no game to adopt it, nothing else would ever bring the node.
+#[test]
+fn pie_structure_a_saved_runtime_entity_spawns_with_no_focused_game() {
+    let mut s = session(|_| {});
+    s.app.world_mut().resource_mut::<PieInstances>().focused = None;
+    let node = save_runtime_entity(&mut s.app, 77);
+    s.assert_matches();
     assert_eq!(s.holders(node).len(), 1);
+}
+
+#[test]
+fn pie_structure_a_saved_runtime_entity_gone_from_the_game_spawns_there() {
+    let mut s = session(|_| {});
+    s.app.world_mut().resource_mut::<PieInstances>().focused = Some(key());
+    let runtime = s.game.world_mut().spawn(Transform::default()).id();
+    s.game.world_mut().despawn(runtime);
+    let node = save_runtime_entity(&mut s.app, runtime.to_bits());
+    s.assert_matches();
+    assert_eq!(s.holders(node).len(), 1);
+}
+
+/// A root asking during Play, after the unsaved tab it stands for was saved, gets
+/// that tab's document, and the game goes on following it.
+#[test]
+fn pie_structure_a_new_root_after_a_save_gets_the_tab_and_structure_goes_on() {
+    let (mut app, dir) = editor();
+    cube(&mut app);
+    assert!(collect_node_changes(app.world_mut()).is_empty());
+    let name = app
+        .world()
+        .resource::<jackdaw::scenes::Scenes>()
+        .tabs
+        .last()
+        .expect("a tab")
+        .display_name
+        .clone();
+    let launch = LaunchScene {
+        replaces: "main.bsn".to_string(),
+        scene: PlayScene::Untitled(name),
+    };
+    serve_scene(app.world_mut(), &key(), Some(&launch), "main.bsn");
+    let path = dir.path().join("assets/first/level.bsn");
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("a folder");
+    app.world_mut()
+        .operator("scene.save")
+        .param("path", path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches")
+        .assert_finished();
+    app.update();
+    let unsaved = cube(&mut app);
+    collect_changes_for(app.world_mut(), &[key()]);
+
+    for game in [key(), other_key()] {
+        let served = serve_scene(app.world_mut(), &game, Some(&launch), "main.bsn");
+        let SceneAnswer::Document { text, dir, .. } = served.answer else {
+            panic!("the tab's document goes to {game}");
+        };
+        assert!(text.contains(&unsaved.0.to_string()), "{text}");
+        assert_eq!(dir, "first");
+    }
+
+    let added = cube(&mut app);
+    let sends = collect_changes_for(app.world_mut(), &[key(), other_key()]);
+    for game in [key(), other_key()] {
+        assert!(
+            sends.iter().any(|(held, event)| *held == game
+                && matches!(event, ControlEvent::SpawnNode { node, .. } if *node == added.0)),
+            "{game}: {sends:?}"
+        );
+    }
 }

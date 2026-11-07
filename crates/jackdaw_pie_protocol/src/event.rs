@@ -44,6 +44,12 @@ pub enum StateEvent {
     },
     /// The game declined a frame stream because it opened its own window.
     OwnWindow,
+    /// The game could not spawn the node a [`ControlEvent::SpawnNode`] named, so it
+    /// no longer matches the document.
+    NodeSpawnFailed {
+        node: u64,
+        reason: String,
+    },
 }
 
 /// What the game spawns a requested scene from.
@@ -172,10 +178,17 @@ pub enum ControlEvent {
         scene: String,
     },
     /// A runtime entity of this game became the document's node `node`: it takes the
-    /// id and stays as it is. `entity` is the game's own entity, as bits.
+    /// id and stays as it is. `entity` is the game's own entity, as bits. If that
+    /// entity has gone by now, the rest is what [`Self::SpawnNode`] holds, to spawn
+    /// the node from instead.
     AdoptNode {
         entity: u64,
         node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+        scene: String,
+        dir: String,
+        bsn: String,
     },
 }
 

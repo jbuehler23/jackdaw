@@ -94,6 +94,7 @@ impl InstanceBuffer {
             jackdaw_pie_protocol::StateEvent::CursorState { .. }
             | jackdaw_pie_protocol::StateEvent::RequestScene { .. }
             | jackdaw_pie_protocol::StateEvent::SceneRequestAbandoned { .. }
+            | jackdaw_pie_protocol::StateEvent::NodeSpawnFailed { .. }
             | jackdaw_pie_protocol::StateEvent::OwnWindow => {}
         }
     }

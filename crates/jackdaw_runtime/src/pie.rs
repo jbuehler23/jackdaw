@@ -526,8 +526,27 @@ fn apply_control(world: &mut World) {
                     },
                 );
             }
-            ControlEvent::AdoptNode { entity, node } => {
-                apply_structure_change(world, StructureChange::Adopt { entity, node });
+            ControlEvent::AdoptNode {
+                entity,
+                node,
+                parent,
+                follows,
+                scene,
+                dir,
+                bsn,
+            } => {
+                apply_structure_change(
+                    world,
+                    StructureChange::Adopt {
+                        entity,
+                        node,
+                        parent,
+                        follows,
+                        scene,
+                        dir,
+                        bsn,
+                    },
+                );
             }
             ControlEvent::Highlight { entity } => {
                 let resolved = entity

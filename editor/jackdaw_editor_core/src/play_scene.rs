@@ -188,8 +188,7 @@ pub(crate) fn prepare_scene(
     requested: &str,
     request: u64,
 ) -> PreparedScene {
-    let mut asked = AskedScene::of(launch, requested);
-    asked.tab = tab_of(world, &asked.target).map(|tab| world.resource::<Scenes>().tabs[tab].id);
+    let asked = AskedScene::resolved(world, launch, requested);
     world
         .get_resource_or_init::<PlayAssetNames>()
         .note_asked(key, asked);
@@ -622,9 +621,22 @@ fn answer_with_assets(
     requested: &str,
 ) -> Answered {
     let AskedScene {
-        requested, target, ..
-    } = AskedScene::of(launch, requested);
-    let served = ServedAs::of_target(&target, &requested);
+        requested,
+        target,
+        tab,
+        ..
+    } = AskedScene::resolved(world, launch, requested);
+    let tab = tab.and_then(|id| {
+        world
+            .get_resource::<Scenes>()?
+            .tabs
+            .iter()
+            .position(|held| held.id == id)
+    });
+    let served = tab.and_then(|tab| tab_asset_path(world, tab)).map_or_else(
+        || ServedAs::of_target(&target, &requested),
+        |path| ServedAs::of(&path, None),
+    );
     let file = match &target {
         PlayScene::Path(path) => path.clone(),
         PlayScene::Untitled(_) => requested.clone(),
@@ -633,7 +645,6 @@ fn answer_with_assets(
     let Some(assets) = crate::asset_index::assets_dir(world) else {
         return Answered::use_file(world, file);
     };
-    let tab = tab_of(world, &target);
     if let (None, PlayScene::Untitled(name)) = (tab, &target) {
         let message =
             format!("{name} was saved or closed during the build, so the game loads {requested}");
@@ -881,6 +892,40 @@ impl AskedScene {
             tab: None,
         }
     }
+
+    /// What `requested` stands for now. A tab holding the target decides, and failing
+    /// that the tab a game asked for it from earlier, since a save can have given that
+    /// tab another path or a first one. An unsaved tab saved before any game asked
+    /// stays unknown, and the game loads the file.
+    fn resolved(world: &World, launch: Option<&LaunchScene>, requested: &str) -> Self {
+        let mut asked = Self::of(launch, requested);
+        let Some(scenes) = world.get_resource::<Scenes>() else {
+            return asked;
+        };
+        asked.tab = tab_of(world, &asked.target)
+            .map(|tab| scenes.tabs[tab].id)
+            .or_else(|| {
+                let names = world.get_resource::<PlayAssetNames>()?;
+                names
+                    .asked
+                    .values()
+                    .flatten()
+                    .filter(|earlier| {
+                        earlier.requested == asked.requested && earlier.target == asked.target
+                    })
+                    .find_map(|earlier| earlier.tab)
+                    .filter(|id| scenes.tabs.iter().any(|tab| tab.id == *id))
+            });
+        asked
+    }
+}
+
+/// The path under the asset folder of the file tab `tab` holds, if it has one.
+fn tab_asset_path(world: &World, tab: usize) -> Option<String> {
+    let path = world.get_resource::<Scenes>()?.tabs[tab].path.clone()?;
+    world
+        .get_resource::<crate::project::ProjectRoot>()?
+        .to_asset_path(path)
 }
 
 /// The scenes the game `key` asked for that the document in front is, each with the
@@ -896,10 +941,7 @@ pub(crate) fn scenes_playing_active_tab(world: &World, key: &InstanceKey) -> Vec
     let Some(active) = scenes.tabs.get(scenes.active) else {
         return Vec::new();
     };
-    let held_dir = active.path.as_deref().and_then(|path| {
-        let project = world.get_resource::<crate::project::ProjectRoot>()?;
-        Some(ServedAs::of(&project.to_asset_path(path)?, None).dir)
-    });
+    let held_dir = tab_asset_path(world, scenes.active).map(|path| ServedAs::of(&path, None).dir);
     names
         .asked
         .get(key)
@@ -939,16 +981,16 @@ pub(crate) struct SubtreesForGame {
 /// under session names and spelled as `asked`'s text spells them. A child in
 /// `existing` is left out: it exists in the game and moves there on its own. One
 /// authoring pass covers them all, so its cost follows the nodes spawned and not the
-/// document. Unsaved sidecars of a new node arrive on a respawn. Refuses, saying why,
-/// when a text would not read back: nothing of it is counted as given.
+/// document. Unsaved sidecars of a new node arrive on a respawn. The texts are not
+/// read back here: the game parses them anyway and reports one it cannot.
 pub(crate) fn subtrees_for_game(
     world: &mut World,
     spawns: &[(u64, Entity)],
     existing: &bevy::platform::collections::HashSet<u64>,
     asked: &AskedScene,
-) -> Result<SubtreesForGame, String> {
+) -> Option<SubtreesForGame> {
     let _span = info_span!("play.subtrees").entered();
-    let assets = crate::asset_index::assets_dir(world).ok_or("the project has no asset folder")?;
+    let assets = crate::asset_index::assets_dir(world)?;
     let tab = world.resource::<Scenes>().active;
     let parent = tab_folder(world, tab, &assets, &asked.dir);
     let registry = world.resource::<AppTypeRegistry>().clone();
@@ -981,7 +1023,6 @@ pub(crate) fn subtrees_for_game(
         &parent,
         &asked.dir,
     );
-    text_read_back(&ast)?;
     let texts = copies
         .into_iter()
         .map(|(id, copy)| (id, jackdaw_bsn::emit_entity(&ast, copy)))
@@ -1021,7 +1062,7 @@ pub(crate) fn subtrees_for_game(
             }
         }
     }
-    Ok(SubtreesForGame {
+    Some(SubtreesForGame {
         texts,
         assets,
         files,

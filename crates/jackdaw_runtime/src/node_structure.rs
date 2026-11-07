@@ -48,8 +48,17 @@ pub enum StructureChange {
         follows: Option<u64>,
         scene: String,
     },
-    /// The runtime entity `entity`, as bits, takes the id `node`.
-    Adopt { entity: u64, node: u64 },
+    /// The runtime entity `entity`, as bits, takes the id `node`. If it has gone, the
+    /// node spawns from the rest, as for [`Self::Spawn`].
+    Adopt {
+        entity: u64,
+        node: u64,
+        parent: Option<u64>,
+        follows: Option<u64>,
+        scene: String,
+        dir: String,
+        bsn: String,
+    },
 }
 
 /// The asset path a root asked the editor for, which outlives its handle being
@@ -69,8 +78,33 @@ struct Held {
 
 /// Apply `change` to what has spawned, and hold it for any root yet to spawn.
 pub fn apply_structure_change(world: &mut World, change: StructureChange) {
+    let change = match change {
+        StructureChange::Adopt {
+            entity,
+            node,
+            parent,
+            follows,
+            scene,
+            dir,
+            bsn,
+        } => match world.get_entity_mut(Entity::from_bits(entity)) {
+            Ok(mut held) => {
+                held.insert(SceneNodeId(node));
+                return;
+            }
+            Err(_) => StructureChange::Spawn {
+                node,
+                parent,
+                follows,
+                scene,
+                dir,
+                bsn,
+            },
+        },
+        other => other,
+    };
     apply_within(world, &change, None);
-    if !matches!(change, StructureChange::Adopt { .. }) && scene_root_awaiting_spawn(world) {
+    if scene_root_awaiting_spawn(world) {
         let delivered = spawned_roots(world).into_iter().collect();
         world
             .get_resource_or_init::<HeldStructure>()
@@ -128,7 +162,7 @@ fn apply_within(world: &mut World, change: &StructureChange, only: Option<Entity
             follows,
             scene,
         } => reparent_node(world, *node, *parent, *follows, scene, only),
-        StructureChange::Adopt { entity, node } => adopt_node(world, *entity, *node),
+        StructureChange::Adopt { .. } => {}
     }
 }
 
@@ -145,10 +179,9 @@ fn spawn_node(world: &mut World, spawn: &Spawning, only: Option<Entity>) {
     let parsed = match jackdaw_bsn::parse_bsn_text(spawn.bsn) {
         Ok(parsed) => parsed,
         Err(err) => {
-            warn!(
-                "PIE: could not read the node {} the editor sent: {err}",
-                spawn.node
-            );
+            if only.is_none() {
+                report_failed_spawn(world, spawn.node, format!("it does not read: {err}"));
+            }
             return;
         }
     };
@@ -158,7 +191,9 @@ fn spawn_node(world: &mut World, spawn: &Spawning, only: Option<Entity>) {
         forget_older_edits(world, &ast);
     }
     if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&ast) {
-        warn!("PIE: cannot spawn the node {}: {err}", spawn.node);
+        if only.is_none() {
+            report_failed_spawn(world, spawn.node, err.to_string());
+        }
         return;
     }
     let targets: Vec<(Entity, Option<Entity>)> = match spawn.parent {
@@ -201,6 +236,19 @@ fn spawn_node(world: &mut World, spawn: &Spawning, only: Option<Entity>) {
     }
 }
 
+/// Say that the game no longer matches the document: the editor counts what it sent
+/// as done, and only the game parses it.
+fn report_failed_spawn(world: &mut World, node: u64, reason: String) {
+    warn!("PIE: could not spawn the node {node} the editor sent: {reason}");
+    #[cfg(feature = "pie")]
+    crate::pie::send_state(
+        world,
+        &jackdaw_pie_protocol::StateEvent::NodeSpawnFailed { node, reason },
+    );
+    #[cfg(not(feature = "pie"))]
+    let _ = (world, reason);
+}
+
 /// An edit held from before this text was written is older than it.
 fn forget_older_edits(world: &mut World, ast: &jackdaw_bsn::SceneBsnAst) {
     let Some(mut pending) = world.get_resource_mut::<PendingNodeChanges>() else {
@@ -212,15 +260,6 @@ fn forget_older_edits(world: &mut World, ast: &jackdaw_bsn::SceneBsnAst) {
                 pending.forget(id);
             }
         }
-    }
-}
-
-fn adopt_node(world: &mut World, entity: u64, node: u64) {
-    match world.get_entity_mut(Entity::from_bits(entity)) {
-        Ok(mut held) => {
-            held.insert(SceneNodeId(node));
-        }
-        Err(_) => warn!("PIE: the entity saved as the node {node} is gone from this game"),
     }
 }
 
@@ -606,6 +645,11 @@ mod tests {
             StructureChange::Adopt {
                 entity: runtime.to_bits(),
                 node: 5,
+                parent: None,
+                follows: None,
+                scene: "level.bsn".to_string(),
+                dir: String::new(),
+                bsn: node_text(5),
             },
         );
         assert_eq!(holders(&mut app, 5), vec![runtime]);
@@ -617,6 +661,30 @@ mod tests {
             },
         );
         assert!(app.world().get_entity(runtime).is_err());
+    }
+
+    /// The game can lose a runtime entity between the save and this arriving.
+    #[test]
+    fn a_runtime_entity_gone_by_its_adoption_is_spawned_as_the_node() {
+        let mut app = app();
+        let root = root_with(&mut app, "level.bsn", &node_text(1));
+        let runtime = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().despawn(runtime);
+        apply_structure_change(
+            app.world_mut(),
+            StructureChange::Adopt {
+                entity: runtime.to_bits(),
+                node: 5,
+                parent: None,
+                follows: Some(1),
+                scene: "level.bsn".to_string(),
+                dir: String::new(),
+                bsn: node_text(5),
+            },
+        );
+        let spawned = holders(&mut app, 5);
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(parent_of(&app, spawned[0]), Some(root));
     }
 
     #[test]

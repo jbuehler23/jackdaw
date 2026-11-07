@@ -450,6 +450,31 @@ mod tests {
         assert_eq!(holders_of(&mut app, 32), 0);
     }
 
+    #[test]
+    fn a_spawn_the_game_cannot_read_is_reported_to_the_editor() {
+        let (mut app, mut editor, _dir) = game();
+        spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0].clone();
+        send(&mut editor, &document(request, scene_text(5.0)));
+        update_until_spawned(&mut app);
+
+        let mut unreadable = spawn_node(34, "scene.bsn");
+        if let ControlEvent::SpawnNode { bsn, .. } = &mut unreadable {
+            *bsn = "{{{ not a document".to_string();
+        }
+        send(&mut editor, &unreadable);
+        app.update();
+        assert_eq!(holders_of(&mut app, 34), 0);
+        let reported = editor.drain_received().into_iter().any(|(_, bytes)| {
+            matches!(
+                from_bytes(&bytes),
+                Ok(StateEvent::NodeSpawnFailed { node: 34, .. })
+            )
+        });
+        assert!(reported, "the editor hears");
+    }
+
     /// A root sent to another file still goes by the path it asked for.
     #[test]
     fn a_root_sent_to_another_file_takes_spawns_for_the_path_it_asked_for() {
