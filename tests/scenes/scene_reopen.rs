@@ -173,3 +173,45 @@ bevy_ecs::hierarchy::Children [
     assert!(ids["Ground"].is_some(), "{saved}");
     assert_eq!(ids["Stone"], None, "{saved}");
 }
+
+/// A scene whose Transforms are bare, or hold only a translation in the
+/// older multi-line form.
+const SPARSE_TRANSFORM_SCENE: &str = "\
+bevy_ecs::hierarchy::Children [
+    #Root
+    bevy_transform::components::transform::Transform
+    bevy_ecs::hierarchy::Children [
+        #Camera
+        bevy_transform::components::transform::Transform {
+            translation: glam::Vec3 {
+                x: 17.0,
+                y: 13.0,
+                z: 19.5,
+            },
+        }
+    ]
+]
+";
+
+/// Saving an opened scene with no edit keeps a sparse Transform sparse, and
+/// the next save is byte-identical.
+#[test]
+fn saving_with_no_edit_keeps_sparse_transforms_sparse() {
+    let mut app = util::editor_test_app();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("sparse.bsn");
+    std::fs::write(&path, SPARSE_TRANSFORM_SCENE).expect("write scene");
+
+    request_open_with_conversion(app.world_mut(), &path);
+    app.update();
+
+    let first = save(&mut app, &path);
+    assert!(
+        first.contains("translation: glam::Vec3 { x: 17.0, y: 13.0, z: 19.5 }"),
+        "{first}"
+    );
+    for expanded in ["scale", "rotation", "x: 0.0"] {
+        assert!(!first.contains(expanded), "{expanded} appeared:\n{first}");
+    }
+    assert_eq!(save(&mut app, &path), first);
+}
