@@ -181,6 +181,7 @@ pub fn note_known_hash(world: &mut World, path: &Path, hash: u64) {
 /// Answer the prompt raised for `path`. An answer for a path with no open
 /// prompt is dropped: the queue can move under a dialog that is already up.
 pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalReloadChoice) {
+    crate::scene_io::save_worker::land_saves(world);
     let path = canonical(path);
     let Some(change) = world
         .resource::<ExternalSceneChanges>()
@@ -205,7 +206,10 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
     let mut installed = false;
     if choice == ExternalReloadChoice::Reload {
         match reload_tab_from_disk(world, &change.path) {
-            Ok(()) => installed = true,
+            Ok(()) => {
+                installed = true;
+                crate::scene_io::save_worker::drop_outside_copy_matching_file(&change.path);
+            }
             Err(refusal) => {
                 world.resource_mut::<ExternalSceneChanges>().refused = Some(refusal);
             }
@@ -217,7 +221,19 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
     if !installed {
         note_known_hash(world, &change.path, change.hash);
     }
+    // The file no longer holds any state of the tab's history.
+    if choice == ExternalReloadChoice::Keep
+        && let Some(index) = tab_index_for_path(world, &change.path)
+    {
+        crate::scenes::mark_tab_unsaved(world, index);
+    }
     queue_recheck(world, &change.path);
+}
+
+/// The hash of the bytes the editor believes are at `path`, if it knows of any.
+pub(crate) fn known_hash(world: &World, path: &Path) -> Option<u64> {
+    let state = world.get_resource::<ExternalWatchState>()?;
+    state.known.get(&canonical(path)).copied()
 }
 
 /// Whether the bytes at `path` differ from the ones the editor believes are
@@ -245,6 +261,7 @@ pub(crate) fn reread_tab_from_disk(world: &mut World, path: &Path) {
                 .resource_mut::<ExternalSceneChanges>()
                 .prompts
                 .retain(|prompt| prompt.path != path);
+            crate::scene_io::save_worker::drop_outside_copy_matching_file(&path);
             if let Ok(bytes) = std::fs::read(&path) {
                 note_known_content(world, &path, &bytes);
             }
@@ -259,7 +276,7 @@ pub(crate) fn reread_tab_from_disk(world: &mut World, path: &Path) {
 
 /// Ask the drain to look at `path` once more, without waiting for the
 /// filesystem to say anything.
-fn queue_recheck(world: &mut World, path: &Path) {
+pub(crate) fn queue_recheck(world: &mut World, path: &Path) {
     if let Some(state) = world.get_resource::<ExternalWatchState>()
         && let Ok(mut lock) = state.pending.lock()
     {
@@ -347,8 +364,7 @@ fn adopt_reloaded_document(world: &mut World, index: usize) {
         (None, None) => {}
     }
     tab.dirty = false;
-    // The load cleared the undo stacks, so the tab's baseline is zero.
-    tab.history_depth_at_last_check = 0;
+    tab.history_state_at_last_check = None;
     // The entities the stored selection named were despawned with the document.
     tab.view_state.selection.clear();
     tab.view_state.brush_sub_selection = crate::brush::BrushSelection::default();
@@ -504,6 +520,10 @@ fn drain_changes(world: &mut World) {
             .watched
             .contains(&path)
         {
+            continue;
+        }
+        // The save looks again once it has noted what it wrote.
+        if crate::scene_io::save_worker::is_being_saved(world, &path) {
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else {
@@ -683,7 +703,7 @@ fn file_name_of(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn canonical(path: &Path) -> PathBuf {
+pub(crate) fn canonical(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 

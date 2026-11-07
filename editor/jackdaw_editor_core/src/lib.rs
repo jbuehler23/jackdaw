@@ -1645,7 +1645,6 @@ fn cleanup_editor(world: &mut World) {
     // 5. Reset resources. The catalog, the asset index and the material
     // registry all describe the project being closed.
     world.insert_resource(scene_io::SceneFilePath::default());
-    world.insert_resource(scene_io::SceneDirtyState::default());
     world.insert_resource(Selection::default());
     world.insert_resource(commands::CommandHistory::default());
     world.insert_resource(asset_catalog::AssetCatalog::default());

@@ -35,7 +35,7 @@ use jackdaw_pie_protocol::manifest::RunConfig;
 use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
 
 use crate::asset_files::asset_file_text;
-use crate::pie::{InstanceKey, MAIN_SCENE, open_scene_asset_path};
+use crate::pie::{InstanceKey, MAIN_SCENE};
 use crate::play_overlay::{UnsavedPrefab, UnwrittenPrefab};
 use crate::prefab::resolver_bsn::PREFAB_TYPE;
 use crate::scene_io::asset_fields::{AbsoluteAssetField, refusal};
@@ -64,6 +64,15 @@ pub enum PlayScene {
 /// or project setting that names a scene keeps it, so the scene in front does
 /// not take its place.
 pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
+    launch_scene_of_tab(world, run, world.get_resource::<Scenes>()?.active)
+}
+
+/// [`launch_scene`] for the scene in tab `index`.
+pub(crate) fn launch_scene_of_tab(
+    world: &World,
+    run: &RunConfig,
+    index: usize,
+) -> Option<LaunchScene> {
     let _span = info_span!("play.launch_scene").entered();
     let names_scene = run.env.contains_key("JACKDAW_PIE_SCENE")
         || world
@@ -73,16 +82,21 @@ pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
         return None;
     }
     let scenes = world.get_resource::<Scenes>()?;
-    let tab = scenes.tabs.get(scenes.active)?;
+    let tab = scenes.tabs.get(index)?;
     if tab.kind != TabKind::Scene || tab.is_refused() {
         return None;
     }
+    let modified = if index == scenes.active {
+        crate::scenes::operators::active_tab_modified(world)
+    } else {
+        tab.dirty
+    };
     let scene = match &tab.path {
-        None if crate::scenes::operators::active_tab_modified(world) => {
-            PlayScene::Untitled(tab.display_name.clone())
-        }
+        None if modified => PlayScene::Untitled(tab.display_name.clone()),
         None => return None,
-        Some(_) => PlayScene::Path(open_scene_asset_path(world).filter(|s| s != MAIN_SCENE)?),
+        Some(_) => PlayScene::Path(
+            crate::pie::scene_asset_path_of_tab(world, index).filter(|s| s != MAIN_SCENE)?,
+        ),
     };
     let replaces = run
         .env
@@ -1667,7 +1681,11 @@ mod tests {
             "got {answer:?}"
         );
         assert_eq!(
-            open_scene_asset_path(app.world()).as_deref(),
+            crate::pie::scene_asset_path_of_tab(
+                app.world(),
+                app.world().resource::<Scenes>().active
+            )
+            .as_deref(),
             Some("zone.bsn"),
             "and it plays as the scene in front"
         );

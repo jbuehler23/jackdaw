@@ -108,6 +108,7 @@ impl UnsavedEditChecks {
 }
 
 fn migrate(world: &mut World) {
+    crate::scene_io::save_worker::land_saves(world);
     let Some(assets) = assets_dir(world) else {
         report_to_caller(world, "migrate: no project is open");
         return;
@@ -582,7 +583,6 @@ mod tests {
         app.init_resource::<crate::asset_catalog::AssetCatalog>();
         app.init_resource::<crate::material_assets::MaterialRegistry>();
         app.init_resource::<jackdaw_commands::CommandHistory>();
-        app.init_resource::<crate::scene_io::SceneDirtyState>();
         app.init_resource::<AssetKinds>();
         app.world_mut()
             .resource_mut::<AssetKinds>()
@@ -866,8 +866,8 @@ mod tests {
         let (mut app, tmp) = migration_app();
         headerless_material(&tmp, "materials/slate.material.bsn", "slate");
         app.world_mut()
-            .resource_mut::<crate::scene_io::SceneDirtyState>()
-            .undo_len_at_save = 1;
+            .resource_mut::<jackdaw_commands::CommandHistory>()
+            .forget_saved();
 
         let reports = run(&mut app);
 

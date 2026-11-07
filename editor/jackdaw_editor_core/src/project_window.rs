@@ -2268,6 +2268,7 @@ pub fn file_rename(params: In<OperatorParameters>, mut commands: Commands) -> Op
 }
 
 fn rename_file(world: &mut World, path: &Path, name: &str) {
+    crate::scene_io::save_worker::land_saves(world);
     let path = crate::definition_assets::resolve_project_path(world, path);
     let name = name.trim();
     if name.is_empty() || name.contains(std::path::is_separator) {

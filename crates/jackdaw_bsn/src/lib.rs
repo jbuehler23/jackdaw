@@ -58,8 +58,8 @@ pub use document::{
     drop_document, is_enum_variant_of, patch_type_path, type_paths_include,
 };
 pub use emitter::{
-    UnparsableEmit, brush_text_len, emit_entities, emit_entity, emit_entity_without_children,
-    emit_scene, emit_scene_checked, emit_value_text, parse_emitted,
+    UnparsableEmit, emit_entities, emit_entity, emit_entity_without_children, emit_scene,
+    emit_scene_checked, emit_scene_sizing_brushes, emit_value_text, parse_emitted,
 };
 pub use loader::{BsnLoadError, parse_bsn_text, parses_on_this_thread};
 pub use retired::{RETIRED_UI_PREFIX, RetiredUiComponents, reject_retired_ui_components};

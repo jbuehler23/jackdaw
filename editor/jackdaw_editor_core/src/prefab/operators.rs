@@ -243,12 +243,13 @@ fn back_up_legacy_prefab(original: &Path) {
 /// `replace` says whether a file already at the path may be written over;
 /// the refusal is the open itself rather than a prior `exists()`.
 fn write_prefab_doc(
-    world: &World,
+    world: &mut World,
     target_path: &Path,
     prefab: &SceneBsnAst,
     op_id: &str,
     replace: bool,
 ) -> Option<PathBuf> {
+    crate::scene_io::save_worker::land_saves(world);
     let path = prefab_bsn_path(target_path);
     let mut out = crate::prefab::resolver_bsn::clone_scene(prefab);
     crate::prefab::save_load::relativize_for_file(
@@ -271,7 +272,7 @@ fn write_prefab_doc(
     }
     let text = crate::asset_files::asset_file_text(crate::prefab::resolver_bsn::PREFAB_TYPE, &body);
     let written = if replace {
-        std::fs::write(&path, text)
+        crate::scene_io::save::write_atomic(&path, text.as_bytes())
     } else {
         std::fs::OpenOptions::new()
             .write(true)
@@ -1013,6 +1014,7 @@ pub fn unbundle_instance(world: &mut World, instance_root_node: Entity) {
 /// the active tab so its content, kind, path, and `display_name` reflect the
 /// new prefab.
 pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
+    crate::scene_io::save_worker::land_saves(world);
     // Prefabs persist as BSN text, so the cache entry, tab path, and file
     // path all use the `.bsn` form of the target.
     let bsn_target = prefab_bsn_path(target_path);
@@ -1108,24 +1110,22 @@ pub fn save_scene_as_prefab(world: &mut World, target_path: &Path) {
             tab.kind = crate::scenes::TabKind::Prefab;
             tab.content = crate::scenes::TabContent::Prefab(canonical);
             tab.display_name = display_name;
-            tab.dirty = false;
         }
     }
 
     if let Some(mut spath) = world.get_resource_mut::<crate::scene_io::SceneFilePath>() {
         spath.path = Some(target_path.to_string_lossy().into_owned());
     }
-    let history_len = world
-        .resource::<jackdaw_commands::CommandHistory>()
-        .undo_stack
-        .len();
-    world
-        .resource_mut::<crate::scene_io::SceneDirtyState>()
-        .undo_len_at_save = history_len;
+    let state = {
+        let mut history = world.resource_mut::<jackdaw_commands::CommandHistory>();
+        history.mark_current_saved();
+        history.state()
+    };
     if let Some(mut scenes) = world.get_resource_mut::<crate::scenes::Scenes>() {
         let active = scenes.active;
         if let Some(tab) = scenes.tabs.get_mut(active) {
-            tab.history_depth_at_last_check = history_len;
+            tab.dirty = false;
+            tab.history_state_at_last_check = Some(state);
         }
     }
 }
@@ -2057,7 +2057,7 @@ pub fn save_prefab_to_disk(world: &mut World, prefab_path: &Path) -> std::io::Re
     if write_path != prefab_path {
         back_up_legacy_prefab(prefab_path);
     }
-    std::fs::write(&write_path, text)?;
+    crate::scene_io::save::write_atomic(&write_path, text.as_bytes())?;
 
     let fingerprint = crate::prefab::cache::compute_file_fingerprint(&write_path)?;
     world

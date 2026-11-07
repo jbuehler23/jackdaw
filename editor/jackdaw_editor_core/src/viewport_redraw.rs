@@ -123,6 +123,7 @@ pub(crate) struct Busy<'w, 's> {
     gestures: Option<Res<'w, crate::test_input::SyntheticInput>>,
     game_requests: Option<Res<'w, GameRequestWindow>>,
     session: Option<NonSend<'w, crate::pie::PieSession>>,
+    saves: Option<Res<'w, crate::scene_io::save_worker::SceneSaves>>,
 }
 
 impl Busy<'_, '_> {
@@ -134,6 +135,7 @@ impl Busy<'_, '_> {
                 .as_ref()
                 .is_some_and(|progress| progress.current().is_some())
             || self.dolly.is_some()
+            || self.saves.as_ref().is_some_and(|saves| !saves.idle())
             || !self.moved.is_empty()
             || !self.spawned.is_empty()
             || self

@@ -1,0 +1,10 @@
+#Zone
+bevy_transform::components::transform::Transform { translation: glam::Vec3 { x: 0.0, y: 2.0, z: 0.0 } }
+--
+#Stack
+jackdaw::prefab::components::IsA { source: "crate.bsn", deleted: [] }
+jackdaw::prefab::components::PrefabEntityId(0)
+bevy_transform::components::transform::Transform { translation: glam::Vec3 { x: 3.0, y: 0.0, z: -1.0 } }
+--
+#Field
+jackdaw_scene_types::types::Terrain { data_path: "zone.terrain-0.jdterrain" }

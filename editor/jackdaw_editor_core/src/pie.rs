@@ -739,6 +739,43 @@ impl PieSession {
     }
 }
 
+/// Hold the open project's game build as in progress, for a test: a launch then
+/// joins the build's waiting list instead of running anything.
+#[doc(hidden)]
+pub fn insert_build_in_progress(world: &mut World) {
+    let Some(root) = project_root(world) else {
+        return;
+    };
+    let task = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
+        .spawn(std::future::pending::<io::Result<GameBuildResult>>());
+    world.non_send_mut::<PieSession>().builds.insert(
+        root,
+        BuildState::Running {
+            task,
+            pending: Vec::new(),
+            progress: Arc::default(),
+        },
+    );
+}
+
+/// The launches waiting on a game build, for a test.
+#[doc(hidden)]
+pub fn launches_waiting_on_build(
+    world: &World,
+) -> Vec<(RunConfig, Option<crate::play_scene::LaunchScene>)> {
+    world
+        .non_send::<PieSession>()
+        .builds
+        .values()
+        .filter_map(|build| match build {
+            BuildState::Running { pending, .. } => Some(pending),
+            _ => None,
+        })
+        .flatten()
+        .map(|spawn| (spawn.run.clone(), spawn.scene.clone()))
+        .collect()
+}
+
 /// Where a launched game's window lives. A launch records the mode it used, and
 /// running instances keep it; changing the setting only affects later launches.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -868,19 +905,63 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         }
     }
 
-    // Read root before borrowing the session mutably below.
-    let Some(root) = project_root(world) else {
-        return;
+    let tab = {
+        let scenes = world.resource::<crate::scenes::Scenes>();
+        scenes.tabs.get(scenes.active).map(|tab| tab.id)
     };
+    if saves_before_play(world) {
+        let _span = info_span!("play.save_before").entered();
+        crate::scene_io::save_worker::after_saves(
+            world,
+            crate::scene_io::save_worker::AfterSaves::Play { key, run, tab },
+        );
+        let modified = crate::scenes::operators::modified_tabs(world);
+        crate::scene_io::save_worker::save_tabs_front_last(world, &modified);
+        return;
+    }
+    start_instance(world, key, run, tab);
+}
 
-    if let Err(reason) = save_before_play(world) {
+/// Go on with Play, unless the saves it waited for say otherwise.
+pub(crate) fn launch_after_saves(
+    world: &mut World,
+    key: InstanceKey,
+    run: RunConfig,
+    tab: Option<u64>,
+    failures: &[crate::scenes::operators::TabSaveFailure],
+) {
+    if let Err(reason) = play_despite(world, failures) {
         warn!("PIE: not playing: {reason}");
         crate::status_bar::notify_error(world, reason);
         return;
     }
+    start_instance(world, key, run, tab);
+}
+
+/// Start the game for `key`, on the scene of the tab with id `tab` under the name it
+/// has by now, a save having possibly moved it to a new file. From a current binary
+/// or after a build.
+fn start_instance(world: &mut World, key: InstanceKey, run: RunConfig, tab: Option<u64>) {
+    {
+        let session = world.non_send::<PieSession>();
+        if session.is_running(&key) || session.is_pending(&key) {
+            return;
+        }
+    }
+    // Read root before borrowing the session mutably below.
+    let Some(root) = project_root(world) else {
+        return;
+    };
     crate::play_overlay::notice_unsaved_model_settings(world);
-    let scene = crate::play_scene::launch_scene(world, &run);
-    let run = run_with_open_scene(world, run);
+    let tab = tab.and_then(|id| {
+        let scenes = world.resource::<crate::scenes::Scenes>();
+        scenes.tabs.iter().position(|tab| tab.id == id)
+    });
+    let scene = tab.and_then(|tab| crate::play_scene::launch_scene_of_tab(world, &run, tab));
+    let run = match tab {
+        Some(tab) => run_with_scene_of_tab(world, run, tab),
+        None => run,
+    };
 
     // If the game binary is built AND still current, spawn from it
     // immediately. A source edit since the last build invalidates the
@@ -902,6 +983,13 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
         world.non_send_mut::<PieSession>().builds.remove(&root);
     }
 
+    // Join an in-flight build's pending list, or start a new build.
+    if let Some(BuildState::Running { pending, .. }) =
+        world.non_send_mut::<PieSession>().builds.get_mut(&root)
+    {
+        pending.push(PendingSpawn { key, run, scene });
+        return;
+    }
     let spec = match crate::project_build::shim_spec_for_project(&root) {
         Ok(spec) => spec,
         Err(error) => {
@@ -909,27 +997,16 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             return;
         }
     };
-
-    // Join an in-flight build's pending list, or start a new build.
-    let mut session = world.non_send_mut::<PieSession>();
-    match session.builds.get_mut(&root) {
-        Some(BuildState::Running { pending, .. }) => {
-            pending.push(PendingSpawn { key, run, scene });
-        }
-        Some(BuildState::Done(_)) => unreachable!("handled above"),
-        Some(BuildState::Failed { .. }) | None => {
-            info!("PIE: building the game for {key}");
-            let (task, progress) = spawn_game_build(&root, spec, BuildLoad::Foreground);
-            session.builds.insert(
-                root,
-                BuildState::Running {
-                    task,
-                    pending: vec![PendingSpawn { key, run, scene }],
-                    progress,
-                },
-            );
-        }
-    }
+    info!("PIE: building the game for {key}");
+    let (task, progress) = spawn_game_build(&root, spec, BuildLoad::Foreground);
+    world.non_send_mut::<PieSession>().builds.insert(
+        root,
+        BuildState::Running {
+            task,
+            pending: vec![PendingSpawn { key, run, scene }],
+            progress,
+        },
+    );
 }
 
 /// The scene a game loads as its main one, inside the asset folder: what the
@@ -942,8 +1019,15 @@ pub(crate) const MAIN_SCENE: &str = "scene.bsn";
 /// `JACKDAW_PIE_REPLACES`, both paths inside the asset folder. Nothing is
 /// named when the main scene is in front, when the scene in front has no file
 /// in the asset folder, or when the run configuration already names a scene.
-pub fn run_with_open_scene(world: &World, mut run: RunConfig) -> RunConfig {
-    let Some(scene) = open_scene_asset_path(world) else {
+pub fn run_with_open_scene(world: &World, run: RunConfig) -> RunConfig {
+    match world.get_resource::<crate::scenes::Scenes>() {
+        Some(scenes) => run_with_scene_of_tab(world, run, scenes.active),
+        None => run,
+    }
+}
+
+fn run_with_scene_of_tab(world: &World, mut run: RunConfig, tab: usize) -> RunConfig {
+    let Some(scene) = scene_asset_path_of_tab(world, tab) else {
         return run;
     };
     if scene == MAIN_SCENE || run.env.contains_key("JACKDAW_PIE_SCENE") {
@@ -956,9 +1040,11 @@ pub fn run_with_open_scene(world: &World, mut run: RunConfig) -> RunConfig {
     run
 }
 
-pub(crate) fn open_scene_asset_path(world: &World) -> Option<String> {
+/// The asset path of the scene in tab `tab`, if it is a scene with a file in the
+/// project.
+pub(crate) fn scene_asset_path_of_tab(world: &World, tab: usize) -> Option<String> {
     let scenes = world.get_resource::<crate::scenes::Scenes>()?;
-    let tab = scenes.tabs.get(scenes.active)?;
+    let tab = scenes.tabs.get(tab)?;
     if tab.kind != crate::scenes::TabKind::Scene {
         return None;
     }
@@ -967,31 +1053,30 @@ pub(crate) fn open_scene_asset_path(world: &World) -> Option<String> {
         .to_asset_path(tab.path.as_deref()?)
 }
 
-/// Save the modified scenes the game may load, unless the project turned
-/// that off. A scene with no file is served to the game unsaved. So is one a
-/// save refuses for naming an asset by an absolute path, which warns. A prefab
-/// that does not save stops Play.
-fn save_before_play(world: &mut World) -> Result<(), String> {
-    let _span = info_span!("play.save_before").entered();
-    if !world
+/// Whether Play saves the modified scenes the game may load first.
+fn saves_before_play(world: &World) -> bool {
+    world
         .get_resource::<crate::project_build::EditorBuildSettings>()
         .is_none_or(|settings| settings.save_before_play)
-    {
-        return Ok(());
-    }
-    let (absolute, failures): (Vec<_>, Vec<_>) =
-        crate::scenes::operators::save_modified_scenes(world)
-            .into_iter()
-            .partition(|failure| {
-                failure.kind == crate::scenes::TabKind::Scene
-                    && failure
-                        .message
-                        .contains(crate::scene_io::asset_fields::ABSOLUTE_PATH_REFUSAL)
-            });
-    let messages = |failures: Vec<crate::scenes::operators::TabSaveFailure>| {
+}
+
+/// What the saves ahead of Play mean for it. A scene with no file is served to the
+/// game unsaved. So is one a save refuses for naming an asset by an absolute path,
+/// which warns. A prefab that does not save stops Play.
+fn play_despite(
+    world: &mut World,
+    failures: &[crate::scenes::operators::TabSaveFailure],
+) -> Result<(), String> {
+    let (absolute, failures): (Vec<_>, Vec<_>) = failures.iter().partition(|failure| {
+        failure.kind == crate::scenes::TabKind::Scene
+            && failure
+                .message
+                .contains(crate::scene_io::asset_fields::ABSOLUTE_PATH_REFUSAL)
+    });
+    let messages = |failures: Vec<&crate::scenes::operators::TabSaveFailure>| {
         failures
             .into_iter()
-            .map(|failure| failure.message)
+            .map(|failure| failure.message.clone())
             .collect::<Vec<_>>()
             .join("; ")
     };

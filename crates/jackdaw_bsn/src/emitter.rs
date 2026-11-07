@@ -155,28 +155,17 @@ pub fn emit_entities(ast: &SceneBsnAst, entities: &[Entity]) -> String {
     out
 }
 
-/// How many bytes of text the document's brushes take up.
-pub fn brush_text_len(ast: &SceneBsnAst) -> usize {
-    let _span = bevy::log::info_span!("doc.brush_text_len").entered();
-    let mut total = 0;
-    let mut text = String::new();
-    for &root in &ast.roots {
-        for node in std::iter::once(root).chain(ast.descendants_of(root)) {
-            let Some(patches) = ast.get_patches(node) else {
-                continue;
-            };
-            for patch in patches.0.iter().filter_map(|&patch| ast.get_patch(patch)) {
-                if let BsnPatch::Struct(data) = patch
-                    && data.type_path == BRUSH_TYPE_PATH
-                {
-                    text.clear();
-                    emit_struct_patch(data, 0, &mut text);
-                    total += text.len();
-                }
-            }
-        }
-    }
-    total
+thread_local! {
+    /// Bytes of brush text emitted on this thread since [`emit_scene_sizing_brushes`]
+    /// began.
+    static BRUSH_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`emit_scene`], with how many bytes of the text the document's brushes take up.
+pub fn emit_scene_sizing_brushes(ast: &SceneBsnAst) -> (String, usize) {
+    BRUSH_BYTES.set(0);
+    let text = emit_scene(ast);
+    (text, BRUSH_BYTES.get())
 }
 
 /// Emit all patches for one entity (one "block" in BSN), in the order they
@@ -240,7 +229,11 @@ fn emit_patch(ast: &SceneBsnAst, patch: &BsnPatch, indent: usize, out: &mut Stri
         }
 
         BsnPatch::Struct(data) => {
+            let start = out.len();
             emit_struct_patch(data, indent, out);
+            if data.type_path == BRUSH_TYPE_PATH {
+                BRUSH_BYTES.set(BRUSH_BYTES.get() + out.len() - start);
+            }
         }
 
         BsnPatch::TupleStruct(data) => {
@@ -711,5 +704,34 @@ mod tests {
             refused.to_string().contains("does not parse back"),
             "{refused}"
         );
+    }
+
+    #[test]
+    fn sizing_the_brushes_counts_only_brush_text() {
+        let text = |path: &str| {
+            let mut out = String::new();
+            emit_struct_patch(
+                &BsnStructData {
+                    type_path: path.into(),
+                    fields: BsnStructFields(Vec::new()),
+                },
+                0,
+                &mut out,
+            );
+            out.len()
+        };
+        let mut ast = SceneBsnAst::default();
+        let plain = "bevy_transform::components::transform::Transform";
+        for path in [BRUSH_TYPE_PATH, plain] {
+            let node = ast.create_entity_node(vec![BsnPatch::Struct(BsnStructData {
+                type_path: path.into(),
+                fields: BsnStructFields(Vec::new()),
+            })]);
+            ast.add_to_roots(node);
+        }
+        let (emitted, brushes) = emit_scene_sizing_brushes(&ast);
+        assert_eq!(emitted, emit_scene(&ast));
+        assert!(brushes >= text(BRUSH_TYPE_PATH), "{brushes}");
+        assert!(brushes < emitted.len() - text(plain), "{brushes}");
     }
 }

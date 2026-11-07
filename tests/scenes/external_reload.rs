@@ -35,7 +35,6 @@ fn make_app() -> App {
     app.add_plugins(jackdaw_bsn::JackdawBsnPlugin);
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.init_resource::<jackdaw::scenes::operators::UntitledCounter>();

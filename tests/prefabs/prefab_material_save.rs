@@ -36,7 +36,6 @@ fn make_app(root: &std::path::Path) -> App {
     app.add_plugins(jackdaw::prefab::PrefabPlugin);
     app.init_resource::<jackdaw::commands::CommandHistory>();
     app.init_resource::<jackdaw::scene_io::SceneFilePath>();
-    app.init_resource::<jackdaw::scene_io::SceneDirtyState>();
     app.init_resource::<jackdaw::selection::Selection>();
     app.init_resource::<jackdaw::scenes::Scenes>();
     app.insert_resource(ProjectRoot::new(

@@ -21,7 +21,7 @@ use jackdaw_tileset::TerrainMatch;
 
 use jackdaw_editor_core::scene_io::SidecarImport;
 use jackdaw_editor_core::scene_io::hooks::{
-    DocumentIoHook, DocumentIoHooks, PlayCopies, PlayDocument, play_copy_stamp,
+    DocumentIoHook, DocumentIoHooks, PlayCopies, PlayDocument, SidecarWrite, play_copy_stamp,
 };
 
 pub fn plugin(app: &mut App) {
@@ -42,20 +42,24 @@ pub fn plugin(app: &mut App) {
 struct TilemapSidecars;
 
 impl DocumentIoHook for TilemapSidecars {
+    fn holds_the_frame(&self, world: &mut World, path: &str) -> bool {
+        moves_to_a_new_file(world, path)
+    }
+
     fn begin_save(&self, world: &mut World, path: &str) -> Box<dyn Any + Send> {
         Box::new(begin_save(world, path))
     }
 
-    fn export_sidecars(
+    fn encode_sidecars(
         &self,
         world: &mut World,
         path: &str,
-        state: &(dyn Any + Send),
-    ) -> Result<(), BevyError> {
+        state: &mut (dyn Any + Send),
+    ) -> Result<Vec<SidecarWrite>, BevyError> {
         let renames = state
-            .downcast_ref::<SaveRenames>()
+            .downcast_mut::<SaveRenames>()
             .ok_or("tilemap save state of the wrong type")?;
-        export_tilemap_sidecars(world, path, renames)
+        Ok(encode_tilemap_sidecars(world, path, renames))
     }
 
     fn finish_save(&self, world: &mut World, state: Box<dyn Any + Send>, written: bool) {
@@ -111,6 +115,8 @@ pub struct TilemapDataStore {
     read_mtimes: HashMap<String, SystemTime>,
     /// Keys edited since they were last read or written.
     changed: HashSet<String>,
+    /// The [`Self::revision`] of the latest write of each key's cells.
+    written_at: HashMap<String, u64>,
     /// The document whose maps live at each key.
     owners: HashMap<String, String>,
     next_unsaved: u64,
@@ -161,6 +167,7 @@ impl TilemapDataStore {
     pub fn get_mut(&mut self, key: &str) -> Option<TilemapEdit<'_>> {
         let data = self.entries.get_mut(key)?;
         self.revision += 1;
+        self.written_at.insert(key.to_string(), self.revision);
         self.changed.insert(key.to_string());
         let redraw =
             (self.redraw.entry(key.to_string())).or_insert_with(|| Redraw::Chunks(BTreeSet::new()));
@@ -184,6 +191,7 @@ impl TilemapDataStore {
         let key = key.into();
         data.layers.iter_mut().for_each(clear_dirty);
         self.revision += 1;
+        self.written_at.insert(key.clone(), self.revision);
         self.changed.insert(key.clone());
         self.redraw.insert(key.clone(), Redraw::Whole);
         self.sets.remove(&key);
@@ -192,6 +200,10 @@ impl TilemapDataStore {
             self.ids.insert(key.clone(), self.next_id);
         }
         self.entries.insert(key, data);
+    }
+
+    fn key_revision(&self, key: &str) -> u64 {
+        self.written_at.get(key).copied().unwrap_or_default()
     }
 
     /// Records `doc` as the document whose map lives at `key`. A map another
@@ -212,6 +224,7 @@ impl TilemapDataStore {
         self.read_mtimes.remove(key);
         self.load_failed.remove(key);
         self.changed.remove(key);
+        self.written_at.remove(key);
         self.entries.remove(key)
     }
 
@@ -256,6 +269,7 @@ impl TilemapDataStore {
                 .collect();
         }
         self.revision += 1;
+        self.written_at.insert(key.to_string(), self.revision);
         self.changed.insert(key.to_string());
         self.redraw.insert(key.to_string(), Redraw::Whole);
         removed
@@ -341,6 +355,8 @@ impl TilemapDataStore {
 
     /// Marks `key` edited, so the next save of its owner writes it.
     pub(crate) fn mark_changed(&mut self, key: &str) {
+        self.revision += 1;
+        self.written_at.insert(key.to_string(), self.revision);
         self.changed.insert(key.to_string());
     }
 
@@ -1003,6 +1019,18 @@ pub(crate) struct SaveRenames {
     renames: Vec<(Entity, String, String, String, String)>,
     /// The file the tab was keyed under before, for a rollback.
     previous_file: Option<String>,
+    /// The maps whose sidecars this save encoded.
+    encoded: Vec<EncodedMap>,
+}
+
+/// A map whose sidecar a save has encoded, for when the save is over.
+struct EncodedMap {
+    key: String,
+    file: PathBuf,
+    /// Whether the cells are still held under another key.
+    renamed: bool,
+    /// The key's cells as of the encoding, so a later edit stays unsaved.
+    revision: u64,
 }
 
 impl SaveRenames {
@@ -1021,6 +1049,18 @@ impl SaveRenames {
     }
 }
 
+/// Whether a save to `path` moves maps of the tab to keys of another file. Their
+/// cells move only once the file is written, and a frame in between would read
+/// the new keys as maps with no cells.
+fn moves_to_a_new_file(world: &mut World, path: &str) -> bool {
+    if !world.contains_resource::<TilemapDataStore>() {
+        return false;
+    }
+    let old = current_doc(world);
+    let new = Doc::file(world, Path::new(path));
+    old.id != new.id && live_maps(world, &old).iter().any(|map| !map.inherited)
+}
+
 /// Moves the tab's maps to the file `path` it is about to be saved to. A map
 /// whose data path is not beside the new file under its stem gets a fresh
 /// one; the old file stays with the document that owns it.
@@ -1029,6 +1069,7 @@ pub(crate) fn begin_save(world: &mut World, path: &str) -> SaveRenames {
         doc: None,
         renames: Vec::new(),
         previous_file: None,
+        encoded: Vec::new(),
     };
     if !world.contains_resource::<TilemapDataStore>() {
         return renames;
@@ -1097,6 +1138,15 @@ pub(crate) fn finish_save(world: &mut World, renames: SaveRenames, written: bool
         return;
     }
     let mut store = world.resource_mut::<TilemapDataStore>();
+    for map in &renames.encoded {
+        store.note_read(&map.key, &map.file);
+        if !map.renamed {
+            if store.key_revision(&map.key) == map.revision {
+                store.changed.remove(&map.key);
+            }
+            store.set_owner(&map.key, &doc.id);
+        }
+    }
     for (_, _, _, from_key, to_key) in &renames.renames {
         if from_key == to_key {
             store.set_owner(to_key, &doc.id);
@@ -1336,13 +1386,13 @@ fn discard_tilemap_edits(world: &mut World, tab: usize) {
 ///
 /// An invalid path and a quarantined key are skipped with a warning and never
 /// fail the save; a quarantined file moving with a Save As is copied as it is.
-pub(crate) fn export_tilemap_sidecars(
+fn encode_tilemap_sidecars(
     world: &mut World,
     scene_path: &str,
-    renames: &SaveRenames,
-) -> Result<(), BevyError> {
+    renames: &mut SaveRenames,
+) -> Vec<SidecarWrite> {
     if !world.contains_resource::<TilemapDataStore>() {
-        return Ok(());
+        return Vec::new();
     }
     let doc = match &renames.doc {
         Some(doc) => doc.clone(),
@@ -1373,10 +1423,13 @@ pub(crate) fn export_tilemap_sidecars(
         }
         if let Some(reason) = store.load_failed_reason(source) {
             warn!("Not saving tilemap data {key:?}: it could not be loaded ({reason})");
-            if let Some(old_full) = renamed.then(|| renames.old_file(&key)).flatten()
-                && let Err(err) = std::fs::copy(&old_full, &full)
-            {
-                warn!("Tilemap data {} was not copied: {err}", old_full.display());
+            if let Some(old_full) = renamed.then(|| renames.old_file(&key)).flatten() {
+                match std::fs::read(&old_full) {
+                    Ok(bytes) => writes.push((full, bytes)),
+                    Err(err) => {
+                        warn!("Tilemap data {} was not copied: {err}", old_full.display());
+                    }
+                }
             }
             continue;
         }
@@ -1384,23 +1437,15 @@ pub(crate) fn export_tilemap_sidecars(
         let Some(data) = store.get(source).filter(|_| !unchanged) else {
             continue;
         };
-        writes.push((key, full, jackdaw_tilemap::encode(data), renamed));
+        renames.encoded.push(EncodedMap {
+            revision: store.key_revision(&key),
+            key,
+            file: full.clone(),
+            renamed,
+        });
+        writes.push((full, jackdaw_tilemap::encode(data)));
     }
-    for (key, full, bytes, renamed) in writes {
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("cannot make {}: {err}", parent.display()))?;
-        }
-        jackdaw_api_internal::document::write_atomic(&full, &bytes)
-            .map_err(|err| format!("failed to write tilemap data {}: {err}", full.display()))?;
-        let mut store = world.resource_mut::<TilemapDataStore>();
-        store.note_read(&key, &full);
-        if !renamed {
-            store.changed.remove(&key);
-            store.set_owner(&key, &doc.id);
-        }
-    }
-    Ok(())
+    writes
 }
 
 #[cfg(test)]

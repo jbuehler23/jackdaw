@@ -14,6 +14,8 @@ mod load_progress;
 mod moved_type_paths;
 mod native_dialogs;
 mod physics_round_trip;
+mod save_baseline;
+mod save_worker;
 mod scene_reopen;
 mod scenes_swap;
 mod tab_switch;

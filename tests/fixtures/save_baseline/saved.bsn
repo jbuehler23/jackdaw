@@ -1,0 +1,105 @@
+// jackdaw 0.21.0-dev | bevy main
+bevy_ecs::hierarchy::Children [
+    #Zone
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 { x: 0.0, y: 2.0, z: 0.0 },
+    }
+    jackdaw_scene_types::node_id::SceneNodeId(5296562403777221732)
+    --
+    #Stack
+    jackdaw::prefab::components::IsA {
+        source: "crate.bsn",
+        deleted: [],
+    }
+    jackdaw::prefab::components::PrefabEntityId(0)
+    bevy_transform::components::transform::Transform {
+        translation: glam::Vec3 { x: 3.0, z: -1.0 },
+    }
+    jackdaw_scene_types::node_id::SceneNodeId(5296562403777221731)
+    --
+    #Field
+    jackdaw_scene_types::types::Terrain {
+        data_path: "zone.terrain-0.jdterrain",
+    }
+    jackdaw_scene_types::node_id::SceneNodeId(5296562403777221730)
+    --
+    #Painted
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::Brush {
+faces: [
+jackdaw_geometry::BrushFaceData { plane: jackdaw_geometry::BrushPlane { normal: glam::Vec3 { x: 1.0 }, distance: 1.0 }, material: "#StandardMaterial0", uv_scale: glam::Vec2 { x: 1.0, y: 1.0 }, uv_u_axis: glam::Vec3 { z: 1.0 }, uv_v_axis: glam::Vec3 { y: -1.0 } },
+jackdaw_geometry::BrushFaceData { plane: jackdaw_geometry::BrushPlane { normal: glam::Vec3 { x: -1.0 }, distance: 1.0 }, uv_scale: glam::Vec2 { x: 1.0, y: 1.0 }, uv_u_axis: glam::Vec3 { z: -1.0 }, uv_v_axis: glam::Vec3 { x: -0.0, y: -1.0, z: -0.0 } },
+jackdaw_geometry::BrushFaceData { plane: jackdaw_geometry::BrushPlane { normal: glam::Vec3 { y: 1.0 }, distance: 1.0 }, uv_scale: glam::Vec2 { x: 1.0, y: 1.0 }, uv_u_axis: glam::Vec3 { x: 1.0 }, uv_v_axis: glam::Vec3 { z: -1.0 } },
+jackdaw_geometry::BrushFaceData { plane: jackdaw_geometry::BrushPlane { normal: glam::Vec3 { y: -1.0 }, distance: 1.0 }, uv_scale: glam::Vec2 { x: 1.0, y: 1.0 }, uv_u_axis: glam::Vec3 { x: -1.0 }, uv_v_axis: glam::Vec3 { x: -0.0, y: -0.0, z: -1.0 } },
+jackdaw_geometry::BrushFaceData { plane: jackdaw_geometry::BrushPlane { normal: glam::Vec3 { z: 1.0 }, distance: 1.0 }, uv_scale: glam::Vec2 { x: 1.0, y: 1.0 }, uv_u_axis: glam::Vec3 { x: -1.0 }, uv_v_axis: glam::Vec3 { y: -1.0 } },
+jackdaw_geometry::BrushFaceData { plane: jackdaw_geometry::BrushPlane { normal: glam::Vec3 { z: -1.0 }, distance: 1.0 }, uv_scale: glam::Vec2 { x: 1.0, y: 1.0 }, uv_u_axis: glam::Vec3 { x: 1.0, y: -0.0 }, uv_v_axis: glam::Vec3 { y: -1.0, z: -0.0 } },
+],
+topology: jackdaw_geometry::topology::BrushTopology {
+vertices: [
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: -1.0, y: -1.0, z: -1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: 1.0, y: -1.0, z: -1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: 1.0, y: 1.0, z: -1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: -1.0, y: 1.0, z: -1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: -1.0, y: -1.0, z: 1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: 1.0, y: -1.0, z: 1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 } },
+jackdaw_geometry::topology::MeshVert { position: glam::Vec3 { x: -1.0, y: 1.0, z: 1.0 } },
+],
+edges: [
+jackdaw_geometry::topology::MeshEdge { v: [0, 1] },
+jackdaw_geometry::topology::MeshEdge { v: [1, 2] },
+jackdaw_geometry::topology::MeshEdge { v: [2, 3] },
+jackdaw_geometry::topology::MeshEdge { v: [0, 3] },
+jackdaw_geometry::topology::MeshEdge { v: [4, 5] },
+jackdaw_geometry::topology::MeshEdge { v: [5, 6] },
+jackdaw_geometry::topology::MeshEdge { v: [6, 7] },
+jackdaw_geometry::topology::MeshEdge { v: [4, 7] },
+jackdaw_geometry::topology::MeshEdge { v: [0, 4] },
+jackdaw_geometry::topology::MeshEdge { v: [1, 5] },
+jackdaw_geometry::topology::MeshEdge { v: [2, 6] },
+jackdaw_geometry::topology::MeshEdge { v: [3, 7] },
+],
+polygons: [
+jackdaw_geometry::topology::MeshPoly { loop_total: 4 },
+jackdaw_geometry::topology::MeshPoly { loop_start: 4, loop_total: 4 },
+jackdaw_geometry::topology::MeshPoly { loop_start: 8, loop_total: 4 },
+jackdaw_geometry::topology::MeshPoly { loop_start: 12, loop_total: 4 },
+jackdaw_geometry::topology::MeshPoly { loop_start: 16, loop_total: 4 },
+jackdaw_geometry::topology::MeshPoly { loop_start: 20, loop_total: 4 },
+],
+loops: [
+jackdaw_geometry::topology::MeshLoop { vert: 1, edge: 1 },
+jackdaw_geometry::topology::MeshLoop { vert: 2, edge: 10 },
+jackdaw_geometry::topology::MeshLoop { vert: 6, edge: 5 },
+jackdaw_geometry::topology::MeshLoop { vert: 5, edge: 9 },
+jackdaw_geometry::topology::MeshLoop { edge: 8 },
+jackdaw_geometry::topology::MeshLoop { vert: 4, edge: 7 },
+jackdaw_geometry::topology::MeshLoop { vert: 7, edge: 11 },
+jackdaw_geometry::topology::MeshLoop { vert: 3, edge: 3 },
+jackdaw_geometry::topology::MeshLoop { vert: 2, edge: 2 },
+jackdaw_geometry::topology::MeshLoop { vert: 3, edge: 11 },
+jackdaw_geometry::topology::MeshLoop { vert: 7, edge: 6 },
+jackdaw_geometry::topology::MeshLoop { vert: 6, edge: 10 },
+jackdaw_geometry::topology::MeshLoop,
+jackdaw_geometry::topology::MeshLoop { vert: 1, edge: 9 },
+jackdaw_geometry::topology::MeshLoop { vert: 5, edge: 4 },
+jackdaw_geometry::topology::MeshLoop { vert: 4, edge: 8 },
+jackdaw_geometry::topology::MeshLoop { vert: 4, edge: 4 },
+jackdaw_geometry::topology::MeshLoop { vert: 5, edge: 5 },
+jackdaw_geometry::topology::MeshLoop { vert: 6, edge: 6 },
+jackdaw_geometry::topology::MeshLoop { vert: 7, edge: 7 },
+jackdaw_geometry::topology::MeshLoop { edge: 3 },
+jackdaw_geometry::topology::MeshLoop { vert: 3, edge: 2 },
+jackdaw_geometry::topology::MeshLoop { vert: 2, edge: 1 },
+jackdaw_geometry::topology::MeshLoop { vert: 1 },
+],
+attributes: jackdaw_geometry::topology::AttributeStack { vert: map[], edge: map[], loop_: map[], face: map[] },
+},
+    }
+    jackdaw_scene_types::node_id::SceneNodeId(5296562403777221733)
+    --
+    #StandardMaterial0
+    bevy_pbr::pbr_material::StandardMaterial {
+        base_color: bevy_color::color::Color::Srgba(bevy_color::srgba::Srgba { red: 0.25, green: 0.5, blue: 0.75, alpha: 1.0 }),
+    }
+]
