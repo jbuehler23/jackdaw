@@ -77,10 +77,33 @@ fn store_of_tab(world: &World, tab: Option<usize>) -> Option<&TerrainDataStore> 
     Some(&scenes.tabs.get(tab)?.terrain_data_store)
 }
 
+/// A store holding unsaved edits to the sidecar `data_path` names in `dir`: the tab in
+/// front's first, then any other open document in that folder, where the same path
+/// names the same file. How a prefab no tab holds gets edits made on its instances.
+fn store_with_edits<'a>(
+    world: &'a World,
+    dir: &Path,
+    data_path: &str,
+) -> Option<&'a TerrainDataStore> {
+    let scenes = world.get_resource::<Scenes>()?;
+    let wanted = std::fs::canonicalize(dir).ok()?;
+    let beside = |tab: usize| {
+        let folder = scenes.tabs.get(tab)?.path.as_deref()?.parent()?;
+        (std::fs::canonicalize(folder).ok()? == wanted).then_some(tab)
+    };
+    std::iter::once(scenes.active)
+        .chain((0..scenes.tabs.len()).filter(|tab| *tab != scenes.active))
+        .filter_map(beside)
+        .filter_map(|tab| store_of_tab(world, Some(tab)))
+        .find(|store| store.has_unsaved_edits(data_path) && !store.is_load_failed(data_path))
+}
+
 /// Settle a copy of each of `document`'s terrains with unsaved edits, or with no
 /// file to read, from the store of the tab holding it. A clean terrain, however far
 /// its store lags its file, and one that failed to load, get none. Edits that an
-/// undo took back leave nothing to copy either, once compared with the file.
+/// undo took back leave nothing to copy either, once compared with the file. A prefab
+/// no tab holds takes only the edits an open document in its folder holds, and a
+/// scene no tab holds takes none.
 fn export_play_terrain(
     world: &World,
     document: &PlayDocument,
@@ -88,9 +111,6 @@ fn export_play_terrain(
 ) -> Result<(), BevyError> {
     use jackdaw_terrain::sidecar;
 
-    let Some(store) = store_of_tab(world, document.tab.or(document.instanced_from)) else {
-        return Ok(());
-    };
     let type_path = <jackdaw_scene_types::Terrain as bevy::reflect::TypePath>::type_path();
     let assets = jackdaw_editor_core::asset_index::assets_dir(world);
     for data_path in document.data_paths(type_path) {
@@ -98,12 +118,20 @@ fn export_play_terrain(
             warn!("Skipping invalid terrain data path {data_path:?}");
             continue;
         };
-        let Some(data) = store
-            .get(&data_path)
-            .filter(|_| !store.is_load_failed(&data_path))
+        let store = match document.tab {
+            Some(tab) => store_of_tab(world, Some(tab)),
+            None if document.instanced => document
+                .file_dir()
+                .and_then(|dir| store_with_edits(world, dir, &data_path)),
+            None => None,
+        };
+        let Some((store, data)) = store.and_then(|store| Some((store, store.get(&data_path)?)))
         else {
             continue;
         };
+        if store.is_load_failed(&data_path) {
+            continue;
+        }
         let saved = document
             .file_dir()
             .and_then(|dir| sidecar::resolve_path(dir, &data_path).ok());

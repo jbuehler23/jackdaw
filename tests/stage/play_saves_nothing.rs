@@ -114,7 +114,7 @@ struct NamesAnAsset {
 /// A save refuses an absolute asset path. Play starts anyway, since the game takes
 /// the document rather than the file.
 #[test]
-fn an_absolute_asset_path_warns_and_still_plays() {
+fn an_absolute_asset_path_still_plays() {
     let tmp = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(tmp.path().join("assets")).expect("assets folder");
     let scene = tmp.path().join("assets/zone.bsn");
@@ -150,12 +150,6 @@ fn an_absolute_asset_path_warns_and_still_plays() {
         text,
         "nothing was written"
     );
-    let notice = app
-        .world()
-        .resource::<jackdaw::status_bar::StatusNotice>()
-        .text()
-        .to_string();
-    assert!(notice.is_empty(), "{notice}");
     assert_eq!(
         jackdaw::pie::launches_waiting_on_build(app.world()).len(),
         1,
@@ -250,8 +244,7 @@ fn a_scene_path_that_leaves_the_project_is_refused() {
     assert_eq!(result, OperatorResult::Cancelled);
 }
 
-/// A prefab is not served, so the game would read the stale file: unlike a scene,
-/// one a save refuses stops Play.
+/// A prefab is served too, so one a save refuses does not stop Play.
 #[test]
 fn a_prefab_tab_a_save_would_refuse_still_plays() {
     let tmp = tempfile::tempdir().expect("tempdir");

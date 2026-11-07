@@ -788,7 +788,7 @@ pub(crate) fn pie_window_mode_toggle(
 
 /// Stop every running instance, drop the cached build path so the next
 /// launch re-runs the (incremental) cargo build, then relaunch each
-/// instance that was running. The game reloads its scene from disk.
+/// instance that was running. The game asks the editor for its scene again.
 pub fn handle_reload(world: &mut World) {
     let keys: Vec<InstanceKey> = world
         .non_send::<PieSession>()

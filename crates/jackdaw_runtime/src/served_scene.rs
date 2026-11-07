@@ -56,9 +56,12 @@ struct AwaitingDocument(u64);
 #[derive(Component)]
 struct SceneFromFile;
 
-/// A root inserted again restarts: it asks the editor afresh, whatever it was told
-/// about the scene it held before.
-pub(crate) fn forget_answer_on_insert(insert: On<Insert<JackdawSceneRoot>>, mut commands: Commands) {
+/// A root inserted again asks the editor afresh when it next spawns, whatever it was
+/// told about the scene it held before.
+pub(crate) fn forget_answer_on_insert(
+    insert: On<Insert<JackdawSceneRoot>>,
+    mut commands: Commands,
+) {
     commands
         .entity(insert.entity)
         .remove::<(SceneFromFile, AwaitingDocument)>();

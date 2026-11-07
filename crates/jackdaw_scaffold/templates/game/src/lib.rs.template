@@ -12,7 +12,7 @@
 //! 3. Components panel: click `Add Component` and pick `SpinningCube`.
 //!    Set `speed` to `1.5`.
 //! 4. Click Play. The cube spins.
-//! 5. `cargo run` launches the same game without the editor.
+//! 5. `File > Save`, then `cargo run` launches the same game without the editor.
 //!
 //! # Adding your own components
 //!

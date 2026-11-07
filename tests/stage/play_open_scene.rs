@@ -1,7 +1,7 @@
 use crate::util::{self, OperatorResultExt as _};
 
 use bevy::prelude::*;
-use jackdaw::boot_ops::run_op_clause;
+use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::play_scene::{LaunchScene, PlayScene, launch_scene};
 use jackdaw_pie_protocol::manifest::RunConfig;
 
@@ -83,5 +83,76 @@ fn a_scene_the_run_configuration_names_is_kept() {
     assert_eq!(
         launch_scene(app.world(), &run),
         in_place_of_main("boss.bsn")
+    );
+}
+
+#[test]
+fn project_settings_name_scenes_over_the_run_configuration() {
+    let (mut app, _tmp) = project_with_scene("meadow.bsn");
+    {
+        let mut settings = app
+            .world_mut()
+            .resource_mut::<jackdaw::play_settings::PlaySettings>();
+        settings.env.insert(
+            "JACKDAW_PIE_SCENE".to_string(),
+            "levels\\boss.bsn".to_string(),
+        );
+        settings
+            .env
+            .insert("JACKDAW_PIE_REPLACES".to_string(), "level.bsn".to_string());
+    }
+    let mut run = RunConfig::default();
+    run.env
+        .insert("JACKDAW_PIE_SCENE".to_string(), "other.bsn".to_string());
+
+    assert_eq!(
+        launch_scene(app.world(), &run),
+        Some(LaunchScene {
+            replaces: "level.bsn".to_string(),
+            scene: PlayScene::Path("levels/boss.bsn".to_string()),
+        })
+    );
+}
+
+#[test]
+fn an_empty_scene_name_names_nothing() {
+    let (app, _tmp) = project_with_scene("meadow.bsn");
+    let mut run = RunConfig::default();
+    run.env
+        .insert("JACKDAW_PIE_SCENE".to_string(), String::new());
+
+    assert_eq!(
+        launch_scene(app.world(), &run),
+        in_place_of_main("meadow.bsn")
+    );
+}
+
+/// A scene in the old form plays from its document, under the name it has.
+#[test]
+fn a_scene_in_the_old_form_is_served_unsaved() {
+    let (mut app, tmp) = project_with_scene("zone.bsn");
+    let legacy = tmp.path().join("assets/zone.jsn");
+    std::fs::write(&legacy, "{}").expect("the old file");
+    std::fs::remove_file(tmp.path().join("assets/zone.bsn")).expect("the new name is free");
+    {
+        let mut scenes = app.world_mut().resource_mut::<jackdaw::scenes::Scenes>();
+        let active = scenes.active;
+        scenes.tabs[active].path = Some(legacy.clone());
+    }
+    run_op_clause_as_user(app.world_mut(), "entity.add.group name=Props")
+        .expect("the group dispatched")
+        .assert_finished();
+    app.update();
+
+    let launch = launch_scene(app.world(), &RunConfig::default()).expect("a scene to play");
+    assert_eq!(launch.scene, PlayScene::Path("zone.jsn".to_string()));
+    let answer = jackdaw::play_scene::scene_answer(app.world_mut(), Some(&launch), "scene.bsn");
+    let jackdaw_pie_protocol::SceneAnswer::Document { text, .. } = answer else {
+        panic!("not the document: {answer:?}");
+    };
+    assert!(text.contains("Props"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&legacy).expect("the old file"),
+        "{}"
     );
 }

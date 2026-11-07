@@ -65,24 +65,28 @@ pub enum PlayScene {
 /// the scene in front.
 pub fn launch_scene(world: &World, run: &RunConfig) -> Option<LaunchScene> {
     let _span = info_span!("play.launch_scene").entered();
-    let replaces = run
-        .env
-        .get("JACKDAW_PIE_REPLACES")
-        .cloned()
-        .unwrap_or_else(|| MAIN_SCENE.to_string());
-    let named = world
-        .get_resource::<crate::play_settings::PlaySettings>()
-        .and_then(|settings| settings.env.get("JACKDAW_PIE_SCENE"))
-        .or_else(|| run.env.get("JACKDAW_PIE_SCENE"));
-    let scene = match named {
-        Some(named) if *named == replaces => return None,
-        Some(named) => PlayScene::Path(named.clone()),
-        None => scene_in_front(world, &replaces)?,
+    let replaces =
+        named_path(world, run, "JACKDAW_PIE_REPLACES").unwrap_or_else(|| MAIN_SCENE.to_string());
+    let scene = match named_path(world, run, "JACKDAW_PIE_SCENE") {
+        Some(named) if named == replaces => return None,
+        Some(named) => PlayScene::Path(named),
+        None => scene_in_front(world)?,
     };
     Some(LaunchScene { replaces, scene })
 }
 
-fn scene_in_front(world: &World, replaces: &str) -> Option<PlayScene> {
+/// The asset path in the variable `key`, a project setting winning over the run
+/// configuration as it does in the game's environment. Empty names nothing.
+fn named_path(world: &World, run: &RunConfig, key: &str) -> Option<String> {
+    world
+        .get_resource::<crate::play_settings::PlaySettings>()
+        .and_then(|settings| settings.env.get(key))
+        .or_else(|| run.env.get(key))
+        .filter(|path| !path.is_empty())
+        .map(|path| path.replace('\\', "/"))
+}
+
+fn scene_in_front(world: &World) -> Option<PlayScene> {
     let scenes = world.get_resource::<Scenes>()?;
     let index = scenes.active;
     let tab = scenes.tabs.get(index)?;
@@ -95,7 +99,7 @@ fn scene_in_front(world: &World, replaces: &str) -> Option<PlayScene> {
         }
         None => None,
         Some(_) => crate::pie::scene_asset_path_of_tab(world, index)
-            .filter(|path| path != replaces)
+            .filter(|path| path != MAIN_SCENE)
             .map(PlayScene::Path),
     }
 }

@@ -1451,6 +1451,73 @@ fn unsaved_tiles_on_an_inherited_instance_reach_the_game() {
         .insert(edited, tiles(&[(1, 1), (2, 2)]));
 
     let served = serve(&mut app, "field.bsn");
-    assert!(sidecars_of(&served).is_some(), "the answer names the copies");
+    assert!(
+        sidecars_of(&served).is_some(),
+        "the answer names the copies"
+    );
     assert_eq!(copies_named(&tmp, TILES_FILE).len(), 1);
+}
+
+/// Two levels down: a prefab with a tab behind holds the instance, so its store holds
+/// the edit to the prefab below it.
+#[test]
+fn unsaved_terrain_inherited_through_a_prefab_tab_reaches_the_game() {
+    let field = format!(
+        "#Prop\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         jackdaw_scene_types::types::Terrain {{ data_path: \"{TERRAIN_FILE}\" }}\n"
+    );
+    let holder = format!(
+        "#Holder\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_ecs::hierarchy::Children [\n{}]\n",
+        instance_of("field.bsn")
+    );
+    let scene = instance_of("holder.bsn");
+    let (mut app, tmp) = editor(&[
+        ("field.bsn", &field),
+        ("holder.bsn", &holder),
+        ("level.bsn", &scene),
+    ]);
+    write_in(
+        &tmp.path().join("assets"),
+        TERRAIN_FILE,
+        &sidecar::save(&terrain_data(1.0)).expect("encodes"),
+    );
+    open(&mut app, "assets/holder.bsn");
+    app.world_mut()
+        .resource_mut::<TerrainDataStore>()
+        .insert(TERRAIN_FILE, terrain_data(6.0));
+    open(&mut app, "assets/level.bsn");
+
+    let mut game = game_serving(&mut app, &tmp, "level.bsn");
+    assert_eq!(terrain_height(&mut game), 6.0);
+}
+
+/// The scene's store names a file in the scene's folder, not the one beside a prefab
+/// elsewhere, whatever the two call it.
+#[test]
+fn a_scenes_terrain_does_not_reach_a_prefab_in_another_folder() {
+    let prop = format!(
+        "#Prop\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         jackdaw_scene_types::types::Terrain {{ data_path: \"{TERRAIN_FILE}\" }}\n"
+    );
+    let scene = instance_of("../prop.bsn");
+    let (mut app, tmp) = editor(&[("prop.bsn", &prop), ("levels/b.bsn", &scene)]);
+    write_in(
+        &tmp.path().join("assets"),
+        TERRAIN_FILE,
+        &sidecar::save(&terrain_data(1.0)).expect("encodes"),
+    );
+    open(&mut app, "assets/levels/b.bsn");
+    app.world_mut()
+        .resource_mut::<TerrainDataStore>()
+        .insert(TERRAIN_FILE, terrain_data(6.0));
+
+    let mut game = game_serving(&mut app, &tmp, "levels/b.bsn");
+    assert_eq!(terrain_height(&mut game), 1.0);
 }
