@@ -973,6 +973,68 @@ fn the_answer_operator_unblocks_a_refused_save() {
     );
 }
 
+/// Reloading a tab from behind takes its files and leaves no question behind,
+/// though bringing it forward asks about the very files the reload reads.
+#[test]
+fn reloading_a_background_tab_leaves_no_prompt() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    let on_disk = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    leave_and_return(&mut app, tab);
+    let sidecar = sidecar_file(&scene_path, &data_path);
+    let prompt = terrain_prompt(&app, &sidecar).expect("the change was not asked about");
+    dispatch(&mut app, "scene.new");
+    app.update();
+    assert_ne!(active_tab(&app), tab, "the edited tab is behind another");
+
+    answer_external_change(app.world_mut(), &prompt.path, ExternalReloadChoice::Reload);
+    settle_terrain(&mut app);
+
+    assert!(
+        reload_prompts(&app).is_empty(),
+        "the reload left a prompt behind"
+    );
+    assert!(!tab_dirty(&app, tab), "the reloaded tab reads as unsaved");
+    assert!(same_heights(&heights(&app, &data_path), &on_disk));
+}
+
+/// `scene.external_change` refuses an answer it does not know and a scene no
+/// question is waiting on, and says so.
+#[test]
+fn the_answer_operator_refuses_what_it_cannot_answer() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, _, _, _) = reopen_aimed(&scene_path);
+
+    let unknown = app
+        .world_mut()
+        .operator("scene.external_change")
+        .param("answer", "maybe".to_string())
+        .call()
+        .expect("scene.external_change dispatches");
+    assert_eq!(
+        unknown,
+        OperatorResult::Cancelled,
+        "an unknown answer was taken"
+    );
+
+    let nothing_waiting = app
+        .world_mut()
+        .operator("scene.external_change")
+        .param("answer", "keep".to_string())
+        .param("path", scene_path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.external_change dispatches");
+    assert_eq!(
+        nothing_waiting,
+        OperatorResult::Cancelled,
+        "an answer for a scene nothing is asking about was taken"
+    );
+}
+
 /// Switch tabs the way the tab strip does.
 fn swap_to(app: &mut App, target: usize) {
     jackdaw_editor_core::scenes::swap::swap_active_tab(app.world_mut(), target);

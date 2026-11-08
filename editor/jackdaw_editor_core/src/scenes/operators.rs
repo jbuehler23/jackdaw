@@ -260,41 +260,56 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
 )]
 pub fn scene_external_change(
     In(params): In<OperatorParameters>,
-    mut commands: Commands,
+    world: &mut World,
 ) -> OperatorResult {
     use crate::scenes::external_watch::{
-        ExternalReloadChoice, ExternalSceneChanges, answer_external_change,
+        ExternalReloadChoice, ExternalSceneChanges, answer_external_change, canonical,
     };
     let choice = match params.as_str("answer") {
         Some("keep") => ExternalReloadChoice::Keep,
         Some("reload") => ExternalReloadChoice::Reload,
         other => {
-            warn!("scene.external_change: answer must be keep or reload, not {other:?}");
+            warn_caller(
+                world,
+                format!("scene.external_change: answer must be keep or reload, not {other:?}"),
+            );
             return OperatorResult::Cancelled;
         }
     };
-    let path = params.as_str("path").map(std::path::PathBuf::from);
-    commands.queue(move |world: &mut World| {
-        let path = match path.map(|path| resolve_scene_path(world, &path)) {
-            Some(Ok(path)) => path,
-            Some(Err(refusal)) => {
+    let path = match params.as_str("path").map(std::path::PathBuf::from) {
+        Some(path) => match resolve_scene_path(world, &path) {
+            Ok(path) => canonical(&path),
+            Err(refusal) => {
                 warn_caller(world, format!("scene.external_change: {refusal}"));
-                return;
+                return OperatorResult::Cancelled;
             }
-            None => {
-                let waiting = world
-                    .get_resource::<ExternalSceneChanges>()
-                    .and_then(|changes| changes.prompts.first())
-                    .map(|prompt| prompt.path.clone());
-                let Some(waiting) = waiting else {
-                    warn_caller(world, "scene.external_change: no file change is waiting");
-                    return;
-                };
-                waiting
-            }
-        };
-        answer_external_change(world, &path, choice);
-    });
+        },
+        None => {
+            let waiting = world
+                .get_resource::<ExternalSceneChanges>()
+                .and_then(|changes| changes.prompts.first())
+                .map(|prompt| prompt.path.clone());
+            let Some(waiting) = waiting else {
+                warn_caller(world, "scene.external_change: no file change is waiting");
+                return OperatorResult::Cancelled;
+            };
+            waiting
+        }
+    };
+    let asked = world
+        .get_resource::<ExternalSceneChanges>()
+        .is_some_and(|changes| changes.prompts.iter().any(|prompt| prompt.path == path));
+    if !asked {
+        warn_caller(
+            world,
+            format!(
+                "scene.external_change: no change to {} is waiting",
+                path.display()
+            ),
+        );
+        return OperatorResult::Cancelled;
+    }
+    answer_external_change(world, &path, choice);
     OperatorResult::Finished
 }
 

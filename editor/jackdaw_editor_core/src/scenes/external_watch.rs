@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use jackdaw_api::prelude::warn_caller;
 use jackdaw_feathers::dialog::{
-    CloseDialogEvent, DialogActionEvent, DialogVariant, EditorDialog, OpenDialogEvent,
+    DialogActionEvent, DialogChoice, DialogVariant, EditorDialog, OpenDialogEvent, answer_dialog,
 };
 use jackdaw_feathers::icons::EditorFont;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -204,7 +204,7 @@ pub struct ExternalSceneChanges {
 /// so an answer goes to that path and not to whatever is now at the front of
 /// the queue. Absent headless, where there is no dialog.
 #[derive(Resource)]
-struct ReloadPromptOpen(PathBuf);
+struct ReloadPromptOpen(PathBuf, Option<Entity>);
 
 /// Set while the refusal notice is on screen.
 #[derive(Resource)]
@@ -349,9 +349,13 @@ fn close_shown_prompt(world: &mut World, path: &Path) {
     {
         return;
     }
-    world.remove_resource::<ReloadPromptOpen>();
-    world.trigger(CloseDialogEvent);
-    world.flush();
+    let dialog = world
+        .remove_resource::<ReloadPromptOpen>()
+        .and_then(|open| open.1);
+    if let Some(dialog) = dialog {
+        answer_dialog(&mut world.commands(), dialog, DialogChoice::Cancel);
+        world.flush();
+    }
 }
 
 /// Answer the prompt raised for `path`. An answer for a path with no open
@@ -497,6 +501,12 @@ fn reload_tab_from_disk(world: &mut World, path: &Path) -> Result<(), RefusedRel
         }
         crate::scene_io::LoadOutcome::Loaded => {
             adopt_reloaded_document(world, index);
+            // Bringing a background tab forward asks about its changed files
+            // before the reload reads them; that question is answered now.
+            world
+                .resource_mut::<ExternalSceneChanges>()
+                .prompts
+                .retain(|prompt| prompt.path != path);
             Ok(())
         }
     }
@@ -799,7 +809,7 @@ fn present_front_prompt(world: &mut World) {
         return;
     }
 
-    world.insert_resource(ReloadPromptOpen(change.path.clone()));
+    world.insert_resource(ReloadPromptOpen(change.path.clone(), None));
     let mut dialog = OpenDialogEvent::new(change.title(), change.action_label())
         .with_description(change.description())
         .with_close_button(false)
@@ -810,6 +820,12 @@ fn present_front_prompt(world: &mut World) {
     }
     world.commands().trigger(dialog);
     world.flush();
+    // The screen was free, so the one dialog up now is this prompt's.
+    let mut dialogs = world.query_filtered::<Entity, With<EditorDialog>>();
+    let shown = dialogs.iter(world).next();
+    if let Some(mut open) = world.get_resource_mut::<ReloadPromptOpen>() {
+        open.1 = shown;
+    }
 }
 
 /// Show a refused reload in its own notice.
