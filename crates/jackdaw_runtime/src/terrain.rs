@@ -493,6 +493,9 @@ fn sync_surfaces(
     let Some(mut meshes) = meshes else {
         return;
     };
+    if terrains.is_empty() {
+        return;
+    }
     let Some(viewer) = viewer_position(&cameras) else {
         // The levels are laid out around a viewer, so with no camera the
         // terrain never draws.
