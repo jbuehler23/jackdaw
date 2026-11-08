@@ -285,15 +285,44 @@ fn reset_build_focus(mut focus: ResMut<BuildPanelFocus>, status: Option<ResMut<B
 
 /// Bring the Build panel to the front on the first build after opening a
 /// project and whenever a build fails; leave routine successful rebuilds
-/// alone so the panel does not steal focus.
+/// alone so the panel does not steal focus. A launch's own build leaves the
+/// Game panel in front, which says when it fails.
 fn auto_focus_build_panel(
     build_status: Res<BuildStatus>,
     mut tree: ResMut<DockTree>,
     mut focus: ResMut<BuildPanelFocus>,
+    mut session: Option<NonSendMut<crate::pie::PieSession>>,
+    instances: Option<Res<crate::pie::PieInstances>>,
+    window_mode: Option<Res<crate::pie::PieWindowMode>>,
 ) {
     if !build_status.is_changed() {
         return;
     }
+    let Some(session) = session.as_mut() else {
+        return surface_build_panel(&build_status, &mut tree, &mut focus);
+    };
+    let launch_build = match &build_status.state {
+        BuildState::Failed { .. } => std::mem::take(&mut session.launch_build_failure_unseen),
+        BuildState::Building { .. } => session.is_launching(),
+        _ => false,
+    };
+    let embedded = crate::pie::effective_window_mode(
+        instances.as_deref(),
+        Some(&**session),
+        window_mode.as_deref().copied(),
+    ) == crate::pie::PieWindowMode::Embedded;
+    if !(launch_build && embedded) {
+        surface_build_panel(&build_status, &mut tree, &mut focus);
+    }
+}
+
+/// Bring the Build panel forward on a failure or the first build since the
+/// project opened.
+fn surface_build_panel(
+    build_status: &BuildStatus,
+    tree: &mut DockTree,
+    focus: &mut BuildPanelFocus,
+) {
     let surface = match &build_status.state {
         BuildState::Failed { .. } | BuildState::Blocked { .. } => true,
         BuildState::Building { .. } if !focus.first_build_shown => {
@@ -303,7 +332,7 @@ fn auto_focus_build_panel(
         _ => false,
     };
     if surface {
-        activate_build_tab(&mut tree);
+        activate_build_tab(tree);
     }
 }
 
