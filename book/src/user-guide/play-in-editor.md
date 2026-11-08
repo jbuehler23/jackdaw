@@ -124,22 +124,40 @@ The Play menu holds:
   game renders off-screen and streams into the Game panel at full frame rate,
   which is the mode you want for input capture and picking. In its own window
   the Game panel still mirrors the active in-game camera once one exists, but
-  menus do not stream and input capture is not offered.
+  menus do not stream and input capture is not offered. The setting is kept
+  per developer with the Play settings.
 
-When more than one instance is running, the **instance button** in the Game
-panel header names the instance on show, and clicking it steps to the next.
+## The Game panel header
+
+- The **view menu** sets the size the game renders at. **Free** fills the
+  panel. **16:9**, **4:3** and **1:1** keep that aspect and letterbox it
+  inside the panel. **1280 x 720** and **1920 x 1080** render at that size and
+  scale it to fit. The menu also holds **Mute**, which silences the running
+  game and the games Play launches until you unmute; a **muted** chip shows
+  while it is on.
+- The **instance picker** shows when more than one instance is running. It
+  names the instance on show, such as **Server** or **Client 2**, and lists the
+  others to switch to.
+- The **pop-out** button at the right moves the game to its own window, or
+  back into the panel. It shares the **Play in separate window** setting, and
+  a running game restarts in the new place. Play in a separate window when you
+  want real performance numbers; the panel is not a performance view.
+
+The view size and mute are kept per developer with the Play settings.
 
 ## Playing the game
 
-Click inside the Game panel to engage input capture (or use the **Play
-Input** header button). While captured:
+When the game shows its first frame, the Game panel takes input on its own,
+unless you clicked or pressed a key in the editor while it was starting, so a
+long build never takes input from you once you have gone back to editing.
+Otherwise click inside the Game panel to engage input capture. While captured:
 
 - Keyboard and mouse forward to the game. WASD, mouse-look, scroll, clicks,
   and typing all reach it.
 - Editor keybinds are suppressed. Tool keys and `Ctrl+S` go to the game,
   not the editor.
-- A **Playing, Shift+Esc to release** chip shows, and the panel border
-  takes the capture accent.
+- **Shift+Esc to release** shows over the game for a moment, and the panel
+  border takes the capture accent.
 
 Plain `Esc` forwards to the game (so the in-game menu still opens). Press
 `Shift+Esc` to release capture and return control to the editor. The Stop

@@ -40,6 +40,7 @@ pub mod environment_ops;
 pub mod face_grid;
 pub use jackdaw_runtime::frame_work;
 pub mod game_panel;
+pub mod game_panel_header;
 pub mod gizmo_ops;
 pub mod gizmos;
 pub mod grid_ops;
@@ -565,6 +566,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(live_input::LiveInputPlugin)
         .add_plugins(game_panel::GamePanelPlugin)
+        .add_plugins(game_panel_header::GamePanelHeaderPlugin)
         .add_plugins(pie_menu::PieMenuPlugin)
         .add_plugins(dock_ops::DockOpsPlugin)
         .add_systems(Startup, (register_workspaces, sync_icon_font))

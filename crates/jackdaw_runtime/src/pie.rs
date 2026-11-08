@@ -110,6 +110,7 @@ pub(crate) fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
     app.add_observer(crate::served_scene::forget_answer_on_insert);
     app.init_resource::<Highlight>();
     app.init_resource::<crate::game_query::Watch>();
+    crate::pie_audio::install(app);
     crate::node_sync::install_node_index(app);
     // Drain control in PreUpdate, before input processing so forwarded editor
     // input lands in `ButtonInput` the same frame.
@@ -149,7 +150,8 @@ pub(crate) fn send_state(world: &mut World, event: &StateEvent) {
 /// `AssetFiles` the asset files the catalog walk at startup could not hold, and
 /// `PrefabFiles` the unsaved prefabs read in place of their files. `Query` is
 /// answered at once and `Watch` sets what [`crate::game_query`] keeps the
-/// editor told of. Unknown frames are skipped.
+/// editor told of. `SetMuted` silences the game's audio or gives it back.
+/// Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;
@@ -255,6 +257,7 @@ fn apply_control(world: &mut World) {
             ControlEvent::Watch { watch, target } => {
                 crate::game_query::set_watch(world, watch, target);
             }
+            ControlEvent::SetMuted(muted) => crate::pie_audio::set_muted(world, muted),
         }
     }
 }
@@ -610,6 +613,28 @@ mod tests {
         );
         app.update();
         assert!(!app.world().resource::<Messages<AppExit>>().is_empty());
+    }
+
+    #[test]
+    fn mute_from_the_editor_is_held_until_unmuted() {
+        let (mut editor, game) = jackdaw_pie_protocol::LoopbackTransport::pair();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        install_link(&mut app, Box::new(game));
+        let muted = |app: &App| app.world().resource::<crate::pie_audio::GameMuted>().0;
+        app.update();
+        assert!(!muted(&app));
+
+        let mut send = |muted: bool| {
+            let event = ControlEvent::SetMuted(muted);
+            editor.send(PieChannel::Reliable, &to_bytes(&event).expect("encode"));
+        };
+        send(true);
+        app.update();
+        assert!(muted(&app));
+        send(false);
+        app.update();
+        assert!(!muted(&app));
     }
 
     /// The box follows the entities at the places `Highlight` names as they come

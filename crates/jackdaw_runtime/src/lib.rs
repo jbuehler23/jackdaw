@@ -90,6 +90,8 @@ mod game_query;
 #[cfg(feature = "pie")]
 mod pie;
 #[cfg(feature = "pie")]
+mod pie_audio;
+#[cfg(feature = "pie")]
 mod pie_frames;
 #[cfg(feature = "pie")]
 mod pie_windowless;

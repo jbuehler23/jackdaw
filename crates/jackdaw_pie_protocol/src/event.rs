@@ -229,6 +229,8 @@ pub enum ControlEvent {
         watch: u64,
         target: Option<GameEntityRef>,
     },
+    /// Silence the game's audio, or give it back its own volume.
+    SetMuted(bool),
 }
 
 /// Serialize a protocol message to bytes. Uses JSON so component payloads
@@ -429,6 +431,14 @@ mod tests {
         ] {
             let bytes = to_bytes(&ev).unwrap();
             assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
+        }
+    }
+
+    #[test]
+    fn mute_round_trips() {
+        for ev in [ControlEvent::SetMuted(true), ControlEvent::SetMuted(false)] {
+            let bytes = to_bytes(&ev).unwrap();
+            assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
         }
     }
 
