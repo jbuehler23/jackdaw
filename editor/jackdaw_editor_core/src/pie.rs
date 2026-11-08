@@ -1302,6 +1302,12 @@ pub(crate) fn relaunch_in_window_mode(world: &mut World, mode: PieWindowMode) {
     if mode == PieWindowMode::Embedded {
         crate::live_input::arm_first_frame_capture(world);
     }
+    let focused = world
+        .get_resource::<PieInstances>()
+        .and_then(|instances| instances.focused.as_ref());
+    if focused.is_some_and(|focused| moving.contains(focused)) {
+        crate::live_frame::clear_stream(world);
+    }
     for key in moving {
         let Some(run) = manifest.run_by_name(&key.config).cloned() else {
             warn!(
@@ -2202,6 +2208,12 @@ fn greet_connected(world: &World, key: &InstanceKey) {
         .is_some_and(|settings| settings.muted);
     if muted {
         send_control_to_instance(world, key, ControlEvent::SetMuted(true));
+    }
+    let paused = world
+        .get_resource::<State<PlayState>>()
+        .is_some_and(|state| *state.get() == PlayState::Paused);
+    if paused {
+        send_control_to_instance(world, key, ControlEvent::Pause);
     }
 }
 

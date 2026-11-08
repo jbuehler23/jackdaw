@@ -379,3 +379,68 @@ fn a_key_press_in_the_editor_while_the_game_starts_keeps_input_with_the_editor()
 fn leaving_the_editor_window_while_the_game_starts_keeps_input_with_the_editor() {
     assert!(!play_and_stream(Meanwhile::FocusLost));
 }
+
+#[test]
+fn a_game_that_connects_while_play_is_paused_is_paused_too() {
+    let mut project = editor_on_a_project();
+    let app = &mut project.app;
+    let _server = connect(app, key("Server", 1));
+    app.update();
+    app.update();
+    call(app, "pie.pause", &[]).assert_finished();
+    assert_eq!(
+        *app.world()
+            .resource::<State<jackdaw_api::pie::PlayState>>()
+            .get(),
+        jackdaw_api::pie::PlayState::Paused
+    );
+
+    let mut client = connect(app, key("Client", 1));
+    next(app, &mut client, |event| {
+        (event == ControlEvent::Pause).then_some(())
+    });
+}
+
+fn display_of<T: Component>(app: &mut App) -> Option<Display> {
+    app.world_mut()
+        .query_filtered::<&Node, With<T>>()
+        .iter(app.world())
+        .next()
+        .map(|node| node.display)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_popped_out_game_shows_where_it_went_instead_of_its_last_frame() {
+    use jackdaw::game_panel::{GameNoSignalChip, GamePanelIdleLabel, GamePanelImage};
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut project = editor_on_a_project();
+    let binary = project._dir.path().join("game.sh");
+    std::fs::write(&binary, "#!/bin/sh\nexec sleep 600\n").expect("a game script");
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable game");
+    let app = &mut project.app;
+    let mut game = connect(app, key("Server", 1));
+    jackdaw::pie::insert_built_game(app.world_mut(), binary);
+    let pixels = vec![128; 64 * 64 * 4];
+    game.send(PieChannel::Frames, &encode_frame(64, 64, 1, &pixels));
+    let until = Instant::now() + GUARD;
+    while display_of::<GamePanelImage>(app) != Some(Display::Flex) {
+        assert!(Instant::now() < until, "the frame never showed");
+        app.update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    call(app, "pie.pop_out", &[]).assert_finished();
+    app.update();
+    assert_eq!(display_of::<GamePanelImage>(app), Some(Display::None));
+    assert_eq!(display_of::<GameNoSignalChip>(app), Some(Display::None));
+    let label = app
+        .world_mut()
+        .query_filtered::<&Text, With<GamePanelIdleLabel>>()
+        .iter(app.world())
+        .next()
+        .map(|text| text.0.clone());
+    assert_eq!(label.as_deref(), Some("Running in its own window"));
+}

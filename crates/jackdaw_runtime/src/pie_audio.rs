@@ -2,7 +2,9 @@
 //! silenced, and unmuting gives back what the editor silenced. A sound the game
 //! muted itself stays muted.
 
-use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, PlaybackSettings, SpatialAudioSink};
+use bevy::audio::{
+    AudioPlayer, AudioSink, AudioSinkPlayback, Pitch, PlaybackSettings, SpatialAudioSink,
+};
 use bevy::ecs::component::Mutable;
 use bevy::ecs::lifecycle::Discard;
 use bevy::prelude::*;
@@ -37,6 +39,7 @@ pub(crate) fn install(app: &mut App) {
             .before(TransformSystems::Propagate),
     );
     app.add_observer(release_on_replace::<AudioPlayer>)
+        .add_observer(release_on_replace::<AudioPlayer<Pitch>>)
         .add_observer(release_on_replace::<AudioSink>)
         .add_observer(release_on_replace::<SpatialAudioSink>);
 }

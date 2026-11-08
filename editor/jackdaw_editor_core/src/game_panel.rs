@@ -296,14 +296,16 @@ pub(crate) fn game_no_signal_chip() -> impl Bundle {
 }
 
 /// Point the frame image at the current stream and show it once a frame has
-/// arrived, else show the idle column. A slow game's last frame stays up.
+/// arrived, else show the idle column. A slow game's last frame stays up, but
+/// not once the focused game runs in its own window.
 fn sync_game_panel_image(
     stream: Res<LiveFrameStream>,
+    launched: crate::pie::LaunchedWindowMode,
     mut images: Query<(&mut ImageNode, &mut Node), With<GamePanelImage>>,
     mut idle: Query<&mut Node, (With<GamePanelIdle>, Without<GamePanelImage>)>,
 ) {
     let handle = stream.image.clone();
-    let show_image = handle.is_some();
+    let show_image = handle.is_some() && launched.get() == PieWindowMode::Embedded;
     let image_display = if show_image {
         Display::Flex
     } else {
@@ -645,10 +647,12 @@ fn update_game_panel_chips(
     capture: Res<crate::live_input::LiveInputCapture>,
     stream: Res<LiveFrameStream>,
     instances: Res<crate::pie::PieInstances>,
+    launched: crate::pie::LaunchedWindowMode,
     mut no_signal: Query<&mut Node, With<GameNoSignalChip>>,
     mut roots: Query<&mut BorderColor, With<GamePanel>>,
 ) {
-    let no_signal_display = if instances.focused.is_some() && went_quiet(&stream) {
+    let embedded = launched.get() == PieWindowMode::Embedded;
+    let no_signal_display = if instances.focused.is_some() && embedded && went_quiet(&stream) {
         Display::Flex
     } else {
         Display::None
