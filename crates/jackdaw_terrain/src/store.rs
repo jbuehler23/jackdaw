@@ -139,13 +139,35 @@ pub struct TerrainDataStore {
     /// saved: a file whose mtime has not moved holds nothing the store does
     /// not already have.
     read_mtimes: HashMap<String, std::time::SystemTime>,
-    /// The paths written since they were last read or written to their file,
-    /// each with a revision unique to its latest write. A file newer than a path
-    /// not listed here holds what the author wants; see [`Self::has_unsaved_edits`].
+    /// The paths handed out to be written since they were last read or written
+    /// to their file, each with a revision unique to its latest hand-out. A
+    /// path listed here may still hold what its file does; see
+    /// [`Self::has_unsaved_edits`].
     edits: HashMap<String, u64>,
+    /// A digest of each path's document as its file holds it, taken when the
+    /// file is written, or on the first hand-out after a read.
+    held: HashMap<String, u64>,
+    /// Whether each path's document differed from [`Self::held`] as of an
+    /// edit revision, behind a lock so asking takes `&self`.
+    differs: Mutex<HashMap<String, (u64, bool)>>,
 }
 
 static NEXT_EDIT: AtomicU64 = AtomicU64::new(1);
+
+/// The digest [`TerrainDataStore`] compares documents by, of their encoded
+/// sidecar bytes.
+pub fn sidecar_digest(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn document_digest(data: &RegionTerrainData) -> Option<u64> {
+    crate::sidecar::save(data)
+        .ok()
+        .map(|bytes| sidecar_digest(&bytes))
+}
 
 fn note_edit(edits: &mut HashMap<String, u64>, data_path: &str) {
     edits.insert(
@@ -300,6 +322,7 @@ impl TerrainDataStore {
     /// Sets how far apart a document's cells sit, keeping where they sit: a
     /// lateral rescale of the same cells over more or less ground.
     pub fn set_cell_size(&mut self, data_path: &str, cell_size: f32) {
+        self.note_baseline(data_path);
         let anchor = self
             .grid(data_path)
             .map(|grid| grid.anchor)
@@ -440,6 +463,7 @@ impl TerrainDataStore {
         rect: GridRect,
         edit: impl FnOnce(&mut [f32]),
     ) -> bool {
+        self.note_baseline(&terrain.data_path);
         let Self {
             entries,
             load_failed,
@@ -582,13 +606,46 @@ impl TerrainDataStore {
         self.cached().remove(data_path);
         self.read_mtimes.remove(data_path);
         self.edits.remove(data_path);
+        self.held.remove(data_path);
         self.entries.remove(data_path)
     }
 
-    /// Whether `data_path` was written since it was last read or written to its
-    /// file. Settling a document onto its geometry does not count.
+    /// Whether `data_path` holds anything its file does not, as of its last
+    /// read or write. A document handed out and never written, or edited and
+    /// undone back to what the file holds, has none. Settling a document onto
+    /// its geometry does not count.
+    ///
+    /// Compares the encoded document against the file's the first time it is
+    /// asked after each edit.
     pub fn has_unsaved_edits(&self, data_path: &str) -> bool {
-        self.edits.contains_key(data_path)
+        let Some(revision) = self.edits.get(data_path).copied() else {
+            return false;
+        };
+        let (Some(held), Some(data)) = (self.held.get(data_path), self.entries.get(data_path))
+        else {
+            return true;
+        };
+        let mut differs = self.differs.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, answer)) = differs.get(data_path)
+            && *at == revision
+        {
+            return *answer;
+        }
+        let answer = document_digest(data) != Some(*held);
+        differs.insert(data_path.to_string(), (revision, answer));
+        answer
+    }
+
+    /// Takes the digest [`Self::has_unsaved_edits`] compares against from the
+    /// document as it stands, on its first hand-out since its file was read.
+    fn note_baseline(&mut self, data_path: &str) {
+        if self.edits.contains_key(data_path) || self.held.contains_key(data_path) {
+            return;
+        }
+        let Some(digest) = self.entries.get(data_path).and_then(document_digest) else {
+            return;
+        };
+        self.held.insert(data_path.to_string(), digest);
     }
 
     /// The revision of the latest edit of `data_path`, while it has unsaved
@@ -601,6 +658,7 @@ impl TerrainDataStore {
     /// modified at `mtime`, which so holds what the store does.
     pub fn note_read(&mut self, data_path: &str, mtime: Option<std::time::SystemTime>) {
         self.edits.remove(data_path);
+        self.held.remove(data_path);
         match mtime {
             Some(mtime) => {
                 self.read_mtimes.insert(data_path.to_string(), mtime);
@@ -611,11 +669,15 @@ impl TerrainDataStore {
         }
     }
 
-    /// Record that the file behind `data_path`, last modified at `mtime`, has
-    /// been seen without being read, so it stops reading as stale while the
-    /// unsaved edits stand.
-    pub fn note_seen(&mut self, data_path: &str, mtime: std::time::SystemTime) {
+    /// Record that the user chose to keep `data_path`'s unsaved edits over its
+    /// file as last modified at `mtime`, so that file stops reading as changed
+    /// and the next save writes over it.
+    pub fn note_kept_over(&mut self, data_path: &str, mtime: std::time::SystemTime) {
         self.read_mtimes.insert(data_path.to_string(), mtime);
+        self.held.remove(data_path);
+        self.edits
+            .entry(data_path.to_string())
+            .or_insert_with(|| NEXT_EDIT.fetch_add(1, Ordering::Relaxed));
     }
 
     /// Whether the file at `full` has been written since this store last read
@@ -633,17 +695,31 @@ impl TerrainDataStore {
             .is_ok_and(|mtime| mtime != *read_at)
     }
 
+    /// Whether the file at `full` was read or written by this store and has been
+    /// written by something else since. Unlike [`Self::sidecar_is_stale`], a path
+    /// never read is not changed.
+    pub fn sidecar_changed_since_read(&self, data_path: &str, full: &std::path::Path) -> bool {
+        self.read_mtimes.contains_key(data_path)
+            && full.is_file()
+            && self.sidecar_is_stale(data_path, full)
+    }
+
     /// Record that `data_path` as of edit `revision`, from
     /// [`Self::edit_revision`], was just written to a file last modified at
-    /// `mtime`. An edit since then stays unsaved.
+    /// `mtime`, holding bytes of digest `digest` from [`sidecar_digest`]. An edit
+    /// since then stays unsaved.
     pub fn note_written(
         &mut self,
         data_path: &str,
         mtime: Option<std::time::SystemTime>,
         revision: Option<u64>,
+        digest: Option<u64>,
     ) {
         let edits = self.edits.get(data_path).copied();
         self.note_read(data_path, mtime);
+        if let Some(digest) = digest {
+            self.held.insert(data_path.to_string(), digest);
+        }
         if let Some(edit) = edits.filter(|edit| Some(*edit) != revision) {
             self.edits.insert(data_path.to_string(), edit);
         }
@@ -704,6 +780,7 @@ impl TerrainDataStore {
         // An entry is handed out to be written through, so this terrain's
         // cached heightmap is stale from here whether the caller writes or not.
         self.retire_heightmap(&terrain.data_path);
+        self.note_baseline(&terrain.data_path);
         let entry = Self::document_in(&mut self.entries, &self.load_failed, terrain)?;
         note_edit(&mut self.edits, &terrain.data_path);
         Some(TerrainEntry::new(entry))
@@ -715,6 +792,7 @@ impl TerrainDataStore {
     /// heightmap: it is for the parts of a document that are not per-cell,
     /// where a write cannot change the ground the mesher samples.
     pub fn document_mut(&mut self, data_path: &str) -> Option<&mut RegionTerrainData> {
+        self.note_baseline(data_path);
         let data = self.entries.get_mut(data_path)?;
         note_edit(&mut self.edits, data_path);
         Some(data)
@@ -787,6 +865,7 @@ impl TerrainDataStore {
         if self.load_failed.contains_key(&data_path) {
             return Err(TerrainMaterialError::LoadFailed);
         }
+        self.note_baseline(&data_path);
         note_edit(&mut self.edits, &data_path);
         match self.entries.get_mut(&data_path) {
             Some(data) => data.materials = materials,
@@ -830,6 +909,7 @@ impl TerrainDataStore {
             return Err(TerrainMaterialError::LoadFailed);
         }
         let settings = settings.sanitized();
+        self.note_baseline(&data_path);
         note_edit(&mut self.edits, &data_path);
         match self.entries.get_mut(&data_path) {
             Some(data) => data.autoterrain = settings,
@@ -914,6 +994,7 @@ impl TerrainDataStore {
         // `CachedHeightmap::matches`, and at an unchanged resolution the only
         // heights `document_in` can move are the zeroes it mints, where
         // `heightmap` already pads with them.
+        self.note_baseline(&terrain.data_path);
         let Self {
             entries,
             load_failed,
@@ -1005,6 +1086,7 @@ impl TerrainDataStore {
             return Err(TerrainMaterialError::LoadFailed);
         }
         let settings = settings.sanitized();
+        self.note_baseline(&data_path);
         note_edit(&mut self.edits, &data_path);
         match self.entries.get_mut(&data_path) {
             Some(data) => data.surface = settings,
@@ -1071,6 +1153,7 @@ impl TerrainDataStore {
         terrain: &jackdaw_scene_types::Terrain,
         rect: GridRect,
     ) -> Option<ColorGrid<'_>> {
+        self.note_baseline(&terrain.data_path);
         let Self {
             entries,
             load_failed,

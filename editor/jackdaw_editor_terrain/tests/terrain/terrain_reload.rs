@@ -12,6 +12,9 @@ use bevy::input::ButtonInput;
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_core::scenes::Scenes;
+use jackdaw_editor_core::scenes::external_watch::{
+    ExternalReloadChoice, ExternalSceneChange, ExternalSceneChanges, answer_external_change,
+};
 use jackdaw_editor_core::selection::Selection;
 use jackdaw_editor_terrain::{
     PaintDomain, TerrainBrushSettings, TerrainDataStore, TerrainEditMode, TerrainPaintState,
@@ -455,72 +458,275 @@ fn leave_and_return(app: &mut App, tab: usize) {
     settle_terrain(app);
 }
 
-fn reload_prompts(
-    app: &App,
-) -> Vec<jackdaw_editor_core::scenes::external_watch::ExternalSceneChange> {
+fn reload_prompts(app: &App) -> Vec<ExternalSceneChange> {
     app.world()
-        .resource::<jackdaw_editor_core::scenes::external_watch::ExternalSceneChanges>()
+        .resource::<ExternalSceneChanges>()
         .prompts
         .clone()
 }
 
-/// Unsaved sculpting outlives its file changing on disk while the tab is in
-/// the background, and the user is asked whether to reload, the way an open
-/// scene whose file changed under it asks.
+/// The reload prompt naming `sidecar` among the files that changed under edits.
+fn terrain_prompt(app: &App, sidecar: &std::path::Path) -> Option<ExternalSceneChange> {
+    reload_prompts(app)
+        .into_iter()
+        .find(|prompt| prompt.changed_files.iter().any(|file| file == sidecar))
+}
+
+/// A sculpt stroke through the brush operator, as the viewport runs one.
+fn sculpt_stroke(app: &mut App, entity: Entity) {
+    *app.world_mut().resource_mut::<TerrainEditMode>() =
+        TerrainEditMode::Sculpt(jackdaw_terrain::SculptTool::Raise);
+    {
+        let mut sculpt = app.world_mut().resource_mut::<TerrainSculptState>();
+        sculpt.target = Some(entity);
+        sculpt.brush_position = Some(Vec2::splat(64.0));
+    }
+    start_stroke(app, "terrain.sculpt");
+    end_stroke(app);
+    *app.world_mut().resource_mut::<TerrainEditMode>() = TerrainEditMode::None;
+}
+
+fn same_heights(got: &[f32], want: &[f32]) -> bool {
+    got.len() == want.len()
+        && got
+            .iter()
+            .zip(want)
+            .all(|(got, want)| (got - want).abs() < 0.001)
+}
+
+fn active_tab(app: &App) -> usize {
+    app.world().resource::<Scenes>().active
+}
+
+fn tab_dirty(app: &App, tab: usize) -> bool {
+    app.world().resource::<Scenes>().tabs[tab].dirty
+}
+
+/// The heights the sidecar on disk holds.
+fn heights_on_disk(scene_path: &std::path::Path, data_path: &str) -> Vec<f32> {
+    let bytes = std::fs::read(sidecar_file(scene_path, data_path)).expect("read the sidecar");
+    jackdaw_terrain::sidecar::load_from(&bytes, None)
+        .expect("decode the sidecar")
+        .data
+        .grid_heights()
+}
+
+/// A reopened scene with a terrain, its tab pointed at the file. Returns the app,
+/// the terrain entity, its data path and its tab.
+fn reopen_aimed(scene_path: &std::path::Path) -> (App, Entity, String, usize) {
+    let mut app = reopen(scene_path);
+    aim_tab_at(&mut app, scene_path);
+    let (entity, terrain) = the_terrain(&mut app);
+    let tab = active_tab(&app);
+    (app, entity, terrain.data_path, tab)
+}
+
+/// Write over the scene file the way another program would, keeping it loadable.
+fn touch_scene_outside(scene_path: &std::path::Path) {
+    let mut bytes = std::fs::read(scene_path).expect("read the scene");
+    bytes.push(b'\n');
+    std::fs::write(scene_path, bytes).expect("write the scene");
+}
+
+/// A sculpt stroke outlives its file changing on disk while the tab is in the
+/// background, and the user is asked whether to reload, told that the tab's
+/// other edits would go too.
 #[test]
-fn unsaved_terrain_edits_survive_their_file_changing_on_disk() {
+fn a_sculpt_stroke_survives_its_file_changing_on_disk() {
     let stage = stage_dir();
     let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
 
-    let mut app = reopen(&scene_path);
-    aim_tab_at(&mut app, &scene_path);
-    let (_, terrain) = the_terrain(&mut app);
-    let data_path = terrain.data_path.clone();
-    let sculpting_tab = app.world().resource::<Scenes>().active;
-
-    let sculpted = sculpt_in_store(&mut app, &terrain, 7.0);
+    sculpt_stroke(&mut app, entity);
+    assert!(tab_dirty(&app, tab), "a sculpt stroke leaves the tab dirty");
+    let sculpted = heights(&app, &data_path);
     rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
-    leave_and_return(&mut app, sculpting_tab);
+    leave_and_return(&mut app, tab);
 
-    let after = heights(&app, &data_path);
     assert!(
-        after
-            .iter()
-            .zip(&sculpted)
-            .all(|(got, want)| (got - want).abs() < 0.001),
+        same_heights(&heights(&app, &data_path), &sculpted),
         "returning to the tab threw away its unsaved sculpting for the file on disk"
     );
-    let prompts = reload_prompts(&app);
-    let sidecar_name = sidecar_file(&scene_path, &data_path)
-        .file_name()
-        .expect("the sidecar has a name")
-        .to_string_lossy()
-        .into_owned();
-    let prompt = prompts
-        .iter()
-        .find(|prompt| prompt.description().contains(&sidecar_name))
+    let sidecar = sidecar_file(&scene_path, &data_path);
+    let prompt = terrain_prompt(&app, &sidecar)
         .expect("the user was not told the terrain file changed on disk");
     assert!(
-        prompt.description().contains("unsaved changes"),
-        "the prompt does not say a reload would lose unsaved changes: {}",
+        prompt.discards_edits(),
+        "the reload is not marked as losing edits"
+    );
+    assert!(
+        prompt.description().contains("other unsaved changes"),
+        "the prompt does not say the tab's other edits go with a reload: {}",
         prompt.description()
     );
 
-    // A second visit with nothing new on disk asks nothing more.
-    let answered = prompt.path.clone();
-    jackdaw_editor_core::scenes::external_watch::answer_external_change(
-        app.world_mut(),
-        &answered,
-        jackdaw_editor_core::scenes::external_watch::ExternalReloadChoice::Keep,
-    );
-    leave_and_return(&mut app, sculpting_tab);
+    answer_external_change(app.world_mut(), &prompt.path, ExternalReloadChoice::Keep);
+    leave_and_return(&mut app, tab);
     assert!(
         reload_prompts(&app).is_empty(),
         "keeping the edits once did not settle the question"
     );
     assert!(
-        app.world().resource::<Scenes>().tabs[sculpting_tab].dirty,
+        tab_dirty(&app, tab),
         "keeping the edits left the tab reading as saved"
+    );
+}
+
+/// A save that would write over a terrain file changed on disk since it was
+/// read leaves the file alone and asks; once the edits are kept, it writes.
+#[test]
+fn saving_over_a_terrain_file_changed_on_disk_asks_first() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, _) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    let sculpted = heights(&app, &data_path);
+    let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+
+    let _ = app.world_mut().operator("scene.save").call();
+    app.update();
+    assert!(
+        same_heights(&heights_on_disk(&scene_path, &data_path), &outside),
+        "the save wrote over the terrain file changed on disk"
+    );
+    let sidecar = sidecar_file(&scene_path, &data_path);
+    let prompt = terrain_prompt(&app, &sidecar).expect("the save did not ask about the file");
+
+    answer_external_change(app.world_mut(), &prompt.path, ExternalReloadChoice::Keep);
+    dispatch(&mut app, "scene.save");
+    app.update();
+    assert!(
+        same_heights(&heights_on_disk(&scene_path, &data_path), &sculpted),
+        "keeping the edits did not let the next save write them"
+    );
+}
+
+/// A tab with unsaved edits elsewhere re-reads a terrain it holds no edits to
+/// whose file changed on disk, so a later save cannot write the old one back.
+#[test]
+fn a_dirty_tab_rereads_an_unedited_terrain_whose_file_changed() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, _, data_path, tab) = reopen_aimed(&scene_path);
+
+    app.world_mut().resource_mut::<Scenes>().tabs[tab].dirty = true;
+    let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    leave_and_return(&mut app, tab);
+
+    assert!(
+        same_heights(&heights(&app, &data_path), &outside),
+        "the dirty tab kept the old terrain over the file on disk"
+    );
+    assert!(
+        reload_prompts(&app).is_empty(),
+        "an unedited terrain raised a prompt"
+    );
+}
+
+/// A reload prompt already waiting on a scene takes on a terrain file that
+/// changed under edits, rather than the change going unasked.
+#[test]
+fn a_waiting_scene_prompt_also_names_a_changed_terrain_file() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
+    for _ in 0..3 {
+        app.update();
+    }
+
+    sculpt_stroke(&mut app, entity);
+    let sculpted = heights(&app, &data_path);
+    touch_scene_outside(&scene_path);
+    let canonical = dunce::canonicalize(&scene_path).expect("the scene exists");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline
+        && !reload_prompts(&app)
+            .iter()
+            .any(|prompt| prompt.path == canonical)
+    {
+        app.update();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        reload_prompts(&app)
+            .iter()
+            .any(|prompt| prompt.path == canonical),
+        "the outside edit to the scene raised no prompt"
+    );
+
+    rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    leave_and_return(&mut app, tab);
+
+    assert!(same_heights(&heights(&app, &data_path), &sculpted));
+    let prompts = reload_prompts(&app);
+    assert_eq!(prompts.len(), 1, "the scene is asked about once");
+    let sidecar = sidecar_file(&scene_path, &data_path);
+    assert!(
+        prompts[0].document_changed && prompts[0].changed_files.contains(&sidecar),
+        "the waiting prompt does not name both the scene and the terrain file"
+    );
+}
+
+/// Undoing a stroke back to what was saved leaves nothing unsaved, so a terrain
+/// file changed on disk is read without asking.
+#[test]
+fn undoing_back_to_saved_lets_an_outside_terrain_change_reread() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    dispatch(&mut app, "history.undo");
+    app.update();
+    assert!(
+        !tab_dirty(&app, tab),
+        "undoing the only stroke leaves the tab clean"
+    );
+    let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    leave_and_return(&mut app, tab);
+
+    assert!(
+        same_heights(&heights(&app, &data_path), &outside),
+        "the undone terrain was not read again from the changed file"
+    );
+    assert!(
+        reload_prompts(&app).is_empty(),
+        "an undone terrain raised a prompt"
+    );
+}
+
+/// Opening a scene already open in a tab that reads clean does not reread it
+/// over unsaved terrain edits, even when the scene file moved on.
+#[test]
+fn reopening_a_scene_keeps_unsaved_terrain_edits() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, _, data_path, tab) = reopen_aimed(&scene_path);
+    // The watcher learns what the aimed tab's file holds over the next frames.
+    for _ in 0..3 {
+        app.update();
+    }
+    let (_, terrain) = the_terrain(&mut app);
+
+    let sculpted = sculpt_in_store(&mut app, &terrain, 7.0);
+    assert!(
+        !tab_dirty(&app, tab),
+        "an edit outside history leaves the tab reading clean"
+    );
+    touch_scene_outside(&scene_path);
+    let _ = app
+        .world_mut()
+        .operator("scene.open")
+        .param("path", scene_path.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.open dispatches");
+    app.update();
+    settle_terrain(&mut app);
+
+    assert!(
+        same_heights(&heights(&app, &data_path), &sculpted),
+        "reopening the scene reread it over unsaved terrain edits"
     );
 }
 
@@ -529,35 +735,21 @@ fn unsaved_terrain_edits_survive_their_file_changing_on_disk() {
 fn reloading_after_a_terrain_file_changed_takes_the_file() {
     let stage = stage_dir();
     let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
 
-    let mut app = reopen(&scene_path);
-    aim_tab_at(&mut app, &scene_path);
-    let (_, terrain) = the_terrain(&mut app);
-    let data_path = terrain.data_path.clone();
-    let sculpting_tab = app.world().resource::<Scenes>().active;
-
-    sculpt_in_store(&mut app, &terrain, 7.0);
+    sculpt_stroke(&mut app, entity);
     let on_disk = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
-    leave_and_return(&mut app, sculpting_tab);
+    leave_and_return(&mut app, tab);
 
-    let prompt = reload_prompts(&app)
-        .into_iter()
-        .next()
+    let sidecar = sidecar_file(&scene_path, &data_path);
+    let prompt = terrain_prompt(&app, &sidecar)
         .expect("the user was not told the terrain file changed on disk");
-    jackdaw_editor_core::scenes::external_watch::answer_external_change(
-        app.world_mut(),
-        &prompt.path,
-        jackdaw_editor_core::scenes::external_watch::ExternalReloadChoice::Reload,
-    );
+    answer_external_change(app.world_mut(), &prompt.path, ExternalReloadChoice::Reload);
     settle_terrain(&mut app);
 
     let (_, terrain) = the_terrain(&mut app);
-    let after = heights(&app, &terrain.data_path);
     assert!(
-        after
-            .iter()
-            .zip(&on_disk)
-            .all(|(got, want)| (got - want).abs() < 0.001),
+        same_heights(&heights(&app, &terrain.data_path), &on_disk),
         "reloading did not take the terrain the file holds"
     );
     assert!(

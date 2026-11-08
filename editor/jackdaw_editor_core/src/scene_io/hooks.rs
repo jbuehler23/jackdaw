@@ -71,6 +71,24 @@ pub trait DocumentIoHook: Send + Sync + 'static {
     /// Drops what the feature holds as unsaved for the document in tab `tab`, whose
     /// edits the author just chose to throw away. The tab is still open.
     fn discard_document(&self, _world: &mut World, _tab: usize) {}
+
+    /// Whether the feature holds anything for the document in tab `tab` that its
+    /// files do not.
+    fn has_unsaved_edits(&self, _world: &World, _tab: usize) -> bool {
+        false
+    }
+
+    /// The feature's files beside the document in tab `tab` that something else
+    /// wrote after the feature last read or wrote them, and that it has not
+    /// read again: a save would write over them.
+    fn changed_on_disk(&self, _world: &World, _tab: usize) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// The author chose to keep what the feature holds for tab `tab` over
+    /// `files`, from [`Self::changed_on_disk`]: they stop reading as changed,
+    /// and the next save writes over them.
+    fn keep_over_changed(&self, _world: &mut World, _tab: usize, _files: &[PathBuf]) {}
 }
 
 /// A file beside a document and the bytes it is to hold.
@@ -322,6 +340,28 @@ pub fn export_play_sidecars(
 pub fn discard_document(world: &mut World, tab: usize) {
     for hook in hooks(world) {
         hook.discard_document(world, tab);
+    }
+}
+
+/// Whether any hook holds unsaved edits for the document in tab `tab`.
+pub fn has_unsaved_edits(world: &World, tab: usize) -> bool {
+    hooks(world)
+        .iter()
+        .any(|hook| hook.has_unsaved_edits(world, tab))
+}
+
+/// Every hook's [`DocumentIoHook::changed_on_disk`] for tab `tab`.
+pub fn changed_on_disk(world: &World, tab: usize) -> Vec<PathBuf> {
+    hooks(world)
+        .iter()
+        .flat_map(|hook| hook.changed_on_disk(world, tab))
+        .collect()
+}
+
+/// Run every hook's [`DocumentIoHook::keep_over_changed`].
+pub fn keep_over_changed(world: &mut World, tab: usize, files: &[PathBuf]) {
+    for hook in hooks(world) {
+        hook.keep_over_changed(world, tab, files);
     }
 }
 

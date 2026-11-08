@@ -65,6 +65,85 @@ impl DocumentIoHook for TerrainSidecars {
     ) -> Result<(), BevyError> {
         export_play_terrain(world, document, copies)
     }
+
+    fn has_unsaved_edits(&self, world: &World, tab: usize) -> bool {
+        store_of_tab(world, Some(tab)).is_some_and(|store| {
+            store
+                .iter()
+                .any(|(path, _)| store.has_unsaved_edits(path) && !store.is_load_failed(path))
+        })
+    }
+
+    fn changed_on_disk(&self, world: &World, tab: usize) -> Vec<PathBuf> {
+        changed_terrain_files(world, tab)
+            .into_iter()
+            .map(|(_, file)| file)
+            .collect()
+    }
+
+    fn keep_over_changed(&self, world: &mut World, tab: usize, files: &[PathBuf]) {
+        let kept: Vec<(String, std::time::SystemTime)> = changed_terrain_files(world, tab)
+            .into_iter()
+            .filter(|(_, file)| files.contains(file))
+            .filter_map(|(path, file)| {
+                let mtime = std::fs::metadata(&file).and_then(|meta| meta.modified());
+                Some((path, mtime.ok()?))
+            })
+            .collect();
+        let Some(mut store) = store_of_tab_mut(world, tab) else {
+            return;
+        };
+        for (path, mtime) in kept {
+            store.note_kept_over(&path, mtime);
+        }
+    }
+}
+
+/// Each terrain of tab `tab` whose sidecar something else wrote after the store
+/// last read or wrote it, with that file, in path order. A terrain whose file
+/// failed to load is left out, since a save never writes it.
+fn changed_terrain_files(world: &World, tab: usize) -> Vec<(String, PathBuf)> {
+    use jackdaw_terrain::sidecar;
+
+    let Some(dir) = world.get_resource::<Scenes>().and_then(|scenes| {
+        scenes
+            .tabs
+            .get(tab)?
+            .path
+            .as_deref()?
+            .parent()
+            .map(Path::to_path_buf)
+    }) else {
+        return Vec::new();
+    };
+    let Some(store) = store_of_tab(world, Some(tab)) else {
+        return Vec::new();
+    };
+    let mut changed: Vec<(String, PathBuf)> = store
+        .iter()
+        .filter(|(path, _)| !store.is_load_failed(path))
+        .filter_map(|(path, _)| {
+            let file = sidecar::resolve_path(&dir, path).ok()?;
+            store
+                .sidecar_changed_since_read(path, &file)
+                .then(|| (path.clone(), file))
+        })
+        .collect();
+    changed.sort();
+    changed
+}
+
+/// [`store_of_tab`], writable.
+fn store_of_tab_mut(world: &mut World, tab: usize) -> Option<Mut<'_, TerrainDataStore>> {
+    let active = world.get_resource::<Scenes>()?.active;
+    if active == tab {
+        return world.get_resource_mut::<TerrainDataStore>();
+    }
+    let scenes = world.get_resource_mut::<Scenes>()?;
+    if tab >= scenes.tabs.len() {
+        return None;
+    }
+    Some(scenes.map_unchanged(|scenes| &mut scenes.tabs[tab].terrain_data_store))
 }
 
 /// The terrain store of tab `tab`: the world's for the tab in front.
@@ -184,6 +263,8 @@ struct EncodedTerrain {
     file: PathBuf,
     /// Its latest edit as of the encoding, so a later one stays unsaved.
     revision: Option<u64>,
+    /// [`jackdaw_terrain::store::sidecar_digest`] of the bytes encoded.
+    digest: u64,
 }
 
 /// Encode every terrain's bulk data for its sidecar beside the scene. Writes nothing.
@@ -226,6 +307,8 @@ fn encode_terrain_sidecars(
         }
     }
 
+    refuse_writing_over_changed_files(world, scene_path, &paths)?;
+
     let store = world.resource::<TerrainDataStore>();
     let mut terrains = Vec::new();
     let mut writes = Vec::new();
@@ -259,12 +342,49 @@ fn encode_terrain_sidecars(
         })?;
         terrains.push(EncodedTerrain {
             revision: store.edit_revision(&data_path),
+            digest: jackdaw_terrain::store::sidecar_digest(&bytes),
             data_path,
             file: path.clone(),
         });
         writes.push((path, bytes));
     }
     Ok((terrains, writes))
+}
+
+/// Refuse a save of the tab holding `scene_path` that would write over a terrain
+/// file something else changed since it was read, and ask the user whether to
+/// reload or keep their edits. Once kept, the next save writes. A save to
+/// another path, as a save-as makes, writes new files and is not checked.
+fn refuse_writing_over_changed_files(
+    world: &mut World,
+    scene_path: &str,
+    paths: &[String],
+) -> Result<(), BevyError> {
+    let Some(scenes) = world.get_resource::<Scenes>() else {
+        return Ok(());
+    };
+    let tab = scenes.active;
+    let Some(tab_path) = scenes.tabs.get(tab).and_then(|tab| tab.path.as_deref()) else {
+        return Ok(());
+    };
+    let same_file = |path: &Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if same_file(tab_path) != same_file(Path::new(scene_path)) {
+        return Ok(());
+    }
+    let changed: Vec<String> = changed_terrain_files(world, tab)
+        .into_iter()
+        .filter(|(path, _)| paths.contains(path))
+        .map(|(_, file)| file.display().to_string())
+        .collect();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    jackdaw_editor_core::scenes::external_watch::ask_about_changed_files(world, tab);
+    Err(BevyError::from(format!(
+        "not saved: {} changed on disk since it was read. Reload it or keep your \
+         edits, then save again",
+        changed.join(", ")
+    )))
 }
 
 /// Without noting the write, the store keeps the mtime it loaded from and every
@@ -277,7 +397,12 @@ fn note_written_terrains(world: &mut World, terrains: &[EncodedTerrain]) {
         let mtime = std::fs::metadata(&terrain.file)
             .and_then(|meta| meta.modified())
             .ok();
-        store.note_written(&terrain.data_path, mtime, terrain.revision);
+        store.note_written(
+            &terrain.data_path,
+            mtime,
+            terrain.revision,
+            Some(terrain.digest),
+        );
     }
 }
 
@@ -336,38 +461,23 @@ pub(crate) fn import_terrain_sidecars(
         }
         wanted.push((terrain.data_path.clone(), terrain.heights.is_empty()));
     }
-    // Files written outside the editor over terrains with unsaved edits: those
-    // edits stand, and the user is asked whether to reload.
-    let mut changed_under_edits: Vec<(String, PathBuf)> = Vec::new();
-    if mode != SidecarImport::Reload {
-        let store = world.resource::<TerrainDataStore>();
-        wanted.retain(|(path, _)| {
-            if !store.contains(path) {
-                return true;
-            }
-            let Ok(full) = sidecar::resolve_path(&scene_dir, path) else {
-                return false;
-            };
-            let stale = full.is_file() && store.sidecar_is_stale(path, &full);
-            if stale && store.has_unsaved_edits(path) && !store.is_load_failed(path) {
-                changed_under_edits.push((path.clone(), full));
-                return false;
-            }
-            mode == SidecarImport::RefreshChanged && stale
-        });
-    }
-    for (data_path, full) in changed_under_edits {
-        if let Ok(mtime) = std::fs::metadata(&full).and_then(|meta| meta.modified()) {
-            world
-                .resource_mut::<TerrainDataStore>()
-                .note_seen(&data_path, mtime);
+    match mode {
+        SidecarImport::Reload => {}
+        SidecarImport::FillMissing => {
+            let store = world.resource::<TerrainDataStore>();
+            wanted.retain(|(path, _)| !store.contains(path));
         }
-        jackdaw_editor_core::scenes::external_watch::ask_about_changed_sidecar(
-            world,
-            Path::new(scene_path),
-            &full,
-            "Terrain Changed on Disk",
-        );
+        // A terrain holding unsaved edits keeps them however far its file has
+        // moved on; the scene asks the user about that file.
+        SidecarImport::RefreshChanged => {
+            let store = world.resource::<TerrainDataStore>();
+            wanted.retain(|(path, _)| {
+                !store.contains(path)
+                    || (!store.has_unsaved_edits(path)
+                        && sidecar::resolve_path(&scene_dir, path)
+                            .is_ok_and(|full| store.sidecar_is_stale(path, &full)))
+            });
+        }
     }
     let assets = jackdaw_editor_core::asset_index::assets_dir(world);
     let mut imported: std::collections::HashSet<String> = std::collections::HashSet::new();

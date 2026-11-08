@@ -365,7 +365,8 @@ fn reopen_open_tab(world: &mut World, path: &std::path::Path, asked: bool) -> bo
         .path
         .clone()
         .unwrap_or(canonical);
-    let dirty = world.resource::<Scenes>().tabs[index].dirty;
+    let dirty = world.resource::<Scenes>().tabs[index].dirty
+        || crate::scene_io::hooks::has_unsaved_edits(world, index);
     let reread = if dirty {
         if asked {
             warn_caller(

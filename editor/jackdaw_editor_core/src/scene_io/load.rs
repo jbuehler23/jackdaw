@@ -516,13 +516,11 @@ pub fn declared_scene_kind(ast: &jackdaw_bsn::SceneBsnAst) -> crate::scenes::ope
 pub enum SidecarImport {
     /// Disk wins. Used when the user explicitly loads or reloads a scene.
     Reload,
-    /// Only fill paths the store has never heard of. Used on tab
-    /// activation, where the store may be holding unsaved sculpting that
-    /// the file on disk does not have yet.
+    /// Only fill paths the store has never heard of.
     FillMissing,
-    /// Fill paths the store has never heard of, and re-read the ones whose
-    /// file has been written since the store last read it. Used when returning
-    /// to a tab with nothing unsaved in it.
+    /// Fill paths the store has never heard of, and re-read the ones holding
+    /// no unsaved edits whose file has been written since the store last read
+    /// it. Used on tab activation.
     RefreshChanged,
 }
 
