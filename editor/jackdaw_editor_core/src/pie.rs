@@ -335,25 +335,21 @@ pub(crate) enum SyncTarget {
     Live,
 }
 
-/// What play-in-editor is doing: `building` while a launch waits on its
-/// cargo build, `running` once a game process is up (a paused game
-/// included), `failed` when a launch's build did not compile, `stopped`
-/// otherwise.
+/// What play-in-editor is doing, from its [`PlayPhase`]: `building` while a
+/// launch builds the game or waits for it to connect, `running`, `paused`,
+/// `failed` when a launch's build did not compile, `stopped` otherwise.
 pub fn play_status(world: &World) -> &'static str {
     let session = world.get_non_send::<PieSession>();
-    let playing = world
+    let state = world
         .get_resource::<State<PlayState>>()
-        .is_some_and(|state| *state.get() != PlayState::Stopped);
-    if playing || session.is_some_and(|session| !session.children.is_empty()) {
-        return "running";
+        .map_or(PlayState::Stopped, |state| state.get().clone());
+    match play_phase(&state, session) {
+        PlayPhase::Building => "building",
+        PlayPhase::Playing => "running",
+        PlayPhase::Paused => "paused",
+        PlayPhase::Stopped if session.is_some_and(PieSession::launch_failed) => "failed",
+        PlayPhase::Stopped => "stopped",
     }
-    if session.is_some_and(PieSession::is_launching) {
-        return "building";
-    }
-    if session.is_some_and(PieSession::launch_failed) {
-        return "failed";
-    }
-    "stopped"
 }
 
 pub struct PiePlugin;
@@ -927,6 +923,26 @@ pub fn connect_test_game(
     );
     world.get_resource_or_init::<PieInstances>().focused = Some(key);
     Ok(())
+}
+
+/// Add `child` as game `key` that is still connecting and never connects, for a
+/// test.
+#[doc(hidden)]
+pub fn connecting_test_game(world: &mut World, key: InstanceKey, child: Child) {
+    if !world.contains_non_send::<PieSession>() {
+        world.insert_non_send(PieSession::default());
+    }
+    let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
+        .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
+    world.non_send_mut::<PieSession>().children.insert(
+        key,
+        ChildStage::Connecting {
+            child,
+            accept,
+            stderr_tail: StderrTail::default(),
+            since: Instant::now(),
+        },
+    );
 }
 
 /// Hold the open project's game build as in progress, for a test: a launch then

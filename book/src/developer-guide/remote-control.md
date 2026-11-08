@@ -167,7 +167,8 @@ embedded mode the game streams into the editor's Game panel, so a window capture
 shows the running game.
 
 The launch is a cargo build then a process, so `status` reports progress under
-`pie` -- `building`, `running` or `stopped` -- and `wait` holds for either end:
+`pie` -- `building`, `running`, `paused`, `failed` or `stopped` -- and `wait`
+holds for either end:
 
 ```text
 call_operator(id: "pie.play")
@@ -177,7 +178,9 @@ call_operator(id: "pie.stop")
 wait(until: "pie_stopped")
 ```
 
-A paused game counts as running.
+A game that is still connecting reads `building`. A `pie_running` wait also ends
+on `paused`, and ends with an error if the build fails or the game stops before
+it connects.
 
 ## Packing repeated groups
 
