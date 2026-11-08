@@ -84,6 +84,7 @@ pub mod extension_slots;
 pub mod extensions_dialog;
 pub mod file_ops;
 pub mod fps_overlay;
+pub mod game_query;
 pub mod hot_reload;
 pub mod launch;
 pub mod launcher_mode;

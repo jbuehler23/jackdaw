@@ -166,6 +166,7 @@ pub struct TerrainViewer;
 
 /// One LOD level of a terrain's surface, rebuilt as the camera moves.
 #[derive(Component)]
+#[require(jackdaw_scene_types::SceneDerived)]
 struct TerrainSurface {
     terrain: Entity,
     /// 0 is the finest ring.

@@ -366,6 +366,7 @@ impl Plugin for PiePlugin {
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
             .init_resource::<crate::play_scene::PlayAssetNames>()
+            .init_resource::<crate::game_query::GameQueries>()
             // PIE is an editor-only subsystem; gate it to the editor state so it
             // never ticks in the launcher (`ProjectSelect`). Without this,
             // `reconcile_build_status` resets the shared `BuildStatus` from
@@ -378,6 +379,10 @@ impl Plugin for PiePlugin {
                     (advance_pie_session, refresh_buttons_on_play_status).chain(),
                     drain_game_events,
                     crate::live_highlight::sync_selection_highlight,
+                    (
+                        crate::game_query::sync_watch,
+                        crate::game_query::expire_game_queries,
+                    ),
                 )
                     .run_if(in_state(crate::AppState::Editor)),
             )
@@ -388,6 +393,7 @@ impl Plugin for PiePlugin {
                     crate::live_frame::clear_stream,
                     crate::play_scene::forget_asset_names,
                     crate::play_overlay::clear_play_sidecars,
+                    crate::game_query::forget_game_queries,
                 ),
             )
             .add_systems(
@@ -878,6 +884,32 @@ impl PieSession {
             },
         );
     }
+}
+
+/// Connect `transport` as the live, focused game `key`, with `child` standing in
+/// for its process, for a test. Nothing reaps `child` until the session advances.
+#[doc(hidden)]
+pub fn connect_test_game(
+    world: &mut World,
+    key: InstanceKey,
+    child: Child,
+    transport: IpcChannelTransport,
+) -> io::Result<()> {
+    let outbox = GameOutbox::new(&transport)?;
+    if !world.contains_non_send::<PieSession>() {
+        world.insert_non_send(PieSession::default());
+    }
+    world.non_send_mut::<PieSession>().children.insert(
+        key.clone(),
+        ChildStage::Live {
+            child,
+            transport,
+            outbox,
+            stderr_tail: StderrTail::default(),
+        },
+    );
+    world.get_resource_or_init::<PieInstances>().focused = Some(key);
+    Ok(())
 }
 
 /// Hold the open project's game build as in progress, for a test: a launch then
@@ -2039,7 +2071,8 @@ fn report_stderr_tail(stderr_tail: &StderrTail) {
 
 /// Drain `StateEvent`s from every live child and show the newest frame of the
 /// focused one.
-pub(crate) fn drain_game_events(world: &mut World) {
+#[doc(hidden)]
+pub fn drain_game_events(world: &mut World) {
     deliver_served_scenes(world);
 
     // Collect all pending (key, events) pairs without holding the session borrow.
@@ -2101,6 +2134,12 @@ pub(crate) fn drain_game_events(world: &mut World) {
                         world,
                         format!("{key} no longer matches the scene: a new entity failed: {reason}"),
                     );
+                }
+                StateEvent::QueryAnswer { request, answer } => {
+                    crate::game_query::receive_answer(world, &key, request, answer);
+                }
+                StateEvent::Watched { watch, entities } => {
+                    crate::game_query::receive_watched(world, &key, watch, entities);
                 }
                 StateEvent::OwnWindow => {
                     if is_focused {

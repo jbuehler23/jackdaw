@@ -189,6 +189,66 @@ fn snapshot_columns(
         .collect()
 }
 
+/// The values of `entity`'s components by type path, sorted, with the skip lists
+/// applied, and the names of the components it holds that do not serialize.
+pub fn entity_components(
+    world: &World,
+    registry: &TypeRegistry,
+    entity: EntityRef,
+) -> (Vec<(String, Value)>, Vec<String>) {
+    let mut values = Vec::new();
+    let mut opaque = Vec::new();
+    for id in entity.archetype().iter_components() {
+        let Some(info) = world.components().get_info(id) else {
+            continue;
+        };
+        let registration = info.type_id().and_then(|type_id| registry.get(type_id));
+        let column = registration.and_then(|registration| {
+            Some(SnapshotColumn {
+                type_path: registration.type_info().type_path_table().path(),
+                reflect: registration.data::<ReflectComponent>()?.clone(),
+            })
+        });
+        match column {
+            Some(column) if should_skip(column.type_path) => {}
+            Some(column) => match column.value(entity, registry) {
+                Some(value) => values.push((column.type_path.to_string(), value)),
+                None => opaque.push(column.type_path.to_string()),
+            },
+            None => opaque.push(info.name().to_string()),
+        }
+    }
+    values.sort_by(|a, b| a.0.cmp(&b.0));
+    opaque.sort();
+    (values, opaque)
+}
+
+/// The value of `entity`'s component with type path `type_path`, as
+/// [`entity_components`] holds it, or its name among the opaque ones.
+pub fn entity_component(
+    registry: &TypeRegistry,
+    entity: EntityRef,
+    type_path: &str,
+) -> (Vec<(String, Value)>, Vec<String>) {
+    let Some(reflect) = registry
+        .get_with_type_path(type_path)
+        .and_then(|registration| registration.data::<ReflectComponent>())
+    else {
+        return (Vec::new(), Vec::new());
+    };
+    let column = SnapshotColumn {
+        type_path: "",
+        reflect: reflect.clone(),
+    };
+    if !reflect.contains(entity) {
+        return (Vec::new(), Vec::new());
+    }
+    match column.value(entity, registry) {
+        Some(value) => (vec![(type_path.to_string(), value)], Vec::new()),
+        None => (Vec::new(), vec![type_path.to_string()]),
+    }
+}
+
 /// Reflection-serialize `entities` for remote display, applying the skip lists
 /// and `RemoteSerializerProcessor` edge-case handling.
 pub fn build_snapshot(
