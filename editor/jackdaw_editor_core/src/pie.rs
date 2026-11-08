@@ -51,6 +51,9 @@ const STDERR_TAIL_LINES: usize = 40;
 /// up on it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The editor's remote control port variable, kept out of a launched game.
+const EDITOR_REMOTE_PORT_ENV: &str = "JACKDAW_REMOTE_PORT";
+
 /// Identifies one running instance: a config label plus its 1-based
 /// instance number.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -2226,6 +2229,7 @@ fn spawn_instance(
     crate::project_build::prepare_game_command(&mut command, binary);
     command
         .current_dir(&cwd)
+        .env_remove(EDITOR_REMOTE_PORT_ENV)
         .envs(&run.env)
         .env("BEVY_ASSET_ROOT", &cwd)
         .env("JACKDAW_PIE", &server_name)
