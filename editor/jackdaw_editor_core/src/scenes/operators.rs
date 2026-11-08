@@ -18,6 +18,7 @@ pub struct UntitledCounter(pub u32);
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<SceneNewOp>()
         .register_operator::<SceneOpenOp>()
+        .register_operator::<SceneExternalChangeOp>()
         .register_operator::<SceneCloseOp>()
         .register_operator::<SceneSwitchOp>()
         .register_operator::<SceneSaveAllOp>()
@@ -235,6 +236,64 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
         }
         // Legacy .jsn picks confirm conversion before opening.
         crate::migrate_dialog::request_open_with_conversion(world, &path);
+    });
+    OperatorResult::Finished
+}
+
+#[operator(
+    id = "scene.external_change",
+    leaves_history = true,
+    label = "Answer File Changed on Disk",
+    allows_undo = false,
+    params(
+        answer(
+            String,
+            doc = "keep, to keep what the editor has open and overwrite the files on \
+                   the next save, or reload, to read them from disk."
+        ),
+        path(
+            String,
+            doc = "Scene file the question is about, absolute or relative to the \
+                   project's assets directory. Defaults to the first one waiting."
+        ),
+    )
+)]
+pub fn scene_external_change(
+    In(params): In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    use crate::scenes::external_watch::{
+        ExternalReloadChoice, ExternalSceneChanges, answer_external_change,
+    };
+    let choice = match params.as_str("answer") {
+        Some("keep") => ExternalReloadChoice::Keep,
+        Some("reload") => ExternalReloadChoice::Reload,
+        other => {
+            warn!("scene.external_change: answer must be keep or reload, not {other:?}");
+            return OperatorResult::Cancelled;
+        }
+    };
+    let path = params.as_str("path").map(std::path::PathBuf::from);
+    commands.queue(move |world: &mut World| {
+        let path = match path.map(|path| resolve_scene_path(world, &path)) {
+            Some(Ok(path)) => path,
+            Some(Err(refusal)) => {
+                warn_caller(world, format!("scene.external_change: {refusal}"));
+                return;
+            }
+            None => {
+                let waiting = world
+                    .get_resource::<ExternalSceneChanges>()
+                    .and_then(|changes| changes.prompts.first())
+                    .map(|prompt| prompt.path.clone());
+                let Some(waiting) = waiting else {
+                    warn_caller(world, "scene.external_change: no file change is waiting");
+                    return;
+                };
+                waiting
+            }
+        };
+        answer_external_change(world, &path, choice);
     });
     OperatorResult::Finished
 }

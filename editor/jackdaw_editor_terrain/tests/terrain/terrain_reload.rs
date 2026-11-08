@@ -392,6 +392,9 @@ fn rewrite_sidecar_on_disk(
     delta: f32,
 ) -> Vec<f32> {
     let sidecar_path = sidecar_file(scene_path, data_path);
+    let before = std::fs::metadata(&sidecar_path)
+        .and_then(|meta| meta.modified())
+        .unwrap_or(std::time::UNIX_EPOCH);
     let mut data = app
         .world()
         .resource::<TerrainDataStore>()
@@ -412,7 +415,7 @@ fn rewrite_sidecar_on_disk(
     // Staleness is decided by mtime, and a test can write a file twice
     // inside one filesystem timestamp tick, so the write is dated
     // forward explicitly.
-    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    let later = std::time::SystemTime::now().max(before) + Duration::from_secs(5);
     std::fs::File::options()
         .write(true)
         .open(&sidecar_path)
@@ -423,11 +426,12 @@ fn rewrite_sidecar_on_disk(
 }
 
 fn sidecar_file(scene_path: &std::path::Path, data_path: &str) -> PathBuf {
-    jackdaw_terrain::sidecar::resolve_path(
+    let file = jackdaw_terrain::sidecar::resolve_path(
         scene_path.parent().expect("the scene has a directory"),
         data_path,
     )
-    .expect("the data path resolves")
+    .expect("the data path resolves");
+    dunce::canonicalize(&file).unwrap_or(file)
 }
 
 /// Sculpt every height of the terrain by `delta` straight into the store, as a
@@ -469,7 +473,7 @@ fn reload_prompts(app: &App) -> Vec<ExternalSceneChange> {
 fn terrain_prompt(app: &App, sidecar: &std::path::Path) -> Option<ExternalSceneChange> {
     reload_prompts(app)
         .into_iter()
-        .find(|prompt| prompt.changed_files.iter().any(|file| file == sidecar))
+        .find(|prompt| prompt.changed_files.iter().any(|file| file.path == sidecar))
 }
 
 /// A sculpt stroke through the brush operator, as the viewport runs one.
@@ -519,6 +523,19 @@ fn reopen_aimed(scene_path: &std::path::Path) -> (App, Entity, String, usize) {
     let (entity, terrain) = the_terrain(&mut app);
     let tab = active_tab(&app);
     (app, entity, terrain.data_path, tab)
+}
+
+/// An edit to the scene that touches no terrain.
+fn edit_something_else(app: &mut App) {
+    dispatch(app, "entity.add.empty");
+    app.update();
+}
+
+fn status_text(app: &App) -> String {
+    app.world()
+        .get_resource::<jackdaw_editor_core::status_bar::StatusNotice>()
+        .map(|notice| notice.text().to_string())
+        .unwrap_or_default()
 }
 
 /// Write over the scene file the way another program would, keeping it loadable.
@@ -578,17 +595,36 @@ fn a_sculpt_stroke_survives_its_file_changing_on_disk() {
 fn saving_over_a_terrain_file_changed_on_disk_asks_first() {
     let stage = stage_dir();
     let scene_path = author_and_save(stage.path());
-    let (mut app, entity, data_path, _) = reopen_aimed(&scene_path);
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
 
     sculpt_stroke(&mut app, entity);
     let sculpted = heights(&app, &data_path);
     let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
 
-    let _ = app.world_mut().operator("scene.save").call();
+    let result = app
+        .world_mut()
+        .operator("scene.save")
+        .call()
+        .expect("scene.save dispatches");
     app.update();
+    assert_eq!(
+        result,
+        OperatorResult::Cancelled,
+        "the save was not refused"
+    );
     assert!(
         same_heights(&heights_on_disk(&scene_path, &data_path), &outside),
         "the save wrote over the terrain file changed on disk"
+    );
+    assert!(
+        tab_dirty(&app, tab),
+        "a refused save left the tab reading as saved"
+    );
+    let notice = status_text(&app);
+    assert!(
+        notice.contains("changed on disk")
+            && !notice.to_lowercase().contains("not saved: not saved"),
+        "the refusal was not reported once: {notice}"
     );
     let sidecar = sidecar_file(&scene_path, &data_path);
     let prompt = terrain_prompt(&app, &sidecar).expect("the save did not ask about the file");
@@ -610,7 +646,11 @@ fn a_dirty_tab_rereads_an_unedited_terrain_whose_file_changed() {
     let scene_path = author_and_save(stage.path());
     let (mut app, _, data_path, tab) = reopen_aimed(&scene_path);
 
-    app.world_mut().resource_mut::<Scenes>().tabs[tab].dirty = true;
+    edit_something_else(&mut app);
+    assert!(
+        tab_dirty(&app, tab),
+        "adding an entity leaves the tab dirty"
+    );
     let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
     leave_and_return(&mut app, tab);
 
@@ -663,7 +703,11 @@ fn a_waiting_scene_prompt_also_names_a_changed_terrain_file() {
     assert_eq!(prompts.len(), 1, "the scene is asked about once");
     let sidecar = sidecar_file(&scene_path, &data_path);
     assert!(
-        prompts[0].document_changed && prompts[0].changed_files.contains(&sidecar),
+        prompts[0].document_changed
+            && prompts[0]
+                .changed_files
+                .iter()
+                .any(|file| file.path == sidecar),
         "the waiting prompt does not name both the scene and the terrain file"
     );
 }
@@ -755,6 +799,177 @@ fn reloading_after_a_terrain_file_changed_takes_the_file() {
     assert!(
         reload_prompts(&app).is_empty(),
         "the reload left a prompt behind"
+    );
+}
+
+/// Saving a tab whose terrain nobody edited, after its file changed on disk,
+/// reads the file first and saves without asking.
+#[test]
+fn saving_an_unedited_terrain_after_an_outside_change_rereads_it() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, _, data_path, _) = reopen_aimed(&scene_path);
+
+    edit_something_else(&mut app);
+    let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    dispatch(&mut app, "scene.save");
+    app.update();
+
+    assert!(
+        reload_prompts(&app).is_empty(),
+        "an unedited terrain raised a prompt"
+    );
+    assert!(
+        same_heights(&heights(&app, &data_path), &outside),
+        "the save did not read the changed file first"
+    );
+    assert!(
+        same_heights(&heights_on_disk(&scene_path, &data_path), &outside),
+        "the save wrote stale terrain over the changed file"
+    );
+}
+
+/// A second outside write landing after the user was asked, and before they
+/// kept their edits, is asked about again.
+#[test]
+fn a_second_outside_write_before_keep_asks_again() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    leave_and_return(&mut app, tab);
+    let sidecar = sidecar_file(&scene_path, &data_path);
+    let prompt = terrain_prompt(&app, &sidecar).expect("the first write was not asked about");
+
+    rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 50.0);
+    answer_external_change(app.world_mut(), &prompt.path, ExternalReloadChoice::Keep);
+    leave_and_return(&mut app, tab);
+    assert!(
+        terrain_prompt(&app, &sidecar).is_some(),
+        "keeping the edits accepted a write the user was never shown"
+    );
+}
+
+/// Saving under a new name in another folder writes its files there, over any
+/// copy already there, and is not refused over the files the tab was read from.
+#[test]
+fn save_as_to_another_folder_is_not_refused() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, _) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    let outside = rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    let elsewhere = stage
+        .path()
+        .join("assets")
+        .join("copies")
+        .join("ground.bsn");
+    std::fs::create_dir_all(elsewhere.parent().expect("a folder")).expect("make the folder");
+    // An older copy already stands where the new name puts the terrain file.
+    std::fs::copy(
+        sidecar_file(&scene_path, &data_path),
+        elsewhere.with_file_name(
+            sidecar_file(&scene_path, &data_path)
+                .file_name()
+                .expect("the sidecar has a name"),
+        ),
+    )
+    .expect("copy the sidecar");
+    let result = app
+        .world_mut()
+        .operator("scene.save")
+        .param("path", elsewhere.to_string_lossy().into_owned())
+        .call()
+        .expect("scene.save dispatches");
+    app.update();
+
+    assert_eq!(result, OperatorResult::Finished, "the save as was refused");
+    assert!(
+        reload_prompts(&app).is_empty(),
+        "the save as raised a prompt"
+    );
+    assert!(
+        sidecar_file(&elsewhere, &data_path).exists(),
+        "the save as wrote no terrain beside the new scene"
+    );
+    assert!(
+        same_heights(&heights_on_disk(&scene_path, &data_path), &outside),
+        "the save as wrote over the file the tab was read from"
+    );
+}
+
+/// A sculpted terrain deleted from the scene leaves nothing unsaved and nothing
+/// to ask about, though its data stays for an undo.
+#[test]
+fn a_deleted_edited_terrain_holds_nothing_unsaved() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, tab) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    app.world_mut().resource_mut::<Selection>().entities = vec![entity];
+    dispatch(&mut app, "entity.delete");
+    app.update();
+    assert!(
+        app.world()
+            .resource::<TerrainDataStore>()
+            .contains(&data_path),
+        "the deleted terrain's data is kept for an undo"
+    );
+    assert!(
+        !jackdaw_editor_core::scene_io::hooks::has_unsaved_edits(app.world(), tab),
+        "a deleted terrain keeps the tab holding unsaved edits"
+    );
+    rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    assert!(
+        jackdaw_editor_core::scene_io::hooks::changed_on_disk(app.world(), tab).is_empty(),
+        "a deleted terrain's file is reported as changed"
+    );
+}
+
+/// With no dialog to answer, `scene.external_change` answers the question a
+/// refused save raised, and the next save writes.
+#[test]
+fn the_answer_operator_unblocks_a_refused_save() {
+    let stage = stage_dir();
+    let scene_path = author_and_save(stage.path());
+    let (mut app, entity, data_path, _) = reopen_aimed(&scene_path);
+
+    sculpt_stroke(&mut app, entity);
+    let sculpted = heights(&app, &data_path);
+    rewrite_sidecar_on_disk(&app, &scene_path, &data_path, 25.0);
+    let refused = app
+        .world_mut()
+        .operator("scene.save")
+        .call()
+        .expect("scene.save dispatches");
+    assert_eq!(
+        refused,
+        OperatorResult::Cancelled,
+        "the save was not refused"
+    );
+
+    let answered = app
+        .world_mut()
+        .operator("scene.external_change")
+        .param("answer", "keep".to_string())
+        .call()
+        .expect("scene.external_change dispatches");
+    assert_eq!(answered, OperatorResult::Finished);
+    app.update();
+    assert!(
+        reload_prompts(&app).is_empty(),
+        "the answer left the prompt waiting"
+    );
+
+    dispatch(&mut app, "scene.save");
+    app.update();
+    assert!(
+        same_heights(&heights_on_disk(&scene_path, &data_path), &sculpted),
+        "the save after keeping did not write the edits"
     );
 }
 

@@ -79,16 +79,43 @@ pub trait DocumentIoHook: Send + Sync + 'static {
     }
 
     /// The feature's files beside the document in tab `tab` that something else
-    /// wrote after the feature last read or wrote them, and that it has not
-    /// read again: a save would write over them.
+    /// wrote after the feature last read or wrote them, while it holds unsaved
+    /// edits to them: a save would write over them.
     fn changed_on_disk(&self, _world: &World, _tab: usize) -> Vec<PathBuf> {
         Vec::new()
     }
 
     /// The author chose to keep what the feature holds for tab `tab` over
-    /// `files`, from [`Self::changed_on_disk`]: they stop reading as changed,
-    /// and the next save writes over them.
-    fn keep_over_changed(&self, _world: &mut World, _tab: usize, _files: &[PathBuf]) {}
+    /// `files`, from [`Self::changed_on_disk`], as each was modified when they
+    /// were asked. Those versions stop reading as changed and the next save
+    /// writes over them; a later write to the same file still reads as changed.
+    fn keep_over_changed(&self, _world: &mut World, _tab: usize, _files: &[ChangedFile]) {}
+}
+
+/// A file beside a document that changed on disk, as it was modified when
+/// the author was asked about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub path: PathBuf,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// The `data_path` of each node of `ast` holding the component `type_path`,
+/// each once, in order.
+pub fn data_paths_in(ast: &SceneBsnAst, type_path: &str) -> Vec<String> {
+    let mut paths: Vec<String> = ast
+        .entities_with_component(type_path)
+        .into_iter()
+        .filter_map(
+            |node| match jackdaw_bsn::get_bsn_field(ast, node, type_path, "data_path")? {
+                jackdaw_bsn::BsnValue::String(path) if !path.is_empty() => Some(path),
+                _ => None,
+            },
+        )
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// A file beside a document and the bytes it is to hold.
@@ -130,20 +157,7 @@ pub struct PlayDocument<'a> {
 impl PlayDocument<'_> {
     /// The `data_path` of each node holding the component `type_path`.
     pub fn data_paths(&self, type_path: &str) -> Vec<String> {
-        let mut paths: Vec<String> = self
-            .ast
-            .entities_with_component(type_path)
-            .into_iter()
-            .filter_map(|node| {
-                match jackdaw_bsn::get_bsn_field(self.ast, node, type_path, "data_path")? {
-                    jackdaw_bsn::BsnValue::String(path) if !path.is_empty() => Some(path),
-                    _ => None,
-                }
-            })
-            .collect();
-        paths.sort();
-        paths.dedup();
-        paths
+        data_paths_in(self.ast, type_path)
     }
 
     /// The folder of the document's file.
@@ -359,7 +373,7 @@ pub fn changed_on_disk(world: &World, tab: usize) -> Vec<PathBuf> {
 }
 
 /// Run every hook's [`DocumentIoHook::keep_over_changed`].
-pub fn keep_over_changed(world: &mut World, tab: usize, files: &[PathBuf]) {
+pub fn keep_over_changed(world: &mut World, tab: usize, files: &[ChangedFile]) {
     for hook in hooks(world) {
         hook.keep_over_changed(world, tab, files);
     }

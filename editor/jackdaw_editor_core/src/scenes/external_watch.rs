@@ -12,10 +12,13 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::warn_caller;
-use jackdaw_feathers::dialog::{DialogActionEvent, DialogVariant, EditorDialog, OpenDialogEvent};
+use jackdaw_feathers::dialog::{
+    CloseDialogEvent, DialogActionEvent, DialogVariant, EditorDialog, OpenDialogEvent,
+};
 use jackdaw_feathers::icons::EditorFont;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::scene_io::hooks::ChangedFile;
 use crate::scenes::{Scenes, TabContent, TabKind};
 
 pub struct ExternalSceneWatchPlugin;
@@ -76,8 +79,8 @@ pub struct ExternalSceneChange {
     /// Whether the document's own file changed.
     pub document_changed: bool,
     /// Files kept beside the document that changed on disk while the editor
-    /// holds edits a save would write over them.
-    pub changed_files: Vec<PathBuf>,
+    /// holds edits a save would write over them, as modified when asked.
+    pub changed_files: Vec<ChangedFile>,
     /// Hash of the bytes this prompt was raised for. Answering records these
     /// rather than whatever is on disk by then.
     hash: u64,
@@ -134,7 +137,11 @@ impl ExternalSceneChange {
         if self.document_changed {
             names.push(self.file_name());
         }
-        names.extend(self.changed_files.iter().map(|file| file_name_of(file)));
+        names.extend(
+            self.changed_files
+                .iter()
+                .map(|file| file_name_of(&file.path)),
+        );
         let several = names.len() > 1;
         let mut text = format!(
             "{} changed on disk, and you have unsaved changes to {} here.",
@@ -232,25 +239,34 @@ pub fn note_known_hash(world: &mut World, path: &Path, hash: u64) {
 /// it. A prompt already waiting on that tab takes the files on. Nothing is
 /// asked when no file changed.
 pub fn ask_about_changed_files(world: &mut World, tab: usize) {
-    let files = crate::scene_io::hooks::changed_on_disk(world, tab);
+    let files: Vec<ChangedFile> = crate::scene_io::hooks::changed_on_disk(world, tab)
+        .into_iter()
+        .map(|path| ChangedFile {
+            modified: std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok(),
+            path,
+        })
+        .collect();
     if files.is_empty() {
         return;
     }
-    let Some(open) = world.get_resource::<Scenes>().and_then(|scenes| {
+    let open = world.get_resource::<Scenes>().and_then(|scenes| {
         open_scene_tabs(scenes)
             .into_iter()
             .find(|open| open.index == tab)
-    }) else {
+    });
+    let Some(open) = open else {
         warn!(
             "{} changed on disk; keeping the unsaved edits",
-            list_paths(&files)
+            list_files(&files)
         );
         return;
     };
     if !world.contains_resource::<ExternalSceneChanges>() {
         warn!(
             "{} changed on disk; keeping the unsaved edits",
-            list_paths(&files)
+            list_files(&files)
         );
         return;
     }
@@ -263,41 +279,79 @@ pub fn ask_about_changed_files(world: &mut World, tab: usize) {
         })
         .unwrap_or_default();
     let mut changes = world.resource_mut::<ExternalSceneChanges>();
-    if let Some(waiting) = changes
+    let merged = changes
         .prompts
         .iter_mut()
         .find(|prompt| prompt.path == open.path)
-    {
-        for file in files {
-            if !waiting.changed_files.contains(&file) {
-                waiting.changed_files.push(file);
+        .map(|waiting| {
+            let mut grew = false;
+            for file in files.iter().cloned() {
+                match waiting
+                    .changed_files
+                    .iter_mut()
+                    .find(|known| known.path == file.path)
+                {
+                    Some(known) if *known == file => {}
+                    Some(known) => {
+                        *known = file;
+                        grew = true;
+                    }
+                    None => {
+                        waiting.changed_files.push(file);
+                        grew = true;
+                    }
+                }
             }
+            grew
+        });
+    match merged {
+        Some(true) => {
+            close_shown_prompt(world, &open.path);
+            return;
         }
-        return;
+        Some(false) => return,
+        None => {}
     }
     info!(
         "{} changed on disk under unsaved edits; offering a reload",
-        list_paths(&files)
+        list_files(&files)
     );
-    changes.prompts.push(ExternalSceneChange {
-        path: open.path,
-        tab_index: open.index,
-        tab_display_name: open.display_name,
-        tab_dirty: open.dirty,
-        data_unsaved,
-        tab_is_prefab: open.is_prefab,
-        document_changed: false,
-        changed_files: files,
-        hash,
-    });
+    world
+        .resource_mut::<ExternalSceneChanges>()
+        .prompts
+        .push(ExternalSceneChange {
+            path: open.path,
+            tab_index: open.index,
+            tab_display_name: open.display_name,
+            tab_dirty: open.dirty,
+            data_unsaved,
+            tab_is_prefab: open.is_prefab,
+            document_changed: false,
+            changed_files: files,
+            hash,
+        });
 }
 
-fn list_paths(files: &[PathBuf]) -> String {
+fn list_files(files: &[ChangedFile]) -> String {
     let names: Vec<String> = files
         .iter()
-        .map(|file| file.display().to_string())
+        .map(|file| file.path.display().to_string())
         .collect();
     join_names(&names)
+}
+
+/// Close the dialog showing the prompt for `path`, if one is, without giving
+/// either answer. A prompt still waiting opens again with what it now says.
+fn close_shown_prompt(world: &mut World, path: &Path) {
+    if world
+        .get_resource::<ReloadPromptOpen>()
+        .is_none_or(|open| open.0 != path)
+    {
+        return;
+    }
+    world.remove_resource::<ReloadPromptOpen>();
+    world.trigger(CloseDialogEvent);
+    world.flush();
 }
 
 /// Answer the prompt raised for `path`. An answer for a path with no open
@@ -319,6 +373,7 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
         return;
     };
 
+    close_shown_prompt(world, &change.path);
     {
         let mut changes = world.resource_mut::<ExternalSceneChanges>();
         changes.prompts.retain(|other| other.path != change.path);
@@ -658,14 +713,21 @@ fn drain_changes(world: &mut World) {
         }
 
         let mut changes = world.resource_mut::<ExternalSceneChanges>();
-        if let Some(waiting) = changes
+        let waiting = changes
             .prompts
             .iter_mut()
             .find(|prompt| prompt.path == path)
-        {
-            if !waiting.document_changed {
-                waiting.document_changed = true;
-                waiting.hash = hash;
+            .map(|waiting| {
+                let newly = !waiting.document_changed;
+                if newly {
+                    waiting.document_changed = true;
+                    waiting.hash = hash;
+                }
+                newly
+            });
+        if let Some(newly) = waiting {
+            if newly {
+                close_shown_prompt(world, &path);
             }
             continue;
         }
