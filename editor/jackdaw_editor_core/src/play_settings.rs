@@ -5,7 +5,9 @@
 //! it: the variables and arguments that point a launch at a particular server,
 //! identity or offline mode. They live with the rest of the project's editor
 //! preferences, which no project commits, and their values are never logged.
-//! The same section holds what becomes of edits made during Play.
+//! The same section holds what becomes of edits made during Play, where the
+//! game's window goes, the Game panel's view size and whether the game is
+//! muted.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -33,6 +35,87 @@ pub struct PlaySettings {
     pub args: Vec<String>,
     /// What becomes of the edits made during Play once it stops.
     pub edits: PlayEdits,
+    /// Whether a launch opens the game in its own window.
+    pub separate_window: bool,
+    /// The size the Game panel asks the game to render at.
+    pub view: GameView,
+    /// Whether the games Play runs are silenced.
+    pub muted: bool,
+}
+
+/// The size the Game panel asks the game to render at: the panel's own, the
+/// largest of an aspect that fits in it, or a fixed resolution scaled to fit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GameView {
+    #[default]
+    #[serde(rename = "free")]
+    Free,
+    #[serde(rename = "16:9")]
+    Wide,
+    #[serde(rename = "4:3")]
+    Standard,
+    #[serde(rename = "1:1")]
+    Square,
+    #[serde(rename = "1280x720")]
+    Hd,
+    #[serde(rename = "1920x1080")]
+    FullHd,
+}
+
+impl GameView {
+    pub const ALL: [Self; 6] = [
+        Self::Free,
+        Self::Wide,
+        Self::Standard,
+        Self::Square,
+        Self::Hd,
+        Self::FullHd,
+    ];
+
+    /// The name the operator takes and the settings file holds.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Wide => "16:9",
+            Self::Standard => "4:3",
+            Self::Square => "1:1",
+            Self::Hd => "1280x720",
+            Self::FullHd => "1920x1080",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|view| view.name().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// How the Game panel names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Hd => "1280 x 720",
+            Self::FullHd => "1920 x 1080",
+            other => other.name(),
+        }
+    }
+
+    /// The stream size to ask for inside a surface of `surface` pixels. An
+    /// aspect's width is kept to a multiple of 64, the row the game captures
+    /// at, so the frame comes back at the aspect asked for.
+    pub fn stream_size(self, surface: UVec2) -> UVec2 {
+        let aspect = match self {
+            Self::Free => return surface,
+            Self::Hd => return UVec2::new(1280, 720),
+            Self::FullHd => return UVec2::new(1920, 1080),
+            Self::Wide => UVec2::new(16, 9),
+            Self::Standard => UVec2::new(4, 3),
+            Self::Square => UVec2::ONE,
+        };
+        let fit_width = surface.x.min(surface.y * aspect.x / aspect.y);
+        let width = (fit_width / 64 * 64).max(64);
+        UVec2::new(width, width * aspect.y / aspect.x)
+    }
 }
 
 /// What becomes of the edits made during Play once the last game stops.
@@ -155,7 +238,60 @@ impl Plugin for PlaySettingsPlugin {
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<PlaySettingsOp>()
-        .register_operator::<PlayEditsOp>();
+        .register_operator::<PlayEditsOp>()
+        .register_operator::<PieViewAspectOp>()
+        .register_operator::<PieMuteOp>();
+}
+
+/// Set the size the Game panel asks the game to render at.
+#[operator(
+    id = "pie.view_aspect",
+    writes_disk = true,
+    allows_undo = false,
+    label = "Game View Size",
+    description = "Fill the Game panel, keep an aspect, or render at a fixed resolution scaled to fit.",
+    params(value(
+        String,
+        doc = "`free`, `16:9`, `4:3`, `1:1`, `1280x720` or `1920x1080`."
+    ))
+)]
+pub fn pie_view_aspect(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let name = params.as_str("value").unwrap_or_default();
+    let Some(view) = GameView::parse(name) else {
+        warn!("pie.view_aspect: unknown value '{name}'");
+        return OperatorResult::Cancelled;
+    };
+    commands.queue(move |world: &mut World| {
+        world.resource_mut::<PlaySettings>().view = view;
+        store(world);
+    });
+    OperatorResult::Finished
+}
+
+/// Silence the games Play runs, or give them their sound back.
+#[operator(
+    id = "pie.mute",
+    writes_disk = true,
+    allows_undo = false,
+    label = "Mute Game",
+    description = "Silence the running game, and the games Play launches, until unmuted.",
+    params(on(
+        bool,
+        doc = "Mute when true, unmute when false; switches when left out."
+    ))
+)]
+pub fn pie_mute(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let named = params.as_bool("on");
+    commands.queue(move |world: &mut World| {
+        let muted = {
+            let mut settings = world.resource_mut::<PlaySettings>();
+            settings.muted = named.unwrap_or(!settings.muted);
+            settings.muted
+        };
+        store(world);
+        crate::pie::broadcast_control(world, jackdaw_pie_protocol::ControlEvent::SetMuted(muted));
+    });
+    OperatorResult::Finished
 }
 
 /// Keep or revert the edits made during Play when it stops, or switch between
@@ -236,6 +372,7 @@ pub fn play_settings(params: In<OperatorParameters>, mut commands: Commands) -> 
 fn load_for_open_project(
     project: Option<Res<crate::project::ProjectRoot>>,
     mut settings: ResMut<PlaySettings>,
+    window_mode: Option<ResMut<crate::pie::PieWindowMode>>,
     mut loaded_root: Local<Option<PathBuf>>,
 ) {
     let Some(project) = project else {
@@ -249,9 +386,12 @@ fn load_for_open_project(
         &project.root,
         crate::project_settings::Section::Key(SECTION),
     );
+    if let Some(mut mode) = window_mode {
+        *mode = crate::pie::PieWindowMode::from_separate(settings.separate_window);
+    }
 }
 
-fn store(world: &World) {
+pub(crate) fn store(world: &World) {
     let (Some(project), Some(settings)) = (
         world.get_resource::<crate::project::ProjectRoot>(),
         world.get_resource::<PlaySettings>(),
@@ -418,6 +558,36 @@ mod tests {
     }
 
     #[test]
+    fn an_aspect_fits_the_panel_and_a_resolution_is_asked_for_as_named() {
+        let panel = UVec2::new(1000, 400);
+        assert_eq!(GameView::Free.stream_size(panel), panel);
+        assert_eq!(GameView::Wide.stream_size(panel), UVec2::new(704, 396));
+        assert_eq!(GameView::Standard.stream_size(panel), UVec2::new(512, 384));
+        assert_eq!(GameView::Square.stream_size(panel), UVec2::new(384, 384));
+        assert_eq!(
+            GameView::Wide.stream_size(UVec2::new(800, 1200)),
+            UVec2::new(768, 432)
+        );
+        assert_eq!(GameView::Hd.stream_size(panel), UVec2::new(1280, 720));
+        assert_eq!(GameView::FullHd.stream_size(panel), UVec2::new(1920, 1080));
+        assert_eq!(
+            GameView::Square.stream_size(UVec2::new(20, 20)),
+            UVec2::new(64, 64),
+            "a tiny panel still asks for a frame the game can capture"
+        );
+    }
+
+    #[test]
+    fn a_view_reads_back_from_its_name() {
+        for view in GameView::ALL {
+            assert_eq!(GameView::parse(view.name()), Some(view));
+        }
+        assert_eq!(GameView::parse("16:10"), None);
+        let json = serde_json::to_string(&GameView::Wide).expect("encode");
+        assert_eq!(json, "\"16:9\"");
+    }
+
+    #[test]
     fn a_word_naming_no_value_is_left_out() {
         assert_eq!(parse_env("REALM=dev nonsense").len(), 1);
     }
@@ -434,6 +604,9 @@ mod tests {
             env: parse_env("REALM=dev"),
             args: parse_args("--offline"),
             edits: PlayEdits::Revert,
+            separate_window: true,
+            view: GameView::Wide,
+            muted: true,
         });
 
         store(&world);
@@ -445,6 +618,8 @@ mod tests {
         assert_eq!(read.env_line(), "REALM=dev");
         assert_eq!(read.args_line(), "--offline");
         assert_eq!(read.edits, PlayEdits::Revert);
+        assert!(read.separate_window && read.muted);
+        assert_eq!(read.view, GameView::Wide);
         assert!(
             crate::project_settings::settings_path(project.path())
                 .starts_with(project.path().join(".jackdaw")),

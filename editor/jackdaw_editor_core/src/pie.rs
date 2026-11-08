@@ -576,7 +576,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ProjectToggleAutoBuildOp>()
         .register_operator::<ProjectTogglePrebuildOp>()
         .register_operator::<PieWindowModeToggleOp>()
+        .register_operator::<PiePopOutOp>()
         .register_operator::<PieNextInstanceOp>()
+        .register_operator::<PieFocusInstanceOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, PiePlayOp>([PresetInput::key("F5")]);
@@ -1077,6 +1079,7 @@ pub fn connect_test_game(
             stderr_tail,
         },
     );
+    greet_connected(world, &key);
     world.get_resource_or_init::<PieInstances>().focused = Some(key);
     Ok(())
 }
@@ -1191,6 +1194,16 @@ fn wants_windowless_env(mode: PieWindowMode) -> bool {
     mode == PieWindowMode::Embedded
 }
 
+impl PieWindowMode {
+    pub(crate) fn from_separate(separate: bool) -> Self {
+        if separate {
+            Self::Windowed
+        } else {
+            Self::Embedded
+        }
+    }
+}
+
 fn toggle_window_mode(mode: &mut PieWindowMode) {
     *mode = match *mode {
         PieWindowMode::Embedded => PieWindowMode::Windowed,
@@ -1198,18 +1211,61 @@ fn toggle_window_mode(mode: &mut PieWindowMode) {
     };
 }
 
+/// Flip the window setting and keep it with the developer's Play settings.
+fn toggle_and_store_window_mode(world: &mut World) -> PieWindowMode {
+    let mode = {
+        let mut mode = world.get_resource_or_init::<PieWindowMode>();
+        toggle_window_mode(&mut mode);
+        *mode
+    };
+    if let Some(mut settings) = world.get_resource_mut::<crate::play_settings::PlaySettings>() {
+        settings.separate_window = mode == PieWindowMode::Windowed;
+    }
+    crate::play_settings::store(world);
+    mode
+}
+
 /// Switch the next launch between an embedded game (streamed into the Game
 /// panel) and a separate game window.
 #[operator(
     id = "pie.window_mode_toggle",
+    writes_disk = true,
     label = "Play in Separate Window",
     description = "Launch the game in its own window instead of the Game panel. Applies to the next launch."
 )]
 pub(crate) fn pie_window_mode_toggle(
     _: In<OperatorParameters>,
-    mut mode: ResMut<PieWindowMode>,
+    mut commands: Commands,
 ) -> OperatorResult {
-    toggle_window_mode(&mut mode);
+    commands.queue(|world: &mut World| {
+        toggle_and_store_window_mode(world);
+    });
+    OperatorResult::Finished
+}
+
+/// Move the game between the Game panel and a separate window. A running game
+/// is restarted in the new place.
+#[operator(
+    id = "pie.pop_out",
+    writes_disk = true,
+    label = "Pop Out Game",
+    description = "Play in a separate window (for real performance numbers), or back in the Game panel. A running game restarts there."
+)]
+pub(crate) fn pie_pop_out(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let mode = toggle_and_store_window_mode(world);
+        let elsewhere = {
+            let session = world.non_send::<PieSession>();
+            session.children.keys().any(|key| {
+                session
+                    .launch_mode(key)
+                    .is_some_and(|launched| launched != mode)
+            })
+        };
+        if elsewhere {
+            handle_restart(world);
+        }
+    });
     OperatorResult::Finished
 }
 
@@ -1237,6 +1293,7 @@ pub fn handle_restart(world: &mut World) {
     };
 
     handle_stop(world);
+    crate::live_input::arm_first_frame_capture(world);
 
     for key in keys {
         let Some(run) = run_configs.run_by_name(&key.config).cloned() else {
@@ -1568,6 +1625,7 @@ pub fn handle_play(world: &mut World) {
                 config: first.label().to_string(),
                 instance: 1,
             };
+            crate::live_input::arm_first_frame_capture(world);
             launch_instance(world, key, first);
         }
         PlayState::Paused => resume(world),
@@ -1847,6 +1905,35 @@ fn several_instances_running(session: NonSend<PieSession>) -> bool {
     session.live_keys().len() > 1
 }
 
+/// Show one running instance in the Game panel.
+#[operator(
+    id = "pie.focus_instance",
+    label = "Show Game Instance",
+    description = "Show this running game instance in the Game panel.",
+    params(
+        config(String, doc = "The run configuration's name."),
+        instance(i64, default = 1, doc = "Which instance of it, counting from 1."),
+    )
+)]
+pub(crate) fn pie_focus_instance(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(config) = params.as_str("config").map(str::to_string) else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(instance) = u32::try_from(params.as_int("instance").unwrap_or(1)) else {
+        return OperatorResult::Cancelled;
+    };
+    let key = InstanceKey { config, instance };
+    commands.queue(move |world: &mut World| {
+        if world.non_send::<PieSession>().live_keys().contains(&key) {
+            set_focused_instance(world, key);
+        }
+    });
+    OperatorResult::Finished
+}
+
 /// Show the next running instance in the Game panel.
 #[operator(
     id = "pie.next_instance",
@@ -1991,9 +2078,14 @@ fn poll_children(world: &mut World) {
     let mut survivors: HashMap<InstanceKey, ChildStage> = HashMap::with_capacity(children.len());
     let mut failed = None;
     let mut exited = Vec::new();
+    let mut connected = Vec::new();
     for (key, stage) in children {
+        let was_connecting = matches!(stage, ChildStage::Connecting { .. });
         match advance_child(&key, stage, timeout) {
             ChildPoll::Running(next) => {
+                if was_connecting && matches!(next, ChildStage::Live { .. }) {
+                    connected.push(key.clone());
+                }
                 survivors.insert(key, next);
             }
             ChildPoll::Exited => exited.push(key),
@@ -2021,6 +2113,20 @@ fn poll_children(world: &mut World) {
         names.retain_games(|key| survivors.contains_key(key));
     }
     world.non_send_mut::<PieSession>().children = survivors;
+    for key in connected {
+        greet_connected(world, &key);
+    }
+}
+
+/// Tell a game that has just connected what the developer's Play settings ask
+/// of it.
+fn greet_connected(world: &World, key: &InstanceKey) {
+    let muted = world
+        .get_resource::<crate::play_settings::PlaySettings>()
+        .is_some_and(|settings| settings.muted);
+    if muted {
+        send_control_to_instance(world, key, ControlEvent::SetMuted(true));
+    }
 }
 
 /// Step one child's stage by value. A connected `Connecting` becomes `Live`; a

@@ -1,5 +1,6 @@
 //! Paces the frame-stream start/resize/stop requests sent to the focused
-//! game so the streamed frame tracks the Game panel's surface size.
+//! game so the streamed frame tracks the Game panel's surface size, or the
+//! aspect or resolution the panel's view setting names.
 //!
 //! The Game panel owns and displays the streamed frame; this module only
 //! decides when to ask the game to start, resize, or stop the stream based
@@ -142,10 +143,14 @@ fn within_dead_zone(a: UVec2, b: UVec2) -> bool {
 /// the focused-instance check reads the non-send
 /// [`PieSession`](crate::pie::PieSession) and the send path needs the world.
 pub fn drive_stream_requests(world: &mut World) {
+    let view = world
+        .get_resource::<crate::play_settings::PlaySettings>()
+        .map(|settings| settings.view)
+        .unwrap_or_default();
     let want = stream_target(
         crate::pie::effective_window_mode_in(world) == crate::pie::PieWindowMode::Embedded,
         crate::pie::focused_live_instance(world),
-        game_panel_pixel_size(world),
+        game_panel_pixel_size(world).map(|surface| view.stream_size(surface)),
     );
     let stream_is_fresh = world
         .get_resource::<LiveFrameStream>()

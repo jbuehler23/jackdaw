@@ -1,0 +1,296 @@
+//! The Game panel header: the instance picker, the view size, mute, and the
+//! game taking input on its first frame.
+
+use std::time::{Duration, Instant};
+
+use crate::util::{self, OperatorResultExt as _};
+
+use bevy::input::ButtonState;
+use bevy::input::mouse::MouseButtonInput;
+use bevy::prelude::*;
+use jackdaw::game_panel_header::{GameInstancePicker, named_instances};
+use jackdaw::pie::InstanceKey;
+use jackdaw_api::prelude::*;
+use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
+use jackdaw_feathers::button::ButtonContentText;
+use jackdaw_pie_protocol::event::from_bytes;
+use jackdaw_pie_protocol::{
+    ControlEvent, IpcChannelTransport, PieChannel, PieTransport as _, encode_frame,
+};
+
+const GUARD: Duration = Duration::from_secs(20);
+
+struct Project {
+    app: App,
+    _dir: tempfile::TempDir,
+}
+
+impl Drop for Project {
+    fn drop(&mut self) {
+        jackdaw::pie::handle_stop(self.app.world_mut());
+    }
+}
+
+/// An editor on a project with a Server and two Client run configurations.
+fn editor_on_a_project() -> Project {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("jackdaw.toml"),
+        "[[run]]\nname = \"Server\"\n\n[[run]]\nname = \"Client\"\ninstances = 2\n",
+    )
+    .expect("a manifest");
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: dir.path().to_path_buf(),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    for _ in 0..3 {
+        app.update();
+    }
+    Project { app, _dir: dir }
+}
+
+fn key(config: &str, instance: u32) -> InstanceKey {
+    InstanceKey {
+        config: config.to_string(),
+        instance,
+    }
+}
+
+fn call(app: &mut App, id: &str, params: &[(&'static str, &str)]) -> OperatorResult {
+    let mut builder = app
+        .world_mut()
+        .operator(id.to_string())
+        .settings(CallOperatorSettings {
+            execution_context: ExecutionContext::Invoke,
+            creates_history_entry: false,
+        });
+    for (name, value) in params {
+        builder = builder.param(*name, value.to_string());
+    }
+    let result = builder.call().expect("dispatch");
+    app.update();
+    app.update();
+    result
+}
+
+/// Connect a game as `key`, returning the game's end of the link.
+fn connect(app: &mut App, key: InstanceKey) -> IpcChannelTransport {
+    let (server, name) = jackdaw_pie_protocol::serve().expect("a rendezvous");
+    let accept = std::thread::spawn(move || server.accept());
+    let game = jackdaw_pie_protocol::connect(&name).expect("the game connects");
+    let editor_end = accept
+        .join()
+        .expect("accept ran")
+        .expect("the editor accepts");
+    let child = std::process::Command::new("sleep")
+        .arg("600")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("a child process");
+    jackdaw::pie::connect_test_game(app.world_mut(), key, child, editor_end).expect("a link");
+    app.update();
+    game
+}
+
+fn received(game: &mut IpcChannelTransport) -> Vec<ControlEvent> {
+    game.drain_received()
+        .into_iter()
+        .filter(|(channel, _)| *channel == PieChannel::Reliable)
+        .filter_map(|(_, bytes)| from_bytes::<ControlEvent>(&bytes).ok())
+        .collect()
+}
+
+/// Run frames until the game receives an event `pick` accepts.
+fn next<T>(
+    app: &mut App,
+    game: &mut IpcChannelTransport,
+    mut pick: impl FnMut(ControlEvent) -> Option<T>,
+) -> T {
+    let until = Instant::now() + GUARD;
+    loop {
+        assert!(
+            Instant::now() < until,
+            "nothing of the kind reached the game"
+        );
+        app.update();
+        for event in received(game) {
+            if let Some(found) = pick(event) {
+                return found;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn picker_caption(app: &mut App) -> Option<String> {
+    let picker = app
+        .world_mut()
+        .query_filtered::<(Entity, &Node), With<GameInstancePicker>>()
+        .single(app.world())
+        .ok()
+        .filter(|(_, node)| node.display != Display::None)
+        .map(|(entity, _)| entity)?;
+    let mut stack = vec![picker];
+    while let Some(entity) = stack.pop() {
+        if app.world().get::<ButtonContentText>(entity).is_some() {
+            return app.world().get::<Text>(entity).map(|text| text.0.clone());
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    None
+}
+
+#[test]
+fn the_instance_picker_shows_with_two_instances_and_focuses_the_one_chosen() {
+    let mut project = editor_on_a_project();
+    let app = &mut project.app;
+    let _server = connect(app, key("Server", 1));
+    app.update();
+    assert_eq!(picker_caption(app), None, "one instance needs no picker");
+
+    let _client = connect(app, key("Client", 2));
+    app.update();
+    assert_eq!(picker_caption(app).as_deref(), Some("Client 2"));
+
+    call(
+        app,
+        "pie.focus_instance",
+        &[("config", "Server"), ("instance", "1")],
+    )
+    .assert_finished();
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::pie::PieInstances>()
+            .focused
+            .as_ref(),
+        Some(&key("Server", 1))
+    );
+    assert_eq!(picker_caption(app).as_deref(), Some("Server"));
+
+    let runs = app
+        .world()
+        .resource::<jackdaw::run_config::RunConfigs>()
+        .manifest
+        .runs
+        .clone();
+    let names: Vec<String> = named_instances(&runs, &[key("Client", 2), key("Server", 1)])
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect();
+    assert_eq!(names, ["Server", "Client 2"], "the picker's list");
+}
+
+#[test]
+fn the_view_size_persists_and_sets_the_size_asked_of_the_game() {
+    let mut project = editor_on_a_project();
+    let root = project._dir.path().to_path_buf();
+    let app = &mut project.app;
+    let mut game = connect(app, key("Server", 1));
+    next(app, &mut game, |event| match event {
+        ControlEvent::StartFrameStream { .. } => Some(()),
+        _ => None,
+    });
+
+    call(app, "pie.view_aspect", &[("value", "16:9")]).assert_finished();
+    let (width, height) = next(app, &mut game, |event| match event {
+        ControlEvent::StartFrameStream { width, height } if width * 9 == height * 16 => {
+            Some((width, height))
+        }
+        _ => None,
+    });
+    assert_eq!(width % 64, 0, "{width}x{height}");
+
+    call(app, "pie.view_aspect", &[("value", "1280x720")]).assert_finished();
+    next(app, &mut game, |event| match event {
+        ControlEvent::StartFrameStream {
+            width: 1280,
+            height: 720,
+        } => Some(()),
+        _ => None,
+    });
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(jackdaw::project_settings::settings_path(&root))
+            .expect("the settings file"),
+    )
+    .expect("settings json");
+    assert_eq!(settings["play"]["view"], "1280x720");
+}
+
+#[test]
+fn mute_is_sent_to_a_game_as_it_connects_and_when_it_changes() {
+    let mut project = editor_on_a_project();
+    let app = &mut project.app;
+    call(app, "pie.mute", &[]).assert_finished();
+    assert!(
+        app.world()
+            .resource::<jackdaw::play_settings::PlaySettings>()
+            .muted
+    );
+
+    let mut game = connect(app, key("Server", 1));
+    next(app, &mut game, |event| {
+        (event == ControlEvent::SetMuted(true)).then_some(())
+    });
+
+    call(app, "pie.mute", &[]).assert_finished();
+    next(app, &mut game, |event| {
+        (event == ControlEvent::SetMuted(false)).then_some(())
+    });
+}
+
+/// Press Play with the build still running, then connect the game and stream
+/// frames until `done` holds or a few seconds of frames have gone by. A click
+/// in the editor lands after Play when `click` is set.
+fn play_and_stream(click: bool) -> bool {
+    let mut project = editor_on_a_project();
+    let app = &mut project.app;
+    jackdaw::pie::insert_build_in_progress(app.world_mut());
+    call(app, "pie.play", &[]).assert_finished();
+    if click {
+        let window = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
+        app.update();
+    }
+
+    let mut game = connect(app, key("Server", 1));
+    let until = Instant::now() + Duration::from_secs(3);
+    let mut seq = 0;
+    while Instant::now() < until {
+        seq += 1;
+        let pixels = vec![128; 64 * 64 * 4];
+        game.send(PieChannel::Frames, &encode_frame(64, 64, seq, &pixels));
+        app.update();
+        if app
+            .world()
+            .resource::<jackdaw::live_input::LiveInputCapture>()
+            .active
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+#[test]
+fn the_game_takes_input_on_its_first_frame_when_the_editor_was_left_alone() {
+    assert!(play_and_stream(false));
+}
+
+#[test]
+fn a_click_in_the_editor_while_the_game_starts_keeps_input_with_the_editor() {
+    assert!(!play_and_stream(true));
+}

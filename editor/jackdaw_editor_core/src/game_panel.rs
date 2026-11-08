@@ -1,6 +1,7 @@
 //! The Game panel: a dockable surface showing the focused instance's
-//! streamed frame. A click on the frame engages input capture. The panel is
-//! a pure monitor: no editor camera, no overlay, no compositing.
+//! streamed frame under a header of view controls (see
+//! [`crate::game_panel_header`]). A click on the frame engages input capture.
+//! The panel is a pure monitor: no editor camera, no overlay, no compositing.
 
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,7 @@ use jackdaw_feathers::tokens;
 
 use jackdaw_panels::tree::{DockTree, NodeId, TabId};
 
+use crate::game_panel_header::chip_node;
 use crate::live_frame::LiveFrameStream;
 use crate::pie::{GameExitReason, LastGameExit, PiePlayOp, PieToggleInstanceOp, PieWindowMode};
 
@@ -62,16 +64,6 @@ pub enum GameIdlePart {
 /// has gone quiet.
 #[derive(Component)]
 pub struct GameNoSignalChip;
-
-/// Marker on the "Playing, Shift+Esc to release" chip shown while input
-/// capture is forwarding to the game.
-#[derive(Component)]
-pub struct GamePlayingChip;
-
-/// Marker on the header button that toggles forwarding editor input to the
-/// running game.
-#[derive(Component)]
-pub struct GamePlayInputButton;
 
 /// Whether Play brought the Game panel forward, and the tab its dock showed
 /// before, so the end of the session can put that tab back. `failed` holds
@@ -136,9 +128,8 @@ fn surface_clicked(world: &mut World, surface: Entity) {
     }
 }
 
-/// Build the panel content: a header with the signal and playing chips and
-/// a Play-input button; below it a letterbox surface
-/// hosting the frame image and an idle label.
+/// Build the panel content: the header, and below it a letterbox surface
+/// hosting the frame image, the idle column and the capture hint.
 pub fn game_panel_content() -> impl Bundle {
     (
         GamePanel,
@@ -151,22 +142,7 @@ pub fn game_panel_content() -> impl Bundle {
         },
         BorderColor::all(Color::NONE),
         children![
-            (
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(tokens::SPACING_SM),
-                    padding: UiRect::axes(px(tokens::SPACING_SM), px(tokens::SPACING_XS)),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                },
-                children![
-                    game_no_signal_chip(),
-                    game_playing_chip(),
-                    game_play_input_button(),
-                    game_instance_button(),
-                ],
-            ),
+            crate::game_panel_header::game_panel_header(),
             (
                 GamePanelSurface,
                 Node {
@@ -193,6 +169,7 @@ pub fn game_panel_content() -> impl Bundle {
                         },
                     ),
                     game_panel_idle(),
+                    crate::game_panel_header::game_capture_flash(),
                 ],
             ),
         ],
@@ -302,17 +279,10 @@ fn game_panel_idle() -> impl Bundle {
 
 /// Build the "no signal" chip, shown while the focused instance's stream has
 /// gone quiet.
-fn game_no_signal_chip() -> impl Bundle {
+pub(crate) fn game_no_signal_chip() -> impl Bundle {
     (
         GameNoSignalChip,
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            display: Display::None,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
+        chip_node(),
         BackgroundColor(tokens::ELEVATED_BG),
         children![(
             Text::new("no signal"),
@@ -323,113 +293,6 @@ fn game_no_signal_chip() -> impl Bundle {
             TextColor(tokens::TEXT_DISABLED),
         )],
     )
-}
-
-/// Build the "Playing, Shift+Esc to release" chip, shown while input capture
-/// forwards editor input to the running game.
-fn game_playing_chip() -> impl Bundle {
-    (
-        GamePlayingChip,
-        Node {
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
-            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-            display: Display::None,
-            flex_shrink: 0.0,
-            ..Default::default()
-        },
-        BackgroundColor(tokens::ELEVATED_BG),
-        children![(
-            Text::new("Playing, Shift+Esc to release"),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(crate::default_style::CAPTURE_ACCENT),
-        )],
-    )
-}
-
-/// Build the button that toggles forwarding editor input to the running game.
-fn game_play_input_button() -> impl Bundle {
-    (
-        GamePlayInputButton,
-        jackdaw_feathers::tooltip::Tooltip::title(
-            "Forward keyboard and mouse to the running game (Shift+Esc releases)",
-        ),
-        button(ButtonProps::new("Play Input")),
-        observe(|_: On<PointerClick>, mut commands: Commands| {
-            commands
-                .operator(crate::live_input::PiePlayInputToggleOp::ID)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: false,
-                })
-                .call();
-        }),
-    )
-}
-
-/// Marker on the button naming the shown instance, there with several running.
-#[derive(Component)]
-pub struct GameInstanceButton;
-
-/// Build the button that steps the panel to the next running instance.
-fn game_instance_button() -> impl Bundle {
-    (
-        GameInstanceButton,
-        jackdaw_feathers::tooltip::Tooltip::title("Show the next running instance"),
-        button(ButtonProps::new("").hidden()),
-        observe(|_: On<PointerClick>, mut commands: Commands| {
-            commands
-                .operator(crate::pie::PieNextInstanceOp::ID)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: false,
-                })
-                .call();
-        }),
-        children![(
-            Text::new(String::new()),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-    )
-}
-
-/// Show the instance button with several instances running, naming the focused one.
-fn update_game_instance_button(
-    session: Option<NonSend<crate::pie::PieSession>>,
-    instances: Res<crate::pie::PieInstances>,
-    mut buttons: Query<(&mut Node, &Children), With<GameInstanceButton>>,
-    mut labels: Query<&mut Text>,
-) {
-    let several = session.is_some_and(|session| session.live_keys().len() > 1);
-    let display = if several {
-        Display::Flex
-    } else {
-        Display::None
-    };
-    let label = instances
-        .focused
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    for (mut node, children) in &mut buttons {
-        if node.display != display {
-            node.display = display;
-        }
-        for child in children.iter() {
-            if let Ok(mut text) = labels.get_mut(child)
-                && text.0 != label
-            {
-                text.0 = label.clone();
-            }
-        }
-    }
 }
 
 /// Point the frame image at the current stream and show it once a frame has
@@ -777,13 +640,12 @@ fn went_quiet(stream: &LiveFrameStream) -> bool {
     stream.has_frame() && !stream.is_fresh()
 }
 
-/// Drive the no-signal chip, the playing chip, and the capture accent border.
+/// Drive the no-signal chip and the capture accent border.
 fn update_game_panel_chips(
     capture: Res<crate::live_input::LiveInputCapture>,
     stream: Res<LiveFrameStream>,
     instances: Res<crate::pie::PieInstances>,
     mut no_signal: Query<&mut Node, With<GameNoSignalChip>>,
-    mut playing: Query<&mut Node, (With<GamePlayingChip>, Without<GameNoSignalChip>)>,
     mut roots: Query<&mut BorderColor, With<GamePanel>>,
 ) {
     let no_signal_display = if instances.focused.is_some() && went_quiet(&stream) {
@@ -794,16 +656,6 @@ fn update_game_panel_chips(
     for mut node in &mut no_signal {
         if node.display != no_signal_display {
             node.display = no_signal_display;
-        }
-    }
-    let playing_display = if capture.active {
-        Display::Flex
-    } else {
-        Display::None
-    };
-    for mut node in &mut playing {
-        if node.display != playing_display {
-            node.display = playing_display;
         }
     }
     let border = if capture.active {
@@ -831,7 +683,6 @@ impl Plugin for GamePanelPlugin {
                     update_game_panel_idle_label,
                     layout_game_panel_image,
                     update_game_panel_chips,
-                    update_game_instance_button,
                 ),
             );
     }
