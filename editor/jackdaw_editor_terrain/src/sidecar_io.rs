@@ -336,20 +336,38 @@ pub(crate) fn import_terrain_sidecars(
         }
         wanted.push((terrain.data_path.clone(), terrain.heights.is_empty()));
     }
-    match mode {
-        SidecarImport::Reload => {}
-        SidecarImport::FillMissing => {
-            let store = world.resource::<TerrainDataStore>();
-            wanted.retain(|(path, _)| !store.contains(path));
+    // Files written outside the editor over terrains with unsaved edits: those
+    // edits stand, and the user is asked whether to reload.
+    let mut changed_under_edits: Vec<(String, PathBuf)> = Vec::new();
+    if mode != SidecarImport::Reload {
+        let store = world.resource::<TerrainDataStore>();
+        wanted.retain(|(path, _)| {
+            if !store.contains(path) {
+                return true;
+            }
+            let Ok(full) = sidecar::resolve_path(&scene_dir, path) else {
+                return false;
+            };
+            let stale = full.is_file() && store.sidecar_is_stale(path, &full);
+            if stale && store.has_unsaved_edits(path) && !store.is_load_failed(path) {
+                changed_under_edits.push((path.clone(), full));
+                return false;
+            }
+            mode == SidecarImport::RefreshChanged && stale
+        });
+    }
+    for (data_path, full) in changed_under_edits {
+        if let Ok(mtime) = std::fs::metadata(&full).and_then(|meta| meta.modified()) {
+            world
+                .resource_mut::<TerrainDataStore>()
+                .note_seen(&data_path, mtime);
         }
-        SidecarImport::RefreshChanged => {
-            let store = world.resource::<TerrainDataStore>();
-            wanted.retain(|(path, _)| {
-                !store.contains(path)
-                    || sidecar::resolve_path(&scene_dir, path)
-                        .is_ok_and(|full| store.sidecar_is_stale(path, &full))
-            });
-        }
+        jackdaw_editor_core::scenes::external_watch::ask_about_changed_sidecar(
+            world,
+            Path::new(scene_path),
+            &full,
+            "Terrain Changed on Disk",
+        );
     }
     let assets = jackdaw_editor_core::asset_index::assets_dir(world);
     let mut imported: std::collections::HashSet<String> = std::collections::HashSet::new();

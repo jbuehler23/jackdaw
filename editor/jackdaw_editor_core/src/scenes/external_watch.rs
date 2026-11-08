@@ -69,9 +69,21 @@ pub struct ExternalSceneChange {
     pub tab_dirty: bool,
     /// Whether the tab holding it is a prefab tab, which changes the wording.
     pub tab_is_prefab: bool,
+    /// A file kept beside the document that changed on disk under unsaved
+    /// edits to it, when that is what this prompt is about.
+    pub sidecar: Option<ChangedSidecar>,
     /// Hash of the bytes this prompt was raised for. Answering records these
     /// rather than whatever is on disk by then.
     hash: u64,
+}
+
+/// A file kept beside a document, such as terrain data, that changed on disk
+/// while the editor held unsaved edits to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedSidecar {
+    pub file: PathBuf,
+    /// Dialog title naming what the file holds.
+    pub title: &'static str,
 }
 
 impl ExternalSceneChange {
@@ -80,9 +92,16 @@ impl ExternalSceneChange {
         file_name_of(&self.path)
     }
 
+    /// Whether reloading throws away edits not yet written.
+    pub fn discards_edits(&self) -> bool {
+        self.tab_dirty || self.sidecar.is_some()
+    }
+
     /// Dialog title, naming the kind of document the tab holds.
     pub fn title(&self) -> &'static str {
-        if self.tab_is_prefab {
+        if let Some(sidecar) = &self.sidecar {
+            sidecar.title
+        } else if self.tab_is_prefab {
             "Prefab Changed on Disk"
         } else {
             "Scene Changed on Disk"
@@ -91,7 +110,7 @@ impl ExternalSceneChange {
 
     /// Label on the button that takes what is on disk.
     pub fn action_label(&self) -> &'static str {
-        if self.tab_dirty {
+        if self.discards_edits() {
             "Reload (discards your unsaved changes)"
         } else {
             "Reload"
@@ -99,7 +118,15 @@ impl ExternalSceneChange {
     }
 
     pub fn description(&self) -> String {
-        if self.tab_dirty {
+        if let Some(sidecar) = &self.sidecar {
+            format!(
+                "{} changed on disk, and you have unsaved changes to it here. \
+                 Reload {} from disk, or keep yours and overwrite the file on the \
+                 next save?",
+                file_name_of(&sidecar.file),
+                self.file_name()
+            )
+        } else if self.tab_dirty {
             format!(
                 "{} changed on disk, and you have unsaved changes to it here. \
                  Reload from disk, or keep yours and overwrite the file on the \
@@ -176,6 +203,54 @@ pub fn note_known_hash(world: &mut World, path: &Path, hash: u64) {
     if let Some(mut state) = world.get_resource_mut::<ExternalWatchState>() {
         state.known.insert(key, hash);
     }
+}
+
+/// Ask whether to reload the tab holding `scene_path`, because `file`, kept
+/// beside it, changed on disk while the editor holds unsaved edits to it.
+/// Reloading re-reads the whole document; keeping leaves the edits for the next
+/// save to write. Nothing new is asked while that tab already has a prompt.
+pub fn ask_about_changed_sidecar(
+    world: &mut World,
+    scene_path: &Path,
+    file: &Path,
+    title: &'static str,
+) {
+    let path = canonical(scene_path);
+    let tab = world.get_resource::<Scenes>().and_then(|scenes| {
+        open_scene_tabs(scenes)
+            .into_iter()
+            .find(|tab| tab.path == path)
+    });
+    let hash = known_hash(world, &path)
+        .or_else(|| std::fs::read(&path).ok().map(|bytes| hash_bytes(&bytes)));
+    let asking = world.contains_resource::<ExternalSceneChanges>();
+    let (Some(tab), Some(hash), true) = (tab, hash, asking) else {
+        warn!(
+            "{} changed on disk; keeping the unsaved edits to it",
+            file.display()
+        );
+        return;
+    };
+    let mut changes = world.resource_mut::<ExternalSceneChanges>();
+    if changes.prompts.iter().any(|prompt| prompt.path == path) {
+        return;
+    }
+    info!(
+        "{} changed on disk under unsaved edits; offering a reload",
+        file.display()
+    );
+    changes.prompts.push(ExternalSceneChange {
+        path,
+        tab_index: tab.index,
+        tab_display_name: tab.display_name,
+        tab_dirty: tab.dirty,
+        tab_is_prefab: tab.is_prefab,
+        sidecar: Some(ChangedSidecar {
+            file: file.to_path_buf(),
+            title,
+        }),
+        hash,
+    });
 }
 
 /// Answer the prompt raised for `path`. An answer for a path with no open
@@ -558,6 +633,7 @@ fn drain_changes(world: &mut World) {
                 tab_display_name: tab.display_name,
                 tab_dirty: tab.dirty,
                 tab_is_prefab: tab.is_prefab,
+                sidecar: None,
                 hash,
             });
     }
@@ -610,7 +686,7 @@ fn present_front_prompt(world: &mut World) {
         .with_close_button(false)
         .with_close_on_click_outside(false);
     dialog.cancel = Some(KEEP_LABEL.to_string());
-    if change.tab_dirty {
+    if change.discards_edits() {
         dialog = dialog.with_variant(DialogVariant::Destructive);
     }
     world.commands().trigger(dialog);

@@ -611,6 +611,13 @@ impl TerrainDataStore {
         }
     }
 
+    /// Record that the file behind `data_path`, last modified at `mtime`, has
+    /// been seen without being read, so it stops reading as stale while the
+    /// unsaved edits stand.
+    pub fn note_seen(&mut self, data_path: &str, mtime: std::time::SystemTime) {
+        self.read_mtimes.insert(data_path.to_string(), mtime);
+    }
+
     /// Whether the file at `full` has been written since this store last read
     /// `data_path` from it.
     ///
