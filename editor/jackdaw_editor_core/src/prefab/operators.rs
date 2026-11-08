@@ -1608,6 +1608,7 @@ pub fn revert_all(world: &mut World, instance_root_node: Entity) -> RevertReport
         world
             .resource::<PrefabAstCache>()
             .baseline(&source)
+            .filter(|baseline| baseline.error().is_none())
             .map(|baseline| {
                 let prefab = baseline.document();
                 let mut baselines = Vec::new();
@@ -1843,7 +1844,10 @@ pub fn apply_to_prefab_source(
     };
 
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let applied = {
+    // The scene keeps its override unless the prefab took the value: an id the
+    // prefab only inherits has no entry in its file to write into.
+    let mut wrote = false;
+    let cached = {
         let reg = registry.read();
         world
             .resource_mut::<PrefabAstCache>()
@@ -1851,16 +1855,27 @@ pub fn apply_to_prefab_source(
                 let Some(target) =
                     prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(entity_id))
                 else {
-                    warn!("apply_to_prefab_source: PrefabEntityId({entity_id}) not in prefab");
                     return;
                 };
                 set_bsn_field(prefab, target, type_path, field_path, value, &reg);
+                wrote = true;
             })
     };
-    if !applied {
+    if !cached {
         warn!(
             "apply_to_prefab_source: prefab not cached: {}",
             source_path.display()
+        );
+        return;
+    }
+    if !wrote {
+        warn_caller(
+            world,
+            format!(
+                "prefab.apply_to_source: PrefabEntityId({entity_id}) is inherited by '{}', not \
+                 written in it, so the override stays on the instance",
+                source_path.display()
+            ),
         );
         return;
     }

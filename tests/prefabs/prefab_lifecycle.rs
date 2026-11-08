@@ -4423,6 +4423,63 @@ fn the_override_dots_of_a_root_inheriting_instance_mark_only_real_overrides() {
 }
 
 #[test]
+fn applying_all_keeps_an_override_on_an_id_the_prefab_only_inherits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, outer) = write_root_inheriting_prefabs(tmp.path());
+    let outer_text = std::fs::read_to_string(&outer).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &outer, bevy::math::Vec3::ZERO);
+
+    let light = <bevy::prelude::PointLight as bevy::reflect::TypePath>::type_path();
+    let knob = |app: &App| {
+        app.world()
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .find_node_by_component_int(PEID_TYPE, 7)
+            .expect("the knob materializes")
+    };
+    {
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let node = knob(&app);
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        jackdaw_bsn::set_bsn_field(
+            &mut ast,
+            node,
+            light,
+            "intensity",
+            jackdaw_bsn::BsnValue::Float(500.0),
+            &reg,
+        );
+    }
+    assert_eq!(
+        live_field_f64(&app, knob(&app), light, "intensity"),
+        Some(500.0),
+        "the override lands before the apply"
+    );
+
+    let instance = sole_isa_node(&app);
+    jackdaw::prefab::operators::apply_all_overrides_to_source(app.world_mut(), instance);
+
+    assert_eq!(
+        live_field_f64(&app, knob(&app), light, "intensity"),
+        Some(500.0),
+        "an override the prefab could not take stays on the instance"
+    );
+    let cached = app
+        .world()
+        .resource::<jackdaw::prefab::PrefabAstCache>()
+        .get(&outer)
+        .map(jackdaw_bsn::emit_scene)
+        .expect("the outer prefab stays cached");
+    assert_eq!(
+        cached,
+        jackdaw_bsn::emit_scene(&bsn_ast(&outer_text)),
+        "the outer prefab is unchanged"
+    );
+}
+
+#[test]
 fn an_override_on_a_root_inheriting_instance_is_saved_and_kept() {
     let tmp = tempfile::tempdir().unwrap();
     let (inner, outer) = write_root_inheriting_prefabs(tmp.path());

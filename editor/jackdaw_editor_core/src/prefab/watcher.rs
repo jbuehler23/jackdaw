@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -351,11 +352,15 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
     let instances: Vec<Entity> = {
         let live = world.resource::<jackdaw_bsn::SceneBsnAst>();
         let cache = world.resource::<PrefabAstCache>();
+        let mut affected: HashMap<crate::prefab::CanonicalPrefabPath, bool> = HashMap::new();
         live.entities_with_component(ISA_TYPE)
             .into_iter()
             .filter(|&node| {
-                crate::prefab::resolver_bsn::read_isa_source(live, node)
-                    .is_some_and(|source| cache.inherits_from(&source, &wanted))
+                crate::prefab::resolver_bsn::read_isa_source(live, node).is_some_and(|source| {
+                    *affected
+                        .entry(crate::prefab::canonical_prefab_path(&source))
+                        .or_insert_with_key(|source| cache.inherits_from(source.as_ref(), &wanted))
+                })
             })
             .collect()
     };

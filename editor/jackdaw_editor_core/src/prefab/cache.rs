@@ -68,7 +68,15 @@ impl PrefabAstCache {
         let entry = self.entries.get(&canonical_prefab_path(path))?;
         let baseline = entry.baseline.get_or_init(|| {
             let get_prefab = |p: &Path| self.get(p);
-            PrefabBaseline::new(&entry.ast, &get_prefab)
+            let baseline = PrefabBaseline::new(&entry.ast, &get_prefab);
+            if let Some(err) = baseline.error() {
+                warn!(
+                    "prefab {} does not resolve ({err}); its instances compare against it as \
+                     written",
+                    path.display()
+                );
+            }
+            baseline
         });
         Some(baseline.view(&entry.ast))
     }
@@ -111,7 +119,7 @@ impl PrefabAstCache {
     /// chains of the cached prefabs, at its root or in a nested instance.
     pub fn inherits_from(&self, source: &Path, ancestor: &CanonicalPrefabPath) -> bool {
         let mut stack = vec![canonical_prefab_path(source)];
-        let mut seen = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         while let Some(current) = stack.pop() {
             if current == *ancestor {
                 return true;
@@ -126,7 +134,7 @@ impl PrefabAstCache {
                     }
                 }
             }
-            seen.push(current);
+            seen.insert(current);
         }
         false
     }

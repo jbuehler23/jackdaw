@@ -547,16 +547,20 @@ pub struct PrefabBaseline {
     expanded: Option<SceneBsnAst>,
     root: Option<Entity>,
     ids: HashMap<u32, Entity>,
+    error: Option<ResolveError>,
 }
 
 impl PrefabBaseline {
     /// Expand `raw` against `get_prefab`. A prefab whose chain does not resolve
-    /// is compared as written.
+    /// is compared as written and keeps the error, see [`Self::error`].
     pub fn new(raw: &SceneBsnAst, get_prefab: &PrefabLookup) -> Self {
-        let expanded = if raw.entities_with_component(ISA_TYPE).is_empty() {
-            None
+        let (expanded, error) = if raw.entities_with_component(ISA_TYPE).is_empty() {
+            (None, None)
         } else {
-            resolve_scene(raw, get_prefab).ok()
+            match resolve_scene(raw, get_prefab) {
+                Ok(expanded) => (Some(expanded), None),
+                Err(error) => (None, Some(error)),
+            }
         };
         let document = expanded.as_ref().unwrap_or(raw);
         let root = document.roots.iter().copied().find(|root| {
@@ -576,7 +580,13 @@ impl PrefabBaseline {
             expanded,
             root,
             ids,
+            error,
         }
+    }
+
+    /// Why the prefab's `IsA` chain did not resolve, when it did not.
+    pub fn error(&self) -> Option<&ResolveError> {
+        self.error.as_ref()
     }
 
     /// This baseline read together with `raw`, the document it was built from.
@@ -585,6 +595,7 @@ impl PrefabBaseline {
             document: self.expanded.as_ref().unwrap_or(raw),
             root: self.root,
             ids: &self.ids,
+            error: self.error.as_ref(),
         }
     }
 }
@@ -595,6 +606,7 @@ pub struct Baseline<'a> {
     document: &'a SceneBsnAst,
     root: Option<Entity>,
     ids: &'a HashMap<u32, Entity>,
+    error: Option<&'a ResolveError>,
 }
 
 impl<'a> Baseline<'a> {
@@ -612,6 +624,12 @@ impl<'a> Baseline<'a> {
     /// the prefab's own ids and not those inside its nested instances.
     pub fn node(&self, id: u32) -> Option<Entity> {
         self.ids.get(&id).copied()
+    }
+
+    /// Why the prefab's `IsA` chain did not resolve, in which case the document
+    /// is the prefab as written.
+    pub fn error(&self) -> Option<&'a ResolveError> {
+        self.error
     }
 }
 
