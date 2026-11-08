@@ -26,6 +26,7 @@ mod new_asset;
 mod pixel_canvas;
 mod play_controls;
 mod play_open_scene;
+mod play_revert;
 mod play_saves_nothing;
 mod project_definitions;
 mod project_startup;

@@ -4,8 +4,10 @@
 //! executable as a child process, and drives it over an `ipc-channel`
 //! connection. Children send `StateEvent`s back and respond to
 //! `ControlEvent`s (Pause / Resume / Step / Stop). Stop reaps the children and leaves
-//! the scene document as it stands. Messages to a child leave on its own
-//! writer thread (`GameOutbox`), so the main thread never waits on a game.
+//! the scene document as it stands, unless the project's Play settings ask for
+//! the edits made during Play to be undone (see [`crate::play_revert`]). Messages
+//! to a child leave on its own writer thread (`GameOutbox`), so the main thread
+//! never waits on a game.
 //!
 //! Instances are keyed by [`InstanceKey`] (config label plus 1-based
 //! instance number). All run configurations of a project share one
@@ -488,6 +490,13 @@ pub struct PlayStatus {
     pub config: Option<String>,
 }
 
+/// Play moved from one [`PlayPhase`] to another.
+#[derive(Event, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayPhaseChanged {
+    pub from: PlayPhase,
+    pub to: PlayPhase,
+}
+
 /// The phase `state` and `session` add up to. Instances launched or waiting
 /// on a build while the state is still `Stopped` are starting up.
 pub(crate) fn play_phase(state: &PlayState, session: Option<&PieSession>) -> PlayPhase {
@@ -541,8 +550,16 @@ fn reconcile_play_status(world: &mut World) {
         _ => play_config(session, focused).filter(named),
     };
     let status = PlayStatus { phase, config };
-    if let Some(mut held) = world.get_resource_mut::<PlayStatus>() {
-        held.set_if_neq(status);
+    let Some(mut held) = world.get_resource_mut::<PlayStatus>() else {
+        return;
+    };
+    let was = held.phase;
+    held.set_if_neq(status);
+    if was != phase {
+        world.trigger(PlayPhaseChanged {
+            from: was,
+            to: phase,
+        });
     }
 }
 
@@ -929,6 +946,15 @@ pub fn insert_build_in_progress(world: &mut World) {
             progress: Arc::default(),
         },
     );
+}
+
+/// Fail the game builds in progress, dropping the launches waiting on them, for
+/// a test.
+#[doc(hidden)]
+pub fn fail_builds_in_progress(world: &mut World) {
+    for build in world.non_send_mut::<PieSession>().builds.values_mut() {
+        *build = BuildState::Failed { launch: true };
+    }
 }
 
 /// The launches waiting on a game build, for a test.

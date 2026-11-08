@@ -5,6 +5,7 @@
 //! it: the variables and arguments that point a launch at a particular server,
 //! identity or offline mode. They live with the rest of the project's editor
 //! preferences, which no project commits, and their values are never logged.
+//! The same section holds what becomes of edits made during Play.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -19,8 +20,9 @@ use jackdaw_feathers::tokens;
 
 const SECTION: &str = "play";
 
-/// Environment variables and arguments the editor adds to every game it
-/// launches for this project.
+/// One developer's Play preferences for this project: the environment variables
+/// and arguments the editor adds to every game it launches, and what becomes of
+/// the edits made during Play.
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PlaySettings {
@@ -29,6 +31,37 @@ pub struct PlaySettings {
     pub env: BTreeMap<String, String>,
     /// Arguments appended to the ones the run configuration names.
     pub args: Vec<String>,
+    /// What becomes of the edits made during Play once it stops.
+    pub edits: PlayEdits,
+}
+
+/// What becomes of the edits made during Play once the last game stops.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayEdits {
+    /// They stay in the documents.
+    #[default]
+    Keep,
+    /// Each document edited during Play goes back to where it stood when Play
+    /// started.
+    Revert,
+}
+
+impl PlayEdits {
+    fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "keep" => Some(Self::Keep),
+            "revert" => Some(Self::Revert),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Revert => "revert",
+        }
+    }
 }
 
 impl PlaySettings {
@@ -121,7 +154,47 @@ impl Plugin for PlaySettingsPlugin {
 }
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
-    ctx.register_operator::<PlaySettingsOp>();
+    ctx.register_operator::<PlaySettingsOp>()
+        .register_operator::<PlayEditsOp>();
+}
+
+/// Keep or revert the edits made during Play when it stops, or switch between
+/// the two when no mode is named.
+#[operator(
+    id = "play.edits",
+    writes_disk = true,
+    allows_undo = false,
+    label = "Revert Edits When Play Stops",
+    description = "Choose whether edits made during Play stay or are undone when the last game stops.",
+    params(mode(
+        String,
+        doc = "`keep` or `revert`; switches between them when left out."
+    ))
+)]
+pub fn play_edits(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    let named = match params.as_str("mode") {
+        Some(name) => match PlayEdits::parse(name) {
+            Some(mode) => Some(mode),
+            None => {
+                warn!("play.edits: unknown mode '{name}', expected keep or revert");
+                return OperatorResult::Cancelled;
+            }
+        },
+        None => None,
+    };
+    commands.queue(move |world: &mut World| {
+        let mode = {
+            let mut settings = world.resource_mut::<PlaySettings>();
+            settings.edits = named.unwrap_or(match settings.edits {
+                PlayEdits::Keep => PlayEdits::Revert,
+                PlayEdits::Revert => PlayEdits::Keep,
+            });
+            settings.edits
+        };
+        store(world);
+        info!("PIE: edits made during Play: {}", mode.name());
+    });
+    OperatorResult::Finished
 }
 
 /// Set the launch environment, or show it for editing when neither is named.
@@ -265,15 +338,20 @@ fn save_from_dialog(
     if open.is_none() || fields.is_empty() {
         return;
     }
-    let mut written = PlaySettings::default();
+    let mut env = None;
+    let mut args = None;
     for (field, value) in fields {
         match field {
-            PlaySettingsField::Env => written.env = parse_env(&value.0),
-            PlaySettingsField::Args => written.args = parse_args(&value.0),
+            PlaySettingsField::Env => env = Some(parse_env(&value.0)),
+            PlaySettingsField::Args => args = Some(parse_args(&value.0)),
         }
     }
     commands.queue(move |world: &mut World| {
-        *world.resource_mut::<PlaySettings>() = written;
+        {
+            let mut settings = world.resource_mut::<PlaySettings>();
+            settings.env = env.unwrap_or_default();
+            settings.args = args.unwrap_or_default();
+        }
         store(world);
     });
 }
@@ -297,6 +375,7 @@ mod tests {
         let settings = PlaySettings {
             env: parse_env("REALM=dev TOKEN=secret"),
             args: parse_args("--offline"),
+            ..Default::default()
         };
 
         assert_eq!(settings.env_line(), "REALM=dev TOKEN=secret");
@@ -322,7 +401,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(PlaySettings {
             env: parse_env("REALM=dev"),
-            args: Vec::new(),
+            ..Default::default()
         });
         app.insert_resource(PlaySettingsOpen);
         app.add_observer(save_from_dialog);
@@ -354,6 +433,7 @@ mod tests {
         world.insert_resource(PlaySettings {
             env: parse_env("REALM=dev"),
             args: parse_args("--offline"),
+            edits: PlayEdits::Revert,
         });
 
         store(&world);
@@ -364,6 +444,7 @@ mod tests {
 
         assert_eq!(read.env_line(), "REALM=dev");
         assert_eq!(read.args_line(), "--offline");
+        assert_eq!(read.edits, PlayEdits::Revert);
         assert!(
             crate::project_settings::settings_path(project.path())
                 .starts_with(project.path().join(".jackdaw")),
