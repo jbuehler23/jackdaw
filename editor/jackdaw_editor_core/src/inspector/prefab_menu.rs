@@ -291,11 +291,7 @@ fn resolve_prefab_value(
     type_path: &str,
 ) -> Option<BsnValue> {
     let (path, prefab_entity_id) = crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
-    let prefab = cache.get(&path)?;
-    let prefab_node = prefab.find_node_by_component_int(
-        "jackdaw::prefab::components::PrefabEntityId",
-        u64::from(prefab_entity_id),
-    )?;
+    let (prefab, prefab_node) = cache.baseline_entry(&path, prefab_entity_id)?;
     get_bsn_field(prefab, prefab_node, type_path, "")
 }
 

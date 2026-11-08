@@ -3,8 +3,8 @@
 //! what prefab entry it inherits from.
 //!
 //! Values compare through [`jackdaw_bsn::bsn_value_eq`], since
-//! [`jackdaw_bsn::BsnValue`] has no derived `PartialEq`. Prefabs are
-//! supplied through the same caller-owned lookup the resolver uses.
+//! [`jackdaw_bsn::BsnValue`] has no derived `PartialEq`. Baselines come from
+//! the prefab cache, expanded the way the save reduction reads them.
 
 use std::path::PathBuf;
 
@@ -13,8 +13,9 @@ use bevy::ecs::entity::Entity;
 use bevy::reflect::TypeRegistry;
 use jackdaw_bsn::{BsnValue, SceneBsnAst, bsn_value_eq, get_bsn_field, held_bsn_field};
 
+use crate::prefab::PrefabAstCache;
 use crate::prefab::resolver_bsn::{
-    ISA_TYPE, PREFAB_ENTITY_ID_TYPE, PrefabLookup, read_isa_source, read_prefab_entity_id,
+    ISA_TYPE, PREFAB_ENTITY_ID_TYPE, read_isa_source, read_prefab_entity_id,
 };
 
 /// True if `node` sits inside a prefab-instance subtree: it carries a
@@ -47,7 +48,7 @@ pub fn resolve_inheritance(ast: &SceneBsnAst, node: Entity) -> Option<(PathBuf, 
 /// (an addition).
 pub fn field_is_overridden(
     ast: &SceneBsnAst,
-    get_prefab: &PrefabLookup,
+    prefabs: &PrefabAstCache,
     node: Entity,
     type_path: &str,
     field_path: Option<&str>,
@@ -60,12 +61,7 @@ pub fn field_is_overridden(
     let Some((prefab_path, prefab_entity_id)) = resolve_inheritance(ast, node) else {
         return false;
     };
-    let Some(prefab) = get_prefab(&prefab_path) else {
-        return false;
-    };
-    let Some(prefab_node) =
-        prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(prefab_entity_id))
-    else {
+    let Some((prefab, prefab_node)) = prefabs.baseline_entry(&prefab_path, prefab_entity_id) else {
         return false;
     };
 
@@ -142,7 +138,6 @@ mod tests {
     use jackdaw_bsn::{
         BsnField, BsnPatch, BsnStructData, BsnStructFields, BsnTupleStructData, BsnValue,
     };
-    use std::path::Path;
 
     const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
     const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
@@ -211,10 +206,10 @@ mod tests {
         (scene, instance, child)
     }
 
-    fn lookup<'a>(
-        map: &'a std::collections::HashMap<PathBuf, SceneBsnAst>,
-    ) -> impl Fn(&Path) -> Option<&'a SceneBsnAst> {
-        move |p: &Path| map.get(p)
+    fn cache_holding(prefab: SceneBsnAst) -> PrefabAstCache {
+        let mut cache = PrefabAstCache::default();
+        cache.insert("prefab.bsn", prefab);
+        cache
     }
 
     #[test]
@@ -281,9 +276,7 @@ mod tests {
                 prefab.create_entity_node(vec![peid_patch(1), rows_patch(prefab_weight)]);
             prefab.add_to_roots(root);
             prefab.add_child_to_ast(root, prefab_child);
-            let mut prefabs = std::collections::HashMap::new();
-            prefabs.insert(PathBuf::from("prefab.bsn"), prefab);
-            let get = lookup(&prefabs);
+            let get = cache_holding(prefab);
 
             let mut scene = SceneBsnAst::default();
             let instance = scene.create_entity_node(vec![isa_patch("prefab.bsn")]);
@@ -308,9 +301,7 @@ mod tests {
 
     #[test]
     fn field_is_overridden_true_for_diverged_field() {
-        let mut prefabs = std::collections::HashMap::new();
-        prefabs.insert(PathBuf::from("prefab.bsn"), make_prefab());
-        let get = lookup(&prefabs);
+        let get = cache_holding(make_prefab());
 
         // Child overrides translation.y to 9.0 (baseline is 1.0).
         let (scene, _instance, child) = make_scene(vec3(0.0, 9.0, 0.0));
@@ -335,9 +326,7 @@ mod tests {
 
     #[test]
     fn field_is_overridden_false_for_inherited_field() {
-        let mut prefabs = std::collections::HashMap::new();
-        prefabs.insert(PathBuf::from("prefab.bsn"), make_prefab());
-        let get = lookup(&prefabs);
+        let get = cache_holding(make_prefab());
 
         // Child matches the baseline exactly.
         let (scene, _instance, child) = make_scene(vec3(0.0, 1.0, 0.0));
