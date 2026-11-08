@@ -1466,7 +1466,7 @@ fn author(
     {
         let _sparsify = info_span!("author.sparsify").entered();
         let cache = world.resource::<crate::prefab::PrefabAstCache>();
-        let get_prefab = |p: &Path| cache.get(p);
+        let get_baseline = |p: &Path| cache.baseline(p);
         let references = AssetReferences::new(world);
         let scene = world.get_resource::<jackdaw_bsn::BsnSceneAssets>();
         let filed_name = |reference: &str| {
@@ -1475,9 +1475,9 @@ fn author(
                 .get(reference.starts_with('@').then_some(reference)?)?;
             jackdaw_bsn::AssetNames::name_of(&references, handle.id())
         };
-        crate::prefab::resolver_bsn::sparsify_inherited_descendants(
+        crate::prefab::resolver_bsn::sparsify_against_baselines(
             &mut ast,
-            &get_prefab,
+            &get_baseline,
             &filed_name,
         );
     }

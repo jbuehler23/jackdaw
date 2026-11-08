@@ -860,7 +860,6 @@ fn field_is_overridden_detects_changed_field() {
              }",
         ),
     );
-    let get = |p: &std::path::Path| cache.get(p);
 
     let scene = bsn_ast(
         "jackdaw::prefab::components::IsA { source: \"p.bsn\" }\n\
@@ -875,7 +874,7 @@ fn field_is_overridden_detects_changed_field() {
 
     assert!(jackdaw::prefab::overrides_bsn::field_is_overridden(
         &scene,
-        &get,
+        &cache,
         instance,
         "bevy_transform::components::transform::Transform",
         None,
@@ -883,7 +882,7 @@ fn field_is_overridden_detects_changed_field() {
     ));
     assert!(jackdaw::prefab::overrides_bsn::field_is_overridden(
         &scene,
-        &get,
+        &cache,
         instance,
         "bevy_transform::components::transform::Transform",
         Some("translation"),
@@ -891,7 +890,7 @@ fn field_is_overridden_detects_changed_field() {
     ));
     assert!(!jackdaw::prefab::overrides_bsn::field_is_overridden(
         &scene,
-        &get,
+        &cache,
         instance,
         "bevy_transform::components::transform::Transform",
         Some("rotation"),
@@ -902,7 +901,6 @@ fn field_is_overridden_detects_changed_field() {
 #[test]
 fn field_is_overridden_returns_false_outside_isa_subtree() {
     let cache = jackdaw::prefab::PrefabAstCache::default();
-    let get = |p: &std::path::Path| cache.get(p);
     let scene = bsn_ast(
         "bevy_transform::components::transform::Transform {\n\
              translation: glam::Vec3 { x: 3.0, y: 0.0, z: 0.0 },\n\
@@ -911,7 +909,7 @@ fn field_is_overridden_returns_false_outside_isa_subtree() {
     let entity = scene.roots[0];
     assert!(!jackdaw::prefab::overrides_bsn::field_is_overridden(
         &scene,
-        &get,
+        &cache,
         entity,
         "bevy_transform::components::transform::Transform",
         None,
@@ -1276,10 +1274,9 @@ fn overridden(app: &bevy::prelude::App) -> bool {
     let node = sole_isa_node(app);
     let live = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
     let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
-    let get_prefab = |path: &std::path::Path| cache.get(path);
     jackdaw::prefab::overrides_bsn::field_is_overridden(
         live,
-        &get_prefab,
+        cache,
         node,
         BRUSH,
         Some("faces[0].uv_rotation"),
@@ -4305,6 +4302,123 @@ fn an_edit_to_an_inner_prefab_shows_through_a_root_inheriting_instance() {
     assert!(
         (knob_transform(&mut reopened).translation.x - 6.0).abs() < 1e-4,
         "the reopened knob shows the inner prefab's current position"
+    );
+}
+
+#[test]
+fn the_watcher_reloads_an_instance_whose_prefab_root_inherits_the_changed_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, outer) = write_root_inheriting_prefabs(tmp.path());
+
+    let mut app = make_app_for_prefab_tests();
+    app.add_plugins(jackdaw::prefab::watcher::PrefabWatcherPlugin);
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &inner,
+        bevy::math::Vec3::new(-10.0, 0.0, 0.0),
+    );
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &outer,
+        bevy::math::Vec3::new(10.0, 0.0, 0.0),
+    );
+    for _ in 0..6 {
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let scale_of = |app: &mut App, file: &str| {
+        let mut q = app
+            .world_mut()
+            .query::<(&Transform, &jackdaw::prefab::IsA)>();
+        q.iter(app.world())
+            .find(|(_, isa)| isa.source.ends_with(file))
+            .map(|(t, _)| t.scale.x)
+            .expect("the instance exists")
+    };
+
+    std::fs::write(&inner, inner_prefab_text(3.0, 5.0)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        app.update();
+        if (scale_of(&mut app, "inner.bsn") - 3.0).abs() < 1e-4 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        (scale_of(&mut app, "inner.bsn") - 3.0).abs() < 1e-4,
+        "the watcher reloaded the direct instance"
+    );
+    assert!(
+        (scale_of(&mut app, "outer.bsn") - 3.0).abs() < 1e-4,
+        "the outer instance shows the inner prefab's new scale; got {}",
+        scale_of(&mut app, "outer.bsn")
+    );
+
+    let text = saved_scene_text(&mut app);
+    let ast = bsn_ast(&text);
+    for node in ast.entities_with_component(ISA_TYPE) {
+        assert!(
+            jackdaw_bsn::get_bsn_field(&ast, node, TRANSFORM_TYPE, "scale").is_none(),
+            "no instance saves the inherited scale; got {text}"
+        );
+    }
+}
+
+#[test]
+fn the_override_dots_of_a_root_inheriting_instance_mark_only_real_overrides() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, outer) = write_root_inheriting_prefabs(tmp.path());
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &outer, bevy::math::Vec3::ZERO);
+
+    let overridden = |app: &App, node: Entity, field: &str| {
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        jackdaw::prefab::overrides_bsn::field_is_overridden(
+            app.world().resource::<jackdaw_bsn::SceneBsnAst>(),
+            app.world().resource::<jackdaw::prefab::PrefabAstCache>(),
+            node,
+            TRANSFORM_TYPE,
+            Some(field),
+            &registry,
+        )
+    };
+    let knob = |app: &App| {
+        app.world()
+            .resource::<jackdaw_bsn::SceneBsnAst>()
+            .find_node_by_component_int(PEID_TYPE, 7)
+            .expect("the knob materializes")
+    };
+
+    let root = sole_isa_node(&app);
+    assert!(
+        !overridden(&app, root, "scale"),
+        "the inherited scale is not marked"
+    );
+    assert!(
+        !overridden(&app, knob(&app), "translation.x"),
+        "the inherited knob position is not marked"
+    );
+
+    {
+        let registry = app.world().resource::<AppTypeRegistry>().clone();
+        let reg = registry.read();
+        let node = knob(&app);
+        let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+        jackdaw_bsn::set_bsn_field(
+            &mut ast,
+            node,
+            TRANSFORM_TYPE,
+            "translation.x",
+            jackdaw_bsn::BsnValue::Float(99.0),
+            &reg,
+        );
+    }
+    assert!(
+        overridden(&app, knob(&app), "translation.x"),
+        "an edit on the inherited knob is marked"
     );
 }
 

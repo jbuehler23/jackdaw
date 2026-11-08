@@ -1466,25 +1466,6 @@ fn holds_a_tilemap(world: &World, root: Entity) -> bool {
     false
 }
 
-/// The prefab document a baseline lookup must read, with the prefab's own
-/// `IsA` chain already expanded: the raw file carries only the ids the prefab
-/// itself authors, not the ones it inherits.
-fn expanded_prefab_source(world: &World, source: &Path) -> Option<SceneBsnAst> {
-    let cache = world.resource::<PrefabAstCache>();
-    let raw = cache.get(source)?;
-    let get_prefab = |p: &Path| cache.get(p);
-    match crate::prefab::resolver_bsn::resolve_scene(raw, &get_prefab) {
-        Ok(expanded) => Some(expanded),
-        Err(e) => {
-            warn!(
-                "prefab baseline: resolving source {} failed: {e}",
-                source.display()
-            );
-            None
-        }
-    }
-}
-
 /// The `IsA` source `node` inherits from, if any.
 fn instance_source_of(world: &World, node: Entity) -> Option<PathBuf> {
     let live = world.resource::<SceneBsnAst>();
@@ -1518,10 +1499,11 @@ fn resolve_prefab_value(
         let isa_node = live.ancestor_with_component(node, ISA_TYPE)?;
         (peid, read_isa_source(live, isa_node)?)
     };
-    let prefab = expanded_prefab_source(world, &source)?;
-    let prefab_node = prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(peid))?;
+    let (prefab, prefab_node) = world
+        .resource::<PrefabAstCache>()
+        .baseline_entry(&source, peid)?;
     let registry = world.resource::<AppTypeRegistry>().read();
-    jackdaw_bsn::held_bsn_field(&prefab, prefab_node, type_path, field_path, &registry)
+    jackdaw_bsn::held_bsn_field(prefab, prefab_node, type_path, field_path, &registry)
 }
 
 /// Revert one component field on a prefab-instance entity to its inherited
@@ -1617,13 +1599,42 @@ pub fn revert_all(world: &mut World, instance_root_node: Entity) -> RevertReport
         }
     }
 
-    // Expanded once and reused for every target: doing it per node would
-    // re-resolve the whole `IsA` chain for each entity. Baselines are read
-    // under an immutable borrow and applied afterwards, so the cache is
-    // never cloned.
+    // Baselines are read under an immutable borrow and applied afterwards, so
+    // the cache is never cloned.
     prime_source_ancestry(world, &source);
-    let expanded = expanded_prefab_source(world, &source);
-    let Some(prefab) = expanded else {
+    let mut unresolved: Vec<u32> = Vec::new();
+    let baselines: Option<Vec<(Entity, Vec<(String, BsnValue)>)>> = {
+        let live = world.resource::<SceneBsnAst>();
+        world
+            .resource::<PrefabAstCache>()
+            .baseline(&source)
+            .map(|baseline| {
+                let prefab = baseline.document();
+                let mut baselines = Vec::new();
+                for node in targets {
+                    let Some(peid) = read_prefab_entity_id(live, node) else {
+                        continue;
+                    };
+                    let Some(prefab_node) =
+                        prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(peid))
+                    else {
+                        unresolved.push(peid);
+                        continue;
+                    };
+                    let comps: Vec<(String, BsnValue)> = prefab
+                        .component_type_paths(prefab_node)
+                        .into_iter()
+                        .filter(|tp| tp != PREFAB_TYPE)
+                        .filter_map(|tp| {
+                            get_bsn_field(prefab, prefab_node, &tp, "").map(|v| (tp, v))
+                        })
+                        .collect();
+                    baselines.push((node, comps));
+                }
+                baselines
+            })
+    };
+    let Some(baselines) = baselines else {
         warn!(
             "revert_all: prefab source {} did not resolve; nothing was reverted",
             source.display()
@@ -1636,31 +1647,6 @@ pub fn revert_all(world: &mut World, instance_root_node: Entity) -> RevertReport
             ),
         );
         return RevertReport::default();
-    };
-
-    let mut unresolved: Vec<u32> = Vec::new();
-    let baselines: Vec<(Entity, Vec<(String, BsnValue)>)> = {
-        let live = world.resource::<SceneBsnAst>();
-        let mut baselines = Vec::new();
-        for node in targets {
-            let Some(peid) = read_prefab_entity_id(live, node) else {
-                continue;
-            };
-            let Some(prefab_node) =
-                prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(peid))
-            else {
-                unresolved.push(peid);
-                continue;
-            };
-            let comps: Vec<(String, BsnValue)> = prefab
-                .component_type_paths(prefab_node)
-                .into_iter()
-                .filter(|tp| tp != PREFAB_TYPE)
-                .filter_map(|tp| get_bsn_field(&prefab, prefab_node, &tp, "").map(|v| (tp, v)))
-                .collect();
-            baselines.push((node, comps));
-        }
-        baselines
     };
     let report = RevertReport {
         reverted: baselines.len(),
@@ -1965,9 +1951,10 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Enti
     {
         let live = world.resource::<SceneBsnAst>();
         let cache = world.resource::<PrefabAstCache>();
-        let Some(prefab) = cache.get(&prefab_path) else {
+        let Some(baseline) = cache.baseline(&prefab_path) else {
             return;
         };
+        let prefab = baseline.document();
 
         let mut pairs: Vec<(Entity, u32)> = Vec::new();
         if let Some(id) = read_prefab_entity_id(live, instance_root_node) {
@@ -1980,9 +1967,7 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Enti
         }
 
         for (node, peid) in pairs {
-            let Some(prefab_node) =
-                prefab.find_node_by_component_int(PREFAB_ENTITY_ID_TYPE, u64::from(peid))
-            else {
+            let Some(prefab_node) = baseline.node(peid) else {
                 continue;
             };
             for tp in live.component_type_paths(node) {

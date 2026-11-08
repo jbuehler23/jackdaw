@@ -966,14 +966,8 @@ fn build_inspector_cards(
             let Some(node) = ast.ast_for(source_entity) else {
                 return false;
             };
-            let get_prefab = |p: &std::path::Path| cache.get(p);
             crate::prefab::overrides_bsn::field_is_overridden(
-                ast,
-                &get_prefab,
-                node,
-                type_path,
-                None,
-                &registry,
+                ast, cache, node, type_path, None, &registry,
             )
         });
 

@@ -346,18 +346,21 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
         };
         jackdaw_bsn::entity_roots(live, &reg)
     };
+    // An instance of a prefab that inherits from the changed one is affected
+    // too, though its own `IsA` names only its prefab.
     let instances: Vec<Entity> = {
         let live = world.resource::<jackdaw_bsn::SceneBsnAst>();
+        let cache = world.resource::<PrefabAstCache>();
         live.entities_with_component(ISA_TYPE)
             .into_iter()
             .filter(|&node| {
                 crate::prefab::resolver_bsn::read_isa_source(live, node)
-                    .is_some_and(|source| crate::prefab::canonical_prefab_path(source) == wanted)
+                    .is_some_and(|source| cache.inherits_from(&source, &wanted))
             })
             .collect()
     };
-    // A prefab only another prefab references has no instance node here; the
-    // whole-scene path picks it up through the cache.
+    // A prefab only another prefab's nested instances reference has no
+    // instance node here; the whole-scene path picks it up through the cache.
     if instances.is_empty() {
         return PrefabReload::Unhandled;
     }
@@ -398,9 +401,14 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
         let Some(&counterpart) = resolved_roots.get(index) else {
             return PrefabReload::Unhandled;
         };
-        if crate::prefab::resolver_bsn::read_isa_source(&resolved, counterpart)
-            .is_none_or(|source| crate::prefab::canonical_prefab_path(source) != wanted)
-        {
+        let live_source = crate::prefab::resolver_bsn::read_isa_source(
+            world.resource::<jackdaw_bsn::SceneBsnAst>(),
+            node,
+        )
+        .map(crate::prefab::canonical_prefab_path);
+        let resolved_source = crate::prefab::resolver_bsn::read_isa_source(&resolved, counterpart)
+            .map(crate::prefab::canonical_prefab_path);
+        if live_source.is_none() || live_source != resolved_source {
             return PrefabReload::Unhandled;
         }
         pairs.push((node, counterpart));

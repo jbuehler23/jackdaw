@@ -72,15 +72,10 @@ pub(crate) fn inspector_type_paths_for(
         }
         current = parent;
     };
-    let Some(prefab) = prefab_cache.get(&isa_source) else {
-        return HashSet::new();
-    };
-    let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
-    if let Some(node) = prefab.find_node_by_component_int(prefab_entity_id_type, u64::from(peid.0))
-    {
-        return prefab.component_type_paths(node).into_iter().collect();
-    }
-    HashSet::new()
+    prefab_cache
+        .baseline_entry(&isa_source, peid.0)
+        .map(|(prefab, node)| prefab.component_type_paths(node).into_iter().collect())
+        .unwrap_or_default()
 }
 
 /// Revert a single component on a prefab instance back to its baseline value.
@@ -175,10 +170,9 @@ pub(crate) fn decorate_prefab_field_rows(
         if !crate::prefab::overrides_bsn::is_inside_prefab_instance(&ast, node) {
             continue;
         }
-        let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
         let overridden = crate::prefab::overrides_bsn::field_is_overridden(
             &ast,
-            &get_prefab,
+            &prefab_cache,
             node,
             &row.type_path,
             Some(&row.field_path),
@@ -326,14 +320,13 @@ pub(crate) fn refresh_prefab_field_dots(
         return;
     }
     let registry = type_registry.read();
-    let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
     for (dot, mut bg) in &mut dots {
         let Some(node) = ast.ast_for(dot.entity) else {
             continue;
         };
         let overridden = crate::prefab::overrides_bsn::field_is_overridden(
             &ast,
-            &get_prefab,
+            &prefab_cache,
             node,
             &dot.type_path,
             Some(&dot.field_path),
