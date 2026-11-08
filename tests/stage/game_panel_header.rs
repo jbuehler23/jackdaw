@@ -444,3 +444,141 @@ fn a_popped_out_game_shows_where_it_went_instead_of_its_last_frame() {
         .map(|text| text.0.clone());
     assert_eq!(label.as_deref(), Some("Running in its own window"));
 }
+
+fn launch_mode(app: &App, key: &InstanceKey) -> Option<jackdaw::pie::PieWindowMode> {
+    app.world()
+        .non_send::<jackdaw::pie::PieSession>()
+        .launch_mode(key)
+}
+
+fn window_mode(app: &App) -> jackdaw::pie::PieWindowMode {
+    *app.world().resource::<jackdaw::pie::PieWindowMode>()
+}
+
+fn focused(app: &App) -> Option<InstanceKey> {
+    app.world()
+        .resource::<jackdaw::pie::PieInstances>()
+        .focused
+        .clone()
+}
+
+/// A built game that starts and never connects, held as the project's build.
+#[cfg(unix)]
+fn insert_idle_built_game(project: &mut Project) {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = project._dir.path().join("game.sh");
+    std::fs::write(&binary, "#!/bin/sh\nexec sleep 600\n").expect("a game script");
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable game");
+    jackdaw::pie::insert_built_game(project.app.world_mut(), binary);
+}
+
+/// Server launched in the Game panel and Client in its own window, both live.
+fn server_in_panel_client_in_window(app: &mut App) -> (IpcChannelTransport, IpcChannelTransport) {
+    let server = connect(app, key("Server", 1));
+    call(app, "pie.window_mode_toggle", &[]).assert_finished();
+    let client = connect(app, key("Client", 1));
+    app.update();
+    app.update();
+    (server, client)
+}
+
+#[test]
+fn popping_out_while_the_game_builds_is_refused_and_play_carries_on() {
+    let mut project = editor_on_a_project();
+    let app = &mut project.app;
+    let _game = connect(app, key("Server", 1));
+    app.update();
+    app.update();
+    jackdaw::pie::insert_build_in_progress(app.world_mut());
+
+    call(app, "pie.pop_out", &[]).assert_finished();
+    app.update();
+    assert_eq!(window_mode(app), jackdaw::pie::PieWindowMode::Embedded);
+    assert_eq!(
+        launch_mode(app, &key("Server", 1)),
+        Some(jackdaw::pie::PieWindowMode::Embedded),
+        "the game keeps running where it was"
+    );
+    assert_eq!(jackdaw::pie::play_status(app.world()), "running");
+}
+
+#[test]
+fn a_relaunch_that_fails_to_start_keeps_the_old_game_running() {
+    let mut project = editor_on_a_project();
+    let missing = project._dir.path().join("no-such-game");
+    let app = &mut project.app;
+    let _game = connect(app, key("Server", 1));
+    app.update();
+    app.update();
+    jackdaw::pie::insert_built_game(app.world_mut(), missing);
+
+    call(app, "pie.pop_out", &[]).assert_finished();
+    app.update();
+    assert_eq!(
+        launch_mode(app, &key("Server", 1)),
+        Some(jackdaw::pie::PieWindowMode::Embedded)
+    );
+    assert_eq!(jackdaw::pie::play_status(app.world()), "running");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_game_brought_into_the_panel_keeps_the_focus_and_takes_input() {
+    let mut project = editor_on_a_project();
+    insert_idle_built_game(&mut project);
+    let app = &mut project.app;
+    let _games = server_in_panel_client_in_window(app);
+    call(
+        app,
+        "pie.focus_instance",
+        &[("config", "Client"), ("instance", "1")],
+    )
+    .assert_finished();
+
+    call(app, "pie.pop_out", &[]).assert_finished();
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(
+        launch_mode(app, &key("Client", 1)),
+        Some(jackdaw::pie::PieWindowMode::Embedded)
+    );
+    assert_eq!(
+        focused(app),
+        Some(key("Client", 1)),
+        "its relaunch keeps the focus"
+    );
+    assert!(
+        app.world()
+            .resource::<jackdaw::live_input::FirstFrameCapture>()
+            .is_armed()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bringing_another_game_into_the_panel_leaves_the_focused_one_without_capture() {
+    let mut project = editor_on_a_project();
+    insert_idle_built_game(&mut project);
+    let app = &mut project.app;
+    let _games = server_in_panel_client_in_window(app);
+    call(
+        app,
+        "pie.focus_instance",
+        &[("config", "Server"), ("instance", "1")],
+    )
+    .assert_finished();
+
+    call(app, "pie.pop_out", &[]).assert_finished();
+    assert_eq!(
+        launch_mode(app, &key("Client", 1)),
+        Some(jackdaw::pie::PieWindowMode::Embedded)
+    );
+    assert_eq!(focused(app), Some(key("Server", 1)));
+    assert!(
+        !app.world()
+            .resource::<jackdaw::live_input::FirstFrameCapture>()
+            .is_armed()
+    );
+}

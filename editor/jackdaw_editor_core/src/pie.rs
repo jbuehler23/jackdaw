@@ -1261,21 +1261,40 @@ pub(crate) fn pie_window_mode_toggle(
 )]
 pub(crate) fn pie_pop_out(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
-        let mode = toggle_and_store_window_mode(world);
-        relaunch_in_window_mode(world, mode);
+        let mut target = world
+            .get_resource::<PieWindowMode>()
+            .copied()
+            .unwrap_or_default();
+        toggle_window_mode(&mut target);
+        let plan = match plan_relaunch(world, target) {
+            Ok(plan) => plan,
+            Err(reason) => {
+                crate::status_bar::notify_warn(world, reason);
+                return;
+            }
+        };
+        toggle_and_store_window_mode(world);
+        if let Some(plan) = plan {
+            relaunch(world, target, plan);
+        }
     });
     OperatorResult::Finished
 }
 
-/// Relaunch the instances launched in the other window mode in `mode`, from
-/// the game already built. Play carries on through the move, so it counts as
-/// no stop and its edits stay. A game coming back into the Game panel takes
-/// input on its first frame, as a launch does.
-pub(crate) fn relaunch_in_window_mode(world: &mut World, mode: PieWindowMode) {
+/// The running instances to relaunch in another window mode, and the built game
+/// to relaunch them from.
+pub(crate) struct RelaunchPlan {
+    moving: Vec<(InstanceKey, RunConfig)>,
+    binary: PathBuf,
+}
+
+/// What moving the running instances to `mode` needs: `None` when none run in
+/// the other mode, or why they cannot move now.
+fn plan_relaunch(world: &World, mode: PieWindowMode) -> Result<Option<RelaunchPlan>, String> {
     let Some(session) = world.get_non_send::<PieSession>() else {
-        return;
+        return Ok(None);
     };
-    let moving: Vec<InstanceKey> = session
+    let mut keys: Vec<InstanceKey> = session
         .children
         .keys()
         .filter(|key| {
@@ -1285,35 +1304,53 @@ pub(crate) fn relaunch_in_window_mode(world: &mut World, mode: PieWindowMode) {
         })
         .cloned()
         .collect();
-    if moving.is_empty() {
-        return;
+    if keys.is_empty() {
+        return Ok(None);
     }
-    let Some(manifest) = world
-        .get_resource::<RunConfigs>()
-        .map(|configs| configs.manifest.clone())
-    else {
-        warn!("PIE: cannot move the game, run configurations are not loaded");
-        return;
-    };
-    let built = project_root(world).and_then(|root| match session.builds.get(&root) {
+    keys.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
+    let binary = project_root(world).and_then(|root| match session.builds.get(&root) {
         Some(BuildState::Done(binary)) => Some(binary.clone()),
         _ => None,
     });
-    if mode == PieWindowMode::Embedded {
-        crate::live_input::arm_first_frame_capture(world);
+    let Some(binary) = binary else {
+        return Err(
+            "The game cannot move while it is being built. Try again once the build is done."
+                .to_string(),
+        );
+    };
+    let Some(manifest) = world
+        .get_resource::<RunConfigs>()
+        .map(|configs| &configs.manifest)
+    else {
+        return Err("The game cannot move: the run configurations are not loaded.".to_string());
+    };
+    let mut moving = Vec::with_capacity(keys.len());
+    for key in keys {
+        let Some(run) = manifest.run_by_name(&key.config).cloned() else {
+            return Err(format!(
+                "The game cannot move: no run configuration is named '{}'.",
+                key.config
+            ));
+        };
+        moving.push((key, run));
     }
+    Ok(Some(RelaunchPlan { moving, binary }))
+}
+
+/// Relaunch the planned instances in `mode` from the game already built, each
+/// with the scene it launched with. The new process starts before the old one
+/// ends, so a failed start leaves the old one running. Play carries on through
+/// the move, so it counts as no stop and its edits stay. The focused game
+/// coming into the Game panel takes input on its first frame, as a launch does.
+fn relaunch(world: &mut World, mode: PieWindowMode, plan: RelaunchPlan) {
     let focused = world
         .get_resource::<PieInstances>()
-        .and_then(|instances| instances.focused.as_ref());
-    if focused.is_some_and(|focused| moving.contains(focused)) {
-        crate::live_frame::clear_stream(world);
-    }
-    for key in moving {
-        let Some(run) = manifest.run_by_name(&key.config).cloned() else {
-            warn!(
-                "PIE: cannot move {key}, no run configuration '{}'",
-                key.config
-            );
+        .and_then(|instances| instances.focused.clone());
+    let mut failed = Vec::new();
+    let mut focus_moved = false;
+    for (key, run) in plan.moving {
+        let Some((stage, launched)) = spawn_instance(world, &key, &run, &plan.binary) else {
+            failed.push(key.to_string());
             continue;
         };
         let scene = world
@@ -1322,10 +1359,29 @@ pub(crate) fn relaunch_in_window_mode(world: &mut World, mode: PieWindowMode) {
             .get(&key)
             .cloned();
         retire_instance(world, &key);
-        match &built {
-            Some(binary) => spawn_from_binary(world, key, &run, scene, binary),
-            None => launch_instance(world, key, run),
+        focus_moved |= focused.as_ref() == Some(&key);
+        {
+            let mut session = world.non_send_mut::<PieSession>();
+            session.launch_modes.insert(key.clone(), launched);
+            session.note_launch_scene(&key, scene);
+            session.children.insert(key, stage);
         }
+        crate::viewport_redraw::note_game_started(world);
+    }
+    if focus_moved {
+        crate::live_frame::clear_stream(world);
+        if mode == PieWindowMode::Embedded {
+            crate::live_input::arm_first_frame_capture(world);
+        }
+    }
+    if !failed.is_empty() {
+        crate::status_bar::notify_error(
+            world,
+            format!(
+                "Could not relaunch {} in the new place; it keeps running where it was.",
+                failed.join(", ")
+            ),
+        );
     }
 }
 
@@ -2040,9 +2096,12 @@ pub(crate) fn pie_next_instance(
 /// Keep focus on a connected instance: the first to connect takes it, and a
 /// focused instance that has gone hands it on.
 fn reconcile_focus(world: &mut World) {
-    let mut live = world.non_send::<PieSession>().live_keys();
+    let session = world.non_send::<PieSession>();
+    let mut live = session.live_keys();
     let focused = world.resource::<PieInstances>().focused.as_ref();
-    if focused.is_some_and(|key| live.contains(key)) {
+    // A focused instance still connecting, as one relaunched in another
+    // window mode is, keeps the focus until it connects.
+    if focused.is_some_and(|key| session.children.contains_key(key)) {
         return;
     }
     live.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
