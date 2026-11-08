@@ -6,8 +6,9 @@ use bevy::prelude::*;
 use jackdaw::project::{ProjectConfig, ProjectRoot};
 use jackdaw::remote::server::{
     apply_bsn_handler, assets_handler, batch_handler, call_operator_handler, cancel_handler,
-    entity_handler, operators_handler, publish_endpoint, retract_endpoint, scene_tree_handler,
-    screenshot_handler, status_handler, wait_handler,
+    entity_handler, game_entities_handler, game_entity_handler, game_query_handler,
+    operators_handler, publish_endpoint, retract_endpoint, scene_tree_handler, screenshot_handler,
+    status_handler, wait_handler,
 };
 use jackdaw_api_internal::operator::OperatorWorldExt as _;
 use jackdaw_commands::CommandHistory;
@@ -2328,4 +2329,133 @@ fn an_abandoned_aim_puts_the_camera_back_only_if_nobody_moved_it() {
     app.world_mut().entity_mut(camera).insert(users);
     expire_pending(&mut app);
     assert_eq!(*app.world().get::<Transform>(camera).unwrap(), users);
+}
+
+/// Run a watching handler once, as one poll of the HTTP layer.
+fn poll_once<M>(
+    app: &mut App,
+    handler: impl bevy::ecs::system::IntoSystem<
+        In<Option<Value>>,
+        bevy::remote::BrpResult<Option<Value>>,
+        M,
+    > + 'static,
+    params: Value,
+) -> bevy::remote::BrpResult<Option<Value>> {
+    app.world_mut()
+        .run_system_cached_with(handler, Some(params))
+        .expect("the handler ran")
+}
+
+#[test]
+fn the_game_methods_refuse_with_no_game_running() {
+    let (mut app, _dir) = editor_with_a_project();
+    for refused in [
+        poll_once(&mut app, game_entities_handler, json!({})),
+        poll_once(&mut app, game_entity_handler, json!({ "node": 7 })),
+        poll_once(
+            &mut app,
+            game_query_handler,
+            json!({ "with": "game::Speed" }),
+        ),
+    ] {
+        let err = refused.expect_err("no game is running");
+        assert!(
+            err.message.contains("no game is running"),
+            "{}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn the_game_methods_answer_with_what_the_game_replies() {
+    use jackdaw_pie_protocol::event::{from_bytes, to_bytes};
+    use jackdaw_pie_protocol::{
+        ControlEvent, GameEntities, GameEntity, GameEntityRef, GameQuery, PieChannel,
+        PieTransport as _, StateEvent,
+    };
+    use std::time::{Duration, Instant};
+
+    let (mut app, _dir) = editor_with_a_project();
+    let (server, name) = jackdaw_pie_protocol::serve().expect("a rendezvous");
+    let accept = std::thread::spawn(move || server.accept());
+    let mut game_end = jackdaw_pie_protocol::connect(&name).expect("the game connects");
+    let editor_end = accept
+        .join()
+        .expect("accept ran")
+        .expect("the editor accepts");
+    let child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .arg("--list")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("a child process");
+    let key = jackdaw::pie::InstanceKey {
+        config: "Game".to_string(),
+        instance: 1,
+    };
+    jackdaw::pie::connect_test_game(app.world_mut(), key, child, editor_end).expect("a link");
+
+    let spark = GameEntity {
+        entity: 42,
+        name: Some("Spark".to_string()),
+        parent: None,
+        node: None,
+        components: vec![("game::Speed".to_string(), json!(2.0))],
+        opaque: Vec::new(),
+    };
+    let params = json!({ "entity": 42, "request": "spark" });
+    assert_eq!(
+        poll_once(&mut app, game_entity_handler, params.clone()).expect("asked"),
+        None,
+        "the answer is not in yet"
+    );
+
+    let until = Instant::now() + Duration::from_secs(30);
+    let request = loop {
+        assert!(
+            Instant::now() < until,
+            "the question never reached the game"
+        );
+        if let Some((_, bytes)) = game_end.drain_received().into_iter().next() {
+            match from_bytes::<ControlEvent>(&bytes).expect("a control event") {
+                ControlEvent::Query { request, query } => {
+                    assert_eq!(query, GameQuery::Entity(GameEntityRef::Entity(42)));
+                    break request;
+                }
+                other => panic!("expected the question, got {other:?}"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let answer = StateEvent::QueryAnswer {
+        request,
+        answer: Ok(GameEntities {
+            entities: vec![spark.clone()],
+            truncated: false,
+        }),
+    };
+    game_end.send(PieChannel::Reliable, &to_bytes(&answer).expect("encode"));
+
+    let answered = loop {
+        assert!(Instant::now() < until, "the answer never came back");
+        jackdaw::pie::drain_game_events(app.world_mut());
+        if let Some(answered) =
+            poll_once(&mut app, game_entity_handler, params.clone()).expect("an answer")
+        {
+            break answered;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(answered, json!({ "entities": [spark], "truncated": false }));
+
+    assert_eq!(
+        poll_once(&mut app, game_entity_handler, params).expect("the trailing poll"),
+        None
+    );
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        game_end.drain_received().is_empty(),
+        "the poll after the answer asks the game nothing"
+    );
 }

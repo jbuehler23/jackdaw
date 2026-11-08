@@ -31,6 +31,7 @@ use path_slash::PathExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use jackdaw_editor_core::game_query::{GameEntityRef, GameQueries, GameQuery, ask_game};
 use jackdaw_editor_core::project::ProjectRoot;
 use jackdaw_editor_core::scenes::Scenes;
 use jackdaw_editor_core::screenshot::CaptureError;
@@ -184,7 +185,10 @@ impl Plugin for JackdawEditorRemotePlugin {
                     .with_watching_method_main("jackdaw/assets", assets_handler)
                     .with_watching_method_main("jackdaw/screenshot", screenshot_handler)
                     .with_watching_method_main("jackdaw/views", views_handler)
-                    .with_watching_method_main("jackdaw/wait", wait_handler),
+                    .with_watching_method_main("jackdaw/wait", wait_handler)
+                    .with_watching_method_main("jackdaw/game_entities", game_entities_handler)
+                    .with_watching_method_main("jackdaw/game_entity", game_entity_handler)
+                    .with_watching_method_main("jackdaw/game_query", game_query_handler),
             )
             // No CORS headers: allowing an origin would hand any page served on
             // loopback write access to the open scene.
@@ -764,7 +768,7 @@ pub fn assets_handler(
 ) -> BrpResult<Option<Value>> {
     check_enabled(world)?;
     let params = params.unwrap_or(Value::Null);
-    let key = request_key(&params);
+    let key = request_key("jackdaw/assets", &params);
     let frame = current_frame(world);
     expire_stale(world, frame);
 
@@ -1018,7 +1022,7 @@ pub fn screenshot_handler(
         .and_then(Value::as_str)
         .unwrap_or("viewport")
         .to_string();
-    let key = request_key(&params);
+    let key = request_key("jackdaw/screenshot", &params);
 
     let frame = current_frame(world);
     expire_stale(world, frame);
@@ -1341,7 +1345,7 @@ fn default_capture_path(world: &World, kind: &str) -> PathBuf {
 pub fn views_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult<Option<Value>> {
     check_enabled(world)?;
     let params = params.unwrap_or(Value::Null);
-    let key = request_key(&params);
+    let key = request_key("jackdaw/views", &params);
     let frame = current_frame(world);
     expire_stale(world, frame);
 
@@ -1820,7 +1824,7 @@ pub fn wait_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
     }
 
     let frames = params.get("frames").and_then(Value::as_u64).unwrap_or(1) as u32;
-    let key = request_key(&params);
+    let key = request_key("jackdaw/wait", &params);
     let mut waits = world.get_resource_or_init::<PendingWaits>();
     // The frame the wait is over, rather than a countdown: a poll is not a
     // frame, and two clients sharing a key would each decrement one countdown.
@@ -1857,7 +1861,7 @@ fn pie_wait(
     wanted: &'static str,
     frame: u32,
 ) -> BrpResult<Option<Value>> {
-    let key = request_key(params);
+    let key = request_key("jackdaw/wait", params);
     let status = jackdaw_editor_core::pie::play_status(world);
     let cap = params
         .get("frames")
@@ -1903,6 +1907,120 @@ fn pie_wait(
         )));
     }
     Ok(None)
+}
+
+/// The running game's entities that no scene node spawned, with the authored
+/// entities they sit under.
+pub fn game_entities_handler(
+    In(params): In<Option<Value>>,
+    world: &mut World,
+) -> BrpResult<Option<Value>> {
+    ask_the_game(world, "jackdaw/game_entities", params, |_| {
+        Ok(GameQuery::Runtime)
+    })
+}
+
+/// One entity of the running game with all its components, by `entity` (its
+/// bits in the game) or every entity of the scene node `node`.
+pub fn game_entity_handler(
+    In(params): In<Option<Value>>,
+    world: &mut World,
+) -> BrpResult<Option<Value>> {
+    ask_the_game(world, "jackdaw/game_entity", params, |params| {
+        let id = |name: &str| params.get(name).and_then(Value::as_u64);
+        match (id("entity"), id("node")) {
+            (Some(entity), _) => Ok(GameQuery::Entity(GameEntityRef::Entity(entity))),
+            (None, Some(node)) => Ok(GameQuery::Entity(GameEntityRef::Node(node))),
+            (None, None) => Err(invalid_params("pass `entity` or `node`")),
+        }
+    })
+}
+
+/// The running game's entities holding the component `with` (a type path), and
+/// whose name contains `name`, each with the value of `with`.
+pub fn game_query_handler(
+    In(params): In<Option<Value>>,
+    world: &mut World,
+) -> BrpResult<Option<Value>> {
+    ask_the_game(world, "jackdaw/game_query", params, |params| {
+        let text = |name: &str| params.get(name).and_then(Value::as_str).map(str::to_string);
+        Ok(GameQuery::Find {
+            with: text("with"),
+            name: text("name"),
+        })
+    })
+}
+
+/// Ask the running game the question `query` makes of the params on the first
+/// poll, and answer with its entities once the game replies. The poll the HTTP
+/// layer makes just after the answer goes out finds it answered and asks nothing.
+fn ask_the_game(
+    world: &mut World,
+    method: &str,
+    params: Option<Value>,
+    query: impl FnOnce(&Value) -> BrpResult<GameQuery>,
+) -> BrpResult<Option<Value>> {
+    check_enabled(world)?;
+    let params = params.unwrap_or(Value::Null);
+    let frame = current_frame(world);
+    expire_stale(world, frame);
+    let key = request_key(method, &params);
+    let held = match world
+        .get_resource_or_init::<PendingWaits>()
+        .requests
+        .get_mut(&key)
+    {
+        Some(PendingRequest {
+            state: PendingState::Answered,
+            last_seen,
+        }) if frame <= last_seen.saturating_add(1) => return Ok(None),
+        None
+        | Some(PendingRequest {
+            state: PendingState::Answered,
+            ..
+        }) => None,
+        Some(pending) => {
+            pending.last_seen = frame;
+            match pending.state {
+                PendingState::Game { request } => Some(request),
+                _ => {
+                    return Err(internal_error(format!(
+                        "request {key} is already waiting on something else"
+                    )));
+                }
+            }
+        }
+    };
+    let held = held.filter(|&request| world.get_resource_or_init::<GameQueries>().holds(request));
+    let request = match held {
+        Some(request) => request,
+        None => {
+            let request = ask_game(world, query(&params)?).map_err(internal_error)?;
+            world.resource_mut::<PendingWaits>().requests.insert(
+                key.clone(),
+                PendingRequest {
+                    last_seen: frame,
+                    state: PendingState::Game { request },
+                },
+            );
+            request
+        }
+    };
+    let Some(answer) = world.get_resource_or_init::<GameQueries>().take(request) else {
+        return Ok(None);
+    };
+    world.resource_mut::<PendingWaits>().requests.insert(
+        key,
+        PendingRequest {
+            last_seen: frame,
+            state: PendingState::Answered,
+        },
+    );
+    let found = answer.map_err(internal_error)?;
+    Ok(Some(json!({
+        "entities": found.entities,
+        "truncated": found.truncated,
+    })))
 }
 
 /// Work the editor started on its own and has not finished.
@@ -2029,13 +2147,13 @@ fn expire_stale(world: &mut World, frame: u32) {
     }
 }
 
-/// The key a watching request is tracked under. A client that passes `request`
-/// gets an identity of its own; one that does not shares state with any
-/// concurrent call spelled identically.
-fn request_key(params: &Value) -> String {
+/// The key a watching request to `method` is tracked under. A client that passes
+/// `request` gets an identity of its own; one that does not shares state with any
+/// concurrent call to the same method spelled identically.
+fn request_key(method: &str, params: &Value) -> String {
     match params.get("request").and_then(Value::as_str) {
-        Some(id) => format!("id:{id}"),
-        None => format!("params:{params}"),
+        Some(id) => format!("id:{method}:{id}"),
+        None => format!("params:{method}:{params}"),
     }
 }
 
@@ -2070,6 +2188,8 @@ enum PendingState {
     Assets { task: Task<Vec<String>> },
     /// A play-in-editor state being held for.
     Pie(PieWait),
+    /// A question the running game has yet to answer.
+    Game { request: u64 },
 }
 
 /// A wait held on a play-in-editor state.

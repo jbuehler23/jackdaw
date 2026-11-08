@@ -51,6 +51,18 @@ struct Highlight {
     places: Vec<jackdaw_pie_protocol::HighlightPlace>,
     /// The entities at `places` this frame.
     entities: Vec<Entity>,
+    /// Whether `entities` are kept current, which only a game drawing the box does.
+    resolved: bool,
+}
+
+/// The entities at `places` as the highlight last found them, when it names the
+/// same places and keeps them current.
+pub(crate) fn highlighted_entities(
+    world: &World,
+    places: &[jackdaw_pie_protocol::HighlightPlace],
+) -> Option<Vec<Entity>> {
+    let highlight = world.get_resource::<Highlight>()?;
+    (highlight.resolved && highlight.places == places).then(|| highlight.entities.clone())
 }
 
 /// Install the PIE transport and the apply system.
@@ -97,12 +109,17 @@ pub(crate) fn install_link(app: &mut App, transport: Box<dyn PieTransport>) {
     app.init_resource::<crate::served_scene::SceneRequests>();
     app.add_observer(crate::served_scene::forget_answer_on_insert);
     app.init_resource::<Highlight>();
+    app.init_resource::<crate::game_query::Watch>();
     crate::node_sync::install_node_index(app);
     // Drain control in PreUpdate, before input processing so forwarded editor
     // input lands in `ButtonInput` the same frame.
     app.add_systems(
         PreUpdate,
-        (apply_control, stream_cursor_state)
+        (
+            apply_control,
+            stream_cursor_state,
+            crate::game_query::send_watched,
+        )
             .chain()
             .before(bevy::input::InputSystems),
     );
@@ -130,8 +147,9 @@ pub(crate) fn send_state(world: &mut World, event: &StateEvent) {
 /// `SceneDocument` answers a scene root waiting on the editor, and
 /// `SceneAssets` loads asset definitions an edit that follows will name,
 /// `AssetFiles` the asset files the catalog walk at startup could not hold, and
-/// `PrefabFiles` the unsaved prefabs read in place of their files.
-/// Unknown frames are skipped.
+/// `PrefabFiles` the unsaved prefabs read in place of their files. `Query` is
+/// answered at once and `Watch` sets what [`crate::game_query`] keeps the
+/// editor told of. Unknown frames are skipped.
 fn apply_control(world: &mut World) {
     if !world.contains_non_send::<PieTransportRes>() {
         return;
@@ -230,6 +248,13 @@ fn apply_control(world: &mut World) {
             ControlEvent::Highlight { places } => {
                 world.resource_mut::<Highlight>().places = places;
             }
+            ControlEvent::Query { request, query } => {
+                let answer = crate::game_query::answer(world, &query);
+                send_state(world, &StateEvent::QueryAnswer { request, answer });
+            }
+            ControlEvent::Watch { watch, target } => {
+                crate::game_query::set_watch(world, watch, target);
+            }
         }
     }
 }
@@ -291,12 +316,9 @@ fn highlight_boxes(
     boxes
 }
 
-/// Find this frame's entities at the highlighted places. A place with none is boxed
-/// again once they appear.
-fn resolve_highlight(world: &mut World) {
-    let places: Vec<NodePlace> = world
-        .resource::<Highlight>()
-        .places
+/// The places the editor names, as the game finds entities at them.
+pub(crate) fn node_places(places: &[jackdaw_pie_protocol::HighlightPlace]) -> Vec<NodePlace> {
+    places
         .iter()
         .map(|place| match place {
             jackdaw_pie_protocol::HighlightPlace::Node { scene, node, inner } => NodePlace {
@@ -313,9 +335,17 @@ fn resolve_highlight(world: &mut World) {
                 inner: inner.clone(),
             },
         })
-        .collect();
+        .collect()
+}
+
+/// Find this frame's entities at the highlighted places. A place with none is boxed
+/// again once they appear.
+fn resolve_highlight(world: &mut World) {
+    let places = node_places(&world.resource::<Highlight>().places);
     let entities = entities_at(world, &places);
-    world.resource_mut::<Highlight>().entities = entities;
+    let mut highlight = world.resource_mut::<Highlight>();
+    highlight.entities = entities;
+    highlight.resolved = true;
 }
 
 /// Draw a wireframe box around every entity of the highlighted node through the

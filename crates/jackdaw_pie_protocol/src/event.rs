@@ -26,7 +26,73 @@ pub enum StateEvent {
     /// The game could not spawn the node a [`ControlEvent::SpawnNode`] named, so it
     /// no longer matches the document.
     NodeSpawnFailed { node: u64, reason: String },
+    /// The reply to a [`ControlEvent::Query`] with the same `request`.
+    QueryAnswer { request: u64, answer: QueryAnswer },
+    /// The entities a [`ControlEvent::Watch`] names, sent when their values change
+    /// and at most a few times a second. `watch` is the watch they answer.
+    Watched {
+        watch: u64,
+        entities: Vec<GameEntity>,
+    },
 }
+
+/// Names entities in a running game.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum GameEntityRef {
+    /// One entity, by its `Entity::to_bits` in the game.
+    Entity(u64),
+    /// Every entity spawned from the scene node with this id.
+    Node(u64),
+    /// The entities at these places, as [`ControlEvent::Highlight`] finds them.
+    Places(Vec<HighlightPlace>),
+}
+
+/// A question the editor asks a running game.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum GameQuery {
+    /// Every entity no scene node spawned, without components, plus the
+    /// authored entities they sit under, so the answer builds a tree.
+    Runtime,
+    /// The entities named, with all their components.
+    Entity(GameEntityRef),
+    /// Entities holding the component with type path `with`, and whose name
+    /// contains `name` ignoring case. Each carries the value of `with`.
+    Find {
+        with: Option<String>,
+        name: Option<String>,
+    },
+}
+
+/// One entity of a running game, as a query answers it.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct GameEntity {
+    /// `Entity::to_bits` in the game.
+    pub entity: u64,
+    pub name: Option<String>,
+    /// The parent, as `entity`.
+    pub parent: Option<u64>,
+    /// The scene node it was spawned from.
+    pub node: Option<u64>,
+    /// Component values by type path, as reflection serializes them, sorted.
+    /// Asset handles are null and entities their bits.
+    pub components: Vec<(String, serde_json::Value)>,
+    /// Components it holds whose values the game cannot serialize, by name.
+    pub opaque: Vec<String>,
+}
+
+/// The most entities one answer holds.
+pub const MAX_ANSWER_ENTITIES: usize = 4000;
+
+/// The entities a [`GameQuery`] found, at most [`MAX_ANSWER_ENTITIES`] of them.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct GameEntities {
+    pub entities: Vec<GameEntity>,
+    /// Whether more were found than the answer holds.
+    pub truncated: bool,
+}
+
+/// The entities a [`GameQuery`] found, or why the game could not answer it.
+pub type QueryAnswer = Result<GameEntities, String>;
 
 /// What the game spawns a requested scene from.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -149,6 +215,19 @@ pub enum ControlEvent {
         parent: Option<u64>,
         follows: Option<u64>,
         scene: String,
+    },
+    /// Ask the game a question; it replies with [`StateEvent::QueryAnswer`]
+    /// carrying the same `request` in the frame this arrives.
+    Query {
+        request: u64,
+        query: GameQuery,
+    },
+    /// Keep the editor told of the values of `target`'s entities with
+    /// [`StateEvent::Watched`] tagged `watch`, or stop for none. A new watch
+    /// replaces the last.
+    Watch {
+        watch: u64,
+        target: Option<GameEntityRef>,
     },
 }
 
@@ -287,6 +366,70 @@ mod tests {
         };
         let bytes = to_bytes(&ev).unwrap();
         assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
+    }
+
+    #[test]
+    fn queries_watches_and_their_answers_round_trip() {
+        let found = GameEntity {
+            entity: 1 << 33,
+            name: Some("Bullet".to_string()),
+            parent: Some(4),
+            node: None,
+            components: vec![("game::Speed".to_string(), serde_json::json!(3.5))],
+            opaque: vec!["game::Secret".to_string()],
+        };
+        for ev in [
+            ControlEvent::Query {
+                request: 2,
+                query: GameQuery::Runtime,
+            },
+            ControlEvent::Query {
+                request: 3,
+                query: GameQuery::Entity(GameEntityRef::Node(7)),
+            },
+            ControlEvent::Query {
+                request: 4,
+                query: GameQuery::Find {
+                    with: Some("game::Speed".to_string()),
+                    name: None,
+                },
+            },
+            ControlEvent::Watch {
+                watch: 1,
+                target: Some(GameEntityRef::Places(vec![HighlightPlace::Node {
+                    scene: "zone.bsn".to_string(),
+                    node: 7,
+                    inner: Vec::new(),
+                }])),
+            },
+            ControlEvent::Watch {
+                watch: 2,
+                target: None,
+            },
+        ] {
+            let bytes = to_bytes(&ev).unwrap();
+            assert_eq!(from_bytes::<ControlEvent>(&bytes).unwrap(), ev);
+        }
+        for ev in [
+            StateEvent::QueryAnswer {
+                request: 2,
+                answer: Ok(GameEntities {
+                    entities: vec![found.clone()],
+                    truncated: false,
+                }),
+            },
+            StateEvent::QueryAnswer {
+                request: 3,
+                answer: Err("no entity".to_string()),
+            },
+            StateEvent::Watched {
+                watch: 1,
+                entities: vec![found],
+            },
+        ] {
+            let bytes = to_bytes(&ev).unwrap();
+            assert_eq!(from_bytes::<StateEvent>(&bytes).unwrap(), ev);
+        }
     }
 
     #[test]

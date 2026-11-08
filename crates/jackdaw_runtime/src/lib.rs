@@ -86,6 +86,8 @@ pub use jackdaw_scene_types::{
 };
 
 #[cfg(feature = "pie")]
+mod game_query;
+#[cfg(feature = "pie")]
 mod pie;
 #[cfg(feature = "pie")]
 mod pie_frames;

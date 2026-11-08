@@ -103,7 +103,7 @@ fn front_prefab(world: &World) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use jackdaw_bsn::SceneBsnAst;
     use jackdaw_scene_types::SCENE_NODE_ID_TYPE_PATH;
 
@@ -111,14 +111,14 @@ mod tests {
 
     const NODE: u64 = 7;
 
-    fn game(instance: u32) -> InstanceKey {
+    pub(crate) fn game(instance: u32) -> InstanceKey {
         InstanceKey {
             config: "game".to_string(),
             instance,
         }
     }
 
-    fn world_with_node() -> (World, Entity) {
+    pub(crate) fn world_with_node() -> (World, Entity) {
         let mut world = World::new();
         world.init_resource::<Selection>();
         world.init_resource::<LastHighlight>();
@@ -155,7 +155,7 @@ mod tests {
         world.resource::<LastHighlight>().0.clone()
     }
 
-    fn at_the_node() -> Vec<HighlightPlace> {
+    pub(crate) fn at_the_node() -> Vec<HighlightPlace> {
         vec![HighlightPlace::Node {
             scene: "zone.bsn".to_string(),
             node: NODE,
@@ -164,7 +164,7 @@ mod tests {
     }
 
     /// The game `instance` has asked for the scene in front.
-    fn playing(world: &mut World, instance: u32) {
+    pub(crate) fn playing(world: &mut World, instance: u32) {
         crate::play_scene::note_test_asked_scene(world, &game(instance), "zone.bsn");
     }
 

@@ -208,9 +208,11 @@ fn draw_map(world: &mut World, map: Entity, tilesets: &mut Tilesets) {
                 layer: index,
                 chunk: coord,
             };
-            let chunk = world.spawn((of, bundle, ChildOf(map))).id();
+            let chunk = world
+                .spawn((of, bundle, ChildOf(map), jackdaw_scene_types::SceneDerived))
+                .id();
             for piece in pieces {
-                world.spawn((piece, ChildOf(chunk)));
+                world.spawn((piece, ChildOf(chunk), jackdaw_scene_types::SceneDerived));
             }
         }
     }

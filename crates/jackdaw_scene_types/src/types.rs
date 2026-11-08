@@ -24,7 +24,14 @@ pub struct SceneRootTag;
 /// and material are stripped as render components). Deliberately not `Reflect`
 /// so it cannot leak into a snapshot or scene file.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(SceneDerived)]
 pub struct DerivedFaceMesh;
+
+/// Marker for an entity a scene builds from what it authors, such as a brush
+/// face mesh or a terrain or tilemap chunk. It is neither authored nor spawned
+/// by the game.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct SceneDerived;
 
 /// Why [`Brush::from_polygons`] refused a face ring, by the ring's index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

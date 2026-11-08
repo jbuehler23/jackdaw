@@ -113,6 +113,7 @@ impl LiveLevelProgress {
 /// One part of a live LOD level, spawned from the level's model under its node.
 /// Derived, never saved.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(jackdaw_scene_types::SceneDerived)]
 pub struct LodPart;
 
 /// The level a [`LodPart`] belongs to, 0 the most detailed. Derived, never
