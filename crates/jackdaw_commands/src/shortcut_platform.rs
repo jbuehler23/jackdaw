@@ -71,10 +71,15 @@ impl ShortcutPlatform {
         alt: bool,
         super_: bool,
     ) -> Vec<&'static str> {
+        let alt_label = match self {
+            Self::MacOs => "Option",
+            Self::Standard => "Alt",
+        };
+
         [
             (ctrl, "Ctrl"),
             (shift, "Shift"),
-            (alt, "Alt"),
+            (alt, alt_label),
             (super_, self.super_label()),
         ]
         .into_iter()
@@ -118,6 +123,14 @@ mod tests {
         assert_eq!(
             ShortcutPlatform::Standard.modifier_labels(true, false, true, true),
             ["Ctrl", "Alt", "Super"]
+        );
+    }
+
+    #[test]
+    fn alt_is_option_on_macos() {
+        assert_eq!(
+            ShortcutPlatform::MacOs.modifier_labels(false, true, false, false),
+            ["Option"]
         );
     }
 
