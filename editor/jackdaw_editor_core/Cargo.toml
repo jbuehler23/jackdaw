@@ -36,7 +36,7 @@ camera_rig = ["dep:jackdaw_camera_rig"]
 # `dlopen`. Games do not use this path; they build as ordinary cargo
 # binaries with their own Bevy. Off by default only because building the
 # SDK slows plain dev builds; release editor builds enable it.
-dylib = ["dep:jackdaw_sdk", "jackdaw_api/dynamic_linking", "jackdaw_project_build/reflect"]
+dylib = ["dep:jackdaw_sdk", "jackdaw_project_build/reflect"]
 # Bake the SDK-builder recipe into the editor binary so a self-contained
 # Cargo install can build its SDK on first launch (the first-run setup
 # screen). Enabled by default; release bundles already carry a built SDK.
