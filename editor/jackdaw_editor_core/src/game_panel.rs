@@ -7,13 +7,13 @@ use std::time::{Duration, Instant};
 use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::button::{ButtonProps, button};
+use jackdaw_feathers::button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::tokens;
 
 use jackdaw_panels::tree::{DockTree, NodeId, TabId};
 
 use crate::live_frame::LiveFrameStream;
-use crate::pie::PieWindowMode;
+use crate::pie::{GameExitReason, LastGameExit, PiePlayOp, PieToggleInstanceOp, PieWindowMode};
 
 /// Dock window id, used for registration and presence checks.
 pub const GAME_WINDOW_ID: &str = "jackdaw.game";
@@ -31,9 +31,32 @@ pub struct GamePanelSurface;
 #[derive(Component)]
 pub struct GamePanelImage;
 
-/// Marker on the idle label shown while no frame is streaming.
+/// Marker on the column shown while no frame is streaming.
+#[derive(Component)]
+pub struct GamePanelIdle;
+
+/// Marker on the idle label saying what the game is doing.
 #[derive(Component)]
 pub struct GamePanelIdleLabel;
+
+/// Marker on the text holding a crashed game's last stderr lines.
+#[derive(Component)]
+pub struct GamePanelStderrText;
+
+/// One part of the idle column, shown or hidden by what the game is doing.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GameIdlePart {
+    Label,
+    Stderr,
+    /// The Play button shown while stopped.
+    Play,
+    /// The Restart button shown after a game went away, relaunching that game.
+    Restart,
+    /// The button opening the Build panel after a failed build.
+    BuildErrors,
+    /// The input hint under the Play button.
+    Hint,
+}
 
 /// Marker on the "no signal" chip shown while the focused instance's stream
 /// has gone quiet.
@@ -51,10 +74,12 @@ pub struct GamePlayingChip;
 pub struct GamePlayInputButton;
 
 /// Whether Play brought the Game panel forward, and the tab its dock showed
-/// before, so the end of the session can put that tab back.
+/// before, so the end of the session can put that tab back. `failed` holds
+/// the panel after a launch that went wrong, until the next one.
 #[derive(Resource, Default, Debug)]
 struct GamePanelSurfaced {
     shown: bool,
+    failed: bool,
     previous: Option<(NodeId, TabId)>,
 }
 
@@ -167,16 +192,109 @@ pub fn game_panel_content() -> impl Bundle {
                             ..Default::default()
                         },
                     ),
-                    (
-                        GamePanelIdleLabel,
-                        Text::new(IDLE_STOPPED),
-                        TextFont {
-                            font_size: tokens::TEXT_SIZE_SM,
-                            ..Default::default()
-                        },
-                        TextColor(tokens::TEXT_DISABLED),
-                    ),
+                    game_panel_idle(),
                 ],
+            ),
+        ],
+    )
+}
+
+/// Build the column shown while no frame is streaming: what the game is doing,
+/// a Play or Restart button, a crashed game's last stderr lines, and a hint.
+/// The stderr block shrinks to the room left and keeps its newest lines.
+fn game_panel_idle() -> impl Bundle {
+    (
+        GamePanelIdle,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(0.0),
+            bottom: px(0.0),
+            left: px(0.0),
+            right: px(0.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            row_gap: px(tokens::SPACING_MD),
+            padding: UiRect::all(px(tokens::SPACING_MD)),
+            ..Default::default()
+        },
+        children![
+            (
+                GamePanelIdleLabel,
+                GameIdlePart::Label,
+                Text::new(String::new()),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                TextLayout::justify(Justify::Center),
+                Node {
+                    display: Display::None,
+                    ..Default::default()
+                },
+            ),
+            (
+                GameIdlePart::Play,
+                button(
+                    ButtonProps::new("Play")
+                        .with_variant(ButtonVariant::Primary)
+                        .call_operator(PiePlayOp::ID)
+                        .hidden(),
+                ),
+            ),
+            (
+                GameIdlePart::Restart,
+                ButtonOperatorCall::new(PieToggleInstanceOp::ID),
+                button(ButtonProps::new("Restart").hidden()),
+            ),
+            (
+                GameIdlePart::BuildErrors,
+                ButtonOperatorCall::new(crate::WindowOpenOp::ID)
+                    .with_param("window_id", crate::build_panel::BUILD_WINDOW_ID),
+                button(ButtonProps::new("Show build errors").hidden()),
+            ),
+            (
+                GameIdlePart::Stderr,
+                Node {
+                    display: Display::None,
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::FlexEnd,
+                    flex_shrink: 1.0,
+                    min_height: px(0.0),
+                    overflow: Overflow::clip(),
+                    padding: UiRect::all(px(tokens::SPACING_MD)),
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+                    max_width: percent(100),
+                    ..Default::default()
+                },
+                BackgroundColor(tokens::ELEVATED_BG),
+                children![(
+                    GamePanelStderrText,
+                    Text::new(String::new()),
+                    TextFont {
+                        font_size: tokens::TEXT_SIZE_XS,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                    Node {
+                        flex_shrink: 0.0,
+                        ..Default::default()
+                    },
+                )],
+            ),
+            (
+                GameIdlePart::Hint,
+                Text::new(IDLE_HINT),
+                TextFont {
+                    font_size: tokens::TEXT_SIZE_SM,
+                    ..Default::default()
+                },
+                TextColor(tokens::TEXT_SECONDARY),
+                Node {
+                    display: Display::None,
+                    ..Default::default()
+                },
             ),
         ],
     )
@@ -315,11 +433,11 @@ fn update_game_instance_button(
 }
 
 /// Point the frame image at the current stream and show it once a frame has
-/// arrived, else show the idle label. A slow game's last frame stays up.
+/// arrived, else show the idle column. A slow game's last frame stays up.
 fn sync_game_panel_image(
     stream: Res<LiveFrameStream>,
     mut images: Query<(&mut ImageNode, &mut Node), With<GamePanelImage>>,
-    mut idle: Query<&mut Node, (With<GamePanelIdleLabel>, Without<GamePanelImage>)>,
+    mut idle: Query<&mut Node, (With<GamePanelIdle>, Without<GamePanelImage>)>,
 ) {
     let handle = stream.image.clone();
     let show_image = handle.is_some();
@@ -350,13 +468,16 @@ fn sync_game_panel_image(
     }
 }
 
-const IDLE_STOPPED: &str = "Press Play to run the game here";
+const IDLE_HINT: &str = "Click the game to give it input, Shift+Esc to release";
 const IDLE_BUILDING: &str = "Building the game...";
 const IDLE_WINDOWED: &str = "Running in its own window";
 const IDLE_LOADING: &str = "Loading the game...";
 const IDLE_STARTING: &str = "Starting the game...";
 const IDLE_OWN_WINDOW: &str = "This game opened its own window. To show it here, pass DefaultPlugins \
      through jackdaw_runtime::maybe_windowless in its main.rs.";
+const IDLE_BUILD_FAILED: &str = "The build failed.";
+const IDLE_NEVER_CONNECTED: &str = "The game did not connect to the editor. Its app must add \
+     JackdawPlugin, with the pie feature of jackdaw_runtime enabled.";
 
 /// How long a launched game may stay unconnected before the panel says why it
 /// might never connect. It is stopped soon after, at the session's own timeout.
@@ -367,7 +488,7 @@ const SLOW_FIRST_FRAME: Duration = Duration::from_secs(60);
 
 /// What the game is doing, for the label shown while the panel has no frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum GameWait {
+enum GameWait<'a> {
     Stopped,
     Building,
     Windowed,
@@ -377,11 +498,24 @@ enum GameWait {
     Connecting(Duration),
     /// Connected and not yet showing a frame, for this long.
     Loading(Duration),
+    /// The last launch's build failed.
+    BuildFailed,
+    /// The last game went away on its own.
+    Exited(&'a GameExitReason),
+}
+
+/// The button the idle column offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdleAction {
+    None,
+    Play,
+    Restart,
+    ShowBuildErrors,
 }
 
 fn idle_message(wait: GameWait) -> String {
     match wait {
-        GameWait::Stopped => IDLE_STOPPED.to_string(),
+        GameWait::Stopped => String::new(),
         GameWait::Building => IDLE_BUILDING.to_string(),
         GameWait::Windowed => IDLE_WINDOWED.to_string(),
         GameWait::OwnWindow => IDLE_OWN_WINDOW.to_string(),
@@ -397,19 +531,75 @@ fn idle_message(wait: GameWait) -> String {
             waited.as_secs()
         ),
         GameWait::Loading(_) => IDLE_LOADING.to_string(),
+        GameWait::BuildFailed => IDLE_BUILD_FAILED.to_string(),
+        GameWait::Exited(GameExitReason::Crashed(status)) => format!("Game exited ({status})"),
+        GameWait::Exited(GameExitReason::ExitedBeforeConnecting(status)) => {
+            format!("Game exited before connecting ({status})")
+        }
+        GameWait::Exited(GameExitReason::NeverConnected) => IDLE_NEVER_CONNECTED.to_string(),
+        GameWait::Exited(GameExitReason::ConnectFailed(error)) => {
+            format!("The game could not connect to the editor: {error}")
+        }
     }
 }
 
-/// Say where the game is while the panel has no frame to show, and report a
-/// first frame that took unusually long.
+fn idle_action(wait: GameWait) -> IdleAction {
+    match wait {
+        GameWait::Stopped => IdleAction::Play,
+        GameWait::Exited(_) => IdleAction::Restart,
+        GameWait::BuildFailed => IdleAction::ShowBuildErrors,
+        _ => IdleAction::None,
+    }
+}
+
+/// Whether `part` of the idle column shows for `wait`, given whether the game
+/// left any stderr lines and whether a launch opens its own window.
+fn idle_part_shown(part: GameIdlePart, wait: GameWait, has_stderr: bool, windowed: bool) -> bool {
+    match part {
+        GameIdlePart::Label => wait != GameWait::Stopped,
+        GameIdlePart::Stderr => matches!(wait, GameWait::Exited(_)) && has_stderr,
+        GameIdlePart::Play => idle_action(wait) == IdleAction::Play,
+        GameIdlePart::Restart => idle_action(wait) == IdleAction::Restart,
+        GameIdlePart::BuildErrors => idle_action(wait) == IdleAction::ShowBuildErrors,
+        GameIdlePart::Hint => wait == GameWait::Stopped && !windowed,
+    }
+}
+
+/// What the game is doing while it is not running, from the session and the
+/// last recorded exit.
+fn stopped_wait<'a>(
+    session: Option<&crate::pie::PieSession>,
+    last: Option<&'a GameExitReason>,
+) -> GameWait<'a> {
+    let Some(session) = session else {
+        return last.map_or(GameWait::Stopped, GameWait::Exited);
+    };
+    if session.is_launching() {
+        GameWait::Building
+    } else if let Some(waited) = session.connecting_for() {
+        GameWait::Connecting(waited)
+    } else if session.launch_failed() {
+        GameWait::BuildFailed
+    } else {
+        last.map_or(GameWait::Stopped, GameWait::Exited)
+    }
+}
+
+/// Say where the game is while the panel has no frame to show, offer Play or
+/// Restart, and report a first frame that took unusually long.
 fn update_game_panel_idle_label(
     play_state: Option<Res<State<PlayState>>>,
     launched: crate::pie::LaunchedWindowMode,
     stream: Res<LiveFrameStream>,
     request: Option<Res<crate::live_frame_view::StreamRequest>>,
     session: Option<NonSend<crate::pie::PieSession>>,
+    last_exit: Option<Res<LastGameExit>>,
     mut loading_since: Local<Option<Instant>>,
     mut labels: Query<&mut Text, With<GamePanelIdleLabel>>,
+    mut stderr_texts: Query<&mut Text, (With<GamePanelStderrText>, Without<GamePanelIdleLabel>)>,
+    mut parts: Query<(&GameIdlePart, &mut Node)>,
+    mut restart_calls: Query<(&GameIdlePart, &mut ButtonOperatorCall)>,
+    added: Query<(), Added<GameIdlePart>>,
     mut commands: Commands,
 ) {
     let running = play_state.is_some_and(|state| *state.get() != PlayState::Stopped);
@@ -434,6 +624,7 @@ fn update_game_panel_idle_label(
         loading_since.get_or_insert_with(Instant::now);
     }
 
+    let exit = last_exit.as_ref().and_then(|last| last.0.as_ref());
     let wait = if running {
         if windowed {
             GameWait::Windowed
@@ -442,16 +633,8 @@ fn update_game_panel_idle_label(
         } else {
             GameWait::Loading(loading_since.map_or(Duration::ZERO, |since| since.elapsed()))
         }
-    } else if let Some(session) = session {
-        if session.is_launching() {
-            GameWait::Building
-        } else if let Some(waited) = session.connecting_for() {
-            GameWait::Connecting(waited)
-        } else {
-            GameWait::Stopped
-        }
     } else {
-        GameWait::Stopped
+        stopped_wait(session.as_deref(), exit.map(|exit| &exit.reason))
     };
     let message = idle_message(wait);
     for mut text in &mut labels {
@@ -459,32 +642,75 @@ fn update_game_panel_idle_label(
             text.0.clone_from(&message);
         }
     }
+    if last_exit.as_ref().is_some_and(Res::is_changed) || !added.is_empty() {
+        let stderr = exit.map(|exit| exit.stderr.join("\n")).unwrap_or_default();
+        for mut text in &mut stderr_texts {
+            if text.0 != stderr {
+                text.0.clone_from(&stderr);
+            }
+        }
+        if let Some(exit) = exit {
+            for (part, mut call) in &mut restart_calls {
+                if *part == GameIdlePart::Restart {
+                    *call = ButtonOperatorCall::new(PieToggleInstanceOp::ID)
+                        .with_param("config", exit.key.config.clone())
+                        .with_param("instance", i64::from(exit.key.instance));
+                }
+            }
+        }
+    }
+    let has_stderr = exit.is_some_and(|exit| !exit.stderr.is_empty());
+    for (part, mut node) in &mut parts {
+        let display = if idle_part_shown(*part, wait, has_stderr, windowed) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
 }
 
-/// Bring the Game panel to the front when an embedded Play session starts,
-/// and put back the tab its dock showed before once play stops, if the Game
-/// panel is still the one in front. The game only streams frames while the
-/// panel is laid out, so a hidden panel would leave the game unseen.
+/// Bring the Game panel to the front when an embedded launch starts, from its
+/// build on, and put back the tab its dock showed before once play stops, if
+/// the Game panel is still the one in front. A launch that ends in a crash, a
+/// failed connection or a failed build leaves the panel in front with its
+/// message. The game only streams frames while the panel is laid out, so a
+/// hidden panel would leave the game unseen.
 fn surface_game_panel_on_play(world: &mut World) {
-    let running = world
+    let state = world
         .get_resource::<State<PlayState>>()
-        .is_some_and(|state| *state.get() != PlayState::Stopped);
+        .map_or(PlayState::Stopped, |state| state.get().clone());
+    let session = world.get_non_send::<crate::pie::PieSession>();
+    let running = crate::pie::play_phase(&state, session) != crate::pie::PlayPhase::Stopped;
+    let failed = session.is_some_and(crate::pie::PieSession::launch_failed)
+        || world
+            .get_resource::<LastGameExit>()
+            .is_some_and(|last| last.0.is_some());
     let embedded = crate::pie::effective_window_mode_in(world) == PieWindowMode::Embedded;
-    let Some(shown) = world
+    let Some((shown, held)) = world
         .get_resource::<GamePanelSurfaced>()
-        .map(|surfaced| surfaced.shown)
+        .map(|surfaced| (surfaced.shown, surfaced.failed))
     else {
         return;
     };
     if !world.contains_resource::<DockTree>() {
         return;
     }
-    if running && embedded && !shown {
+    if running && !embedded && shown {
+        *world.resource_mut::<GamePanelSurfaced>() = GamePanelSurfaced::default();
+    } else if running && embedded && (!shown || held) {
         let previous = front_tab_beside_game(world.resource::<DockTree>());
         crate::open_window_in_default_area_if_absent(world, GAME_WINDOW_ID);
         let mut surfaced = world.resource_mut::<GamePanelSurfaced>();
+        if !shown {
+            surfaced.previous = previous;
+        }
         surfaced.shown = true;
-        surfaced.previous = previous;
+        surfaced.failed = false;
+    } else if !running && shown && failed {
+        world.resource_mut::<GamePanelSurfaced>().failed = true;
     } else if !running && shown {
         let previous = std::mem::take(&mut *world.resource_mut::<GamePanelSurfaced>()).previous;
         let mut tree = world.resource_mut::<DockTree>();
@@ -662,9 +888,116 @@ mod tests {
         let unconnected = idle_message(GameWait::Connecting(SLOW_CONNECT));
         assert!(unconnected.contains("JackdawPlugin"), "{unconnected}");
         assert!(!unconnected.contains("oading"), "{unconnected}");
-        assert_eq!(idle_message(GameWait::Stopped), IDLE_STOPPED);
         assert_eq!(idle_message(GameWait::Building), IDLE_BUILDING);
         assert_eq!(idle_message(GameWait::Windowed), IDLE_WINDOWED);
+    }
+
+    const PARTS: [GameIdlePart; 6] = [
+        GameIdlePart::Label,
+        GameIdlePart::Stderr,
+        GameIdlePart::Play,
+        GameIdlePart::Restart,
+        GameIdlePart::BuildErrors,
+        GameIdlePart::Hint,
+    ];
+
+    fn shown(wait: GameWait, has_stderr: bool) -> Vec<GameIdlePart> {
+        PARTS
+            .into_iter()
+            .filter(|part| idle_part_shown(*part, wait, has_stderr, false))
+            .collect()
+    }
+
+    #[test]
+    fn a_game_in_its_own_window_gets_play_without_the_input_hint() {
+        let parts: Vec<GameIdlePart> = PARTS
+            .into_iter()
+            .filter(|part| idle_part_shown(*part, GameWait::Stopped, false, true))
+            .collect();
+        assert_eq!(parts, [GameIdlePart::Play]);
+    }
+
+    #[test]
+    fn stopped_offers_play_and_the_input_hint() {
+        assert_eq!(
+            shown(GameWait::Stopped, false),
+            [GameIdlePart::Play, GameIdlePart::Hint]
+        );
+        assert_eq!(stopped_wait(None, None), GameWait::Stopped);
+    }
+
+    #[test]
+    fn a_crashed_game_shows_its_code_and_stderr_with_restart() {
+        let crashed = GameExitReason::Crashed("code 101".to_string());
+        assert_eq!(
+            idle_message(GameWait::Exited(&crashed)),
+            "Game exited (code 101)"
+        );
+        assert_eq!(
+            shown(GameWait::Exited(&crashed), true),
+            [
+                GameIdlePart::Label,
+                GameIdlePart::Stderr,
+                GameIdlePart::Restart
+            ]
+        );
+        assert_eq!(
+            shown(GameWait::Exited(&crashed), false),
+            [GameIdlePart::Label, GameIdlePart::Restart]
+        );
+        let early = GameExitReason::ExitedBeforeConnecting("signal 9".to_string());
+        assert_eq!(
+            idle_message(GameWait::Exited(&early)),
+            "Game exited before connecting (signal 9)"
+        );
+        assert_eq!(
+            stopped_wait(None, Some(&crashed)),
+            GameWait::Exited(&crashed)
+        );
+    }
+
+    #[test]
+    fn a_game_that_never_connected_is_told_to_add_jackdaw_plugin() {
+        let message = idle_message(GameWait::Exited(&GameExitReason::NeverConnected));
+        assert!(message.contains("JackdawPlugin"), "{message}");
+        assert!(message.contains("pie feature"), "{message}");
+        assert_eq!(
+            idle_action(GameWait::Exited(&GameExitReason::NeverConnected)),
+            IdleAction::Restart
+        );
+    }
+
+    #[test]
+    fn a_failed_build_offers_its_errors() {
+        assert_eq!(idle_message(GameWait::BuildFailed), IDLE_BUILD_FAILED);
+        assert_eq!(
+            shown(GameWait::BuildFailed, false),
+            [GameIdlePart::Label, GameIdlePart::BuildErrors]
+        );
+    }
+
+    #[test]
+    fn a_launch_under_way_wins_over_the_last_exit() {
+        let crashed = GameExitReason::Crashed("code 1".to_string());
+        let mut session = crate::pie::PieSession::default();
+        session.insert_test_pending_build(crate::pie::InstanceKey {
+            config: "Game".to_string(),
+            instance: 1,
+        });
+        assert_eq!(
+            stopped_wait(Some(&session), Some(&crashed)),
+            GameWait::Building
+        );
+        session.fail_test_builds();
+        assert_eq!(
+            stopped_wait(Some(&session), Some(&crashed)),
+            GameWait::BuildFailed
+        );
+        assert_eq!(
+            shown(GameWait::Building, false),
+            [GameIdlePart::Label],
+            "building keeps its message and offers nothing"
+        );
     }
 
     #[test]
