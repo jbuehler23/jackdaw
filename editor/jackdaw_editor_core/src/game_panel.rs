@@ -200,15 +200,22 @@ pub fn game_panel_content() -> impl Bundle {
 }
 
 /// Build the column shown while no frame is streaming: what the game is doing,
-/// its last stderr lines after a crash, a Play or Restart button and a hint.
+/// a Play or Restart button, a crashed game's last stderr lines, and a hint.
+/// The stderr block shrinks to the room left and keeps its newest lines.
 fn game_panel_idle() -> impl Bundle {
     (
         GamePanelIdle,
         Node {
+            position_type: PositionType::Absolute,
+            top: px(0.0),
+            bottom: px(0.0),
+            left: px(0.0),
+            right: px(0.0),
             flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             row_gap: px(tokens::SPACING_MD),
-            max_width: percent(90),
+            padding: UiRect::all(px(tokens::SPACING_MD)),
             ..Default::default()
         },
         children![
@@ -226,26 +233,6 @@ fn game_panel_idle() -> impl Bundle {
                     display: Display::None,
                     ..Default::default()
                 },
-            ),
-            (
-                GameIdlePart::Stderr,
-                Node {
-                    display: Display::None,
-                    padding: UiRect::all(px(tokens::SPACING_MD)),
-                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
-                    max_width: percent(100),
-                    ..Default::default()
-                },
-                BackgroundColor(tokens::ELEVATED_BG),
-                children![(
-                    GamePanelStderrText,
-                    Text::new(String::new()),
-                    TextFont {
-                        font_size: tokens::TEXT_SIZE_XS,
-                        ..Default::default()
-                    },
-                    TextColor(tokens::TEXT_SECONDARY),
-                )],
             ),
             (
                 GameIdlePart::Play,
@@ -266,6 +253,35 @@ fn game_panel_idle() -> impl Bundle {
                 ButtonOperatorCall::new(crate::WindowOpenOp::ID)
                     .with_param("window_id", crate::build_panel::BUILD_WINDOW_ID),
                 button(ButtonProps::new("Show build errors").hidden()),
+            ),
+            (
+                GameIdlePart::Stderr,
+                Node {
+                    display: Display::None,
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::FlexEnd,
+                    flex_shrink: 1.0,
+                    min_height: px(0.0),
+                    overflow: Overflow::clip(),
+                    padding: UiRect::all(px(tokens::SPACING_MD)),
+                    border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+                    max_width: percent(100),
+                    ..Default::default()
+                },
+                BackgroundColor(tokens::ELEVATED_BG),
+                children![(
+                    GamePanelStderrText,
+                    Text::new(String::new()),
+                    TextFont {
+                        font_size: tokens::TEXT_SIZE_XS,
+                        ..Default::default()
+                    },
+                    TextColor(tokens::TEXT_SECONDARY),
+                    Node {
+                        flex_shrink: 0.0,
+                        ..Default::default()
+                    },
+                )],
             ),
             (
                 GameIdlePart::Hint,
