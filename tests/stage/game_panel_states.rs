@@ -340,3 +340,28 @@ fn the_game_panel_comes_forward_during_the_build_and_offers_its_errors_when_it_f
     press(&mut app, GameIdlePart::BuildErrors).assert_finished();
     assert_eq!(front_window(&app, leaf).as_deref(), Some("jackdaw.build"));
 }
+
+#[cfg(unix)]
+#[test]
+fn play_shows_the_last_stderr_lines_of_a_built_game_that_exits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (mut app, _leaf, project) = editor_on_a_project();
+    let binary = project.path().join("game.sh");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\necho 'loading the level' >&2\necho 'the level is missing' >&2\nexit 3\n",
+    )
+    .expect("a game script");
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable game");
+    jackdaw::pie::insert_built_game(app.world_mut(), binary);
+
+    call(&mut app, "pie.play").assert_finished();
+    update_until(&mut app, "the exit to be recorded", |app| {
+        recorded_exit(app).is_some()
+    });
+    app.update();
+    assert_eq!(label(&mut app), "Game exited before connecting (code 3)");
+    assert_eq!(stderr(&mut app), "loading the level\nthe level is missing");
+}

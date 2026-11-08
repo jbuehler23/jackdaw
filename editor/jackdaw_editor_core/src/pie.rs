@@ -1099,6 +1099,19 @@ pub fn connecting_test_game(world: &mut World, key: InstanceKey, mut child: Chil
     );
 }
 
+/// Hold `binary` as the open project's built game, for a test: Play then
+/// launches it as it would a game it just built.
+#[doc(hidden)]
+pub fn insert_built_game(world: &mut World, binary: PathBuf) {
+    let Some(root) = project_root(world) else {
+        return;
+    };
+    world
+        .non_send_mut::<PieSession>()
+        .builds
+        .insert(root, BuildState::Done(binary));
+}
+
 /// Give up on games that have not connected after `timeout`, for a test.
 #[doc(hidden)]
 pub fn set_connect_timeout(world: &mut World, timeout: Duration) {
