@@ -32,6 +32,8 @@ pub struct GameQueries {
     next_watch: u64,
     watching: Option<Watching>,
     watched: Vec<GameEntity>,
+    watch_answered: bool,
+    generation: u64,
 }
 
 /// A game entity watched in place of the selection, until the selection moves
@@ -39,6 +41,7 @@ pub struct GameQueries {
 struct RuntimePick {
     entity: u64,
     selected: Option<Entity>,
+    key: Option<InstanceKey>,
 }
 
 struct Waiting {
@@ -71,6 +74,17 @@ impl GameQueries {
     /// nothing is watched or before the game has answered.
     pub fn watched(&self) -> &[GameEntity] {
         &self.watched
+    }
+
+    /// Whether the game has sent the watched entities since the watch began.
+    pub fn watch_answered(&self) -> bool {
+        self.watch_answered
+    }
+
+    /// A count that moves whenever what is watched, its values or the runtime
+    /// pick change.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// What the game is watching, if anything.
@@ -112,6 +126,8 @@ impl GameQueries {
             .is_some_and(|watching| watching.key == *key && watching.watch == watch)
         {
             self.watched = entities;
+            self.watch_answered = true;
+            self.generation += 1;
         }
     }
 
@@ -204,14 +220,21 @@ fn primary_selection(world: &World) -> Option<Entity> {
 /// selection. Selecting anything else in the editor ends the pick.
 pub fn pick_runtime_entity(world: &mut World, entity: u64) {
     let selected = primary_selection(world);
-    world.get_resource_or_init::<GameQueries>().runtime_pick =
-        Some(RuntimePick { entity, selected });
+    let key = focused_live_instance(world);
+    let mut queries = world.get_resource_or_init::<GameQueries>();
+    queries.runtime_pick = Some(RuntimePick {
+        entity,
+        selected,
+        key,
+    });
+    queries.generation += 1;
 }
 
 /// Go back to watching the selection.
 pub fn clear_runtime_pick(world: &mut World) {
     if let Some(mut queries) = world.get_resource_mut::<GameQueries>() {
         queries.runtime_pick = None;
+        queries.generation += 1;
     }
 }
 
@@ -232,13 +255,13 @@ fn watch_target(world: &World, key: &InstanceKey) -> Option<GameEntityRef> {
 /// it to stop. Sends only when the target or the focused game changes.
 pub(crate) fn sync_watch(world: &mut World) {
     let selected = primary_selection(world);
+    let focused = focused_live_instance(world);
     let mut queries = world.get_resource_or_init::<GameQueries>();
-    if queries
-        .runtime_pick
-        .as_ref()
-        .is_some_and(|pick| selected.is_some() && pick.selected != selected)
-    {
+    if queries.runtime_pick.as_ref().is_some_and(|pick| {
+        (selected.is_some() && pick.selected != selected) || pick.key != focused
+    }) {
         queries.runtime_pick = None;
+        queries.generation += 1;
     }
     let current = queries.watching.clone();
     let desired = focused_live_instance(world)
@@ -253,6 +276,8 @@ pub(crate) fn sync_watch(world: &mut World) {
     }
     let mut queries = world.resource_mut::<GameQueries>();
     queries.watched.clear();
+    queries.watch_answered = false;
+    queries.generation += 1;
     queries.next_watch += 1;
     let watch = queries.next_watch;
     queries.watching = desired
@@ -281,7 +306,9 @@ pub(crate) fn forget_game_queries(world: &mut World) {
     if let Some(mut queries) = world.get_resource_mut::<GameQueries>() {
         queries.watching = None;
         queries.watched.clear();
+        queries.watch_answered = false;
         queries.runtime_pick = None;
+        queries.generation += 1;
     }
     expire_game_queries(world);
 }
@@ -508,6 +535,33 @@ mod tests {
             target,
             Some(GameEntityRef::Entity(42)),
             "selecting another entity ends the pick"
+        );
+    }
+
+    #[test]
+    fn a_runtime_pick_ends_when_another_game_takes_focus() {
+        let (mut world, _, mut game_end) = playing();
+        pick_runtime_entity(&mut world, 42);
+        sync_watch(&mut world);
+        next_control(&mut game_end);
+        let (editor, _other_end) = link();
+        let child = Command::new(std::env::current_exe().expect("the test binary"))
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child process");
+        crate::pie::connect_test_game(&mut world, game(2), child, editor).expect("a link");
+
+        sync_watch(&mut world);
+        assert_eq!(
+            world.resource::<GameQueries>().runtime_pick(),
+            None,
+            "the other game's entity ids mean nothing here"
+        );
+        assert_ne!(
+            world.resource::<GameQueries>().watch_target(),
+            Some(&GameEntityRef::Entity(42))
         );
     }
 

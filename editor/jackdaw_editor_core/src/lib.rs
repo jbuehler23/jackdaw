@@ -145,6 +145,7 @@ pub mod remote_ops;
 pub mod render_diagnostics;
 pub mod restart;
 pub mod run_config;
+pub mod runtime_outliner;
 pub use jackdaw_scaffold as scaffold;
 pub mod pixel_camera;
 pub mod scene_io;

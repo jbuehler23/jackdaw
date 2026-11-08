@@ -820,6 +820,17 @@ pub fn hierarchy_content(icon_font: Handle<Font>) -> impl Bundle {
                 tree_container_drop_observers(),
             ),
             (
+                crate::runtime_outliner::RuntimeGroupMount,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: percent(100),
+                    flex_shrink: 0.0,
+                    max_height: percent(40),
+                    overflow: Overflow::scroll_y(),
+                    ..Default::default()
+                },
+            ),
+            (
                 crate::status_bar::SceneStatsText,
                 Text::default(),
                 TextFont {
