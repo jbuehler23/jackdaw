@@ -4109,6 +4109,247 @@ fn revert_all_reverts_field_inherited_through_a_nested_prefab() {
     );
 }
 
+/// Text of an inner prefab whose root scales by `scale` and whose child (id 7)
+/// sits at `knob_x`.
+fn inner_prefab_text(scale: f64, knob_x: f64) -> String {
+    format!(
+        "#inner\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform {{\n\
+             translation: glam::Vec3 {{ x: 0.0, y: 0.0, z: 0.0 }},\n\
+             rotation: glam::Quat {{ x: 0.0, y: 0.0, z: 0.0, w: 1.0 }},\n\
+             scale: glam::Vec3 {{ x: {scale:?}, y: {scale:?}, z: {scale:?} }},\n\
+         }}\n\
+         bevy_camera::visibility::Visibility::Inherited\n\
+         bevy_ecs::hierarchy::Children [\n\
+             #knob\n\
+             jackdaw::prefab::components::PrefabEntityId(7)\n\
+             bevy_transform::components::transform::Transform {{\n\
+                 translation: glam::Vec3 {{ x: {knob_x:?}, y: 0.0, z: 0.0 }},\n\
+                 rotation: glam::Quat {{ x: 0.0, y: 0.0, z: 0.0, w: 1.0 }},\n\
+                 scale: glam::Vec3 {{ x: 1.0, y: 1.0, z: 1.0 }},\n\
+             }}\n\
+             bevy_camera::visibility::Visibility::Inherited\n\
+         ]"
+    )
+}
+
+/// Write an inner prefab and an outer prefab whose root is an `IsA` of it.
+/// Returns `(inner, outer)`.
+fn write_root_inheriting_prefabs(
+    dir: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let inner = dir.join("inner.bsn");
+    let outer = dir.join("outer.bsn");
+    std::fs::write(&inner, inner_prefab_text(2.0, 3.0)).unwrap();
+    std::fs::write(
+        &outer,
+        format!(
+            "#outer\n\
+             jackdaw::prefab::components::Prefab\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}",
+            inner.to_slash_lossy()
+        ),
+    )
+    .unwrap();
+    (inner, outer)
+}
+
+/// Rewrite the inner prefab and reload the scene the way the file watcher does:
+/// capture the sparse scene against the old baseline, then respawn it against
+/// the new one.
+fn edit_inner_prefab(app: &mut App, inner: &std::path::Path, scale: f64, knob_x: f64) {
+    let sparse = jackdaw::prefab::watcher::capture_sparse_scene_text(app.world_mut())
+        .expect("a live document to capture");
+    let text = inner_prefab_text(scale, knob_x);
+    std::fs::write(inner, &text).unwrap();
+    app.world_mut()
+        .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+        .insert(inner, bsn_ast(&text));
+    jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &sparse);
+}
+
+fn instance_transform(app: &mut App) -> Transform {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<&Transform, With<jackdaw::prefab::IsA>>();
+    let transforms: Vec<Transform> = q.iter(app.world()).copied().collect();
+    assert_eq!(transforms.len(), 1, "one instance entity");
+    transforms[0]
+}
+
+fn knob_transform(app: &mut App) -> Transform {
+    let mut q = app
+        .world_mut()
+        .query::<(&jackdaw::prefab::PrefabEntityId, &Transform)>();
+    q.iter(app.world())
+        .find(|(id, _)| id.0 == 7)
+        .map(|(_, t)| *t)
+        .expect("the inherited knob exists")
+}
+
+fn saved_scene_text(app: &mut App) -> String {
+    jackdaw::scene_io::emit_bsn_scene_with_inline_assets(app.world_mut(), std::path::Path::new(""))
+}
+
+fn saved_instance_field(text: &str, field_path: &str) -> Option<jackdaw_bsn::BsnValue> {
+    let ast = bsn_ast(text);
+    let node = ast
+        .entities_with_component(ISA_TYPE)
+        .first()
+        .copied()
+        .expect("the saved scene holds the instance");
+    jackdaw_bsn::get_bsn_field(&ast, node, TRANSFORM_TYPE, field_path)
+}
+
+fn saved_knob_transform(text: &str) -> Option<jackdaw_bsn::BsnValue> {
+    let ast = bsn_ast(text);
+    let node = ast.find_node_by_component_int(PEID_TYPE, 7)?;
+    jackdaw_bsn::get_bsn_field(&ast, node, TRANSFORM_TYPE, "")
+}
+
+#[test]
+fn an_instance_of_a_prefab_whose_root_inherits_saves_no_inherited_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, outer) = write_root_inheriting_prefabs(tmp.path());
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &outer,
+        bevy::math::Vec3::new(10.0, 0.0, 0.0),
+    );
+    assert!(
+        (instance_transform(&mut app).scale.x - 2.0).abs() < 1e-4,
+        "the instance inherits the inner root's scale"
+    );
+
+    let text = saved_scene_text(&mut app);
+    assert!(
+        saved_instance_field(&text, "scale").is_none(),
+        "the inherited scale is not written as an override; got {text}"
+    );
+    assert!(
+        saved_instance_field(&text, "rotation").is_none(),
+        "the inherited rotation is not written as an override; got {text}"
+    );
+    assert!(
+        matches!(
+            saved_instance_field(&text, "translation.x"),
+            Some(jackdaw_bsn::BsnValue::Float(x)) if (x - 10.0).abs() < 1e-4
+        ),
+        "the placement is written; got {text}"
+    );
+    assert!(
+        saved_knob_transform(&text).is_none(),
+        "the knob inherited through the outer prefab carries no override; got {text}"
+    );
+}
+
+#[test]
+fn an_edit_to_an_inner_prefab_shows_through_a_root_inheriting_instance() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, outer) = write_root_inheriting_prefabs(tmp.path());
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &outer,
+        bevy::math::Vec3::new(10.0, 0.0, 0.0),
+    );
+    edit_inner_prefab(&mut app, &inner, 3.0, 5.0);
+
+    let transform = instance_transform(&mut app);
+    assert!(
+        (transform.scale.x - 3.0).abs() < 1e-4,
+        "the instance shows the inner prefab's new scale; got {}",
+        transform.scale.x
+    );
+    assert!(
+        (transform.translation.x - 10.0).abs() < 1e-4,
+        "the placement survives the reload; got {}",
+        transform.translation.x
+    );
+    assert!(
+        (knob_transform(&mut app).translation.x - 5.0).abs() < 1e-4,
+        "the knob shows the inner prefab's new position"
+    );
+
+    let text = saved_scene_text(&mut app);
+    assert!(
+        saved_instance_field(&text, "scale").is_none(),
+        "no override appears after the reload; got {text}"
+    );
+
+    let mut reopened = make_app_for_prefab_tests();
+    {
+        let mut cache = reopened
+            .world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>();
+        cache.insert(&inner, bsn_ast(&inner_prefab_text(4.0, 6.0)));
+        cache.insert(&outer, bsn_ast(&std::fs::read_to_string(&outer).unwrap()));
+    }
+    jackdaw::prefab::watcher::respawn_from_sparse_text(reopened.world_mut(), &text);
+    let transform = instance_transform(&mut reopened);
+    assert!(
+        (transform.scale.x - 4.0).abs() < 1e-4,
+        "the reopened instance shows the inner prefab's current scale; got {}",
+        transform.scale.x
+    );
+    assert!(
+        (transform.translation.x - 10.0).abs() < 1e-4,
+        "the reopened instance keeps its placement"
+    );
+    assert!(
+        (knob_transform(&mut reopened).translation.x - 6.0).abs() < 1e-4,
+        "the reopened knob shows the inner prefab's current position"
+    );
+}
+
+#[test]
+fn an_override_on_a_root_inheriting_instance_is_saved_and_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, outer) = write_root_inheriting_prefabs(tmp.path());
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(
+        app.world_mut(),
+        &outer,
+        bevy::math::Vec3::new(10.0, 0.0, 0.0),
+    );
+    let instance = {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, With<jackdaw::prefab::IsA>>();
+        q.single(app.world()).expect("one instance entity")
+    };
+    if let Some(mut t) = app.world_mut().get_mut::<Transform>(instance) {
+        t.scale = bevy::math::Vec3::splat(7.0);
+    }
+    jackdaw_bsn::sync_to_ast(
+        app.world_mut(),
+        instance,
+        std::any::TypeId::of::<Transform>(),
+    );
+
+    let text = saved_scene_text(&mut app);
+    assert!(
+        matches!(
+            saved_instance_field(&text, "scale.x"),
+            Some(jackdaw_bsn::BsnValue::Float(x)) if (x - 7.0).abs() < 1e-4
+        ),
+        "the authored scale is written; got {text}"
+    );
+
+    edit_inner_prefab(&mut app, &inner, 3.0, 5.0);
+    assert!(
+        (instance_transform(&mut app).scale.x - 7.0).abs() < 1e-4,
+        "the authored scale wins over the inner prefab's edit"
+    );
+}
+
 /// An unmatched `PrefabEntityId` must be reported, never silently dropped from
 /// a pass that then claims to have reverted everything.
 #[test]

@@ -405,7 +405,7 @@ pub fn sparsify_inherited_descendants(
                 .map(move |child| (child, node))
         })
         .collect();
-    let mut entries: HashMap<PathBuf, HashMap<i128, Entity>> = HashMap::new();
+    let mut baselines: HashMap<PathBuf, Baseline> = HashMap::new();
 
     for node in nodes {
         // Instance roots sparsify against their own prefab's root entry: resolve
@@ -413,7 +413,22 @@ pub fn sparsify_inherited_descendants(
         // the inverse those values read as authored overrides and prefab root
         // edits never propagate.
         if ast.find_patch_by_type_path(node, ISA_TYPE).is_some() {
-            sparsify_instance_root(ast, node, get_prefab, filed_name);
+            let Some(baseline) = read_isa_source(ast, node)
+                .and_then(|source| baseline_for(&mut baselines, source, get_prefab))
+            else {
+                continue;
+            };
+            let Some(prefab_root) = baseline.root else {
+                continue;
+            };
+            sparsify_node_against_baseline(
+                ast,
+                node,
+                &baseline.prefab,
+                prefab_root,
+                &[ISA_TYPE, PREFAB_ENTITY_ID_TYPE],
+                filed_name,
+            );
             continue;
         }
         let Some(peid) = read_prefab_entity_id(ast, node) else {
@@ -429,19 +444,15 @@ pub fn sparsify_inherited_descendants(
             }
             cursor = parents.get(&current).copied();
         }
-        let Some(source) = isa_source else {
-            continue;
-        };
-        let Some(prefab) = get_prefab(&source) else {
-            continue;
-        };
-        let Some(&prefab_match) = entries
-            .entry(source)
-            .or_insert_with(|| prefab.nodes_by_component_int(PREFAB_ENTITY_ID_TYPE))
-            .get(&i128::from(peid))
+        let Some(baseline) =
+            isa_source.and_then(|source| baseline_for(&mut baselines, source, get_prefab))
         else {
             continue;
         };
+        let Some(&prefab_match) = baseline.ids.get(&peid) else {
+            continue;
+        };
+        let prefab = &baseline.prefab;
 
         sparsify_node_against_baseline(
             ast,
@@ -511,38 +522,49 @@ fn sparsify_node_against_baseline(
     }
 }
 
-/// Strip an instance root's components (and inherited name) that still match
-/// its prefab root's baseline. `IsA` and `PrefabEntityId` are kept
-/// unconditionally.
-fn sparsify_instance_root(
-    ast: &mut SceneBsnAst,
-    node: Entity,
-    get_prefab: &PrefabLookup,
-    filed_name: &ReferenceSpelling,
-) {
-    let Some(source) = read_isa_source(ast, node) else {
-        return;
-    };
-    let Some(prefab) = get_prefab(&source) else {
-        return;
-    };
-    let Some(prefab_root) = prefab
-        .roots
-        .iter()
-        .copied()
-        .find(|root| prefab.find_patch_by_type_path(*root, PREFAB_TYPE).is_some())
-    else {
-        return;
-    };
+/// What an instance of one prefab is compared against when it is reduced to
+/// overrides: the prefab with its own `IsA` chain expanded, since a prefab that
+/// inherits holds neither the root components nor the ids it inherits.
+struct Baseline {
+    prefab: SceneBsnAst,
+    root: Option<Entity>,
+    ids: HashMap<u32, Entity>,
+}
 
-    sparsify_node_against_baseline(
-        ast,
-        node,
-        prefab,
-        prefab_root,
-        &[ISA_TYPE, PREFAB_ENTITY_ID_TYPE],
-        filed_name,
-    );
+impl Baseline {
+    /// Expand `raw` against `get_prefab`. A prefab whose chain does not resolve
+    /// is compared as written.
+    fn new(raw: &SceneBsnAst, get_prefab: &PrefabLookup) -> Self {
+        let prefab = resolve_scene(raw, get_prefab).unwrap_or_else(|_| clone_scene(raw));
+        let root = prefab
+            .roots
+            .iter()
+            .copied()
+            .find(|root| prefab.find_patch_by_type_path(*root, PREFAB_TYPE).is_some());
+        let mut ids = HashMap::default();
+        for &top in &prefab.roots {
+            for node in std::iter::once(top).chain(scoped_descendants(&prefab, top)) {
+                if let Some(id) = read_prefab_entity_id(&prefab, node) {
+                    ids.entry(id).or_insert(node);
+                }
+            }
+        }
+        Self { prefab, root, ids }
+    }
+}
+
+/// The baseline for `source`, expanded on first use. `None` when the lookup
+/// does not have the source.
+fn baseline_for<'a>(
+    baselines: &'a mut HashMap<PathBuf, Baseline>,
+    source: PathBuf,
+    get_prefab: &PrefabLookup,
+) -> Option<&'a Baseline> {
+    if !baselines.contains_key(&source) {
+        let baseline = Baseline::new(get_prefab(&source)?, get_prefab);
+        baselines.insert(source.clone(), baseline);
+    }
+    baselines.get(&source)
 }
 
 /// Write each string `filed_name` has another name for under that name.
