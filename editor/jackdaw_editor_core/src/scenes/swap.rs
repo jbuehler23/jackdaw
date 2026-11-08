@@ -198,8 +198,8 @@ pub fn activate_tab(world: &mut World, target: usize) {
     };
 
     // Restore the target tab's bulk terrain data before spawning its scene
-    // and importing any sidecars. `FillMissing` can now preserve unsaved
-    // edits without confusing a same-named sidecar from another tab.
+    // and importing any sidecars, so the import keeps unsaved edits without
+    // confusing a same-named sidecar from another tab.
     if let Some(terrain_data_store) = terrain_data_store {
         *world.resource_mut::<crate::terrain_mode::TerrainDataStore>() = terrain_data_store;
     }
@@ -381,26 +381,23 @@ pub fn activate_tab(world: &mut World, target: usize) {
     // by `scene_open_system` pushes a parsed document straight onto the
     // tab strip and never goes through `finish_load_scene`, so this is the
     // only place its bulk data gets read.
-    // A dirty tab keeps its unsaved edits; a clean one re-reads the file.
+    // Each file is decided on its own: one holding unsaved edits keeps them, and
+    // one with none re-reads a file that has moved on.
     if let Some(path) = tab_path.as_ref() {
-        let mode = if world
-            .resource::<Scenes>()
-            .tabs
-            .get(target)
-            .is_some_and(|tab| tab.dirty)
-        {
-            crate::scene_io::SidecarImport::FillMissing
-        } else {
-            crate::scene_io::SidecarImport::RefreshChanged
-        };
         let path = path.to_string_lossy();
-        info_span!("tab.sidecars")
-            .in_scope(|| crate::scene_io::hooks::import_sidecars(world, &path, mode));
+        info_span!("tab.sidecars").in_scope(|| {
+            crate::scene_io::hooks::import_sidecars(
+                world,
+                &path,
+                crate::scene_io::SidecarImport::RefreshChanged,
+            );
+        });
     }
 
     let mut scenes = world.resource_mut::<Scenes>();
     scenes.active = target;
     scenes.tabs[target].history_state_at_last_check = None;
+    crate::scenes::external_watch::ask_about_changed_files(world, target);
     info_span!("tab.opened_observers").in_scope(|| {
         world.trigger(jackdaw_api_internal::document::SceneOpened { path: tab_path });
     });
