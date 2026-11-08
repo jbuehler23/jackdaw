@@ -108,7 +108,10 @@ impl Plugin for HierarchyPlugin {
             .init_resource::<RowsAwaitingRegistration>()
             .init_resource::<NewRootRows>()
             .init_resource::<OutlinerRangeAnchor>()
-            .add_plugins(crate::outliner_rows::plugin)
+            .add_plugins((
+                crate::outliner_rows::plugin,
+                crate::runtime_outliner::plugin,
+            ))
             .add_systems(OnEnter(crate::AppState::Editor), setup_name_watcher)
             .add_systems(
                 Update,

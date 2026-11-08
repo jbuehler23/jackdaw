@@ -8,6 +8,7 @@ pub(crate) mod component_tooltip;
 mod custom_props_display;
 mod definition_card;
 pub mod file_card;
+pub mod live_values;
 pub(crate) mod material_card_routing;
 mod material_display;
 pub(crate) mod material_row;
@@ -23,6 +24,7 @@ pub(crate) mod project_component_display;
 pub mod recipe_card;
 #[doc(hidden)]
 pub mod reflect_fields;
+pub mod runtime_card;
 pub(crate) mod schema_fields;
 pub mod sprite_card;
 pub mod type_metadata_pane;
@@ -226,6 +228,12 @@ impl Plugin for InspectorPlugin {
                         .after(category_strip::resolve_active_on_rebuild),
                     prefab_field_dots::decorate_prefab_field_rows,
                     prefab_field_dots::refresh_prefab_field_dots,
+                    (
+                        live_values::refresh_live_value_chips.run_if(live_values::chips_may_change),
+                        runtime_card::sync_runtime_card
+                            .run_if(runtime_card::runtime_card_may_change),
+                    )
+                        .after(crate::game_query::sync_watch),
                     // After the three passes that spawn and remove the marks.
                     // Their spawns are deferred, so the gutter follows a new
                     // mark on the next pass rather than the same one.

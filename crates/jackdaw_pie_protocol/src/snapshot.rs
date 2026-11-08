@@ -165,6 +165,14 @@ impl SnapshotColumn {
     }
 }
 
+/// A reflected value serialized as [`entity_components`] serializes component
+/// values, or `None` when it does not serialize.
+pub fn reflect_value_json(value: &dyn PartialReflect, registry: &TypeRegistry) -> Option<Value> {
+    let processor = RemoteSerializerProcessor;
+    let serializer = TypedReflectSerializer::with_processor(value, registry, &processor);
+    serde_json::to_value(&serializer).ok()
+}
+
 /// The components of `archetype` a snapshot holds: registered as reflectable
 /// components and not on a skip list.
 fn snapshot_columns(

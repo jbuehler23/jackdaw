@@ -920,15 +920,16 @@ impl AskedScene {
     }
 }
 
-/// The path under the asset folder of the file tab `tab` holds, if it has one.
-#[cfg(test)]
-pub(crate) fn note_test_asked_scene(world: &mut World, key: &InstanceKey, requested: &str) {
+/// Record that the game `key` asked for the scene `requested`, for a test.
+#[doc(hidden)]
+pub fn note_test_asked_scene(world: &mut World, key: &InstanceKey, requested: &str) {
     let asked = AskedScene::resolved(world, None, requested);
     world
         .resource_mut::<PlayAssetNames>()
         .note_asked(key, asked);
 }
 
+/// The path under the asset folder of the file tab `tab` holds, if it has one.
 pub(crate) fn tab_asset_path(world: &World, tab: usize) -> Option<String> {
     let path = world.get_resource::<Scenes>()?.tabs[tab].path.clone()?;
     world

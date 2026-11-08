@@ -1572,6 +1572,19 @@ pub(crate) fn focused_live_instance(world: &World) -> Option<InstanceKey> {
     }
 }
 
+/// Whether a focused game is connected, as an operator's availability check.
+pub(crate) fn focused_game_is_live(
+    instances: Option<Res<PieInstances>>,
+    session: Option<NonSend<PieSession>>,
+) -> bool {
+    let (Some(instances), Some(session)) = (instances, session) else {
+        return false;
+    };
+    instances.focused.as_ref().is_some_and(|focused| {
+        matches!(session.children.get(focused), Some(ChildStage::Live { .. }))
+    })
+}
+
 /// Move focus to `key`: the instance losing it stops streaming frames nobody
 /// would see. A no-op if `key` is already focused.
 pub(crate) fn set_focused_instance(world: &mut World, key: InstanceKey) {

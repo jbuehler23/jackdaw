@@ -53,6 +53,7 @@ mod ui_marquee;
 mod ui_stage_manipulation;
 mod ui_text_edit;
 mod view_ops;
+mod watch_the_game;
 mod water;
 mod world_guides;
 mod world_units;
