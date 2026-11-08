@@ -69,6 +69,68 @@ impl std::fmt::Display for InstanceKey {
 /// per-child reader thread and read back when reporting a crash.
 type StderrTail = Arc<Mutex<VecDeque<String>>>;
 
+/// How many stderr lines a [`GameExit`] shows.
+const EXIT_STDERR_LINES: usize = 8;
+
+/// Why a game went away without being stopped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GameExitReason {
+    /// Exited with a failure status after connecting, as "code N" or "signal N".
+    Crashed(String),
+    /// Exited before connecting, with its status.
+    ExitedBeforeConnecting(String),
+    /// Still unconnected at the connect timeout, so it was stopped.
+    NeverConnected,
+    /// The connection to it could not be set up.
+    ConnectFailed(String),
+}
+
+/// A game that went away on its own, with the end of its stderr.
+#[derive(Clone, Debug)]
+pub struct GameExit {
+    pub key: InstanceKey,
+    pub reason: GameExitReason,
+    stderr: StderrTail,
+}
+
+impl GameExit {
+    /// The last few lines the game wrote to stderr.
+    pub fn stderr_lines(&self) -> Vec<String> {
+        let Ok(buf) = self.stderr.lock() else {
+            return Vec::new();
+        };
+        let skip = buf.len().saturating_sub(EXIT_STDERR_LINES);
+        buf.iter().skip(skip).cloned().collect()
+    }
+}
+
+/// Why the last game went away, until Play or Stop is pressed or a game exits
+/// cleanly.
+#[derive(Resource, Default, Debug)]
+pub struct LastGameExit(pub Option<GameExit>);
+
+/// A child's exit status as "code N", or "signal N" for one killed by a signal.
+fn exit_status_text(status: std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("code {code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("signal {signal}");
+        }
+    }
+    status.to_string()
+}
+
+/// What one poll of a child found.
+enum ChildPoll {
+    Running(ChildStage),
+    /// Reaped, with why when it went away uncleanly.
+    Gone(Option<GameExit>),
+}
+
 /// One launched child and its connection progress.
 enum ChildStage {
     /// The child is launched and `IpcServerHandle::accept` is blocking
@@ -180,6 +242,8 @@ pub struct PieSession {
     pub(crate) builds: HashMap<PathBuf, BuildState>,
     /// Scene answers being written on a worker.
     serving: Vec<ServingScene>,
+    /// Replaces [`CONNECT_TIMEOUT`] when set.
+    connect_timeout: Option<Duration>,
 }
 
 /// A scene answer on a worker, with its places in the instance's outbox.
@@ -319,7 +383,7 @@ impl PieSession {
     }
 
     /// Whether the last thing a launch did was fail its build.
-    fn launch_failed(&self) -> bool {
+    pub(crate) fn launch_failed(&self) -> bool {
         self.builds
             .values()
             .any(|build| matches!(build, BuildState::Failed { launch: true }))
@@ -360,6 +424,7 @@ impl Plugin for PiePlugin {
             .init_non_send::<PieSession>()
             .init_resource::<PieInstances>()
             .init_resource::<PlayStatus>()
+            .init_resource::<LastGameExit>()
             .init_resource::<crate::live_frame::LiveFrameStream>()
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
@@ -905,10 +970,11 @@ impl PieSession {
 pub fn connect_test_game(
     world: &mut World,
     key: InstanceKey,
-    child: Child,
+    mut child: Child,
     transport: IpcChannelTransport,
 ) -> io::Result<()> {
     let outbox = GameOutbox::new(&transport)?;
+    let stderr_tail = tail_stderr(&mut child);
     if !world.contains_non_send::<PieSession>() {
         world.insert_non_send(PieSession::default());
     }
@@ -918,7 +984,7 @@ pub fn connect_test_game(
             child,
             transport,
             outbox,
-            stderr_tail: StderrTail::default(),
+            stderr_tail,
         },
     );
     world.get_resource_or_init::<PieInstances>().focused = Some(key);
@@ -928,21 +994,31 @@ pub fn connect_test_game(
 /// Add `child` as game `key` that is still connecting and never connects, for a
 /// test.
 #[doc(hidden)]
-pub fn connecting_test_game(world: &mut World, key: InstanceKey, child: Child) {
+pub fn connecting_test_game(world: &mut World, key: InstanceKey, mut child: Child) {
     if !world.contains_non_send::<PieSession>() {
         world.insert_non_send(PieSession::default());
     }
     let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
         .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
+    let stderr_tail = tail_stderr(&mut child);
     world.non_send_mut::<PieSession>().children.insert(
         key,
         ChildStage::Connecting {
             child,
             accept,
-            stderr_tail: StderrTail::default(),
+            stderr_tail,
             since: Instant::now(),
         },
     );
+}
+
+/// Give up on games that have not connected after `timeout`, for a test.
+#[doc(hidden)]
+pub fn set_connect_timeout(world: &mut World, timeout: Duration) {
+    if !world.contains_non_send::<PieSession>() {
+        world.insert_non_send(PieSession::default());
+    }
+    world.non_send_mut::<PieSession>().connect_timeout = Some(timeout);
 }
 
 /// Hold the open project's game build as in progress, for a test: a launch then
@@ -1082,6 +1158,9 @@ pub(crate) fn project_root(world: &World) -> Option<PathBuf> {
 /// cached binary, joins an in-flight build's pending list, or starts a
 /// new build keyed by the spec.
 pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfig) {
+    if let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
+        last.0 = None;
+    }
     {
         let session = world.non_send::<PieSession>();
         if session.is_running(&key) || session.is_pending(&key) {
@@ -1434,6 +1513,9 @@ pub fn handle_stop(world: &mut World) {
     }
     // Dropping the in-flight builds cancels them and kills their cargo.
     session.builds.clear();
+    if let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
+        last.0 = None;
+    }
 
     if current != PlayState::Stopped {
         world
@@ -1788,13 +1870,28 @@ fn poll_builds(world: &mut World) {
 /// exit are reaped. The children map is taken with `mem::take` and
 /// rebuilt from survivors, moving each `Child` by value.
 fn poll_children(world: &mut World) {
-    let children = std::mem::take(&mut world.non_send_mut::<PieSession>().children);
+    let mut session = world.non_send_mut::<PieSession>();
+    let children = std::mem::take(&mut session.children);
+    let timeout = session.connect_timeout.unwrap_or(CONNECT_TIMEOUT);
 
     let mut survivors: HashMap<InstanceKey, ChildStage> = HashMap::with_capacity(children.len());
+    let mut reaped = false;
+    let mut exit = None;
     for (key, stage) in children {
-        if let Some(next) = advance_child(&key, stage) {
-            survivors.insert(key, next);
+        match advance_child(&key, stage, timeout) {
+            ChildPoll::Running(next) => {
+                survivors.insert(key, next);
+            }
+            ChildPoll::Gone(gone) => {
+                reaped = true;
+                if gone.is_some() {
+                    exit = gone;
+                }
+            }
         }
+    }
+    if reaped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
+        last.0 = exit;
     }
 
     let mut session = world.non_send_mut::<PieSession>();
@@ -1813,11 +1910,18 @@ fn poll_children(world: &mut World) {
     world.non_send_mut::<PieSession>().children = survivors;
 }
 
-/// Step one child's stage by value, returning the stage it should
-/// carry into next frame, or `None` if it should be dropped. A
-/// connected `Connecting` becomes `Live`; a child that failed to
-/// connect or has exited is reaped and dropped.
-fn advance_child(key: &InstanceKey, stage: ChildStage) -> Option<ChildStage> {
+/// Step one child's stage by value. A connected `Connecting` becomes `Live`; a
+/// child that failed to connect, took longer than `timeout` to, or has exited
+/// is reaped, with why when it went away uncleanly.
+fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> ChildPoll {
+    let gone = |reason: GameExitReason, stderr_tail: StderrTail| {
+        report_stderr_tail(&stderr_tail);
+        ChildPoll::Gone(Some(GameExit {
+            key: key.clone(),
+            reason,
+            stderr: stderr_tail,
+        }))
+    };
     match stage {
         ChildStage::Connecting {
             mut child,
@@ -1830,41 +1934,39 @@ fn advance_child(key: &InstanceKey, stage: ChildStage) -> Option<ChildStage> {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     error!("PIE: {key} exited before connecting with {status}");
-                    report_stderr_tail(&stderr_tail);
-                    return None;
+                    return gone(
+                        GameExitReason::ExitedBeforeConnecting(exit_status_text(status)),
+                        stderr_tail,
+                    );
                 }
                 Ok(None) => {}
                 Err(err) => {
                     error!("PIE: {key} failed to poll while connecting: {err}");
                     child.kill().ok();
                     child.wait().ok();
-                    return None;
+                    return gone(GameExitReason::ConnectFailed(err.to_string()), stderr_tail);
                 }
             }
             match future::block_on(future::poll_once(&mut accept)) {
-                None => {
-                    if since.elapsed() >= CONNECT_TIMEOUT {
-                        error!(
-                            "PIE: {key} did not connect within {}s; is the jackdaw_runtime/pie feature enabled for this bin?",
-                            CONNECT_TIMEOUT.as_secs()
-                        );
-                        child.kill().ok();
-                        child.wait().ok();
-                        report_stderr_tail(&stderr_tail);
-                        None
-                    } else {
-                        Some(ChildStage::Connecting {
-                            child,
-                            accept,
-                            stderr_tail,
-                            since,
-                        })
-                    }
+                None if since.elapsed() >= timeout => {
+                    error!(
+                        "PIE: {key} did not connect within {}s; does its app add JackdawPlugin, with the pie feature of jackdaw_runtime enabled?",
+                        timeout.as_secs()
+                    );
+                    child.kill().ok();
+                    child.wait().ok();
+                    gone(GameExitReason::NeverConnected, stderr_tail)
                 }
+                None => ChildPoll::Running(ChildStage::Connecting {
+                    child,
+                    accept,
+                    stderr_tail,
+                    since,
+                }),
                 Some(Ok(transport)) => match GameOutbox::new(&transport) {
                     Ok(outbox) => {
                         info!("PIE: {key} connected");
-                        Some(ChildStage::Live {
+                        ChildPoll::Running(ChildStage::Live {
                             child,
                             transport,
                             outbox,
@@ -1875,15 +1977,14 @@ fn advance_child(key: &InstanceKey, stage: ChildStage) -> Option<ChildStage> {
                         error!("PIE: {key} could not start its writer thread: {err}");
                         child.kill().ok();
                         child.wait().ok();
-                        None
+                        gone(GameExitReason::ConnectFailed(err.to_string()), stderr_tail)
                     }
                 },
                 Some(Err(err)) => {
                     error!("PIE: {key} failed to connect: {err}");
                     child.kill().ok();
                     child.wait().ok();
-                    report_stderr_tail(&stderr_tail);
-                    None
+                    gone(GameExitReason::ConnectFailed(err.to_string()), stderr_tail)
                 }
             }
         }
@@ -1893,24 +1994,26 @@ fn advance_child(key: &InstanceKey, stage: ChildStage) -> Option<ChildStage> {
             outbox,
             stderr_tail,
         } => match child.try_wait() {
-            Ok(None) => Some(ChildStage::Live {
+            Ok(None) => ChildPoll::Running(ChildStage::Live {
                 child,
                 transport,
                 outbox,
                 stderr_tail,
             }),
+            Ok(Some(status)) if status.success() => {
+                info!("PIE: {key} exited");
+                ChildPoll::Gone(None)
+            }
             Ok(Some(status)) => {
-                if status.success() {
-                    info!("PIE: {key} exited");
-                } else {
-                    error!("PIE: {key} exited with {status}");
-                    report_stderr_tail(&stderr_tail);
-                }
-                None
+                error!("PIE: {key} exited with {status}");
+                gone(
+                    GameExitReason::Crashed(exit_status_text(status)),
+                    stderr_tail,
+                )
             }
             Err(err) => {
                 error!("PIE: {key} failed to poll: {err}");
-                None
+                ChildPoll::Gone(None)
             }
         },
     }
@@ -2084,6 +2187,23 @@ fn spawn_instance(
     #[cfg(target_os = "windows")]
     pie_windows::PIE_JOB.assign_to_process(&child);
 
+    let stderr_tail = tail_stderr(&mut child);
+    let accept = AsyncComputeTaskPool::get().spawn(async move { handle.accept() });
+
+    info!("PIE: {key} launched, awaiting connection");
+    Some((
+        ChildStage::Connecting {
+            child,
+            accept,
+            stderr_tail,
+            since: Instant::now(),
+        },
+        mode,
+    ))
+}
+
+/// Keep the last lines of a child's piped stderr, read on a thread of its own.
+fn tail_stderr(child: &mut Child) -> StderrTail {
     let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     if let Some(stderr) = child.stderr.take() {
         let tail = Arc::clone(&stderr_tail);
@@ -2098,19 +2218,7 @@ fn spawn_instance(
             }
         });
     }
-
-    let accept = AsyncComputeTaskPool::get().spawn(async move { handle.accept() });
-
-    info!("PIE: {key} launched, awaiting connection");
-    Some((
-        ChildStage::Connecting {
-            child,
-            accept,
-            stderr_tail,
-            since: Instant::now(),
-        },
-        mode,
-    ))
+    stderr_tail
 }
 
 /// Log the buffered stderr tail as an error, for diagnosing a crashed
@@ -3315,5 +3423,103 @@ mod transport_tests {
             world.resource::<NextState<PlayState>>(),
             NextState::Pending(PlayState::Playing)
         ));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod game_exit_tests {
+    use super::*;
+
+    fn key() -> InstanceKey {
+        InstanceKey {
+            config: "Game".to_string(),
+            instance: 1,
+        }
+    }
+
+    fn shell(script: &str) -> Child {
+        Command::new("sh")
+            .args(["-c", script])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("a shell")
+    }
+
+    fn connecting(mut child: Child, since: Instant) -> ChildStage {
+        let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
+            .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
+        let stderr_tail = tail_stderr(&mut child);
+        ChildStage::Connecting {
+            child,
+            accept,
+            stderr_tail,
+            since,
+        }
+    }
+
+    /// Poll `stage` until it is reaped.
+    fn reap(mut stage: ChildStage, timeout: Duration) -> Option<GameExit> {
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            match advance_child(&key(), stage, timeout) {
+                ChildPoll::Running(next) => stage = next,
+                ChildPoll::Gone(exit) => return exit,
+            }
+            assert!(Instant::now() < until, "the child was never reaped");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn exit_status_names_the_code_or_the_signal() {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            exit_status_text(std::process::ExitStatus::from_raw(3 << 8)),
+            "code 3"
+        );
+        assert_eq!(
+            exit_status_text(std::process::ExitStatus::from_raw(9)),
+            "signal 9"
+        );
+    }
+
+    #[test]
+    fn a_game_that_exits_before_connecting_records_its_code_and_stderr() {
+        let stage = connecting(
+            shell("for i in 1 2 3 4 5 6 7 8 9 10; do echo line $i >&2; done; exit 3"),
+            Instant::now(),
+        );
+        let exit = reap(stage, Duration::from_secs(30)).expect("an exit is recorded");
+        assert_eq!(exit.key, key());
+        assert_eq!(
+            exit.reason,
+            GameExitReason::ExitedBeforeConnecting("code 3".to_string())
+        );
+        let until = Instant::now() + Duration::from_secs(5);
+        while exit.stderr_lines().last().map(String::as_str) != Some("line 10") {
+            assert!(Instant::now() < until, "{:?}", exit.stderr_lines());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let lines = exit.stderr_lines();
+        assert_eq!(lines.len(), EXIT_STDERR_LINES);
+        assert_eq!(lines.first().map(String::as_str), Some("line 3"));
+    }
+
+    #[test]
+    fn a_game_still_unconnected_at_the_timeout_is_stopped_and_recorded() {
+        let stage = connecting(shell("sleep 600"), Instant::now());
+        let exit = reap(stage, Duration::from_millis(20)).expect("an exit is recorded");
+        assert_eq!(exit.reason, GameExitReason::NeverConnected);
+    }
+
+    #[test]
+    fn an_unconnected_game_within_the_timeout_keeps_running() {
+        let stage = connecting(shell("sleep 600"), Instant::now());
+        let ChildPoll::Running(mut stage) = advance_child(&key(), stage, Duration::from_secs(30))
+        else {
+            panic!("the child was reaped");
+        };
+        stage.kill_and_reap();
     }
 }

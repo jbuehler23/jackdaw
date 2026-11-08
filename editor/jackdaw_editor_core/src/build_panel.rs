@@ -285,11 +285,14 @@ fn reset_build_focus(mut focus: ResMut<BuildPanelFocus>, status: Option<ResMut<B
 
 /// Bring the Build panel to the front on the first build after opening a
 /// project and whenever a build fails; leave routine successful rebuilds
-/// alone so the panel does not steal focus.
+/// alone so the panel does not steal focus. A build for a launch into the
+/// Game panel leaves the Game panel in front, which says when it fails.
 fn auto_focus_build_panel(
     build_status: Res<BuildStatus>,
     mut tree: ResMut<DockTree>,
     mut focus: ResMut<BuildPanelFocus>,
+    session: Option<NonSend<crate::pie::PieSession>>,
+    launched: crate::pie::LaunchedWindowMode,
 ) {
     if !build_status.is_changed() {
         return;
@@ -302,7 +305,9 @@ fn auto_focus_build_panel(
         }
         _ => false,
     };
-    if surface {
+    let play_launch = launched.get() == crate::pie::PieWindowMode::Embedded
+        && session.is_some_and(|session| session.is_launching() || session.launch_failed());
+    if surface && !play_launch {
         activate_build_tab(&mut tree);
     }
 }

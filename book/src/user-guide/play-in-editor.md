@@ -95,7 +95,9 @@ The play controls in the title bar are **Play**, **Pause**, **Step** and
 Every key can be changed in the keymap. `F5` does nothing while a game is
 running, so a second press never restarts it by accident.
 
-Hit **Play** to launch. While the game builds, Play reads **Building...**
+Hit **Play** to launch, from the toolbar or the Play button in the Game
+panel. The Game panel comes to the front as the build starts. While the game
+builds, Play reads **Building...**
 and **Stop** cancels the launch, stopping the build. Once the game runs, Play
 fills with the accent colour, the viewport's edge takes the accent too, and
 the status bar reads **Playing**, followed by the run configuration's name
@@ -172,5 +174,10 @@ running game holds.
   the panel that was in front before Play comes back, and the viewport's edge
   clears. Edits made during Play stay in the document. A game that exits or
   crashes on its own puts the controls back to stopped too.
+- When a launch goes wrong, the Game panel stays in front and says why: the
+  exit code and the last lines the game printed for a crash, a note that the
+  game must add `JackdawPlugin` (with the `pie` feature of `jackdaw_runtime`)
+  when it never connects, or that the build failed. **Restart** in the panel
+  launches it again.
 - **Restart** relaunches with the current window setting, which is how you
   apply a change to **Play in separate window**.

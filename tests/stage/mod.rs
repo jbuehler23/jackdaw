@@ -12,6 +12,7 @@ mod definition_assets;
 mod extension_app_plugin;
 mod extension_reload;
 mod foliage;
+mod game_panel_states;
 mod gltf_authoring;
 mod image_sampling;
 mod layered_surface;
