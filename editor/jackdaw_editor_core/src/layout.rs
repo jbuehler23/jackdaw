@@ -1,4 +1,6 @@
+use bevy::app::PropagateOver;
 use bevy::feathers::controls::{ButtonVariant, FeathersToolButton};
+use bevy::feathers::theme::{InheritableThemeTextColor, ThemedText};
 use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::prelude::*;
 use jackdaw_feathers::{
@@ -29,7 +31,7 @@ use crate::{
     grid_ops::{GridDecreaseOp, GridIncreaseOp, GridToggleSnapOp},
     hierarchy::{HierarchyPanel, HierarchyShowAllButton, HierarchyTreeContainer},
     inspector::Inspector,
-    pie::PieWindowModeToggleOp,
+    pie::{PiePauseOp, PiePlayOp, PieStepOp, PieStopOp, PlayPhase, PlayStatus},
     snapping::SnapSettings,
     tool_ops::{ToolRotateOp, ToolScaleOp, ToolSelectOp, ToolTranslateOp},
     viewport::SceneViewport,
@@ -250,10 +252,9 @@ fn window_title_bar_content(
     )
 }
 
-/// Play / Pause / Stop transport pill. Clicking a button triggers
-/// the corresponding `PiePlugin` handler. The plugin installs a
-/// click observer on each `PieButton` via an `On<Add<PieButton>>`
-/// observer, so wiring here is purely presentation.
+/// The Play transport: Play with the Play menu beside it, then Pause, Step
+/// and Stop. Each button runs its operator, whose availability greys it out,
+/// and [`update_play_controls`] follows the play phase on Play and Pause.
 fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
     (
         EditorEntity,
@@ -263,7 +264,7 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
             justify_content: JustifyContent::Center,
             height: px(tokens::HEADER_CONTROL_HEIGHT),
             padding: UiRect::horizontal(px(6.5)),
-            column_gap: px(9.0),
+            column_gap: px(4.0),
             border: UiRect::all(px(1.0)),
             border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_LG)),
             ..Default::default()
@@ -271,59 +272,220 @@ fn play_pause_controls(icon_font: Handle<Font>) -> impl Bundle {
         BackgroundColor(tokens::HEADER_CONTROL_BG),
         BorderColor::all(tokens::HEADER_CONTROL_BORDER),
         children![
-            pie_transport_button(
-                crate::pie::PieButton::Rebuild,
-                Icon::Hammer,
-                icon_font.clone(),
+            (
+                PlayButton,
+                TransportButton,
+                EditorEntity,
+                button(
+                    ButtonProps::new(PlayPhase::Stopped.play_caption())
+                        .with_left_icon(Icon::Play)
+                        .with_variant(EditorButtonVariant::Ghost)
+                        .call_operator(PiePlayOp::ID),
+                ),
             ),
-            pie_transport_button(crate::pie::PieButton::Play, Icon::Play, icon_font.clone(),),
             pie_menu_button(icon_font.clone()),
-            pie_transport_button(crate::pie::PieButton::Pause, Icon::Pause, icon_font.clone(),),
-            pie_transport_button(crate::pie::PieButton::Stop, Icon::Square, icon_font.clone(),),
-            pie_transport_button(crate::pie::PieButton::Reload, Icon::RefreshCw, icon_font),
-            window_mode_button(),
+            (
+                PauseButton,
+                transport_button(PiePauseOp::ID, Icon::Pause, icon_font.clone()),
+            ),
+            transport_button(PieStepOp::ID, Icon::StepForward, icon_font.clone()),
+            transport_button(PieStopOp::ID, Icon::Square, icon_font),
         ],
     )
 }
 
-/// Caret button next to Play that opens the run-config dropdown. Shares
-/// `pie_transport_button`'s shape but carries the `PieMenuButton`
-/// marker, which `PieMenuPlugin` observes to open the menu.
+/// Caret button next to Play that opens the Play menu. Carries the
+/// `PieMenuButton` marker, which `PieMenuPlugin` observes to open the menu.
 fn pie_menu_button(icon_font: Handle<Font>) -> impl Bundle {
     (
         crate::pie_menu::PieMenuButton,
+        TransportButton,
         EditorEntity,
+        jackdaw_feathers::tooltip::Tooltip::title("Play options")
+            .with_description("Run configurations, Rebuild, Restart and the game window."),
         icon_button(
             IconButtonProps::new(Icon::ChevronDown)
                 .variant(EditorButtonVariant::Ghost)
-                .with_size(ButtonSize::IconSM)
-                .color(tokens::HEADER_CONTROL_LABEL),
+                .with_size(ButtonSize::IconSM),
             &icon_font,
         ),
     )
 }
 
-/// Single transport button. The `PieButton` marker is the hook the
-/// `PiePlugin` uses to attach the click observer. Lucide glyphs live
-/// in the Private Use Area, so the icon font handle must be passed
-/// explicitly: without it the default font (`FiraSans`) renders the
-/// codepoints as tofu/`?`.
-fn pie_transport_button(
-    kind: crate::pie::PieButton,
-    icon: Icon,
-    icon_font: Handle<Font>,
-) -> impl Bundle {
+/// An icon button in the Play transport that runs `op_id`. Lucide glyphs
+/// live in the Private Use Area, so the icon font handle is passed
+/// explicitly.
+fn transport_button(op_id: &'static str, icon: Icon, icon_font: Handle<Font>) -> impl Bundle {
     (
-        kind,
         EditorEntity,
+        TransportButton,
+        ButtonOperatorCall::new(op_id),
         icon_button(
             IconButtonProps::new(icon)
                 .variant(EditorButtonVariant::Ghost)
-                .with_size(ButtonSize::IconSM)
-                .color(tokens::HEADER_CONTROL_LABEL),
+                .with_size(ButtonSize::IconSM),
             &icon_font,
         ),
     )
+}
+
+/// Marker on every button in the Play transport.
+#[derive(Component)]
+pub struct TransportButton;
+
+/// Let a transport button's icon and caption take the feathers button text
+/// colour, so a disabled one greys and the Primary one reads on its fill like
+/// any other feathers button. Only the colour is taken: the font stays, or the
+/// icon glyphs would lose the icon font. The button's colour is put back
+/// afterwards so it reaches the text just marked.
+pub fn theme_transport_text(
+    added: Query<Entity, Added<TransportButton>>,
+    children: Query<&Children>,
+    colors: Query<&InheritableThemeTextColor>,
+    mut commands: Commands,
+) {
+    for button in &added {
+        let mut stack: Vec<Entity> = children
+            .get(button)
+            .map(|kids| kids.iter().collect())
+            .unwrap_or_default();
+        while let Some(entity) = stack.pop() {
+            commands
+                .entity(entity)
+                .insert((ThemedText, PropagateOver::<TextFont>::default()));
+            if let Ok(kids) = children.get(entity) {
+                stack.extend(kids.iter());
+            }
+        }
+        if let Ok(color) = colors.get(button) {
+            commands.entity(button).insert(color.clone());
+        }
+    }
+}
+
+/// Marker on the toolbar's Play button.
+#[derive(Component)]
+pub struct PlayButton;
+
+/// Marker on the toolbar's Pause button.
+#[derive(Component)]
+pub struct PauseButton;
+
+/// Marker on the Play button's icon, which spins while a launch builds.
+#[derive(Component)]
+pub struct PlayButtonIcon;
+
+/// Wide enough for the longest Play caption, so the buttons after it stay put
+/// as it changes. The button also takes the icon buttons' height to fit the
+/// pill.
+const PLAY_BUTTON_MIN_WIDTH: f32 = 104.0;
+
+/// How fast the Play icon turns while a launch builds, in turns per second.
+const BUILDING_SPIN_TURNS: f32 = 1.0;
+
+/// Show the play phase on the Play and Pause buttons: Play reads Play, Resume
+/// or Building..., and fills with the accent while a game runs; Pause reads as
+/// pressed while paused. Whether each can be clicked is its operator's
+/// availability, which the operator buttons follow on their own.
+pub fn update_play_controls(
+    status: Res<PlayStatus>,
+    added: Query<(), Added<PlayButton>>,
+    mut play: Query<(Entity, &mut EditorButtonVariant, &mut Node), With<PlayButton>>,
+    mut pause: Query<&mut EditorButtonVariant, (With<PauseButton>, Without<PlayButton>)>,
+    children: Query<&Children>,
+    captions: Query<(), With<jackdaw_feathers::button::ButtonContentText>>,
+    icons: Query<
+        (),
+        (
+            With<Text>,
+            Without<jackdaw_feathers::button::ButtonContentText>,
+        ),
+    >,
+    mut texts: Query<&mut Text>,
+    mut commands: Commands,
+) {
+    if !status.is_changed() && added.is_empty() {
+        return;
+    }
+    let phase = status.phase;
+    let play_variant = if phase == PlayPhase::Playing {
+        EditorButtonVariant::Primary
+    } else {
+        EditorButtonVariant::Ghost
+    };
+    let glyph = String::from(if phase == PlayPhase::Building {
+        Icon::LoaderCircle.unicode()
+    } else {
+        Icon::Play.unicode()
+    });
+    for (entity, mut variant, mut node) in &mut play {
+        if *variant != play_variant {
+            *variant = play_variant;
+        }
+        if node.min_width != px(PLAY_BUTTON_MIN_WIDTH) {
+            node.min_width = px(PLAY_BUTTON_MIN_WIDTH);
+            node.height = ButtonSize::IconSM.height();
+        }
+        if let Some(caption) =
+            jackdaw_feathers::button::button_caption(entity, &children, &captions)
+            && let Ok(mut text) = texts.get_mut(caption)
+            && text.0 != phase.play_caption()
+        {
+            text.0 = phase.play_caption().to_string();
+        }
+        let icon = children
+            .get(entity)
+            .into_iter()
+            .flat_map(Children::iter)
+            .find(|kid| icons.contains(*kid));
+        if let Some(icon) = icon {
+            commands.entity(icon).insert(PlayButtonIcon);
+            if let Ok(mut text) = texts.get_mut(icon)
+                && text.0 != glyph
+            {
+                text.0.clone_from(&glyph);
+            }
+        }
+    }
+    let pause_variant = if phase == PlayPhase::Paused {
+        EditorButtonVariant::Active
+    } else {
+        EditorButtonVariant::Ghost
+    };
+    for mut variant in &mut pause {
+        if *variant != pause_variant {
+            *variant = pause_variant;
+        }
+    }
+}
+
+/// Turn the Play icon while a launch builds, and set it straight otherwise.
+pub fn spin_play_icon(
+    time: Res<Time<Real>>,
+    status: Res<PlayStatus>,
+    mut icons: Query<(Entity, Option<&mut UiTransform>), With<PlayButtonIcon>>,
+    mut commands: Commands,
+) {
+    let building = status.phase == PlayPhase::Building;
+    if !building && !status.is_changed() {
+        return;
+    }
+    let rotation = if building {
+        Rot2::radians(time.elapsed_secs() * BUILDING_SPIN_TURNS * std::f32::consts::TAU)
+    } else {
+        Rot2::IDENTITY
+    };
+    for (entity, transform) in &mut icons {
+        match transform {
+            Some(mut transform) => transform.rotation = rotation,
+            None => {
+                commands.entity(entity).insert(UiTransform {
+                    rotation,
+                    ..UiTransform::IDENTITY
+                });
+            }
+        }
+    }
 }
 
 /// Bundle the editor toolbar and the `SceneViewport` node together so
@@ -1063,68 +1225,6 @@ pub fn update_playing_edge(
     for mut border in &mut viewport_border {
         if *border != target {
             *border = target;
-        }
-    }
-}
-
-/// Marker on the button that picks whether the next launched game renders
-/// into the viewport or opens a separate window.
-#[derive(Component)]
-pub struct WindowModeButton;
-
-/// Marker on the text node inside [`WindowModeButton`] that names the current
-/// [`PieWindowMode`](crate::pie::PieWindowMode).
-#[derive(Component)]
-pub struct WindowModeLabel;
-
-/// Build the button that flips the next launch between an embedded
-/// (viewport) game and a separate game window.
-///
-/// Always visible. Clicking dispatches `pie.window_mode_toggle`;
-/// [`update_window_mode_button`] keeps the label naming the current mode.
-fn window_mode_button() -> impl Bundle {
-    (
-        WindowModeButton,
-        button(ButtonProps::new("")),
-        jackdaw_feathers::tooltip::Tooltip::title("Game window: embedded or separate window"),
-        observe(|_: On<PointerClick>, mut commands: Commands| {
-            commands
-                .operator(PieWindowModeToggleOp::ID)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: false,
-                })
-                .call();
-        }),
-        children![(
-            WindowModeLabel,
-            Text::new(String::new()),
-            TextFont {
-                font_size: tokens::TEXT_SIZE_SM,
-                ..Default::default()
-            },
-            TextColor(tokens::TEXT_SECONDARY),
-        )],
-    )
-}
-
-/// Keep the window-mode button label current.
-pub fn update_window_mode_button(
-    mode: Res<crate::pie::PieWindowMode>,
-    buttons: Query<&Children, With<WindowModeButton>>,
-    mut labels: Query<&mut Text, With<WindowModeLabel>>,
-) {
-    let label = match *mode {
-        crate::pie::PieWindowMode::Embedded => "Embedded",
-        crate::pie::PieWindowMode::Windowed => "Windowed",
-    };
-    for children in &buttons {
-        for child in children.iter() {
-            if let Ok(mut text) = labels.get_mut(child)
-                && text.0 != label
-            {
-                text.0 = label.to_string();
-            }
         }
     }
 }

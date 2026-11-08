@@ -4,6 +4,8 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use jackdaw_env::process::StderrCapture;
@@ -117,6 +119,21 @@ pub fn build_project_binary_with_load(
     load: BuildLoad,
     report: &mut dyn FnMut(BuildEvent),
 ) -> Result<ProjectBinaryBuild, ProjectBuildError> {
+    build_project_binary_cancellable(spec, jackdaw_dir, load, &AtomicBool::new(false), report)
+}
+
+/// How often a running cargo build checks whether it was cancelled.
+const CANCEL_POLL: Duration = Duration::from_millis(50);
+
+/// [`build_project_binary_with_load`], killing cargo once `cancel` is set. A
+/// cancelled build returns an `Interrupted` io error.
+pub fn build_project_binary_cancellable(
+    spec: &ShimSpec,
+    jackdaw_dir: &Path,
+    load: BuildLoad,
+    cancel: &AtomicBool,
+    report: &mut dyn FnMut(BuildEvent),
+) -> Result<ProjectBinaryBuild, ProjectBuildError> {
     let target_dir = game_target_dir(jackdaw_dir);
     report(BuildEvent::Log(format!(
         "building {} as a cargo binary in {}, into {}",
@@ -139,14 +156,30 @@ pub fn build_project_binary_with_load(
 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = StderrCapture::take(&mut child);
+    let lines = lines_on_a_thread(stdout);
     let mut done = 0u32;
     let mut log = String::new();
     let mut executables: Vec<PathBuf> = Vec::new();
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        if let Some(path) = executable_for_package(&line, &spec.package_name) {
-            executables.push(path);
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            report(BuildEvent::Log("build cancelled".to_string()));
+            return Err(ProjectBuildError::Io(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "build cancelled",
+            )));
         }
-        parse_build_line(&line, &mut done, &mut log, report);
+        match lines.recv_timeout(CANCEL_POLL) {
+            Ok(line) => {
+                if let Some(path) = executable_for_package(&line, &spec.package_name) {
+                    executables.push(path);
+                }
+                parse_build_line(&line, &mut done, &mut log, report);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
     }
     let status = child.wait()?;
     if !status.success() {
@@ -445,6 +478,20 @@ fn extractor_command(binary: &Path, spec: &ShimSpec, project_crates: &[String]) 
     prepare_game_command(&mut command, binary);
     command.env(PROJECT_CRATES_ENV, project_crates.join(","));
     command
+}
+
+/// Each line `stdout` gives, read on a thread of its own so the reader can stop
+/// waiting on it.
+fn lines_on_a_thread(stdout: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if send.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    lines
 }
 
 /// Collect a child's output, killing it if it outlives `timeout`.
@@ -969,6 +1016,48 @@ mod tests {
         let output = wait_with_deadline(child, Duration::from_secs(30)).expect("echo finishes");
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
+    }
+
+    /// A build cancelled while cargo runs stops at once rather than finishing.
+    #[test]
+    fn a_cancelled_build_stops_without_finishing() {
+        let root = std::env::temp_dir().join(format!("jackdaw-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("fixture dirs");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"cancelled-game\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [workspace]\n\n[dependencies]\n",
+        )
+        .expect("fixture manifest");
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("fixture source");
+        let spec = ShimSpec {
+            package_name: "cancelled-game".to_string(),
+            crate_name: "cancelled_game".to_string(),
+            project_root: root.clone(),
+            extension_type: None,
+        };
+        let jackdaw_dir = root.join(".jackdaw");
+        std::fs::create_dir_all(&jackdaw_dir).expect("jackdaw dir");
+
+        let result = build_project_binary_cancellable(
+            &spec,
+            &jackdaw_dir,
+            BuildLoad::Foreground,
+            &AtomicBool::new(true),
+            &mut |_| {},
+        );
+        let Err(ProjectBuildError::Io(error)) = result else {
+            panic!("a cancelled build must not succeed");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        assert!(
+            !game_target_dir(&jackdaw_dir)
+                .join("debug/cancelled-game")
+                .exists(),
+            "cargo was stopped before it linked the game"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A project that does not compile fails with the compiler's own errors

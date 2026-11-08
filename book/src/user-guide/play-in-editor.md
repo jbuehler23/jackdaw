@@ -42,7 +42,7 @@ line tables only, so it has no local variables to show. Setting `debug = true`
 under `[profile.dev.package."*"]` keeps full debug info, on code still
 optimised.
 
-The Play dropdown is filled from the **run configurations** in your
+The Play menu lists the **run configurations** in your
 project's `jackdaw.toml` (`[[run]]` entries carrying a name, environment
 variables, arguments, an instance count, and a working directory). A
 project with no `jackdaw.toml` still plays: the editor synthesizes a
@@ -81,20 +81,48 @@ showing.
 
 ## Launching
 
-The play controls header carries **Play**, **Pause**, **Stop**, and
-**Reload**, plus a window-mode button that reads **Embedded** or
-**Windowed**. The window-mode button sets the mode for the next launch.
+The play controls in the title bar are **Play**, **Pause**, **Step** and
+**Stop**, with the Play menu on the arrow beside Play.
 
-- **Embedded** (default): no separate game window opens. The game renders
-  off-screen and streams into the Game panel at full frame rate. This is
-  the mode you want for input capture and picking.
-- **Windowed**: the game opens its own OS window. The Game panel still
-  mirrors the active in-game camera once one exists, but menus do not
-  stream and input capture is not offered.
+| Key | Action |
+| --- | --- |
+| `F5` | Play, or resume a paused game |
+| `Ctrl+F5` (`Cmd+F5` on macOS) | Restart |
+| `F7` | Pause or resume |
+| `F8` | Stop |
+| `F10` | Step one tick while paused |
 
-Hit **Play** to launch. The Game panel starts streaming immediately,
-beginning with whatever the game shows first (often a menu or title
-screen). The viewport's edge takes an accent colour while a game runs.
+Every key can be changed in the keymap. `F5` does nothing while a game is
+running, so a second press never restarts it by accident.
+
+Hit **Play** to launch. While the game builds, Play reads **Building...**
+and **Stop** cancels the launch, stopping the build. Once the game runs, Play
+fills with the accent colour, the viewport's edge takes the accent too, and
+the status bar reads **Playing**, followed by the run configuration's name
+when it has one. The Game panel starts
+streaming immediately, beginning with whatever the game shows first (often a
+menu or title screen).
+
+**Pause** freezes the game's clock and shows as pressed; Play then reads
+**Resume**. While paused, **Step** advances the game by one fixed tick. The
+game keeps rendering and keeps taking your edits while paused, so you can
+change a value and step to see it act.
+
+The Play menu holds:
+
+- one row per run configuration instance, ticked while it runs; click a row
+  to launch or stop that instance on its own
+- the scene Play will run: the scene in front, unless a run configuration
+  names one
+- **Rebuild**, which rebuilds the project so new components appear in the
+  editor
+- **Restart**, which rebuilds and relaunches the running game
+- **Play in separate window**, ticked when the next launch opens the game in
+  its own OS window instead of the Game panel. Without it (the default), the
+  game renders off-screen and streams into the Game panel at full frame rate,
+  which is the mode you want for input capture and picking. In its own window
+  the Game panel still mirrors the active in-game camera once one exists, but
+  menus do not stream and input capture is not offered.
 
 When more than one instance is running, the **instance button** in the Game
 panel header names the instance on show, and clicking it steps to the next.
@@ -112,7 +140,9 @@ Input** header button). While captured:
   takes the capture accent.
 
 Plain `Esc` forwards to the game (so the in-game menu still opens). Press
-`Shift+Esc` to release capture and return control to the editor. Capture
+`Shift+Esc` to release capture and return control to the editor. The Stop
+key (`F8`) also works while captured: it releases capture and stops the game,
+so a game that binds `F8` itself does not get it while playing in the editor. Capture
 also releases on its own if you stop the game, switch instances, click away
 to another application, or close the panel, and any keys you were holding
 are released so nothing stays stuck down.
@@ -136,10 +166,11 @@ that instance's child, and a node in an open prefab tab boxes it in every instan
 The editor does not show entities the game spawned at runtime, or the values a
 running game holds.
 
-## Stopping and reloading
+## Stopping and restarting
 
 - **Stop** ends the game process. The Game panel returns to its idle state,
   the panel that was in front before Play comes back, and the viewport's edge
-  clears. Edits made during Play stay in the document.
-- **Reload** relaunches with the current window-mode setting, which is how
-  you apply a change to the **Embedded** / **Windowed** button.
+  clears. Edits made during Play stay in the document. A game that exits or
+  crashes on its own puts the controls back to stopped too.
+- **Restart** relaunches with the current window setting, which is how you
+  apply a change to **Play in separate window**.
