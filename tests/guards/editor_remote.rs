@@ -1611,6 +1611,119 @@ fn a_pie_wait_answers_on_the_transition_rather_than_the_state_it_started_in() {
     assert_eq!(stopped, json!("stopped"));
 }
 
+#[test]
+fn status_follows_play_through_pause_resume_and_stop() {
+    let (mut app, _dir) = editor_with_a_project();
+    let (server, name) = jackdaw_pie_protocol::serve().expect("a rendezvous");
+    let accept = std::thread::spawn(move || server.accept());
+    let _game = jackdaw_pie_protocol::connect(&name).expect("the game connects");
+    let editor_end = accept
+        .join()
+        .expect("accept ran")
+        .expect("the editor accepts");
+    let child = std::process::Command::new("sleep")
+        .arg("600")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("a child process");
+    let key = jackdaw::pie::InstanceKey {
+        config: "Game".to_string(),
+        instance: 1,
+    };
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    jackdaw::pie::connect_test_game(app.world_mut(), key, child, editor_end).expect("a link");
+
+    let pie = |app: &mut App| {
+        for _ in 0..3 {
+            app.update();
+        }
+        call(app, status_handler, json!({}))["pie"].clone()
+    };
+    assert_eq!(pie(&mut app), json!("running"));
+
+    let press = |app: &mut App, id: &'static str| {
+        app.world_mut()
+            .operator(id)
+            .call()
+            .expect("the operator dispatches")
+            .assert_finished();
+    };
+    press(&mut app, "pie.pause");
+    assert_eq!(pie(&mut app), json!("paused"));
+    press(&mut app, "pie.pause");
+    assert_eq!(pie(&mut app), json!("running"), "pause again resumes");
+    press(&mut app, "pie.pause");
+    assert_eq!(pie(&mut app), json!("paused"));
+    press(&mut app, "pie.play");
+    assert_eq!(pie(&mut app), json!("running"), "play resumes too");
+    press(&mut app, "pie.stop");
+    assert_eq!(pie(&mut app), json!("stopped"));
+}
+
+/// A game process that is up but has not connected yet reads as building, and a
+/// wait for it to run ends with an error once it exits rather than at the cap.
+#[test]
+fn a_game_still_connecting_reads_building_and_a_wait_on_it_ends_when_it_exits() {
+    let (mut app, _dir) = editor_with_a_project();
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    let child = std::process::Command::new("sh")
+        .args(["-c", "exit 1"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("a child process");
+    let key = jackdaw::pie::InstanceKey {
+        config: "Game".to_string(),
+        instance: 1,
+    };
+    jackdaw::pie::connecting_test_game(app.world_mut(), key, child);
+    assert_eq!(
+        call(&mut app, status_handler, json!({}))["pie"],
+        json!("building")
+    );
+
+    let running = json!({ "until": "pie_running", "request": "connecting" });
+    assert_eq!(
+        poll_pie(&mut app, running.clone()).expect("the handler did not refuse"),
+        None,
+        "a game still connecting is not running yet"
+    );
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while call(&mut app, status_handler, json!({}))["pie"] != json!("stopped") {
+        assert!(
+            std::time::Instant::now() < until,
+            "the exited game was never reaped"
+        );
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let refusal = poll_pie(&mut app, running).expect_err("the game went away");
+    assert!(
+        refusal.message.contains("stopped before it connected"),
+        "{}",
+        refusal.message
+    );
+}
+
+/// A paused game is up, so a wait for a running one answers with `paused`.
+#[test]
+fn a_pie_running_wait_answers_paused_for_a_paused_game() {
+    let mut app = util::editor_test_app();
+    set_play_state(&mut app, jackdaw_api::pie::PlayState::Paused);
+    let answer = poll_pie(
+        &mut app,
+        json!({ "until": "pie_running", "request": "paused" }),
+    )
+    .expect("the handler did not refuse")
+    .expect("a paused game answers a wait for running");
+    assert_eq!(answer, json!({ "pie": "paused" }));
+}
+
 /// A wait that would otherwise hold for its whole frame cap ends when the
 /// frames run out, so a caller is told rather than left on the line.
 #[test]

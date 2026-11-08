@@ -395,8 +395,8 @@ pub fn status_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
         // and holding the editor until an entry is taken or `modal.cancel`
         // drops it.
         "picker": open_picker(world),
-        // `building`, `running` or `stopped`: what play-in-editor is
-        // doing, which `jackdaw/wait` can be held on.
+        // `building`, `running`, `paused`, `failed` or `stopped`: what
+        // play-in-editor is doing, which `jackdaw/wait` can be held on.
         "pie": jackdaw_editor_core::pie::play_status(world),
     }))
 }
@@ -1795,7 +1795,8 @@ fn write_views(
 }
 
 /// Let frames pass, or wait for the editor to reach a state. `until` takes
-/// `idle`, `pie_running` or `pie_stopped`; without it the call waits `frames`.
+/// `idle`, `pie_running` (a paused game counts) or `pie_stopped`; without it
+/// the call waits `frames`.
 pub fn wait_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult<Option<Value>> {
     check_enabled(world)?;
     let params = params.unwrap_or(Value::Null);
@@ -1885,16 +1886,22 @@ fn pie_wait(
     };
     wait.seen_active |= status != "stopped";
     let reached = match wait.wanted {
-        "running" => status == "running",
+        "running" => matches!(status, "running" | "paused"),
         _ => wait.seen_active && status == "stopped",
     };
+    let gone = wait.wanted == "running" && wait.seen_active && status == "stopped";
     let out_of_frames = frame >= wait.until;
 
-    // A build that did not compile ends every wait on it; holding for the frame
-    // cap would report the failure as a timeout.
+    // A build that did not compile, or a game that went away before it
+    // connected, ends every wait on it; holding for the frame cap would report
+    // the failure as a timeout.
     if status == "failed" {
         waits.requests.remove(&key);
         return Err(internal_error("the game build failed"));
+    }
+    if gone {
+        waits.requests.remove(&key);
+        return Err(internal_error("the game stopped before it connected"));
     }
     if reached {
         waits.requests.remove(&key);
