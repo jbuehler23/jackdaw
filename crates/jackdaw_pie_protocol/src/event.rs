@@ -71,6 +71,8 @@ pub enum HighlightPlace {
 pub enum ControlEvent {
     Pause,
     Resume,
+    /// Advance a paused game by one fixed timestep. Ignored while running.
+    Step,
     Stop,
     /// Begin (or resize) streaming rendered frames at the given pixel size.
     /// The game clamps to its own limits; no frames flow until this arrives.

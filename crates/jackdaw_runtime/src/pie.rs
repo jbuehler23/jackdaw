@@ -124,7 +124,8 @@ pub(crate) fn send_state(world: &mut World, event: &StateEvent) {
 ///
 /// `Stop`, or the editor hanging up, writes `AppExit::Success` to tear down
 /// the game loop. `Pause` / `Resume` toggle the virtual clock, freezing
-/// gameplay systems keyed on `Time<Virtual>`. `NodeComponents` applies
+/// gameplay systems keyed on `Time<Virtual>`, and `Step` runs one fixed tick
+/// of a paused game. `NodeComponents` applies
 /// reflected edits to every entity spawned from a scene node.
 /// `SceneDocument` answers a scene root waiting on the editor, and
 /// `SceneAssets` loads asset definitions an edit that follows will name,
@@ -164,6 +165,7 @@ fn apply_control(world: &mut World) {
             ControlEvent::Resume => {
                 world.resource_mut::<Time<Virtual>>().unpause();
             }
+            ControlEvent::Step => step_one_tick(world),
             ControlEvent::StartFrameStream { width, height } => {
                 crate::pie_frames::start_frame_stream(world, width, height);
             }
@@ -230,6 +232,18 @@ fn apply_control(world: &mut World) {
             }
         }
     }
+}
+
+/// Give a paused game's fixed clock one timestep, so `FixedMain` runs once this
+/// frame. Control drains before the fixed loop, and a paused virtual clock adds
+/// nothing of its own, so exactly one tick runs.
+fn step_one_tick(world: &mut World) {
+    if !world.resource::<Time<Virtual>>().is_paused() {
+        return;
+    }
+    let mut fixed = world.resource_mut::<Time<Fixed>>();
+    let timestep = fixed.timestep();
+    fixed.accumulate_overstep(timestep);
 }
 
 /// World-space `(center, half_extents, rotation)` boxes to outline for the
@@ -849,6 +863,83 @@ mod tests {
             let transform = app.world().get::<Transform>(entity).expect("a transform");
             assert_eq!(transform.translation.x, 3.0);
         }
+    }
+
+    #[derive(Resource, Default)]
+    struct Ticks(u32);
+
+    fn count_tick(mut ticks: ResMut<Ticks>) {
+        ticks.0 += 1;
+    }
+
+    /// A paused game with a fixed-tick counter, linked to an editor end.
+    fn paused_ticking_app() -> (App, jackdaw_pie_protocol::LoopbackTransport) {
+        let (editor, game) = jackdaw_pie_protocol::LoopbackTransport::pair();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Ticks>();
+        app.add_systems(FixedUpdate, count_tick);
+        install_link(&mut app, Box::new(game));
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.update();
+        (app, editor)
+    }
+
+    fn send(editor: &mut jackdaw_pie_protocol::LoopbackTransport, event: &ControlEvent) {
+        editor.send(PieChannel::Reliable, &to_bytes(event).expect("encode"));
+    }
+
+    #[test]
+    fn step_runs_exactly_one_fixed_tick_of_a_paused_game() {
+        let (mut app, mut editor) = paused_ticking_app();
+        for _ in 0..3 {
+            app.update();
+        }
+        let before = app.world().resource::<Ticks>().0;
+
+        send(&mut editor, &ControlEvent::Step);
+        app.update();
+        assert_eq!(app.world().resource::<Ticks>().0, before + 1);
+
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<Ticks>().0,
+            before + 1,
+            "the game stays paused after the step"
+        );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+
+        send(&mut editor, &ControlEvent::Step);
+        send(&mut editor, &ControlEvent::Step);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Ticks>().0,
+            before + 3,
+            "two steps in one frame run two ticks"
+        );
+    }
+
+    #[test]
+    fn step_does_nothing_while_the_game_runs() {
+        let mut world = World::new();
+        world.init_resource::<Time<Virtual>>();
+        world.init_resource::<Time<Fixed>>();
+
+        step_one_tick(&mut world);
+        assert_eq!(
+            world.resource::<Time<Fixed>>().overstep(),
+            std::time::Duration::ZERO,
+            "a running game's own clock drives its ticks"
+        );
+
+        world.resource_mut::<Time<Virtual>>().pause();
+        step_one_tick(&mut world);
+        assert_eq!(
+            world.resource::<Time<Fixed>>().overstep(),
+            world.resource::<Time<Fixed>>().timestep()
+        );
     }
 
     #[test]

@@ -19,9 +19,9 @@ use crate::run_config::RunConfigs;
 
 pub use jackdaw_project_build::{
     BuildEvent, BuildLoad, ProjectBinaryBuild, ProjectBuild, ProjectBuildError,
-    build_project_binary, build_project_binary_with_load, build_project_dylib, cargo_meta,
-    detach_from_host_build, linkage, plan, prepare_game_command, project_manifest, shim,
-    shim_spec_for_project,
+    build_project_binary, build_project_binary_cancellable, build_project_binary_with_load,
+    build_project_dylib, cargo_meta, detach_from_host_build, linkage, plan, prepare_game_command,
+    project_manifest, shim, shim_spec_for_project,
 };
 
 pub struct ProjectBuildPlugin;

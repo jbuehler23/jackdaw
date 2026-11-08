@@ -138,3 +138,185 @@ fn a_game_in_its_own_window_leaves_the_dock_alone() {
     assert_eq!(play_state(&app), PlayState::Playing);
     assert_eq!(front_window(&app, leaf).as_deref(), Some("jackdaw.build"));
 }
+
+/// Whether the transport button running `op_id` can be clicked.
+fn enabled(app: &mut App, op_id: &str) -> bool {
+    let mut buttons = app.world_mut().query::<(
+        &jackdaw_feathers::button::ButtonOperatorCall,
+        Has<bevy::ui::InteractionDisabled>,
+    )>();
+    let found: Vec<bool> = buttons
+        .iter(app.world())
+        .filter(|(call, _)| call.id == op_id)
+        .map(|(_, disabled)| !disabled)
+        .collect();
+    assert!(!found.is_empty(), "the toolbar has a {op_id} button");
+    found.into_iter().all(|enabled| enabled)
+}
+
+fn play_caption(app: &mut App) -> String {
+    let button = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw::layout::PlayButton>>()
+        .single(app.world())
+        .expect("one Play button");
+    let mut stack = vec![button];
+    while let Some(entity) = stack.pop() {
+        if app
+            .world()
+            .get::<jackdaw_feathers::button::ButtonContentText>(entity)
+            .is_some()
+        {
+            return app
+                .world()
+                .get::<Text>(entity)
+                .expect("a caption")
+                .0
+                .clone();
+        }
+        if let Some(children) = app.world().get::<Children>(entity) {
+            stack.extend(children.iter());
+        }
+    }
+    panic!("the Play button has a caption");
+}
+
+fn footer(app: &mut App) -> String {
+    app.world_mut()
+        .query_filtered::<&Text, With<jackdaw_feathers::status_bar::StatusBarCenter>>()
+        .single(app.world())
+        .expect("one footer centre")
+        .0
+        .clone()
+}
+
+/// Whether the footer's idle readouts, "Ready" on the left and the remote
+/// connection indicator, are showing.
+fn idle_readouts_shown(app: &mut App) -> [bool; 2] {
+    let mut left = app
+        .world_mut()
+        .query_filtered::<&Visibility, With<jackdaw_feathers::status_bar::StatusBarLeft>>();
+    let left = left.single(app.world()).expect("one left slot") != Visibility::Hidden;
+    let mut slot = app
+        .world_mut()
+        .query_filtered::<&Visibility, With<jackdaw::remote_mode::ConnectionIndicatorSlot>>();
+    let slot = slot.single(app.world()).expect("one connection slot") != Visibility::Hidden;
+    [left, slot]
+}
+
+fn footer_right(app: &mut App) -> String {
+    app.world_mut()
+        .query_filtered::<&Text, With<jackdaw_feathers::status_bar::StatusBarRight>>()
+        .single(app.world())
+        .expect("one footer right")
+        .0
+        .clone()
+}
+
+/// (Play, Pause, Step, Stop) as clickable or not.
+fn transport(app: &mut App) -> [bool; 4] {
+    ["pie.play", "pie.pause", "pie.step", "pie.stop"].map(|id| enabled(app, id))
+}
+
+#[test]
+fn the_transport_buttons_follow_a_launch_from_stopped_through_building_and_back() {
+    let project = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        project.path().join("jackdaw.toml"),
+        "[[run]]\nname = \"Client\"\n",
+    )
+    .expect("a manifest");
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .insert_resource(jackdaw::project::ProjectRoot {
+            root: project.path().to_path_buf(),
+            config: default(),
+        });
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    for _ in 0..3 {
+        app.update();
+    }
+
+    assert_eq!(
+        transport(&mut app),
+        [true, false, false, false],
+        "stopped: Play only"
+    );
+    assert_eq!(play_caption(&mut app), "Play");
+    assert!(footer(&mut app).starts_with("Jackdaw v"));
+    assert_eq!(idle_readouts_shown(&mut app), [true, true]);
+
+    jackdaw::pie::insert_build_in_progress(app.world_mut());
+    call(&mut app, "pie.play").assert_finished();
+    app.update();
+    assert_eq!(
+        transport(&mut app),
+        [false, false, false, true],
+        "building: Stop cancels, nothing else"
+    );
+    assert_eq!(play_caption(&mut app), "Building...");
+    assert_eq!(
+        footer(&mut app).split(" | ").next(),
+        Some("Building: Client"),
+        "the footer names the run and nothing more"
+    );
+    assert_eq!(
+        idle_readouts_shown(&mut app),
+        [false, false],
+        "no Ready and no connection state while Play is under way"
+    );
+    let right = footer_right(&mut app);
+    assert!(
+        !right.contains("Ready") && !right.contains("Disconnected"),
+        "{right}"
+    );
+    call(&mut app, "pie.play").assert_cancelled();
+
+    call(&mut app, "pie.stop").assert_finished();
+    app.update();
+    assert_eq!(transport(&mut app), [true, false, false, false]);
+    assert_eq!(play_caption(&mut app), "Play");
+    assert!(jackdaw::pie::launches_waiting_on_build(app.world()).is_empty());
+    assert!(footer(&mut app).starts_with("Jackdaw v"));
+    assert_eq!(idle_readouts_shown(&mut app), [true, true]);
+}
+
+/// The transport buttons take the feathers text colour but keep their fonts,
+/// so the icon glyphs still draw from the icon font.
+#[test]
+fn the_transport_icons_keep_the_icon_font() {
+    let mut app = util::editor_test_app();
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    for _ in 0..4 {
+        app.update();
+    }
+    let icon_font = app
+        .world()
+        .resource::<jackdaw_feathers::icons::IconFont>()
+        .0
+        .clone();
+    let mut buttons = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw::layout::TransportButton>>();
+    let buttons: Vec<Entity> = buttons.iter(app.world()).collect();
+    assert_eq!(
+        buttons.len(),
+        5,
+        "Play, the menu caret, Pause, Step and Stop"
+    );
+    for button in buttons {
+        let glyph = app
+            .world()
+            .get::<Children>(button)
+            .into_iter()
+            .flat_map(Children::iter)
+            .find(|child| app.world().get::<Text>(*child).is_some())
+            .expect("an icon glyph");
+        let font = app.world().get::<TextFont>(glyph).expect("a font");
+        assert_eq!(font.font, icon_font.clone().into(), "{button:?}");
+    }
+}

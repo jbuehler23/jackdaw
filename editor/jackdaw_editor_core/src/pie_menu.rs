@@ -1,20 +1,29 @@
-//! Play-button run-config dropdown. The caret opens a list of every
-//! launchable instance; clicking a row toggles launch/stop. When the
-//! project has no `jackdaw.toml`, a single scaffold row is shown instead.
-//! A per-frame system closes the popover on Escape or an outside click.
+//! The Play menu, opened by the caret beside Play. It lists every launchable
+//! instance, a row toggling each one, then the scene Play runs, Rebuild,
+//! Restart and the separate-window choice. When the project has no
+//! `jackdaw.toml`, a scaffold row stands in for the instances. Every row but
+//! the scaffold one runs an operator. A per-frame system closes the popover
+//! on Escape or an outside click.
 
+use bevy::feathers::constants::size::CHECKBOX_SIZE;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::ui_transform::UiGlobalTransform;
-use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
+use bevy::ui_widgets::Activate;
+use jackdaw_api::prelude::*;
+use jackdaw_feathers::button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::icons::{EditorFont, Icon, IconFont};
+use jackdaw_feathers::separator::{SeparatorProps, separator};
 use jackdaw_feathers::tokens;
 
-use crate::pie::{InstanceKey, PieSession, launch_instance, stop_instance};
+use crate::pie::{
+    InstanceKey, PieRestartOp, PieSession, PieToggleInstanceOp, PieWindowMode,
+    PieWindowModeToggleOp, ProjectBuildOp,
+};
+use crate::play_scene::PlayScene;
 use crate::run_config::{CargoMeta, RunConfigs, read_run_configs, scaffold_manifest};
 
 const MENU_MIN_WIDTH: f32 = 220.0;
-const CHECK_SLOT_WIDTH: f32 = 16.0;
 
 pub struct PieMenuPlugin;
 
@@ -22,7 +31,7 @@ impl Plugin for PieMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PieMenuState>()
             .add_observer(on_menu_button_click)
-            .add_observer(on_instance_row_click)
+            .add_observer(close_menu_on_item_activate)
             .add_observer(on_scaffold_row_click)
             .add_systems(Update, close_menu_on_outside_click);
     }
@@ -37,10 +46,10 @@ pub struct PieMenuButton;
 #[derive(Component)]
 pub struct PieMenuPopover;
 
-/// Marker on one instance row, carrying the instance it launches or
-/// stops when clicked.
+/// Marker on every menu row that runs an operator; activating one closes the
+/// menu.
 #[derive(Component)]
-pub struct PieInstanceRow(pub InstanceKey);
+pub struct PieMenuItem;
 
 /// Marker on the fallback row shown when the project has no
 /// `jackdaw.toml`; clicking it scaffolds one.
@@ -125,14 +134,113 @@ fn spawn_menu(world: &mut World, right_x: f32, top_y: f32) -> Entity {
         .id();
 
     if rows.is_empty() {
-        spawn_scaffold_row(world, popover, editor_font, icon_font);
+        spawn_scaffold_row(world, popover, editor_font.clone(), icon_font);
     } else {
         for row in rows {
-            spawn_instance_row(world, popover, row, editor_font.clone());
+            spawn_instance_row(world, popover, row);
         }
     }
 
+    world.spawn((separator(SeparatorProps::horizontal()), ChildOf(popover)));
+    let scene = format!("Scene: {}", scene_played(world));
+    spawn_note(world, popover, scene, editor_font);
+    spawn_action_row(world, popover, "Rebuild", ProjectBuildOp::ID);
+    spawn_action_row(world, popover, "Restart", PieRestartOp::ID);
+    world.spawn((separator(SeparatorProps::horizontal()), ChildOf(popover)));
+    let windowed = world.get_resource::<PieWindowMode>().copied() == Some(PieWindowMode::Windowed);
+    spawn_check_row(
+        world,
+        popover,
+        "Play in separate window",
+        windowed,
+        ButtonOperatorCall::new(PieWindowModeToggleOp::ID),
+    );
+
     popover
+}
+
+/// The scene the first run configuration would play now, as the menu names it.
+fn scene_played(world: &World) -> String {
+    let launch = world
+        .get_resource::<RunConfigs>()
+        .and_then(|configs| configs.manifest.runs.first())
+        .and_then(|run| crate::play_scene::launch_scene(world, run));
+    match launch.map(|launch| launch.scene) {
+        Some(PlayScene::Path(path) | PlayScene::Untitled(path)) => path,
+        None => crate::pie::MAIN_SCENE.to_string(),
+    }
+}
+
+/// A line of caption text in the menu, lined up with the rows' captions.
+fn spawn_note(world: &mut World, popover: Entity, text: String, editor_font: Option<Handle<Font>>) {
+    let mut font = TextFont {
+        font_size: tokens::TEXT_SIZE_SM,
+        ..Default::default()
+    };
+    if let Some(handle) = editor_font {
+        font.font = handle.into();
+    }
+    let line = world
+        .spawn((
+            Node {
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(tokens::SPACING_XS)),
+                column_gap: Val::Px(6.0),
+                align_items: AlignItems::Center,
+                ..Default::default()
+            },
+            ChildOf(popover),
+        ))
+        .id();
+    world.spawn((
+        Node {
+            width: CHECKBOX_SIZE,
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
+        ChildOf(line),
+    ));
+    world.spawn((
+        Text::new(text),
+        font,
+        TextColor(tokens::TEXT_SECONDARY),
+        ChildOf(line),
+    ));
+}
+
+/// A row running `op_id`, its caption lined up with the checkbox rows'.
+fn spawn_action_row(world: &mut World, popover: Entity, label: &str, op_id: &'static str) {
+    world.spawn((
+        PieMenuItem,
+        button(
+            ButtonProps::new(label)
+                .with_variant(ButtonVariant::Ghost)
+                .align_left()
+                .reserving_left_icon()
+                .call_operator(op_id),
+        ),
+        ChildOf(popover),
+    ));
+}
+
+/// A row with a checkbox showing `checked`, running `call` when clicked.
+fn spawn_check_row(
+    world: &mut World,
+    popover: Entity,
+    label: &str,
+    checked: bool,
+    call: ButtonOperatorCall,
+) {
+    world.spawn((
+        PieMenuItem,
+        call,
+        button(
+            ButtonProps::new(label)
+                .with_variant(ButtonVariant::Ghost)
+                .align_left()
+                .with_left_checkbox(checked),
+        ),
+        ChildOf(popover),
+    ));
 }
 
 /// Collect one `RowSpec` per launchable instance. Single-instance configs
@@ -165,65 +273,11 @@ fn collect_rows(world: &mut World) -> Vec<RowSpec> {
     rows
 }
 
-fn spawn_instance_row(
-    world: &mut World,
-    popover: Entity,
-    spec: RowSpec,
-    editor_font: Option<Handle<Font>>,
-) {
-    let label_color = if spec.running {
-        tokens::DOC_TAB_ACTIVE_LABEL
-    } else {
-        tokens::DOC_TAB_INACTIVE_LABEL
-    };
-
-    let row = world
-        .spawn((
-            PieInstanceRow(spec.key),
-            button(
-                ButtonProps::new("")
-                    .with_variant(ButtonVariant::Ghost)
-                    .align_left(),
-            ),
-            ChildOf(popover),
-        ))
-        .id();
-
-    spawn_check_slot(world, row, spec.running);
-
-    let mut label_font = TextFont {
-        font_size: tokens::TEXT_SIZE_SM,
-        ..Default::default()
-    };
-    if let Some(handle) = editor_font {
-        label_font.font = handle.into();
-    }
-    world.spawn((
-        Text::new(spec.label),
-        label_font,
-        TextColor(label_color),
-        Pickable::IGNORE,
-        ChildOf(row),
-    ));
-}
-
-/// Fixed-width slot holding the row's checkbox, so labels stay aligned
-/// across rows whether or not the run is up.
-fn spawn_check_slot(world: &mut World, row: Entity, running: bool) {
-    let slot = world
-        .spawn((
-            Node {
-                width: Val::Px(CHECK_SLOT_WIDTH),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..Default::default()
-            },
-            Pickable::IGNORE,
-            ChildOf(row),
-        ))
-        .id();
-
-    jackdaw_feathers::button::spawn_inert_checkbox(world, slot, running);
+fn spawn_instance_row(world: &mut World, popover: Entity, spec: RowSpec) {
+    let call = ButtonOperatorCall::new(PieToggleInstanceOp::ID)
+        .with_param("config", spec.key.config.clone())
+        .with_param("instance", i64::from(spec.key.instance));
+    spawn_check_row(world, popover, &spec.label, spec.running, call);
 }
 
 fn spawn_scaffold_row(
@@ -274,35 +328,15 @@ fn spawn_scaffold_row(
     ));
 }
 
-fn on_instance_row_click(
-    mut click: On<PointerClick>,
-    rows: Query<&PieInstanceRow>,
-    parents: Query<&ChildOf>,
+/// Close the menu once one of its rows has run its operator.
+fn close_menu_on_item_activate(
+    activate: On<Activate>,
+    items: Query<(), With<PieMenuItem>>,
     mut commands: Commands,
-) -> Result {
-    if click.event().button != PointerButton::Primary {
-        return Ok(());
+) {
+    if items.contains(activate.entity) {
+        commands.queue(close_menu);
     }
-    let Some(row) = find_ancestor_with(click.event_target(), &parents, |e| rows.contains(e)) else {
-        return Ok(());
-    };
-    click.propagate(false);
-
-    let key = rows.get(row)?.0.clone();
-    commands.queue(move |world: &mut World| {
-        if world.non_send::<PieSession>().is_running(&key) {
-            stop_instance(world, &key);
-        } else if let Some(run) = world
-            .resource::<RunConfigs>()
-            .manifest
-            .run_by_name(&key.config)
-            .cloned()
-        {
-            launch_instance(world, key.clone(), run);
-        }
-        close_menu(world);
-    });
-    Ok(())
 }
 
 fn on_scaffold_row_click(
@@ -426,66 +460,4 @@ where
         }
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bevy::feathers::controls::FeathersCheckbox;
-    use bevy::ui::Checked;
-
-    fn check_slot_app() -> App {
-        let mut app = App::new();
-        app.add_plugins((
-            bevy::app::TaskPoolPlugin::default(),
-            bevy::asset::AssetPlugin::default(),
-            bevy::scene::ScenePlugin,
-        ))
-        .init_asset::<Image>()
-        .init_asset::<Font>();
-        app
-    }
-
-    fn spawn_slot(app: &mut App, running: bool) {
-        let row = app.world_mut().spawn(Node::default()).id();
-        spawn_check_slot(app.world_mut(), row, running);
-    }
-
-    /// A run's row is marked with the native checkbox, checked while the run
-    /// is up and clear while it is not.
-    #[test]
-    fn a_running_instance_is_marked_with_a_checked_feathers_checkbox() {
-        let mut app = check_slot_app();
-        spawn_slot(&mut app, true);
-
-        let mut boxes = app
-            .world_mut()
-            .query_filtered::<Entity, With<FeathersCheckbox>>();
-        let checkbox = boxes
-            .iter(app.world())
-            .next()
-            .expect("the slot holds a feathers checkbox");
-        assert!(
-            app.world().get::<Checked>(checkbox).is_some(),
-            "a running instance reads as checked",
-        );
-    }
-
-    #[test]
-    fn a_stopped_instance_leaves_the_box_clear() {
-        let mut app = check_slot_app();
-        spawn_slot(&mut app, false);
-
-        let mut boxes = app
-            .world_mut()
-            .query_filtered::<Entity, With<FeathersCheckbox>>();
-        let checkbox = boxes
-            .iter(app.world())
-            .next()
-            .expect("the slot holds a feathers checkbox");
-        assert!(
-            app.world().get::<Checked>(checkbox).is_none(),
-            "a stopped instance reads as unchecked",
-        );
-    }
 }

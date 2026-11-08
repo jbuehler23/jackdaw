@@ -554,3 +554,29 @@ fn n_in_the_tileset_window_claims_only_the_new_terrain_command() {
         "inactive while no tileset tab has the keyboard"
     );
 }
+
+/// The Play keys: F5 plays or resumes, Ctrl+F5 (Cmd on macOS) restarts, F7
+/// toggles pause, F8 stops and F10 steps. Each key is the one operator's alone.
+#[test]
+fn the_play_keys_claim_only_the_play_operators() {
+    let mut app = crate::headless_app();
+    let defaults = classic(&mut app);
+    for (input, operator) in [
+        (PresetInput::key("F5"), "pie.play"),
+        (PresetInput::key("F5").ctrl_or_super(), "pie.restart"),
+        (PresetInput::key("F7"), "pie.pause"),
+        (PresetInput::key("F8"), "pie.stop"),
+        (PresetInput::key("F10"), "pie.step"),
+    ] {
+        assert_eq!(
+            operators_on(&defaults, &input),
+            vec![operator.to_string()],
+            "{input:?} should be {operator}'s alone",
+        );
+    }
+    let conflicts = find_conflicts(&defaults);
+    assert!(
+        !conflicts.iter().any(|line| line.contains("pie.")),
+        "a Play key collided with something already bound: {conflicts:?}",
+    );
+}

@@ -3,7 +3,7 @@
 //! Builds the project with plain `cargo build`, launches the game's own
 //! executable as a child process, and drives it over an `ipc-channel`
 //! connection. Children send `StateEvent`s back and respond to
-//! `ControlEvent`s (Pause / Resume / Stop). Stop reaps the children and leaves
+//! `ControlEvent`s (Pause / Resume / Step / Stop). Stop reaps the children and leaves
 //! the scene document as it stands. Messages to a child leave on its own
 //! writer thread (`GameOutbox`), so the main thread never waits on a game.
 //!
@@ -16,6 +16,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,12 +25,14 @@ use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
+use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_pie_protocol::event::{from_bytes, to_bytes};
 use jackdaw_pie_protocol::manifest::RunConfig;
 use jackdaw_pie_protocol::{
     ControlEvent, IpcChannelTransport, PieChannel, PieTransport, StateEvent, serve,
 };
 
+use crate::core_extension::CoreExtensionInputContext;
 use crate::ext_build::BuildProgress;
 use crate::pie_outbox::{GameOutbox, NodeEdit, OutboxSlot};
 use crate::play_scene::LaunchScene;
@@ -45,22 +48,6 @@ const STDERR_TAIL_LINES: usize = 40;
 /// How long to wait for a launched child to connect back before giving
 /// up on it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Marker for the toolbar transport buttons. `PiePlugin` installs
-/// an `On<Add<PieButton>>` observer that wires each button's
-/// `PointerClick` to the corresponding handler.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PieButton {
-    Play,
-    Pause,
-    Stop,
-    Reload,
-    /// Rebuild the project so new or changed game code appears in the
-    /// editor. Distinct from `Reload` (which rebuilds and relaunches the
-    /// running game): `Rebuild` is the edit-mode refresh of the component
-    /// list, and dispatches `project.build`.
-    Rebuild,
-}
 
 /// Identifies one running instance: a config label plus its 1-based
 /// instance number.
@@ -133,7 +120,7 @@ pub(crate) enum BuildState {
     /// instances to spawn once the binary is ready. `progress` is the
     /// sink cargo writes compile progress into, surfaced in the footer.
     Running {
-        task: Task<io::Result<GameBuildResult>>,
+        task: GameBuildTask,
         pending: Vec<PendingSpawn>,
         progress: Arc<Mutex<BuildProgress>>,
     },
@@ -143,6 +130,28 @@ pub(crate) enum BuildState {
     /// The build failed; its pending instances were dropped. `launch` says
     /// whether any were waiting, which a background rebuild's are not.
     Failed { launch: bool },
+}
+
+/// A game build on the compute pool. Dropping it cancels the build, which kills
+/// cargo, so a launch stopped while building stops compiling too.
+pub(crate) struct GameBuildTask {
+    task: Task<io::Result<GameBuildResult>>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl From<Task<io::Result<GameBuildResult>>> for GameBuildTask {
+    fn from(task: Task<io::Result<GameBuildResult>>) -> Self {
+        Self {
+            task,
+            cancel: Arc::default(),
+        }
+    }
+}
+
+impl Drop for GameBuildTask {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 /// One instance waiting for its build to finish before spawning.
@@ -352,6 +361,7 @@ impl Plugin for PiePlugin {
         app.init_state::<PlayState>()
             .init_non_send::<PieSession>()
             .init_resource::<PieInstances>()
+            .init_resource::<PlayStatus>()
             .init_resource::<crate::live_frame::LiveFrameStream>()
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
@@ -365,7 +375,7 @@ impl Plugin for PiePlugin {
             .add_systems(
                 Update,
                 (
-                    advance_pie_session,
+                    (advance_pie_session, refresh_buttons_on_play_status).chain(),
                     drain_game_events,
                     crate::live_highlight::sync_selection_highlight,
                 )
@@ -383,8 +393,7 @@ impl Plugin for PiePlugin {
             .add_systems(
                 OnExit(PlayState::Stopped),
                 crate::play_overlay::clear_play_sidecars,
-            )
-            .add_observer(wire_pie_button);
+            );
     }
 }
 
@@ -400,26 +409,168 @@ fn cleanup_session_on_stop(world: &mut World) {
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<PiePlayOp>()
         .register_operator::<PiePauseOp>()
+        .register_operator::<PieStepOp>()
         .register_operator::<PieStopOp>()
-        .register_operator::<PieReloadOp>()
+        .register_operator::<PieRestartOp>()
+        .register_operator::<PieToggleInstanceOp>()
         .register_operator::<ProjectBuildOp>()
         .register_operator::<ProjectToggleAutoBuildOp>()
         .register_operator::<ProjectTogglePrebuildOp>()
         .register_operator::<PieWindowModeToggleOp>()
         .register_operator::<PieNextInstanceOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>();
+
+    ctx.bind_operator::<CoreExtensionInputContext, PiePlayOp>([PresetInput::key("F5")]);
+    ctx.bind_operator::<CoreExtensionInputContext, PieRestartOp>([
+        PresetInput::key("F5").ctrl_or_super()
+    ]);
+    ctx.bind_operator::<CoreExtensionInputContext, PiePauseOp>([PresetInput::key("F7")]);
+    ctx.bind_operator::<CoreExtensionInputContext, PieStopOp>([PresetInput::key("F8")]);
+    ctx.bind_operator::<CoreExtensionInputContext, PieStepOp>([PresetInput::key("F10")]);
 }
 
-fn play_is_stopped_or_paused(state: Res<State<PlayState>>) -> bool {
-    !matches!(state.get(), PlayState::Playing)
+/// What Play is doing, as the toolbar and the status bar show it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlayPhase {
+    #[default]
+    Stopped,
+    /// A launch is building the game or waiting for it to connect.
+    Building,
+    Playing,
+    Paused,
 }
 
-fn play_is_playing(state: Res<State<PlayState>>) -> bool {
-    *state.get() == PlayState::Playing
+/// Which transport controls can be used in a [`PlayPhase`]. Play stays usable
+/// while playing so it shows the accent fill; pressing it then does nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransportControls {
+    pub play: bool,
+    pub pause: bool,
+    pub step: bool,
+    pub stop: bool,
+    pub restart: bool,
 }
 
-fn play_is_running(state: Res<State<PlayState>>) -> bool {
-    *state.get() != PlayState::Stopped
+impl PlayPhase {
+    pub fn controls(self) -> TransportControls {
+        let running = matches!(self, PlayPhase::Playing | PlayPhase::Paused);
+        TransportControls {
+            play: self != PlayPhase::Building,
+            pause: running,
+            step: self == PlayPhase::Paused,
+            stop: self != PlayPhase::Stopped,
+            restart: running,
+        }
+    }
+
+    /// What the Play button reads.
+    pub fn play_caption(self) -> &'static str {
+        match self {
+            PlayPhase::Stopped | PlayPhase::Playing => "Play",
+            PlayPhase::Building => "Building...",
+            PlayPhase::Paused => "Resume",
+        }
+    }
+}
+
+/// The current [`PlayPhase`] and the name of the run configuration it is for,
+/// `None` for an unnamed one. Written only when either changes, so readers can
+/// rely on change detection.
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
+pub struct PlayStatus {
+    pub phase: PlayPhase,
+    pub config: Option<String>,
+}
+
+/// The phase `state` and `session` add up to. Instances launched or waiting
+/// on a build while the state is still `Stopped` are starting up.
+pub(crate) fn play_phase(state: &PlayState, session: Option<&PieSession>) -> PlayPhase {
+    match state {
+        PlayState::Playing => PlayPhase::Playing,
+        PlayState::Paused => PlayPhase::Paused,
+        PlayState::Stopped => {
+            if session.is_some_and(|session| !session.children.is_empty() || session.is_launching())
+            {
+                PlayPhase::Building
+            } else {
+                PlayPhase::Stopped
+            }
+        }
+    }
+}
+
+/// The run configuration Play is for: the focused instance's, else the first
+/// launched or waiting one's.
+fn play_config(session: &PieSession, focused: Option<&InstanceKey>) -> Option<String> {
+    let mut waiting = session.builds.values().filter_map(|build| match build {
+        BuildState::Running { pending, .. } => pending.first().map(|spawn| &spawn.key),
+        _ => None,
+    });
+    focused
+        .or_else(|| {
+            session
+                .children
+                .keys()
+                .min_by_key(|key| (&key.config, key.instance))
+        })
+        .or_else(|| waiting.next())
+        .map(|key| key.config.clone())
+}
+
+fn reconcile_play_status(world: &mut World) {
+    let state = world.resource::<State<PlayState>>().get().clone();
+    let session = world.non_send::<PieSession>();
+    let phase = play_phase(&state, Some(session));
+    let focused = world
+        .get_resource::<PieInstances>()
+        .and_then(|instances| instances.focused.as_ref());
+    let named = |label: &String| {
+        world
+            .get_resource::<RunConfigs>()
+            .and_then(|configs| configs.manifest.run_by_name(label))
+            .is_some_and(|run| run.name.is_some())
+    };
+    let config = match phase {
+        PlayPhase::Stopped => None,
+        _ => play_config(session, focused).filter(named),
+    };
+    let status = PlayStatus { phase, config };
+    if let Some(mut held) = world.get_resource_mut::<PlayStatus>() {
+        held.set_if_neq(status);
+    }
+}
+
+/// Re-check every operator button when Play changes phase: a build finishing
+/// or a game exiting changes what the transport controls can do without any
+/// operator running.
+fn refresh_buttons_on_play_status(status: Res<PlayStatus>, mut commands: Commands) {
+    if status.is_changed() {
+        commands.trigger(RefreshOperatorButtons);
+    }
+}
+
+fn phase_now(state: &State<PlayState>, session: Option<&NonSend<PieSession>>) -> PlayPhase {
+    play_phase(state.get(), session.map(|session| &**session))
+}
+
+fn can_play(state: Res<State<PlayState>>, session: Option<NonSend<PieSession>>) -> bool {
+    phase_now(&state, session.as_ref()).controls().play
+}
+
+fn can_pause(state: Res<State<PlayState>>, session: Option<NonSend<PieSession>>) -> bool {
+    phase_now(&state, session.as_ref()).controls().pause
+}
+
+fn can_step(state: Res<State<PlayState>>, session: Option<NonSend<PieSession>>) -> bool {
+    phase_now(&state, session.as_ref()).controls().step
+}
+
+fn can_stop(state: Res<State<PlayState>>, session: Option<NonSend<PieSession>>) -> bool {
+    phase_now(&state, session.as_ref()).controls().stop
+}
+
+fn can_restart(state: Res<State<PlayState>>, session: Option<NonSend<PieSession>>) -> bool {
+    phase_now(&state, session.as_ref()).controls().restart
 }
 
 /// Start the game. From Stopped, builds the project's game binary and
@@ -427,32 +578,44 @@ fn play_is_running(state: Res<State<PlayState>>) -> bool {
 #[operator(
     id = "pie.play", writes_disk = true,
     label = "Play",
-    description = "Start the game running in the editor.",
-    is_available = play_is_stopped_or_paused
+    description = "Start the game running in the editor, or resume a paused game.",
+    is_available = can_play
 )]
 pub(crate) fn pie_play(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_play);
     OperatorResult::Finished
 }
 
-/// Pause the running game.
+/// Pause the running game, or resume a paused one.
 #[operator(
     id = "pie.pause",
     label = "Pause",
-    description = "Pause the running game.",
-    is_available = play_is_playing
+    description = "Pause the running game, or resume it when paused.",
+    is_available = can_pause
 )]
 pub(crate) fn pie_pause(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_pause);
     OperatorResult::Finished
 }
 
-/// Stop the running game and return to authoring mode.
+/// Advance the paused game by one fixed tick.
+#[operator(
+    id = "pie.step",
+    label = "Step",
+    description = "Advance the paused game by one tick.",
+    is_available = can_step
+)]
+pub(crate) fn pie_step(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(handle_step);
+    OperatorResult::Finished
+}
+
+/// Stop the running game, or cancel a launch still building.
 #[operator(
     id = "pie.stop",
     label = "Stop",
-    description = "Stop the running game.",
-    is_available = play_is_running
+    description = "Stop the running game, or cancel a launch that is still building.",
+    is_available = can_stop
 )]
 pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(handle_stop);
@@ -461,13 +624,48 @@ pub(crate) fn pie_stop(_: In<OperatorParameters>, mut commands: Commands) -> Ope
 
 /// Rebuild and relaunch the running game.
 #[operator(
-    id = "pie.reload",
-    label = "Reload",
+    id = "pie.restart",
+    label = "Restart",
     description = "Rebuild and relaunch the running game.",
-    is_available = play_is_running
+    is_available = can_restart
 )]
-pub(crate) fn pie_reload(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
-    commands.queue(handle_reload);
+pub(crate) fn pie_restart(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(handle_restart);
+    OperatorResult::Finished
+}
+
+/// Launch one instance of a run configuration, or stop it if it is running.
+#[operator(
+    id = "pie.toggle_instance",
+    writes_disk = true,
+    label = "Toggle Game Instance",
+    description = "Launch one instance of a run configuration, or stop it when it is running.",
+    params(
+        config(String, doc = "The run configuration's name."),
+        instance(i64, default = 1, doc = "Which instance of it, counting from 1."),
+    )
+)]
+pub(crate) fn pie_toggle_instance(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(config) = params.as_str("config").map(str::to_string) else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(instance) = u32::try_from(params.as_int("instance").unwrap_or(1)) else {
+        return OperatorResult::Cancelled;
+    };
+    let key = InstanceKey { config, instance };
+    commands.queue(move |world: &mut World| {
+        if world.non_send::<PieSession>().is_running(&key) {
+            stop_instance(world, &key);
+        } else if let Some(run) = world
+            .get_resource::<RunConfigs>()
+            .and_then(|configs| configs.manifest.run_by_name(&key.config).cloned())
+        {
+            launch_instance(world, key, run);
+        }
+    });
     OperatorResult::Finished
 }
 
@@ -670,7 +868,7 @@ impl PieSession {
         self.builds.insert(
             PathBuf::from(format!("test-build-{key}")),
             BuildState::Running {
-                task,
+                task: task.into(),
                 pending: vec![PendingSpawn {
                     key,
                     run: RunConfig::default(),
@@ -694,7 +892,7 @@ pub fn insert_build_in_progress(world: &mut World) {
     world.non_send_mut::<PieSession>().builds.insert(
         root,
         BuildState::Running {
-            task,
+            task: task.into(),
             pending: Vec::new(),
             progress: Arc::default(),
         },
@@ -746,8 +944,8 @@ fn toggle_window_mode(mode: &mut PieWindowMode) {
 /// panel) and a separate game window.
 #[operator(
     id = "pie.window_mode_toggle",
-    label = "Toggle Game Window Mode",
-    description = "Switch the next launch between embedded (Game panel) and a separate game window."
+    label = "Play in Separate Window",
+    description = "Launch the game in its own window instead of the Game panel. Applies to the next launch."
 )]
 pub(crate) fn pie_window_mode_toggle(
     _: In<OperatorParameters>,
@@ -760,7 +958,7 @@ pub(crate) fn pie_window_mode_toggle(
 /// Stop every running instance, drop the cached build path so the next
 /// launch re-runs the (incremental) cargo build, then relaunch each
 /// instance that was running. The game asks the editor for its scene again.
-pub fn handle_reload(world: &mut World) {
+pub fn handle_restart(world: &mut World) {
     let keys: Vec<InstanceKey> = world
         .non_send::<PieSession>()
         .children
@@ -776,7 +974,7 @@ pub fn handle_reload(world: &mut World) {
         .get_resource::<RunConfigs>()
         .map(|c| c.manifest.clone())
     else {
-        warn!("PIE: Reload but run configurations are not loaded");
+        warn!("PIE: Restart but run configurations are not loaded");
         return;
     };
 
@@ -784,44 +982,13 @@ pub fn handle_reload(world: &mut World) {
 
     for key in keys {
         let Some(run) = run_configs.run_by_name(&key.config).cloned() else {
-            warn!("PIE: Reload could not find run config '{}'", key.config);
+            warn!("PIE: Restart could not find run config '{}'", key.config);
             continue;
         };
         launch_instance(world, key, run);
     }
 
-    info!("PIE: Reload (rebuild + relaunch)");
-}
-
-/// Spawn a click observer on each `PieButton` as it's added. The
-/// observer dispatches the corresponding `pie.*` operator.
-fn wire_pie_button(
-    trigger: On<Add<PieButton>>,
-    buttons: Query<&PieButton>,
-    mut commands: Commands,
-) {
-    let entity = trigger.event_target();
-    let Ok(kind) = buttons.get(entity).copied() else {
-        return;
-    };
-    let op_id = match kind {
-        PieButton::Play => PiePlayOp::ID,
-        PieButton::Pause => PiePauseOp::ID,
-        PieButton::Stop => PieStopOp::ID,
-        PieButton::Reload => PieReloadOp::ID,
-        PieButton::Rebuild => ProjectBuildOp::ID,
-    };
-    commands
-        .entity(entity)
-        .observe(move |_: On<PointerClick>, mut commands: Commands| {
-            commands
-                .operator(op_id)
-                .settings(CallOperatorSettings {
-                    execution_context: ExecutionContext::Invoke,
-                    creates_history_entry: false,
-                })
-                .call();
-        });
+    info!("PIE: Restart (rebuild + relaunch)");
 }
 
 /// Resolve the open project's root directory, or log and bail if no
@@ -1001,10 +1168,12 @@ pub(crate) fn spawn_game_build(
     root: &Path,
     spec: ShimSpec,
     load: jackdaw_project_build::BuildLoad,
-) -> (Task<io::Result<GameBuildResult>>, Arc<Mutex<BuildProgress>>) {
+) -> (GameBuildTask, Arc<Mutex<BuildProgress>>) {
     let progress = Arc::new(Mutex::new(BuildProgress::default()));
     let sink = Arc::clone(&progress);
     let jackdaw_dir = root.join(".jackdaw");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::clone(&cancel);
     let task = AsyncComputeTaskPool::get().spawn(async move {
         if let Ok(mut p) = sink.lock() {
             p.push_log("building the game".to_string());
@@ -1041,10 +1210,11 @@ pub(crate) fn spawn_game_build(
                 }
             }
         };
-        let result = crate::project_build::build_project_binary_with_load(
+        let result = crate::project_build::build_project_binary_cancellable(
             &spec,
             &jackdaw_dir,
             load,
+            &cancelled,
             &mut report,
         );
         match result {
@@ -1080,7 +1250,7 @@ pub(crate) fn spawn_game_build(
             }
         }
     });
-    (task, progress)
+    (GameBuildTask { task, cancel }, progress)
 }
 
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
@@ -1137,26 +1307,39 @@ pub fn handle_play(world: &mut World) {
             };
             launch_instance(world, key, first);
         }
-        PlayState::Paused => {
-            broadcast_control(world, ControlEvent::Resume);
-            world
-                .resource_mut::<NextState<PlayState>>()
-                .set(PlayState::Playing);
-            info!("PIE: Play (resumed)");
-        }
+        PlayState::Paused => resume(world),
         PlayState::Playing => {}
     }
 }
 
-/// Transition `Playing` -> `Paused`, telling every live child to freeze.
-/// No-op otherwise.
+fn resume(world: &mut World) {
+    broadcast_control(world, ControlEvent::Resume);
+    world
+        .resource_mut::<NextState<PlayState>>()
+        .set(PlayState::Playing);
+    info!("PIE: Resume");
+}
+
+/// Toggle between `Playing` and `Paused`, telling every live child to freeze
+/// or carry on. No-op while stopped.
 pub fn handle_pause(world: &mut World) {
-    if *world.resource::<State<PlayState>>().get() == PlayState::Playing {
-        broadcast_control(world, ControlEvent::Pause);
-        world
-            .resource_mut::<NextState<PlayState>>()
-            .set(PlayState::Paused);
-        info!("PIE: Pause");
+    match world.resource::<State<PlayState>>().get() {
+        PlayState::Playing => {
+            broadcast_control(world, ControlEvent::Pause);
+            world
+                .resource_mut::<NextState<PlayState>>()
+                .set(PlayState::Paused);
+            info!("PIE: Pause");
+        }
+        PlayState::Paused => resume(world),
+        PlayState::Stopped => {}
+    }
+}
+
+/// Advance every live child by one fixed tick. No-op unless paused.
+pub fn handle_step(world: &mut World) {
+    if *world.resource::<State<PlayState>>().get() == PlayState::Paused {
+        broadcast_control(world, ControlEvent::Step);
     }
 }
 
@@ -1175,7 +1358,7 @@ pub fn handle_stop(world: &mut World) {
     for (_key, mut stage) in session.children.drain() {
         stage.kill_and_reap();
     }
-    // Dropping the in-flight build tasks aborts them.
+    // Dropping the in-flight builds cancels them and kills their cargo.
     session.builds.clear();
 
     if current != PlayState::Stopped {
@@ -1429,6 +1612,7 @@ fn advance_pie_session(world: &mut World) {
     poll_children(world);
     reconcile_focus(world);
     reconcile_play_state(world);
+    reconcile_play_status(world);
     crate::project_build::reconcile_build_status(world);
 }
 
@@ -1450,7 +1634,7 @@ fn poll_builds(world: &mut World) {
         else {
             continue;
         };
-        match future::block_on(future::poll_once(task)) {
+        match future::block_on(future::poll_once(&mut task.task)) {
             None => {}
             Some(Ok(result)) => {
                 // The build persisted the project's type schema to
@@ -2143,7 +2327,7 @@ mod build_failure_tests {
         session.builds.insert(
             PathBuf::from("my-game"),
             BuildState::Running {
-                task,
+                task: task.into(),
                 pending: Vec::new(),
                 progress: Arc::new(Mutex::new(output)),
             },
@@ -2180,7 +2364,9 @@ mod build_failure_tests {
         world.non_send_mut::<PieSession>().builds.insert(
             PathBuf::from("my-game"),
             BuildState::Running {
-                task: AsyncComputeTaskPool::get().spawn(std::future::pending()),
+                task: AsyncComputeTaskPool::get()
+                    .spawn(std::future::pending())
+                    .into(),
                 pending: Vec::new(),
                 progress: Arc::default(),
             },
@@ -2799,5 +2985,241 @@ mod control_outbox_tests {
             assert!(!world.non_send::<PieSession>().is_running(&key()));
         });
         drop(game);
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use std::thread;
+
+    use jackdaw_pie_protocol::{connect, event::from_bytes};
+
+    use super::*;
+
+    const GUARD: Duration = Duration::from_secs(30);
+
+    fn key() -> InstanceKey {
+        InstanceKey {
+            config: "Game".to_string(),
+            instance: 1,
+        }
+    }
+
+    /// A process standing in for the game; it exits on its own.
+    fn child() -> Child {
+        Command::new(std::env::current_exe().expect("the test binary"))
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a child process")
+    }
+
+    fn link() -> (IpcChannelTransport, IpcChannelTransport) {
+        let (server, name) = serve().expect("a rendezvous");
+        let accept = thread::spawn(move || server.accept());
+        let game = connect(&name).expect("the game connects");
+        let editor = accept
+            .join()
+            .expect("accept ran")
+            .expect("the editor accepts");
+        (editor, game)
+    }
+
+    fn world_in(state: PlayState, session: PieSession) -> World {
+        let mut world = World::new();
+        world.insert_resource(State::new(state));
+        world.init_resource::<NextState<PlayState>>();
+        world.insert_non_send(session);
+        world
+    }
+
+    fn phase_of(world: &World) -> PlayPhase {
+        play_phase(
+            world.resource::<State<PlayState>>().get(),
+            Some(world.non_send::<PieSession>()),
+        )
+    }
+
+    fn controls(
+        play: bool,
+        pause: bool,
+        step: bool,
+        stop: bool,
+        restart: bool,
+    ) -> TransportControls {
+        TransportControls {
+            play,
+            pause,
+            step,
+            stop,
+            restart,
+        }
+    }
+
+    #[test]
+    fn each_phase_offers_its_own_controls() {
+        assert_eq!(
+            PlayPhase::Stopped.controls(),
+            controls(true, false, false, false, false),
+            "stopped: only Play"
+        );
+        assert_eq!(
+            PlayPhase::Building.controls(),
+            controls(false, false, false, true, false),
+            "building: only Stop, which cancels"
+        );
+        assert_eq!(
+            PlayPhase::Playing.controls(),
+            controls(true, true, false, true, true),
+            "playing: Play does nothing but stays lit, Step waits for a pause"
+        );
+        assert_eq!(
+            PlayPhase::Paused.controls(),
+            controls(true, true, true, true, true),
+            "paused: Play resumes and Step steps"
+        );
+        assert_eq!(PlayPhase::Stopped.play_caption(), "Play");
+        assert_eq!(PlayPhase::Building.play_caption(), "Building...");
+        assert_eq!(PlayPhase::Playing.play_caption(), "Play");
+        assert_eq!(PlayPhase::Paused.play_caption(), "Resume");
+    }
+
+    #[test]
+    fn the_phase_follows_the_session_and_the_play_state() {
+        let world = world_in(PlayState::Stopped, PieSession::default());
+        assert_eq!(phase_of(&world), PlayPhase::Stopped);
+
+        let mut session = PieSession::default();
+        session.insert_test_pending_build(key());
+        let world = world_in(PlayState::Stopped, session);
+        assert_eq!(phase_of(&world), PlayPhase::Building, "waiting on a build");
+
+        let mut session = PieSession::default();
+        session.insert_test_connecting(key(), child());
+        let mut world = world_in(PlayState::Stopped, session);
+        assert_eq!(phase_of(&world), PlayPhase::Building, "waiting to connect");
+        handle_stop(&mut world);
+        assert_eq!(
+            phase_of(&world),
+            PlayPhase::Stopped,
+            "Stop cancels a launch"
+        );
+
+        let (editor, _game) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(), child(), editor);
+        let world = world_in(PlayState::Playing, session);
+        assert_eq!(phase_of(&world), PlayPhase::Playing);
+        assert_eq!(
+            play_config(world.non_send::<PieSession>(), None),
+            Some("Game".to_string())
+        );
+
+        let world = world_in(PlayState::Paused, PieSession::default());
+        assert_eq!(phase_of(&world), PlayPhase::Paused);
+    }
+
+    #[test]
+    fn dropping_a_build_cancels_it() {
+        let task: GameBuildTask = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
+            .spawn(std::future::pending::<io::Result<GameBuildResult>>())
+            .into();
+        let cancel = Arc::clone(&task.cancel);
+        assert!(!cancel.load(Ordering::Relaxed));
+        let mut session = PieSession::default();
+        session.builds.insert(
+            PathBuf::from("game"),
+            BuildState::Running {
+                task,
+                pending: Vec::new(),
+                progress: Arc::default(),
+            },
+        );
+        let mut world = world_in(PlayState::Stopped, session);
+        handle_stop(&mut world);
+        assert!(
+            cancel.load(Ordering::Relaxed),
+            "Stop tells the build to kill cargo"
+        );
+    }
+
+    #[test]
+    fn a_game_that_exits_takes_the_controls_back_to_stopped() {
+        let (editor, _game) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(), child(), editor);
+        let mut world = world_in(PlayState::Playing, session);
+
+        let deadline = Instant::now() + GUARD;
+        while world.non_send::<PieSession>().is_running(&key()) {
+            assert!(Instant::now() < deadline, "the game never exited");
+            poll_children(&mut world);
+            thread::sleep(Duration::from_millis(5));
+        }
+        reconcile_play_state(&mut world);
+
+        assert!(matches!(
+            world.resource::<NextState<PlayState>>(),
+            NextState::Pending(PlayState::Stopped)
+        ));
+        world.insert_resource(State::new(PlayState::Stopped));
+        assert_eq!(phase_of(&world), PlayPhase::Stopped);
+    }
+
+    #[test]
+    fn pause_step_and_an_edit_made_while_paused_reach_the_game() {
+        let (editor, mut game) = link();
+        let mut session = PieSession::default();
+        session.insert_test_live(key(), child(), editor);
+        let mut world = world_in(PlayState::Playing, session);
+
+        handle_step(&mut world);
+        handle_pause(&mut world);
+        world.insert_resource(State::new(PlayState::Paused));
+        handle_step(&mut world);
+        send_control_to_instance(
+            &world,
+            &key(),
+            ControlEvent::NodeComponents {
+                node: 7,
+                set: Vec::new(),
+                removed: vec!["game::Spin".to_string()],
+            },
+        );
+        handle_pause(&mut world);
+
+        let deadline = Instant::now() + GUARD;
+        let mut events = Vec::new();
+        while events.len() < 4 {
+            assert!(Instant::now() < deadline, "only {events:?} arrived");
+            for (_, bytes) in game.drain_received() {
+                events.push(from_bytes::<ControlEvent>(&bytes).expect("a control event"));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        let transport: Vec<&ControlEvent> = events
+            .iter()
+            .filter(|event| !matches!(event, ControlEvent::NodeComponents { .. }))
+            .collect();
+        assert_eq!(
+            transport,
+            vec![
+                &ControlEvent::Pause,
+                &ControlEvent::Step,
+                &ControlEvent::Resume
+            ],
+            "a step while playing sends nothing; one while paused sends one Step"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ControlEvent::NodeComponents { node: 7, .. })),
+            "the edit made while paused was sent"
+        );
+        assert!(matches!(
+            world.resource::<NextState<PlayState>>(),
+            NextState::Pending(PlayState::Playing)
+        ));
     }
 }

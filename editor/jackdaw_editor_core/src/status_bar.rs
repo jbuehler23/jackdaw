@@ -11,6 +11,7 @@ use crate::{
     gizmos::{GizmoAxis, GizmoSpace},
     modal_transform::{ModalOp, ModalTransformState},
     numeric_transform::NumericTransformState,
+    pie::{PlayPhase, PlayStatus},
     scene_io::SceneFilePath,
 };
 
@@ -163,6 +164,7 @@ impl Plugin for StatusBarPlugin {
             Update,
             (
                 update_status_left,
+                hide_idle_readouts_during_play,
                 update_status_center,
                 update_status_inspected,
                 tick_status_notice,
@@ -223,12 +225,16 @@ fn update_status_center(
     scene_path: Res<SceneFilePath>,
     scenes: Option<Res<crate::scenes::Scenes>>,
     project: Option<Res<crate::project::ProjectRoot>>,
+    play: Option<Res<PlayStatus>>,
     mut had_project: Local<bool>,
     mut text_query: Query<&mut Text, With<StatusBarCenter>>,
 ) {
     let had = std::mem::replace(&mut *had_project, project.is_some());
     let project_changed = project.as_ref().is_some_and(Res::is_changed) || had != project.is_some();
-    if !scene_path.is_changed() && !scenes.as_ref().is_some_and(Res::is_changed) && !project_changed
+    if !scene_path.is_changed()
+        && !scenes.as_ref().is_some_and(Res::is_changed)
+        && !project_changed
+        && !play.as_ref().is_some_and(Res::is_changed)
     {
         return;
     }
@@ -257,7 +263,55 @@ fn update_status_center(
             }
         });
 
-    text.0 = format!("Jackdaw v{version}{path_str}");
+    let lead = play
+        .as_deref()
+        .and_then(play_line)
+        .unwrap_or_else(|| format!("Jackdaw v{version}"));
+    text.0 = format!("{lead}{path_str}");
+}
+
+/// What the footer leads with while Play is under way, in place of the
+/// editor version: the phase, and the run configuration when it has a name.
+pub(crate) fn play_line(play: &PlayStatus) -> Option<String> {
+    let phase = match play.phase {
+        PlayPhase::Stopped => return None,
+        PlayPhase::Building => "Building",
+        PlayPhase::Playing => "Playing",
+        PlayPhase::Paused => "Paused",
+    };
+    Some(match play.config.as_deref() {
+        Some(config) => format!("{phase}: {config}"),
+        None => phase.to_string(),
+    })
+}
+
+/// Hide the footer's idle readouts, the left-hand "Ready" and the remote
+/// connection indicator, while Play is under way.
+fn hide_idle_readouts_during_play(
+    play: Res<PlayStatus>,
+    added_left: Query<(), Added<StatusBarLeft>>,
+    added_slot: Query<(), Added<crate::remote_mode::ConnectionIndicatorSlot>>,
+    mut readouts: Query<
+        &mut Visibility,
+        Or<(
+            With<StatusBarLeft>,
+            With<crate::remote_mode::ConnectionIndicatorSlot>,
+        )>,
+    >,
+) {
+    if !play.is_changed() && added_left.is_empty() && added_slot.is_empty() {
+        return;
+    }
+    let wanted = if play.phase == PlayPhase::Stopped {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut readouts {
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+    }
 }
 
 /// A scene as the footer names it: under the assets folder when it is there,
@@ -369,6 +423,7 @@ fn update_status_right(
     notice: Res<StatusNotice>,
     phase: Res<EditorPhase>,
     progress: Option<Res<crate::progress::EditorProgress>>,
+    play: Option<Res<PlayStatus>>,
     mut text_query: Query<(&mut Text, &mut TextColor), With<StatusBarRight>>,
 ) {
     // A phase says what the editor is doing right now, so it outranks the tool
@@ -428,9 +483,13 @@ fn update_status_right(
         && !numeric.is_changed()
         && !tile_hover.is_changed()
         && !tile_mode.is_changed()
+        && !play.as_ref().is_some_and(Res::is_changed)
     {
         return;
     }
+    let playing = play
+        .as_ref()
+        .is_some_and(|play| play.phase != PlayPhase::Stopped);
     let Ok((mut text, mut color)) = text_query.single_mut() else {
         return;
     };
@@ -447,6 +506,10 @@ fn update_status_right(
             };
             color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
             return;
+        }
+        // The game it built is running; the footer says so in the middle.
+        BuildState::Ready { .. } if playing => {
+            color.0 = jackdaw_feathers::tokens::TEXT_SECONDARY;
         }
         BuildState::Ready { components, .. } => {
             text.0 = if let Some(outcome) = &build_status.outcome {
@@ -707,5 +770,27 @@ mod tests {
             "gizmo01b.bsn"
         );
         assert_eq!(scene_label("/tmp/x/gizmo.bsn", None), "gizmo.bsn");
+    }
+
+    #[test]
+    fn during_play_the_footer_names_the_phase_and_the_run_when_it_has_a_name() {
+        use super::{PlayPhase, PlayStatus, play_line};
+
+        let status = |phase, config: Option<&str>| PlayStatus {
+            phase,
+            config: config.map(str::to_string),
+        };
+        assert_eq!(play_line(&status(PlayPhase::Stopped, Some("Client"))), None);
+        for (phase, named, unnamed) in [
+            (PlayPhase::Building, "Building: Client", "Building"),
+            (PlayPhase::Playing, "Playing: Client", "Playing"),
+            (PlayPhase::Paused, "Paused: Client", "Paused"),
+        ] {
+            assert_eq!(
+                play_line(&status(phase, Some("Client"))).as_deref(),
+                Some(named)
+            );
+            assert_eq!(play_line(&status(phase, None)).as_deref(), Some(unnamed));
+        }
     }
 }
