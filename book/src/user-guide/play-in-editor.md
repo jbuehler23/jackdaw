@@ -177,7 +177,8 @@ running game holds.
 - When a launch goes wrong, the Game panel stays in front and says why: the
   exit code and the last lines the game printed for a crash, a note that the
   game must add `JackdawPlugin` (with the `pie` feature of `jackdaw_runtime`)
-  when it never connects, or that the build failed. **Restart** in the panel
-  launches it again.
+  when it never connects, or that the build failed, with a button that shows
+  the build errors. **Restart** in the panel launches the game that went away
+  again.
 - **Restart** relaunches with the current window setting, which is how you
   apply a change to **Play in separate window**.

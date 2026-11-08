@@ -67,10 +67,70 @@ impl std::fmt::Display for InstanceKey {
 
 /// Rolling buffer of a child's most recent stderr lines, filled by the
 /// per-child reader thread and read back when reporting a crash.
-type StderrTail = Arc<Mutex<VecDeque<String>>>;
+#[derive(Default)]
+struct StderrTail {
+    lines: Arc<Mutex<VecDeque<String>>>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+
+/// How long a reaped child's stderr reader may take to reach the end of the
+/// pipe. A grandchild holding the pipe open would otherwise block it forever.
+const STDERR_DRAIN: Duration = Duration::from_millis(250);
+
+impl StderrTail {
+    /// Wait a moment for the reader to take the lines an exited child wrote
+    /// last, then return the buffered lines.
+    fn drain(mut self) -> Vec<String> {
+        if let Some(reader) = self.reader.take() {
+            let until = Instant::now() + STDERR_DRAIN;
+            while !reader.is_finished() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        self.lines
+            .lock()
+            .map(|buf| buf.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
 
 /// How many stderr lines a [`GameExit`] shows.
 const EXIT_STDERR_LINES: usize = 8;
+
+/// How many characters of one stderr line a [`GameExit`] keeps.
+const EXIT_STDERR_LINE_CHARS: usize = 200;
+
+/// `line` without terminal escape sequences, cut to [`EXIT_STDERR_LINE_CHARS`].
+fn plain_stderr_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len().min(EXIT_STDERR_LINE_CHARS));
+    let mut chars = line.chars().peekable();
+    let mut kept = 0;
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            } else {
+                chars.next();
+            }
+            continue;
+        }
+        if c.is_control() {
+            continue;
+        }
+        if kept == EXIT_STDERR_LINE_CHARS {
+            out.push_str("...");
+            break;
+        }
+        out.push(c);
+        kept += 1;
+    }
+    out
+}
 
 /// Why a game went away without being stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,17 +150,23 @@ pub enum GameExitReason {
 pub struct GameExit {
     pub key: InstanceKey,
     pub reason: GameExitReason,
-    stderr: StderrTail,
+    /// The last few lines the game wrote to stderr, without escape sequences.
+    pub stderr: Vec<String>,
 }
 
 impl GameExit {
-    /// The last few lines the game wrote to stderr.
-    pub fn stderr_lines(&self) -> Vec<String> {
-        let Ok(buf) = self.stderr.lock() else {
-            return Vec::new();
-        };
-        let skip = buf.len().saturating_sub(EXIT_STDERR_LINES);
-        buf.iter().skip(skip).cloned().collect()
+    fn new(key: InstanceKey, reason: GameExitReason, stderr: StderrTail) -> Self {
+        let lines = stderr.drain();
+        report_stderr_lines(&lines);
+        let skip = lines.len().saturating_sub(EXIT_STDERR_LINES);
+        Self {
+            key,
+            reason,
+            stderr: lines[skip..]
+                .iter()
+                .map(|line| plain_stderr_line(line))
+                .collect(),
+        }
     }
 }
 
@@ -108,6 +174,20 @@ impl GameExit {
 /// cleanly.
 #[derive(Resource, Default, Debug)]
 pub struct LastGameExit(pub Option<GameExit>);
+
+/// Record `failed` as the last exit, else forget a recorded exit of a game that
+/// has since exited cleanly.
+fn record_exits(last: &mut LastGameExit, failed: Option<GameExit>, exited: &[InstanceKey]) {
+    if failed.is_some() {
+        last.0 = failed;
+    } else if last
+        .0
+        .as_ref()
+        .is_some_and(|exit| exited.contains(&exit.key))
+    {
+        last.0 = None;
+    }
+}
 
 /// A child's exit status as "code N", or "signal N" for one killed by a signal.
 fn exit_status_text(status: std::process::ExitStatus) -> String {
@@ -127,8 +207,12 @@ fn exit_status_text(status: std::process::ExitStatus) -> String {
 /// What one poll of a child found.
 enum ChildPoll {
     Running(ChildStage),
-    /// Reaped, with why when it went away uncleanly.
-    Gone(Option<GameExit>),
+    /// Exited with a success status.
+    Exited,
+    /// Dropped after its process could not be polled.
+    Lost,
+    /// Went away uncleanly.
+    Failed(GameExit),
 }
 
 /// One launched child and its connection progress.
@@ -244,6 +328,9 @@ pub struct PieSession {
     serving: Vec<ServingScene>,
     /// Replaces [`CONNECT_TIMEOUT`] when set.
     connect_timeout: Option<Duration>,
+    /// A launch's build failed and the Build panel has not yet seen that
+    /// failure; the Game panel reports it instead.
+    pub(crate) launch_build_failure_unseen: bool,
 }
 
 /// A scene answer on a worker, with its places in the instance's outbox.
@@ -1040,12 +1127,17 @@ pub fn insert_build_in_progress(world: &mut World) {
     );
 }
 
-/// Fail the game builds in progress, dropping the launches waiting on them, for
-/// a test.
+/// Fail the game builds in progress as a compile error would, dropping the
+/// launches waiting on them, for a test.
 #[doc(hidden)]
 pub fn fail_builds_in_progress(world: &mut World) {
-    for build in world.non_send_mut::<PieSession>().builds.values_mut() {
+    let mut session = world.non_send_mut::<PieSession>();
+    for build in session.builds.values_mut() {
         *build = BuildState::Failed { launch: true };
+    }
+    session.launch_build_failure_unseen = true;
+    if let Some(mut status) = world.get_resource_mut::<crate::build_status::BuildStatus>() {
+        status.state = crate::build_status::BuildState::Failed { at: Instant::now() };
     }
 }
 
@@ -1428,9 +1520,11 @@ pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
     stage.kill_and_reap();
     drop(stage);
 
-    if world.non_send::<PieSession>().children.is_empty()
-        && *world.resource::<State<PlayState>>().get() != PlayState::Stopped
-    {
+    let last_stopped = world.non_send::<PieSession>().children.is_empty();
+    if last_stopped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
+        last.0 = None;
+    }
+    if last_stopped && *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
         world
             .resource_mut::<NextState<PlayState>>()
             .set(PlayState::Stopped);
@@ -1791,6 +1885,7 @@ fn advance_pie_session(world: &mut World) {
 /// spawning so `spawn_instance` can read the world without aliasing.
 fn poll_builds(world: &mut World) {
     let mut builds = std::mem::take(&mut world.non_send_mut::<PieSession>().builds);
+    let mut launch_build_failed = false;
     let mut spawned: Vec<(InstanceKey, ChildStage, PieWindowMode, Option<LaunchScene>)> =
         Vec::new();
 
@@ -1838,9 +1933,9 @@ fn poll_builds(world: &mut World) {
                         keys.join(", ")
                     );
                 }
-                *state = BuildState::Failed {
-                    launch: !pending.is_empty(),
-                };
+                let launch = !pending.is_empty();
+                launch_build_failed |= launch;
+                *state = BuildState::Failed { launch };
                 {
                     let mut status = world.resource_mut::<crate::build_status::BuildStatus>();
                     status.state = crate::build_status::BuildState::Failed { at: Instant::now() };
@@ -1855,6 +1950,9 @@ fn poll_builds(world: &mut World) {
     let started = !spawned.is_empty();
     let mut session = world.non_send_mut::<PieSession>();
     session.builds = builds;
+    if launch_build_failed {
+        session.launch_build_failure_unseen = true;
+    }
     for (key, stage, mode, scene) in spawned {
         session.launch_modes.insert(key.clone(), mode);
         session.note_launch_scene(&key, scene);
@@ -1875,23 +1973,22 @@ fn poll_children(world: &mut World) {
     let timeout = session.connect_timeout.unwrap_or(CONNECT_TIMEOUT);
 
     let mut survivors: HashMap<InstanceKey, ChildStage> = HashMap::with_capacity(children.len());
-    let mut reaped = false;
-    let mut exit = None;
+    let mut failed = None;
+    let mut exited = Vec::new();
     for (key, stage) in children {
         match advance_child(&key, stage, timeout) {
             ChildPoll::Running(next) => {
                 survivors.insert(key, next);
             }
-            ChildPoll::Gone(gone) => {
-                reaped = true;
-                if gone.is_some() {
-                    exit = gone;
-                }
-            }
+            ChildPoll::Exited => exited.push(key),
+            ChildPoll::Lost => {}
+            ChildPoll::Failed(exit) => failed = Some(exit),
         }
     }
-    if reaped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
-        last.0 = exit;
+    if (failed.is_some() || !exited.is_empty())
+        && let Some(mut last) = world.get_resource_mut::<LastGameExit>()
+    {
+        record_exits(&mut last, failed, &exited);
     }
 
     let mut session = world.non_send_mut::<PieSession>();
@@ -1915,12 +2012,7 @@ fn poll_children(world: &mut World) {
 /// is reaped, with why when it went away uncleanly.
 fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> ChildPoll {
     let gone = |reason: GameExitReason, stderr_tail: StderrTail| {
-        report_stderr_tail(&stderr_tail);
-        ChildPoll::Gone(Some(GameExit {
-            key: key.clone(),
-            reason,
-            stderr: stderr_tail,
-        }))
+        ChildPoll::Failed(GameExit::new(key.clone(), reason, stderr_tail))
     };
     match stage {
         ChildStage::Connecting {
@@ -2002,7 +2094,7 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
             }),
             Ok(Some(status)) if status.success() => {
                 info!("PIE: {key} exited");
-                ChildPoll::Gone(None)
+                ChildPoll::Exited
             }
             Ok(Some(status)) => {
                 error!("PIE: {key} exited with {status}");
@@ -2013,7 +2105,7 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
             }
             Err(err) => {
                 error!("PIE: {key} failed to poll: {err}");
-                ChildPoll::Gone(None)
+                ChildPoll::Lost
             }
         },
     }
@@ -2204,9 +2296,9 @@ fn spawn_instance(
 
 /// Keep the last lines of a child's piped stderr, read on a thread of its own.
 fn tail_stderr(child: &mut Child) -> StderrTail {
-    let stderr_tail: StderrTail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
-    if let Some(stderr) = child.stderr.take() {
-        let tail = Arc::clone(&stderr_tail);
+    let lines = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
+    let reader = child.stderr.take().map(|stderr| {
+        let tail = Arc::clone(&lines);
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 if let Ok(mut buf) = tail.lock() {
@@ -2216,19 +2308,16 @@ fn tail_stderr(child: &mut Child) -> StderrTail {
                     buf.push_back(line);
                 }
             }
-        });
-    }
-    stderr_tail
+        })
+    });
+    StderrTail { lines, reader }
 }
 
-/// Log the buffered stderr tail as an error, for diagnosing a crashed
-/// or unconnectable game.
-fn report_stderr_tail(stderr_tail: &StderrTail) {
-    if let Ok(buf) = stderr_tail.lock()
-        && !buf.is_empty()
-    {
-        let tail: Vec<&str> = buf.iter().map(String::as_str).collect();
-        error!("PIE: game stderr tail:\n{}", tail.join("\n"));
+/// Log a reaped game's stderr tail as an error, for diagnosing a crashed or
+/// unconnectable game.
+fn report_stderr_lines(lines: &[String]) {
+    if !lines.is_empty() {
+        error!("PIE: game stderr tail:\n{}", lines.join("\n"));
     }
 }
 
@@ -3464,7 +3553,8 @@ mod game_exit_tests {
         loop {
             match advance_child(&key(), stage, timeout) {
                 ChildPoll::Running(next) => stage = next,
-                ChildPoll::Gone(exit) => return exit,
+                ChildPoll::Failed(exit) => return Some(exit),
+                ChildPoll::Exited | ChildPoll::Lost => return None,
             }
             assert!(Instant::now() < until, "the child was never reaped");
             std::thread::sleep(Duration::from_millis(5));
@@ -3496,14 +3586,51 @@ mod game_exit_tests {
             exit.reason,
             GameExitReason::ExitedBeforeConnecting("code 3".to_string())
         );
-        let until = Instant::now() + Duration::from_secs(5);
-        while exit.stderr_lines().last().map(String::as_str) != Some("line 10") {
-            assert!(Instant::now() < until, "{:?}", exit.stderr_lines());
-            std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(
+            exit.stderr.last().map(String::as_str),
+            Some("line 10"),
+            "the lines written just before the exit are kept"
+        );
+        assert_eq!(exit.stderr.len(), EXIT_STDERR_LINES);
+        assert_eq!(exit.stderr.first().map(String::as_str), Some("line 3"));
+    }
+
+    #[test]
+    fn stderr_lines_lose_escape_sequences_and_are_cut_short() {
+        assert_eq!(
+            plain_stderr_line("\u{1b}[1m\u{1b}[31merror\u{1b}[0m: boom"),
+            "error: boom"
+        );
+        let long = "x".repeat(500);
+        let cut = plain_stderr_line(&long);
+        assert_eq!(cut.len(), EXIT_STDERR_LINE_CHARS + 3);
+        assert!(cut.ends_with("..."));
+    }
+
+    fn crash_of(instance: u32) -> GameExit {
+        GameExit {
+            key: InstanceKey {
+                config: "Game".to_string(),
+                instance,
+            },
+            reason: GameExitReason::Crashed("code 1".to_string()),
+            stderr: Vec::new(),
         }
-        let lines = exit.stderr_lines();
-        assert_eq!(lines.len(), EXIT_STDERR_LINES);
-        assert_eq!(lines.first().map(String::as_str), Some("line 3"));
+    }
+
+    #[test]
+    fn another_game_exiting_cleanly_keeps_the_recorded_crash() {
+        let mut last = LastGameExit(Some(crash_of(1)));
+        let other = crash_of(2).key;
+        record_exits(&mut last, None, std::slice::from_ref(&other));
+        assert!(last.0.is_some());
+        record_exits(&mut last, None, &[crash_of(1).key]);
+        assert!(
+            last.0.is_none(),
+            "the crashed game itself exiting cleanly clears it"
+        );
+        record_exits(&mut last, Some(crash_of(2)), &[crash_of(1).key]);
+        assert_eq!(last.0.map(|exit| exit.key), Some(other));
     }
 
     #[test]

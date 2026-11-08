@@ -7,13 +7,13 @@ use std::time::{Duration, Instant};
 use bevy::{prelude::*, ui_widgets::observe};
 use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
-use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
+use jackdaw_feathers::button::{ButtonOperatorCall, ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::tokens;
 
 use jackdaw_panels::tree::{DockTree, NodeId, TabId};
 
 use crate::live_frame::LiveFrameStream;
-use crate::pie::{GameExitReason, LastGameExit, PiePlayOp, PieWindowMode};
+use crate::pie::{GameExitReason, LastGameExit, PiePlayOp, PieToggleInstanceOp, PieWindowMode};
 
 /// Dock window id, used for registration and presence checks.
 pub const GAME_WINDOW_ID: &str = "jackdaw.game";
@@ -50,8 +50,10 @@ pub enum GameIdlePart {
     Stderr,
     /// The Play button shown while stopped.
     Play,
-    /// The Restart button shown after a game went away.
+    /// The Restart button shown after a game went away, relaunching that game.
     Restart,
+    /// The button opening the Build panel after a failed build.
+    BuildErrors,
     /// The input hint under the Play button.
     Hint,
 }
@@ -256,11 +258,14 @@ fn game_panel_idle() -> impl Bundle {
             ),
             (
                 GameIdlePart::Restart,
-                button(
-                    ButtonProps::new("Restart")
-                        .call_operator(PiePlayOp::ID)
-                        .hidden(),
-                ),
+                ButtonOperatorCall::new(PieToggleInstanceOp::ID),
+                button(ButtonProps::new("Restart").hidden()),
+            ),
+            (
+                GameIdlePart::BuildErrors,
+                ButtonOperatorCall::new(crate::WindowOpenOp::ID)
+                    .with_param("window_id", crate::build_panel::BUILD_WINDOW_ID),
+                button(ButtonProps::new("Show build errors").hidden()),
             ),
             (
                 GameIdlePart::Hint,
@@ -454,7 +459,7 @@ const IDLE_LOADING: &str = "Loading the game...";
 const IDLE_STARTING: &str = "Starting the game...";
 const IDLE_OWN_WINDOW: &str = "This game opened its own window. To show it here, pass DefaultPlugins \
      through jackdaw_runtime::maybe_windowless in its main.rs.";
-const IDLE_BUILD_FAILED: &str = "The build failed. Its errors are in the Build panel.";
+const IDLE_BUILD_FAILED: &str = "The build failed.";
 const IDLE_NEVER_CONNECTED: &str = "The game did not connect to the editor. Its app must add \
      JackdawPlugin, with the pie feature of jackdaw_runtime enabled.";
 
@@ -489,6 +494,7 @@ enum IdleAction {
     None,
     Play,
     Restart,
+    ShowBuildErrors,
 }
 
 fn idle_message(wait: GameWait) -> String {
@@ -525,19 +531,21 @@ fn idle_action(wait: GameWait) -> IdleAction {
     match wait {
         GameWait::Stopped => IdleAction::Play,
         GameWait::Exited(_) => IdleAction::Restart,
+        GameWait::BuildFailed => IdleAction::ShowBuildErrors,
         _ => IdleAction::None,
     }
 }
 
 /// Whether `part` of the idle column shows for `wait`, given whether the game
-/// left any stderr lines.
-fn idle_part_shown(part: GameIdlePart, wait: GameWait, has_stderr: bool) -> bool {
+/// left any stderr lines and whether a launch opens its own window.
+fn idle_part_shown(part: GameIdlePart, wait: GameWait, has_stderr: bool, windowed: bool) -> bool {
     match part {
         GameIdlePart::Label => wait != GameWait::Stopped,
         GameIdlePart::Stderr => matches!(wait, GameWait::Exited(_)) && has_stderr,
         GameIdlePart::Play => idle_action(wait) == IdleAction::Play,
         GameIdlePart::Restart => idle_action(wait) == IdleAction::Restart,
-        GameIdlePart::Hint => wait == GameWait::Stopped,
+        GameIdlePart::BuildErrors => idle_action(wait) == IdleAction::ShowBuildErrors,
+        GameIdlePart::Hint => wait == GameWait::Stopped && !windowed,
     }
 }
 
@@ -574,6 +582,8 @@ fn update_game_panel_idle_label(
     mut labels: Query<&mut Text, With<GamePanelIdleLabel>>,
     mut stderr_texts: Query<&mut Text, (With<GamePanelStderrText>, Without<GamePanelIdleLabel>)>,
     mut parts: Query<(&GameIdlePart, &mut Node)>,
+    mut restart_calls: Query<(&GameIdlePart, &mut ButtonOperatorCall)>,
+    added: Query<(), Added<GameIdlePart>>,
     mut commands: Commands,
 ) {
     let running = play_state.is_some_and(|state| *state.get() != PlayState::Stopped);
@@ -616,18 +626,26 @@ fn update_game_panel_idle_label(
             text.0.clone_from(&message);
         }
     }
-    let stderr = match wait {
-        GameWait::Exited(_) => exit.map(|exit| exit.stderr_lines().join("\n")),
-        _ => None,
-    }
-    .unwrap_or_default();
-    for mut text in &mut stderr_texts {
-        if text.0 != stderr {
-            text.0.clone_from(&stderr);
+    if last_exit.as_ref().is_some_and(Res::is_changed) || !added.is_empty() {
+        let stderr = exit.map(|exit| exit.stderr.join("\n")).unwrap_or_default();
+        for mut text in &mut stderr_texts {
+            if text.0 != stderr {
+                text.0.clone_from(&stderr);
+            }
+        }
+        if let Some(exit) = exit {
+            for (part, mut call) in &mut restart_calls {
+                if *part == GameIdlePart::Restart {
+                    *call = ButtonOperatorCall::new(PieToggleInstanceOp::ID)
+                        .with_param("config", exit.key.config.clone())
+                        .with_param("instance", i64::from(exit.key.instance));
+                }
+            }
         }
     }
+    let has_stderr = exit.is_some_and(|exit| !exit.stderr.is_empty());
     for (part, mut node) in &mut parts {
-        let display = if idle_part_shown(*part, wait, !stderr.is_empty()) {
+        let display = if idle_part_shown(*part, wait, has_stderr, windowed) {
             Display::Flex
         } else {
             Display::None
@@ -664,7 +682,9 @@ fn surface_game_panel_on_play(world: &mut World) {
     if !world.contains_resource::<DockTree>() {
         return;
     }
-    if running && embedded && (!shown || held) {
+    if running && !embedded && shown {
+        *world.resource_mut::<GamePanelSurfaced>() = GamePanelSurfaced::default();
+    } else if running && embedded && (!shown || held) {
         let previous = front_tab_beside_game(world.resource::<DockTree>());
         crate::open_window_in_default_area_if_absent(world, GAME_WINDOW_ID);
         let mut surfaced = world.resource_mut::<GamePanelSurfaced>();
@@ -856,17 +876,29 @@ mod tests {
         assert_eq!(idle_message(GameWait::Windowed), IDLE_WINDOWED);
     }
 
+    const PARTS: [GameIdlePart; 6] = [
+        GameIdlePart::Label,
+        GameIdlePart::Stderr,
+        GameIdlePart::Play,
+        GameIdlePart::Restart,
+        GameIdlePart::BuildErrors,
+        GameIdlePart::Hint,
+    ];
+
     fn shown(wait: GameWait, has_stderr: bool) -> Vec<GameIdlePart> {
-        [
-            GameIdlePart::Label,
-            GameIdlePart::Stderr,
-            GameIdlePart::Play,
-            GameIdlePart::Restart,
-            GameIdlePart::Hint,
-        ]
-        .into_iter()
-        .filter(|part| idle_part_shown(*part, wait, has_stderr))
-        .collect()
+        PARTS
+            .into_iter()
+            .filter(|part| idle_part_shown(*part, wait, has_stderr, false))
+            .collect()
+    }
+
+    #[test]
+    fn a_game_in_its_own_window_gets_play_without_the_input_hint() {
+        let parts: Vec<GameIdlePart> = PARTS
+            .into_iter()
+            .filter(|part| idle_part_shown(*part, GameWait::Stopped, false, true))
+            .collect();
+        assert_eq!(parts, [GameIdlePart::Play]);
     }
 
     #[test]
@@ -920,9 +952,12 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_build_says_so_without_a_button() {
+    fn a_failed_build_offers_its_errors() {
         assert_eq!(idle_message(GameWait::BuildFailed), IDLE_BUILD_FAILED);
-        assert_eq!(shown(GameWait::BuildFailed, false), [GameIdlePart::Label]);
+        assert_eq!(
+            shown(GameWait::BuildFailed, false),
+            [GameIdlePart::Label, GameIdlePart::BuildErrors]
+        );
     }
 
     #[test]
