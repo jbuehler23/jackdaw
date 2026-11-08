@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn alt_is_option_on_macos() {
         assert_eq!(
-            ShortcutPlatform::MacOs.modifier_labels(false, true, false, false),
+            ShortcutPlatform::MacOs.modifier_labels(false, false, true, false),
             ["Option"]
         );
     }
