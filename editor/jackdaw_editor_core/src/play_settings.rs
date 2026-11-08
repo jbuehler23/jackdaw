@@ -102,7 +102,8 @@ impl GameView {
 
     /// The stream size to ask for inside a surface of `surface` pixels. An
     /// aspect's width is kept to a multiple of 64, the row the game captures
-    /// at, so the frame comes back at the aspect asked for.
+    /// at, so the frame comes back at the aspect asked for, and both sides
+    /// are at least 64.
     pub fn stream_size(self, surface: UVec2) -> UVec2 {
         let aspect = match self {
             Self::Free => return surface,
@@ -112,8 +113,10 @@ impl GameView {
             Self::Standard => UVec2::new(4, 3),
             Self::Square => UVec2::ONE,
         };
+        const ROW: u32 = 64;
         let fit_width = surface.x.min(surface.y * aspect.x / aspect.y);
-        let width = (fit_width / 64 * 64).max(64);
+        let min_width = (ROW * aspect.x).div_ceil(aspect.y).div_ceil(ROW) * ROW;
+        let width = (fit_width / ROW * ROW).max(min_width);
         UVec2::new(width, width * aspect.y / aspect.x)
     }
 }
@@ -262,7 +265,11 @@ pub fn pie_view_aspect(params: In<OperatorParameters>, mut commands: Commands) -
         return OperatorResult::Cancelled;
     };
     commands.queue(move |world: &mut World| {
-        world.resource_mut::<PlaySettings>().view = view;
+        let Some(mut settings) = world.get_resource_mut::<PlaySettings>() else {
+            warn!("pie.view_aspect: no Play settings to hold the view");
+            return;
+        };
+        settings.view = view;
         store(world);
     });
     OperatorResult::Finished
@@ -283,11 +290,12 @@ pub fn pie_view_aspect(params: In<OperatorParameters>, mut commands: Commands) -
 pub fn pie_mute(params: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     let named = params.as_bool("on");
     commands.queue(move |world: &mut World| {
-        let muted = {
-            let mut settings = world.resource_mut::<PlaySettings>();
-            settings.muted = named.unwrap_or(!settings.muted);
-            settings.muted
+        let Some(mut settings) = world.get_resource_mut::<PlaySettings>() else {
+            warn!("pie.mute: no Play settings to hold the mute");
+            return;
         };
+        settings.muted = named.unwrap_or(!settings.muted);
+        let muted = settings.muted;
         store(world);
         crate::pie::broadcast_control(world, jackdaw_pie_protocol::ControlEvent::SetMuted(muted));
     });
@@ -574,6 +582,15 @@ mod tests {
             GameView::Square.stream_size(UVec2::new(20, 20)),
             UVec2::new(64, 64),
             "a tiny panel still asks for a frame the game can capture"
+        );
+        assert_eq!(
+            GameView::Wide.stream_size(UVec2::new(20, 20)),
+            UVec2::new(128, 72),
+            "both sides of a tiny frame meet the minimum at the aspect"
+        );
+        assert_eq!(
+            GameView::Standard.stream_size(UVec2::new(20, 20)),
+            UVec2::new(128, 96)
         );
     }
 

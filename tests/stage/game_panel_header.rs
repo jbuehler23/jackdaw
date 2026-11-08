@@ -6,8 +6,10 @@ use std::time::{Duration, Instant};
 use crate::util::{self, OperatorResultExt as _};
 
 use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, WindowFocused};
 use jackdaw::game_panel_header::{GameInstancePicker, named_instances};
 use jackdaw::pie::InstanceKey;
 use jackdaw_api::prelude::*;
@@ -226,6 +228,47 @@ fn the_view_size_persists_and_sets_the_size_asked_of_the_game() {
 }
 
 #[test]
+fn choosing_an_aspect_near_the_panel_size_still_asks_for_it() {
+    let mut project = editor_on_a_project();
+    let app = &mut project.app;
+    let surface = app
+        .world_mut()
+        .query_filtered::<Entity, With<jackdaw::game_panel::GamePanelSurface>>()
+        .single(app.world())
+        .expect("the Game panel surface");
+    {
+        let mut node = app
+            .world_mut()
+            .get_mut::<Node>(surface)
+            .expect("the surface node");
+        node.flex_grow = 0.0;
+        node.flex_shrink = 0.0;
+        node.width = px(712.0);
+        node.height = px(400.0);
+    }
+    let mut game = connect(app, key("Server", 1));
+    let free = next(app, &mut game, |event| match event {
+        ControlEvent::StartFrameStream { width, height } => Some(UVec2::new(width, height)),
+        _ => None,
+    });
+    let wide = jackdaw::play_settings::GameView::Wide.stream_size(free);
+    assert!(
+        free.x.abs_diff(wide.x) <= 32 && free.y.abs_diff(wide.y) <= 32,
+        "the panel ({free}) is already close to 16:9 ({wide})"
+    );
+
+    call(app, "pie.view_aspect", &[("value", "16:9")]).assert_finished();
+    next(app, &mut game, |event| {
+        (event
+            == ControlEvent::StartFrameStream {
+                width: wide.x,
+                height: wide.y,
+            })
+        .then_some(())
+    });
+}
+
+#[test]
 fn mute_is_sent_to_a_game_as_it_connects_and_when_it_changes() {
     let mut project = editor_on_a_project();
     let app = &mut project.app;
@@ -247,23 +290,55 @@ fn mute_is_sent_to_a_game_as_it_connects_and_when_it_changes() {
     });
 }
 
+/// What happens in the editor while the game builds.
+#[derive(Clone, Copy)]
+enum Meanwhile {
+    Nothing,
+    Click,
+    KeyPress,
+    FocusLost,
+}
+
 /// Press Play with the build still running, then connect the game and stream
-/// frames until `done` holds or a few seconds of frames have gone by. A click
-/// in the editor lands after Play when `click` is set.
-fn play_and_stream(click: bool) -> bool {
+/// frames for a few seconds, returning whether the game took input. What
+/// `meanwhile` names lands in the editor after Play.
+fn play_and_stream(meanwhile: Meanwhile) -> bool {
     let mut project = editor_on_a_project();
     let app = &mut project.app;
     jackdaw::pie::insert_build_in_progress(app.world_mut());
     call(app, "pie.play", &[]).assert_finished();
-    if click {
-        let window = app.world_mut().spawn_empty().id();
-        app.world_mut().write_message(MouseButtonInput {
-            button: MouseButton::Left,
-            state: ButtonState::Pressed,
-            window,
-        });
-        app.update();
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .expect("the editor window");
+    match meanwhile {
+        Meanwhile::Nothing => {}
+        Meanwhile::Click => {
+            app.world_mut().write_message(MouseButtonInput {
+                button: MouseButton::Left,
+                state: ButtonState::Pressed,
+                window,
+            });
+        }
+        Meanwhile::KeyPress => {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::KeyW,
+                logical_key: Key::Character("w".into()),
+                state: ButtonState::Pressed,
+                text: None,
+                repeat: false,
+                window,
+            });
+        }
+        Meanwhile::FocusLost => {
+            app.world_mut().write_message(WindowFocused {
+                window,
+                focused: false,
+            });
+        }
     }
+    app.update();
 
     let mut game = connect(app, key("Server", 1));
     let until = Instant::now() + Duration::from_secs(3);
@@ -287,10 +362,20 @@ fn play_and_stream(click: bool) -> bool {
 
 #[test]
 fn the_game_takes_input_on_its_first_frame_when_the_editor_was_left_alone() {
-    assert!(play_and_stream(false));
+    assert!(play_and_stream(Meanwhile::Nothing));
 }
 
 #[test]
 fn a_click_in_the_editor_while_the_game_starts_keeps_input_with_the_editor() {
-    assert!(!play_and_stream(true));
+    assert!(!play_and_stream(Meanwhile::Click));
+}
+
+#[test]
+fn a_key_press_in_the_editor_while_the_game_starts_keeps_input_with_the_editor() {
+    assert!(!play_and_stream(Meanwhile::KeyPress));
+}
+
+#[test]
+fn leaving_the_editor_window_while_the_game_starts_keeps_input_with_the_editor() {
+    assert!(!play_and_stream(Meanwhile::FocusLost));
 }

@@ -47,9 +47,10 @@ pub struct LiveInputCapture {
 }
 
 /// Whether the game Play is launching takes input when its first frame
-/// arrives. Pressing Play arms it; a click or key press in the editor before
-/// that frame disarms it, so a long build never takes input from someone who
-/// went back to editing.
+/// arrives. Pressing Play arms it; a click, key press or scroll in the editor
+/// before that frame disarms it, and so does the editor window losing focus,
+/// so a long build never takes input from someone who went back to editing or
+/// to another app.
 #[derive(Resource, Default, Debug)]
 pub struct FirstFrameCapture {
     armed: bool,
@@ -79,18 +80,26 @@ pub(crate) fn arm_first_frame_capture(world: &mut World) {
     world.get_resource_or_init::<FirstFrameCapture>().arm();
 }
 
-/// Disarm first-frame capture on any key or mouse press in the editor.
+/// Disarm first-frame capture on any key or mouse press or scroll in the
+/// editor, or the editor window losing focus.
 fn note_editor_touch(
     mut first: ResMut<FirstFrameCapture>,
     capture: Res<LiveInputCapture>,
     mut keys: MessageReader<KeyboardInput>,
     mut buttons: MessageReader<MouseButtonInput>,
+    mut wheels: MessageReader<MouseWheel>,
+    mut focus: MessageReader<WindowFocused>,
+    primary: Query<(), With<PrimaryWindow>>,
 ) {
     let key_pressed = keys.read().any(|key| key.state == ButtonState::Pressed);
     let button_pressed = buttons
         .read()
         .any(|button| button.state == ButtonState::Pressed);
-    let pressed = key_pressed || button_pressed;
+    let scrolled = wheels.read().count() > 0;
+    let left = focus
+        .read()
+        .any(|event| !event.focused && primary.contains(event.window));
+    let pressed = key_pressed || button_pressed || scrolled || left;
     if std::mem::take(&mut first.skip_frame) || capture.active {
         return;
     }

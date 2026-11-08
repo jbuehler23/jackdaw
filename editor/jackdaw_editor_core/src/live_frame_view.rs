@@ -18,6 +18,7 @@ use jackdaw_pie_protocol::ControlEvent;
 
 use crate::live_frame::LiveFrameStream;
 use crate::pie::InstanceKey;
+use crate::play_settings::{GameView, PlaySettings};
 
 /// How long a candidate size must hold steady before it is requested, so
 /// panel drags do not spam stream restarts.
@@ -43,12 +44,25 @@ pub(crate) struct StreamRequest {
     /// When the last `StartFrameStream` went out; gates stale-stream
     /// restarts to one per [`RESTART_BACKOFF_MS`] window.
     last_start: Option<Instant>,
+    /// The Game panel's view setting the bookkeeping refers to.
+    view: GameView,
 }
 
 impl StreamRequest {
     /// Whether a stream has been asked of the game and not stopped since.
     pub(crate) fn is_requested(&self) -> bool {
         self.requested.is_some()
+    }
+
+    /// Note the view setting while streaming. A change forgets the size last
+    /// asked for, so the new view is always requested, even at a size inside
+    /// the dead zone of the old one.
+    fn follow_view(&mut self, view: GameView) {
+        if self.view != view {
+            self.view = view;
+            self.requested = None;
+            self.pending = None;
+        }
     }
 }
 
@@ -144,7 +158,7 @@ fn within_dead_zone(a: UVec2, b: UVec2) -> bool {
 /// [`PieSession`](crate::pie::PieSession) and the send path needs the world.
 pub fn drive_stream_requests(world: &mut World) {
     let view = world
-        .get_resource::<crate::play_settings::PlaySettings>()
+        .get_resource::<PlaySettings>()
         .map(|settings| settings.view)
         .unwrap_or_default();
     let want = stream_target(
@@ -157,6 +171,9 @@ pub fn drive_stream_requests(world: &mut World) {
         .is_some_and(LiveFrameStream::is_fresh);
     let action = {
         let mut req = world.resource_mut::<StreamRequest>();
+        if want.is_some() {
+            req.follow_view(view);
+        }
         next_stream_action(
             want.as_ref().map(|(key, size)| (key, *size)),
             stream_is_fresh,
@@ -258,6 +275,7 @@ mod tests {
             pending: None,
             last_focus: Some(key("game", 1)),
             last_start: None,
+            view: GameView::Free,
         };
         let now = Instant::now();
         assert_eq!(
@@ -390,6 +408,27 @@ mod tests {
         assert_eq!(
             next_stream_action(Some((&k, moved)), true, &mut req, later(t1)),
             StreamAction::Start(moved)
+        );
+    }
+
+    #[test]
+    fn a_view_change_rerequests_inside_the_dead_zone() {
+        let mut req = StreamRequest::default();
+        let k = key("game", 1);
+        let t0 = Instant::now();
+        next_stream_action(Some((&k, UVec2::new(712, 400))), true, &mut req, t0);
+        next_stream_action(Some((&k, UVec2::new(712, 400))), true, &mut req, later(t0));
+
+        let wide = UVec2::new(704, 396);
+        req.follow_view(GameView::Wide);
+        let t1 = later(later(t0));
+        assert_eq!(
+            next_stream_action(Some((&k, wide)), true, &mut req, t1),
+            StreamAction::None
+        );
+        assert_eq!(
+            next_stream_action(Some((&k, wide)), true, &mut req, later(t1)),
+            StreamAction::Start(wide)
         );
     }
 

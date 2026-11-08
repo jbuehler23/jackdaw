@@ -55,10 +55,11 @@ pub struct GameCaptureFlash;
 #[derive(Component)]
 pub struct GameHeaderMenuItem;
 
-/// The header menu that is open, if any.
+/// The header menu that is open, if any, and the button it opened under.
 #[derive(Resource, Default)]
 struct GameHeaderMenu {
     popover: Option<Entity>,
+    anchor: Option<Entity>,
 }
 
 /// What an instance is called in the picker: its run configuration's label,
@@ -302,17 +303,20 @@ fn instance_menu_rows(world: &World) -> Vec<MenuRow> {
         .collect()
 }
 
-/// Open a menu of `rows` under `anchor`, or close the open one.
+/// Open a menu of `rows` under `anchor`, closing any open menu. A click on
+/// the button whose menu is open only closes it.
 fn toggle_menu(world: &mut World, anchor: Entity, rows: Vec<MenuRow>) {
-    let open = world
-        .get_resource_or_init::<GameHeaderMenu>()
-        .popover
-        .take();
+    let (open, open_anchor) = {
+        let mut menu = world.get_resource_or_init::<GameHeaderMenu>();
+        (menu.popover.take(), menu.anchor.take())
+    };
     if let Some(open) = open
         && world.get_entity(open).is_ok()
     {
         world.despawn(open);
-        return;
+        if open_anchor == Some(anchor) {
+            return;
+        }
     }
     let menu = world
         .spawn(popover(
@@ -351,7 +355,9 @@ fn toggle_menu(world: &mut World, anchor: Entity, rows: Vec<MenuRow>) {
             }
         }
     }
-    world.resource_mut::<GameHeaderMenu>().popover = Some(menu);
+    let mut held = world.resource_mut::<GameHeaderMenu>();
+    held.popover = Some(menu);
+    held.anchor = Some(anchor);
 }
 
 /// Close the header menu once one of its rows has run its operator.
@@ -365,6 +371,7 @@ fn close_menu_on_item_activate(
     if !items.contains(activate.entity) {
         return;
     }
+    menu.anchor = None;
     if let Some(open) = menu.popover.take()
         && popovers.contains(open)
     {
@@ -426,8 +433,12 @@ fn sync_view_controls(
     }
 }
 
+/// The running instances and the focused one, as the picker last showed them.
+type PickerShown = (Vec<InstanceKey>, Option<InstanceKey>);
+
 /// Show the instance picker with several instances running, captioned with
-/// the one on show.
+/// the one on show. Runs its update only when the running instances, the
+/// focus or the run configurations change.
 fn sync_instance_picker(
     session: Option<NonSend<PieSession>>,
     configs: Option<Res<RunConfigs>>,
@@ -437,11 +448,23 @@ fn sync_instance_picker(
     captions: Query<(), With<ButtonContentText>>,
     popovers: Query<(), With<EditorPopover>>,
     mut texts: Query<&mut Text>,
+    added: Query<(), Added<ButtonContentText>>,
+    mut shown: Local<Option<PickerShown>>,
 ) {
-    let live = session
+    let mut live = session
         .as_deref()
         .map(PieSession::live_keys)
         .unwrap_or_default();
+    live.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
+    let focused = instances
+        .as_deref()
+        .and_then(|instances| instances.focused.clone());
+    let configs_changed = configs.as_ref().is_some_and(Res::is_changed);
+    let now = (live, focused);
+    if shown.as_ref() == Some(&now) && !configs_changed && added.is_empty() {
+        return;
+    }
+    let (live, focused) = shown.insert(now);
     let several = live.len() > 1;
     let display = if several {
         Display::Flex
@@ -454,8 +477,8 @@ fn sync_instance_picker(
                 .as_deref()
                 .map(|configs| configs.manifest.runs.as_slice())
                 .unwrap_or_default();
-            let focused = instances.as_deref()?.focused.as_ref()?;
-            named_instances(runs, &live)
+            let focused = focused.as_ref()?;
+            named_instances(runs, live)
                 .into_iter()
                 .find(|(key, _)| key == focused)
                 .map(|(_, name)| name)
@@ -508,12 +531,15 @@ pub fn capture_flash_shown(capture: &LiveInputCapture) -> bool {
 fn sync_capture_flash(
     capture: Res<LiveInputCapture>,
     mut flashes: Query<&mut Node, With<GameCaptureFlash>>,
+    added: Query<(), Added<GameCaptureFlash>>,
+    mut was_shown: Local<bool>,
 ) {
-    let display = if capture_flash_shown(&capture) {
-        Display::Flex
-    } else {
-        Display::None
-    };
+    let shown = capture_flash_shown(&capture);
+    if shown == *was_shown && added.is_empty() {
+        return;
+    }
+    *was_shown = shown;
+    let display = if shown { Display::Flex } else { Display::None };
     for mut node in &mut flashes {
         if node.display != display {
             node.display = display;

@@ -384,3 +384,46 @@ fn the_revert_setting_is_kept_with_the_project() {
         "with no mode named the setting switches"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn popping_the_game_out_keeps_the_play_edits_and_relaunches_it_in_a_window() {
+    use jackdaw::pie::{PieSession, PieWindowMode};
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut editor = editor();
+    editor.revert_on_stop();
+    std::fs::write(
+        editor.dir.path().join("jackdaw.toml"),
+        "[[run]]\nname = \"Game\"\n",
+    )
+    .expect("a manifest");
+    jackdaw::run_config::read_run_configs(editor.app.world_mut());
+    let binary = editor.dir.path().join("game.sh");
+    std::fs::write(&binary, "#!/bin/sh\nexec sleep 600\n").expect("a game script");
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable game");
+
+    editor.play(1);
+    jackdaw::pie::insert_built_game(editor.app.world_mut(), binary);
+    editor.edit("entity.add.group name=Crates parent=Zone");
+    editor.op("pie.pop_out");
+
+    {
+        let session = editor.app.world().non_send::<PieSession>();
+        assert!(session.is_running(&key(1)), "the game is back");
+        assert_eq!(session.launch_mode(&key(1)), Some(PieWindowMode::Windowed));
+    }
+    assert_ne!(editor.play_state(), PlayState::Stopped);
+    assert!(
+        editor.has("Crates"),
+        "the move is no stop, so the edit stays"
+    );
+    assert!(
+        jackdaw::pie::launches_waiting_on_build(editor.app.world()).is_empty(),
+        "relaunched from the game already built"
+    );
+
+    editor.stop();
+    assert!(!editor.has("Crates"), "stopping Play still reverts");
+}

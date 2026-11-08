@@ -1079,6 +1079,14 @@ pub fn connect_test_game(
             stderr_tail,
         },
     );
+    let mode = world
+        .get_resource::<PieWindowMode>()
+        .copied()
+        .unwrap_or_default();
+    world
+        .non_send_mut::<PieSession>()
+        .launch_modes
+        .insert(key.clone(), mode);
     greet_connected(world, &key);
     world.get_resource_or_init::<PieInstances>().focused = Some(key);
     Ok(())
@@ -1244,29 +1252,75 @@ pub(crate) fn pie_window_mode_toggle(
 }
 
 /// Move the game between the Game panel and a separate window. A running game
-/// is restarted in the new place.
+/// is relaunched in the new place.
 #[operator(
     id = "pie.pop_out",
     writes_disk = true,
     label = "Pop Out Game",
-    description = "Play in a separate window (for real performance numbers), or back in the Game panel. A running game restarts there."
+    description = "Play in a separate window (for real performance numbers), or back in the Game panel. A running game relaunches there."
 )]
 pub(crate) fn pie_pop_out(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
     commands.queue(|world: &mut World| {
         let mode = toggle_and_store_window_mode(world);
-        let elsewhere = {
-            let session = world.non_send::<PieSession>();
-            session.children.keys().any(|key| {
-                session
-                    .launch_mode(key)
-                    .is_some_and(|launched| launched != mode)
-            })
-        };
-        if elsewhere {
-            handle_restart(world);
-        }
+        relaunch_in_window_mode(world, mode);
     });
     OperatorResult::Finished
+}
+
+/// Relaunch the instances launched in the other window mode in `mode`, from
+/// the game already built. Play carries on through the move, so it counts as
+/// no stop and its edits stay. A game coming back into the Game panel takes
+/// input on its first frame, as a launch does.
+pub(crate) fn relaunch_in_window_mode(world: &mut World, mode: PieWindowMode) {
+    let Some(session) = world.get_non_send::<PieSession>() else {
+        return;
+    };
+    let moving: Vec<InstanceKey> = session
+        .children
+        .keys()
+        .filter(|key| {
+            session
+                .launch_mode(key)
+                .is_some_and(|launched| launched != mode)
+        })
+        .cloned()
+        .collect();
+    if moving.is_empty() {
+        return;
+    }
+    let Some(manifest) = world
+        .get_resource::<RunConfigs>()
+        .map(|configs| configs.manifest.clone())
+    else {
+        warn!("PIE: cannot move the game, run configurations are not loaded");
+        return;
+    };
+    let built = project_root(world).and_then(|root| match session.builds.get(&root) {
+        Some(BuildState::Done(binary)) => Some(binary.clone()),
+        _ => None,
+    });
+    if mode == PieWindowMode::Embedded {
+        crate::live_input::arm_first_frame_capture(world);
+    }
+    for key in moving {
+        let Some(run) = manifest.run_by_name(&key.config).cloned() else {
+            warn!(
+                "PIE: cannot move {key}, no run configuration '{}'",
+                key.config
+            );
+            continue;
+        };
+        let scene = world
+            .non_send::<PieSession>()
+            .launch_scenes
+            .get(&key)
+            .cloned();
+        retire_instance(world, &key);
+        match &built {
+            Some(binary) => spawn_from_binary(world, key, &run, scene, binary),
+            None => launch_instance(world, key, run),
+        }
+    }
 }
 
 /// Stop every running instance, drop the cached build path so the next
@@ -1347,13 +1401,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
     if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&root) {
         if source_is_current(&root, path) {
             let path = path.clone();
-            if let Some((stage, mode)) = spawn_instance(world, &key, &run, &path) {
-                let mut session = world.non_send_mut::<PieSession>();
-                session.launch_modes.insert(key.clone(), mode);
-                session.note_launch_scene(&key, scene);
-                session.children.insert(key, stage);
-                crate::viewport_redraw::note_game_started(world);
-            }
+            spawn_from_binary(world, key, &run, scene, &path);
             return;
         }
         info!("PIE: project source changed; rebuilding before Play");
@@ -1384,6 +1432,24 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             progress,
         },
     );
+}
+
+/// Spawn instance `key` from the built game at `binary`, noting how and with
+/// which scene it launched.
+fn spawn_from_binary(
+    world: &mut World,
+    key: InstanceKey,
+    run: &RunConfig,
+    scene: Option<LaunchScene>,
+    binary: &Path,
+) {
+    if let Some((stage, mode)) = spawn_instance(world, &key, run, binary) {
+        let mut session = world.non_send_mut::<PieSession>();
+        session.launch_modes.insert(key.clone(), mode);
+        session.note_launch_scene(&key, scene);
+        session.children.insert(key, stage);
+        crate::viewport_redraw::note_game_started(world);
+    }
 }
 
 /// The scene a game loads as its main one, inside the asset folder: what the
@@ -1574,6 +1640,23 @@ pub(crate) fn spawn_game_build(
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
 /// Returns to authoring mode once no children remain.
 pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
+    if !retire_instance(world, key) {
+        return;
+    }
+    let last_stopped = world.non_send::<PieSession>().children.is_empty();
+    if last_stopped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
+        last.0 = None;
+    }
+    if last_stopped && *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
+        world
+            .resource_mut::<NextState<PlayState>>()
+            .set(PlayState::Stopped);
+    }
+}
+
+/// End instance `key`'s process and forget it, leaving Play's state alone.
+/// Returns whether it was running.
+fn retire_instance(world: &mut World, key: &InstanceKey) -> bool {
     world
         .non_send_mut::<PieSession>()
         .serving
@@ -1585,23 +1668,13 @@ pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
     session.launch_modes.remove(key);
     session.launch_scenes.remove(key);
     let Some(mut stage) = session.children.remove(key) else {
-        return;
+        return false;
     };
     if let ChildStage::Live { outbox, .. } = &stage {
         send_control_to(outbox, ControlEvent::Stop);
     }
     stage.kill_and_reap();
-    drop(stage);
-
-    let last_stopped = world.non_send::<PieSession>().children.is_empty();
-    if last_stopped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
-        last.0 = None;
-    }
-    if last_stopped && *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
-        world
-            .resource_mut::<NextState<PlayState>>()
-            .set(PlayState::Stopped);
-    }
+    true
 }
 
 /// Begin play. From Stopped, launches the first run config's instance
@@ -1927,7 +2000,10 @@ pub(crate) fn pie_focus_instance(
     };
     let key = InstanceKey { config, instance };
     commands.queue(move |world: &mut World| {
-        if world.non_send::<PieSession>().live_keys().contains(&key) {
+        if world
+            .get_non_send::<PieSession>()
+            .is_some_and(|session| session.live_keys().contains(&key))
+        {
             set_focused_instance(world, key);
         }
     });

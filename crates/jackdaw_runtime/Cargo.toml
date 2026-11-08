@@ -61,7 +61,7 @@ serde_json.workspace = true
 thiserror = "2"
 
 [features]
-default = ["render", "soft_shadows", "audio"]
+default = ["render", "soft_shadows"]
 render = [
     "dep:jackdaw_surface",
     # Textures imported with Bevy's `CompressedImageSaver` are Basis files,
@@ -83,21 +83,20 @@ render = [
 # per-shader sampler limit the extra shadow samplers would pass. A scene that
 # sets a soft shadow size needs it on to load.
 soft_shadows = ["render", "bevy/experimental_pbr_pcss"]
-# Lets Play's mute silence the game's sounds. On by default; a game with no
-# audio can turn it off.
-audio = ["bevy/bevy_audio"]
 # Play-in-editor: connect to the editor over ipc-channel, stream the
 # scene's ECS state, and apply control commands. Off by default so the
 # protocol and ipc-channel stay out of the standalone runtime build.
 # Frame capture renders the active camera rig offscreen and reads it
 # back, which needs bevy's gpu readback (bevy_render) and Image
-# (bevy_image) even when the `render` feature is off.
+# (bevy_image) even when the `render` feature is off. Play's mute needs
+# bevy_audio.
 pie = [
     "dep:jackdaw_pie_protocol",
     "jackdaw_pie_protocol/ipc",
     "dep:jackdaw_camera_rig",
     "bevy/bevy_render",
     "bevy/bevy_image",
+    "bevy/bevy_audio",
 ]
 # Draw the terrain a scene authored. Each `Terrain` entity's sidecar is read
 # from beside the scene file, its material slots resolve against the project
