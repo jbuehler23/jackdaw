@@ -109,6 +109,23 @@ pub(crate) fn history_redo(_: In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
+/// Undo or redo the document in front back to its history's mark, as
+/// [`jackdaw_commands::CommandHistory::return_to_mark`] does. Returns whether
+/// it got there.
+pub(crate) fn return_to_mark(world: &mut World) -> bool {
+    cancel_active_modal_if_any(world);
+    crate::ui_stage::cancel_canvas_gestures(world);
+    let returned =
+        world.resource_scope(|world, mut history: Mut<crate::commands::CommandHistory>| {
+            history.return_to_mark(world)
+        });
+    if let Some(why) = returned.dropped {
+        warn!("{why}");
+    }
+    refresh_views_after_history(world);
+    returned.reached
+}
+
 /// Refresh derived view state after an undo or redo: give the outliner a row for
 /// any root the history brought back. Row icons follow the components that decide
 /// them, and meshes and edit overlays follow `Changed<Brush>` on the brushes the

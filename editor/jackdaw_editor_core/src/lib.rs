@@ -118,6 +118,7 @@ pub mod pie;
 pub mod pie_menu;
 mod pie_outbox;
 pub mod play_overlay;
+pub mod play_revert;
 pub mod play_scene;
 pub mod play_settings;
 mod play_structure;
@@ -560,6 +561,7 @@ impl Plugin for EditorCorePlugin {
         .add_plugins(pie::PiePlugin)
         .add_plugins(project_build::ProjectBuildPlugin)
         .add_plugins(play_sync::plugin)
+        .add_plugins(play_revert::plugin)
         .add_plugins(live_frame_view::LiveFrameViewPlugin)
         .add_plugins(live_input::LiveInputPlugin)
         .add_plugins(game_panel::GamePanelPlugin)

@@ -1,6 +1,7 @@
 //! The Play menu, opened by the caret beside Play. It lists every launchable
 //! instance, a row toggling each one, then the scene Play runs, Rebuild,
-//! Restart and the separate-window choice. When the project has no
+//! Restart, the separate-window choice and whether edits made during Play are
+//! reverted when it stops. When the project has no
 //! `jackdaw.toml`, a scaffold row stands in for the instances. Every row but
 //! the scaffold one runs an operator. A per-frame system closes the popover
 //! on Escape or an outside click.
@@ -21,6 +22,7 @@ use crate::pie::{
     PieWindowModeToggleOp, ProjectBuildOp,
 };
 use crate::play_scene::PlayScene;
+use crate::play_settings::{PlayEdits, PlayEditsOp, PlaySettings};
 use crate::run_config::{CargoMeta, RunConfigs, read_run_configs, scaffold_manifest};
 
 const MENU_MIN_WIDTH: f32 = 220.0;
@@ -154,6 +156,16 @@ fn spawn_menu(world: &mut World, right_x: f32, top_y: f32) -> Entity {
         "Play in separate window",
         windowed,
         ButtonOperatorCall::new(PieWindowModeToggleOp::ID),
+    );
+    let revert = world
+        .get_resource::<PlaySettings>()
+        .is_some_and(|settings| settings.edits == PlayEdits::Revert);
+    spawn_check_row(
+        world,
+        popover,
+        "Revert edits when Play stops",
+        revert,
+        ButtonOperatorCall::new(PlayEditsOp::ID),
     );
 
     popover
