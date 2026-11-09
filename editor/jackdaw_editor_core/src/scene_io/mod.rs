@@ -346,7 +346,35 @@ impl Plugin for SceneIoPlugin {
                 Update,
                 poll_scene_dialog.run_if(in_state(crate::AppState::Editor)),
             )
-            .add_systems(PostUpdate, deactivate_document_cameras);
+            .add_systems(PostUpdate, deactivate_document_cameras)
+            .add_systems(
+                PostUpdate,
+                lift_document_default_ui_camera.before(bevy::ui::UiSystems::Prepare),
+            );
+    }
+}
+
+/// Takes `IsDefaultUiCamera` off document entities in the editor's world, so
+/// every editor UI root keeps resolving to the shell camera. The document keeps
+/// the marker, and a save writes it.
+fn lift_document_default_ui_camera(
+    marked: Query<
+        Entity,
+        (
+            With<bevy::ui::IsDefaultUiCamera>,
+            Or<(
+                With<jackdaw_bsn::AstNodeRef>,
+                With<crate::entity_ops::SceneCamera>,
+            )>,
+            Without<crate::EditorEntity>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for entity in &marked {
+        commands
+            .entity(entity)
+            .remove::<bevy::ui::IsDefaultUiCamera>();
     }
 }
 

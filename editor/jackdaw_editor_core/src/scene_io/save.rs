@@ -1854,7 +1854,53 @@ fn emit_bsn_entities_authored(world: &mut World, parent_path: &Path, nodes: &[En
 
     normalize_runtime_derived_values(world, &mut ast);
 
-    let mut emit_list = added_roots;
+    // The document's own entries the copy names travel with it, so a paste into
+    // another scene resolves them to the same values.
+    let named_entries = {
+        let reg = registry.read();
+        let mut referenced = HashSet::new();
+        let patches: Vec<Entity> = subtree_nodes
+            .iter()
+            .filter_map(|&node| ast.get_patches(node))
+            .flat_map(|patches| patches.0.iter().copied())
+            .collect();
+        for patch in patches {
+            let Some(mut patch) = ast.world.get_mut::<jackdaw_bsn::BsnPatch>(patch) else {
+                continue;
+            };
+            let mut collect = |text: &mut String| {
+                if let Some(name) = text.strip_prefix('#') {
+                    referenced.insert(name.to_owned());
+                }
+            };
+            match &mut *patch {
+                jackdaw_bsn::BsnPatch::Struct(data) => {
+                    let owner = component_type(&reg, &data.type_path);
+                    visit_in_fields(&reg, owner, &data.type_path, &mut data.fields, &mut collect);
+                }
+                jackdaw_bsn::BsnPatch::TupleStruct(data) => {
+                    let owner = component_type(&reg, &data.type_path);
+                    visit_in_tuple(&reg, owner, &data.type_path, &mut data.values, &mut collect);
+                }
+                jackdaw_bsn::BsnPatch::Template(type_path, Some(fields)) => {
+                    let owner = component_type(&reg, type_path);
+                    visit_in_fields(&reg, owner, type_path, fields, &mut collect);
+                }
+                _ => {}
+            }
+        }
+        jackdaw_bsn::asset_roots(&ast, &reg)
+            .into_iter()
+            .filter(|root| !added_roots.contains(root))
+            .filter(|&root| {
+                ast.get_name(root)
+                    .is_some_and(|name| referenced.contains(name))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut emit_list = named_entries;
+    emit_list.extend(added_roots);
     emit_list.extend_from_slice(&clone_nodes);
     jackdaw_bsn::emit_entities(&ast, &emit_list)
 }
