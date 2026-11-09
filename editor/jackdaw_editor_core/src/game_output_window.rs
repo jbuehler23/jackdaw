@@ -479,6 +479,17 @@ fn sync_game_output(world: &mut World, mut last_pass: Local<Option<Instant>>) {
     }
     let fresh = lists.iter().any(|(_, fresh)| *fresh);
     if !fresh && last_pass.is_some_and(|last| last.elapsed() < SYNC_INTERVAL) {
+        let moved = world.get_resource::<GameOutput>().map(GameOutput::revision);
+        let pending = moved.is_some_and(|revision| {
+            lists.iter().any(|(list, _)| {
+                world
+                    .get::<GameOutputList>(*list)
+                    .is_some_and(|state| state.behind || state.revision != Some(revision))
+            })
+        });
+        if pending {
+            world.write_message(bevy::window::RequestRedraw);
+        }
         return;
     }
     if !window_in_front(world) {
@@ -494,11 +505,19 @@ fn sync_game_output(world: &mut World, mut last_pass: Local<Option<Instant>>) {
         .unwrap_or_default();
     let revision = output.revision();
     let shown = shown_instance(world);
-    for (list, _) in lists {
-        sync_list(world, list, &output, revision, shown.as_ref(), &filter);
+    for (list, _) in &lists {
+        sync_list(world, *list, &output, revision, shown.as_ref(), &filter);
     }
     let instances = output_instances(world);
     sync_header(world, shown.as_ref(), &instances);
+    let behind = lists.iter().any(|(list, _)| {
+        world
+            .get::<GameOutputList>(*list)
+            .is_some_and(|state| state.behind)
+    });
+    if behind {
+        world.write_message(bevy::window::RequestRedraw);
+    }
 }
 
 /// Whether the Game Output window is the tab on show in its dock. A window

@@ -296,8 +296,10 @@ impl GameOutput {
             let mut lines = LineSplitter::default();
             loop {
                 let read = match pipe.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
+                    Ok(0) => break,
                     Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
                 };
                 echo(stream, &chunk[..read]);
                 lines.feed(&chunk[..read], |line| {
