@@ -850,9 +850,8 @@ fn build_inspector_cards(
         }
         let (path, prefab_entity_id) =
             crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
-        let instance_entity = ast
-            .ancestor_with_component(node, "jackdaw::prefab::components::IsA")
-            .and_then(|n| ast.ecs_for_ast(n))?;
+        let instance_entity =
+            crate::prefab::overrides_bsn::id_owner(ast, node).and_then(|n| ast.ecs_for_ast(n))?;
         Some(PrefabInstanceCtx {
             instance_entity,
             has_cached_prefab: cache.get(&path).is_some(),

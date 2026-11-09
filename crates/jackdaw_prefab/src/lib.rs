@@ -22,10 +22,11 @@ pub use components::{
 };
 pub use model::{PrefabModel, prefab_model};
 pub use resolve::{
-    Baseline, BaselineLookup, CycleError, MAX_PREFAB_DEPTH, PrefabBaseline, PrefabLookup,
-    ReferenceSpelling, ResolveError, clone_scene, read_isa_deleted, read_isa_source,
-    read_prefab_entity_id, resolve_scene, set_whole_component, sparsify_against_baselines,
-    sparsify_inherited_descendants, value_to_patch, would_cycle,
+    Baseline, BaselineLookup, CycleError, InheritedEntry, MAX_PREFAB_DEPTH, PrefabBaseline,
+    PrefabLookup, ReferenceSpelling, ResolveError, clone_scene, inherited_entry, prefab_entry,
+    read_isa_deleted, read_isa_source, read_prefab_entity_id, resolve_scene, scoped_descendants,
+    set_whole_component, sparsify_against_baselines, sparsify_inherited_descendants,
+    value_to_patch, would_cycle,
 };
 pub use source::{
     absolutize_isa_sources, isa_value, normalize_as_prefab_source, normalize_path,
