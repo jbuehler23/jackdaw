@@ -47,13 +47,13 @@ members = [
 [dependencies]
 # The editor itself. Its library is named `jackdaw` so reflected type paths
 # stay `jackdaw::...`; the rename keeps it apart from this package's own lib.
-jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev", path = "editor/jackdaw_editor_core", default-features = false }
-jackdaw_editor_tile = { version = "0.21.0-dev", path = "editor/jackdaw_editor_tile" }
-jackdaw_editor_terrain = { version = "0.21.0-dev", path = "editor/jackdaw_editor_terrain" }
-jackdaw_editor_modelling = { version = "0.21.0-dev", path = "editor/jackdaw_editor_modelling" }
-jackdaw_editor_remote = { version = "0.21.0-dev", path = "editor/jackdaw_editor_remote" }
-jackdaw_editor_animation = { version = "0.21.0-dev", path = "editor/jackdaw_editor_animation" }
-jackdaw_editor_launcher = { version = "0.21.0-dev", path = "editor/jackdaw_editor_launcher" }
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1-rc.2", path = "editor/jackdaw_editor_core", default-features = false }
+jackdaw_editor_tile = { version = "0.20.1-rc.2", path = "editor/jackdaw_editor_tile" }
+jackdaw_editor_terrain = { version = "0.20.1-rc.2", path = "editor/jackdaw_editor_terrain" }
+jackdaw_editor_modelling = { version = "0.20.1-rc.2", path = "editor/jackdaw_editor_modelling" }
+jackdaw_editor_remote = { version = "0.20.1-rc.2", path = "editor/jackdaw_editor_remote" }
+jackdaw_editor_animation = { version = "0.20.1-rc.2", path = "editor/jackdaw_editor_animation" }
+jackdaw_editor_launcher = { version = "0.20.1-rc.2", path = "editor/jackdaw_editor_launcher" }
 bevy.workspace = true
 # The wrapper's logic also lives in this crate's `[[bin]]` so that
 # `cargo install jackdaw` ships `jackdaw-rustc-wrapper` next to the
@@ -66,7 +66,7 @@ jackdaw_rustc_wrapper.workspace = true
 # 0.20.0 when the workspace moves to Bevy 0.20. Jackdaw's own patch number
 # advances independently within a Bevy minor.
 [workspace.package]
-version = "0.21.0-dev"
+version = "0.20.1-rc.2"
 rust-version = "1.97.1"
 
 [workspace.dependencies]
@@ -81,40 +81,40 @@ bevy = { version = "0.20", features = [
     "reflect_documentation",
     "reflect_functions",
 ] }
-jackdaw_jsn = { version = "0.21.0-dev", path = "crates/jackdaw_jsn" }
-jackdaw_geometry = { version = "0.21.0-dev", path = "crates/jackdaw_geometry" }
-jackdaw_scene_types = { version = "0.21.0-dev", path = "crates/jackdaw_scene_types" }
-jackdaw_schema = { version = "0.21.0-dev", path = "crates/jackdaw_schema" }
-jackdaw_project_build = { version = "0.21.0-dev", path = "crates/jackdaw_project_build" }
-jackdaw_bsn = { version = "0.21.0-dev", path = "crates/jackdaw_bsn" }
-jackdaw_bind = { version = "0.21.0-dev", path = "crates/jackdaw_bind" }
-jackdaw_csg = { version = "0.21.0-dev", path = "crates/jackdaw_csg" }
-bevy_window_chrome = { version = "0.21.0-dev", path = "crates/bevy_window_chrome" }
-jackdaw_camera = { version = "0.21.0-dev", path = "crates/jackdaw_camera" }
-jackdaw_input = { version = "0.21.0-dev", path = "crates/jackdaw_input" }
-jackdaw_camera_rig = { version = "0.21.0-dev", path = "crates/jackdaw_camera_rig" }
-jackdaw_feathers = { version = "0.21.0-dev", path = "crates/jackdaw_feathers" }
-jackdaw_widgets = { version = "0.21.0-dev", path = "crates/jackdaw_widgets" }
-jackdaw_widgets_runtime = { version = "0.21.0-dev", path = "crates/jackdaw_widgets_runtime", default-features = false }
-jackdaw_commands = { version = "0.21.0-dev", path = "crates/jackdaw_commands" }
-jackdaw_terrain = { version = "0.21.0-dev", path = "crates/jackdaw_terrain" }
-jackdaw_remote = { version = "0.21.0-dev", path = "crates/jackdaw_remote" }
-jackdaw_snap = { version = "0.21.0-dev", path = "crates/jackdaw_snap" }
-jackdaw_recipe = { version = "0.21.0-dev", path = "crates/jackdaw_recipe" }
-jackdaw_select = { version = "0.21.0-dev", path = "crates/jackdaw_select" }
-jackdaw_uv = { version = "0.21.0-dev", path = "crates/jackdaw_uv" }
-jackdaw_pick = { version = "0.21.0-dev", path = "crates/jackdaw_pick" }
-jackdaw_hull = { version = "0.21.0-dev", path = "crates/jackdaw_hull" }
-jackdaw_material = { version = "0.21.0-dev", path = "crates/jackdaw_material" }
-jackdaw_surface = { version = "0.21.0-dev", path = "crates/jackdaw_surface" }
-jackdaw_node_graph = { version = "0.21.0-dev", path = "crates/jackdaw_node_graph" }
-jackdaw_animation = { version = "0.21.0-dev", path = "crates/jackdaw_animation" }
-jackdaw_animation_runtime = { version = "0.21.0-dev", path = "crates/jackdaw_animation_runtime" }
-jackdaw_fuzzy = { version = "0.21.0-dev", path = "crates/jackdaw_fuzzy" }
-jackdaw_localization = { version = "0.21.0-dev", path = "crates/jackdaw_localization" }
-jackdaw_data_path = { version = "0.21.0-dev", path = "crates/jackdaw_data_path" }
-jackdaw_tilemap = { version = "0.21.0-dev", path = "crates/jackdaw_tilemap" }
-jackdaw_tileset = { version = "0.21.0-dev", path = "crates/jackdaw_tileset" }
+jackdaw_jsn = { version = "0.20.1-rc.2", path = "crates/jackdaw_jsn" }
+jackdaw_geometry = { version = "0.20.1-rc.2", path = "crates/jackdaw_geometry" }
+jackdaw_scene_types = { version = "0.20.1-rc.2", path = "crates/jackdaw_scene_types" }
+jackdaw_schema = { version = "0.20.1-rc.2", path = "crates/jackdaw_schema" }
+jackdaw_project_build = { version = "0.20.1-rc.2", path = "crates/jackdaw_project_build" }
+jackdaw_bsn = { version = "0.20.1-rc.2", path = "crates/jackdaw_bsn" }
+jackdaw_bind = { version = "0.20.1-rc.2", path = "crates/jackdaw_bind" }
+jackdaw_csg = { version = "0.20.1-rc.2", path = "crates/jackdaw_csg" }
+bevy_window_chrome = { version = "0.20.1-rc.2", path = "crates/bevy_window_chrome" }
+jackdaw_camera = { version = "0.20.1-rc.2", path = "crates/jackdaw_camera" }
+jackdaw_input = { version = "0.20.1-rc.2", path = "crates/jackdaw_input" }
+jackdaw_camera_rig = { version = "0.20.1-rc.2", path = "crates/jackdaw_camera_rig" }
+jackdaw_feathers = { version = "0.20.1-rc.2", path = "crates/jackdaw_feathers" }
+jackdaw_widgets = { version = "0.20.1-rc.2", path = "crates/jackdaw_widgets" }
+jackdaw_widgets_runtime = { version = "0.20.1-rc.2", path = "crates/jackdaw_widgets_runtime", default-features = false }
+jackdaw_commands = { version = "0.20.1-rc.2", path = "crates/jackdaw_commands" }
+jackdaw_terrain = { version = "0.20.1-rc.2", path = "crates/jackdaw_terrain" }
+jackdaw_remote = { version = "0.20.1-rc.2", path = "crates/jackdaw_remote" }
+jackdaw_snap = { version = "0.20.1-rc.2", path = "crates/jackdaw_snap" }
+jackdaw_recipe = { version = "0.20.1-rc.2", path = "crates/jackdaw_recipe" }
+jackdaw_select = { version = "0.20.1-rc.2", path = "crates/jackdaw_select" }
+jackdaw_uv = { version = "0.20.1-rc.2", path = "crates/jackdaw_uv" }
+jackdaw_pick = { version = "0.20.1-rc.2", path = "crates/jackdaw_pick" }
+jackdaw_hull = { version = "0.20.1-rc.2", path = "crates/jackdaw_hull" }
+jackdaw_material = { version = "0.20.1-rc.2", path = "crates/jackdaw_material" }
+jackdaw_surface = { version = "0.20.1-rc.2", path = "crates/jackdaw_surface" }
+jackdaw_node_graph = { version = "0.20.1-rc.2", path = "crates/jackdaw_node_graph" }
+jackdaw_animation = { version = "0.20.1-rc.2", path = "crates/jackdaw_animation" }
+jackdaw_animation_runtime = { version = "0.20.1-rc.2", path = "crates/jackdaw_animation_runtime" }
+jackdaw_fuzzy = { version = "0.20.1-rc.2", path = "crates/jackdaw_fuzzy" }
+jackdaw_localization = { version = "0.20.1-rc.2", path = "crates/jackdaw_localization" }
+jackdaw_data_path = { version = "0.20.1-rc.2", path = "crates/jackdaw_data_path" }
+jackdaw_tilemap = { version = "0.20.1-rc.2", path = "crates/jackdaw_tilemap" }
+jackdaw_tileset = { version = "0.20.1-rc.2", path = "crates/jackdaw_tileset" }
 glam = { version = "0.33", features = ["serde"] }
 meshopt = "0.6"
 noise = "0.9"
@@ -122,25 +122,25 @@ rand = "0.10"
 serde = "1"
 lucide-icons = "0.563"
 serde_json = "1"
-jackdaw_multiplayer = { version = "0.21.0-dev", path = "crates/jackdaw_multiplayer" }
-jackdaw_multiplayer_editor = { version = "0.21.0-dev", path = "crates/jackdaw_multiplayer_editor" }
-jackdaw_runtime = { version = "0.21.0-dev", path = "crates/jackdaw_runtime" }
-jackdaw_panels = { version = "0.21.0-dev", path = "crates/jackdaw_panels" }
-jackdaw_prefab = { version = "0.21.0-dev", path = "crates/jackdaw_prefab" }
-jackdaw_api = { version = "0.21.0-dev", path = "crates/jackdaw_api" }
-jackdaw_extension = { version = "0.21.0-dev", path = "crates/jackdaw_extension" }
-jackdaw_api_internal = { version = "0.21.0-dev", path = "crates/jackdaw_api_internal" }
-jackdaw_api_macros = { version = "0.21.0-dev", path = "crates/jackdaw_api_macros" }
-jackdaw_dylib = { version = "0.21.0-dev", path = "crates/jackdaw_dylib" }
-jackdaw_loader = { version = "0.21.0-dev", path = "crates/jackdaw_loader" }
-jackdaw_package = { version = "0.21.0-dev", path = "crates/jackdaw_package" }
-jackdaw_scaffold = { version = "0.21.0-dev", path = "crates/jackdaw_scaffold" }
-jd = { version = "0.21.0-dev", path = "crates/jd" }
-jackdaw_releases = { version = "0.21.0-dev", path = "crates/jackdaw_releases" }
-jackdaw_sdk = { version = "0.21.0-dev", path = "crates/jackdaw_sdk" }
-jackdaw_rustc_wrapper = { version = "0.21.0-dev", path = "crates/jackdaw_rustc_wrapper" }
-jackdaw_cli_internal = { version = "0.21.0-dev", path = "crates/jackdaw_cli" }
-jackdaw_env = { version = "0.21.0-dev", path = "crates/jackdaw_env" }
+jackdaw_multiplayer = { version = "0.20.1-rc.2", path = "crates/jackdaw_multiplayer" }
+jackdaw_multiplayer_editor = { version = "0.20.1-rc.2", path = "crates/jackdaw_multiplayer_editor" }
+jackdaw_runtime = { version = "0.20.1-rc.2", path = "crates/jackdaw_runtime" }
+jackdaw_panels = { version = "0.20.1-rc.2", path = "crates/jackdaw_panels" }
+jackdaw_prefab = { version = "0.20.1-rc.2", path = "crates/jackdaw_prefab" }
+jackdaw_api = { version = "0.20.1-rc.2", path = "crates/jackdaw_api" }
+jackdaw_extension = { version = "0.20.1-rc.2", path = "crates/jackdaw_extension" }
+jackdaw_api_internal = { version = "0.20.1-rc.2", path = "crates/jackdaw_api_internal" }
+jackdaw_api_macros = { version = "0.20.1-rc.2", path = "crates/jackdaw_api_macros" }
+jackdaw_dylib = { version = "0.20.1-rc.2", path = "crates/jackdaw_dylib" }
+jackdaw_loader = { version = "0.20.1-rc.2", path = "crates/jackdaw_loader" }
+jackdaw_package = { version = "0.20.1-rc.2", path = "crates/jackdaw_package" }
+jackdaw_scaffold = { version = "0.20.1-rc.2", path = "crates/jackdaw_scaffold" }
+jd = { version = "0.20.1-rc.2", path = "crates/jd" }
+jackdaw_releases = { version = "0.20.1-rc.2", path = "crates/jackdaw_releases" }
+jackdaw_sdk = { version = "0.20.1-rc.2", path = "crates/jackdaw_sdk" }
+jackdaw_rustc_wrapper = { version = "0.20.1-rc.2", path = "crates/jackdaw_rustc_wrapper" }
+jackdaw_cli_internal = { version = "0.20.1-rc.2", path = "crates/jackdaw_cli" }
+jackdaw_env = { version = "0.20.1-rc.2", path = "crates/jackdaw_env" }
 rfd = "0.15"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 anyhow = { version = "1", default-features = false }
@@ -219,7 +219,7 @@ jackdaw_api.workspace = true
 jackdaw_api_internal.workspace = true
 jackdaw_loader.workspace = true
 jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
-jackdaw_pie_protocol = { version = "0.21.0-dev", path = "crates/jackdaw_pie_protocol", features = [
+jackdaw_pie_protocol = { version = "0.20.1-rc.2", path = "crates/jackdaw_pie_protocol", features = [
     "ipc",
 ] }
 jackdaw_input.workspace = true
