@@ -5900,3 +5900,169 @@ fn three_levels_of_nested_prefabs_save_none_of_their_values_and_follow_edits() {
         assert!(saved_field(&text, id, "").is_none(), "id {id}: got {text}");
     }
 }
+
+/// Text of a middle prefab that places the inner prefab as its child (id 5) and
+/// owns an entity numbered 7 in its own id space, the knob's id in the inner one.
+fn middle_with_shared_id_text(inner: &std::path::Path) -> String {
+    format!(
+        "#middle\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_ecs::hierarchy::Children [\n\
+             jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}\n\
+             jackdaw::prefab::components::PrefabEntityId(5)\n\
+             --\n\
+             #lamp\n\
+             jackdaw::prefab::components::PrefabEntityId(7)\n\
+             bevy_transform::components::transform::Transform {{\n\
+                 translation: glam::Vec3 {{ x: 50.0, y: 0.0, z: 0.0 }},\n\
+                 rotation: glam::Quat {{ x: 0.0, y: 0.0, z: 0.0, w: 1.0 }},\n\
+                 scale: glam::Vec3 {{ x: 1.0, y: 1.0, z: 1.0 }},\n\
+             }}\n\
+         ]",
+        inner.to_slash_lossy()
+    )
+}
+
+/// The live node numbered `id` among the children of the node numbered
+/// `parent_id`.
+fn child_with_id(app: &App, parent_id: u64, id: i128) -> Entity {
+    let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+    let parent = ast
+        .find_node_by_component_int(PEID_TYPE, parent_id)
+        .expect("the parent materializes");
+    ast.get_children_ast(parent)
+        .into_iter()
+        .find(|&node| {
+            matches!(
+                jackdaw_bsn::get_bsn_field(ast, node, PEID_TYPE, "0"),
+                Some(jackdaw_bsn::BsnValue::Int(held)) if held == id
+            )
+        })
+        .expect("the child materializes")
+}
+
+fn x_of(app: &App, node: Entity) -> f64 {
+    live_field_f64(app, node, TRANSFORM_TYPE, "translation.x").expect("the node holds the field")
+}
+
+#[test]
+fn applying_three_levels_down_keeps_nested_ids_apart_from_the_outer_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = tmp.path().join("inner.bsn");
+    let middle = tmp.path().join("middle.bsn");
+    let top = tmp.path().join("top.bsn");
+    std::fs::write(&inner, inner_prefab_text(2.0, 3.0)).unwrap();
+    std::fs::write(&middle, middle_with_shared_id_text(&inner)).unwrap();
+    std::fs::write(
+        &top,
+        format!(
+            "#top\n\
+             jackdaw::prefab::components::Prefab\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             bevy_ecs::hierarchy::Children [\n\
+                 jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}\n\
+                 jackdaw::prefab::components::PrefabEntityId(3)\n\
+             ]",
+            middle.to_slash_lossy()
+        ),
+    )
+    .unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &top, bevy::math::Vec3::ZERO);
+    assert!((x_of(&app, child_with_id(&app, 5, 7)) - 3.0).abs() < 1e-4);
+    assert!((x_of(&app, child_with_id(&app, 3, 7)) - 50.0).abs() < 1e-4);
+
+    let apply = |app: &mut App, parent_id: u64, value: f64| {
+        let node = child_with_id(app, parent_id, 7);
+        {
+            let registry = app.world().resource::<AppTypeRegistry>().clone();
+            let reg = registry.read();
+            let mut ast = app.world_mut().resource_mut::<jackdaw_bsn::SceneBsnAst>();
+            jackdaw_bsn::set_bsn_field(
+                &mut ast,
+                node,
+                TRANSFORM_TYPE,
+                "translation.x",
+                jackdaw_bsn::BsnValue::Float(value),
+                &reg,
+            );
+        }
+        let owner = {
+            let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+            jackdaw::prefab::overrides_bsn::id_owner(ast, node).expect("an owning instance")
+        };
+        jackdaw::prefab::operators::apply_to_prefab_source(
+            app.world_mut(),
+            owner,
+            7,
+            TRANSFORM_TYPE,
+            "translation.x",
+            jackdaw_bsn::BsnValue::Float(value),
+        );
+    };
+    apply(&mut app, 5, 12.0);
+    apply(&mut app, 3, 60.0);
+
+    let top_text = {
+        let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
+        let raw = cache.get(&top).expect("the top prefab stays cached");
+        let entry_of = |parent: Entity, id: i128| {
+            raw.get_children_ast(parent).into_iter().find(|&node| {
+                matches!(
+                    jackdaw_bsn::get_bsn_field(raw, node, PEID_TYPE, "0"),
+                    Some(jackdaw_bsn::BsnValue::Int(held)) if held == id
+                )
+            })
+        };
+        let field = |node| jackdaw_bsn::get_bsn_field(raw, node, TRANSFORM_TYPE, "translation.x");
+        let placed = raw
+            .find_node_by_component_int(PEID_TYPE, 3)
+            .expect("the top prefab places the middle one");
+        let nested = entry_of(placed, 5).expect("the nested instance gains an entry");
+        assert!(
+            raw.find_patch_by_type_path(nested, ISA_TYPE).is_some(),
+            "the nested instance's entry names its prefab"
+        );
+        let knob = entry_of(nested, 7).expect("the knob gains an entry inside it");
+        assert!(is_float(field(knob), 12.0));
+        let lamp = entry_of(placed, 7).expect("the middle prefab's own entity gains an entry");
+        assert!(is_float(field(lamp), 60.0));
+        assert_eq!(
+            jackdaw_bsn::emit_scene(cache.get(&inner).expect("cached")),
+            jackdaw_bsn::emit_scene(&bsn_ast(&inner_prefab_text(2.0, 3.0))),
+            "the inner prefab is unchanged"
+        );
+        jackdaw_bsn::emit_scene(raw)
+    };
+
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!((x_of(&app, child_with_id(&app, 5, 7)) - 12.0).abs() < 1e-4);
+    assert!((x_of(&app, child_with_id(&app, 3, 7)) - 60.0).abs() < 1e-4);
+    let text = saved_scene_text(&mut app);
+
+    let mut reopened = make_app_for_prefab_tests();
+    {
+        let mut cache = reopened
+            .world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>();
+        cache.insert(&inner, bsn_ast(&inner_prefab_text(2.0, 3.0)));
+        cache.insert(&middle, bsn_ast(&middle_with_shared_id_text(&inner)));
+        cache.insert(&top, bsn_ast(&top_text));
+    }
+    jackdaw::prefab::watcher::respawn_from_sparse_text(reopened.world_mut(), &text);
+    assert!((x_of(&reopened, child_with_id(&reopened, 5, 7)) - 12.0).abs() < 1e-4);
+    assert!((x_of(&reopened, child_with_id(&reopened, 3, 7)) - 60.0).abs() < 1e-4);
+    let resaved = saved_scene_text(&mut reopened);
+    let ast = bsn_ast(&resaved);
+    for node in ast.entities_with_component(PEID_TYPE) {
+        assert!(
+            jackdaw_bsn::get_bsn_field(&ast, node, TRANSFORM_TYPE, "translation.x").is_none()
+                || ast.find_patch_by_type_path(node, ISA_TYPE).is_some(),
+            "no entity inside the instance saves an override; got {resaved}"
+        );
+    }
+}

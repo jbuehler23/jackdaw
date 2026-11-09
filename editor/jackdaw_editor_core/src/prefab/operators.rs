@@ -2000,7 +2000,7 @@ fn apply_fields_to_prefab(world: &mut World, writes: Vec<FieldWrite>) -> usize {
 /// entry in that prefab's file to take the value, adding the entries for the
 /// path down from the nested instance's own entry with only their ids.
 fn seed_missing_entries(world: &mut World, writes: &[FieldWrite]) {
-    let mut seeds: Vec<(PathBuf, Vec<(Entity, Vec<u32>)>)> = Vec::new();
+    let mut seeds: Vec<(PathBuf, Vec<(Entity, Vec<SeedEntry>)>)> = Vec::new();
     {
         let live = world.resource::<SceneBsnAst>();
         let cache = world.resource::<PrefabAstCache>();
@@ -2024,11 +2024,13 @@ fn seed_missing_entries(world: &mut World, writes: &[FieldWrite]) {
             .mutate(&source, |prefab: &mut SceneBsnAst| {
                 for (parent, chain) in chains {
                     let mut current = parent;
-                    for id in chain {
+                    for (id, isa) in chain {
                         current = match scoped_entry(prefab, current, id) {
                             Some(found) => found,
                             None => {
-                                let node = prefab.create_entity_node(vec![peid_patch(id)]);
+                                let mut patches = vec![peid_patch(id)];
+                                patches.extend(isa.and_then(value_to_patch));
+                                let node = prefab.create_entity_node(patches);
                                 prefab.add_child_to_ast(current, node);
                                 node
                             }
@@ -2039,20 +2041,25 @@ fn seed_missing_entries(world: &mut World, writes: &[FieldWrite]) {
     }
 }
 
+/// An entry to add to a prefab file: its id, and the `IsA` it carries when the
+/// expanded prefab nests an instance there, so ids inside it keep their own
+/// space.
+type SeedEntry = (u32, Option<BsnValue>);
+
 /// The deepest entry the prefab file writes on the way to `inherited`, and the
-/// ids of the entries below it that the file lacks, in order. `None` when the
+/// entries below it that the file lacks, in order. `None` when the
 /// file writes the entry already, or when the first id is missing: the prefab
 /// itself only inherits that entry.
 fn missing_entry_chain(
     cache: &PrefabAstCache,
     inherited: &crate::prefab::resolver_bsn::InheritedEntry<'_>,
-) -> Option<(Entity, Vec<u32>)> {
+) -> Option<(Entity, Vec<SeedEntry>)> {
     let raw = cache.get(&inherited.source)?;
     let document = inherited.document;
     let mut written = prefab_entry(raw, &[])?;
     let mut expanded = prefab_entry(document, &[])?;
     let mut parent: Option<Entity> = None;
-    let mut chain: Vec<u32> = Vec::new();
+    let mut chain: Vec<SeedEntry> = Vec::new();
     for (step, &id) in inherited.path.iter().enumerate() {
         let next = scoped_entry(document, expanded, id)?;
         if parent.is_none() {
@@ -2066,12 +2073,15 @@ fn missing_entry_chain(
             }
             parent = Some(written);
         }
-        let mut between: Vec<u32> = Vec::new();
+        let mut between: Vec<SeedEntry> = Vec::new();
         let mut cursor = Some(next);
         while let Some(node) = cursor
             && node != expanded
         {
-            between.push(read_prefab_entity_id(document, node)?);
+            between.push((
+                read_prefab_entity_id(document, node)?,
+                get_bsn_field(document, node, ISA_TYPE, ""),
+            ));
             cursor = document.ast_parent_of(node);
         }
         between.reverse();
