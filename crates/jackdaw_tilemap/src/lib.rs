@@ -48,9 +48,9 @@ pub use report::{
     StripReport, TerrainReport, auto_setup, auto_setup_on_grid,
 };
 pub use setup::{
-    CollisionMode, Pair, PairGroup, Provenance, Scope, SetupSet, SetupTerrain, SetupTile,
-    TilesetSetup, Tracked, fits, free_set_name, group_pairs, rerun, reset_to_auto, set_name,
-    solver_takes, stacked_pairs,
+    CollisionMode, MARKER_COLORS, Pair, PairGroup, Provenance, Scope, SetupSet, SetupTerrain,
+    SetupTile, TilesetSetup, Tracked, fits, free_set_name, group_pairs, next_marker_color, rerun,
+    reset_to_auto, set_name, solver_takes, stacked_pairs,
 };
 pub use setup_layout::{Coverage, LayoutTerrains};
 pub use sidecar::{

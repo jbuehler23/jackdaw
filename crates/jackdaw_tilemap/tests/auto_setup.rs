@@ -288,15 +288,19 @@ fn a_user_solid_terrain_with_no_match_still_collides() {
         setup.set_peer(tile, peer, GROUND).expect("known terrain");
     }
     let ground = setup.terrains.iter_mut().find(|t| t.id == GROUND);
-    ground.expect("ground").oklab.x += 0.5;
-    let swatch = setup.terrain(GROUND).map(|t| t.swatch);
+    let ground = ground.expect("ground");
+    let art = ground.oklab;
+    ground.oklab.x += 0.5;
+    let swatch = ground.swatch;
     let fresh = u8::try_from(setup.next_id).expect("a terrain id");
 
     let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
     let kept = after.terrain(GROUND).expect("kept for its User values");
     assert_eq!(kept.collision.value, CollisionMode::Solid);
     assert!(after.tiles[&tile].shape.value.is_some());
-    assert_eq!(after.terrain(fresh).map(|t| t.swatch), swatch);
+    let found = after.terrain(fresh).expect("the art's ground, found again");
+    assert_eq!(found.oklab, art);
+    assert_ne!(found.swatch, swatch, "a marker color of its own");
     assert_eq!(after.next_id, setup.next_id + 1);
 }
 

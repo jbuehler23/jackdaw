@@ -216,7 +216,13 @@ fn new_terrains_take_the_first_free_palette_hue() {
     };
     let first = swatches(&dir);
     assert_ne!(first[0], first[1]);
-    assert!(first.iter().all(|s| s[..3] != [0x80; 3]), "{first:?}");
+    let markers = jackdaw_tilemap::MARKER_COLORS;
+    assert!(
+        first
+            .iter()
+            .all(|s| markers.iter().any(|m| s[..3] == m[..])),
+        "{first:?}"
+    );
     call(&mut app, "tileset.terrain.remove", &[("terrain", "grass")]);
     call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
     assert_eq!(

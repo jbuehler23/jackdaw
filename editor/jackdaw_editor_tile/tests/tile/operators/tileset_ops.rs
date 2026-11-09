@@ -160,6 +160,17 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     assert_eq!(tileset.grid, UVec2::new(27, 38));
     assert_eq!(tileset.setup_sheets, vec![0]);
     assert_eq!(tileset.terrains.len(), 8);
+    let markers: Vec<[u8; 3]> = (tileset.terrains.iter())
+        .map(|t| {
+            let [r, g, b, _] = t.swatch.to_u8_array();
+            [r, g, b]
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        jackdaw_tilemap::MARKER_COLORS[..8],
+        "distinct marker colors, not the art's"
+    );
     let background: Vec<u8> = (tileset.terrains.iter())
         .filter(|t| t.background)
         .map(|t| t.id)

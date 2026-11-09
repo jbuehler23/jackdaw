@@ -43,6 +43,30 @@ use crate::{
 /// empty).
 pub type Pair = (TerrainId, TerrainId);
 
+/// Marker colors new terrains take in order, skipping those in use: saturated
+/// and far apart in hue and lightness, with the hues common in terrain art
+/// last, so a marker reads over the tiles it marks.
+pub const MARKER_COLORS: [[u8; 3]; 12] = [
+    [0xf0, 0x32, 0xe6],
+    [0x42, 0xd4, 0xf4],
+    [0xf5, 0x82, 0x31],
+    [0x43, 0x63, 0xd8],
+    [0xff, 0xe1, 0x19],
+    [0xe6, 0x19, 0x4b],
+    [0x91, 0x1e, 0xb4],
+    [0xbf, 0xef, 0x45],
+    [0x46, 0x99, 0x90],
+    [0xff, 0x8f, 0xc8],
+    [0x3c, 0xb4, 0x4b],
+    [0x9a, 0x63, 0x24],
+];
+
+/// The first marker color not in `used`, or one in turn once all are.
+pub fn next_marker_color(used: &[[u8; 3]]) -> [u8; 3] {
+    (MARKER_COLORS.iter().find(|c| !used.contains(c)).copied())
+        .unwrap_or(MARKER_COLORS[used.len() % MARKER_COLORS.len()])
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Provenance {
     #[default]
@@ -514,12 +538,21 @@ fn merge(
             .map(|f| SetupTerrain {
                 name: p.name.clone(),
                 collision: p.collision.clone(),
+                swatch: p.swatch,
                 ..f.clone()
             });
         terrains.insert(p.id, refreshed.unwrap_or_else(|| p.clone()));
     }
+    let mut used: Vec<[u8; 3]> = terrains.values().map(|t| t.swatch).collect();
     for (id, f) in &fresh_terrains {
-        terrains.entry(*id).or_insert_with(|| f.clone());
+        if let Entry::Vacant(entry) = terrains.entry(*id) {
+            let swatch = next_marker_color(&used);
+            used.push(swatch);
+            entry.insert(SetupTerrain {
+                swatch,
+                ..f.clone()
+            });
+        }
     }
 
     let background = |id: TerrainId| terrains.get(&id).is_some_and(|t| t.background);
@@ -669,13 +702,18 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
                 id: p.id,
                 name: Tracked::auto(found.map(|t| t.name.clone()).unwrap_or_default()),
                 oklab: found.map_or(Vec3::ZERO, |t| t.oklab),
-                swatch: found.map_or([0; 3], |t| t.swatch),
+                swatch: [0; 3],
                 background: p.background,
                 collision: Tracked::auto(mode),
             }
         })
         .collect();
     terrains.sort_by_key(|t| t.id);
+    let mut used = Vec::new();
+    for terrain in &mut terrains {
+        terrain.swatch = next_marker_color(&used);
+        used.push(terrain.swatch);
+    }
     let auto_tile = |terrains| SetupTile {
         terrains,
         ..SetupTile::default()
@@ -1636,6 +1674,46 @@ mod tests {
         assert_eq!(mode, no_set);
         assert_eq!(setup.lock_set(5, true), no_set);
         assert_eq!(setup.set_peer(at(0), Peer::Top, 0), Ok(()));
+    }
+
+    #[test]
+    fn auto_setup_marks_terrains_with_distinct_marker_colors() {
+        let setup = TilesetSetup::from_auto(&first());
+        let colors: Vec<[u8; 3]> = setup.terrains.iter().map(|t| t.swatch).collect();
+        assert_eq!(colors, MARKER_COLORS[..3]);
+    }
+
+    #[test]
+    fn a_rerun_keeps_a_picked_marker_color_with_its_name_and_terrain() {
+        let mut setup = TilesetSetup::from_auto(&first());
+        let sand = setup.terrain_mut(SAND).expect("sand");
+        sand.swatch = [1, 2, 3];
+        sand.name = Tracked::user("beach".to_string());
+        let after = run(&setup, &second(), Scope::All);
+        let ids: Vec<TerrainId> = after.terrains.iter().map(|t| t.id).collect();
+        assert_eq!(ids, [GRASS, SAND, DIRT]);
+        let sand = after.terrain(SAND).expect("kept");
+        assert_eq!(
+            (sand.name.value.as_str(), sand.swatch),
+            ("beach", [1, 2, 3])
+        );
+        assert_eq!(
+            after.tiles[&at(3)].terrains,
+            mix(SAND, GRASS, &[Peer::Right])
+        );
+    }
+
+    #[test]
+    fn a_rerun_gives_a_new_terrain_a_marker_color_no_terrain_has() {
+        let mut setup = TilesetSetup::from_auto(&sheets_run(&["a.png"], &sand_first(), &[]));
+        setup.terrain_mut(GRASS).expect("grass").swatch = MARKER_COLORS[2];
+        let fresh = sheets_run(&["a.png"], &sand_first(), &dirt_first());
+        let after = run(&setup, &fresh, Scope::All);
+        let colors: Vec<[u8; 3]> = after.terrains.iter().map(|t| t.swatch).collect();
+        assert_eq!(
+            colors,
+            [MARKER_COLORS[2], MARKER_COLORS[1], MARKER_COLORS[0]]
+        );
     }
 
     #[test]
