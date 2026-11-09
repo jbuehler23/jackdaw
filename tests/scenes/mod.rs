@@ -3,6 +3,7 @@
 
 mod asset_ingest;
 mod bsn_scene_fixpoint;
+mod default_ui_camera;
 mod external_reload;
 mod face_field_materials;
 mod first_open_materials;

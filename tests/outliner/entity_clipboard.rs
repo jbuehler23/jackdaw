@@ -534,3 +534,99 @@ fn a_paste_refuses_a_payload_that_is_both_kinds() {
         notice.text(),
     );
 }
+
+fn scene_with_material(name: &str, roughness: f32) -> String {
+    format!(
+        "\
+bevy_ecs::hierarchy::Children [
+    #{name}
+    bevy_transform::components::transform::Transform
+    jackdaw_scene_types::types::Brush {{
+        faces: [
+            jackdaw_geometry::BrushFaceData {{
+                plane: jackdaw_geometry::BrushPlane {{ normal: glam::Vec3 {{ x: 0.0, y: 1.0, z: 0.0 }}, distance: 1.0 }},
+                material: \"#StandardMaterial0\",
+            }},
+        ],
+    }}
+    --
+    #StandardMaterial0
+    bevy_pbr::pbr_material::StandardMaterial {{
+        perceptual_roughness: {roughness:?},
+    }}
+]
+"
+    )
+}
+
+fn brush_roughness(app: &mut App, name: &str) -> Option<f32> {
+    let mut brushes = app
+        .world_mut()
+        .query::<(&Name, &jackdaw_scene_types::types::Brush)>();
+    let store = app.world().resource::<Assets<StandardMaterial>>();
+    brushes
+        .iter(app.world())
+        .find(|(held, _)| held.as_str() == name)
+        .and_then(|(_, brush)| brush.faces.first())
+        .and_then(|face| store.get(&face.material))
+        .map(|material| material.perceptual_roughness)
+}
+
+#[test]
+fn a_pasted_material_whose_name_the_scene_uses_keeps_its_own_value() {
+    let mut app = clipboard_app();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("source.bsn");
+    let target = dir.path().join("target.bsn");
+    std::fs::write(&source, scene_with_material("Copied", 0.25)).expect("write source");
+    std::fs::write(&target, scene_with_material("Resident", 0.75)).expect("write target");
+
+    run_finished(&mut app, &format!("scene.open path={}", source.display()));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(brush_roughness(&mut app, "Copied"), Some(0.25));
+    let copied = app
+        .world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .find(|(_, name)| name.as_str() == "Copied")
+        .map(|(entity, _)| entity)
+        .expect("the source brush");
+    select(&mut app, copied);
+    run_finished(&mut app, "entity.copy");
+
+    run_finished(&mut app, &format!("scene.open path={}", target.display()));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(brush_roughness(&mut app, "Resident"), Some(0.75));
+    run_finished(&mut app, "entity.paste");
+    for _ in 0..3 {
+        app.update();
+    }
+
+    let notice = app
+        .world()
+        .resource::<jackdaw::status_bar::StatusNotice>()
+        .text()
+        .to_string();
+    assert!(!notice.contains("pasted without"), "{notice}");
+    assert_eq!(
+        brush_roughness(&mut app, "Copied"),
+        Some(0.25),
+        "the pasted brush keeps its material"
+    );
+    assert_eq!(
+        brush_roughness(&mut app, "Resident"),
+        Some(0.75),
+        "the scene's own material is unchanged"
+    );
+
+    run_finished(&mut app, "scene.save");
+    let saved = std::fs::read_to_string(&target).expect("the scene is saved");
+    assert!(
+        saved.contains("0.25") && saved.contains("0.75"),
+        "the file holds both materials:\n{saved}"
+    );
+}

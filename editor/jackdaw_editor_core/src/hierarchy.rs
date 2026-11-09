@@ -909,6 +909,11 @@ fn spawn_rows_for_new_roots(world: &mut World) {
             spawn_single_tree_row(world, entity, container);
         }
     }
+    // Roots arrive in spawn order, which for a load is not the order the
+    // document lists them in.
+    if world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
+        sync_outliner_row_order(world, None);
+    }
 }
 
 /// When an entity's Name is added/changed, update its row label in
@@ -1884,9 +1889,15 @@ pub fn sync_outliner_row_order(world: &mut World, parent: Option<Entity>) {
             .filter(|&row| world.get::<ChildOf>(row).map(ChildOf::parent) == Some(row_container))
             .collect();
         for (index, row) in wanted.into_iter().enumerate() {
-            world
-                .entity_mut(row_container)
-                .insert_children(index, &[row]);
+            let in_place = world
+                .get::<Children>(row_container)
+                .and_then(|rows| rows.get(index).copied())
+                == Some(row);
+            if !in_place {
+                world
+                    .entity_mut(row_container)
+                    .insert_children(index, &[row]);
+            }
         }
     }
 }

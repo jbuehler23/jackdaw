@@ -2161,7 +2161,7 @@ fn paste_clipboard_entities(world: &mut World, text: &str, target: PasteTarget) 
     }
 
     // Assets travel with the subtree, so a pasted image node finds its image.
-    let dropped = jackdaw_bsn::adopt_asset_roots(world, &parsed);
+    let dropped = jackdaw_bsn::adopt_asset_roots(world, &mut parsed);
     if !dropped.is_empty() {
         crate::status_bar::notify_warn(world, format!("pasted without {}", dropped.join(", ")));
     }

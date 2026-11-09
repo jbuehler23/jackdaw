@@ -856,11 +856,11 @@ const LATE_FILE: &str = "materials/late.bsn";
 
 /// `#Late` joins the scene as pasted content brings it.
 fn adopt_late_entry(app: &mut App) {
-    let source = jackdaw_bsn::parse_bsn_text(
+    let mut source = jackdaw_bsn::parse_bsn_text(
         "#Late\nbevy_pbr::pbr_material::StandardMaterial {\n    perceptual_roughness: 0.5,\n}\n",
     )
     .expect("the entry parses");
-    assert!(jackdaw_bsn::adopt_asset_roots(app.world_mut(), &source).is_empty());
+    assert!(jackdaw_bsn::adopt_asset_roots(app.world_mut(), &mut source).is_empty());
 }
 
 /// `@late` and its path resolve as the asset index finds the file.

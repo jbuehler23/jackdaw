@@ -1018,3 +1018,146 @@ fn reopening_a_scene_shows_its_children_in_document_order() {
         "the panel shows the order the document holds",
     );
 }
+
+const ORDERED_SCENE: &str = "\
+bevy_ecs::hierarchy::Children [
+    #Root
+    bevy_transform::components::transform::Transform
+    bevy_ecs::hierarchy::Children [
+        #Ph
+        bevy_transform::components::transform::Transform
+        --
+        #Clr
+        bevy_transform::components::transform::Transform
+        --
+        #Ref
+        bevy_transform::components::transform::Transform
+    ]
+    --
+    #Zeta
+    bevy_transform::components::transform::Transform
+    --
+    #Alpha
+    bevy_transform::components::transform::Transform
+]
+";
+
+/// Names of the top-level rows in `panel`, in the order the panel draws them.
+fn root_row_order(world: &World, panel: Entity) -> Vec<String> {
+    world
+        .get::<Children>(panel)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| world.get::<TreeNode>(row))
+                .filter_map(|node| world.get::<Name>(node.0))
+                .map(|name| name.as_str().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn named(app: &mut App, wanted: &str) -> Entity {
+    app.world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .find(|(entity, name)| {
+            name.as_str() == wanted
+                && app
+                    .world()
+                    .get::<jackdaw_bsn::AstNodeRef>(*entity)
+                    .is_some()
+        })
+        .map(|(entity, _)| entity)
+        .unwrap_or_else(|| panic!("the scene holds {wanted}"))
+}
+
+/// Top-level rows and `Root`'s child rows, with `Root` expanded.
+fn outliner_order(app: &mut App, panel: Entity) -> (Vec<String>, Vec<String>) {
+    let root = named(app, "Root");
+    let row = app
+        .world()
+        .resource::<TreeIndex>()
+        .get(panel, root)
+        .expect("Root has a row");
+    app.world_mut()
+        .entity_mut(row)
+        .insert(jackdaw_widgets::tree_view::TreeNodeExpanded(true));
+    for _ in 0..8 {
+        app.update();
+    }
+    (
+        root_row_order(app.world(), panel),
+        row_order(app.world(), panel, root),
+    )
+}
+
+#[test]
+fn siblings_keep_document_order_across_a_tab_switch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let scene = dir.path().join("ordered.bsn");
+    let other = dir.path().join("other.bsn");
+    std::fs::write(&scene, ORDERED_SCENE).expect("the scene is written");
+    std::fs::write(
+        &other,
+        "#Elsewhere\nbevy_transform::components::transform::Transform\n",
+    )
+    .expect("the other scene is written");
+
+    let mut app = util::editor_test_app();
+    app.world_mut().insert_resource(HierarchyShowAll(true));
+    let panel = app
+        .world_mut()
+        .spawn((
+            HierarchyTreeContainer,
+            Node::default(),
+            Visibility::Inherited,
+        ))
+        .id();
+    app.update();
+    run_finished(&mut app, &format!("scene.open path={}", other.display()));
+    run_finished(&mut app, &format!("scene.open path={}", scene.display()));
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let expected = (
+        vec!["Root".to_string(), "Zeta".into(), "Alpha".into()],
+        vec!["Ph".to_string(), "Clr".into(), "Ref".into()],
+    );
+    assert_eq!(outliner_order(&mut app, panel), expected, "after the open");
+
+    let front = app.world().resource::<jackdaw::scenes::Scenes>().active;
+    for _ in 0..2 {
+        assert!(jackdaw::scenes::swap::swap_active_tab(
+            app.world_mut(),
+            1 - front
+        ));
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(jackdaw::scenes::swap::swap_active_tab(
+            app.world_mut(),
+            front
+        ));
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            outliner_order(&mut app, panel),
+            expected,
+            "after a switch and back"
+        );
+    }
+
+    run_finished(&mut app, "scene.save");
+    let saved = std::fs::read_to_string(&scene).expect("the scene is saved");
+    let positions: Vec<usize> = ["#Root", "#Ph", "#Clr", "#Ref", "#Zeta", "#Alpha"]
+        .iter()
+        .map(|name| {
+            saved
+                .find(name)
+                .unwrap_or_else(|| panic!("{name} in {saved}"))
+        })
+        .collect();
+    assert!(positions.is_sorted(), "the file keeps the order: {saved}");
+}
