@@ -52,6 +52,15 @@ fn scene_draws_from_a_changed_prefab(world: &World) -> bool {
     cache.unanswered_changes().any(|path| drawn.contains(path))
 }
 
+/// Whether the live scene draws from `prefab`, directly or through the prefabs
+/// it draws from. With no live document to read, it does.
+pub(crate) fn scene_draws_from(world: &World, prefab: &CanonicalPrefabPath) -> bool {
+    let Some(live) = world.get_resource::<jackdaw_bsn::SceneBsnAst>() else {
+        return true;
+    };
+    prefabs_drawn_from(live, world.resource::<PrefabAstCache>()).contains(prefab)
+}
+
 /// Every prefab `document` draws from, following each one the cache holds into
 /// the prefabs it draws from in turn.
 fn prefabs_drawn_from(

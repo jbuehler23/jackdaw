@@ -122,7 +122,14 @@ pub(crate) struct DragTicks {
     /// Drags that moved since the last send.
     moved: HashSet<Drag>,
     /// Every drag under way, with the component as it stood before the drag.
-    open: HashMap<Drag, Box<dyn Reflect>>,
+    open: HashMap<Drag, OpenDrag>,
+}
+
+/// A drag under way: the component as it stood before the drag, and the node it
+/// was dragged on, so the game can be put back after the entity has gone.
+struct OpenDrag {
+    node: Option<u64>,
+    before: Box<dyn Reflect>,
 }
 
 /// Note a drag about to write `field_path` of `entity`, when a game can take it.
@@ -143,9 +150,15 @@ pub(crate) fn note_drag_tick(world: &mut World, entity: Entity, type_path: &str,
         held_component(world, &registry, entity, type_path)
             .and_then(|held| held.reflect_clone().ok())
     };
+    let node = world
+        .get_resource::<SceneBsnAst>()
+        .and_then(|ast| ast.ast_for(entity).and_then(|node| ast.stable_id_of(node)));
     let mut ticks = world.get_resource_or_init::<DragTicks>();
     if let Some(before) = before {
-        ticks.open.entry(drag.clone()).or_insert(before);
+        ticks
+            .open
+            .entry(drag.clone())
+            .or_insert(OpenDrag { node, before });
     }
     ticks.moved.insert(drag);
 }
@@ -168,7 +181,9 @@ pub(crate) fn drag_is_open(
 
 /// Send the components drags moved this frame, each once. A drag that ended sends
 /// what its entity holds now. One whose entity left the selection with no release
-/// is cancelled, and its entity goes back to how the drag found it first.
+/// is cancelled, and its entity goes back to how the drag found it first. One whose
+/// entity is gone, with a tab switch or a respawn, sends the component as the drag
+/// found it.
 fn send_drags(world: &mut World, keys: &[InstanceKey]) {
     let Some(mut ticks) = world.remove_resource::<DragTicks>() else {
         return;
@@ -178,6 +193,7 @@ fn send_drags(world: &mut World, keys: &[InstanceKey]) {
         .drain()
         .map(|drag| (drag.entity, drag.type_path))
         .collect();
+    let mut settling: HashMap<(u64, String), Box<dyn Reflect>> = HashMap::new();
     let drags: Vec<Drag> = ticks.open.keys().cloned().collect();
     for drag in drags {
         let Drag {
@@ -186,8 +202,15 @@ fn send_drags(world: &mut World, keys: &[InstanceKey]) {
             field_path,
         } = &drag;
         if world.get_entity(*entity).is_err() {
-            ticks.open.remove(&drag);
             sending.remove(&(*entity, type_path.clone()));
+            crate::commands::forget_field_edit_on(world, *entity, type_path, field_path);
+            if let Some(OpenDrag {
+                node: Some(node),
+                before,
+            }) = ticks.open.remove(&drag)
+            {
+                settling.entry((node, type_path.clone())).or_insert(before);
+            }
             continue;
         }
         let open = crate::commands::field_edit_is_open(world, *entity, type_path, field_path);
@@ -197,11 +220,11 @@ fn send_drags(world: &mut World, keys: &[InstanceKey]) {
         if open && selected {
             continue;
         }
-        let before = ticks.open.remove(&drag);
+        let opened = ticks.open.remove(&drag);
         if open {
             crate::commands::forget_field_edit_on(world, *entity, type_path, field_path);
-            if let Some(before) = before {
-                restore_component(world, *entity, type_path, before.as_ref());
+            if let Some(opened) = opened {
+                restore_component(world, *entity, type_path, opened.before.as_ref());
             }
         }
         sending.insert((*entity, type_path.clone()));
@@ -209,6 +232,9 @@ fn send_drags(world: &mut World, keys: &[InstanceKey]) {
     world.insert_resource(ticks);
     for (entity, type_path) in sending {
         send_held_component(world, keys, entity, &type_path);
+    }
+    for ((node, type_path), before) in settling {
+        send_component(world, keys, node, &type_path, before.as_ref());
     }
 }
 
@@ -254,9 +280,46 @@ fn send_held_component(world: &mut World, keys: &[InstanceKey], entity: Entity, 
             .ok()
             .map(|value| (value, assets))
         });
-    let Some((value, assets)) = change else {
-        return;
-    };
+    if let Some((value, assets)) = change {
+        send_node_component(world, keys, id, type_path, value, &assets);
+    }
+}
+
+/// Send `value` as node `id`'s `type_path` to the games `keys`, the way
+/// [`send_held_component`] does.
+fn send_component(
+    world: &mut World,
+    keys: &[InstanceKey],
+    id: u64,
+    type_path: &str,
+    value: &dyn Reflect,
+) {
+    world.init_resource::<crate::play_scene::PlayAssetNames>();
+    let change =
+        world.resource_scope(|world, mut names: Mut<crate::play_scene::PlayAssetNames>| {
+            let registry = world.resource::<AppTypeRegistry>().clone();
+            let registry = registry.read();
+            let mut references = PlayReferences::with(world, &names);
+            let mut assets = UsedAssets::default();
+            let value = value.as_partial_reflect();
+            references.take_up(world, &registry, value, &mut names, &mut assets);
+            game_value(value, &registry, &references)
+                .ok()
+                .map(|value| (value, assets))
+        });
+    if let Some((value, assets)) = change {
+        send_node_component(world, keys, id, type_path, value, &assets);
+    }
+}
+
+fn send_node_component(
+    world: &mut World,
+    keys: &[InstanceKey],
+    id: u64,
+    type_path: &str,
+    value: serde_json::Value,
+    assets: &UsedAssets,
+) {
     let event = ControlEvent::NodeComponents {
         node: id,
         set: vec![(type_path.to_string(), value)],
@@ -1761,6 +1824,35 @@ mod tests {
             world.get::<Transform>(entity).expect("it").translation.x,
             0.0
         );
+    }
+
+    /// A tab switch mid-drag takes the dragged entity with it: the game goes back to
+    /// the document's value all the same.
+    #[test]
+    fn a_drag_cut_off_by_a_tab_switch_puts_the_game_back() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let (mut world, entity, mut game) = dragging_world();
+        serving(&mut world, dir.path());
+        sync_document_to_game(&mut world);
+        drag_tick(&mut world, 2.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game), vec![2.0]);
+
+        world.entity_mut(entity).despawn();
+        world
+            .resource_mut::<crate::scenes::Scenes>()
+            .tabs
+            .push(crate::scenes::SceneTab::new_untitled(2));
+        world.resource_mut::<crate::scenes::Scenes>().active = 1;
+        world.insert_resource(SceneBsnAst::default());
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game), vec![0.0]);
+        assert!(!crate::commands::field_edit_is_open(
+            &world,
+            entity,
+            TRANSFORM,
+            "translation.x"
+        ));
     }
 
     #[test]
