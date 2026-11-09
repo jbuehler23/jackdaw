@@ -77,6 +77,26 @@ fn pieces(app: &mut App, root: Entity) -> Vec<ZonePiece> {
         .collect()
 }
 
+/// The drawn pieces of the zone overlay of the dock under `root`, with the
+/// fill each node has.
+fn piece_nodes(app: &mut App, root: Entity) -> Vec<(ZonePiece, Option<Color>)> {
+    let overlays: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<(Entity, &ZoneOverlay), Without<GhostZones>>()
+        .iter(app.world())
+        .filter(|(_, o)| o.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    let world = app.world();
+    (overlays.into_iter())
+        .flat_map(|o| world.get::<Children>(o).into_iter().flatten().copied())
+        .filter_map(|e| {
+            let piece = world.get::<ZonePiece>(e).copied()?;
+            Some((piece, world.get::<BackgroundColor>(e).map(|c| c.0)))
+        })
+        .collect()
+}
+
 /// The open dock under `root`, in the terrains mode.
 fn painting(app: &mut App) -> Entity {
     let (_, root) = opened(app);
@@ -322,13 +342,32 @@ fn the_overlay_draws_each_tiles_shapes_and_dims_tiles_outside_the_set() {
         picked: false,
     };
     assert!(has(quiet), "the grass L is outlined: {found:?}");
-    let filled = |p: &ZonePiece| matches!(p, ZonePiece::Tint { value, .. } if *value == grass);
+    let grass_tile = [("tile", "0:7"), ("peers", "1,1,1,1,1,1,1,1,1")];
+    call(&mut app, "tileset.tile.set_bits", &grass_tile);
+    settle(&mut app);
+    let filled: Vec<ZonePiece> = (piece_nodes(&mut app, root).into_iter())
+        .filter(|(p, fill)| {
+            matches!(p, ZonePiece::Shape { .. }) && fill.is_some_and(|c| c.alpha() > 0.0)
+        })
+        .map(|(piece, _)| piece)
+        .collect();
+    let whole_grass = ZonePiece::Shape {
+        value: grass,
+        picked: false,
+    };
     assert!(
-        !found.iter().any(filled),
-        "only the picked terrain is filled"
+        piece_nodes(&mut app, root)
+            .iter()
+            .any(|(p, _)| *p == whole_grass),
+        "a whole grass tile is one outlined shape"
     );
+    assert_eq!(filled, [corner], "only the picked terrain is filled");
     assert!(has(ZonePiece::Dim), "tiles outside the set are dimmed");
-    assert!(found.len() < 400, "adjacent pieces merge: {}", found.len());
+    assert!(
+        found.len() < 400,
+        "a few pieces per painted tile: {}",
+        found.len()
+    );
 }
 
 #[test]

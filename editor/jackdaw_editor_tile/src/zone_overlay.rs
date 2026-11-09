@@ -180,8 +180,8 @@ pub enum ZonePiece {
     Dim,
     /// A rectangular shape, filled and outlined.
     Shape { value: u32, picked: bool },
-    /// Part of the fill of a shape that is no rectangle.
-    Tint { value: u32, picked: bool },
+    /// Part of the fill of a picked shape that is no rectangle.
+    Tint { value: u32 },
     /// Part of the outline of a shape that is no rectangle.
     Edge { value: u32, picked: bool },
     /// The dark stroke outside an edge of a picked shape.
@@ -336,7 +336,7 @@ fn spawn_pieces(
                     ));
                 }
             }
-            ZonePiece::Tint { value, .. } => {
+            ZonePiece::Tint { value } => {
                 node.insert(BackgroundColor(
                     color(values, value).with_alpha(PICKED_FILL),
                 ));
@@ -416,11 +416,9 @@ pub fn pieces(
             }
         }
         shapes.sort_by_key(|(piece, _)| match piece {
-            ZonePiece::Shape { picked, .. }
-            | ZonePiece::Tint { picked, .. }
-            | ZonePiece::Edge { picked, .. } => *picked,
+            ZonePiece::Shape { picked, .. } | ZonePiece::Edge { picked, .. } => *picked,
             ZonePiece::Dim => false,
-            ZonePiece::Stroke => true,
+            ZonePiece::Tint { .. } | ZonePiece::Stroke => true,
         });
         out.extend(shapes.into_iter().map(|(piece, at)| (row, piece, at)));
     }
@@ -504,62 +502,84 @@ fn tile_shapes(
             }
         }
         if picked {
-            let tint = ZonePiece::Tint { value, picked };
+            let tint = ZonePiece::Tint { value };
             out.extend(runs.into_iter().map(|(.., at)| (tint, at)));
         }
         let width = if picked { PICKED_LINE } else { QUIET_LINE };
         let edge = ZonePiece::Edge { value, picked };
         for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
-            let mut lines = Vec::new();
-            let mut open: Option<Rect> = None;
-            for i in 0..n * n {
-                let (a, b) = (i / n, i % n);
-                let (x, y) = if dx == 0 { (b, a) } else { (a, b) };
-                let side = inside(i64::from(x), i64::from(y))
-                    && !inside(i64::from(x) + dx, i64::from(y) + dy);
-                let at = cell(x, y);
-                let line = match (dx, dy) {
-                    (0, -1) => Rect::new(at.min.x, at.min.y, at.max.x, at.min.y + width),
-                    (0, _) => Rect::new(at.min.x, at.max.y - width, at.max.x, at.max.y),
-                    (-1, _) => Rect::new(at.min.x, at.min.y, at.min.x + width, at.max.y),
-                    _ => Rect::new(at.max.x - width, at.min.y, at.max.x, at.max.y),
-                };
-                let joins = |run: &Rect| {
-                    b != 0
-                        && if dx == 0 {
-                            (run.max.x - line.min.x).abs() < 0.01 && run.min.y == line.min.y
-                        } else {
-                            (run.max.y - line.min.y).abs() < 0.01 && run.min.x == line.min.x
-                        }
-                };
-                match (side, open.as_mut()) {
-                    (true, Some(run)) if joins(run) => *run = run.union(line),
-                    (true, _) => lines.extend(open.replace(line)),
-                    (false, _) => lines.extend(open.take()),
-                }
-            }
-            lines.extend(open);
-            for line in lines {
-                out.push((edge, line));
-                if picked {
-                    let stroke = match (dx, dy) {
-                        (0, -1) => {
-                            Rect::new(line.min.x, line.min.y - STROKE, line.max.x, line.min.y)
-                        }
-                        (0, _) => {
-                            Rect::new(line.min.x, line.max.y, line.max.x, line.max.y + STROKE)
-                        }
-                        (-1, _) => {
-                            Rect::new(line.min.x - STROKE, line.min.y, line.min.x, line.max.y)
-                        }
-                        _ => Rect::new(line.max.x, line.min.y, line.max.x + STROKE, line.max.y),
+            let across = dx == 0;
+            let at = |a: u32, b: u32| if across { (b, a) } else { (a, b) };
+            let side = |x: u32, y: u32| {
+                inside(i64::from(x), i64::from(y)) && !inside(i64::from(x) + dx, i64::from(y) + dy)
+            };
+            for a in 0..n {
+                let mut b = 0;
+                while b < n {
+                    let (x, y) = at(a, b);
+                    if !side(x, y) {
+                        b += 1;
+                        continue;
+                    }
+                    let start = b;
+                    while b < n && side(at(a, b).0, at(a, b).1) {
+                        b += 1;
+                    }
+                    let (first, last) = (at(a, start), at(a, b - 1));
+                    let step = if across { (1, 0) } else { (0, 1) };
+                    let turns_in = |(x, y): (u32, u32), sign: i64| {
+                        inside(i64::from(x) + sign * step.0, i64::from(y) + sign * step.1)
                     };
-                    out.push((ZonePiece::Stroke, stroke));
+                    let ends = (turns_in(first, -1), turns_in(last, 1));
+                    let span = cell(first.0, first.1).union(cell(last.0, last.1));
+                    let (line, stroke) = boundary(span, (dx, dy), width, ends);
+                    out.push((edge, line));
+                    if picked {
+                        out.push((ZonePiece::Stroke, stroke));
+                    }
                 }
             }
         }
     }
     out
+}
+
+/// The line along side `(dx, dy)` of the cells spanning `span`, inside it
+/// and `width` across, and the dark stroke just outside it. `ends` says
+/// whether the outline turns into the shape before and after the run.
+/// Lines along a row close the inner corners and take the outer ones;
+/// lines along a column stop short of both, so every corner is drawn once.
+fn boundary(span: Rect, (dx, dy): (i64, i64), width: f32, ends: (bool, bool)) -> (Rect, Rect) {
+    let (before, after) = ends;
+    if dx == 0 {
+        let grow = |turns: bool| if turns { width } else { 0.0 };
+        let reach = |turns: bool| if turns { -STROKE } else { STROKE };
+        let (x0, x1) = (span.min.x - grow(before), span.max.x + grow(after));
+        let (s0, s1) = (span.min.x - reach(before), span.max.x + reach(after));
+        if dy < 0 {
+            let line = Rect::new(x0, span.min.y, x1, span.min.y + width);
+            (line, Rect::new(s0, span.min.y - STROKE, s1, span.min.y))
+        } else {
+            let line = Rect::new(x0, span.max.y - width, x1, span.max.y);
+            (line, Rect::new(s0, span.max.y, s1, span.max.y + STROKE))
+        }
+    } else {
+        let trim = |turns: bool| if turns { 0.0 } else { width };
+        let (y0, y1) = (span.min.y + trim(before), span.max.y - trim(after));
+        if dx < 0 {
+            let line = Rect::new(span.min.x, y0, span.min.x + width, y1);
+            (
+                line,
+                Rect::new(span.min.x - STROKE, span.min.y, span.min.x, span.max.y),
+            )
+        } else {
+            let line = Rect::new(span.max.x - width, y0, span.max.x, y1);
+            (
+                line,
+                Rect::new(span.max.x, span.min.y, span.max.x + STROKE, span.max.y),
+            )
+        }
+    }
 }
 
 /// The dock, sheet and tile of the sheet tile `entity`, the zone outline of
@@ -757,6 +777,66 @@ mod tests {
             )
         };
         assert_eq!(count(&found, quiet), 6);
+        let widths: Vec<f32> = (found.iter())
+            .filter(|(p, _)| quiet(p))
+            .map(|(_, r)| r.width().min(r.height()))
+            .collect();
+        assert!(widths.iter().all(|w| *w == QUIET_LINE), "{widths:?}");
+    }
+
+    /// How many of the pieces `hit` takes hold `point`.
+    fn covering(
+        found: &[(ZonePiece, Rect)],
+        hit: impl Fn(&ZonePiece) -> bool,
+        point: Vec2,
+    ) -> usize {
+        (found.iter())
+            .filter(|(p, r)| hit(p) && r.contains(point))
+            .count()
+    }
+
+    #[test]
+    fn every_corner_of_an_l_outline_is_drawn_once() {
+        let values = corners(&[(0, [1, 1, 1, 0])], Some(1));
+        let found = drawn(&grid(1, 1), &values);
+        let edge = |p: &ZonePiece| matches!(p, ZonePiece::Edge { .. });
+        let stroke = |p: &ZonePiece| *p == ZonePiece::Stroke;
+        let half = PICKED_LINE / 2.0;
+        let lines = [
+            ("outer top left", Vec2::splat(INSET + half)),
+            (
+                "outer top right",
+                Vec2::new(32.0 - INSET - half, INSET + half),
+            ),
+            (
+                "outer bottom left",
+                Vec2::new(INSET + half, 32.0 - INSET - half),
+            ),
+            ("inner", Vec2::splat(16.0 - half)),
+            (
+                "outer at the notch",
+                Vec2::new(32.0 - INSET - half, 16.0 - half),
+            ),
+        ];
+        for (name, point) in lines {
+            assert_eq!(covering(&found, edge, point), 1, "{name} line corner");
+        }
+        let half = STROKE / 2.0;
+        let strokes = [
+            ("outer top left", Vec2::splat(INSET - half)),
+            (
+                "outer top right",
+                Vec2::new(32.0 - INSET + half, INSET - half),
+            ),
+            ("inner", Vec2::splat(16.0 + half)),
+            (
+                "outer at the notch",
+                Vec2::new(32.0 - INSET + half, 16.0 + half),
+            ),
+        ];
+        for (name, point) in strokes {
+            assert_eq!(covering(&found, stroke, point), 1, "{name} stroke corner");
+        }
     }
 
     #[test]

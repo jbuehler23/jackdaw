@@ -61,6 +61,11 @@ pub const MARKER_COLORS: [[u8; 3]; 12] = [
     [0x9a, 0x63, 0x24],
 ];
 
+/// The marker color of the terrain at `rank` in id order in a fresh setup.
+pub(crate) fn marker_color_at(rank: usize) -> [u8; 3] {
+    MARKER_COLORS[rank % MARKER_COLORS.len()]
+}
+
 /// The first marker color not in `used`, or one in turn once all are.
 pub fn next_marker_color(used: &[[u8; 3]]) -> [u8; 3] {
     (MARKER_COLORS.iter().find(|c| !used.contains(c)).copied())
@@ -543,15 +548,11 @@ fn merge(
             });
         terrains.insert(p.id, refreshed.unwrap_or_else(|| p.clone()));
     }
-    let mut used: Vec<[u8; 3]> = terrains.values().map(|t| t.swatch).collect();
+    let mut unmarked = BTreeSet::new();
     for (id, f) in &fresh_terrains {
         if let Entry::Vacant(entry) = terrains.entry(*id) {
-            let swatch = next_marker_color(&used);
-            used.push(swatch);
-            entry.insert(SetupTerrain {
-                swatch,
-                ..f.clone()
-            });
+            entry.insert(f.clone());
+            unmarked.insert(*id);
         }
     }
 
@@ -651,6 +652,14 @@ fn merge(
             fresh_terrains.contains_key(id) || !full || kept
         }
     });
+    let mut marked: Vec<[u8; 3]> = (terrains.iter())
+        .filter(|(id, _)| !unmarked.contains(*id))
+        .map(|(_, t)| t.swatch)
+        .collect();
+    for (_, terrain) in terrains.iter_mut().filter(|(id, _)| unmarked.contains(*id)) {
+        terrain.swatch = next_marker_color(&marked);
+        marked.push(terrain.swatch);
+    }
     let mut renumber = BTreeMap::new();
     let mut next_id = start;
     for id in terrains.keys().filter(|id| u16::from(**id) >= start) {
@@ -709,10 +718,8 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
         })
         .collect();
     terrains.sort_by_key(|t| t.id);
-    let mut used = Vec::new();
-    for terrain in &mut terrains {
-        terrain.swatch = next_marker_color(&used);
-        used.push(terrain.swatch);
+    for (rank, terrain) in terrains.iter_mut().enumerate() {
+        terrain.swatch = marker_color_at(rank);
     }
     let auto_tile = |terrains| SetupTile {
         terrains,
@@ -1494,6 +1501,32 @@ mod tests {
             .map(|s| (s.name.as_str(), s.terrains.as_slice()))
             .collect();
         assert_eq!(sets, [("Terrain set 1", &[GRASS, SAND, 4][..])]);
+    }
+
+    #[test]
+    fn a_new_terrain_takes_the_marker_color_a_dropped_terrain_frees() {
+        let run_of = |terrains| Run {
+            names: &["a.png"],
+            analysed: &[0],
+            terrains,
+            sets: &[],
+            grass: &[],
+            stamps: &[],
+        };
+        let setup = TilesetSetup::from_auto(&first());
+        let fresh = run_of(&[(1, 0.8), (2, 0.5), (3, 0.05)]).fresh();
+        let after = run(&setup, &fresh, Scope::All);
+        let marks: Vec<(TerrainId, [u8; 3])> =
+            after.terrains.iter().map(|t| (t.id, t.swatch)).collect();
+        assert_eq!(
+            marks,
+            [
+                (GRASS, MARKER_COLORS[0]),
+                (SAND, MARKER_COLORS[1]),
+                (4, MARKER_COLORS[2])
+            ],
+            "dirt is gone, so its color is free"
+        );
     }
 
     #[test]
