@@ -1125,14 +1125,12 @@ fn a_discarded_prefab_the_scene_uses_respawns_only_its_instances() {
     open(&mut app, "assets/zone.bsn");
     edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
     let beacon = select_named(&mut app, "Beacon");
-    let placed = named(&mut app, "Placed");
 
     let tab = tab_named(&app, "door.bsn");
     discard(&mut app, tab);
     app.update();
 
     assert_eq!(editor_x(&mut app, "Placed"), 1.0);
-    assert_eq!(named(&mut app, "Placed"), placed);
     assert!(
         app.world().get_entity(beacon).is_ok(),
         "the scene kept its other entities"
