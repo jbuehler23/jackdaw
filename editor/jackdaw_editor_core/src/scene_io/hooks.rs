@@ -68,6 +68,12 @@ pub trait DocumentIoHook: Send + Sync + 'static {
         Ok(())
     }
 
+    /// The prefabs `document`'s data names beyond its `IsA` references, as paths
+    /// under the asset folder, read from the data the editor holds for it.
+    fn play_prefabs(&self, _world: &World, _document: &PlayDocument) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Drops what the feature holds as unsaved for the document in tab `tab`, whose
     /// edits the author just chose to throw away. The tab is still open.
     fn discard_document(&self, _world: &mut World, _tab: usize) {}
@@ -348,6 +354,14 @@ pub fn export_play_sidecars(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+/// Every hook's [`DocumentIoHook::play_prefabs`] for `document`.
+pub fn play_prefabs(world: &World, document: &PlayDocument) -> Vec<String> {
+    hooks(world)
+        .iter()
+        .flat_map(|hook| hook.play_prefabs(world, document))
+        .collect()
 }
 
 /// Run every hook's [`DocumentIoHook::discard_document`].

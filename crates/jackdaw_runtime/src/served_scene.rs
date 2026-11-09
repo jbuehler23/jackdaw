@@ -639,6 +639,45 @@ mod tests {
         assert_eq!(asked[0].1, "scene.bsn");
     }
 
+    /// A served root put back to restart a level drops what it spawned and spawns
+    /// the document the editor holds now.
+    #[test]
+    fn a_served_root_inserted_again_spawns_the_editors_current_document() {
+        let (mut app, mut editor, _dir) = game();
+        let spawns: Arc<std::sync::Mutex<Vec<Entity>>> = Arc::default();
+        let record = spawns.clone();
+        app.add_observer(move |spawned: On<JackdawSceneSpawned>| {
+            if let Ok(mut spawns) = record.lock() {
+                spawns.push(spawned.entity);
+            }
+        });
+        let root = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (first, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(first, scene_text(5.0)));
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![5.0]);
+        assert!(app.world().get::<ServedScene>(root).is_some());
+
+        let handle: Handle<JackdawScene> = app.world().resource::<AssetServer>().load("scene.bsn");
+        app.world_mut()
+            .entity_mut(root)
+            .insert(JackdawSceneRoot(handle));
+        app.update();
+        assert!(node_xs(&mut app).is_empty(), "the old spawn is gone");
+        assert!(app.world().get::<JackdawSceneReady>(root).is_none());
+        let asked = requests_from(&mut editor);
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].1, "scene.bsn");
+
+        send(&mut editor, &document(asked[0].0, scene_text(7.0)));
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![7.0]);
+        assert!(app.world().get::<ServedScene>(root).is_some());
+        assert!(app.world().get::<JackdawSceneReady>(root).is_some());
+        assert_eq!(*spawns.lock().expect("the record"), vec![root, root]);
+    }
+
     /// A scene answer naming a file with a hash loads that file, not a label of one.
     #[test]
     fn a_file_answer_whose_name_holds_a_hash_loads_as_a_file() {
