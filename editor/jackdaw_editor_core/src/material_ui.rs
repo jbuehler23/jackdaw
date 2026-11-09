@@ -696,7 +696,7 @@ pub(crate) fn spawn_color_row(
         crate::inspector::reflect_fields::ColorLabel::Inline(label),
         0.0,
         None,
-        move |world, rgba, _is_final| {
+        move |world, rgba, _edit| {
             if let Some(mut material) = world
                 .resource_mut::<Assets<StandardMaterial>>()
                 .get_mut(&write_handle)

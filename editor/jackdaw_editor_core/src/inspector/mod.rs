@@ -168,6 +168,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(reflect_fields::on_numeric_value_change_i64)
             .add_observer(reflect_fields::on_color_plane_change)
             .add_observer(reflect_fields::on_color_slider_change)
+            .add_observer(reflect_fields::on_color_drag_cancel)
             .add_observer(val_field::on_val_number_change)
             .add_observer(val_field::on_val_unit_change)
             .add_observer(node_card::on_node_enum_change)
