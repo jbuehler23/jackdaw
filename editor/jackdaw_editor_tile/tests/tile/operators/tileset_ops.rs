@@ -183,10 +183,11 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
         "the file holds the whole setup"
     );
     let report = reports(&app).join("\n");
-    assert_eq!(
-        report.matches("Corners, 14/16 shapes").count(),
-        3,
-        "the report covers the sea sets: {report}"
+    let sea = "  set \"Terrain set 2\" (Corners): terrains bottom first \
+               [\"Terrain 2\", \"Terrain 6\", \"Terrain 7\", \"Terrain 8\"], 42/48 shapes";
+    assert!(
+        report.contains(sea),
+        "the report covers the sea set: {report}"
     );
 
     assert_eq!(

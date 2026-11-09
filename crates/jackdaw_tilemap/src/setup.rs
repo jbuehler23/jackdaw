@@ -406,15 +406,14 @@ pub fn rerun(
     inputs: &[(&str, RgbaImage)],
     scope: &Scope,
 ) -> Result<TilesetSetup, SetupError> {
-    let fresh = auto_setup_reserving(inputs, &[], &kept_names(previous, scope))?;
+    let fresh = auto_setup_reserving(inputs, &[], &terrain_names(previous))?;
     merge(previous, &fresh, inputs, scope, false)
 }
 
-/// Names a re-run in `scope` leaves as they are: user names and the names
-/// of terrains outside it.
-fn kept_names(previous: &TilesetSetup, scope: &Scope) -> Vec<String> {
+/// The terrain names of `previous`, which a re-run keeps and new terrains
+/// step around.
+fn terrain_names(previous: &TilesetSetup) -> Vec<String> {
     (previous.terrains.iter())
-        .filter(|t| t.name.is_user() || !scope.covers_terrain(t.id, &previous.sets))
         .map(|t| t.name.value.clone())
         .collect()
 }
@@ -428,8 +427,7 @@ pub fn reset_to_auto(
     inputs: &[(&str, RgbaImage)],
     tiles: &BTreeSet<TileAddress>,
 ) -> Result<TilesetSetup, SetupError> {
-    let scope = Scope::Tiles(tiles.clone());
-    let fresh = auto_setup_reserving(inputs, &[], &kept_names(setup, &scope))?;
+    let fresh = auto_setup_reserving(inputs, &[], &terrain_names(setup))?;
     reset(setup, &fresh, inputs, tiles)
 }
 
@@ -514,11 +512,7 @@ fn merge(
         let refreshed = (fresh_terrains.get(&p.id))
             .filter(|_| scope.covers_terrain(p.id, &prev.sets))
             .map(|f| SetupTerrain {
-                name: if p.name.is_user() {
-                    p.name.clone()
-                } else {
-                    f.name.clone()
-                },
+                name: p.name.clone(),
                 collision: p.collision.clone(),
                 ..f.clone()
             });

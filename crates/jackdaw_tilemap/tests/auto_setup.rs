@@ -127,8 +127,8 @@ fn absorbed_terrains_leave_the_proposal() {
         .iter()
         .map(|t| t.name.as_str())
         .collect();
-    // Named by hue: the yellow-olive dirt and sand ground reads as grass.
-    assert_eq!(names[..3], ["grass", "grass 2", "grass 6"]);
+    // Kept terrains are numbered first and dropped ones after them.
+    assert_eq!(names[..3], ["Terrain 1", "Terrain 2", "Terrain 9"]);
     let distinct: BTreeSet<&str> = names.iter().copied().collect();
     assert_eq!(distinct.len(), names.len(), "{names:?}");
     assert_eq!(found.sheets, [0]);
@@ -351,26 +351,11 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
     // every terrain it keeps has its old id.
     let check = |sheets: &[(&str, &Sheet)], kept: usize| {
         let after = rerun_over(&setup, sheets, &Scope::All);
-        let auto = TilesetSetup::from_auto(&run(sheets));
         assert_eq!((setup.terrains.len(), after.terrains.len()), (11, kept));
         for got in &after.terrains {
             let was = setup.terrain(got.id).expect("an old id");
             assert!(got.oklab.distance(was.oklab) < 0.06);
-            let fresh = auto.terrains.iter().min_by(|a, b| {
-                let (da, db) = (a.oklab.distance(got.oklab), b.oklab.distance(got.oklab));
-                da.total_cmp(&db)
-            });
-            let fresh = fresh.filter(|f| f.oklab.distance(got.oklab) < 0.06);
-            let expected = if got.id == GRASS {
-                "meadow".to_string()
-            } else if let Some(fresh) = fresh {
-                fresh.name.value.clone()
-            } else {
-                // Seeded only by the two copies together, so a fresh run
-                // over one copy has no such terrain to name it after.
-                continue;
-            };
-            assert_eq!(got.name.value, expected, "terrain {}", got.id);
+            assert_eq!(got.name, was.name, "terrain {}", got.id);
         }
         after
     };
@@ -378,7 +363,7 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
     assert_eq!(reordered.sheets, setup.sheets);
     assert_eq!(reordered.tiles, setup.tiles);
     let ground = reordered.terrain(GROUND).map(|t| t.name.value.as_str());
-    assert_eq!(ground, Some("grass 2"));
+    assert_eq!(ground, Some("Terrain 2"));
     let added = check(
         &[("copy.png", &packed), (PACKED, &packed), (SPACED, &spaced)],
         11,
@@ -407,48 +392,61 @@ fn reruns_are_deterministic() {
     assert_eq!(rerun_over(&a, &[(PACKED, &sheet)], &Scope::All), a);
 }
 
+fn names_of(setup: &TilesetSetup) -> Vec<(u8, String)> {
+    (setup.terrains.iter())
+        .map(|t| (t.id, t.name.value.clone()))
+        .collect()
+}
+
+#[track_caller]
+fn assert_distinct(setup: &TilesetSetup) {
+    let names = names_of(setup);
+    let unique: BTreeSet<&String> = names.iter().map(|(_, n)| n).collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+}
+
 #[test]
-fn auto_names_step_around_user_names_and_stay_put() {
+fn reruns_keep_every_terrain_name() {
     let sheet = Sheet::packed();
     let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
     setup
-        .rename_terrain(GROUND, "grass")
+        .rename_terrain(GROUND, "meadow")
         .expect("known terrain");
-    let name = |s: &TilesetSetup, id| s.terrain(id).map(|t| t.name.clone());
-    let once = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
-    assert_eq!(
-        name(&once, GRASS),
-        Some(Tracked::auto("grass 2".to_string()))
-    );
-    assert_eq!(
-        name(&once, GROUND),
-        Some(Tracked::user("grass".to_string()))
-    );
-    let twice = rerun_over(&once, &[(PACKED, &sheet)], &Scope::All);
-    assert_eq!(name(&twice, GRASS), name(&once, GRASS));
+    let partial = Scope::Set(setup.set_index(DEEP_SEA, WATER).expect("a set"));
+    for scope in [Scope::All, partial.clone()] {
+        let after = rerun_over(&setup, &[(PACKED, &sheet)], &scope);
+        assert_eq!(names_of(&after), names_of(&setup), "{scope:?}");
+        let twice = rerun_over(&after, &[(PACKED, &sheet)], &scope);
+        assert_eq!(names_of(&twice), names_of(&setup), "{scope:?}");
+    }
+    let ground = setup.terrain(GROUND).map(|t| t.name.clone());
+    assert_eq!(ground, Some(Tracked::user("meadow".to_string())));
 
-    let partial = Scope::Set(once.set_index(DEEP_SEA, WATER).expect("a set"));
-    let kept = rerun_over(&once, &[(PACKED, &sheet)], &partial);
-    assert_eq!(
-        name(&kept, GRASS),
-        Some(Tracked::auto("grass 2".to_string()))
-    );
-    let mut out_of_scope = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    out_of_scope.terrains[0].name = Tracked::auto("grass 6".to_string());
-    let after = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &partial);
-    let names: Vec<String> = after
-        .terrains
-        .iter()
-        .map(|t| t.name.value.clone())
-        .collect();
-    assert_eq!(
-        names,
-        [
-            "grass 6", "grass 2", "grass 3", "grass 4", "dirt", "grass 8", "water", "water 2"
-        ]
-    );
-    let all = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &Scope::All);
-    assert_eq!(name(&all, GRASS), Some(Tracked::auto("grass".to_string())));
+    let mut renamed = setup.clone();
+    renamed.terrains[0].name = Tracked::auto("Terrain 9".to_string());
+    for scope in [Scope::All, partial] {
+        let after = rerun_over(&renamed, &[(PACKED, &sheet)], &scope);
+        assert_eq!(names_of(&after), names_of(&renamed), "{scope:?}");
+    }
+}
+
+#[test]
+fn new_terrains_of_a_rerun_take_names_no_terrain_has() {
+    let (packed, spaced) = (Sheet::packed(), Sheet::spaced());
+    let setup = TilesetSetup::from_auto(&run(&[(SPACED, &spaced)]));
+    let both = [(PACKED, &packed), (SPACED, &spaced)];
+    let partial = Scope::Set(setup.set_index(DEEP_SEA, WATER).expect("a set"));
+    for scope in [Scope::All, partial] {
+        let after = rerun_over(&setup, &both, &scope);
+        if scope == Scope::All {
+            assert!(after.terrains.len() > setup.terrains.len());
+        }
+        assert_distinct(&after);
+        for (id, name) in names_of(&setup) {
+            let kept = after.terrain(id).map(|t| t.name.value.as_str());
+            assert_eq!(kept, Some(name.as_str()), "{scope:?}");
+        }
+    }
 }
 
 #[test]

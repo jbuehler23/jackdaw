@@ -384,7 +384,7 @@ fn the_hover_readout_names_the_cell_terrain_tile_and_override() {
     let (sheet, at) = tileset
         .tile_of_layer(u32::from(tile.index()))
         .expect("a resolved tile");
-    let expected = format!("Cell 2,2 | Terrain {grass} | Tile {sheet}:{at}");
+    let expected = format!("Cell 2,2 | Terrain \"{grass}\" | Tile {sheet}:{at}");
     assert_eq!(
         app.world().resource::<TileHoverReadout>().0.as_deref(),
         Some(expected.as_str())
@@ -412,7 +412,7 @@ fn the_hover_readout_names_the_cell_terrain_tile_and_override() {
     let readout = app.world().resource::<TileHoverReadout>().0.clone();
     assert_eq!(
         readout.as_deref(),
-        Some(format!("Cell 2,2 | Terrain {grass} | Tile 0:3 | Hand-placed").as_str())
+        Some(format!("Cell 2,2 | Terrain \"{grass}\" | Tile 0:3 | Hand-placed").as_str())
     );
 
     hover(&mut app, None);
@@ -578,7 +578,7 @@ fn the_readout_follows_the_tileset_loading_and_changing() {
     }
     settle(&mut app);
     assert!(
-        readout(&app).contains("Terrain Meadow |"),
+        readout(&app).contains("Terrain \"Meadow\" |"),
         "{}",
         readout(&app)
     );

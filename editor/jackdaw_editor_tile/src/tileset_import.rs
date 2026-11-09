@@ -89,7 +89,9 @@ enum SetupChoice {
             String,
             default = "manual",
             doc = "\"manual\" slices the sheets for terrains set by hand, \"auto\" also finds \
-                   terrains, terrain sets and objects, \"none\" makes a plain tile atlas."
+                   terrains, terrain sets and objects, \"none\" makes a plain tile atlas. Auto \
+                   names terrains Terrain 1, Terrain 2 and so on; rename them with \
+                   `tileset.terrain.rename`."
         ),
         edit(
             bool,
@@ -246,6 +248,11 @@ fn import(
             (tileset.set_setup(&TilesetSetup::from_auto(&fresh))).map_err(|e| e.to_string())?;
             tileset.auto_setup = true;
             summary = format!("{summary}\n{}", fresh.report);
+            if !fresh.report.terrains.is_empty() {
+                summary.push_str(
+                    "terrain names are defaults; rename them with tileset.terrain.rename",
+                );
+            }
         }
         SetupChoice::Manual => tileset.setup_sheets = (0..sheets.len() as u32).collect(),
         SetupChoice::None => {}

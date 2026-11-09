@@ -84,9 +84,9 @@ fn resolve_block(
 #[test]
 fn a_block_of_one_grass_on_another_resolves_to_its_transition_tiles() {
     let tileset = overworld();
-    let grass = terrain_named(&tileset, "grass");
-    let raised = terrain_named(&tileset, "grass 2");
-    let water = terrain_named(&tileset, "water");
+    let grass = terrain_named(&tileset, "Terrain 1");
+    let raised = terrain_named(&tileset, "Terrain 2");
+    let water = terrain_named(&tileset, "Terrain 7");
     let set = tileset
         .terrain_set(Some(TerrainMatch::CornersAndSides))
         .expect("the sheet has sets of this mode");
@@ -133,7 +133,7 @@ fn every_set_of_the_mode_shares_one_layer_and_a_mixed_sheet_needs_a_mode() {
     let set = tileset
         .terrain_set(Some(TerrainMatch::CornersAndSides))
         .expect("a set");
-    for name in ["grass 2", "water"] {
+    for name in ["Terrain 2", "Terrain 7"] {
         let id = terrain_named(&tileset, name);
         assert!(
             set.tiles.iter().any(|t| t.terrains.centre() == id),
