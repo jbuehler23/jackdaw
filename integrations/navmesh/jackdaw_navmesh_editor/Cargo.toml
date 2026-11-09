@@ -9,12 +9,12 @@ repository.workspace = true
 
 [package.metadata.jackdaw]
 # The editor line this module is built for.
-editor = "main"
+editor = "0.20"
 
 [dependencies]
 # The editor's Bevy feature set, so this crate and the editor agree on every
 # type they share.
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", features = [
+bevy = { version = "0.20", features = [
     "bevy_feathers",
     "bevy_scene",
     "bevy_dev_tools",

@@ -44,9 +44,9 @@ jackdaw_runtime = { workspace = true, features = [
 # `approx` on Bevy's math crates, which physics engines such as avian turn
 # on: against an SDK whose `glam` lacks it, a project using one fails on
 # missing trait impls in a crate the project never named.
-bevy_math = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["approx"] }
-bevy_curve = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["approx"] }
-bevy_shape = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["approx"] }
+bevy_math = { version = "0.20", features = ["approx"] }
+bevy_curve = { version = "0.20", features = ["approx"] }
+bevy_shape = { version = "0.20", features = ["approx"] }
 # The rest of what avian turns on in crates the SDK shares with a game.
 approx = "0.5"
 downcast-rs = { version = "2", features = ["sync"] }

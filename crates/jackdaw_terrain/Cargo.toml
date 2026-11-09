@@ -10,9 +10,9 @@ repository = "https://github.com/jbuehler23/jackdaw"
 [dependencies]
 noise = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-bevy_math = { git = "https://github.com/bevyengine/bevy", branch = "main" }
+bevy_math = "0.20"
 bytemuck = { version = "1", features = ["derive"], optional = true }
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, optional = true, features = [
+bevy = { version = "0.20", default-features = false, optional = true, features = [
     "std",
     "bevy_asset",
 ] }

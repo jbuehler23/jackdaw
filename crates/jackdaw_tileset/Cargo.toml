@@ -9,7 +9,7 @@ repository = "https://github.com/jbuehler23/jackdaw"
 include = ["src/**/*", "Cargo.toml", "LICENSE*"]
 
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "std",
     "bevy_asset",
     "bevy_color",
@@ -21,7 +21,7 @@ jackdaw_tilemap.workspace = true
 render = ["bevy/bevy_sprite_render"]
 
 [dev-dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "bevy_camera",
     "bevy_log",
 ] }

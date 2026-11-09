@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/jbuehler23/jackdaw"
 
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "reflect_auto_register",
     "std",
     "serialize",
@@ -137,7 +137,7 @@ workspace = true
 [dev-dependencies]
 tempfile = "3"
 # The texture import tests write PNGs and decode them.
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["png"] }
+bevy = { version = "0.20", default-features = false, features = ["png"] }
 image.workspace = true
 # The cap the resolution tests drive the chain past.
 jackdaw_prefab = { version = "0.21.0-dev", path = "../jackdaw_prefab" }

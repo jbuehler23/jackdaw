@@ -13,7 +13,7 @@ reflect = ["dep:bevy", "dep:jackdaw_scene_types"]
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, optional = true, features = [
+bevy = { version = "0.20", default-features = false, optional = true, features = [
     "std",
     "serialize",
     # `ReflectAsset` is how a game's asset registrations are recognised.

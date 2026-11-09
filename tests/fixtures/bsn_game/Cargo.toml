@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main" }
+bevy = { version = "0.20" }
 jackdaw_runtime = { path = "../../../crates/jackdaw_runtime", features = ["pie"] }
 jackdaw_scene_types = { path = "../../../crates/jackdaw_scene_types", default-features = false }
 jackdaw_extension = { path = "../../../crates/jackdaw_extension" }
