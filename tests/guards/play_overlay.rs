@@ -1075,6 +1075,74 @@ fn a_discard_of_the_prefab_tab_in_front_goes_back_to_the_file() {
     assert_eq!(editor_x(&mut app, "Placed"), 1.0);
 }
 
+/// A discarded prefab the scene in front never reaches leaves that scene as it
+/// was: the same entities, still selected.
+#[test]
+fn a_discarded_prefab_the_scene_does_not_reach_respawns_nothing() {
+    let scene = roots(&[
+        "#Beacon\nbevy_transform::components::transform::Transform\n".to_string(),
+        instance_of("gate.bsn"),
+    ]);
+    let (mut app, tmp) = editor(&[
+        ("door.bsn", &door(1.0)),
+        ("gate.bsn", &door(3.0)),
+        ("zone.bsn", &scene),
+    ]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    let mut game = game_serving(&mut app, &tmp, "zone.bsn");
+    played_as(&mut game, "zone.bsn");
+    let beacon = select_named(&mut app, "Beacon");
+    let placed = named(&mut app, "Placed");
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+
+    assert!(
+        app.world().get_entity(beacon).is_ok(),
+        "the scene kept its entities"
+    );
+    assert_eq!(named(&mut app, "Placed"), placed);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::selection::Selection>()
+            .entities,
+        vec![beacon],
+        "the selection stays"
+    );
+    assert_eq!(x_of(&mut game, "Placed"), 3.0);
+}
+
+/// A discarded prefab the scene reaches only through another prefab still goes
+/// back to the file in the scene in front.
+#[test]
+fn a_discarded_prefab_reached_through_another_goes_back_to_the_file() {
+    let gate = "#Gate\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n\
+         #Leaf\n\
+         jackdaw::prefab::components::PrefabEntityId(1)\n\
+         jackdaw::prefab::components::IsA { source: \"door.bsn\", deleted: [] }\n\
+         ]\n"
+    .to_string();
+    let scene = instance_of("gate.bsn");
+    let (mut app, _tmp) = editor(&[
+        ("door.bsn", &door(1.0)),
+        ("gate.bsn", &gate),
+        ("zone.bsn", &scene),
+    ]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    assert_eq!(editor_x(&mut app, "Leaf"), 9.0);
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+
+    assert_eq!(editor_x(&mut app, "Leaf"), 1.0);
+}
+
 fn editor_x(app: &mut App, entity: &str) -> f32 {
     app.world_mut()
         .query::<(&Name, &Transform)>()
