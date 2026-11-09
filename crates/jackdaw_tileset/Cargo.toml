@@ -21,7 +21,12 @@ jackdaw_tilemap.workspace = true
 render = ["bevy/bevy_sprite_render"]
 
 [dev-dependencies]
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = [
+    "bevy_camera",
+    "bevy_log",
+] }
 image.workspace = true
+jackdaw_bsn.workspace = true
 
 [lints]
 workspace = true

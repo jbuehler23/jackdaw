@@ -427,10 +427,7 @@ fn auto_names_step_around_user_names_and_stay_put() {
     let twice = rerun_over(&once, &[(PACKED, &sheet)], &Scope::All);
     assert_eq!(name(&twice, GRASS), name(&once, GRASS));
 
-    let partial = Scope::Set {
-        inner: DEEP_SEA,
-        outer: WATER,
-    };
+    let partial = Scope::Set(once.set_index(DEEP_SEA, WATER).expect("a set"));
     let kept = rerun_over(&once, &[(PACKED, &sheet)], &partial);
     assert_eq!(
         name(&kept, GRASS),
@@ -447,7 +444,7 @@ fn auto_names_step_around_user_names_and_stay_put() {
     assert_eq!(
         names,
         [
-            "grass 6", "grass 2", "grass 3", "grass 4", "dirt", "grass 5", "water", "water 2"
+            "grass 6", "grass 2", "grass 3", "grass 4", "dirt", "grass 8", "water", "water 2"
         ]
     );
     let all = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &Scope::All);
@@ -458,13 +455,12 @@ fn auto_names_step_around_user_names_and_stay_put() {
 fn a_rerun_does_not_propose_a_set_removed_by_hand() {
     let sheet = Sheet::packed();
     let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    let set = &setup.sets[0];
-    let pair = (set.inner, set.outer);
-    setup.remove_set(pair.0, pair.1).expect("a known set");
+    let removed = setup.remove_set(0).expect("a known set");
     let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
-    assert!(
-        after.set(pair.0, pair.1).is_none(),
-        "{pair:?} stays removed"
-    );
-    assert!(after.removed_sets.contains(&pair));
+    for ((a, b), mode) in jackdaw_tilemap::stacked_pairs(&removed) {
+        let proposed = (after.sets.iter()).any(|s| s.mode.value == mode && s.has(a) && s.has(b));
+        assert!(!proposed, "{a} with {b} stays removed");
+        assert!(after.removed_sets.contains(&(a, b)));
+    }
+    assert_eq!(after.sets.len(), setup.sets.len());
 }

@@ -33,14 +33,18 @@ const GRASS: u8 = 1;
 const WATER: u8 = 2;
 
 /// The overworld sheet imported with nothing set up, then grass and water, a
-/// water over grass set and tile 0 of grass with a water corner, by hand.
+/// corner set of grass then water and tile 0 of grass with a water corner, by
+/// hand.
 pub(crate) fn handmade() -> (App, tempfile::TempDir) {
     let (mut app, dir) = project_app();
     import(&mut app, &[("paths", SHEET)]);
     call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
     call(&mut app, "tileset.terrain.add", &[("name", "water")]);
-    let set = [("inner", "2"), ("outer", "1"), ("mode", "corners")];
-    call(&mut app, "tileset.terrain_set.add", &set);
+    call(&mut app, "tileset.terrain_set.add", &[("mode", "corners")]);
+    for terrain in ["1", "2"] {
+        let join = [("set", "0"), ("terrain", terrain)];
+        call(&mut app, "tileset.terrain_set.add_terrain", &join);
+    }
     let bits = [("tile", "0:0"), ("peers", "1,1,1,1,1,1,1,1,2")];
     call(&mut app, "tileset.tile.set_bits", &bits);
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
@@ -607,7 +611,7 @@ fn the_missing_shapes_of_a_set_open_on_request() {
             .world_mut()
             .query::<(Entity, &MissingGlyph)>()
             .iter(app.world())
-            .filter(|(_, g)| g.root == root && (g.inner, g.outer) == (WATER, GRASS))
+            .filter(|(_, g)| g.root == root && g.set == 0)
             .map(|(e, _)| e)
             .collect();
         for glyph in &glyphs {
@@ -635,15 +639,15 @@ fn the_missing_shapes_of_a_set_open_on_request() {
     assert!(
         shown
             .iter()
-            .any(|t| t == "water over grass: 1 of 16 shapes"),
+            .any(|t| t == "Terrain set 1 (Corners): 1 of 16 shapes"),
         "{shown:?}"
     );
     assert_eq!(listed(&mut app), 0, "collapsed: {shown:?}");
-    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    press(&mut app, root, DockAction::ToggleMissing(0));
     assert_eq!(listed(&mut app), 15);
-    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    press(&mut app, root, DockAction::ToggleMissing(0));
     assert_eq!(listed(&mut app), 0);
-    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    press(&mut app, root, DockAction::ToggleMissing(0));
     press(&mut app, root, DockAction::Page(DockPage::Objects));
     assert!(!texts(&mut app, root).iter().any(|t| t.contains("missing")));
 }
@@ -839,13 +843,12 @@ fn terrains_are_listed_by_their_icon_tile_and_sets_by_their_names() {
 
     let shown = texts(&mut app, root);
     assert!(
-        shown.iter().any(|t| t.starts_with("water over grass:")),
+        shown
+            .iter()
+            .any(|t| t.starts_with("Terrain set 1 (Corners):")),
         "{shown:?}"
     );
-    assert!(
-        !shown.iter().any(|t| t.contains("set 2 over 1")),
-        "{shown:?}"
-    );
+    assert!(!shown.iter().any(|t| t.contains(" over ")), "{shown:?}");
 }
 
 /// The screen rect of `entity`, in logical pixels.
@@ -976,7 +979,7 @@ fn the_selected_tile_becomes_the_brush_terrains_icon() {
 fn each_terrain_set_row_has_a_remove_button() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    let remove = control(&mut app, root, DockAction::RemoveSet(WATER, GRASS));
+    let remove = control(&mut app, root, DockAction::RemoveSet(0));
     let tip = app
         .world()
         .get::<jackdaw_feathers::tooltip::Tooltip>(remove)
@@ -984,13 +987,42 @@ fn each_terrain_set_row_has_a_remove_button() {
     assert_eq!(tip.as_deref(), Some("Remove terrain set"));
 
     let (before, count) = (on_disk(&dir), entries(&app));
-    press(&mut app, root, DockAction::RemoveSet(WATER, GRASS));
+    press(&mut app, root, DockAction::RemoveSet(0));
     assert!(on_disk(&dir).terrain_sets.is_empty());
     assert_eq!(entries(&app), count + 1);
-    assert!(!actions(&mut app, root).contains(&DockAction::RemoveSet(WATER, GRASS)));
+    assert!(!actions(&mut app, root).contains(&DockAction::RemoveSet(0)));
     run(&mut app, "history.undo");
     settle(&mut app);
     assert_eq!(on_disk(&dir), before);
+}
+
+#[test]
+fn a_set_removed_by_the_operator_leaves_the_dock_on_the_set_it_had() {
+    let (mut app, _dir) = handmade();
+    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    call(
+        &mut app,
+        "tileset.terrain_set.add",
+        &[("name", "Sand"), ("mode", "sides")],
+    );
+    let join = [("set", "Sand"), ("terrain", "sand")];
+    call(&mut app, "tileset.terrain_set.add_terrain", &join);
+    settle(&mut app);
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::ActiveSet(1));
+    press(&mut app, root, DockAction::ToggleMissing(1));
+    call(&mut app, "tileset.terrain_set.remove", &[("set", "0")]);
+    settle(&mut app);
+    assert_eq!(view(&app).active.as_deref(), Some("Sand"));
+    assert!(view(&app).expanded.contains("Sand"));
+    let shown = texts(&mut app, root);
+    assert!(
+        shown.iter().any(|t| t == "Sides: 16 shapes missing"),
+        "{shown:?}"
+    );
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(view(&app).active.as_deref(), Some("Sand"), "undo keeps it");
 }
 
 fn edit_view(app: &mut App, change: impl FnOnce(&mut DockView)) {
@@ -1002,21 +1034,21 @@ fn edit_view(app: &mut App, change: impl FnOnce(&mut DockView)) {
 fn removing_a_set_clears_its_view_state_only_when_it_goes() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    let pair = (WATER, GRASS);
+    let pair = "Terrain set 1".to_string();
     edit_view(&mut app, |view| {
-        view.active = Some(pair);
-        view.expanded.insert(pair);
+        view.active = Some(pair.clone());
+        view.expanded.insert(pair.clone());
     });
 
     let file = dir.path().join("assets");
     let mut permissions = std::fs::metadata(&file).expect("the folder").permissions();
     permissions.set_readonly(true);
     std::fs::set_permissions(&file, permissions.clone()).expect("read only");
-    press(&mut app, root, DockAction::RemoveSet(WATER, GRASS));
+    press(&mut app, root, DockAction::RemoveSet(0));
     assert_eq!(on_disk(&dir).terrain_sets.len(), 1, "the write failed");
     assert_eq!(
         view(&app).active,
-        Some(pair),
+        Some(pair.clone()),
         "a failed remove keeps the active set"
     );
     assert!(view(&app).expanded.contains(&pair));
@@ -1027,7 +1059,7 @@ fn removing_a_set_clears_its_view_state_only_when_it_goes() {
     )]
     permissions.set_readonly(false);
     std::fs::set_permissions(&file, permissions).expect("writable");
-    press(&mut app, root, DockAction::RemoveSet(WATER, GRASS));
+    press(&mut app, root, DockAction::RemoveSet(0));
     assert!(on_disk(&dir).terrain_sets.is_empty());
     assert_eq!(view(&app).active, None);
     assert!(!view(&app).expanded.contains(&pair));
@@ -1045,7 +1077,7 @@ fn a_set_row_keeps_its_remove_button_inside_a_narrow_dock() {
     let (_, root) = opened(&mut app);
     set_width(&mut app, 700);
     let dock = screen_rect(&app, root);
-    let remove = control(&mut app, root, DockAction::RemoveSet(WATER, GRASS));
+    let remove = control(&mut app, root, DockAction::RemoveSet(0));
     let button = screen_rect(&app, remove);
     assert!(
         button.max.x <= dock.max.x + 0.5 && button.min.x >= dock.min.x - 0.5,
@@ -1066,7 +1098,7 @@ fn a_set_row_keeps_its_remove_button_inside_a_narrow_dock() {
         button.max.x <= column.max.x + 0.5,
         "the button at {button:?} stays inside its column at {column:?}"
     );
-    let pick = control(&mut app, root, DockAction::ActiveSet(WATER, GRASS));
+    let pick = control(&mut app, root, DockAction::ActiveSet(0));
     let node = app.world().get::<Node>(pick).expect("a node");
     assert_eq!(
         (node.min_width, node.flex_shrink > 0.0),
@@ -1098,7 +1130,7 @@ fn the_terrains_column_sits_beside_the_sheet() {
     let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Brush(WATER));
-    press(&mut app, root, DockAction::ToggleMissing(WATER, GRASS));
+    press(&mut app, root, DockAction::ToggleMissing(0));
     let mut widths = Vec::new();
     for width in [954, 1920] {
         set_width(&mut app, width);
@@ -1141,7 +1173,7 @@ fn picking_a_terrain_or_a_set_keeps_every_row_in_place() {
         DockAction::Brush(0),
         DockAction::Brush(GRASS),
         DockAction::Brush(WATER),
-        DockAction::ActiveSet(WATER, GRASS),
+        DockAction::ActiveSet(0),
     ];
     let places = |app: &mut App| -> Vec<Rect> {
         (rows.iter())
@@ -1155,7 +1187,7 @@ fn picking_a_terrain_or_a_set_keeps_every_row_in_place() {
     for action in [
         DockAction::Brush(WATER),
         DockAction::Tile(0, 5),
-        DockAction::ToggleMissing(WATER, GRASS),
+        DockAction::ToggleMissing(0),
         DockAction::RenameTerrain(WATER),
         DockAction::Brush(GRASS),
     ] {
@@ -1178,10 +1210,12 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
     for label in ["Select", "Paint", "Off", "Set", "All", "New terrain"] {
         assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
     }
-    assert!(
-        !shown.iter().any(|t| t.contains(" (")),
-        "no key in a label: {shown:?}"
-    );
+    let keyed = |t: &String| {
+        t.strip_suffix(')')
+            .and_then(|t| t.rsplit_once(" ("))
+            .is_some_and(|(_, key)| key.len() <= 3)
+    };
+    assert!(!shown.iter().any(keyed), "no key in a label: {shown:?}");
     for (action, key) in [
         (DockAction::Tool(DockTool::Paint), "P"),
         (DockAction::Tool(DockTool::Select), "P"),
@@ -1210,7 +1244,7 @@ fn match_modes_and_coverage_read_as_words() {
     assert!(
         shown
             .iter()
-            .any(|t| t == "water over grass: 1 of 16 shapes"),
+            .any(|t| t == "Terrain set 1 (Corners): 1 of 16 shapes"),
         "{shown:?}"
     );
     assert!(

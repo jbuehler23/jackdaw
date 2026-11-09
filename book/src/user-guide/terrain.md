@@ -55,8 +55,8 @@ the terrain. Hold `Ctrl` while painting to restore value `0`.
 **Show Painted Values** tints the terrain with the active
 palette so the stored data is visible even before a game
 material consumes it. New channel and palette entries receive
-generated names and colours; project-specific descriptor
-names, integer widths, labels, values, and colours can also be
+generated names and colors; project-specific descriptor
+names, integer widths, labels, values, and colors can also be
 authored directly in the scene document.
 
 ## Quantization
@@ -177,7 +177,7 @@ built against it, so treat the shapes below as stable.
 
 ## Rendering
 
-Terrain draws as a handful of concentric LOD levels centred on
+Terrain draws as a handful of concentric LOD levels centered on
 the camera: the level under the camera samples every grid
 point, and each ring out doubles the step and covers four
 times the ground, so the vertex budget stays flat as the

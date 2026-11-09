@@ -502,8 +502,7 @@ const LAST_BUILD_RECORD: &str = "last-extension-build";
 /// The extension dylib the last build produced, if there is one.
 ///
 /// The build records its output's path, since the target directory is
-/// keyed by a salt only the build knows and older keyed directories are
-/// kept. Without a record, the newest library under `<jackdaw_dir>/target`
+/// keyed by a salt only the build knows. Without a record, the newest library under `<jackdaw_dir>/target`
 /// is taken.
 pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
     let recorded = std::fs::read_to_string(jackdaw_dir.join(LAST_BUILD_RECORD))
@@ -596,44 +595,48 @@ fn unresolved_crate_name(line: &str) -> Option<String> {
     Some(line[start..end].to_string())
 }
 
-/// How many keyed target directories to keep, including the current
-/// one. Each holds a full compilation of the project's dependency
-/// closure, bevy included, so this trades disk against the ten-plus
-/// minutes it takes to rebuild one.
-const TARGET_DIRS_KEPT: usize = 2;
+/// Whether a cargo build is running in `dir` or below it. Cargo holds a
+/// lock on `.cargo-lock` in each `<build>/<profile>/` directory for the
+/// length of a build.
+pub fn build_running(dir: &Path) -> bool {
+    build_running_within(dir, 0)
+}
 
-/// Drop old keyed target directories, keeping the current one and the
-/// most recently created others. `game` is the game build's directory,
-/// which shares the root and is never dropped.
-///
-/// Ordering is by directory mtime, which is creation time here: cargo
-/// writes nested files, which does not touch the salt directory itself.
-/// With only two kept that is enough to make an A/B flip stable, and
-/// avoids maintaining a usage stamp for a heuristic this coarse.
-///
-/// Deleting every other directory outright made switching build
-/// configuration cost a full rebuild of bevy every time. The salt
-/// covers the wrapper binary, so alternating a debug and a release
-/// editor (or upgrading and rolling back) flips it back and forth, and
-/// each flip threw away a cache that was about to be wanted again.
-/// Keeping the previous one makes that flip nearly free while still
-/// bounding growth.
+fn build_running_within(dir: &Path, depth: usize) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            return false;
+        };
+        if kind.is_dir() {
+            depth < 4 && build_running_within(&path, depth + 1)
+        } else if entry.file_name() == ".cargo-lock" {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+        } else {
+            false
+        }
+    })
+}
+
+/// Drop every keyed target directory but the current one and any with a
+/// build running in it. Each holds a full compilation of the project's
+/// dependency closure, bevy included. `game` is the game build's
+/// directory, which shares the root and is never dropped.
 fn retain_recent_target_dirs(target_root: &Path, current: &str, game: &Path) {
     let Ok(entries) = std::fs::read_dir(target_root) else {
         return;
     };
-    let mut others: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy() != current && entry.path() != game)
-        .filter_map(|entry| {
-            let used = entry.metadata().and_then(|meta| meta.modified()).ok()?;
-            Some((used, entry.path()))
-        })
-        .collect();
-    // Newest first; keep enough to leave room for the current one.
-    others.sort_by_key(|(used, _)| std::cmp::Reverse(*used));
-    for (_, path) in others.into_iter().skip(TARGET_DIRS_KEPT.saturating_sub(1)) {
-        let _ = std::fs::remove_dir_all(path);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_name().to_string_lossy() != current && path != game && !build_running(&path) {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -846,34 +849,46 @@ mod tests {
         assert!(stale_sdk_hint(log, &sdk, &manifest).is_none());
     }
 
-    /// Switching build configuration used to delete the cache it was
-    /// about to want back, costing a full rebuild of bevy each time.
     #[test]
-    fn the_previous_target_dir_survives_a_configuration_flip() {
+    fn only_the_current_target_dir_and_game_are_kept() {
         let root = std::env::temp_dir().join(format!("jackdaw-retain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let game = root.join("game");
         for salt in ["game", "aaa", "bbb", "ccc"] {
             std::fs::create_dir_all(root.join(salt)).unwrap();
-            // Distinct mtimes so "most recent" is well defined.
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        // Building under `ccc` keeps it plus the newest other (`bbb`).
         retain_recent_target_dirs(&root, "ccc", &game);
         assert!(root.join("ccc").is_dir(), "the current dir is untouched");
-        assert!(root.join("bbb").is_dir(), "the previous one is kept");
-        assert!(!root.join("aaa").exists(), "older ones are dropped");
-        assert!(
-            game.is_dir(),
-            "the game build's directory is not a keyed one"
-        );
+        assert!(!root.join("bbb").exists());
+        assert!(!root.join("aaa").exists());
+        assert!(game.is_dir(), "the game build's directory is kept");
 
-        // Flipping back to `bbb` finds its cache still there.
-        retain_recent_target_dirs(&root, "bbb", &game);
-        assert!(root.join("bbb").is_dir());
-        assert!(root.join("ccc").is_dir(), "and can flip again for free");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
+    #[test]
+    fn a_target_dir_with_a_running_build_is_kept() {
+        let root = std::env::temp_dir().join(format!("jackdaw-retain-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let game = root.join("game");
+        let busy = root.join("busy/triple/debug");
+        std::fs::create_dir_all(&busy).unwrap();
+        std::fs::create_dir_all(root.join("idle/triple/debug")).unwrap();
+        std::fs::create_dir_all(root.join("current")).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(busy.join(".cargo-lock"))
+            .unwrap();
+        lock.lock().unwrap();
+
+        retain_recent_target_dirs(&root, "current", &game);
+        assert!(root.join("busy").is_dir(), "a building dir survives");
+        assert!(!root.join("idle").exists(), "an idle old dir is removed");
+
+        drop(lock);
         let _ = std::fs::remove_dir_all(&root);
     }
 

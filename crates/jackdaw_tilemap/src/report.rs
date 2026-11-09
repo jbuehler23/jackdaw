@@ -39,16 +39,26 @@ pub enum SetupError {
     UnknownSheet(usize),
     /// A terrain missing from the analysis or the setup.
     UnknownTerrain(TerrainId),
-    /// No terrain set of the setup has this inner and outer terrain.
-    UnknownSet(TerrainId, TerrainId),
+    /// No terrain set of the setup is at this index.
+    UnknownSet(usize),
     /// Every terrain id is taken; ids are never reused.
     TooManyTerrains,
     /// The input at this index repeats an earlier sheet name.
     DuplicateSheet(usize),
-    /// A set of a terrain over itself.
+    /// A transition of a terrain with itself.
     SameTerrain(TerrainId),
-    /// A terrain set with this inner and outer terrain already exists.
-    SetExists(TerrainId, TerrainId),
+    /// The terrain set at this index already has the name.
+    SetNameTaken(usize),
+    /// A terrain that already belongs to the terrain set at `set`.
+    TerrainInSet {
+        terrain: TerrainId,
+        set: usize,
+    },
+    /// A terrain the terrain set at `set` does not hold.
+    NotInSet {
+        terrain: TerrainId,
+        set: usize,
+    },
     /// A tile that holds no peer of the terrain.
     NotOnTile(TileAddress, TerrainId),
     /// A block of tiles that leaves its sheet's grid.
@@ -81,14 +91,18 @@ impl fmt::Display for SetupError {
             SetupError::Fit(e) => write!(f, "{e}"),
             SetupError::UnknownSheet(i) => write!(f, "sheet index {i} names no input"),
             SetupError::UnknownTerrain(id) => write!(f, "terrain {id} is not known"),
-            SetupError::UnknownSet(inner, outer) => {
-                write!(f, "no terrain set {inner} over {outer}")
-            }
+            SetupError::UnknownSet(set) => write!(f, "no terrain set at {set}"),
             SetupError::TooManyTerrains => write!(f, "no terrain ids left"),
             SetupError::DuplicateSheet(i) => write!(f, "input {i} repeats a sheet name"),
             SetupError::SameTerrain(id) => write!(f, "terrain {id} cannot border itself"),
-            SetupError::SetExists(inner, outer) => {
-                write!(f, "terrain set {inner} over {outer} already exists")
+            SetupError::SetNameTaken(set) => {
+                write!(f, "terrain set {set} already has that name")
+            }
+            SetupError::TerrainInSet { terrain, set } => {
+                write!(f, "terrain {terrain} already belongs to terrain set {set}")
+            }
+            SetupError::NotInSet { terrain, set } => {
+                write!(f, "terrain set {set} does not hold terrain {terrain}")
             }
             SetupError::NotOnTile(at, id) => {
                 write!(
@@ -122,7 +136,7 @@ impl fmt::Display for SetupError {
                 };
                 write!(
                     f,
-                    "this pair already draws {placed}; it has {tiles} tiles elsewhere"
+                    "this terrain set already draws {placed}; it has {tiles} tiles elsewhere"
                 )
             }
             SetupError::Order => write!(

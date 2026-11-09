@@ -106,6 +106,11 @@
 
 | Key | Action |
 |-----|--------|
+| F5 | Play, or resume a paused game |
+| Ctrl+F5 (Cmd+F5 on macOS) | Restart |
+| F7 | Pause or resume |
+| F8 | Stop, also while input is captured |
+| F10 | Step one tick while paused |
 | Esc | Forward to the game (opens its in-game menu) while capturing |
 | Shift+Esc | Release input capture, return control to the editor |
 

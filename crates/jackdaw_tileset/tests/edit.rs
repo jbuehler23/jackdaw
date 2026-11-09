@@ -42,7 +42,9 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
     let sand = setup
         .add_terrain("sand", [0xe7, 0xa1, 0x6a], false)
         .expect("id");
-    setup.add_set(sand, grass, MatchMode::Sides).expect("set");
+    let set = setup.add_set("", MatchMode::Sides).expect("set");
+    setup.add_set_terrain(set, grass, None).expect("free");
+    setup.add_set_terrain(set, sand, None).expect("free");
     let edge = TileTerrains::filled(sand).with(Peer::Top, grass);
     setup
         .set_peers(
@@ -53,9 +55,10 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
     setup
         .set_peers(TileAddress { sheet: 0, tile: 1 }, edge)
         .expect("bits");
+    let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
     let mixed = TileAddress { sheet: 0, tile: 2 };
     setup
-        .set_peers(mixed, edge.with(Peer::Top, 0))
+        .set_peers(mixed, edge.with(Peer::Top, water))
         .expect("bits");
     // Auto setup's guess, not a hand-set tile, so it stays flagged.
     setup.tiles.get_mut(&mixed).expect("set").provenance = [Provenance::Auto; 9];
@@ -74,7 +77,7 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
         "image \"farm.tiles.png\": tile 16x16, 4x3 layers",
         "  terrain 1 \"grass\": swatch #84c669, background, collision passable",
         "  terrain 2 \"sand\": swatch #e7a16a, collision passable, icon 1:3",
-        "  set \"sand\" over \"grass\": Sides, 1/16 shapes, missing 1,2,1,2,2,2,1,2,1;",
+        "  set \"Terrain set 1\" (Sides): terrains bottom first [\"grass\", \"sand\"], 1/16 shapes, missing 1,2,1,2,2,2,1,2,1;",
         "flagged tiles: 1",
         "  sheet 1: 2",
         "  object on sheet 1 at 2,1: 2x1, 2 tiles, pivot 0.5,0, by hand",

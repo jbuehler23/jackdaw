@@ -268,7 +268,7 @@ mod tests {
 
     use super::*;
     use crate::pie::install_link;
-    use crate::{JackdawPlugin, SceneRefused, ServedScene};
+    use crate::{JackdawPlugin, JackdawSceneReady, JackdawSceneSpawned, SceneRefused, ServedScene};
 
     const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
     const NAME: &str = "bevy_ecs::name::Name";
@@ -567,6 +567,32 @@ mod tests {
     }
 
     #[test]
+    fn a_served_document_reports_its_spawn_with_its_entities_present() {
+        let (mut app, mut editor, _dir) = game();
+        let seen: Arc<std::sync::Mutex<Vec<(Entity, usize)>>> = Arc::default();
+        let record = seen.clone();
+        app.add_observer(
+            move |spawned: On<JackdawSceneSpawned>, nodes: Query<(), With<SceneNodeId>>| {
+                if let Ok(mut seen) = record.lock() {
+                    seen.push((spawned.entity, nodes.iter().count()));
+                }
+            },
+        );
+        let root = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        assert!(seen.lock().expect("the record").is_empty(), "held");
+
+        send(&mut editor, &document(request, scene_text(5.0)));
+        app.update();
+        app.update();
+
+        assert!(app.world().get::<ServedScene>(root).is_some());
+        assert!(app.world().get::<JackdawSceneReady>(root).is_some());
+        assert_eq!(*seen.lock().expect("the record"), vec![(root, 1)]);
+    }
+
+    #[test]
     fn roots_on_one_path_share_a_request_and_other_paths_ask_their_own() {
         let (mut app, mut editor, _dir) = game();
         spawn_root(&mut app, "scene.bsn");
@@ -611,6 +637,45 @@ mod tests {
         }
         assert_eq!(asked.len(), 1, "once the scene it now names has loaded");
         assert_eq!(asked[0].1, "scene.bsn");
+    }
+
+    /// A served root put back to restart a level drops what it spawned and spawns
+    /// the document the editor holds now.
+    #[test]
+    fn a_served_root_inserted_again_spawns_the_editors_current_document() {
+        let (mut app, mut editor, _dir) = game();
+        let spawns: Arc<std::sync::Mutex<Vec<Entity>>> = Arc::default();
+        let record = spawns.clone();
+        app.add_observer(move |spawned: On<JackdawSceneSpawned>| {
+            if let Ok(mut spawns) = record.lock() {
+                spawns.push(spawned.entity);
+            }
+        });
+        let root = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (first, _) = requests_from(&mut editor)[0];
+        send(&mut editor, &document(first, scene_text(5.0)));
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![5.0]);
+        assert!(app.world().get::<ServedScene>(root).is_some());
+
+        let handle: Handle<JackdawScene> = app.world().resource::<AssetServer>().load("scene.bsn");
+        app.world_mut()
+            .entity_mut(root)
+            .insert(JackdawSceneRoot(handle));
+        app.update();
+        assert!(node_xs(&mut app).is_empty(), "the old spawn is gone");
+        assert!(app.world().get::<JackdawSceneReady>(root).is_none());
+        let asked = requests_from(&mut editor);
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].1, "scene.bsn");
+
+        send(&mut editor, &document(asked[0].0, scene_text(7.0)));
+        app.update();
+        assert_eq!(node_xs(&mut app), vec![7.0]);
+        assert!(app.world().get::<ServedScene>(root).is_some());
+        assert!(app.world().get::<JackdawSceneReady>(root).is_some());
+        assert_eq!(*spawns.lock().expect("the record"), vec![root, root]);
     }
 
     /// A scene answer naming a file with a hash loads that file, not a label of one.

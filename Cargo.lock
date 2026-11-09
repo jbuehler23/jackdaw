@@ -5050,6 +5050,7 @@ version = "0.21.0-dev"
 dependencies = [
  "bevy",
  "image",
+ "jackdaw_bsn",
  "jackdaw_tilemap",
 ]
 

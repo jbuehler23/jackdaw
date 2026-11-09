@@ -72,15 +72,10 @@ pub(crate) fn inspector_type_paths_for(
         }
         current = parent;
     };
-    let Some(prefab) = prefab_cache.get(&isa_source) else {
-        return HashSet::new();
-    };
-    let prefab_entity_id_type = "jackdaw::prefab::components::PrefabEntityId";
-    if let Some(node) = prefab.find_node_by_component_int(prefab_entity_id_type, u64::from(peid.0))
-    {
-        return prefab.component_type_paths(node).into_iter().collect();
-    }
-    HashSet::new()
+    prefab_cache
+        .baseline_entry(&isa_source, peid.0)
+        .map(|(prefab, node)| prefab.component_type_paths(node).into_iter().collect())
+        .unwrap_or_default()
 }
 
 /// Revert a single component on a prefab instance back to its baseline value.
@@ -168,6 +163,7 @@ pub(crate) fn decorate_prefab_field_rows(
     mut commands: Commands,
 ) {
     let registry = type_registry.read();
+    let mut lookup = None;
     for (row_entity, row) in &new_rows {
         let Some(node) = ast.ast_for(row.source_entity) else {
             continue;
@@ -175,19 +171,20 @@ pub(crate) fn decorate_prefab_field_rows(
         if !crate::prefab::overrides_bsn::is_inside_prefab_instance(&ast, node) {
             continue;
         }
-        let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
-        let overridden = crate::prefab::overrides_bsn::field_is_overridden(
+        let inherited = lookup
+            .get_or_insert_with(|| prefab_cache.inheritance(&ast))
+            .entry(&ast, node);
+        let overridden = crate::prefab::overrides_bsn::field_differs_from(
             &ast,
-            &get_prefab,
             node,
+            inherited.as_ref(),
             &row.type_path,
             Some(&row.field_path),
             &registry,
         );
         let inheritance = crate::prefab::overrides_bsn::resolve_inheritance(&ast, node);
-        let instance_entity = ast
-            .ancestor_with_component(node, "jackdaw::prefab::components::IsA")
-            .and_then(|n| ast.ecs_for_ast(n));
+        let instance_entity =
+            crate::prefab::overrides_bsn::id_owner(&ast, node).and_then(|n| ast.ecs_for_ast(n));
         if let (Some((prefab_path, prefab_entity_id)), Some(instance_entity)) =
             (inheritance, instance_entity)
         {
@@ -326,15 +323,18 @@ pub(crate) fn refresh_prefab_field_dots(
         return;
     }
     let registry = type_registry.read();
-    let get_prefab = |p: &std::path::Path| prefab_cache.get(p);
+    let mut lookup = None;
     for (dot, mut bg) in &mut dots {
         let Some(node) = ast.ast_for(dot.entity) else {
             continue;
         };
-        let overridden = crate::prefab::overrides_bsn::field_is_overridden(
+        let inherited = lookup
+            .get_or_insert_with(|| prefab_cache.inheritance(&ast))
+            .entry(&ast, node);
+        let overridden = crate::prefab::overrides_bsn::field_differs_from(
             &ast,
-            &get_prefab,
             node,
+            inherited.as_ref(),
             &dot.type_path,
             Some(&dot.field_path),
             &registry,

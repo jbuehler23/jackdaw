@@ -20,6 +20,7 @@ use jackdaw_tilemap::{LayoutTemplate, Placement};
 use jackdaw_tileset::TerrainMatch;
 
 const GRASS: u8 = 1;
+const WATER: u8 = 2;
 const SAND: u8 = 3;
 const GROUND: DockAction =
     DockAction::LayoutPick(LayoutTemplate::Minimal3x3, Placement::BetweenCells);
@@ -209,8 +210,9 @@ fn apply_is_one_undo_entry_and_adds_the_set_in_the_placements_mode() {
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
     let after = on_disk(&dir);
     let set = (after.terrain_sets.iter())
-        .find(|s| (s.inner, s.outer) == (SAND, GRASS))
-        .expect("the set is added");
+        .find(|s| s.terrains.contains(&SAND))
+        .expect("sand joins a set");
+    assert_eq!(set.terrains, [GRASS, SAND, WATER], "sand just above grass");
     assert_eq!(set.mode, TerrainMatch::Corners, "ground sits between cells");
     assert_eq!(entries(&app), count + 1, "one undo entry");
     assert_eq!(popovers(&mut app, root), 0, "apply closes the popover");
@@ -225,8 +227,13 @@ fn apply_is_one_undo_entry_and_adds_the_set_in_the_placements_mode() {
     press(&mut app, root, WALLS);
     input(&mut app, "input.key key=Enter");
     let set = (on_disk(&dir).terrain_sets.into_iter())
-        .find(|s| (s.inner, s.outer) == (SAND, GRASS))
+        .find(|s| s.terrains.contains(&SAND) && s.terrains.contains(&GRASS))
         .expect("Enter applies");
+    assert_eq!(
+        (set.name.as_str(), set.terrains.as_slice()),
+        ("Terrain set 2", &[GRASS, SAND][..]),
+        "a set of the walls' mode, grass keeping its corner set"
+    );
     assert_eq!(set.mode, TerrainMatch::CornersAndSides);
 }
 
@@ -365,11 +372,11 @@ fn an_existing_sets_placement_is_kept_unless_it_draws_nothing_else() {
     assert_eq!(
         draft_pick(&app),
         Some((LayoutTemplate::Minimal3x3, Placement::BetweenCells)),
-        "water over grass already draws between cells"
+        "the set of water and grass already draws between cells"
     );
     press(&mut app, root, WALLS);
     let shown = texts(&mut app, root);
-    let note = "this pair already draws between cells; it has 1 tiles elsewhere";
+    let note = "this terrain set already draws between cells; it has 1 tiles elsewhere";
     assert!(shown.iter().any(|t| t.contains(note)), "{shown:?}");
     assert!(disabled(&mut app, root, DockAction::LayoutApply));
     input(&mut app, "input.key key=Enter");

@@ -842,6 +842,10 @@ fn build_inspector_cards(
     // Prefab-instance context: if this entity sits inside an IsA
     // subtree, override info comes from the prefab AST + cache and the
     // revert / right-click actions route to the new prefab operators.
+    let inherited = scene_ast.zip(prefab_cache).and_then(|(ast, cache)| {
+        let node = ast.ast_for(source_entity)?;
+        cache.inherited_entry(ast, node)
+    });
     let prefab_ctx: Option<PrefabInstanceCtx> = scene_ast.and_then(|ast| {
         let cache = prefab_cache?;
         let node = ast.ast_for(source_entity)?;
@@ -850,9 +854,8 @@ fn build_inspector_cards(
         }
         let (path, prefab_entity_id) =
             crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
-        let instance_entity = ast
-            .ancestor_with_component(node, "jackdaw::prefab::components::IsA")
-            .and_then(|n| ast.ecs_for_ast(n))?;
+        let instance_entity =
+            crate::prefab::overrides_bsn::id_owner(ast, node).and_then(|n| ast.ecs_for_ast(n))?;
         Some(PrefabInstanceCtx {
             instance_entity,
             has_cached_prefab: cache.get(&path).is_some(),
@@ -960,17 +963,16 @@ fn build_inspector_cards(
             if !ctx.has_cached_prefab {
                 return false;
             }
-            let (Some(ast), Some(cache)) = (scene_ast, prefab_cache) else {
+            let Some(ast) = scene_ast else {
                 return false;
             };
             let Some(node) = ast.ast_for(source_entity) else {
                 return false;
             };
-            let get_prefab = |p: &std::path::Path| cache.get(p);
-            crate::prefab::overrides_bsn::field_is_overridden(
+            crate::prefab::overrides_bsn::field_differs_from(
                 ast,
-                &get_prefab,
                 node,
+                inherited.as_ref(),
                 type_path,
                 None,
                 &registry,

@@ -38,6 +38,10 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainSetAddOp>();
     ctx.register_operator::<TilesetTerrainSetSetOp>();
     ctx.register_operator::<TilesetTerrainSetRemoveOp>();
+    ctx.register_operator::<TilesetTerrainSetRenameOp>();
+    ctx.register_operator::<TilesetTerrainSetAddTerrainOp>();
+    ctx.register_operator::<TilesetTerrainSetRemoveTerrainOp>();
+    ctx.register_operator::<TilesetTerrainSetMoveTerrainOp>();
     ctx.register_operator::<TilesetTileSetBitsOp>();
     ctx.register_operator::<TilesetClearAutoOp>();
 }
@@ -251,6 +255,42 @@ fn free_name(tileset: &Tileset, name: &str) -> Result<(), String> {
         return Err(format!("a terrain is already named `{name}`"));
     }
     Ok(())
+}
+
+/// A terrain set by index or name.
+pub(crate) fn terrain_set(tileset: &Tileset, text: &str) -> Result<usize, String> {
+    let sets = tileset.sets();
+    let found = (sets.iter().enumerate())
+        .find(|(i, s)| text.parse::<usize>().is_ok_and(|n| n == *i) || s.name == text);
+    found
+        .map(|(i, _)| i)
+        .ok_or_else(|| format!("no terrain set is `{text}`"))
+}
+
+/// `name` trimmed, refused when a terrain set cannot take it: a number, or
+/// with a quote or a control character. Empty stands for the default name.
+fn set_name_allowed(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.parse::<usize>().is_ok() || name.chars().any(|c| c == '"' || c.is_control()) {
+        return Err(format!("`{name}` cannot name a terrain set"));
+    }
+    Ok(name.to_string())
+}
+
+/// The name of terrain set `set` of `setup`, quoted, for messages.
+fn set_label(setup: &TilesetSetup, set: usize) -> String {
+    setup
+        .sets
+        .get(set)
+        .map_or_else(|| set.to_string(), |s| format!("\"{}\"", s.name))
+}
+
+/// A stacking position from an optional integer parameter.
+fn position(params: &OperatorParameters, name: &str) -> Result<Option<usize>, String> {
+    params
+        .as_int(name)
+        .map(|at| usize::try_from(at).map_err(|_| format!("{name} is 0 or more, not {at}")))
+        .transpose()
 }
 
 /// A sheet by index or source path.
@@ -608,7 +648,7 @@ pub fn tileset_terrain_merge(
                 let (from, into) = (terrain(tileset, &from)?, terrain(tileset, &into)?);
                 setup
                     .merge_terrains(from, into)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| setup.explain(e))?;
                 Ok(format!("terrain {from} merged into terrain {into}"))
             })
         },
@@ -656,19 +696,23 @@ pub fn tileset_terrain_set_collision(
     id = "tileset.terrain_set.add",
     writes_disk = true,
     label = "Add Terrain Set",
-    description = "Add the transition set of an inner terrain over an outer one.",
+    description = "Add an empty terrain set with a match mode; terrains join it with \
+                   tileset.terrain_set.add_terrain.",
     allows_undo = false,
     params(
         path(
             String,
             doc = "Tileset file under the project's assets; defaults to the open tileset."
         ),
-        inner(String, doc = "Inner terrain id or name."),
-        outer(String, doc = "Outer terrain id or name, or empty."),
         mode(
             String,
             default = "corners_and_sides",
             doc = "corners, sides or corners_and_sides."
+        ),
+        name(
+            String,
+            doc = "Name of the new set; unique, not a number. Defaults to the next free \
+                   `Terrain set n`."
         ),
     )
 )]
@@ -676,30 +720,21 @@ pub fn tileset_terrain_set_add(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let (inner, outer, mode) = (
-        text(&params, "inner"),
-        text(&params, "outer"),
-        text(&params, "mode"),
-    );
+    let (mode, name) = (text(&params, "mode"), text(&params, "name"));
     queue_edit(
         &mut commands,
         "tileset.terrain_set.add",
         text(&params, "path"),
         move |_, tileset| {
-            with_setup(tileset, |tileset, setup| {
-                let (inner, outer) = (
-                    terrain(tileset, &inner)?,
-                    terrain_or_empty(tileset, &outer)?,
-                );
+            with_setup(tileset, |_, setup| {
                 let mode = if mode.is_empty() {
                     MatchMode::CornersAndSides
                 } else {
                     match_mode(&mode)?
                 };
-                setup
-                    .add_set(inner, outer, mode)
-                    .map_err(|e| e.to_string())?;
-                Ok(format!("terrain set {inner} over {outer} added"))
+                let name = set_name_allowed(&name)?;
+                let set = setup.add_set(&name, mode).map_err(|e| setup.explain(e))?;
+                Ok(format!("terrain set {set} {} added", set_label(setup, set)))
             })
         },
     )
@@ -717,42 +752,23 @@ pub fn tileset_terrain_set_add(
             String,
             doc = "Tileset file under the project's assets; defaults to the open tileset."
         ),
-        index(i64, doc = "Index of the set in the tileset's list."),
-        inner(String, doc = "Inner terrain id or name, when no index is given."),
-        outer(String, doc = "Outer terrain id or name, or empty."),
+        set(String, doc = "Index or name of the set."),
     )
 )]
 pub fn tileset_terrain_set_remove(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let (index, inner, outer) = (
-        params.as_int("index"),
-        text(&params, "inner"),
-        text(&params, "outer"),
-    );
+    let set = text(&params, "set");
     queue_edit(
         &mut commands,
         "tileset.terrain_set.remove",
         text(&params, "path"),
         move |_, tileset| {
-            let (inner, outer) = match index {
-                Some(index) => usize::try_from(index)
-                    .ok()
-                    .and_then(|i| tileset.terrain_sets.get(i))
-                    .map(|s| (s.inner, s.outer))
-                    .ok_or_else(|| format!("no terrain set at {index}"))?,
-                None if inner.is_empty() => {
-                    return Err("name a terrain set by index or inner and outer".to_string());
-                }
-                None => (
-                    terrain(tileset, &inner)?,
-                    terrain_or_empty(tileset, &outer)?,
-                ),
-            };
-            with_setup(tileset, |_, setup| {
-                setup.remove_set(inner, outer).map_err(|e| e.to_string())?;
-                Ok(format!("terrain set {inner} over {outer} removed"))
+            with_setup(tileset, |tileset, setup| {
+                let index = terrain_set(tileset, &set)?;
+                let removed = setup.remove_set(index).map_err(|e| setup.explain(e))?;
+                Ok(format!("terrain set \"{}\" removed", removed.name))
             })
         },
     )
@@ -770,8 +786,7 @@ pub fn tileset_terrain_set_remove(
             String,
             doc = "Tileset file under the project's assets; defaults to the open tileset."
         ),
-        inner(String, doc = "Inner terrain id or name."),
-        outer(String, doc = "Outer terrain id or name, or empty."),
+        set(String, doc = "Index or name of the set."),
         mode(String, doc = "corners, sides or corners_and_sides."),
     )
 )]
@@ -779,25 +794,198 @@ pub fn tileset_terrain_set_set(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let (inner, outer, mode) = (
-        text(&params, "inner"),
-        text(&params, "outer"),
-        text(&params, "mode"),
-    );
+    let (set, mode) = (text(&params, "set"), text(&params, "mode"));
     queue_edit(
         &mut commands,
         "tileset.terrain_set.set",
         text(&params, "path"),
         move |_, tileset| {
             with_setup(tileset, |tileset, setup| {
-                let (inner, outer) = (
-                    terrain(tileset, &inner)?,
-                    terrain_or_empty(tileset, &outer)?,
-                );
+                let index = terrain_set(tileset, &set)?;
                 setup
-                    .set_match_mode(inner, outer, match_mode(&mode)?)
-                    .map_err(|e| e.to_string())?;
-                Ok(format!("terrain set {inner} over {outer} matches {mode}"))
+                    .set_match_mode(index, match_mode(&mode)?)
+                    .map_err(|e| setup.explain(e))?;
+                Ok(format!(
+                    "terrain set {} matches {mode}",
+                    set_label(setup, index)
+                ))
+            })
+        },
+    )
+}
+
+/// Rename a terrain set.
+#[operator(
+    id = "tileset.terrain_set.rename",
+    writes_disk = true,
+    label = "Rename Terrain Set",
+    description = "Rename a terrain set; names are unique.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Tileset file under the project's assets; defaults to the open tileset."
+        ),
+        set(String, doc = "Index or name of the set."),
+        name(String, doc = "New name; unique, not a number, not empty."),
+    )
+)]
+pub fn tileset_terrain_set_rename(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (set, name) = (text(&params, "set"), text(&params, "name"));
+    queue_edit(
+        &mut commands,
+        "tileset.terrain_set.rename",
+        text(&params, "path"),
+        move |_, tileset| {
+            with_setup(tileset, |tileset, setup| {
+                let index = terrain_set(tileset, &set)?;
+                let name = set_name_allowed(&name)?;
+                if name.is_empty() {
+                    return Err("a terrain set needs a name".to_string());
+                }
+                setup
+                    .rename_set(index, &name)
+                    .map_err(|e| setup.explain(e))?;
+                Ok(format!("terrain set {index} is now \"{name}\""))
+            })
+        },
+    )
+}
+
+/// Put a terrain in a terrain set.
+#[operator(
+    id = "tileset.terrain_set.add_terrain",
+    writes_disk = true,
+    label = "Add Terrain to Set",
+    description = "Put a terrain that belongs to no terrain set in one, at a stacking \
+                   position; terrains higher in a set sit on top where they meet.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Tileset file under the project's assets; defaults to the open tileset."
+        ),
+        set(String, doc = "Index or name of the set."),
+        terrain(String, doc = "Terrain id or name."),
+        at(
+            i64,
+            doc = "Stacking position, 0 at the bottom; on top when not given."
+        ),
+    )
+)]
+pub fn tileset_terrain_set_add_terrain(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (set, name) = (text(&params, "set"), text(&params, "terrain"));
+    let at = position(&params, "at");
+    queue_edit(
+        &mut commands,
+        "tileset.terrain_set.add_terrain",
+        text(&params, "path"),
+        move |_, tileset| {
+            with_setup(tileset, |tileset, setup| {
+                let (index, id) = (terrain_set(tileset, &set)?, terrain(tileset, &name)?);
+                setup
+                    .add_set_terrain(index, id, at?)
+                    .map_err(|e| setup.explain(e))?;
+                Ok(format!(
+                    "terrain {id} joined terrain set {}",
+                    set_label(setup, index)
+                ))
+            })
+        },
+    )
+}
+
+/// Take a terrain out of its terrain set.
+#[operator(
+    id = "tileset.terrain_set.remove_terrain",
+    writes_disk = true,
+    label = "Remove Terrain from Set",
+    description = "Take a terrain out of a terrain set; the terrain and its tile bits stay.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Tileset file under the project's assets; defaults to the open tileset."
+        ),
+        set(String, doc = "Index or name of the set."),
+        terrain(String, doc = "Terrain id or name."),
+    )
+)]
+pub fn tileset_terrain_set_remove_terrain(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (set, name) = (text(&params, "set"), text(&params, "terrain"));
+    queue_edit(
+        &mut commands,
+        "tileset.terrain_set.remove_terrain",
+        text(&params, "path"),
+        move |_, tileset| {
+            with_setup(tileset, |tileset, setup| {
+                let (index, id) = (terrain_set(tileset, &set)?, terrain(tileset, &name)?);
+                setup
+                    .remove_set_terrain(index, id)
+                    .map_err(|e| setup.explain(e))?;
+                Ok(format!(
+                    "terrain {id} left terrain set {}",
+                    set_label(setup, index)
+                ))
+            })
+        },
+    )
+}
+
+/// Move a terrain up or down its terrain set.
+#[operator(
+    id = "tileset.terrain_set.move_terrain",
+    writes_disk = true,
+    label = "Move Terrain in Set",
+    description = "Move a terrain to another stacking position in its terrain set; terrains \
+                   higher in a set sit on top where they meet.",
+    allows_undo = false,
+    params(
+        path(
+            String,
+            doc = "Tileset file under the project's assets; defaults to the open tileset."
+        ),
+        set(String, doc = "Index or name of the set."),
+        terrain(String, doc = "Terrain id or name."),
+        to(
+            i64,
+            doc = "Stacking position, 0 at the bottom; past the top moves it to the top."
+        ),
+    )
+)]
+pub fn tileset_terrain_set_move_terrain(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let (set, name) = (text(&params, "set"), text(&params, "terrain"));
+    let to = position(&params, "to");
+    queue_edit(
+        &mut commands,
+        "tileset.terrain_set.move_terrain",
+        text(&params, "path"),
+        move |_, tileset| {
+            with_setup(tileset, |tileset, setup| {
+                let (index, id) = (terrain_set(tileset, &set)?, terrain(tileset, &name)?);
+                let to = to?.ok_or("name the position with to")?;
+                setup
+                    .move_set_terrain(index, id, to)
+                    .map_err(|e| setup.explain(e))?;
+                let at = (setup.sets.get(index))
+                    .and_then(|s| s.terrains.iter().position(|t| *t == id))
+                    .unwrap_or(to);
+                Ok(format!(
+                    "terrain {id} is at {at} in terrain set {}",
+                    set_label(setup, index)
+                ))
             })
         },
     )
@@ -930,6 +1118,18 @@ fn next_hue(tileset: &Tileset) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_set_name_is_trimmed_before_it_is_checked() {
+        assert!(set_name_allowed(" 1").is_err(), "a number once trimmed");
+        assert_eq!(
+            set_name_allowed("  "),
+            Ok(String::new()),
+            "the default name"
+        );
+        assert_eq!(set_name_allowed(" Paths "), Ok("Paths".to_string()));
+        assert!(set_name_allowed("a\"b").is_err());
+    }
 
     #[test]
     fn legend_keywords_cannot_name_a_terrain() {

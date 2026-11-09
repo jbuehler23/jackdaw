@@ -583,15 +583,16 @@ fn a_direct_terrain_edit_resolves_a_bounded_region_and_writes_one_chunk() {
     assert_eq!(data.layers[0].tiles, fresh, "the edit left no stale tile");
 }
 
-/// The inner and outer terrain of the overworld's first corners set.
+/// The two terrains, upper first, of the overworld's first corners set of
+/// two.
 pub(crate) fn corner_pair(app: &App) -> (TerrainId, TerrainId) {
     let tileset = (app.world().resource::<Assets<Tileset>>().iter())
         .next()
         .map(|(_, t)| t.clone())
         .expect("the tileset");
-    (tileset.terrain_sets.iter())
-        .find(|set| set.mode == TerrainMatch::Corners)
-        .map(|set| (set.inner, set.outer))
+    (tileset.sets().iter())
+        .find(|set| set.mode == TerrainMatch::Corners && set.terrains.len() == 2)
+        .map(|set| (set.terrains[1], set.terrains[0]))
         .expect("a corners set")
 }
 

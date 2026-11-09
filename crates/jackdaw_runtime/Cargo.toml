@@ -88,13 +88,15 @@ soft_shadows = ["render", "bevy/experimental_pbr_pcss"]
 # protocol and ipc-channel stay out of the standalone runtime build.
 # Frame capture renders the active camera rig offscreen and reads it
 # back, which needs bevy's gpu readback (bevy_render) and Image
-# (bevy_image) even when the `render` feature is off.
+# (bevy_image) even when the `render` feature is off. Play's mute needs
+# bevy_audio.
 pie = [
     "dep:jackdaw_pie_protocol",
     "jackdaw_pie_protocol/ipc",
     "dep:jackdaw_camera_rig",
     "bevy/bevy_render",
     "bevy/bevy_image",
+    "bevy/bevy_audio",
 ]
 # Draw the terrain a scene authored. Each `Terrain` entity's sidecar is read
 # from beside the scene file, its material slots resolve against the project

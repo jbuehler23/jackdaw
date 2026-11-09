@@ -1799,12 +1799,17 @@ struct PasteEntitiesCommand {
     remapped_text: String,
     /// Where the paste landed, so a redo puts it back in the same place.
     target: PasteTarget,
+    /// Asset entries the paste added to the document, which an undo takes out.
+    joined_assets: Vec<String>,
     label: String,
 }
 
 impl crate::commands::EditorCommand for PasteEntitiesCommand {
     /// Only a redo reaches this: `push_executed` does not run what it is given.
     fn execute(&mut self, world: &mut World) {
+        if let Ok(mut parsed) = jackdaw_bsn::parse_bsn_text(&self.remapped_text) {
+            self.joined_assets = jackdaw_bsn::adopt_asset_roots(world, &mut parsed).joined;
+        }
         let spawned = spawn_bsn_clipboard(world, &self.remapped_text, self.target);
         select_entities(world, &spawned);
         info!("Redo: re-pasted {} entities", spawned.len());
@@ -1828,10 +1833,35 @@ impl crate::commands::EditorCommand for PasteEntitiesCommand {
         for e in to_despawn {
             crate::commands::despawn_scene_entity(world, e);
         }
+        remove_asset_roots(world, &self.joined_assets);
     }
 
     fn description(&self) -> &str {
         &self.label
+    }
+}
+
+/// Take the asset entries named `names` out of the live document's roots.
+fn remove_asset_roots(world: &mut World, names: &[String]) {
+    let mut live = world.resource_mut::<jackdaw_bsn::SceneBsnAst>();
+    for name in names {
+        let Some(root) = live
+            .roots
+            .iter()
+            .copied()
+            .find(|&root| live.get_name(root) == Some(name.as_str()))
+        else {
+            continue;
+        };
+        live.remove_from_roots(root);
+        let patches = live
+            .get_patches(root)
+            .map(|patches| patches.0.clone())
+            .unwrap_or_default();
+        for patch in patches {
+            live.world.despawn(patch);
+        }
+        live.world.despawn(root);
     }
 }
 
@@ -2161,9 +2191,12 @@ fn paste_clipboard_entities(world: &mut World, text: &str, target: PasteTarget) 
     }
 
     // Assets travel with the subtree, so a pasted image node finds its image.
-    let dropped = jackdaw_bsn::adopt_asset_roots(world, &parsed);
-    if !dropped.is_empty() {
-        crate::status_bar::notify_warn(world, format!("pasted without {}", dropped.join(", ")));
+    let adopted = jackdaw_bsn::adopt_asset_roots(world, &mut parsed);
+    if !adopted.dropped.is_empty() {
+        crate::status_bar::notify_warn(
+            world,
+            format!("pasted without {}", adopted.dropped.join(", ")),
+        );
     }
 
     // Fresh ids and names before the graft, so the paste is a second thing in
@@ -2184,6 +2217,7 @@ fn paste_clipboard_entities(world: &mut World, text: &str, target: PasteTarget) 
         spawned_node_ids,
         remapped_text,
         target,
+        joined_assets: adopted.joined,
         label: "Paste entities".to_string(),
     };
     world

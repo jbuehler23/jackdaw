@@ -14,8 +14,8 @@
 //! build, keyed by the project root: several instances wait on one build
 //! and spawn together when it finishes.
 
-use std::collections::{HashMap, VecDeque};
-use std::io::{self, BufRead, BufReader};
+use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +36,7 @@ use jackdaw_pie_protocol::{
 
 use crate::core_extension::CoreExtensionInputContext;
 use crate::ext_build::BuildProgress;
+use crate::game_output::{GameOutput, OutputCapture, plain_line};
 use crate::pie_outbox::{GameOutbox, NodeEdit, OutboxSlot};
 use crate::play_scene::LaunchScene;
 use crate::project_build::BuildLoad;
@@ -43,13 +44,12 @@ use crate::project_build::shim::ShimSpec;
 use crate::run_config::RunConfigs;
 use crate::worker_task::{WorkerOutcome, WorkerTask};
 
-/// How many trailing stderr lines to keep from a game process, so a
-/// crash can be reported without buffering unbounded output.
-const STDERR_TAIL_LINES: usize = 40;
-
 /// How long to wait for a launched child to connect back before giving
 /// up on it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The editor's remote control port variable, kept out of a launched game.
+const EDITOR_REMOTE_PORT_ENV: &str = "JACKDAW_REMOTE_PORT";
 
 /// Identifies one running instance: a config label plus its 1-based
 /// instance number.
@@ -65,72 +65,11 @@ impl std::fmt::Display for InstanceKey {
     }
 }
 
-/// Rolling buffer of a child's most recent stderr lines, filled by the
-/// per-child reader thread and read back when reporting a crash.
-#[derive(Default)]
-struct StderrTail {
-    lines: Arc<Mutex<VecDeque<String>>>,
-    reader: Option<std::thread::JoinHandle<()>>,
-}
-
-/// How long a reaped child's stderr reader may take to reach the end of the
-/// pipe. A grandchild holding the pipe open would otherwise block it forever.
-const STDERR_DRAIN: Duration = Duration::from_millis(250);
-
-impl StderrTail {
-    /// Wait a moment for the reader to take the lines an exited child wrote
-    /// last, then return the buffered lines.
-    fn drain(mut self) -> Vec<String> {
-        if let Some(reader) = self.reader.take() {
-            let until = Instant::now() + STDERR_DRAIN;
-            while !reader.is_finished() && Instant::now() < until {
-                std::thread::sleep(Duration::from_millis(2));
-            }
-        }
-        self.lines
-            .lock()
-            .map(|buf| buf.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-}
-
 /// How many stderr lines a [`GameExit`] shows.
 const EXIT_STDERR_LINES: usize = 8;
 
 /// How many characters of one stderr line a [`GameExit`] keeps.
 const EXIT_STDERR_LINE_CHARS: usize = 200;
-
-/// `line` without terminal escape sequences, cut to [`EXIT_STDERR_LINE_CHARS`].
-fn plain_stderr_line(line: &str) -> String {
-    let mut out = String::with_capacity(line.len().min(EXIT_STDERR_LINE_CHARS));
-    let mut chars = line.chars().peekable();
-    let mut kept = 0;
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            } else {
-                chars.next();
-            }
-            continue;
-        }
-        if c.is_control() {
-            continue;
-        }
-        if kept == EXIT_STDERR_LINE_CHARS {
-            out.push_str("...");
-            break;
-        }
-        out.push(c);
-        kept += 1;
-    }
-    out
-}
 
 /// Why a game went away without being stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,16 +94,14 @@ pub struct GameExit {
 }
 
 impl GameExit {
-    fn new(key: InstanceKey, reason: GameExitReason, stderr: StderrTail) -> Self {
-        let lines = stderr.drain();
-        report_stderr_lines(&lines);
-        let skip = lines.len().saturating_sub(EXIT_STDERR_LINES);
+    fn new(key: InstanceKey, reason: GameExitReason, output: OutputCapture) -> Self {
+        let lines = output.finish(EXIT_STDERR_LINES);
         Self {
             key,
             reason,
-            stderr: lines[skip..]
+            stderr: lines
                 .iter()
-                .map(|line| plain_stderr_line(line))
+                .map(|line| plain_line(line, EXIT_STDERR_LINE_CHARS))
                 .collect(),
         }
     }
@@ -223,7 +160,7 @@ enum ChildStage {
     Connecting {
         child: Child,
         accept: Task<io::Result<IpcChannelTransport>>,
-        stderr_tail: StderrTail,
+        output: OutputCapture,
         since: Instant,
     },
     /// The child is connected and running. Messages to it go through `outbox`;
@@ -232,7 +169,7 @@ enum ChildStage {
         child: Child,
         transport: IpcChannelTransport,
         outbox: GameOutbox,
-        stderr_tail: StderrTail,
+        output: OutputCapture,
     },
 }
 
@@ -512,6 +449,7 @@ impl Plugin for PiePlugin {
             .init_resource::<PieInstances>()
             .init_resource::<PlayStatus>()
             .init_resource::<LastGameExit>()
+            .init_resource::<GameOutput>()
             .init_resource::<crate::live_frame::LiveFrameStream>()
             .init_resource::<crate::live_highlight::LastHighlight>()
             .init_resource::<PieWindowMode>()
@@ -573,7 +511,9 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
         .register_operator::<ProjectToggleAutoBuildOp>()
         .register_operator::<ProjectTogglePrebuildOp>()
         .register_operator::<PieWindowModeToggleOp>()
+        .register_operator::<PiePopOutOp>()
         .register_operator::<PieNextInstanceOp>()
+        .register_operator::<PieFocusInstanceOp>()
         .register_operator::<crate::live_input::PiePlayInputToggleOp>();
 
     ctx.bind_operator::<CoreExtensionInputContext, PiePlayOp>([PresetInput::key("F5")]);
@@ -999,13 +939,14 @@ impl PieSession {
         transport: IpcChannelTransport,
     ) {
         let outbox = GameOutbox::new(&transport).expect("a writer thread");
+        let output = OutputCapture::detached(&key);
         self.children.insert(
             key,
             ChildStage::Live {
                 child,
                 transport,
                 outbox,
-                stderr_tail: StderrTail::default(),
+                output,
             },
         );
     }
@@ -1014,12 +955,13 @@ impl PieSession {
     pub(crate) fn insert_test_connecting(&mut self, key: InstanceKey, child: Child) {
         let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
             .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
+        let output = OutputCapture::detached(&key);
         self.children.insert(
             key,
             ChildStage::Connecting {
                 child,
                 accept,
-                stderr_tail: StderrTail::default(),
+                output,
                 since: Instant::now(),
             },
         );
@@ -1061,7 +1003,9 @@ pub fn connect_test_game(
     transport: IpcChannelTransport,
 ) -> io::Result<()> {
     let outbox = GameOutbox::new(&transport)?;
-    let stderr_tail = tail_stderr(&mut child);
+    let output = world
+        .get_resource_or_init::<GameOutput>()
+        .capture(&key, &mut child);
     if !world.contains_non_send::<PieSession>() {
         world.insert_non_send(PieSession::default());
     }
@@ -1071,9 +1015,18 @@ pub fn connect_test_game(
             child,
             transport,
             outbox,
-            stderr_tail,
+            output,
         },
     );
+    let mode = world
+        .get_resource::<PieWindowMode>()
+        .copied()
+        .unwrap_or_default();
+    world
+        .non_send_mut::<PieSession>()
+        .launch_modes
+        .insert(key.clone(), mode);
+    greet_connected(world, &key);
     world.get_resource_or_init::<PieInstances>().focused = Some(key);
     Ok(())
 }
@@ -1087,13 +1040,15 @@ pub fn connecting_test_game(world: &mut World, key: InstanceKey, mut child: Chil
     }
     let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
         .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
-    let stderr_tail = tail_stderr(&mut child);
+    let output = world
+        .get_resource_or_init::<GameOutput>()
+        .capture(&key, &mut child);
     world.non_send_mut::<PieSession>().children.insert(
         key,
         ChildStage::Connecting {
             child,
             accept,
-            stderr_tail,
+            output,
             since: Instant::now(),
         },
     );
@@ -1188,6 +1143,16 @@ fn wants_windowless_env(mode: PieWindowMode) -> bool {
     mode == PieWindowMode::Embedded
 }
 
+impl PieWindowMode {
+    pub(crate) fn from_separate(separate: bool) -> Self {
+        if separate {
+            Self::Windowed
+        } else {
+            Self::Embedded
+        }
+    }
+}
+
 fn toggle_window_mode(mode: &mut PieWindowMode) {
     *mode = match *mode {
         PieWindowMode::Embedded => PieWindowMode::Windowed,
@@ -1195,19 +1160,170 @@ fn toggle_window_mode(mode: &mut PieWindowMode) {
     };
 }
 
+/// Flip the window setting and keep it with the developer's Play settings.
+fn toggle_and_store_window_mode(world: &mut World) -> PieWindowMode {
+    let mode = {
+        let mut mode = world.get_resource_or_init::<PieWindowMode>();
+        toggle_window_mode(&mut mode);
+        *mode
+    };
+    if let Some(mut settings) = world.get_resource_mut::<crate::play_settings::PlaySettings>() {
+        settings.separate_window = mode == PieWindowMode::Windowed;
+    }
+    crate::play_settings::store(world);
+    mode
+}
+
 /// Switch the next launch between an embedded game (streamed into the Game
 /// panel) and a separate game window.
 #[operator(
     id = "pie.window_mode_toggle",
+    writes_disk = true,
     label = "Play in Separate Window",
     description = "Launch the game in its own window instead of the Game panel. Applies to the next launch."
 )]
 pub(crate) fn pie_window_mode_toggle(
     _: In<OperatorParameters>,
-    mut mode: ResMut<PieWindowMode>,
+    mut commands: Commands,
 ) -> OperatorResult {
-    toggle_window_mode(&mut mode);
+    commands.queue(|world: &mut World| {
+        toggle_and_store_window_mode(world);
+    });
     OperatorResult::Finished
+}
+
+/// Move the game between the Game panel and a separate window. A running game
+/// is relaunched in the new place.
+#[operator(
+    id = "pie.pop_out",
+    writes_disk = true,
+    label = "Pop Out Game",
+    description = "Play in a separate window (for real performance numbers), or back in the Game panel. A running game relaunches there."
+)]
+pub(crate) fn pie_pop_out(_: In<OperatorParameters>, mut commands: Commands) -> OperatorResult {
+    commands.queue(|world: &mut World| {
+        let mut target = world
+            .get_resource::<PieWindowMode>()
+            .copied()
+            .unwrap_or_default();
+        toggle_window_mode(&mut target);
+        let plan = match plan_relaunch(world, target) {
+            Ok(plan) => plan,
+            Err(reason) => {
+                crate::status_bar::notify_warn(world, reason);
+                return;
+            }
+        };
+        toggle_and_store_window_mode(world);
+        if let Some(plan) = plan {
+            relaunch(world, target, plan);
+        }
+    });
+    OperatorResult::Finished
+}
+
+/// The running instances to relaunch in another window mode, and the built game
+/// to relaunch them from.
+pub(crate) struct RelaunchPlan {
+    moving: Vec<(InstanceKey, RunConfig)>,
+    binary: PathBuf,
+}
+
+/// What moving the running instances to `mode` needs: `None` when none run in
+/// the other mode, or why they cannot move now.
+fn plan_relaunch(world: &World, mode: PieWindowMode) -> Result<Option<RelaunchPlan>, String> {
+    let Some(session) = world.get_non_send::<PieSession>() else {
+        return Ok(None);
+    };
+    let mut keys: Vec<InstanceKey> = session
+        .children
+        .keys()
+        .filter(|key| {
+            session
+                .launch_mode(key)
+                .is_some_and(|launched| launched != mode)
+        })
+        .cloned()
+        .collect();
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    keys.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
+    let binary = project_root(world).and_then(|root| match session.builds.get(&root) {
+        Some(BuildState::Done(binary)) => Some(binary.clone()),
+        _ => None,
+    });
+    let Some(binary) = binary else {
+        return Err(
+            "The game cannot move while it is being built. Try again once the build is done."
+                .to_string(),
+        );
+    };
+    let Some(manifest) = world
+        .get_resource::<RunConfigs>()
+        .map(|configs| &configs.manifest)
+    else {
+        return Err("The game cannot move: the run configurations are not loaded.".to_string());
+    };
+    let mut moving = Vec::with_capacity(keys.len());
+    for key in keys {
+        let Some(run) = manifest.run_by_name(&key.config).cloned() else {
+            return Err(format!(
+                "The game cannot move: no run configuration is named '{}'.",
+                key.config
+            ));
+        };
+        moving.push((key, run));
+    }
+    Ok(Some(RelaunchPlan { moving, binary }))
+}
+
+/// Relaunch the planned instances in `mode` from the game already built, each
+/// with the scene it launched with. The new process starts before the old one
+/// ends, so a failed start leaves the old one running. Play carries on through
+/// the move, so it counts as no stop and its edits stay. The focused game
+/// coming into the Game panel takes input on its first frame, as a launch does.
+fn relaunch(world: &mut World, mode: PieWindowMode, plan: RelaunchPlan) {
+    let focused = world
+        .get_resource::<PieInstances>()
+        .and_then(|instances| instances.focused.clone());
+    let mut failed = Vec::new();
+    let mut focus_moved = false;
+    for (key, run) in plan.moving {
+        let Some((stage, launched)) = spawn_instance(world, &key, &run, &plan.binary) else {
+            failed.push(key.to_string());
+            continue;
+        };
+        let scene = world
+            .non_send::<PieSession>()
+            .launch_scenes
+            .get(&key)
+            .cloned();
+        retire_instance(world, &key);
+        focus_moved |= focused.as_ref() == Some(&key);
+        {
+            let mut session = world.non_send_mut::<PieSession>();
+            session.launch_modes.insert(key.clone(), launched);
+            session.note_launch_scene(&key, scene);
+            session.children.insert(key, stage);
+        }
+        crate::viewport_redraw::note_game_started(world);
+    }
+    if focus_moved {
+        crate::live_frame::clear_stream(world);
+        if mode == PieWindowMode::Embedded {
+            crate::live_input::arm_first_frame_capture(world);
+        }
+    }
+    if !failed.is_empty() {
+        crate::status_bar::notify_error(
+            world,
+            format!(
+                "Could not relaunch {} in the new place; it keeps running where it was.",
+                failed.join(", ")
+            ),
+        );
+    }
 }
 
 /// Stop every running instance, drop the cached build path so the next
@@ -1234,6 +1350,7 @@ pub fn handle_restart(world: &mut World) {
     };
 
     handle_stop(world);
+    crate::live_input::arm_first_frame_capture(world);
 
     for key in keys {
         let Some(run) = run_configs.run_by_name(&key.config).cloned() else {
@@ -1287,13 +1404,7 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
     if let Some(BuildState::Done(path)) = world.non_send::<PieSession>().builds.get(&root) {
         if source_is_current(&root, path) {
             let path = path.clone();
-            if let Some((stage, mode)) = spawn_instance(world, &key, &run, &path) {
-                let mut session = world.non_send_mut::<PieSession>();
-                session.launch_modes.insert(key.clone(), mode);
-                session.note_launch_scene(&key, scene);
-                session.children.insert(key, stage);
-                crate::viewport_redraw::note_game_started(world);
-            }
+            spawn_from_binary(world, key, &run, scene, &path);
             return;
         }
         info!("PIE: project source changed; rebuilding before Play");
@@ -1324,6 +1435,24 @@ pub(crate) fn launch_instance(world: &mut World, key: InstanceKey, run: RunConfi
             progress,
         },
     );
+}
+
+/// Spawn instance `key` from the built game at `binary`, noting how and with
+/// which scene it launched.
+fn spawn_from_binary(
+    world: &mut World,
+    key: InstanceKey,
+    run: &RunConfig,
+    scene: Option<LaunchScene>,
+    binary: &Path,
+) {
+    if let Some((stage, mode)) = spawn_instance(world, &key, run, binary) {
+        let mut session = world.non_send_mut::<PieSession>();
+        session.launch_modes.insert(key.clone(), mode);
+        session.note_launch_scene(&key, scene);
+        session.children.insert(key, stage);
+        crate::viewport_redraw::note_game_started(world);
+    }
 }
 
 /// The scene a game loads as its main one, inside the asset folder: what the
@@ -1514,6 +1643,23 @@ pub(crate) fn spawn_game_build(
 /// Stop one instance: ask a live child to exit, reap it, and drop it.
 /// Returns to authoring mode once no children remain.
 pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
+    if !retire_instance(world, key) {
+        return;
+    }
+    let last_stopped = world.non_send::<PieSession>().children.is_empty();
+    if last_stopped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
+        last.0 = None;
+    }
+    if last_stopped && *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
+        world
+            .resource_mut::<NextState<PlayState>>()
+            .set(PlayState::Stopped);
+    }
+}
+
+/// End instance `key`'s process and forget it, leaving Play's state alone.
+/// Returns whether it was running.
+fn retire_instance(world: &mut World, key: &InstanceKey) -> bool {
     world
         .non_send_mut::<PieSession>()
         .serving
@@ -1525,23 +1671,13 @@ pub(crate) fn stop_instance(world: &mut World, key: &InstanceKey) {
     session.launch_modes.remove(key);
     session.launch_scenes.remove(key);
     let Some(mut stage) = session.children.remove(key) else {
-        return;
+        return false;
     };
     if let ChildStage::Live { outbox, .. } = &stage {
         send_control_to(outbox, ControlEvent::Stop);
     }
     stage.kill_and_reap();
-    drop(stage);
-
-    let last_stopped = world.non_send::<PieSession>().children.is_empty();
-    if last_stopped && let Some(mut last) = world.get_resource_mut::<LastGameExit>() {
-        last.0 = None;
-    }
-    if last_stopped && *world.resource::<State<PlayState>>().get() != PlayState::Stopped {
-        world
-            .resource_mut::<NextState<PlayState>>()
-            .set(PlayState::Stopped);
-    }
+    true
 }
 
 /// Begin play. From Stopped, launches the first run config's instance
@@ -1565,6 +1701,7 @@ pub fn handle_play(world: &mut World) {
                 config: first.label().to_string(),
                 instance: 1,
             };
+            crate::live_input::arm_first_frame_capture(world);
             launch_instance(world, key, first);
         }
         PlayState::Paused => resume(world),
@@ -1844,6 +1981,38 @@ fn several_instances_running(session: NonSend<PieSession>) -> bool {
     session.live_keys().len() > 1
 }
 
+/// Show one running instance in the Game panel.
+#[operator(
+    id = "pie.focus_instance",
+    label = "Show Game Instance",
+    description = "Show this running game instance in the Game panel.",
+    params(
+        config(String, doc = "The run configuration's name."),
+        instance(i64, default = 1, doc = "Which instance of it, counting from 1."),
+    )
+)]
+pub(crate) fn pie_focus_instance(
+    params: In<OperatorParameters>,
+    mut commands: Commands,
+) -> OperatorResult {
+    let Some(config) = params.as_str("config").map(str::to_string) else {
+        return OperatorResult::Cancelled;
+    };
+    let Ok(instance) = u32::try_from(params.as_int("instance").unwrap_or(1)) else {
+        return OperatorResult::Cancelled;
+    };
+    let key = InstanceKey { config, instance };
+    commands.queue(move |world: &mut World| {
+        if world
+            .get_non_send::<PieSession>()
+            .is_some_and(|session| session.live_keys().contains(&key))
+        {
+            set_focused_instance(world, key);
+        }
+    });
+    OperatorResult::Finished
+}
+
 /// Show the next running instance in the Game panel.
 #[operator(
     id = "pie.next_instance",
@@ -1868,9 +2037,12 @@ pub(crate) fn pie_next_instance(
 /// Keep focus on a connected instance: the first to connect takes it, and a
 /// focused instance that has gone hands it on.
 fn reconcile_focus(world: &mut World) {
-    let mut live = world.non_send::<PieSession>().live_keys();
+    let session = world.non_send::<PieSession>();
+    let mut live = session.live_keys();
     let focused = world.resource::<PieInstances>().focused.as_ref();
-    if focused.is_some_and(|key| live.contains(key)) {
+    // A focused instance still connecting, as one relaunched in another
+    // window mode is, keeps the focus until it connects.
+    if focused.is_some_and(|key| session.children.contains_key(key)) {
         return;
     }
     live.sort_by(|a, b| a.config.cmp(&b.config).then(a.instance.cmp(&b.instance)));
@@ -1988,9 +2160,14 @@ fn poll_children(world: &mut World) {
     let mut survivors: HashMap<InstanceKey, ChildStage> = HashMap::with_capacity(children.len());
     let mut failed = None;
     let mut exited = Vec::new();
+    let mut connected = Vec::new();
     for (key, stage) in children {
+        let was_connecting = matches!(stage, ChildStage::Connecting { .. });
         match advance_child(&key, stage, timeout) {
             ChildPoll::Running(next) => {
+                if was_connecting && matches!(next, ChildStage::Live { .. }) {
+                    connected.push(key.clone());
+                }
                 survivors.insert(key, next);
             }
             ChildPoll::Exited => exited.push(key),
@@ -2018,20 +2195,40 @@ fn poll_children(world: &mut World) {
         names.retain_games(|key| survivors.contains_key(key));
     }
     world.non_send_mut::<PieSession>().children = survivors;
+    for key in connected {
+        greet_connected(world, &key);
+    }
+}
+
+/// Tell a game that has just connected what the developer's Play settings ask
+/// of it.
+fn greet_connected(world: &World, key: &InstanceKey) {
+    let muted = world
+        .get_resource::<crate::play_settings::PlaySettings>()
+        .is_some_and(|settings| settings.muted);
+    if muted {
+        send_control_to_instance(world, key, ControlEvent::SetMuted(true));
+    }
+    let paused = world
+        .get_resource::<State<PlayState>>()
+        .is_some_and(|state| *state.get() == PlayState::Paused);
+    if paused {
+        send_control_to_instance(world, key, ControlEvent::Pause);
+    }
 }
 
 /// Step one child's stage by value. A connected `Connecting` becomes `Live`; a
 /// child that failed to connect, took longer than `timeout` to, or has exited
 /// is reaped, with why when it went away uncleanly.
 fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> ChildPoll {
-    let gone = |reason: GameExitReason, stderr_tail: StderrTail| {
-        ChildPoll::Failed(GameExit::new(key.clone(), reason, stderr_tail))
+    let gone = |reason: GameExitReason, output: OutputCapture| {
+        ChildPoll::Failed(GameExit::new(key.clone(), reason, output))
     };
     match stage {
         ChildStage::Connecting {
             mut child,
             mut accept,
-            stderr_tail,
+            output,
             since,
         } => {
             // A child that died before connecting will never accept;
@@ -2041,7 +2238,7 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
                     error!("PIE: {key} exited before connecting with {status}");
                     return gone(
                         GameExitReason::ExitedBeforeConnecting(exit_status_text(status)),
-                        stderr_tail,
+                        output,
                     );
                 }
                 Ok(None) => {}
@@ -2049,7 +2246,7 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
                     error!("PIE: {key} failed to poll while connecting: {err}");
                     child.kill().ok();
                     child.wait().ok();
-                    return gone(GameExitReason::ConnectFailed(err.to_string()), stderr_tail);
+                    return gone(GameExitReason::ConnectFailed(err.to_string()), output);
                 }
             }
             match future::block_on(future::poll_once(&mut accept)) {
@@ -2060,12 +2257,12 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
                     );
                     child.kill().ok();
                     child.wait().ok();
-                    gone(GameExitReason::NeverConnected, stderr_tail)
+                    gone(GameExitReason::NeverConnected, output)
                 }
                 None => ChildPoll::Running(ChildStage::Connecting {
                     child,
                     accept,
-                    stderr_tail,
+                    output,
                     since,
                 }),
                 Some(Ok(transport)) => match GameOutbox::new(&transport) {
@@ -2075,21 +2272,21 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
                             child,
                             transport,
                             outbox,
-                            stderr_tail,
+                            output,
                         })
                     }
                     Err(err) => {
                         error!("PIE: {key} could not start its writer thread: {err}");
                         child.kill().ok();
                         child.wait().ok();
-                        gone(GameExitReason::ConnectFailed(err.to_string()), stderr_tail)
+                        gone(GameExitReason::ConnectFailed(err.to_string()), output)
                     }
                 },
                 Some(Err(err)) => {
                     error!("PIE: {key} failed to connect: {err}");
                     child.kill().ok();
                     child.wait().ok();
-                    gone(GameExitReason::ConnectFailed(err.to_string()), stderr_tail)
+                    gone(GameExitReason::ConnectFailed(err.to_string()), output)
                 }
             }
         }
@@ -2097,13 +2294,13 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
             mut child,
             transport,
             outbox,
-            stderr_tail,
+            output,
         } => match child.try_wait() {
             Ok(None) => ChildPoll::Running(ChildStage::Live {
                 child,
                 transport,
                 outbox,
-                stderr_tail,
+                output,
             }),
             Ok(Some(status)) if status.success() => {
                 info!("PIE: {key} exited");
@@ -2111,10 +2308,7 @@ fn advance_child(key: &InstanceKey, stage: ChildStage, timeout: Duration) -> Chi
             }
             Ok(Some(status)) => {
                 error!("PIE: {key} exited with {status}");
-                gone(
-                    GameExitReason::Crashed(exit_status_text(status)),
-                    stderr_tail,
-                )
+                gone(GameExitReason::Crashed(exit_status_text(status)), output)
             }
             Err(err) => {
                 error!("PIE: {key} failed to poll: {err}");
@@ -2226,10 +2420,12 @@ fn spawn_instance(
     crate::project_build::prepare_game_command(&mut command, binary);
     command
         .current_dir(&cwd)
+        .env_remove(EDITOR_REMOTE_PORT_ENV)
         .envs(&run.env)
         .env("BEVY_ASSET_ROOT", &cwd)
         .env("JACKDAW_PIE", &server_name)
         .args(&run.args)
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     if let Some(settings) = world.get_resource::<crate::play_settings::PlaySettings>() {
@@ -2292,7 +2488,11 @@ fn spawn_instance(
     #[cfg(target_os = "windows")]
     pie_windows::PIE_JOB.assign_to_process(&child);
 
-    let stderr_tail = tail_stderr(&mut child);
+    let output = world
+        .get_resource::<GameOutput>()
+        .cloned()
+        .unwrap_or_default()
+        .capture(key, &mut child);
     let accept = AsyncComputeTaskPool::get().spawn(async move { handle.accept() });
 
     info!("PIE: {key} launched, awaiting connection");
@@ -2300,38 +2500,11 @@ fn spawn_instance(
         ChildStage::Connecting {
             child,
             accept,
-            stderr_tail,
+            output,
             since: Instant::now(),
         },
         mode,
     ))
-}
-
-/// Keep the last lines of a child's piped stderr, read on a thread of its own.
-fn tail_stderr(child: &mut Child) -> StderrTail {
-    let lines = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
-    let reader = child.stderr.take().map(|stderr| {
-        let tail = Arc::clone(&lines);
-        std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Ok(mut buf) = tail.lock() {
-                    if buf.len() == STDERR_TAIL_LINES {
-                        buf.pop_front();
-                    }
-                    buf.push_back(line);
-                }
-            }
-        })
-    });
-    StderrTail { lines, reader }
-}
-
-/// Log a reaped game's stderr tail as an error, for diagnosing a crashed or
-/// unconnectable game.
-fn report_stderr_lines(lines: &[String]) {
-    if !lines.is_empty() {
-        error!("PIE: game stderr tail:\n{}", lines.join("\n"));
-    }
 }
 
 /// Drain `StateEvent`s from every live child and show the newest frame of the
@@ -3551,11 +3724,11 @@ mod game_exit_tests {
     fn connecting(mut child: Child, since: Instant) -> ChildStage {
         let accept = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new)
             .spawn(std::future::pending::<io::Result<IpcChannelTransport>>());
-        let stderr_tail = tail_stderr(&mut child);
+        let output = GameOutput::default().capture(&key(), &mut child);
         ChildStage::Connecting {
             child,
             accept,
-            stderr_tail,
+            output,
             since,
         }
     }
@@ -3606,18 +3779,6 @@ mod game_exit_tests {
         );
         assert_eq!(exit.stderr.len(), EXIT_STDERR_LINES);
         assert_eq!(exit.stderr.first().map(String::as_str), Some("line 3"));
-    }
-
-    #[test]
-    fn stderr_lines_lose_escape_sequences_and_are_cut_short() {
-        assert_eq!(
-            plain_stderr_line("\u{1b}[1m\u{1b}[31merror\u{1b}[0m: boom"),
-            "error: boom"
-        );
-        let long = "x".repeat(500);
-        let cut = plain_stderr_line(&long);
-        assert_eq!(cut.len(), EXIT_STDERR_LINE_CHARS + 3);
-        assert!(cut.ends_with("..."));
     }
 
     fn crash_of(instance: u32) -> GameExit {

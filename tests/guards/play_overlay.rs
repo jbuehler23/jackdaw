@@ -672,6 +672,80 @@ fn a_scene_loaded_from_its_file_gets_the_unsaved_prefab_too() {
     assert_eq!(door_x(&mut game), 4.0);
 }
 
+/// A prefab drawing the glTF at `model`.
+fn tree(model: &str) -> String {
+    format!(
+        "jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         #Tree\n\
+         bevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n    \
+         #Tree\n    \
+         bevy_transform::components::transform::Transform\n    \
+         jackdaw_scene_types::types::GltfSource {{ path: \"{model}\", scene_index: 0 }}\n    \
+         jackdaw::prefab::components::PrefabEntityId(1)\n\
+         ]\n"
+    )
+}
+
+/// A prefab only a terrain's scatter names, with no instance of it anywhere.
+#[test]
+fn an_unsaved_prefab_a_terrain_scatters_reaches_the_game() {
+    let scene = roots(&[format!(
+        "#Field\njackdaw_scene_types::types::Terrain {{ data_path: \"{TERRAIN_FILE}\" }}\n"
+    )]);
+    let (mut app, tmp) = editor(&[
+        ("kit/tree.bsn", &tree("kit/Saved.gltf")),
+        ("zone.bsn", &scene),
+    ]);
+    let mut data = terrain_data(1.0);
+    data.scatter = jackdaw_terrain::placement::ScatterPalette {
+        assets: vec![jackdaw_terrain::placement::ScatterPaletteEntry::new(
+            "kit/tree.bsn",
+        )],
+        groups: vec!["tree".to_string()],
+    };
+    write_in(
+        &tmp.path().join("assets"),
+        TERRAIN_FILE,
+        &sidecar::save(&data).expect("encodes"),
+    );
+    open(&mut app, "assets/zone.bsn");
+    let saved = asset_file(&tmp, "kit/tree.bsn");
+    set_cached_prefab(&mut app, &tmp, "kit/tree.bsn", &tree("kit/Unsaved.gltf"));
+
+    let served = serve(&mut app, "zone.bsn");
+    let files = prefab_files(&served);
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].0, "kit/tree.bsn");
+    assert!(
+        files[0]
+            .1
+            .as_deref()
+            .is_some_and(|text| text.contains("kit/Unsaved.gltf")),
+        "{files:?}"
+    );
+
+    let mut game = empty_game(&tmp);
+    game.update();
+    take(&mut game, served);
+    let drawn = |game: &mut App| {
+        game.world()
+            .resource::<jackdaw_terrain::render::ScatterPrefabs>()
+            .get("kit/tree.bsn")
+            .map(|prefab| prefab.model.clone())
+    };
+    update_until(&mut game, "the scatter prefab resolved", |game| {
+        drawn(game).is_some()
+    });
+    assert_eq!(drawn(&mut game).as_deref(), Some("kit/Unsaved.gltf"));
+    assert_eq!(
+        asset_file(&tmp, "kit/tree.bsn"),
+        saved,
+        "the file is untouched"
+    );
+}
+
 /// A component of the game's naming an asset, known to both sides.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default, no_auto_register)]
@@ -999,6 +1073,74 @@ fn a_discard_of_the_prefab_tab_in_front_goes_back_to_the_file() {
     let mut game = game_serving(&mut app, &tmp, "door.bsn");
     assert_eq!(x_of(&mut game, "Door"), 1.0);
     assert_eq!(editor_x(&mut app, "Placed"), 1.0);
+}
+
+/// A discarded prefab the scene in front never reaches leaves that scene as it
+/// was: the same entities, still selected.
+#[test]
+fn a_discarded_prefab_the_scene_does_not_reach_respawns_nothing() {
+    let scene = roots(&[
+        "#Beacon\nbevy_transform::components::transform::Transform\n".to_string(),
+        instance_of("gate.bsn"),
+    ]);
+    let (mut app, tmp) = editor(&[
+        ("door.bsn", &door(1.0)),
+        ("gate.bsn", &door(3.0)),
+        ("zone.bsn", &scene),
+    ]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    let mut game = game_serving(&mut app, &tmp, "zone.bsn");
+    played_as(&mut game, "zone.bsn");
+    let beacon = select_named(&mut app, "Beacon");
+    let placed = named(&mut app, "Placed");
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+
+    assert!(
+        app.world().get_entity(beacon).is_ok(),
+        "the scene kept its entities"
+    );
+    assert_eq!(named(&mut app, "Placed"), placed);
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::selection::Selection>()
+            .entities,
+        vec![beacon],
+        "the selection stays"
+    );
+    assert_eq!(x_of(&mut game, "Placed"), 3.0);
+}
+
+/// A discarded prefab the scene reaches only through another prefab still goes
+/// back to the file in the scene in front.
+#[test]
+fn a_discarded_prefab_reached_through_another_goes_back_to_the_file() {
+    let gate = "#Gate\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform\n\
+         bevy_ecs::hierarchy::Children [\n\
+         #Leaf\n\
+         jackdaw::prefab::components::PrefabEntityId(1)\n\
+         jackdaw::prefab::components::IsA { source: \"door.bsn\", deleted: [] }\n\
+         ]\n"
+    .to_string();
+    let scene = instance_of("gate.bsn");
+    let (mut app, _tmp) = editor(&[
+        ("door.bsn", &door(1.0)),
+        ("gate.bsn", &gate),
+        ("zone.bsn", &scene),
+    ]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    assert_eq!(editor_x(&mut app, "Leaf"), 9.0);
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+
+    assert_eq!(editor_x(&mut app, "Leaf"), 1.0);
 }
 
 fn editor_x(app: &mut App, entity: &str) -> f32 {

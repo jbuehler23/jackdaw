@@ -2,8 +2,9 @@
 //! mouse input forwards to the focused game instance over the control
 //! channel instead of driving editor keybinds.
 //!
-//! Engage with a Play-mode click in the Game panel or the header button
-//! (`pie.play_input_toggle`); release with Shift+Esc. Plain Esc forwards,
+//! Engage with a click in the Game panel or `pie.play_input_toggle`; a game
+//! Play launches takes input on its first frame unless the editor was used
+//! while it started. Release with Shift+Esc. Plain Esc forwards,
 //! so the game's own menus keep working. The keys bound to `pie.stop` (F8 by
 //! default) stop the game rather than forward, so Stop always works. Every
 //! release path synthesizes key-up and button-up events for whatever was
@@ -11,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::time::Instant;
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
@@ -40,6 +42,92 @@ pub struct LiveInputCapture {
     /// these to match the editor window to the game while capturing.
     pub(crate) game_cursor_grabbed: bool,
     pub(crate) game_cursor_visible: bool,
+    /// When capture last engaged, for the release hint shown over the panel.
+    pub(crate) engaged_at: Option<Instant>,
+}
+
+/// Whether the game Play is launching takes input when its first frame
+/// arrives. Pressing Play arms it; a click, key press or scroll in the editor
+/// before that frame disarms it, and so does the editor window losing focus,
+/// so a long build never takes input from someone who went back to editing or
+/// to another app.
+#[derive(Resource, Default, Debug)]
+pub struct FirstFrameCapture {
+    armed: bool,
+    /// Set by arming: the frame Play was pressed in still holds the press
+    /// that pressed it, which is not a touch.
+    skip_frame: bool,
+}
+
+impl FirstFrameCapture {
+    pub fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    fn arm(&mut self) {
+        self.armed = true;
+        self.skip_frame = true;
+    }
+
+    /// Note a press in the editor, which disarms it.
+    fn touched(&mut self) {
+        self.armed = false;
+    }
+}
+
+/// Arm capture on the first frame of the game being launched.
+pub(crate) fn arm_first_frame_capture(world: &mut World) {
+    world.get_resource_or_init::<FirstFrameCapture>().arm();
+}
+
+/// Disarm first-frame capture on any key or mouse press or scroll in the
+/// editor, or the editor window losing focus.
+fn note_editor_touch(
+    mut first: ResMut<FirstFrameCapture>,
+    capture: Res<LiveInputCapture>,
+    mut keys: MessageReader<KeyboardInput>,
+    mut buttons: MessageReader<MouseButtonInput>,
+    mut wheels: MessageReader<MouseWheel>,
+    mut focus: MessageReader<WindowFocused>,
+    primary: Query<(), With<PrimaryWindow>>,
+) {
+    let key_pressed = keys.read().any(|key| key.state == ButtonState::Pressed);
+    let button_pressed = buttons
+        .read()
+        .any(|button| button.state == ButtonState::Pressed);
+    let scrolled = wheels.read().count() > 0;
+    let left = focus
+        .read()
+        .any(|event| !event.focused && primary.contains(event.window));
+    let pressed = key_pressed || button_pressed || scrolled || left;
+    if std::mem::take(&mut first.skip_frame) || capture.active {
+        return;
+    }
+    if pressed && first.armed {
+        first.touched();
+    }
+}
+
+/// Engage capture once the launched game shows a frame in the Game panel, if
+/// first-frame capture is still armed.
+fn capture_on_first_frame(world: &mut World) {
+    if !world
+        .get_resource::<FirstFrameCapture>()
+        .is_some_and(FirstFrameCapture::is_armed)
+    {
+        return;
+    }
+    let fresh = world
+        .get_resource::<LiveFrameStream>()
+        .is_some_and(LiveFrameStream::is_fresh);
+    if !fresh || crate::pie::focused_live_instance(world).is_none() {
+        return;
+    }
+    world.resource_mut::<FirstFrameCapture>().armed = false;
+    if world.resource::<LiveInputCapture>().active {
+        return;
+    }
+    engage_on_panel(world);
 }
 
 /// Events collected this frame, drained by `flush_forwards` and sent to the
@@ -58,6 +146,7 @@ pub(crate) fn engage_capture(world: &mut World, surface: Entity) {
         let mut capture = world.resource_mut::<LiveInputCapture>();
         capture.active = true;
         capture.panel_node = Some(surface);
+        capture.engaged_at = Some(Instant::now());
     }
     world
         .resource_mut::<bevy::input_focus::InputFocus>()
@@ -360,10 +449,10 @@ pub fn restore_editor_cursor(world: &mut World) {
     }
 }
 
-/// Engage capture from the header button: bind to the Game panel surface and
-/// signal the game it gained focus. Returns without engaging when no surface
-/// is present.
-fn engage_from_header(world: &mut World) {
+/// Engage capture without a click: bind to the Game panel surface and signal
+/// the game it gained focus. Returns without engaging when no surface is
+/// present.
+fn engage_on_panel(world: &mut World) {
     let Some(surface) = world
         .query_filtered::<Entity, With<crate::game_panel::GamePanelSurface>>()
         .iter(world)
@@ -392,7 +481,7 @@ pub(crate) fn pie_play_input_toggle(
             apply_release_requests(world);
             flush_forwards(world);
         } else {
-            engage_from_header(world);
+            engage_on_panel(world);
         }
     });
     OperatorResult::Finished
@@ -404,9 +493,12 @@ impl Plugin for LiveInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LiveInputCapture>()
             .init_resource::<PendingForwards>()
+            .init_resource::<FirstFrameCapture>()
             .add_systems(
                 Update,
                 (
+                    note_editor_touch,
+                    capture_on_first_frame,
                     collect_forwards,
                     auto_release,
                     apply_release_requests,

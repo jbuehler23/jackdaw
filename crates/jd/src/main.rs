@@ -25,6 +25,7 @@ fn main() -> ExitCode {
         Some("import") => jackdaw_scaffold::run_import_cli(&args[1..]),
         Some("open") => jd::editor_cli::open_command(&args[1..]),
         Some("editor") => jd::editor_cli::editor_command(&args[1..]),
+        Some("clean") => jd::clean::clean_command(&args[1..]),
         Some("self") => jd::editor_cli::self_command(&args[1..]),
         Some("upgrade") => jackdaw_scaffold::run_upgrade_cli(&args[1..]),
         Some("export-terrain") => export_terrain(&args[1..]),
@@ -108,6 +109,12 @@ const SPECS: &[CommandSpec] = &[
         flags: &[],
         values: &["--project", "-p"],
         usage: "jd doctor [--project <path>]",
+    },
+    CommandSpec {
+        name: "clean",
+        flags: &["--cargo"],
+        values: &[],
+        usage: "jd clean [--cargo]",
     },
     CommandSpec {
         name: "mcp",
@@ -252,6 +259,8 @@ fn print_usage() {
          build [--project <path>]   Build project code for the editor\n  \
          run [--project <path>]     Build and run the game\n  \
          setup                      Prepare the pinned SDK\n  \
+         clean [--cargo]            Remove the project's .jackdaw/target build cache\n    \
+                                    (close the editor first; --cargo also runs cargo clean)\n  \
          doctor [--project <path>]  Check build prerequisites and a project's setup\n  \
          export-terrain <scene.bsn> --out <dir>\n    \
                                     Export a terrain's heightmap/channels/placements\n    \

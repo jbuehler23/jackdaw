@@ -18,6 +18,7 @@ pub struct UntitledCounter(pub u32);
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<SceneNewOp>()
         .register_operator::<SceneOpenOp>()
+        .register_operator::<SceneExternalChangeOp>()
         .register_operator::<SceneCloseOp>()
         .register_operator::<SceneSwitchOp>()
         .register_operator::<SceneSaveAllOp>()
@@ -239,6 +240,79 @@ pub fn scene_open(In(params): In<OperatorParameters>, mut commands: Commands) ->
     OperatorResult::Finished
 }
 
+#[operator(
+    id = "scene.external_change",
+    leaves_history = true,
+    label = "Answer File Changed on Disk",
+    allows_undo = false,
+    params(
+        answer(
+            String,
+            doc = "keep, to keep what the editor has open and overwrite the files on \
+                   the next save, or reload, to read them from disk."
+        ),
+        path(
+            String,
+            doc = "Scene file the question is about, absolute or relative to the \
+                   project's assets directory. Defaults to the first one waiting."
+        ),
+    )
+)]
+pub fn scene_external_change(
+    In(params): In<OperatorParameters>,
+    world: &mut World,
+) -> OperatorResult {
+    use crate::scenes::external_watch::{
+        ExternalReloadChoice, ExternalSceneChanges, answer_external_change, canonical,
+    };
+    let choice = match params.as_str("answer") {
+        Some("keep") => ExternalReloadChoice::Keep,
+        Some("reload") => ExternalReloadChoice::Reload,
+        other => {
+            warn_caller(
+                world,
+                format!("scene.external_change: answer must be keep or reload, not {other:?}"),
+            );
+            return OperatorResult::Cancelled;
+        }
+    };
+    let path = match params.as_str("path").map(std::path::PathBuf::from) {
+        Some(path) => match resolve_scene_path(world, &path) {
+            Ok(path) => canonical(&path),
+            Err(refusal) => {
+                warn_caller(world, format!("scene.external_change: {refusal}"));
+                return OperatorResult::Cancelled;
+            }
+        },
+        None => {
+            let waiting = world
+                .get_resource::<ExternalSceneChanges>()
+                .and_then(|changes| changes.prompts.first())
+                .map(|prompt| prompt.path.clone());
+            let Some(waiting) = waiting else {
+                warn_caller(world, "scene.external_change: no file change is waiting");
+                return OperatorResult::Cancelled;
+            };
+            waiting
+        }
+    };
+    let asked = world
+        .get_resource::<ExternalSceneChanges>()
+        .is_some_and(|changes| changes.prompts.iter().any(|prompt| prompt.path == path));
+    if !asked {
+        warn_caller(
+            world,
+            format!(
+                "scene.external_change: no change to {} is waiting",
+                path.display()
+            ),
+        );
+        return OperatorResult::Cancelled;
+    }
+    answer_external_change(world, &path, choice);
+    OperatorResult::Finished
+}
+
 /// Where a scene path given by name lands. A relative path names a file under
 /// the project's `assets/`, else under the project root; a new file goes under
 /// `assets/` unless the path already starts with that folder.
@@ -365,7 +439,8 @@ fn reopen_open_tab(world: &mut World, path: &std::path::Path, asked: bool) -> bo
         .path
         .clone()
         .unwrap_or(canonical);
-    let dirty = world.resource::<Scenes>().tabs[index].dirty;
+    let dirty = world.resource::<Scenes>().tabs[index].dirty
+        || crate::scene_io::hooks::has_unsaved_edits(world, index);
     let reread = if dirty {
         if asked {
             warn_caller(

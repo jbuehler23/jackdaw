@@ -139,13 +139,38 @@ pub struct TerrainDataStore {
     /// saved: a file whose mtime has not moved holds nothing the store does
     /// not already have.
     read_mtimes: HashMap<String, std::time::SystemTime>,
-    /// The paths written since they were last read or written to their file,
-    /// each with a revision unique to its latest write. A file newer than a path
-    /// not listed here holds what the author wants; see [`Self::has_unsaved_edits`].
+    /// The paths handed out to be written since they were last read or written
+    /// to their file, each with a revision unique to its latest hand-out. A
+    /// path listed here may still hold what its file does; see
+    /// [`Self::has_unsaved_edits`].
     edits: HashMap<String, u64>,
+    /// A digest of the bytes each path's file held when it was last read or
+    /// written, from [`sidecar_digest`].
+    held: HashMap<String, u64>,
+    /// The file each path was last read from or written to, so a file at
+    /// another path with the same name never reads as that one changing.
+    read_files: HashMap<String, std::path::PathBuf>,
+    /// Whether each path's document differed from [`Self::held`] as of an
+    /// edit revision, behind a lock so asking takes `&self`.
+    differs: Mutex<HashMap<String, (u64, bool)>>,
 }
 
 static NEXT_EDIT: AtomicU64 = AtomicU64::new(1);
+
+/// The digest [`TerrainDataStore`] compares documents by, of their encoded
+/// sidecar bytes.
+pub fn sidecar_digest(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn document_digest(data: &RegionTerrainData) -> Option<u64> {
+    crate::sidecar::save(data)
+        .ok()
+        .map(|bytes| sidecar_digest(&bytes))
+}
 
 fn note_edit(edits: &mut HashMap<String, u64>, data_path: &str) {
     edits.insert(
@@ -582,13 +607,54 @@ impl TerrainDataStore {
         self.cached().remove(data_path);
         self.read_mtimes.remove(data_path);
         self.edits.remove(data_path);
+        self.held.remove(data_path);
+        self.read_files.remove(data_path);
+        self.forget_differs(data_path);
         self.entries.remove(data_path)
     }
 
-    /// Whether `data_path` was written since it was last read or written to its
-    /// file. Settling a document onto its geometry does not count.
+    /// Whether `data_path` holds anything its file does not, as of its last
+    /// read or write. A document handed out and never written, or edited and
+    /// undone back to what the file holds, has none. Settling a document onto
+    /// its geometry does not count.
+    ///
+    /// Encodes the document and compares it against the file's bytes the first
+    /// time it is asked after each edit, so a file in an older format reads as
+    /// edited once touched.
     pub fn has_unsaved_edits(&self, data_path: &str) -> bool {
-        self.edits.contains_key(data_path)
+        let Some(revision) = self.edits.get(data_path).copied() else {
+            return false;
+        };
+        let Some(held) = self.held.get(data_path) else {
+            return true;
+        };
+        let Some(data) = self.entries.get(data_path) else {
+            return true;
+        };
+        let mut differs = self.differs.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, answer)) = differs.get(data_path)
+            && *at == revision
+        {
+            return *answer;
+        }
+        let answer = document_digest(data) != Some(*held);
+        differs.insert(data_path.to_string(), (revision, answer));
+        answer
+    }
+
+    /// Record the digest, from [`sidecar_digest`], of the bytes `data_path` was
+    /// just read from, and the file they came from.
+    pub fn note_held(&mut self, data_path: &str, file: std::path::PathBuf, digest: u64) {
+        self.held.insert(data_path.to_string(), digest);
+        self.read_files.insert(data_path.to_string(), file);
+        self.forget_differs(data_path);
+    }
+
+    fn forget_differs(&mut self, data_path: &str) {
+        self.differs
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(data_path);
     }
 
     /// The revision of the latest edit of `data_path`, while it has unsaved
@@ -601,6 +667,9 @@ impl TerrainDataStore {
     /// modified at `mtime`, which so holds what the store does.
     pub fn note_read(&mut self, data_path: &str, mtime: Option<std::time::SystemTime>) {
         self.edits.remove(data_path);
+        self.held.remove(data_path);
+        self.read_files.remove(data_path);
+        self.forget_differs(data_path);
         match mtime {
             Some(mtime) => {
                 self.read_mtimes.insert(data_path.to_string(), mtime);
@@ -609,6 +678,18 @@ impl TerrainDataStore {
                 self.read_mtimes.remove(data_path);
             }
         }
+    }
+
+    /// Record that the user chose to keep `data_path`'s unsaved edits over its
+    /// file as last modified at `mtime`, so that file stops reading as changed
+    /// and the next save writes over it.
+    pub fn note_kept_over(&mut self, data_path: &str, mtime: std::time::SystemTime) {
+        self.read_mtimes.insert(data_path.to_string(), mtime);
+        self.held.remove(data_path);
+        self.forget_differs(data_path);
+        self.edits
+            .entry(data_path.to_string())
+            .or_insert_with(|| NEXT_EDIT.fetch_add(1, Ordering::Relaxed));
     }
 
     /// Whether the file at `full` has been written since this store last read
@@ -626,17 +707,34 @@ impl TerrainDataStore {
             .is_ok_and(|mtime| mtime != *read_at)
     }
 
+    /// Whether `full` is the file this store last read `data_path` from or wrote
+    /// it to, and something else has written it since. Unlike
+    /// [`Self::sidecar_is_stale`], a path never read, or read from another file,
+    /// is not changed.
+    pub fn sidecar_changed_since_read(&self, data_path: &str, full: &std::path::Path) -> bool {
+        self.read_files
+            .get(data_path)
+            .is_some_and(|read| read == full)
+            && self.read_mtimes.contains_key(data_path)
+            && full.is_file()
+            && self.sidecar_is_stale(data_path, full)
+    }
+
     /// Record that `data_path` as of edit `revision`, from
-    /// [`Self::edit_revision`], was just written to a file last modified at
-    /// `mtime`. An edit since then stays unsaved.
+    /// [`Self::edit_revision`], was just written to `file`, last modified at
+    /// `mtime`, as bytes of digest `digest` from [`sidecar_digest`]. An edit
+    /// since then stays unsaved.
     pub fn note_written(
         &mut self,
         data_path: &str,
+        file: std::path::PathBuf,
         mtime: Option<std::time::SystemTime>,
         revision: Option<u64>,
+        digest: u64,
     ) {
         let edits = self.edits.get(data_path).copied();
         self.note_read(data_path, mtime);
+        self.note_held(data_path, file, digest);
         if let Some(edit) = edits.filter(|edit| Some(*edit) != revision) {
             self.edits.insert(data_path.to_string(), edit);
         }
@@ -1616,6 +1714,107 @@ mod tests {
 
         store.note_read("a.jdterrain", None);
         assert!(!store.has_unsaved_edits("a.jdterrain"), "as written");
+    }
+
+    /// [`store_for`], as though its document had just been read from a file
+    /// holding exactly what the store does.
+    fn read_store_for(terrain: &jackdaw_scene_types::Terrain) -> TerrainDataStore {
+        let mut store = store_for(terrain);
+        let bytes = crate::sidecar::save(store.get(&terrain.data_path).expect("a document"))
+            .expect("the document encodes");
+        store.note_read(&terrain.data_path, Some(std::time::UNIX_EPOCH));
+        store.note_held(
+            &terrain.data_path,
+            std::path::PathBuf::from("a.jdterrain"),
+            sidecar_digest(&bytes),
+        );
+        store
+    }
+
+    /// Writes `heights` through a fresh hand-out, as a brush or an undo does.
+    fn write_heights(
+        store: &mut TerrainDataStore,
+        terrain: &jackdaw_scene_types::Terrain,
+        heights: &[f32],
+    ) {
+        store
+            .entry_for(terrain)
+            .expect("the terrain has a document")
+            .set_heights(heights);
+    }
+
+    #[test]
+    fn only_a_change_from_the_file_counts_as_unsaved() {
+        let subject = terrain(4, "a.jdterrain");
+        let mut store = read_store_for(&subject);
+        let as_read = store.heights("a.jdterrain").into_owned();
+
+        store.entry_for(&subject);
+        assert!(
+            !store.has_unsaved_edits("a.jdterrain"),
+            "a hand-out that writes nothing"
+        );
+
+        let mut raised = as_read.clone();
+        raised[0] += 1.0;
+        write_heights(&mut store, &subject, &raised);
+        assert!(store.has_unsaved_edits("a.jdterrain"), "a real write");
+
+        write_heights(&mut store, &subject, &as_read);
+        assert!(
+            !store.has_unsaved_edits("a.jdterrain"),
+            "written back to what the file holds, as an undo does"
+        );
+    }
+
+    #[test]
+    fn a_write_to_the_file_is_what_later_edits_compare_against() {
+        let subject = terrain(4, "a.jdterrain");
+        let mut store = read_store_for(&subject);
+        let mut raised = store.heights("a.jdterrain").into_owned();
+        raised[0] += 1.0;
+        write_heights(&mut store, &subject, &raised);
+        let saving = store.edit_revision("a.jdterrain");
+        let bytes = crate::sidecar::save(store.get("a.jdterrain").expect("a document"))
+            .expect("the document encodes");
+
+        // A hand-out while the save is on its way, asked about before it lands.
+        store.entry_for(&subject);
+        assert!(
+            store.has_unsaved_edits("a.jdterrain"),
+            "compared against the file as read"
+        );
+
+        store.note_written(
+            "a.jdterrain",
+            std::path::PathBuf::from("a.jdterrain"),
+            None,
+            saving,
+            sidecar_digest(&bytes),
+        );
+        assert!(
+            !store.has_unsaved_edits("a.jdterrain"),
+            "the answer from before the write still stands"
+        );
+    }
+
+    #[test]
+    fn edits_kept_over_a_changed_file_stay_unsaved_until_written() {
+        let subject = terrain(4, "a.jdterrain");
+        let mut store = read_store_for(&subject);
+        let as_read = store.heights("a.jdterrain").into_owned();
+        assert!(!store.has_unsaved_edits("a.jdterrain"));
+
+        store.note_kept_over("a.jdterrain", std::time::UNIX_EPOCH);
+        assert!(
+            store.has_unsaved_edits("a.jdterrain"),
+            "the file no longer holds what the store does"
+        );
+        write_heights(&mut store, &subject, &as_read);
+        assert!(
+            store.has_unsaved_edits("a.jdterrain"),
+            "matching the file as first read is not matching the file now"
+        );
     }
 
     fn store_for(terrain: &jackdaw_scene_types::Terrain) -> TerrainDataStore {

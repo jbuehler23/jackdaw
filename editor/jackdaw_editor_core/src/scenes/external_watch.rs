@@ -12,10 +12,13 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::warn_caller;
-use jackdaw_feathers::dialog::{DialogActionEvent, DialogVariant, EditorDialog, OpenDialogEvent};
+use jackdaw_feathers::dialog::{
+    DialogActionEvent, DialogChoice, DialogVariant, EditorDialog, OpenDialogEvent, answer_dialog,
+};
 use jackdaw_feathers::icons::EditorFont;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::scene_io::hooks::ChangedFile;
 use crate::scenes::{Scenes, TabContent, TabKind};
 
 pub struct ExternalSceneWatchPlugin;
@@ -57,18 +60,27 @@ pub enum ExternalReloadChoice {
     Keep,
 }
 
-/// One open document whose file changed on disk, waiting on an answer.
+/// One open document whose file, or files kept beside it, changed on disk,
+/// waiting on an answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExternalSceneChange {
-    /// Canonical path of the changed file.
+    /// Canonical path of the document's file.
     pub path: PathBuf,
     /// Tab holding it, as of the last frame.
     pub tab_index: usize,
     pub tab_display_name: String,
-    /// Whether that tab has edits a reload would throw away.
+    /// Whether that tab has edits to the document a reload would throw away.
     pub tab_dirty: bool,
+    /// Whether the files kept beside the document hold edits a reload would
+    /// throw away.
+    pub data_unsaved: bool,
     /// Whether the tab holding it is a prefab tab, which changes the wording.
     pub tab_is_prefab: bool,
+    /// Whether the document's own file changed.
+    pub document_changed: bool,
+    /// Files kept beside the document that changed on disk while the editor
+    /// holds edits a save would write over them, as modified when asked.
+    pub changed_files: Vec<ChangedFile>,
     /// Hash of the bytes this prompt was raised for. Answering records these
     /// rather than whatever is on disk by then.
     hash: u64,
@@ -80,18 +92,24 @@ impl ExternalSceneChange {
         file_name_of(&self.path)
     }
 
+    /// Whether reloading throws away edits not yet written.
+    pub fn discards_edits(&self) -> bool {
+        self.tab_dirty || self.data_unsaved || !self.changed_files.is_empty()
+    }
+
     /// Dialog title, naming the kind of document the tab holds.
     pub fn title(&self) -> &'static str {
-        if self.tab_is_prefab {
-            "Prefab Changed on Disk"
-        } else {
-            "Scene Changed on Disk"
+        match (self.document_changed, self.tab_is_prefab) {
+            (true, true) => "Prefab Changed on Disk",
+            (true, false) => "Scene Changed on Disk",
+            (false, true) => "Prefab Data Changed on Disk",
+            (false, false) => "Scene Data Changed on Disk",
         }
     }
 
     /// Label on the button that takes what is on disk.
     pub fn action_label(&self) -> &'static str {
-        if self.tab_dirty {
+        if self.discards_edits() {
             "Reload (discards your unsaved changes)"
         } else {
             "Reload"
@@ -99,20 +117,58 @@ impl ExternalSceneChange {
     }
 
     pub fn description(&self) -> String {
-        if self.tab_dirty {
-            format!(
-                "{} changed on disk, and you have unsaved changes to it here. \
-                 Reload from disk, or keep yours and overwrite the file on the \
-                 next save?",
-                self.file_name()
-            )
-        } else {
-            format!(
-                "{} changed on disk. Reload it, or keep the copy the editor \
-                 has open?",
-                self.file_name()
-            )
+        if self.changed_files.is_empty() {
+            return if self.discards_edits() {
+                format!(
+                    "{} changed on disk, and you have unsaved changes to it here. \
+                     Reload from disk, or keep yours and overwrite the file on the \
+                     next save?",
+                    self.file_name()
+                )
+            } else {
+                format!(
+                    "{} changed on disk. Reload it, or keep the copy the editor \
+                     has open?",
+                    self.file_name()
+                )
+            };
         }
+        let mut names: Vec<String> = Vec::new();
+        if self.document_changed {
+            names.push(self.file_name());
+        }
+        names.extend(
+            self.changed_files
+                .iter()
+                .map(|file| file_name_of(&file.path)),
+        );
+        let several = names.len() > 1;
+        let mut text = format!(
+            "{} changed on disk, and you have unsaved changes to {} here.",
+            join_names(&names),
+            if several { "them" } else { "it" }
+        );
+        if self.tab_dirty && !self.document_changed {
+            text.push_str(&format!(
+                " Reloading reads all of {} again, so your other unsaved changes \
+                 to it are lost too.",
+                self.file_name()
+            ));
+        }
+        text.push_str(&format!(
+            " Reload from disk, or keep yours and overwrite the {} on the next save?",
+            if several { "files" } else { "file" }
+        ));
+        text
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn join_names(names: &[String]) -> String {
+    match names.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -148,7 +204,7 @@ pub struct ExternalSceneChanges {
 /// so an answer goes to that path and not to whatever is now at the front of
 /// the queue. Absent headless, where there is no dialog.
 #[derive(Resource)]
-struct ReloadPromptOpen(PathBuf);
+struct ReloadPromptOpen(PathBuf, Option<Entity>);
 
 /// Set while the refusal notice is on screen.
 #[derive(Resource)]
@@ -178,6 +234,130 @@ pub fn note_known_hash(world: &mut World, path: &Path, hash: u64) {
     }
 }
 
+/// Ask whether to reload tab `tab`, for every file kept beside its document
+/// that changed on disk while the editor holds edits a save would write over
+/// it. A prompt already waiting on that tab takes the files on. Nothing is
+/// asked when no file changed.
+pub fn ask_about_changed_files(world: &mut World, tab: usize) {
+    let files: Vec<ChangedFile> = crate::scene_io::hooks::changed_on_disk(world, tab)
+        .into_iter()
+        .map(|path| ChangedFile {
+            modified: std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok(),
+            path,
+        })
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    let open = world.get_resource::<Scenes>().and_then(|scenes| {
+        open_scene_tabs(scenes)
+            .into_iter()
+            .find(|open| open.index == tab)
+    });
+    let Some(open) = open else {
+        warn!(
+            "{} changed on disk; keeping the unsaved edits",
+            list_files(&files)
+        );
+        return;
+    };
+    if !world.contains_resource::<ExternalSceneChanges>() {
+        warn!(
+            "{} changed on disk; keeping the unsaved edits",
+            list_files(&files)
+        );
+        return;
+    }
+    let data_unsaved = crate::scene_io::hooks::has_unsaved_edits(world, tab);
+    let hash = known_hash(world, &open.path)
+        .or_else(|| {
+            std::fs::read(&open.path)
+                .ok()
+                .map(|bytes| hash_bytes(&bytes))
+        })
+        .unwrap_or_default();
+    let mut changes = world.resource_mut::<ExternalSceneChanges>();
+    let merged = changes
+        .prompts
+        .iter_mut()
+        .find(|prompt| prompt.path == open.path)
+        .map(|waiting| {
+            let mut grew = false;
+            for file in files.iter().cloned() {
+                match waiting
+                    .changed_files
+                    .iter_mut()
+                    .find(|known| known.path == file.path)
+                {
+                    Some(known) if *known == file => {}
+                    Some(known) => {
+                        *known = file;
+                        grew = true;
+                    }
+                    None => {
+                        waiting.changed_files.push(file);
+                        grew = true;
+                    }
+                }
+            }
+            grew
+        });
+    match merged {
+        Some(true) => {
+            close_shown_prompt(world, &open.path);
+            return;
+        }
+        Some(false) => return,
+        None => {}
+    }
+    info!(
+        "{} changed on disk under unsaved edits; offering a reload",
+        list_files(&files)
+    );
+    world
+        .resource_mut::<ExternalSceneChanges>()
+        .prompts
+        .push(ExternalSceneChange {
+            path: open.path,
+            tab_index: open.index,
+            tab_display_name: open.display_name,
+            tab_dirty: open.dirty,
+            data_unsaved,
+            tab_is_prefab: open.is_prefab,
+            document_changed: false,
+            changed_files: files,
+            hash,
+        });
+}
+
+fn list_files(files: &[ChangedFile]) -> String {
+    let names: Vec<String> = files
+        .iter()
+        .map(|file| file.path.display().to_string())
+        .collect();
+    join_names(&names)
+}
+
+/// Close the dialog showing the prompt for `path`, if one is, without giving
+/// either answer. A prompt still waiting opens again with what it now says.
+fn close_shown_prompt(world: &mut World, path: &Path) {
+    if world
+        .get_resource::<ReloadPromptOpen>()
+        .is_none_or(|open| open.0 != path)
+    {
+        return;
+    }
+    let dialog = world
+        .remove_resource::<ReloadPromptOpen>()
+        .and_then(|open| open.1);
+    if let Some(dialog) = dialog {
+        answer_dialog(&mut world.commands(), dialog, DialogChoice::Cancel);
+        world.flush();
+    }
+}
+
 /// Answer the prompt raised for `path`. An answer for a path with no open
 /// prompt is dropped: the queue can move under a dialog that is already up.
 pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalReloadChoice) {
@@ -197,6 +377,7 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
         return;
     };
 
+    close_shown_prompt(world, &change.path);
     {
         let mut changes = world.resource_mut::<ExternalSceneChanges>();
         changes.prompts.retain(|other| other.path != change.path);
@@ -225,6 +406,7 @@ pub fn answer_external_change(world: &mut World, path: &Path, choice: ExternalRe
     if choice == ExternalReloadChoice::Keep
         && let Some(index) = tab_index_for_path(world, &change.path)
     {
+        crate::scene_io::hooks::keep_over_changed(world, index, &change.changed_files);
         crate::scenes::mark_tab_unsaved(world, index);
     }
     queue_recheck(world, &change.path);
@@ -319,6 +501,12 @@ fn reload_tab_from_disk(world: &mut World, path: &Path) -> Result<(), RefusedRel
         }
         crate::scene_io::LoadOutcome::Loaded => {
             adopt_reloaded_document(world, index);
+            // Bringing a background tab forward asks about its changed files
+            // before the reload reads them; that question is answered now.
+            world
+                .resource_mut::<ExternalSceneChanges>()
+                .prompts
+                .retain(|prompt| prompt.path != path);
             Ok(())
         }
     }
@@ -534,12 +722,23 @@ fn drain_changes(world: &mut World) {
             continue;
         }
 
-        let already_asking = world
-            .resource::<ExternalSceneChanges>()
+        let mut changes = world.resource_mut::<ExternalSceneChanges>();
+        let waiting = changes
             .prompts
-            .iter()
-            .any(|prompt| prompt.path == path);
-        if already_asking {
+            .iter_mut()
+            .find(|prompt| prompt.path == path)
+            .map(|waiting| {
+                let newly = !waiting.document_changed;
+                if newly {
+                    waiting.document_changed = true;
+                    waiting.hash = hash;
+                }
+                newly
+            });
+        if let Some(newly) = waiting {
+            if newly {
+                close_shown_prompt(world, &path);
+            }
             continue;
         }
         let Some(tab) = open_scene_tabs(world.resource::<Scenes>())
@@ -549,6 +748,7 @@ fn drain_changes(world: &mut World) {
             continue;
         };
         info!("{} changed on disk; offering a reload", path.display());
+        let data_unsaved = crate::scene_io::hooks::has_unsaved_edits(world, tab.index);
         world
             .resource_mut::<ExternalSceneChanges>()
             .prompts
@@ -557,7 +757,10 @@ fn drain_changes(world: &mut World) {
                 tab_index: tab.index,
                 tab_display_name: tab.display_name,
                 tab_dirty: tab.dirty,
+                data_unsaved,
                 tab_is_prefab: tab.is_prefab,
+                document_changed: true,
+                changed_files: Vec::new(),
                 hash,
             });
     }
@@ -565,13 +768,14 @@ fn drain_changes(world: &mut World) {
 
 /// Drop prompts about files no tab still holds, and refresh the rest against
 /// the current tab state.
-fn sync_prompts_with_tabs(scenes: Res<Scenes>, mut changes: ResMut<ExternalSceneChanges>) {
-    if changes.prompts.is_empty() {
+fn sync_prompts_with_tabs(world: &mut World) {
+    if world.resource::<ExternalSceneChanges>().prompts.is_empty() {
         return;
     }
-    let open = open_scene_tabs(&scenes);
-    let mut refreshed: Vec<ExternalSceneChange> = Vec::with_capacity(changes.prompts.len());
-    for prompt in &changes.prompts {
+    let open = open_scene_tabs(world.resource::<Scenes>());
+    let prompts = world.resource::<ExternalSceneChanges>().prompts.clone();
+    let mut refreshed: Vec<ExternalSceneChange> = Vec::with_capacity(prompts.len());
+    for prompt in &prompts {
         let Some(tab) = open.iter().find(|tab| tab.path == prompt.path) else {
             continue;
         };
@@ -579,12 +783,13 @@ fn sync_prompts_with_tabs(scenes: Res<Scenes>, mut changes: ResMut<ExternalScene
             tab_index: tab.index,
             tab_display_name: tab.display_name.clone(),
             tab_dirty: tab.dirty,
+            data_unsaved: crate::scene_io::hooks::has_unsaved_edits(world, tab.index),
             tab_is_prefab: tab.is_prefab,
             ..prompt.clone()
         });
     }
-    if refreshed != changes.prompts {
-        changes.prompts = refreshed;
+    if refreshed != prompts {
+        world.resource_mut::<ExternalSceneChanges>().prompts = refreshed;
     }
 }
 
@@ -604,17 +809,23 @@ fn present_front_prompt(world: &mut World) {
         return;
     }
 
-    world.insert_resource(ReloadPromptOpen(change.path.clone()));
+    world.insert_resource(ReloadPromptOpen(change.path.clone(), None));
     let mut dialog = OpenDialogEvent::new(change.title(), change.action_label())
         .with_description(change.description())
         .with_close_button(false)
         .with_close_on_click_outside(false);
     dialog.cancel = Some(KEEP_LABEL.to_string());
-    if change.tab_dirty {
+    if change.discards_edits() {
         dialog = dialog.with_variant(DialogVariant::Destructive);
     }
     world.commands().trigger(dialog);
     world.flush();
+    // The screen was free, so the one dialog up now is this prompt's.
+    let mut dialogs = world.query_filtered::<Entity, With<EditorDialog>>();
+    let shown = dialogs.iter(world).next();
+    if let Some(mut open) = world.get_resource_mut::<ReloadPromptOpen>() {
+        open.1 = shown;
+    }
 }
 
 /// Show a refused reload in its own notice.

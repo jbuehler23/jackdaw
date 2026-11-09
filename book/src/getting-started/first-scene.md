@@ -78,6 +78,43 @@ Bevy cannot load `.bsn` on its own; the loader ships in
 `jackdaw_runtime`, which is an ordinary dependency of your
 crate.
 
+## Wait for a level to spawn
+
+The asset server reports a scene as loaded before its entities
+exist, and under Play the game spawns the document the editor
+serves. To run code once the level is in the world, observe
+`JackdawSceneSpawned` on the root:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_runtime::prelude::*;
+
+fn load_level(mut commands: Commands, assets: Res<AssetServer>) {
+    commands
+        .spawn(JackdawSceneRoot(assets.load("scene.bsn")))
+        .observe(|spawned: On<JackdawSceneSpawned>, names: Query<(Entity, &Name)>| {
+            info!("level {} is ready", spawned.entity);
+            for (entity, name) in &names {
+                if name.as_str() == "PlayerStart" {
+                    info!("player starts at {entity}");
+                }
+            }
+        })
+        .observe(|failed: On<JackdawSceneSpawnFailed>| {
+            error!("level failed to load: {}", failed.error);
+        });
+}
+```
+
+The scene's authored entities exist when the event fires, but
+`GlobalTransform` has not propagated yet, so read `Transform` in
+the observer. Models and sidecars such as terrain and tilemaps
+finish loading after it.
+
+The event fires again each time the scene respawns, such as after
+a hot reload of its file. While the scene stays spawned, the root
+carries `JackdawSceneReady`, which a system can filter on.
+
 ## What you have now
 
 A project with one scene, one cube, and a save/load round
@@ -86,7 +123,7 @@ trip you can iterate on. Next steps:
 - [Viewport Navigation](../user-guide/viewport-navigation.md)
   for getting around the 3D view.
 - [Custom Components](../developer-guide/custom-components.md)
-  to attach your own behaviour to the cube.
+  to attach your own behavior to the cube.
 - [Migrating an Existing Project](migrating-an-existing-project.md)
   if you already have a Bevy game and want to wire jackdaw
   into it.
