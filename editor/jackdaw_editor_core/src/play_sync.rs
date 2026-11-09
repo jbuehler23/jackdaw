@@ -182,8 +182,8 @@ pub(crate) fn drag_is_open(
 /// Send the components drags moved this frame, each once. A drag that ended sends
 /// what its entity holds now. One whose entity left the selection with no release
 /// is cancelled, and its entity goes back to how the drag found it first. One whose
-/// entity is gone, with a tab switch or a respawn, sends the component as the drag
-/// found it.
+/// entity is gone sends what the node's new entity holds after a respawn, or the
+/// component as the drag found it when the node left with a tab switch.
 fn send_drags(world: &mut World, keys: &[InstanceKey]) {
     let Some(mut ticks) = world.remove_resource::<DragTicks>() else {
         return;
@@ -204,12 +204,24 @@ fn send_drags(world: &mut World, keys: &[InstanceKey]) {
         if world.get_entity(*entity).is_err() {
             sending.remove(&(*entity, type_path.clone()));
             crate::commands::forget_field_edit_on(world, *entity, type_path, field_path);
-            if let Some(OpenDrag {
+            let Some(OpenDrag {
                 node: Some(node),
                 before,
             }) = ticks.open.remove(&drag)
-            {
-                settling.entry((node, type_path.clone())).or_insert(before);
+            else {
+                continue;
+            };
+            let respawned = world.get_resource::<SceneBsnAst>().and_then(|ast| {
+                ast.node_by_stable_id(node)
+                    .and_then(|node| ast.ecs_for_ast(node))
+            });
+            match respawned {
+                Some(respawned) if world.get_entity(respawned).is_ok() => {
+                    sending.insert((respawned, type_path.clone()));
+                }
+                _ => {
+                    settling.entry((node, type_path.clone())).or_insert(before);
+                }
             }
             continue;
         }
@@ -1853,6 +1865,30 @@ mod tests {
             TRANSFORM,
             "translation.x"
         ));
+    }
+
+    /// A respawn mid-drag that changes the dragged component leaves the game on the
+    /// document's new value, not the one the drag found.
+    #[test]
+    fn a_drag_cut_off_by_a_respawn_ends_on_the_document_value() {
+        let (mut world, entity, mut game) = dragging_world();
+        drag_tick(&mut world, 2.0);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game), vec![2.0]);
+
+        move_to(&mut world, entity, 5.0);
+        let node = world
+            .resource::<SceneBsnAst>()
+            .ast_for(entity)
+            .expect("a node");
+        world.entity_mut(entity).despawn();
+        world.resource_mut::<SceneBsnAst>().unlink(entity);
+        let respawned = world
+            .spawn((SceneNodeId(NODE), Transform::from_xyz(5.0, 0.0, 0.0)))
+            .id();
+        world.resource_mut::<SceneBsnAst>().link(respawned, node);
+        sync_document_to_game(&mut world);
+        assert_eq!(received_x(&mut world, &mut game).last(), Some(&5.0));
     }
 
     #[test]

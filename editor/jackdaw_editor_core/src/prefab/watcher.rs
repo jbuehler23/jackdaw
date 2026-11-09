@@ -328,8 +328,8 @@ pub enum PrefabReload {
     /// The file's instances were respawned in place; other entities kept
     /// their ids.
     Instances,
-    /// Nothing inherits from the file directly, or an instance does not line
-    /// up with a resolved root. The caller respawns the whole scene.
+    /// An instance does not line up with a resolved root. The caller respawns
+    /// the whole scene.
     Unhandled,
     /// The scene does not draw from the file, or the new text did not parse or
     /// resolve, and the scene is untouched.
@@ -365,13 +365,10 @@ pub fn reload_instances_of(world: &mut World, sparse_text: &str, changed: &Path)
             })
             .collect()
     };
-    // A prefab only another prefab's nested instances reference has no
-    // instance node here; the whole-scene path picks it up through the cache.
+    // The instances cover nested ones too, so none means the scene does not draw
+    // from the file.
     if instances.is_empty() {
-        if !crate::prefab::sync::scene_draws_from(world, &wanted) {
-            return PrefabReload::Nothing;
-        }
-        return PrefabReload::Unhandled;
+        return PrefabReload::Nothing;
     }
     let at_root: Option<Vec<usize>> = instances
         .iter()
