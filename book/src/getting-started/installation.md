@@ -233,6 +233,10 @@ shared-SDK mode as releases:
 cargo run --bin jackdaw --features dylib --target "$(rustc -vV | sed -n 's/host: //p')"
 ```
 
+## Cleaning a project's builds
+
+`jd clean` inside a project removes its `.jackdaw/target` build cache and prints the space freed. The rest of `.jackdaw/` is left alone. `jd clean --cargo` also runs `cargo clean`. Close the editor first: it refuses while a build is running.
+
 ## Managing editors with jd
 
 `jd editor` installs editors side by side, one per version, so projects
