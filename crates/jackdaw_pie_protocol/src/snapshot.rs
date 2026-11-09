@@ -5,6 +5,7 @@ use bevy::{
     asset::ReflectHandle,
     ecs::{
         archetype::{Archetype, ArchetypeId},
+        entity::{EntityGeneration, EntityIndex},
         reflect::ReflectComponent,
         world::EntityRef,
     },
@@ -37,9 +38,9 @@ pub fn entity_bits(value: &Value) -> Option<u64> {
         Value::Number(number) => number.as_u64(),
         Value::String(text) => {
             let (index, generation) = text.split_once('v')?;
-            let index: u32 = index.parse().ok()?;
-            let generation: u32 = generation.parse().ok()?;
-            Some((u64::from(generation) << 32) | u64::from(index))
+            let index = EntityIndex::from_raw_u32(index.parse().ok()?)?;
+            let generation = EntityGeneration::from_bits(generation.parse().ok()?);
+            Some(Entity::from_index_and_generation(index, generation).to_bits())
         }
         Value::Array(fields) => fields.first().and_then(entity_bits),
         Value::Object(fields) => fields.values().next().and_then(entity_bits),
@@ -337,6 +338,10 @@ mod tests {
         assert_eq!(entity_bits(&text), Some(bits));
         assert_eq!(entity_bits(&serde_json::json!(bits)), Some(bits));
         assert_eq!(entity_bits(&serde_json::json!([text])), Some(bits));
+        assert_eq!(
+            entity_bits(&serde_json::json!(entity.to_string())),
+            Some(bits)
+        );
         assert_eq!(entity_bits(&serde_json::json!("not an entity")), None);
     }
 }
