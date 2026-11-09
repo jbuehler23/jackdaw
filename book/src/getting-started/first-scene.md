@@ -78,6 +78,38 @@ Bevy cannot load `.bsn` on its own; the loader ships in
 `jackdaw_runtime`, which is an ordinary dependency of your
 crate.
 
+## Wait for a level to spawn
+
+The asset server reports a scene as loaded before its entities
+exist, and under Play the game spawns the document the editor
+serves. To run code once the level is in the world, observe
+`JackdawSceneSpawned` on the root:
+
+```rust
+use bevy::prelude::*;
+use jackdaw_runtime::prelude::*;
+
+fn load_level(mut commands: Commands, assets: Res<AssetServer>) {
+    commands
+        .spawn(JackdawSceneRoot(assets.load("scene.bsn")))
+        .observe(|spawned: On<JackdawSceneSpawned>, names: Query<(Entity, &Name)>| {
+            info!("level {} is ready", spawned.entity);
+            for (entity, name) in &names {
+                if name.as_str() == "PlayerStart" {
+                    info!("player starts at {entity}");
+                }
+            }
+        })
+        .observe(|failed: On<JackdawSceneSpawnFailed>| {
+            error!("level failed to load: {}", failed.error);
+        });
+}
+```
+
+The event fires again each time the scene respawns, such as after
+a hot reload of its file. While the scene stays spawned, the root
+carries `JackdawSceneReady`, which a system can filter on.
+
 ## What you have now
 
 A project with one scene, one cube, and a save/load round

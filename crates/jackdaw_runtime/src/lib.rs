@@ -188,7 +188,8 @@ pub mod prelude {
     pub use crate::{
         DetailPresser, EditorCategory, EditorDescription, EditorHidden, EditorPreview,
         JackdawAssetSourcePlugin, JackdawCatalog, JackdawCatalogPath, JackdawPlugin,
-        JackdawSceneMember, JackdawSceneRoot, SceneRefused, SkipSerialization,
+        JackdawSceneMember, JackdawSceneReady, JackdawSceneRoot, JackdawSceneSpawnFailed,
+        JackdawSceneSpawned, SceneRefused, SkipSerialization,
     };
     #[cfg(feature = "terrain")]
     pub use crate::{DetailPressers, DetailSettings, DetailViewer, TerrainViewer};
@@ -534,8 +535,31 @@ pub struct JackdawSceneMember {
 #[derive(Component, Default)]
 struct SceneInstanceMembers(Vec<Entity>);
 
+/// Marks a root whose spawn pass has run, whether it spawned or was refused.
 #[derive(Component)]
 struct SceneSpawned;
+
+/// Marks a [`JackdawSceneRoot`] whose scene has spawned, until a reload takes
+/// the scene down to spawn it again.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JackdawSceneReady;
+
+/// Triggered on a [`JackdawSceneRoot`] each time its scene has spawned, from a
+/// file or from the document the editor serves under Play, with the scene's
+/// entities already in the world.
+#[derive(EntityEvent, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JackdawSceneSpawned {
+    pub entity: Entity,
+}
+
+/// Triggered on a [`JackdawSceneRoot`] when its scene was refused, alongside
+/// [`SceneRefused`].
+#[derive(EntityEvent, Clone, Debug, PartialEq, Eq)]
+pub struct JackdawSceneSpawnFailed {
+    pub entity: Entity,
+    /// Why the scene was refused.
+    pub error: String,
+}
 
 /// Marks a scene root spawned from the document the editor served under Play
 /// rather than from its file, so a change to the file does not respawn it: the
@@ -693,7 +717,7 @@ fn clear_modified_scene_roots(
         }
         commands
             .entity(root_entity)
-            .remove::<SceneSpawned>()
+            .remove::<(SceneSpawned, JackdawSceneReady)>()
             .insert(SceneInstanceMembers::default());
     }
 }
@@ -766,9 +790,7 @@ pub(crate) fn spawn_loaded_scenes(
             // why.
             if let Some(err) = scene_load_failure(world, &handle) {
                 warn!("Cannot spawn scene: {err}");
-                world
-                    .entity_mut(root_entity)
-                    .insert((SceneSpawned, SceneRefused));
+                refuse_scene(world, root_entity, err);
             }
             continue;
         };
@@ -804,9 +826,7 @@ fn spawn_scene_document(
         Ok(ast) => ast,
         Err(err) => {
             warn!("Cannot read scene: {err}");
-            world
-                .entity_mut(root_entity)
-                .insert((SceneSpawned, SceneRefused));
+            refuse_scene(world, root_entity, err);
             return;
         }
     };
@@ -842,9 +862,7 @@ fn spawn_scene_document(
     // whose own file never names it.
     if let Err(err) = jackdaw_bsn::reject_retired_ui_components(&ast) {
         warn!("Cannot spawn scene '{scene_name}': {err}");
-        world
-            .entity_mut(root_entity)
-            .insert((SceneSpawned, SceneRefused));
+        refuse_scene(world, root_entity, format!("{scene_name}: {err}"));
         return;
     }
 
@@ -878,7 +896,23 @@ fn spawn_scene_document(
             .insert(jackdaw_scene_types::SceneRootTag);
     }
 
-    world.entity_mut(root_entity).insert(SceneSpawned);
+    world
+        .entity_mut(root_entity)
+        .insert((SceneSpawned, JackdawSceneReady));
+    world.trigger(JackdawSceneSpawned {
+        entity: root_entity,
+    });
+}
+
+fn refuse_scene(world: &mut World, root_entity: Entity, error: String) {
+    world
+        .entity_mut(root_entity)
+        .remove::<JackdawSceneReady>()
+        .insert((SceneSpawned, SceneRefused));
+    world.trigger(JackdawSceneSpawnFailed {
+        entity: root_entity,
+        error,
+    });
 }
 
 /// Materialize the prefab instances a scene document names.
