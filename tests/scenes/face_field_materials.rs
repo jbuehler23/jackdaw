@@ -860,7 +860,11 @@ fn adopt_late_entry(app: &mut App) {
         "#Late\nbevy_pbr::pbr_material::StandardMaterial {\n    perceptual_roughness: 0.5,\n}\n",
     )
     .expect("the entry parses");
-    assert!(jackdaw_bsn::adopt_asset_roots(app.world_mut(), &mut source).is_empty());
+    assert!(
+        jackdaw_bsn::adopt_asset_roots(app.world_mut(), &mut source)
+            .dropped
+            .is_empty()
+    );
 }
 
 /// `@late` and its path resolve as the asset index finds the file.

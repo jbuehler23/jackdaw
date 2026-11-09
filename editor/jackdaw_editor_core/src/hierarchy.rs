@@ -706,9 +706,13 @@ pub(crate) fn rebuild_hierarchy(world: &mut World) -> Result {
             }
         }
     }
-    world
-        .run_system_cached(rebuild_hierarchy_inner)
-        .map_err(BevyError::from)
+    world.run_system_cached(rebuild_hierarchy_inner)?;
+    // The sort above is only the fallback order: the document's order wins for
+    // the roots it holds.
+    if world.contains_resource::<jackdaw_bsn::SceneBsnAst>() {
+        sync_outliner_row_order(world, None);
+    }
+    Ok(())
 }
 
 /// Ancestor entities whose rows must expand, top down, so that `target`'s

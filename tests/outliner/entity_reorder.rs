@@ -1126,6 +1126,18 @@ fn siblings_keep_document_order_across_a_tab_switch() {
     );
     assert_eq!(outliner_order(&mut app, panel), expected, "after the open");
 
+    for show_all in [false, true] {
+        app.world_mut().resource_mut::<HierarchyShowAll>().0 = show_all;
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(
+            outliner_order(&mut app, panel),
+            expected,
+            "after show-all turned {show_all}"
+        );
+    }
+
     let front = app.world().resource::<jackdaw::scenes::Scenes>().active;
     for _ in 0..2 {
         assert!(jackdaw::scenes::swap::swap_active_tab(

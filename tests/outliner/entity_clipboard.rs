@@ -630,3 +630,66 @@ fn a_pasted_material_whose_name_the_scene_uses_keeps_its_own_value() {
         "the file holds both materials:\n{saved}"
     );
 }
+
+/// The target scene in front, with `Copied` from the source scene on the
+/// clipboard. Both scenes name a material `StandardMaterial0`, with different
+/// values.
+fn clashing_paste_app() -> (App, tempfile::TempDir, std::path::PathBuf) {
+    let mut app = clipboard_app();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("source.bsn");
+    let target = dir.path().join("target.bsn");
+    std::fs::write(&source, scene_with_material("Copied", 0.25)).expect("write source");
+    std::fs::write(&target, scene_with_material("Resident", 0.75)).expect("write target");
+    run_finished(&mut app, &format!("scene.open path={}", source.display()));
+    let copied = app
+        .world_mut()
+        .query::<(Entity, &Name)>()
+        .iter(app.world())
+        .find(|(_, name)| name.as_str() == "Copied")
+        .map(|(entity, _)| entity)
+        .expect("the source brush");
+    select(&mut app, copied);
+    run_finished(&mut app, "entity.copy");
+    run_finished(&mut app, &format!("scene.open path={}", target.display()));
+    (app, dir, target)
+}
+
+fn material_entries(app: &App) -> Vec<String> {
+    let live = app.world().resource::<SceneBsnAst>();
+    live.roots
+        .iter()
+        .filter_map(|&root| live.get_name(root))
+        .filter(|name| name.starts_with("StandardMaterial"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn pasting_a_clashing_material_twice_adopts_it_once() {
+    let (mut app, _dir, _target) = clashing_paste_app();
+    press(&mut app, "entity.paste");
+    press(&mut app, "entity.paste");
+    assert_eq!(
+        material_entries(&app),
+        vec!["StandardMaterial0", "StandardMaterial1"]
+    );
+    assert_eq!(brush_roughness(&mut app, "Copied2"), Some(0.25));
+}
+
+#[test]
+fn undoing_a_paste_takes_out_the_material_it_adopted() {
+    let (mut app, _dir, target) = clashing_paste_app();
+    press(&mut app, "entity.paste");
+    assert_eq!(material_entries(&app).len(), 2);
+
+    run_finished(&mut app, "history.undo");
+    assert_eq!(material_entries(&app), vec!["StandardMaterial0"]);
+    run_finished(&mut app, "scene.save");
+    let saved = std::fs::read_to_string(&target).expect("the scene is saved");
+    assert!(!saved.contains("StandardMaterial1"), "{saved}");
+
+    run_finished(&mut app, "history.redo");
+    assert_eq!(material_entries(&app).len(), 2);
+    assert_eq!(brush_roughness(&mut app, "Copied"), Some(0.25));
+}
