@@ -2567,6 +2567,7 @@ fn saving_keeps_a_tile_sidecar_that_failed_to_load() {
 }
 
 #[test]
+#[cfg(unix)]
 fn saving_keeps_a_tile_sidecar_that_cannot_be_read() {
     use std::os::unix::fs::PermissionsExt as _;
     let tmp = tempfile::tempdir().expect("temp directory");
