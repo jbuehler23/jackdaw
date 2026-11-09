@@ -1253,8 +1253,8 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
     };
     assert!(!shown.iter().any(keyed), "no key in a label: {shown:?}");
     for (action, key) in [
-        (DockAction::Mode(ModeId::TILES), "M"),
-        (DockAction::Mode(ModeId::TERRAINS), "M"),
+        (DockAction::Mode(ModeId::TILES), ""),
+        (DockAction::Mode(ModeId::TERRAINS), ""),
         (DockAction::NewTerrain, "N"),
     ] {
         let entity = control(&mut app, root, action);
@@ -1341,10 +1341,10 @@ fn dock_tooltips_follow_a_rebound_key() {
         .world_mut()
         .query::<(Entity, &OperatorAction)>()
         .iter(app.world())
-        .filter(|(_, a)| a.0 == "tileset.mode")
+        .filter(|(_, a)| a.0 == "tileset.terrain.from_tile")
         .map(|(e, _)| e)
         .collect();
-    assert!(!actions.is_empty(), "the mode key has an action");
+    assert!(!actions.is_empty(), "the new terrain key has an action");
     let old: Vec<Entity> = app
         .world_mut()
         .query::<(Entity, &BindingOf)>()
@@ -1361,8 +1361,8 @@ fn dock_tooltips_follow_a_rebound_key() {
     };
     app.world_mut().spawn((key, BindingOf(actions[0])));
     settle(&mut app);
-    let paint = control(&mut app, root, DockAction::Mode(ModeId::TERRAINS));
-    let tip = app.world().get::<Tooltip>(paint).map(|t| t.keybind.clone());
+    let new = control(&mut app, root, DockAction::NewTerrain);
+    let tip = app.world().get::<Tooltip>(new).map(|t| t.keybind.clone());
     assert_eq!(tip.as_deref(), Some("Q"));
 }
 

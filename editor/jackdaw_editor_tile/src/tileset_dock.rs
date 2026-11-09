@@ -103,20 +103,18 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     let context = ctx
         .spawn((
             TilesetDockInputContext,
-            ContextPriority(6),
+            ContextPriority(5),
             ContextActivity::INACTIVE,
             Name::new("TilesetDockInputContext"),
             jackdaw_editor_core::EditorEntity,
         ))
         .id();
     ctx.bind_operator_in::<TilesetTerrainFromTileOp>(context, [PresetInput::key("KeyN")]);
-    ctx.bind_operator_in::<TilesetModeOp>(context, [PresetInput::key("KeyM")]);
     ctx.bind_operator_in::<TilesetLayoutApplyOp>(context, [PresetInput::key("Enter")]);
 }
 
 /// The input context of the Tileset window, active while a tileset tab has
-/// the keyboard. It outranks tile edit mode, so the focused tab takes the
-/// keys both bind.
+/// the keyboard.
 #[derive(Component, Default)]
 #[require(InputContext)]
 pub struct TilesetDockInputContext;

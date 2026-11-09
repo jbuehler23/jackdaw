@@ -397,11 +397,11 @@ fn a_click_in_select_mode_selects_and_paints_nothing() {
 }
 
 #[test]
-fn a_click_in_the_terrains_mode_paints_one_zone_and_m_steps_modes() {
+fn a_click_in_the_terrains_mode_paints_one_zone_and_the_mode_operator_steps_modes() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     press(&mut app, root, DockAction::Brush(WATER));
-    input(&mut app, "input.key key=KeyM");
+    input(&mut app, "tileset.mode");
     assert_eq!(view(&app).mode, ModeId::TERRAINS);
     let count = entries(&app);
     let at = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.15));
@@ -409,7 +409,7 @@ fn a_click_in_the_terrains_mode_paints_one_zone_and_m_steps_modes() {
     let one = [WATER, 0, 0, 0, 0, 0, 0, 0, 0];
     assert_eq!(peers_of(&on_disk(&dir), 1), Some(one));
     assert_eq!(entries(&app), count + 1);
-    input(&mut app, "input.key key=KeyM");
+    input(&mut app, "tileset.mode");
     assert_eq!(view(&app).mode, ModeId::OBJECTS);
 }
 

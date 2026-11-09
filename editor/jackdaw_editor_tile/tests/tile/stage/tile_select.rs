@@ -8,7 +8,6 @@ use crate::stage::tilemap_render::{
     grass_patch, ground_terrain, layer, project_app, settle, spawn_map, tile_layer,
 };
 
-use crate::util::OperatorResultExt as _;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 
@@ -414,59 +413,4 @@ fn a_selection_context_spawned_later_follows_the_selection() {
             .is_some_and(|active| active.0),
         "active while cells are selected"
     );
-}
-
-#[test]
-fn the_mode_key_in_a_focused_tileset_tab_switches_its_mode_not_the_tile_tool() {
-    use jackdaw_editor_tile::tileset_dock::{
-        DockAction, DockControl, TilesetDock, TilesetDockViews,
-    };
-    use jackdaw_editor_tile::tileset_modes::ModeId;
-
-    let (mut app, _dir) = project_app();
-    let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
-    enter(&mut app, map);
-    let tool = app.world().resource::<TileEditMode>().tool;
-    assert_ne!(tool, TileTool::Select);
-    app.world_mut()
-        .operator("tileset.edit")
-        .param(
-            "path",
-            PropertyValue::from("overworld.tileset.bsn".to_string()),
-        )
-        .call()
-        .expect("tileset.edit dispatches")
-        .assert_finished();
-    settle(&mut app);
-    let tile = app
-        .world_mut()
-        .query::<(Entity, &DockControl)>()
-        .iter(app.world())
-        .find(|(_, c)| c.action == DockAction::Tile(0, 3))
-        .map(|(e, _)| e)
-        .expect("a sheet tile");
-    app.world_mut()
-        .trigger(bevy::ui_widgets::Activate { entity: tile });
-    settle(&mut app);
-    assert_eq!(app.world().resource::<TileEditMode>().map, Some(map));
-    jackdaw_editor_core::boot_ops::run_op_clause(app.world_mut(), "input.key key=KeyM")
-        .expect("the clause dispatches")
-        .assert_finished();
-    for _ in 0..600 {
-        app.update();
-        let input = (app.world()).resource::<jackdaw_editor_core::test_input::SyntheticInput>();
-        if input.is_idle() {
-            break;
-        }
-    }
-    settle(&mut app);
-    let mode = |app: &mut App| {
-        let path = (app.world_mut().query::<&TilesetDock>().iter(app.world()))
-            .find_map(|d| d.path.clone())
-            .expect("a tileset tab");
-        app.world().resource::<TilesetDockViews>().0[&path].mode
-    };
-    assert_eq!(mode(&mut app), ModeId::TERRAINS, "the focused tab takes M");
-    assert_eq!(app.world().resource::<TileEditMode>().tool, tool);
-    assert_eq!(app.world().resource::<TileEditMode>().map, Some(map));
 }
