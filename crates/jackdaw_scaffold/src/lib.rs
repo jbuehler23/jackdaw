@@ -3212,7 +3212,7 @@ mod tests {
         assert!(
             plan.notes
                 .iter()
-                .any(|note| note.contains("`physics`") && note.contains("not compatible")),
+                .any(|note| note.contains("`physics`") && note.contains("Physics module")),
             "got: {:?}",
             plan.notes
         );
@@ -3824,7 +3824,10 @@ mod tests {
         );
         assert_eq!(modules_arg(&args(&["game"])).unwrap(), None);
         assert!(modules_arg(&args(&["game", "--modules", "rendering"])).is_err());
-        assert!(modules_arg(&args(&["game", "--modules", "physics"])).is_err());
+        assert_eq!(
+            modules_arg(&args(&["game", "--modules", "physics"])).unwrap(),
+            Some(modules(&["physics"]))
+        );
         assert!(modules_arg(&args(&["game", "--modules", "physics", "--no-modules"])).is_err());
     }
 

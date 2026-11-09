@@ -9,15 +9,12 @@ repository.workspace = true
 
 [package.metadata.jackdaw]
 # The editor line this module is built for.
-editor = "main"
-# Why this module cannot build on the current Bevy; CI reports it instead
-# of building. Remove once avian releases for Bevy 0.20.
-unavailable = "avian has no release for Bevy main"
+editor = "0.20"
 
 [dependencies]
 # See `jackdaw_pie_protocol`: this crate ships inside games, so its bevy
 # features unify into theirs. Keep the list minimal and explicit.
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = [
+bevy = { version = "0.20", default-features = false, features = [
     "std",
     "serialize",
     "reflect_auto_register",
@@ -25,7 +22,7 @@ bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-fe
     "bevy_mesh",
 ] }
 avian3d = { workspace = true }
-jackdaw_geometry = { version = "0.21.0-dev", path = "../../../crates/jackdaw_geometry" }
+jackdaw_geometry = { version = "0.21.0-dev", path = "../../../crates/jackdaw_geometry", default-features = false, features = ["reflect"] }
 jackdaw_scene_types = { version = "0.21.0-dev", path = "../../../crates/jackdaw_scene_types" }
 # The heights a loaded terrain is drawn from, for its ground collider.
 jackdaw_runtime = { version = "0.21.0-dev", path = "../../../crates/jackdaw_runtime", default-features = false, optional = true }
@@ -37,7 +34,7 @@ default = ["terrain"]
 terrain = ["dep:jackdaw_runtime", "jackdaw_runtime/terrain", "dep:jackdaw_terrain"]
 
 [dev-dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["bevy_gltf", "bevy_world_serialization"] }
+bevy = { version = "0.20", default-features = false, features = ["bevy_gltf", "bevy_world_serialization"] }
 jackdaw_runtime = { version = "0.21.0-dev", path = "../../../crates/jackdaw_runtime", features = ["terrain"] }
 jackdaw_terrain = { version = "0.21.0-dev", path = "../../../crates/jackdaw_terrain" }
 tempfile = "3"

@@ -767,7 +767,7 @@ mod tests {
             problems[0].fix,
             format!("jd upgrade --apply {}", root.display())
         );
-        assert!(problems[0].note.is_some());
+        assert!(problems[0].note.is_none(), "{:?}", problems[0].note);
     }
 
     #[test]
