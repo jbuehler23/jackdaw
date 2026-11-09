@@ -1202,15 +1202,15 @@ pub(crate) fn warn_absolute(world: &mut World, absolute: &[AbsoluteAssetField]) 
 /// share a session name, so an edit of one document's asset leaves another's alone.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum AssetOwner {
-    /// The document of the tab with this id.
+    /// The document of the untitled tab with this id.
     Tab(u64),
-    /// A document no tab holds, by its path under the asset folder.
+    /// A document by its path under the asset folder, whether a tab holds it or not.
     File(String),
 }
 
 impl AssetOwner {
     pub(crate) fn of_tab(world: &World, tab: usize) -> Self {
-        Self::Tab(world.resource::<Scenes>().tabs[tab].id)
+        Self::of(world, &world.resource::<Scenes>().tabs[tab])
     }
 
     /// The owner of the live document's assets.
@@ -1218,7 +1218,18 @@ impl AssetOwner {
         world
             .get_resource::<Scenes>()
             .and_then(|scenes| scenes.tabs.get(scenes.active))
-            .map_or_else(|| Self::File(String::new()), |tab| Self::Tab(tab.id))
+            .map_or_else(|| Self::File(String::new()), |tab| Self::of(world, tab))
+    }
+
+    fn of(world: &World, tab: &crate::scenes::SceneTab) -> Self {
+        tab.path
+            .as_deref()
+            .and_then(|path| {
+                world
+                    .get_resource::<crate::project::ProjectRoot>()?
+                    .to_asset_path(path)
+            })
+            .map_or(Self::Tab(tab.id), Self::File)
     }
 }
 
@@ -1250,7 +1261,7 @@ pub struct PlayAssetNames {
 
 impl PlayAssetNames {
     /// The `#Name` of the asset `id`, or `None` when the asset cannot be embedded
-    /// for a game.
+    /// for a game. A live id with no name yet belongs to the tab in front.
     pub(crate) fn resolve(
         &mut self,
         world: &World,

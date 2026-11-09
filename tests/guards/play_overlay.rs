@@ -2071,3 +2071,58 @@ fn a_runtime_tint_survives_a_later_root_spawning() {
         .collect();
     assert_eq!(roughness, vec![0.9, 0.9], "the tint stays");
 }
+
+/// One frame of Play: the editor's material and document edits reach the game.
+fn play_frame(app: &mut App, game: &mut App) {
+    app.update();
+    let mut sends = collect_material_changes(app.world_mut(), &[key()]);
+    sends.extend(collect_changes_for(app.world_mut(), &[key()]));
+    for (_, event) in sends {
+        match event {
+            ControlEvent::SceneAssets { text } => load_scene_assets(game.world_mut(), &text),
+            ControlEvent::AssetFiles { files } => load_asset_files(game.world_mut(), &files),
+            ControlEvent::PrefabFiles { files } => load_prefab_files(game.world_mut(), &files),
+            ControlEvent::NodeComponents { node, set, removed } => {
+                jackdaw_runtime::node_sync::apply_node_components(
+                    game.world_mut(),
+                    node,
+                    &set,
+                    &removed,
+                );
+            }
+            _ => {}
+        }
+    }
+    game.update();
+}
+
+/// A scene closed and opened again while playing: an edit of its material still
+/// reaches the game's entities of that scene.
+#[test]
+fn a_material_edit_after_reopening_a_scene_reaches_the_game() {
+    let (mut app, tmp) = editor(&[
+        ("zone.bsn", &stone_scene("Zone", 0.25)),
+        ("meadow.bsn", &stone_scene("Meadow", 0.25)),
+    ]);
+    app.register_type::<Swatch>();
+    open(&mut app, "assets/meadow.bsn");
+    open(&mut app, "assets/zone.bsn");
+    collect_changes_for(app.world_mut(), &[key()]);
+
+    let mut game = empty_game(&tmp);
+    game.register_type::<Swatch>();
+    game.update();
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.25);
+
+    let zone = tab_named(&app, "zone.bsn");
+    jackdaw::scenes::operators::scene_close_system_unprompted(app.world_mut(), zone);
+    play_frame(&mut app, &mut game);
+    open(&mut app, "assets/zone.bsn");
+    play_frame(&mut app, &mut game);
+
+    let material = swatch_of(&mut app, "Zone");
+    set_roughness(&mut app, &material, 0.8);
+    play_frame(&mut app, &mut game);
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.8);
+}
