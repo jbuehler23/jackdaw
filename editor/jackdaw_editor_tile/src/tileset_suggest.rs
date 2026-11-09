@@ -15,13 +15,13 @@ use jackdaw_tilemap::{
 use jackdaw_tileset::Tileset;
 
 use crate::tileset_dock::{
-    DockAction, DockControl, DockPage, DockPane, DockView, Pane, TilesetDock, TilesetDockViews,
-    block_rect, dispatch, dock_path, dock_tileset, frame_size, load, refill, sheet_image,
-    spawn_heading, spawn_icon_button, spawn_row, spawn_text, take_keyboard, zoom,
+    DockAction, DockControl, DockPane, DockView, Pane, TilesetDock, TilesetDockViews, block_rect,
+    dispatch, dock_path, dock_tileset, frame_size, load, refill, sheet_image, spawn_heading,
+    spawn_icon_button, spawn_row, spawn_text, take_keyboard, zoom,
 };
 use crate::tileset_edit::text;
 use crate::tileset_layout::open_block;
-use jackdaw_editor_core::operator_tooltip::OperatorTooltip;
+use crate::tileset_modes::ModeId;
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<DismissedSuggestions>();
@@ -187,23 +187,10 @@ pub(crate) fn prune(view: &mut DockView, tileset: &Tileset) {
         .collect();
     let folded = |s: &Suggestion| {
         let object = matches!(s.kind, SuggestionKind::Object { .. });
-        (object && !view.objects_open) || (!object && view.page == DockPage::Objects)
+        (object && !view.objects_open) || (!object && view.mode == ModeId::OBJECTS)
     };
     view.shown = (shown.filter(|s| !folded(s))).and_then(|s| kept.iter().position(|k| *k == s));
     view.suggestions = Some(kept);
-}
-
-/// The Suggest button of the dock header.
-pub(crate) fn spawn_suggest_button(world: &mut World, parent: Entity, root: Entity) {
-    world.spawn((
-        button(ButtonProps::new("Suggest").with_left_icon(Icon::Sparkles)),
-        DockControl {
-            root,
-            action: DockAction::Suggest,
-        },
-        OperatorTooltip(TilesetSuggestOp::ID),
-        ChildOf(parent),
-    ));
 }
 
 /// The open Suggestions list: blocks, then the objects folded into one row.
@@ -235,7 +222,7 @@ pub(crate) fn spawn_suggestions(
     ));
     let (objects, blocks): (Vec<_>, Vec<_>) = (found.iter().enumerate())
         .partition(|(_, s)| matches!(s.kind, SuggestionKind::Object { .. }));
-    if view.page == DockPage::Sheet {
+    if view.mode != ModeId::OBJECTS {
         for (i, s) in &blocks {
             spawn_suggestion(world, parent, root, (tileset, s), *i);
         }
@@ -373,18 +360,6 @@ pub(crate) fn spawn_outline(
 pub(crate) fn act(world: &mut World, control: DockControl) -> bool {
     let root = control.root;
     let index = match control.action {
-        DockAction::Suggest => {
-            take_keyboard(world, root);
-            let path = dock_of(world, root);
-            let mut call = world.operator(TilesetSuggestOp::ID);
-            if let Some(path) = path {
-                call = call.param("path", path);
-            }
-            if let Err(err) = call.call() {
-                warn!("{}: {err}", TilesetSuggestOp::ID);
-            }
-            return true;
-        }
         DockAction::SuggestionsClose => {
             edit_list(world, root, |view| {
                 (view.suggestions, view.shown) = (None, None);

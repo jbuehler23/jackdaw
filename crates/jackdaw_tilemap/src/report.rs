@@ -332,6 +332,11 @@ fn setup_on_grid(
             animates,
         });
     }
+    let mut ids: Vec<TerrainId> = proposal.terrains.iter().map(|p| p.id).collect();
+    ids.sort_unstable();
+    let marker = |id: TerrainId| {
+        crate::setup::marker_color_at(ids.iter().position(|i| *i == id).unwrap_or_default())
+    };
     let mut terrains = Vec::with_capacity(proposal.terrains.len());
     for p in &proposal.terrains {
         let t = analysis
@@ -340,7 +345,7 @@ fn setup_on_grid(
         terrains.push(TerrainReport {
             id: p.id,
             name: t.name.clone(),
-            swatch: t.swatch,
+            swatch: marker(p.id),
             background: p.background,
             pure_tiles: p.pure_tiles.len(),
         });

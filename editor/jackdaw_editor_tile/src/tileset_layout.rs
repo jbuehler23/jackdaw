@@ -21,14 +21,15 @@ use jackdaw_tilemap::{
 };
 use jackdaw_tileset::Tileset;
 
-use crate::tileset_bits::{BitMark, spawn_mark};
 use crate::tileset_dock::{
-    DockAction, DockControl, DockPage, DockTool, DockView, TilesetDock, TilesetDockViews,
-    block_rect, dock_tileset, focused_dock, in_rect, rect_cells, refill, sheet_image, spawn_text,
-    swatch, take_keyboard, tile_image, tile_outline, zoom,
+    DockAction, DockControl, DockView, TilesetDock, TilesetDockViews, block_rect, dock_tileset,
+    focused_dock, in_rect, rect_cells, refill, sheet_image, spawn_text, swatch, take_keyboard,
+    tile_image, tile_outline, zoom,
 };
 use crate::tileset_edit::apply_edit;
 use crate::tileset_layout_ops::{PLACEMENTS, TEMPLATES, order_text, template_edit};
+use crate::tileset_modes::ModeId;
+use crate::zone_overlay::{ZoneLayout, ZoneValues, spawn_zone_overlay};
 use jackdaw_editor_core::operator_tooltip::OperatorTooltip;
 
 /// Each placement's heading, its tooltip and its layouts in the order shown.
@@ -392,13 +393,11 @@ pub struct LayoutAnchor {
     pub root: Entity,
 }
 
-/// A bit the picked layout would give peer `peer` of sheet tile `tile`.
+/// The overlay of the zones the picked layout would paint, over the block
+/// of the dock `root`.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct GhostMark {
+pub struct GhostZones {
     pub root: Entity,
-    pub tile: u32,
-    pub peer: usize,
-    pub terrain: TerrainId,
 }
 
 /// The outline of a block tile whose place the fit is unsure of.
@@ -603,24 +602,10 @@ fn refresh(world: &mut World, root: Entity, path: &str, tileset: &Tileset) {
     else {
         return;
     };
-    let columns = tileset
-        .sheets
-        .get(draft.sheet as usize)
-        .map_or(1, |s| s.columns);
-    let picked = draft.pick.is_some();
-    let mut marks = world.query::<(
-        Entity,
-        Option<&GhostMark>,
-        Option<&BitMark>,
-        Option<&UnsureMark>,
-    )>();
+    let mut marks = world.query::<(Entity, Option<&GhostZones>, Option<&UnsureMark>)>();
     let stale: Vec<Entity> = (marks.iter(world))
-        .filter(|(_, ghost, bit, unsure)| {
-            ghost.is_some_and(|g| g.root == root)
-                || unsure.is_some_and(|u| u.root == root)
-                || bit.is_some_and(|b| {
-                    b.root == root && picked && draft.holds(b.sheet, b.tile, columns)
-                })
+        .filter(|(_, ghost, unsure)| {
+            ghost.is_some_and(|g| g.root == root) || unsure.is_some_and(|u| u.root == root)
         })
         .map(|(e, ..)| e)
         .collect();
@@ -712,25 +697,29 @@ fn spawn_ghosts(
     let scale = zoom(tileset.tile_size.as_vec2());
     let mode = template.mode_at(placement);
     let shapes = template.placed_tiles(placement, draft.inner, draft.outer);
-    for (tile, shape) in draft.slot_tiles(columns).into_iter().zip(shapes) {
-        let Some(tile) = tile else {
-            continue;
-        };
-        for peer in Peer::ALL.into_iter().filter(|p| mode.reads(*p)) {
-            let terrain = shape.get(peer);
-            if terrain == 0 {
-                continue;
-            }
-            let ghost = GhostMark {
-                root,
-                tile,
-                peer: peer.index(),
-                terrain,
-            };
-            let at = (draft.sheet, tile, peer.index());
-            let color = swatch(tileset, terrain, 0.45);
-            spawn_mark(world, frame, at, ghost, (tileset, scale), color);
-        }
+    let tiles: HashMap<u32, [u32; 9]> = (draft.slot_tiles(columns).into_iter().zip(shapes))
+        .filter_map(|(tile, shape)| {
+            let peers = Peer::ALL.map(|p| {
+                let read = mode.reads(p);
+                if read { u32::from(shape.get(p)) } else { 0 }
+            });
+            Some((tile?, peers))
+        })
+        .collect();
+    let colors = [draft.inner, draft.outer]
+        .into_iter()
+        .map(|id| (u32::from(id), swatch(tileset, id, 1.0)))
+        .collect();
+    let ghost = ZoneValues {
+        layout: ZoneLayout::Peers(mode),
+        tiles,
+        picked: (draft.inner != 0).then_some(u32::from(draft.inner)),
+        colors,
+        dim: false,
+        hover: None,
+    };
+    if let Some(overlay) = spawn_zone_overlay(world, frame, root, (tileset, draft.sheet), ghost) {
+        world.entity_mut(overlay).insert(GhostZones { root });
     }
     for cell in &draft.unsure {
         let tile = draft.cell_tile(*cell, columns);
@@ -1158,7 +1147,7 @@ fn on_press(
     };
     let selecting = (docks.get(root).ok())
         .and_then(|d| views.0.get(d.path.as_ref()?))
-        .is_some_and(|v| v.page == DockPage::Sheet && v.tool == DockTool::Select);
+        .is_some_and(|v| v.mode == ModeId::TILES);
     if selecting {
         drag.0 = Some((root, sheet, tile, tile));
     }
@@ -1255,7 +1244,8 @@ pub(crate) type BlockGuess = (
 
 /// Open the layout popover over the `size` block at `origin` of sheet
 /// `sheet`: with `guess` preselected, else with the layout that fits best.
-/// A layout of two placements still asks which one it is.
+/// A layout of two placements still asks which one it is. Laying out a
+/// block is a tiles mode task, so the dock switches to it.
 pub(crate) fn open_block(
     world: &mut World,
     root: Entity,
@@ -1280,6 +1270,7 @@ pub(crate) fn open_block(
     };
     draft.refit(world, tileset, fitting);
     if let Some(view) = world.resource_mut::<TilesetDockViews>().0.get_mut(path) {
+        view.mode = ModeId::TILES;
         view.layout = Some(draft);
     }
     refill(world, path);

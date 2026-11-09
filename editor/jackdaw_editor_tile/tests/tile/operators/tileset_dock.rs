@@ -15,12 +15,16 @@ use bevy::ui_widgets::Activate;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_core::asset_index::AssetIndex;
 use jackdaw_editor_tile::tileset_bits::MissingGlyph;
+use jackdaw_editor_tile::tileset_dock::MoreMenu;
 use jackdaw_editor_tile::tileset_dock::{
-    BitsOverlay, CollisionCombo, DockAction, DockControl, DockPage, DockPane, DockTool, DockView,
-    NameField, Pane, SheetPicture, TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock,
-    TilesetDockInputContext, TilesetDockViews,
+    CollisionCombo, DockAction, DockControl, DockPane, DockView, NameField, Pane, SheetPicture,
+    TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext,
+    TilesetDockViews,
 };
+use jackdaw_editor_tile::tileset_modes::ModeId;
+use jackdaw_feathers::button::ButtonOperatorCall;
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
+use jackdaw_feathers::menu_bar::DynamicMenuRows;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_panels::tree::{DockTree, Edge, TabId};
 use jackdaw_scene_types::PropertyValue;
@@ -131,6 +135,32 @@ pub(crate) fn control(app: &mut App, root: Entity, action: DockAction) -> Entity
 pub(crate) fn press(app: &mut App, root: Entity, action: DockAction) {
     let entity = control(app, root, action);
     app.world_mut().trigger(Activate { entity });
+    settle(app);
+}
+
+/// The rows of the More menu of the dock under `root`, as the menu builds
+/// them.
+pub(crate) fn more_menu(app: &mut App, root: Entity) -> Vec<(String, String)> {
+    let rows = (app.world_mut().query::<(&MoreMenu, &DynamicMenuRows)>())
+        .iter(app.world())
+        .find(|(m, _)| m.root == root)
+        .map(|(_, rows)| rows.0.clone())
+        .expect("a More menu");
+    rows(app.world())
+}
+
+/// Run the More menu row of the dock under `root` that calls `id`.
+pub(crate) fn pick_more(app: &mut App, root: Entity, id: &str) {
+    let action = (more_menu(app, root).into_iter())
+        .map(|(action, _)| action)
+        .find(|a| a.strip_prefix("op:").is_some_and(|op| op.starts_with(id)))
+        .unwrap_or_else(|| panic!("a More row calls {id}"));
+    let row = ButtonOperatorCall::try_from(action.as_str()).expect("an operator row");
+    let mut call = app.world_mut().operator(row.id.clone());
+    for (key, value) in row.params {
+        call = call.param(key, value);
+    }
+    call.call().expect("dispatches").assert_finished();
     settle(app);
 }
 
@@ -305,21 +335,27 @@ fn actions(app: &mut App, root: Entity) -> Vec<DockAction> {
         .collect()
 }
 
+/// The modes of the mode bar of the dock under `root`, in bar order.
+pub(crate) fn mode_bar(app: &mut App, root: Entity) -> Vec<ModeId> {
+    let segment = control(app, root, DockAction::Mode(ModeId::TILES));
+    let bar = app.world().get::<ChildOf>(segment).expect("a bar").parent();
+    let segments: Vec<Entity> = app.world().get::<Children>(bar).expect("segments").to_vec();
+    (segments.into_iter())
+        .filter_map(|e| match app.world().get::<DockControl>(e)?.action {
+            DockAction::Mode(mode) => Some(mode),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
-fn the_dock_opens_on_a_plain_sheet_page() {
+fn the_dock_opens_on_the_tiles_mode_with_a_mode_bar() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    assert_eq!(view(&app).page, DockPage::Sheet);
-    let mut pages: Vec<DockAction> = (actions(&mut app, root).into_iter())
-        .filter(|a| matches!(a, DockAction::Page(_)))
-        .collect();
-    pages.sort_by_key(|a| *a != DockAction::Page(DockPage::Sheet));
+    assert_eq!(view(&app).mode, ModeId::TILES);
     assert_eq!(
-        pages,
-        [
-            DockAction::Page(DockPage::Sheet),
-            DockAction::Page(DockPage::Objects)
-        ]
+        mode_bar(&mut app, root),
+        [ModeId::TILES, ModeId::TERRAINS, ModeId::OBJECTS]
     );
     let shown = texts(&mut app, root);
     for gone in ["Review", "Accept", "Reset to auto"] {
@@ -423,7 +459,7 @@ fn opening_clears_untouched_auto_setup_once_as_one_undo_entry() {
     open(&mut app, FILE);
     assert_cleared(&before, &on_disk(&dir));
     assert_eq!(entries(&app), count + 1, "the clear is one undo entry");
-    assert_eq!(view(&app).page, DockPage::Sheet);
+    assert_eq!(view(&app).mode, ModeId::TILES);
 
     run(&mut app, "history.undo");
     settle(&mut app);
@@ -575,7 +611,7 @@ fn the_collision_combo_sets_the_terrain_collision() {
 fn objects_are_added_from_a_rectangle_and_removed() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Page(DockPage::Objects));
+    press(&mut app, root, DockAction::Mode(ModeId::OBJECTS));
     // Two tiles of the bottom row, which no found object covers.
     let columns = on_disk(&dir).sheets[0].columns;
     let last = on_disk(&dir).sheets[0].rows - 1;
@@ -648,7 +684,7 @@ fn the_missing_shapes_of_a_set_open_on_request() {
     press(&mut app, root, DockAction::ToggleMissing(0));
     assert_eq!(listed(&mut app), 0);
     press(&mut app, root, DockAction::ToggleMissing(0));
-    press(&mut app, root, DockAction::Page(DockPage::Objects));
+    press(&mut app, root, DockAction::Mode(ModeId::OBJECTS));
     assert!(!texts(&mut app, root).iter().any(|t| t.contains("missing")));
 }
 
@@ -1207,7 +1243,7 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
     let (mut app, _dir) = handmade();
     let (_, root) = opened(&mut app);
     let shown = texts(&mut app, root);
-    for label in ["Select", "Paint", "Off", "Set", "All", "New terrain"] {
+    for label in ["Tiles", "Terrains", "Objects", "New terrain"] {
         assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
     }
     let keyed = |t: &String| {
@@ -1217,9 +1253,8 @@ fn the_header_names_no_keys_and_its_tooltips_do() {
     };
     assert!(!shown.iter().any(keyed), "no key in a label: {shown:?}");
     for (action, key) in [
-        (DockAction::Tool(DockTool::Paint), "P"),
-        (DockAction::Tool(DockTool::Select), "P"),
-        (DockAction::Bits(BitsOverlay::Set), "O"),
+        (DockAction::Mode(ModeId::TILES), ""),
+        (DockAction::Mode(ModeId::TERRAINS), ""),
         (DockAction::NewTerrain, "N"),
     ] {
         let entity = control(&mut app, root, action);
@@ -1306,10 +1341,10 @@ fn dock_tooltips_follow_a_rebound_key() {
         .world_mut()
         .query::<(Entity, &OperatorAction)>()
         .iter(app.world())
-        .filter(|(_, a)| a.0 == "tileset.paint_mode")
+        .filter(|(_, a)| a.0 == "tileset.terrain.from_tile")
         .map(|(e, _)| e)
         .collect();
-    assert!(!actions.is_empty(), "the paint mode key has an action");
+    assert!(!actions.is_empty(), "the new terrain key has an action");
     let old: Vec<Entity> = app
         .world_mut()
         .query::<(Entity, &BindingOf)>()
@@ -1326,8 +1361,8 @@ fn dock_tooltips_follow_a_rebound_key() {
     };
     app.world_mut().spawn((key, BindingOf(actions[0])));
     settle(&mut app);
-    let paint = control(&mut app, root, DockAction::Tool(DockTool::Paint));
-    let tip = app.world().get::<Tooltip>(paint).map(|t| t.keybind.clone());
+    let new = control(&mut app, root, DockAction::NewTerrain);
+    let tip = app.world().get::<Tooltip>(new).map(|t| t.keybind.clone());
     assert_eq!(tip.as_deref(), Some("Q"));
 }
 
@@ -1349,7 +1384,7 @@ fn the_object_hint_names_the_sheet_of_a_tileset_with_several() {
         },
     );
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Page(DockPage::Objects));
+    press(&mut app, root, DockAction::Mode(ModeId::OBJECTS));
     press(&mut app, root, DockAction::Tile(1, 0));
     press(&mut app, root, DockAction::Tile(1, 1));
     let shown = texts(&mut app, root);

@@ -13,8 +13,9 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_tile::tileset_dock::{DockAction, DockControl, TilesetDockViews};
 use jackdaw_editor_tile::tileset_layout::{
-    CanPaintPreview, GhostMark, LayoutPopover, LayoutTerrainPick, UnsureMark,
+    CanPaintPreview, GhostZones, LayoutPopover, LayoutTerrainPick, UnsureMark,
 };
+use jackdaw_editor_tile::zone_overlay::ZoneOverlay;
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
 use jackdaw_tilemap::{LayoutTemplate, Placement};
 use jackdaw_tileset::TerrainMatch;
@@ -101,9 +102,11 @@ fn disabled(app: &mut App, root: Entity, action: DockAction) -> bool {
 }
 
 fn ghosts(app: &mut App, root: Entity) -> BTreeSet<(u32, usize, u8)> {
-    (app.world_mut().query::<&GhostMark>().iter(app.world()))
-        .filter(|g| g.root == root)
-        .map(|g| (g.tile, g.peer, g.terrain))
+    (app.world_mut().query::<(&GhostZones, &ZoneOverlay)>())
+        .iter(app.world())
+        .filter(|(g, _)| g.root == root)
+        .flat_map(|(_, o)| o.values.zones())
+        .map(|(tile, peer, terrain)| (tile, peer, terrain as u8))
         .collect()
 }
 
@@ -342,23 +345,23 @@ fn an_apply_that_changes_nothing_closes_with_no_stale_ghosts() {
 }
 
 #[test]
-fn switching_tool_or_page_drops_the_draft() {
+fn switching_mode_drops_the_draft() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
     drag_block(&mut app, &dir, root, 3, 3);
-    call(&mut app, "tileset.paint_mode", &[("mode", "paint")]);
+    call(&mut app, "tileset.mode", &[("mode", "terrains")]);
     settle(&mut app);
-    assert!(!has_draft(&app), "paint mode drops it");
+    assert!(!has_draft(&app), "the terrains mode drops it");
     assert_eq!(popovers(&mut app, root), 0);
-    call(&mut app, "tileset.paint_mode", &[("mode", "select")]);
+    call(&mut app, "tileset.mode", &[("mode", "tiles")]);
     settle(&mut app);
     drag_block(&mut app, &dir, root, 3, 3);
     press(
         &mut app,
         root,
-        DockAction::Page(jackdaw_editor_tile::tileset_dock::DockPage::Objects),
+        DockAction::Mode(jackdaw_editor_tile::tileset_modes::ModeId::OBJECTS),
     );
-    assert!(!has_draft(&app), "a page switch drops it");
+    assert!(!has_draft(&app), "the objects mode drops it");
 }
 
 #[test]
