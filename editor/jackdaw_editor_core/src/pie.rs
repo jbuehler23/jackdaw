@@ -96,7 +96,6 @@ pub struct GameExit {
 impl GameExit {
     fn new(key: InstanceKey, reason: GameExitReason, output: OutputCapture) -> Self {
         let lines = output.finish(EXIT_STDERR_LINES);
-        report_stderr_lines(&lines);
         Self {
             key,
             reason,
@@ -2506,14 +2505,6 @@ fn spawn_instance(
         },
         mode,
     ))
-}
-
-/// Log a reaped game's stderr tail as an error, for diagnosing a crashed or
-/// unconnectable game.
-fn report_stderr_lines(lines: &[String]) {
-    if !lines.is_empty() {
-        error!("PIE: game stderr tail:\n{}", lines.join("\n"));
-    }
 }
 
 /// Drain `StateEvent`s from every live child and show the newest frame of the

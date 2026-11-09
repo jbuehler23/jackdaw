@@ -234,11 +234,7 @@ fn game_panel_idle() -> impl Bundle {
                     "window_id",
                     crate::game_output_window::GAME_OUTPUT_WINDOW_ID
                 ),
-                button(
-                    ButtonProps::new("Show output")
-                        .with_variant(ButtonVariant::Ghost)
-                        .hidden()
-                ),
+                button(ButtonProps::new("Show output").hidden()),
             ),
             (
                 GameIdlePart::BuildErrors,

@@ -1,8 +1,10 @@
 //! Game Output window: a read-only bottom-dock panel listing what a game
-//! instance printed, from [`GameOutput`]. Rows are only appended as lines
-//! arrive, and at most [`OUTPUT_ROWS`] are on show.
+//! instance printed, from [`GameOutput`]. While the window is in front it
+//! reads the buffers a few times a second, appends rows a bounded number at a
+//! time and keeps at most [`OUTPUT_ROWS`] on show.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use bevy::ui_widgets::observe;
@@ -19,7 +21,9 @@ use jackdaw_feathers::popover::EditorPopover;
 use jackdaw_feathers::text_edit::{self, TextEditProps, TextEditValue};
 use jackdaw_feathers::tokens;
 
-use crate::game_output::{GameOutput, OutputLine, OutputStream};
+use crate::game_output::{
+    GameOutput, OutputLevel, OutputLine, OutputStream, TextFilter, line_level,
+};
 use crate::game_panel_header::{MenuRow, menu_trigger, named_instances, toggle_menu};
 use crate::pie::{InstanceKey, PieInstances};
 use crate::run_config::RunConfigs;
@@ -29,6 +33,12 @@ pub const GAME_OUTPUT_WINDOW_ID: &str = "jackdaw.game_output";
 
 /// How many lines the window shows at once.
 pub const OUTPUT_ROWS: usize = 500;
+
+/// How many rows one pass adds; the rest follow on later passes.
+const ROWS_PER_PASS: usize = 100;
+
+/// How often the window reads the buffers.
+const SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
 const EMPTY_NO_GAME: &str = "No game output yet. Press Play to run the game.";
 const EMPTY_NO_LINES: &str = "The game has not printed anything.";
@@ -174,13 +184,15 @@ pub struct GameOutputList {
     key: Option<InstanceKey>,
     generation: u64,
     filter: String,
-    /// The last sequence number read, matching or not.
+    /// The last sequence number taken from the buffer, matching or not.
     last_seq: Option<u64>,
     /// [`GameOutput::revision`] when the list last read the buffer.
     revision: Option<u64>,
     rows: VecDeque<Entity>,
     /// Whether matching lines older than the rows on show exist.
     more: bool,
+    /// Whether the buffer holds lines not yet on show.
+    behind: bool,
 }
 
 /// One line on show, with the stream it came from.
@@ -194,6 +206,11 @@ pub struct GameOutputEmpty;
 /// Marker on the note saying older lines are not on show.
 #[derive(Component)]
 pub struct GameOutputMore;
+
+/// Marker on the hint that newer lines wait below while the list is scrolled
+/// up.
+#[derive(Component)]
+pub struct GameOutputNewBelow;
 
 /// Marker on the button picking the instance, shown while several have output.
 #[derive(Component)]
@@ -334,6 +351,22 @@ fn build_game_output_window(world: &mut World, parent: Entity) {
         .id();
     world.spawn((jackdaw_feathers::scroll::scrollbar(list), ChildOf(body)));
     world.spawn((
+        GameOutputNewBelow,
+        small_text("New lines below", tokens::TEXT_PRIMARY),
+        Node {
+            display: Display::None,
+            position_type: PositionType::Absolute,
+            right: px(tokens::SPACING_MD),
+            bottom: px(tokens::SPACING_SM),
+            padding: UiRect::axes(px(tokens::SPACING_SM), px(2.0)),
+            border_radius: BorderRadius::all(px(tokens::BORDER_RADIUS_SM)),
+            ..Default::default()
+        },
+        BackgroundColor(tokens::ELEVATED_BG),
+        Pickable::IGNORE,
+        ChildOf(body),
+    ));
+    world.spawn((
         GameOutputMore,
         small_text("", tokens::TEXT_DISABLED),
         Node {
@@ -408,13 +441,14 @@ fn settle_output_scroll(
 }
 
 fn row(line: &OutputLine, list: Entity) -> impl Bundle {
-    let color = match line.stream {
-        OutputStream::Stdout => tokens::TEXT_PRIMARY,
-        OutputStream::Stderr => tokens::TEXT_WARNING,
+    let color = match line_level(&line.text) {
+        Some(OutputLevel::Error) => tokens::TEXT_ERROR,
+        Some(OutputLevel::Warn) => tokens::TEXT_WARNING,
+        None => tokens::TEXT_PRIMARY,
     };
     (
         GameOutputRow(line.stream),
-        Text::new(line.text.clone()),
+        Text::new(line.text.to_string()),
         TextFont {
             font_size: tokens::TEXT_SIZE_SM,
             ..Default::default()
@@ -429,20 +463,28 @@ fn row(line: &OutputLine, list: Entity) -> impl Bundle {
     )
 }
 
-/// Bring each list up to date with the buffer of the instance it shows: new
-/// lines are appended, and the rows rebuilt only when the instance, the
-/// filter or the buffer's generation changed. A list scrolled to its end
-/// stays there.
-fn sync_game_output(world: &mut World, mut last: Local<Option<ViewKey>>) {
+/// Bring each list up to date with the buffer of the instance it shows, a
+/// few times a second while the window is in front: new lines are appended,
+/// and the rows rebuilt when the instance, the filter or the buffer's
+/// generation changed. A list scrolled to its end stays there. A list
+/// scrolled up keeps its rows until it is back at its end.
+fn sync_game_output(world: &mut World, mut last_pass: Local<Option<Instant>>) {
     let mut lists = world.query::<(Entity, &GameOutputList)>();
     let lists: Vec<(Entity, bool)> = lists
         .iter(world)
         .map(|(entity, list)| (entity, list.revision.is_none()))
         .collect();
     if lists.is_empty() {
-        *last = None;
         return;
     }
+    let fresh = lists.iter().any(|(_, fresh)| *fresh);
+    if !fresh && last_pass.is_some_and(|last| last.elapsed() < SYNC_INTERVAL) {
+        return;
+    }
+    if !window_in_front(world) {
+        return;
+    }
+    *last_pass = Some(Instant::now());
     let Some(output) = world.get_resource::<GameOutput>().cloned() else {
         return;
     };
@@ -450,23 +492,30 @@ fn sync_game_output(world: &mut World, mut last: Local<Option<ViewKey>>) {
         .get_resource::<GameOutputView>()
         .map(|view| view.filter.clone())
         .unwrap_or_default();
-    let now = (output.revision(), shown_instance(world), filter);
-    let fresh = lists.iter().any(|(_, fresh)| *fresh);
-    if !fresh && last.as_ref() == Some(&now) {
-        return;
-    }
-    let (revision, shown, filter) = &now;
+    let revision = output.revision();
+    let shown = shown_instance(world);
     for (list, _) in lists {
-        sync_list(world, list, &output, *revision, shown.as_ref(), filter);
+        sync_list(world, list, &output, revision, shown.as_ref(), &filter);
     }
     let instances = output_instances(world);
     sync_header(world, shown.as_ref(), &instances);
-    *last = Some(now);
 }
 
-/// What the lists were last brought up to date with: the buffer revision, the
-/// instance shown and the filter.
-type ViewKey = (u64, Option<InstanceKey>, String);
+/// Whether the Game Output window is the tab on show in its dock. A window
+/// the dock tree does not hold counts as shown.
+fn window_in_front(world: &World) -> bool {
+    let Some(tree) = world.get_resource::<jackdaw_panels::tree::DockTree>() else {
+        return true;
+    };
+    let Some(leaf) = tree.find_leaf_with_window(GAME_OUTPUT_WINDOW_ID) else {
+        return true;
+    };
+    let Some(dock) = tree.get(leaf).and_then(|node| node.as_leaf()) else {
+        return true;
+    };
+    dock.tabs()
+        .any(|(window, tab)| window == GAME_OUTPUT_WINDOW_ID && dock.active == Some(tab))
+}
 
 fn sync_list(
     world: &mut World,
@@ -480,61 +529,87 @@ fn sync_list(
         return;
     };
     let same_view = state.key.as_ref() == shown && state.filter == filter;
-    if same_view && state.revision == Some(revision) {
+    if same_view && state.revision == Some(revision) && !state.behind {
         return;
     }
     let (generation, last_seq) = (state.generation, state.last_seq);
 
-    let mut page =
-        shown.and_then(|key| output.tail(key, last_seq.filter(|_| same_view), filter, OUTPUT_ROWS));
+    let mut pinned = true;
+    if let Some(scroll) = world.get::<ScrollPosition>(list)
+        && let Some(computed) = world.get::<ComputedNode>(list)
+    {
+        pinned = scroll.y >= scroll_range(computed) - 4.0;
+    }
+
+    let mut page = shown.and_then(|key| output.after(key, last_seq.filter(|_| same_view)));
     let rebuild = !same_view
         || page
             .as_ref()
             .is_some_and(|page| page.generation != generation);
     if rebuild && same_view {
-        page = shown.and_then(|key| output.tail(key, None, filter, OUTPUT_ROWS));
+        page = shown.and_then(|key| output.after(key, None));
     }
-
-    let pinned = match (
-        world.get::<ScrollPosition>(list),
-        world.get::<ComputedNode>(list),
-    ) {
-        (Some(scroll), Some(computed)) => scroll.y >= scroll_range(computed) - 4.0,
-        _ => true,
-    };
 
     let Some(mut held) = world.get_mut::<GameOutputList>(list) else {
         return;
     };
     let mut state = std::mem::take(&mut *held);
+    state.key = shown.cloned();
+    state.filter = filter.to_string();
+    state.revision = Some(revision);
     let mut stale: Vec<Entity> = Vec::new();
     if rebuild {
         stale.extend(state.rows.drain(..));
         state.more = false;
-    }
-    let mut added = 0;
-    if let Some(page) = &page {
-        for line in &page.lines {
-            state.rows.push_back(world.spawn(row(line, list)).id());
-            added += 1;
-        }
-        state.more |= page.more;
-        state.generation = page.generation;
-        state.last_seq = page.next_seq.checked_sub(1);
-    } else {
         state.last_seq = None;
     }
-    while state.rows.len() > OUTPUT_ROWS {
-        if let Some(oldest) = state.rows.pop_front() {
-            stale.push(oldest);
-            state.more = true;
+    let frozen = !rebuild && !pinned;
+    let mut added = 0;
+    match page {
+        Some(page) if frozen => {
+            state.behind = !page.lines.is_empty();
+        }
+        Some(page) => {
+            state.generation = page.generation;
+            let text_filter = TextFilter::new(filter);
+            let mut lines: Vec<OutputLine> = page
+                .lines
+                .into_iter()
+                .filter(|line| text_filter.matches(&line.text))
+                .collect();
+            if lines.len() > OUTPUT_ROWS {
+                state.more = true;
+                lines.drain(..lines.len() - OUTPUT_ROWS);
+            }
+            let take = lines.len().min(ROWS_PER_PASS);
+            for line in &lines[..take] {
+                state.rows.push_back(world.spawn(row(line, list)).id());
+            }
+            added = take;
+            state.behind = take < lines.len();
+            state.last_seq = if state.behind {
+                take.checked_sub(1)
+                    .and_then(|last| lines.get(last))
+                    .map(|line| line.seq)
+                    .or(state.last_seq)
+            } else {
+                page.next_seq.checked_sub(1)
+            };
+            while state.rows.len() > OUTPUT_ROWS {
+                if let Some(oldest) = state.rows.pop_front() {
+                    stale.push(oldest);
+                    state.more = true;
+                }
+            }
+        }
+        None => {
+            state.behind = false;
+            state.last_seq = None;
         }
     }
-    state.key = shown.cloned();
-    state.filter = filter.to_string();
-    state.revision = Some(revision);
     let empty = state.rows.is_empty();
     let more = state.more;
+    let waiting = frozen && state.behind;
     if let Some(mut held) = world.get_mut::<GameOutputList>(list) {
         *held = state;
     }
@@ -558,8 +633,10 @@ fn sync_list(
     };
     set_text_part::<GameOutputEmpty>(world, list, empty, empty_message);
     set_text_part::<GameOutputMore>(world, list, more, &more_message);
+    if let Some(body) = world.get::<ChildOf>(list).map(ChildOf::parent) {
+        set_text_part::<GameOutputNewBelow>(world, body, waiting, "New lines below");
+    }
     if (added > 0 || rebuild)
-        && pinned
         && let Some(mut scroll) = world.get_mut::<ScrollPosition>(list)
     {
         scroll.y = f32::MAX;

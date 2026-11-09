@@ -199,10 +199,11 @@ running game holds.
   the build errors. **Restart** in the panel launches the game that went away
   again, and **Show output** opens the Game Output window.
 - The **Game Output** window, in the bottom dock and the Window menu, lists
-  what the game printed to stdout and stderr, with stderr lines tinted. It
-  keeps the last 5000 lines of each instance, has a picker when several
-  instances ran, a filter box and **Clear**, and keeps a game's output after it
-  exits until Play launches it again. The view menu in the Game panel header
-  opens it too.
+  what the game printed to stdout and stderr, with error and warning log lines
+  in their colours. It keeps the last 5000 lines of each instance, has a
+  picker when several instances ran, a filter box and **Clear**, and keeps a
+  game's output after it exits until Play launches it again. While you are
+  scrolled up it holds still and says when new lines wait below. The view
+  menu in the Game panel header opens it too.
 - **Restart** relaunches with the current window setting, which is how you
   apply a change to **Play in separate window**.

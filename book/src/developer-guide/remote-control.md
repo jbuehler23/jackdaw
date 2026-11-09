@@ -199,9 +199,13 @@ jackdaw/game_output { "instance": "Client 2", "since": 120, "limit": 200 }
 - `since` answers with the lines from that sequence number on. Pass the last
   answer's `next` to read only new lines. Without it the answer holds the last
   `limit` lines (200 by default).
-- `more` says lines were left out to keep to `limit`. A `since` below `first`
-  missed lines the buffer no longer holds. Sequence numbers carry on when Play
-  launches the instance again, which empties its buffer.
+- `next` is the sequence number to pass as `since` to read on from here.
+  `first` is the oldest sequence number still kept, so a `since` below it
+  missed lines the buffer no longer holds. `more` says lines were left out to
+  keep to `limit`.
+- Each line carries its `stream`, `stdout` or `stderr`.
+- Sequence numbers carry on when Play launches the instance again, which
+  empties its buffer, and start from 0 again when the editor restarts.
 
 ## Packing repeated groups
 

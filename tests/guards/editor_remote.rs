@@ -2665,4 +2665,19 @@ fn game_output_reads_a_running_games_lines_from_a_sequence_number() {
         "{later}"
     );
     assert_eq!(later["next"], json!(3), "{later}");
+
+    let stale = call(&mut app, game_output_handler, json!({ "since": 1000 }));
+    assert_eq!(stale["lines"], json!([]), "{stale}");
+    assert_eq!(
+        stale["next"],
+        json!(3),
+        "a stale `since` reads on from the end"
+    );
+    let none = call(&mut app, game_output_handler, json!({ "limit": 0 }));
+    assert_eq!(none["lines"], json!([]), "{none}");
+    assert_eq!(
+        none["next"],
+        json!(0),
+        "no lines read leaves `next` at the oldest"
+    );
 }

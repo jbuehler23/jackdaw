@@ -11,16 +11,17 @@ use super::game_panel_states::{
     editor_on_a_project, key, press, recorded_exit, shown, update_until,
 };
 use crate::util::OperatorResultExt as _;
+use jackdaw_api::prelude::*;
 
 /// The lines `config`'s instance printed, with their streams.
 fn buffered(app: &App, config: &str) -> Vec<(OutputStream, String)> {
     app.world()
         .resource::<GameOutput>()
-        .tail(&key(config), None, "", usize::MAX)
+        .after(&key(config), None)
         .map(|page| {
             page.lines
                 .into_iter()
-                .map(|line| (line.stream, line.text))
+                .map(|line| (line.stream, line.text.to_string()))
                 .collect()
         })
         .unwrap_or_default()
@@ -143,7 +144,63 @@ fn output_survives_the_exit_and_the_next_play_clears_it() {
         buffered(&app, "Client"),
         [(OutputStream::Stdout, "second run".to_string())]
     );
+    assert_eq!(
+        rows(&mut app),
+        [(OutputStream::Stdout, "first run".to_string())],
+        "the window waits while the Game panel is in front"
+    );
+    open_window(&mut app);
     update_until(&mut app, "the window to show only the second run", |app| {
         rows(app) == [(OutputStream::Stdout, "second run".to_string())]
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn lines_printed_after_clear_still_arrive() {
+    let (mut app, _leaf, project) = editor_on_a_project();
+    jackdaw::pie::set_connect_timeout(app.world_mut(), std::time::Duration::from_secs(600));
+    let go = project.path().join("go");
+    built_game(
+        &mut app,
+        &project,
+        &format!(
+            "echo 'before'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\necho 'after'\nsleep 600\n",
+            go.display()
+        ),
+    );
+    super::game_panel_states::call(&mut app, "pie.play").assert_finished();
+    update_until(&mut app, "the first line", |app| {
+        buffered(app, "Client").len() == 1
+    });
+    open_window(&mut app);
+    update_until(&mut app, "the window to show it", |app| {
+        rows(app).len() == 1
+    });
+
+    app.world_mut()
+        .operator("game_output.clear")
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    update_until(&mut app, "the window to empty", |app| rows(app).is_empty());
+
+    std::fs::write(&go, "").expect("the signal file");
+    update_until(&mut app, "the line printed after the clear", |app| {
+        rows(app) == [(OutputStream::Stdout, "after".to_string())]
+    });
+    assert_eq!(
+        buffered(&app, "Client"),
+        [(OutputStream::Stdout, "after".to_string())]
+    );
+}
+
+fn open_window(app: &mut App) {
+    app.world_mut()
+        .operator("window.open")
+        .param("window_id", GAME_OUTPUT_WINDOW_ID)
+        .call()
+        .expect("dispatch")
+        .assert_finished();
+    app.update();
 }

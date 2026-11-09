@@ -2046,20 +2046,25 @@ pub fn game_output_handler(In(params): In<Option<Value>>, world: &mut World) -> 
         .iter()
         .find(|(held, _)| *held == key)
         .map(|(_, name)| name.clone());
+    let next = if let Some(last) = page.lines.last() {
+        last.seq + 1
+    } else if let Some(since) = since {
+        since.min(page.next_seq)
+    } else {
+        page.first_seq
+    };
     let lines: Vec<Value> = page
         .lines
         .iter()
-        .map(|line| json!({ "seq": line.seq, "stream": line.stream.name(), "text": line.text }))
+        .map(|line| json!({ "seq": line.seq, "stream": line.stream.name(), "text": &*line.text }))
         .collect();
     Ok(json!({
         "instance": { "config": key.config, "instance": key.instance, "name": name },
         "instances": names,
         "running": running,
         "lines": lines,
-        // The oldest sequence number still kept; a `since` below it lost lines.
         "first": page.first_seq,
-        // Pass as `since` to read on from here.
-        "next": page.lines.last().map_or(since.unwrap_or(page.next_seq), |line| line.seq + 1),
+        "next": next,
         "more": page.more,
     }))
 }
