@@ -564,10 +564,15 @@ bevy_rev = "3f2a1c9e"
             "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n\
              [dependencies]\nbevy = { git = \"https://github.com/bevyengine/bevy\" }\n",
         );
-        assert_eq!(
-            compare_project(&dir, &ProjectManifest::default()),
+        let expected = if crate::BEVY_VERSION == "main" {
             PinStatus::Unpinned
-        );
+        } else {
+            PinStatus::BevyDiffers {
+                pinned: "main".to_string(),
+                running: crate::BEVY_VERSION.to_string(),
+            }
+        };
+        assert_eq!(compare_project(&dir, &ProjectManifest::default()), expected);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

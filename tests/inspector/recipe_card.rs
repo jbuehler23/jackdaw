@@ -300,7 +300,7 @@ fn shown_text(app: &mut App, field: Entity) -> String {
     inner
         .first()
         .and_then(|inner| app.world().get::<bevy::text::EditableText>(*inner))
-        .map(|editable| editable.value().into_owned())
+        .map(|editable| editable.value().to_string())
         .expect("a text field")
 }
 

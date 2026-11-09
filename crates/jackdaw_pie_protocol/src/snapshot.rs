@@ -35,7 +35,12 @@ pub struct RemoteEntity {
 pub fn entity_bits(value: &Value) -> Option<u64> {
     match value {
         Value::Number(number) => number.as_u64(),
-        Value::String(text) => text.parse::<Entity>().ok().map(Entity::to_bits),
+        Value::String(text) => {
+            let (index, generation) = text.split_once('v')?;
+            let index: u32 = index.parse().ok()?;
+            let generation: u32 = generation.parse().ok()?;
+            Some((u64::from(generation) << 32) | u64::from(index))
+        }
         Value::Array(fields) => fields.first().and_then(entity_bits),
         Value::Object(fields) => fields.values().next().and_then(entity_bits),
         _ => None,

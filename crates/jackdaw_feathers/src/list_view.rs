@@ -85,6 +85,7 @@ mod tests {
             bevy::scene::ScenePlugin,
             plugin,
         ));
+        app.init_asset::<bevy::text::Font>();
 
         let entity = app
             .world_mut()

@@ -58,7 +58,7 @@ pub fn set_text_input_value(editable: &mut EditableText, text: String) {
 }
 
 fn editable_text_string(editable: &EditableText) -> String {
-    editable.value().into_owned()
+    editable.value().to_string()
 }
 
 #[derive(Event)]
@@ -1229,7 +1229,7 @@ struct MultilineHeightMeasure {
 }
 
 impl Measure for MultilineHeightMeasure {
-    fn measure(&self, measure_args: MeasureArgs<'_>) -> Vec2 {
+    fn measure(&mut self, measure_args: MeasureArgs<'_>) -> Vec2 {
         let width = measure_args.resolve_width();
         let x = width
             .effective

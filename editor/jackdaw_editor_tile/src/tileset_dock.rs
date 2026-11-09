@@ -1949,7 +1949,7 @@ fn typed_name(world: &mut World, root: Entity) -> Option<(TerrainNameField, Stri
     let mut stack = vec![holder];
     while let Some(entity) = stack.pop() {
         if let Some(text) = world.get::<bevy::text::EditableText>(entity) {
-            let name = text.value().trim().to_string();
+            let name = text.value().to_string().trim().to_string();
             return (!name.is_empty()).then_some((field, name));
         }
         stack.extend(world.get::<Children>(entity).into_iter().flatten());

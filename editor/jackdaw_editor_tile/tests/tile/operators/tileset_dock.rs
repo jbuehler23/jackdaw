@@ -720,7 +720,7 @@ fn name_field(app: &mut App, root: Entity) -> Option<(NameField, Entity, String)
     let mut stack = vec![outer];
     while let Some(entity) = stack.pop() {
         if let Some(editable) = app.world().get::<bevy::text::EditableText>(entity) {
-            return Some((field, entity, editable.value().into_owned()));
+            return Some((field, entity, editable.value().to_string()));
         }
         if let Some(children) = app.world().get::<Children>(entity) {
             stack.extend(children.iter());

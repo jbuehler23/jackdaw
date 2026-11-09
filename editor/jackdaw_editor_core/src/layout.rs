@@ -715,7 +715,7 @@ pub fn toolbar_op_button(op_id: &'static str, icon: Icon) -> impl Scene {
             @variant: {ButtonVariant::Plain}
         }
         bevy::feathers::font_styles::InheritableFont {
-            font: bevy::text::FontSourceTemplate::Handle(jackdaw_feathers::icons::font_paths::LUCIDE),
+            font: jackdaw_feathers::icons::font_paths::LUCIDE,
             font_size: bevy::text::FontSize::Px(TOOLBAR_ICON_PX),
         }
         ButtonOperatorCall::new(op_id)

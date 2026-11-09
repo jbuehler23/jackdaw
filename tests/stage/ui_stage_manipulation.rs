@@ -3651,10 +3651,11 @@ fn panel_camera(app: &mut App, panel: Entity) -> Entity {
 }
 
 /// Deliver one pointer event to `target` at a window position.
-fn pointer_at<E: Event>(app: &mut App, position: Vec2, event: impl FnOnce(Pointer) -> E)
-where
-    bevy::ecs::event::EventTriggerState<'static, E>: Default,
-{
+fn pointer_at<E: Event<Trigger<'static>: Default>>(
+    app: &mut App,
+    position: Vec2,
+    event: impl FnOnce(Pointer) -> E,
+) {
     let window = app
         .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>()

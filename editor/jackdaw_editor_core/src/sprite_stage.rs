@@ -174,7 +174,6 @@ type PickParts = (
     Option<&'static Anchor>,
     &'static GlobalTransform,
     &'static InheritedVisibility,
-    Option<&'static SpritePickingMode>,
 );
 
 /// What a sprite's size and pixels are read from.
@@ -187,22 +186,19 @@ pub struct SpritePixels<'w> {
 }
 
 impl SpritePixels<'_> {
-    /// Whether the press at `point` lands on `sprite` under the sprite's own
-    /// picking mode, or the app's [`SpritePickingSettings`] without one.
+    /// Whether the press at `point` lands on `sprite` under the app's
+    /// [`SpritePickingSettings`].
     fn contains(
         &self,
         sprite: &Sprite,
         anchor: Anchor,
         transform: &GlobalTransform,
-        mode: Option<&SpritePickingMode>,
         point: Vec2,
     ) -> bool {
-        let mode = mode.copied().unwrap_or_else(|| {
-            self.settings.as_deref().map_or_else(
-                || SpritePickingSettings::default().picking_mode,
-                |s| s.picking_mode,
-            )
-        });
+        let mode = self.settings.as_deref().map_or_else(
+            || SpritePickingSettings::default().picking_mode,
+            |s| s.picking_mode,
+        );
         let image = sprite_image(sprite, &self.images, &self.server);
         sprite_contains(
             sprite,
@@ -448,9 +444,9 @@ fn on_sprite_press(
 
     let hits: Vec<(Entity, f32)> = sprites
         .iter()
-        .filter(|(_, sprite, anchor, transform, visible, mode)| {
+        .filter(|(_, sprite, anchor, transform, visible)| {
             let anchor = anchor.copied().unwrap_or_default();
-            visible.get() && pixels.contains(sprite, anchor, transform, *mode, point)
+            visible.get() && pixels.contains(sprite, anchor, transform, point)
         })
         .filter(|(entity, ..)| in_2d_scene(*entity, &parents, &scene_roots))
         .map(|(entity, _, _, transform, ..)| (entity, transform.translation().z))

@@ -1199,7 +1199,7 @@ fn a_reloaded_text_input_keeps_its_text() {
         .get::<bevy::text::EditableText>(loaded)
         .expect("the loaded input still has an editor")
         .value()
-        .into_owned();
+        .to_string();
     assert_eq!(
         shown, "Ada Lovelace",
         "and the loaded document puts it back in the box",
