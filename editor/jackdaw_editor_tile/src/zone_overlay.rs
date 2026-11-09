@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
+use bevy::math::Rot2;
 use bevy::picking::events::{PointerMove, PointerOut};
 use bevy::prelude::*;
+use bevy::ui::UiTransform;
 use jackdaw_tilemap::{MatchMode, Peer};
 use jackdaw_tileset::Tileset;
 
@@ -109,6 +111,18 @@ pub struct ZoneValues {
     pub dim: bool,
     /// The fill of the zone under the pointer, when it is outlined.
     pub hover: Option<Color>,
+    /// Tiles drawn as a polygon of one value in place of their zones, by
+    /// sheet tile.
+    pub outlines: HashMap<u32, ZoneOutline>,
+}
+
+/// A polygon a tile shows in place of zones.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZoneOutline {
+    pub value: u32,
+    /// Rings in tile fractions, from (0, 0) at the tile's top left to
+    /// (1, 1).
+    pub rings: Vec<Vec<Vec2>>,
 }
 
 impl ZoneValues {
@@ -186,6 +200,13 @@ pub enum ZonePiece {
     Edge { value: u32, picked: bool },
     /// The dark stroke outside an edge of a picked shape.
     Stroke,
+    /// One side of an outline that is no rectangle, turned by `angle`
+    /// radians about its center.
+    Segment {
+        value: u32,
+        picked: bool,
+        angle: f32,
+    },
 }
 
 /// The outline of the zone under the pointer, showing tile `tile`.
@@ -350,6 +371,25 @@ fn spawn_pieces(
             ZonePiece::Stroke => {
                 node.insert(BackgroundColor(dark));
             }
+            ZonePiece::Segment {
+                value,
+                picked,
+                angle,
+            } => {
+                node.insert((
+                    BackgroundColor(line(value, picked)),
+                    UiTransform {
+                        rotation: Rot2::radians(angle),
+                        ..UiTransform::IDENTITY
+                    },
+                ));
+                if picked {
+                    node.insert((
+                        Outline::new(px(STROKE), px(0), dark),
+                        glow(line(value, true)),
+                    ));
+                }
+            }
         }
     }
 }
@@ -394,7 +434,8 @@ pub fn pieces(
             let mut open: Option<Rect> = None;
             for column in 0..grid.columns {
                 let tile = row * grid.columns + column;
-                let held = (values.tiles.get(&tile)).is_some_and(|p| p.iter().any(|v| *v != 0));
+                let held = values.outlines.contains_key(&tile)
+                    || (values.tiles.get(&tile)).is_some_and(|p| p.iter().any(|v| *v != 0));
                 let at = grid.tiles.get(tile as usize).copied().unwrap_or_default();
                 match (held, open.as_mut()) {
                     (false, Some(run)) if (run.max.x - at.min.x).abs() < 0.01 => {
@@ -411,12 +452,16 @@ pub fn pieces(
         let mut shapes = Vec::new();
         for column in 0..grid.columns {
             let tile = row * grid.columns + column;
-            if let Some(peers) = values.tiles.get(&tile) {
+            if let Some(outline) = values.outlines.get(&tile) {
+                shapes.extend(outline_shapes(grid, values, tile, outline));
+            } else if let Some(peers) = values.tiles.get(&tile) {
                 shapes.extend(tile_shapes(grid, values, tile, peers));
             }
         }
         shapes.sort_by_key(|(piece, _)| match piece {
-            ZonePiece::Shape { picked, .. } | ZonePiece::Edge { picked, .. } => *picked,
+            ZonePiece::Shape { picked, .. }
+            | ZonePiece::Edge { picked, .. }
+            | ZonePiece::Segment { picked, .. } => *picked,
             ZonePiece::Dim => false,
             ZonePiece::Tint { .. } | ZonePiece::Stroke => true,
         });
@@ -542,6 +587,59 @@ fn tile_shapes(
         }
     }
     out
+}
+
+/// The pieces of `outline` on tile `tile`, inside the tile less the inset:
+/// a rectangle is one shape, any other ring one segment per side.
+fn outline_shapes(
+    grid: &SheetGrid,
+    values: &ZoneValues,
+    tile: u32,
+    outline: &ZoneOutline,
+) -> Vec<(ZonePiece, Rect)> {
+    let rect = grid.tiles.get(tile as usize).copied().unwrap_or_default();
+    let inner = Rect::from_corners(rect.min + INSET, rect.max - INSET);
+    let at = |p: Vec2| inner.min + p.clamp(Vec2::ZERO, Vec2::ONE) * inner.size();
+    let value = outline.value;
+    let picked = values.picked == Some(value);
+    let width = if picked { PICKED_LINE } else { QUIET_LINE };
+    let mut out = Vec::new();
+    for ring in &outline.rings {
+        if let Some((lo, hi)) = axis_rect(ring) {
+            let shape = Rect::from_corners(at(lo), at(hi));
+            out.push((ZonePiece::Shape { value, picked }, shape));
+            continue;
+        }
+        let next = ring.iter().cycle().skip(1);
+        for (a, b) in ring.iter().zip(next) {
+            let (a, b) = (at(*a), at(*b));
+            let length = a.distance(b);
+            if length < 0.01 {
+                continue;
+            }
+            let angle = (b - a).to_angle();
+            let side = Rect::from_center_size((a + b) / 2.0, Vec2::new(length + width, width));
+            let segment = ZonePiece::Segment {
+                value,
+                picked,
+                angle,
+            };
+            out.push((segment, side));
+        }
+    }
+    out
+}
+
+/// The corners of `ring` when it is an axis-aligned rectangle.
+fn axis_rect(ring: &[Vec2]) -> Option<(Vec2, Vec2)> {
+    if ring.len() != 4 {
+        return None;
+    }
+    let next = ring.iter().cycle().skip(1);
+    let straight = (ring.iter().zip(next)).all(|(a, b)| a.x == b.x || a.y == b.y);
+    let lo = ring.iter().copied().reduce(Vec2::min)?;
+    let hi = ring.iter().copied().reduce(Vec2::max)?;
+    (straight && (hi - lo).cmpgt(Vec2::ZERO).all()).then_some((lo, hi))
 }
 
 /// The line along side `(dx, dy)` of the cells spanning `span`, inside it
@@ -687,6 +785,7 @@ mod tests {
             colors: HashMap::new(),
             dim: true,
             hover: None,
+            outlines: HashMap::new(),
         }
     }
 
@@ -853,6 +952,71 @@ mod tests {
         assert_eq!(layout.value(&peers, UVec2::new(0, 0)), 1);
         assert_eq!(layout.value(&peers, UVec2::new(2, 0)), 0);
         assert_eq!(layout.value(&peers, UVec2::new(2, 2)), 2);
+    }
+
+    fn outlined(rings: &[&[(f32, f32)]], picked: bool) -> ZoneValues {
+        let rings = (rings.iter())
+            .map(|r| r.iter().map(|&(x, y)| Vec2::new(x, y)).collect())
+            .collect();
+        ZoneValues {
+            layout: ZoneLayout::Whole,
+            tiles: HashMap::new(),
+            picked: picked.then_some(1),
+            colors: HashMap::new(),
+            dim: true,
+            hover: None,
+            outlines: HashMap::from([(0, ZoneOutline { value: 1, rings })]),
+        }
+    }
+
+    #[test]
+    fn a_rectangular_outline_is_one_inset_shape_and_its_tile_is_not_dimmed() {
+        let half = [(0.0, 0.5), (1.0, 0.5), (1.0, 1.0), (0.0, 1.0)];
+        let found = drawn(&grid(2, 1), &outlined(&[&half], true));
+        let shape = ZonePiece::Shape {
+            value: 1,
+            picked: true,
+        };
+        let lower = Rect::new(INSET, 16.0, 32.0 - INSET, 32.0 - INSET);
+        assert!(found.contains(&(shape, lower)), "{found:?}");
+        assert_eq!(count(&found, |p| *p == ZonePiece::Dim), 1, "the other tile");
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn a_slope_outline_is_one_segment_per_side() {
+        let slope = [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0)];
+        let found = drawn(&grid(1, 1), &outlined(&[&slope], false));
+        let segments: Vec<f32> = (found.iter())
+            .filter_map(|(p, r)| match p {
+                ZonePiece::Segment { picked: false, .. } => Some(r.width()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(segments.len(), 3, "{found:?}");
+        let side = 32.0 - 2.0 * INSET;
+        let diagonal = side * std::f32::consts::SQRT_2 + QUIET_LINE;
+        assert!(
+            segments.iter().any(|w| (w - diagonal).abs() < 0.01),
+            "{segments:?}"
+        );
+    }
+
+    #[test]
+    fn a_fully_outlined_sheet_draws_one_node_per_rectangle_and_three_per_slope() {
+        let square = vec![vec![Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y]];
+        let slope = vec![vec![Vec2::Y, Vec2::ONE, Vec2::X]];
+        let sheet = |rings: &Vec<Vec<Vec2>>| ZoneValues {
+            outlines: (0..27 * 65)
+                .map(|t| {
+                    let rings = rings.clone();
+                    (t, ZoneOutline { value: 1, rings })
+                })
+                .collect(),
+            ..outlined(&[], true)
+        };
+        assert_eq!(drawn(&grid(27, 65), &sheet(&square)).len(), 27 * 65);
+        assert_eq!(drawn(&grid(27, 65), &sheet(&slope)).len(), 3 * 27 * 65);
     }
 
     #[test]

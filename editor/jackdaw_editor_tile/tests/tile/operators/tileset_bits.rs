@@ -456,7 +456,7 @@ fn a_click_in_the_terrains_mode_paints_one_zone_and_the_mode_operator_steps_mode
     assert_eq!(peers_of(&on_disk(&dir), 1), Some(one));
     assert_eq!(entries(&app), count + 1);
     input(&mut app, "tileset.mode");
-    assert_eq!(view(&app).mode, ModeId::OBJECTS);
+    assert_eq!(view(&app).mode, ModeId::COLLISION);
 }
 
 #[test]

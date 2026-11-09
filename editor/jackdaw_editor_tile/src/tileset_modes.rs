@@ -16,6 +16,8 @@ impl ModeId {
     pub const TILES: ModeId = ModeId("tiles");
     /// Paint terrains on tile zones.
     pub const TERRAINS: ModeId = ModeId("terrains");
+    /// Paint collision shapes on tiles.
+    pub const COLLISION: ModeId = ModeId("collision");
     /// Mark rectangles of tiles as objects.
     pub const OBJECTS: ModeId = ModeId("objects");
 }
@@ -184,7 +186,7 @@ pub(crate) fn plugin(app: &mut App) {
     label = "Tileset Mode",
     description = "Switch a Tileset tab to one of its modes: tiles picks tiles, terrains \
                    paints terrains on tile zones with the brush terrain (right erases), \
-                   objects marks rectangles of tiles as objects; extensions add more. With \
+                   collision paints collision shapes on tiles (right clears), objects marks rectangles of tiles as objects; extensions add more. With \
                    no mode it steps to the next.",
     allows_undo = false,
     is_available = a_tileset_is_shown,

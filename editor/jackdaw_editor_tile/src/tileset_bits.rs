@@ -347,6 +347,7 @@ fn terrain_zones(
         colors,
         dim: true,
         hover: Some(hover.unwrap_or(Color::NONE)),
+        outlines: HashMap::new(),
     })
 }
 

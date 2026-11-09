@@ -1,5 +1,7 @@
 use bevy::math::UVec2;
-use jackdaw_tilemap::{MatchMode, Peer, Provenance, TileAddress, TileTerrains};
+use jackdaw_tilemap::{
+    MatchMode, Peer, Provenance, ShapePreset, TileAddress, TileCollision, TileTerrains,
+};
 use jackdaw_tileset::{Tileset, TilesetSheet};
 
 /// Two sheets, the second alone under terrain setup.
@@ -70,18 +72,28 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
         .expect("bits");
     tileset.set_setup(&setup).expect("converts");
     tileset.paint_property(&[5], "slow", "yes");
+    tileset.physics_layers_mut().push("Water".into());
+    let mut setup = tileset.setup().expect("converts");
+    let solid = TileCollision::preset(ShapePreset::Solid, 0, false).expect("a preset");
+    let trigger = TileCollision::preset(ShapePreset::TopHalf, 1, true).expect("a preset");
+    setup.set_collision(TileAddress { sheet: 0, tile: 0 }, solid);
+    setup.set_collision(TileAddress { sheet: 0, tile: 0 }, trigger);
+    tileset.set_setup(&setup).expect("converts");
     tileset.terrains[1].icon = Some((1, 3));
 
     let text = tileset.describe().expect("describes");
     for line in [
         "image \"farm.tiles.png\": tile 16x16, 4x3 layers",
-        "  terrain 1 \"grass\": swatch #84c669, background, collision passable",
-        "  terrain 2 \"sand\": swatch #e7a16a, collision passable, icon 1:3",
+        "  terrain 1 \"grass\": swatch #84c669, background\n",
+        "  terrain 2 \"sand\": swatch #e7a16a, icon 1:3",
         "  set \"Terrain set 1\" (Sides): terrains bottom first [\"grass\", \"sand\"], 1/16 shapes, missing 1,2,1,2,2,2,1,2,1;",
         "flagged tiles: 1",
         "  sheet 1: 2",
         "  object on sheet 1 at 2,1: 2x1, 2 tiles, pivot 0.5,0, by hand",
         "  layer 5: slow=yes",
+        "physics layers: 2",
+        "  layer 0 \"World\": 1 solid, 0 trigger tiles",
+        "  layer 1 \"Water\": 0 solid, 1 trigger tiles",
         "sheet 0 \"props.png\": 4x1 tiles from layer 0",
         "  ....",
         "sheet 1 \"ground.png\": 4x2 tiles from layer 4",
@@ -110,4 +122,22 @@ fn an_icon_stays_with_its_terrain_through_a_setup_edit() {
         .collect();
     assert_eq!(icons, [("sand", Some((1, 2))), ("dirt", None)]);
     assert_eq!(tileset.terrains[0].id, sand);
+}
+
+#[test]
+fn a_packed_layer_reads_the_collision_of_its_tile() {
+    let mut tileset = tileset();
+    let mut setup = tileset.setup().expect("converts");
+    let slope = TileCollision::preset(ShapePreset::SlopeDown, 0, false).expect("a preset");
+    setup.set_collision(TileAddress { sheet: 0, tile: 2 }, slope);
+    tileset.set_setup(&setup).expect("converts");
+    let shapes = tileset.collision_of_layer(6);
+    assert_eq!(shapes.len(), 1);
+    assert_eq!(
+        shapes[0].polygons,
+        ShapePreset::SlopeDown.polygons().expect("a ring")
+    );
+    assert!(tileset.collision_of_layer(5).is_empty());
+    assert!(tileset.collision_of_layer(99).is_empty());
+    assert_eq!(*tileset.physics_layer_names(), ["World".to_string()]);
 }

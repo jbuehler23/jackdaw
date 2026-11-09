@@ -13,7 +13,7 @@ use jackdaw_api_internal::operator::{OperatorReports, OperatorWarnings};
 use jackdaw_commands::CommandHistory;
 use jackdaw_editor_core::operator_calls::call_operator as call_operator_handler;
 use jackdaw_scene_types::PropertyValue;
-use jackdaw_tileset::{TerrainCollision, TerrainMatch, Tileset};
+use jackdaw_tileset::{CollisionPreset, TerrainMatch, Tileset, TilesetCollision};
 use serde_json::json;
 
 pub(crate) const FILE: &str = "overworld.tileset.bsn";
@@ -350,26 +350,116 @@ fn terrain_merge_folds_one_terrain_into_another() {
     );
 }
 
+/// The collision of sheet 0 tile `tile`.
+pub(crate) fn collision_of(tileset: &Tileset, tile: u32) -> Vec<TilesetCollision> {
+    tileset.collision(0, tile).to_vec()
+}
+
 #[test]
-fn terrain_set_collision_chooses_the_mode() {
+fn collision_set_puts_a_preset_per_layer_and_none_clears_it() {
     let (mut app, dir) = overworld();
+    let set = [("tiles", "0:3,0:4"), ("preset", "top_half")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &set);
+    for tile in [3, 4] {
+        let shapes = collision_of(&after, tile);
+        assert_eq!(shapes.len(), 1, "tile {tile}");
+        assert_eq!(shapes[0].preset, CollisionPreset::TopHalf);
+        assert_eq!((shapes[0].layer, shapes[0].trigger), (0, false));
+        assert_eq!(
+            Some(shapes[0].polygons.clone()),
+            CollisionPreset::TopHalf.polygons()
+        );
+    }
+    let named = [("action", "add"), ("name", "Water")];
+    edit(&mut app, &dir, "tileset.collision.layer", &named);
+    let trigger = [
+        ("tiles", "0:3"),
+        ("preset", "slope_up"),
+        ("layer", "Water"),
+        ("trigger", "true"),
+    ];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &trigger);
+    let shapes = collision_of(&after, 3);
+    assert_eq!(shapes.len(), 2, "one shape per layer");
+    assert_eq!((shapes[1].layer, shapes[1].trigger), (1, true));
+    assert_eq!(shapes[1].preset, CollisionPreset::SlopeUp);
+
+    let clear = [("tiles", "0:3,0:4"), ("preset", "none")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &clear);
+    assert!(collision_of(&after, 4).is_empty());
+    assert_eq!(collision_of(&after, 3).len(), 1, "layer 1 is left");
+
     let (_, after) = edit(
         &mut app,
         &dir,
-        "tileset.terrain.set_collision",
-        &[("terrain", "11"), ("mode", "solid")],
+        "tileset.collision.set",
+        &[("tiles", "0:5"), ("preset", "traced")],
     );
-    let water = (after.terrains.iter())
-        .find(|t| t.id == WATER)
-        .expect("water");
-    assert_eq!(water.collision, TerrainCollision::Solid);
-    assert!(water.collision_by_user);
+    let traced = collision_of(&after, 5);
+    assert_eq!(traced.len(), 1);
+    assert_eq!(traced[0].preset, CollisionPreset::Traced);
+    let inside = |v: &Vec2| v.cmpge(Vec2::ZERO).all() && v.cmple(Vec2::ONE).all();
+    assert!(!traced[0].polygons.is_empty());
+    assert!(traced[0].polygons.iter().flatten().all(inside));
+
+    let count = entries(&app);
+    call(
+        &mut app,
+        "tileset.collision.set",
+        &[("tiles", "0:4"), ("preset", "none")],
+    );
+    assert_eq!(entries(&app), count, "nothing to clear adds no entry");
+    let round = [("tiles", "0:4"), ("preset", "round")];
     refused(
         &mut app,
         &dir,
-        "tileset.terrain.set_collision",
-        &[("terrain", "11"), ("mode", "sticky")],
-        "solid, trigger or passable",
+        "tileset.collision.set",
+        &round,
+        "not `round`",
+    );
+    let layer = [("tiles", "0:4"), ("preset", "solid"), ("layer", "9")];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.set",
+        &layer,
+        "no physics layer",
+    );
+}
+
+#[test]
+fn physics_layers_are_added_with_a_free_name_and_renamed() {
+    let (mut app, dir) = overworld();
+    assert_eq!(*on_disk(&dir).physics_layer_names(), ["World".to_string()]);
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &[("action", "add")],
+    );
+    assert_eq!(after.physics_layer_names().to_vec(), ["World", "Layer 2"]);
+    let rename = [("action", "rename"), ("layer", "1"), ("name", "Hazards")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.layer", &rename);
+    assert_eq!(after.physics_layer_names().to_vec(), ["World", "Hazards"]);
+    let taken = [
+        ("action", "rename"),
+        ("layer", "Hazards"),
+        ("name", "World"),
+    ];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &taken,
+        "already named",
+    );
+    let unknown = [("action", "sort")];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &unknown,
+        "add, rename or select",
     );
 }
 
@@ -667,9 +757,10 @@ fn the_terrain_operators_run_over_the_remote() {
                 json!({ "terrain": "marsh", "name": "pond" }),
             ),
             (
-                "tileset.terrain.set_collision",
-                json!({ "terrain": "pond", "mode": "trigger" }),
+                "tileset.collision.set",
+                json!({ "tiles": "0:11", "preset": "bottom_half", "trigger": true }),
             ),
+            ("tileset.collision.layer", json!({ "action": "add" })),
             (
                 "tileset.terrain_set.add",
                 json!({ "mode": "corners", "name": "Ponds" }),

@@ -2,6 +2,7 @@
 
 mod tileset_bits;
 mod tileset_browser;
+mod tileset_collision;
 mod tileset_dock;
 mod tileset_edit_ops;
 mod tileset_layout_ops;

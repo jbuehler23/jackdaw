@@ -6,7 +6,7 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_commands::CommandHistory;
 use jackdaw_tilemap::{MatchMode, Peer, TerrainId, TileAddress, TileTerrains, TilesetSetup};
-use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain};
+use jackdaw_tileset::{Tileset, TilesetTerrain};
 
 use jackdaw_editor_core::asset_index::{AssetValue, absolute_path, note_written};
 use jackdaw_editor_core::commands::EditorCommand;
@@ -21,7 +21,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainSetIconOp>();
     ctx.register_operator::<TilesetTerrainSplitOp>();
     ctx.register_operator::<TilesetTerrainMergeOp>();
-    ctx.register_operator::<TilesetTerrainSetCollisionOp>();
     ctx.register_operator::<TilesetTerrainSetAddOp>();
     ctx.register_operator::<TilesetTerrainSetSetOp>();
     ctx.register_operator::<TilesetTerrainSetRemoveOp>();
@@ -340,15 +339,6 @@ fn match_mode(text: &str) -> Result<MatchMode, String> {
     }
 }
 
-fn collision_mode(text: &str) -> Result<TerrainCollision, String> {
-    match text {
-        "solid" => Ok(TerrainCollision::Solid),
-        "trigger" => Ok(TerrainCollision::Trigger),
-        "passable" => Ok(TerrainCollision::Passable),
-        other => Err(format!("mode is solid, trigger or passable, not `{other}`")),
-    }
-}
-
 const PEER_NAMES: [&str; 9] = [
     "top_left",
     "top",
@@ -641,42 +631,6 @@ pub fn tileset_terrain_merge(
                     .map_err(|e| setup.explain(e))?;
                 Ok(format!("terrain {from} merged into terrain {into}"))
             })
-        },
-    )
-}
-
-/// Choose how a terrain collides.
-#[operator(
-    id = "tileset.terrain.set_collision",
-    writes_disk = true,
-    label = "Set Terrain Collision",
-    description = "Choose whether a terrain is solid, a trigger or passable.",
-    allows_undo = false,
-    params(
-        path(
-            String,
-            doc = "Tileset file under the project's assets; defaults to the open tileset."
-        ),
-        terrain(String, doc = "Terrain id or name."),
-        mode(String, doc = "solid, trigger or passable."),
-    )
-)]
-pub fn tileset_terrain_set_collision(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let (name, mode) = (text(&params, "terrain"), text(&params, "mode"));
-    queue_edit(
-        &mut commands,
-        "tileset.terrain.set_collision",
-        text(&params, "path"),
-        move |_, tileset| {
-            let id = terrain(tileset, &name)?;
-            let collision = collision_mode(&mode)?;
-            let changed = terrain_mut(tileset, id)?;
-            changed.collision = collision;
-            changed.collision_by_user = true;
-            Ok(format!("terrain {id} is {mode}"))
         },
     )
 }
