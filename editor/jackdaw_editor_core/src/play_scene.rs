@@ -664,7 +664,11 @@ fn answer_with_assets(
         return Answered::use_file(world, file);
     };
     warn_absolute(world, &document.absolute);
-    let mut ast = with_session_names(world, document);
+    let owner = match tab {
+        Some(tab) => AssetOwner::of_tab(world, tab),
+        None => AssetOwner::File(file.clone()),
+    };
+    let mut ast = with_session_names(world, document, &owner);
     let mut held = DocumentAssets::of(world, &mut ast);
     let own_names = held.embedded.iter().map(|(name, _)| name.clone()).collect();
     let overlay =
@@ -689,8 +693,13 @@ fn answer_with_assets(
 /// `document` with every embedded asset under its session name. A root and every
 /// reference to it are renamed together, including the `@Name` spelling a load also
 /// answers to, whatever wrote them. A root whose asset the live stores hold is
-/// written from the store, which an edit reads too.
-pub(crate) fn with_session_names(world: &mut World, document: GameDocument) -> SceneBsnAst {
+/// written from the store, which an edit reads too. Any other root takes the name
+/// of an asset of `owner` with the same definition.
+pub(crate) fn with_session_names(
+    world: &mut World,
+    document: GameDocument,
+    owner: &AssetOwner,
+) -> SceneBsnAst {
     let GameDocument {
         mut ast,
         live_assets,
@@ -736,7 +745,7 @@ pub(crate) fn with_session_names(world: &mut World, document: GameDocument) -> S
                     let Some(definition) = root_definition(&ast, root) else {
                         continue;
                     };
-                    let new = names.of_definition(definition);
+                    let new = names.of_definition(owner, definition);
                     if named.insert(new.clone()) {
                         rename_root(&mut ast, root, new.trim_start_matches('#'));
                     } else {
@@ -1022,7 +1031,8 @@ pub(crate) fn subtrees_for_game(
     let mut document = crate::scene_io::save::part_of_live_document_for_game(world, part, &parent);
     warn_absolute(world, &document.absolute);
     keep_assets_named(&mut document.ast, &registry.read());
-    let mut ast = with_session_names(world, document);
+    let owner = AssetOwner::of_tab(world, tab);
+    let mut ast = with_session_names(world, document, &owner);
     let held = DocumentAssets::of(world, &mut ast);
     let overlay = crate::play_overlay::prefabs_of_document_part(
         world,
@@ -1188,18 +1198,44 @@ pub(crate) fn warn_absolute(world: &mut World, absolute: &[AbsoluteAssetField]) 
     crate::status_bar::notify_warn(world, message);
 }
 
+/// The document an embedded asset belongs to. Assets of different documents never
+/// share a session name, so an edit of one document's asset leaves another's alone.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum AssetOwner {
+    /// The document of the tab with this id.
+    Tab(u64),
+    /// A document no tab holds, by its path under the asset folder.
+    File(String),
+}
+
+impl AssetOwner {
+    pub(crate) fn of_tab(world: &World, tab: usize) -> Self {
+        Self::Tab(world.resource::<Scenes>().tabs[tab].id)
+    }
+
+    /// The owner of the live document's assets.
+    fn in_front(world: &World) -> Self {
+        world
+            .get_resource::<Scenes>()
+            .and_then(|scenes| scenes.tabs.get(scenes.active))
+            .map_or_else(|| Self::File(String::new()), |tab| Self::Tab(tab.id))
+    }
+}
+
 /// The one `#Name` each runtime asset goes by for this Play session, for served
 /// text and live sync alike, and what each running game has been given.
 ///
 /// Every name is minted here and held until Play stops, whatever a save or a
 /// re-emit numbers the asset. A reparse of the document gives an asset a new id,
-/// so an id with no name takes the name of an asset with the same definition,
-/// rather than sending the game a copy per reparse.
+/// so an id with no name takes the name of an asset of the same document with the
+/// same definition, rather than sending the game a copy per reparse.
 #[derive(Resource, Default)]
 pub struct PlayAssetNames {
     names: HashMap<UntypedAssetId, String>,
     /// The definition each name stands for, by `#Name`.
     definitions: BTreeMap<String, u64>,
+    /// The document each name belongs to, by `#Name`.
+    owners: HashMap<String, AssetOwner>,
     next: usize,
     /// The definition each game last received under each `#Name`, or under the
     /// path of an asset file.
@@ -1231,7 +1267,7 @@ impl PlayAssetNames {
             }
             self.names.remove(&id);
         }
-        let name = self.of_definition(definition);
+        let name = self.of_definition(&AssetOwner::in_front(world), definition);
         self.names.insert(id, name.clone());
         Some(name)
     }
@@ -1285,7 +1321,13 @@ impl PlayAssetNames {
                 };
                 Some((name, Some(asset)))
             });
-        live.or_else(|| Some((self.of_definition(root_definition(ast, root)?), None)))
+        let owner = AssetOwner::in_front(world);
+        live.or_else(|| {
+            Some((
+                self.of_definition(&owner, root_definition(ast, root)?),
+                None,
+            ))
+        })
     }
 
     /// The `#Name` the asset `id` goes by, if it has one.
@@ -1293,17 +1335,19 @@ impl PlayAssetNames {
         self.names.get(&id).cloned()
     }
 
-    /// The `#Name` standing for `definition`, minted if none does.
-    pub(crate) fn of_definition(&mut self, definition: u64) -> String {
+    /// The `#Name` standing for `definition` in `owner`'s document, minted if none
+    /// does.
+    pub(crate) fn of_definition(&mut self, owner: &AssetOwner, definition: u64) -> String {
         let same = self
             .definitions
             .iter()
-            .find(|(_, held)| **held == definition)
+            .find(|(name, held)| **held == definition && self.owners.get(*name) == Some(owner))
             .map(|(name, _)| name.clone());
         same.unwrap_or_else(|| {
             let name = format!("#Play{}", self.next);
             self.next += 1;
             self.definitions.insert(name.clone(), definition);
+            self.owners.insert(name.clone(), owner.clone());
             name
         })
     }
