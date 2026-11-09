@@ -10,14 +10,19 @@ use crate::tileset_dock::{DockAction, DockControl, zoom};
 
 /// Alpha of the dim layer over tiles that hold no value.
 const DIM: f32 = 0.55;
-/// Alpha of the tint on zones holding the picked value.
-const TINT: f32 = 0.22;
-/// Alpha of an edge line of a value other than the picked one.
-const QUIET: f32 = 0.6;
-/// Width of the edge line of the picked value, and of the others.
+/// Alpha of the fill of a shape of the picked value, and of the others.
+const PICKED_FILL: f32 = 0.35;
+const QUIET_FILL: f32 = 0.2;
+/// Alpha of the outline of a shape of a value other than the picked one.
+const QUIET: f32 = 0.8;
+/// Width of the outline of a shape of the picked value, and of the others.
 const PICKED_LINE: f32 = 2.0;
-const QUIET_LINE: f32 = 1.0;
-/// Blur of the glow around the picked value's edge lines.
+const QUIET_LINE: f32 = 1.5;
+/// Width of the dark stroke around an outline.
+const STROKE: f32 = 1.0;
+/// Gap between a shape and the edge of its tile.
+const INSET: f32 = 1.5;
+/// Blur of the glow around the picked value's outlines.
 const GLOW: f32 = 6.0;
 /// Alpha of the fill of the zone under the pointer.
 const HOVER: f32 = 0.35;
@@ -167,14 +172,17 @@ pub struct ZoneOverlay {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZoneRow(pub u32);
 
-/// One drawn part of an overlay.
+/// One drawn part of an overlay. A value's zones in one tile make one
+/// shape: a rectangle is drawn whole, any other shape as fills and edges.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum ZonePiece {
     /// Over a run of tiles holding no value.
     Dim,
-    /// Over a run of zones holding the picked value.
-    Tint(u32),
-    /// A line along the side of a run of zones where `value` meets another.
+    /// A rectangular shape, filled and outlined.
+    Shape { value: u32, picked: bool },
+    /// Part of the fill of a shape that is no rectangle.
+    Tint { value: u32, picked: bool },
+    /// Part of the outline of a shape that is no rectangle.
     Edge { value: u32, picked: bool },
 }
 
@@ -294,6 +302,16 @@ fn spawn_pieces(
     values: &ZoneValues,
     found: Vec<(u32, ZonePiece, Rect)>,
 ) {
+    let stroke = Outline::new(px(STROKE), px(0), Color::BLACK.with_alpha(0.7));
+    let glow = |line: Color| BoxShadow::new(line.with_alpha(0.8), px(0), px(0), px(1), px(GLOW));
+    let fill = |value: u32, picked: bool| {
+        let alpha = if picked { PICKED_FILL } else { QUIET_FILL };
+        color(values, value).with_alpha(alpha)
+    };
+    let line = |value: u32, picked: bool| {
+        let alpha = if picked { 1.0 } else { QUIET };
+        color(values, value).with_alpha(alpha)
+    };
     for (row, piece, rect) in found {
         let mut node = world.spawn((
             absolute(rect),
@@ -306,24 +324,28 @@ fn spawn_pieces(
             ZonePiece::Dim => {
                 node.insert(BackgroundColor(Color::BLACK.with_alpha(DIM)));
             }
-            ZonePiece::Tint(value) => {
-                node.insert(BackgroundColor(color(values, value).with_alpha(TINT)));
-            }
-            ZonePiece::Edge {
-                value,
-                picked: false,
-            } => {
-                node.insert(BackgroundColor(color(values, value).with_alpha(QUIET)));
-            }
-            ZonePiece::Edge {
-                value,
-                picked: true,
-            } => {
-                let line = color(values, value);
+            ZonePiece::Shape { value, picked } => {
+                let width = if picked { PICKED_LINE } else { QUIET_LINE };
+                let mut shape = absolute(rect);
+                shape.border = UiRect::all(px(width));
                 node.insert((
-                    BackgroundColor(line),
-                    BoxShadow::new(line.with_alpha(0.8), px(0), px(0), px(1), px(GLOW)),
+                    shape,
+                    BackgroundColor(fill(value, picked)),
+                    BorderColor::all(line(value, picked)),
+                    stroke,
                 ));
+                if picked {
+                    node.insert(glow(line(value, true)));
+                }
+            }
+            ZonePiece::Tint { value, picked } => {
+                node.insert(BackgroundColor(fill(value, picked)));
+            }
+            ZonePiece::Edge { value, picked } => {
+                node.insert((BackgroundColor(line(value, picked)), stroke));
+                if picked {
+                    node.insert(glow(line(value, true)));
+                }
             }
         }
     }
@@ -356,145 +378,163 @@ fn absolute(rect: Rect) -> Node {
 }
 
 /// What an overlay draws over tile rows `rows`, with the row each piece
-/// belongs to. Each row draws its dim runs, then its tint runs, then the
-/// edge lines of other values, then those of the picked value. Adjacent
-/// pieces of one kind merge into runs along a row or a column of zones
-/// within a tile row, so a row can be drawn again on its own.
+/// belongs to: each row's dim runs, then the shapes of its tiles, the
+/// picked value's last.
 pub fn pieces(
     grid: &SheetGrid,
     values: &ZoneValues,
     rows: Range<u32>,
 ) -> Vec<(u32, ZonePiece, Rect)> {
-    let layout = values.layout;
-    let n = layout.cells();
-    let (width, height) = (grid.columns * n, grid.rows * n);
-    let tile_of = |x: u32, y: u32| (y / n) * grid.columns + x / n;
-    let value = |x: u32, y: u32| {
-        let cell = UVec2::new(x % n, y % n);
-        (values.tiles.get(&tile_of(x, y))).map_or(0, |peers| layout.value(peers, cell))
-    };
-    let rect = |x: u32, y: u32| grid.cell_rect(layout, tile_of(x, y), UVec2::new(x % n, y % n));
-    let line = |value: u32| {
-        let picked = values.picked == Some(value);
-        let piece = ZonePiece::Edge { value, picked };
-        (piece, if picked { PICKED_LINE } else { QUIET_LINE })
-    };
     let mut out = Vec::new();
     for row in rows.start..rows.end.min(grid.rows) {
-        let mut found = Vec::new();
         if values.dim {
-            let mut runs = Runs::default();
+            let mut open: Option<Rect> = None;
             for column in 0..grid.columns {
                 let tile = row * grid.columns + column;
                 let held = (values.tiles.get(&tile)).is_some_and(|p| p.iter().any(|v| *v != 0));
                 let at = grid.tiles.get(tile as usize).copied().unwrap_or_default();
-                runs.push_across((!held).then_some(ZonePiece::Dim), at);
-            }
-            found.extend(runs.done());
-        }
-        let band = row * n..(row + 1) * n;
-        if let Some(picked) = values.picked.filter(|p| *p != 0) {
-            for y in band.clone() {
-                let mut runs = Runs::default();
-                for x in 0..width {
-                    let piece = (value(x, y) == picked).then_some(ZonePiece::Tint(picked));
-                    runs.push_across(piece, rect(x, y));
-                }
-                found.extend(runs.done());
-            }
-        }
-        let mut edges = Vec::new();
-        for x in 0..=width {
-            let (mut before, mut after) = (Runs::default(), Runs::default());
-            for y in band.clone() {
-                let left = if x > 0 { value(x - 1, y) } else { 0 };
-                let right = if x < width { value(x, y) } else { 0 };
-                let differ = left != right;
-                let side = |runs: &mut Runs, v: u32, cell: Option<Rect>, inward: f32| {
-                    let piece = (differ && v != 0).then(|| line(v));
-                    let at = cell.map(|c| {
-                        let edge = if inward < 0.0 { c.max.x } else { c.min.x };
-                        let t = piece.map_or(0.0, |(_, t)| t) * inward;
-                        Rect::new(edge, c.min.y, edge + t, c.max.y)
-                    });
-                    runs.push_down(piece.map(|(p, _)| p), at.unwrap_or_default());
-                };
-                side(&mut before, left, (x > 0).then(|| rect(x - 1, y)), -1.0);
-                side(&mut after, right, (x < width).then(|| rect(x, y)), 1.0);
-            }
-            edges.extend(before.done());
-            edges.extend(after.done());
-        }
-        for y in band.start..=band.end {
-            let (mut before, mut after) = (Runs::default(), Runs::default());
-            let (above, below) = (y > band.start, y < band.end);
-            for x in 0..width {
-                let top = if y > 0 { value(x, y - 1) } else { 0 };
-                let bottom = if y < height { value(x, y) } else { 0 };
-                let differ = top != bottom;
-                let side = |runs: &mut Runs, v: u32, cell: Option<Rect>, inward: f32| {
-                    let piece = (differ && v != 0).then(|| line(v));
-                    let at = cell.map(|c| {
-                        let edge = if inward < 0.0 { c.max.y } else { c.min.y };
-                        let t = piece.map_or(0.0, |(_, t)| t) * inward;
-                        Rect::new(c.min.x, edge, c.max.x, edge + t)
-                    });
-                    runs.push_across(piece.map(|(p, _)| p), at.unwrap_or_default());
-                };
-                if above {
-                    side(&mut before, top, Some(rect(x, y - 1)), -1.0);
-                }
-                if below {
-                    side(&mut after, bottom, Some(rect(x, y)), 1.0);
+                match (held, open.as_mut()) {
+                    (false, Some(run)) if (run.max.x - at.min.x).abs() < 0.01 => {
+                        *run = run.union(at);
+                    }
+                    (false, _) => {
+                        out.extend(open.replace(at).map(|r| (row, ZonePiece::Dim, r)));
+                    }
+                    (true, _) => out.extend(open.take().map(|r| (row, ZonePiece::Dim, r))),
                 }
             }
-            edges.extend(before.done());
-            edges.extend(after.done());
+            out.extend(open.map(|r| (row, ZonePiece::Dim, r)));
         }
-        edges.sort_by_key(|(piece, _)| matches!(piece, ZonePiece::Edge { picked: true, .. }));
-        found.extend(edges);
-        out.extend(found.into_iter().map(|(piece, at)| (row, piece, at)));
+        let mut shapes = Vec::new();
+        for column in 0..grid.columns {
+            let tile = row * grid.columns + column;
+            if let Some(peers) = values.tiles.get(&tile) {
+                shapes.extend(tile_shapes(grid, values, tile, peers));
+            }
+        }
+        shapes.sort_by_key(|(piece, _)| match piece {
+            ZonePiece::Shape { picked, .. }
+            | ZonePiece::Tint { picked, .. }
+            | ZonePiece::Edge { picked, .. } => *picked,
+            ZonePiece::Dim => false,
+        });
+        out.extend(shapes.into_iter().map(|(piece, at)| (row, piece, at)));
     }
     out
 }
 
-/// Pieces of one kind in a line, merged while each starts where the last
-/// ends.
-#[derive(Default)]
-struct Runs {
-    open: Option<(ZonePiece, Rect)>,
-    done: Vec<(ZonePiece, Rect)>,
-}
-
-impl Runs {
-    fn push_across(&mut self, piece: Option<ZonePiece>, at: Rect) {
-        self.push(piece, at, |open, at| {
-            (open.max.x - at.min.x).abs() < 0.01 && open.min.y == at.min.y && open.max.y == at.max.y
-        });
-    }
-
-    fn push_down(&mut self, piece: Option<ZonePiece>, at: Rect) {
-        self.push(piece, at, |open, at| {
-            (open.max.y - at.min.y).abs() < 0.01 && open.min.x == at.min.x && open.max.x == at.max.x
-        });
-    }
-
-    fn push(&mut self, piece: Option<ZonePiece>, at: Rect, joins: impl Fn(Rect, Rect) -> bool) {
-        if let (Some(piece), Some((open, rect))) = (piece, self.open.as_mut())
-            && *open == piece
-            && joins(*rect, at)
-        {
-            *rect = rect.union(at);
-            return;
+/// The shape of each value on tile `tile`, inset from the tile's edges.
+fn tile_shapes(
+    grid: &SheetGrid,
+    values: &ZoneValues,
+    tile: u32,
+    peers: &[u32; 9],
+) -> Vec<(ZonePiece, Rect)> {
+    let layout = values.layout;
+    let n = layout.cells();
+    let value_at = |x: u32, y: u32| layout.value(peers, UVec2::new(x, y));
+    let cell = |x: u32, y: u32| {
+        let mut at = grid.cell_rect(layout, tile, UVec2::new(x, y));
+        if x == 0 {
+            at.min.x += INSET;
         }
-        self.done.extend(self.open.take());
-        self.open = piece.map(|p| (p, at));
+        if y == 0 {
+            at.min.y += INSET;
+        }
+        if x + 1 == n {
+            at.max.x -= INSET;
+        }
+        if y + 1 == n {
+            at.max.y -= INSET;
+        }
+        at
+    };
+    let mut held: Vec<u32> = (0..n * n).map(|i| value_at(i % n, i / n)).collect();
+    held.retain(|v| *v != 0);
+    held.sort_unstable();
+    held.dedup();
+    let mut out = Vec::new();
+    for value in held {
+        let picked = values.picked == Some(value);
+        let inside = |x: i64, y: i64| {
+            (0..i64::from(n)).contains(&x)
+                && (0..i64::from(n)).contains(&y)
+                && value_at(x as u32, y as u32) == value
+        };
+        let cells: Vec<UVec2> = (0..n * n)
+            .map(|i| UVec2::new(i % n, i / n))
+            .filter(|c| inside(i64::from(c.x), i64::from(c.y)))
+            .collect();
+        let (lo, hi) = cells.iter().fold((UVec2::MAX, UVec2::ZERO), |(lo, hi), c| {
+            (lo.min(*c), hi.max(*c))
+        });
+        let span = hi - lo + UVec2::ONE;
+        if span.x * span.y == cells.len() as u32 {
+            let at = cell(lo.x, lo.y).union(cell(hi.x, hi.y));
+            out.push((ZonePiece::Shape { value, picked }, at));
+            continue;
+        }
+        let mut runs: Vec<(u32, u32, u32, Rect)> = Vec::new();
+        for y in 0..n {
+            let mut x = 0;
+            while x < n {
+                if !inside(i64::from(x), i64::from(y)) {
+                    x += 1;
+                    continue;
+                }
+                let start = x;
+                while x < n && inside(i64::from(x), i64::from(y)) {
+                    x += 1;
+                }
+                let at = cell(start, y).union(cell(x - 1, y));
+                match runs
+                    .iter_mut()
+                    .find(|r| r.0 + 1 == y && (r.1, r.2) == (start, x))
+                {
+                    Some(run) => {
+                        run.0 = y;
+                        run.3 = run.3.union(at);
+                    }
+                    None => runs.push((y, start, x, at)),
+                }
+            }
+        }
+        let tint = ZonePiece::Tint { value, picked };
+        out.extend(runs.into_iter().map(|(.., at)| (tint, at)));
+        let width = if picked { PICKED_LINE } else { QUIET_LINE };
+        let edge = ZonePiece::Edge { value, picked };
+        for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+            let mut open: Option<Rect> = None;
+            for i in 0..n * n {
+                let (a, b) = (i / n, i % n);
+                let (x, y) = if dx == 0 { (b, a) } else { (a, b) };
+                let side = inside(i64::from(x), i64::from(y))
+                    && !inside(i64::from(x) + dx, i64::from(y) + dy);
+                let at = cell(x, y);
+                let line = match (dx, dy) {
+                    (0, -1) => Rect::new(at.min.x, at.min.y, at.max.x, at.min.y + width),
+                    (0, _) => Rect::new(at.min.x, at.max.y - width, at.max.x, at.max.y),
+                    (-1, _) => Rect::new(at.min.x, at.min.y, at.min.x + width, at.max.y),
+                    _ => Rect::new(at.max.x - width, at.min.y, at.max.x, at.max.y),
+                };
+                let joins = |run: &Rect| {
+                    b != 0
+                        && if dx == 0 {
+                            (run.max.x - line.min.x).abs() < 0.01 && run.min.y == line.min.y
+                        } else {
+                            (run.max.y - line.min.y).abs() < 0.01 && run.min.x == line.min.x
+                        }
+                };
+                match (side, open.as_mut()) {
+                    (true, Some(run)) if joins(run) => *run = run.union(line),
+                    (true, _) => out.extend(open.replace(line).map(|r| (edge, r))),
+                    (false, _) => out.extend(open.take().map(|r| (edge, r))),
+                }
+            }
+            out.extend(open.map(|r| (edge, r)));
+        }
     }
-
-    fn done(mut self) -> Vec<(ZonePiece, Rect)> {
-        self.done.extend(self.open.take());
-        self.done
-    }
+    out
 }
 
 /// The dock, sheet and tile of the sheet tile `entity`, the zone outline of
@@ -616,40 +656,66 @@ mod tests {
     }
 
     #[test]
-    fn a_region_across_tile_seams_merges_into_one_tint_run_per_row() {
-        let values = corners(&[(0, [1, 1, 1, 1]), (1, [1, 1, 1, 1])], Some(1));
+    fn a_whole_tile_or_a_half_is_one_inset_shape() {
+        let values = corners(&[(0, [1, 1, 1, 1]), (1, [1, 2, 1, 2])], Some(1));
         let found = drawn(&grid(3, 1), &values);
-        let tints: Vec<Rect> = (found.iter())
-            .filter(|(p, _)| *p == ZonePiece::Tint(1))
-            .map(|(_, r)| *r)
+        let shapes: Vec<(ZonePiece, Rect)> = (found.iter())
+            .filter(|(p, _)| matches!(p, ZonePiece::Shape { .. }))
+            .copied()
             .collect();
-        assert_eq!(tints.len(), 2, "one run per zone row: {tints:?}");
-        assert_eq!(tints[0], Rect::new(0.0, 0.0, 64.0, 16.0));
-        let edges = count(&found, |p| {
-            matches!(p, ZonePiece::Edge { picked: true, .. })
-        });
-        assert_eq!(edges, 4, "one line per side of the region");
-        let dims = (found.iter()).filter(|(p, _)| *p == ZonePiece::Dim).count();
-        assert_eq!(dims, 1, "the empty third tile");
+        let picked = ZonePiece::Shape {
+            value: 1,
+            picked: true,
+        };
+        let other = ZonePiece::Shape {
+            value: 2,
+            picked: false,
+        };
+        let whole = Rect::new(INSET, INSET, 32.0 - INSET, 32.0 - INSET);
+        assert_eq!(shapes.len(), 3, "{shapes:?}");
+        assert!(shapes.contains(&(picked, whole)), "{shapes:?}");
+        let right = Rect::new(48.0, INSET, 64.0 - INSET, 32.0 - INSET);
+        assert!(shapes.contains(&(other, right)), "{shapes:?}");
+        assert_eq!(count(&found, |p| *p == ZonePiece::Dim), 1, "the empty tile");
+        assert_eq!(found.len(), 4, "no edge or fill pieces");
     }
 
     #[test]
-    fn other_values_get_only_quiet_edges() {
-        let values = corners(&[(0, [1, 2, 1, 2])], Some(1));
+    fn a_painted_tile_inside_a_region_keeps_its_own_outline() {
+        let full = [1, 1, 1, 1];
+        let values = corners(&[(0, full), (1, full), (2, full)], Some(1));
+        let found = drawn(&grid(3, 1), &values);
+        assert_eq!(count(&found, |p| matches!(p, ZonePiece::Shape { .. })), 3);
+    }
+
+    #[test]
+    fn an_l_shape_is_filled_and_outlined_along_its_boundary() {
+        let values = corners(&[(0, [1, 1, 1, 2])], Some(2));
         let found = drawn(&grid(1, 1), &values);
-        assert_eq!(count(&found, |p| *p == ZonePiece::Tint(2)), 0);
-        let quiet = |p: &ZonePiece| {
+        let tints = count(&found, |p| matches!(p, ZonePiece::Tint { value: 1, .. }));
+        assert_eq!(tints, 2, "the top row and the bottom left quarter");
+        let edges = count(&found, |p| {
             matches!(
                 p,
                 ZonePiece::Edge {
-                    value: 2,
+                    value: 1,
                     picked: false
                 }
             )
+        });
+        assert_eq!(edges, 6, "an L has six sides");
+        let quarter = ZonePiece::Shape {
+            value: 2,
+            picked: true,
         };
-        assert_eq!(count(&found, quiet), 4, "the right half's outline");
-        let line = (found.iter()).find(|(p, r)| quiet(p) && r.min.x == 16.0 && r.height() > 1.0);
-        assert_eq!(line.map(|(_, r)| r.width()), Some(QUIET_LINE));
+        assert_eq!(count(&found, |p| *p == quarter), 1);
+    }
+
+    #[test]
+    fn a_fully_painted_sheet_draws_one_node_per_tile() {
+        let tiles: Vec<(u32, [u32; 4])> = (0..27 * 65).map(|t| (t, [1, 1, 1, 1])).collect();
+        let values = corners(&tiles, Some(1));
+        assert_eq!(drawn(&grid(27, 65), &values).len(), 27 * 65);
     }
 
     #[test]

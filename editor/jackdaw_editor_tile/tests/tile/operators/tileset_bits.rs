@@ -302,24 +302,35 @@ fn the_terrains_mode_overlays_the_active_set_and_the_tiles_mode_nothing() {
 }
 
 #[test]
-fn the_overlay_tints_the_brush_terrain_and_dims_tiles_outside_the_set() {
+fn the_overlay_draws_each_tiles_shapes_and_dims_tiles_outside_the_set() {
     let (mut app, _dir) = handmade();
     let root = painting(&mut app);
     press(&mut app, root, DockAction::Brush(WATER));
     let found = pieces(&mut app, root);
     let has = |piece: ZonePiece| found.contains(&piece);
     let (water, grass) = (u32::from(WATER), u32::from(GRASS));
-    assert!(has(ZonePiece::Tint(water)), "{found:?}");
-    assert!(!has(ZonePiece::Tint(grass)), "only the brush is tinted");
-    let picked = ZonePiece::Edge {
+    let corner = ZonePiece::Shape {
         value: water,
         picked: true,
     };
-    let quiet = ZonePiece::Edge {
-        value: grass,
-        picked: false,
-    };
-    assert!(has(picked) && has(quiet), "{found:?}");
+    assert!(
+        has(corner),
+        "the water corner is one picked shape: {found:?}"
+    );
+    let l_shape = [
+        ZonePiece::Tint {
+            value: grass,
+            picked: false,
+        },
+        ZonePiece::Edge {
+            value: grass,
+            picked: false,
+        },
+    ];
+    assert!(
+        l_shape.into_iter().all(has),
+        "the grass L is quiet: {found:?}"
+    );
     assert!(has(ZonePiece::Dim), "tiles outside the set are dimmed");
     assert!(found.len() < 400, "adjacent pieces merge: {}", found.len());
 }

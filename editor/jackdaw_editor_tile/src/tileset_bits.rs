@@ -537,7 +537,7 @@ fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Pe
     }
 }
 
-/// Draw the tile rows of the stroke's sheet around the `fresh` zones again
+/// Draw the tile rows of the stroke's sheet holding the `fresh` zones again
 /// from the stroke's setup. The whole sheet is drawn again once the stroke
 /// applies.
 fn redraw(world: &mut World, stroke: &Stroke, frame: Entity, fresh: &[(u32, Peer)]) {
@@ -565,12 +565,7 @@ fn redraw(world: &mut World, stroke: &Stroke, frame: Entity, fresh: &[(u32, Peer
     };
     let columns =
         (stroke.tileset.sheets.get(stroke.sheet as usize)).map_or(1, |s| s.columns.max(1));
-    let rows: BTreeSet<u32> = (fresh.iter())
-        .flat_map(|(tile, _)| {
-            let row = tile / columns;
-            row.saturating_sub(1)..=row + 1
-        })
-        .collect();
+    let rows: BTreeSet<u32> = fresh.iter().map(|(tile, _)| tile / columns).collect();
     redraw_zone_rows(world, overlay, values, rows);
 }
 
