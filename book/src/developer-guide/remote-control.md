@@ -120,7 +120,9 @@ is left out, and `entity.snap_to_ground` drops the selection, or the ids given a
 is left out, so a placed instance does not stand beside the scene. `scene.open`
 takes `reload`: a path whose tab is already open is activated in place, reread
 when `reload` is set, and reread anyway when the file has moved on under a tab
-holding no unsaved edits.
+holding no unsaved edits. A file that changes on disk under unsaved edits raises
+a prompt in the editor, which `scene.external_change` answers with `answer:
+"keep"` or `"reload"`, for the file named by `path` or the first one waiting.
 
 `scene_tree` takes a `root` as an entity id or a name, and a `depth` counting
 generations below it: `0` is the node alone, `1` adds its children, and no
@@ -168,7 +170,8 @@ shows the running game.
 
 The launch is a cargo build then a process, so `status` reports progress under
 `pie` -- `building`, `running`, `paused`, `failed` or `stopped` -- and `wait`
-holds for either end:
+holds for either end. The game spawns the editor's open documents, so there is
+no save before `pie.play`:
 
 ```text
 call_operator(id: "pie.play")
@@ -181,6 +184,22 @@ wait(until: "pie_stopped")
 A game that is still connecting reads `building`. A `pie_running` wait also ends
 on `paused`, and ends with an error if the build fails or the game stops before
 it connects.
+
+Three BRP methods ask the running game about its entities. They answer for the
+instance the Game panel shows, and fail once the game has stopped or if it does
+not answer within a few seconds:
+
+- `jackdaw/game_entities` lists the entities no scene node spawned, without
+  components, with the authored entities they sit under.
+- `jackdaw/game_entity` takes `entity` (its bits in the game) or `node` (a scene
+  node id, naming every entity spawned from it) and answers with all their
+  components.
+- `jackdaw/game_query` takes `with` (a component type path) and `name` (a
+  substring, ignoring case) and answers with the matching entities, each
+  carrying the value of `with`.
+
+An answer holds at most 4000 entities and sets `truncated` when more matched.
+Components the game cannot serialize are listed by name under `opaque`.
 
 The BRP method `jackdaw/game_output` answers with what a game printed, also after
 it exited:

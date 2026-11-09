@@ -123,7 +123,7 @@ trip you can iterate on. Next steps:
 - [Viewport Navigation](../user-guide/viewport-navigation.md)
   for getting around the 3D view.
 - [Custom Components](../developer-guide/custom-components.md)
-  to attach your own behaviour to the cube.
+  to attach your own behavior to the cube.
 - [Migrating an Existing Project](migrating-an-existing-project.md)
   if you already have a Bevy game and want to wire jackdaw
   into it.

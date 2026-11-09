@@ -121,7 +121,7 @@ previews and gizmo meshes sit at the origin and would hide the scene.
 ## Brushes
 
 Brushes are the `Brush` component in `jackdaw_scene_types`, evaluated with
-`evaluate_brush_geometry`. The editor moves a brush's origin to the centre of
+`evaluate_brush_geometry`. The editor moves a brush's origin to the center of
 its geometry in `BrushSystems::Recenter` and rebuilds its meshes in
 `BrushSystems::Rebuild`; order systems that follow a brush's shape after
 them. `register_brush_default` gives every brush the editor creates from then
