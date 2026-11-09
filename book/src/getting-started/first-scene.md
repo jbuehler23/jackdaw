@@ -106,6 +106,11 @@ fn load_level(mut commands: Commands, assets: Res<AssetServer>) {
 }
 ```
 
+The scene's authored entities exist when the event fires, but
+`GlobalTransform` has not propagated yet, so read `Transform` in
+the observer. Models and sidecars such as terrain and tilemaps
+finish loading after it.
+
 The event fires again each time the scene respawns, such as after
 a hot reload of its file. While the scene stays spawned, the root
 carries `JackdawSceneReady`, which a system can filter on.

@@ -130,6 +130,33 @@ fn a_refused_scene_fires_failed_and_not_spawned() {
     );
 }
 
+#[test]
+fn an_observer_may_despawn_another_root_waiting_to_spawn() {
+    let mut app = runtime_app();
+    let seen = watch_spawns(&mut app);
+    let mut scenes = app.world_mut().resource_mut::<Assets<JackdawScene>>();
+    let first = scenes.add(JackdawScene::new(SCENE.into(), ".".into()));
+    let second = scenes.add(JackdawScene::new(SCENE.into(), ".".into()));
+    let a = app.world_mut().spawn(JackdawSceneRoot(first)).id();
+    let b = app.world_mut().spawn(JackdawSceneRoot(second)).id();
+    app.add_observer(
+        move |spawned: On<JackdawSceneSpawned>, mut commands: Commands| {
+            let other = if spawned.entity == a { b } else { a };
+            if let Ok(mut other) = commands.get_entity(other) {
+                other.despawn();
+            }
+        },
+    );
+    app.update();
+    app.update();
+
+    let seen = seen.lock().expect("the record");
+    assert_eq!(seen.len(), 1, "only the root that spawned first: {seen:?}");
+    let survivor = seen[0].0;
+    assert!(app.world().get_entity(survivor).is_ok());
+    assert!(app.world().get::<JackdawSceneReady>(survivor).is_some());
+}
+
 fn runtime_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
