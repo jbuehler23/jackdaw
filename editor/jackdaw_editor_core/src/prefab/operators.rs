@@ -1870,83 +1870,231 @@ pub fn apply_to_prefab_source(
         );
         return;
     };
-    apply_field_to_prefab(world, node, type_path, field_path, value);
+    apply_fields_to_prefab(
+        world,
+        vec![FieldWrite {
+            node,
+            type_path: type_path.to_string(),
+            field_path: field_path.to_string(),
+            value,
+        }],
+    );
 }
 
-/// Write one field of `node` into the prefab file that authors the entry it
-/// inherits from, and clear the field's delta on `node`. When the prefab does
-/// not take the value, the override stays on `node`.
-fn apply_field_to_prefab(
-    world: &mut World,
+/// One field of a live node to write into the prefab that authors the entry
+/// the node inherits from.
+struct FieldWrite {
     node: Entity,
-    type_path: &str,
-    field_path: &str,
+    type_path: String,
+    field_path: String,
     value: BsnValue,
-) {
-    let (source, target, base) = match prefab_write_target(world, node, type_path) {
-        Ok(found) => found,
-        Err(message) => {
-            warn_caller(
-                world,
-                format!("prefab.apply_to_source: {message}, so the override stays on the instance"),
-            );
-            return;
-        }
+}
+
+/// Write each field into the prefab file that authors the entry its node
+/// inherits from, and clear the field's delta on the node. A field the prefab
+/// does not take stays on its node as an override, with a warning. Returns how
+/// many fields stayed.
+fn apply_fields_to_prefab(world: &mut World, writes: Vec<FieldWrite>) -> usize {
+    seed_missing_entries(world, &writes);
+
+    let planned: Vec<(
+        FieldWrite,
+        Result<(PathBuf, Entity, Option<BsnValue>), String>,
+    )> = {
+        let live = world.resource::<SceneBsnAst>();
+        let cache = world.resource::<PrefabAstCache>();
+        let mut lookup = cache.inheritance(live);
+        writes
+            .into_iter()
+            .map(|write| {
+                let target = lookup
+                    .entry(live, write.node)
+                    .ok_or_else(|| "the node inherits from no cached prefab entry".to_string())
+                    .and_then(|inherited| prefab_write_target(cache, &inherited, &write.type_path));
+                (write, target)
+            })
+            .collect()
     };
 
+    let mut groups: Vec<(PathBuf, Vec<(FieldWrite, Entity, Option<BsnValue>)>)> = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
+    for (write, target) in planned {
+        match target {
+            Ok((source, entry, base)) => {
+                match groups.iter_mut().find(|(held, _)| *held == source) {
+                    Some((_, group)) => group.push((write, entry, base)),
+                    None => groups.push((source, vec![(write, entry, base)])),
+                }
+            }
+            Err(message) => refused.push(format!(
+                "{} '{}': {message}",
+                write.type_path, write.field_path
+            )),
+        }
+    }
+
     let registry = world.resource::<AppTypeRegistry>().clone();
-    let mut wrote = false;
-    {
+    let mut taken: Vec<FieldWrite> = Vec::new();
+    for (source, group) in groups {
         let reg = registry.read();
+        let mut results: Vec<(FieldWrite, bool)> = Vec::new();
         world
             .resource_mut::<PrefabAstCache>()
             .mutate(&source, |prefab: &mut SceneBsnAst| {
-                wrote = write_prefab_field(
-                    prefab,
-                    target,
-                    base.as_ref(),
-                    type_path,
-                    field_path,
-                    value,
-                    &reg,
-                );
+                for (write, entry, base) in group {
+                    let wrote = write_prefab_field(
+                        prefab,
+                        entry,
+                        base.as_ref(),
+                        &write.type_path,
+                        &write.field_path,
+                        write.value.clone(),
+                        &reg,
+                    );
+                    results.push((write, wrote));
+                }
             });
+        for (write, wrote) in results {
+            if wrote {
+                taken.push(write);
+            } else {
+                refused.push(format!(
+                    "{} '{}': '{}' did not take it",
+                    write.type_path,
+                    write.field_path,
+                    source.display()
+                ));
+            }
+        }
     }
-    if !wrote {
+
+    for message in &refused {
         warn_caller(
             world,
-            format!(
-                "prefab.apply_to_source: '{}' did not take {type_path} '{field_path}', so the \
-                 override stays on the instance",
-                source.display()
-            ),
+            format!("prefab.apply_to_source: {message}, so the override stays on the instance"),
         );
-        return;
     }
 
     let mut live = world.resource_mut::<SceneBsnAst>();
-    if let Some(BsnValue::Struct(mut data)) = get_bsn_field(&live, node, type_path, "") {
-        data.fields.0.retain(|f| f.name != field_path);
-        if data.fields.0.is_empty() {
-            live.remove_component_patch(node, type_path);
-        } else {
-            set_whole_component(&mut live, node, type_path, BsnValue::Struct(data));
+    for write in taken {
+        if let Some(BsnValue::Struct(mut data)) =
+            get_bsn_field(&live, write.node, &write.type_path, "")
+        {
+            data.fields.0.retain(|f| f.name != write.field_path);
+            if data.fields.0.is_empty() {
+                live.remove_component_patch(write.node, &write.type_path);
+            } else {
+                set_whole_component(
+                    &mut live,
+                    write.node,
+                    &write.type_path,
+                    BsnValue::Struct(data),
+                );
+            }
         }
+    }
+    refused.len()
+}
+
+/// Give each write whose node sits inside a nested instance of its prefab an
+/// entry in that prefab's file to take the value, adding the entries for the
+/// path down from the nested instance's own entry with only their ids.
+fn seed_missing_entries(world: &mut World, writes: &[FieldWrite]) {
+    let mut seeds: Vec<(PathBuf, Vec<(Entity, Vec<u32>)>)> = Vec::new();
+    {
+        let live = world.resource::<SceneBsnAst>();
+        let cache = world.resource::<PrefabAstCache>();
+        let mut lookup = cache.inheritance(live);
+        for write in writes {
+            let Some(inherited) = lookup.entry(live, write.node) else {
+                continue;
+            };
+            let Some((parent, chain)) = missing_entry_chain(cache, &inherited) else {
+                continue;
+            };
+            match seeds.iter_mut().find(|(held, _)| *held == inherited.source) {
+                Some((_, chains)) => chains.push((parent, chain)),
+                None => seeds.push((inherited.source.clone(), vec![(parent, chain)])),
+            }
+        }
+    }
+    for (source, chains) in seeds {
+        world
+            .resource_mut::<PrefabAstCache>()
+            .mutate(&source, |prefab: &mut SceneBsnAst| {
+                for (parent, chain) in chains {
+                    let mut current = parent;
+                    for id in chain {
+                        current = match scoped_entry(prefab, current, id) {
+                            Some(found) => found,
+                            None => {
+                                let node = prefab.create_entity_node(vec![peid_patch(id)]);
+                                prefab.add_child_to_ast(current, node);
+                                node
+                            }
+                        };
+                    }
+                }
+            });
     }
 }
 
-/// The prefab file that authors what `node` inherits, its entry for `node` as
-/// written, and the value that entry itself inherits for `type_path`, if any.
+/// The deepest entry the prefab file writes on the way to `inherited`, and the
+/// ids of the entries below it that the file lacks, in order. `None` when the
+/// file writes the entry already, or when the first id is missing: the prefab
+/// itself only inherits that entry.
+fn missing_entry_chain(
+    cache: &PrefabAstCache,
+    inherited: &crate::prefab::resolver_bsn::InheritedEntry<'_>,
+) -> Option<(Entity, Vec<u32>)> {
+    let raw = cache.get(&inherited.source)?;
+    let document = inherited.document;
+    let mut written = prefab_entry(raw, &[])?;
+    let mut expanded = prefab_entry(document, &[])?;
+    let mut parent: Option<Entity> = None;
+    let mut chain: Vec<u32> = Vec::new();
+    for (step, &id) in inherited.path.iter().enumerate() {
+        let next = scoped_entry(document, expanded, id)?;
+        if parent.is_none() {
+            if let Some(found) = scoped_entry(raw, written, id) {
+                written = found;
+                expanded = next;
+                continue;
+            }
+            if step == 0 {
+                return None;
+            }
+            parent = Some(written);
+        }
+        let mut between: Vec<u32> = Vec::new();
+        let mut cursor = Some(next);
+        while let Some(node) = cursor
+            && node != expanded
+        {
+            between.push(read_prefab_entity_id(document, node)?);
+            cursor = document.ast_parent_of(node);
+        }
+        between.reverse();
+        chain.extend(between);
+        expanded = next;
+    }
+    Some((parent?, chain))
+}
+
+/// The node under `root`, in its id space, numbered `id`.
+fn scoped_entry(document: &SceneBsnAst, root: Entity, id: u32) -> Option<Entity> {
+    scoped_descendants(document, root)
+        .into_iter()
+        .find(|&node| read_prefab_entity_id(document, node) == Some(id))
+}
+
+/// For `inherited`, the prefab file that authors it, its entry as written, and
+/// the value that entry itself inherits for `type_path`, if any.
 fn prefab_write_target(
-    world: &World,
-    node: Entity,
+    cache: &PrefabAstCache,
+    inherited: &crate::prefab::resolver_bsn::InheritedEntry<'_>,
     type_path: &str,
 ) -> Result<(PathBuf, Entity, Option<BsnValue>), String> {
-    let live = world.resource::<SceneBsnAst>();
-    let cache = world.resource::<PrefabAstCache>();
-    let inherited = cache
-        .inherited_entry(live, node)
-        .ok_or_else(|| "the node inherits from no cached prefab entry".to_string())?;
     let raw = cache
         .get(&inherited.source)
         .ok_or_else(|| format!("prefab not cached: {}", inherited.source.display()))?;
@@ -1960,7 +2108,7 @@ fn prefab_write_target(
     let base = cache
         .inherited_entry(raw, target)
         .and_then(|entry| get_bsn_field(entry.document, entry.entry, type_path, ""));
-    Ok((inherited.source, target, base))
+    Ok((inherited.source.clone(), target, base))
 }
 
 /// Write `value` at `field_path` into a prefab's own entry `target`. An entry
@@ -2068,12 +2216,15 @@ pub fn unpack_child(world: &mut World, child_node: Entity, drop_target_node: Ent
 /// overridden leaf into the prefab that authors it. An override the prefab
 /// cannot take stays on the instance.
 pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Entity) {
-    let mut work: Vec<(Entity, String, String, BsnValue)> = Vec::new();
+    let mut work: Vec<FieldWrite> = Vec::new();
+    let mut unmatched = 0usize;
+    let mut foreign = 0usize;
     {
         let live = world.resource::<SceneBsnAst>();
         let cache = world.resource::<PrefabAstCache>();
-        let Some(author) = cache
-            .inherited_entry(live, instance_root_node)
+        let mut lookup = cache.inheritance(live);
+        let Some(author) = lookup
+            .entry(live, instance_root_node)
             .map(|entry| entry.instance)
         else {
             return;
@@ -2085,14 +2236,16 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Enti
             if read_prefab_entity_id(live, node).is_none() {
                 continue;
             }
-            // A nested instance the prefab does not place inherits from a
-            // prefab of its own, which applying this instance must not touch.
-            let Some(inherited) = cache
-                .inherited_entry(live, node)
-                .filter(|entry| entry.instance == author)
-            else {
+            let Some(inherited) = lookup.entry(live, node) else {
+                unmatched += 1;
                 continue;
             };
+            // A nested instance the prefab does not place inherits from a
+            // prefab of its own, which applying this instance must not touch.
+            if inherited.instance != author {
+                foreign += 1;
+                continue;
+            }
             for tp in live.component_type_paths(node) {
                 if tp == PREFAB_TYPE || tp == ISA_TYPE || tp == PREFAB_ENTITY_ID_TYPE {
                     continue;
@@ -2105,14 +2258,27 @@ pub fn apply_all_overrides_to_source(world: &mut World, instance_root_node: Enti
                     &scene_value,
                     prefab_value.as_ref(),
                 ) {
-                    work.push((node, tp.clone(), field_path, value));
+                    work.push(FieldWrite {
+                        node,
+                        type_path: tp.clone(),
+                        field_path,
+                        value,
+                    });
                 }
             }
         }
     }
 
-    for (node, type_path, field_path, value) in work {
-        apply_field_to_prefab(world, node, &type_path, &field_path, value);
+    let kept = apply_fields_to_prefab(world, work);
+    if kept + unmatched + foreign > 0 {
+        warn_caller(
+            world,
+            format!(
+                "prefab.apply_all: left on the instance {kept} field(s) the prefab did not \
+                 take, {unmatched} entit(ies) with no entry in the prefab and {foreign} \
+                 entit(ies) of another prefab"
+            ),
+        );
     }
 }
 

@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use crate::prefab::canonical_path::{CanonicalPrefabPath, canonical_prefab_path};
 use crate::prefab::resolver_bsn::{
-    Baseline, ISA_TYPE, InheritedEntry, PrefabBaseline, inherited_entry, read_isa_source,
+    Baseline, ISA_TYPE, InheritanceLookup, InheritedEntry, PrefabBaseline, read_isa_source,
 };
 
 /// Snapshot of a prefab file's identity at the moment the editor
@@ -94,8 +94,13 @@ impl PrefabAstCache {
     /// from: for a nested instance its outer prefab places, and the nodes
     /// inside it, an entry of the outer prefab.
     pub fn inherited_entry(&self, ast: &SceneBsnAst, node: Entity) -> Option<InheritedEntry<'_>> {
-        let get_baseline = |p: &Path| self.baseline(p);
-        inherited_entry(ast, node, &get_baseline)
+        self.inheritance(ast).entry(ast, node)
+    }
+
+    /// Answers [`Self::inherited_entry`] for many nodes of `ast`, sharing the
+    /// work while neither `ast`'s hierarchy nor the cache changes.
+    pub fn inheritance(&self, ast: &SceneBsnAst) -> InheritanceLookup<'_, '_> {
+        InheritanceLookup::new(ast, Box::new(move |p: &Path| self.baseline(p)))
     }
 
     pub fn insert(&mut self, path: impl AsRef<Path>, mut ast: SceneBsnAst) {

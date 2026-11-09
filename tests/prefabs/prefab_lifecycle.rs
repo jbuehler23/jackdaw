@@ -4524,23 +4524,47 @@ fn an_override_on_a_root_inheriting_instance_is_saved_and_kept() {
 /// Text of an outer prefab that places the inner prefab as its child (id 5) at
 /// `child_x` and moves the inner prefab's knob to `knob_x`.
 fn nesting_prefab_text(inner: &std::path::Path, child_x: f64, knob_x: f64) -> String {
+    placing_prefab_text(inner, "", child_x, Some(knob_x), &[])
+}
+
+/// Text of an outer prefab whose root carries `root_isa` and which places the
+/// inner prefab as its child (id 5) at `child_x`, deleting the inner ids in
+/// `deleted` and moving the knob to `knob_x` when given.
+fn placing_prefab_text(
+    inner: &std::path::Path,
+    root_isa: &str,
+    child_x: f64,
+    knob_x: Option<f64>,
+    deleted: &[u32],
+) -> String {
+    let knob = knob_x.map_or(String::new(), |x| {
+        format!(
+            "bevy_ecs::hierarchy::Children [\n\
+                 jackdaw::prefab::components::PrefabEntityId(7)\n\
+                 bevy_transform::components::transform::Transform {{ translation: glam::Vec3 {{ x: {x:?}, y: 0.0, z: 0.0 }} }}\n\
+             ]\n"
+        )
+    });
+    let deleted = deleted
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "#outer\n\
          jackdaw::prefab::components::Prefab\n\
          jackdaw::prefab::components::PrefabEntityId(0)\n\
+         {root_isa}\n\
          bevy_transform::components::transform::Transform {{\n\
              translation: glam::Vec3 {{ x: 0.0, y: 0.0, z: 0.0 }},\n\
              rotation: glam::Quat {{ x: 0.0, y: 0.0, z: 0.0, w: 1.0 }},\n\
              scale: glam::Vec3 {{ x: 1.0, y: 1.0, z: 1.0 }},\n\
          }}\n\
          bevy_ecs::hierarchy::Children [\n\
-             jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}\n\
+             jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [{deleted}] }}\n\
              jackdaw::prefab::components::PrefabEntityId(5)\n\
              bevy_transform::components::transform::Transform {{ translation: glam::Vec3 {{ x: {child_x:?}, y: 0.0, z: 0.0 }} }}\n\
-             bevy_ecs::hierarchy::Children [\n\
-                 jackdaw::prefab::components::PrefabEntityId(7)\n\
-                 bevy_transform::components::transform::Transform {{ translation: glam::Vec3 {{ x: {knob_x:?}, y: 0.0, z: 0.0 }} }}\n\
-             ]\n\
+             {knob}\
          ]",
         inner.to_slash_lossy()
     )
@@ -5631,4 +5655,248 @@ fn instances_sharing_a_sidecar_with_different_bounds_are_noted() {
         .world()
         .resource::<jackdaw_editor_tile::tilemap::TilemapDataStore>();
     assert!(store.bounds_diverge(&key));
+}
+
+/// Respawn a saved scene in a fresh app whose cache holds the inner prefab and
+/// `outer_text` for the outer one.
+fn reopen_with_outer_text(
+    text: &str,
+    inner: &std::path::Path,
+    outer: &std::path::Path,
+    outer_text: &str,
+) -> App {
+    let mut reopened = make_app_for_prefab_tests();
+    {
+        let mut cache = reopened
+            .world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>();
+        cache.insert(inner, bsn_ast(&inner_prefab_text(2.0, 3.0)));
+        cache.insert(outer, bsn_ast(outer_text));
+    }
+    jackdaw::prefab::watcher::respawn_from_sparse_text(reopened.world_mut(), text);
+    reopened
+}
+
+fn holds_node(app: &App, id: u64) -> bool {
+    app.world()
+        .resource::<jackdaw_bsn::SceneBsnAst>()
+        .find_node_by_component_int(PEID_TYPE, id)
+        .is_some()
+}
+
+#[test]
+fn applying_a_knob_override_seeds_a_sparse_entry_in_the_outer_prefab() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = tmp.path().join("inner.bsn");
+    let outer = tmp.path().join("outer.bsn");
+    std::fs::write(&inner, inner_prefab_text(2.0, 3.0)).unwrap();
+    std::fs::write(&outer, placing_prefab_text(&inner, "", 4.0, None, &[])).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &outer, bevy::math::Vec3::ZERO);
+    assert!((live_x(&app, 7, "translation.x") - 3.0).abs() < 1e-4);
+    set_live_field(&mut app, 7, "translation.x", 12.0);
+
+    let owner = {
+        let ast = app.world().resource::<jackdaw_bsn::SceneBsnAst>();
+        jackdaw::prefab::overrides_bsn::id_owner(ast, live_node(&app, 7))
+            .expect("the knob is numbered by the nested child")
+    };
+    jackdaw::prefab::operators::apply_to_prefab_source(
+        app.world_mut(),
+        owner,
+        7,
+        TRANSFORM_TYPE,
+        "translation.x",
+        jackdaw_bsn::BsnValue::Float(12.0),
+    );
+
+    {
+        let cache = app.world().resource::<jackdaw::prefab::PrefabAstCache>();
+        let raw = cache.get(&outer).expect("the outer prefab stays cached");
+        let child = raw
+            .find_node_by_component_int(PEID_TYPE, 5)
+            .expect("the outer prefab holds its child");
+        let knob = raw
+            .get_children_ast(child)
+            .into_iter()
+            .find(|&node| {
+                matches!(
+                    jackdaw_bsn::get_bsn_field(raw, node, PEID_TYPE, ""),
+                    Some(jackdaw_bsn::BsnValue::TupleStruct(_))
+                )
+            })
+            .expect("the outer prefab gains a knob entry under its child");
+        let field = |path| jackdaw_bsn::get_bsn_field(raw, knob, TRANSFORM_TYPE, path);
+        assert!(is_float(field("translation.x"), 12.0));
+        assert!(field("scale").is_none(), "the knob entry stays sparse");
+        let inner_raw = cache.get(&inner).expect("the inner prefab stays cached");
+        assert_eq!(
+            jackdaw_bsn::emit_scene(inner_raw),
+            jackdaw_bsn::emit_scene(&bsn_ast(&inner_prefab_text(2.0, 3.0))),
+            "the inner prefab is unchanged"
+        );
+    }
+
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!((live_x(&app, 7, "translation.x") - 12.0).abs() < 1e-4);
+    let text = saved_scene_text(&mut app);
+    assert!(saved_field(&text, 7, "").is_none(), "got {text}");
+}
+
+#[test]
+fn a_child_the_outer_prefab_deletes_later_stays_gone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, outer) = write_nesting_prefabs(tmp.path());
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &outer, bevy::math::Vec3::ZERO);
+    let text = saved_scene_text(&mut app);
+
+    let deleting = placing_prefab_text(&inner, "", 4.0, None, &[7]);
+    let mut reopened = reopen_with_outer_text(&text, &inner, &outer, &deleting);
+    assert!(
+        !holds_node(&reopened, 7),
+        "the knob the outer prefab now deletes does not come back"
+    );
+    let resaved = saved_scene_text(&mut reopened);
+    let ast = bsn_ast(&resaved);
+    assert!(
+        ast.find_node_by_component_int(PEID_TYPE, 7).is_none(),
+        "the deleted knob is not saved; got {resaved}"
+    );
+}
+
+#[test]
+fn a_child_the_outer_prefab_restores_later_comes_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = tmp.path().join("inner.bsn");
+    let outer = tmp.path().join("outer.bsn");
+    std::fs::write(&inner, inner_prefab_text(2.0, 3.0)).unwrap();
+    std::fs::write(&outer, placing_prefab_text(&inner, "", 4.0, None, &[7])).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &outer, bevy::math::Vec3::ZERO);
+    assert!(!holds_node(&app, 7), "the outer prefab deletes the knob");
+    let text = saved_scene_text(&mut app);
+
+    let reopened = reopen_with_outer_text(
+        &text,
+        &inner,
+        &outer,
+        &nesting_prefab_text(&inner, 4.0, 8.0),
+    );
+    assert!(
+        (live_x(&reopened, 7, "translation.x") - 8.0).abs() < 1e-4,
+        "the restored knob comes back where the outer prefab puts it"
+    );
+}
+
+#[test]
+fn a_nested_child_in_a_root_inheriting_outer_prefab_follows_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.bsn");
+    let inner = tmp.path().join("inner.bsn");
+    let outer = tmp.path().join("outer.bsn");
+    std::fs::write(
+        &base,
+        "#base\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_transform::components::transform::Transform {\n\
+             translation: glam::Vec3 { x: 0.0, y: 0.0, z: 0.0 },\n\
+             rotation: glam::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },\n\
+             scale: glam::Vec3 { x: 3.0, y: 3.0, z: 3.0 },\n\
+         }",
+    )
+    .unwrap();
+    std::fs::write(&inner, inner_prefab_text(2.0, 3.0)).unwrap();
+    let root_isa = format!(
+        "jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}",
+        base.to_slash_lossy()
+    );
+    let outer_text = |child_x, knob_x| {
+        placing_prefab_text(&inner, &root_isa, child_x, Some(knob_x), &[])
+            .replace("scale: glam::Vec3 { x: 1.0, y: 1.0, z: 1.0 },\n", "")
+    };
+    std::fs::write(&outer, outer_text(4.0, 8.0)).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &outer, bevy::math::Vec3::ZERO);
+    assert!((live_x(&app, 5, "translation.x") - 4.0).abs() < 1e-4);
+    assert!((live_x(&app, 7, "translation.x") - 8.0).abs() < 1e-4);
+
+    let text = saved_scene_text(&mut app);
+    assert!(saved_field(&text, 5, "").is_none(), "got {text}");
+    assert!(saved_field(&text, 7, "").is_none(), "got {text}");
+    assert!(saved_instance_field(&text, "scale").is_none(), "got {text}");
+
+    let reopened = reopen_with_outer_text(&text, &inner, &outer, &outer_text(6.0, 9.0));
+    assert!((live_x(&reopened, 5, "translation.x") - 6.0).abs() < 1e-4);
+    assert!((live_x(&reopened, 7, "translation.x") - 9.0).abs() < 1e-4);
+}
+
+/// Text of a top prefab that places the outer prefab as its child (id 3) at
+/// `child_x` and moves the knob two prefabs down to `knob_x`.
+fn top_prefab_text(outer: &std::path::Path, child_x: f64, knob_x: f64) -> String {
+    format!(
+        "#top\n\
+         jackdaw::prefab::components::Prefab\n\
+         jackdaw::prefab::components::PrefabEntityId(0)\n\
+         bevy_ecs::hierarchy::Children [\n\
+             jackdaw::prefab::components::IsA {{ source: \"{}\", deleted: [] }}\n\
+             jackdaw::prefab::components::PrefabEntityId(3)\n\
+             bevy_transform::components::transform::Transform {{ translation: glam::Vec3 {{ x: {child_x:?}, y: 0.0, z: 0.0 }} }}\n\
+             bevy_ecs::hierarchy::Children [\n\
+                 jackdaw::prefab::components::PrefabEntityId(5)\n\
+                 bevy_ecs::hierarchy::Children [\n\
+                     jackdaw::prefab::components::PrefabEntityId(7)\n\
+                     bevy_transform::components::transform::Transform {{ translation: glam::Vec3 {{ x: {knob_x:?}, y: 0.0, z: 0.0 }} }}\n\
+                 ]\n\
+             ]\n\
+         ]",
+        outer.to_slash_lossy()
+    )
+}
+
+#[test]
+fn three_levels_of_nested_prefabs_save_none_of_their_values_and_follow_edits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, outer) = write_nesting_prefabs(tmp.path());
+    let top = tmp.path().join("top.bsn");
+    std::fs::write(&top, top_prefab_text(&outer, 1.0, 20.0)).unwrap();
+
+    let mut app = make_app_for_prefab_tests();
+    jackdaw::prefab::operators::spawn_instance(app.world_mut(), &top, bevy::math::Vec3::ZERO);
+    assert!((live_x(&app, 3, "translation.x") - 1.0).abs() < 1e-4);
+    assert!((live_x(&app, 5, "translation.x") - 4.0).abs() < 1e-4);
+    assert!((live_x(&app, 5, "scale.x") - 2.0).abs() < 1e-4);
+    assert!((live_x(&app, 7, "translation.x") - 20.0).abs() < 1e-4);
+
+    let text = saved_scene_text(&mut app);
+    for id in [3, 5, 7] {
+        assert!(saved_field(&text, id, "").is_none(), "id {id}: got {text}");
+    }
+
+    let edit = |app: &mut App, path: &std::path::Path, body: String| {
+        let sparse = jackdaw::prefab::watcher::capture_sparse_scene_text(app.world_mut())
+            .expect("a live document to capture");
+        app.world_mut()
+            .resource_mut::<jackdaw::prefab::PrefabAstCache>()
+            .insert(path, bsn_ast(&body));
+        jackdaw::prefab::watcher::respawn_from_sparse_text(app.world_mut(), &sparse);
+    };
+    edit(&mut app, &outer, nesting_prefab_text(&inner, 6.0, 8.0));
+    assert!((live_x(&app, 5, "translation.x") - 6.0).abs() < 1e-4);
+    assert!((live_x(&app, 7, "translation.x") - 20.0).abs() < 1e-4);
+    edit(&mut app, &top, top_prefab_text(&outer, 1.0, 30.0));
+    assert!((live_x(&app, 7, "translation.x") - 30.0).abs() < 1e-4);
+    assert!((live_x(&app, 5, "translation.x") - 6.0).abs() < 1e-4);
+
+    let text = saved_scene_text(&mut app);
+    for id in [3, 5, 7] {
+        assert!(saved_field(&text, id, "").is_none(), "id {id}: got {text}");
+    }
 }

@@ -842,6 +842,10 @@ fn build_inspector_cards(
     // Prefab-instance context: if this entity sits inside an IsA
     // subtree, override info comes from the prefab AST + cache and the
     // revert / right-click actions route to the new prefab operators.
+    let inherited = scene_ast.zip(prefab_cache).and_then(|(ast, cache)| {
+        let node = ast.ast_for(source_entity)?;
+        cache.inherited_entry(ast, node)
+    });
     let prefab_ctx: Option<PrefabInstanceCtx> = scene_ast.and_then(|ast| {
         let cache = prefab_cache?;
         let node = ast.ast_for(source_entity)?;
@@ -959,14 +963,19 @@ fn build_inspector_cards(
             if !ctx.has_cached_prefab {
                 return false;
             }
-            let (Some(ast), Some(cache)) = (scene_ast, prefab_cache) else {
+            let Some(ast) = scene_ast else {
                 return false;
             };
             let Some(node) = ast.ast_for(source_entity) else {
                 return false;
             };
-            crate::prefab::overrides_bsn::field_is_overridden(
-                ast, cache, node, type_path, None, &registry,
+            crate::prefab::overrides_bsn::field_differs_from(
+                ast,
+                node,
+                inherited.as_ref(),
+                type_path,
+                None,
+                &registry,
             )
         });
 
