@@ -512,6 +512,8 @@ impl JackdawScene {
 /// chain, triggering Bevy B0004 warnings and silently breaking
 /// rendering). Callers can spawn `JackdawSceneRoot(handle)` by
 /// itself; Bevy fills in the requires.
+///
+/// Inserting it again on a spawned root respawns the scene, as restarting a level does.
 #[derive(Component, Deref)]
 #[require(Transform, Visibility, SceneInstanceMembers)]
 pub struct JackdawSceneRoot(pub Handle<JackdawScene>);
@@ -2506,6 +2508,70 @@ mod asset_file_tests {
         app.update();
         assert!(app.world().get::<SceneSpawned>(second).is_some());
         assert_eq!(jackdaw_bsn::parses_on_this_thread(), before + 1);
+    }
+
+    /// A game restarting a level inserts the root again with the handle it had.
+    #[test]
+    fn a_file_root_inserted_again_with_its_handle_respawns_once() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write(tmp.path(), "scene.bsn", HIERARCHY);
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            AssetPlugin {
+                file_path: tmp.path().to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            bevy::world_serialization::WorldSerializationPlugin,
+            JackdawPlugin,
+        ));
+        let spawns: std::sync::Arc<std::sync::Mutex<Vec<Entity>>> = Default::default();
+        let record = spawns.clone();
+        app.add_observer(move |spawned: On<JackdawSceneSpawned>| {
+            if let Ok(mut spawns) = record.lock() {
+                spawns.push(spawned.entity);
+            }
+        });
+        let handle: Handle<JackdawScene> = app.world().resource::<AssetServer>().load("scene.bsn");
+        let root = app.world_mut().spawn(JackdawSceneRoot(handle.clone())).id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.world().get::<JackdawSceneReady>(root).is_none() {
+            assert!(std::time::Instant::now() < deadline, "never spawned");
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        let members = |app: &App| {
+            app.world()
+                .get::<SceneInstanceMembers>(root)
+                .map(|members| members.0.clone())
+                .unwrap_or_default()
+        };
+        let first = members(&app);
+        assert!(!first.is_empty());
+        assert_eq!(*spawns.lock().expect("the record"), vec![root]);
+
+        app.world_mut()
+            .entity_mut(root)
+            .insert(JackdawSceneRoot(handle));
+        assert!(app.world().get::<JackdawSceneReady>(root).is_none());
+        app.update();
+        assert!(app.world().get::<JackdawSceneReady>(root).is_some());
+        for _ in 0..3 {
+            app.update();
+        }
+        let second = members(&app);
+        assert!(!second.is_empty());
+        assert!(
+            first
+                .iter()
+                .all(|&entity| app.world().get_entity(entity).is_err()),
+            "the first spawn is gone"
+        );
+        assert_eq!(*spawns.lock().expect("the record"), vec![root, root]);
     }
 
     #[test]

@@ -67,6 +67,10 @@ impl DocumentIoHook for TerrainSidecars {
         export_play_terrain(world, document, copies)
     }
 
+    fn play_prefabs(&self, world: &World, document: &PlayDocument) -> Vec<String> {
+        scatter_prefabs(world, document)
+    }
+
     fn has_unsaved_edits(&self, world: &World, tab: usize) -> bool {
         let Some(store) = store_of_tab(world, Some(tab)) else {
             return false;
@@ -250,13 +254,7 @@ fn export_play_terrain(
             warn!("Skipping invalid terrain data path {data_path:?}");
             continue;
         };
-        let store = match document.tab {
-            Some(tab) => store_of_tab(world, Some(tab)),
-            None if document.instanced => document
-                .file_dir()
-                .and_then(|dir| store_with_edits(world, dir, &data_path)),
-            None => None,
-        };
+        let store = store_of_document(world, document, &data_path);
         let Some((store, data)) = store.and_then(|store| Some((store, store.get(&data_path)?)))
         else {
             continue;
@@ -288,6 +286,55 @@ fn export_play_terrain(
         })?;
     }
     Ok(())
+}
+
+/// The store holding `document`'s data for the terrain at `data_path`: its tab's, or
+/// for a prefab no tab holds, an open document's in its folder with unsaved edits.
+fn store_of_document<'a>(
+    world: &'a World,
+    document: &PlayDocument,
+    data_path: &str,
+) -> Option<&'a TerrainDataStore> {
+    match document.tab {
+        Some(tab) => store_of_tab(world, Some(tab)),
+        None if document.instanced => document
+            .file_dir()
+            .and_then(|dir| store_with_edits(world, dir, data_path)),
+        None => None,
+    }
+}
+
+/// The prefabs `document`'s terrains scatter, from the store holding each terrain's
+/// data, else from its file.
+fn scatter_prefabs(world: &World, document: &PlayDocument) -> Vec<String> {
+    use jackdaw_terrain::sidecar;
+
+    let type_path = <jackdaw_scene_types::Terrain as bevy::reflect::TypePath>::type_path();
+    let mut prefabs = Vec::new();
+    for data_path in document.data_paths(type_path) {
+        let held = store_of_document(world, document, &data_path)
+            .and_then(|store| store.get(&data_path))
+            .map(|data| data.scatter.clone());
+        let palette = held.or_else(|| {
+            let file = sidecar::resolve_path(document.file_dir()?, &data_path).ok()?;
+            let bytes = std::fs::read(file).ok()?;
+            Some(sidecar::load(&bytes).ok()?.scatter)
+        });
+        let Some(palette) = palette else {
+            continue;
+        };
+        prefabs.extend(
+            palette
+                .assets
+                .into_iter()
+                .filter(|entry| {
+                    !entry.is_tombstone()
+                        && jackdaw_terrain::placement::is_prefab_asset(&entry.asset)
+                })
+                .map(|entry| entry.asset),
+        );
+    }
+    prefabs
 }
 
 /// Whether the sidecar at `file` decodes to `data`. An older format on disk does
