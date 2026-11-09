@@ -112,9 +112,19 @@ fn uv_scale_for(id: u32) -> f32 {
 }
 
 // `id` must already be clamped by `last_layer`.
-// A slot's own roughness or reflectance, negative where it sets none.
-fn slot_value(values: array<vec4<f32>, 4>, id: u32) -> f32 {
-    return values[id / 4u][id % 4u];
+// A slot's own roughness, negative where it sets none.
+//
+// One reader per uniform array rather than one taking the array as a
+// parameter: an array passed by value is copied into function-local memory,
+// which mobile compilers spill to scratch.
+fn slot_roughness_for(id: u32) -> f32 {
+    return splat.slot_roughness[id / 4u][id % 4u];
+}
+
+// `id` must already be clamped by `last_layer`.
+// A slot's own reflectance, negative where it sets none.
+fn slot_reflectance_for(id: u32) -> f32 {
+    return splat.slot_reflectance[id / 4u][id % 4u];
 }
 
 fn detile_for(id: u32) -> f32 {
@@ -143,12 +153,6 @@ struct TileTap {
     weight: f32,
 }
 
-// The tiles one fragment reads, with the share each of them takes.
-struct Sampling {
-    taps: array<TileTap, 4>,
-    count: u32,
-}
-
 // `v` turned by the unit `(cos, sin)` in `turn`.
 fn turned_by(v: vec2<f32>, turn: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(turn.x * v.x - turn.y * v.y, turn.y * v.x + turn.x * v.y);
@@ -172,44 +176,57 @@ fn turned_by(v: vec2<f32>, turn: vec2<f32>) -> vec2<f32> {
 // rotation pivots on the tile centres rather than the texture origin, so the
 // displacement does not grow with how far the terrain runs.
 //
-// `strength` 0 returns a single tap holding exactly what came in.
-fn detile(uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, strength: f32) -> Sampling {
-    var out: Sampling;
-    out.count = 1u;
-    out.taps[0].uv = uv;
-    out.taps[0].ddx = ddx;
-    out.taps[0].ddy = ddy;
-    out.taps[0].turn = vec2<f32>(1.0, 0.0);
-    out.taps[0].weight = 1.0;
-    if strength <= 0.0 {
-        return out;
-    }
+// The tiles are handed out one at a time and sampled as they come, never
+// gathered into an array: a function-local array indexed at runtime is what
+// mobile compilers spill to scratch memory, and once `accumulate` is inlined
+// for every corner and layer that spill cost an Adreno 840 six times the
+// fragment's whole budget, detiling on or off. `accumulate` walks the tiles.
 
+// Detiling off: one tap holding exactly what came in.
+fn untiled_tap(uv: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> TileTap {
+    return TileTap(uv, ddx, ddy, vec2<f32>(1.0, 0.0), 1.0);
+}
+
+// Where the four tiles around `uv` start: `base` names the lower tile centre
+// and `f` the smoothed position between the centres.
+struct TileGrid {
+    base: vec2<f32>,
+    f: vec2<f32>,
+}
+
+fn tile_grid(uv: vec2<f32>) -> TileGrid {
     // Half a tile back, so `base` names the four tile centres around the
     // sample rather than the corners of the tile it is inside.
     let p = uv - vec2<f32>(0.5);
-    let base = floor(p);
-    let f = smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), fract(p));
+    return TileGrid(floor(p), smoothstep(vec2<f32>(0.0), vec2<f32>(1.0), fract(p)));
+}
 
-    out.count = 4u;
-    for (var j = 0u; j < 2u; j++) {
-        for (var i = 0u; i < 2u; i++) {
-            let corner = base + vec2<f32>(f32(i), f32(j));
-            let weight = mix(1.0 - f.x, f.x, f32(i)) * mix(1.0 - f.y, f.y, f32(j));
-            let hash = tile_hash(corner);
-            let angle = (hash.x * 2.0 - 1.0) * strength * 3.14159265;
-            let shift = (hash - vec2<f32>(0.5)) * strength;
-            let pivot = corner + vec2<f32>(0.5);
-            let turn = vec2<f32>(cos(angle), sin(angle));
-            let index = j * 2u + i;
-            out.taps[index].uv = pivot + turned_by(uv - pivot, turn) + shift;
-            out.taps[index].ddx = turned_by(ddx, turn);
-            out.taps[index].ddy = turned_by(ddy, turn);
-            out.taps[index].turn = turn;
-            out.taps[index].weight = weight;
-        }
-    }
-    return out;
+// Tile `(i, j)` of the four around `uv`, each 0 or 1, in its own rigid frame
+// and with its bilinear share.
+fn tile_tap(
+    uv: vec2<f32>,
+    ddx: vec2<f32>,
+    ddy: vec2<f32>,
+    strength: f32,
+    grid: TileGrid,
+    i: u32,
+    j: u32,
+) -> TileTap {
+    let f = grid.f;
+    let corner = grid.base + vec2<f32>(f32(i), f32(j));
+    let weight = mix(1.0 - f.x, f.x, f32(i)) * mix(1.0 - f.y, f.y, f32(j));
+    let hash = tile_hash(corner);
+    let angle = (hash.x * 2.0 - 1.0) * strength * 3.14159265;
+    let shift = (hash - vec2<f32>(0.5)) * strength;
+    let pivot = corner + vec2<f32>(0.5);
+    let turn = vec2<f32>(cos(angle), sin(angle));
+    return TileTap(
+        pivot + turned_by(uv - pivot, turn) + shift,
+        turned_by(ddx, turn),
+        turned_by(ddy, turn),
+        turn,
+        weight,
+    );
 }
 
 // The texel a grid coordinate's lower corner sits in. `control_resolution`
@@ -248,6 +265,59 @@ fn slope_at(corner: vec2<i32>, f: vec2<f32>) -> f32 {
     return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
 
+// One layer's samples summed over the tiles read so far, each scaled by its
+// tile's share, with the shares summed in `taken`.
+struct TapSums {
+    albedo: vec3<f32>,
+    height: f32,
+    normal: vec3<f32>,
+    occlusion: f32,
+    roughness: f32,
+    taken: f32,
+}
+
+// `sums` with one tile of layer `layer` added at that tile's share.
+fn sample_tap(
+    sums: TapSums,
+    layer: i32,
+    tap: TileTap,
+    has_occlusion: bool,
+    has_roughness: bool,
+) -> TapSums {
+    var out = sums;
+    out.albedo += tap.weight
+        * textureSampleGrad(albedo_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).rgb;
+    out.height += tap.weight
+        * textureSampleGrad(height_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
+    let packed =
+        textureSampleGrad(normal_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).rgb;
+    let unpacked = packed * 2.0 - 1.0;
+    // This tap's UV was turned by `tap.turn`, so its texture reads
+    // rotated by the inverse across the surface and the tangent-space
+    // normal stored in it has to turn back before the tiles are
+    // blended. Green is already in the shader's convention:
+    // `flip_normal_y` is applied on the way into the array.
+    let back = turned_by(unpacked.xy, vec2<f32>(tap.turn.x, -tap.turn.y));
+    out.normal += tap.weight * vec3<f32>(back, unpacked.z);
+    // A layer with no map of its own holds a filled array layer, so
+    // it is not sampled: it contributes the identity instead,
+    // unoccluded and at full roughness before the slot's own value.
+    if has_occlusion {
+        out.occlusion += tap.weight * textureSampleGrad(
+            occlusion_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
+    } else {
+        out.occlusion += tap.weight;
+    }
+    if has_roughness {
+        out.roughness += tap.weight * textureSampleGrad(
+            roughness_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).g;
+    } else {
+        out.roughness += tap.weight;
+    }
+    out.taken += tap.weight;
+    return out;
+}
+
 struct Accum {
     albedo: vec3<f32>,
     normal: vec3<f32>,
@@ -284,68 +354,50 @@ fn accumulate(
     let layer_id = min(id, last_layer());
     let layer = i32(layer_id);
     let scale = uv_scale_for(layer_id);
-    let tiled = detile(
-        local_xz * scale, ddx_local * scale, ddy_local * scale, detile_for(layer_id));
+    let uv = local_xz * scale;
+    let ddx = ddx_local * scale;
+    let ddy = ddy_local * scale;
+    let strength = detile_for(layer_id);
+    let has_occlusion = ((splat.occlusion_slots >> layer_id) & 1u) != 0u;
+    let has_roughness = ((splat.roughness_slots >> layer_id) & 1u) != 0u;
 
     // One sample per tile, blended after sampling: a rigid UV and its own
     // derivatives per tap, so no tap is stretched by its neighbours.
     // Four taps of three arrays across four control corners is 96 reads
     // per fragment where a single cell with detiling off takes 24.
-    var albedo_sum = vec3<f32>(0.0);
-    var height_sum = 0.0;
-    var normal_sum = vec3<f32>(0.0);
-    var occlusion_sum = 0.0;
-    var roughness_sum = 0.0;
-    var taken = 0.0;
-    let has_occlusion = ((splat.occlusion_slots >> layer_id) & 1u) != 0u;
-    let has_roughness = ((splat.roughness_slots >> layer_id) & 1u) != 0u;
-    for (var t = 0u; t < tiled.count; t++) {
-        let tap = tiled.taps[t];
-        // A tile whose share has fallen to nothing is three samples that
-        // change no pixel. The gradients are explicit, so this branch does
-        // not have to be uniform.
-        if tap.weight <= 1e-4 {
-            continue;
+    var sums = TapSums(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, 0.0, 0.0);
+    if strength <= 0.0 {
+        sums = sample_tap(
+            sums, layer, untiled_tap(uv, ddx, ddy), has_occlusion, has_roughness);
+    } else {
+        let grid = tile_grid(uv);
+        for (var j = 0u; j < 2u; j++) {
+            for (var i = 0u; i < 2u; i++) {
+                let tap = tile_tap(uv, ddx, ddy, strength, grid, i, j);
+                // A tile whose share has fallen to nothing is three samples
+                // that change no pixel. The gradients are explicit, so this
+                // branch does not have to be uniform.
+                if tap.weight > 1e-4 {
+                    sums = sample_tap(sums, layer, tap, has_occlusion, has_roughness);
+                }
+            }
         }
-        albedo_sum += tap.weight
-            * textureSampleGrad(albedo_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).rgb;
-        height_sum += tap.weight
-            * textureSampleGrad(height_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
-        let packed =
-            textureSampleGrad(normal_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).rgb;
-        let unpacked = packed * 2.0 - 1.0;
-        // This tap's UV was turned by `tap.turn`, so its texture reads
-        // rotated by the inverse across the surface and the tangent-space
-        // normal stored in it has to turn back before the tiles are
-        // blended. Green is already in the shader's convention:
-        // `flip_normal_y` is applied on the way into the array.
-        let back = turned_by(unpacked.xy, vec2<f32>(tap.turn.x, -tap.turn.y));
-        normal_sum += tap.weight * vec3<f32>(back, unpacked.z);
-        // A layer with no map of its own holds a filled array layer, so
-        // it is not sampled: it contributes the identity instead,
-        // unoccluded and at full roughness before the slot's own value.
-        if has_occlusion {
-            occlusion_sum += tap.weight * textureSampleGrad(
-                occlusion_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).r;
-        } else {
-            occlusion_sum += tap.weight;
-        }
-        if has_roughness {
-            roughness_sum += tap.weight * textureSampleGrad(
-                roughness_array, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy).g;
-        } else {
-            roughness_sum += tap.weight;
-        }
-        taken += tap.weight;
     }
-    let own_roughness = slot_value(splat.slot_roughness, layer_id);
+    let albedo_sum = sums.albedo;
+    let height_sum = sums.height;
+    let normal_sum = sums.normal;
+    let occlusion_sum = sums.occlusion;
+    let roughness_sum = sums.roughness;
+    let taken = sums.taken;
+
+    let own_roughness = slot_roughness_for(layer_id);
     var roughness_scale = 1.0;
     if own_roughness >= 0.0 {
         roughness_scale = own_roughness;
     } else if !has_roughness {
         roughness_scale = splat.perceptual_roughness;
     }
-    let own_reflectance = slot_value(splat.slot_reflectance, layer_id);
+    let own_reflectance = slot_reflectance_for(layer_id);
     let reflectance = select(DEFAULT_REFLECTANCE, own_reflectance, own_reflectance >= 0.0);
     let inv_taps = 1.0 / max(taken, 1e-8);
     let albedo = albedo_sum * inv_taps;

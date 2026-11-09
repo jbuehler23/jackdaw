@@ -2476,6 +2476,47 @@ mod tests {
         }
     }
 
+    /// The fragment path declares no array outside the uniform.
+    ///
+    /// A function-local array indexed at runtime, or an array passed by value,
+    /// is what mobile compilers put in scratch memory. Adreno does that to the
+    /// whole fragment once `accumulate` is inlined for every corner and layer:
+    /// an Adreno 840 drew a screen of terrain in ~95 ms with a four-tap array,
+    /// even with detiling off, and in under 16 ms without one. The uniform's
+    /// own arrays live in a buffer and are exempt; `texture_2d_array` is a
+    /// binding, not an array value.
+    #[test]
+    fn the_fragment_path_holds_no_function_local_arrays() {
+        let start = SHADER_SOURCE
+            .find("struct SplatUniform {")
+            .expect("SplatUniform is declared");
+        let end = start
+            + SHADER_SOURCE[start..]
+                .find('}')
+                .expect("SplatUniform is closed");
+        for (part, offset) in [(&SHADER_SOURCE[..start], 0), (&SHADER_SOURCE[end..], end)] {
+            for (at, _) in part.match_indices("array<") {
+                let after_underscore = at > 0 && part.as_bytes()[at - 1] == b'_';
+                assert!(
+                    after_underscore,
+                    "an array value at byte {}: `{}`",
+                    offset + at,
+                    part[at..].lines().next().unwrap_or_default()
+                );
+            }
+        }
+    }
+
+    /// The body of a shader function, from its declaration to the next one.
+    fn shader_fn(name: &str) -> &'static str {
+        let start = SHADER_SOURCE
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("`{name}` is declared"));
+        let body = &SHADER_SOURCE[start..];
+        let end = body[1..].find("\nfn ").map_or(body.len(), |at| at + 1);
+        &body[..end]
+    }
+
     /// Detiling turns the UV, so the tangent-space normal stored in the texture
     /// has to turn back with it. With one rotation per tile, the turn has to be
     /// applied per tap, before the taps are blended.
@@ -2485,16 +2526,13 @@ mod tests {
             SHADER_SOURCE.contains("turn: vec2<f32>,"),
             "`TileTap` must carry the rotation it applied to the UV"
         );
-        let start = SHADER_SOURCE
-            .find("fn accumulate(")
-            .expect("accumulate is declared");
-        let body = &SHADER_SOURCE[start..];
+        let body = shader_fn("sample_tap");
         let packed = body
             .find("normal_array")
-            .expect("accumulate samples the normals");
+            .expect("sample_tap samples the normals");
         let turned = body
             .find("turned_by(unpacked.xy, vec2<f32>(tap.turn.x, -tap.turn.y))")
-            .expect("accumulate must turn each tap's normal back by that tap's rotation");
+            .expect("sample_tap must turn each tap's normal back by that tap's rotation");
         assert!(
             turned > packed,
             "the rotation must be applied after the sample, not before"
@@ -2509,53 +2547,58 @@ mod tests {
     /// texture read through it comes back marbled.
     #[test]
     fn detiling_samples_once_per_tile_and_blends_the_samples() {
+        let tap = shader_fn("tile_tap");
         assert!(
-            SHADER_SOURCE.contains("taps: array<TileTap, 4>"),
-            "detile must hand back one frame per tile, not one blended UV"
+            tap.contains("-> TileTap"),
+            "a tile must come back as its own frame, not one blended UV"
         );
-        let start = SHADER_SOURCE
-            .find("fn accumulate(")
-            .expect("accumulate is declared");
-        let body = &SHADER_SOURCE[start..];
-        let loop_at = body
-            .find("for (var t = 0u; t < tiled.count; t++)")
-            .expect("accumulate must walk the taps");
+        let accumulate = shader_fn("accumulate");
+        let loop_at = accumulate
+            .find("for (var i = 0u; i < 2u; i++)")
+            .expect("accumulate must walk the tiles");
+        let built = accumulate
+            .find("tile_tap(uv, ddx, ddy, strength, grid, i, j)")
+            .expect("each tile is built in the loop");
+        let sampled = accumulate[built..]
+            .find("sample_tap(sums, layer, tap,")
+            .map(|at| at + built)
+            .expect("each tile is sampled as soon as it is built");
+        assert!(
+            loop_at < built && built < sampled,
+            "every tile must be sampled inside the per-tile loop"
+        );
+        let sample = shader_fn("sample_tap");
         for array in ["albedo_array", "height_array", "normal_array"] {
-            let sampled = body
-                .find(&format!(
-                    "textureSampleGrad({array}, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy)"
-                ))
-                .unwrap_or_else(|| panic!("{array} must be sampled at a tap's own rigid UV"));
             assert!(
-                sampled > loop_at,
-                "{array} must be sampled inside the per-tile loop"
+                sample.contains(&format!(
+                    "textureSampleGrad({array}, layer_sampler, tap.uv, layer, tap.ddx, tap.ddy)"
+                )),
+                "{array} must be sampled at a tap's own rigid UV"
             );
         }
-        assert!(
-            !body.contains("tiled.uv"),
-            "no sample may read a blended coordinate"
-        );
     }
 
     /// Detiling off is one sample, not four of the same one.
     #[test]
     fn detiling_off_leaves_a_single_tap() {
-        let start = SHADER_SOURCE
-            .find("fn detile(")
-            .expect("detile is declared");
-        let body = &SHADER_SOURCE[start..];
-        let single = body
-            .find("out.count = 1u;")
-            .expect("detile starts at one tap");
-        let guard = body
-            .find("if strength <= 0.0 {")
-            .expect("detile short-circuits at strength 0");
-        let four = body
-            .find("out.count = 4u;")
-            .expect("detile opens to four taps");
+        let untiled = shader_fn("untiled_tap");
         assert!(
-            single < guard && guard < four,
-            "strength 0 must return before the four tiles are built"
+            untiled.contains("TileTap(uv, ddx, ddy, vec2<f32>(1.0, 0.0), 1.0)"),
+            "the untiled tap is the UV as it came in, unturned, at full share"
+        );
+        let accumulate = shader_fn("accumulate");
+        let guard = accumulate
+            .find("if strength <= 0.0 {")
+            .expect("accumulate short-circuits at strength 0");
+        let single = accumulate
+            .find("untiled_tap(uv, ddx, ddy)")
+            .expect("strength 0 takes the single untiled tap");
+        let four = accumulate
+            .find("tile_grid(uv)")
+            .expect("detiling on opens the four tiles");
+        assert!(
+            guard < single && single < four,
+            "strength 0 must take one tap before the four tiles are built"
         );
     }
 
