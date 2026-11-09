@@ -502,8 +502,7 @@ const LAST_BUILD_RECORD: &str = "last-extension-build";
 /// The extension dylib the last build produced, if there is one.
 ///
 /// The build records its output's path, since the target directory is
-/// keyed by a salt only the build knows and older keyed directories are
-/// kept. Without a record, the newest library under `<jackdaw_dir>/target`
+/// keyed by a salt only the build knows. Without a record, the newest library under `<jackdaw_dir>/target`
 /// is taken.
 pub fn last_built_dylib(jackdaw_dir: &Path) -> Option<PathBuf> {
     let recorded = std::fs::read_to_string(jackdaw_dir.join(LAST_BUILD_RECORD))
@@ -596,17 +595,47 @@ fn unresolved_crate_name(line: &str) -> Option<String> {
     Some(line[start..end].to_string())
 }
 
-/// Drop every keyed target directory but the current one. Each holds a
-/// full compilation of the project's dependency closure, bevy included.
-/// `game` is the game build's directory, which shares the root and is
-/// never dropped.
+/// Whether a cargo build is running in `dir` or below it. Cargo holds a
+/// lock on `.cargo-lock` in each `<build>/<profile>/` directory for the
+/// length of a build.
+pub fn build_running(dir: &Path) -> bool {
+    build_running_within(dir, 0)
+}
+
+fn build_running_within(dir: &Path, depth: usize) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            return false;
+        };
+        if kind.is_dir() {
+            depth < 4 && build_running_within(&path, depth + 1)
+        } else if entry.file_name() == ".cargo-lock" {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+        } else {
+            false
+        }
+    })
+}
+
+/// Drop every keyed target directory but the current one and any with a
+/// build running in it. Each holds a full compilation of the project's
+/// dependency closure, bevy included. `game` is the game build's
+/// directory, which shares the root and is never dropped.
 fn retain_recent_target_dirs(target_root: &Path, current: &str, game: &Path) {
     let Ok(entries) = std::fs::read_dir(target_root) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy() != current && entry.path() != game {
-            let _ = std::fs::remove_dir_all(entry.path());
+        let path = entry.path();
+        if entry.file_name().to_string_lossy() != current && path != game && !build_running(&path) {
+            let _ = std::fs::remove_dir_all(path);
         }
     }
 }
@@ -835,6 +864,31 @@ mod tests {
         assert!(!root.join("aaa").exists());
         assert!(game.is_dir(), "the game build's directory is kept");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_target_dir_with_a_running_build_is_kept() {
+        let root = std::env::temp_dir().join(format!("jackdaw-retain-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let game = root.join("game");
+        let busy = root.join("busy/triple/debug");
+        std::fs::create_dir_all(&busy).unwrap();
+        std::fs::create_dir_all(root.join("idle/triple/debug")).unwrap();
+        std::fs::create_dir_all(root.join("current")).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(busy.join(".cargo-lock"))
+            .unwrap();
+        lock.lock().unwrap();
+
+        retain_recent_target_dirs(&root, "current", &game);
+        assert!(root.join("busy").is_dir(), "a building dir survives");
+        assert!(!root.join("idle").exists(), "an idle old dir is removed");
+
+        drop(lock);
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -42,6 +42,7 @@ pub use binary::{
     build_project_binary_cancellable, build_project_binary_with_load, detach_from_host_build,
     game_target_dir, prepare_game_command,
 };
+pub use build::build_running;
 pub use build::{
     BuildEvent, ProjectBuild, ProjectBuildError, build_project_dylib, last_built_dylib, sdk_remedy,
     shim_spec_for_project,

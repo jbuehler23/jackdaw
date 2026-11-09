@@ -6,7 +6,6 @@
     reason = "command-line output goes to the terminal"
 )]
 
-use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -59,36 +58,12 @@ fn remove_project_target(root: &Path) -> Result<Option<u64>, String> {
     if !target.is_dir() {
         return Ok(None);
     }
-    if build_running(&target, 0) {
+    if jackdaw_project_build::build_running(&target) {
         return Err("a build is running for this project; close the editor first".into());
     }
     let size = dir_size(&target);
     std::fs::remove_dir_all(&target).map_err(|error| format!("{}: {error}", target.display()))?;
     Ok(Some(size))
-}
-
-/// Whether any `.cargo-lock` under `dir` (target/<build>/<profile>/) is
-/// held, which cargo does for the length of a build.
-fn build_running(dir: &Path, depth: usize) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let path = entry.path();
-        let Ok(kind) = entry.file_type() else {
-            return false;
-        };
-        if kind.is_dir() {
-            depth < 4 && build_running(&path, depth + 1)
-        } else if entry.file_name() == ".cargo-lock" {
-            OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
-        } else {
-            false
-        }
-    })
 }
 
 fn dir_size(dir: &Path) -> u64 {
@@ -163,7 +138,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let profile = dir.path().join(".jackdaw/target/game/debug");
         std::fs::create_dir_all(&profile).unwrap();
-        let lock = OpenOptions::new()
+        let lock = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
