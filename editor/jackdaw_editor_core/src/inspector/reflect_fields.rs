@@ -2060,7 +2060,11 @@ pub(crate) fn settle_released_color_drags(
     open: Query<Entity, With<ColorDragOpen>>,
     mut commands: Commands,
 ) {
-    if open.is_empty() || pointers.iter().any(|press| press.is_any_pressed()) {
+    if open.is_empty()
+        || pointers
+            .iter()
+            .any(bevy::picking::pointer::PointerPressState::is_any_pressed)
+    {
         return;
     }
     for root in &open {
