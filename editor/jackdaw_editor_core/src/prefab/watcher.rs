@@ -270,8 +270,11 @@ fn drain_changes(world: &mut World) {
                     respawn_scene(world, sparse_text);
                     reloaded = true;
                 }
-                PrefabReload::Nothing => {}
+                PrefabReload::Nothing => continue,
             }
+            world
+                .resource_mut::<PrefabAstCache>()
+                .answer_changes_of(&cache_key);
         }
     }
 
@@ -314,13 +317,14 @@ pub(crate) fn return_prefab_to_file(world: &mut World, path: &Path, reload: bool
         return;
     };
     match reload_instances_of(world, &sparse_text, path) {
-        PrefabReload::Instances => rebuild_outliner(world),
-        PrefabReload::Unhandled => {
-            respawn_scene(world, &sparse_text);
-            rebuild_outliner(world);
-        }
-        PrefabReload::Nothing => {}
+        PrefabReload::Instances => {}
+        PrefabReload::Unhandled => respawn_scene(world, &sparse_text),
+        PrefabReload::Nothing => return,
     }
+    rebuild_outliner(world);
+    world
+        .resource_mut::<PrefabAstCache>()
+        .answer_changes_of(path);
 }
 
 /// What a per-file reload did, and so what the caller has left to do.
