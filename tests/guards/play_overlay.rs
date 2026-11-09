@@ -2032,3 +2032,42 @@ fn an_edit_of_one_scene_s_material_leaves_another_scene_alone() {
         "the other scene keeps its material"
     );
 }
+
+/// A game tints a served material at runtime. A later root of the scene spawns from
+/// another answer holding the same definition, and the tint stays.
+#[test]
+fn a_runtime_tint_survives_a_later_root_spawning() {
+    let (mut app, tmp) = editor(&[("zone.bsn", &stone_scene("Zone", 0.25))]);
+    app.register_type::<Swatch>();
+    open(&mut app, "assets/zone.bsn");
+
+    let mut game = empty_game(&tmp);
+    game.register_type::<Swatch>();
+    game.update();
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.25);
+    let tinted = swatch_of(&mut game, "Zone");
+    set_roughness(&mut game, &tinted, 0.9);
+
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    update_until(&mut game, "the second root spawned", |game| {
+        named(game, "Zone").len() == 2
+    });
+    let roughness: Vec<f32> = named(&mut game, "Zone")
+        .into_iter()
+        .map(|zone| {
+            let swatch = game
+                .world()
+                .get::<Swatch>(zone)
+                .expect("a swatch")
+                .swatch
+                .clone();
+            game.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&swatch)
+                .expect("the swatch resolves")
+                .perceptual_roughness
+        })
+        .collect();
+    assert_eq!(roughness, vec![0.9, 0.9], "the tint stays");
+}

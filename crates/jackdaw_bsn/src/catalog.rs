@@ -62,8 +62,19 @@ pub fn load_bsn_assets_onto(
     bsn_text: &str,
     held: impl Fn(&str) -> Option<UntypedHandle>,
 ) -> Result<Vec<CatalogEntry>, BsnLoadError> {
-    let ast = parse_bsn_text(bsn_text)?;
+    Ok(load_document_assets_onto(
+        world,
+        &parse_bsn_text(bsn_text)?,
+        held,
+    ))
+}
 
+/// [`load_bsn_assets_onto`] for a document already parsed.
+pub fn load_document_assets_onto(
+    world: &mut World,
+    ast: &SceneBsnAst,
+    held: impl Fn(&str) -> Option<UntypedHandle>,
+) -> Vec<CatalogEntry> {
     let registry = world.resource::<AppTypeRegistry>().clone();
     let server = world.get_resource::<AssetServer>().cloned();
     let assets_ctx = server.as_ref().map(|s| crate::BsnApplyAssets {
@@ -79,7 +90,7 @@ pub fn load_bsn_assets_onto(
         let Some(name) = ast.get_name(root).map(str::to_owned) else {
             continue;
         };
-        let Some((type_path, asset_value)) = asset_value_from_root(&ast, root) else {
+        let Some((type_path, asset_value)) = asset_value_from_root(ast, root) else {
             continue;
         };
 
@@ -105,7 +116,7 @@ pub fn load_bsn_assets_onto(
         entries.push(CatalogEntry { name, handle });
     }
 
-    Ok(entries)
+    entries
 }
 
 /// Whether a document root is a named asset entry (its type patch resolves to
