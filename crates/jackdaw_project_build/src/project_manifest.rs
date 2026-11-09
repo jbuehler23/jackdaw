@@ -555,10 +555,10 @@ bevy_rev = "3f2a1c9e"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A git or path bevy dependency states no version, so there is
-    /// nothing to compare and the open must not be blocked on a guess.
+    /// A git bevy dependency counts as Bevy main, so only a main editor
+    /// opens it without a version warning.
     #[test]
-    fn an_unpinned_project_with_no_stated_bevy_version_is_not_blocked() {
+    fn a_project_on_bevy_git_is_treated_as_bevy_main() {
         let dir = project(
             "git",
             "[package]\nname = \"g\"\nversion = \"0.1.0\"\n\n\

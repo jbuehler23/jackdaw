@@ -283,59 +283,33 @@ fn without_component<'a>(text: Cow<'a, str>, opening: &str) -> Cow<'a, str> {
 /// entry rewrites a fully-qualified reflect path, or a module prefix every
 /// type under it moved with, so an older scene's components resolve against
 /// the newer registry.
-///
-/// Renames on Bevy's main branch go under `main`, which is newer than every
-/// release; that group becomes the next minor's when it ships.
-const RENAMES: &[(&str, &[(&str, &str)])] = &[
-    (
-        "0.20",
-        &[
-            (
-                "bevy_core_pipeline::tonemapping::Tonemapping",
-                "bevy_render::view::Tonemapping",
-            ),
-            (
-                "bevy_core_pipeline::tonemapping::DebandDither",
-                "bevy_render::view::DebandDither",
-            ),
-            ("bevy_feathers::cursor::", "bevy_picking::cursor::"),
-            ("bevy_math::primitives::", "bevy_shape::"),
-            ("bevy_math::bounding::", "bevy_shape::bounding::"),
-            ("bevy_math::ray::", "bevy_shape::ray::"),
-            ("bevy_math::curve::", "bevy_curve::"),
-            ("bevy_math::cubic_splines::", "bevy_curve::cubic_splines::"),
-            (
-                "bevy_sprite::sprite_mesh::SpriteAlphaMode",
-                "bevy_sprite::sprite::SpriteAlphaMode",
-            ),
-            (
-                "bevy_sprite_render::sprite_mesh::sprite_material::SpriteMaterial",
-                "bevy_sprite_render::sprite_mesh::sprite_extended_material::SpriteMaterial",
-            ),
-        ],
-    ),
-    (
-        "main",
-        &[
-            (
-                "bevy_ui::experimental::ghost_hierarchy::GhostNode",
-                "bevy_ui::ui_node::GhostNode",
-            ),
-            (
-                "bevy_feathers::controls::number_input::NumberInputValue",
-                "bevy_ui_widgets::numeric::NumericValue",
-            ),
-            (
-                "bevy_feathers::controls::number_input::NumberInputRange",
-                "bevy_ui_widgets::numeric::NumericRange",
-            ),
-            (
-                "bevy_feathers::controls::number_input::NumberFormat",
-                "bevy_ui_widgets::numeric::NumericFormat",
-            ),
-        ],
-    ),
-];
+const RENAMES: &[(&str, &[(&str, &str)])] = &[(
+    "0.20",
+    &[
+        (
+            "bevy_core_pipeline::tonemapping::Tonemapping",
+            "bevy_render::view::Tonemapping",
+        ),
+        (
+            "bevy_core_pipeline::tonemapping::DebandDither",
+            "bevy_render::view::DebandDither",
+        ),
+        ("bevy_feathers::cursor::", "bevy_picking::cursor::"),
+        ("bevy_math::primitives::", "bevy_shape::"),
+        ("bevy_math::bounding::", "bevy_shape::bounding::"),
+        ("bevy_math::ray::", "bevy_shape::ray::"),
+        ("bevy_math::curve::", "bevy_curve::"),
+        ("bevy_math::cubic_splines::", "bevy_curve::cubic_splines::"),
+        (
+            "bevy_sprite::sprite_mesh::SpriteAlphaMode",
+            "bevy_sprite::sprite::SpriteAlphaMode",
+        ),
+        (
+            "bevy_sprite_render::sprite_mesh::sprite_material::SpriteMaterial",
+            "bevy_sprite_render::sprite_mesh::sprite_extended_material::SpriteMaterial",
+        ),
+    ],
+)];
 
 /// Bevy 0.20 made each `BorderRadius` corner a two-axis `CornerRadius`. A
 /// corner saved as one `Val` was circular, which is a `CornerRadius` whose
@@ -434,16 +408,6 @@ mod tests {
     }
 
     #[test]
-    fn a_020_scene_takes_the_type_paths_of_bevy_main() {
-        let text = "bevy_ui::experimental::ghost_hierarchy::GhostNode\n\
-                    bevy_feathers::controls::number_input::NumberInputValue::F32(1.5)";
-        let out = migrate_type_paths(text, "0.20");
-        assert!(out.contains("bevy_ui::ui_node::GhostNode"));
-        assert!(out.contains("bevy_ui_widgets::numeric::NumericValue::F32(1.5)"));
-        assert_eq!(migrate_type_paths(text, "main"), text);
-    }
-
-    #[test]
     fn a_scene_from_bevy_main_is_newer_than_every_release() {
         assert!(bevy_minor_lt("0.20", "main"));
         assert!(!bevy_minor_lt("main", "0.20"));
@@ -500,8 +464,10 @@ mod tests {
     #[test]
     fn a_020_scene_is_left_as_written() {
         let text = "top_left: bevy_ui::geometry::Val::Px(6.0)\n\
-                    bevy_core_pipeline::tonemapping::Tonemapping::None";
+                    bevy_core_pipeline::tonemapping::Tonemapping::None\n\
+                    bevy_ui::experimental::ghost_hierarchy::GhostNode";
         assert!(matches!(migrate_type_paths(text, "0.20"), Cow::Borrowed(_)));
+        assert!(!migrates_from("0.20"));
     }
 
     #[test]
