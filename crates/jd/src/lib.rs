@@ -8,6 +8,7 @@
 //! It also installs and removes editors: see [`editors`].
 
 pub mod archive;
+pub mod clean;
 pub mod editor_cli;
 pub mod editors;
 pub mod fetch;

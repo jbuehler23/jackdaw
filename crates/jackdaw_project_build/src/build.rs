@@ -596,44 +596,18 @@ fn unresolved_crate_name(line: &str) -> Option<String> {
     Some(line[start..end].to_string())
 }
 
-/// How many keyed target directories to keep, including the current
-/// one. Each holds a full compilation of the project's dependency
-/// closure, bevy included, so this trades disk against the ten-plus
-/// minutes it takes to rebuild one.
-const TARGET_DIRS_KEPT: usize = 2;
-
-/// Drop old keyed target directories, keeping the current one and the
-/// most recently created others. `game` is the game build's directory,
-/// which shares the root and is never dropped.
-///
-/// Ordering is by directory mtime, which is creation time here: cargo
-/// writes nested files, which does not touch the salt directory itself.
-/// With only two kept that is enough to make an A/B flip stable, and
-/// avoids maintaining a usage stamp for a heuristic this coarse.
-///
-/// Deleting every other directory outright made switching build
-/// configuration cost a full rebuild of bevy every time. The salt
-/// covers the wrapper binary, so alternating a debug and a release
-/// editor (or upgrading and rolling back) flips it back and forth, and
-/// each flip threw away a cache that was about to be wanted again.
-/// Keeping the previous one makes that flip nearly free while still
-/// bounding growth.
+/// Drop every keyed target directory but the current one. Each holds a
+/// full compilation of the project's dependency closure, bevy included.
+/// `game` is the game build's directory, which shares the root and is
+/// never dropped.
 fn retain_recent_target_dirs(target_root: &Path, current: &str, game: &Path) {
     let Ok(entries) = std::fs::read_dir(target_root) else {
         return;
     };
-    let mut others: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy() != current && entry.path() != game)
-        .filter_map(|entry| {
-            let used = entry.metadata().and_then(|meta| meta.modified()).ok()?;
-            Some((used, entry.path()))
-        })
-        .collect();
-    // Newest first; keep enough to leave room for the current one.
-    others.sort_by_key(|(used, _)| std::cmp::Reverse(*used));
-    for (_, path) in others.into_iter().skip(TARGET_DIRS_KEPT.saturating_sub(1)) {
-        let _ = std::fs::remove_dir_all(path);
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy() != current && entry.path() != game {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
 }
 
@@ -846,33 +820,20 @@ mod tests {
         assert!(stale_sdk_hint(log, &sdk, &manifest).is_none());
     }
 
-    /// Switching build configuration used to delete the cache it was
-    /// about to want back, costing a full rebuild of bevy each time.
     #[test]
-    fn the_previous_target_dir_survives_a_configuration_flip() {
+    fn only_the_current_target_dir_and_game_are_kept() {
         let root = std::env::temp_dir().join(format!("jackdaw-retain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let game = root.join("game");
         for salt in ["game", "aaa", "bbb", "ccc"] {
             std::fs::create_dir_all(root.join(salt)).unwrap();
-            // Distinct mtimes so "most recent" is well defined.
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        // Building under `ccc` keeps it plus the newest other (`bbb`).
         retain_recent_target_dirs(&root, "ccc", &game);
         assert!(root.join("ccc").is_dir(), "the current dir is untouched");
-        assert!(root.join("bbb").is_dir(), "the previous one is kept");
-        assert!(!root.join("aaa").exists(), "older ones are dropped");
-        assert!(
-            game.is_dir(),
-            "the game build's directory is not a keyed one"
-        );
-
-        // Flipping back to `bbb` finds its cache still there.
-        retain_recent_target_dirs(&root, "bbb", &game);
-        assert!(root.join("bbb").is_dir());
-        assert!(root.join("ccc").is_dir(), "and can flip again for free");
+        assert!(!root.join("bbb").exists());
+        assert!(!root.join("aaa").exists());
+        assert!(game.is_dir(), "the game build's directory is kept");
 
         let _ = std::fs::remove_dir_all(&root);
     }
