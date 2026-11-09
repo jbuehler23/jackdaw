@@ -39,6 +39,8 @@ pub mod entity_refs;
 pub mod environment_ops;
 pub mod face_grid;
 pub use jackdaw_runtime::frame_work;
+pub mod game_output;
+pub mod game_output_window;
 pub mod game_panel;
 pub mod game_panel_header;
 pub mod gizmo_ops;
@@ -496,6 +498,7 @@ impl Plugin for EditorCorePlugin {
                 view_modes::ViewModesPlugin,
                 status_bar::StatusBarPlugin,
                 build_panel::BuildPanelPlugin,
+                game_output_window::GameOutputWindowPlugin,
                 project_window::ProjectWindowPlugin,
                 modal_transform::ModalTransformPlugin,
             ),
@@ -704,6 +707,7 @@ impl Plugin for ExtensionPlugin {
                 .register_extension::<builtin_extensions::ProjectWindowExtension>()
                 .register_extension::<builtin_extensions::GamePanelExtension>()
                 .register_extension::<build_panel::BuildPanelExtension>()
+                .register_extension::<game_output_window::GameOutputExtension>()
                 .register_extension::<builtin_extensions::InspectorExtension>()
                 .register_extension::<test_input::TestInputExtension>();
         }
