@@ -317,19 +317,15 @@ fn the_overlay_draws_each_tiles_shapes_and_dims_tiles_outside_the_set() {
         has(corner),
         "the water corner is one picked shape: {found:?}"
     );
-    let l_shape = [
-        ZonePiece::Tint {
-            value: grass,
-            picked: false,
-        },
-        ZonePiece::Edge {
-            value: grass,
-            picked: false,
-        },
-    ];
+    let quiet = ZonePiece::Edge {
+        value: grass,
+        picked: false,
+    };
+    assert!(has(quiet), "the grass L is outlined: {found:?}");
+    let filled = |p: &ZonePiece| matches!(p, ZonePiece::Tint { value, .. } if *value == grass);
     assert!(
-        l_shape.into_iter().all(has),
-        "the grass L is quiet: {found:?}"
+        !found.iter().any(filled),
+        "only the picked terrain is filled"
     );
     assert!(has(ZonePiece::Dim), "tiles outside the set are dimmed");
     assert!(found.len() < 400, "adjacent pieces merge: {}", found.len());

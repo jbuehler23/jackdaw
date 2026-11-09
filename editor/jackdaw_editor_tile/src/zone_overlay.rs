@@ -10,20 +10,20 @@ use crate::tileset_dock::{DockAction, DockControl, zoom};
 
 /// Alpha of the dim layer over tiles that hold no value.
 const DIM: f32 = 0.55;
-/// Alpha of the fill of a shape of the picked value, and of the others.
-const PICKED_FILL: f32 = 0.35;
-const QUIET_FILL: f32 = 0.2;
+/// Alpha of the fill of a shape of the picked value; other values have none.
+const PICKED_FILL: f32 = 0.22;
 /// Alpha of the outline of a shape of a value other than the picked one.
-const QUIET: f32 = 0.8;
+const QUIET: f32 = 0.6;
 /// Width of the outline of a shape of the picked value, and of the others.
-const PICKED_LINE: f32 = 2.0;
-const QUIET_LINE: f32 = 1.5;
-/// Width of the dark stroke around an outline.
+const PICKED_LINE: f32 = 1.5;
+const QUIET_LINE: f32 = 1.0;
+/// Width of the dark stroke around the outline of a picked shape.
 const STROKE: f32 = 1.0;
 /// Gap between a shape and the edge of its tile.
 const INSET: f32 = 1.5;
-/// Blur of the glow around the picked value's outlines.
-const GLOW: f32 = 6.0;
+/// Blur and alpha of the glow around the picked value's outlines.
+const GLOW: f32 = 3.0;
+const GLOW_ALPHA: f32 = 0.35;
 /// Alpha of the fill of the zone under the pointer.
 const HOVER: f32 = 0.35;
 
@@ -184,6 +184,8 @@ pub enum ZonePiece {
     Tint { value: u32, picked: bool },
     /// Part of the outline of a shape that is no rectangle.
     Edge { value: u32, picked: bool },
+    /// The dark stroke outside an edge of a picked shape.
+    Stroke,
 }
 
 /// The outline of the zone under the pointer, showing tile `tile`.
@@ -302,12 +304,9 @@ fn spawn_pieces(
     values: &ZoneValues,
     found: Vec<(u32, ZonePiece, Rect)>,
 ) {
-    let stroke = Outline::new(px(STROKE), px(0), Color::BLACK.with_alpha(0.7));
-    let glow = |line: Color| BoxShadow::new(line.with_alpha(0.8), px(0), px(0), px(1), px(GLOW));
-    let fill = |value: u32, picked: bool| {
-        let alpha = if picked { PICKED_FILL } else { QUIET_FILL };
-        color(values, value).with_alpha(alpha)
-    };
+    let dark = Color::BLACK.with_alpha(0.7);
+    let glow =
+        |line: Color| BoxShadow::new(line.with_alpha(GLOW_ALPHA), px(0), px(0), px(0), px(GLOW));
     let line = |value: u32, picked: bool| {
         let alpha = if picked { 1.0 } else { QUIET };
         color(values, value).with_alpha(alpha)
@@ -328,24 +327,28 @@ fn spawn_pieces(
                 let width = if picked { PICKED_LINE } else { QUIET_LINE };
                 let mut shape = absolute(rect);
                 shape.border = UiRect::all(px(width));
-                node.insert((
-                    shape,
-                    BackgroundColor(fill(value, picked)),
-                    BorderColor::all(line(value, picked)),
-                    stroke,
-                ));
+                node.insert((shape, BorderColor::all(line(value, picked))));
                 if picked {
-                    node.insert(glow(line(value, true)));
+                    node.insert((
+                        BackgroundColor(color(values, value).with_alpha(PICKED_FILL)),
+                        Outline::new(px(STROKE), px(0), dark),
+                        glow(line(value, true)),
+                    ));
                 }
             }
-            ZonePiece::Tint { value, picked } => {
-                node.insert(BackgroundColor(fill(value, picked)));
+            ZonePiece::Tint { value, .. } => {
+                node.insert(BackgroundColor(
+                    color(values, value).with_alpha(PICKED_FILL),
+                ));
             }
             ZonePiece::Edge { value, picked } => {
-                node.insert((BackgroundColor(line(value, picked)), stroke));
+                node.insert(BackgroundColor(line(value, picked)));
                 if picked {
                     node.insert(glow(line(value, true)));
                 }
+            }
+            ZonePiece::Stroke => {
+                node.insert(BackgroundColor(dark));
             }
         }
     }
@@ -417,6 +420,7 @@ pub fn pieces(
             | ZonePiece::Tint { picked, .. }
             | ZonePiece::Edge { picked, .. } => *picked,
             ZonePiece::Dim => false,
+            ZonePiece::Stroke => true,
         });
         out.extend(shapes.into_iter().map(|(piece, at)| (row, piece, at)));
     }
@@ -499,11 +503,14 @@ fn tile_shapes(
                 }
             }
         }
-        let tint = ZonePiece::Tint { value, picked };
-        out.extend(runs.into_iter().map(|(.., at)| (tint, at)));
+        if picked {
+            let tint = ZonePiece::Tint { value, picked };
+            out.extend(runs.into_iter().map(|(.., at)| (tint, at)));
+        }
         let width = if picked { PICKED_LINE } else { QUIET_LINE };
         let edge = ZonePiece::Edge { value, picked };
         for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+            let mut lines = Vec::new();
             let mut open: Option<Rect> = None;
             for i in 0..n * n {
                 let (a, b) = (i / n, i % n);
@@ -527,11 +534,29 @@ fn tile_shapes(
                 };
                 match (side, open.as_mut()) {
                     (true, Some(run)) if joins(run) => *run = run.union(line),
-                    (true, _) => out.extend(open.replace(line).map(|r| (edge, r))),
-                    (false, _) => out.extend(open.take().map(|r| (edge, r))),
+                    (true, _) => lines.extend(open.replace(line)),
+                    (false, _) => lines.extend(open.take()),
                 }
             }
-            out.extend(open.map(|r| (edge, r)));
+            lines.extend(open);
+            for line in lines {
+                out.push((edge, line));
+                if picked {
+                    let stroke = match (dx, dy) {
+                        (0, -1) => {
+                            Rect::new(line.min.x, line.min.y - STROKE, line.max.x, line.min.y)
+                        }
+                        (0, _) => {
+                            Rect::new(line.min.x, line.max.y, line.max.x, line.max.y + STROKE)
+                        }
+                        (-1, _) => {
+                            Rect::new(line.min.x - STROKE, line.min.y, line.min.x, line.max.y)
+                        }
+                        _ => Rect::new(line.max.x, line.min.y, line.max.x + STROKE, line.max.y),
+                    };
+                    out.push((ZonePiece::Stroke, stroke));
+                }
+            }
         }
     }
     out
@@ -689,8 +714,8 @@ mod tests {
     }
 
     #[test]
-    fn an_l_shape_is_filled_and_outlined_along_its_boundary() {
-        let values = corners(&[(0, [1, 1, 1, 2])], Some(2));
+    fn a_picked_l_shape_is_one_fill_with_an_outline_on_its_boundary_only() {
+        let values = corners(&[(0, [1, 1, 1, 2])], Some(1));
         let found = drawn(&grid(1, 1), &values);
         let tints = count(&found, |p| matches!(p, ZonePiece::Tint { value: 1, .. }));
         assert_eq!(tints, 2, "the top row and the bottom left quarter");
@@ -699,16 +724,39 @@ mod tests {
                 p,
                 ZonePiece::Edge {
                     value: 1,
-                    picked: false
+                    picked: true
                 }
             )
         });
         assert_eq!(edges, 6, "an L has six sides");
+        assert_eq!(
+            count(&found, |p| *p == ZonePiece::Stroke),
+            6,
+            "one per side"
+        );
         let quarter = ZonePiece::Shape {
             value: 2,
-            picked: true,
+            picked: false,
         };
         assert_eq!(count(&found, |p| *p == quarter), 1);
+    }
+
+    #[test]
+    fn other_values_are_outlined_with_no_fill() {
+        let values = corners(&[(0, [1, 1, 1, 2])], Some(2));
+        let found = drawn(&grid(1, 1), &values);
+        assert_eq!(count(&found, |p| matches!(p, ZonePiece::Tint { .. })), 0);
+        assert_eq!(count(&found, |p| *p == ZonePiece::Stroke), 0);
+        let quiet = |p: &ZonePiece| {
+            matches!(
+                p,
+                ZonePiece::Edge {
+                    value: 1,
+                    picked: false
+                }
+            )
+        };
+        assert_eq!(count(&found, quiet), 6);
     }
 
     #[test]
