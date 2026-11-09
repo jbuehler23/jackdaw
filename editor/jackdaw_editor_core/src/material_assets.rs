@@ -565,12 +565,6 @@ pub fn spawn_material_tile(commands: &mut Commands, parent: Entity, tile: Materi
             BackgroundColor(Color::NONE),
         ))
         .id();
-    // The browser rebuild queues a tile per material against the grid
-    // it saw this frame, and a panel rebuild can despawn that grid
-    // before these spawns flush. Parenting through the guard drops the
-    // tile instead of orphaning it under a dead grid.
-    jackdaw_feathers::utils::attach_or_despawn(commands, parent, cell);
-
     let mut swatch = commands.spawn((
         Node {
             width: px(tokens::THUMB_IMAGE_SIZE),
@@ -641,6 +635,12 @@ pub fn spawn_material_tile(commands: &mut Commands, parent: Entity, tile: Materi
             }
         },
     );
+
+    // The browser rebuild queues a tile per material against the grid
+    // it saw this frame, and a panel rebuild can despawn that grid
+    // before these spawns flush. Parenting through the guard last drops the
+    // tile and everything under it instead of orphaning any of it.
+    jackdaw_feathers::utils::attach_or_despawn(commands, parent, cell);
 
     cell
 }
@@ -1090,6 +1090,33 @@ mod tests {
         app.register_asset_reflect::<StandardMaterial>();
         app.register_type::<StandardMaterial>();
         app
+    }
+
+    /// A tile queued against a grid that is gone by the time it lands leaves
+    /// nothing behind.
+    #[test]
+    fn a_material_tile_for_a_despawned_grid_leaves_nothing_behind() {
+        let mut world = World::new();
+        let grid = world.spawn_empty().id();
+        world.despawn(grid);
+        let before = world.entities().count_spawned();
+
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        spawn_material_tile(
+            &mut commands,
+            grid,
+            MaterialTile {
+                name: "Bark".to_string(),
+                thumbnail: Some(Handle::default()),
+                saved: true,
+                selected: false,
+                italic_font: Handle::default(),
+            },
+        );
+        queue.apply(&mut world);
+
+        assert_eq!(world.entities().count_spawned(), before);
     }
 
     fn textured(app: &mut App, path: &str, srgb: bool) -> Handle<Image> {
