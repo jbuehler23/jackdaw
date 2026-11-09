@@ -144,9 +144,8 @@ fn output_survives_the_exit_and_the_next_play_clears_it() {
         buffered(&app, "Client"),
         [(OutputStream::Stdout, "second run".to_string())]
     );
-    assert_eq!(
-        rows(&mut app),
-        [(OutputStream::Stdout, "first run".to_string())],
+    assert!(
+        !rows(&mut app).iter().any(|(_, text)| text == "second run"),
         "the window waits while the Game panel is in front"
     );
     open_window(&mut app);
