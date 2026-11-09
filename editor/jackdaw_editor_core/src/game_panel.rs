@@ -54,6 +54,8 @@ pub enum GameIdlePart {
     Play,
     /// The Restart button shown after a game went away, relaunching that game.
     Restart,
+    /// The button opening the Game Output window after a game went away.
+    ShowOutput,
     /// The button opening the Build panel after a failed build.
     BuildErrors,
     /// The input hint under the Play button.
@@ -177,7 +179,8 @@ pub fn game_panel_content() -> impl Bundle {
 }
 
 /// Build the column shown while no frame is streaming: what the game is doing,
-/// a Play or Restart button, a crashed game's last stderr lines, and a hint.
+/// a Play or Restart button, a crashed game's last stderr lines with a button
+/// opening its whole output, and a hint.
 /// The stderr block shrinks to the room left and keeps its newest lines.
 fn game_panel_idle() -> impl Bundle {
     (
@@ -224,6 +227,18 @@ fn game_panel_idle() -> impl Bundle {
                 GameIdlePart::Restart,
                 ButtonOperatorCall::new(PieToggleInstanceOp::ID),
                 button(ButtonProps::new("Restart").hidden()),
+            ),
+            (
+                GameIdlePart::ShowOutput,
+                ButtonOperatorCall::new(crate::WindowOpenOp::ID).with_param(
+                    "window_id",
+                    crate::game_output_window::GAME_OUTPUT_WINDOW_ID
+                ),
+                button(
+                    ButtonProps::new("Show output")
+                        .with_variant(ButtonVariant::Ghost)
+                        .hidden()
+                ),
             ),
             (
                 GameIdlePart::BuildErrors,
@@ -425,6 +440,7 @@ fn idle_part_shown(part: GameIdlePart, wait: GameWait, has_stderr: bool, windowe
         GameIdlePart::Stderr => matches!(wait, GameWait::Exited(_)) && has_stderr,
         GameIdlePart::Play => idle_action(wait) == IdleAction::Play,
         GameIdlePart::Restart => idle_action(wait) == IdleAction::Restart,
+        GameIdlePart::ShowOutput => matches!(wait, GameWait::Exited(_)),
         GameIdlePart::BuildErrors => idle_action(wait) == IdleAction::ShowBuildErrors,
         GameIdlePart::Hint => wait == GameWait::Stopped && !windowed,
     }
@@ -747,11 +763,12 @@ mod tests {
         assert_eq!(idle_message(GameWait::Windowed), IDLE_WINDOWED);
     }
 
-    const PARTS: [GameIdlePart; 6] = [
+    const PARTS: [GameIdlePart; 7] = [
         GameIdlePart::Label,
         GameIdlePart::Stderr,
         GameIdlePart::Play,
         GameIdlePart::Restart,
+        GameIdlePart::ShowOutput,
         GameIdlePart::BuildErrors,
         GameIdlePart::Hint,
     ];
@@ -793,12 +810,17 @@ mod tests {
             [
                 GameIdlePart::Label,
                 GameIdlePart::Stderr,
-                GameIdlePart::Restart
+                GameIdlePart::Restart,
+                GameIdlePart::ShowOutput
             ]
         );
         assert_eq!(
             shown(GameWait::Exited(&crashed), false),
-            [GameIdlePart::Label, GameIdlePart::Restart]
+            [
+                GameIdlePart::Label,
+                GameIdlePart::Restart,
+                GameIdlePart::ShowOutput
+            ]
         );
         let early = GameExitReason::ExitedBeforeConnecting("signal 9".to_string());
         assert_eq!(

@@ -1,4 +1,4 @@
-//! The Game panel's header: the view menu (size and mute), the instance
+//! The Game panel's header: the view menu (size, mute and output), the instance
 //! picker shown while several instances run, the "no signal" and "muted"
 //! chips and the pop-out button.
 
@@ -229,7 +229,7 @@ pub(crate) fn game_capture_flash() -> impl Bundle {
 
 /// The trigger a click on a header menu button opens a menu under, or `None`
 /// for a click inside the open menu, which hangs off the trigger.
-fn menu_trigger(
+pub(crate) fn menu_trigger(
     click: &On<PointerClick>,
     popovers: &Query<(), With<EditorPopover>>,
     parents: &Query<&ChildOf>,
@@ -249,10 +249,14 @@ fn menu_trigger(
 }
 
 /// One row of a header menu.
-enum MenuRow {
+pub(crate) enum MenuRow {
     Check {
         label: String,
         checked: bool,
+        call: ButtonOperatorCall,
+    },
+    Action {
+        label: String,
         call: ButtonOperatorCall,
     },
     Separator,
@@ -275,6 +279,14 @@ fn view_menu_rows(world: &World) -> Vec<MenuRow> {
         label: "Mute".to_string(),
         checked: muted,
         call: ButtonOperatorCall::new(PieMuteOp::ID),
+    });
+    rows.push(MenuRow::Separator);
+    rows.push(MenuRow::Action {
+        label: "Show output".to_string(),
+        call: ButtonOperatorCall::new(crate::WindowOpenOp::ID).with_param(
+            "window_id",
+            crate::game_output_window::GAME_OUTPUT_WINDOW_ID,
+        ),
     });
     rows
 }
@@ -305,7 +317,7 @@ fn instance_menu_rows(world: &World) -> Vec<MenuRow> {
 
 /// Open a menu of `rows` under `anchor`, closing any open menu. A click on
 /// the button whose menu is open only closes it.
-fn toggle_menu(world: &mut World, anchor: Entity, rows: Vec<MenuRow>) {
+pub(crate) fn toggle_menu(world: &mut World, anchor: Entity, rows: Vec<MenuRow>) {
     let (open, open_anchor) = {
         let mut menu = world.get_resource_or_init::<GameHeaderMenu>();
         (menu.popover.take(), menu.anchor.take())
@@ -346,6 +358,18 @@ fn toggle_menu(world: &mut World, anchor: Entity, rows: Vec<MenuRow>) {
                             .with_variant(ButtonVariant::Ghost)
                             .align_left()
                             .with_left_checkbox(checked),
+                    ),
+                    ChildOf(menu),
+                ));
+            }
+            MenuRow::Action { label, call } => {
+                world.spawn((
+                    GameHeaderMenuItem,
+                    call,
+                    button(
+                        ButtonProps::new(label)
+                            .with_variant(ButtonVariant::Ghost)
+                            .align_left(),
                     ),
                     ChildOf(menu),
                 ));

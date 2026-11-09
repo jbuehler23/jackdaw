@@ -182,6 +182,27 @@ A game that is still connecting reads `building`. A `pie_running` wait also ends
 on `paused`, and ends with an error if the build fails or the game stops before
 it connects.
 
+The BRP method `jackdaw/game_output` answers with what a game printed, also after
+it exited:
+
+```text
+jackdaw/game_output { "instance": "Client 2", "since": 120, "limit": 200 }
+-> { "instance": { "config": "Client", "instance": 2, "name": "Client 2" },
+     "instances": ["Server", "Client 1", "Client 2"], "running": true,
+     "lines": [{ "seq": 120, "stream": "stderr", "text": "..." }],
+     "first": 0, "next": 121, "more": false }
+```
+
+- `instance` takes the name the Game panel shows, a run configuration's name,
+  or `{ "config": "Client", "instance": 2 }`. Left out, it is the instance the
+  Game Output window shows, which follows the Game panel.
+- `since` answers with the lines from that sequence number on. Pass the last
+  answer's `next` to read only new lines. Without it the answer holds the last
+  `limit` lines (200 by default).
+- `more` says lines were left out to keep to `limit`. A `since` below `first`
+  missed lines the buffer no longer holds. Sequence numbers carry on when Play
+  launches the instance again, which empties its buffer.
+
 ## Packing repeated groups
 
 `prefab.pack` writes a group out as a prefab file and leaves an instance standing

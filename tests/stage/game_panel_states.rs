@@ -20,7 +20,7 @@ fn settings() -> CallOperatorSettings {
     }
 }
 
-fn call(app: &mut App, id: &str) -> OperatorResult {
+pub(super) fn call(app: &mut App, id: &str) -> OperatorResult {
     let result = app
         .world_mut()
         .operator(id.to_string())
@@ -33,7 +33,7 @@ fn call(app: &mut App, id: &str) -> OperatorResult {
 }
 
 /// Run what the button for `part` runs, with its parameters, as a click does.
-fn press(app: &mut App, part: GameIdlePart) -> OperatorResult {
+pub(super) fn press(app: &mut App, part: GameIdlePart) -> OperatorResult {
     let pressed = app
         .world_mut()
         .query::<(&GameIdlePart, &ButtonOperatorCall)>()
@@ -54,7 +54,7 @@ fn press(app: &mut App, part: GameIdlePart) -> OperatorResult {
     result
 }
 
-fn key(config: &str) -> InstanceKey {
+pub(super) fn key(config: &str) -> InstanceKey {
     InstanceKey {
         config: config.to_string(),
         instance: 1,
@@ -63,7 +63,7 @@ fn key(config: &str) -> InstanceKey {
 
 /// An editor on a project with a Client and a Server run configuration, the
 /// Build panel in front of the dock it shares with the Game panel.
-fn editor_on_a_project() -> (App, NodeId, tempfile::TempDir) {
+pub(super) fn editor_on_a_project() -> (App, NodeId, tempfile::TempDir) {
     let project = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         project.path().join("jackdaw.toml"),
@@ -106,7 +106,7 @@ fn editor_on_a_project() -> (App, NodeId, tempfile::TempDir) {
     (app, leaf, project)
 }
 
-fn front_window(app: &App, leaf: NodeId) -> Option<String> {
+pub(super) fn front_window(app: &App, leaf: NodeId) -> Option<String> {
     let tree = app.world().resource::<DockTree>();
     let leaf = tree.get(leaf)?.as_leaf()?;
     let active = leaf.active?;
@@ -114,7 +114,7 @@ fn front_window(app: &App, leaf: NodeId) -> Option<String> {
         .find_map(|(window, tab)| (tab == active).then(|| window.to_string()))
 }
 
-fn label(app: &mut App) -> String {
+pub(super) fn label(app: &mut App) -> String {
     app.world_mut()
         .query_filtered::<&Text, With<GamePanelIdleLabel>>()
         .single(app.world())
@@ -123,7 +123,7 @@ fn label(app: &mut App) -> String {
         .clone()
 }
 
-fn stderr(app: &mut App) -> String {
+pub(super) fn stderr(app: &mut App) -> String {
     app.world_mut()
         .query_filtered::<&Text, With<GamePanelStderrText>>()
         .single(app.world())
@@ -133,7 +133,7 @@ fn stderr(app: &mut App) -> String {
 }
 
 /// The parts of the idle column on show.
-fn shown(app: &mut App) -> Vec<GameIdlePart> {
+pub(super) fn shown(app: &mut App) -> Vec<GameIdlePart> {
     let mut parts: Vec<GameIdlePart> = app
         .world_mut()
         .query::<(&GameIdlePart, &Node)>()
@@ -146,7 +146,7 @@ fn shown(app: &mut App) -> Vec<GameIdlePart> {
 }
 
 /// Update until `done` holds, failing after a few seconds.
-fn update_until(app: &mut App, what: &str, mut done: impl FnMut(&mut App) -> bool) {
+pub(super) fn update_until(app: &mut App, what: &str, mut done: impl FnMut(&mut App) -> bool) {
     let until = Instant::now() + Duration::from_secs(10);
     while !done(app) {
         assert!(Instant::now() < until, "timed out waiting for {what}");
@@ -155,7 +155,7 @@ fn update_until(app: &mut App, what: &str, mut done: impl FnMut(&mut App) -> boo
     }
 }
 
-fn recorded_exit(app: &App) -> Option<InstanceKey> {
+pub(super) fn recorded_exit(app: &App) -> Option<InstanceKey> {
     app.world()
         .resource::<jackdaw::pie::LastGameExit>()
         .0
@@ -236,7 +236,8 @@ fn a_game_that_crashes_shows_its_exit_and_restart_launches_that_game_again() {
         [
             GameIdlePart::Label,
             GameIdlePart::Stderr,
-            GameIdlePart::Restart
+            GameIdlePart::Restart,
+            GameIdlePart::ShowOutput
         ]
     );
     assert_eq!(
@@ -313,7 +314,11 @@ fn a_game_that_never_connects_is_told_to_add_jackdaw_plugin() {
     assert!(message.contains("JackdawPlugin"), "{message}");
     assert_eq!(
         shown(&mut app),
-        [GameIdlePart::Label, GameIdlePart::Restart]
+        [
+            GameIdlePart::Label,
+            GameIdlePart::Restart,
+            GameIdlePart::ShowOutput
+        ]
     );
     assert_eq!(front_window(&app, leaf).as_deref(), Some(GAME_WINDOW_ID));
 }

@@ -6,9 +6,9 @@ use bevy::prelude::*;
 use jackdaw::project::{ProjectConfig, ProjectRoot};
 use jackdaw::remote::server::{
     apply_bsn_handler, assets_handler, batch_handler, call_operator_handler, cancel_handler,
-    entity_handler, game_entities_handler, game_entity_handler, game_query_handler,
-    operators_handler, publish_endpoint, retract_endpoint, scene_tree_handler, screenshot_handler,
-    status_handler, wait_handler,
+    entity_handler, game_entities_handler, game_entity_handler, game_output_handler,
+    game_query_handler, operators_handler, publish_endpoint, retract_endpoint, scene_tree_handler,
+    screenshot_handler, status_handler, wait_handler,
 };
 use jackdaw_api_internal::operator::OperatorWorldExt as _;
 use jackdaw_commands::CommandHistory;
@@ -2571,4 +2571,98 @@ fn the_game_methods_answer_with_what_the_game_replies() {
         game_end.drain_received().is_empty(),
         "the poll after the answer asks the game nothing"
     );
+}
+
+/// With no game launched, `jackdaw/game_output` answers with no instance
+/// rather than refusing.
+#[test]
+fn game_output_names_no_instance_before_a_game_runs() {
+    let mut app = util::editor_test_app();
+    let answer = call(&mut app, game_output_handler, json!({}));
+    assert_eq!(answer["instance"], Value::Null, "{answer}");
+    assert_eq!(answer["lines"], json!([]), "{answer}");
+    assert_eq!(answer["running"], json!(false), "{answer}");
+}
+
+/// `jackdaw/game_output` answers with what a running game printed, each line
+/// with its stream and sequence number, and reads on from `since`.
+#[cfg(unix)]
+#[test]
+fn game_output_reads_a_running_games_lines_from_a_sequence_number() {
+    use std::time::{Duration, Instant};
+
+    let mut app = util::editor_test_app();
+    let child = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "echo one; echo two >&2; sleep 1; echo three; sleep 600",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("a child process");
+    let key = jackdaw::pie::InstanceKey {
+        config: "Game".to_string(),
+        instance: 1,
+    };
+    jackdaw::pie::set_connect_timeout(app.world_mut(), Duration::from_secs(600));
+    jackdaw::pie::connecting_test_game(app.world_mut(), key, child);
+
+    let until = Instant::now() + Duration::from_secs(10);
+    let first = loop {
+        let answer = call(&mut app, game_output_handler, json!({ "limit": 2 }));
+        if answer["lines"]
+            .as_array()
+            .is_some_and(|lines| lines.len() == 2)
+        {
+            break answer;
+        }
+        assert!(Instant::now() < until, "the lines never came: {answer}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(first["instance"]["config"], json!("Game"), "{first}");
+    assert_eq!(first["running"], json!(true), "{first}");
+    let mut lines: Vec<(String, String)> = first["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .map(|line| {
+            (
+                line["stream"].as_str().unwrap_or_default().to_string(),
+                line["text"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        [
+            ("stderr".to_string(), "two".to_string()),
+            ("stdout".to_string(), "one".to_string())
+        ]
+    );
+    let next = first["next"].as_u64().expect("a next sequence number");
+    assert_eq!(next, 2, "{first}");
+
+    let later = loop {
+        let answer = call(
+            &mut app,
+            game_output_handler,
+            json!({ "since": next, "instance": "Game" }),
+        );
+        if !answer["lines"].as_array().is_none_or(Vec::is_empty) {
+            break answer;
+        }
+        assert!(
+            Instant::now() < until,
+            "the third line never came: {answer}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        later["lines"],
+        json!([{ "seq": 2, "stream": "stdout", "text": "three" }]),
+        "{later}"
+    );
+    assert_eq!(later["next"], json!(3), "{later}");
 }

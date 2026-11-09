@@ -188,7 +188,8 @@ impl Plugin for JackdawEditorRemotePlugin {
                     .with_watching_method_main("jackdaw/wait", wait_handler)
                     .with_watching_method_main("jackdaw/game_entities", game_entities_handler)
                     .with_watching_method_main("jackdaw/game_entity", game_entity_handler)
-                    .with_watching_method_main("jackdaw/game_query", game_query_handler),
+                    .with_watching_method_main("jackdaw/game_query", game_query_handler)
+                    .with_method_main("jackdaw/game_output", game_output_handler),
             )
             // No CORS headers: allowing an origin would hand any page served on
             // loopback write access to the open scene.
@@ -1956,6 +1957,111 @@ pub fn game_query_handler(
             name: text("name"),
         })
     })
+}
+
+/// How many lines `jackdaw/game_output` answers with when not told.
+const GAME_OUTPUT_LIMIT: usize = 200;
+
+/// What a game instance printed. `instance` names it as the Game panel does
+/// ("Client 2"), by its run configuration, or as `{config, instance}`, and
+/// defaults to the instance the Game Output window shows. `since` answers
+/// with the lines from that sequence number on, else the last ones, up to
+/// `limit`.
+pub fn game_output_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    use jackdaw_editor_core::game_output::GameOutput;
+    use jackdaw_editor_core::game_output_window::{output_instances, shown_instance};
+
+    check_enabled(world)?;
+    let params = params.unwrap_or(Value::Null);
+    let instances = output_instances(world);
+    let key = match params.get("instance") {
+        None | Some(Value::Null) => shown_instance(world),
+        Some(Value::String(name)) => Some(
+            instances
+                .iter()
+                .find(|(_, shown)| shown == name)
+                .or_else(|| {
+                    instances
+                        .iter()
+                        .find(|(key, _)| key.config == *name && key.instance == 1)
+                })
+                .map(|(key, _)| key.clone())
+                .ok_or_else(|| invalid_params(format!("no game instance `{name}` has output")))?,
+        ),
+        Some(Value::Object(fields)) => {
+            let config = fields
+                .get("config")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid_params("`instance.config` must be a string"))?;
+            let instance = fields.get("instance").map_or(Some(1), Value::as_u64);
+            let instance = instance
+                .and_then(|instance| u32::try_from(instance).ok())
+                .ok_or_else(|| invalid_params("`instance.instance` must be a number from 1"))?;
+            Some(jackdaw_editor_core::pie::InstanceKey {
+                config: config.to_string(),
+                instance,
+            })
+        }
+        Some(_) => {
+            return Err(invalid_params(
+                "`instance` must be a name or {config, instance}",
+            ));
+        }
+    };
+    let since = match params.get("since") {
+        None | Some(Value::Null) => None,
+        Some(since) => Some(
+            since
+                .as_u64()
+                .ok_or_else(|| invalid_params("`since` must be a sequence number"))?,
+        ),
+    };
+    let limit = match params.get("limit") {
+        None | Some(Value::Null) => GAME_OUTPUT_LIMIT,
+        Some(limit) => limit
+            .as_u64()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .ok_or_else(|| invalid_params("`limit` must be a count"))?,
+    };
+    let names: Vec<&String> = instances.iter().map(|(_, name)| name).collect();
+    let Some(key) = key else {
+        return Ok(json!({
+            "instance": null,
+            "instances": names,
+            "running": false,
+            "lines": [],
+            "first": 0,
+            "next": 0,
+            "more": false,
+        }));
+    };
+    let page = world
+        .get_resource::<GameOutput>()
+        .and_then(|output| output.page(&key, since, limit))
+        .ok_or_else(|| invalid_params(format!("game instance {key} has no output")))?;
+    let running = world
+        .get_non_send::<jackdaw_editor_core::pie::PieSession>()
+        .is_some_and(|session| session.is_running(&key));
+    let name = instances
+        .iter()
+        .find(|(held, _)| *held == key)
+        .map(|(_, name)| name.clone());
+    let lines: Vec<Value> = page
+        .lines
+        .iter()
+        .map(|line| json!({ "seq": line.seq, "stream": line.stream.name(), "text": line.text }))
+        .collect();
+    Ok(json!({
+        "instance": { "config": key.config, "instance": key.instance, "name": name },
+        "instances": names,
+        "running": running,
+        "lines": lines,
+        // The oldest sequence number still kept; a `since` below it lost lines.
+        "first": page.first_seq,
+        // Pass as `since` to read on from here.
+        "next": page.lines.last().map_or(since.unwrap_or(page.next_seq), |line| line.seq + 1),
+        "more": page.more,
+    }))
 }
 
 /// Ask the running game the question `query` makes of the params on the first
