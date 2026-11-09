@@ -17,7 +17,7 @@ use jackdaw_bsn::SceneBsnAst;
 
 /// What the editor told this game to read in place of its files.
 #[derive(Resource, Default)]
-struct PlayOverlay {
+pub(crate) struct PlayOverlay {
     /// Unsaved prefab text, by the prefab's normalized path in its text form.
     prefabs: HashMap<PathBuf, String>,
 }
@@ -97,27 +97,39 @@ pub(crate) fn overlaid_prefab(
     assets_root: &Path,
 ) -> Option<SceneBsnAst> {
     let overlay = world.get_resource::<PlayOverlay>()?;
-    let text = overlay.prefabs.get(&jackdaw_bsn::text_twin(path))?;
-    let mut ast = match crate::parse_bsn_text(text) {
-        Ok(ast) => ast,
-        Err(err) => {
-            warn!(
-                "PIE: the unsaved prefab {} does not parse, using its file: {err}",
-                path.display()
-            );
-            return None;
-        }
-    };
     let registry = world.resource::<AppTypeRegistry>().read();
-    let roots: Vec<Entity> = ast
-        .roots
-        .iter()
-        .copied()
-        .filter(|&root| !crate::is_asset_root(&ast, root, &registry))
-        .collect();
-    ast.roots = roots;
-    jackdaw_prefab::prepare_prefab_document(&mut ast, path, assets_root);
-    Some(ast)
+    overlay.prefab(&registry, path, assets_root)
+}
+
+impl PlayOverlay {
+    /// [`overlaid_prefab`], for a system holding the overlay and the registry.
+    pub(crate) fn prefab(
+        &self,
+        registry: &bevy::reflect::TypeRegistry,
+        path: &Path,
+        assets_root: &Path,
+    ) -> Option<SceneBsnAst> {
+        let text = self.prefabs.get(&jackdaw_bsn::text_twin(path))?;
+        let mut ast = match crate::parse_bsn_text(text) {
+            Ok(ast) => ast,
+            Err(err) => {
+                warn!(
+                    "PIE: the unsaved prefab {} does not parse, using its file: {err}",
+                    path.display()
+                );
+                return None;
+            }
+        };
+        let roots: Vec<Entity> = ast
+            .roots
+            .iter()
+            .copied()
+            .filter(|&root| !crate::is_asset_root(&ast, root, registry))
+            .collect();
+        ast.roots = roots;
+        jackdaw_prefab::prepare_prefab_document(&mut ast, path, assets_root);
+        Some(ast)
+    }
 }
 
 /// Where the scene under `root` keeps unsaved copies of the sidecars of the document

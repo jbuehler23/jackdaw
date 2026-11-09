@@ -63,25 +63,47 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(Update, publish_heights.after(refresh_heightmaps));
 }
 
-/// Answer the prefabs stored scatter names with the models they draw, read
-/// from the game's assets.
+/// Answer the prefabs stored scatter names with the models they draw: each new
+/// name once, and every name again when the editor sends prefab text under
+/// Play, which stands in for the prefab's file.
 fn resolve_scatter_prefabs(
     mut prefabs: ResMut<ScatterPrefabs>,
+    overlay: Option<Res<crate::play_overlay::PlayOverlay>>,
+    registry: Res<AppTypeRegistry>,
     catalog_path: Option<Res<crate::JackdawCatalogPath>>,
     asset_folder: Option<Res<crate::AssetFolder>>,
 ) {
-    let wanted: Vec<String> = prefabs.wanted().map(str::to_string).collect();
-    if wanted.is_empty() {
+    let names: Vec<String> = if overlay.as_ref().is_some_and(DetectChanges::is_changed) {
+        prefabs
+            .known()
+            .chain(prefabs.wanted())
+            .map(str::to_string)
+            .collect()
+    } else {
+        prefabs.wanted().map(str::to_string).collect()
+    };
+    if names.is_empty() {
         return;
     }
     let Some(assets) = crate::resolve_assets_root(catalog_path.as_deref(), asset_folder.as_deref())
     else {
         return;
     };
-    for name in wanted {
-        let path = assets.join(&name);
-        let file = jackdaw_bsn::existing_form(&path).unwrap_or(path);
-        let model = match jackdaw_prefab::read_prefab_document(&file, &assets) {
+    let assets = jackdaw_prefab::normalize_path(&assets);
+    let registry = registry.read();
+    for name in names {
+        let path = jackdaw_prefab::normalize_path(&assets.join(&name));
+        let unsaved = overlay
+            .as_ref()
+            .and_then(|overlay| overlay.prefab(&registry, &path, &assets));
+        let document = match unsaved {
+            Some(document) => Ok(document),
+            None => {
+                let file = jackdaw_bsn::existing_form(&path).unwrap_or_else(|| path.clone());
+                jackdaw_prefab::read_prefab_document(&file, &assets)
+            }
+        };
+        let model = match document {
             Ok(document) => jackdaw_prefab::prefab_model(&document),
             Err(err) => {
                 warn!("terrain scatter: cannot read the prefab {name}: {err}");
@@ -93,7 +115,10 @@ fn resolve_scatter_prefabs(
             local: Transform::from_matrix(Mat4::from(model.local)),
             materials: model.materials,
         });
-        prefabs.resolve(&name, model);
+        let asked = prefabs.wanted().any(|wanted| wanted == name);
+        if asked || prefabs.get(&name) != model.as_ref() {
+            prefabs.resolve(&name, model);
+        }
     }
 }
 
@@ -1053,6 +1078,90 @@ mod tests {
             Some("textures/grass_basecolor.png")
         );
         assert_eq!(resolved.missing, vec!["nowhere".to_string()]);
+    }
+
+    /// A prefab drawing the glTF at `model`.
+    fn tree_prefab(model: &str) -> String {
+        format!(
+            "jackdaw::prefab::components::Prefab\n\
+             jackdaw::prefab::components::PrefabEntityId(0)\n\
+             #Tree\n\
+             bevy_transform::components::transform::Transform\n\
+             bevy_ecs::hierarchy::Children [\n    \
+             #Tree\n    \
+             bevy_transform::components::transform::Transform\n    \
+             jackdaw_scene_types::types::GltfSource {{ path: \"{model}\", scene_index: 0 }}\n    \
+             jackdaw::prefab::components::PrefabEntityId(1)\n\
+             ]\n"
+        )
+    }
+
+    fn scatter_game(assets: &Path) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(bevy::transform::TransformPlugin);
+        app.add_plugins(AssetPlugin {
+            file_path: assets.to_string_lossy().into_owned(),
+            ..default()
+        });
+        app.add_plugins(bevy::world_serialization::WorldSerializationPlugin);
+        app.add_plugins(crate::JackdawPlugin);
+        app
+    }
+
+    fn scatter_model(app: &App, prefab: &str) -> Option<String> {
+        app.world()
+            .resource::<ScatterPrefabs>()
+            .get(prefab)
+            .map(|resolved| resolved.model.clone())
+    }
+
+    #[test]
+    fn scatter_draws_the_unsaved_prefab_the_editor_sent() {
+        let project = tempfile::tempdir().expect("tempdir");
+        let assets = project.path().join("assets");
+        std::fs::create_dir_all(&assets).expect("assets");
+        let saved = tree_prefab("kit/Saved.gltf");
+        std::fs::write(assets.join("tree.bsn"), &saved).expect("prefab");
+
+        let mut app = scatter_game(&assets);
+        crate::play_overlay::load_prefab_files(
+            app.world_mut(),
+            &[(
+                "tree.bsn".to_string(),
+                Some(tree_prefab("kit/Unsaved.gltf")),
+            )],
+        );
+        app.world_mut().spawn(TerrainScatter {
+            palette: jackdaw_terrain::placement::ScatterPalette {
+                assets: vec![jackdaw_terrain::placement::ScatterPaletteEntry::new(
+                    "tree.bsn",
+                )],
+                groups: vec!["tree".to_string()],
+            },
+            regions: Vec::new(),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        assert_eq!(
+            scatter_model(&app, "tree.bsn").as_deref(),
+            Some("kit/Unsaved.gltf")
+        );
+        assert_eq!(
+            std::fs::read_to_string(assets.join("tree.bsn")).expect("the file"),
+            saved,
+            "nothing was written"
+        );
+
+        crate::play_overlay::load_prefab_files(app.world_mut(), &[("tree.bsn".to_string(), None)]);
+        app.update();
+        assert_eq!(
+            scatter_model(&app, "tree.bsn").as_deref(),
+            Some("kit/Saved.gltf"),
+            "sent back to the file"
+        );
     }
 
     /// One terrain, its levels laid out around a camera the test moves.

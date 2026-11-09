@@ -324,6 +324,7 @@ impl Plugin for JackdawPlugin {
             )
                 .chain(),
         );
+        app.add_observer(respawn_reinserted_root);
         app.add_observer(hidden_in_game::hide_on_add);
         app.add_observer(fallback_camera::yield_to_game_camera)
             .add_observer(fallback_camera::leave_with_last_2d_scene);
@@ -722,6 +723,26 @@ fn clear_modified_scene_roots(
             .remove::<(SceneSpawned, JackdawSceneReady)>()
             .insert(SceneInstanceMembers::default());
     }
+}
+
+/// A spawned root inserted again, as a game restarting a level does, drops what
+/// it spawned and spawns on the next pass, whether it was served or read from
+/// its file.
+fn respawn_reinserted_root(
+    insert: On<Insert<JackdawSceneRoot>>,
+    roots: Query<&SceneInstanceMembers, With<SceneSpawned>>,
+    mut commands: Commands,
+) {
+    let Ok(members) = roots.get(insert.entity) else {
+        return;
+    };
+    for &member in &members.0 {
+        commands.entity(member).try_despawn();
+    }
+    commands
+        .entity(insert.entity)
+        .remove::<(SceneSpawned, JackdawSceneReady, ServedScene)>()
+        .insert(SceneInstanceMembers::default());
 }
 
 /// Why the asset server gave up on a scene, when it has. A load still in
