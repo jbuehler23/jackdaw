@@ -6,5 +6,6 @@ mod tileset_dock;
 mod tileset_edit_ops;
 mod tileset_layout_ops;
 mod tileset_layout_popover;
+mod tileset_modes;
 mod tileset_ops;
 mod tileset_suggest;

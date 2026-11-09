@@ -24,17 +24,26 @@ const SPACED_SHEET: &str = "overworld_spaced.png";
 /// An editor on a temp project whose assets hold the overworld sheet, packed
 /// and spaced.
 pub(crate) fn project_app() -> (App, tempfile::TempDir) {
+    project_app_with(|_| {})
+}
+
+/// Like [`project_app`], with `extra` adding plugins to the editor.
+pub(crate) fn project_app_with(extra: impl FnOnce(&mut App)) -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let assets = dir.path().join("assets");
     std::fs::create_dir_all(&assets).expect("assets");
     std::fs::copy(util::OVERWORLD_SHEET, assets.join(SHEET)).expect("copy the sheet");
     util::write_spaced_overworld_sheet(&assets.join(SPACED_SHEET));
-    let app = editor_on(&dir);
+    let app = editor_on_with(&dir, extra);
     (app, dir)
 }
 
 pub(crate) fn editor_on(dir: &tempfile::TempDir) -> App {
-    let mut app = util::editor_test_app_reading(&dir.path().join("assets"));
+    editor_on_with(dir, |_| {})
+}
+
+fn editor_on_with(dir: &tempfile::TempDir, extra: impl FnOnce(&mut App)) -> App {
+    let mut app = util::editor_test_app_reading_with(&dir.path().join("assets"), extra);
     app.world_mut()
         .insert_resource(jackdaw_editor_core::project::ProjectRoot {
             root: dir.path().to_path_buf(),

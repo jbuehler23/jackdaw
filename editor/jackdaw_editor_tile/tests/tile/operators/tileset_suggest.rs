@@ -2,14 +2,16 @@
 //! without changing the tileset, and each row shows, dismisses, lays out or
 //! adds its suggestion only when pressed.
 
-use crate::operators::tileset_dock::{control, opened, press, settle, texts, view};
+use crate::operators::tileset_dock::{opened, pick_more, press, settle, texts, view};
 use crate::operators::tileset_edit_ops::{call, entries, on_disk};
 use crate::operators::tileset_ops::{SHEET, import, project_app, warnings};
 
 use bevy::prelude::*;
-use jackdaw_editor_tile::tileset_dock::{BitsOverlay, DockAction, DockControl, TilesetDockViews};
-use jackdaw_editor_tile::tileset_layout::LayoutPopover;
+use jackdaw_editor_tile::tileset_dock::{DockAction, DockControl, TilesetDockViews};
+use jackdaw_editor_tile::tileset_layout::{GhostZones, LayoutPopover};
+use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_editor_tile::tileset_suggest::{SuggestionLabel, SuggestionOutline};
+use jackdaw_editor_tile::zone_overlay::ZoneOverlay;
 use jackdaw_tilemap::{LayoutTemplate, Suggestion, SuggestionKind};
 
 const GRASS: u8 = 1;
@@ -66,7 +68,12 @@ fn nothing_is_suggested_on_import_or_open() {
     let (_, root) = opened(&mut app);
     assert!(view(&app).suggestions.is_none());
     assert_eq!(rows(&mut app, root), 0);
-    control(&mut app, root, DockAction::Suggest);
+    let menu = crate::operators::tileset_dock::more_menu(&mut app, root);
+    assert!(
+        menu.iter()
+            .any(|(a, _)| a.starts_with("op:tileset.suggest")),
+        "{menu:?}"
+    );
 }
 
 #[test]
@@ -74,7 +81,7 @@ fn suggest_lists_blocks_and_objects_without_changing_the_tileset() {
     let (mut app, dir) = named();
     let (_, root) = opened(&mut app);
     let (before, history) = (on_disk(&dir), entries(&app));
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let found = listed(&app);
     let dirt = position(&found, |s| s.origin == DIRT_BLOCK);
     let SuggestionKind::Block {
@@ -110,7 +117,7 @@ fn suggest_lists_blocks_and_objects_without_changing_the_tileset() {
 fn show_outlines_a_suggestion_and_dismiss_drops_it_for_the_session() {
     let (mut app, _dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     assert!(outlines(&mut app, root).is_empty());
     let found = listed(&app);
     let dirt = position(&found, |s| s.origin == DIRT_BLOCK);
@@ -127,7 +134,7 @@ fn show_outlines_a_suggestion_and_dismiss_drops_it_for_the_session() {
     assert_eq!(left.len(), found.len() - 1);
     assert!(!left.contains(&found[dirt]));
     assert!(outlines(&mut app, root).is_empty(), "its outline goes too");
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     assert!(
         !listed(&app).contains(&found[dirt]),
         "dismissed stays dismissed"
@@ -148,7 +155,7 @@ fn popovers(app: &mut App, root: Entity) -> usize {
 fn lay_out_opens_the_popover_with_the_suggestion_preselected() {
     let (mut app, dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let found = listed(&app);
     let dirt = position(&found, |s| s.origin == DIRT_BLOCK);
     let before = on_disk(&dir);
@@ -186,7 +193,7 @@ fn lay_out_opens_the_popover_with_the_suggestion_preselected() {
 fn add_object_adds_the_suggested_object() {
     let (mut app, dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let found = listed(&app);
     let object = position(&found, |s| matches!(s.kind, SuggestionKind::Object { .. }));
     press(&mut app, root, DockAction::SuggestionObjects);
@@ -209,7 +216,7 @@ fn add_object_adds_the_suggested_object() {
 fn a_block_of_two_placements_asks_which_one() {
     let (mut app, _dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let found = listed(&app);
     let corners = position(&found, |s| match &s.kind {
         SuggestionKind::Block { layouts, .. } => layouts[0].template == LayoutTemplate::Corner2x2,
@@ -224,7 +231,7 @@ fn a_block_of_two_placements_asks_which_one() {
 fn a_suggestion_on_a_missing_sheet_is_dropped() {
     let (mut app, _dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let stale = Suggestion {
         sheet: 7,
         ..listed(&app)[0].clone()
@@ -237,7 +244,7 @@ fn a_suggestion_on_a_missing_sheet_is_dropped() {
             .expect("a list")
             .push(stale.clone());
     }
-    press(&mut app, root, DockAction::Bits(BitsOverlay::Off));
+    press(&mut app, root, DockAction::Mode(ModeId::TERRAINS));
     assert!(!listed(&app).contains(&stale));
 }
 
@@ -245,7 +252,7 @@ fn a_suggestion_on_a_missing_sheet_is_dropped() {
 fn objects_are_one_folded_group() {
     let (mut app, _dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let found = listed(&app);
     let objects: Vec<usize> = (0..found.len()).filter(|i| !is_block(&found[*i])).collect();
     assert!(!objects.is_empty());
@@ -268,7 +275,7 @@ fn objects_are_one_folded_group() {
 fn rows_are_one_short_line() {
     let (mut app, _dir) = named();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Suggest);
+    pick_more(&mut app, root, "tileset.suggest");
     let shown = texts(&mut app, root);
     assert!(
         shown.iter().any(|t| t == "Dirt on grass, 3x3 + corners"),
@@ -284,4 +291,34 @@ fn rows_are_one_short_line() {
         assert!(!text.contains(" at "), "{text}");
         assert_eq!(wrap, LineBreak::NoWrap, "{text}");
     }
+}
+
+#[test]
+fn laying_out_a_block_from_the_terrains_mode_shows_only_its_ghosts() {
+    let (mut app, _dir) = named();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::Mode(ModeId::TERRAINS));
+    pick_more(&mut app, root, "tileset.suggest");
+    let found = listed(&app);
+    let sixteen = position(&found, |s| match &s.kind {
+        SuggestionKind::Block { layouts, .. } => {
+            s.named() && layouts[0].template.shape() == UVec2::splat(4)
+        }
+        SuggestionKind::Object { .. } => false,
+    });
+    press(&mut app, root, DockAction::SuggestionLayOut(sixteen));
+    assert_eq!(view(&app).mode, ModeId::TILES, "laying out is a tiles task");
+    assert!(view(&app).layout.is_some());
+    let overlays: Vec<bool> = app
+        .world_mut()
+        .query::<(&ZoneOverlay, Has<GhostZones>)>()
+        .iter(app.world())
+        .filter(|(o, _)| o.root == root)
+        .map(|(_, ghost)| ghost)
+        .collect();
+    assert_eq!(
+        overlays,
+        [true],
+        "the ghosts, with no terrain overlay under them"
+    );
 }

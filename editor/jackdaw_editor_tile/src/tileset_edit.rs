@@ -85,8 +85,11 @@ pub(crate) fn open_tileset(world: &mut World, path: &str) -> Result<(PathBuf, Ti
             let path = crate::tileset_dock::focused_tileset(world)?;
             Some(resolve_project_path(world, Path::new(&path)))
         };
-        open.or_else(focused)
-            .ok_or("no path given and no tileset is open")?
+        let front = || {
+            let path = crate::tileset_dock::front_tileset(world)?;
+            Some(resolve_project_path(world, Path::new(&path)))
+        };
+        (open.or_else(focused).or_else(front)).ok_or("no path given and no tileset is open")?
     } else {
         resolve_project_path(world, Path::new(path.trim()))
     };

@@ -32,8 +32,10 @@ pub mod tileset_edit;
 pub mod tileset_import;
 pub mod tileset_layout;
 pub mod tileset_layout_ops;
+pub mod tileset_modes;
 pub mod tileset_suggest;
 pub mod toolbar;
+pub mod zone_overlay;
 
 pub use jackdaw_editor_core::tile_mode::TILE_EDITOR_EXTENSION_ID;
 
@@ -59,6 +61,8 @@ impl Plugin for TileEditorPlugin {
             tileset_bits::plugin,
             tileset_layout::plugin,
             tileset_suggest::plugin,
+            tileset_modes::plugin,
+            zone_overlay::plugin,
             tilemap_card::plugin,
         ));
         let world = app.world_mut();
