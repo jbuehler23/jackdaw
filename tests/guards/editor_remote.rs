@@ -508,6 +508,52 @@ fn applied_bsn_spawns_every_root_in_the_source() {
     assert!(names.contains(&"Sack".to_string()), "{names:?}");
 }
 
+/// The tree lists the roots in the order the outliner shows them, which is
+/// the document's order rather than the order they were spawned in.
+#[test]
+fn the_tree_lists_roots_in_document_order() {
+    let mut app = editor_with_a_scene();
+    call(
+        &mut app,
+        apply_bsn_handler,
+        json!({
+            "source": "#First bevy_transform::components::transform::Transform,\n\
+                #Second bevy_transform::components::transform::Transform,\n\
+                #Third bevy_transform::components::transform::Transform\n",
+        }),
+    );
+    app.update();
+    let ours = |app: &mut App| -> Vec<String> {
+        root_names(app)
+            .into_iter()
+            .filter(|name| ["First", "Second", "Third"].contains(&name.as_str()))
+            .collect()
+    };
+    assert_eq!(ours(&mut app), ["First", "Second", "Third"]);
+
+    call(
+        &mut app,
+        call_operator_handler,
+        json!({ "id": "selection.select", "params": { "name": "Third" } }),
+    );
+    for _ in 0..2 {
+        call(
+            &mut app,
+            call_operator_handler,
+            json!({ "id": "entity.move_up" }),
+        );
+        app.update();
+    }
+
+    assert_eq!(ours(&mut app), ["Third", "First", "Second"]);
+    let tree = call(&mut app, scene_tree_handler, json!({ "depth": 0 }));
+    for node in tree["tree"].as_array().expect("an array") {
+        if node["name"] == json!("Third") {
+            assert!(node["node"].is_u64(), "a root carries its node id: {node}");
+        }
+    }
+}
+
 /// A UI screen hangs off `Node`, which carries `UiTransform` rather than
 /// `Transform`, so the walk has to follow it or the screen reads as empty.
 #[test]
@@ -1661,6 +1707,70 @@ fn status_follows_play_through_pause_resume_and_stop() {
     assert_eq!(pie(&mut app), json!("running"), "play resumes too");
     press(&mut app, "pie.stop");
     assert_eq!(pie(&mut app), json!("stopped"));
+}
+
+/// Status lists each launched game with how far it has got, marks the one the
+/// game methods ask, and drops them once play stops.
+#[test]
+fn status_lists_the_game_instances_play_launched() {
+    let (mut app, _dir) = editor_with_a_project();
+    app.world_mut()
+        .resource_mut::<NextState<jackdaw::AppState>>()
+        .set(jackdaw::AppState::Editor);
+    app.update();
+    assert_eq!(
+        call(&mut app, status_handler, json!({}))["instances"],
+        json!([])
+    );
+
+    let (server, name) = jackdaw_pie_protocol::serve().expect("a rendezvous");
+    let accept = std::thread::spawn(move || server.accept());
+    let _game = jackdaw_pie_protocol::connect(&name).expect("the game connects");
+    let editor_end = accept
+        .join()
+        .expect("accept ran")
+        .expect("the editor accepts");
+    let sleeper = || {
+        std::process::Command::new("sleep")
+            .arg("600")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("a child process")
+    };
+    let key = |instance| jackdaw::pie::InstanceKey {
+        config: "Game".to_string(),
+        instance,
+    };
+    jackdaw::pie::connecting_test_game(app.world_mut(), key(2), sleeper());
+    jackdaw::pie::connect_test_game(app.world_mut(), key(1), sleeper(), editor_end)
+        .expect("a link");
+    for _ in 0..3 {
+        app.update();
+    }
+
+    let status = call(&mut app, status_handler, json!({}));
+    assert_eq!(status["pie"], json!("running"), "{status}");
+    assert_eq!(
+        status["instances"],
+        json!([
+            { "config": "Game", "instance": 1, "stage": "connected", "focused": true },
+            { "config": "Game", "instance": 2, "stage": "connecting", "focused": false },
+        ]),
+        "{status}"
+    );
+
+    app.world_mut()
+        .operator("pie.stop")
+        .call()
+        .expect("the operator dispatches")
+        .assert_finished();
+    for _ in 0..3 {
+        app.update();
+    }
+    let status = call(&mut app, status_handler, json!({}));
+    assert_eq!(status["pie"], json!("stopped"), "{status}");
+    assert_eq!(status["instances"], json!([]), "{status}");
 }
 
 /// A game process that is up but has not connected yet reads as building, and a

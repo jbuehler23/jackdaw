@@ -367,10 +367,6 @@ impl PieSession {
             .max()
     }
 
-    /// Whether any instance can take document edits now: `Live` while at
-    /// least one is connected (others may still be launching), `Launching`
-    /// while instances build or connect and none is connected yet, `None`
-    /// with no instance launched.
     /// The instances connected and able to take control messages.
     pub(crate) fn live_keys(&self) -> Vec<InstanceKey> {
         self.children
@@ -380,6 +376,33 @@ impl PieSession {
             .collect()
     }
 
+    /// Every instance launched or waiting on its build, sorted, with
+    /// `building`, `connecting` or `connected`.
+    pub fn instance_stages(&self) -> Vec<(InstanceKey, &'static str)> {
+        let launched = self.children.iter().map(|(key, stage)| {
+            let stage = match stage {
+                ChildStage::Connecting { .. } => "connecting",
+                ChildStage::Live { .. } => "connected",
+            };
+            (key.clone(), stage)
+        });
+        let building = self.builds.values().flat_map(|build| match build {
+            BuildState::Running { pending, .. } => pending
+                .iter()
+                .map(|spawn| (spawn.key.clone(), "building"))
+                .collect(),
+            _ => Vec::new(),
+        });
+        let mut stages: Vec<(InstanceKey, &'static str)> = launched.chain(building).collect();
+        stages.sort_by(|(a, _), (b, _)| (&a.config, a.instance).cmp(&(&b.config, b.instance)));
+        stages.dedup_by(|(a, _), (b, _)| a == b);
+        stages
+    }
+
+    /// Whether any instance can take document edits now: `Live` while at
+    /// least one is connected (others may still be launching), `Launching`
+    /// while instances build or connect and none is connected yet, `None`
+    /// with no instance launched.
     pub(crate) fn sync_target(&self) -> SyncTarget {
         let mut connecting = false;
         for stage in self.children.values() {
