@@ -250,6 +250,17 @@ impl TilesetSetup {
     /// it; a set with none counts its two lowest terrains. A set of one
     /// terrain counts it on empty.
     pub fn coverage(&self, set: usize) -> Result<Coverage, SetupError> {
+        self.coverage_of(set, None)
+    }
+
+    /// [`Self::coverage`] over the transitions of the set at `set` that
+    /// involve `terrain`. With none shown, it counts `terrain` on the terrain
+    /// below it, or the terrain above on it when it is at the bottom.
+    pub fn terrain_coverage(&self, set: usize, terrain: TerrainId) -> Result<Coverage, SetupError> {
+        self.coverage_of(set, Some(terrain))
+    }
+
+    fn coverage_of(&self, set: usize, terrain: Option<TerrainId>) -> Result<Coverage, SetupError> {
         let found = self.sets.get(set).ok_or(SetupError::UnknownSet(set))?;
         let mode = found.mode.value;
         let read: Vec<Peer> = Peer::ALL.into_iter().filter(|p| mode.reads(*p)).collect();
@@ -278,14 +289,20 @@ impl TilesetSetup {
                 .iter()
                 .any(|k| k.contains(&pair.0) && k.contains(&pair.1))
         };
-        let mut counted: Vec<(TerrainId, TerrainId)> =
-            pairs.iter().copied().filter(shown).collect();
+        let involves =
+            |pair: &(TerrainId, TerrainId)| terrain.is_none_or(|t| pair.0 == t || pair.1 == t);
+        let mut counted: Vec<(TerrainId, TerrainId)> = (pairs.iter().copied())
+            .filter(|pair| involves(pair) && shown(pair))
+            .collect();
         if counted.is_empty() {
-            counted = match terrains.as_slice() {
-                [] => Vec::new(),
-                [only] => vec![(*only, 0)],
-                [lowest, next, ..] => vec![(*next, *lowest)],
+            let at = match terrain {
+                Some(t) => terrains.iter().position(|x| *x == t),
+                None => Some(0),
             };
+            counted = at
+                .and_then(|at| unshown_pair(terrains, at))
+                .into_iter()
+                .collect();
         }
         let (mut covered, mut total, mut missing) = (0, 0, Vec::new());
         for (inner, outer) in counted {
@@ -384,6 +401,20 @@ fn block(
         }
     }
     Ok(tiles)
+}
+
+/// The transition counted for the terrain at `at` of `terrains`, bottom
+/// first, when the set shows none: it on the terrain below, or the terrain
+/// above on it at the bottom, or it on empty alone.
+fn unshown_pair(terrains: &[TerrainId], at: usize) -> Option<(TerrainId, TerrainId)> {
+    let terrain = *terrains.get(at)?;
+    match at {
+        0 => match terrains.get(1) {
+            Some(above) => Some((*above, terrain)),
+            None => Some((terrain, 0)),
+        },
+        _ => Some((terrain, terrains[at - 1])),
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +632,29 @@ mod tests {
         assert_eq!(after.total, before.total + 16, "sand on empty joins");
         assert_eq!(after.covered, before.covered + 2, "the edge and pure sand");
         assert!(setup.flagged().is_empty(), "a transition to empty");
+    }
+
+    #[test]
+    fn terrain_coverage_counts_only_the_transitions_a_terrain_is_in() {
+        let mut setup = farm();
+        let whole = setup.coverage(0).expect("set");
+        for terrain in [GRASS, SAND] {
+            let one = setup.terrain_coverage(0, terrain).expect("set");
+            assert_eq!((one.covered, one.total), (whole.covered, whole.total));
+        }
+        let edge = SetupTile {
+            terrains: edge(SAND, 0),
+            ..SetupTile::default()
+        };
+        setup.tiles.insert(at(3), edge);
+        let total = |setup: &TilesetSetup, terrain| {
+            let coverage = setup.terrain_coverage(0, terrain).expect("set");
+            (coverage.covered, coverage.total)
+        };
+        assert_eq!(total(&setup, SAND), (4, 32), "on grass and on empty");
+        assert_eq!(total(&setup, GRASS), (2, 16), "under sand only");
+        let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
+        assert_eq!(total(&setup, water), (0, 0), "in no transition of the set");
     }
 
     #[test]

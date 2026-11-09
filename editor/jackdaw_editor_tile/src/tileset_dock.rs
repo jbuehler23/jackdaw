@@ -23,12 +23,15 @@ use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{Coverage, LayoutTemplate, Placement, Suggestion, TerrainId, TilesetSetup};
+use jackdaw_tilemap::{
+    Coverage, LayoutTemplate, MatchMode, Placement, Suggestion, TerrainId, TilesetSetup,
+};
 use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain, TilesetTerrainSet};
 
 use crate::tileset_bits::{
-    BitsCount, CoverageLine, CoverageSummary, MissingShapes, TilesetBitsOverlayOp,
-    TilesetPaintModeOp, coverage_line, painted_count, spawn_marks, spawn_missing, summary_line,
+    BitsCount, CoverageLine, CoverageSummary, MissingShapes, TerrainCoverageLine,
+    TilesetBitsOverlayOp, TilesetPaintModeOp, coverage_line, painted_count, spawn_marks,
+    spawn_missing, summary_line, terrain_coverage_line,
 };
 use crate::tileset_edit::{apply_edit, clear_auto, open_tileset, suggested_name, text};
 use crate::tileset_import::{TILESET_SUFFIX, decode_sheet};
@@ -58,9 +61,9 @@ const COLLISIONS: [(&str, &str); 3] = [
 ];
 /// Match modes, as the operator names them and as the dock shows them.
 const MODES: [(&str, &str); 3] = [
-    ("corners", "Corners"),
-    ("sides", "Sides"),
-    ("corners_and_sides", "Corners and sides"),
+    ("corners", "Match corners"),
+    ("sides", "Match edges"),
+    ("corners_and_sides", "Match corners and edges"),
 ];
 
 pub(crate) fn plugin(app: &mut App) {
@@ -72,6 +75,7 @@ pub(crate) fn plugin(app: &mut App) {
         .add_observer(on_page_change)
         .add_observer(on_collision_pick)
         .add_observer(on_new_set_pick)
+        .add_observer(on_set_mode_pick)
         .add_systems(
             Update,
             follow_focus.run_if(resource_exists_and_changed::<InputFocus>),
@@ -149,6 +153,8 @@ pub struct DockView {
     pub new_set: Option<usize>,
     /// The terrain set, by name, a stroke paints in.
     pub active: Option<String>,
+    /// The set names at the last fill, to follow a set renamed by undo.
+    pub set_names: Vec<String>,
     /// The block whose layout the layout popover is picking.
     pub layout: Option<LayoutDraft>,
     /// Blocks and objects `tileset.suggest` found, while its list is open.
@@ -222,12 +228,14 @@ impl BitsOverlay {
     ];
 }
 
-/// What a name field of the terrains list names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a name field of the dock names.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NameField {
     /// A new terrain shown by the selected tile.
     New,
     Rename(TerrainId),
+    /// The terrain set with this name.
+    RenameSet(String),
 }
 
 /// The view of each open tileset, by its path. A tileset has one tab, so the
@@ -274,12 +282,18 @@ pub enum DockAction {
     Tool(DockTool),
     /// Add a set of the mode picked in the new set control.
     CreateSet,
+    /// Open the name field of the set at this index.
+    RenameSet(usize),
     /// Remove the set at this index.
     RemoveSet(usize),
     /// Put the brush terrain in the set at this index.
     AddBrushToSet(usize),
     /// Take the terrain out of the set at this index.
     RemoveFromSet(usize, TerrainId),
+    /// Move the terrain one place up the set at this index, nearer the top.
+    RaiseInSet(usize, TerrainId),
+    /// Move the terrain one place down the set at this index.
+    LowerInSet(usize, TerrainId),
     /// Read the dragged block as this layout drawn at this placement.
     LayoutPick(LayoutTemplate, Placement),
     LayoutApply,
@@ -308,7 +322,7 @@ pub struct SheetPicture {
 }
 
 /// The name field of the dock `root`.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Debug)]
 pub struct TerrainNameField {
     pub root: Entity,
     pub field: NameField,
@@ -342,6 +356,27 @@ pub enum Pane {
     /// What is picked, under the list.
     Detail,
     Sheet,
+}
+
+/// The terrain sets list of the dock `root`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TerrainSetList {
+    pub root: Entity,
+}
+
+/// The entry of the terrain set at index `set` in the dock `root`: its name
+/// line, mode, terrains and Add terrain.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TerrainSetEntry {
+    pub root: Entity,
+    pub set: usize,
+}
+
+/// The mode combo of the terrain set at index `set`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SetModeCombo {
+    pub root: Entity,
+    pub set: usize,
 }
 
 /// The collision combo of terrain `terrain`.
@@ -489,8 +524,9 @@ fn fill_path(world: &mut World, root: Entity, path: Option<String>) {
             if !tileset.terrains.iter().any(|t| t.id == view.brush) {
                 view.brush = 0;
             }
-            view.active = brush_set(&tileset, view.brush, view.active.as_deref());
             let sets = tileset.sets();
+            follow_renames(&mut view, &sets);
+            view.active = brush_set(&tileset, view.brush, view.active.as_deref());
             (view.expanded).retain(|name| sets.iter().any(|s| s.name == *name));
             crate::tileset_suggest::prune(&mut view, &tileset);
             (world.resource_mut::<TilesetDockViews>().0).insert(path.clone(), view.clone());
@@ -835,8 +871,8 @@ fn spawn_terrains(
     }
 }
 
-/// Each terrain set as a line that makes it active, with buttons to put the
-/// brush terrain in it and to remove it, and its terrains bottom first.
+/// Each terrain set: a line that makes it active with its name, coverage,
+/// rename and remove, its mode, its terrains top first and Add terrain.
 fn spawn_sets(
     world: &mut World,
     parent: Entity,
@@ -846,62 +882,188 @@ fn spawn_sets(
     view: &DockView,
 ) {
     spawn_heading(world, parent, "Terrain sets");
-    let free = |id: TerrainId| id != 0 && !setup.sets.iter().any(|s| s.terrains.contains(&id));
-    for (index, set) in setup.sets.iter().enumerate() {
-        let Some((line, _)) = coverage_line(setup, index) else {
-            continue;
-        };
-        let holder = world
-            .spawn((
-                Node {
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                ChildOf(parent),
-            ))
-            .id();
+    let list = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
+                row_gap: px(tokens::SPACING_SM),
+                ..default()
+            },
+            TerrainSetList { root },
+            ChildOf(parent),
+        ))
+        .id();
+    for index in 0..setup.sets.len() {
+        spawn_set(world, list, root, (tileset, setup), view, index);
+    }
+}
+
+fn spawn_set(
+    world: &mut World,
+    parent: Entity,
+    root: Entity,
+    (tileset, setup): (&Tileset, &TilesetSetup),
+    view: &DockView,
+    index: usize,
+) {
+    let Some(((line, coverage), set)) = coverage_line(setup, index).zip(setup.sets.get(index))
+    else {
+        return;
+    };
+    let entry = world
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
+                ..default()
+            },
+            TerrainSetEntry { root, set: index },
+            ChildOf(parent),
+        ))
+        .id();
+    let holder = world
+        .spawn((
+            Node {
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ChildOf(entry),
+        ))
+        .id();
+    let field = NameField::RenameSet(set.name.clone());
+    if view.naming.as_ref() == Some(&field) {
+        let row = spawn_row(world, holder, tokens::SPACING_SM);
+        if let Some(mut node) = world.get_mut::<Node>(row) {
+            node.flex_grow = 1.0;
+            node.min_width = px(0.0);
+        }
+        spawn_name_field(world, row, root, field, set.name.clone());
+    } else {
         let active = view.active.as_deref() == Some(set.name.as_str());
         let row = spawn_pick(world, holder, root, DockAction::ActiveSet(index), active);
-        let names: Vec<String> = (set.terrains.iter().rev())
-            .map(|id| tileset.terrain_name(*id))
-            .collect();
-        let tip = format!("{}, top first: {}", set.name, names.join(", "));
-        world
-            .entity_mut(row)
-            .insert((Tooltip::title(tip), Hovered::default()));
         if let Some(mut node) = world.get_mut::<Node>(row) {
             node.flex_grow = 1.0;
             node.flex_shrink = 1.0;
             node.min_width = px(0.0);
             node.overflow = Overflow::clip_x();
         }
-        let label = spawn_text(world, row, line, tokens::TEXT_PRIMARY);
+        let name = spawn_text(world, row, set.name.clone(), tokens::TEXT_PRIMARY);
+        world.entity_mut(name).insert(Node {
+            flex_grow: 1.0,
+            ..default()
+        });
+        let count = spawn_text(world, row, line, tokens::TEXT_SECONDARY);
         world
-            .entity_mut(label)
+            .entity_mut(count)
             .insert(CoverageLine { root, set: index });
-        if free(view.brush) {
-            let add = DockAction::AddBrushToSet(index);
-            spawn_icon_button(world, holder, root, Icon::Plus, "Add brush terrain", add);
+    }
+    let rename = DockAction::RenameSet(index);
+    spawn_icon_button(
+        world,
+        holder,
+        root,
+        Icon::Pencil,
+        "Rename terrain set",
+        rename,
+    );
+    let remove = DockAction::RemoveSet(index);
+    spawn_icon_button(world, holder, root, Icon::X, "Remove terrain set", remove);
+
+    let indent = |world: &mut World, row: Entity| {
+        if let Some(mut node) = world.get_mut::<Node>(row) {
+            node.margin.left = px(tokens::SPACING_LG);
         }
-        let remove = DockAction::RemoveSet(index);
-        spawn_icon_button(world, holder, root, Icon::X, "Remove terrain set", remove);
-        for &id in set.terrains.iter().rev() {
-            let Some(terrain) = tileset.terrains.iter().find(|t| t.id == id) else {
-                continue;
+    };
+    let mode = spawn_row(world, entry, tokens::SPACING_SM);
+    indent(world, mode);
+    let modes = MODES.map(|(_, word)| word.to_string()).to_vec();
+    world.spawn((
+        combobox_compact_with_selected(modes, mode_index(coverage.mode)),
+        SetModeCombo { root, set: index },
+        ChildOf(mode),
+    ));
+
+    let top = set.terrains.len().saturating_sub(1);
+    for (at, &id) in set.terrains.iter().enumerate().rev() {
+        let Some(terrain) = tileset.terrains.iter().find(|t| t.id == id) else {
+            continue;
+        };
+        let row = spawn_row(world, entry, tokens::SPACING_SM);
+        indent(world, row);
+        spawn_terrain_swatch(world, row, root, tileset, terrain);
+        let name = spawn_text(world, row, terrain.name.clone(), tokens::TEXT_SECONDARY);
+        world.entity_mut(name).insert(Node {
+            flex_grow: 1.0,
+            min_width: px(0.0),
+            ..default()
+        });
+        if let Some(line) = terrain_coverage_line(setup, index, id) {
+            let count = spawn_text(world, row, line, tokens::TEXT_SECONDARY);
+            let marker = TerrainCoverageLine {
+                root,
+                set: index,
+                terrain: id,
             };
-            let line = spawn_row(world, parent, tokens::SPACING_SM);
-            if let Some(mut node) = world.get_mut::<Node>(line) {
-                node.margin.left = px(tokens::SPACING_LG);
-            }
-            spawn_terrain_swatch(world, line, root, tileset, terrain);
-            let name = spawn_text(world, line, terrain.name.clone(), tokens::TEXT_SECONDARY);
-            world.entity_mut(name).insert(Node {
-                flex_grow: 1.0,
-                ..default()
-            });
-            let out = DockAction::RemoveFromSet(index, id);
-            spawn_icon_button(world, line, root, Icon::X, "Take out of set", out);
+            world.entity_mut(count).insert(marker);
         }
+        let moves = [
+            (
+                Icon::ChevronUp,
+                "Move up",
+                DockAction::RaiseInSet(index, id),
+                at < top,
+            ),
+            (
+                Icon::ChevronDown,
+                "Move down",
+                DockAction::LowerInSet(index, id),
+                at > 0,
+            ),
+        ];
+        for (icon, tip, action, can) in moves {
+            let button = spawn_icon_button(world, row, root, icon, tip, action);
+            if !can {
+                world
+                    .entity_mut(button)
+                    .insert((InteractionDisabled, Visibility::Hidden));
+            }
+        }
+        let out = DockAction::RemoveFromSet(index, id);
+        spawn_icon_button(world, row, root, Icon::X, "Take out of set", out);
+    }
+
+    let add = spawn_row(world, entry, tokens::SPACING_SM);
+    indent(world, add);
+    let free = view.brush != 0 && !setup.sets.iter().any(|s| s.terrains.contains(&view.brush));
+    let variant = if free {
+        ButtonVariant::Ghost
+    } else {
+        ButtonVariant::Disabled
+    };
+    let tip = Tooltip::title("Add terrain")
+        .with_description("Add the picked terrain, when it is in no set, on top of this set.");
+    world.spawn((
+        button(
+            ButtonProps::new("Add terrain")
+                .with_left_icon(Icon::Plus)
+                .with_variant(variant),
+        ),
+        tip,
+        DockControl {
+            root,
+            action: DockAction::AddBrushToSet(index),
+        },
+        ChildOf(add),
+    ));
+}
+
+/// The index in [`MODES`] of `mode`.
+fn mode_index(mode: MatchMode) -> usize {
+    match mode {
+        MatchMode::Corners => 0,
+        MatchMode::Sides => 1,
+        MatchMode::CornersAndSides => 2,
     }
 }
 
@@ -926,7 +1088,7 @@ fn spawn_detail(
         let row = spawn_row(world, parent, tokens::SPACING_SM);
         spawn_terrain_swatch(world, row, root, tileset, brush);
         let field = NameField::Rename(brush.id);
-        if view.naming == Some(field) {
+        if view.naming.as_ref() == Some(&field) {
             spawn_name_field(world, row, root, field, brush.name.clone());
         } else {
             let label = spawn_text(world, row, brush.name.clone(), tokens::TEXT_PRIMARY);
@@ -987,6 +1149,7 @@ fn spawn_new_set(world: &mut World, parent: Entity, root: Entity, view: &DockVie
     let row = spawn_row(world, parent, tokens::SPACING_SM);
     if let Some(mut node) = world.get_mut::<Node>(row) {
         node.margin.top = px(tokens::SPACING_MD);
+        node.flex_shrink = 0.0;
     }
     let modes = MODES.map(|(_, word)| word.to_string()).to_vec();
     world.spawn((
@@ -1401,6 +1564,9 @@ fn spawn_pick(
         Button,
         DockControl { root, action },
     ));
+    if let Some(mut node) = world.get_mut::<Node>(row) {
+        node.flex_shrink = 0.0;
+    }
     row
 }
 
@@ -1517,6 +1683,35 @@ fn on_new_set_pick(
         if let Some(view) = views.0.get_mut(&path) {
             view.new_set = Some(selected);
         }
+    });
+}
+
+/// A pick of a set's mode combo changes the set's match mode.
+fn on_set_mode_pick(
+    change: On<ComboBoxChangeEvent>,
+    combos: Query<&SetModeCombo>,
+    mut commands: Commands,
+) {
+    let Ok(combo) = combos.get(change.entity).copied() else {
+        return;
+    };
+    let Some((mode, _)) = MODES.get(change.selected).copied() else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        let Some((path, tileset)) = dock_tileset(world, combo.root) else {
+            return;
+        };
+        let setup = tileset.setup().ok();
+        let Some(set) = setup.as_ref().and_then(|s| s.sets.get(combo.set)) else {
+            return;
+        };
+        if MODES[mode_index(set.mode.value)].0 == mode {
+            return;
+        }
+        let params = vec![("set", set.name.clone()), ("mode", mode.to_string())];
+        let call = Some(("tileset.terrain_set.set", params));
+        dispatch(world, combo.root, &path, &tileset, call);
     });
 }
 
@@ -1669,6 +1864,30 @@ fn act(world: &mut World, control: DockControl) {
             let params = vec![("set", set.to_string()), ("terrain", terrain.to_string())];
             Some(("tileset.terrain_set.remove_terrain", params))
         }
+        DockAction::RaiseInSet(set, terrain) | DockAction::LowerInSet(set, terrain) => {
+            let raise = matches!(control.action, DockAction::RaiseInSet(..));
+            let at = (tileset.sets().get(set))
+                .and_then(|s| s.terrains.iter().position(|t| *t == terrain));
+            let to = at.and_then(|at| {
+                if raise {
+                    at.checked_add(1)
+                } else {
+                    at.checked_sub(1)
+                }
+            });
+            to.map(|to| {
+                let params = vec![
+                    ("set", set.to_string()),
+                    ("terrain", terrain.to_string()),
+                    ("to", to.to_string()),
+                ];
+                ("tileset.terrain_set.move_terrain", params)
+            })
+        }
+        DockAction::RenameSet(set) => {
+            view.naming = set_name(&tileset, set).map(NameField::RenameSet);
+            None
+        }
         DockAction::Tile(sheet, tile) => {
             let extend = view.page == DockPage::Objects
                 && view.anchor.is_some_and(|a| a.0 == sheet)
@@ -1742,6 +1961,41 @@ fn act(world: &mut World, control: DockControl) {
         return;
     }
     dispatch(world, root, &path, &tileset, call);
+}
+
+/// Move the active and expanded set names to the new names of sets renamed
+/// in place since the last fill.
+fn follow_renames(view: &mut DockView, sets: &[TilesetTerrainSet]) {
+    if view.set_names.len() == sets.len() {
+        let renamed: Vec<(String, String)> = (view.set_names.iter().zip(sets))
+            .filter(|(old, set)| **old != set.name)
+            .map(|(old, set)| (old.clone(), set.name.clone()))
+            .collect();
+        for (from, to) in renamed {
+            if view.active.as_deref() == Some(from.as_str()) {
+                view.active = Some(to.clone());
+            }
+            if view.expanded.remove(&from) {
+                view.expanded.insert(to);
+            }
+        }
+    }
+    view.set_names = sets.iter().map(|s| s.name.clone()).collect();
+}
+
+/// Point the view of the tileset at `path` at the set renamed from `from`
+/// to `to`.
+pub(crate) fn rename_set_in_view(world: &mut World, path: &str, from: &str, to: &str) {
+    let mut views = world.resource_mut::<TilesetDockViews>();
+    let Some(view) = views.0.get_mut(path) else {
+        return;
+    };
+    if view.active.as_deref() == Some(from) {
+        view.active = Some(to.to_string());
+    }
+    if view.expanded.remove(from) {
+        view.expanded.insert(to.to_string());
+    }
 }
 
 /// The name of the set at `set`.
@@ -1923,7 +2177,7 @@ fn on_name_commit(
     else {
         return;
     };
-    let field = *field;
+    let field = field.clone();
     let cancelled = keys.just_pressed(KeyCode::Escape);
     let name = Some(commit.text.trim().to_string()).filter(|n| !cancelled && !n.is_empty());
     commands.queue(move |world: &mut World| name_terrain(world, field, name));
@@ -1935,7 +2189,7 @@ fn typed_name(world: &mut World, root: Entity) -> Option<(TerrainNameField, Stri
     let (holder, field) = (world.query::<(Entity, &TerrainNameField)>())
         .iter(world)
         .find(|(_, f)| f.root == root)
-        .map(|(e, f)| (e, *f))?;
+        .map(|(e, f)| (e, f.clone()))?;
     let mut stack = vec![holder];
     while let Some(entity) = stack.pop() {
         if let Some(text) = world.get::<bevy::text::EditableText>(entity) {
@@ -1955,7 +2209,7 @@ fn name_terrain(world: &mut World, field: TerrainNameField, name: Option<String>
     let Some(view) = views
         .0
         .get_mut(&path)
-        .filter(|v| v.naming == Some(field.field))
+        .filter(|v| v.naming.as_ref() == Some(&field.field))
     else {
         return;
     };
@@ -1970,7 +2224,11 @@ fn name_terrain(world: &mut World, field: TerrainNameField, name: Option<String>
             let params = vec![("terrain", terrain.to_string()), ("name", name)];
             Some(("tileset.terrain.rename", params))
         }
-        NameField::Rename(_) => None,
+        NameField::RenameSet(set) if set != name => {
+            let params = vec![("set", set), ("name", name)];
+            Some(("tileset.terrain_set.rename", params))
+        }
+        NameField::Rename(_) | NameField::RenameSet(_) => None,
     });
     dispatch(world, field.root, &path, &tileset, call);
 }

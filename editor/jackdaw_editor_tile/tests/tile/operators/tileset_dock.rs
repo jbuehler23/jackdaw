@@ -14,17 +14,19 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_core::asset_index::AssetIndex;
-use jackdaw_editor_tile::tileset_bits::MissingGlyph;
+use jackdaw_editor_tile::tileset_bits::{CoverageLine, MissingGlyph, TerrainCoverageLine};
 use jackdaw_editor_tile::tileset_dock::{
     BitsOverlay, CollisionCombo, DockAction, DockControl, DockPage, DockPane, DockTool, DockView,
-    NameField, Pane, SheetPicture, TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock,
-    TilesetDockInputContext, TilesetDockViews,
+    NameField, Pane, SetModeCombo, SheetPicture, TILESET_WINDOW_ID, TerrainNameField,
+    TerrainSetEntry, TerrainSetList, TerrainSwatch, TilesetDock, TilesetDockInputContext,
+    TilesetDockViews,
 };
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_panels::tree::{DockTree, Edge, TabId};
 use jackdaw_scene_types::PropertyValue;
 use jackdaw_scene_types::tilemap::{Tilemap, TilemapLayer};
+use jackdaw_tileset::TerrainMatch;
 use jackdaw_tileset::{TerrainCollision, Tileset};
 
 const SECOND: &str = "second.tileset.bsn";
@@ -636,12 +638,8 @@ fn the_missing_shapes_of_a_set_open_on_request() {
         !shown.iter().any(|t| t.trim_start().starts_with("missing ")),
         "{shown:?}"
     );
-    assert!(
-        shown
-            .iter()
-            .any(|t| t == "Terrain set 1 (Corners): 1 of 16 shapes"),
-        "{shown:?}"
-    );
+    assert!(shown.iter().any(|t| t == "Terrain set 1"), "{shown:?}");
+    assert_eq!(set_coverage(&mut app, root, 0), "1 of 16 shapes");
     assert_eq!(listed(&mut app), 0, "collapsed: {shown:?}");
     press(&mut app, root, DockAction::ToggleMissing(0));
     assert_eq!(listed(&mut app), 15);
@@ -677,10 +675,10 @@ fn name_field(app: &mut App, root: Entity) -> Option<(NameField, Entity, String)
         .query::<(Entity, &TerrainNameField)>()
         .iter(app.world())
         .filter(|(_, f)| f.root == root)
-        .map(|(e, f)| (e, f.field))
+        .map(|(e, f)| (e, f.field.clone()))
         .collect();
     assert!(fields.len() <= 1, "{fields:?}");
-    let (outer, field) = fields.first().copied()?;
+    let (outer, field) = fields.first().cloned()?;
     let mut stack = vec![outer];
     while let Some(entity) = stack.pop() {
         if let Some(editable) = app.world().get::<bevy::text::EditableText>(entity) {
@@ -842,13 +840,10 @@ fn terrains_are_listed_by_their_icon_tile_and_sets_by_their_names() {
     assert!(colour.is_some_and(|c| c.alpha() == 1.0), "{colour:?}");
 
     let shown = texts(&mut app, root);
-    assert!(
-        shown
-            .iter()
-            .any(|t| t.starts_with("Terrain set 1 (Corners):")),
-        "{shown:?}"
-    );
-    assert!(!shown.iter().any(|t| t.contains(" over ")), "{shown:?}");
+    assert!(shown.iter().any(|t| t == "Terrain set 1"), "{shown:?}");
+    for word in [" over ", "inner", "outer"] {
+        assert!(!shown.iter().any(|t| t.contains(word)), "{word}: {shown:?}");
+    }
 }
 
 /// The screen rect of `entity`, in logical pixels.
@@ -1017,7 +1012,7 @@ fn a_set_removed_by_the_operator_leaves_the_dock_on_the_set_it_had() {
     assert!(view(&app).expanded.contains("Sand"));
     let shown = texts(&mut app, root);
     assert!(
-        shown.iter().any(|t| t == "Sides: 16 shapes missing"),
+        shown.iter().any(|t| t == "Edges: 16 shapes missing"),
         "{shown:?}"
     );
     run(&mut app, "history.undo");
@@ -1238,20 +1233,25 @@ fn match_modes_and_coverage_read_as_words() {
     let (_, root) = opened(&mut app);
     let shown = texts(&mut app, root);
     assert!(
-        shown.iter().any(|t| t == "Corners and sides"),
+        shown.iter().any(|t| t == "Match corners and edges"),
         "the default mode pick: {shown:?}"
     );
     assert!(
-        shown
-            .iter()
-            .any(|t| t == "Terrain set 1 (Corners): 1 of 16 shapes"),
-        "{shown:?}"
+        shown.iter().any(|t| t == "Match corners"),
+        "the set's mode: {shown:?}"
     );
+    assert_eq!(set_coverage(&mut app, root, 0), "1 of 16 shapes");
     assert!(
         shown.iter().any(|t| t == "Corners: 15 shapes missing"),
         "{shown:?}"
     );
-    for raw in ["corners_and_sides", "CornersAndSides", "1/16", "TERRAINS"] {
+    for raw in [
+        "corners_and_sides",
+        "CornersAndSides",
+        "1/16",
+        "TERRAINS",
+        "Sides",
+    ] {
         assert!(!shown.iter().any(|t| t.contains(raw)), "{raw}: {shown:?}");
     }
 }
@@ -1357,4 +1357,206 @@ fn the_object_hint_names_the_sheet_of_a_tileset_with_several() {
         shown.iter().any(|t| t == "Sheet 2, tiles 0 to 1"),
         "{shown:?}"
     );
+}
+
+/// The text of the one entity carrying a `C` that `pick` takes.
+fn marked_text<C: Component>(app: &mut App, pick: impl Fn(&C) -> bool) -> String {
+    let found: Vec<String> = app
+        .world_mut()
+        .query::<(&C, &Text)>()
+        .iter(app.world())
+        .filter(|(c, _)| pick(c))
+        .map(|(_, t)| t.0.clone())
+        .collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    found[0].clone()
+}
+
+/// The coverage the dock under `root` shows for the set at `set`.
+pub(crate) fn set_coverage(app: &mut App, root: Entity, set: usize) -> String {
+    marked_text::<CoverageLine>(app, |l| l.root == root && l.set == set)
+}
+
+fn terrain_coverage(app: &mut App, root: Entity, set: usize, terrain: u8) -> String {
+    marked_text::<TerrainCoverageLine>(app, |l| {
+        l.root == root && l.set == set && l.terrain == terrain
+    })
+}
+
+#[test]
+fn a_set_is_renamed_inline_and_keeps_its_view_state() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    press(&mut app, root, DockAction::ActiveSet(0));
+    press(&mut app, root, DockAction::ToggleMissing(0));
+    press(&mut app, root, DockAction::RenameSet(0));
+    let (field, entity, prefill) = name_field(&mut app, root).expect("the field opens");
+    assert_eq!(
+        (field, prefill.as_str()),
+        (
+            NameField::RenameSet("Terrain set 1".into()),
+            "Terrain set 1"
+        )
+    );
+    assert_eq!(focused(&app), Some(entity), "it has the keyboard");
+    let count = entries(&app);
+    input(&mut app, "input.text text=Lowlands");
+    input(&mut app, "input.key key=Enter");
+    assert_eq!(on_disk(&dir).terrain_sets[0].name, "Lowlands");
+    assert_eq!(entries(&app), count + 1, "one undo entry");
+    assert_eq!(name_field(&mut app, root), None);
+    assert_eq!(view(&app).active.as_deref(), Some("Lowlands"));
+    assert!(view(&app).expanded.contains("Lowlands"));
+    assert!(!view(&app).expanded.contains("Terrain set 1"));
+    assert!(texts(&mut app, root).iter().any(|t| t == "Lowlands"));
+
+    call(
+        &mut app,
+        "tileset.terrain_set.rename",
+        &[("set", "Lowlands"), ("name", "Coast")],
+    );
+    settle(&mut app);
+    assert_eq!(
+        view(&app).active.as_deref(),
+        Some("Coast"),
+        "a rename by the operator follows too"
+    );
+
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).terrain_sets[0].name, "Lowlands");
+    assert_eq!(
+        view(&app).active.as_deref(),
+        Some("Lowlands"),
+        "undo follows"
+    );
+    assert!(view(&app).expanded.contains("Lowlands"));
+    run(&mut app, "history.redo");
+    settle(&mut app);
+    assert_eq!(view(&app).active.as_deref(), Some("Coast"), "redo follows");
+    assert!(view(&app).expanded.contains("Coast"));
+}
+
+#[test]
+fn a_sets_mode_combo_changes_its_match_mode() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let combos: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &SetModeCombo)>()
+        .iter(app.world())
+        .filter(|(_, c)| c.root == root && c.set == 0)
+        .map(|(e, _)| e)
+        .collect();
+    assert_eq!(combos.len(), 1, "one mode combo per set");
+    let count = entries(&app);
+    app.world_mut().trigger(ComboBoxChangeEvent {
+        entity: combos[0],
+        selected: 1,
+        label: String::new(),
+        value: None,
+    });
+    settle(&mut app);
+    let set = &on_disk(&dir).terrain_sets[0];
+    assert_eq!(set.mode, TerrainMatch::Sides);
+    assert!(set.mode_by_user, "a mode picked by the user");
+    assert_eq!(entries(&app), count + 1);
+    assert!(texts(&mut app, root).iter().any(|t| t == "Match edges"));
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).terrain_sets[0].mode, TerrainMatch::Corners);
+}
+
+#[test]
+fn a_terrain_moves_up_and_down_its_set() {
+    let (mut app, dir) = handmade();
+    let (_, root) = opened(&mut app);
+    let raise_top = control(&mut app, root, DockAction::RaiseInSet(0, WATER));
+    assert!(disabled(&app, raise_top), "water is on top");
+    let lower_bottom = control(&mut app, root, DockAction::LowerInSet(0, GRASS));
+    assert!(disabled(&app, lower_bottom), "grass is at the bottom");
+    assert_eq!(terrain_coverage(&mut app, root, 0, WATER), "1 of 16");
+    assert_eq!(terrain_coverage(&mut app, root, 0, GRASS), "1 of 16");
+
+    let count = entries(&app);
+    press(&mut app, root, DockAction::LowerInSet(0, WATER));
+    assert_eq!(on_disk(&dir).terrain_sets[0].terrains, [WATER, GRASS]);
+    assert_eq!(entries(&app), count + 1);
+    let raise = control(&mut app, root, DockAction::RaiseInSet(0, WATER));
+    assert!(!disabled(&app, raise));
+    press(&mut app, root, DockAction::RaiseInSet(0, WATER));
+    assert_eq!(on_disk(&dir).terrain_sets[0].terrains, [GRASS, WATER]);
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).terrain_sets[0].terrains, [WATER, GRASS]);
+}
+
+#[test]
+fn every_terrain_set_is_listed_at_its_full_height() {
+    let (mut app, _dir) = handmade();
+    for (name, set, mode) in [
+        ("sand", "Beach", "sides"),
+        ("dirt", "Paths", "corners_and_sides"),
+    ] {
+        call(&mut app, "tileset.terrain.add", &[("name", name)]);
+        call(
+            &mut app,
+            "tileset.terrain_set.add",
+            &[("name", set), ("mode", mode)],
+        );
+        let join = [("set", set), ("terrain", name)];
+        call(&mut app, "tileset.terrain_set.add_terrain", &join);
+    }
+    settle(&mut app);
+    let (_, root) = opened(&mut app);
+    set_width(&mut app, 954);
+
+    let lists: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &TerrainSetList)>()
+        .iter(app.world())
+        .filter(|(_, l)| l.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    assert_eq!(lists.len(), 1);
+    let node = app.world().get::<Node>(lists[0]).expect("a node").clone();
+    assert_eq!(node.height, Val::Auto, "no fixed height");
+    assert_eq!(node.max_height, Val::Auto);
+    assert_eq!(node.flex_shrink, 0.0, "it keeps its natural height");
+    assert_eq!(node.overflow, Overflow::visible(), "it clips nothing");
+
+    let mut entries: Vec<(usize, Entity)> = app
+        .world_mut()
+        .query::<(Entity, &TerrainSetEntry)>()
+        .iter(app.world())
+        .filter(|(_, e)| e.root == root)
+        .map(|(e, s)| (s.set, e))
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    let shown = texts(&mut app, root);
+    for name in ["Terrain set 1", "Beach", "Paths"] {
+        assert!(shown.iter().any(|t| t == name), "{name}: {shown:?}");
+    }
+    let row = 16.0;
+    let mut bottom = f32::MIN;
+    for (set, entity) in entries {
+        assert_eq!(
+            app.world().get::<Node>(entity).map(|n| n.flex_shrink),
+            Some(0.0)
+        );
+        let rect = screen_rect(&app, entity);
+        assert!(
+            rect.height() >= 3.0 * row,
+            "set {set} shows its name, mode and Add terrain: {rect:?}"
+        );
+        assert!(
+            rect.min.y >= bottom - 0.5,
+            "set {set} overlaps the one above"
+        );
+        bottom = rect.max.y;
+    }
 }

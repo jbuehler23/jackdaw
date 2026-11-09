@@ -2,7 +2,7 @@
 //! tiles, the coverage of each set and its missing shapes.
 
 use crate::operators::tileset_dock::{
-    control, handmade, input, opened, press, screen_rect, settle, texts, view,
+    control, handmade, input, opened, press, screen_rect, set_coverage, settle, texts, view,
 };
 use crate::operators::tileset_edit_ops::{call, entries, on_disk, peers_of, refused, run};
 use crate::operators::tileset_ops::warnings;
@@ -76,9 +76,7 @@ fn root_nodes(app: &mut App) -> usize {
 }
 
 fn coverage(app: &mut App, root: Entity) -> String {
-    (texts(app, root).into_iter())
-        .find(|t| t.starts_with("Terrain set 1 (Corners):"))
-        .unwrap_or_default()
+    set_coverage(app, root, 0)
 }
 
 #[test]
@@ -203,10 +201,7 @@ fn a_brush_no_set_holds_paints_nothing_and_says_why() {
 fn the_coverage_line_follows_the_stroke_as_it_paints() {
     let (mut app, _dir) = handmade();
     let root = painting(&mut app);
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 1 of 16 shapes"
-    );
+    assert_eq!(coverage(&mut app, root), "1 of 16 shapes");
     call(
         &mut app,
         "tileset.tile.set_bits",
@@ -226,17 +221,14 @@ fn the_coverage_line_follows_the_stroke_as_it_paints() {
     );
     assert_eq!(
         coverage(&mut app, root),
-        "Terrain set 1 (Corners): 2 of 16 shapes",
+        "2 of 16 shapes",
         "live, before the stroke ends"
     );
     input(
         &mut app,
         &format!("input.pointer x={} y={} action=release", to.x, to.y),
     );
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 2 of 16 shapes"
-    );
+    assert_eq!(coverage(&mut app, root), "2 of 16 shapes");
 }
 
 #[test]
@@ -478,12 +470,9 @@ fn the_new_set_control_adds_a_set_that_becomes_active() {
     press(&mut app, root, DockAction::AddBrushToSet(1));
     assert_eq!(on_disk(&dir).terrain_sets[1].terrains, [SAND]);
     let texts = texts(&mut app, root);
-    assert!(
-        texts
-            .iter()
-            .any(|t| t == "Terrain set 2 (Sides): 0 of 16 shapes"),
-        "{texts:?}"
-    );
+    assert!(texts.iter().any(|t| t == "Terrain set 2"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Match edges"), "{texts:?}");
+    assert_eq!(set_coverage(&mut app, root, 1), "0 of 16 shapes");
     press(&mut app, root, DockAction::RemoveFromSet(1, SAND));
     assert!(on_disk(&dir).terrain_sets[1].terrains.is_empty());
 }
@@ -568,10 +557,7 @@ fn the_overlay_marks_only_tiles_the_coverage_counts() {
         BTreeSet::from([0]),
         "a tile mixing terrains of two sets is neither's, for the solver and the coverage"
     );
-    assert_eq!(
-        coverage(&mut app, root),
-        "Terrain set 1 (Corners): 1 of 16 shapes"
-    );
+    assert_eq!(coverage(&mut app, root), "1 of 16 shapes");
 }
 
 fn summary(app: &mut App, root: Entity) -> String {

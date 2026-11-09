@@ -97,6 +97,14 @@ pub struct CoverageLine {
     pub set: usize,
 }
 
+/// The coverage of terrain `terrain` within the terrain set at index `set`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TerrainCoverageLine {
+    pub root: Entity,
+    pub set: usize,
+    pub terrain: TerrainId,
+}
+
 /// The missing shape summary of the active terrain set at index `set`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct CoverageSummary {
@@ -316,13 +324,19 @@ fn step<T: Copy + PartialEq>(
 /// The coverage line of the terrain set at index `set` and its coverage.
 pub(crate) fn coverage_line(setup: &TilesetSetup, set: usize) -> Option<(String, Coverage)> {
     let coverage = setup.coverage(set).ok()?;
-    let name = &setup.sets.get(set)?.name;
-    let mode = mode_word(coverage.mode);
-    let line = format!(
-        "{name} ({mode}): {} of {} shapes",
-        coverage.covered, coverage.total
-    );
+    let line = format!("{} of {} shapes", coverage.covered, coverage.total);
     Some((line, coverage))
+}
+
+/// How many shapes of the transitions of terrain `terrain` in the set at
+/// `set` have tiles.
+pub(crate) fn terrain_coverage_line(
+    setup: &TilesetSetup,
+    set: usize,
+    terrain: TerrainId,
+) -> Option<String> {
+    let coverage = setup.terrain_coverage(set, terrain).ok()?;
+    Some(format!("{} of {}", coverage.covered, coverage.total))
 }
 
 /// How many shapes of its layout a set misses, with its mode.
@@ -353,8 +367,8 @@ pub(crate) fn spawn_missing(
 pub(crate) fn mode_word(mode: MatchMode) -> &'static str {
     match mode {
         MatchMode::Corners => "Corners",
-        MatchMode::Sides => "Sides",
-        MatchMode::CornersAndSides => "Corners and sides",
+        MatchMode::Sides => "Edges",
+        MatchMode::CornersAndSides => "Corners and edges",
     }
 }
 
@@ -683,6 +697,14 @@ fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Pe
     };
     let set = stroke.set;
     retext::<CoverageLine>(world, |l| l.root == root && l.set == set, &text);
+    let terrains = (stroke.setup.sets.get(set)).map_or_else(Vec::new, |s| s.terrains.clone());
+    for terrain in terrains {
+        if let Some(line) = terrain_coverage_line(&stroke.setup, set, terrain) {
+            let pick =
+                |l: &TerrainCoverageLine| l.root == root && l.set == set && l.terrain == terrain;
+            retext::<TerrainCoverageLine>(world, pick, &line);
+        }
+    }
     let summary = summary_line(&coverage);
     retext::<CoverageSummary>(world, |l| l.root == root && l.set == set, &summary);
     let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())

@@ -834,25 +834,43 @@ pub fn tileset_terrain_set_rename(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let (set, name) = (text(&params, "set"), text(&params, "name"));
-    queue_edit(
-        &mut commands,
-        "tileset.terrain_set.rename",
+    let (set, name, path) = (
+        text(&params, "set"),
+        text(&params, "name"),
         text(&params, "path"),
-        move |_, tileset| {
+    );
+    const OP: &str = "tileset.terrain_set.rename";
+    commands.queue(move |world: &mut World| {
+        let mut renamed = None;
+        let edited = apply_edit(world, OP, &path, |_, tileset| {
             with_setup(tileset, |tileset, setup| {
                 let index = terrain_set(tileset, &set)?;
                 let name = set_name_allowed(&name)?;
                 if name.is_empty() {
                     return Err("a terrain set needs a name".to_string());
                 }
+                let from = (setup.sets.get(index)).map_or_else(String::new, |s| s.name.clone());
                 setup
                     .rename_set(index, &name)
                     .map_err(|e| setup.explain(e))?;
+                renamed = Some((from, name.clone()));
                 Ok(format!("terrain set {index} is now \"{name}\""))
             })
-        },
-    )
+        });
+        match edited {
+            Ok(message) => {
+                if let Some((from, to)) = renamed
+                    && let Ok((file, _)) = open_tileset(world, &path)
+                {
+                    let file = file.to_string_lossy().into_owned();
+                    crate::tileset_dock::rename_set_in_view(world, &file, &from, &to);
+                }
+                report_to_caller(world, message);
+            }
+            Err(err) => warn_caller(world, format!("{OP}: {err}")),
+        }
+    });
+    OperatorResult::Finished
 }
 
 /// Put a terrain in a terrain set.

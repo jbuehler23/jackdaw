@@ -620,3 +620,89 @@ fn pair_sets_of_two_modes_sharing_terrains_paint_as_they_did() {
         );
     }
 }
+
+/// `tileset` written as `.tileset.bsn` text, the way the editor saves it.
+fn saved_text(tileset: &Tileset) -> String {
+    use bevy::asset::{Assets, ReflectAsset};
+    use bevy::ecs::reflect::AppTypeRegistry;
+    use bevy::ecs::world::World;
+    use bevy::reflect::TypePath;
+
+    let registry = AppTypeRegistry::default();
+    {
+        let mut registry = registry.write();
+        registry.register::<Tileset>();
+        registry.register_type_data::<Tileset, ReflectAsset>();
+    }
+    let mut assets = Assets::<Tileset>::default();
+    let handle = assets.add(tileset.clone());
+    let mut world = World::new();
+    world.insert_resource(registry);
+    world.insert_resource(assets);
+    let body = jackdaw_bsn::serialize_assets_to_bsn(
+        &world,
+        &[jackdaw_bsn::CatalogAssetRef {
+            name: "ground".into(),
+            type_id: std::any::TypeId::of::<Tileset>(),
+            asset_id: handle.id().untyped(),
+        }],
+    );
+    assert!(!body.trim().is_empty(), "the tileset emits");
+    jackdaw_bsn::with_asset_header(Tileset::type_path(), &body)
+}
+
+#[test]
+fn named_sets_saved_and_read_back_keep_their_names_modes_and_terrain_order() {
+    const SAND: TerrainId = 4;
+    let mut tileset = three_terrains(vec![
+        TilesetTerrainSet {
+            name: "Low ground".into(),
+            mode: TerrainMatch::Corners,
+            terrains: vec![WATER, GRASS, DIRT],
+            mode_by_user: true,
+            ..Default::default()
+        },
+        TilesetTerrainSet {
+            name: "Beach".into(),
+            mode: TerrainMatch::Sides,
+            terrains: vec![SAND],
+            locked_manual: true,
+            ..Default::default()
+        },
+    ]);
+    tileset.terrains.push(TilesetTerrain {
+        id: SAND,
+        name: "sand".into(),
+        ..Default::default()
+    });
+    let text = saved_text(&tileset);
+    let path = std::path::Path::new("ground.tileset.bsn");
+    let loaded: Tileset = jackdaw_bsn::read_asset_text(&text, path).expect("the saved file reads");
+    let read = |t: &Tileset| -> Vec<(String, TerrainMatch, Vec<TerrainId>, bool, bool)> {
+        (t.sets().iter().cloned())
+            .map(|s| (s.name, s.mode, s.terrains, s.mode_by_user, s.locked_manual))
+            .collect()
+    };
+    assert_eq!(read(&loaded), read(&tileset), "{text}");
+    assert_eq!(
+        read(&loaded),
+        [
+            (
+                "Low ground".to_string(),
+                TerrainMatch::Corners,
+                vec![WATER, GRASS, DIRT],
+                true,
+                false
+            ),
+            (
+                "Beach".to_string(),
+                TerrainMatch::Sides,
+                vec![SAND],
+                false,
+                true
+            ),
+        ]
+    );
+    assert!(!loaded.terrain_sets.iter().any(TilesetTerrainSet::is_pair));
+    assert_eq!(loaded.terrain_sets, tileset.terrain_sets);
+}
