@@ -179,6 +179,12 @@ impl PrefabAstCache {
         self.changes.clear();
     }
 
+    /// Take every change to `path` as answered.
+    pub fn answer_changes_of(&mut self, path: &Path) {
+        let key = canonical_prefab_path(path);
+        self.changes.retain(|(_, changed)| *changed != key);
+    }
+
     /// Take the changes past `epoch` as answered, leaving any from before it
     /// still to answer: a load that read those prefabs has already used them.
     pub fn answer_changes_after(&mut self, epoch: u64) {

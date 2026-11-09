@@ -1113,6 +1113,37 @@ fn a_discarded_prefab_the_scene_does_not_reach_respawns_nothing() {
     assert_eq!(x_of(&mut game, "Placed"), 3.0);
 }
 
+/// A discarded prefab the scene draws from respawns only its instances: every
+/// other entity, and the selection, stays.
+#[test]
+fn a_discarded_prefab_the_scene_uses_respawns_only_its_instances() {
+    let scene = roots(&[
+        "#Beacon\nbevy_transform::components::transform::Transform\n".to_string(),
+        instance_of("door.bsn"),
+    ]);
+    let (mut app, _tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    let beacon = select_named(&mut app, "Beacon");
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+    app.update();
+
+    assert_eq!(editor_x(&mut app, "Placed"), 1.0);
+    assert!(
+        app.world().get_entity(beacon).is_ok(),
+        "the scene kept its other entities"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::selection::Selection>()
+            .entities,
+        vec![beacon],
+        "the selection stays"
+    );
+}
+
 /// A discarded prefab the scene reaches only through another prefab still goes
 /// back to the file in the scene in front.
 #[test]
