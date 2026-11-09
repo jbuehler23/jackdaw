@@ -35,6 +35,9 @@ use serde_json::{Value, json};
 /// than a session that never answers.
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Longest a wait on Play may take, since pressing play builds the game first.
+const PLAY_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// The resource URI for the operator catalogue.
 const OPERATORS_URI: &str = "jackdaw://operators";
 /// The resource URI for the open scene as BSN.
@@ -120,7 +123,14 @@ impl JackdawMcp {
             .json(&request)
             .send()
             .await
-            .map_err(|err| ErrorData::internal_error(format!("{method}: {err}"), None))?;
+            .map_err(|err| {
+                let message = if err.is_timeout() {
+                    format!("{method}: no answer within {}s", timeout.as_secs())
+                } else {
+                    format!("{method}: {err}")
+                };
+                ErrorData::internal_error(message, None)
+            })?;
         let body: Value = response
             .json()
             .await
@@ -134,6 +144,16 @@ impl JackdawMcp {
     /// A BRP call whose JSON result is the tool's whole answer.
     async fn brp_text(&self, method: &str, params: Value) -> Result<CallToolResult, ErrorData> {
         let result = self.brp(method, params).await?;
+        Ok(json_result(&result))
+    }
+
+    /// Ask the running game through one of the editor's game methods, which
+    /// answer once the game replies, giving up after [`GAME_QUERY_TIMEOUT`].
+    async fn ask_game(&self, method: &str, params: Value) -> Result<CallToolResult, ErrorData> {
+        let result = self
+            .brp_answer_within(method, params, GAME_QUERY_TIMEOUT)
+            .await?
+            .map_err(|error| brp_error(method, &error))?;
         Ok(json_result(&result))
     }
 
@@ -733,13 +753,77 @@ pub struct AssetsArgs {
     pub details: Option<bool>,
 }
 
+/// Arguments for `game_entity`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GameEntityArgs {
+    /// One entity of the game, by the `entity` id the game answers with.
+    #[serde(default)]
+    pub entity: Option<u64>,
+    /// Every game entity spawned from this scene node, by the `node` id
+    /// `scene_tree` reports.
+    #[serde(default)]
+    pub node: Option<u64>,
+}
+
+impl GameEntityArgs {
+    /// The `jackdaw/game_entity` parameters for these arguments.
+    fn brp_params(&self, request: String) -> Value {
+        compact(json!({ "entity": self.entity, "node": self.node, "request": request }))
+    }
+}
+
+/// Arguments for `game_query`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GameQueryArgs {
+    /// A component type path the entities must hold, e.g.
+    /// `bevy_transform::components::transform::Transform`. Its value is
+    /// reported for each entity.
+    #[serde(default)]
+    pub with: Option<String>,
+    /// Text the entity's name must contain.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl GameQueryArgs {
+    /// The `jackdaw/game_query` parameters for these arguments.
+    fn brp_params(&self, request: String) -> Value {
+        compact(json!({ "with": self.with, "name": self.name, "request": request }))
+    }
+}
+
+/// Arguments for `game_output`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GameOutputArgs {
+    /// The instance to read: a name as the Game panel shows it (`Client 2`),
+    /// a run configuration's name, or `{config, instance}` as `status` lists
+    /// them. The one the Game Output window shows when omitted.
+    #[serde(default)]
+    pub instance: Option<Value>,
+    /// Answer with the lines from this sequence number on. Pass the last
+    /// answer's `next` to read only what was printed since.
+    #[serde(default)]
+    pub since: Option<u64>,
+    /// Most lines to answer with. 200 when omitted.
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+/// Longest a question to the running game may wait for its answer.
+const GAME_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 // --- Tools ---
 
 #[tool_router(router = tool_router)]
 impl JackdawMcp {
-    /// What the editor has open and what is selected.
+    /// What the editor has open, what is selected and what Play is doing.
     #[tool(
-        description = "What the Jackdaw editor has open: project, scene, dirty flag, selection."
+        description = "What the Jackdaw editor has open: project, scene, dirty flag, selection, \
+                       any modal, dialog or picker holding it, `pie` (what Play is doing: \
+                       `building`, `running`, `paused`, `failed` or `stopped`) and `instances` \
+                       (each launched game as `{config, instance, stage, focused}`, where \
+                       `stage` is `building`, `connecting` or `connected` and the focused one \
+                       is the game the `game_*` tools ask)."
     )]
     pub async fn status(&self) -> Result<CallToolResult, ErrorData> {
         self.brp_text("jackdaw/status", json!({})).await
@@ -910,8 +994,9 @@ impl JackdawMcp {
 
     /// The scene as the outliner shows it.
     #[tool(
-        description = "The open scene's entity tree: ids, names, component type paths. Large; \
-                       use `scene_summary` and `check` to verify edits."
+        description = "The open scene's entity tree in outliner order: entity ids, `node` ids \
+                       (which `game_entity` takes), names, component type paths. Large; use \
+                       `scene_summary` and `check` to verify edits."
     )]
     pub async fn scene_tree(
         &self,
@@ -1150,7 +1235,8 @@ impl JackdawMcp {
         description = "Let frames pass, or hold until the editor reaches a state: `idle` (no \
                        bake, build, modal tool or synthetic input still running), `pie_running` \
                        or `pie_stopped`. Use after opening a scene, starting a bake, sending \
-                       input or pressing play, before reading or capturing."
+                       input or pressing play, before reading or capturing. A Play wait holds \
+                       while the game builds, up to ten minutes."
     )]
     pub async fn wait(
         &self,
@@ -1160,6 +1246,10 @@ impl JackdawMcp {
             .until
             .clone()
             .or_else(|| args.until_idle.unwrap_or(false).then(|| "idle".to_string()));
+        let timeout = match until.as_deref() {
+            Some("pie_running" | "pie_stopped") => PLAY_WAIT_TIMEOUT,
+            _ => CALL_TIMEOUT,
+        };
         let params = match until {
             Some(until) => json!({ "until": until }),
             None => json!({
@@ -1167,7 +1257,11 @@ impl JackdawMcp {
                 "request": self.next_request_id(),
             }),
         };
-        self.brp_text("jackdaw/wait", params).await
+        let result = self
+            .brp_answer_within("jackdaw/wait", params, timeout)
+            .await?
+            .map_err(|error| brp_error("jackdaw/wait", &error))?;
+        Ok(json_result(&result))
     }
 
     /// What is in the project's assets directory.
@@ -1183,6 +1277,82 @@ impl JackdawMcp {
         self.brp_text(
             "jackdaw/assets",
             compact(json!({ "glob": args.glob, "details": args.details })),
+        )
+        .await
+    }
+
+    /// What the running game spawned that no scene node did.
+    #[tool(
+        description = "The running game's entities that no scene node spawned (what its own \
+                       systems added), each with its name, parent and `entity` id, plus the \
+                       authored entities they sit under. Asks the focused game and waits for \
+                       its answer; refused when no game is running."
+    )]
+    pub async fn game_entities(&self) -> Result<CallToolResult, ErrorData> {
+        self.ask_game(
+            "jackdaw/game_entities",
+            json!({ "request": self.next_request_id() }),
+        )
+        .await
+    }
+
+    /// One entity of the running game in full.
+    #[tool(
+        description = "Entities of the running game with every component value, as the game \
+                       holds them now: one by its game `entity` id, or every entity spawned \
+                       from a scene node by its `node` id from `scene_tree`. Components the \
+                       game cannot serialize are listed by name under `opaque`."
+    )]
+    pub async fn game_entity(
+        &self,
+        Parameters(args): Parameters<GameEntityArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if args.entity.is_none() && args.node.is_none() {
+            return Err(ErrorData::invalid_params("pass `entity` or `node`", None));
+        }
+        self.ask_game(
+            "jackdaw/game_entity",
+            args.brp_params(self.next_request_id()),
+        )
+        .await
+    }
+
+    /// Find entities in the running game.
+    #[tool(
+        description = "The running game's entities holding the component `with` (a type path) \
+                       and whose name contains `name`, each with the value of `with`. Either \
+                       may be left out. Use it to read game state, e.g. where a player is now."
+    )]
+    pub async fn game_query(
+        &self,
+        Parameters(args): Parameters<GameQueryArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.ask_game(
+            "jackdaw/game_query",
+            args.brp_params(self.next_request_id()),
+        )
+        .await
+    }
+
+    /// What a game printed.
+    #[tool(
+        description = "What a game instance printed to stdout and stderr, kept after it stops: \
+                       the last lines up to `limit`, or those from `since` on. Each line has a \
+                       `seq`; pass the answer's `next` as `since` to read only new lines. \
+                       `instances` names every instance with output and `running` says whether \
+                       this one still is."
+    )]
+    pub async fn game_output(
+        &self,
+        Parameters(args): Parameters<GameOutputArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.brp_text(
+            "jackdaw/game_output",
+            compact(json!({
+                "instance": args.instance,
+                "since": args.since,
+                "limit": args.limit,
+            })),
         )
         .await
     }
@@ -1219,7 +1389,14 @@ impl ServerHandler for JackdawMcp {
              user's camera. Take a `screenshot` only for what the user's viewport shows. `get_entity` \
              reads one node in full and `save_scene` writes the open scene back to its file. \
              Operators reach the disk too, through the same saves, exports and bakes the menus \
-             run."
+             run. To play the game, `call_operator` with `pie.play` (it builds the project's \
+             game and runs it as its own process), then `wait` with `until: \"pie_running\"`; \
+             `pie.pause`, `pie.step`, `pie.restart` and `pie.stop` control it and `status` \
+             reports `pie` and the game `instances`. The game plays the open scene, and edits \
+             made while it runs, through operators, batches or `apply_bsn`, reach it as they \
+             land. Read the running game with `game_query`, `game_entity` (a scene node's \
+             game entities by the `node` id `scene_tree` reports) and `game_entities` (what \
+             the game spawned itself), and what it printed with `game_output`."
                 .to_string(),
         );
         info
@@ -1607,5 +1784,39 @@ mod tests {
         let views = text.find("`views`").expect("names views");
         let screenshot = text.find("`screenshot`").expect("names screenshot");
         assert!(views < screenshot, "{text}");
+    }
+
+    #[test]
+    fn the_instructions_say_how_to_play_and_read_the_game() {
+        let text = JackdawMcp::new(".")
+            .get_info()
+            .instructions
+            .expect("instructions");
+        for wanted in [
+            "`pie.play`",
+            "`pie.stop`",
+            "pie_running",
+            "`game_query`",
+            "`game_entity`",
+            "`game_entities`",
+            "`game_output`",
+        ] {
+            assert!(text.contains(wanted), "no {wanted}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_game_question_carries_its_request_and_drops_what_was_omitted() {
+        let args: GameEntityArgs = serde_json::from_value(json!({ "node": 7 })).expect("parses");
+        assert_eq!(
+            args.brp_params("r".to_string()),
+            json!({ "node": 7, "request": "r" })
+        );
+        let args: GameQueryArgs =
+            serde_json::from_value(json!({ "with": "game::Player" })).expect("parses");
+        assert_eq!(
+            args.brp_params("r".to_string()),
+            json!({ "with": "game::Player", "request": "r" })
+        );
     }
 }

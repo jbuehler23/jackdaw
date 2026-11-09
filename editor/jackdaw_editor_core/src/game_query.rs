@@ -158,8 +158,16 @@ impl GameQueries {
 /// Send `query` to the focused game, returning the request its answer comes
 /// back under, or an error with no game running.
 pub fn ask_game(world: &mut World, query: GameQuery) -> Result<u64, String> {
-    let key = focused_live_instance(world)
-        .ok_or_else(|| "no game is running; start one with the pie.play operator".to_string())?;
+    let key = focused_live_instance(world).ok_or_else(|| {
+        let launching = world
+            .get_non_send::<crate::pie::PieSession>()
+            .is_some_and(|session| !session.instance_stages().is_empty());
+        if launching {
+            "the game is still building or connecting; wait with until: pie_running".to_string()
+        } else {
+            "no game is running; start one with the pie.play operator".to_string()
+        }
+    })?;
     let mut queries = world.get_resource_or_init::<GameQueries>();
     queries.next_request += 1;
     let request = queries.next_request;

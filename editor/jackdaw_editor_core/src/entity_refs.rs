@@ -561,11 +561,10 @@ fn in_outliner_order(world: &mut World, found: EntityHashSet) -> Vec<Entity> {
     found
 }
 
-/// Each scene node's place in the outliner: top-level nodes by id, then each
-/// node's children in their order, depth first.
+/// Each scene node's place in the outliner: top-level nodes in document
+/// order, then each node's children in their order, depth first.
 fn outliner_order(world: &mut World) -> EntityHashMap<usize> {
-    let mut roots = crate::operator_calls::scene_roots(world);
-    roots.sort();
+    let roots = crate::operator_calls::scene_roots(world);
     let mut order = EntityHashMap::default();
     let mut stack: Vec<Entity> = roots.into_iter().rev().collect();
     while let Some(entity) = stack.pop() {

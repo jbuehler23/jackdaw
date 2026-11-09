@@ -1148,14 +1148,30 @@ pub fn is_scene_node(world: &World, entity: Entity) -> bool {
             .is_some()
 }
 
-/// The scene nodes at the top of the hierarchy, in query order.
+/// The scene nodes at the top of the hierarchy, in the document's order as the
+/// outliner lists them, then any the document does not hold, by id.
 pub fn scene_roots(world: &mut World) -> Vec<Entity> {
     let mut query = world.query_filtered::<Entity, Without<ChildOf>>();
-    let roots: Vec<Entity> = query.iter(world).collect();
-    roots
-        .into_iter()
+    let mut rest: Vec<Entity> = query
+        .iter(world)
         .filter(|entity| is_scene_node(world, *entity))
-        .collect()
+        .collect();
+    rest.sort();
+    let mut roots: Vec<Entity> = world
+        .get_resource::<jackdaw_bsn::SceneBsnAst>()
+        .map(|ast| {
+            ast.roots
+                .iter()
+                .filter_map(|&node| ast.ecs_for_ast(node))
+                .collect()
+        })
+        .unwrap_or_default();
+    roots.retain(|entity| rest.binary_search(entity).is_ok());
+    let mut seen = EntityHashSet::default();
+    roots.retain(|entity| seen.insert(*entity));
+    rest.retain(|entity| !seen.contains(entity));
+    roots.extend(rest);
+    roots
 }
 
 /// Whether a node under a scene node belongs in the tree. A UI node carries
