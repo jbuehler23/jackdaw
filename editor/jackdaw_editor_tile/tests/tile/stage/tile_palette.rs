@@ -466,9 +466,8 @@ fn a_corner_set_terrain_shows_its_corner_tile() {
     let corner_only: Vec<u8> = (set.terrains.iter())
         .map(|t| t.id)
         .filter(|&id| {
-            let sets: Vec<_> = (set.terrain_sets.iter())
-                .filter(|s| s.inner == id || s.outer == id)
-                .collect();
+            let all = set.sets();
+            let sets: Vec<_> = (all.iter()).filter(|s| s.terrains.contains(&id)).collect();
             !sets.is_empty() && sets.iter().all(|s| s.mode == TerrainMatch::Corners)
         })
         .filter(|&id| {

@@ -15,10 +15,12 @@
 //!   proposal; values out of scope are kept. Collision modes are the setup's
 //!   (new terrains start Passable). A tile merges peer by peer; a tile left
 //!   with no terrain, no shape and nothing User is unassigned.
-//! - Sets: a set holds the transition tiles between its two terrains, and the
-//!   pure tiles of one of them when no other set uses it. Locked sets and the
-//!   tiles they hold are never changed by a re-run. A set the fresh run lacks
-//!   stays while a kept tile is one of its transitions.
+//! - Sets: a set holds the transition tiles among its terrains, and the pure
+//!   tiles of one of them when no other set uses it. Auto setup proposes
+//!   transition pairs; pairs of one mode that share a terrain form one set.
+//!   Locked sets, sets with a User mode and the tiles they hold are never
+//!   changed by a re-run. A set the fresh run lacks stays while a kept tile
+//!   is one of its transitions, and a set rebuilt by a re-run keeps its name.
 //! - Shapes: each Auto shape in scope is traced from the tile's merged peers
 //!   with the setup's colours and Solid terrains.
 //! - Stamps: User stamps stay; Auto stamps in scope give way to fresh ones,
@@ -37,8 +39,9 @@ use crate::{
     TileShape, TileTerrains,
 };
 
-/// Inner and outer terrain of a set.
-type Pair = (TerrainId, TerrainId);
+/// The terrain a transition draws, then the terrain it draws on (0 for
+/// empty).
+pub type Pair = (TerrainId, TerrainId);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Provenance {
@@ -94,13 +97,24 @@ pub struct SetupTerrain {
     pub collision: Tracked<CollisionMode>,
 }
 
+/// A named terrain set: a match mode and the terrains whose transitions it
+/// holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SetupSet {
-    pub inner: TerrainId,
-    pub outer: TerrainId,
+    pub name: String,
     pub mode: Tracked<MatchMode>,
+    /// Stacking order, bottom first; never 0, never repeated. The empty
+    /// terrain is below every set's terrains.
+    pub terrains: Vec<TerrainId>,
     /// A re-run never changes the set or the tiles it holds.
     pub locked_manual: bool,
+}
+
+impl SetupSet {
+    /// Whether the set holds `id`; every set holds the empty terrain 0.
+    pub fn has(&self, id: TerrainId) -> bool {
+        id == 0 || self.terrains.contains(&id)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -109,15 +123,19 @@ pub struct SetupTile {
     /// Per peer, by [`Peer::index`].
     pub provenance: [Provenance; 9],
     pub shape: Tracked<Option<TileShape>>,
-    /// The set, inner then outer, the tile was laid out for; `None` when only
-    /// its peers say which set holds it.
-    pub set: Option<(TerrainId, TerrainId)>,
+    /// The transition the tile was laid out for, as the terrain drawn and
+    /// the terrain drawn on; `None` when only its peers say which set holds
+    /// it.
+    pub set: Option<Pair>,
 }
 
 impl SetupTile {
     /// Forgets the recorded set once the peers hold a terrain outside it.
     pub(crate) fn drop_set_it_left(&mut self) {
-        if self.set.is_some_and(|pair| !within(pair, &self.terrains)) {
+        if self
+            .set
+            .is_some_and(|(a, b)| !within(&[a, b], &self.terrains))
+        {
             self.set = None;
         }
     }
@@ -136,26 +154,34 @@ impl SetupTile {
 pub enum Scope {
     /// Everything but locked sets and the tiles they hold.
     All,
-    /// The set's match mode, its two terrains and the tiles it holds before
-    /// or after the run.
-    Set { inner: TerrainId, outer: TerrainId },
+    /// The set at this index: its match mode, its terrains and the tiles it
+    /// holds before or after the run.
+    Set(usize),
     /// The tiles' bits and shapes and the Auto stamps holding any of them.
     Tiles(BTreeSet<TileAddress>),
 }
 
 impl Scope {
-    fn covers_terrain(&self, id: TerrainId) -> bool {
+    fn covers_terrain(&self, id: TerrainId, sets: &[SetupSet]) -> bool {
         match self {
             Scope::All => true,
-            Scope::Set { inner, outer } => id == *inner || id == *outer,
+            Scope::Set(i) => sets.get(*i).is_some_and(|s| s.terrains.contains(&id)),
             Scope::Tiles(_) => false,
         }
     }
 
-    fn covers_set(&self, pair: Pair) -> bool {
+    fn covers_set(&self, index: usize) -> bool {
         match self {
             Scope::All => true,
-            Scope::Set { inner, outer } => pair == (*inner, *outer),
+            Scope::Set(i) => *i == index,
+            Scope::Tiles(_) => false,
+        }
+    }
+
+    fn covers_pair(&self, (a, b): Pair, sets: &[SetupSet]) -> bool {
+        match self {
+            Scope::All => true,
+            Scope::Set(i) => sets.get(*i).is_some_and(|s| s.has(a) && s.has(b)),
             Scope::Tiles(_) => false,
         }
     }
@@ -168,9 +194,9 @@ impl Scope {
     ) -> bool {
         match self {
             Scope::All => true,
-            Scope::Set { inner, outer } => {
-                (tiles.iter().flatten()).any(|t| set_holds((*inner, *outer), &t.terrains, sets))
-            }
+            Scope::Set(i) => sets.get(*i).is_some_and(|set| {
+                (tiles.iter().flatten()).any(|t| set_holds(&set.terrains, &t.terrains, sets))
+            }),
             Scope::Tiles(chosen) => chosen.contains(&at),
         }
     }
@@ -199,7 +225,7 @@ pub struct TilesetSetup {
     pub sheets: Vec<String>,
     /// By id.
     pub terrains: Vec<SetupTerrain>,
-    /// By inner, then outer terrain.
+    /// In the order the user sees them; names are unique.
     pub sets: Vec<SetupSet>,
     /// Assigned tiles; a tile absent here is unassigned.
     pub tiles: BTreeMap<TileAddress, SetupTile>,
@@ -207,8 +233,9 @@ pub struct TilesetSetup {
     pub stamps: Vec<Tracked<Stamp>>,
     /// Id the next new terrain takes; ids are never reused.
     pub next_id: u16,
-    /// Sets removed by hand, inner then outer; a re-run does not propose them.
-    pub removed_sets: BTreeSet<(TerrainId, TerrainId)>,
+    /// Transitions removed by hand, either way round; a re-run does not
+    /// propose them.
+    pub removed_sets: BTreeSet<Pair>,
 }
 
 impl TilesetSetup {
@@ -222,8 +249,64 @@ impl TilesetSetup {
         self.terrains.iter().find(|t| t.id == id)
     }
 
-    pub fn set(&self, inner: TerrainId, outer: TerrainId) -> Option<&SetupSet> {
-        (self.sets.iter()).find(|s| s.inner == inner && s.outer == outer)
+    /// The first set holding both `a` and `b`; 0 is in every set.
+    pub fn set(&self, a: TerrainId, b: TerrainId) -> Option<&SetupSet> {
+        self.sets.get(self.set_index(a, b)?)
+    }
+
+    /// Index of the first set holding both `a` and `b`, at least one of them
+    /// a terrain.
+    pub fn set_index(&self, a: TerrainId, b: TerrainId) -> Option<usize> {
+        if a == 0 && b == 0 {
+            return None;
+        }
+        (self.sets.iter()).position(|s| s.has(a) && s.has(b))
+    }
+
+    /// Index of the set named `name`.
+    pub fn set_named(&self, name: &str) -> Option<usize> {
+        self.sets.iter().position(|s| s.name == name)
+    }
+
+    /// `err` worded with the names of the terrains and sets it names.
+    pub fn explain(&self, err: SetupError) -> String {
+        let terrain = |id: TerrainId| {
+            self.terrain(id)
+                .map_or_else(|| id.to_string(), |t| format!("\"{}\"", t.name.value))
+        };
+        let set = |at: usize| {
+            self.sets
+                .get(at)
+                .map_or_else(|| at.to_string(), |s| format!("\"{}\"", s.name))
+        };
+        match err {
+            SetupError::SetNameTaken(at) => format!("a terrain set is already named {}", set(at)),
+            SetupError::TerrainInSet {
+                terrain: id,
+                set: at,
+            } => format!(
+                "terrain {} already belongs to terrain set {}",
+                terrain(id),
+                set(at)
+            ),
+            SetupError::NotInSet {
+                terrain: id,
+                set: at,
+            } => {
+                format!(
+                    "terrain set {} does not hold terrain {}",
+                    set(at),
+                    terrain(id)
+                )
+            }
+            SetupError::SameTerrain(id) => format!("terrain {} cannot border itself", terrain(id)),
+            other => other.to_string(),
+        }
+    }
+
+    /// The first free `Terrain set n`, counting on from the sets there are.
+    pub fn next_set_name(&self) -> String {
+        free_set_name(self.sets.len() + 1, |name| self.set_named(name).is_some())
     }
 
     /// Sets one peer of `tile` by hand; `0` clears it.
@@ -266,23 +349,13 @@ impl TilesetSetup {
         Ok(())
     }
 
-    pub fn set_match_mode(
-        &mut self,
-        inner: TerrainId,
-        outer: TerrainId,
-        mode: MatchMode,
-    ) -> Result<(), SetupError> {
-        self.set_mut(inner, outer)?.mode = Tracked::user(mode);
+    pub fn set_match_mode(&mut self, set: usize, mode: MatchMode) -> Result<(), SetupError> {
+        self.set_mut(set)?.mode = Tracked::user(mode);
         Ok(())
     }
 
-    pub fn lock_set(
-        &mut self,
-        inner: TerrainId,
-        outer: TerrainId,
-        locked: bool,
-    ) -> Result<(), SetupError> {
-        self.set_mut(inner, outer)?.locked_manual = locked;
+    pub fn lock_set(&mut self, set: usize, locked: bool) -> Result<(), SetupError> {
+        self.set_mut(set)?.locked_manual = locked;
         Ok(())
     }
 
@@ -300,10 +373,8 @@ impl TilesetSetup {
             .ok_or(SetupError::UnknownTerrain(id))
     }
 
-    fn set_mut(&mut self, inner: TerrainId, outer: TerrainId) -> Result<&mut SetupSet, SetupError> {
-        (self.sets.iter_mut())
-            .find(|s| s.inner == inner && s.outer == outer)
-            .ok_or(SetupError::UnknownSet(inner, outer))
+    pub(crate) fn set_mut(&mut self, set: usize) -> Result<&mut SetupSet, SetupError> {
+        self.sets.get_mut(set).ok_or(SetupError::UnknownSet(set))
     }
 
     /// The setup over `sheets`, its tiles and stamps moved by `sheet`; those
@@ -343,7 +414,7 @@ pub fn rerun(
 /// of terrains outside it.
 fn kept_names(previous: &TilesetSetup, scope: &Scope) -> Vec<String> {
     (previous.terrains.iter())
-        .filter(|t| t.name.is_user() || !scope.covers_terrain(t.id))
+        .filter(|t| t.name.is_user() || !scope.covers_terrain(t.id, &previous.sets))
         .map(|t| t.name.value.clone())
         .collect()
 }
@@ -424,9 +495,9 @@ fn merge(
             *peer = remap(*peer);
         }
     }
-    for set in &mut auto.sets {
-        (set.inner, set.outer) = (remap(set.inner), remap(set.outer));
-    }
+    let fresh_pairs: Vec<(Pair, MatchMode)> = (fresh.proposal.sets.iter())
+        .map(|s| ((remap(s.inner), remap(s.outer)), s.mode))
+        .collect();
     let fresh_terrains: BTreeMap<TerrainId, SetupTerrain> = (auto.terrains.iter())
         .map(|t| {
             (
@@ -441,7 +512,7 @@ fn merge(
     let mut terrains = BTreeMap::new();
     for p in &prev.terrains {
         let refreshed = (fresh_terrains.get(&p.id))
-            .filter(|_| scope.covers_terrain(p.id))
+            .filter(|_| scope.covers_terrain(p.id, &prev.sets))
             .map(|f| SetupTerrain {
                 name: if p.name.is_user() {
                     p.name.clone()
@@ -457,10 +528,11 @@ fn merge(
         terrains.entry(*id).or_insert_with(|| f.clone());
     }
 
-    let mut sets = merge_sets(&prev, &auto.sets, &scope);
-    let locked: Vec<Pair> = (prev.sets.iter())
+    let background = |id: TerrainId| terrains.get(&id).is_some_and(|t| t.background);
+    let mut rebuilt = merge_sets(&prev, &fresh_pairs, &scope);
+    let mut sets = rebuilt.assemble(&prev, &background);
+    let locked: Vec<&SetupSet> = (prev.sets.iter())
         .filter(|s| !reset && s.locked_manual)
-        .map(|s| (s.inner, s.outer))
         .collect();
     let solid = |t: &SetupTerrain| t.collision.value == CollisionMode::Solid;
     let pixels = if terrains.values().any(solid) {
@@ -470,7 +542,7 @@ fn merge(
     };
     let palette = |id: TerrainId| terrains.get(&id).map(|t| (t.oklab, solid(t)));
     let mode_of = |peers: &TileTerrains| {
-        let set = sets.iter().find(|s| transition((s.inner, s.outer), peers));
+        let set = sets.iter().find(|s| transition(&s.terrains, peers));
         set.map_or(MatchMode::CornersAndSides, |s| s.mode.value)
     };
     let keys = prev.tiles.keys().chain(auto.tiles.keys());
@@ -479,10 +551,12 @@ fn merge(
     for address in addresses {
         let before = prev.tiles.get(&address);
         let both = [before, auto.tiles.get(&address)];
-        let held = |pair| (both.iter().flatten()).any(|t| set_holds(pair, &t.terrains, &prev.sets));
+        let held = |set: &SetupSet| {
+            (both.iter().flatten()).any(|t| set_holds(&set.terrains, &t.terrains, &prev.sets))
+        };
         let fixed = !live.contains(&address.sheet)
             || !scope.covers_tile(address, both, &prev.sets)
-            || locked.iter().any(|&pair| held(pair));
+            || locked.iter().any(|set| held(set));
         if fixed {
             if let Some(tile) = before {
                 tiles.insert(address, tile.clone());
@@ -507,14 +581,20 @@ fn merge(
         }
     }
 
-    for set in &prev.sets {
-        let pair = (set.inner, set.outer);
-        let gone = !sets.iter().any(|s| (s.inner, s.outer) == pair);
-        if gone && tiles.values().any(|t| transition(pair, &t.terrains)) {
-            sets.push(set.clone());
+    let mut restored = false;
+    for set in &rebuilt.dropped.clone() {
+        let lost = |t: &&SetupTile| {
+            transition(&set.terrains, &t.terrains)
+                && !sets.iter().any(|s| within(&s.terrains, &t.terrains))
+        };
+        if tiles.values().any(|t| lost(&t)) {
+            rebuilt.pairs.extend(stacked_pairs(set));
+            restored = true;
         }
     }
-    sets.sort_by_key(|s| (s.inner, s.outer));
+    if restored {
+        sets = rebuilt.assemble(&prev, &background);
+    }
 
     let mut stamps = prev.stamps.clone();
     if !reset {
@@ -530,7 +610,7 @@ fn merge(
     }
 
     let full = scope == Scope::All;
-    let set_ids = sets.iter().flat_map(|s| [s.inner, s.outer]);
+    let set_ids = sets.iter().flat_map(|s| s.terrains.clone());
     let used: BTreeSet<TerrainId> = (tiles.values())
         .flat_map(|t| t.terrains.peers)
         .chain(set_ids)
@@ -559,8 +639,7 @@ fn merge(
     }
     let sets = (sets.into_iter())
         .map(|s| SetupSet {
-            inner: renumbered(s.inner),
-            outer: renumbered(s.outer),
+            terrains: s.terrains.iter().map(|&t| renumbered(t)).collect(),
             ..s
         })
         .collect();
@@ -627,15 +706,19 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
             tile.shape = Tracked::auto(Some(shape.clone()));
         }
     }
-    let mut sets: Vec<SetupSet> = (fresh.proposal.sets.iter())
-        .map(|s| SetupSet {
-            inner: s.inner,
-            outer: s.outer,
-            mode: Tracked::auto(s.mode),
+    let pairs: Vec<(Pair, MatchMode)> = (fresh.proposal.sets.iter())
+        .map(|s| ((s.inner, s.outer), s.mode))
+        .collect();
+    let background =
+        |id: TerrainId| (fresh.proposal.terrains.iter()).any(|p| p.id == id && p.background);
+    let sets = (group_pairs(&pairs, &background).into_iter().zip(1..))
+        .map(|(group, n)| SetupSet {
+            name: set_name(n),
+            mode: Tracked::auto(group.mode),
+            terrains: group.terrains,
             locked_manual: false,
         })
         .collect();
-    sets.sort_by_key(|s| (s.inner, s.outer));
     let mut stamps: Vec<Tracked<Stamp>> = fresh.stamps.iter().cloned().map(Tracked::auto).collect();
     sort_stamps(&mut stamps);
     let sheets = (fresh.sheets.iter())
@@ -697,7 +780,7 @@ fn user_terrains(setup: &TilesetSetup) -> BTreeSet<TerrainId> {
         .map(|t| t.id);
     let sets = (setup.sets.iter())
         .filter(|s| s.locked_manual || s.mode.is_user())
-        .flat_map(|s| [s.inner, s.outer]);
+        .flat_map(|s| s.terrains.clone());
     let peers = setup.tiles.values().flat_map(|t| {
         (t.terrains.peers.iter().zip(&t.provenance))
             .filter(|(_, p)| **p == Provenance::User)
@@ -706,23 +789,210 @@ fn user_terrains(setup: &TilesetSetup) -> BTreeSet<TerrainId> {
     named.chain(sets).chain(peers).collect()
 }
 
-fn merge_sets(previous: &TilesetSetup, fresh: &[SetupSet], scope: &Scope) -> Vec<SetupSet> {
-    let key = |s: &SetupSet| (s.inner, s.outer);
-    let before: BTreeMap<_, &SetupSet> = previous.sets.iter().map(|s| (key(s), s)).collect();
-    let after: BTreeMap<_, &SetupSet> = fresh.iter().map(|s| (key(s), s)).collect();
-    let keys: BTreeSet<_> = before.keys().chain(after.keys()).copied().collect();
-    let mut sets = Vec::new();
-    for k in keys {
-        let in_scope = scope.covers_set(k);
-        let kept =
-            (before.get(&k).copied()).filter(|s| !in_scope || s.locked_manual || s.mode.is_user());
-        let taken =
-            (after.get(&k).copied()).filter(|_| in_scope && !previous.removed_sets.contains(&k));
-        if let Some(s) = kept.or(taken) {
-            sets.push(s.clone());
+/// The sets of a re-run before its tiles are merged: the previous sets it
+/// keeps, those it rebuilds, and the transition pairs it rebuilds them from.
+struct MergedSets {
+    /// Indices of the previous sets kept as they are.
+    kept: Vec<usize>,
+    /// Previous sets in scope that the run rebuilds.
+    dropped: Vec<SetupSet>,
+    pairs: Vec<(Pair, MatchMode)>,
+}
+
+impl MergedSets {
+    /// The kept sets and the sets the pairs form, in the previous order; a
+    /// rebuilt set takes the name of the dropped set it shares the most
+    /// terrains with, and new sets take free default names.
+    fn assemble(
+        &self,
+        previous: &TilesetSetup,
+        background: &dyn Fn(TerrainId) -> bool,
+    ) -> Vec<SetupSet> {
+        let groups = group_pairs(&self.pairs, background);
+        let mut names: Vec<Option<String>> = vec![None; groups.len()];
+        for dropped in &self.dropped {
+            let shared = |g: &PairGroup| {
+                let count = g.terrains.iter().filter(|t| dropped.terrains.contains(t));
+                (count.count(), g.mode == dropped.mode.value)
+            };
+            let heir = (0..groups.len())
+                .filter(|&g| names[g].is_none() && shared(&groups[g]).0 > 0)
+                .max_by_key(|&g| (shared(&groups[g]), std::cmp::Reverse(g)));
+            if let Some(heir) = heir {
+                names[heir] = Some(dropped.name.clone());
+            }
+        }
+        let mut taken: Vec<String> = (self.kept.iter())
+            .filter_map(|&i| previous.sets.get(i))
+            .map(|s| s.name.clone())
+            .chain(names.iter().flatten().cloned())
+            .collect();
+        for name in &mut names {
+            if name.is_none() {
+                let fresh = free_set_name(1, |candidate| taken.iter().any(|t| t == candidate));
+                taken.push(fresh.clone());
+                *name = Some(fresh);
+            }
+        }
+        let built = |index: usize| SetupSet {
+            name: names[index].clone().unwrap_or_default(),
+            mode: Tracked::auto(groups[index].mode),
+            terrains: groups[index].terrains.clone(),
+            locked_manual: false,
+        };
+        let mut placed = vec![false; groups.len()];
+        let mut sets = Vec::new();
+        for (index, set) in previous.sets.iter().enumerate() {
+            if self.kept.contains(&index) {
+                sets.push(set.clone());
+                continue;
+            }
+            let heir = names
+                .iter()
+                .position(|n| n.as_deref() == Some(set.name.as_str()));
+            if let Some(heir) = heir.filter(|h| !placed[*h]) {
+                placed[heir] = true;
+                sets.push(built(heir));
+            }
+        }
+        for (index, done) in placed.into_iter().enumerate() {
+            if !done {
+                sets.push(built(index));
+            }
+        }
+        sets
+    }
+}
+
+/// Keeps the previous sets outside `scope`, locked or of a User mode, and
+/// rebuilds the others from the fresh pairs in scope that no kept set holds
+/// and that were not removed by hand.
+fn merge_sets(previous: &TilesetSetup, fresh: &[(Pair, MatchMode)], scope: &Scope) -> MergedSets {
+    let keeps = |(index, set): &(usize, &SetupSet)| {
+        !scope.covers_set(*index) || set.locked_manual || set.mode.is_user()
+    };
+    let (kept, dropped): (Vec<_>, Vec<_>) = previous.sets.iter().enumerate().partition(keeps);
+    let removed = |(a, b): Pair| {
+        previous.removed_sets.contains(&(a, b)) || previous.removed_sets.contains(&(b, a))
+    };
+    let held = |(a, b): Pair| kept.iter().any(|(_, s)| s.has(a) && s.has(b));
+    let pairs = (fresh.iter())
+        .filter(|(pair, _)| {
+            scope.covers_pair(*pair, &previous.sets) && !removed(*pair) && !held(*pair)
+        })
+        .copied()
+        .collect();
+    MergedSets {
+        kept: kept.into_iter().map(|(i, _)| i).collect(),
+        dropped: dropped.into_iter().map(|(_, s)| s.clone()).collect(),
+        pairs,
+    }
+}
+
+/// Every transition of `set` as a pair, upper terrain first: each terrain
+/// on empty and on each terrain below it, which [`group_pairs`] stacks back
+/// in the set's order.
+pub fn stacked_pairs(set: &SetupSet) -> Vec<(Pair, MatchMode)> {
+    let (mode, terrains) = (set.mode.value, &set.terrains);
+    (0..terrains.len())
+        .flat_map(|upper| {
+            let lower = std::iter::once(0).chain(terrains[..upper].iter().copied());
+            lower.map(move |lower| ((terrains[upper], lower), mode))
+        })
+        .collect()
+}
+
+/// Terrain sets formed from transition pairs, as [`group_pairs`] returns them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairGroup {
+    pub mode: MatchMode,
+    /// Bottom first.
+    pub terrains: Vec<TerrainId>,
+    /// Indices of the pairs the set took.
+    pub pairs: Vec<usize>,
+}
+
+/// The sets `pairs` form: pairs of one mode that share a terrain join one
+/// set, in the order of their first pair. A set stacks its background
+/// terrains first, then each pair's second terrain below its first, then by
+/// id.
+pub fn group_pairs(
+    pairs: &[(Pair, MatchMode)],
+    background: &dyn Fn(TerrainId) -> bool,
+) -> Vec<PairGroup> {
+    let mut groups: Vec<PairGroup> = Vec::new();
+    for (index, &((a, b), mode)) in pairs.iter().enumerate() {
+        if a == b || (a == 0 && b == 0) {
+            continue;
+        }
+        let shares = |g: &PairGroup| {
+            g.mode == mode && [a, b].iter().any(|t| *t != 0 && g.terrains.contains(t))
+        };
+        let joined: Vec<usize> = (0..groups.len()).filter(|&g| shares(&groups[g])).collect();
+        let into = match joined.first() {
+            Some(&first) => {
+                for &other in joined[1..].iter().rev() {
+                    let gone = groups.remove(other);
+                    for t in gone.terrains {
+                        if !groups[first].terrains.contains(&t) {
+                            groups[first].terrains.push(t);
+                        }
+                    }
+                    groups[first].pairs.extend(gone.pairs);
+                }
+                first
+            }
+            None => {
+                groups.push(PairGroup {
+                    mode,
+                    terrains: Vec::new(),
+                    pairs: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        let group = &mut groups[into];
+        group.pairs.push(index);
+        for t in [a, b] {
+            if t != 0 && !group.terrains.contains(&t) {
+                group.terrains.push(t);
+            }
         }
     }
-    sets
+    for group in &mut groups {
+        group.pairs.sort_unstable();
+        let terrains = group.terrains.clone();
+        let index = |id: TerrainId| terrains.iter().position(|t| *t == id);
+        let mut depth = vec![0usize; terrains.len()];
+        for _ in 0..terrains.len() {
+            for &p in &group.pairs {
+                let ((upper, lower), _) = pairs[p];
+                if let (Some(upper), Some(lower)) = (index(upper), index(lower)) {
+                    depth[upper] = depth[upper].max(depth[lower] + 1).min(terrains.len());
+                }
+            }
+        }
+        let mut order: Vec<(bool, usize, TerrainId)> = (terrains.iter().zip(&depth))
+            .map(|(&id, &depth)| (!background(id), depth, id))
+            .collect();
+        order.sort_unstable();
+        group.terrains = order.into_iter().map(|(.., id)| id).collect();
+    }
+    groups.sort_by_key(|g| g.pairs.first().copied());
+    groups
+}
+
+/// `Terrain set n`.
+pub fn set_name(n: usize) -> String {
+    format!("Terrain set {n}")
+}
+
+/// The first `Terrain set n` from `from` on that `taken` refuses.
+pub fn free_set_name(from: usize, taken: impl Fn(&str) -> bool) -> String {
+    (from.max(1)..)
+        .map(set_name)
+        .find(|name| !taken(name))
+        .unwrap_or_default()
 }
 
 fn merge_tile(previous: Option<&SetupTile>, fresh: Option<&SetupTile>) -> SetupTile {
@@ -748,53 +1018,87 @@ fn merge_tile(previous: Option<&SetupTile>, fresh: Option<&SetupTile>) -> SetupT
 }
 
 /// Whether the terrain solver of `mode` takes a tile with `peers` laid out
-/// for `recorded`: by that set while the peers fit it, else when the peers fit
-/// a set of `mode` and, unless one terrain fills the tile, no set of another
-/// mode. `sets` are the inner and outer terrain and the mode of each set.
+/// for the transition `recorded`. While the peers fit it, the sets holding
+/// its drawn terrain above the other decide: it goes to the tightest of them,
+/// the one with the fewest other terrains, if that is of `mode`. With none,
+/// any set of `mode` holding both takes it. Otherwise the solver takes it
+/// when its peers fit a set of `mode` and, unless one terrain fills the tile,
+/// no set of another mode fits them as tightly. `sets` are the terrains,
+/// bottom first, and the mode of each set.
 pub fn solver_takes(
     mode: MatchMode,
     peers: &[TerrainId; 9],
     recorded: Option<Pair>,
-    sets: &[(Pair, MatchMode)],
+    sets: &[(&[TerrainId], MatchMode)],
 ) -> bool {
-    if let Some(pair) = recorded.filter(|p| fits(*p, peers)) {
-        return sets.contains(&(pair, mode));
+    let rank = |terrains: &[TerrainId], id: TerrainId| match id {
+        0 => Some(0),
+        id => terrains.iter().position(|t| *t == id).map(|at| at + 1),
+    };
+    if let Some((a, b)) = recorded.filter(|&(a, b)| fits(&[a, b], peers)) {
+        let ranks = |t: &[TerrainId]| rank(t, a).zip(rank(t, b));
+        let held = [a, b].iter().filter(|t| **t != 0).count();
+        let stacked: Vec<(usize, bool)> = (sets.iter())
+            .filter(|(t, _)| ranks(t).is_some_and(|(a, b)| a > b))
+            .map(|(t, m)| (t.len().saturating_sub(held), *m == mode))
+            .collect();
+        return match stacked.iter().map(|(extra, _)| *extra).min() {
+            Some(tight) => (stacked.iter()).any(|&(extra, ours)| extra == tight && ours),
+            None => (sets.iter()).any(|(t, m)| *m == mode && ranks(t).is_some()),
+        };
     }
     let pure = peers.iter().all(|&p| p == peers[0]);
-    let fit = |same: bool| (sets.iter()).any(|(p, m)| (*m == mode) == same && fits(*p, peers));
-    fit(true) && (pure || !fit(false))
-}
-
-/// Whether `peers` has a terrain and all of them are of `pair`.
-pub fn fits((a, b): Pair, peers: &[TerrainId; 9]) -> bool {
-    peers.iter().all(|&p| p == 0 || p == a || p == b) && peers.iter().any(|&p| p != 0)
-}
-
-fn within((a, b): Pair, peers: &TileTerrains) -> bool {
-    peers.peers.iter().all(|&p| p == 0 || p == a || p == b)
-}
-
-pub(crate) fn transition(pair: Pair, peers: &TileTerrains) -> bool {
-    within(pair, peers) && peers.peers.contains(&pair.0) && peers.peers.contains(&pair.1)
-}
-
-/// Whether the set of `pair` holds a tile with `peers`: a transition between
-/// its terrains, or a pure tile of one of them no other set in `sets` uses.
-pub(crate) fn set_holds(pair: Pair, peers: &TileTerrains, sets: &[SetupSet]) -> bool {
-    if !within(pair, peers) {
-        return false;
-    }
-    if transition(pair, peers) {
-        return true;
-    }
-    let pure = if peers.peers.contains(&pair.0) {
-        pair.0
-    } else if peers.peers.contains(&pair.1) {
-        pair.1
-    } else {
+    let shown = present(&TileTerrains { peers: *peers }).len();
+    let fitting: Vec<(usize, bool)> = (sets.iter())
+        .filter(|(t, _)| fits(t, peers))
+        .map(|(t, m)| (t.len().saturating_sub(shown), *m == mode))
+        .collect();
+    let Some(tight) = fitting.iter().map(|(extra, _)| *extra).min() else {
         return false;
     };
-    let other = |s: &SetupSet| (s.inner, s.outer) != pair && (s.inner == pure || s.outer == pure);
+    let at = |ours: bool| (fitting.iter()).any(|&(extra, o)| extra == tight && o == ours);
+    fitting.iter().any(|(_, ours)| *ours) && (pure || (at(true) && !at(false)))
+}
+
+/// Whether `peers` has a terrain and all of them are of `terrains` or empty.
+pub fn fits(terrains: &[TerrainId], peers: &[TerrainId; 9]) -> bool {
+    peers.iter().all(|&p| p == 0 || terrains.contains(&p)) && peers.iter().any(|&p| p != 0)
+}
+
+pub(crate) fn within(terrains: &[TerrainId], peers: &TileTerrains) -> bool {
+    peers.peers.iter().all(|&p| p == 0 || terrains.contains(&p))
+}
+
+/// Whether `peers` lie within `terrains` and the empty terrain and hold more
+/// than one of them.
+pub(crate) fn transition(terrains: &[TerrainId], peers: &TileTerrains) -> bool {
+    within(terrains, peers) && peers.peers.iter().any(|&p| p != peers.peers[0])
+}
+
+/// The terrains `peers` hold, empty left out.
+fn present(peers: &TileTerrains) -> Vec<TerrainId> {
+    let mut found: Vec<TerrainId> = Vec::new();
+    for &p in &peers.peers {
+        if p != 0 && !found.contains(&p) {
+            found.push(p);
+        }
+    }
+    found
+}
+
+/// Whether the set of `terrains` holds a tile with `peers`: a transition
+/// among its terrains, or a tile of one of them no other set in `sets` uses.
+pub(crate) fn set_holds(terrains: &[TerrainId], peers: &TileTerrains, sets: &[SetupSet]) -> bool {
+    if !within(terrains, peers) {
+        return false;
+    }
+    if transition(terrains, peers) {
+        return true;
+    }
+    let [only] = present(peers)[..] else {
+        return false;
+    };
+    let other = |s: &SetupSet| s.terrains != terrains && s.terrains.contains(&only);
     !sets.iter().any(other)
 }
 
@@ -976,7 +1280,7 @@ mod tests {
     fn first() -> AutoSetup {
         let sets = [
             (SAND, GRASS, MatchMode::Sides, &sand_first()[..]),
-            (DIRT, GRASS, MatchMode::Sides, &dirt_first()[..]),
+            (DIRT, GRASS, MatchMode::Corners, &dirt_first()[..]),
         ];
         let run = Run {
             names: &["a.png"],
@@ -1016,7 +1320,7 @@ mod tests {
     fn checked(setup: TilesetSetup) -> TilesetSetup {
         let known: BTreeSet<TerrainId> = setup.terrains.iter().map(|t| t.id).collect();
         let peers = setup.tiles.values().flat_map(|t| t.terrains.peers);
-        let sets = setup.sets.iter().flat_map(|s| [s.inner, s.outer]);
+        let sets = setup.sets.iter().flat_map(|s| s.terrains.clone());
         for id in peers.chain(sets).filter(|id| *id != 0) {
             assert!(known.contains(&id), "terrain {id} dangles");
         }
@@ -1081,7 +1385,8 @@ mod tests {
         let mut setup = TilesetSetup::from_auto(&first());
         setup.set_peer(at(0), Peer::Left, SAND).expect("known");
         setup.rename_terrain(GRASS, "meadow").expect("known");
-        (setup.set_match_mode(DIRT, GRASS, MatchMode::Corners)).expect("known");
+        let dirt = setup.set_index(DIRT, GRASS).expect("a set");
+        (setup.set_match_mode(dirt, MatchMode::Corners)).expect("known");
         (setup.set_collision_mode(DIRT, CollisionMode::Trigger)).expect("known");
         setup.set_shape(at(11), square());
         setup.put_stamp(stamp(&[30, 31]));
@@ -1153,8 +1458,10 @@ mod tests {
         assert_eq!(after.next_id, 5);
         assert_eq!(after.terrain(SAND).map(|t| t.name.is_user()), Some(true));
         assert_eq!(after.tiles[&at(0)].terrains, mix(SAND, GRASS, &[Peer::Top]));
-        let keys: Vec<_> = after.sets.iter().map(|s| (s.inner, s.outer)).collect();
-        assert_eq!(keys, [(SAND, GRASS), (4, GRASS)]);
+        let sets: Vec<_> = (after.sets.iter())
+            .map(|s| (s.name.as_str(), s.terrains.as_slice()))
+            .collect();
+        assert_eq!(sets, [("Terrain set 1", &[GRASS, SAND, 4][..])]);
     }
 
     #[test]
@@ -1226,14 +1533,8 @@ mod tests {
     #[test]
     fn a_set_scoped_run_changes_only_that_set() {
         let setup = TilesetSetup::from_auto(&first());
-        let after = run(
-            &setup,
-            &second(),
-            Scope::Set {
-                inner: DIRT,
-                outer: GRASS,
-            },
-        );
+        let dirt = setup.set_index(DIRT, GRASS).expect("a set");
+        let after = run(&setup, &second(), Scope::Set(dirt));
         let all = run(&setup, &second(), Scope::All);
         assert_eq!(after.set(DIRT, GRASS), all.set(DIRT, GRASS));
         assert_eq!(after.set(SAND, GRASS), setup.set(SAND, GRASS));
@@ -1266,13 +1567,11 @@ mod tests {
     #[test]
     fn a_locked_set_is_untouched_by_every_scope_but_shared_pure_tiles_are_not_its() {
         let mut setup = TilesetSetup::from_auto(&first());
-        setup.lock_set(SAND, GRASS, true).expect("known");
+        let sand = setup.set_index(SAND, GRASS).expect("a set");
+        setup.lock_set(sand, true).expect("known");
         let scopes = [
             Scope::All,
-            Scope::Set {
-                inner: SAND,
-                outer: GRASS,
-            },
+            Scope::Set(sand),
             Scope::Tiles(tiles(&[0, 1, 2, 3, 5, 6, 10])),
         ];
         for scope in scopes {
@@ -1285,11 +1584,7 @@ mod tests {
                     "{scope:?}"
                 );
             }
-            let refreshed = scope
-                != Scope::Set {
-                    inner: SAND,
-                    outer: GRASS,
-                };
+            let refreshed = scope != Scope::Set(sand);
             let dirt = mix(DIRT, GRASS, &[Peer::Bottom]);
             assert_eq!(
                 after.tiles[&at(10)].terrains == dirt,
@@ -1312,7 +1607,8 @@ mod tests {
         setup.set_shape(at(1), square());
         setup.set_peer(at(11), Peer::Top, SAND).expect("known");
         setup.set_peer(at(20), Peer::Top, SAND).expect("known");
-        setup.lock_set(SAND, GRASS, true).expect("known");
+        let sand = setup.set_index(SAND, GRASS).expect("a set");
+        setup.lock_set(sand, true).expect("known");
         let after = reset_tiles(&setup, &first(), &[0, 1, 20, 40]);
         let auto = TilesetSetup::from_auto(&first());
         assert_eq!(after.tiles[&at(0)], auto.tiles[&at(0)]);
@@ -1341,10 +1637,10 @@ mod tests {
         assert_eq!(setup.set_peer(at(0), Peer::Top, 9), unknown);
         assert_eq!(setup.rename_terrain(9, "x"), unknown);
         assert_eq!(setup.set_collision_mode(9, CollisionMode::Solid), unknown);
-        let no_set = Err(SetupError::UnknownSet(GRASS, DIRT));
-        let mode = setup.set_match_mode(GRASS, DIRT, MatchMode::Corners);
+        let no_set = Err(SetupError::UnknownSet(5));
+        let mode = setup.set_match_mode(5, MatchMode::Corners);
         assert_eq!(mode, no_set);
-        assert_eq!(setup.lock_set(GRASS, DIRT, true), no_set);
+        assert_eq!(setup.lock_set(5, true), no_set);
         assert_eq!(setup.set_peer(at(0), Peer::Top, 0), Ok(()));
     }
 

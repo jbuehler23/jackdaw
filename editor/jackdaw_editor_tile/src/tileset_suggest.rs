@@ -136,7 +136,7 @@ fn short(template: LayoutTemplate) -> &'static str {
     }
 }
 
-/// "Dirt over grass, 3x3 + corners", or "5x3 block, 3x3 + corners" when it
+/// "Dirt on grass, 3x3 + corners", or "5x3 block, 3x3 + corners" when it
 /// names none of the user's terrains.
 fn describe(tileset: &Tileset, s: &Suggestion) -> String {
     let size = format!("{}x{}", s.size.x, s.size.y);
@@ -155,7 +155,7 @@ fn describe(tileset: &Tileset, s: &Suggestion) -> String {
             if !s.named() {
                 return format!("{size} block, {layout}");
             }
-            let line = format!("{} over {}, {layout}", name(*inner), name(*outer));
+            let line = format!("{} on {}, {layout}", name(*inner), name(*outer));
             let mut chars = line.chars();
             chars
                 .next()

@@ -17,7 +17,7 @@ use jackdaw_feathers::tokens;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_tilemap::{
     BlockEvidence, BlockFit, LayoutTemplate, PaintPreview, Peer, Placement, RgbaImage, SetupError,
-    SheetInput, TerrainId, TerrainLook, TileAddress,
+    SheetInput, TerrainId, TerrainLook, TileAddress, TilesetSetup,
 };
 use jackdaw_tileset::Tileset;
 
@@ -128,8 +128,8 @@ pub struct LayoutDraft {
 }
 
 impl LayoutDraft {
-    /// A draft of the block with the brush as its inner terrain when it has
-    /// one, and the layout its size or the pair's set names.
+    /// A draft of the block drawing the brush terrain when there is one, and
+    /// the layout its size or the terrains' set names.
     fn new(tileset: &Tileset, brush: TerrainId, sheet: u32, origin: UVec2, size: UVec2) -> Self {
         let ids: Vec<TerrainId> = tileset.terrains.iter().map(|t| t.id).collect();
         let inner = Some(brush)
@@ -149,12 +149,22 @@ impl LayoutDraft {
         draft
     }
 
-    /// Pick the placement the pair's set already draws, else the layout
-    /// whose shape the block has, else one it fits; ambiguous blocks stay
-    /// unpicked.
+    /// Pick the placement of the set that already stacks the drawn terrain
+    /// above the other, else the layout whose shape the block has, else one
+    /// it fits; ambiguous blocks stay unpicked.
     fn preselect(&mut self, tileset: &Tileset) {
         let setup = tileset.setup().ok();
-        let had = (setup.as_ref()).and_then(|s| Some(s.set(self.inner, self.outer)?.mode.value));
+        let had = (setup.as_ref()).and_then(|s| {
+            let set = &s.sets[self.set_in(s)?];
+            let rank = |id: TerrainId| match id {
+                0 => Some(0),
+                id => set.terrains.iter().position(|t| *t == id).map(|at| at + 1),
+            };
+            let above = rank(self.inner)
+                .zip(rank(self.outer))
+                .is_some_and(|(a, b)| a > b);
+            above.then_some(set.mode.value)
+        });
         let size = self.size;
         let existing = had.and_then(|mode| {
             (GROUPS.iter())
@@ -173,12 +183,26 @@ impl LayoutDraft {
         self.blocked = self.conflict(tileset);
     }
 
-    /// The refusal the kernel gives when the pair's set draws another
-    /// placement with tiles outside the block.
+    /// The set the layout goes in, while one of the terrains has a set and
+    /// the other no other set.
+    fn set_in(&self, setup: &TilesetSetup) -> Option<usize> {
+        setup
+            .layout_set(None, self.inner, self.outer, None)
+            .ok()
+            .flatten()
+    }
+
+    /// The refusal the kernel gives when the terrains are in two sets, or
+    /// their set draws another placement with tiles outside the block.
     fn conflict(&self, tileset: &Tileset) -> Option<String> {
         let (template, placement) = self.pick?;
         let setup = tileset.setup().ok()?;
-        let had = setup.set(self.inner, self.outer)?.mode.value;
+        let mode = template.mode_at(placement);
+        let set = match setup.layout_set(None, self.inner, self.outer, Some(mode)) {
+            Ok(set) => set?,
+            Err(err) => return Some(setup.explain(err)),
+        };
+        let had = setup.sets[set].mode.value;
         let index = tileset.setup_sheet(self.sheet).ok()?;
         let columns = tileset.sheets.get(self.sheet as usize)?.columns;
         let block: Vec<TileAddress> = (0..self.size.y)
@@ -186,7 +210,7 @@ impl LayoutDraft {
             .map(|c| (self.origin + c).y * columns + (self.origin + c).x)
             .map(|tile| TileAddress { sheet: index, tile })
             .collect();
-        match setup.drawn_elsewhere((self.inner, self.outer), &block) {
+        match setup.drawn_elsewhere(set, &block) {
             0 => None,
             _ if had == template.mode_at(placement) => None,
             n => Some(SetupError::SetDrawn(had, n).to_string()),
@@ -250,8 +274,8 @@ impl LayoutDraft {
         let name = |found: Option<&'static str>| found.unwrap_or_default().to_string();
         let order = self.order.as_deref().map(|o| ("order", order_text(o)));
         let params = vec![
-            ("inner", self.inner.to_string()),
-            ("outer", self.outer.to_string()),
+            ("terrain", self.inner.to_string()),
+            ("base", self.outer.to_string()),
             (
                 "template",
                 name(TEMPLATES.iter().find(|e| e.0 == template).map(|e| e.1)),
@@ -268,7 +292,7 @@ impl LayoutDraft {
     }
 
     /// Fit the pick to the block's pixels as `fitting` asks; choosing, with
-    /// no set of the pair yet, it first picks the best fitting layout of the
+    /// no set holding both terrains yet, it first picks the best fitting layout of the
     /// block's exact shape when it fits well. Tiles placed by hand keep their
     /// place while the layout stays. Without icon tiles the template's own
     /// order stays.
@@ -497,10 +521,18 @@ fn apply(world: &mut World, root: Entity) -> Result<String, String> {
         &path,
         template_edit(&params),
     );
+    let laid_in = (applied.is_ok())
+        .then(|| dock_tileset(world, root))
+        .flatten()
+        .and_then(|(_, tileset)| {
+            (tileset.sets().iter())
+                .find(|s| s.terrains.contains(&draft.inner))
+                .map(|s| s.name.clone())
+        });
     if let Some(view) = world.resource_mut::<TilesetDockViews>().0.get_mut(&path) {
         match &applied {
             Ok(_) => {
-                view.active = Some((draft.inner, draft.outer));
+                view.active = laid_in;
                 collapse(view);
             }
             Err(err) => view
@@ -1027,13 +1059,8 @@ fn spawn_terrain_pickers(
         .collect();
     let row = spawn_wrap(world, parent);
     let pickers = [
-        ("Inner", names, index(draft.inner).unwrap_or(0), false),
-        (
-            "over",
-            outers,
-            index(draft.outer).map_or(0, |i| i + 1),
-            true,
-        ),
+        ("Terrain", names, index(draft.inner).unwrap_or(0), false),
+        ("on", outers, index(draft.outer).map_or(0, |i| i + 1), true),
     ];
     for (word, options, selected, outer) in pickers {
         spawn_text(world, row, word, tokens::TEXT_SECONDARY);

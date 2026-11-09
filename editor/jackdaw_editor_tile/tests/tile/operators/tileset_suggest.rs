@@ -271,7 +271,7 @@ fn rows_are_one_short_line() {
     press(&mut app, root, DockAction::Suggest);
     let shown = texts(&mut app, root);
     assert!(
-        shown.iter().any(|t| t == "Dirt over grass, 3x3 + corners"),
+        shown.iter().any(|t| t == "Dirt on grass, 3x3 + corners"),
         "{shown:?}"
     );
     let labels: Vec<(String, LineBreak)> = (app.world_mut())

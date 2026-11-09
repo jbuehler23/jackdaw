@@ -1,7 +1,7 @@
 use std::fmt;
 
 use jackdaw_tilemap::{
-    Placement, TerrainId, TerrainSet, TerrainTile, TileRef, TileTerrains, solver_takes,
+    MatchMode, Placement, TerrainId, TerrainSet, TerrainTile, TileRef, TileTerrains, solver_takes,
 };
 
 use crate::{TerrainMatch, Tileset, match_mode};
@@ -40,53 +40,42 @@ impl Tileset {
     /// A layer solves under one match mode, `mode`, or the tileset's only
     /// mode when `None`. Every terrain set of that mode joins one solver set;
     /// sets of other modes do not resolve on the layer and need a layer of
-    /// their own. A tile joins by the set it was laid out for when it records
-    /// one its peers still fit. Otherwise it joins when its peers lie within
-    /// one joined set's two terrains and, unless it is a pure tile, within no
-    /// other mode's set, since its peers alone cannot say which of those it
-    /// was made for.
-    /// Terrains stack background first, then each set's outer below its
-    /// inner, then by id.
+    /// their own. A tile joins by the transition it was laid out for when its
+    /// peers still fit it and a joined set holds both its terrains. Otherwise
+    /// it joins when its peers lie within one joined set's terrains and,
+    /// unless it is a pure tile, within no other mode's set, since its peers
+    /// alone cannot say which of those it was made for.
+    /// Terrains stack by their place in their set, bottom first; terrains of
+    /// different sets level with each other stack background first, then by
+    /// id.
     pub fn terrain_set(&self, mode: Option<TerrainMatch>) -> Result<TerrainSet, TerrainSetError> {
         let mode = match mode {
             Some(mode) => mode,
             None => self.only_mode()?,
         };
-        let sets: Vec<_> = (self.terrain_sets.iter())
-            .filter(|set| set.mode == mode)
-            .collect();
+        let all = self.sets();
+        let sets: Vec<_> = all.iter().filter(|set| set.mode == mode).collect();
         if sets.is_empty() {
             return Err(TerrainSetError::NoSetWithMode(mode));
-        }
-        let mut terrains: Vec<TerrainId> = Vec::new();
-        for set in &sets {
-            for id in [set.outer, set.inner] {
-                if id != 0 && !terrains.contains(&id) {
-                    terrains.push(id);
-                }
-            }
-        }
-        let mut depth = vec![0usize; terrains.len()];
-        let index = |id: TerrainId| terrains.iter().position(|t| *t == id);
-        for _ in 0..terrains.len() {
-            for set in &sets {
-                if let (Some(outer), Some(inner)) = (index(set.outer), index(set.inner)) {
-                    depth[inner] = depth[inner].max(depth[outer] + 1).min(terrains.len());
-                }
-            }
         }
         let background = |id: TerrainId| {
             (self.terrains.iter()).any(|terrain| terrain.id == id && terrain.background)
         };
-        let mut order: Vec<(bool, usize, TerrainId)> = (terrains.iter().zip(&depth))
-            .map(|(&id, &depth)| (!background(id), depth, id))
-            .collect();
+        let mut order: Vec<(usize, bool, TerrainId)> = Vec::new();
+        for set in &sets {
+            for (place, &id) in set.terrains.iter().enumerate() {
+                match order.iter_mut().find(|(.., t)| *t == id) {
+                    Some(found) => found.0 = found.0.min(place),
+                    None => order.push((place, !background(id), id)),
+                }
+            }
+        }
         order.sort_unstable();
 
         let mut set =
             TerrainSet::new(match_mode(mode)).with_order(order.into_iter().map(|(.., id)| id));
-        let sets: Vec<_> = (self.terrain_sets.iter())
-            .map(|s| ((s.inner, s.outer), match_mode(s.mode)))
+        let sets: Vec<(&[TerrainId], MatchMode)> = (all.iter())
+            .map(|s| (s.terrains.as_slice(), match_mode(s.mode)))
             .collect();
         for tile in &self.tiles {
             let recorded = (tile.set_inner != 0).then_some((tile.set_inner, tile.set_outer));
@@ -113,7 +102,7 @@ impl Tileset {
 
     fn only_mode(&self) -> Result<TerrainMatch, TerrainSetError> {
         let mut modes: Vec<TerrainMatch> = Vec::new();
-        for set in &self.terrain_sets {
+        for set in self.sets().iter() {
             if !modes.contains(&set.mode) {
                 modes.push(set.mode);
             }

@@ -158,18 +158,19 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     // Grass has pure tiles, so the background is the dark ground the cliff
     // set sits on.
     assert_eq!(background, vec![6]);
-    let sets: Vec<(u8, u8, TerrainMatch)> = (tileset.terrain_sets.iter())
-        .map(|s| (s.inner, s.outer, s.mode))
+    let sets: Vec<(&str, TerrainMatch, &[u8])> = (tileset.terrain_sets.iter())
+        .map(|s| (s.name.as_str(), s.mode, s.terrains.as_slice()))
         .collect();
     assert_eq!(
         sets,
         [
-            (2, 1, TerrainMatch::CornersAndSides),
-            (5, 6, TerrainMatch::Corners),
-            (9, 2, TerrainMatch::Corners),
-            (11, 1, TerrainMatch::CornersAndSides),
-            (11, 9, TerrainMatch::Corners),
-            (12, 11, TerrainMatch::Corners),
+            (
+                "Terrain set 1",
+                TerrainMatch::CornersAndSides,
+                &[1, 2, 11][..]
+            ),
+            ("Terrain set 2", TerrainMatch::Corners, &[2, 9, 11, 12][..]),
+            ("Terrain set 3", TerrainMatch::Corners, &[6, 5][..]),
         ]
     );
     assert_eq!(tileset.objects.len(), 34);

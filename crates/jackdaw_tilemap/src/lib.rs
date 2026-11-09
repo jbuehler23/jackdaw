@@ -48,10 +48,11 @@ pub use report::{
     StripReport, TerrainReport, auto_setup, auto_setup_on_grid,
 };
 pub use setup::{
-    CollisionMode, Provenance, Scope, SetupSet, SetupTerrain, SetupTile, TilesetSetup, Tracked,
-    fits, rerun, reset_to_auto, solver_takes,
+    CollisionMode, Pair, PairGroup, Provenance, Scope, SetupSet, SetupTerrain, SetupTile,
+    TilesetSetup, Tracked, fits, free_set_name, group_pairs, rerun, reset_to_auto, set_name,
+    solver_takes, stacked_pairs,
 };
-pub use setup_layout::Coverage;
+pub use setup_layout::{Coverage, LayoutTerrains};
 pub use sidecar::{
     LayerData, LayerKind, MAGIC, SidecarError, TerrainAuthoring, TilemapData, VERSION, decode,
     encode,

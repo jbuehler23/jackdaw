@@ -2,13 +2,14 @@ use bevy::prelude::*;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_tilemap::{
-    LayoutTemplate, Placement, RgbaImage, TerrainId, TileTerrains, TilesetSetup, reset_to_auto,
+    LayoutTemplate, LayoutTerrains, Placement, RgbaImage, TerrainId, TileTerrains, TilesetSetup,
+    reset_to_auto,
 };
 use jackdaw_tileset::{Tileset, TilesetObject};
 
 use crate::tileset_edit::{
-    open_tileset, queue_edit, setup_tiles, sheet, terrain, terrain_or_empty, text, tile_list,
-    with_setup,
+    open_tileset, queue_edit, setup_tiles, sheet, terrain, terrain_or_empty, terrain_set, text,
+    tile_list, with_setup,
 };
 use crate::tileset_import::decode_sheet;
 use jackdaw_editor_core::asset_index::assets_dir;
@@ -104,9 +105,10 @@ fn placement(template: LayoutTemplate, text: &str) -> Result<Placement, String> 
     id = "tileset.apply_template",
     writes_disk = true,
     label = "Apply Tileset Template",
-    description = "Set the bits of a block of tiles to a common layout of an inner terrain over \
-                   an outer one, adding their terrain set when missing and giving it the \
-                   placement's match mode. corner16 and side16 are 4x4, minimal3x3 3x3, \
+    description = "Set the bits of a block of tiles to a common layout of one terrain drawn on \
+                   another. A terrain in no terrain set joins the other's set, the drawn \
+                   terrain on top, or both join a new set named `Terrain set n`; the set takes \
+                   the placement's match mode. corner16 and side16 are 4x4, minimal3x3 3x3, \
                    corner2x2 2x2, minimal3x3_inner a 3x3 with the 2x2 inner corners to its \
                    right, and blob47 rows of 8. A block of another size takes the tiles row \
                    by row; tiles past it are skipped and reported. Each terrain's icon tile \
@@ -117,8 +119,13 @@ fn placement(template: LayoutTemplate, text: &str) -> Result<Placement, String> 
             String,
             doc = "Tileset file under the project's assets; defaults to the open tileset."
         ),
-        inner(String, doc = "Inner terrain id or name."),
-        outer(String, doc = "Outer terrain id or name, or empty."),
+        terrain(String, doc = "Terrain id or name the layout draws."),
+        base(String, doc = "Terrain id or name the layout draws on, or empty."),
+        set(
+            String,
+            doc = "Index or name of the terrain set to lay out in; defaults to the set \
+                   holding either terrain, or a new one."
+        ),
         template(
             String,
             doc = "corner16, side16, minimal3x3, corner2x2, blob47 or minimal3x3_inner."
@@ -155,8 +162,9 @@ pub fn tileset_apply_template(
     mut commands: Commands,
 ) -> OperatorResult {
     let keys = [
-        "inner",
-        "outer",
+        "terrain",
+        "base",
+        "set",
         "template",
         "placement",
         "origin",
@@ -181,7 +189,8 @@ pub(crate) fn template_edit(
     let arg = |key: &str| {
         (args.iter().find(|(k, _)| *k == key)).map_or(String::new(), |(_, v)| v.clone())
     };
-    let (inner, outer, template) = (arg("inner"), arg("outer"), arg("template"));
+    let (inner, outer, template) = (arg("terrain"), arg("base"), arg("template"));
+    let chosen = arg("set");
     let (placed, origin, size, on) = (arg("placement"), arg("origin"), arg("size"), arg("sheet"));
     let order = arg("order");
     move |_, tileset| {
@@ -190,6 +199,10 @@ pub(crate) fn template_edit(
                 terrain(tileset, &inner)?,
                 terrain_or_empty(tileset, &outer)?,
             );
+            let set = match chosen.as_str() {
+                "" => None,
+                chosen => Some(terrain_set(tileset, chosen)?),
+            };
             let template = layout_template(&template)?;
             let placement = placement(template, &placed)?;
             let origin = cell(&origin, "origin")?;
@@ -207,10 +220,14 @@ pub(crate) fn template_edit(
                 "" => template.canonical_order(size),
                 order => cell_order(order)?,
             };
-            let pair = (inner, outer);
+            let pair = LayoutTerrains {
+                set,
+                terrain: inner,
+                base: outer,
+            };
             let (tiles, skipped) = (setup
                 .apply_template_ordered(layout, pair, index, grid, block, &order))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| setup.explain(e))?;
             let icons = bare_icons(tileset, setup, [inner, outer]);
             let past = match skipped {
                 0 => String::new(),
