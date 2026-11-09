@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use bevy::color::ColorToPacked as _;
 use jackdaw_tilemap::{CellCoord, Region, TileAddress, TilesetSetup, emit_rows};
 
-use crate::{TerrainCollision, Tileset, TilesetError};
+use crate::{TerrainCollision, Tileset, TilesetError, terrain_match};
 
 impl Tileset {
     /// Sets `key` to `value` on each of `layers`, or removes it for an empty
@@ -66,17 +66,20 @@ impl Tileset {
                 collision_name(t.collision)
             );
         }
-        let _ = writeln!(out, "terrain sets: {}", self.terrain_sets.len());
-        for s in &self.terrain_sets {
+        let _ = writeln!(out, "terrain sets: {}", setup.sets.len());
+        for (index, s) in setup.sets.iter().enumerate() {
             let locked = if s.locked_manual { ", locked" } else { "" };
+            let terrains: Vec<String> = (s.terrains.iter())
+                .map(|&id| format!("\"{}\"", self.terrain_name(id)))
+                .collect();
             let _ = write!(
                 out,
-                "  set \"{}\" over \"{}\": {:?}{locked}",
-                self.terrain_name(s.inner),
-                self.terrain_name(s.outer),
-                s.mode
+                "  set \"{}\" ({:?}{locked}): terrains bottom first [{}]",
+                s.name,
+                terrain_match(s.mode.value),
+                terrains.join(", ")
             );
-            if let Ok(c) = setup.coverage(s.inner, s.outer) {
+            if let Ok(c) = setup.coverage(index) {
                 let _ = write!(out, ", {}/{} shapes", c.covered, c.total);
                 let missing: Vec<String> = (c.missing.iter())
                     .map(|t| t.peers.map(|p| p.to_string()).join(","))

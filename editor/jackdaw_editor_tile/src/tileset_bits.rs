@@ -17,7 +17,9 @@ use crate::tileset_dock::{
     BitsOverlay, DockAction, DockControl, DockPage, DockTool, DockView, TilesetDockViews, dispatch,
     dock_path, dock_tileset, refill, swatch, zoom,
 };
-use crate::tileset_edit::{peer, queue_edit, terrain, terrain_or_empty, text, tile, with_setup};
+use crate::tileset_edit::{
+    peer, queue_edit, terrain_or_empty, terrain_set, text, tile, with_setup,
+};
 
 /// On-screen size of a missing shape's glyph.
 const GLYPH: f32 = 21.0;
@@ -80,37 +82,33 @@ pub struct BitMark {
     pub peer: usize,
 }
 
-/// A shape the set of `inner` over `outer` has no tile for, drawn as a 3x3
+/// A shape the terrain set at index `set` has no tile for, drawn as a 3x3
 /// glyph of its peers.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct MissingGlyph {
     pub root: Entity,
-    pub inner: TerrainId,
-    pub outer: TerrainId,
+    pub set: usize,
 }
 
-/// The coverage line of the set of `inner` over `outer`.
+/// The coverage line of the terrain set at index `set`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct CoverageLine {
     pub root: Entity,
-    pub inner: TerrainId,
-    pub outer: TerrainId,
+    pub set: usize,
 }
 
-/// The missing shape summary of the active set of `inner` over `outer`.
+/// The missing shape summary of the active terrain set at index `set`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct CoverageSummary {
     pub root: Entity,
-    pub inner: TerrainId,
-    pub outer: TerrainId,
+    pub set: usize,
 }
 
-/// The row of missing shape glyphs of the set of `inner` over `outer`.
+/// The row of missing shape glyphs of the terrain set at index `set`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct MissingShapes {
     pub root: Entity,
-    pub inner: TerrainId,
-    pub outer: TerrainId,
+    pub set: usize,
 }
 
 /// The count of painted tiles in the header of the dock `root`.
@@ -127,7 +125,7 @@ struct Stroke {
     root: Entity,
     path: String,
     sheet: u32,
-    set: (TerrainId, TerrainId),
+    set: usize,
     mode: MatchMode,
     terrain: TerrainId,
     button: PointerButton,
@@ -153,8 +151,7 @@ struct Stroke {
             String,
             doc = "Tileset file under the project's assets; defaults to the open tileset."
         ),
-        inner(String, doc = "Inner terrain id or name of the set."),
-        outer(String, doc = "Outer terrain id or name of the set, or empty."),
+        set(String, doc = "Index or name of the terrain set."),
         terrain(String, doc = "Terrain to paint, one of the set's; empty erases."),
         zones(
             String,
@@ -167,7 +164,7 @@ pub fn tileset_tile_paint_bits(
     params: In<OperatorParameters>,
     mut commands: Commands,
 ) -> OperatorResult {
-    let (inner, outer) = (text(&params, "inner"), text(&params, "outer"));
+    let set = text(&params, "set");
     let (on, zones) = (text(&params, "terrain"), text(&params, "zones"));
     queue_edit(
         &mut commands,
@@ -175,24 +172,20 @@ pub fn tileset_tile_paint_bits(
         text(&params, "path"),
         move |_, tileset| {
             with_setup(tileset, |tileset, setup| {
-                let (inner, outer) = (
-                    terrain(tileset, &inner)?,
-                    terrain_or_empty(tileset, &outer)?,
-                );
+                let index = terrain_set(tileset, &set)?;
                 let id = terrain_or_empty(tileset, &on)?;
-                let name = |id| tileset.terrain_name(id);
-                let set = format!("{} over {}", name(inner), name(outer));
-                if setup.set(inner, outer).is_none() {
+                let found = setup.sets.get(index).ok_or("no such terrain set")?;
+                if !found.has(id) {
                     return Err(format!(
-                        "no terrain set {set}; add it with tileset.terrain_set.add"
+                        "`{}` is not in the terrain set \"{}\"; add it with \
+                         tileset.terrain_set.add_terrain",
+                        tileset.terrain_name(id),
+                        found.name
                     ));
-                }
-                if ![0, inner, outer].contains(&id) {
-                    return Err(format!("`{}` is not in the set {set}", name(id)));
                 }
                 let zones = zone_list(tileset, &zones)?;
                 let changed =
-                    (setup.paint_zones(inner, outer, id, &zones)).map_err(|e| e.to_string())?;
+                    (setup.paint_zones(index, id, &zones)).map_err(|e| setup.explain(e))?;
                 Ok(format!("{changed} of {} zones painted", zones.len()))
             })
         },
@@ -320,19 +313,14 @@ fn step<T: Copy + PartialEq>(
         .ok_or_else(|| format!("mode is one of {}, not `{name}`", names.join(", ")))
 }
 
-/// The coverage line of the set of `inner` over `outer` and its coverage.
-pub(crate) fn coverage_line(
-    tileset: &Tileset,
-    setup: &TilesetSetup,
-    (inner, outer): (TerrainId, TerrainId),
-) -> Option<(String, Coverage)> {
-    let coverage = setup.coverage(inner, outer).ok()?;
+/// The coverage line of the terrain set at index `set` and its coverage.
+pub(crate) fn coverage_line(setup: &TilesetSetup, set: usize) -> Option<(String, Coverage)> {
+    let coverage = setup.coverage(set).ok()?;
+    let name = &setup.sets.get(set)?.name;
+    let mode = mode_word(coverage.mode);
     let line = format!(
-        "{} over {}: {} of {} shapes",
-        tileset.terrain_name(inner),
-        tileset.terrain_name(outer),
-        coverage.covered,
-        coverage.total
+        "{name} ({mode}): {} of {} shapes",
+        coverage.covered, coverage.total
     );
     Some((line, coverage))
 }
@@ -354,9 +342,9 @@ pub(crate) fn spawn_missing(
     tileset: &Tileset,
     coverage: &Coverage,
 ) {
-    let MissingShapes { root, inner, outer } = shapes;
+    let MissingShapes { root, set } = shapes;
     for shape in &coverage.missing {
-        let glyph = MissingGlyph { root, inner, outer };
+        let glyph = MissingGlyph { root, set };
         spawn_glyph(world, row, glyph, tileset, coverage.mode, shape);
     }
 }
@@ -434,9 +422,7 @@ pub(crate) fn spawn_marks(
     if view.bits == BitsOverlay::Off {
         return;
     }
-    let active = view
-        .active
-        .and_then(|(inner, outer)| setup.set(inner, outer));
+    let active = view.active_set(&tileset.sets());
     let scale = zoom(tileset.tile_size.as_vec2());
     let columns = tileset.sheets.get(sheet as usize).map_or(1, |s| s.columns);
     let drafted = |tile: u32| {
@@ -445,14 +431,14 @@ pub(crate) fn spawn_marks(
     for (address, tile) in (setup.tiles.iter()).filter(|(a, _)| a.sheet == on && !drafted(a.tile)) {
         let peers = &tile.terrains;
         let holding = if view.bits == BitsOverlay::Set {
-            let Some(set) = active.filter(|s| setup.holds(s.inner, s.outer, tile)) else {
+            let Some(set) = active.filter(|s| setup.holds(*s, tile)) else {
                 continue;
             };
-            Some(set.mode.value)
+            Some(setup.sets[set].mode.value)
         } else {
-            (setup.sets.iter())
-                .find(|s| setup.holds(s.inner, s.outer, tile))
-                .map(|s| s.mode.value)
+            (0..setup.sets.len())
+                .find(|s| setup.holds(*s, tile))
+                .map(|s| setup.sets[s].mode.value)
         };
         for peer in Peer::ALL {
             let id = peers.get(peer);
@@ -593,8 +579,9 @@ fn begin(world: &mut World, hit: TileHit, button: PointerButton) {
     let Ok(setup) = tileset.setup() else {
         return;
     };
-    let set = (view.active).filter(|(i, o)| [0, *i, *o].contains(&terrain));
-    let Some(mode) = set.and_then(|(i, o)| setup.set(i, o)).map(|s| s.mode.value) else {
+    let set = (view.active_set(&tileset.sets()))
+        .filter(|s| setup.sets.get(*s).is_some_and(|s| s.has(terrain)));
+    let Some(mode) = set.and_then(|s| setup.sets.get(s)).map(|s| s.mode.value) else {
         if terrain != 0 {
             let name = tileset.terrain_name(terrain);
             let notice = format!("no terrain set holds {name}; add one to paint its bits");
@@ -682,9 +669,8 @@ fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Pe
             )
         })
         .collect();
-    let (inner, outer) = stroke.set;
     if (stroke.setup)
-        .paint_zones(inner, outer, stroke.terrain, &zones)
+        .paint_zones(stroke.set, stroke.terrain, &zones)
         .is_err()
     {
         return;
@@ -692,24 +678,16 @@ fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Pe
     let root = stroke.root;
     let count = painted_count(&stroke.setup);
     retext::<BitsCount>(world, |c| c.root == root, &count);
-    let Some((text, coverage)) = coverage_line(&stroke.tileset, &stroke.setup, stroke.set) else {
+    let Some((text, coverage)) = coverage_line(&stroke.setup, stroke.set) else {
         return;
     };
     let set = stroke.set;
-    retext::<CoverageLine>(
-        world,
-        |l| l.root == root && (l.inner, l.outer) == set,
-        &text,
-    );
+    retext::<CoverageLine>(world, |l| l.root == root && l.set == set, &text);
     let summary = summary_line(&coverage);
-    retext::<CoverageSummary>(
-        world,
-        |l| l.root == root && (l.inner, l.outer) == set,
-        &summary,
-    );
+    retext::<CoverageSummary>(world, |l| l.root == root && l.set == set, &summary);
     let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())
         .iter(world)
-        .filter(|(_, m)| m.root == root && (m.inner, m.outer) == set)
+        .filter(|(_, m)| m.root == root && m.set == set)
         .map(|(e, m)| (e, *m))
         .collect();
     for (row, shapes) in rows {
@@ -742,11 +720,9 @@ fn finish(world: &mut World, button: PointerButton) {
     let zones: Vec<String> = (stroke.zones.iter())
         .map(|(tile, peer)| format!("{}:{tile}:{}", stroke.sheet, peer.index()))
         .collect();
-    let (inner, outer) = stroke.set;
     let call = (!zones.is_empty()).then(|| {
         let params = vec![
-            ("inner", inner.to_string()),
-            ("outer", outer.to_string()),
+            ("set", stroke.set.to_string()),
             ("terrain", stroke.terrain.to_string()),
             ("zones", zones.join(",")),
         ];
