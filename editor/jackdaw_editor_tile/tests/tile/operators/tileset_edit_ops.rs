@@ -6,6 +6,7 @@ use crate::operators::tileset_ops::{
     SHEET, asset_file, import, project_app, read_tileset, warnings,
 };
 use crate::util::OperatorResultExt as _;
+use jackdaw_tilemap::{RgbaImage, empty_tiles};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -425,6 +426,69 @@ fn collision_set_puts_a_preset_per_layer_and_none_clears_it() {
         &layer,
         "no physics layer",
     );
+}
+
+#[test]
+fn a_traced_shape_on_a_fully_transparent_tile_clears_it() {
+    let (mut app, dir) = overworld();
+    let tileset = on_disk(&dir);
+    let decoded = image::open(asset_file(&dir, SHEET))
+        .expect("decodes")
+        .to_rgba8();
+    let pixels =
+        RgbaImage::new(decoded.width(), decoded.height(), decoded.as_raw()).expect("sized");
+    let layout = tileset.sheet_layout(0).expect("a grid");
+    let clear = (empty_tiles(&pixels, &layout).iter())
+        .position(|empty| *empty)
+        .expect("a fully transparent tile") as u32;
+    let tile = format!("0:{clear}");
+    let solid = [("tiles", tile.as_str()), ("preset", "solid")];
+    edit(&mut app, &dir, "tileset.collision.set", &solid);
+    let traced = [("tiles", tile.as_str()), ("preset", "traced")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &traced);
+    assert!(collision_of(&after, clear).is_empty());
+}
+
+#[test]
+fn collision_goes_on_a_sheet_imported_without_terrain_setup() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET), ("setup", "none")]);
+    assert!(on_disk(&dir).setup_sheets.is_empty());
+    let set = [("tiles", "0:3"), ("preset", "bottom_half")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &set);
+    assert_eq!(collision_of(&after, 3).len(), 1);
+    edit(&mut app, &dir, "tileset.terrain.add", &[("name", "grass")]);
+    assert_eq!(
+        collision_of(&on_disk(&dir), 3).len(),
+        1,
+        "a setup edit keeps it"
+    );
+    let clear = [("tiles", "0:3"), ("preset", "none")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &clear);
+    assert!(after.tiles.is_empty());
+}
+
+#[test]
+fn a_physics_layer_is_found_by_index_before_name_and_numbers_cannot_name_one() {
+    let (mut app, dir) = overworld();
+    for name in ["Water", "Hazards"] {
+        let add = [("action", "add"), ("name", name)];
+        edit(&mut app, &dir, "tileset.collision.layer", &add);
+    }
+    let numbered = [("action", "add"), ("name", "2")];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &numbered,
+        "cannot name",
+    );
+    let by_index = [("tiles", "0:3"), ("preset", "solid"), ("layer", "2")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &by_index);
+    assert_eq!(collision_of(&after, 3)[0].layer, 2);
+    let by_name = [("tiles", "0:4"), ("preset", "solid"), ("layer", "Water")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &by_name);
+    assert_eq!(collision_of(&after, 4)[0].layer, 1);
 }
 
 #[test]

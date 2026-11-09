@@ -2,7 +2,7 @@ use bevy::math::UVec2;
 use jackdaw_tilemap::{
     MatchMode, Peer, Provenance, ShapePreset, TileAddress, TileCollision, TileTerrains,
 };
-use jackdaw_tileset::{Tileset, TilesetSheet};
+use jackdaw_tileset::{CollisionPreset, Tileset, TilesetCollision, TilesetSheet};
 
 /// Two sheets, the second alone under terrain setup.
 fn tileset() -> Tileset {
@@ -125,19 +125,48 @@ fn an_icon_stays_with_its_terrain_through_a_setup_edit() {
 }
 
 #[test]
-fn a_packed_layer_reads_the_collision_of_its_tile() {
+fn the_collision_lookup_reads_each_packed_layer() {
     let mut tileset = tileset();
     let mut setup = tileset.setup().expect("converts");
     let slope = TileCollision::preset(ShapePreset::SlopeDown, 0, false).expect("a preset");
     setup.set_collision(TileAddress { sheet: 0, tile: 2 }, slope);
     tileset.set_setup(&setup).expect("converts");
-    let shapes = tileset.collision_of_layer(6);
+    let lookup = tileset.collision_lookup();
+    let shapes = lookup.get(6);
     assert_eq!(shapes.len(), 1);
     assert_eq!(
         shapes[0].polygons,
         ShapePreset::SlopeDown.polygons().expect("a ring")
     );
-    assert!(tileset.collision_of_layer(5).is_empty());
-    assert!(tileset.collision_of_layer(99).is_empty());
+    assert!(lookup.get(5).is_empty());
+    assert!(lookup.get(99).is_empty());
     assert_eq!(*tileset.physics_layer_names(), ["World".to_string()]);
+}
+
+#[test]
+fn a_sheet_outside_setup_takes_collision_that_a_setup_edit_keeps() {
+    let mut tileset = tileset();
+    let solid = TilesetCollision {
+        layer: 0,
+        trigger: false,
+        preset: CollisionPreset::Solid,
+        polygons: CollisionPreset::Solid.polygons().expect("a ring"),
+    };
+    assert_eq!(tileset.set_collision(0, 1, solid.clone()), Ok(true));
+    assert_eq!(tileset.set_collision(0, 1, solid.clone()), Ok(false));
+    assert!(
+        tileset.set_collision(0, 9, solid.clone()).is_err(),
+        "past the sheet"
+    );
+    let mut setup = tileset.setup().expect("tiles outside setup are left out");
+    setup.add_terrain("grass", [1, 2, 3], false).expect("id");
+    tileset.set_setup(&setup).expect("converts");
+    assert_eq!(tileset.collision(0, 1), [solid]);
+    assert_eq!(tileset.collision_lookup().get(1).len(), 1);
+    assert_eq!(tileset.clear_collision(0, 1, 0), Ok(true));
+    assert!(
+        tileset.tiles.iter().all(|t| t.sheet != 0),
+        "a blank tile goes"
+    );
+    assert_eq!(tileset.clear_collision(0, 1, 0), Ok(false));
 }

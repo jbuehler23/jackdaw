@@ -462,15 +462,15 @@ fn scroll_to(world: &mut World, root: Entity, tileset: &Tileset, sheet: u32, s: 
         return;
     };
     let mut above = 0.0;
-    for index in tileset.setup_sheets.iter().take_while(|i| **i != sheet) {
-        let source = tileset
-            .sheets
-            .get(*index as usize)
-            .map(|s| s.source.clone());
+    for index in crate::tileset_dock::shown_sheets(tileset)
+        .into_iter()
+        .take_while(|i| *i != sheet)
+    {
+        let source = tileset.sheets.get(index as usize).map(|s| s.source.clone());
         let pixels = (source.and_then(|source| sheet_image(world, &source)))
             .and_then(|h| world.resource::<Assets<Image>>().get(&h).map(Image::size))
             .map_or(Vec2::ZERO, UVec2::as_vec2);
-        above += frame_size(tileset, *index, pixels).y + tokens::SPACING_MD;
+        above += frame_size(tileset, index, pixels).y + tokens::SPACING_MD;
     }
     let margin = tileset.tile_size.as_vec2() * zoom(tileset.tile_size.as_vec2());
     let target = (corner + Vec2::new(0.0, above) - margin).max(Vec2::ZERO);

@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn traced_art_follows_the_opaque_pixels_whatever_their_colour() {
+    fn traced_art_follows_the_opaque_pixels_whatever_their_color() {
         let tile = OneTile::new(TileKind::Terrain, TileTerrains::filled(1), |x, y| {
             match (y >= T / 2, x % 2 == 0) {
                 (false, _) => [0, 0, 0, 0],

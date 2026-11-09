@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use bevy::color::Srgba;
@@ -194,6 +194,19 @@ pub struct TilesetTile {
     pub set_inner: TerrainId,
     /// The terrain that transition draws on.
     pub set_outer: TerrainId,
+}
+
+/// Collision shapes by packed layer, built once by
+/// [`Tileset::collision_lookup`] for reading per map cell.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CollisionLookup(HashMap<u32, Vec<TilesetCollision>>);
+
+impl CollisionLookup {
+    /// The shapes of packed layer `layer`, the tile a map cell draws, by
+    /// physics layer.
+    pub fn get(&self, layer: u32) -> &[TilesetCollision] {
+        self.0.get(&layer).map_or(&[], Vec::as_slice)
+    }
 }
 
 /// The name the one physics layer of a new tileset takes.
@@ -442,18 +455,85 @@ impl Tileset {
     }
 
     /// The collision shapes of tile `tile` of sheet `sheet`, by physics
-    /// layer.
+    /// layer. Each call searches the tiles; [`Tileset::collision_lookup`]
+    /// reads many.
     pub fn collision(&self, sheet: u32, tile: u32) -> &[TilesetCollision] {
         (self.tiles.iter())
             .find(|t| t.sheet == sheet && t.tile == tile)
             .map_or(&[], |t| t.collision.as_slice())
     }
 
-    /// The collision shapes of packed layer `layer`, the tile a map cell
-    /// draws, by physics layer.
-    pub fn collision_of_layer(&self, layer: u32) -> &[TilesetCollision] {
-        self.tile_of_layer(layer)
-            .map_or(&[], |(sheet, tile)| self.collision(sheet, tile))
+    /// The collision shapes of every tile, by packed layer.
+    pub fn collision_lookup(&self) -> CollisionLookup {
+        let shapes = (self.tiles.iter())
+            .filter(|t| !t.collision.is_empty())
+            .filter_map(|t| Some((self.layer(t.sheet, t.tile)?, t.collision.clone())))
+            .collect();
+        CollisionLookup(shapes)
+    }
+
+    /// Puts `shape` on tile `tile` of sheet `sheet` by hand in place of its
+    /// shape on the same physics layer; says whether anything changed. Any
+    /// sheet takes collision, under terrain setup or not.
+    pub fn set_collision(
+        &mut self,
+        sheet: u32,
+        tile: u32,
+        shape: TilesetCollision,
+    ) -> Result<bool, TilesetError> {
+        self.layer(sheet, tile)
+            .ok_or(TilesetError::NoTile { sheet, tile })?;
+        let at = match (self.tiles.iter()).position(|t| t.sheet == sheet && t.tile == tile) {
+            Some(at) => at,
+            None => {
+                self.tiles.push(TilesetTile {
+                    sheet,
+                    tile,
+                    ..default()
+                });
+                self.tiles.len() - 1
+            }
+        };
+        let entry = &mut self.tiles[at];
+        if entry.collision.contains(&shape) {
+            return Ok(false);
+        }
+        entry.collision.retain(|s| s.layer != shape.layer);
+        let slot = entry.collision.partition_point(|s| s.layer < shape.layer);
+        entry.collision.insert(slot, shape);
+        entry.collision_by_user = true;
+        Ok(true)
+    }
+
+    /// Takes the shape on physics layer `layer` off tile `tile` of sheet
+    /// `sheet` by hand; says whether it had one. A tile left holding nothing
+    /// is dropped.
+    pub fn clear_collision(
+        &mut self,
+        sheet: u32,
+        tile: u32,
+        layer: u32,
+    ) -> Result<bool, TilesetError> {
+        self.layer(sheet, tile)
+            .ok_or(TilesetError::NoTile { sheet, tile })?;
+        let Some(at) = (self.tiles.iter()).position(|t| t.sheet == sheet && t.tile == tile) else {
+            return Ok(false);
+        };
+        let entry = &mut self.tiles[at];
+        let before = entry.collision.len();
+        entry.collision.retain(|s| s.layer != layer);
+        if entry.collision.len() == before {
+            return Ok(false);
+        }
+        entry.collision_by_user = true;
+        let blank = entry.collision.is_empty()
+            && entry.peers == [0; 9]
+            && !entry.peers_by_user.contains(&true)
+            && entry.set_inner == 0;
+        if blank {
+            self.tiles.remove(at);
+        }
+        Ok(true)
     }
 
     /// Packed layer of tile `tile` of sheet `sheet`.
@@ -519,6 +599,8 @@ impl Tileset {
     }
 
     /// The terrain setup the tileset holds, for the kernel to edit or re-run.
+    /// Tiles of sheets outside setup, which hold only collision, are left
+    /// out.
     pub fn setup(&self) -> Result<TilesetSetup, TilesetError> {
         let sheets = (self.setup_sheets.iter())
             .map(|&index| {
@@ -534,8 +616,11 @@ impl Tileset {
         };
         let mut tiles = BTreeMap::new();
         for tile in &self.tiles {
+            let Ok(sheet) = position(tile.sheet) else {
+                continue;
+            };
             let address = TileAddress {
-                sheet: position(tile.sheet)?,
+                sheet,
                 tile: tile.tile,
             };
             tiles.insert(address, setup_tile(tile));
@@ -565,7 +650,7 @@ impl Tileset {
 
     /// Takes the terrain setup `setup` in place of the tileset's. Objects keep
     /// their pivots where a stamp has the same bounds; new ones pivot at the
-    /// bottom centre.
+    /// bottom centre. Tiles of sheets outside the new setup are kept.
     pub fn set_setup(&mut self, setup: &TilesetSetup) -> Result<(), TilesetError> {
         let setup_sheets = (setup.sheets.iter())
             .map(|name| {
@@ -582,6 +667,8 @@ impl Tileset {
         for (address, tile) in &setup.tiles {
             tiles.push(tileset_tile(source(address.sheet)?, address.tile, tile));
         }
+        let outside = (self.tiles.iter()).filter(|t| !setup_sheets.contains(&t.sheet));
+        tiles.extend(outside.cloned());
         let mut objects = Vec::with_capacity(setup.stamps.len());
         for stamp in &setup.stamps {
             let sheet = source(stamp.value.sheet)?;

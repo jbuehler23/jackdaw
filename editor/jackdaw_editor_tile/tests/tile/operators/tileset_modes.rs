@@ -53,6 +53,7 @@ fn marks() -> TilesetMode {
         order: 50,
         panel: marks_panel,
         overlay: Some(marks_overlay),
+        stroke: None,
     }
 }
 

@@ -5,10 +5,10 @@ use crate::operators::tileset_dock::{
     control, handmade, input, opened, press, screen_rect, settle, texts, view,
 };
 use crate::operators::tileset_edit_ops::{collision_of, entries, on_disk, run};
-use crate::operators::tileset_ops::warnings;
+use crate::operators::tileset_ops::{SHEET, import, project_app, warnings};
 
 use bevy::prelude::*;
-use jackdaw_editor_tile::tileset_collision::PhysicsLayerPick;
+use jackdaw_editor_tile::tileset_collision::{PhysicsLayerPick, SOLID, TRIGGER};
 use jackdaw_editor_tile::tileset_dock::DockAction;
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_editor_tile::zone_overlay::{ZoneOverlay, ZonePiece};
@@ -205,4 +205,116 @@ fn a_new_physics_layer_is_shown_and_the_combo_picks_a_layer() {
         0,
         "layer 0 is empty"
     );
+}
+
+/// The outline color of each picked or quiet rectangle the overlay of the
+/// dock under `root` draws.
+fn shape_colors(app: &mut App, root: Entity) -> Vec<Color> {
+    let overlays: Vec<Entity> = app
+        .world_mut()
+        .query::<(Entity, &ZoneOverlay)>()
+        .iter(app.world())
+        .filter(|(_, o)| o.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    let world = app.world();
+    (overlays.into_iter())
+        .flat_map(|o| world.get::<Children>(o).into_iter().flatten().copied())
+        .filter(|e| matches!(world.get::<ZonePiece>(*e), Some(ZonePiece::Shape { .. })))
+        .filter_map(|e| world.get::<BorderColor>(e).map(|b| b.top.with_alpha(1.0)))
+        .collect()
+}
+
+#[test]
+fn triggers_and_solid_shapes_are_outlined_in_their_own_colors() {
+    let (mut app, _dir) = handmade();
+    let root = colliding(&mut app);
+    let at = on_tile(&mut app, root, 1, Vec2::new(0.5, 0.5));
+    drag(&mut app, at, at + Vec2::X, "primary");
+    press(&mut app, root, DockAction::CollisionTrigger);
+    let at = on_tile(&mut app, root, 2, Vec2::new(0.5, 0.5));
+    drag(&mut app, at, at + Vec2::X, "primary");
+    let colors = shape_colors(&mut app, root);
+    assert_eq!(colors.len(), 2, "{colors:?}");
+    assert!(colors.contains(&SOLID), "{colors:?}");
+    assert!(colors.contains(&TRIGGER), "{colors:?}");
+}
+
+#[test]
+fn losing_window_focus_drops_a_collision_stroke() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let from = on_tile(&mut app, root, 1, Vec2::new(0.5, 0.5));
+    let to = on_tile(&mut app, root, 3, Vec2::new(0.5, 0.5));
+    input(
+        &mut app,
+        &format!(
+            "input.pointer x={} y={} action=press button=primary",
+            from.x, from.y
+        ),
+    );
+    assert_eq!(picked_shapes(&pieces(&mut app, root)), 1, "the preview");
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+        .single(app.world())
+        .expect("a window");
+    app.world_mut().write_message(bevy::window::WindowFocused {
+        window,
+        focused: false,
+    });
+    settle(&mut app);
+    for action in ["move", "release"] {
+        input(
+            &mut app,
+            &format!(
+                "input.pointer x={} y={} action={action} button=primary",
+                to.x, to.y
+            ),
+        );
+    }
+    assert_eq!(on_disk(&dir), before);
+    assert_eq!(entries(&app), count);
+    assert_eq!(
+        picked_shapes(&pieces(&mut app, root)),
+        0,
+        "the preview is gone"
+    );
+}
+
+#[test]
+fn undoing_a_shown_layer_add_falls_back_to_a_layer_there_is() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    press(&mut app, root, DockAction::AddPhysicsLayer);
+    assert_eq!(view(&app).collision.layer, 1);
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).physics_layer_names().len(), 1);
+    assert_eq!(view(&app).collision.layer, 0);
+    run(&mut app, "history.redo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir).physics_layer_names().len(), 2);
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    let at = on_tile(&mut app, root, 1, Vec2::new(0.5, 0.5));
+    drag(&mut app, at, at + Vec2::X, "primary");
+    assert_eq!(collision_of(&on_disk(&dir), 1)[0].layer, 0);
+}
+
+#[test]
+fn a_sheet_without_terrain_setup_is_shown_and_takes_collision() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET), ("setup", "none")]);
+    settle(&mut app);
+    let root = colliding(&mut app);
+    let from = on_tile(&mut app, root, 1, Vec2::new(0.5, 0.5));
+    let to = on_tile(&mut app, root, 2, Vec2::new(0.5, 0.5));
+    drag(&mut app, from, to, "primary");
+    let after = on_disk(&dir);
+    assert!(after.setup_sheets.is_empty());
+    assert_eq!(collision_of(&after, 1).len(), 1);
+    assert_eq!(collision_of(&after, 2).len(), 1);
+    assert_eq!(picked_shapes(&pieces(&mut app, root)), 2);
 }

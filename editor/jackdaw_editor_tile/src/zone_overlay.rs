@@ -1020,6 +1020,38 @@ mod tests {
     }
 
     #[test]
+    fn a_traced_ring_of_eight_points_draws_eight_segments_per_tile() {
+        let ring: Vec<Vec2> = [
+            (0.0, 0.25),
+            (0.25, 0.0),
+            (0.75, 0.0),
+            (1.0, 0.25),
+            (1.0, 0.75),
+            (0.75, 1.0),
+            (0.25, 1.0),
+            (0.0, 0.75),
+        ]
+        .map(|(x, y)| Vec2::new(x, y))
+        .to_vec();
+        let values = ZoneValues {
+            outlines: (0..27 * 65)
+                .map(|t| {
+                    let rings = vec![ring.clone()];
+                    (t, ZoneOutline { value: 1, rings })
+                })
+                .collect(),
+            ..outlined(&[], false)
+        };
+        let found = drawn(&grid(27, 65), &values);
+        assert_eq!(found.len(), 8 * 27 * 65);
+        assert!(
+            found
+                .iter()
+                .all(|(p, _)| matches!(p, ZonePiece::Segment { .. }))
+        );
+    }
+
+    #[test]
     fn the_zone_under_a_point_follows_the_layout() {
         let corners = ZoneLayout::Peers(MatchMode::Corners);
         assert_eq!(

@@ -21,7 +21,7 @@
 //!   changed by a re-run. A set the fresh run lacks stays while a kept tile
 //!   is one of its transitions, and a set rebuilt by a re-run keeps its name.
 //! - Collision: a tile keeps its collision through a re-run and a reset; a
-//!   tile new to the setup takes what the fresh run traced.
+//!   re-run proposes none.
 //! - Stamps: User stamps stay; Auto stamps in scope give way to fresh ones,
 //!   less those sharing a tile with a stamp that stays.
 
@@ -34,7 +34,7 @@ use crate::report::auto_setup_reserving;
 use crate::terrain_find::CLUSTER_RADIUS;
 use crate::{
     AutoSetup, MatchMode, Peer, RgbaImage, SetupError, Stamp, TerrainId, TileAddress,
-    TileCollision, TileShape, TileTerrains,
+    TileCollision, TileTerrains,
 };
 
 /// The terrain a transition draws, then the terrain it draws on (0 for
@@ -176,7 +176,8 @@ pub enum Scope {
     /// The set at this index: its match mode, its terrains and the tiles it
     /// holds before or after the run.
     Set(usize),
-    /// The tiles' bits and shapes and the Auto stamps holding any of them.
+    /// The tiles' bits and the Auto stamps holding any of them; their
+    /// collision stays.
     Tiles(BTreeSet<TileAddress>),
 }
 
@@ -261,7 +262,13 @@ impl TilesetSetup {
     /// Everything `fresh` proposes, all Auto, in its ids, with the shapes it
     /// traced for the import's Solid terrains on the tiles it assigns.
     pub fn from_auto(fresh: &AutoSetup) -> Self {
-        proposed(fresh, &fresh.shapes)
+        let mut setup = proposed(fresh);
+        for (address, shape) in &fresh.shapes {
+            if let Some(tile) = setup.tiles.get_mut(address) {
+                tile.collision = Tracked::auto(vec![TileCollision::traced(shape.clone())]);
+            }
+        }
+        setup
     }
 
     pub fn terrain(&self, id: TerrainId) -> Option<&SetupTerrain> {
@@ -519,7 +526,7 @@ fn merge(
     let live: BTreeSet<usize> = fresh_sheets.iter().flatten().copied().collect();
     let scope = scope.moved(&from_previous);
     let prev = previous.clone().moved(sheets.clone(), &from_previous);
-    let mut auto = proposed(fresh, &fresh.shapes).moved(sheets.clone(), &from_fresh);
+    let mut auto = proposed(fresh).moved(sheets.clone(), &from_fresh);
 
     let (ids, start) = match_ids(&prev.terrains, &auto.terrains, prev.next_id)?;
     let remap = |f: TerrainId| ids.get(&f).copied().unwrap_or(0);
@@ -678,9 +685,8 @@ fn merge(
     })
 }
 
-/// The setup `fresh` proposes, in its ids, with `shapes` as Auto solid
-/// collision on layer 0.
-fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> TilesetSetup {
+/// The setup `fresh` proposes, in its ids, with no collision.
+fn proposed(fresh: &AutoSetup) -> TilesetSetup {
     let mut terrains: Vec<SetupTerrain> = (fresh.proposal.terrains.iter())
         .map(|p| {
             let found = fresh.analysis.terrain(p.id);
@@ -714,11 +720,6 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
         for address in &p.pure_tiles {
             let pure = TileTerrains::filled(p.id);
             tiles.entry(*address).or_insert_with(|| auto_tile(pure));
-        }
-    }
-    for (address, shape) in shapes {
-        if let Some(tile) = tiles.get_mut(address) {
-            tile.collision = Tracked::auto(vec![TileCollision::traced(shape.clone())]);
         }
     }
     let pairs: Vec<(Pair, MatchMode)> = (fresh.proposal.sets.iter())
@@ -1138,7 +1139,7 @@ mod tests {
     use super::*;
     use crate::{
         FittedTile, FoundTerrain, ProposedSet, ProposedTerrain, SetupReport, SheetReport,
-        TerrainAnalysis, TilesetProposal,
+        TerrainAnalysis, TileShape, TilesetProposal,
     };
 
     const GRASS: TerrainId = 1;

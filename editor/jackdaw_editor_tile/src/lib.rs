@@ -13,6 +13,7 @@ use jackdaw_editor_core::inspector::ComponentCardRegistry;
 use jackdaw_editor_core::project_window::FileOpeners;
 use jackdaw_editor_core::toolbar_2d::Toolbar2dSlots;
 
+pub mod sheet_stroke;
 pub mod tile_palette;
 pub mod tile_preview;
 pub mod tile_select;
@@ -59,7 +60,7 @@ impl Plugin for TileEditorPlugin {
         ))
         .add_plugins((
             tileset_dock::plugin,
-            tileset_bits::plugin,
+            sheet_stroke::plugin,
             tileset_collision::plugin,
             tileset_layout::plugin,
             tileset_suggest::plugin,

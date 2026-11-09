@@ -1,64 +1,45 @@
 use std::collections::{BTreeSet, HashMap};
 
-use bevy::picking::events::{
-    PointerCancel, PointerDragEnd, PointerMove, PointerPress, PointerRelease,
-};
-use bevy::picking::pointer::{PointerButton, PointerId, PointerPressState};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::UiTransform;
-use bevy::window::WindowFocused;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, combobox_compact_with_selected};
 use jackdaw_feathers::icons::Icon;
 use jackdaw_feathers::tokens;
-use jackdaw_tilemap::{RgbaImage, SheetInput, TileCollision, trace_art};
-use jackdaw_tileset::{CollisionPreset, Tileset};
+use jackdaw_tilemap::{GridLayout, RgbaImage, SheetInput, trace_art};
+use jackdaw_tileset::{CollisionPreset, Tileset, TilesetCollision};
 
+use crate::sheet_stroke::{SheetPaint, StrokeInfo, StrokeStart};
+use crate::tileset_bits::sheet_overlay;
 use crate::tileset_dock::{
-    CollisionBrush, DockAction, DockControl, DockView, TilesetDockViews, dispatch, dock_path,
+    CollisionBrush, DockAction, DockCall, DockControl, DockView, TilesetDockViews, dock_path,
     dock_tileset, refill, sheet_image, spawn_icon_button, spawn_pick, spawn_row, spawn_text,
 };
 use crate::tileset_edit::{apply_edit, text, tile_list};
 use crate::tileset_import::decode_sheet;
-use crate::tileset_layout::GhostZones;
 use crate::tileset_modes::{ModeId, ModePanel, ModeSheet, TilesetMode, TilesetModeAppExt as _};
 use crate::zone_overlay::{
-    ZoneLayout, ZoneOutline, ZoneOverlay, ZoneValues, redraw_zone_rows, spawn_zone_overlay,
+    ZoneLayout, ZoneOutline, ZoneValues, redraw_zone_rows, spawn_zone_overlay,
 };
 
 /// Outline color of solid shapes, and of triggers.
-const SOLID: Color = Color::srgb(0.35, 0.78, 1.0);
-const TRIGGER: Color = Color::srgb(1.0, 0.72, 0.22);
+pub const SOLID: Color = Color::srgb(0.35, 0.78, 1.0);
+pub const TRIGGER: Color = Color::srgb(1.0, 0.72, 0.22);
 /// On-screen size of a preset's glyph.
 const GLYPH: f32 = 14.0;
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<CollisionStroke>()
-        .add_observer(on_layer_pick)
-        .add_observer(on_press)
-        .add_observer(on_move)
-        .add_observer(
-            |end: On<PointerRelease>, stroke: Res<CollisionStroke>, mut commands: Commands| {
-                end_stroke(end.button, &stroke, &mut commands);
-            },
-        )
-        .add_observer(
-            |end: On<PointerDragEnd>, stroke: Res<CollisionStroke>, mut commands: Commands| {
-                end_stroke(end.button, &stroke, &mut commands);
-            },
-        )
-        .add_systems(
-            Update,
-            cancel_on_interruption.run_if(|stroke: Res<CollisionStroke>| stroke.0.is_some()),
-        )
+    app.add_observer(on_layer_pick)
         .register_tileset_mode(TilesetMode {
             id: ModeId::COLLISION,
             label: "Collision",
             order: 20,
             panel: collision_panel,
             overlay: Some(collision_overlay),
+            stroke: Some(start_stroke),
         });
 }
 
@@ -242,10 +223,11 @@ fn layer_action(
     }
 }
 
-/// `name` trimmed, refused when empty or taken by one of `others`.
+/// `name` trimmed, refused when empty, a number or taken by one of
+/// `others`.
 fn free_layer_name(others: &[String], name: &str) -> Result<String, String> {
     let name = name.trim();
-    if name.is_empty() || name.chars().any(char::is_control) {
+    if name.is_empty() || name.parse::<u32>().is_ok() || name.chars().any(char::is_control) {
         return Err(format!("`{name}` cannot name a physics layer"));
     }
     if others.iter().any(|n| n == name) {
@@ -264,21 +246,24 @@ fn show_layer(world: &mut World, path: &str, layer: u32) {
     refill(world, path);
 }
 
-/// A physics layer by index or name; layer 0 when `text` is empty.
+/// A physics layer by index, else by name; layer 0 when `text` is empty.
 fn physics_layer(tileset: &Tileset, text: &str) -> Result<u32, String> {
     let names = tileset.physics_layer_names();
     if text.is_empty() {
         return Ok(0);
     }
-    let found = (names.iter().zip(0u32..))
-        .find(|(name, i)| text.parse::<u32>().is_ok_and(|n| n == *i) || *name == text);
-    found
-        .map(|(_, i)| i)
+    let by_index = text
+        .parse::<u32>()
+        .ok()
+        .filter(|i| (*i as usize) < names.len());
+    let by_name = || names.iter().position(|n| n == text).map(|i| i as u32);
+    by_index
+        .or_else(by_name)
         .ok_or_else(|| format!("no physics layer is `{text}`"))
 }
 
 /// The pixels and grid of each sheet a traced shape is read from.
-type TracedSheets = HashMap<u32, (Vec<u8>, (u32, u32, jackdaw_tilemap::GridLayout))>;
+type TracedSheets = HashMap<u32, (Vec<u8>, (u32, u32, GridLayout))>;
 
 /// The sheets of `tiles` decoded from disk, when `shape` is traced.
 fn traced_sheets(
@@ -312,7 +297,7 @@ fn traced_sheets(
 /// bottom-left.
 fn traced(
     pixels: &[u8],
-    (width, height, layout): (u32, u32, jackdaw_tilemap::GridLayout),
+    (width, height, layout): (u32, u32, GridLayout),
     tile: u32,
 ) -> Option<Vec<Vec<Vec2>>> {
     let input = SheetInput {
@@ -337,27 +322,24 @@ pub fn paint_collision(
     if layer >= layers {
         return Err(format!("the tileset has no physics layer {layer}"));
     }
-    let mut setup = tileset.setup().map_err(|e| e.to_string())?;
     let mut changed = 0;
     for &(sheet, tile) in tiles {
-        let address = (tileset.setup_address(sheet, tile)).map_err(|e| e.to_string())?;
         let polygons =
             shape.and_then(|(preset, _)| preset.polygons().or_else(|| trace(sheet, tile)));
         let done = match (shape, polygons) {
             (Some((preset, trigger)), Some(polygons)) => {
-                let collision = TileCollision {
+                let collision = TilesetCollision {
                     layer,
                     trigger,
-                    preset: preset.into(),
+                    preset,
                     polygons,
                 };
-                setup.set_collision(address, collision)
+                tileset.set_collision(sheet, tile, collision)
             }
-            _ => setup.clear_collision(address, layer),
+            _ => tileset.clear_collision(sheet, tile, layer),
         };
-        changed += usize::from(done);
+        changed += usize::from(done.map_err(|e| e.to_string())?);
     }
-    tileset.set_setup(&setup).map_err(|e| e.to_string())?;
     Ok(changed)
 }
 
@@ -568,205 +550,96 @@ fn on_layer_pick(
     });
 }
 
-/// The stroke a pointer is painting on a sheet, applied when it lifts.
-#[derive(Resource, Default)]
-struct CollisionStroke(Option<Stroke>);
-
-struct Stroke {
-    root: Entity,
-    path: String,
-    sheet: u32,
-    button: PointerButton,
+/// A stroke of the collision mode: the brush painted on whole tiles, or
+/// cleared from them with the right button.
+struct CollisionPaint {
     brush: CollisionBrush,
-    tileset: Tileset,
     /// The tileset with the stroke painted so far.
     shown: Tileset,
     tiles: BTreeSet<u32>,
-    /// The last point painted, in sheet pixels.
-    last: Vec2,
 }
 
-fn end_stroke(button: PointerButton, stroke: &CollisionStroke, commands: &mut Commands) {
-    if stroke.0.as_ref().is_some_and(|s| s.button == button) {
-        commands.queue(move |world: &mut World| finish(world, button));
-    }
-}
-
-/// A cancelled pointer or a window losing focus drops the stroke unapplied.
-fn cancel_on_interruption(
-    mut focus: MessageReader<WindowFocused>,
-    mut cancels: MessageReader<PointerCancel>,
-    mut commands: Commands,
-) {
-    let lost = focus.read().any(|f| !f.focused);
-    let cancelled = cancels.read().count() > 0;
-    if lost || cancelled {
-        commands.queue(|world: &mut World| {
-            if let Some(stroke) = world.resource_mut::<CollisionStroke>().0.take() {
-                refill(world, &stroke.path);
-            }
-        });
-    }
-}
-
-/// The dock, frame, sheet tile and point in it, from (0, 0) at its top left
-/// to (1, 1), of a pointer event on a sheet tile.
-type TileHit = (Entity, Entity, u32, u32, Vec2);
-
-fn tile_hit(
-    entity: Entity,
-    position: Option<Vec3>,
-    controls: &Query<(&DockControl, &ChildOf)>,
-) -> Option<TileHit> {
-    let (control, parent) = controls.get(entity).ok()?;
-    let DockAction::Tile(sheet, tile) = control.action else {
-        return None;
-    };
-    let inside = position?.truncate() + 0.5;
-    Some((control.root, parent.parent(), sheet, tile, inside))
-}
-
-fn on_press(
-    press: On<PointerPress>,
-    controls: Query<(&DockControl, &ChildOf)>,
-    stroke: Res<CollisionStroke>,
-    mut commands: Commands,
-) {
-    if stroke.0.is_some() {
-        return;
-    }
-    if let Some(hit) = tile_hit(press.entity, press.hit.position, &controls) {
-        let button = press.button;
-        commands.queue(move |world: &mut World| begin(world, hit, button));
-    }
-}
-
-fn on_move(
-    moved: On<PointerMove>,
-    controls: Query<(&DockControl, &ChildOf)>,
-    pointers: Query<(&PointerId, &PointerPressState)>,
-    stroke: Res<CollisionStroke>,
-    mut commands: Commands,
-) {
-    let Some(button) = stroke.0.as_ref().map(|s| s.button) else {
-        return;
-    };
-    let held = (pointers.iter())
-        .find(|(id, _)| **id == moved.pointer.id)
-        .is_some_and(|(_, state)| match button {
-            PointerButton::Primary => state.is_primary_pressed(),
-            PointerButton::Secondary => state.is_secondary_pressed(),
-            PointerButton::Middle => state.is_middle_pressed(),
-        });
-    if !held {
-        return;
-    }
-    if let Some(hit) = tile_hit(moved.entity, moved.hit.position, &controls) {
-        commands.queue(move |world: &mut World| extend(world, hit));
-    }
-}
-
-/// Start a stroke in a dock in the collision mode: left paints the brush,
-/// right clears.
-fn begin(world: &mut World, hit: TileHit, button: PointerButton) {
-    let (root, _, sheet, tile, inside) = hit;
-    if button == PointerButton::Middle || world.resource::<CollisionStroke>().0.is_some() {
-        return;
-    }
-    let Some((path, tileset)) = dock_tileset(world, root) else {
-        return;
-    };
-    let Some(view) = world.resource::<TilesetDockViews>().0.get(&path).cloned() else {
-        return;
-    };
-    if view.mode != ModeId::COLLISION {
-        return;
-    }
-    let Some((origin, size)) = tileset.sheet_rect(sheet, tile) else {
-        return;
-    };
-    let stroke = Stroke {
-        root,
-        path,
-        sheet,
-        button,
-        brush: view.collision,
-        shown: tileset.clone(),
-        tileset,
+/// Start a stroke of the collision mode.
+fn start_stroke(_: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetPaint>> {
+    Some(Box::new(CollisionPaint {
+        brush: start.view.collision,
+        shown: start.tileset.clone(),
         tiles: BTreeSet::new(),
-        last: origin.as_vec2() + inside * size.as_vec2(),
-    };
-    world.resource_mut::<CollisionStroke>().0 = Some(stroke);
-    extend(world, hit);
+    }))
 }
 
-/// Paint every tile on the line from the stroke's last point to the hit.
-fn extend(world: &mut World, (root, frame, sheet, tile, inside): TileHit) {
-    let Some(mut stroke) = world.resource_mut::<CollisionStroke>().0.take() else {
-        return;
-    };
-    let layout = (stroke.tileset.sheet_layout(sheet))
-        .filter(|_| stroke.root == root && stroke.sheet == sheet);
-    if let Some((layout, (origin, size))) = layout.zip(stroke.tileset.sheet_rect(sheet, tile)) {
-        let at = origin.as_vec2() + inside * size.as_vec2();
-        let step = size.as_vec2().min_element() / 4.0;
-        let steps = (stroke.last.distance(at) / step.max(0.5)).ceil().max(1.0) as u32;
-        let mut fresh = Vec::new();
-        for i in 0..=steps {
-            let point = stroke.last.lerp(at, i as f32 / steps as f32);
-            if let Some((found, _)) = layout
-                .tile_at(point)
-                .filter(|(t, _)| stroke.tiles.insert(*t))
-            {
-                fresh.push(found);
-            }
+impl CollisionPaint {
+    /// The brush's preset and trigger flag for a left stroke; none for a
+    /// right one, which clears.
+    fn shape(&self, stroke: &StrokeInfo) -> Option<(CollisionPreset, bool)> {
+        (stroke.button == PointerButton::Primary).then_some((self.brush.preset, self.brush.trigger))
+    }
+}
+
+impl SheetPaint for CollisionPaint {
+    fn samples(&self) -> f32 {
+        4.0
+    }
+
+    fn paint(&mut self, world: &mut World, stroke: &StrokeInfo, frame: Entity, points: &[Vec2]) {
+        let Some(layout) = stroke.tileset.sheet_layout(stroke.sheet) else {
+            return;
+        };
+        let fresh: Vec<u32> = (points.iter())
+            .filter_map(|p| layout.tile_at(*p).map(|(tile, _)| tile))
+            .filter(|tile| self.tiles.insert(*tile))
+            .collect();
+        if fresh.is_empty() {
+            return;
         }
-        stroke.last = at;
-        show(world, &mut stroke, frame, &fresh);
+        let shape = self.shape(stroke);
+        let pixels = (shape.is_some_and(|(p, _)| p == CollisionPreset::Traced))
+            .then(|| sheet_pixels(world, &stroke.tileset, stroke.sheet))
+            .flatten();
+        let trace = |_: u32, tile: u32| {
+            let (bytes, size) = pixels.as_ref()?;
+            traced(bytes, *size, tile)
+        };
+        let tiles: Vec<(u32, u32)> = fresh.iter().map(|t| (stroke.sheet, *t)).collect();
+        let layer = self.brush.layer;
+        if paint_collision(&mut self.shown, &tiles, shape, layer, &trace).is_err() {
+            return;
+        }
+        let Some(view) = (world.resource::<TilesetDockViews>().0.get(&stroke.path)).cloned() else {
+            return;
+        };
+        let values = collision_values(&self.shown, stroke.sheet, &view);
+        let Some(overlay) = sheet_overlay(world, stroke.root, frame) else {
+            spawn_zone_overlay(
+                world,
+                frame,
+                stroke.root,
+                (&self.shown, stroke.sheet),
+                values,
+            );
+            return;
+        };
+        let columns =
+            (stroke.tileset.sheets.get(stroke.sheet as usize)).map_or(1, |s| s.columns.max(1));
+        let rows: BTreeSet<u32> = fresh.iter().map(|tile| tile / columns).collect();
+        redraw_zone_rows(world, overlay, values, rows);
     }
-    world.resource_mut::<CollisionStroke>().0 = Some(stroke);
-}
 
-/// Paint the new tiles into the stroke's tileset and draw their rows again.
-fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[u32]) {
-    if fresh.is_empty() || world.get_entity(frame).is_err() {
-        return;
+    fn apply(&self, stroke: &StrokeInfo) -> Option<DockCall> {
+        let tiles: Vec<String> = (self.tiles.iter())
+            .map(|tile| format!("{}:{tile}", stroke.sheet))
+            .collect();
+        let preset = self.shape(stroke).map_or("none", |(p, _)| p.name());
+        (!tiles.is_empty()).then(|| {
+            let params = vec![
+                ("tiles", tiles.join(",")),
+                ("preset", preset.to_string()),
+                ("layer", self.brush.layer.to_string()),
+                ("trigger", self.brush.trigger.to_string()),
+            ];
+            (TilesetCollisionSetOp::ID, params)
+        })
     }
-    let brush = stroke.brush;
-    let shape = (stroke.button == PointerButton::Primary).then_some((brush.preset, brush.trigger));
-    let pixels = (shape.is_some_and(|(p, _)| p == CollisionPreset::Traced))
-        .then(|| sheet_pixels(world, &stroke.tileset, stroke.sheet))
-        .flatten();
-    let trace = |_: u32, tile: u32| {
-        let (bytes, size) = pixels.as_ref()?;
-        traced(bytes, *size, tile)
-    };
-    let tiles: Vec<(u32, u32)> = fresh.iter().map(|t| (stroke.sheet, *t)).collect();
-    if paint_collision(&mut stroke.shown, &tiles, shape, brush.layer, &trace).is_err() {
-        return;
-    }
-    let Some(view) = (world.resource::<TilesetDockViews>().0.get(&stroke.path)).cloned() else {
-        return;
-    };
-    let overlay = (world.query_filtered::<(Entity, &ZoneOverlay, &ChildOf), Without<GhostZones>>())
-        .iter(world)
-        .find(|(_, o, parent)| o.root == stroke.root && parent.parent() == frame)
-        .map(|(e, ..)| e);
-    let values = collision_values(&stroke.shown, stroke.sheet, &view);
-    let Some(overlay) = overlay else {
-        spawn_zone_overlay(
-            world,
-            frame,
-            stroke.root,
-            (&stroke.shown, stroke.sheet),
-            values,
-        );
-        return;
-    };
-    let columns =
-        (stroke.tileset.sheets.get(stroke.sheet as usize)).map_or(1, |s| s.columns.max(1));
-    let rows: BTreeSet<u32> = fresh.iter().map(|tile| tile / columns).collect();
-    redraw_zone_rows(world, overlay, values, rows);
 }
 
 /// The pixels of the drawn image of sheet `sheet`, with its size and grid.
@@ -774,37 +647,11 @@ fn sheet_pixels(
     world: &mut World,
     tileset: &Tileset,
     sheet: u32,
-) -> Option<(Vec<u8>, (u32, u32, jackdaw_tilemap::GridLayout))> {
+) -> Option<(Vec<u8>, (u32, u32, GridLayout))> {
     let source = &tileset.sheets.get(sheet as usize)?.source;
     let handle = sheet_image(world, source)?;
     let image = world.resource::<Assets<Image>>().get(&handle)?;
     let pixels = image.data.clone()?;
     let layout = tileset.sheet_layout(sheet)?;
     Some((pixels, (image.width(), image.height(), layout)))
-}
-
-/// Apply the stroke `button` paints as one edit.
-fn finish(world: &mut World, button: PointerButton) {
-    let mut strokes = world.resource_mut::<CollisionStroke>();
-    let Some(stroke) = strokes.0.take_if(|s| s.button == button) else {
-        return;
-    };
-    let tiles: Vec<String> = (stroke.tiles.iter())
-        .map(|tile| format!("{}:{tile}", stroke.sheet))
-        .collect();
-    let brush = stroke.brush;
-    let preset = match button {
-        PointerButton::Primary => brush.preset.name(),
-        _ => "none",
-    };
-    let call = (!tiles.is_empty()).then(|| {
-        let params = vec![
-            ("tiles", tiles.join(",")),
-            ("preset", preset.to_string()),
-            ("layer", brush.layer.to_string()),
-            ("trigger", brush.trigger.to_string()),
-        ];
-        (TilesetCollisionSetOp::ID, params)
-    });
-    dispatch(world, stroke.root, &stroke.path, &stroke.tileset, call);
 }

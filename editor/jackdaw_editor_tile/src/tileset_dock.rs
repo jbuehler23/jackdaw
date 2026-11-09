@@ -592,10 +592,17 @@ fn fill_tileset(
         node.overflow = Overflow::scroll();
     }
     let overlay = mode.and_then(|m| m.overlay);
-    for index in &tileset.setup_sheets {
-        spawn_sheet(world, sheet, root, (tileset, &setup), *index, view, overlay);
+    for index in shown_sheets(tileset) {
+        spawn_sheet(world, sheet, root, (tileset, &setup), index, view, overlay);
     }
     Ok(())
+}
+
+/// The sheets a tab draws, top to bottom: those under terrain setup in its
+/// order, then the others.
+pub(crate) fn shown_sheets(tileset: &Tileset) -> Vec<u32> {
+    let others = (0..tileset.sheets.len() as u32).filter(|s| !tileset.setup_sheets.contains(s));
+    tileset.setup_sheets.iter().copied().chain(others).collect()
 }
 
 /// The side panel of the tiles and terrains modes: the terrains and sets,
@@ -1557,7 +1564,7 @@ pub(crate) fn dock_tileset(world: &mut World, root: Entity) -> Option<(String, T
 }
 
 /// An operator and its parameters, for the tileset of a dock.
-type DockCall = (&'static str, Vec<(&'static str, String)>);
+pub type DockCall = (&'static str, Vec<(&'static str, String)>);
 
 fn act(world: &mut World, control: DockControl) {
     if crate::tileset_layout::act(world, control) || crate::tileset_suggest::act(world, control) {
@@ -1571,7 +1578,9 @@ fn act(world: &mut World, control: DockControl) {
         return;
     };
     let mut view = (world.resource::<TilesetDockViews>().0.get(&path).cloned()).unwrap_or_default();
-    let paints = view.mode == ModeId::TERRAINS || view.mode == ModeId::COLLISION;
+    let paints = (world.get_resource::<TilesetModes>())
+        .and_then(|modes| modes.get(view.mode))
+        .is_some_and(|mode| mode.stroke.is_some());
     if paints && matches!(control.action, DockAction::Tile(..)) {
         take_keyboard(world, root);
         return;

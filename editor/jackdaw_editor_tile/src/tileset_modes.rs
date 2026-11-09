@@ -4,6 +4,7 @@ use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_tilemap::TilesetSetup;
 use jackdaw_tileset::Tileset;
 
+use crate::sheet_stroke::StrokeStarter;
 use crate::tileset_dock::{DockView, TilesetDockViews, dock_path, refill, refill_all};
 use crate::tileset_edit::text;
 
@@ -62,6 +63,8 @@ pub struct TilesetMode {
     pub panel: fn(&mut World, &ModePanel),
     /// Draws over each sheet, after its tiles.
     pub overlay: Option<fn(&mut World, &ModeSheet)>,
+    /// Starts a paint stroke where a press lands on a sheet tile.
+    pub stroke: Option<StrokeStarter>,
 }
 
 /// The registered modes of the Tileset window.
@@ -163,6 +166,7 @@ pub(crate) fn plugin(app: &mut App) {
             order: 0,
             panel: crate::tileset_dock::sheet_panel,
             overlay: None,
+            stroke: None,
         })
         .register_tileset_mode(TilesetMode {
             id: ModeId::TERRAINS,
@@ -170,6 +174,7 @@ pub(crate) fn plugin(app: &mut App) {
             order: 10,
             panel: crate::tileset_dock::sheet_panel,
             overlay: Some(crate::tileset_bits::terrain_overlay),
+            stroke: Some(crate::tileset_bits::start_stroke),
         })
         .register_tileset_mode(TilesetMode {
             id: ModeId::OBJECTS,
@@ -177,6 +182,7 @@ pub(crate) fn plugin(app: &mut App) {
             order: 100,
             panel: crate::tileset_dock::objects_panel,
             overlay: Some(crate::tileset_dock::object_outlines),
+            stroke: None,
         });
 }
 
@@ -186,8 +192,9 @@ pub(crate) fn plugin(app: &mut App) {
     label = "Tileset Mode",
     description = "Switch a Tileset tab to one of its modes: tiles picks tiles, terrains \
                    paints terrains on tile zones with the brush terrain (right erases), \
-                   collision paints collision shapes on tiles (right clears), objects marks rectangles of tiles as objects; extensions add more. With \
-                   no mode it steps to the next.",
+                   collision paints collision shapes on tiles (right clears), objects marks \
+                   rectangles of tiles as objects; extensions add more. With no mode it steps \
+                   to the next.",
     allows_undo = false,
     is_available = a_tileset_is_shown,
     params(

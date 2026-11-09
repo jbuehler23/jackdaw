@@ -272,8 +272,8 @@ fn bare_icons(tileset: &Tileset, setup: &mut TilesetSetup, terrains: [TerrainId;
     id = "tileset.tile.reset_to_auto",
     writes_disk = true,
     label = "Reset Tiles To Auto",
-    description = "Hand tiles back to auto setup: their bits and shapes are proposed afresh \
-                   from the source sheets.",
+    description = "Hand tiles back to auto setup: their bits are proposed afresh from the \
+                   source sheets and their collision stays.",
     allows_undo = false,
     params(
         path(
