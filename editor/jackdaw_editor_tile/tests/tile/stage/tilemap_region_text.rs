@@ -26,6 +26,22 @@ const DESCRIBE: &str = "tilemap.describe";
 const READ: &str = "tilemap.read_region";
 const WRITE: &str = "tilemap.write_region";
 
+/// The overworld project with the terrains these tests write named by hand.
+fn named_app() -> (App, tempfile::TempDir) {
+    let (mut app, dir) = project_app();
+    for (terrain, name) in [("1", "grass"), ("7", "dirt"), ("11", "water")] {
+        let result = (app.world_mut().operator("tileset.terrain.rename"))
+            .param("path", PropertyValue::from(TILESET.to_string()))
+            .param("terrain", PropertyValue::from(terrain.to_string()))
+            .param("name", PropertyValue::from(name.to_string()))
+            .call()
+            .expect("tileset.terrain.rename dispatches");
+        assert_eq!(result, OperatorResult::Finished);
+        settle(&mut app);
+    }
+    (app, dir)
+}
+
 fn report(app: &App) -> String {
     (app.world().get_resource::<OperatorReports>()).map_or(String::new(), |r| r.0.join("\n"))
 }
@@ -88,7 +104,7 @@ fn two_layer_map(app: &mut App) -> Entity {
 
 #[test]
 fn describe_lists_the_layers_with_their_tilesets_and_terrains() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = two_layer_map(&mut app);
     let said = finished(
         &mut app,
@@ -100,8 +116,8 @@ fn describe_lists_the_layers_with_their_tilesets_and_terrains() {
         format!(
             "tilemap \"map\": cell 16x16, unbounded, painted 0,-2 to 7,5\n\
              layer 0 \"Ground\": terrain, tileset \"{TILESET}\", match corners_and_sides, 36 cells painted\n  \
-             terrains: 1 \"grass\", 2 \"grass 2\", 5 \"grass 3\", 6 \"grass 4\", 7 \"dirt\", \
-             9 \"grass 5\", 11 \"water\", 12 \"water 2\"\n\
+             terrains: 1 \"grass\", 2 \"Terrain 2\", 5 \"Terrain 3\", 6 \"Terrain 4\", \
+             7 \"dirt\", 9 \"Terrain 6\", 11 \"water\", 12 \"Terrain 8\"\n\
              layer 1 \"Props\": tile, tileset \"{TILESET}\", 2 cells painted\n"
         )
     );
@@ -109,7 +125,7 @@ fn describe_lists_the_layers_with_their_tilesets_and_terrains() {
 
 #[test]
 fn a_terrain_layer_reads_as_terrain_names_and_hand_placed_tiles() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], marked_patch());
     let said = finished(&mut app, READ, &read(map, -1, 2, 2, -1));
     assert_eq!(
@@ -127,7 +143,7 @@ fn a_terrain_layer_reads_as_terrain_names_and_hand_placed_tiles() {
 
 #[test]
 fn a_tile_layer_reads_as_tiles() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let cells = [
         (0, 0, TileRef::new(3)),
         (1, 0, TileRef::new(3)),
@@ -143,7 +159,7 @@ fn a_tile_layer_reads_as_tiles() {
 
 #[test]
 fn tiles_reads_the_tiles_a_terrain_layer_shows() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], marked_patch());
     let params = with(
         read(map, 0, 1, 2, 0),
@@ -156,7 +172,7 @@ fn tiles_reads_the_tiles_a_terrain_layer_shows() {
 
 #[test]
 fn a_tile_on_a_terrain_layer_is_placed_by_hand_even_where_it_resolves() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], marked_patch());
     let at00 = CellCoord::new(0, 0);
     let shown = stored(&mut app, map).layers[0].tiles.get(at00);
@@ -181,7 +197,7 @@ fn a_tile_on_a_terrain_layer_is_placed_by_hand_even_where_it_resolves() {
 
 #[test]
 fn orientation_is_checked_and_a_name_holding_at_resolves_whole() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     let bad = "legend: {\"T\": \"tile:0:5@99\"}\nrows:\nT\n";
     assert_refused(
@@ -221,7 +237,7 @@ fn orientation_is_checked_and_a_name_holding_at_resolves_whole() {
 
 #[test]
 fn a_terrain_named_like_a_keyword_round_trips() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     edit_tileset(&mut app, |tileset| {
         if let Some(dirt) = tileset.terrains.iter_mut().find(|t| t.id == 7) {
             dirt.name = "erase".to_string();
@@ -246,7 +262,7 @@ fn a_terrain_named_like_a_keyword_round_trips() {
 
 #[test]
 fn cells_past_the_bounds_or_of_unknown_terrain_read_as_keep() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let mut data = grass_patch();
     if let Some(a) = data.layers[0].authoring.as_mut() {
         a.terrain.set(CellCoord::new(2, 2), 3);
@@ -273,7 +289,7 @@ fn cells_past_the_bounds_or_of_unknown_terrain_read_as_keep() {
 
 #[test]
 fn a_layer_switched_to_tiles_reads_and_writes_its_tiles() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let auto = layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Auto);
     let map = spawn_map(&mut app, vec![auto], grass_patch());
     if let Some(mut tilemap) = app.world_mut().get_mut::<Tilemap>(map) {
@@ -312,7 +328,7 @@ fn assert_writes_like(app: &mut App, map: Entity, params: &Params, twin: &Params
 
 #[test]
 fn a_path_write_links_across_cells_already_holding_its_terrain() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     let entity = ("entity", PropertyValue::Entity(map));
     let one = with(
@@ -331,7 +347,7 @@ fn a_path_write_links_across_cells_already_holding_its_terrain() {
 
 #[test]
 fn a_connect_write_over_path_links_clears_them() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     let entity = ("entity", PropertyValue::Entity(map));
     let water = ("terrain", text("water"));
@@ -352,7 +368,7 @@ fn a_connect_write_over_path_links_clears_them() {
 
 #[test]
 fn write_region_is_one_entry_undone_and_redone_exactly() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     let (before, count) = (bytes(&mut app, map), entries(&app));
     let region = "legend: {\"d\": \"dirt\"}\nrows:\n  dd?\n  ?.d\n";
@@ -374,7 +390,7 @@ fn write_region_is_one_entry_undone_and_redone_exactly() {
 
 #[test]
 fn writing_back_what_was_read_changes_nothing() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], marked_patch());
     let said = finished(&mut app, READ, &read(map, -1, 6, 6, -1));
     let (before, count) = (bytes(&mut app, map), entries(&app));
@@ -402,7 +418,7 @@ fn writing_back_what_was_read_changes_nothing() {
 
 #[test]
 fn writing_back_a_tile_layer_changes_nothing() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let cells = [(0, 0, TileRef::new(3)), (2, 1, TileRef::new(7))];
     let tiles = tile_map(&mut app, &cells);
     let said = finished(&mut app, READ, &read(tiles, 0, 1, 2, 0));
@@ -416,7 +432,7 @@ fn writing_back_a_tile_layer_changes_nothing() {
 
 #[test]
 fn malformed_text_is_refused_with_its_line_and_column() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     for (region, why) in [
         (
@@ -444,7 +460,7 @@ fn malformed_text_is_refused_with_its_line_and_column() {
 
 #[test]
 fn unknown_names_are_refused_before_any_cell_is_written() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     let lava = "legend: {\"d\": \"dirt\", \"l\": \"lava\"}\nrows:\ndd\n";
     assert_refused(
@@ -452,7 +468,7 @@ fn unknown_names_are_refused_before_any_cell_is_written() {
         map,
         WRITE,
         &at(map, 0, 5, lava),
-        "legend `l`: no terrain is `lava`; terrains are grass, grass 2",
+        "legend `l`: no terrain is `lava`; terrains are grass, Terrain 2",
     );
     let tile = "legend: {\"T\": \"tile:0:99999\"}\nrows:\n.T\n";
     assert_refused(&mut app, map, WRITE, &at(map, 0, 5, tile), "out of range");
@@ -460,7 +476,7 @@ fn unknown_names_are_refused_before_any_cell_is_written() {
 
 #[test]
 fn terrain_is_refused_on_a_tile_layer() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let tiles = tile_map(&mut app, &[(0, 0, TileRef::new(3))]);
     let grass = "legend: {\"g\": \"grass\"}\nrows:\ng\n";
     assert_refused(
@@ -474,7 +490,7 @@ fn terrain_is_refused_on_a_tile_layer() {
 
 #[test]
 fn a_region_past_the_size_cap_is_refused() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     assert_refused(
         &mut app,
@@ -496,7 +512,7 @@ fn a_region_past_the_size_cap_is_refused() {
 
 #[test]
 fn the_map_and_layer_are_named_or_taken_from_the_selection() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = two_layer_map(&mut app);
     app.world_mut()
         .resource_mut::<jackdaw_editor_core::selection::Selection>()
@@ -541,7 +557,7 @@ fn corner_map(app: &mut App) -> Entity {
 
 #[test]
 fn a_corner_layer_refuses_hand_placed_tiles_from_every_writer() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = corner_map(&mut app);
     let entity = ("entity", PropertyValue::Entity(map));
     let set_cells = [
@@ -573,7 +589,7 @@ fn a_corner_layer_refuses_hand_placed_tiles_from_every_writer() {
 
 #[test]
 fn a_corner_layer_reads_terrain_back_unchanged_and_tiles_by_their_corner_cell() {
-    let (mut app, _dir) = project_app();
+    let (mut app, _dir) = named_app();
     let map = corner_map(&mut app);
     let rows = finished(&mut app, READ, &read(map, 0, 5, 5, 0));
     let before = bytes(&mut app, map);

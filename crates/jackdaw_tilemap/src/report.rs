@@ -10,10 +10,10 @@ use glam::UVec2;
 
 use crate::terrain_find::name_terrains;
 use crate::{
-    AnimationStrip, FitError, GridLayout, LOOSE_FRAME_MATCH, LayoutTemplate, MatchMode, RgbaImage,
+    AnimationStrip, FitError, GridLayout, LOOSE_FRAME_MATCH, MatchMode, Pair, RgbaImage,
     SharedDetection, SheetInput, Stamp, TerrainAnalysis, TerrainId, TileAddress, TileKind,
     TileShape, TilesetProposal, detect_grid_shared, find_stamps, find_terrains, fit_layouts,
-    pair_animations, reconcile, trace_proposal,
+    group_pairs, pair_animations, reconcile, set_name, trace_proposal,
 };
 
 /// Everything auto setup proposes for one import.
@@ -181,15 +181,15 @@ pub struct TerrainReport {
     pub pure_tiles: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A terrain set as auto setup names it, with the shapes its pairs cover.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SetReport {
+    pub name: String,
     pub mode: MatchMode,
-    pub inner: TerrainId,
-    pub outer: TerrainId,
+    /// Bottom first.
+    pub terrains: Vec<TerrainId>,
     pub covered: usize,
     pub total: usize,
-    pub missing: usize,
-    pub template: Option<LayoutTemplate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,9 +296,7 @@ fn setup_on_grid(
         .filter(|t| t.background)
         .map(|t| t.id)
         .collect();
-    let sets: Vec<(TerrainId, TerrainId)> =
-        (proposal.sets.iter()).map(|s| (s.inner, s.outer)).collect();
-    name_terrains(&mut analysis.terrains, &kept, &background, &sets, reserved);
+    name_terrains(&mut analysis.terrains, &kept, reserved);
     let shapes = if solid.is_empty() {
         BTreeMap::new()
     } else {
@@ -347,15 +345,21 @@ fn setup_on_grid(
             pure_tiles: p.pure_tiles.len(),
         });
     }
-    let sets = (proposal.sets.iter())
-        .map(|s| SetReport {
-            mode: s.mode,
-            inner: s.inner,
-            outer: s.outer,
-            covered: s.covered,
-            total: s.total,
-            missing: s.missing.len(),
-            template: s.template,
+    let pairs: Vec<(Pair, MatchMode)> = (proposal.sets.iter())
+        .map(|s| ((s.inner, s.outer), s.mode))
+        .collect();
+    let sets = (group_pairs(&pairs, &|id| background.contains(&id)).into_iter())
+        .zip(1..)
+        .map(|(group, n)| {
+            let fits = group.pairs.iter().filter_map(|&i| proposal.sets.get(i));
+            let (covered, total) = fits.fold((0, 0), |(c, t), s| (c + s.covered, t + s.total));
+            SetReport {
+                name: set_name(n),
+                mode: group.mode,
+                terrains: group.terrains,
+                covered,
+                total,
+            }
         })
         .collect();
     let by_sheet = |tiles: &[TileAddress]| {
@@ -461,21 +465,19 @@ impl fmt::Display for SetupReport {
         }
         writeln!(f, "terrain sets: {}", self.sets.len())?;
         for s in &self.sets {
-            let template = s.template.map_or("none".to_string(), |t| format!("{t:?}"));
-            let terrain = |id: TerrainId| match id {
-                0 => "empty".to_string(),
-                id => (self.terrains.iter().find(|t| t.id == id))
-                    .map_or_else(|| id.to_string(), |t| format!("\"{}\"", t.name)),
+            let terrain = |id: TerrainId| {
+                (self.terrains.iter().find(|t| t.id == id))
+                    .map_or_else(|| id.to_string(), |t| format!("\"{}\"", t.name))
             };
+            let terrains: Vec<String> = s.terrains.iter().map(|&id| terrain(id)).collect();
             writeln!(
                 f,
-                "  set {} over {}: {:?}, {}/{} shapes, {} missing, template {template}",
-                terrain(s.inner),
-                terrain(s.outer),
+                "  set \"{}\" ({:?}): terrains bottom first [{}], {}/{} shapes",
+                s.name,
                 s.mode,
+                terrains.join(", "),
                 s.covered,
-                s.total,
-                s.missing
+                s.total
             )?;
         }
         writeln!(f, "stamps: {}", self.stamps.len())?;

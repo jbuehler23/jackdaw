@@ -363,7 +363,7 @@ pub fn hover_readout(
         let name = match authoring.map_or(0, |a| a.terrain.get(cell)) {
             0 => "none".to_string(),
             id => (tileset.and_then(|t| t.terrains.iter().find(|t| t.id == id)))
-                .map_or_else(|| id.to_string(), |t| t.name.clone()),
+                .map_or_else(|| id.to_string(), |t| format!("\"{}\"", t.name)),
         };
         parts.push(format!("Terrain {name}"));
     }

@@ -234,7 +234,7 @@ fn terrain_remove_empties_its_peers_and_drops_its_sets() {
         &mut app,
         &dir,
         "tileset.terrain.remove",
-        &[("terrain", "grass 2")],
+        &[("terrain", "Terrain 2")],
     );
     let ground_tile = tile_of(&before, GROUND);
     assert!(after.terrains.iter().all(|t| t.id != GROUND));
@@ -316,7 +316,7 @@ fn terrain_merge_folds_one_terrain_into_another() {
         &mut app,
         &dir,
         "tileset.terrain.merge",
-        &[("from", "11"), ("into", "grass 2")],
+        &[("from", "11"), ("into", "Terrain 2")],
     );
     assert_eq!(after.terrains.len(), 7);
     assert_eq!(
@@ -553,7 +553,7 @@ fn set_bits_takes_nine_peers_or_one() {
         &mut app,
         &dir,
         "tileset.tile.set_bits",
-        &[("tile", "0:5"), ("peers", "1,1,1,1,water,1,,0,empty")],
+        &[("tile", "0:5"), ("peers", "1,1,1,1,Terrain 7,1,,0,empty")],
     );
     assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 11, 1, 0, 0, 0]));
     let tile = after.tiles.iter().find(|t| t.tile == 5).expect("set");
