@@ -217,8 +217,8 @@ pub(super) fn spawn_custom_properties_display(
                     super::reflect_fields::ColorLabel::Inline(prop_name),
                     0.0,
                     None,
-                    move |world, rgba, edit| {
-                        if edit != super::reflect_fields::ColorEdit::Release {
+                    move |world, rgba, is_final| {
+                        if !is_final {
                             return;
                         }
                         let color = Color::srgba(rgba[0], rgba[1], rgba[2], rgba[3]);

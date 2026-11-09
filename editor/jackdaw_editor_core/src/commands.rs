@@ -201,12 +201,6 @@ pub(crate) fn field_edit_is_open(
     peek_live_at_begin(world, entity, type_path, field_path).is_some()
 }
 
-/// Close the current field-edit gesture without committing it. The caller has
-/// put the entities back.
-pub(crate) fn field_edit_cancel(world: &mut World, type_path: &str, field_path: &str) {
-    clear_field_edit_session(world, type_path, field_path);
-}
-
 /// Close a field-edit gesture on `entity` that will not be committed.
 pub(crate) fn forget_field_edit_on(
     world: &mut World,

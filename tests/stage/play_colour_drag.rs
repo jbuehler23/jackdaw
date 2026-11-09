@@ -1,12 +1,10 @@
 //! A colour drag in the Components panel during Play previews in the game, and a
-//! cancelled drag puts the game back.
+//! gesture that ends with no release from the widget still settles.
 
 use std::time::{Duration, Instant};
 
 use bevy::feathers::controls::{ColorChannel, ColorSlider, SliderBaseColor};
-use bevy::picking::backend::HitData;
-use bevy::picking::events::{Pointer, PointerCancel};
-use bevy::picking::pointer::{Location, PointerId};
+use bevy::picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput};
 use bevy::prelude::*;
 use bevy::ui_widgets::ValueChange;
 use jackdaw::boot_ops::run_op_clause;
@@ -189,43 +187,84 @@ impl Playing {
     }
 }
 
+/// Press or let go of the primary mouse button, as picking sees it.
+fn mouse(app: &mut App, pressed: bool) {
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+        .single(app.world())
+        .expect("a primary window");
+    let target = bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Primary)
+        .normalize(Some(window))
+        .expect("the primary window normalizes");
+    let action = if pressed {
+        PointerAction::Press(PointerButton::Primary)
+    } else {
+        PointerAction::Release(PointerButton::Primary)
+    };
+    app.world_mut().write_message(PointerInput::new(
+        PointerId::Mouse,
+        Location {
+            target,
+            position: Vec2::ZERO,
+        },
+        action,
+    ));
+    app.update();
+}
+
+fn tick(playing: &mut Playing, slider: Entity, red: f32) {
+    playing.app.world_mut().trigger(ValueChange {
+        source: slider,
+        value: red,
+        is_final: false,
+    });
+}
+
+/// A drag previews in the game while the pointer is held and authors nothing; a
+/// pointer let go with no release from the widget authors the colour once.
 #[test]
-fn a_colour_drag_during_play_previews_in_the_game_and_a_cancel_puts_it_back() {
+fn a_colour_drag_during_play_previews_in_the_game_until_the_pointer_lets_go() {
     let mut playing = playing();
     let slider = playing.red_slider();
     let undo_before = playing.undo_entries();
 
-    playing.app.world_mut().trigger(ValueChange {
-        source: slider,
-        value: 0.7f32,
-        is_final: false,
-    });
+    mouse(&mut playing.app, true);
+    tick(&mut playing, slider, 0.7);
     assert!(
         (playing.red_in_game() - 0.7).abs() < 1e-4,
         "the drag previews"
     );
     assert!((playing.red() - 0.7).abs() < 1e-4);
-
-    let camera = playing.app.world_mut().spawn_empty().id();
-    playing.app.world_mut().trigger(PointerCancel {
-        entity: slider,
-        pointer: Pointer::new(
-            PointerId::Mouse,
-            Location {
-                target: bevy::camera::NormalizedRenderTarget::Image(Handle::default().into()),
-                position: Vec2::ZERO,
-            },
-        ),
-        hit: HitData::new(camera, 0.0, None, None),
-    });
-    assert!(
-        (playing.red_in_game() - 0.2).abs() < 1e-4,
-        "the cancel puts it back"
-    );
-    assert!((playing.red() - 0.2).abs() < 1e-4);
     assert_eq!(
         playing.undo_entries(),
         undo_before,
-        "a cancel authors nothing"
+        "a held drag authors nothing"
     );
+
+    mouse(&mut playing.app, false);
+    playing.app.update();
+    assert_eq!(
+        playing.undo_entries(),
+        undo_before + 1,
+        "the let-go authors once"
+    );
+    assert!((playing.red_in_game() - 0.7).abs() < 1e-4);
+    assert!((playing.red() - 0.7).abs() < 1e-4);
+}
+
+/// A click on the track moves the colour and authors it, though the widget sends
+/// no release for it.
+#[test]
+fn a_click_on_a_colour_track_authors_the_colour() {
+    let mut playing = playing();
+    let slider = playing.red_slider();
+    let undo_before = playing.undo_entries();
+
+    tick(&mut playing, slider, 0.5);
+    playing.app.update();
+    playing.app.update();
+    assert_eq!(playing.undo_entries(), undo_before + 1);
+    assert!((playing.red_in_game() - 0.5).abs() < 1e-4);
+    assert!((playing.red() - 0.5).abs() < 1e-4);
 }

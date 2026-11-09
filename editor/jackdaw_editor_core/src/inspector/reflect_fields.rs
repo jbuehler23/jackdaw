@@ -1544,28 +1544,11 @@ struct ColorFieldState {
 }
 
 /// Where a color field writes its committed sRGBA. Held on the field root and
-/// invoked by `commit_color_field` with `(world, rgba, edit)`. This is the
+/// invoked by `commit_color_field` with `(world, rgba, is_final)`. This is the
 /// only binding-specific part of the color composite; different callers supply
 /// their own commit closure while sharing every widget and observer.
 #[derive(Component)]
-struct ColorCommit(Box<dyn Fn(&mut World, [f32; 4], ColorEdit) + Send + Sync>);
-
-/// What a colour field's commit callback is asked to do with a colour.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum ColorEdit {
-    /// A tick of a drag still under way.
-    Drag,
-    /// The colour the author settled on.
-    Release,
-    /// A drag cut off before its release, with the colour it began from.
-    Cancel,
-}
-
-impl ColorEdit {
-    fn of(is_final: bool) -> Self {
-        if is_final { Self::Release } else { Self::Drag }
-    }
-}
+struct ColorCommit(Box<dyn Fn(&mut World, [f32; 4], bool) + Send + Sync>);
 
 /// Optional gate on a color field root. When present and it returns `true`, the
 /// shared plane/slider observers drop the edit before touching `ColorFieldState`
@@ -1595,7 +1578,7 @@ pub(crate) struct HexColorInput {
 /// plane + RGBA sliders) under `parent`, seeded to `initial` sRGBA. The composite
 /// is binding-agnostic: every widget, the shared `ColorFieldState`, and the sync
 /// observers are the same regardless of where the value goes. `commit` receives
-/// `(world, rgba, edit)` each time the color settles, so callers route the
+/// `(world, rgba, is_final)` each time the color settles, so callers route the
 /// result wherever they need without touching the shared observer path. Returns
 /// the field root, which carries `ColorFieldState` and `ColorCommit`.
 ///
@@ -1618,7 +1601,7 @@ pub(crate) fn spawn_color_picker(
     label: ColorLabel,
     left_padding: f32,
     collapse: Option<ColorRowKey>,
-    commit: impl Fn(&mut World, [f32; 4], ColorEdit) + Send + Sync + 'static,
+    commit: impl Fn(&mut World, [f32; 4], bool) + Send + Sync + 'static,
 ) -> Entity {
     let rgba = initial;
     let srgba = Srgba::new(rgba[0], rgba[1], rgba[2], rgba[3]);
@@ -1851,21 +1834,18 @@ fn spawn_color_field(
     let tp = type_path.to_string();
     let path = field_path;
 
-    let commit = move |world: &mut World, rgba: [f32; 4], edit: ColorEdit| {
+    let commit = move |world: &mut World, rgba: [f32; 4], is_final: bool| {
         let new_json = srgba_json(world, rgba);
-        match edit {
-            ColorEdit::Drag => crate::commands::field_edit_preview(world, &tp, &path, &new_json),
-            ColorEdit::Release => crate::commands::field_edit_commit(
+        if is_final {
+            crate::commands::field_edit_commit(
                 world,
                 &tp,
                 &path,
                 &new_json,
                 "Set color on multiple entities",
-            ),
-            ColorEdit::Cancel => {
-                crate::commands::field_edit_preview(world, &tp, &path, &new_json);
-                crate::commands::field_edit_cancel(world, &tp, &path);
-            }
+            );
+        } else {
+            crate::commands::field_edit_preview(world, &tp, &path, &new_json);
         }
     };
 
@@ -1931,7 +1911,7 @@ fn commit_hex_input(world: &mut World, hex_entity: Entity, text: String) {
         state.rgba = rgba;
     }
     sync_color_widgets(world, root);
-    commit_color_field(world, root, ColorEdit::Release);
+    commit_color_field(world, root, true);
 }
 
 /// Commit the hex entry when Enter is pressed.
@@ -2047,10 +2027,10 @@ fn sync_color_widgets(world: &mut World, root: Entity) {
 }
 
 /// Commit the current `ColorFieldState` under `root` through the field's
-/// `ColorCommit` callback, as a drag tick, a release or a cancel. The callback
-/// decides where the color goes, so this is
+/// `ColorCommit` callback. A live drag passes `is_final == false`; the final
+/// event passes `true`. The callback decides where the color goes, so this is
 /// binding-agnostic.
-fn commit_color_field(world: &mut World, root: Entity, edit: ColorEdit) {
+fn commit_color_field(world: &mut World, root: Entity, is_final: bool) {
     let Some(state) = world.get::<ColorFieldState>(root) else {
         return;
     };
@@ -2059,51 +2039,37 @@ fn commit_color_field(world: &mut World, root: Entity, edit: ColorEdit) {
     let Some(commit) = world.entity_mut(root).take::<ColorCommit>() else {
         return;
     };
-    if edit != ColorEdit::Drag {
-        world.entity_mut(root).remove::<ColorDragStart>();
+    if is_final {
+        world.entity_mut(root).remove::<ColorDragOpen>();
+    } else {
+        world.entity_mut(root).insert(ColorDragOpen);
     }
-    commit.0(world, rgba, edit);
+    commit.0(world, rgba, is_final);
     world.entity_mut(root).insert(commit);
 }
 
-/// Remember the colour under `root` as where a drag began, before its first
-/// tick changes it.
-fn note_color_drag_start(world: &mut World, root: Entity, is_final: bool) {
-    if is_final || world.get::<ColorDragStart>(root).is_some() {
-        return;
-    }
-    if let Some(rgba) = world.get::<ColorFieldState>(root).map(|state| state.rgba) {
-        world.entity_mut(root).insert(ColorDragStart(rgba));
-    }
-}
-
-/// The colour a drag on a colour field began from, held on the field root
-/// while the drag is open.
+/// On a colour field root while a drag on it has ticked without a release.
 #[derive(Component)]
-pub(crate) struct ColorDragStart([f32; 4]);
+pub(crate) struct ColorDragOpen;
 
-/// A cancelled drag on a colour slider or plane settles on the colour it began
-/// from.
-pub(crate) fn on_color_drag_cancel(
-    event: On<bevy::picking::events::PointerCancel>,
-    sub_widgets: Query<&ColorSubWidget>,
-    starts: Query<&ColorDragStart>,
-    mut commands: Commands,
-) {
-    let Ok(sub) = sub_widgets.get(event.entity) else {
+/// A press on a colour slider or plane that never becomes a drag sends no
+/// release, nor does a cancelled touch. Once no pointer is held, settle what
+/// such a gesture left as a release.
+pub(crate) fn settle_released_color_drags(world: &mut World) {
+    let held = world
+        .query::<&bevy::picking::pointer::PointerPressState>()
+        .iter(world)
+        .any(bevy::picking::pointer::PointerPressState::is_any_pressed);
+    if held {
         return;
-    };
-    let root = sub.root;
-    let Ok(&ColorDragStart(start)) = starts.get(root) else {
-        return;
-    };
-    commands.queue(move |world: &mut World| {
-        if let Some(mut state) = world.get_mut::<ColorFieldState>(root) {
-            state.rgba = start;
-        }
-        sync_color_widgets(world, root);
-        commit_color_field(world, root, ColorEdit::Cancel);
-    });
+    }
+    let open: Vec<Entity> = world
+        .query_filtered::<Entity, With<ColorDragOpen>>()
+        .iter(world)
+        .collect();
+    for root in open {
+        commit_color_field(world, root, true);
+    }
 }
 
 /// Write path for the red/blue color plane. Updates the red and blue channels
@@ -2124,13 +2090,12 @@ pub(crate) fn on_color_plane_change(
         if color_edit_skipped(world, root) {
             return;
         }
-        note_color_drag_start(world, root, is_final);
         if let Some(mut state) = world.get_mut::<ColorFieldState>(root) {
             state.rgba[0] = value.x;
             state.rgba[2] = value.y;
         }
         sync_color_widgets(world, root);
-        commit_color_field(world, root, ColorEdit::of(is_final));
+        commit_color_field(world, root, is_final);
     });
 }
 
@@ -2161,12 +2126,11 @@ pub(crate) fn on_color_slider_change(
         if color_edit_skipped(world, root) {
             return;
         }
-        note_color_drag_start(world, root, is_final);
         if let Some(mut state) = world.get_mut::<ColorFieldState>(root) {
             state.rgba[channel] = value;
         }
         sync_color_widgets(world, root);
-        commit_color_field(world, root, ColorEdit::of(is_final));
+        commit_color_field(world, root, is_final);
     });
 }
 

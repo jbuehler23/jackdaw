@@ -168,7 +168,6 @@ impl Plugin for InspectorPlugin {
             .add_observer(reflect_fields::on_numeric_value_change_i64)
             .add_observer(reflect_fields::on_color_plane_change)
             .add_observer(reflect_fields::on_color_slider_change)
-            .add_observer(reflect_fields::on_color_drag_cancel)
             .add_observer(val_field::on_val_number_change)
             .add_observer(val_field::on_val_unit_change)
             .add_observer(node_card::on_node_enum_change)
@@ -186,6 +185,10 @@ impl Plugin for InspectorPlugin {
             .add_observer(add_header::on_add_header_mount_added)
             .add_observer(add_header::on_material_new_click)
             .add_observer(asset_row::on_asset_row_button)
+            .add_systems(
+                Update,
+                reflect_fields::settle_released_color_drags.before(apply_pending_inspector_rebuild),
+            )
             .add_systems(
                 Update,
                 (
