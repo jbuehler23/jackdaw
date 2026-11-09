@@ -268,7 +268,7 @@ mod tests {
 
     use super::*;
     use crate::pie::install_link;
-    use crate::{JackdawPlugin, SceneRefused, ServedScene};
+    use crate::{JackdawPlugin, JackdawSceneReady, JackdawSceneSpawned, SceneRefused, ServedScene};
 
     const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
     const NAME: &str = "bevy_ecs::name::Name";
@@ -564,6 +564,32 @@ mod tests {
             scene_text(1.0),
             "nothing was written"
         );
+    }
+
+    #[test]
+    fn a_served_document_reports_its_spawn_with_its_entities_present() {
+        let (mut app, mut editor, _dir) = game();
+        let seen: Arc<std::sync::Mutex<Vec<(Entity, usize)>>> = Arc::default();
+        let record = seen.clone();
+        app.add_observer(
+            move |spawned: On<JackdawSceneSpawned>, nodes: Query<(), With<SceneNodeId>>| {
+                if let Ok(mut seen) = record.lock() {
+                    seen.push((spawned.entity, nodes.iter().count()));
+                }
+            },
+        );
+        let root = spawn_root(&mut app, "scene.bsn");
+        app.update();
+        let (request, _) = requests_from(&mut editor)[0];
+        assert!(seen.lock().expect("the record").is_empty(), "held");
+
+        send(&mut editor, &document(request, scene_text(5.0)));
+        app.update();
+        app.update();
+
+        assert!(app.world().get::<ServedScene>(root).is_some());
+        assert!(app.world().get::<JackdawSceneReady>(root).is_some());
+        assert_eq!(*seen.lock().expect("the record"), vec![(root, 1)]);
     }
 
     #[test]
