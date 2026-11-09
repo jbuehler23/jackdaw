@@ -1835,11 +1835,17 @@ fn spawn_color_field(
     let path = field_path;
 
     let commit = move |world: &mut World, rgba: [f32; 4], is_final: bool| {
+        let new_json = srgba_json(world, rgba);
         if is_final {
-            apply_color_with_undo(world, &tp, &path, rgba);
+            crate::commands::field_edit_commit(
+                world,
+                &tp,
+                &path,
+                &new_json,
+                "Set color on multiple entities",
+            );
         } else {
-            let value_str = serde_json::to_string(&rgba).unwrap_or_default();
-            apply_field_value_live(world, &tp, &path, &value_str);
+            crate::commands::field_edit_preview(world, &tp, &path, &new_json);
         }
     };
 
@@ -2033,8 +2039,37 @@ fn commit_color_field(world: &mut World, root: Entity, is_final: bool) {
     let Some(commit) = world.entity_mut(root).take::<ColorCommit>() else {
         return;
     };
+    if is_final {
+        world.entity_mut(root).remove::<ColorDragOpen>();
+    } else {
+        world.entity_mut(root).insert(ColorDragOpen);
+    }
     commit.0(world, rgba, is_final);
     world.entity_mut(root).insert(commit);
+}
+
+/// On a colour field root while a drag on it has ticked without a release.
+#[derive(Component)]
+pub(crate) struct ColorDragOpen;
+
+/// A press on a colour slider or plane that never becomes a drag sends no
+/// release, nor does a cancelled touch. Once no pointer is held, settle what
+/// such a gesture left as a release.
+pub(crate) fn settle_released_color_drags(
+    pointers: Query<&bevy::picking::pointer::PointerPressState>,
+    open: Query<Entity, With<ColorDragOpen>>,
+    mut commands: Commands,
+) {
+    if open.is_empty()
+        || pointers
+            .iter()
+            .any(bevy::picking::pointer::PointerPressState::is_any_pressed)
+    {
+        return;
+    }
+    for root in &open {
+        commands.queue(move |world: &mut World| commit_color_field(world, root, true));
+    }
 }
 
 /// Write path for the red/blue color plane. Updates the red and blue channels
@@ -2099,25 +2134,12 @@ pub(crate) fn on_color_slider_change(
     });
 }
 
-/// Apply a color change with undo support (propagates to all selected entities).
-fn apply_color_with_undo(world: &mut World, type_path: &str, field_path: &str, new_rgba: [f32; 4]) {
-    let registry = world.resource::<AppTypeRegistry>().clone();
-
-    // The canonical reflect JSON (`{"Srgba": {..}}`) deserializes into any
-    // `Color`-typed field; the picker's raw sRGBA array does not.
-    let srgba = Srgba::new(new_rgba[0], new_rgba[1], new_rgba[2], new_rgba[3]);
-    let new_json = {
-        let reg = registry.read();
-        color_to_canonical_json(Color::Srgba(srgba), &reg)
-    };
-
-    crate::commands::field_edit_commit(
-        world,
-        type_path,
-        field_path,
-        &new_json,
-        "Set color on multiple entities",
-    );
+/// The picker's sRGBA as canonical reflect JSON (`{"Srgba": {..}}`), which
+/// deserializes into any `Color`-typed field where the raw array does not.
+fn srgba_json(world: &World, rgba: [f32; 4]) -> serde_json::Value {
+    let srgba = Srgba::new(rgba[0], rgba[1], rgba[2], rgba[3]);
+    let registry = world.resource::<AppTypeRegistry>().read();
+    color_to_canonical_json(Color::Srgba(srgba), &registry)
 }
 
 /// The same number field in the shared label-left row shape, for cards that lay
