@@ -17,19 +17,17 @@ use jackdaw_editor_core::asset_index::AssetIndex;
 use jackdaw_editor_tile::tileset_bits::MissingGlyph;
 use jackdaw_editor_tile::tileset_dock::MoreMenu;
 use jackdaw_editor_tile::tileset_dock::{
-    CollisionCombo, DockAction, DockControl, DockPane, DockView, NameField, Pane, SheetPicture,
-    TILESET_WINDOW_ID, TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext,
-    TilesetDockViews,
+    DockAction, DockControl, DockPane, DockView, NameField, Pane, SheetPicture, TILESET_WINDOW_ID,
+    TerrainNameField, TerrainSwatch, TilesetDock, TilesetDockInputContext, TilesetDockViews,
 };
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_feathers::button::ButtonOperatorCall;
-use jackdaw_feathers::combobox::ComboBoxChangeEvent;
 use jackdaw_feathers::menu_bar::DynamicMenuRows;
 use jackdaw_feathers::tooltip::Tooltip;
 use jackdaw_panels::tree::{DockTree, Edge, TabId};
 use jackdaw_scene_types::PropertyValue;
 use jackdaw_scene_types::tilemap::{Tilemap, TilemapLayer};
-use jackdaw_tileset::{TerrainCollision, Tileset};
+use jackdaw_tileset::Tileset;
 
 const SECOND: &str = "second.tileset.bsn";
 
@@ -104,14 +102,14 @@ pub(crate) fn view(app: &App) -> DockView {
     app.world().resource::<TilesetDockViews>().0[FILE].clone()
 }
 
-/// How many times the dock under `root` has been built, by the collision
-/// combos each build spawns.
+/// How many times the dock has been built, by the More menu each build
+/// spawns.
 #[derive(Resource, Default)]
 struct Builds(usize);
 
 fn count_builds(app: &mut App) {
     app.init_resource::<Builds>();
-    app.add_observer(|_: On<Add<CollisionCombo>>, mut builds: ResMut<Builds>| {
+    app.add_observer(|_: On<Add<MoreMenu>>, mut builds: ResMut<Builds>| {
         builds.0 += 1;
     });
 }
@@ -355,7 +353,12 @@ fn the_dock_opens_on_the_tiles_mode_with_a_mode_bar() {
     assert_eq!(view(&app).mode, ModeId::TILES);
     assert_eq!(
         mode_bar(&mut app, root),
-        [ModeId::TILES, ModeId::TERRAINS, ModeId::OBJECTS]
+        [
+            ModeId::TILES,
+            ModeId::TERRAINS,
+            ModeId::COLLISION,
+            ModeId::OBJECTS
+        ]
     );
     let shown = texts(&mut app, root);
     for gone in ["Review", "Accept", "Reset to auto"] {
@@ -401,8 +404,7 @@ fn a_peer_click_paints_the_brush_and_the_view_follows_undo() {
     };
     assert_eq!(peers(&dir).map(|p| p[1]), Some(WATER));
     assert_eq!(entries(&app), count + 1, "one undo entry");
-    let terrains = on_disk(&dir).terrains.len();
-    assert_eq!(builds(&app) - built, terrains, "the dock is built once");
+    assert_eq!(builds(&app) - built, 1, "the dock is built once");
 
     run(&mut app, "history.undo");
     settle(&mut app);
@@ -581,30 +583,6 @@ fn opening_leaves_a_hand_made_tileset_as_it_is() {
         count,
         "no history for a tileset with nothing to clear"
     );
-}
-
-#[test]
-fn the_collision_combo_sets_the_terrain_collision() {
-    let (mut app, dir) = handmade();
-    let (_, root) = opened(&mut app);
-    let combo: Vec<Entity> = app
-        .world_mut()
-        .query::<(Entity, &CollisionCombo)>()
-        .iter(app.world())
-        .filter(|(_, c)| c.root == root && c.terrain == WATER)
-        .map(|(e, _)| e)
-        .collect();
-    let count = entries(&app);
-    app.world_mut().trigger(ComboBoxChangeEvent {
-        entity: combo[0],
-        selected: 0,
-        label: String::new(),
-        value: None,
-    });
-    settle(&mut app);
-    let water = (on_disk(&dir).terrains.into_iter()).find(|t| t.id == WATER);
-    assert_eq!(water.map(|t| t.collision), Some(TerrainCollision::Solid));
-    assert_eq!(entries(&app), count + 1);
 }
 
 #[test]
@@ -985,7 +963,7 @@ fn the_new_terrain_button_builds_the_dock_once() {
     let built = builds(&app);
     press(&mut app, root, DockAction::NewTerrain);
     assert!(name_field(&mut app, root).is_some());
-    assert_eq!(builds(&app) - built, 2, "one build of two terrain rows");
+    assert_eq!(builds(&app) - built, 1, "one build");
 }
 
 #[test]

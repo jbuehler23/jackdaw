@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use jackdaw_tilemap::{
-    AutoSetup, CollisionMode, Peer, Provenance, RgbaImage, Scope, SetupTile, TileAddress,
-    TilesetSetup, Tracked, auto_setup, rerun,
+    AutoSetup, Peer, Provenance, RgbaImage, Scope, SetupTile, ShapePreset, TileAddress,
+    TileCollision, TilesetSetup, Tracked, auto_setup, rerun,
 };
 
 struct Sheet {
@@ -210,7 +210,8 @@ fn user_bits_names_and_modes_survive_a_rerun() {
     setup
         .rename_terrain(GRASS, "meadow")
         .expect("known terrain");
-    (setup.set_collision_mode(GROUND, CollisionMode::Solid)).expect("known terrain");
+    let half = TileCollision::preset(ShapePreset::TopHalf, 0, false).expect("a preset");
+    assert!(setup.set_collision(painted, half.clone()));
 
     let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
 
@@ -221,8 +222,6 @@ fn user_bits_names_and_modes_survive_a_rerun() {
     }
     let grass = after.terrain(GRASS).expect("grass kept");
     assert_eq!(grass.name, Tracked::user("meadow".to_string()));
-    let ground = after.terrain(GROUND).expect("ground kept");
-    assert_eq!(ground.collision, Tracked::user(CollisionMode::Solid));
 
     let auto = TilesetSetup::from_auto(&fresh);
     assert_eq!((&after.sets, &after.stamps), (&auto.sets, &auto.stamps));
@@ -244,64 +243,31 @@ fn user_bits_names_and_modes_survive_a_rerun() {
     }
 
     for (address, tile) in &after.tiles {
-        assert_eq!(tile.shape.provenance, Provenance::Auto);
-        if tile.shape.value.is_some() {
-            assert!(uses(tile, GROUND), "{address:?}");
-        } else {
-            // Unread sides of a sea tile over the ground take the ground too, so
-            // only a ground centre makes an untouched tile solid.
-            let all_auto = !tile.provenance.contains(&Provenance::User);
-            let centre = tile.terrains.centre() == GROUND;
-            assert!(!(all_auto && centre), "{address:?}");
+        if *address != painted {
+            assert!(tile.collision.value.is_empty(), "{address:?}");
         }
     }
-    assert!(after.tiles[&cleared].shape.value.is_none());
-    assert!(after.tiles[&painted].shape.value.is_some());
+    assert_eq!(after.tiles[&painted].collision, Tracked::user(vec![half]));
 }
 
 #[test]
-fn an_imported_solid_terrain_stays_solid_with_its_shapes() {
+fn shapes_traced_on_import_are_solid_collision_a_rerun_keeps() {
     let sheet = Sheet::packed();
     let inputs = [(PACKED, sheet.image())];
     let fresh = auto_setup(&inputs, &[WATER]).expect("runs");
     let setup = TilesetSetup::from_auto(&fresh);
-    let solid = Tracked::auto(CollisionMode::Solid);
-    assert_eq!(setup.terrain(WATER).map(|t| &t.collision), Some(&solid));
     let after = rerun(&setup, &inputs, &Scope::All).expect("re-run");
-    assert_eq!(after.terrain(WATER).map(|t| &t.collision), Some(&solid));
-    let shapes = |s: &TilesetSetup| -> Vec<(TileAddress, bool)> {
+    let shapes = |s: &TilesetSetup| -> Vec<(TileAddress, Vec<TileCollision>)> {
         (s.tiles.iter())
-            .map(|(a, t)| (*a, t.shape.value.is_some()))
+            .map(|(a, t)| (*a, t.collision.value.clone()))
+            .filter(|(_, c)| !c.is_empty())
             .collect()
     };
-    assert!(shapes(&after).iter().any(|(_, s)| *s));
-    assert_eq!(shapes(&after), shapes(&setup));
-}
-
-#[test]
-fn a_user_solid_terrain_with_no_match_still_collides() {
-    let sheet = Sheet::packed();
-    let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    (setup.set_collision_mode(GROUND, CollisionMode::Solid)).expect("known terrain");
-    let tile = first_with(&setup, WATER, 0);
-    for peer in Peer::ALL {
-        setup.set_peer(tile, peer, GROUND).expect("known terrain");
-    }
-    let ground = setup.terrains.iter_mut().find(|t| t.id == GROUND);
-    let ground = ground.expect("ground");
-    let art = ground.oklab;
-    ground.oklab.x += 0.5;
-    let swatch = ground.swatch;
-    let fresh = u8::try_from(setup.next_id).expect("a terrain id");
-
-    let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
-    let kept = after.terrain(GROUND).expect("kept for its User values");
-    assert_eq!(kept.collision.value, CollisionMode::Solid);
-    assert!(after.tiles[&tile].shape.value.is_some());
-    let found = after.terrain(fresh).expect("the art's ground, found again");
-    assert_eq!(found.oklab, art);
-    assert_ne!(found.swatch, swatch, "a marker color of its own");
-    assert_eq!(after.next_id, setup.next_id + 1);
+    let traced = shapes(&setup);
+    assert!(!traced.is_empty());
+    let solid = |c: &TileCollision| c.layer == 0 && !c.trigger && c.preset == ShapePreset::Traced;
+    assert!(traced.iter().all(|(_, c)| c.len() == 1 && solid(&c[0])));
+    assert_eq!(shapes(&after), traced);
 }
 
 /// `sheet` drawn twice side by side, as a two-frame animation strip.
@@ -386,10 +352,7 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
 #[test]
 fn reruns_are_deterministic() {
     let sheet = Sheet::packed();
-    let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    setup
-        .set_collision_mode(GROUND, CollisionMode::Solid)
-        .expect("known");
+    let setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
     let a = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
     let b = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
     assert_eq!(a, b);

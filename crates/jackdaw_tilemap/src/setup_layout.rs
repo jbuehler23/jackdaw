@@ -398,7 +398,7 @@ mod tests {
     }
 
     const GRID: UVec2 = UVec2::new(8, 8);
-    use crate::{SetupTile, TileShape, Tracked};
+    use crate::{SetupTile, TileCollision, Tracked};
 
     #[test]
     fn a_template_lays_its_shapes_row_by_row_and_adds_its_set() {
@@ -617,7 +617,7 @@ mod tests {
             setup.tiles.insert(at(tile), mixed);
         }
         let shape = SetupTile {
-            shape: Tracked::user(Some(TileShape::default())),
+            collision: Tracked::user(vec![TileCollision::default()]),
             ..SetupTile::default()
         };
         setup.tiles.insert(at(6), shape);

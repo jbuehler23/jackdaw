@@ -155,6 +155,15 @@ pub fn trace_mask(mask: &SolidMask) -> TileShape {
     }
 }
 
+/// The opaque pixels of tile `tile` of `input`, traced; `None` for a tile
+/// with none or past the sheet's end.
+pub fn trace_art(input: &SheetInput, tile: u32) -> Option<TileShape> {
+    let none = |_: TerrainId| -> Option<(Vec3, bool)> { None };
+    let mask = mask_of(input, tile, false, &TileTerrains::default(), &none, true)?;
+    let shape = trace_mask(&mask);
+    (!shape.is_empty()).then_some(shape)
+}
+
 /// Traces every analysed tile of `inputs`: terrain tiles through their
 /// fitted peers and their set's mode where a set holds them, else through
 /// their labels with every peer read; decor tiles only when listed in
@@ -990,6 +999,23 @@ mod tests {
         assert_eq!(missing, Ok(None));
         let mismatched = solid_mask(&tile.analysis, &[], ADDRESS, None, |_| true, true);
         assert!(matches!(mismatched, Err(FitError::SheetCount { .. })));
+    }
+
+    #[test]
+    fn traced_art_follows_the_opaque_pixels_whatever_their_color() {
+        let tile = OneTile::new(TileKind::Terrain, TileTerrains::filled(1), |x, y| {
+            match (y >= T / 2, x % 2 == 0) {
+                (false, _) => [0, 0, 0, 0],
+                (true, true) => GRASS,
+                (true, false) => ROCK,
+            }
+        });
+        let shape = trace_art(&tile.input(), 0).expect("opaque pixels");
+        let half = ring(&[(0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.0, 0.5)]);
+        assert_eq!(sorted(&shape), std::slice::from_ref(&half));
+        let clear = OneTile::new(TileKind::Decor, TileTerrains::default(), |_, _| [0; 4]);
+        assert_eq!(trace_art(&clear.input(), 0), None);
+        assert_eq!(trace_art(&tile.input(), 1), None, "past the sheet");
     }
 
     /// Traces `tile` alone with rock Solid, fitted in `mode` when given.

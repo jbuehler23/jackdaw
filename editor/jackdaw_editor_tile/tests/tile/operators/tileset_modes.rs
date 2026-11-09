@@ -35,6 +35,7 @@ fn marks_overlay(world: &mut World, sheet: &ModeSheet) {
         colors: HashMap::from([(1, Color::WHITE)]),
         dim: true,
         hover: Some(Color::WHITE),
+        outlines: HashMap::new(),
     };
     spawn_zone_overlay(
         world,
@@ -52,6 +53,7 @@ fn marks() -> TilesetMode {
         order: 50,
         panel: marks_panel,
         overlay: Some(marks_overlay),
+        stroke: None,
     }
 }
 
@@ -90,7 +92,13 @@ fn a_mode_registered_by_a_plugin_shows_in_the_bar_and_tileset_mode_selects_it() 
     let (_, root) = opened(&mut app);
     assert_eq!(
         mode_bar(&mut app, root),
-        [ModeId::TILES, ModeId::TERRAINS, MARKS, ModeId::OBJECTS],
+        [
+            ModeId::TILES,
+            ModeId::TERRAINS,
+            ModeId::COLLISION,
+            MARKS,
+            ModeId::OBJECTS
+        ],
         "listed by order"
     );
     assert!(overlaid(&mut app, root).is_empty());
@@ -126,7 +134,10 @@ fn an_unknown_mode_is_refused_and_keeps_the_mode() {
     settle(&mut app);
     assert_eq!(view(&app).mode, ModeId::TILES);
     let said = warnings(&app).join("\n");
-    assert!(said.contains("tiles, terrains, objects"), "{said}");
+    assert!(
+        said.contains("tiles, terrains, collision, objects"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -155,7 +166,12 @@ fn an_extensions_mode_goes_when_it_unloads_and_its_tab_falls_back() {
     settle(&mut app);
     assert_eq!(
         mode_bar(&mut app, root),
-        [ModeId::TILES, ModeId::TERRAINS, ModeId::OBJECTS]
+        [
+            ModeId::TILES,
+            ModeId::TERRAINS,
+            ModeId::COLLISION,
+            ModeId::OBJECTS
+        ]
     );
     assert_eq!(view(&app).mode, ModeId::TILES, "the tab falls back");
 }

@@ -25,7 +25,7 @@ use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
 use jackdaw_tilemap::{Coverage, LayoutTemplate, Placement, Suggestion, TerrainId, TilesetSetup};
-use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain, TilesetTerrainSet};
+use jackdaw_tileset::{CollisionPreset, Tileset, TilesetTerrain, TilesetTerrainSet};
 
 use crate::tileset_bits::{
     CoverageLine, CoverageSummary, MissingShapes, coverage_line, painted_count, spawn_missing,
@@ -50,12 +50,6 @@ const PREVIEW: f32 = 72.0;
 const ICON: f32 = 20.0;
 /// Width of the terrains and sets column beside the sheet.
 const LIST_WIDTH: f32 = 248.0;
-/// Collision modes, as the operator names them and as the dock shows them.
-const COLLISIONS: [(&str, &str); 3] = [
-    ("solid", "Solid"),
-    ("trigger", "Trigger"),
-    ("passable", "Passable"),
-];
 /// Match modes, as the operator names them and as the dock shows them.
 const MODES: [(&str, &str); 3] = [
     ("corners", "Corners"),
@@ -70,7 +64,6 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(Update, refresh_on_tileset_events)
         .add_observer(on_activate)
         .add_observer(on_mode_change)
-        .add_observer(on_collision_pick)
         .add_observer(on_new_set_pick)
         .add_systems(
             Update,
@@ -145,6 +138,18 @@ pub struct DockView {
     pub shown: Option<usize>,
     /// Whether the suggested objects are listed one by one.
     pub objects_open: bool,
+    /// What a stroke of the collision mode paints.
+    pub collision: CollisionBrush,
+}
+
+/// What a stroke of the collision mode paints, and the physics layer it
+/// shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollisionBrush {
+    pub preset: CollisionPreset,
+    /// Index into the tileset's physics layers.
+    pub layer: u32,
+    pub trigger: bool,
 }
 
 impl DockView {
@@ -241,6 +246,12 @@ pub enum DockAction {
     SuggestionAddObject(usize),
     /// Show or hide the suggested objects.
     SuggestionObjects,
+    /// Paint this collision preset.
+    CollisionPreset(CollisionPreset),
+    /// Paint triggers, or solid shapes again.
+    CollisionTrigger,
+    /// Add a physics layer and show it.
+    AddPhysicsLayer,
 }
 
 /// The drawn image of sheet `sheet` in the dock `root`.
@@ -296,13 +307,6 @@ pub struct PaintedCount(pub String);
 #[derive(Component, Clone, Copy, Debug)]
 pub struct MoreMenu {
     pub root: Entity,
-}
-
-/// The collision combo of terrain `terrain`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct CollisionCombo {
-    pub root: Entity,
-    pub terrain: TerrainId,
 }
 
 /// Open a tileset in the Tileset window.
@@ -447,6 +451,8 @@ fn fill_path(world: &mut World, root: Entity, path: Option<String>) {
             let sets = tileset.sets();
             (view.expanded).retain(|name| sets.iter().any(|s| s.name == *name));
             crate::tileset_suggest::prune(&mut view, &tileset);
+            let layers = tileset.physics_layer_names().len() as u32;
+            view.collision.layer = view.collision.layer.min(layers.saturating_sub(1));
             let modes = world.get_resource::<TilesetModes>();
             if let Some(modes) = modes.filter(|m| m.get(view.mode).is_none()) {
                 view.mode = modes.iter().next().map_or(ModeId::TILES, |m| m.id);
@@ -586,10 +592,17 @@ fn fill_tileset(
         node.overflow = Overflow::scroll();
     }
     let overlay = mode.and_then(|m| m.overlay);
-    for index in &tileset.setup_sheets {
-        spawn_sheet(world, sheet, root, (tileset, &setup), *index, view, overlay);
+    for index in shown_sheets(tileset) {
+        spawn_sheet(world, sheet, root, (tileset, &setup), index, view, overlay);
     }
     Ok(())
+}
+
+/// The sheets a tab draws, top to bottom: those under terrain setup in its
+/// order, then the others.
+pub(crate) fn shown_sheets(tileset: &Tileset) -> Vec<u32> {
+    let others = (0..tileset.sheets.len() as u32).filter(|s| !tileset.setup_sheets.contains(s));
+    tileset.setup_sheets.iter().copied().chain(others).collect()
 }
 
 /// The side panel of the tiles and terrains modes: the terrains and sets,
@@ -814,23 +827,6 @@ fn spawn_terrains(
         if terrain.background {
             spawn_text(world, row, "background", tokens::TEXT_SECONDARY);
         }
-        if terrain.id == 0 {
-            continue;
-        }
-        let index = match terrain.collision {
-            TerrainCollision::Solid => 0,
-            TerrainCollision::Trigger => 1,
-            TerrainCollision::Passable => 2,
-        };
-        let names = COLLISIONS.map(|(_, name)| name).to_vec();
-        world.spawn((
-            combobox_compact_with_selected(names, index),
-            CollisionCombo {
-                root,
-                terrain: terrain.id,
-            },
-            ChildOf(row),
-        ));
     }
     if tileset.terrains.is_empty() {
         let hint = "Pick a plain tile, then New terrain.";
@@ -1376,7 +1372,7 @@ fn spawn_object_pick(
 }
 
 /// A row that picks something when clicked, highlighted while it is the pick.
-fn spawn_pick(
+pub(crate) fn spawn_pick(
     world: &mut World,
     parent: Entity,
     root: Entity,
@@ -1513,33 +1509,6 @@ fn on_new_set_pick(
     });
 }
 
-fn on_collision_pick(
-    change: On<ComboBoxChangeEvent>,
-    combos: Query<&CollisionCombo>,
-    mut commands: Commands,
-) {
-    let Ok(combo) = combos.get(change.entity).copied() else {
-        return;
-    };
-    let Some((mode, _)) = COLLISIONS.get(change.selected).copied() else {
-        return;
-    };
-    commands.queue(move |world: &mut World| {
-        let Some((path, _)) = dock_tileset(world, combo.root) else {
-            return;
-        };
-        let called = world
-            .operator("tileset.terrain.set_collision")
-            .param("path", path)
-            .param("terrain", combo.terrain.to_string())
-            .param("mode", mode)
-            .call();
-        if let Err(err) = called {
-            warn!("tileset.terrain.set_collision: {err}");
-        }
-    });
-}
-
 /// Build again each dock whose tileset was loaded or changed, by an edit, its
 /// undo, a new import or the file on disk.
 fn refresh_on_tileset_events(
@@ -1595,7 +1564,7 @@ pub(crate) fn dock_tileset(world: &mut World, root: Entity) -> Option<(String, T
 }
 
 /// An operator and its parameters, for the tileset of a dock.
-type DockCall = (&'static str, Vec<(&'static str, String)>);
+pub type DockCall = (&'static str, Vec<(&'static str, String)>);
 
 fn act(world: &mut World, control: DockControl) {
     if crate::tileset_layout::act(world, control) || crate::tileset_suggest::act(world, control) {
@@ -1609,7 +1578,10 @@ fn act(world: &mut World, control: DockControl) {
         return;
     };
     let mut view = (world.resource::<TilesetDockViews>().0.get(&path).cloned()).unwrap_or_default();
-    if view.mode == ModeId::TERRAINS && matches!(control.action, DockAction::Tile(..)) {
+    let paints = (world.get_resource::<TilesetModes>())
+        .and_then(|modes| modes.get(view.mode))
+        .is_some_and(|mode| mode.stroke.is_some());
+    if paints && matches!(control.action, DockAction::Tile(..)) {
         take_keyboard(world, root);
         return;
     }
@@ -1695,6 +1667,21 @@ fn act(world: &mut World, control: DockControl) {
         | DockAction::SuggestionLayOut(_)
         | DockAction::SuggestionAddObject(_)
         | DockAction::SuggestionObjects => None,
+        DockAction::CollisionPreset(preset) => {
+            view.collision.preset = preset;
+            None
+        }
+        DockAction::CollisionTrigger => {
+            view.collision.trigger = !view.collision.trigger;
+            None
+        }
+        DockAction::AddPhysicsLayer => {
+            let params = vec![("action", "add".to_string())];
+            Some((
+                crate::tileset_collision::TilesetCollisionLayerOp::ID,
+                params,
+            ))
+        }
         DockAction::RenameTerrain(terrain) => {
             view.naming = Some(NameField::Rename(terrain));
             None

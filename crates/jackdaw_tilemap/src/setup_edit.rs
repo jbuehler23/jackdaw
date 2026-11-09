@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use crate::setup::transition;
 use crate::terrain_find::srgb_to_oklab;
 use crate::{
-    CollisionMode, MatchMode, Peer, Provenance, SetupError, SetupSet, SetupTerrain, Stamp,
-    TerrainId, TileAddress, TileTerrains, TilesetSetup, Tracked,
+    MatchMode, Peer, Provenance, SetupError, SetupSet, SetupTerrain, Stamp, TerrainId, TileAddress,
+    TileTerrains, TilesetSetup, Tracked,
 };
 
 impl TilesetSetup {
@@ -23,7 +23,6 @@ impl TilesetSetup {
             oklab: srgb_to_oklab([r, g, b, 255]),
             swatch,
             background,
-            collision: Tracked::user(CollisionMode::default()),
         });
         Ok(id)
     }

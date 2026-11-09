@@ -12,17 +12,16 @@
 //!   in fresh id order; ids are never reused. A full run drops a terrain with
 //!   no match unless something User or anything kept refers to it.
 //! - Merge: User values are kept; Auto values in scope take the fresh
-//!   proposal; values out of scope are kept. Collision modes are the setup's
-//!   (new terrains start Passable). A tile merges peer by peer; a tile left
-//!   with no terrain, no shape and nothing User is unassigned.
+//!   proposal; values out of scope are kept. A tile merges peer by peer; a
+//!   tile left with no terrain, no collision and nothing User is unassigned.
 //! - Sets: a set holds the transition tiles among its terrains, and the pure
 //!   tiles of one of them when no other set uses it. Auto setup proposes
 //!   transition pairs; pairs of one mode that share a terrain form one set.
 //!   Locked sets, sets with a User mode and the tiles they hold are never
 //!   changed by a re-run. A set the fresh run lacks stays while a kept tile
 //!   is one of its transitions, and a set rebuilt by a re-run keeps its name.
-//! - Shapes: each Auto shape in scope is traced from the tile's merged peers
-//!   with the setup's colours and Solid terrains.
+//! - Collision: a tile keeps its collision through a re-run and a reset; a
+//!   re-run proposes none.
 //! - Stamps: User stamps stay; Auto stamps in scope give way to fresh ones,
 //!   less those sharing a tile with a stamp that stays.
 
@@ -31,12 +30,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::Vec3;
 
-use crate::collision_trace::{TileTrace, trace_tile};
 use crate::report::auto_setup_reserving;
 use crate::terrain_find::CLUSTER_RADIUS;
 use crate::{
-    AutoSetup, MatchMode, Peer, RgbaImage, SetupError, SheetInput, Stamp, TerrainId, TileAddress,
-    TileShape, TileTerrains,
+    AutoSetup, MatchMode, Peer, RgbaImage, SetupError, Stamp, TerrainId, TileAddress,
+    TileCollision, TileTerrains,
 };
 
 /// The terrain a transition draws, then the terrain it draws on (0 for
@@ -106,14 +104,6 @@ impl<T> Tracked<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum CollisionMode {
-    Solid,
-    Trigger,
-    #[default]
-    Passable,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct SetupTerrain {
     pub id: TerrainId,
@@ -123,7 +113,6 @@ pub struct SetupTerrain {
     pub oklab: Vec3,
     pub swatch: [u8; 3],
     pub background: bool,
-    pub collision: Tracked<CollisionMode>,
 }
 
 /// A named terrain set: a match mode and the terrains whose transitions it
@@ -151,7 +140,8 @@ pub struct SetupTile {
     pub terrains: TileTerrains,
     /// Per peer, by [`Peer::index`].
     pub provenance: [Provenance; 9],
-    pub shape: Tracked<Option<TileShape>>,
+    /// At most one shape per physics layer, by layer.
+    pub collision: Tracked<Vec<TileCollision>>,
     /// The transition the tile was laid out for, as the terrain drawn and
     /// the terrain drawn on; `None` when only its peers say which set holds
     /// it.
@@ -170,11 +160,11 @@ impl SetupTile {
     }
 
     fn has_user(&self) -> bool {
-        self.shape.is_user() || self.provenance.contains(&Provenance::User)
+        self.collision.is_user() || self.provenance.contains(&Provenance::User)
     }
 
     fn is_blank(&self) -> bool {
-        self.terrains == TileTerrains::default() && self.shape.value.is_none()
+        self.terrains == TileTerrains::default() && self.collision.value.is_empty()
     }
 }
 
@@ -186,7 +176,8 @@ pub enum Scope {
     /// The set at this index: its match mode, its terrains and the tiles it
     /// holds before or after the run.
     Set(usize),
-    /// The tiles' bits and shapes and the Auto stamps holding any of them.
+    /// The tiles' bits and the Auto stamps holding any of them; their
+    /// collision stays.
     Tiles(BTreeSet<TileAddress>),
 }
 
@@ -271,7 +262,13 @@ impl TilesetSetup {
     /// Everything `fresh` proposes, all Auto, in its ids, with the shapes it
     /// traced for the import's Solid terrains on the tiles it assigns.
     pub fn from_auto(fresh: &AutoSetup) -> Self {
-        proposed(fresh, &fresh.shapes)
+        let mut setup = proposed(fresh);
+        for (address, shape) in &fresh.shapes {
+            if let Some(tile) = setup.tiles.get_mut(address) {
+                tile.collision = Tracked::auto(vec![TileCollision::traced(shape.clone())]);
+            }
+        }
+        setup
     }
 
     pub fn terrain(&self, id: TerrainId) -> Option<&SetupTerrain> {
@@ -355,9 +352,37 @@ impl TilesetSetup {
         Ok(())
     }
 
-    /// Sets the collision shape of `tile` by hand; `None` means no collision.
-    pub fn set_shape(&mut self, tile: TileAddress, shape: Option<TileShape>) {
-        self.tiles.entry(tile).or_default().shape = Tracked::user(shape);
+    /// Puts `shape` on `tile` by hand in place of its shape on the same
+    /// layer; says whether anything changed.
+    pub fn set_collision(&mut self, tile: TileAddress, shape: TileCollision) -> bool {
+        let entry = self.tiles.entry(tile).or_default();
+        let shapes = &mut entry.collision.value;
+        if shapes.contains(&shape) {
+            return false;
+        }
+        shapes.retain(|s| s.layer != shape.layer);
+        let at = shapes.partition_point(|s| s.layer < shape.layer);
+        shapes.insert(at, shape);
+        entry.collision.provenance = Provenance::User;
+        true
+    }
+
+    /// Takes the shape on `layer` off `tile` by hand; says whether it had
+    /// one.
+    pub fn clear_collision(&mut self, tile: TileAddress, layer: u32) -> bool {
+        let Some(entry) = self.tiles.get_mut(&tile) else {
+            return false;
+        };
+        let before = entry.collision.value.len();
+        entry.collision.value.retain(|s| s.layer != layer);
+        if entry.collision.value.len() == before {
+            return false;
+        }
+        entry.collision.provenance = Provenance::User;
+        if entry.is_blank() && !entry.provenance.contains(&Provenance::User) {
+            self.tiles.remove(&tile);
+        }
+        true
     }
 
     pub fn rename_terrain(
@@ -366,15 +391,6 @@ impl TilesetSetup {
         name: impl Into<String>,
     ) -> Result<(), SetupError> {
         self.terrain_mut(id)?.name = Tracked::user(name.into());
-        Ok(())
-    }
-
-    pub fn set_collision_mode(
-        &mut self,
-        id: TerrainId,
-        mode: CollisionMode,
-    ) -> Result<(), SetupError> {
-        self.terrain_mut(id)?.collision = Tracked::user(mode);
         Ok(())
     }
 
@@ -436,7 +452,7 @@ pub fn rerun(
     scope: &Scope,
 ) -> Result<TilesetSetup, SetupError> {
     let fresh = auto_setup_reserving(inputs, &[], &terrain_names(previous))?;
-    merge(previous, &fresh, inputs, scope, false)
+    merge(previous, &fresh, scope, false)
 }
 
 /// The terrain names of `previous`, which a re-run keeps and new terrains
@@ -447,7 +463,7 @@ fn terrain_names(previous: &TilesetSetup) -> Vec<String> {
         .collect()
 }
 
-/// Runs auto setup over `inputs` and hands the bits and shapes of `tiles`
+/// Runs auto setup over `inputs` and hands the bits of `tiles`
 /// back to it, even in locked sets; a tile it proposes nothing for becomes
 /// unassigned, and a tile on a sheet it did not analyse is left as it is.
 /// Stamps, sets and existing terrains are left as they are.
@@ -457,31 +473,28 @@ pub fn reset_to_auto(
     tiles: &BTreeSet<TileAddress>,
 ) -> Result<TilesetSetup, SetupError> {
     let fresh = auto_setup_reserving(inputs, &[], &terrain_names(setup))?;
-    reset(setup, &fresh, inputs, tiles)
+    reset(setup, &fresh, tiles)
 }
 
 fn reset(
     setup: &TilesetSetup,
     fresh: &AutoSetup,
-    inputs: &[(&str, RgbaImage)],
     tiles: &BTreeSet<TileAddress>,
 ) -> Result<TilesetSetup, SetupError> {
     let mut handed_back = setup.clone();
     for address in tiles {
         if let Some(tile) = handed_back.tiles.get_mut(address) {
             tile.provenance = [Provenance::Auto; 9];
-            tile.shape.provenance = Provenance::Auto;
         }
     }
     let scope = Scope::Tiles(tiles.clone());
-    merge(&handed_back, fresh, inputs, &scope, true)
+    merge(&handed_back, fresh, &scope, true)
 }
 
-/// `previous` merged with `fresh`, which auto setup made from `inputs`.
+/// `previous` merged with `fresh`, a run of auto setup.
 fn merge(
     previous: &TilesetSetup,
     fresh: &AutoSetup,
-    inputs: &[(&str, RgbaImage)],
     scope: &Scope,
     reset: bool,
 ) -> Result<TilesetSetup, SetupError> {
@@ -513,7 +526,7 @@ fn merge(
     let live: BTreeSet<usize> = fresh_sheets.iter().flatten().copied().collect();
     let scope = scope.moved(&from_previous);
     let prev = previous.clone().moved(sheets.clone(), &from_previous);
-    let mut auto = proposed(fresh, &BTreeMap::new()).moved(sheets.clone(), &from_fresh);
+    let mut auto = proposed(fresh).moved(sheets.clone(), &from_fresh);
 
     let (ids, start) = match_ids(&prev.terrains, &auto.terrains, prev.next_id)?;
     let remap = |f: TerrainId| ids.get(&f).copied().unwrap_or(0);
@@ -542,7 +555,6 @@ fn merge(
             .filter(|_| scope.covers_terrain(p.id, &prev.sets))
             .map(|f| SetupTerrain {
                 name: p.name.clone(),
-                collision: p.collision.clone(),
                 swatch: p.swatch,
                 ..f.clone()
             });
@@ -562,17 +574,6 @@ fn merge(
     let locked: Vec<&SetupSet> = (prev.sets.iter())
         .filter(|s| !reset && s.locked_manual)
         .collect();
-    let solid = |t: &SetupTerrain| t.collision.value == CollisionMode::Solid;
-    let pixels = if terrains.values().any(solid) {
-        sheet_inputs(fresh, inputs, &from_fresh)?
-    } else {
-        BTreeMap::new()
-    };
-    let palette = |id: TerrainId| terrains.get(&id).map(|t| (t.oklab, solid(t)));
-    let mode_of = |peers: &TileTerrains| {
-        let set = sets.iter().find(|s| transition(&s.terrains, peers));
-        set.map_or(MatchMode::CornersAndSides, |s| s.mode.value)
-    };
     let keys = prev.tiles.keys().chain(auto.tiles.keys());
     let addresses: BTreeSet<TileAddress> = keys.copied().collect();
     let mut tiles = BTreeMap::new();
@@ -591,19 +592,7 @@ fn merge(
             }
             continue;
         }
-        let mut merged = merge_tile(before, both[1]);
-        if !merged.shape.is_user() {
-            let trace = TileTrace {
-                tile: address.tile,
-                peers: &merged.terrains,
-                mode: mode_of(&merged.terrains),
-                terrain: true,
-                decor_solid: false,
-            };
-            let input = pixels.get(&address.sheet);
-            let shape = input.and_then(|i| trace_tile(i, &trace, &palette));
-            merged.shape = Tracked::auto(shape);
-        }
+        let merged = merge_tile(before, both[1]);
         if merged.has_user() || !merged.is_blank() {
             tiles.insert(address, merged);
         }
@@ -696,24 +685,17 @@ fn merge(
     })
 }
 
-/// The setup `fresh` proposes, in its ids, with `shapes` as Auto shapes.
-fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> TilesetSetup {
-    let solid = fresh.report.collision.as_ref().map(|c| c.solid.as_slice());
+/// The setup `fresh` proposes, in its ids, with no collision.
+fn proposed(fresh: &AutoSetup) -> TilesetSetup {
     let mut terrains: Vec<SetupTerrain> = (fresh.proposal.terrains.iter())
         .map(|p| {
             let found = fresh.analysis.terrain(p.id);
-            let mode = if solid.is_some_and(|s| s.contains(&p.id)) {
-                CollisionMode::Solid
-            } else {
-                CollisionMode::Passable
-            };
             SetupTerrain {
                 id: p.id,
                 name: Tracked::auto(found.map(|t| t.name.clone()).unwrap_or_default()),
                 oklab: found.map_or(Vec3::ZERO, |t| t.oklab),
                 swatch: [0; 3],
                 background: p.background,
-                collision: Tracked::auto(mode),
             }
         })
         .collect();
@@ -738,11 +720,6 @@ fn proposed(fresh: &AutoSetup, shapes: &BTreeMap<TileAddress, TileShape>) -> Til
         for address in &p.pure_tiles {
             let pure = TileTerrains::filled(p.id);
             tiles.entry(*address).or_insert_with(|| auto_tile(pure));
-        }
-    }
-    for (address, shape) in shapes {
-        if let Some(tile) = tiles.get_mut(address) {
-            tile.shape = Tracked::auto(Some(shape.clone()));
         }
     }
     let pairs: Vec<(Pair, MatchMode)> = (fresh.proposal.sets.iter())
@@ -815,7 +792,7 @@ fn match_ids(
 /// Terrains a User value or a locked or User-mode set refers to.
 fn user_terrains(setup: &TilesetSetup) -> BTreeSet<TerrainId> {
     let named = (setup.terrains.iter())
-        .filter(|t| t.name.is_user() || t.collision.is_user())
+        .filter(|t| t.name.is_user())
         .map(|t| t.id);
     let sets = (setup.sets.iter())
         .filter(|s| s.locked_manual || s.mode.is_user())
@@ -1046,8 +1023,8 @@ fn merge_tile(previous: Option<&SetupTile>, fresh: Option<&SetupTile>) -> SetupT
             tile.provenance[i] = Provenance::User;
         }
     }
-    if p.shape.is_user() {
-        tile.shape = p.shape.clone();
+    if p.collision.is_user() || !p.collision.value.is_empty() {
+        tile.collision = p.collision.clone();
     }
     if p.provenance.contains(&Provenance::User) {
         tile.set = p.set.or(tile.set);
@@ -1155,37 +1132,14 @@ fn sort_stamps(stamps: &mut [Tracked<Stamp>]) {
     });
 }
 
-/// The analysed sheets of `fresh` with their pixels, by setup sheet.
-fn sheet_inputs<'a>(
-    fresh: &AutoSetup,
-    inputs: &[(&'a str, RgbaImage<'a>)],
-    sheet: &dyn Fn(usize) -> Option<usize>,
-) -> Result<BTreeMap<usize, SheetInput<'a>>, SetupError> {
-    let mut by_sheet = BTreeMap::new();
-    for (s, &i) in fresh.sheets.iter().enumerate() {
-        let &(name, image) = inputs.get(i).ok_or(SetupError::UnknownSheet(i))?;
-        let grid = fresh.report.sheets.get(i).and_then(|r| r.grid);
-        let (layout, _) = grid.ok_or(SetupError::UnknownSheet(i))?;
-        if let Some(sheet) = sheet(s) {
-            let input = SheetInput {
-                name,
-                image,
-                layout,
-            };
-            by_sheet.insert(sheet, input);
-        }
-    }
-    Ok(by_sheet)
-}
-
 #[cfg(test)]
 mod tests {
     use glam::{UVec2, Vec2};
 
     use super::*;
     use crate::{
-        CollisionReport, FittedTile, FoundTerrain, ProposedSet, ProposedTerrain, SetupReport,
-        SheetReport, TerrainAnalysis, TilesetProposal,
+        FittedTile, FoundTerrain, ProposedSet, ProposedTerrain, SetupReport, SheetReport,
+        TerrainAnalysis, TileShape, TilesetProposal,
     };
 
     const GRASS: TerrainId = 1;
@@ -1368,23 +1322,19 @@ mod tests {
     }
 
     fn run(previous: &TilesetSetup, fresh: &AutoSetup, scope: Scope) -> TilesetSetup {
-        checked(merge(previous, fresh, &[], &scope, false).expect("nothing to trace"))
+        checked(merge(previous, fresh, &scope, false).expect("merges"))
     }
 
     fn reset_tiles(setup: &TilesetSetup, fresh: &AutoSetup, list: &[u32]) -> TilesetSetup {
-        checked(reset(setup, fresh, &[], &tiles(list)).expect("nothing to trace"))
+        checked(reset(setup, fresh, &tiles(list)).expect("resets"))
     }
 
     fn tiles(list: &[u32]) -> BTreeSet<TileAddress> {
         list.iter().map(|t| at(*t)).collect()
     }
 
-    fn square() -> Option<TileShape> {
-        let ring = [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y];
-        Some(TileShape {
-            polygons: vec![ring.to_vec()],
-            half_tile: false,
-        })
+    fn square() -> TileCollision {
+        TileCollision::preset(crate::ShapePreset::Solid, 0, false).expect("a preset")
     }
 
     #[test]
@@ -1407,16 +1357,18 @@ mod tests {
     }
 
     #[test]
-    fn from_auto_takes_the_imports_solid_terrains() {
+    fn from_auto_takes_the_traced_shapes_as_solid_collision() {
         let mut fresh = first();
-        fresh.report.collision = Some(CollisionReport {
-            solid: vec![DIRT],
-            shapes: 0,
-            half_tiles: 0,
-        });
+        let ring = vec![Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y];
+        let shape = TileShape {
+            polygons: vec![ring],
+            half_tile: false,
+        };
+        fresh.shapes.insert(at(5), shape.clone());
         let setup = TilesetSetup::from_auto(&fresh);
-        let dirt = setup.terrain(DIRT).map(|t| &t.collision);
-        assert_eq!(dirt, Some(&Tracked::auto(CollisionMode::Solid)));
+        let traced = Tracked::auto(vec![TileCollision::traced(shape)]);
+        assert_eq!(setup.tiles[&at(5)].collision, traced);
+        assert!(!setup.tiles[&at(5)].collision.value[0].trigger);
     }
 
     #[test]
@@ -1426,8 +1378,7 @@ mod tests {
         setup.rename_terrain(GRASS, "meadow").expect("known");
         let dirt = setup.set_index(DIRT, GRASS).expect("a set");
         (setup.set_match_mode(dirt, MatchMode::Corners)).expect("known");
-        (setup.set_collision_mode(DIRT, CollisionMode::Trigger)).expect("known");
-        setup.set_shape(at(11), square());
+        assert!(setup.set_collision(at(11), square()));
         setup.put_stamp(stamp(&[30, 31]));
         let after = run(&setup, &second(), Scope::All);
 
@@ -1446,14 +1397,12 @@ mod tests {
         assert_eq!(after.tiles[&at(6)].terrains, TileTerrains::filled(GRASS));
         let eleven = &after.tiles[&at(11)];
         assert_eq!(eleven.terrains, TileTerrains::default());
-        assert_eq!(eleven.shape, Tracked::user(square()));
+        assert_eq!(eleven.collision, Tracked::user(vec![square()]));
         let mode = |inner| after.set(inner, GRASS).map(|s| s.mode.clone());
         assert_eq!(mode(SAND), Some(Tracked::auto(MatchMode::Corners)));
         assert_eq!(mode(DIRT), Some(Tracked::user(MatchMode::Corners)));
         let grass = after.terrain(GRASS).expect("kept");
         assert_eq!(grass.name, Tracked::user("meadow".to_string()));
-        let dirt = after.terrain(DIRT).expect("kept");
-        assert_eq!(dirt.collision, Tracked::user(CollisionMode::Trigger));
         assert_eq!(
             after.terrain(SAND).map(|t| t.name.value.as_str()),
             Some("auto 0.5")
@@ -1466,12 +1415,26 @@ mod tests {
     }
 
     #[test]
-    fn collision_modes_are_the_setups() {
+    fn collision_is_kept_through_a_rerun_and_set_per_layer() {
         let mut setup = TilesetSetup::from_auto(&first());
-        setup.terrains[2].collision = Tracked::auto(CollisionMode::Trigger);
+        assert!(setup.set_collision(at(0), square()));
+        assert!(!setup.set_collision(at(0), square()), "the same shape");
+        let trigger = TileCollision {
+            layer: 1,
+            trigger: true,
+            ..square()
+        };
+        assert!(setup.set_collision(at(0), trigger.clone()));
         let after = run(&setup, &second(), Scope::All);
-        let dirt = after.terrain(DIRT).map(|t| &t.collision);
-        assert_eq!(dirt, Some(&Tracked::auto(CollisionMode::Trigger)));
+        let kept = &after.tiles[&at(0)].collision;
+        assert_eq!(kept, &Tracked::user(vec![square(), trigger]));
+        let mut cleared = after.clone();
+        assert!(cleared.clear_collision(at(0), 0));
+        assert!(
+            !cleared.clear_collision(at(0), 0),
+            "nothing left on layer 0"
+        );
+        assert_eq!(cleared.tiles[&at(0)].collision.value.len(), 1);
     }
 
     #[test]
@@ -1591,7 +1554,7 @@ mod tests {
             grass: &[],
             stamps: &[],
         };
-        let result = merge(&setup, &new.fresh(), &[], &Scope::All, false);
+        let result = merge(&setup, &new.fresh(), &Scope::All, false);
         assert_eq!(result, Err(SetupError::TooManyTerrains));
     }
 
@@ -1669,7 +1632,7 @@ mod tests {
         let mut setup = TilesetSetup::from_auto(&first());
         setup.set_peer(at(0), Peer::Left, SAND).expect("known");
         setup.set_peer(at(40), Peer::Centre, SAND).expect("known");
-        setup.set_shape(at(1), square());
+        setup.set_collision(at(1), square());
         setup.set_peer(at(11), Peer::Top, SAND).expect("known");
         setup.set_peer(at(20), Peer::Top, SAND).expect("known");
         let sand = setup.set_index(SAND, GRASS).expect("a set");
@@ -1677,7 +1640,13 @@ mod tests {
         let after = reset_tiles(&setup, &first(), &[0, 1, 20, 40]);
         let auto = TilesetSetup::from_auto(&first());
         assert_eq!(after.tiles[&at(0)], auto.tiles[&at(0)]);
-        assert_eq!(after.tiles[&at(1)], auto.tiles[&at(1)]);
+        let one = &after.tiles[&at(1)];
+        assert_eq!(one.terrains, auto.tiles[&at(1)].terrains);
+        assert_eq!(
+            one.collision,
+            Tracked::user(vec![square()]),
+            "collision stays"
+        );
         assert!(!after.tiles.contains_key(&at(20)));
         assert!(!after.tiles.contains_key(&at(40)));
         assert_eq!(after.tiles[&at(11)], setup.tiles[&at(11)]);
@@ -1701,7 +1670,6 @@ mod tests {
         let unknown = Err(SetupError::UnknownTerrain(9));
         assert_eq!(setup.set_peer(at(0), Peer::Top, 9), unknown);
         assert_eq!(setup.rename_terrain(9, "x"), unknown);
-        assert_eq!(setup.set_collision_mode(9, CollisionMode::Solid), unknown);
         let no_set = Err(SetupError::UnknownSet(5));
         let mode = setup.set_match_mode(5, MatchMode::Corners);
         assert_eq!(mode, no_set);

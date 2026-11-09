@@ -13,6 +13,7 @@ use jackdaw_editor_core::inspector::ComponentCardRegistry;
 use jackdaw_editor_core::project_window::FileOpeners;
 use jackdaw_editor_core::toolbar_2d::Toolbar2dSlots;
 
+pub mod sheet_stroke;
 pub mod tile_palette;
 pub mod tile_preview;
 pub mod tile_select;
@@ -27,6 +28,7 @@ pub mod tilemap_resolve;
 pub mod tilemap_shape_ops;
 pub mod tilemap_stroke;
 pub mod tileset_bits;
+pub mod tileset_collision;
 pub mod tileset_dock;
 pub mod tileset_edit;
 pub mod tileset_import;
@@ -58,7 +60,8 @@ impl Plugin for TileEditorPlugin {
         ))
         .add_plugins((
             tileset_dock::plugin,
-            tileset_bits::plugin,
+            sheet_stroke::plugin,
+            tileset_collision::plugin,
             tileset_layout::plugin,
             tileset_suggest::plugin,
             tileset_modes::plugin,
@@ -104,6 +107,7 @@ impl JackdawExtension for TileEditorExtension {
     fn register(&self, ctx: &mut ExtensionContext) {
         tileset_dock::add_to_extension(ctx);
         tileset_bits::add_to_extension(ctx);
+        tileset_collision::add_to_extension(ctx);
         tileset_edit::add_to_extension(ctx);
         tilemap_stroke::add_to_extension(ctx);
         tile_tools::add_to_extension(ctx);

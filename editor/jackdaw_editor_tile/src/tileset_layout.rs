@@ -717,6 +717,7 @@ fn spawn_ghosts(
         colors,
         dim: false,
         hover: None,
+        outlines: Default::default(),
     };
     if let Some(overlay) = spawn_zone_overlay(world, frame, root, (tileset, draft.sheet), ghost) {
         world.entity_mut(overlay).insert(GhostZones { root });
