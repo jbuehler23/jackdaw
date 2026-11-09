@@ -1657,6 +1657,27 @@ fn a_pie_wait_answers_on_the_transition_rather_than_the_state_it_started_in() {
     assert_eq!(stopped, json!("stopped"));
 }
 
+/// A wait for a stopped game sent after `pie.stop`, with nothing launched or
+/// building, answers once a launch would have shown up.
+#[test]
+fn a_pie_stopped_wait_with_nothing_launched_answers() {
+    let mut app = util::editor_test_app();
+    let stopped = json!({ "until": "pie_stopped", "request": "after-stop" });
+    let start = app.world().resource::<bevy::diagnostic::FrameCount>().0;
+
+    assert_eq!(
+        poll_pie(&mut app, stopped.clone()).expect("the handler did not refuse"),
+        None
+    );
+    app.world_mut()
+        .resource_mut::<bevy::diagnostic::FrameCount>()
+        .0 = start + 31;
+    let answer = poll_pie(&mut app, stopped)
+        .expect("the handler did not refuse")
+        .expect("nothing is launched, so Play is stopped");
+    assert_eq!(answer["pie"], json!("stopped"));
+}
+
 #[test]
 fn status_follows_play_through_pause_resume_and_stop() {
     let (mut app, _dir) = editor_with_a_project();

@@ -1882,10 +1882,14 @@ pub fn wait_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
 /// otherwise. Ten minutes at 60fps, since a game build takes minutes.
 const PIE_WAIT_FRAMES: u32 = 36_000;
 
+/// Frames a `pie_stopped` wait that has seen no game gives a `pie.play` sent
+/// just before it to register its launch.
+const PIE_STOP_GRACE_FRAMES: u32 = 30;
+
 /// Hold until Play reaches `wanted`, the build behind it fails, or the
-/// wait runs out of frames. A `pie_stopped` wait resolves only once a game has
-/// been seen building or up, since `pie.play` returns while the editor still
-/// reads as stopped.
+/// wait runs out of frames. A `pie_stopped` wait resolves once Play reads as
+/// stopped with no instance launched or building, since `pie.play` returns
+/// while the editor still reads as stopped.
 fn pie_wait(
     world: &mut World,
     params: &Value,
@@ -1898,6 +1902,9 @@ fn pie_wait(
         .get("frames")
         .and_then(Value::as_u64)
         .map_or(PIE_WAIT_FRAMES, |frames| frames as u32);
+    let launched = world
+        .get_non_send::<jackdaw_editor_core::pie::PieSession>()
+        .is_some_and(|session| !session.instance_stages().is_empty());
 
     let mut waits = world.get_resource_or_init::<PendingWaits>();
     let pending = waits.requests.entry(key.clone()).or_insert(PendingRequest {
@@ -1914,12 +1921,14 @@ fn pie_wait(
             "request {key} is already waiting on something else"
         )));
     };
-    wait.seen_active |= status != "stopped";
+    wait.seen_active |= status != "stopped" || launched;
+    let settled =
+        wait.seen_active || frame >= wait.until.saturating_sub(cap) + PIE_STOP_GRACE_FRAMES;
     let reached = match wait.wanted {
         "running" => matches!(status, "running" | "paused"),
-        _ => wait.seen_active && status == "stopped",
+        _ => status == "stopped" && !launched && settled,
     };
-    let gone = wait.wanted == "running" && wait.seen_active && status == "stopped";
+    let gone = wait.wanted == "running" && wait.seen_active && status == "stopped" && !launched;
     let out_of_frames = frame >= wait.until;
 
     // A build that did not compile, or a game that went away before it
