@@ -195,11 +195,12 @@ not answer within a few seconds:
   node id, naming every entity spawned from it) and answers with all their
   components.
 - `jackdaw/game_query` takes `with` (a component type path) and `name` (a
-  substring, ignoring case) and answers with the matching entities, each
-  carrying the value of `with`.
+  substring, ignoring case), either or both, and answers with the matching
+  entities, each carrying the value of `with`.
 
 An answer holds at most 4000 entities and sets `truncated` when more matched.
-Components the game cannot serialize are listed by name under `opaque`.
+Each entity lists the components the game cannot serialize by name under
+`opaque`.
 
 The BRP method `jackdaw/game_output` answers with what a game printed, also after
 it exited:

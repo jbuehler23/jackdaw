@@ -102,7 +102,8 @@ starts streaming immediately, beginning with whatever the game shows first
 
 The game spawns the scene the editor has open, not the file on disk, so
 there is no need to save first. Prefabs and sidecars with unsaved changes
-reach it too.
+reach it too. Model settings must be saved first; Play says so in the status
+bar when some are not.
 
 **Pause** freezes the game's clock and shows as pressed; Play then reads
 **Resume**. While paused, **Step** advances the game by one fixed tick. The
@@ -217,8 +218,9 @@ The editor also reads from the running game, without changing it:
 - Selecting a Runtime row shows that entity in the Inspector as a read-only
   card, and clears the selection. Selecting anything else in the editor ends
   it.
-- When the running game holds a different value for a field of the selected
-  entity, the field carries a **Live** chip with that value. A collapsed
+- When the running game holds a different value for a number, bool, text or
+  vector field of the selected entity, and its node spawned one entity in the
+  game, the field carries a **Live** chip with that value. A collapsed
   component card carries a **Live** badge. The chip is not saved, and the
   document keeps the authored value.
 
