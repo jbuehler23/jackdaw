@@ -2055,20 +2055,16 @@ pub(crate) struct ColorDragOpen;
 /// A press on a colour slider or plane that never becomes a drag sends no
 /// release, nor does a cancelled touch. Once no pointer is held, settle what
 /// such a gesture left as a release.
-pub(crate) fn settle_released_color_drags(world: &mut World) {
-    let held = world
-        .query::<&bevy::picking::pointer::PointerPressState>()
-        .iter(world)
-        .any(bevy::picking::pointer::PointerPressState::is_any_pressed);
-    if held {
+pub(crate) fn settle_released_color_drags(
+    pointers: Query<&bevy::picking::pointer::PointerPressState>,
+    open: Query<Entity, With<ColorDragOpen>>,
+    mut commands: Commands,
+) {
+    if open.is_empty() || pointers.iter().any(|press| press.is_any_pressed()) {
         return;
     }
-    let open: Vec<Entity> = world
-        .query_filtered::<Entity, With<ColorDragOpen>>()
-        .iter(world)
-        .collect();
-    for root in open {
-        commit_color_field(world, root, true);
+    for root in &open {
+        commands.queue(move |world: &mut World| commit_color_field(world, root, true));
     }
 }
 

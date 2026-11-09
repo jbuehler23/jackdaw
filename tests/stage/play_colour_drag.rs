@@ -268,3 +268,25 @@ fn a_click_on_a_colour_track_authors_the_colour() {
     assert!((playing.red_in_game() - 0.5).abs() < 1e-4);
     assert!((playing.red() - 0.5).abs() < 1e-4);
 }
+
+/// A drag the widget releases itself authors once, with nothing left for the
+/// let-go to author again.
+#[test]
+fn a_released_colour_drag_authors_once() {
+    let mut playing = playing();
+    let slider = playing.red_slider();
+    let undo_before = playing.undo_entries();
+
+    mouse(&mut playing.app, true);
+    tick(&mut playing, slider, 0.6);
+    playing.app.update();
+    playing.app.world_mut().trigger(ValueChange {
+        source: slider,
+        value: 0.8f32,
+        is_final: true,
+    });
+    mouse(&mut playing.app, false);
+    playing.app.update();
+    assert_eq!(playing.undo_entries(), undo_before + 1);
+    assert!((playing.red() - 0.8).abs() < 1e-4);
+}
