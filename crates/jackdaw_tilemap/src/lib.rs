@@ -78,4 +78,4 @@ pub use terrain_find::{
     FoundTerrain, SheetInput, TerrainAnalysis, TileAddress, TileKind, TileLabels, find_terrains,
 };
 pub use tile::{TerrainId, TileRef};
-pub use tile_collision::{ShapePreset, TileCollision};
+pub use tile_collision::{ShapePreset, ShapeTurn, TileCollision, ring_area};

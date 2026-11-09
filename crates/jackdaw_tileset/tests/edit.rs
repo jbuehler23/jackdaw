@@ -149,6 +149,7 @@ fn a_sheet_outside_setup_takes_collision_that_a_setup_edit_keeps() {
     let solid = TilesetCollision {
         layer: 0,
         trigger: false,
+        one_way: true,
         preset: CollisionPreset::Solid,
         polygons: CollisionPreset::Solid.polygons().expect("a ring"),
     };

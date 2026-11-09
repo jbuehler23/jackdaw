@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy::ui::UiTransform;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
+use jackdaw_commands::CommandHistory;
 use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, combobox_compact_with_selected};
 use jackdaw_feathers::icons::Icon;
@@ -21,6 +22,7 @@ use crate::tileset_dock::{
 use crate::tileset_edit::{apply_edit, text, tile_list};
 use crate::tileset_import::decode_sheet;
 use crate::tileset_modes::{ModeId, ModePanel, ModeSheet, TilesetMode, TilesetModeAppExt as _};
+use crate::tileset_shape::open_shape_editor;
 use crate::zone_overlay::{
     ZoneLayout, ZoneOutline, ZoneValues, redraw_zone_rows, spawn_zone_overlay,
 };
@@ -32,7 +34,8 @@ pub const TRIGGER: Color = Color::srgb(1.0, 0.72, 0.22);
 const GLYPH: f32 = 14.0;
 
 pub(crate) fn plugin(app: &mut App) {
-    app.add_observer(on_layer_pick)
+    app.init_resource::<LastTileClick>()
+        .add_observer(on_layer_pick)
         .register_tileset_mode(TilesetMode {
             id: ModeId::COLLISION,
             label: "Collision",
@@ -62,7 +65,8 @@ pub struct PhysicsLayerPick {
     description = "Put a collision shape on tiles on one physics layer, in place of the shape \
                    they had there, as one undo entry: a preset, or the tile's opaque pixels \
                    traced. No preset clears the layer's shape. A traced tile with no opaque \
-                   pixel is cleared.",
+                   pixel is cleared. Custom keeps the shape each tile has there and sets only \
+                   its trigger and one way flags.",
     allows_undo = false,
     params(
         path(
@@ -75,14 +79,19 @@ pub struct PhysicsLayerPick {
         ),
         preset(
             String,
-            doc = "solid, top_half, bottom_half, slope_up, slope_down or traced; empty or \
-                   none clears."
+            doc = "solid, top_half, bottom_half, slope_up, slope_down, traced or custom; \
+                   empty or none clears."
         ),
         layer(String, doc = "Physics layer index or name; layer 0 by default."),
         trigger(
             bool,
             default = false,
             doc = "Whether the shape overlaps without blocking."
+        ),
+        one_way(
+            bool,
+            default = false,
+            doc = "Whether the shape blocks only what comes down onto it from above."
         ),
     )
 )]
@@ -93,6 +102,7 @@ pub fn tileset_collision_set(
     let (path, tiles) = (text(&params, "path"), text(&params, "tiles"));
     let (preset, layer) = (text(&params, "preset"), text(&params, "layer"));
     let trigger = params.as_bool("trigger").unwrap_or(false);
+    let one_way = params.as_bool("one_way").unwrap_or(false);
     commands.queue(move |world: &mut World| {
         let op = TilesetCollisionSetOp::ID;
         let set = apply_edit(world, op, &path, |world, tileset| {
@@ -103,10 +113,14 @@ pub fn tileset_collision_set(
                     let found = CollisionPreset::from_name(name).ok_or_else(|| {
                         format!(
                             "preset is solid, top_half, bottom_half, slope_up, slope_down, \
-                             traced or none, not `{name}`"
+                             traced, custom or none, not `{name}`"
                         )
                     })?;
-                    Some((found, trigger))
+                    Some(PaintShape {
+                        preset: found,
+                        trigger,
+                        one_way,
+                    })
                 }
             };
             let layer = physics_layer(tileset, &layer)?;
@@ -247,7 +261,7 @@ fn show_layer(world: &mut World, path: &str, layer: u32) {
 }
 
 /// A physics layer by index, else by name; layer 0 when `text` is empty.
-fn physics_layer(tileset: &Tileset, text: &str) -> Result<u32, String> {
+pub(crate) fn physics_layer(tileset: &Tileset, text: &str) -> Result<u32, String> {
     let names = tileset.physics_layer_names();
     if text.is_empty() {
         return Ok(0);
@@ -270,10 +284,10 @@ fn traced_sheets(
     world: &World,
     tileset: &Tileset,
     tiles: &[(u32, u32)],
-    shape: Option<(CollisionPreset, bool)>,
+    shape: Option<PaintShape>,
 ) -> Result<TracedSheets, String> {
     let mut sheets = TracedSheets::new();
-    if !shape.is_some_and(|(p, _)| p == CollisionPreset::Traced) {
+    if !shape.is_some_and(|s| s.preset == CollisionPreset::Traced) {
         return Ok(sheets);
     }
     let assets = jackdaw_editor_core::asset_index::assets_dir(world).ok_or("no project is open")?;
@@ -308,13 +322,23 @@ fn traced(
     trace_art(&input, tile).map(|shape| shape.polygons)
 }
 
+/// A shape painted on tiles: a preset and its flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaintShape {
+    /// Custom keeps each tile's own polygons.
+    pub preset: CollisionPreset,
+    pub trigger: bool,
+    pub one_way: bool,
+}
+
 /// Put `shape` on `tiles` on physics layer `layer`, or clear the layer from
 /// them when `shape` is `None`; says how many tiles changed. `trace` reads
-/// a tile's opaque pixels for a traced shape.
+/// a tile's opaque pixels for a traced shape. A custom shape leaves tiles
+/// with no shape on the layer alone.
 pub fn paint_collision(
     tileset: &mut Tileset,
     tiles: &[(u32, u32)],
-    shape: Option<(CollisionPreset, bool)>,
+    shape: Option<PaintShape>,
     layer: u32,
     trace: &dyn Fn(u32, u32) -> Option<Vec<Vec<Vec2>>>,
 ) -> Result<usize, String> {
@@ -324,19 +348,35 @@ pub fn paint_collision(
     }
     let mut changed = 0;
     for &(sheet, tile) in tiles {
-        let polygons =
-            shape.and_then(|(preset, _)| preset.polygons().or_else(|| trace(sheet, tile)));
-        let done = match (shape, polygons) {
-            (Some((preset, trigger)), Some(polygons)) => {
+        let own = (tileset.collision(sheet, tile).iter())
+            .find(|c| c.layer == layer)
+            .cloned();
+        let Some(shape) = shape else {
+            let done = tileset.clear_collision(sheet, tile, layer);
+            changed += usize::from(done.map_err(|e| e.to_string())?);
+            continue;
+        };
+        let (preset, polygons) = if shape.preset == CollisionPreset::Custom {
+            let Some(own) = own else {
+                continue;
+            };
+            (own.preset, Some(own.polygons))
+        } else {
+            let polygons = shape.preset.polygons().or_else(|| trace(sheet, tile));
+            (shape.preset, polygons)
+        };
+        let done = match polygons {
+            Some(polygons) => {
                 let collision = TilesetCollision {
                     layer,
-                    trigger,
+                    trigger: shape.trigger,
+                    one_way: shape.one_way,
                     preset,
                     polygons,
                 };
                 tileset.set_collision(sheet, tile, collision)
             }
-            _ => tileset.clear_collision(sheet, tile, layer),
+            None => tileset.clear_collision(sheet, tile, layer),
         };
         changed += usize::from(done.map_err(|e| e.to_string())?);
     }
@@ -440,7 +480,8 @@ pub(crate) fn collision_panel(world: &mut World, panel: &ModePanel) {
         },
         ChildOf(list),
     ));
-    let hint = "Click or drag over tiles to paint, right-drag to clear.";
+    let hint = "Click or drag over tiles to paint, right-drag to clear. Double-click a tile \
+                to edit its shape.";
     spawn_text(world, list, hint, tokens::TEXT_SECONDARY);
 }
 
@@ -452,6 +493,7 @@ fn preset_label(preset: CollisionPreset) -> &'static str {
         CollisionPreset::SlopeUp => "Slope up",
         CollisionPreset::SlopeDown => "Slope down",
         CollisionPreset::Traced => "Traced from the art",
+        CollisionPreset::Custom => "Custom",
     }
 }
 
@@ -470,14 +512,17 @@ fn spawn_glyph(world: &mut World, parent: Entity, preset: CollisionPreset) {
             ChildOf(parent),
         ))
         .id();
-    let uneven = [
-        (0.0, 0.0),
-        (1.0, 0.0),
-        (1.0, 0.6),
-        (0.55, 0.6),
-        (0.55, 1.0),
-        (0.0, 1.0),
-    ];
+    let uneven: &[(f32, f32)] = match preset {
+        CollisionPreset::Custom => &[(0.0, 0.0), (1.0, 0.25), (0.8, 1.0), (0.2, 0.7)],
+        _ => &[
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 0.6),
+            (0.55, 0.6),
+            (0.55, 1.0),
+            (0.0, 1.0),
+        ],
+    };
     let ring: Vec<Vec2> = match preset.polygons() {
         Some(polygons) => polygons.into_iter().next().unwrap_or_default(),
         None => uneven.iter().map(|&(x, y)| Vec2::new(x, y)).collect(),
@@ -551,28 +596,60 @@ fn on_layer_pick(
 }
 
 /// A stroke of the collision mode: the brush painted on whole tiles, or
-/// cleared from them with the right button.
+/// cleared from them with the right button. A left stroke with the custom
+/// brush paints nothing and opens the shape editor on its tile.
 struct CollisionPaint {
     brush: CollisionBrush,
     /// The tileset with the stroke painted so far.
     shown: Tileset,
     tiles: BTreeSet<u32>,
+    /// The undo history's revision as the stroke started.
+    revision: u64,
 }
 
+/// The last single-tile left click of the collision mode, to tell a double
+/// click.
+#[derive(Resource, Default)]
+struct LastTileClick(Option<TileClick>);
+
+#[derive(Clone, Copy, Debug)]
+struct TileClick {
+    root: Entity,
+    sheet: u32,
+    tile: u32,
+    /// Seconds since startup.
+    at: f64,
+    /// The history revision the click's paint left, when it painted.
+    painted: Option<u64>,
+}
+
+/// Longest gap between the clicks of a double click, in seconds.
+const DOUBLE_CLICK: f64 = 0.5;
+
 /// Start a stroke of the collision mode.
-fn start_stroke(_: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetPaint>> {
+fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetPaint>> {
+    let revision = world.resource::<CommandHistory>().revision();
     Some(Box::new(CollisionPaint {
         brush: start.view.collision,
         shown: start.tileset.clone(),
         tiles: BTreeSet::new(),
+        revision,
     }))
 }
 
 impl CollisionPaint {
-    /// The brush's preset and trigger flag for a left stroke; none for a
-    /// right one, which clears.
-    fn shape(&self, stroke: &StrokeInfo) -> Option<(CollisionPreset, bool)> {
-        (stroke.button == PointerButton::Primary).then_some((self.brush.preset, self.brush.trigger))
+    /// What a stroke paints, `None` for a right one, which clears.
+    fn shape(&self, stroke: &StrokeInfo) -> Option<PaintShape> {
+        (stroke.button == PointerButton::Primary).then_some(PaintShape {
+            preset: self.brush.preset,
+            trigger: self.brush.trigger,
+            one_way: false,
+        })
+    }
+
+    /// Whether the stroke only picks a tile for the shape editor.
+    fn picks(&self, stroke: &StrokeInfo) -> bool {
+        stroke.button == PointerButton::Primary && self.brush.preset == CollisionPreset::Custom
     }
 }
 
@@ -589,11 +666,11 @@ impl SheetPaint for CollisionPaint {
             .filter_map(|p| layout.tile_at(*p).map(|(tile, _)| tile))
             .filter(|tile| self.tiles.insert(*tile))
             .collect();
-        if fresh.is_empty() {
+        if fresh.is_empty() || self.picks(stroke) {
             return;
         }
         let shape = self.shape(stroke);
-        let pixels = (shape.is_some_and(|(p, _)| p == CollisionPreset::Traced))
+        let pixels = (shape.is_some_and(|s| s.preset == CollisionPreset::Traced))
             .then(|| sheet_pixels(world, &stroke.tileset, stroke.sheet))
             .flatten();
         let trace = |_: u32, tile: u32| {
@@ -629,8 +706,8 @@ impl SheetPaint for CollisionPaint {
         let tiles: Vec<String> = (self.tiles.iter())
             .map(|tile| format!("{}:{tile}", stroke.sheet))
             .collect();
-        let preset = self.shape(stroke).map_or("none", |(p, _)| p.name());
-        (!tiles.is_empty()).then(|| {
+        let preset = self.shape(stroke).map_or("none", |s| s.preset.name());
+        (!tiles.is_empty() && !self.picks(stroke)).then(|| {
             let params = vec![
                 ("tiles", tiles.join(",")),
                 ("preset", preset.to_string()),
@@ -639,6 +716,47 @@ impl SheetPaint for CollisionPaint {
             ];
             (TilesetCollisionSetOp::ID, params)
         })
+    }
+
+    fn finished(&self, world: &mut World, stroke: &StrokeInfo) {
+        let mut tiles = self.tiles.iter();
+        let (Some(&tile), None) = (tiles.next(), tiles.next()) else {
+            world.resource_mut::<LastTileClick>().0 = None;
+            return;
+        };
+        if stroke.button != PointerButton::Primary {
+            world.resource_mut::<LastTileClick>().0 = None;
+            return;
+        }
+        if self.picks(stroke) {
+            open_shape_editor(world, stroke.root, stroke.sheet, tile);
+            return;
+        }
+        let at = world.resource::<Time<Real>>().elapsed_secs_f64();
+        let revision = world.resource::<CommandHistory>().revision();
+        let click = TileClick {
+            root: stroke.root,
+            sheet: stroke.sheet,
+            tile,
+            at,
+            painted: (revision != self.revision).then_some(revision),
+        };
+        let last = world.resource_mut::<LastTileClick>().0.replace(click);
+        let double = last.filter(|l| {
+            (l.root, l.sheet, l.tile) == (click.root, click.sheet, click.tile)
+                && at - l.at < DOUBLE_CLICK
+        });
+        let Some(first) = double else {
+            return;
+        };
+        world.resource_mut::<LastTileClick>().0 = None;
+        if first.painted == Some(revision) {
+            let undone = world.operator("history.undo").call();
+            if let Err(err) = undone {
+                warn!("history.undo: {err}");
+            }
+        }
+        open_shape_editor(world, stroke.root, stroke.sheet, tile);
     }
 }
 

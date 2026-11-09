@@ -121,11 +121,20 @@ impl Tileset {
             let on =
                 (self.tiles.iter()).flat_map(|t| t.collision.iter().filter(|c| c.layer == index));
             let triggers = on.clone().filter(|c| c.trigger).count();
+            let custom = (on.clone())
+                .filter(|c| c.preset == crate::CollisionPreset::Custom)
+                .count();
+            let one_way = on.clone().filter(|c| c.one_way).count();
             let solid = on.count() - triggers;
-            let _ = writeln!(
-                out,
-                "  layer {index} \"{name}\": {solid} solid, {triggers} trigger tiles"
-            );
+            let mut line =
+                format!("  layer {index} \"{name}\": {solid} solid, {triggers} trigger tiles");
+            if custom > 0 {
+                let _ = write!(line, ", {custom} custom");
+            }
+            if one_way > 0 {
+                let _ = write!(line, ", {one_way} one way");
+            }
+            let _ = writeln!(out, "{line}");
         }
         let _ = writeln!(out, "properties: {} layers", self.properties.len());
         for (layer, properties) in &self.properties {

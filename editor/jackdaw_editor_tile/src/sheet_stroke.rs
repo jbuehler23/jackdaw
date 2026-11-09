@@ -61,6 +61,8 @@ pub trait SheetPaint: Send + Sync + 'static {
     fn paint(&mut self, world: &mut World, stroke: &StrokeInfo, frame: Entity, points: &[Vec2]);
     /// The call that applies the stroke; `None` when it painted nothing.
     fn apply(&self, stroke: &StrokeInfo) -> Option<DockCall>;
+    /// Runs once the stroke is applied.
+    fn finished(&self, _world: &mut World, _stroke: &StrokeInfo) {}
 }
 
 /// Starts a mode's stroke; `None` leaves the press alone.
@@ -227,6 +229,7 @@ fn finish(world: &mut World, button: PointerButton) {
         return;
     };
     let call = stroke.paint.apply(&stroke.info);
-    let info = stroke.info;
+    let Active { info, paint, .. } = stroke;
     dispatch(world, info.root, &info.path, &info.tileset, call);
+    paint.finished(world, &info);
 }

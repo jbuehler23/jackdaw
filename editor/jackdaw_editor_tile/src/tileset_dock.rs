@@ -24,7 +24,9 @@ use jackdaw_input::prelude::{ContextActivity, ContextPriority, InputContext};
 use jackdaw_panels::area::DockWindow;
 use jackdaw_panels::tree::{DockTree, TabId};
 use jackdaw_scene_types::{Tilemap, TilemapLayerKind};
-use jackdaw_tilemap::{Coverage, LayoutTemplate, Placement, Suggestion, TerrainId, TilesetSetup};
+use jackdaw_tilemap::{
+    Coverage, LayoutTemplate, Placement, ShapeTurn, Suggestion, TerrainId, TilesetSetup,
+};
 use jackdaw_tileset::{CollisionPreset, Tileset, TilesetTerrain, TilesetTerrainSet};
 
 use crate::tileset_bits::{
@@ -35,6 +37,7 @@ use crate::tileset_edit::{apply_edit, clear_auto, open_tileset, suggested_name, 
 use crate::tileset_import::{TILESET_SUFFIX, decode_sheet};
 use crate::tileset_layout::{LayoutDraft, TilesetLayoutApplyOp, spawn_draft};
 use crate::tileset_modes::{ModeId, ModePanel, ModeSheet, TilesetModeOp, TilesetModes};
+use crate::tileset_shape::{ShapeEdit, ShapeTool};
 use crate::tileset_suggest::{TilesetSuggestOp, spawn_outline, spawn_suggestions};
 use jackdaw_editor_core::asset_index::assets_dir;
 use jackdaw_editor_core::definition_assets::{entry_for_file, resolve_project_path};
@@ -140,6 +143,8 @@ pub struct DockView {
     pub objects_open: bool,
     /// What a stroke of the collision mode paints.
     pub collision: CollisionBrush,
+    /// The tile whose collision shape the shape editor is drawing.
+    pub shape: Option<ShapeEdit>,
 }
 
 /// What a stroke of the collision mode paints, and the physics layer it
@@ -164,6 +169,7 @@ impl DockView {
         self.mode = mode;
         self.anchor = None;
         self.layout = None;
+        self.shape = None;
     }
 }
 
@@ -252,6 +258,17 @@ pub enum DockAction {
     CollisionTrigger,
     /// Add a physics layer and show it.
     AddPhysicsLayer,
+    /// Pick a tool of the shape editor.
+    ShapeTool(ShapeTool),
+    /// Pick the shape editor's polygon at this index.
+    ShapePolygon(usize),
+    ShapeAddPolygon,
+    ShapeRemovePolygon(usize),
+    /// Replace the edited shape with the tile's opaque pixels traced.
+    ShapeFromTraced,
+    ShapeTurn(ShapeTurn),
+    ShapeTrigger,
+    ShapeOneWay,
 }
 
 /// The drawn image of sheet `sheet` in the dock `root`.
@@ -451,6 +468,7 @@ fn fill_path(world: &mut World, root: Entity, path: Option<String>) {
             let sets = tileset.sets();
             (view.expanded).retain(|name| sets.iter().any(|s| s.name == *name));
             crate::tileset_suggest::prune(&mut view, &tileset);
+            crate::tileset_shape::prune(&mut view, &tileset);
             let layers = tileset.physics_layer_names().len() as u32;
             view.collision.layer = view.collision.layer.min(layers.saturating_sub(1));
             let modes = world.get_resource::<TilesetModes>();
@@ -461,6 +479,7 @@ fn fill_path(world: &mut World, root: Entity, path: Option<String>) {
             if let Err(err) = fill_tileset(world, root, &tileset, &view) {
                 spawn_text(world, root, err, tokens::TEXT_ERROR);
             }
+            crate::tileset_shape::sync(world, root, &tileset, &view);
         }
         Ok((id, None)) => {
             set_asset(world, root, id);
@@ -1567,7 +1586,10 @@ pub(crate) fn dock_tileset(world: &mut World, root: Entity) -> Option<(String, T
 pub type DockCall = (&'static str, Vec<(&'static str, String)>);
 
 fn act(world: &mut World, control: DockControl) {
-    if crate::tileset_layout::act(world, control) || crate::tileset_suggest::act(world, control) {
+    if crate::tileset_layout::act(world, control)
+        || crate::tileset_suggest::act(world, control)
+        || crate::tileset_shape::act(world, control)
+    {
         return;
     }
     let root = control.root;
@@ -1666,7 +1688,15 @@ fn act(world: &mut World, control: DockControl) {
         | DockAction::SuggestionDismiss(_)
         | DockAction::SuggestionLayOut(_)
         | DockAction::SuggestionAddObject(_)
-        | DockAction::SuggestionObjects => None,
+        | DockAction::SuggestionObjects
+        | DockAction::ShapeTool(_)
+        | DockAction::ShapePolygon(_)
+        | DockAction::ShapeAddPolygon
+        | DockAction::ShapeRemovePolygon(_)
+        | DockAction::ShapeFromTraced
+        | DockAction::ShapeTurn(_)
+        | DockAction::ShapeTrigger
+        | DockAction::ShapeOneWay => None,
         DockAction::CollisionPreset(preset) => {
             view.collision.preset = preset;
             None
