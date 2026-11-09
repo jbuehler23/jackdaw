@@ -5,6 +5,7 @@
 //! Prefabs are supplied through a caller-owned lookup closure rather than a
 //! cache type, so the resolver depends on nothing but the document model.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use bevy::ecs::entity::Entity;
@@ -18,6 +19,7 @@ use jackdaw_bsn::{
 use std::fmt;
 
 use crate::components::{ISA_TYPE, PREFAB_ENTITY_ID_TYPE, PREFAB_TYPE};
+use crate::source::isa_value;
 
 /// How many prefab references one resolve follows before it stops. Cycles have
 /// their own detector; this catches non-cyclic runaway nesting.
@@ -161,14 +163,77 @@ fn merge_prefab_under_instance(
         return;
     };
 
-    let existing: HashMap<u32, Entity> = scoped_descendants(ast, instance_root)
+    inherit_root_components(ast, instance_root, prefab, prefab_root);
+    merge_entry_subtree(ast, instance_root, prefab, prefab_root, deleted);
+}
+
+/// Materialize and merge the descendants of `scene_node` against those of
+/// `prefab_node`, its entry in `prefab`. A nested instance the scene already
+/// carries takes its `IsA` and its subtree from the same entry as its own
+/// components, so what the prefab authors inside it shows through.
+fn merge_entry_subtree(
+    ast: &mut SceneBsnAst,
+    scene_node: Entity,
+    prefab: &SceneBsnAst,
+    prefab_node: Entity,
+    deleted: &[u32],
+) {
+    let existing: HashMap<u32, Entity> = scoped_descendants(ast, scene_node)
         .into_iter()
         .filter_map(|node| read_prefab_entity_id(ast, node).map(|id| (id, node)))
         .collect();
 
-    inherit_root_components(ast, instance_root, prefab, prefab_root);
-    materialize_descendants(ast, instance_root, prefab, prefab_root, deleted, &existing);
-    merge_descendant_overrides(ast, instance_root, prefab, prefab_root);
+    materialize_descendants(ast, scene_node, prefab, prefab_node, deleted, &existing);
+    merge_descendant_overrides(ast, scene_node, prefab, prefab_node);
+
+    let prefab_instances: HashMap<u32, Entity> = scoped_descendants(prefab, prefab_node)
+        .into_iter()
+        .filter(|&node| prefab.find_patch_by_type_path(node, ISA_TYPE).is_some())
+        .filter_map(|node| read_prefab_entity_id(prefab, node).map(|id| (id, node)))
+        .collect();
+    for (id, scene_child) in existing {
+        let Some(&prefab_child) = prefab_instances.get(&id) else {
+            continue;
+        };
+        let deleted = adopt_entry_isa(ast, scene_child, prefab, prefab_child);
+        drop_deleted_entries(ast, scene_child, &deleted);
+        merge_entry_subtree(ast, scene_child, prefab, prefab_child, &deleted);
+    }
+}
+
+/// Give a nested instance the source and deleted ids its outer prefab's entry
+/// names, adding the ids the scene deletes itself, and return those ids. The
+/// scene's copy of `IsA` can be older than the outer prefab.
+fn adopt_entry_isa(
+    ast: &mut SceneBsnAst,
+    scene_node: Entity,
+    prefab: &SceneBsnAst,
+    prefab_node: Entity,
+) -> Vec<u32> {
+    let mut deleted = read_isa_deleted(prefab, prefab_node);
+    for id in read_isa_deleted(ast, scene_node) {
+        if !deleted.contains(&id) {
+            deleted.push(id);
+        }
+    }
+    if let Some(BsnValue::String(source)) = get_bsn_field(prefab, prefab_node, ISA_TYPE, "source") {
+        set_whole_component(ast, scene_node, ISA_TYPE, isa_value(&source, &deleted));
+    }
+    deleted
+}
+
+/// Detach the entries under `root`, in its id space, whose ids are `deleted`.
+fn drop_deleted_entries(ast: &mut SceneBsnAst, root: Entity, deleted: &[u32]) {
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        for child in ast.get_children_ast(current) {
+            if read_prefab_entity_id(ast, child).is_some_and(|id| deleted.contains(&id)) {
+                ast.remove_child_from_ast(current, child);
+            } else if ast.find_patch_by_type_path(child, ISA_TYPE).is_none() {
+                stack.push(child);
+            }
+        }
+    }
 }
 
 /// Copy each prefab-root component (except `Prefab` and `IsA`) onto the
@@ -216,7 +281,7 @@ fn inherit_root_components(
 /// reached without passing through a nested `IsA` node. A nested instance root
 /// is included, since it is an entry of the outer prefab, but its subtree is
 /// numbered by its own prefab and is left out.
-fn scoped_descendants(ast: &SceneBsnAst, root: Entity) -> Vec<Entity> {
+pub fn scoped_descendants(ast: &SceneBsnAst, root: Entity) -> Vec<Entity> {
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(current) = stack.pop() {
@@ -425,50 +490,51 @@ pub fn sparsify_against_baselines(
                 .map(move |child| (child, node))
         })
         .collect();
+    let parent_of = |node: Entity| parents.get(&node).copied();
+    let mut scopes = Scopes::new(Box::new(get_baseline));
     for node in nodes {
-        // Instance roots sparsify against their own prefab's root entry: resolve
-        // materializes the prefab root's components onto the instance, so without
-        // the inverse those values read as authored overrides and prefab root
+        // Instance roots sparsify against the entry resolve fills them from: their
+        // own prefab's root, or the outer prefab's entry for a nested instance.
+        // Without the inverse those values read as authored overrides and prefab
         // edits never propagate.
         if ast.find_patch_by_type_path(node, ISA_TYPE).is_some() {
-            let Some(baseline) =
-                read_isa_source(ast, node).and_then(|source| get_baseline(&source))
-            else {
+            let Some(scope) = scopes.scope(ast, node, &parent_of) else {
                 continue;
             };
-            let Some(prefab_root) = baseline.root() else {
-                continue;
-            };
+            let (prefab, entry, nested) = (scope.document, scope.entry, scope.instance != node);
             sparsify_node_against_baseline(
                 ast,
                 node,
-                baseline.document(),
-                prefab_root,
+                prefab,
+                entry,
                 &[ISA_TYPE, PREFAB_ENTITY_ID_TYPE],
                 filed_name,
             );
+            if nested {
+                keep_own_deletions(ast, node, prefab, entry);
+            }
             continue;
         }
         let Some(peid) = read_prefab_entity_id(ast, node) else {
             continue;
         };
-
-        let mut cursor = parents.get(&node).copied();
-        let mut isa_source: Option<PathBuf> = None;
-        while let Some(current) = cursor {
-            if let Some(source) = read_isa_source(ast, current) {
-                isa_source = Some(source);
-                break;
-            }
-            cursor = parents.get(&current).copied();
-        }
-        let Some(baseline) = isa_source.and_then(|source| get_baseline(&source)) else {
+        let Some(owner) = instance_above(ast, node, &parent_of) else {
             continue;
         };
-        let Some(prefab_match) = baseline.node(peid) else {
+        let Some(scope) = scopes.scope(ast, owner, &parent_of) else {
             continue;
         };
-        let prefab = baseline.document();
+        // A node the outer prefab's entry lacks still compares against its own
+        // prefab, so it is never saved whole.
+        let found = match scope.ids.get(&peid) {
+            Some(&prefab_match) => Some((scope.document, prefab_match)),
+            None => read_isa_source(ast, owner)
+                .and_then(|source| scopes.own_baseline(&source))
+                .and_then(|baseline| Some((baseline.document, baseline.node(peid)?))),
+        };
+        let Some((prefab, prefab_match)) = found else {
+            continue;
+        };
 
         sparsify_node_against_baseline(
             ast,
@@ -488,6 +554,25 @@ pub fn sparsify_against_baselines(
             }
             ast.world.despawn(patch);
         }
+    }
+}
+
+/// Leave a nested instance's `IsA` naming only the ids the scene deletes beyond
+/// what its outer prefab's entry deletes, so the outer prefab's later deletions
+/// and restorations show through.
+fn keep_own_deletions(ast: &mut SceneBsnAst, node: Entity, prefab: &SceneBsnAst, entry: Entity) {
+    let held = read_isa_deleted(ast, node);
+    let inherited = read_isa_deleted(prefab, entry);
+    let own: Vec<u32> = held
+        .iter()
+        .copied()
+        .filter(|id| !inherited.contains(id))
+        .collect();
+    if own.len() == held.len() {
+        return;
+    }
+    if let Some(BsnValue::String(source)) = get_bsn_field(ast, node, ISA_TYPE, "source") {
+        set_whole_component(ast, node, ISA_TYPE, isa_value(&source, &own));
     }
 }
 
@@ -635,6 +720,230 @@ impl<'a> Baseline<'a> {
 
 /// Finds the [`Baseline`] of a prefab by source path.
 pub type BaselineLookup<'a> = dyn Fn(&Path) -> Option<Baseline<'a>> + 'a;
+
+/// The prefab entry a node of a resolved document inherits its values from,
+/// the one resolve fills it from.
+pub struct InheritedEntry<'a> {
+    /// The instance node whose prefab authors the entry.
+    pub instance: Entity,
+    /// That prefab's source.
+    pub source: PathBuf,
+    /// The ids leading from that prefab's root to the entry, each numbered by
+    /// the nested instance the one before it names. Empty for the root.
+    pub path: Vec<u32>,
+    /// The expanded prefab document holding the entry.
+    pub document: &'a SceneBsnAst,
+    /// The entry in [`Self::document`].
+    pub entry: Entity,
+}
+
+/// The entry `node` inherits from. A nested instance whose outer prefab places
+/// it inherits from the outer prefab's expanded entry for its id, and so do its
+/// descendants, since that entry already carries what the outer prefab changes
+/// inside it. A node that entry lacks inherits from its own prefab.
+pub fn inherited_entry<'a>(
+    ast: &SceneBsnAst,
+    node: Entity,
+    get_baseline: &BaselineLookup<'a>,
+) -> Option<InheritedEntry<'a>> {
+    InheritanceLookup::new(ast, Box::new(get_baseline)).entry(ast, node)
+}
+
+/// Answers [`inherited_entry`] for many nodes of one document, sharing the
+/// parent links and the entries already found. Valid while the document's
+/// hierarchy, `IsA` and `PrefabEntityId` components stay as they were.
+pub struct InheritanceLookup<'a, 'b> {
+    scopes: Scopes<'a, 'b>,
+    parents: HashMap<Entity, Entity>,
+}
+
+impl<'a, 'b> InheritanceLookup<'a, 'b> {
+    /// A lookup over `ast`, reading each prefab's baseline from `get_baseline`.
+    pub fn new(
+        ast: &SceneBsnAst,
+        get_baseline: Box<dyn Fn(&Path) -> Option<Baseline<'a>> + 'b>,
+    ) -> Self {
+        let mut parents = HashMap::default();
+        let mut stack: Vec<Entity> = ast.roots.clone();
+        while let Some(current) = stack.pop() {
+            for child in ast.get_children_ast(current) {
+                parents.insert(child, current);
+                stack.push(child);
+            }
+        }
+        Self {
+            scopes: Scopes::new(get_baseline),
+            parents,
+        }
+    }
+
+    /// The entry `node` of the document this lookup was made for inherits from.
+    pub fn entry(&mut self, ast: &SceneBsnAst, node: Entity) -> Option<InheritedEntry<'a>> {
+        let parents = &self.parents;
+        let parent_of = |child: Entity| parents.get(&child).copied();
+        if ast.find_patch_by_type_path(node, ISA_TYPE).is_some() {
+            let scope = self.scopes.scope(ast, node, &parent_of)?;
+            return Some(InheritedEntry {
+                instance: scope.instance,
+                source: scope.source.clone(),
+                path: scope.path.clone(),
+                document: scope.document,
+                entry: scope.entry,
+            });
+        }
+        let id = read_prefab_entity_id(ast, node)?;
+        let owner = instance_above(ast, node, &parent_of)?;
+        let scope = self.scopes.scope(ast, owner, &parent_of)?;
+        if let Some(&entry) = scope.ids.get(&id) {
+            let mut path = scope.path.clone();
+            path.push(id);
+            return Some(InheritedEntry {
+                instance: scope.instance,
+                source: scope.source.clone(),
+                path,
+                document: scope.document,
+                entry,
+            });
+        }
+        if scope.instance == owner {
+            return None;
+        }
+        let source = read_isa_source(ast, owner)?;
+        let baseline = self.scopes.own_baseline(&source)?;
+        Some(InheritedEntry {
+            instance: owner,
+            source,
+            path: vec![id],
+            document: baseline.document,
+            entry: baseline.node(id)?,
+        })
+    }
+}
+
+/// The node of `prefab` as written that [`InheritedEntry::path`] names, or
+/// `None` when the prefab only inherits that entry.
+pub fn prefab_entry(prefab: &SceneBsnAst, path: &[u32]) -> Option<Entity> {
+    let mut current = prefab
+        .roots
+        .iter()
+        .copied()
+        .find(|root| prefab.find_patch_by_type_path(*root, PREFAB_TYPE).is_some())?;
+    for &id in path {
+        current = scoped_descendants(prefab, current)
+            .into_iter()
+            .find(|&node| read_prefab_entity_id(prefab, node) == Some(id))?;
+    }
+    Some(current)
+}
+
+/// The nearest `IsA` node strictly above `node`.
+fn instance_above(
+    ast: &SceneBsnAst,
+    node: Entity,
+    parent_of: &dyn Fn(Entity) -> Option<Entity>,
+) -> Option<Entity> {
+    let mut cursor = parent_of(node);
+    while let Some(current) = cursor {
+        if ast.find_patch_by_type_path(current, ISA_TYPE).is_some() {
+            return Some(current);
+        }
+        cursor = parent_of(current);
+    }
+    None
+}
+
+/// The prefab entry an instance node is filled from, with the entries its
+/// descendants match by id.
+struct Scope<'a> {
+    document: &'a SceneBsnAst,
+    entry: Entity,
+    ids: Cow<'a, HashMap<u32, Entity>>,
+    instance: Entity,
+    source: PathBuf,
+    path: Vec<u32>,
+}
+
+/// The [`Scope`] of each instance node of one document, built on first use.
+struct Scopes<'a, 'b> {
+    get_baseline: Box<dyn Fn(&Path) -> Option<Baseline<'a>> + 'b>,
+    built: HashMap<Entity, Option<Scope<'a>>>,
+}
+
+impl<'a, 'b> Scopes<'a, 'b> {
+    fn new(get_baseline: Box<dyn Fn(&Path) -> Option<Baseline<'a>> + 'b>) -> Self {
+        Self {
+            get_baseline,
+            built: HashMap::default(),
+        }
+    }
+
+    /// The baseline of the prefab at `source` itself.
+    fn own_baseline(&self, source: &Path) -> Option<Baseline<'a>> {
+        (self.get_baseline)(source)
+    }
+
+    fn scope(
+        &mut self,
+        ast: &SceneBsnAst,
+        instance: Entity,
+        parent_of: &dyn Fn(Entity) -> Option<Entity>,
+    ) -> Option<&Scope<'a>> {
+        if !self.built.contains_key(&instance) {
+            let scope = self.build(ast, instance, parent_of);
+            self.built.insert(instance, scope);
+        }
+        self.built.get(&instance)?.as_ref()
+    }
+
+    fn build(
+        &mut self,
+        ast: &SceneBsnAst,
+        instance: Entity,
+        parent_of: &dyn Fn(Entity) -> Option<Entity>,
+    ) -> Option<Scope<'a>> {
+        if let Some(id) = read_prefab_entity_id(ast, instance)
+            && let Some(owner) = instance_above(ast, instance, parent_of)
+            && let Some(outer) = self.scope(ast, owner, parent_of)
+            && let Some(&entry) = outer.ids.get(&id)
+            && outer
+                .document
+                .find_patch_by_type_path(entry, ISA_TYPE)
+                .is_some()
+        {
+            let mut path = outer.path.clone();
+            path.push(id);
+            return Some(Scope {
+                document: outer.document,
+                entry,
+                ids: Cow::Owned(scoped_ids(outer.document, entry)),
+                instance: outer.instance,
+                source: outer.source.clone(),
+                path,
+            });
+        }
+        let source = read_isa_source(ast, instance)?;
+        let baseline = (self.get_baseline)(&source)?;
+        Some(Scope {
+            document: baseline.document,
+            entry: baseline.root?,
+            ids: Cow::Borrowed(baseline.ids),
+            instance,
+            source,
+            path: Vec::new(),
+        })
+    }
+}
+
+/// The nodes `root` numbers, by id, the first in walk order winning.
+fn scoped_ids(document: &SceneBsnAst, root: Entity) -> HashMap<u32, Entity> {
+    let mut ids = HashMap::default();
+    for node in scoped_descendants(document, root) {
+        if let Some(id) = read_prefab_entity_id(document, node) {
+            ids.entry(id).or_insert(node);
+        }
+    }
+    ids
+}
 
 /// Write each string `filed_name` has another name for under that name.
 fn respell_references(value: &mut BsnValue, filed_name: &ReferenceSpelling) {

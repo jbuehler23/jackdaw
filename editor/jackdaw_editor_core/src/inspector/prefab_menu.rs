@@ -290,9 +290,8 @@ fn resolve_prefab_value(
     node: Entity,
     type_path: &str,
 ) -> Option<BsnValue> {
-    let (path, prefab_entity_id) = crate::prefab::overrides_bsn::resolve_inheritance(ast, node)?;
-    let (prefab, prefab_node) = cache.baseline_entry(&path, prefab_entity_id)?;
-    get_bsn_field(prefab, prefab_node, type_path, "")
+    let inherited = cache.inherited_entry(ast, node)?;
+    get_bsn_field(inherited.document, inherited.entry, type_path, "")
 }
 
 /// What "apply field to source" writes for one field of `entity`.

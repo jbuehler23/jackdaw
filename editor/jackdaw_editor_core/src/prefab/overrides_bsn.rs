@@ -15,7 +15,7 @@ use jackdaw_bsn::{BsnValue, SceneBsnAst, bsn_value_eq, get_bsn_field, held_bsn_f
 
 use crate::prefab::PrefabAstCache;
 use crate::prefab::resolver_bsn::{
-    ISA_TYPE, PREFAB_ENTITY_ID_TYPE, read_isa_source, read_prefab_entity_id,
+    ISA_TYPE, InheritedEntry, PREFAB_ENTITY_ID_TYPE, read_isa_source, read_prefab_entity_id,
 };
 
 /// True if `node` sits inside a prefab-instance subtree: it carries a
@@ -40,6 +40,21 @@ pub fn resolve_inheritance(ast: &SceneBsnAst, node: Entity) -> Option<(PathBuf, 
     Some((source, prefab_entity_id))
 }
 
+/// The instance node in whose `PrefabEntityId` space `node` is numbered: for an
+/// instance nested inside another, the instance above it, otherwise the nearest
+/// `IsA` node, inclusive.
+pub fn id_owner(ast: &SceneBsnAst, node: Entity) -> Option<Entity> {
+    let nearest = ast.ancestor_with_component(node, ISA_TYPE)?;
+    if nearest != node {
+        return Some(nearest);
+    }
+    Some(
+        ast.ast_parent_of(node)
+            .and_then(|parent| ast.ancestor_with_component(parent, ISA_TYPE))
+            .unwrap_or(node),
+    )
+}
+
 /// True if `node`'s component value at `type_path` (or, when `field_path`
 /// is `Some`, its subfield at that dotted path) differs from the value on
 /// the prefab entry the node inherits from. False when the node authors no
@@ -57,13 +72,33 @@ pub fn field_is_overridden(
     if get_bsn_field(ast, node, type_path, "").is_none() {
         return false;
     }
+    field_differs_from(
+        ast,
+        node,
+        prefabs.inherited_entry(ast, node).as_ref(),
+        type_path,
+        field_path,
+        registry,
+    )
+}
 
-    let Some((prefab_path, prefab_entity_id)) = resolve_inheritance(ast, node) else {
+/// [`field_is_overridden`] against `inherited`, the entry `node` inherits
+/// from, for a caller that looks entries up for many nodes at once.
+pub fn field_differs_from(
+    ast: &SceneBsnAst,
+    node: Entity,
+    inherited: Option<&InheritedEntry<'_>>,
+    type_path: &str,
+    field_path: Option<&str>,
+    registry: &TypeRegistry,
+) -> bool {
+    if get_bsn_field(ast, node, type_path, "").is_none() {
+        return false;
+    }
+    let Some(inherited) = inherited else {
         return false;
     };
-    let Some((prefab, prefab_node)) = prefabs.baseline_entry(&prefab_path, prefab_entity_id) else {
-        return false;
-    };
+    let (prefab, prefab_node) = (inherited.document, inherited.entry);
 
     if get_bsn_field(prefab, prefab_node, type_path, "").is_none() {
         // Component exists on the instance but not on the prefab: an addition.
