@@ -5,6 +5,7 @@ mod bundle_modules;
 mod bundle_smoke;
 mod core_deps;
 mod git_deps;
+mod perf;
 mod release;
 
 /// Target triple for the heavy tier's SDK build. Reads the host from
@@ -291,6 +292,7 @@ fn main() -> ExitCode {
         "bundle-smoke" => bundle_smoke::cmd(&args[1..]),
         "core-deps" => core_deps::cmd(),
         "git-deps" => git_deps::cmd(),
+        "perf" => perf::cmd(&args[1..]),
         "package" => match args.get(1) {
             Some(out) => release::package(
                 std::path::Path::new(out),
@@ -306,7 +308,7 @@ fn main() -> ExitCode {
             eprintln!(
                 "usage: cargo xtask <fast|archive [FILE]|integration [N/M] [--archive FILE]|heavy|\
                  release-gate|package-sdk|bundle|bundle-modules|bundle-smoke|core-deps|git-deps|\
-                 package DIR [--check]|publish [--dry-run]> \
+                 package DIR [--check]|publish [--dry-run]|perf --project DIR> \
                  (got {other:?})"
             );
             false
