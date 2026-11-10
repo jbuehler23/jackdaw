@@ -15,6 +15,8 @@ pub struct LiveFrameStream {
     pub last_seq: u64,
     /// When the newest frame arrived; `None` until the first frame.
     pub received_at: Option<Instant>,
+    /// When the first frame of this stream arrived.
+    pub first_received_at: Option<Instant>,
     /// The game said it opened its own window, so no frame will ever come.
     pub game_has_own_window: bool,
 }
@@ -66,8 +68,10 @@ pub fn apply_frame(
     }
     // The lane is ordered, so a lower seq means the game restarted; treat the
     // frame as the start of a new stream rather than a stale duplicate.
+    let now = Instant::now();
     stream.last_seq = frame.seq;
-    stream.received_at = Some(Instant::now());
+    stream.received_at = Some(now);
+    stream.first_received_at.get_or_insert(now);
     let size = UVec2::new(frame.width, frame.height);
     if let Some(handle) = &stream.image
         && stream.size == size
@@ -116,6 +120,7 @@ mod tests {
         );
         let handle = stream.image.clone().expect("image created");
         assert_eq!(stream.size, UVec2::new(64, 64));
+        let first = stream.first_received_at.expect("first frame time kept");
 
         let b2 = frame_bytes(64, 64, 2, 9);
         apply_frame(
@@ -124,6 +129,11 @@ mod tests {
             jackdaw_pie_protocol::decode_frame(&b2).unwrap(),
         );
         assert_eq!(stream.image.as_ref(), Some(&handle), "same asset reused");
+        assert_eq!(
+            stream.first_received_at,
+            Some(first),
+            "later frames keep it"
+        );
         let data = images.get(&handle).unwrap().data.as_ref().unwrap();
         assert!(data.iter().all(|&b| b == 9));
     }
@@ -195,6 +205,7 @@ mod tests {
         let handle = stream.image.clone().unwrap();
         stream.clear(&mut images);
         assert!(stream.image.is_none());
+        assert!(stream.first_received_at.is_none());
         assert!(images.get(&handle).is_none());
         assert_eq!(stream.last_seq, 0);
     }
