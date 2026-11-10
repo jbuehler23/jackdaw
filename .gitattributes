@@ -5,3 +5,5 @@
 tests/guards/*.txt text eol=lf
 # Signed extension fixtures are compared byte for byte.
 crates/jackdaw_package/tests/fixtures/* -text
+# Tilemap golden files are compared as written.
+crates/jackdaw_tilemap/tests/golden/** text eol=lf
