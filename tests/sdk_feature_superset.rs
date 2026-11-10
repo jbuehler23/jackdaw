@@ -106,7 +106,53 @@ fn scaffold_with_shim(root: &Path) -> Result<PathBuf, String> {
         .map_err(|e| format!("scaffold {}: {e}", root.display()))?;
 
     let spec = shim_spec_for_project(root).map_err(|error| error.to_string())?;
-    shim::ensure_shim(&spec, &root.join(".jackdaw"), "0").map_err(|e| format!("generate shim: {e}"))
+    let shim = shim::ensure_shim(&spec, &root.join(".jackdaw"), "0")
+        .map_err(|e| format!("generate shim: {e}"))?;
+    if let Some(rev) = locked_bevy_rev(&workspace_root()) {
+        pin_bevy(&shim, &rev)?;
+    }
+    Ok(shim)
+}
+
+/// The Bevy commit the workspace's lockfile pins, when the workspace builds
+/// against Bevy's main branch.
+fn locked_bevy_rev(workspace: &Path) -> Option<String> {
+    let lock = std::fs::read_to_string(workspace.join("Cargo.lock")).ok()?;
+    let mut lines = lock.lines();
+    while let Some(line) = lines.next() {
+        if line != "name = \"bevy\"" {
+            continue;
+        }
+        for line in lines.by_ref() {
+            if line.is_empty() {
+                break;
+            }
+            if let Some(source) = line.strip_prefix("source = \"git+") {
+                let (_, rev) = source.split_once('#')?;
+                return Some(rev.trim_end_matches('"').to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the project's Bevy at `rev`, the commit a Bleeding Edge project is
+/// set up against, so both sides compare the same Bevy.
+fn pin_bevy(dir: &Path, rev: &str) -> Result<(), String> {
+    let output = Command::new("cargo")
+        .args(["update", "--package", "bevy", "--precise", rev])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("run cargo update in {}: {e}", dir.display()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "pin bevy to {rev} in {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
 }
 
 /// Skip when the environment cannot resolve dependencies (no registry
