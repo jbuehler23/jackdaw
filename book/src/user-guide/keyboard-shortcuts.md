@@ -26,9 +26,10 @@
 
 | Key | Action |
 |-----|--------|
-| Esc | Translate mode |
-| R | Rotate mode |
-| T | Scale mode |
+| Q | Select tool |
+| W | Translate tool |
+| E | Rotate tool |
+| R | Scale tool |
 | X | Toggle local / world space |
 | M | Toggle snapping (same as the toolbar magnet) |
 | MMB | Toggle snap |

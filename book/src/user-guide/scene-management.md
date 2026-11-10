@@ -66,10 +66,10 @@ Nothing stops you from putting many `.bsn` files in
 `assets/scenes/`. The editor doesn't currently have a "scene
 list" panel, so you switch between them via `File > Open`.
 
-If you reference one scene from another (sub-scenes,
-prefabs), that pattern is not built yet. Today scenes are
-flat. See [Open Challenges](../developer-guide/open-challenges.md)
-for what scene-as-asset would look like.
+To reuse a group of entities across scenes, save it as a
+prefab. A prefab is its own `.bsn` file; scenes hold
+instances of it that follow edits to the prefab and can
+override their own values.
 
 ## Project files outside `assets/`
 

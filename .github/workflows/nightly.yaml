@@ -177,7 +177,7 @@ jobs:
     needs: pin
     uses: ./.github/workflows/bundle.yaml
     with:
-      include: '[{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","glibc_target":"x86_64-unknown-linux-gnu.2.31","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","link":"-C link-arg=-Wl,--allow-shlib-undefined","archive":"tar.zst"},{"os":"macos-14","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"zip"},{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}]'
+      include: '[{"os":"ubuntu-latest","triple":"x86_64-unknown-linux-gnu","glibc_target":"x86_64-unknown-linux-gnu.2.31","rpath":"-C link-arg=-Wl,-rpath,$ORIGIN","link":"-C link-arg=-Wl,--allow-shlib-undefined","archive":"tar.zst"},{"os":"macos-15","triple":"aarch64-apple-darwin","rpath":"-C link-arg=-Wl,-rpath,@loader_path","archive":"zip"},{"os":"windows-latest","triple":"x86_64-pc-windows-msvc","rpath":"","lto":"off","archive":"zip"}]'
       nightly: ${{ needs.pin.outputs.nightly }}
       lockfile: bevy-main-lock
 

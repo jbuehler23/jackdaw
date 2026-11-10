@@ -1,12 +1,16 @@
 //! What the Game panel shows when there is no frame: Play while stopped, and
 //! why the last launch ended when it went wrong.
 
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use crate::util::{self, OperatorResultExt as _};
 
 use bevy::prelude::*;
-use jackdaw::game_panel::{GAME_WINDOW_ID, GameIdlePart, GamePanelIdleLabel, GamePanelStderrText};
+#[cfg(unix)]
+use jackdaw::game_panel::GamePanelStderrText;
+use jackdaw::game_panel::{GAME_WINDOW_ID, GameIdlePart, GamePanelIdleLabel};
+#[cfg(unix)]
 use jackdaw::pie::InstanceKey;
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{CallOperatorSettings, ExecutionContext};
@@ -54,6 +58,7 @@ pub(super) fn press(app: &mut App, part: GameIdlePart) -> OperatorResult {
     result
 }
 
+#[cfg(unix)]
 pub(super) fn key(config: &str) -> InstanceKey {
     InstanceKey {
         config: config.to_string(),
@@ -123,6 +128,7 @@ pub(super) fn label(app: &mut App) -> String {
         .clone()
 }
 
+#[cfg(unix)]
 pub(super) fn stderr(app: &mut App) -> String {
     app.world_mut()
         .query_filtered::<&Text, With<GamePanelStderrText>>()
@@ -146,6 +152,7 @@ pub(super) fn shown(app: &mut App) -> Vec<GameIdlePart> {
 }
 
 /// Update until `done` holds, failing after a few seconds.
+#[cfg(unix)]
 pub(super) fn update_until(app: &mut App, what: &str, mut done: impl FnMut(&mut App) -> bool) {
     let until = Instant::now() + Duration::from_secs(10);
     while !done(app) {
@@ -155,6 +162,7 @@ pub(super) fn update_until(app: &mut App, what: &str, mut done: impl FnMut(&mut 
     }
 }
 
+#[cfg(unix)]
 pub(super) fn recorded_exit(app: &App) -> Option<InstanceKey> {
     app.world()
         .resource::<jackdaw::pie::LastGameExit>()
