@@ -125,7 +125,10 @@ mod tests {
     fn a_build_without_a_nightly_name_goes_by_its_version() {
         assert_eq!(name_of(None, "0.20.1"), "0.20.1");
         assert_eq!(name_of(Some(""), "0.20.1"), "0.20.1");
-        assert_eq!(name_of(Some("nightly-2026-11-10"), "0.20.1"), "nightly-2026-11-10");
+        assert_eq!(
+            name_of(Some("nightly-2026-11-10"), "0.20.1"),
+            "nightly-2026-11-10"
+        );
     }
 
     #[test]
