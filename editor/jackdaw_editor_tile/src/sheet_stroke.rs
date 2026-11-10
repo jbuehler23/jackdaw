@@ -2,8 +2,10 @@ use bevy::picking::events::{
     PointerCancel, PointerDragEnd, PointerMove, PointerPress, PointerRelease,
 };
 use bevy::picking::pointer::{PointerButton, PointerId, PointerPressState};
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::window::WindowFocused;
+use jackdaw_commands::CommandHistory;
 use jackdaw_tileset::Tileset;
 
 use crate::tileset_dock::{
@@ -13,6 +15,10 @@ use crate::tileset_modes::TilesetModes;
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<SheetStroke>()
+        .init_resource::<LastPress>()
+        .init_resource::<FrameTime>()
+        .add_systems(First, start_frame)
+        .add_systems(Last, end_frame)
         .add_observer(on_press)
         .add_observer(on_move)
         .add_observer(
@@ -38,7 +44,11 @@ pub struct StrokeStart<'a> {
     pub tileset: &'a Tileset,
     pub view: &'a DockView,
     pub sheet: u32,
+    pub tile: u32,
     pub button: PointerButton,
+    /// For a left press that doubles the last one on the same tile, the
+    /// undo depth before that first press.
+    pub double_click: Option<usize>,
 }
 
 /// The dock, sheet and button of a stroke under way, and the tileset as the
@@ -105,6 +115,71 @@ fn cancel_on_interruption(
             }
         });
     }
+}
+
+/// Longest gap between the presses of a double click, in seconds.
+const DOUBLE_CLICK: f64 = 0.5;
+/// Seconds of work a frame may take before the rest of it stops counting
+/// toward the gap between two presses.
+const SLOW_FRAME: f64 = 0.1;
+
+/// The last left press that started a stroke, to tell a double click.
+#[derive(Resource, Default)]
+struct LastPress(Option<Press>);
+
+#[derive(Clone, Copy, Debug)]
+struct Press {
+    root: Entity,
+    sheet: u32,
+    tile: u32,
+    at: Instant,
+    /// [`FrameTime::slow`] as the press came.
+    slow: f64,
+    /// How many undo entries there were before the press painted.
+    depth: usize,
+}
+
+/// How long frames take, so a frame kept busy by the paint of a first click
+/// does not hold its second click back past a double click.
+#[derive(Resource, Default)]
+struct FrameTime {
+    started: Option<Instant>,
+    /// Seconds frames took past [`SLOW_FRAME`], summed.
+    slow: f64,
+}
+
+fn start_frame(mut frames: ResMut<FrameTime>) {
+    frames.started = Some(Instant::now());
+}
+
+fn end_frame(mut frames: ResMut<FrameTime>) {
+    if let Some(started) = frames.started.take() {
+        frames.slow += (started.elapsed().as_secs_f64() - SLOW_FRAME).max(0.0);
+    }
+}
+
+/// The undo depth before the last press, when a press of `button` on sheet
+/// tile `tile` doubles it.
+fn double_click(
+    world: &mut World,
+    root: Entity,
+    sheet: u32,
+    tile: u32,
+    button: PointerButton,
+) -> Option<usize> {
+    let last = world.resource_mut::<LastPress>().0.take()?;
+    let slow = world.resource::<FrameTime>().slow - last.slow;
+    let gap = last.at.elapsed().as_secs_f64() - slow;
+    debug!(
+        "press on sheet tile {sheet}:{tile}, {gap:.3} s after one on {}:{} ({slow:.3} s of slow frames left out)",
+        last.sheet, last.tile
+    );
+    let same = (last.root, last.sheet, last.tile) == (root, sheet, tile);
+    let double = button == PointerButton::Primary && same && gap < DOUBLE_CLICK;
+    if double {
+        debug!("double click on sheet tile {sheet}:{tile}");
+    }
+    double.then_some(last.depth)
 }
 
 /// The dock, frame, sheet tile and point in it, from (0, 0) at its top left
@@ -182,15 +257,30 @@ fn begin(world: &mut World, hit: TileHit, button: PointerButton) {
     let Some((starter, (origin, size))) = starter.zip(tileset.sheet_rect(sheet, tile)) else {
         return;
     };
+    let depth = world.resource::<CommandHistory>().undo_stack.len();
+    let double = double_click(world, root, sheet, tile, button);
     let start = StrokeStart {
         root,
         path: &path,
         tileset: &tileset,
         view: &view,
         sheet,
+        tile,
         button,
+        double_click: double,
     };
-    let Some(paint) = starter(world, &start) else {
+    let paint = starter(world, &start);
+    let first =
+        (button == PointerButton::Primary && double.is_none() && paint.is_some()).then(|| Press {
+            root,
+            sheet,
+            tile,
+            at: Instant::now(),
+            slow: world.resource::<FrameTime>().slow,
+            depth,
+        });
+    world.resource_mut::<LastPress>().0 = first;
+    let Some(paint) = paint else {
         return;
     };
     let info = StrokeInfo {

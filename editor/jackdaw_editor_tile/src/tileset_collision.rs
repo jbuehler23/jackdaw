@@ -1,6 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
 
-use bevy::picking::events::PointerPress;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::UiTransform;
@@ -35,9 +34,7 @@ pub const TRIGGER: Color = Color::srgb(1.0, 0.72, 0.22);
 const GLYPH: f32 = 14.0;
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<LastTilePress>()
-        .init_resource::<PendingShapeEdit>()
-        .add_observer(on_tile_press)
+    app.init_resource::<PendingShapeEdit>()
         .add_systems(
             Update,
             open_pending_shape_edit.run_if(|p: Res<PendingShapeEdit>| p.0.is_some()),
@@ -612,22 +609,6 @@ struct CollisionPaint {
     tiles: BTreeSet<u32>,
 }
 
-/// The last left press on a sheet tile of the collision mode, to tell a
-/// double click.
-#[derive(Resource, Default)]
-struct LastTilePress(Option<TilePress>);
-
-#[derive(Clone, Copy, Debug)]
-struct TilePress {
-    root: Entity,
-    sheet: u32,
-    tile: u32,
-    /// Seconds since startup.
-    at: f64,
-    /// How many undo entries there were before the press painted.
-    depth: usize,
-}
-
 /// A tile whose shape editor opens once the mouse button is up and no
 /// stroke is under way.
 #[derive(Resource, Default)]
@@ -640,61 +621,6 @@ struct PendingEdit {
     tile: u32,
     /// The undo depth to take the first click of a double click back to.
     undo_to: Option<usize>,
-}
-
-/// Longest gap between the presses of a double click, in seconds.
-const DOUBLE_CLICK: f64 = 0.5;
-
-/// A left press on a sheet tile, read for double clicks.
-fn on_tile_press(press: On<PointerPress>, controls: Query<&DockControl>, mut commands: Commands) {
-    if press.button != PointerButton::Primary {
-        return;
-    }
-    let Ok(control) = controls.get(press.entity).copied() else {
-        return;
-    };
-    let DockAction::Tile(sheet, tile) = control.action else {
-        return;
-    };
-    let root = control.root;
-    commands.queue(move |world: &mut World| tile_pressed(world, root, sheet, tile));
-}
-
-/// Record a press on sheet tile `tile` of the dock `root`; the second
-/// press on the same tile in a short time asks for its shape editor.
-fn tile_pressed(world: &mut World, root: Entity, sheet: u32, tile: u32) {
-    let Some((path, _)) = dock_tileset(world, root) else {
-        return;
-    };
-    let brush = (world.resource::<TilesetDockViews>().0.get(&path))
-        .filter(|v| v.mode == ModeId::COLLISION)
-        .map(|v| v.collision.preset);
-    let editing = (world.query::<&ShapePopover>().iter(world)).any(|p| p.root == root);
-    if editing || brush.is_none_or(|p| p == CollisionPreset::Custom) {
-        world.resource_mut::<LastTilePress>().0 = None;
-        return;
-    }
-    let press = TilePress {
-        root,
-        sheet,
-        tile,
-        at: world.resource::<Time<Real>>().elapsed_secs_f64(),
-        depth: world.resource::<CommandHistory>().undo_stack.len(),
-    };
-    let last = world.resource_mut::<LastTilePress>().0.replace(press);
-    let double = last.filter(|l| {
-        (l.root, l.sheet, l.tile) == (root, sheet, tile) && press.at - l.at < DOUBLE_CLICK
-    });
-    let Some(first) = double else {
-        return;
-    };
-    world.resource_mut::<LastTilePress>().0 = None;
-    world.resource_mut::<PendingShapeEdit>().0 = Some(PendingEdit {
-        root,
-        sheet,
-        tile,
-        undo_to: Some(first.depth),
-    });
 }
 
 /// Open the pending shape editor once the button is up and no stroke is
@@ -712,6 +638,10 @@ fn open_pending_shape_edit(world: &mut World) {
     let painted = edit
         .undo_to
         .is_some_and(|depth| world.resource::<CommandHistory>().undo_stack.len() == depth + 1);
+    debug!(
+        "opening the shape editor of tile {}:{}, taking its paint back: {painted}",
+        edit.sheet, edit.tile
+    );
     if painted {
         match world.operator("history.undo").call() {
             Ok(_) => {
@@ -730,8 +660,24 @@ fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetP
     if editing {
         return None;
     }
+    let brush = start.view.collision;
+    if let Some(depth) = start.double_click
+        && brush.preset != CollisionPreset::Custom
+    {
+        debug!(
+            "shape editor of tile {}:{} pending until the button is up",
+            start.sheet, start.tile
+        );
+        world.resource_mut::<PendingShapeEdit>().0 = Some(PendingEdit {
+            root: start.root,
+            sheet: start.sheet,
+            tile: start.tile,
+            undo_to: Some(depth),
+        });
+        return None;
+    }
     Some(Box::new(CollisionPaint {
-        brush: start.view.collision,
+        brush,
         shown: start.tileset.clone(),
         tiles: BTreeSet::new(),
     }))

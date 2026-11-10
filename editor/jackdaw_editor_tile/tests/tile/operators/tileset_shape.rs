@@ -585,3 +585,156 @@ fn the_shape_editor_is_as_tall_as_its_content() {
         "{shown} tall for {expected} of content"
     );
 }
+
+fn tile_entity(app: &mut App, root: Entity, tile: u32) -> Entity {
+    control(app, root, DockAction::Tile(0, tile))
+}
+
+#[test]
+fn a_double_click_after_the_sheet_rebuilds_opens_the_editor() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    let before = on_disk(&dir);
+    let at = tile_center(&mut app, root, 1);
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    let first = tile_entity(&mut app, root, 1);
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    settle(&mut app);
+    assert_ne!(
+        tile_entity(&mut app, root, 1),
+        first,
+        "the paint rebuilt the sheet"
+    );
+    assert_ne!(on_disk(&dir), before, "the first click painted");
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    settle(&mut app);
+    settle(&mut app);
+    assert_eq!(editors(&mut app, root).len(), 1, "the editor opens");
+    assert_eq!(on_disk(&dir), before, "the first click is taken back");
+}
+
+#[test]
+fn a_double_click_whose_second_press_meets_the_rebuild_opens_the_editor() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    let before = on_disk(&dir);
+    let at = tile_center(&mut app, root, 1);
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    for state in [
+        ButtonState::Pressed,
+        ButtonState::Released,
+        ButtonState::Pressed,
+        ButtonState::Released,
+    ] {
+        buttons_in_one_frame(&mut app, &[state]);
+    }
+    settle(&mut app);
+    settle(&mut app);
+    assert_eq!(editors(&mut app, root).len(), 1, "the editor opens");
+    assert_eq!(on_disk(&dir), before, "the first click is taken back");
+}
+
+/// Milliseconds the next frame stalls for, as a frame busy with a large
+/// rebuild does, and how long every frame takes.
+#[derive(Resource, Default)]
+struct Stalls {
+    next: u64,
+    every: u64,
+}
+
+fn stalling(app: &mut App) {
+    app.init_resource::<Stalls>();
+    app.add_systems(Update, |mut stalls: ResMut<Stalls>| {
+        let ms = std::mem::take(&mut stalls.next) + stalls.every;
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    });
+}
+
+#[test]
+fn a_double_click_held_up_by_a_slow_paint_still_opens_the_editor() {
+    let (mut app, dir) = handmade();
+    stalling(&mut app);
+    let root = colliding(&mut app);
+    let before = on_disk(&dir);
+    let at = tile_center(&mut app, root, 1);
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    let first = tile_entity(&mut app, root, 1);
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    app.world_mut().resource_mut::<Stalls>().next = 700;
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    app.update();
+    assert_ne!(
+        tile_entity(&mut app, root, 1),
+        first,
+        "the paint rebuilt the sheet"
+    );
+    assert_ne!(on_disk(&dir), before, "the first click painted");
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    settle(&mut app);
+    settle(&mut app);
+    assert_eq!(editors(&mut app, root).len(), 1, "the editor opens");
+    assert_eq!(on_disk(&dir), before, "the first click is taken back");
+}
+
+#[test]
+fn two_clicks_far_apart_in_busy_frames_do_not_open_the_editor() {
+    let (mut app, dir) = handmade();
+    stalling(&mut app);
+    let root = colliding(&mut app);
+    let at = tile_center(&mut app, root, 1);
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    app.world_mut().resource_mut::<Stalls>().every = 60;
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    for _ in 0..10 {
+        app.update();
+    }
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    settle(&mut app);
+    assert!(editors(&mut app, root).is_empty());
+    assert_eq!(
+        collision_of(&on_disk(&dir), 1).len(),
+        1,
+        "the tile stays painted"
+    );
+}
+
+#[test]
+fn two_clicks_far_apart_on_a_tile_do_not_open_the_editor() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    let at = tile_center(&mut app, root, 1);
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    settle(&mut app);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(&mut app, &[ButtonState::Released]);
+    settle(&mut app);
+    assert!(editors(&mut app, root).is_empty());
+    assert_eq!(
+        collision_of(&on_disk(&dir), 1).len(),
+        1,
+        "the tile stays painted"
+    );
+}
