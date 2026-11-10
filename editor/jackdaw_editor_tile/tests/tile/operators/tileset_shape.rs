@@ -10,13 +10,18 @@ use crate::operators::tileset_edit_ops::{
 };
 use crate::operators::tileset_ops::warnings;
 
+use bevy::input::ButtonState;
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
+use bevy::ui::ComputedNode;
+use bevy::window::WindowEvent;
 use jackdaw_commands::CommandHistory;
 use jackdaw_editor_tile::tileset_dock::{DockAction, TilesetDockViews};
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_editor_tile::tileset_shape::{
     ShapeCanvas, ShapeHandle, ShapePiece, ShapePopover, ShapeSnap, parse_points,
 };
+use jackdaw_feathers::tokens;
 use jackdaw_tilemap::ShapeTurn;
 use jackdaw_tileset::CollisionPreset;
 
@@ -503,5 +508,80 @@ fn a_click_outside_the_open_editor_closes_it_without_painting() {
         collision_of(&on_disk(&dir), 3).len(),
         1,
         "the next click paints"
+    );
+}
+
+/// Mouse button events for the primary window, all delivered in the next
+/// frame, as a slow frame gets them from the window.
+fn buttons_in_one_frame(app: &mut App, states: &[ButtonState]) {
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+        .single(app.world())
+        .expect("a window");
+    for state in states {
+        app.world_mut()
+            .write_message(WindowEvent::MouseButtonInput(MouseButtonInput {
+                button: MouseButton::Left,
+                state: *state,
+                window,
+            }));
+    }
+    app.update();
+}
+
+#[test]
+fn a_double_click_whose_events_share_frames_still_opens_the_editor() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    let before = on_disk(&dir);
+    let at = tile_center(&mut app, root, 1);
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
+    buttons_in_one_frame(
+        &mut app,
+        &[
+            ButtonState::Released,
+            ButtonState::Pressed,
+            ButtonState::Released,
+        ],
+    );
+    settle(&mut app);
+    settle(&mut app);
+    assert_eq!(editors(&mut app, root).len(), 1, "the editor opens");
+    assert_eq!(on_disk(&dir), before, "the first click is taken back");
+}
+
+#[test]
+fn the_shape_editor_is_as_tall_as_its_content() {
+    let (mut app, _dir) = handmade();
+    let root = colliding(&mut app);
+    edit_tile(&mut app, root, 1);
+    settle(&mut app);
+    let popover = (app.world_mut().query::<(Entity, &ShapePopover)>())
+        .iter(app.world())
+        .find(|(_, p)| p.root == root)
+        .map(|(e, _)| e)
+        .expect("an editor");
+    let height = |app: &App, entity: Entity| {
+        let node = app.world().get::<ComputedNode>(entity).expect("laid out");
+        node.size().y * node.inverse_scale_factor()
+    };
+    let children: Vec<Entity> = app
+        .world()
+        .get::<Children>(popover)
+        .expect("content")
+        .to_vec();
+    let content: f32 = children.iter().map(|c| height(&app, *c)).sum();
+    let gaps = tokens::SPACING_MD * (children.len() - 1) as f32;
+    let frame = 2.0 * tokens::SPACING_MD + 2.0;
+    let expected = content + gaps + frame;
+    let shown = height(&app, popover);
+    assert!(
+        (shown - expected).abs() < 1.0,
+        "{shown} tall for {expected} of content"
     );
 }

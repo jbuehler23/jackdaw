@@ -772,7 +772,7 @@ fn fill_popover(
     let note = spawn_text(world, popover, hint, tokens::TEXT_SECONDARY);
     let wide = canvas_scale(tileset) * tileset.tile_size.x as f32 + tokens::SPACING_MD + SIDE_WIDTH;
     world.entity_mut(note).insert(Node {
-        max_width: px(wide),
+        width: px(wide),
         ..default()
     });
     for (label, checked, action) in flags {

@@ -68,6 +68,11 @@ pub trait SheetPaint: Send + Sync + 'static {
 /// Starts a mode's stroke; `None` leaves the press alone.
 pub type StrokeStarter = fn(&mut World, &StrokeStart) -> Option<Box<dyn SheetPaint>>;
 
+/// Whether a stroke is under way.
+pub(crate) fn stroke_active(world: &World) -> bool {
+    world.resource::<SheetStroke>().0.is_some()
+}
+
 /// The stroke a pointer is painting on a sheet, applied when it lifts.
 #[derive(Resource, Default)]
 pub(crate) struct SheetStroke(Option<Active>);

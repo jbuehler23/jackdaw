@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 
+use bevy::picking::events::PointerPress;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::UiTransform;
@@ -13,7 +14,7 @@ use jackdaw_feathers::tokens;
 use jackdaw_tilemap::{GridLayout, RgbaImage, SheetInput, trace_art};
 use jackdaw_tileset::{CollisionPreset, Tileset, TilesetCollision};
 
-use crate::sheet_stroke::{SheetPaint, StrokeInfo, StrokeStart};
+use crate::sheet_stroke::{SheetPaint, StrokeInfo, StrokeStart, stroke_active};
 use crate::tileset_bits::sheet_overlay;
 use crate::tileset_dock::{
     CollisionBrush, DockAction, DockCall, DockControl, DockView, TilesetDockViews, dock_path,
@@ -34,7 +35,13 @@ pub const TRIGGER: Color = Color::srgb(1.0, 0.72, 0.22);
 const GLYPH: f32 = 14.0;
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<LastTileClick>()
+    app.init_resource::<LastTilePress>()
+        .init_resource::<PendingShapeEdit>()
+        .add_observer(on_tile_press)
+        .add_systems(
+            Update,
+            open_pending_shape_edit.run_if(|p: Res<PendingShapeEdit>| p.0.is_some()),
+        )
         .add_observer(on_layer_pick)
         .register_tileset_mode(TilesetMode {
             id: ModeId::COLLISION,
@@ -603,28 +610,118 @@ struct CollisionPaint {
     /// The tileset with the stroke painted so far.
     shown: Tileset,
     tiles: BTreeSet<u32>,
-    /// The undo history's revision as the stroke started.
-    revision: u64,
 }
 
-/// The last single-tile left click of the collision mode, to tell a double
-/// click.
+/// The last left press on a sheet tile of the collision mode, to tell a
+/// double click.
 #[derive(Resource, Default)]
-struct LastTileClick(Option<TileClick>);
+struct LastTilePress(Option<TilePress>);
 
 #[derive(Clone, Copy, Debug)]
-struct TileClick {
+struct TilePress {
     root: Entity,
     sheet: u32,
     tile: u32,
     /// Seconds since startup.
     at: f64,
-    /// The history revision the click's paint left, when it painted.
-    painted: Option<u64>,
+    /// How many undo entries there were before the press painted.
+    depth: usize,
 }
 
-/// Longest gap between the clicks of a double click, in seconds.
+/// A tile whose shape editor opens once the mouse button is up and no
+/// stroke is under way.
+#[derive(Resource, Default)]
+struct PendingShapeEdit(Option<PendingEdit>);
+
+#[derive(Clone, Copy, Debug)]
+struct PendingEdit {
+    root: Entity,
+    sheet: u32,
+    tile: u32,
+    /// The undo depth to take the first click of a double click back to.
+    undo_to: Option<usize>,
+}
+
+/// Longest gap between the presses of a double click, in seconds.
 const DOUBLE_CLICK: f64 = 0.5;
+
+/// A left press on a sheet tile, read for double clicks.
+fn on_tile_press(press: On<PointerPress>, controls: Query<&DockControl>, mut commands: Commands) {
+    if press.button != PointerButton::Primary {
+        return;
+    }
+    let Ok(control) = controls.get(press.entity).copied() else {
+        return;
+    };
+    let DockAction::Tile(sheet, tile) = control.action else {
+        return;
+    };
+    let root = control.root;
+    commands.queue(move |world: &mut World| tile_pressed(world, root, sheet, tile));
+}
+
+/// Record a press on sheet tile `tile` of the dock `root`; the second
+/// press on the same tile in a short time asks for its shape editor.
+fn tile_pressed(world: &mut World, root: Entity, sheet: u32, tile: u32) {
+    let Some((path, _)) = dock_tileset(world, root) else {
+        return;
+    };
+    let brush = (world.resource::<TilesetDockViews>().0.get(&path))
+        .filter(|v| v.mode == ModeId::COLLISION)
+        .map(|v| v.collision.preset);
+    let editing = (world.query::<&ShapePopover>().iter(world)).any(|p| p.root == root);
+    if editing || brush.is_none_or(|p| p == CollisionPreset::Custom) {
+        world.resource_mut::<LastTilePress>().0 = None;
+        return;
+    }
+    let press = TilePress {
+        root,
+        sheet,
+        tile,
+        at: world.resource::<Time<Real>>().elapsed_secs_f64(),
+        depth: world.resource::<CommandHistory>().undo_stack.len(),
+    };
+    let last = world.resource_mut::<LastTilePress>().0.replace(press);
+    let double = last.filter(|l| {
+        (l.root, l.sheet, l.tile) == (root, sheet, tile) && press.at - l.at < DOUBLE_CLICK
+    });
+    let Some(first) = double else {
+        return;
+    };
+    world.resource_mut::<LastTilePress>().0 = None;
+    world.resource_mut::<PendingShapeEdit>().0 = Some(PendingEdit {
+        root,
+        sheet,
+        tile,
+        undo_to: Some(first.depth),
+    });
+}
+
+/// Open the pending shape editor once the button is up and no stroke is
+/// under way, so the press that would close it has passed. The paint of a
+/// double click's first click is taken back and left off the redo stack.
+fn open_pending_shape_edit(world: &mut World) {
+    let mouse = world.resource::<ButtonInput<MouseButton>>();
+    let busy = mouse.pressed(MouseButton::Left) || mouse.get_just_pressed().next().is_some();
+    if busy || stroke_active(world) {
+        return;
+    }
+    let Some(edit) = world.resource_mut::<PendingShapeEdit>().0.take() else {
+        return;
+    };
+    let painted = edit
+        .undo_to
+        .is_some_and(|depth| world.resource::<CommandHistory>().undo_stack.len() == depth + 1);
+    if painted {
+        match world.operator("history.undo").call() {
+            Ok(_) => {
+                world.resource_mut::<CommandHistory>().discard_next_redo();
+            }
+            Err(err) => warn!("history.undo: {err}"),
+        }
+    }
+    open_shape_editor(world, edit.root, edit.sheet, edit.tile);
+}
 
 /// Start a stroke of the collision mode; a press while the shape editor is
 /// open only closes it.
@@ -633,12 +730,10 @@ fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetP
     if editing {
         return None;
     }
-    let revision = world.resource::<CommandHistory>().revision();
     Some(Box::new(CollisionPaint {
         brush: start.view.collision,
         shown: start.tileset.clone(),
         tiles: BTreeSet::new(),
-        revision,
     }))
 }
 
@@ -726,44 +821,16 @@ impl SheetPaint for CollisionPaint {
     fn finished(&self, world: &mut World, stroke: &StrokeInfo) {
         let mut tiles = self.tiles.iter();
         let (Some(&tile), None) = (tiles.next(), tiles.next()) else {
-            world.resource_mut::<LastTileClick>().0 = None;
             return;
         };
-        if stroke.button != PointerButton::Primary {
-            world.resource_mut::<LastTileClick>().0 = None;
-            return;
-        }
         if self.picks(stroke) {
-            open_shape_editor(world, stroke.root, stroke.sheet, tile);
-            return;
+            world.resource_mut::<PendingShapeEdit>().0 = Some(PendingEdit {
+                root: stroke.root,
+                sheet: stroke.sheet,
+                tile,
+                undo_to: None,
+            });
         }
-        let at = world.resource::<Time<Real>>().elapsed_secs_f64();
-        let revision = world.resource::<CommandHistory>().revision();
-        let click = TileClick {
-            root: stroke.root,
-            sheet: stroke.sheet,
-            tile,
-            at,
-            painted: (revision != self.revision).then_some(revision),
-        };
-        let last = world.resource_mut::<LastTileClick>().0.replace(click);
-        let double = last.filter(|l| {
-            (l.root, l.sheet, l.tile) == (click.root, click.sheet, click.tile)
-                && at - l.at < DOUBLE_CLICK
-        });
-        let Some(first) = double else {
-            return;
-        };
-        world.resource_mut::<LastTileClick>().0 = None;
-        if first.painted == Some(revision) {
-            match world.operator("history.undo").call() {
-                Ok(_) => {
-                    world.resource_mut::<CommandHistory>().discard_next_redo();
-                }
-                Err(err) => warn!("history.undo: {err}"),
-            }
-        }
-        open_shape_editor(world, stroke.root, stroke.sheet, tile);
     }
 }
 
