@@ -11,10 +11,11 @@ use crate::operators::tileset_edit_ops::{
 use crate::operators::tileset_ops::warnings;
 
 use bevy::prelude::*;
+use jackdaw_commands::CommandHistory;
 use jackdaw_editor_tile::tileset_dock::{DockAction, TilesetDockViews};
 use jackdaw_editor_tile::tileset_modes::ModeId;
 use jackdaw_editor_tile::tileset_shape::{
-    ShapeCanvas, ShapeHandle, ShapePiece, ShapePopover, ShapeSnap, ShapeTool, parse_points,
+    ShapeCanvas, ShapeHandle, ShapePiece, ShapePopover, ShapeSnap, parse_points,
 };
 use jackdaw_tilemap::ShapeTurn;
 use jackdaw_tileset::CollisionPreset;
@@ -220,6 +221,10 @@ fn tile_center(app: &mut App, root: Entity, tile: u32) -> Vec2 {
     screen_rect(app, cell).center()
 }
 
+fn redo_entries(app: &App) -> usize {
+    app.world().resource::<CommandHistory>().redo_stack.len()
+}
+
 fn editors(app: &mut App, root: Entity) -> Vec<ShapePopover> {
     (app.world_mut().query::<&ShapePopover>().iter(app.world()))
         .filter(|p| p.root == root)
@@ -273,6 +278,7 @@ fn double_clicking_a_tile_opens_the_editor_and_takes_back_the_first_click() {
     let (mut app, dir) = handmade();
     let root = colliding(&mut app);
     let (before, count) = (on_disk(&dir), entries(&app));
+    let redo = redo_entries(&app);
     let at = tile_center(&mut app, root, 1);
     input(
         &mut app,
@@ -284,6 +290,10 @@ fn double_clicking_a_tile_opens_the_editor_and_takes_back_the_first_click() {
     assert_eq!(open[0].tile, (0, 1));
     assert_eq!(on_disk(&dir), before, "the first click is taken back");
     assert_eq!(entries(&app), count);
+    assert_eq!(redo_entries(&app), redo, "nothing to redo");
+    run(&mut app, "history.redo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before, "redo does not paint the tile");
 
     input(&mut app, "input.key key=Escape");
     settle(&mut app);
@@ -370,7 +380,6 @@ fn dragging_a_point_moves_it_as_one_undo_entry() {
     let root = colliding(&mut app);
     edit_tile(&mut app, root, 1);
     press(&mut app, root, DockAction::ShapeAddPolygon);
-    press(&mut app, root, DockAction::ShapeTool(ShapeTool::Move));
     let count = entries(&app);
     let from = on_canvas(&mut app, root, Vec2::new(0.75, 0.75));
     let to = on_canvas(&mut app, root, Vec2::new(1.0, 1.0));
@@ -443,22 +452,56 @@ fn the_editor_buttons_flip_trace_and_flag_the_shape() {
         CollisionPreset::SlopeDown
     );
     press(&mut app, root, DockAction::ShapeTrigger);
-    press(&mut app, root, DockAction::ShapeOneWay);
     let shape = &collision_of(&on_disk(&dir), 0)[0];
-    assert!(shape.trigger && shape.one_way);
+    assert!(shape.trigger && !shape.one_way);
     assert_eq!(shape.preset, CollisionPreset::SlopeDown);
     press(&mut app, root, DockAction::ShapeFromTraced);
+    let traced = collision_of(&on_disk(&dir), 0)[0].clone();
+    assert_eq!(traced.preset, CollisionPreset::Traced);
+    assert!(traced.trigger, "flags kept");
+    press(&mut app, root, DockAction::ShapeOneWay);
     let shape = &collision_of(&on_disk(&dir), 0)[0];
-    assert_eq!(shape.preset, CollisionPreset::Traced);
-    assert!(shape.trigger && shape.one_way, "flags kept");
+    assert!(shape.one_way);
+    assert_eq!(
+        (shape.preset, &shape.polygons),
+        (CollisionPreset::Traced, &traced.polygons),
+        "a flag keeps the traced polygons"
+    );
     press(&mut app, root, DockAction::ShapeRemovePolygon(0));
-    let left = collision_of(&on_disk(&dir), 0);
-    assert!(left.is_empty() || left[0].preset == CollisionPreset::Custom);
+    assert!(
+        collision_of(&on_disk(&dir), 0).is_empty(),
+        "the traced tile has one polygon"
+    );
     assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
     run(&mut app, "history.undo");
     settle(&mut app);
     assert_eq!(
         collision_of(&on_disk(&dir), 0)[0].preset,
         CollisionPreset::Traced
+    );
+}
+
+#[test]
+fn a_click_outside_the_open_editor_closes_it_without_painting() {
+    let (mut app, dir) = handmade();
+    let root = colliding(&mut app);
+    edit_tile(&mut app, root, 2);
+    press(
+        &mut app,
+        root,
+        DockAction::CollisionPreset(CollisionPreset::Solid),
+    );
+    assert_eq!(editors(&mut app, root).len(), 1, "the editor stays open");
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let at = tile_center(&mut app, root, 3);
+    click(&mut app, at, "primary");
+    assert!(editors(&mut app, root).is_empty(), "the press closes it");
+    assert_eq!(on_disk(&dir), before, "and paints nothing");
+    assert_eq!(entries(&app), count);
+    click(&mut app, at, "primary");
+    assert_eq!(
+        collision_of(&on_disk(&dir), 3).len(),
+        1,
+        "the next click paints"
     );
 }

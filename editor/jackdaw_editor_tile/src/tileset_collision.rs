@@ -22,7 +22,7 @@ use crate::tileset_dock::{
 use crate::tileset_edit::{apply_edit, text, tile_list};
 use crate::tileset_import::decode_sheet;
 use crate::tileset_modes::{ModeId, ModePanel, ModeSheet, TilesetMode, TilesetModeAppExt as _};
-use crate::tileset_shape::open_shape_editor;
+use crate::tileset_shape::{ShapePopover, open_shape_editor};
 use crate::zone_overlay::{
     ZoneLayout, ZoneOutline, ZoneValues, redraw_zone_rows, spawn_zone_overlay,
 };
@@ -626,8 +626,13 @@ struct TileClick {
 /// Longest gap between the clicks of a double click, in seconds.
 const DOUBLE_CLICK: f64 = 0.5;
 
-/// Start a stroke of the collision mode.
+/// Start a stroke of the collision mode; a press while the shape editor is
+/// open only closes it.
 fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetPaint>> {
+    let editing = (world.query::<&ShapePopover>().iter(world)).any(|p| p.root == start.root);
+    if editing {
+        return None;
+    }
     let revision = world.resource::<CommandHistory>().revision();
     Some(Box::new(CollisionPaint {
         brush: start.view.collision,
@@ -751,9 +756,11 @@ impl SheetPaint for CollisionPaint {
         };
         world.resource_mut::<LastTileClick>().0 = None;
         if first.painted == Some(revision) {
-            let undone = world.operator("history.undo").call();
-            if let Err(err) = undone {
-                warn!("history.undo: {err}");
+            match world.operator("history.undo").call() {
+                Ok(_) => {
+                    world.resource_mut::<CommandHistory>().discard_next_redo();
+                }
+                Err(err) => warn!("history.undo: {err}"),
             }
         }
         open_shape_editor(world, stroke.root, stroke.sheet, tile);

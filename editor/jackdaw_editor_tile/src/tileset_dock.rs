@@ -37,7 +37,7 @@ use crate::tileset_edit::{apply_edit, clear_auto, open_tileset, suggested_name, 
 use crate::tileset_import::{TILESET_SUFFIX, decode_sheet};
 use crate::tileset_layout::{LayoutDraft, TilesetLayoutApplyOp, spawn_draft};
 use crate::tileset_modes::{ModeId, ModePanel, ModeSheet, TilesetModeOp, TilesetModes};
-use crate::tileset_shape::{ShapeEdit, ShapeTool};
+use crate::tileset_shape::ShapeEdit;
 use crate::tileset_suggest::{TilesetSuggestOp, spawn_outline, spawn_suggestions};
 use jackdaw_editor_core::asset_index::assets_dir;
 use jackdaw_editor_core::definition_assets::{entry_for_file, resolve_project_path};
@@ -258,8 +258,6 @@ pub enum DockAction {
     CollisionTrigger,
     /// Add a physics layer and show it.
     AddPhysicsLayer,
-    /// Pick a tool of the shape editor.
-    ShapeTool(ShapeTool),
     /// Pick the shape editor's polygon at this index.
     ShapePolygon(usize),
     ShapeAddPolygon,
@@ -1689,7 +1687,6 @@ fn act(world: &mut World, control: DockControl) {
         | DockAction::SuggestionLayOut(_)
         | DockAction::SuggestionAddObject(_)
         | DockAction::SuggestionObjects
-        | DockAction::ShapeTool(_)
         | DockAction::ShapePolygon(_)
         | DockAction::ShapeAddPolygon
         | DockAction::ShapeRemovePolygon(_)

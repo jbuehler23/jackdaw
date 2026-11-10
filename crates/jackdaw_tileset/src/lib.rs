@@ -274,7 +274,7 @@ impl CollisionPreset {
         ShapePreset::from(self).polygons()
     }
 
-    /// The preset drawing exactly `polygons`; custom for any other shape.
+    /// The preset that draws `polygons`; custom for any other shape.
     pub fn of_polygons(polygons: &[Vec<Vec2>]) -> Self {
         ShapePreset::of_polygons(polygons).into()
     }

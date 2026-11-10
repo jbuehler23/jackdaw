@@ -1,5 +1,6 @@
 //! Tile collision: shapes on numbered physics layers, each solid or a
-//! trigger, drawn from a preset or traced from the tile's art.
+//! trigger, made from a preset, traced from the tile's art or drawn point
+//! by point.
 
 use glam::Vec2;
 
@@ -67,7 +68,7 @@ impl ShapePreset {
         Self::ALL.into_iter().find(|p| p.name() == name)
     }
 
-    /// The preset drawing exactly `polygons`, whatever point each ring
+    /// The preset that draws `polygons`, whatever point each ring
     /// starts at; custom for any other shape.
     pub fn of_polygons(polygons: &[Vec<Vec2>]) -> Self {
         let same_ring = |a: &[Vec2], b: &[Vec2]| {

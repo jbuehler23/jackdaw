@@ -1,6 +1,6 @@
 //! The shape editor of the collision mode: a popover drawing one tile's
-//! collision polygons on the shown physics layer, zoomed, with tools to
-//! add, move and delete their points, and the operators it calls.
+//! collision polygons on the shown physics layer, zoomed, where points are
+//! added, moved and deleted, and the operators it calls.
 
 use bevy::math::Rot2;
 use bevy::picking::events::{PointerDrag, PointerDragEnd, PointerPress, PointerRelease};
@@ -10,7 +10,7 @@ use bevy::ui::{ComputedNode, InteractionDisabled, UiGlobalTransform, UiTransform
 use jackdaw_api::prelude::*;
 use jackdaw_api_internal::keymap::PresetInput;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
-use jackdaw_feathers::button::{ButtonProps, ButtonSize, ButtonVariant, button};
+use jackdaw_feathers::button::{ButtonProps, ButtonVariant, button};
 use jackdaw_feathers::combobox::{ComboBoxChangeEvent, combobox_compact_with_selected};
 use jackdaw_feathers::icons::Icon;
 use jackdaw_feathers::popover::{PopoverDismissed, PopoverPlacement, PopoverProps, popover};
@@ -102,34 +102,11 @@ pub struct ShapeEdit {
     pub tile: u32,
     /// Where the editor opened, in window logical pixels.
     pub at: Vec2,
-    pub tool: ShapeTool,
     pub snap: ShapeSnap,
     /// Index of the picked polygon of the tile's shape.
     pub polygon: Option<usize>,
     /// Points of a polygon being drawn, in tile fractions y up.
     pub draft: Vec<Vec2>,
-}
-
-/// What a press on the shape editor's tile does.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ShapeTool {
-    /// Insert a point on an edge, or draw a new polygon point by point.
-    #[default]
-    Add,
-    Move,
-    Delete,
-}
-
-impl ShapeTool {
-    pub const ALL: [ShapeTool; 3] = [ShapeTool::Add, ShapeTool::Move, ShapeTool::Delete];
-
-    fn icon(self) -> (Icon, &'static str) {
-        match self {
-            ShapeTool::Add => (Icon::PenTool, "Add points"),
-            ShapeTool::Move => (Icon::Move, "Move points"),
-            ShapeTool::Delete => (Icon::Eraser, "Delete points"),
-        }
-    }
 }
 
 /// The grid points snap to.
@@ -541,15 +518,14 @@ pub(crate) fn open_shape_editor(world: &mut World, root: Entity, sheet: u32, til
     let Some(view) = views.0.get_mut(&path) else {
         return;
     };
-    let (tool, snap) = view
+    let snap = view
         .shape
         .as_ref()
-        .map_or_else(Default::default, |s| (s.tool, s.snap));
+        .map_or_else(Default::default, |s| s.snap);
     view.shape = Some(ShapeEdit {
         sheet,
         tile,
         at,
-        tool,
         snap,
         polygon: None,
         draft: Vec::new(),
@@ -668,28 +644,6 @@ fn fill_popover(
     let layer = view.collision.layer;
     let shape = shape_of(tileset, edit, layer);
     let tools = spawn_row(world, popover, tokens::SPACING_XS);
-    for tool in ShapeTool::ALL {
-        let (icon, tip) = tool.icon();
-        let variant = if edit.tool == tool {
-            ButtonVariant::Active
-        } else {
-            ButtonVariant::Ghost
-        };
-        let props = ButtonProps::new("")
-            .with_left_icon(icon)
-            .with_size(ButtonSize::IconSM)
-            .with_variant(variant);
-        let action = DockAction::ShapeTool(tool);
-        let control = DockControl { root, action };
-        world.spawn((button(props), Tooltip::title(tip), control, ChildOf(tools)));
-    }
-    world.spawn((
-        Node {
-            width: px(tokens::SPACING_MD),
-            ..default()
-        },
-        ChildOf(tools),
-    ));
     let turns = [
         (Icon::Wand, "From traced", DockAction::ShapeFromTraced),
         (
@@ -813,6 +767,14 @@ fn fill_popover(
             DockAction::ShapeOneWay,
         ),
     ];
+    let hint = "Click to draw a polygon, then its first point or Enter to close it. Click an \
+                edge to add a point, drag a point to move it, right-click it to delete it.";
+    let note = spawn_text(world, popover, hint, tokens::TEXT_SECONDARY);
+    let wide = canvas_scale(tileset) * tileset.tile_size.x as f32 + tokens::SPACING_MD + SIDE_WIDTH;
+    world.entity_mut(note).insert(Node {
+        max_width: px(wide),
+        ..default()
+    });
     for (label, checked, action) in flags {
         let toggle = world
             .spawn((
@@ -1109,8 +1071,7 @@ pub(crate) fn act(world: &mut World, control: DockControl) -> bool {
     let root = control.root;
     let shape_action = matches!(
         control.action,
-        DockAction::ShapeTool(_)
-            | DockAction::ShapePolygon(_)
+        DockAction::ShapePolygon(_)
             | DockAction::ShapeAddPolygon
             | DockAction::ShapeRemovePolygon(_)
             | DockAction::ShapeFromTraced
@@ -1129,10 +1090,6 @@ pub(crate) fn act(world: &mut World, control: DockControl) -> bool {
     let shape = shape_of(&tileset, &edit, layer);
     let count = shape.as_ref().map_or(0, |s| s.polygons.len());
     match control.action {
-        DockAction::ShapeTool(tool) => {
-            edit_view(world, root, |e| e.tool = tool);
-            refresh(world, root);
-        }
         DockAction::ShapePolygon(index) => {
             edit_view(world, root, |e| {
                 e.polygon = (e.polygon != Some(index)).then_some(index);
@@ -1178,7 +1135,7 @@ pub(crate) fn act(world: &mut World, control: DockControl) -> bool {
                 return true;
             };
             let flip = Some(control.action == DockAction::ShapeTrigger);
-            let params = flags_params(Some(own), own.preset.name(), flip);
+            let params = flags_params(Some(own), CollisionPreset::Custom.name(), flip);
             shape_call(world, root, &path, &edit, layer, set_id(), params, |_| {});
         }
         _ => {}
@@ -1409,9 +1366,7 @@ fn handle_press(
         return;
     };
     take_keyboard(world, root);
-    let deletes = button == PointerButton::Secondary
-        || (button == PointerButton::Primary && edit.tool == ShapeTool::Delete);
-    if deletes {
+    if button == PointerButton::Secondary {
         delete_point(world, root, handle.polygon, handle.point);
         return;
     }
@@ -1434,7 +1389,7 @@ fn handle_press(
     else {
         return;
     };
-    if edit.tool == ShapeTool::Add && !edit.draft.is_empty() {
+    if !edit.draft.is_empty() {
         if edit.draft.last() != Some(&at) {
             edit_view(world, root, |e| e.draft.push(at));
         }
@@ -1471,50 +1426,39 @@ fn canvas_press(world: &mut World, root: Entity, local: Vec2, size: Vec2, button
     let pixels = tileset.tile_size.as_vec2();
     let at = edit.snap.apply(in_tile(local, size), pixels);
     let polygons = polygons_of(&tileset, &edit, layer);
-    if edit.tool == ShapeTool::Add {
-        if let Some(first) = edit.draft.first() {
-            let closes = edit.draft.len() >= 3 && on_canvas(*first, size).distance(local) <= HANDLE;
-            if closes {
-                close_draft(world, root);
-                return;
-            }
-            if edit.draft.last() != Some(&at) {
-                edit_view(world, root, |e| e.draft.push(at));
-            }
-            refresh(world, root);
+    if let Some(first) = edit.draft.first() {
+        let closes = edit.draft.len() >= 3 && on_canvas(*first, size).distance(local) <= HANDLE;
+        if closes {
+            close_draft(world, root);
             return;
         }
-        if let Some((index, after, point)) = nearest_edge(&polygons, local, size) {
-            let point = edit.snap.apply(point, pixels);
-            let mut ring = polygons[index].clone();
-            if !ring.contains(&point) {
-                ring.insert(after + 1, point);
-                set_polygon(
-                    world,
-                    root,
-                    (&path, &edit, layer),
-                    Some(index),
-                    &ring,
-                    |e| {
-                        e.polygon = Some(index);
-                    },
-                );
-                return;
-            }
+        if edit.draft.last() != Some(&at) {
+            edit_view(world, root, |e| e.draft.push(at));
         }
+        refresh(world, root);
+        return;
     }
-    let inside = polygons
-        .iter()
-        .rposition(|r| contains(r, in_tile(local, size)));
-    let start = edit.tool == ShapeTool::Add && inside.is_none() && edit.polygon.is_none();
-    edit_view(world, root, |e| {
-        if start {
-            e.draft = vec![at];
-        } else {
-            e.polygon = inside;
-        }
-    });
-    refresh(world, root);
+    let Some((index, after, point)) = nearest_edge(&polygons, local, size) else {
+        edit_view(world, root, |e| (e.polygon, e.draft) = (None, vec![at]));
+        refresh(world, root);
+        return;
+    };
+    let point = edit.snap.apply(point, pixels);
+    let mut ring = polygons[index].clone();
+    if ring.contains(&point) {
+        return;
+    }
+    ring.insert(after + 1, point);
+    set_polygon(
+        world,
+        root,
+        (&path, &edit, layer),
+        Some(index),
+        &ring,
+        |e| {
+            e.polygon = Some(index);
+        },
+    );
 }
 
 /// The polygon, the index of the edge's first point and the point on it in
@@ -1535,17 +1479,6 @@ fn nearest_edge(polygons: &[Vec<Vec2>], local: Vec2, size: Vec2) -> Option<(usiz
         }
     }
     best.map(|(_, index, edge, at)| (index, edge, at))
-}
-
-/// Whether `at` is inside `ring`, by the even-odd rule.
-fn contains(ring: &[Vec2], at: Vec2) -> bool {
-    let next = ring.iter().cycle().skip(1);
-    (ring.iter().zip(next))
-        .filter(|(a, b)| (a.y > at.y) != (b.y > at.y))
-        .filter(|(a, b)| at.x < a.x + (at.y - a.y) / (b.y - a.y) * (b.x - a.x))
-        .count()
-        % 2
-        == 1
 }
 
 /// Move the dragged point to `local` pixels from the top left of its
