@@ -138,7 +138,7 @@ mod tilemap;
 #[cfg(feature = "tilemap")]
 pub use jackdaw_tileset::chunk::TilemapChunkOf;
 #[cfg(feature = "tilemap")]
-pub use tilemap::TilemapSidecarMissing;
+pub use tilemap::{TilemapChunkCollision, TilemapCollision, TilemapSidecarMissing};
 
 #[cfg(feature = "navmesh")]
 mod navmesh;
