@@ -182,6 +182,31 @@ jobs:
             esac
           done
 
+      # A project made by the last stable release upgrades to this one and
+      # resolves the packaged crates.
+      - name: Upgrade a project from the last release
+        working-directory: ${{ runner.temp }}/packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          previous=$(gh release list --repo "$REPO" --exclude-pre-releases --exclude-drafts --limit 20 \
+            --json tagName --jq '.[].tagName' | grep -vx "$GITHUB_REF_NAME" | grep '^v' | head -n 1)
+          echo "upgrading a project made by $previous"
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            "https://github.com/$REPO/releases/download/$previous/install.sh" \
+            | sh -s -- --version "${previous#v}" --prefix "$RUNNER_TEMP/previous" \
+              --bin-dir "$RUNNER_TEMP/previous-bin" --no-modify-path -y
+          "$RUNNER_TEMP/previous-bin/jd" new upgraded-game --path projects --no-git
+          "$RUNNER_TEMP/bin/jd" upgrade projects/upgraded-game --apply
+          manifest=$(cd projects/upgraded-game && cargo metadata --format-version 1 \
+            | jq -r '.packages[] | select(.name == "jackdaw_runtime") | .manifest_path')
+          case "$manifest" in
+            "$RUNNER_TEMP/packages/src/"*) echo "the upgraded project resolves jackdaw_runtime from $manifest" ;;
+            *) echo "::error::the upgraded project resolved jackdaw_runtime from '$manifest', not the packaged crate"; exit 1 ;;
+          esac
+
       - name: Keep the projects
         uses: actions/upload-artifact@v4
         with:
@@ -285,6 +310,76 @@ jobs:
   # The one-line installers, run against the archives this run built, served
   # from a local web server in place of the release: a piped install
   # configured by environment, an upgrade, a re-run and an uninstall, with
+  # Each archive installed the way the launcher installs an editor: from a
+  # signed index, here a throwaway one listing the archive by a file URL, so
+  # the download, checksum and version check all run before anything ships.
+  editor-install:
+    name: Editor install - ${{ matrix.triple }}
+    needs: [plan, binaries]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.warm != 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+
+      - name: Download the archive
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-${{ matrix.triple }}
+          path: ${{ runner.temp }}/dist
+
+      - name: Build the index tool
+        run: cargo build --locked --quiet -p jackdaw_releases --features index-tool --bin jackdaw-release-index
+
+      - name: Install the editor from a signed index
+        env:
+          BEVY: ${{ needs.plan.outputs.bevy }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          dist="$RUNNER_TEMP/dist"
+          work="$RUNNER_TEMP/journey"
+          mkdir -p "$work/jd" "$work/home"
+          exe=""
+          url_dist="$dist"
+          url_work="$work"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            exe=".exe"
+            url_dist="/$(cygpath -m "$dist")"
+            url_work="/$(cygpath -m "$work")"
+          fi
+          archive=$(ls "$dist"/jackdaw-${{ matrix.triple }}.*)
+          case "$archive" in
+            *.tar.zst) tar --zstd -xf "$archive" -C "$work/jd" ;;
+            *.zip) unzip -q "$archive" -d "$work/jd" ;;
+          esac
+          jd="$work/jd/jackdaw-${{ matrix.triple }}/jd$exe"
+          tool="target/debug/jackdaw-release-index$exe"
+          JACKDAW_INDEX_SIGNING_KEY=$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n\r')
+          export JACKDAW_INDEX_SIGNING_KEY
+          "$tool" add --index "$work/releases.json" --tag "v$version" --dist "$dist" \
+            --base-url "file://$url_dist" --bevy "$BEVY"
+          export JACKDAW_RELEASE_INDEX="file://$url_work/releases.json"
+          JACKDAW_RELEASE_INDEX_KEY=$("$tool" public-key)
+          export JACKDAW_RELEASE_INDEX_KEY
+          export HOME="$work/home" XDG_DATA_HOME="$work/home/data" XDG_CONFIG_HOME="$work/home/config" \
+            XDG_CACHE_HOME="$work/home/cache" APPDATA="$work/home/appdata" LOCALAPPDATA="$work/home/localappdata"
+          "$jd" editor install "$version"
+          "$jd" editor verify "$version"
+
   # the commands checked from a new shell. Nothing waits for it.
   installers:
     name: Installer - ${{ matrix.triple }}
@@ -453,8 +548,8 @@ jobs:
   # latest release.
   github-release:
     name: GitHub release
-    needs: [binaries, heavy, publish]
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.binaries.result == 'success' && (needs.heavy.result == 'success' || (needs.heavy.result == 'skipped' && !contains(github.ref_name, '-'))) && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && contains(github.ref_name, '-'))) }}
+    needs: [binaries, heavy, publish, editor-install]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.binaries.result == 'success' && needs.editor-install.result == 'success' && (needs.heavy.result == 'success' || (needs.heavy.result == 'skipped' && !contains(github.ref_name, '-'))) && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && contains(github.ref_name, '-'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
