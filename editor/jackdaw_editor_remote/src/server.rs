@@ -400,7 +400,24 @@ pub fn status_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
         // doing, which `jackdaw/wait` can be held on.
         "pie": jackdaw_editor_core::pie::play_status(world),
         "instances": game_instances(world),
+        "game_frame": game_frame(world),
     }))
+}
+
+/// The newest frame the Game panel holds from the focused game, or null
+/// until one has arrived.
+fn game_frame(world: &World) -> Value {
+    world
+        .get_resource::<jackdaw_editor_core::live_frame::LiveFrameStream>()
+        .filter(|stream| stream.has_frame())
+        .map_or(Value::Null, |stream| {
+            json!({
+                "seq": stream.last_seq,
+                "width": stream.size.x,
+                "height": stream.size.y,
+                "fresh": stream.is_fresh(),
+            })
+        })
 }
 
 /// Every game instance Play launched, each `building`, `connecting` or
@@ -2430,5 +2447,25 @@ mod tests {
     #[test]
     fn the_editor_port_is_not_the_game_port() {
         assert_ne!(DEFAULT_PORT, jackdaw_remote::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn status_reports_a_game_frame_only_once_the_panel_holds_one() {
+        use jackdaw_editor_core::live_frame::LiveFrameStream;
+
+        let mut world = World::new();
+        assert_eq!(game_frame(&world), Value::Null);
+        world.init_resource::<LiveFrameStream>();
+        assert_eq!(game_frame(&world), Value::Null);
+
+        let mut stream = world.resource_mut::<LiveFrameStream>();
+        stream.image = Some(Handle::default());
+        stream.size = UVec2::new(64, 32);
+        stream.last_seq = 3;
+        stream.received_at = Some(std::time::Instant::now());
+        assert_eq!(
+            game_frame(&world),
+            json!({ "seq": 3, "width": 64, "height": 32, "fresh": true })
+        );
     }
 }
