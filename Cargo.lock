@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_window_chrome"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "objc2 0.5.2",
@@ -4249,7 +4249,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jackdaw"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "base64 0.22.1",
  "bevy",
@@ -4309,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_animation"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_animation_runtime",
@@ -4324,7 +4324,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_animation_runtime"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_bsn",
@@ -4334,7 +4334,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_api"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_api_internal",
@@ -4350,7 +4350,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_api_internal"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "dirs",
@@ -4368,7 +4368,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_api_macros"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4377,7 +4377,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_bind"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "thiserror 2.0.20",
@@ -4385,7 +4385,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_bsn"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "bevy_reflect",
@@ -4402,14 +4402,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_camera"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
 ]
 
 [[package]]
 name = "jackdaw_camera_rig"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_scene_types",
@@ -4417,7 +4417,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_cli_internal"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "dunce",
  "jackdaw_env",
@@ -4427,7 +4427,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_commands"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "serde",
@@ -4435,7 +4435,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_csg"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "jackdaw_geometry",
@@ -4445,11 +4445,11 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_data_path"
-version = "0.20.1"
+version = "0.20.2"
 
 [[package]]
 name = "jackdaw_dylib"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "jackdaw_api_internal",
  "jackdaw_commands",
@@ -4458,14 +4458,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "jackdaw",
 ]
 
 [[package]]
 name = "jackdaw_editor_animation"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_animation",
@@ -4486,7 +4486,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor_core"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4559,7 +4559,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor_launcher"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "bevy_window_chrome",
@@ -4584,7 +4584,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor_modelling"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_api",
@@ -4607,7 +4607,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor_remote"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4639,7 +4639,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor_terrain"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "dunce",
@@ -4666,7 +4666,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_editor_tile"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "dunce",
@@ -4693,7 +4693,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_env"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "dirs",
  "libc",
@@ -4705,7 +4705,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_extension"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "jackdaw_api",
  "jackdaw_api_macros",
@@ -4713,7 +4713,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_feathers"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_commands",
@@ -4726,14 +4726,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_fuzzy"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "nucleo-matcher",
 ]
 
 [[package]]
 name = "jackdaw_geometry"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "bitflags 2.13.1",
@@ -4748,7 +4748,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_hull"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "jackdaw_geometry",
@@ -4757,7 +4757,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_input"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "bitflags 2.13.1",
@@ -4765,7 +4765,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_jsn"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "glam",
@@ -4780,7 +4780,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_loader"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "dirs",
@@ -4792,7 +4792,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_localization"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "fluent",
@@ -4803,14 +4803,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_material"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "jackdaw_mcp"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "base64 0.22.1",
  "jackdaw_env",
@@ -4825,7 +4825,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_multiplayer"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_scene_types",
@@ -4835,7 +4835,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_multiplayer_editor"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_api",
@@ -4844,7 +4844,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_node_graph"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_commands",
@@ -4857,7 +4857,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_package"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -4869,7 +4869,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_panels"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_commands",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_pick"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "jackdaw_geometry",
@@ -4890,7 +4890,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_pie_protocol"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "ipc-channel",
@@ -4901,7 +4901,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_prefab"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_bsn",
@@ -4912,7 +4912,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_project_build"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "dunce",
  "jackdaw_env",
@@ -4932,11 +4932,11 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_recipe"
-version = "0.20.1"
+version = "0.20.2"
 
 [[package]]
 name = "jackdaw_releases"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -4950,7 +4950,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_remote"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_bsn",
@@ -4961,7 +4961,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_runtime"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "image",
@@ -4987,7 +4987,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_rustc_wrapper"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -4995,7 +4995,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_scaffold"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "dunce",
  "include_dir",
@@ -5011,7 +5011,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_scene_types"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "dunce",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_schema"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_scene_types",
@@ -5036,7 +5036,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_sdk"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "approx",
  "bevy",
@@ -5053,7 +5053,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_select"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "jackdaw_geometry",
@@ -5061,7 +5061,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_snap"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "serde",
@@ -5070,7 +5070,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_surface"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "half",
@@ -5079,7 +5079,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_terrain"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "bevy_math",
@@ -5094,7 +5094,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_tilemap"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "image",
@@ -5103,7 +5103,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_tileset"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "image",
@@ -5113,7 +5113,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_uv"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "glam",
  "jackdaw_geometry",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_widgets"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
  "jackdaw_commands",
@@ -5131,14 +5131,14 @@ dependencies = [
 
 [[package]]
 name = "jackdaw_widgets_runtime"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "bevy",
 ]
 
 [[package]]
 name = "jd"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "dunce",
  "ed25519-dalek",

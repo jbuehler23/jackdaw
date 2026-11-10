@@ -12,7 +12,7 @@ categories = ["game-development"]
 include = ["src/**/*", "Cargo.toml"]
 
 [dependencies]
-jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1", path = "../jackdaw_editor_core", default-features = false }
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.2", path = "../jackdaw_editor_core", default-features = false }
 bevy.workspace = true
 anyhow.workspace = true
 async-channel = "2"
@@ -23,7 +23,7 @@ jackdaw_commands.workspace = true
 jackdaw_env.workspace = true
 jackdaw_feathers.workspace = true
 jackdaw_geometry.workspace = true
-jackdaw_pie_protocol = { version = "0.20.1", path = "../../crates/jackdaw_pie_protocol", features = [
+jackdaw_pie_protocol = { version = "0.20.2", path = "../../crates/jackdaw_pie_protocol", features = [
     "ipc",
 ] }
 jackdaw_remote.workspace = true
@@ -40,7 +40,7 @@ serde_json.workspace = true
 # The features the root enables on the core, and not `default`, so the
 # remote tests share the core `cargo build` and `cargo test` make instead
 # of compiling one of their own.
-jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1", path = "../jackdaw_editor_core", default-features = false, features = [
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.2", path = "../jackdaw_editor_core", default-features = false, features = [
     "multiplayer",
     "camera_rig",
     "embed-recipe",
