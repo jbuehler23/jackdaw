@@ -401,6 +401,7 @@ fn a_game_that_connects_while_play_is_paused_is_paused_too() {
     });
 }
 
+#[cfg(unix)]
 fn display_of<T: Component>(app: &mut App) -> Option<Display> {
     app.world_mut()
         .query_filtered::<&Node, With<T>>()
@@ -455,6 +456,7 @@ fn window_mode(app: &App) -> jackdaw::pie::PieWindowMode {
     *app.world().resource::<jackdaw::pie::PieWindowMode>()
 }
 
+#[cfg(unix)]
 fn focused(app: &App) -> Option<InstanceKey> {
     app.world()
         .resource::<jackdaw::pie::PieInstances>()
@@ -474,6 +476,7 @@ fn insert_idle_built_game(project: &mut Project) {
 }
 
 /// Server launched in the Game panel and Client in its own window, both live.
+#[cfg(unix)]
 fn server_in_panel_client_in_window(app: &mut App) -> (IpcChannelTransport, IpcChannelTransport) {
     let server = connect(app, key("Server", 1));
     call(app, "pie.window_mode_toggle", &[]).assert_finished();
