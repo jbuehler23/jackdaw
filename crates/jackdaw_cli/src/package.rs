@@ -106,9 +106,9 @@ fn bundle(workspace: &Path, out: &Path, artifacts: Option<&Path>) -> Result<Stri
         .parent()
         .ok_or_else(|| "release SDK dylib has no parent dir".to_string())?;
 
-    // The editor and public CLI, staged beside the SDK's wrapper.
-    // EXE_SUFFIX is `.exe` on Windows, empty elsewhere.
-    for bin in ["jackdaw", "jd"] {
+    // The editor, the public CLI and its MCP server, staged beside the SDK's
+    // wrapper. EXE_SUFFIX is `.exe` on Windows, empty elsewhere.
+    for bin in ["jackdaw", "jd", "jd-mcp"] {
         let name = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
         let src = profile_dir.join(&name);
         if !src.is_file() {
@@ -194,7 +194,7 @@ fn relocate_macos_install_names(out: &Path, triple: &str) -> Result<(), String> 
         .map(|n| n.to_string_lossy().into_owned())
         .collect();
 
-    let binaries: Vec<PathBuf> = ["jackdaw", "jd", "jackdaw-rustc-wrapper"]
+    let binaries: Vec<PathBuf> = ["jackdaw", "jd", "jd-mcp", "jackdaw-rustc-wrapper"]
         .iter()
         .map(|b| out.join(b))
         .filter(|p| p.is_file())

@@ -210,10 +210,11 @@ jobs:
       - name: Build installed binaries (target)
         run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jackdaw --features dylib --bins --message-format=json-render-diagnostics > "$RUNNER_TEMP/bundle-build.json"
 
-      # `jd` on its own: built with the editor's `dylib` features it would
-      # link the Bevy runtime through the schema crate's reflection.
+      # `jd` and its MCP server on their own: built with the editor's `dylib`
+      # features `jd` would link the Bevy runtime through the schema crate's
+      # reflection.
       - name: Build jd (target)
-        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jd --bin jd
+        run: $CARGO_FRONTEND build --release --target "$BUILD_TARGET" -p jd -p jackdaw_mcp --bin jd --bin jd-mcp
 
       # Under the glibc target the shipped wrapper is the root package's
       # own, built above against the same glibc, placed where the bundler
@@ -325,7 +326,7 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
-          for bin in jackdaw jd; do
+          for bin in jackdaw jd jd-mcp; do
             if ! readelf -d "$root/$bin" | grep -E 'RUNPATH|RPATH' | grep -qF '$ORIGIN'; then
               echo "$bin is missing its \$ORIGIN runpath:"
               readelf -d "$root/$bin" | head -20
@@ -344,7 +345,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           missing=0
           for f in sdk/manifest.txt Cargo.lock toolchain.txt \
-                   "jackdaw$exe" "jd$exe" "jackdaw-rustc-wrapper$exe"; do
+                   "jackdaw$exe" "jd$exe" "jd-mcp$exe" "jackdaw-rustc-wrapper$exe"; do
             if [ ! -f "$root/$f" ]; then echo "bundle is missing $f"; missing=1; fi
           done
           if [ ! -d "$root/sdk/${{ matrix.triple }}" ]; then
