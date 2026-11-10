@@ -143,8 +143,31 @@ fn a_generated_large_scene_saves_parses_and_opens_at_full_size() {
 fn writes_the_large_scene_into_a_project_folder() {
     let out = std::env::var_os("JACKDAW_LARGE_SCENE_OUT")
         .expect("JACKDAW_LARGE_SCENE_OUT names the project folder to write into");
-    let out = Path::new(&out);
-    std::fs::create_dir_all(out).expect("the project folder is made");
-    let scene = write_large_scene(out).expect("the scene is generated");
-    eprintln!("wrote {}: {scene:?}", scene.path.display());
+    let out = Path::new(&out).join("assets");
+    let tmp = tempfile::tempdir().expect("a temp directory");
+    let scene = write_large_scene(tmp.path()).expect("the scene is generated");
+    let generated = scene
+        .path
+        .parent()
+        .expect("the scene sits in the assets folder");
+    copy_tree(generated, &out);
+    eprintln!(
+        "wrote {} into {}: {scene:?}",
+        scene.path.display(),
+        out.display()
+    );
+}
+
+/// Copy every file under `from` into `to`, keeping the layout.
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("the target folder is made");
+    for entry in std::fs::read_dir(from).expect("the generated folder reads") {
+        let entry = entry.expect("a directory entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("a generated file copies");
+        }
+    }
 }
