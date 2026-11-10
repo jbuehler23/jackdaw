@@ -73,7 +73,16 @@ pub const BEVY_REV: Option<&str> = option_env!("JACKDAW_BEVY_REV");
 
 /// The nightly this build is, e.g. `nightly-2026-10-18`, when the nightly
 /// workflow built it.
-pub const NIGHTLY: Option<&str> = option_env!("JACKDAW_NIGHTLY");
+pub const NIGHTLY: Option<&str> = nightly_name(option_env!("JACKDAW_NIGHTLY"));
+
+/// A nightly name left empty, as a release build's environment sets it,
+/// names no nightly.
+const fn nightly_name(name: Option<&'static str>) -> Option<&'static str> {
+    match name {
+        Some(name) if !name.is_empty() => Some(name),
+        _ => None,
+    }
+}
 
 /// The name this build goes by: its nightly, or else its version.
 pub fn build_name() -> &'static str {
@@ -113,7 +122,17 @@ pub fn jackdaw_requirement_for(version: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::jackdaw_requirement_for;
+    use super::{jackdaw_requirement_for, nightly_name};
+
+    #[test]
+    fn an_empty_nightly_name_names_no_nightly() {
+        assert_eq!(nightly_name(None), None);
+        assert_eq!(nightly_name(Some("")), None);
+        assert_eq!(
+            nightly_name(Some("nightly-2026-11-10")),
+            Some("nightly-2026-11-10")
+        );
+    }
 
     #[test]
     fn a_stable_release_requests_its_minor_line() {
