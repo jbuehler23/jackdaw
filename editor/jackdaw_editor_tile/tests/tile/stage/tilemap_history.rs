@@ -103,7 +103,7 @@ fn fresh_tiles(app: &mut App, map: Entity) -> jackdaw_tilemap::ChunkedLayer<Tile
     let data = stored(app, map);
     full_resolve(
         &set,
-        data.layers[0].authoring.as_ref().expect("authoring"),
+        data.layers[&0].authoring.as_ref().expect("authoring"),
         None,
     )
     .0
@@ -165,7 +165,7 @@ fn undo_reaches_the_map_after_a_tab_swap() {
     assert_eq!(bytes(&mut app, map), before);
     let chunk = chunk_at(&mut app, map, 0, IVec2::ZERO);
     let drawn = index_at(&app, chunk, (2, 1));
-    let tiles = &stored(&mut app, map).layers[0].tiles;
+    let tiles = &stored(&mut app, map).layers[&0].tiles;
     assert_eq!(drawn, Some(tiles.get(CellCoord::new(2, 1)).index()));
 }
 
@@ -318,7 +318,7 @@ fn stored_terrain_tiles_equal_a_fresh_resolve() {
     let (mut app, _dir) = project_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
     assert_eq!(
-        stored(&mut app, map).layers[0].tiles,
+        stored(&mut app, map).layers[&0].tiles,
         fresh_tiles(&mut app, map)
     );
 
@@ -327,7 +327,7 @@ fn stored_terrain_tiles_equal_a_fresh_resolve() {
     paint(&mut app, map, "terrain", "2,2;3,3", "erase");
     paint(&mut app, map, "tile", "31,4", "7");
     let data = stored(&mut app, map);
-    let overrides = &data.layers[0]
+    let overrides = &data.layers[&0]
         .authoring
         .as_ref()
         .expect("authoring")
@@ -336,11 +336,11 @@ fn stored_terrain_tiles_equal_a_fresh_resolve() {
         overrides.get(&CellCoord::new(31, 4)),
         Some(&TileRef::new(7))
     );
-    assert_eq!(data.layers[0].tiles, fresh_tiles(&mut app, map));
+    assert_eq!(data.layers[&0].tiles, fresh_tiles(&mut app, map));
 
     paint(&mut app, map, "tile", "31,4", "erase");
     assert_eq!(
-        stored(&mut app, map).layers[0].tiles,
+        stored(&mut app, map).layers[&0].tiles,
         fresh_tiles(&mut app, map)
     );
 }
@@ -372,7 +372,7 @@ fn the_renderer_draws_stored_terrain_tiles_without_resolving() {
         "a whole redraw resolves nothing"
     );
     assert_eq!(app.world().resource::<TilemapDrawStats>().chunks_written, 3);
-    let tiles = stored(&mut app, map).layers[0].tiles.clone();
+    let tiles = stored(&mut app, map).layers[&0].tiles.clone();
     for (_, coord, chunk) in chunks(&mut app, map) {
         let data = app
             .world()
@@ -393,7 +393,7 @@ fn the_renderer_draws_stored_terrain_tiles_without_resolving() {
 fn a_tileset_edit_resolves_the_map_again_and_its_undo_restores_both() {
     let (mut app, _dir) = project_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], grass_patch());
-    let centre = stored(&mut app, map).layers[0]
+    let centre = stored(&mut app, map).layers[&0]
         .tiles
         .get(CellCoord::new(3, 3));
     let (before, tileset_before) = (bytes(&mut app, map), tileset(&app));
@@ -414,7 +414,7 @@ fn a_tileset_edit_resolves_the_map_again_and_its_undo_restores_both() {
         count + 1,
         "the tileset edit is the one entry"
     );
-    let tiles = stored(&mut app, map).layers[0].tiles.clone();
+    let tiles = stored(&mut app, map).layers[&0].tiles.clone();
     assert_ne!(
         tiles.get(CellCoord::new(3, 3)),
         centre,
@@ -473,7 +473,7 @@ fn derived_tiles_never_make_the_map_unsaved_and_survive_an_unbuildable_set() {
     jackdaw_editor_core::scene_io::load_scene_from_file(app.world_mut(), &scene);
     settle(&mut app);
     let map = the_map(&mut app);
-    let tiles = stored(&mut app, map).layers[0].tiles.clone();
+    let tiles = stored(&mut app, map).layers[&0].tiles.clone();
     assert!(
         !tiles.is_empty(),
         "the load resolves the older file's tiles"
@@ -485,7 +485,7 @@ fn derived_tiles_never_make_the_map_unsaved_and_survive_an_unbuildable_set() {
         LayerTerrainMatch::Auto;
     settle(&mut app);
     assert_eq!(
-        stored(&mut app, map).layers[0].tiles,
+        stored(&mut app, map).layers[&0].tiles,
         tiles,
         "an unbuildable set keeps the tiles"
     );
@@ -493,7 +493,7 @@ fn derived_tiles_never_make_the_map_unsaved_and_survive_an_unbuildable_set() {
     (app.world_mut().get_mut::<Tilemap>(map).expect("the map")).layers[0].terrain_match =
         LayerTerrainMatch::CornersAndSides;
     settle(&mut app);
-    assert_eq!(stored(&mut app, map).layers[0].tiles, tiles);
+    assert_eq!(stored(&mut app, map).layers[&0].tiles, tiles);
 
     std::fs::write(
         dir.path()
@@ -505,10 +505,10 @@ fn derived_tiles_never_make_the_map_unsaved_and_survive_an_unbuildable_set() {
     jackdaw_editor_core::scene_io::load_scene_from_file(app.world_mut(), &scene);
     settle(&mut app);
     let map = the_map(&mut app);
-    let authoring = stored(&mut app, map).layers[0].authoring.clone();
+    let authoring = stored(&mut app, map).layers[&0].authoring.clone();
     assert_eq!(
         authoring,
-        grass_strip().layers[0].authoring,
+        grass_strip().layers[&0].authoring,
         "the reload reads the file"
     );
     assert!(!unsaved(&mut app, map));
@@ -572,11 +572,11 @@ fn undo_after_a_save_as_never_reaches_the_map_that_reopened_the_old_file() {
 fn a_tile_layer_holding_old_authoring_takes_tiles_as_they_are() {
     let (mut app, _dir) = project_app();
     let mut data = grass_patch();
-    data.layers[0].kind = LayerKind::Tile;
+    data.layers.get_mut(&0).expect("a layer").kind = LayerKind::Tile;
     let tiles = layer(TilemapLayerKind::Tile, default());
     let map = spawn_map(&mut app, vec![tiles], data);
     paint(&mut app, map, "tile", "3,3", "7");
-    let layer = &stored(&mut app, map).layers[0];
+    let layer = &stored(&mut app, map).layers[&0];
     assert_eq!(layer.tiles.get(CellCoord::new(3, 3)), TileRef::new(7));
     let authoring = layer.authoring.as_ref().expect("left as it was");
     assert!(authoring.overrides.is_empty(), "no override is placed");
@@ -584,8 +584,8 @@ fn a_tile_layer_holding_old_authoring_takes_tiles_as_they_are() {
         authoring.terrain,
         grass_patch()
             .layers
-            .remove(0)
-            .authoring
+            .remove(&0)
+            .and_then(|layer| layer.authoring)
             .expect("authoring")
             .terrain
     );
@@ -721,7 +721,7 @@ fn strokes_still_apply_after_a_reload_that_follows_a_tileset_re_derive() {
     save_as(&mut app, &dir, "zone.bsn");
     let map = the_map(&mut app);
     let before = bytes(&mut app, map);
-    let centre = stored(&mut app, map).layers[0]
+    let centre = stored(&mut app, map).layers[&0]
         .tiles
         .get(CellCoord::new(3, 3));
     paint(&mut app, map, "terrain", "1,1", "2");
@@ -765,7 +765,7 @@ fn a_layer_switched_from_tile_to_terrain_paints_and_undoes() {
     (app.world_mut().get_mut::<Tilemap>(map).expect("the map")).layers[0] = ground_terrain();
     settle(&mut app);
     assert_eq!(
-        stored(&mut app, map).layers[0].kind,
+        stored(&mut app, map).layers[&0].kind,
         LayerKind::Terrain,
         "the scene's kind wins"
     );
@@ -773,10 +773,15 @@ fn a_layer_switched_from_tile_to_terrain_paints_and_undoes() {
 
     paint(&mut app, map, "terrain", "4,4,6,6", "1");
     let painted = stored(&mut app, map);
-    assert_eq!(painted.layers[0].kind, LayerKind::Terrain);
-    assert!(!painted.layers[0].tiles.get(CellCoord::new(5, 5)).is_empty());
+    assert_eq!(painted.layers[&0].kind, LayerKind::Terrain);
+    assert!(
+        !painted.layers[&0]
+            .tiles
+            .get(CellCoord::new(5, 5))
+            .is_empty()
+    );
     assert_eq!(
-        painted.layers[0].tiles.get(CellCoord::new(0, 0)),
+        painted.layers[&0].tiles.get(CellCoord::new(0, 0)),
         TileRef::new(3)
     );
     run(&mut app, "history.undo");
@@ -813,8 +818,12 @@ fn an_idle_map_with_tile_and_ambiguous_layers_stops_refreshing() {
         ..layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Auto)
     };
     let mut data = grass_patch();
-    data.layers
-        .insert(0, tile_layer(&[(0, 0, TileRef::new(3))]).layers.remove(0));
+    let grass = data.layers.remove(&0).expect("a layer");
+    data.layers.insert(
+        0,
+        (tile_layer(&[(0, 0, TileRef::new(3))]).layers.remove(&0)).expect("a layer"),
+    );
+    data.layers.insert(1, grass);
     spawn_map(&mut app, vec![tiles, ambiguous], data);
     settle(&mut app);
     let refreshes = |app: &App| app.world().resource::<TilemapResolveStats>().refreshes;

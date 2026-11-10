@@ -116,12 +116,16 @@ fn tiles(cells: &[(i32, i32)]) -> TilemapData {
         layer.set(CellCoord::new(x, y), TileRef::new(3));
     }
     TilemapData {
-        layers: vec![LayerData {
-            kind: LayerKind::Tile,
-            placement: Placement::OnCells,
-            tiles: layer,
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            LayerData {
+                kind: LayerKind::Tile,
+                placement: Placement::OnCells,
+                tiles: layer,
+                authoring: None,
+            },
+        )]
+        .into(),
     }
 }
 

@@ -98,11 +98,11 @@ fn terrain_name(app: &App, id: u8) -> String {
 
 pub(crate) fn terrain_at(app: &mut App, map: Entity, x: i32, y: i32) -> u8 {
     let data = stored(app, map);
-    (data.layers[0].authoring.as_ref()).map_or(0, |a| a.terrain.get(CellCoord::new(x, y)))
+    (data.layers[&0].authoring.as_ref()).map_or(0, |a| a.terrain.get(CellCoord::new(x, y)))
 }
 
 fn tile_at(app: &mut App, map: Entity, x: i32, y: i32) -> TileRef {
-    stored(app, map).layers[0].tiles.get(CellCoord::new(x, y))
+    stored(app, map).layers[&0].tiles.get(CellCoord::new(x, y))
 }
 
 fn terrain_map(app: &mut App) -> Entity {
@@ -272,7 +272,7 @@ fn fill_rect_is_clipped_to_the_bounds_like_the_rectangle() {
         FILL_RECT,
         &with(rect(2, 2, 3000, 3000), &[("tile", text("7"))]),
     );
-    assert_eq!(stored(&mut app, map).layers[0].tiles.cells().count(), 36);
+    assert_eq!(stored(&mut app, map).layers[&0].tiles.cells().count(), 36);
 }
 
 #[test]
@@ -427,10 +427,10 @@ fn clear_empties_a_terrain_layer_with_its_hand_placed_tiles() {
     assert_eq!(entries(&app), count + 1);
     assert_eq!(last_label(&app), "Clear layer");
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     assert_eq!(authoring.terrain.cells().count(), 0);
     assert!(authoring.overrides.is_empty());
-    assert_eq!(data.layers[0].tiles.cells().count(), 0);
+    assert_eq!(data.layers[&0].tiles.cells().count(), 0);
     let after = bytes(&mut app, map);
     run(&mut app, "history.undo");
     assert_eq!(bytes(&mut app, map), before);
@@ -794,7 +794,7 @@ fn the_reported_count_is_of_changed_cells() {
 fn a_shape_lands_on_the_layer_it_was_pressed_on() {
     let (mut app, _dir) = project_app();
     let mut data = grass_patch();
-    data.layers.push(LayerData::empty(LayerKind::Tile));
+    data.layers.insert(1, LayerData::empty(LayerKind::Tile));
     let map = spawn_map(
         &mut app,
         vec![ground_terrain(), layer(TilemapLayerKind::Tile, default())],
@@ -818,5 +818,5 @@ fn a_shape_lands_on_the_layer_it_was_pressed_on() {
         2,
         "painted on the press layer"
     );
-    assert_eq!(stored(&mut app, map).layers[1].tiles.cells().count(), 0);
+    assert_eq!(stored(&mut app, map).layers[&1].tiles.cells().count(), 0);
 }

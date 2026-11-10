@@ -123,9 +123,9 @@ pub struct TilemapDataStore {
     /// Keys whose cells changed since their maps were last drawn.
     redraw: HashMap<String, Redraw>,
     /// The terrain set and map bounds each terrain layer resolves with, by
-    /// key and layer index. A layer listed here holds the tiles its authoring
+    /// key and layer id. A layer listed here holds the tiles its authoring
     /// resolves to, and an edit resolves the cells it touched with them.
-    sets: HashMap<String, BTreeMap<usize, LayerResolve>>,
+    sets: HashMap<String, BTreeMap<u32, LayerResolve>>,
     /// Keys whose maps disagree on their bounds; see
     /// [`refresh_terrain`](crate::tilemap_resolve::refresh_terrain).
     pub(crate) diverging_bounds: HashSet<String>,
@@ -137,8 +137,6 @@ pub struct TilemapDataStore {
     pub(crate) resolved_cells: usize,
     /// Advances on every write of any key's cells.
     revision: u64,
-    /// Maps whose layer count and cells were found to disagree, warned once.
-    pub(crate) mismatch_warned: HashSet<u64>,
 }
 
 /// The terrain set a layer's tiles were resolved with, and the map bounds.
@@ -153,8 +151,8 @@ pub(crate) struct LayerResolve {
 pub enum Redraw {
     /// The cells were put or dropped whole.
     Whole,
-    /// Only these chunks, by layer index, were edited.
-    Chunks(BTreeSet<(usize, ChunkCoord)>),
+    /// Only these chunks, by layer id, were edited.
+    Chunks(BTreeSet<(u32, ChunkCoord)>),
 }
 
 impl TilemapDataStore {
@@ -189,7 +187,7 @@ impl TilemapDataStore {
     /// keeps its id: it is still the same document's map.
     pub fn insert(&mut self, key: impl Into<String>, mut data: TilemapData) {
         let key = key.into();
-        data.layers.iter_mut().for_each(clear_dirty);
+        data.layers.values_mut().for_each(clear_dirty);
         self.revision += 1;
         self.written_at.insert(key.clone(), self.revision);
         self.changed.insert(key.clone());
@@ -228,51 +226,34 @@ impl TilemapDataStore {
         self.entries.remove(key)
     }
 
-    /// Takes data layer `index` out when `remove`, then puts `insert` in its
-    /// place, keeping each other layer's resolved set under its new index.
-    /// Returns the layer taken out. A layer past the end of the data is left
-    /// for padding to add.
-    pub(crate) fn splice_layer(
+    /// Puts `layer` in as data layer `id` of the map at `key`, or takes that
+    /// layer out when `None`. Returns the layer held before. The layer's
+    /// tiles are not known to be resolved any more.
+    pub(crate) fn replace_layer(
         &mut self,
         key: &str,
-        index: usize,
-        remove: bool,
-        insert: Option<LayerData>,
+        id: u32,
+        layer: Option<LayerData>,
     ) -> Option<LayerData> {
         let data = self.entries.get_mut(key)?;
-        let remove = remove && index < data.layers.len();
-        let insert = insert.filter(|_| index <= data.layers.len() - usize::from(remove));
-        if !remove && insert.is_none() {
+        if layer.is_none() && !data.layers.contains_key(&id) {
             return None;
         }
-        let removed = remove.then(|| data.layers.remove(index));
-        let added = insert.is_some();
-        if let Some(mut layer) = insert {
-            clear_dirty(&mut layer);
-            data.layers.insert(index, layer);
-        }
+        let before = match layer {
+            Some(mut layer) => {
+                clear_dirty(&mut layer);
+                data.layers.insert(id, layer)
+            }
+            None => data.layers.remove(&id),
+        };
         if let Some(sets) = self.sets.get_mut(key) {
-            *sets = std::mem::take(sets)
-                .into_iter()
-                .filter(|(at, _)| *at != index || !remove)
-                .map(|(at, set)| {
-                    let shift = isize::from(added) - isize::from(remove);
-                    (
-                        if at < index {
-                            at
-                        } else {
-                            at.saturating_add_signed(shift)
-                        },
-                        set,
-                    )
-                })
-                .collect();
+            sets.remove(&id);
         }
         self.revision += 1;
         self.written_at.insert(key.to_string(), self.revision);
         self.changed.insert(key.to_string());
         self.redraw.insert(key.to_string(), Redraw::Whole);
-        removed
+        before
     }
 
     /// Whether the cells at `key` changed since its maps were last drawn.
@@ -325,15 +306,15 @@ impl TilemapDataStore {
         (self.ids.iter()).find_map(|(key, at)| (*at == id).then_some(key.as_str()))
     }
 
-    /// The terrain set terrain layer `layer` at `key` resolves with, if its
-    /// tiles are known to be resolved.
-    pub fn resolved_with(&self, key: &str, layer: usize) -> Option<&Arc<TerrainSet>> {
+    /// The terrain set terrain layer `layer` (an id) at `key` resolves with,
+    /// if its tiles are known to be resolved.
+    pub fn resolved_with(&self, key: &str, layer: u32) -> Option<&Arc<TerrainSet>> {
         Some(&self.sets.get(key)?.get(&layer)?.set)
     }
 
     /// The map bounds terrain layer `layer` at `key` was last resolved
     /// within; `None` when unbounded or not resolved.
-    pub fn resolved_bounds(&self, key: &str, layer: usize) -> Option<CellRect> {
+    pub fn resolved_bounds(&self, key: &str, layer: u32) -> Option<CellRect> {
         self.sets.get(key)?.get(&layer)?.bounds
     }
 
@@ -345,7 +326,7 @@ impl TilemapDataStore {
     pub(crate) fn note_resolved(
         &mut self,
         key: &str,
-        layer: usize,
+        layer: u32,
         set: Arc<TerrainSet>,
         bounds: Option<CellRect>,
     ) {
@@ -362,7 +343,7 @@ impl TilemapDataStore {
 
     /// Marks a layer's tiles as resolved with no known set: edits leave them
     /// as they are, and the next refresh that has a set resolves them whole.
-    pub(crate) fn forget_resolved(&mut self, key: &str, layer: usize) {
+    pub(crate) fn forget_resolved(&mut self, key: &str, layer: u32) {
         if let Some(layers) = self.sets.get_mut(key) {
             layers.remove(&layer);
         }
@@ -370,16 +351,16 @@ impl TilemapDataStore {
 
     /// Whether data layer `layer` at `key` differs in kind from `kind`, the
     /// kind its scene layer has.
-    pub(crate) fn kind_differs(&self, key: &str, layer: usize, kind: LayerKind) -> bool {
+    pub(crate) fn kind_differs(&self, key: &str, layer: u32, kind: LayerKind) -> bool {
         (self.entries.get(key))
-            .and_then(|data| data.layers.get(layer))
+            .and_then(|data| data.layers.get(&layer))
             .is_some_and(|data| data.kind != kind)
     }
 
     /// Gives data layer `layer` at `key` the kind of its scene layer. The
     /// scene is the source of the kind, so this is no edit of the cells.
-    pub(crate) fn sync_layer_kind(&mut self, key: &str, layer: usize, kind: LayerKind) {
-        if let Some(data) = (self.entries.get_mut(key)).and_then(|data| data.layers.get_mut(layer))
+    pub(crate) fn sync_layer_kind(&mut self, key: &str, layer: u32, kind: LayerKind) {
+        if let Some(data) = (self.entries.get_mut(key)).and_then(|data| data.layers.get_mut(&layer))
         {
             data.kind = kind;
         }
@@ -394,13 +375,13 @@ impl TilemapDataStore {
     pub(crate) fn put_derived_tiles(
         &mut self,
         key: &str,
-        layer: usize,
+        layer: u32,
         placement: Placement,
         fresh: &ChunkedLayer<TileRef>,
     ) {
         self.place_layer(key, layer, placement);
         let Some(tiles) = (self.entries.get_mut(key))
-            .and_then(|data| data.layers.get_mut(layer))
+            .and_then(|data| data.layers.get_mut(&layer))
             .map(|layer| &mut layer.tiles)
         else {
             return;
@@ -430,8 +411,8 @@ impl TilemapDataStore {
     /// draws the map again whole. Hand-placed tiles are kept: tiles between
     /// cells ignore them, and they show again once the layer is back on
     /// cells.
-    pub(crate) fn place_layer(&mut self, key: &str, layer: usize, placement: Placement) {
-        let Some(data) = (self.entries.get_mut(key)).and_then(|data| data.layers.get_mut(layer))
+    pub(crate) fn place_layer(&mut self, key: &str, layer: u32, placement: Placement) {
+        let Some(data) = (self.entries.get_mut(key)).and_then(|data| data.layers.get_mut(&layer))
         else {
             return;
         };
@@ -485,23 +466,23 @@ impl TilemapDataStore {
 pub struct TilemapEdit<'a> {
     data: &'a mut TilemapData,
     redraw: &'a mut Redraw,
-    sets: Option<&'a BTreeMap<usize, LayerResolve>>,
+    sets: Option<&'a BTreeMap<u32, LayerResolve>>,
     resolved_cells: &'a mut usize,
-    /// Each layer's overrides as the edit found them.
-    overrides: Vec<Option<BTreeMap<CellCoord, TileRef>>>,
-    /// The authoring cells the edit reports it wrote, by layer.
-    written: BTreeMap<usize, Vec<CellCoord>>,
+    /// Each layer's overrides as the edit found them, by layer id.
+    overrides: BTreeMap<u32, Option<BTreeMap<CellCoord, TileRef>>>,
+    /// The authoring cells the edit reports it wrote, by layer id.
+    written: BTreeMap<u32, Vec<CellCoord>>,
 }
 
 impl<'a> TilemapEdit<'a> {
     fn new(
         data: &'a mut TilemapData,
         redraw: &'a mut Redraw,
-        sets: Option<&'a BTreeMap<usize, LayerResolve>>,
+        sets: Option<&'a BTreeMap<u32, LayerResolve>>,
         resolved_cells: &'a mut usize,
     ) -> Self {
         let overrides = (data.layers.iter())
-            .map(|layer| (layer.authoring.as_ref()).map(|a| a.overrides.clone()))
+            .map(|(&id, layer)| (id, (layer.authoring.as_ref()).map(|a| a.overrides.clone())))
             .collect();
         Self {
             data,
@@ -513,9 +494,10 @@ impl<'a> TilemapEdit<'a> {
         }
     }
 
-    /// Reports the authoring cells of `layer` this edit wrote, so dropping it
-    /// resolves only those and their ring rather than their whole chunks.
-    pub fn mark_written(&mut self, layer: usize, cells: impl IntoIterator<Item = CellCoord>) {
+    /// Reports the authoring cells of layer id `layer` this edit wrote, so
+    /// dropping it resolves only those and their ring rather than their whole
+    /// chunks.
+    pub fn mark_written(&mut self, layer: u32, cells: impl IntoIterator<Item = CellCoord>) {
         self.written.entry(layer).or_default().extend(cells);
     }
 }
@@ -535,19 +517,19 @@ impl std::ops::DerefMut for TilemapEdit<'_> {
 
 impl Drop for TilemapEdit<'_> {
     fn drop(&mut self) {
-        let mut whole = self.data.layers.len() != self.overrides.len();
+        let mut whole = !self.data.layers.keys().eq(self.overrides.keys());
         let mut touched = BTreeSet::new();
-        for (index, layer) in self.data.layers.iter_mut().enumerate() {
-            let before = self.overrides.get(index).and_then(Option::as_ref);
+        for (&id, layer) in self.data.layers.iter_mut() {
+            let before = self.overrides.get(&id).and_then(Option::as_ref);
             let mut dirty: BTreeSet<ChunkCoord> = BTreeSet::new();
             let Some(authoring) = layer.authoring.as_mut() else {
                 whole |= before.is_some();
-                touched.extend(layer.tiles.take_dirty().into_iter().map(|c| (index, c)));
+                touched.extend(layer.tiles.take_dirty().into_iter().map(|c| (id, c)));
                 continue;
             };
             dirty.extend(authoring.terrain.take_dirty());
             dirty.extend(authoring.links.take_dirty());
-            let mut cells: Vec<CellCoord> = match self.written.remove(&index) {
+            let mut cells: Vec<CellCoord> = match self.written.remove(&id) {
                 Some(written) => written,
                 None => (dirty.iter())
                     .flat_map(|chunk| (0..CHUNK_AREA).map(|local| chunk.cell(local)))
@@ -567,7 +549,7 @@ impl Drop for TilemapEdit<'_> {
                 }
             }
             dirty.extend(cells.iter().map(|cell| cell.chunk()));
-            let set = (self.sets.and_then(|sets| sets.get(&index)))
+            let set = (self.sets.and_then(|sets| sets.get(&id)))
                 .filter(|_| layer.kind == LayerKind::Terrain && !cells.is_empty());
             if let Some(at) = set {
                 let placed = layer.placement;
@@ -575,7 +557,7 @@ impl Drop for TilemapEdit<'_> {
                 whole |= layer.placement != placed;
             }
             dirty.extend(layer.tiles.take_dirty());
-            touched.extend(dirty.into_iter().map(|chunk| (index, chunk)));
+            touched.extend(dirty.into_iter().map(|chunk| (id, chunk)));
         }
         match self.redraw {
             Redraw::Whole => {}
@@ -843,6 +825,8 @@ pub fn ensure_tilemap_data_path(maps: Query<Entity, Changed<Tilemap>>, mut comma
 ///   duplicate): the newer map moves, with a copy of the cells.
 ///
 /// Maps inherited from a prefab keep the prefab's key and are never minted.
+/// A map of the tab's own whose layers repeat an id gets fresh ids for the
+/// repeats.
 fn ensure_paths(world: &mut World, batch: &[Entity]) {
     let doc = current_doc(world);
     let live = live_maps(world, &doc);
@@ -858,6 +842,7 @@ fn ensure_paths(world: &mut World, batch: &[Entity]) {
             }
             continue;
         }
+        dedup_layer_ids(world, map.entity);
         let Some((full, key)) = map.located.clone() else {
             if !map.data_path.is_empty() {
                 warn!(
@@ -896,6 +881,27 @@ fn ensure_paths(world: &mut World, batch: &[Entity]) {
         }
         set_data_path(world, map.entity, &minted, &mut taken, &doc);
     }
+}
+
+/// Gives a fresh id to each layer of `entity`'s map whose id an earlier layer
+/// holds, in the world and the document.
+fn dedup_layer_ids(world: &mut World, entity: Entity) {
+    let Some(mut tilemap) = world.get::<Tilemap>(entity).cloned() else {
+        return;
+    };
+    if !tilemap.dedup_layer_ids() {
+        return;
+    }
+    warn!("Tilemap {entity} repeated a layer id; the repeats get fresh ids");
+    if let Some(mut live) = world.get_mut::<Tilemap>(entity) {
+        *live = tilemap.clone();
+    }
+    jackdaw_editor_core::commands::sync_component_to_ast(
+        world,
+        entity,
+        Tilemap::type_path(),
+        &tilemap,
+    );
 }
 
 fn clear_dirty(layer: &mut LayerData) {

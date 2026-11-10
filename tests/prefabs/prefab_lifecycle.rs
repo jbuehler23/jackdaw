@@ -5286,12 +5286,16 @@ fn saving_a_prefab_tab_writes_its_terrain_and_tile_sidecars() {
             .expect("a power-of-two resolution migrates"),
         );
     let map = jackdaw_tilemap::TilemapData {
-        layers: vec![jackdaw_tilemap::LayerData {
-            kind: jackdaw_tilemap::LayerKind::Tile,
-            placement: Default::default(),
-            tiles: jackdaw_tilemap::ChunkedLayer::new(),
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            jackdaw_tilemap::LayerData {
+                kind: jackdaw_tilemap::LayerKind::Tile,
+                placement: Default::default(),
+                tiles: jackdaw_tilemap::ChunkedLayer::new(),
+                authoring: None,
+            },
+        )]
+        .into(),
     };
     let key = tilemap_key(&mut app);
     app.world_mut()
@@ -5323,12 +5327,16 @@ fn a_tilemap_inherited_from_a_prefab_keeps_its_sidecar_beside_the_prefab() {
     )
     .unwrap();
     let map = jackdaw_tilemap::TilemapData {
-        layers: vec![jackdaw_tilemap::LayerData {
-            kind: jackdaw_tilemap::LayerKind::Tile,
-            placement: Default::default(),
-            tiles: jackdaw_tilemap::ChunkedLayer::new(),
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            jackdaw_tilemap::LayerData {
+                kind: jackdaw_tilemap::LayerKind::Tile,
+                placement: Default::default(),
+                tiles: jackdaw_tilemap::ChunkedLayer::new(),
+                authoring: None,
+            },
+        )]
+        .into(),
     };
     let bytes = jackdaw_tilemap::encode(&map);
     std::fs::write(&prefab_sidecar, &bytes).unwrap();
@@ -5408,12 +5416,16 @@ fn tile_map(tile: u16) -> jackdaw_tilemap::TilemapData {
         jackdaw_tilemap::TileRef::new(tile),
     );
     jackdaw_tilemap::TilemapData {
-        layers: vec![jackdaw_tilemap::LayerData {
-            kind: jackdaw_tilemap::LayerKind::Tile,
-            placement: Default::default(),
-            tiles,
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            jackdaw_tilemap::LayerData {
+                kind: jackdaw_tilemap::LayerKind::Tile,
+                placement: Default::default(),
+                tiles,
+                authoring: None,
+            },
+        )]
+        .into(),
     }
 }
 

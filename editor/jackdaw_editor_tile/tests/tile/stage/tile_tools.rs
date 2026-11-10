@@ -16,7 +16,7 @@ use jackdaw_editor_tile::tile_tools::{TileBrush, TileEditMode, TileStrokeState, 
 use jackdaw_editor_tile::tilemap::TilemapDataStore;
 use jackdaw_editor_tile::tilemap_resolve::full_resolve;
 use jackdaw_scene_types::{PropertyValue, TilemapLayerKind};
-use jackdaw_tilemap::{CellCoord, TileRef, TilemapData, orthogonal_line};
+use jackdaw_tilemap::{CellCoord, LayerData, LayerKind, TileRef, TilemapData, orthogonal_line};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
 pub(crate) const BRUSH: &str = "tilemap.brush";
@@ -107,12 +107,12 @@ pub(crate) fn bytes(app: &mut App, map: Entity) -> Vec<u8> {
 
 fn terrain(app: &mut App, map: Entity, x: i32, y: i32) -> u8 {
     let data = stored(app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     authoring.terrain.get(CellCoord::new(x, y))
 }
 
 fn tile(app: &mut App, map: Entity, x: i32, y: i32) -> TileRef {
-    stored(app, map).layers[0].tiles.get(CellCoord::new(x, y))
+    stored(app, map).layers[&0].tiles.get(CellCoord::new(x, y))
 }
 
 pub(crate) fn assert_resolved(app: &mut App, map: Entity) {
@@ -126,12 +126,12 @@ pub(crate) fn assert_resolved(app: &mut App, map: Entity) {
     let data = stored(app, map);
     let fresh = full_resolve(
         &set,
-        data.layers[0].authoring.as_ref().expect("authoring"),
+        data.layers[&0].authoring.as_ref().expect("authoring"),
         None,
     )
     .0;
     assert!(
-        data.layers[0].tiles == fresh,
+        data.layers[&0].tiles == fresh,
         "stored tiles match a fresh resolve"
     );
 }
@@ -484,7 +484,7 @@ fn erasing_terrain_clears_hand_placed_tiles_in_the_same_entry() {
 
     stroke(&mut app, ERASER, MouseButton::Left, &[(2, 2)]);
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     assert_eq!(authoring.terrain.get(CellCoord::new(2, 2)), 0);
     assert!(
         authoring.overrides.is_empty(),
@@ -494,7 +494,7 @@ fn erasing_terrain_clears_hand_placed_tiles_in_the_same_entry() {
     assert_undo_redo(&mut app, map, &before, count);
     run(&mut app, "history.undo");
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     assert!(authoring.overrides.contains_key(&CellCoord::new(2, 2)));
 }
 
@@ -699,7 +699,7 @@ pub(crate) fn tile_map(app: &mut App, cells: &[(i32, i32, TileRef)]) -> Entity {
 }
 
 fn painted(app: &mut App, map: Entity) -> usize {
-    stored(app, map).layers[0].tiles.cells().count()
+    stored(app, map).layers[&0].tiles.cells().count()
 }
 
 #[test]
@@ -794,7 +794,13 @@ fn a_line_joins_the_press_and_release_cells() {
 
 pub(crate) fn two_islands() -> TilemapData {
     let mut data = grass_patch();
-    let authoring = data.layers[0].authoring.as_mut().expect("authoring");
+    let authoring = data
+        .layers
+        .get_mut(&0)
+        .expect("a layer")
+        .authoring
+        .as_mut()
+        .expect("authoring");
     authoring.terrain.set(CellCoord::new(10, 10), 1);
     data
 }
@@ -1120,7 +1126,7 @@ fn shapes_between_extreme_cells_are_refused() {
 fn entering_tile_edit_mode_over_the_remote_reports_finished() {
     let (mut app, _dir) = project_app();
     let mut data = grass_patch();
-    data.layers.extend(tile_layer(&[]).layers);
+    data.layers.insert(1, LayerData::empty(LayerKind::Tile));
     let map = spawn_map(
         &mut app,
         vec![ground_terrain(), layer(TilemapLayerKind::Tile, default())],
