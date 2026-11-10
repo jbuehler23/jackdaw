@@ -1390,6 +1390,7 @@ fn discard_tilemap_edits(world: &mut World, tab: usize) {
 /// since they were read or written, or whose file is missing. Maps of other
 /// documents (inherited from a prefab, say) are written by their own saves.
 ///
+/// Cells of layers the map no longer lists are left out, with a warning.
 /// An invalid path and a quarantined key are skipped with a warning and never
 /// fail the save; a quarantined file moving with a Save As is copied as it is.
 fn encode_tilemap_sidecars(
@@ -1443,13 +1444,31 @@ fn encode_tilemap_sidecars(
         let Some(data) = store.get(source).filter(|_| !unchanged) else {
             continue;
         };
+        let listed: BTreeSet<u32> = (world.get::<Tilemap>(map.entity))
+            .map(|tilemap| tilemap.layers.iter().map(|layer| layer.id).collect())
+            .unwrap_or_default();
+        let unlisted: Vec<u32> = (data.layers.keys())
+            .filter(|id| !listed.contains(id))
+            .copied()
+            .collect();
+        let bytes = if unlisted.is_empty() {
+            jackdaw_tilemap::encode(data)
+        } else {
+            warn!(
+                "Tilemap data {key:?} holds cells of layers {unlisted:?} its map no longer \
+                 lists; the save leaves them out"
+            );
+            let mut kept = data.clone();
+            kept.layers.retain(|id, _| listed.contains(id));
+            jackdaw_tilemap::encode(&kept)
+        };
         renames.encoded.push(EncodedMap {
             revision: store.key_revision(&key),
             key,
             file: full.clone(),
             renamed,
         });
-        writes.push((full, jackdaw_tilemap::encode(data)));
+        writes.push((full, bytes));
     }
     writes
 }

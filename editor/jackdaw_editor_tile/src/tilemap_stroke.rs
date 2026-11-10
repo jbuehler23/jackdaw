@@ -519,12 +519,14 @@ fn set_cells(world: &mut World, params: &OperatorParameters) -> Result<String, S
     Ok(format!("{changed} cells set on layer `{}`", layer.name))
 }
 
-/// The index of the layer `named` names: by its name, by `#` and its id, or
-/// by its index from 0 at the bottom.
+/// The index of the layer `named` names: by `#` and its id, by its name, or
+/// by its index from 0 at the bottom. The id comes first, so a layer named
+/// like another's id cannot take its place.
 pub(crate) fn layer_named(tilemap: &Tilemap, named: &str) -> Result<usize, String> {
-    let by_id = || (named.strip_prefix('#')?.parse().ok()).and_then(|id| tilemap.layer_index(id));
-    (tilemap.layers.iter().position(|l| l.name == named))
-        .or_else(by_id)
+    let by_id = (named.strip_prefix('#').and_then(|id| id.parse().ok()))
+        .and_then(|id| tilemap.layer_index(id));
+    by_id
+        .or_else(|| tilemap.layers.iter().position(|l| l.name == named))
         .or_else(|| named.parse().ok().filter(|i| *i < tilemap.layers.len()))
         .ok_or_else(|| format!("the map has no layer `{named}`"))
 }

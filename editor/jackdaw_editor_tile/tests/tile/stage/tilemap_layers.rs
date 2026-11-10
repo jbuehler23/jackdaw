@@ -736,3 +736,46 @@ fn a_layer_repeating_another_layers_id_gets_a_fresh_one() {
         "the cells stay with the first"
     );
 }
+
+#[test]
+fn a_layer_named_like_another_layers_id_does_not_take_its_place() {
+    let (mut app, _dir, _root, map) = app_with_map();
+    add_tile_layer(&mut app, map, "Props");
+    let props = tilemap(&app, map).layers[1].id;
+    assert_eq!(
+        set(&mut app, map, 0, "name", &format!("#{props}")),
+        OperatorResult::Finished
+    );
+    let result = call(
+        &mut app,
+        "tilemap.layer.remove",
+        &[
+            ("entity", PropertyValue::Entity(map)),
+            ("layer", text(&format!("#{props}"))),
+        ],
+    );
+    assert_eq!(result, OperatorResult::Finished, "{}", warnings(&app));
+    let layers = tilemap(&app, map).layers;
+    assert_eq!(layers.len(), 1);
+    assert_ne!(layers[0].id, props, "the layer with that id went");
+}
+
+#[test]
+fn a_save_leaves_out_the_cells_of_layers_the_map_no_longer_lists() {
+    let (mut app, dir, _root, map) = app_with_map();
+    add_tile_layer(&mut app, map, "Props");
+    paint(&mut app, map, "0", "terrain", "2");
+    paint(&mut app, map, "Props", "tile", "0:3");
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("a tilemap")
+        .layers
+        .truncate(1);
+    settle(&mut app);
+    let kept = tilemap(&app, map).layers[0].id;
+    save_as(&mut app, &dir.path().join("farm.bsn").to_string_lossy());
+    let key = key_of(&mut app, map);
+    let file = std::fs::read(dir.path().join(&key)).expect("the sidecar");
+    let saved = jackdaw_tilemap::decode(&file).expect("a sidecar");
+    assert_eq!(saved.layers.keys().copied().collect::<Vec<_>>(), [kept]);
+}

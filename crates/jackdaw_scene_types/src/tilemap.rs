@@ -48,11 +48,17 @@ impl Tilemap {
 
     /// A layer id no layer of the map holds or held, advancing the counter.
     /// Ids past the counter, as a hand-edited map may hold, are skipped too.
+    /// Once the counter can go no further, the lowest id no layer holds.
     pub fn mint_layer_id(&mut self) -> u32 {
-        let past_held = (self.layers.iter()).map(|layer| layer.id.saturating_add(1));
-        let id = past_held.fold(self.next_layer_id, u32::max);
-        self.next_layer_id = id.saturating_add(1);
-        id
+        let past_held = (self.layers.iter()).map(|layer| u64::from(layer.id) + 1);
+        let next = past_held.fold(u64::from(self.next_layer_id), u64::max);
+        if let Ok(id) = u32::try_from(next) {
+            self.next_layer_id = id.saturating_add(1);
+            return id;
+        }
+        (0..=u32::MAX)
+            .find(|id| !self.layers.iter().any(|layer| layer.id == *id))
+            .unwrap_or_default()
     }
 
     /// Gives a fresh id to every layer whose id an earlier layer holds.
@@ -146,6 +152,19 @@ mod tests {
         let ids: Vec<u32> = map.layers.iter().map(|l| l.id).collect();
         assert_eq!(ids, [0, 4, 3, 5]);
         assert_eq!(map.layer_index(5), Some(3));
+        assert!(!map.dedup_layer_ids());
+    }
+
+    #[test]
+    fn an_exhausted_counter_mints_the_lowest_unused_id() {
+        let mut map = Tilemap {
+            layers: vec![layer(u32::MAX), layer(u32::MAX), layer(0), layer(u32::MAX)],
+            next_layer_id: u32::MAX,
+            ..Default::default()
+        };
+        assert!(map.dedup_layer_ids());
+        let ids: Vec<u32> = map.layers.iter().map(|l| l.id).collect();
+        assert_eq!(ids, [u32::MAX, 1, 0, 2]);
         assert!(!map.dedup_layer_ids());
     }
 }
