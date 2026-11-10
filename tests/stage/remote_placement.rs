@@ -673,6 +673,7 @@ fn source_written_from(app: &mut App, tmp: &tempfile::TempDir, scene: &str) -> S
     );
     let saved = run_op_clause_as_user(app.world_mut(), "scene.save").expect("the save dispatched");
     assert_eq!(saved, OperatorResult::Finished);
+    jackdaw::scene_io::wait_for_saves(app.world_mut());
     app.update();
 
     let text = std::fs::read_to_string(&file).expect("the scene was written");

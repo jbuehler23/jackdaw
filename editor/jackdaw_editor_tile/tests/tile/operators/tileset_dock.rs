@@ -1061,12 +1061,14 @@ fn a_set_removed_by_the_operator_leaves_the_dock_on_the_set_it_had() {
     assert_eq!(view(&app).active.as_deref(), Some("Sand"), "undo keeps it");
 }
 
+#[cfg(unix)]
 fn edit_view(app: &mut App, change: impl FnOnce(&mut DockView)) {
     let mut views = app.world_mut().resource_mut::<TilesetDockViews>();
     change(views.0.get_mut(FILE).expect("a view"));
 }
 
 #[test]
+#[cfg(unix)]
 fn removing_a_set_clears_its_view_state_only_when_it_goes() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);

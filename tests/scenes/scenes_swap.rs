@@ -2919,6 +2919,7 @@ fn a_copy_of_a_quarantined_map_gets_no_cells() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_scene_name_a_data_path_refuses_mints_a_clean_name() {
     let tmp = tempfile::tempdir().expect("temp directory");
     save_tilemap_scene(&tmp.path().join("level:1.bsn"), painted_map(2, 1));
