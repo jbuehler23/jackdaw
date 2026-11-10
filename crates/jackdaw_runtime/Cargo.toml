@@ -72,6 +72,7 @@ render = [
     "bevy/bevy_gltf",
     "bevy/bevy_render",
     "bevy/bevy_image",
+    "bevy/jpeg",
     "jackdaw_geometry/render",
     "jackdaw_scene_types/render",
     # `bevy_feathers` depends on `bevy_render` outright, so the theme markers
