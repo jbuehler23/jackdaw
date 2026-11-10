@@ -716,25 +716,29 @@ fn two_clicks_far_apart_in_busy_frames_do_not_open_the_editor() {
 }
 
 #[test]
-fn two_clicks_far_apart_on_a_tile_do_not_open_the_editor() {
+fn a_double_click_held_up_between_frames_still_opens_the_editor() {
     let (mut app, dir) = handmade();
     let root = colliding(&mut app);
+    let before = on_disk(&dir);
     let at = tile_center(&mut app, root, 1);
     input(
         &mut app,
         &format!("input.pointer x={} y={} action=move", at.x, at.y),
     );
+    let first = tile_entity(&mut app, root, 1);
     buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
     buttons_in_one_frame(&mut app, &[ButtonState::Released]);
-    settle(&mut app);
     std::thread::sleep(std::time::Duration::from_millis(700));
+    app.update();
+    assert_ne!(
+        tile_entity(&mut app, root, 1),
+        first,
+        "the paint rebuilt the sheet"
+    );
     buttons_in_one_frame(&mut app, &[ButtonState::Pressed]);
     buttons_in_one_frame(&mut app, &[ButtonState::Released]);
     settle(&mut app);
-    assert!(editors(&mut app, root).is_empty());
-    assert_eq!(
-        collision_of(&on_disk(&dir), 1).len(),
-        1,
-        "the tile stays painted"
-    );
+    settle(&mut app);
+    assert_eq!(editors(&mut app, root).len(), 1, "the editor opens");
+    assert_eq!(on_disk(&dir), before, "the first click is taken back");
 }

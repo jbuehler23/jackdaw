@@ -17,8 +17,7 @@ pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<SheetStroke>()
         .init_resource::<LastPress>()
         .init_resource::<FrameTime>()
-        .add_systems(First, start_frame)
-        .add_systems(Last, end_frame)
+        .add_systems(First, time_frame)
         .add_observer(on_press)
         .add_observer(on_move)
         .add_observer(
@@ -119,8 +118,8 @@ fn cancel_on_interruption(
 
 /// Longest gap between the presses of a double click, in seconds.
 const DOUBLE_CLICK: f64 = 0.5;
-/// Seconds of work a frame may take before the rest of it stops counting
-/// toward the gap between two presses.
+/// Seconds from one frame to the next before the rest stops counting toward
+/// the gap between two presses.
 const SLOW_FRAME: f64 = 0.1;
 
 /// The last left press that started a stroke, to tell a double click.
@@ -132,29 +131,30 @@ struct Press {
     root: Entity,
     sheet: u32,
     tile: u32,
-    at: Instant,
-    /// [`FrameTime::slow`] as the press came.
+    pressed: Instant,
+    /// When the stroke of the press was applied, or the press when it
+    /// painted nothing; the gap to a second press counts from here.
+    settled: Instant,
+    /// [`FrameTime::slow`] at `settled`.
     slow: f64,
     /// How many undo entries there were before the press painted.
     depth: usize,
 }
 
-/// How long frames take, so a frame kept busy by the paint of a first click
-/// does not hold its second click back past a double click.
+/// How long frames take from one start to the next, so a stall after a
+/// first click, in its paint, the rebuild or drawing it, does not hold its
+/// second click back past a double click.
 #[derive(Resource, Default)]
 struct FrameTime {
     started: Option<Instant>,
-    /// Seconds frames took past [`SLOW_FRAME`], summed.
+    /// Seconds between frame starts past [`SLOW_FRAME`], summed.
     slow: f64,
 }
 
-fn start_frame(mut frames: ResMut<FrameTime>) {
-    frames.started = Some(Instant::now());
-}
-
-fn end_frame(mut frames: ResMut<FrameTime>) {
-    if let Some(started) = frames.started.take() {
-        frames.slow += (started.elapsed().as_secs_f64() - SLOW_FRAME).max(0.0);
+fn time_frame(mut frames: ResMut<FrameTime>) {
+    let now = Instant::now();
+    if let Some(started) = frames.started.replace(now) {
+        frames.slow += (now.duration_since(started).as_secs_f64() - SLOW_FRAME).max(0.0);
     }
 }
 
@@ -169,9 +169,10 @@ fn double_click(
 ) -> Option<usize> {
     let last = world.resource_mut::<LastPress>().0.take()?;
     let slow = world.resource::<FrameTime>().slow - last.slow;
-    let gap = last.at.elapsed().as_secs_f64() - slow;
+    let since_press = last.pressed.elapsed().as_secs_f64();
+    let gap = last.settled.elapsed().as_secs_f64() - slow;
     debug!(
-        "press on sheet tile {sheet}:{tile}, {gap:.3} s after one on {}:{} ({slow:.3} s of slow frames left out)",
+        "press on sheet tile {sheet}:{tile}, {since_press:.3} s after one on {}:{}, {gap:.3} s after it was applied less {slow:.3} s of slow frames",
         last.sheet, last.tile
     );
     let same = (last.root, last.sheet, last.tile) == (root, sheet, tile);
@@ -270,12 +271,14 @@ fn begin(world: &mut World, hit: TileHit, button: PointerButton) {
         double_click: double,
     };
     let paint = starter(world, &start);
+    let now = Instant::now();
     let first =
         (button == PointerButton::Primary && double.is_none() && paint.is_some()).then(|| Press {
             root,
             sheet,
             tile,
-            at: Instant::now(),
+            pressed: now,
+            settled: now,
             slow: world.resource::<FrameTime>().slow,
             depth,
         });
@@ -325,6 +328,14 @@ fn finish(world: &mut World, button: PointerButton) {
     };
     let call = stroke.paint.apply(&stroke.info);
     let Active { info, paint, .. } = stroke;
+    let painted = call.is_some();
     dispatch(world, info.root, &info.path, &info.tileset, call);
     paint.finished(world, &info);
+    if painted {
+        let slow = world.resource::<FrameTime>().slow;
+        if let Some(press) = world.resource_mut::<LastPress>().0.as_mut() {
+            press.settled = Instant::now();
+            press.slow = slow;
+        }
+    }
 }
