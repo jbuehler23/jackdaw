@@ -2,11 +2,12 @@
 //!
 //! Jackdaw's main branch tracks Bevy's: the bevy crates may come from
 //! [`BEVY_GIT`] on its `main` branch, spelled the same way everywhere, and the
-//! lockfiles pin that branch to one commit. No other manifest entry in the
-//! repository, `integrations/` included, may take a dependency from git or
-//! patch one in, and no module may add one to a game. An integration whose
-//! upstream has no release for the current Bevy is kept and marked unavailable
-//! instead.
+//! lockfiles pin that branch to one commit. The only other git sources are the
+//! [`FORKS`] of crates with no release for Bevy main, each on its `bevy-main`
+//! branch. No other manifest entry in the repository, `integrations/`
+//! included, may take a dependency from git or patch one in, and no module may
+//! add one to a game. An integration whose upstream has no release for the
+//! current Bevy is kept and marked unavailable instead.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,6 +19,47 @@ pub const BEVY_GIT: &str = "https://github.com/bevyengine/bevy";
 
 /// The branch of [`BEVY_GIT`] the bevy crates track.
 pub const BEVY_BRANCH: &str = "main";
+
+/// A fork of a crate with no release for Bevy main.
+pub struct Fork {
+    /// The repository.
+    pub git: &'static str,
+    /// The branch that follows Bevy main.
+    pub branch: &'static str,
+    /// The crates taken from it.
+    pub crates: &'static [&'static str],
+}
+
+/// The forks a dependency may come from by git besides [`BEVY_GIT`].
+pub const FORKS: [Fork; 4] = [
+    Fork {
+        git: "https://github.com/jbuehler23/avian",
+        branch: "bevy-main",
+        crates: &["avian2d", "avian3d", "avian_derive"],
+    },
+    Fork {
+        git: "https://github.com/jbuehler23/bevy_heavy",
+        branch: "bevy-main",
+        crates: &["bevy_heavy"],
+    },
+    Fork {
+        git: "https://github.com/jbuehler23/bevy_transform_interpolation",
+        branch: "bevy-main",
+        crates: &["bevy_transform_interpolation"],
+    },
+    Fork {
+        git: "https://github.com/jbuehler23/glam_matrix_extras",
+        branch: "bevy-main",
+        crates: &["glam_matrix_extras"],
+    },
+];
+
+/// Whether the crate `name` from `git` on `branch` is one of the [`FORKS`].
+pub fn is_fork(name: &str, git: Option<&str>, branch: Option<&str>) -> bool {
+    FORKS.iter().any(|fork| {
+        Some(fork.git) == git && Some(fork.branch) == branch && fork.crates.contains(&name)
+    })
+}
 
 /// Check every tracked `Cargo.toml`, every tracked `Cargo.lock` and the
 /// module catalog.
@@ -71,7 +113,11 @@ pub fn cmd() -> bool {
         }
     }
     for module in ModuleCatalog::builtin().modules() {
-        for krate in module.crates.iter().filter(|krate| krate.git.is_some()) {
+        for krate in module.crates.iter().filter(|krate| {
+            krate.git.is_some()
+                && (krate.rev.is_some()
+                    || !is_fork(&krate.name, krate.git.as_deref(), krate.branch.as_deref()))
+        }) {
             eprintln!("module {} adds {} to games from git", module.id, krate.name);
             ok = false;
         }
@@ -79,7 +125,7 @@ pub fn cmd() -> bool {
     if ok {
         let at = pinned.map_or_else(String::new, |(commit, _)| format!(" at {commit}"));
         eprintln!(
-            "{} manifests and the module catalog take nothing from git but bevy {BEVY_BRANCH}{at}",
+            "{} manifests and the module catalog take nothing from git but bevy {BEVY_BRANCH}{at} and the bevy-main forks",
             manifests.len()
         );
     }
@@ -147,7 +193,7 @@ pub fn git_sources(manifest: &toml::Table) -> Vec<String> {
         .flatten()
         .filter_map(|(name, spec)| {
             let spec = spec.as_table().filter(|spec| spec.contains_key("git"))?;
-            (!is_tracked_bevy(name, spec)).then(|| {
+            (!is_tracked_bevy(name, spec) && !is_tracked_fork(name, spec)).then(|| {
                 if name.starts_with("bevy") && spec.get("git").and_then(toml::Value::as_str) == Some(BEVY_GIT) {
                     format!("{name} must track bevy as {{ git = \"{BEVY_GIT}\", branch = \"{BEVY_BRANCH}\" }}")
                 } else {
@@ -181,9 +227,19 @@ fn is_tracked_bevy(name: &str, spec: &toml::Table) -> bool {
             .any(|key| spec.contains_key(*key))
 }
 
+/// Whether `spec` takes the crate `name` from one of the [`FORKS`] on its
+/// branch, with nothing else pinning or renaming it.
+fn is_tracked_fork(name: &str, spec: &toml::Table) -> bool {
+    let key = |key: &str| spec.get(key).and_then(toml::Value::as_str);
+    is_fork(name, key("git"), key("branch"))
+        && !["rev", "tag", "package"]
+            .iter()
+            .any(|key| spec.contains_key(*key))
+}
+
 /// The commit a lockfile pins the bevy crates to, `None` when it has no
-/// bevy from git, or what is wrong: another git source, or bevy crates
-/// split across commits or branches.
+/// bevy from git, or what is wrong: a git source other than bevy and the
+/// [`FORKS`], or bevy crates split across commits or branches.
 pub fn bevy_commit(lockfile: &toml::Table) -> Result<Option<String>, String> {
     let expected = format!("git+{BEVY_GIT}?branch={BEVY_BRANCH}#");
     let mut commit: Option<String> = None;
@@ -205,6 +261,14 @@ pub fn bevy_commit(lockfile: &toml::Table) -> Result<Option<String>, String> {
             .and_then(toml::Value::as_str)
             .unwrap_or_default();
         let Some(rev) = source.strip_prefix(&expected) else {
+            let from_fork = source
+                .strip_prefix("git+")
+                .and_then(|source| source.split_once('#'))
+                .and_then(|(url, _)| url.split_once("?branch="))
+                .is_some_and(|(git, branch)| is_fork(name, Some(git), Some(branch)));
+            if from_fork {
+                continue;
+            }
             return Err(format!("{name} resolves from {source}"));
         };
         match &commit {
@@ -273,6 +337,31 @@ mod tests {
     }
 
     #[test]
+    fn the_bevy_main_forks_pass_on_their_branch_only() {
+        let manifest: toml::Table = toml::from_str(
+            r#"
+            [dependencies]
+            avian2d = { git = "https://github.com/jbuehler23/avian", branch = "bevy-main" }
+            avian3d = { version = "0.8", git = "https://github.com/jbuehler23/avian", branch = "bevy-main", features = ["3d"] }
+
+            [dev-dependencies]
+            bevy_heavy = { git = "https://github.com/jbuehler23/bevy_heavy", branch = "main" }
+            avian_derive = { git = "https://github.com/jbuehler23/avian", rev = "abc" }
+            parry3d = { git = "https://github.com/jbuehler23/avian", branch = "bevy-main" }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            git_sources(&manifest),
+            [
+                "avian_derive comes from git",
+                "bevy_heavy comes from git",
+                "parry3d comes from git",
+            ]
+        );
+    }
+
+    #[test]
     fn bevy_pinned_any_other_way_is_rejected() {
         let manifest: toml::Table = toml::from_str(
             r#"
@@ -323,6 +412,25 @@ mod tests {
 
         let other = lockfile(&[("forked", "git+https://example.com/forked#cccc")]);
         assert!(bevy_commit(&other).is_err());
+
+        let forks = lockfile(&[
+            ("bevy", &format!("{main}aaaa")),
+            (
+                "avian3d",
+                "git+https://github.com/jbuehler23/avian?branch=bevy-main#dddd",
+            ),
+            (
+                "bevy_heavy",
+                "git+https://github.com/jbuehler23/bevy_heavy?branch=bevy-main#eeee",
+            ),
+        ]);
+        assert_eq!(bevy_commit(&forks), Ok(Some("aaaa".to_string())));
+
+        let wrong_branch = lockfile(&[(
+            "avian3d",
+            "git+https://github.com/jbuehler23/avian?branch=main#dddd",
+        )]);
+        assert!(bevy_commit(&wrong_branch).is_err());
 
         let registry = lockfile(&[(
             "glam",
