@@ -76,7 +76,7 @@ jobs:
           # Moving Bevy re-resolves gpu-allocator's `windows` range onto the
           # 0.61 that ipc-channel needs, which breaks wgpu-hal's dx12 backend
           # on 0.62. Updating gpu-allocator in place puts it back on 0.62.
-          for workspace in . integrations/navmesh; do
+          for workspace in . integrations/navmesh integrations/physics; do
             (
               cd "$workspace"
               cargo update --package bevy --precise "$rev"
@@ -90,7 +90,7 @@ jobs:
           else
             echo "known_good=false" >> "$GITHUB_OUTPUT"
           fi
-          git diff --stat -- Cargo.lock integrations/navmesh/Cargo.lock
+          git diff --stat -- Cargo.lock integrations/navmesh/Cargo.lock integrations/physics/Cargo.lock
 
       - name: Install cargo binstall
         uses: cargo-bins/cargo-binstall@main
@@ -108,6 +108,7 @@ jobs:
           path: |
             Cargo.lock
             integrations/navmesh/Cargo.lock
+            integrations/physics/Cargo.lock
           retention-days: 7
 
   # The fast and integration tiers, as CI runs them on a pull request.

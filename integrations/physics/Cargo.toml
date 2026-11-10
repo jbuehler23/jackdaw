@@ -18,7 +18,8 @@ repository = "https://github.com/jbuehler23/jackdaw"
 # `bevy-main` branch of a fork that takes Bevy from git main. The lockfile
 # pins that branch to one commit. When the editor moves to a newer Bevy
 # commit, move the fork first (see its BEVY_MAIN.md), then run
-# `cargo update -p bevy --precise <commit>` and `cargo update -p avian3d`
+# `cargo update -p bevy --precise <commit>`, then `cargo update -p avian3d
+# -p bevy_heavy -p bevy_transform_interpolation -p glam_matrix_extras`
 # here, so this lockfile and the editor's pin the same Bevy.
 avian2d = { version = "0.8", git = "https://github.com/jbuehler23/avian", branch = "bevy-main", features = [
     "2d",
