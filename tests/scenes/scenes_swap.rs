@@ -2567,6 +2567,7 @@ fn saving_keeps_a_tile_sidecar_that_failed_to_load() {
 }
 
 #[test]
+#[cfg(unix)]
 fn saving_keeps_a_tile_sidecar_that_cannot_be_read() {
     use std::os::unix::fs::PermissionsExt as _;
     let tmp = tempfile::tempdir().expect("temp directory");
@@ -2832,16 +2833,17 @@ fn save_as_keeps_a_quarantined_map_and_its_file() {
 #[test]
 fn a_map_pasted_from_another_scene_takes_a_copy_of_its_cells() {
     let tmp = tempfile::tempdir().expect("temp directory");
-    let a = tmp.path().join("a.bsn");
+    let root = dunce::canonicalize(tmp.path()).expect("the temp directory resolves");
+    let a = root.join("a.bsn");
     save_tilemap_scene(&a, painted_map(4, 1));
-    let a_sidecar = tmp.path().join("a.tilemap-0.jdtiles");
+    let a_sidecar = root.join("a.tilemap-0.jdtiles");
     let a_bytes = std::fs::read(&a_sidecar).unwrap();
 
     let mut app = tilemap_app(1);
     jackdaw::scenes::operators::scene_open_system(app.world_mut(), &a);
     select(&mut app, "map");
     jackdaw::entity_ops::copy_selected_entities(app.world_mut());
-    open_new_scene(&mut app, &tmp.path().join("b.bsn"));
+    open_new_scene(&mut app, &root.join("b.bsn"));
     jackdaw::entity_ops::paste_entities_after_selection(app.world_mut());
     ensure(&mut app);
 
@@ -2849,7 +2851,7 @@ fn a_map_pasted_from_another_scene_takes_a_copy_of_its_cells() {
     assert_eq!(pasted.len(), 1);
     assert_eq!(pasted[0].data_path, "b.tilemap-0.jdtiles");
     let active = app.world().resource::<jackdaw::scenes::Scenes>().active;
-    bind(&mut app, active, &tmp.path().join("b.bsn"));
+    bind(&mut app, active, &root.join("b.bsn"));
     save_all(&mut app);
     assert_eq!(
         std::fs::read(&a_sidecar).unwrap(),
@@ -2857,7 +2859,7 @@ fn a_map_pasted_from_another_scene_takes_a_copy_of_its_cells() {
         "a's file is untouched"
     );
     assert_eq!(
-        decoded(&tmp.path().join("b.tilemap-0.jdtiles")),
+        decoded(&root.join("b.tilemap-0.jdtiles")),
         painted_map(4, 1)
     );
 }
@@ -2917,6 +2919,7 @@ fn a_copy_of_a_quarantined_map_gets_no_cells() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_scene_name_a_data_path_refuses_mints_a_clean_name() {
     let tmp = tempfile::tempdir().expect("temp directory");
     save_tilemap_scene(&tmp.path().join("level:1.bsn"), painted_map(2, 1));

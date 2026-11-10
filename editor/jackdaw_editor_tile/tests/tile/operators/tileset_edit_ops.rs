@@ -775,6 +775,7 @@ fn set_bits_takes_nine_peers_or_one() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_failed_write_changes_nothing_and_mints_no_history() {
     use std::os::unix::fs::PermissionsExt as _;
 
