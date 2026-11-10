@@ -220,6 +220,9 @@ pub struct TilesetCollision {
     pub layer: u32,
     /// Overlaps without blocking.
     pub trigger: bool,
+    /// Blocks only what comes down onto it from above.
+    #[reflect(default)]
+    pub one_way: bool,
     pub preset: CollisionPreset,
     /// Counter-clockwise outer rings in tile fractions, y up, from the tile's
     /// bottom-left.
@@ -241,16 +244,19 @@ pub enum CollisionPreset {
     SlopeDown,
     /// The tile's opaque pixels.
     Traced,
+    /// Polygons drawn point by point.
+    Custom,
 }
 
 impl CollisionPreset {
-    pub const ALL: [CollisionPreset; 6] = [
+    pub const ALL: [CollisionPreset; 7] = [
         CollisionPreset::Solid,
         CollisionPreset::TopHalf,
         CollisionPreset::BottomHalf,
         CollisionPreset::SlopeUp,
         CollisionPreset::SlopeDown,
         CollisionPreset::Traced,
+        CollisionPreset::Custom,
     ];
 
     /// The name operators and text take, such as `top_half`.
@@ -262,10 +268,15 @@ impl CollisionPreset {
         ShapePreset::from_name(name).map(Self::from)
     }
 
-    /// The preset's polygons; `None` for a traced shape, which depends on
-    /// the art.
+    /// The preset's polygons; `None` for a traced or custom shape, which
+    /// depends on the art or the hand.
     pub fn polygons(self) -> Option<Vec<Vec<Vec2>>> {
         ShapePreset::from(self).polygons()
+    }
+
+    /// The preset that draws `polygons`; custom for any other shape.
+    pub fn of_polygons(polygons: &[Vec<Vec2>]) -> Self {
+        ShapePreset::of_polygons(polygons).into()
     }
 }
 
@@ -771,6 +782,7 @@ fn setup_tile(tile: &TilesetTile) -> SetupTile {
         .map(|c| TileCollision {
             layer: c.layer,
             trigger: c.trigger,
+            one_way: c.one_way,
             preset: c.preset.into(),
             polygons: c.polygons.clone(),
         })
@@ -794,6 +806,7 @@ fn tileset_tile(sheet: u32, tile: u32, from: &SetupTile) -> TilesetTile {
         .map(|c| TilesetCollision {
             layer: c.layer,
             trigger: c.trigger,
+            one_way: c.one_way,
             preset: c.preset.into(),
             polygons: c.polygons.clone(),
         })
@@ -819,6 +832,7 @@ impl From<CollisionPreset> for ShapePreset {
             CollisionPreset::SlopeUp => ShapePreset::SlopeUp,
             CollisionPreset::SlopeDown => ShapePreset::SlopeDown,
             CollisionPreset::Traced => ShapePreset::Traced,
+            CollisionPreset::Custom => ShapePreset::Custom,
         }
     }
 }
@@ -832,6 +846,7 @@ impl From<ShapePreset> for CollisionPreset {
             ShapePreset::SlopeUp => CollisionPreset::SlopeUp,
             ShapePreset::SlopeDown => CollisionPreset::SlopeDown,
             ShapePreset::Traced => CollisionPreset::Traced,
+            ShapePreset::Custom => CollisionPreset::Custom,
         }
     }
 }

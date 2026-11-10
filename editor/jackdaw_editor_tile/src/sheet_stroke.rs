@@ -2,8 +2,10 @@ use bevy::picking::events::{
     PointerCancel, PointerDragEnd, PointerMove, PointerPress, PointerRelease,
 };
 use bevy::picking::pointer::{PointerButton, PointerId, PointerPressState};
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::window::WindowFocused;
+use jackdaw_commands::CommandHistory;
 use jackdaw_tileset::Tileset;
 
 use crate::tileset_dock::{
@@ -13,6 +15,9 @@ use crate::tileset_modes::TilesetModes;
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<SheetStroke>()
+        .init_resource::<LastPress>()
+        .init_resource::<FrameTime>()
+        .add_systems(First, time_frame)
         .add_observer(on_press)
         .add_observer(on_move)
         .add_observer(
@@ -38,7 +43,11 @@ pub struct StrokeStart<'a> {
     pub tileset: &'a Tileset,
     pub view: &'a DockView,
     pub sheet: u32,
+    pub tile: u32,
     pub button: PointerButton,
+    /// For a left press that doubles the last one on the same tile, the
+    /// undo depth before that first press.
+    pub double_click: Option<usize>,
 }
 
 /// The dock, sheet and button of a stroke under way, and the tileset as the
@@ -61,10 +70,17 @@ pub trait SheetPaint: Send + Sync + 'static {
     fn paint(&mut self, world: &mut World, stroke: &StrokeInfo, frame: Entity, points: &[Vec2]);
     /// The call that applies the stroke; `None` when it painted nothing.
     fn apply(&self, stroke: &StrokeInfo) -> Option<DockCall>;
+    /// Runs once the stroke is applied.
+    fn finished(&self, _world: &mut World, _stroke: &StrokeInfo) {}
 }
 
 /// Starts a mode's stroke; `None` leaves the press alone.
 pub type StrokeStarter = fn(&mut World, &StrokeStart) -> Option<Box<dyn SheetPaint>>;
+
+/// Whether a stroke is under way.
+pub(crate) fn stroke_active(world: &World) -> bool {
+    world.resource::<SheetStroke>().0.is_some()
+}
 
 /// The stroke a pointer is painting on a sheet, applied when it lifts.
 #[derive(Resource, Default)]
@@ -98,6 +114,73 @@ fn cancel_on_interruption(
             }
         });
     }
+}
+
+/// Longest gap between the presses of a double click, in seconds.
+const DOUBLE_CLICK: f64 = 0.5;
+/// Seconds from one frame to the next before the rest stops counting toward
+/// the gap between two presses.
+const SLOW_FRAME: f64 = 0.1;
+
+/// The last left press that started a stroke, to tell a double click.
+#[derive(Resource, Default)]
+struct LastPress(Option<Press>);
+
+#[derive(Clone, Copy, Debug)]
+struct Press {
+    root: Entity,
+    sheet: u32,
+    tile: u32,
+    pressed: Instant,
+    /// When the stroke of the press was applied, or the press when it
+    /// painted nothing; the gap to a second press counts from here.
+    settled: Instant,
+    /// [`FrameTime::slow`] at `settled`.
+    slow: f64,
+    /// How many undo entries there were before the press painted.
+    depth: usize,
+}
+
+/// How long frames take from one start to the next, so a stall after a
+/// first click, in its paint, the rebuild or drawing it, does not hold its
+/// second click back past a double click.
+#[derive(Resource, Default)]
+struct FrameTime {
+    started: Option<Instant>,
+    /// Seconds between frame starts past [`SLOW_FRAME`], summed.
+    slow: f64,
+}
+
+fn time_frame(mut frames: ResMut<FrameTime>) {
+    let now = Instant::now();
+    if let Some(started) = frames.started.replace(now) {
+        frames.slow += (now.duration_since(started).as_secs_f64() - SLOW_FRAME).max(0.0);
+    }
+}
+
+/// The undo depth before the last press, when a press of `button` on sheet
+/// tile `tile` doubles it.
+fn double_click(
+    world: &mut World,
+    root: Entity,
+    sheet: u32,
+    tile: u32,
+    button: PointerButton,
+) -> Option<usize> {
+    let last = world.resource_mut::<LastPress>().0.take()?;
+    let slow = world.resource::<FrameTime>().slow - last.slow;
+    let since_press = last.pressed.elapsed().as_secs_f64();
+    let gap = last.settled.elapsed().as_secs_f64() - slow;
+    debug!(
+        "press on sheet tile {sheet}:{tile}, {since_press:.3} s after one on {}:{}, {gap:.3} s after it was applied less {slow:.3} s of slow frames",
+        last.sheet, last.tile
+    );
+    let same = (last.root, last.sheet, last.tile) == (root, sheet, tile);
+    let double = button == PointerButton::Primary && same && gap < DOUBLE_CLICK;
+    if double {
+        debug!("double click on sheet tile {sheet}:{tile}");
+    }
+    double.then_some(last.depth)
 }
 
 /// The dock, frame, sheet tile and point in it, from (0, 0) at its top left
@@ -175,15 +258,32 @@ fn begin(world: &mut World, hit: TileHit, button: PointerButton) {
     let Some((starter, (origin, size))) = starter.zip(tileset.sheet_rect(sheet, tile)) else {
         return;
     };
+    let depth = world.resource::<CommandHistory>().undo_stack.len();
+    let double = double_click(world, root, sheet, tile, button);
     let start = StrokeStart {
         root,
         path: &path,
         tileset: &tileset,
         view: &view,
         sheet,
+        tile,
         button,
+        double_click: double,
     };
-    let Some(paint) = starter(world, &start) else {
+    let paint = starter(world, &start);
+    let now = Instant::now();
+    let first =
+        (button == PointerButton::Primary && double.is_none() && paint.is_some()).then(|| Press {
+            root,
+            sheet,
+            tile,
+            pressed: now,
+            settled: now,
+            slow: world.resource::<FrameTime>().slow,
+            depth,
+        });
+    world.resource_mut::<LastPress>().0 = first;
+    let Some(paint) = paint else {
         return;
     };
     let info = StrokeInfo {
@@ -227,6 +327,15 @@ fn finish(world: &mut World, button: PointerButton) {
         return;
     };
     let call = stroke.paint.apply(&stroke.info);
-    let info = stroke.info;
+    let Active { info, paint, .. } = stroke;
+    let painted = call.is_some();
     dispatch(world, info.root, &info.path, &info.tileset, call);
+    paint.finished(world, &info);
+    if painted {
+        let slow = world.resource::<FrameTime>().slow;
+        if let Some(press) = world.resource_mut::<LastPress>().0.as_mut() {
+            press.settled = Instant::now();
+            press.slow = slow;
+        }
+    }
 }
