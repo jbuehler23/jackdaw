@@ -192,7 +192,11 @@ jobs:
         run: |
           set -euo pipefail
           previous=$(gh release list --repo "$REPO" --exclude-pre-releases --exclude-drafts --limit 20 \
-            --json tagName --jq '.[].tagName' | grep -vx "$GITHUB_REF_NAME" | grep '^v' | head -n 1)
+            --json tagName --jq '.[].tagName' | { grep -vx "$GITHUB_REF_NAME" || true; } | { grep '^v' || true; } | head -n 1)
+          if [ -z "$previous" ]; then
+            echo "::notice::no earlier stable release to upgrade from"
+            exit 0
+          fi
           echo "upgrading a project made by $previous"
           curl --proto '=https' --tlsv1.2 -fsSL \
             "https://github.com/$REPO/releases/download/$previous/install.sh" \
@@ -307,9 +311,6 @@ jobs:
       save_cache: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.save_cache == true) }}
       release: true
 
-  # The one-line installers, run against the archives this run built, served
-  # from a local web server in place of the release: a piped install
-  # configured by environment, an upgrade, a re-run and an uninstall, with
   # Each archive installed the way the launcher installs an editor: from a
   # signed index, here a throwaway one listing the archive by a file URL, so
   # the download, checksum and version check all run before anything ships.
@@ -361,17 +362,19 @@ jobs:
             url_dist="/$(cygpath -m "$dist")"
             url_work="/$(cygpath -m "$work")"
           fi
-          archive=$(ls "$dist"/jackdaw-${{ matrix.triple }}.*)
-          case "$archive" in
-            *.tar.zst) tar --zstd -xf "$archive" -C "$work/jd" ;;
-            *.zip) unzip -q "$archive" -d "$work/jd" ;;
+          archive="$dist/jackdaw-${{ matrix.triple }}.${{ matrix.archive }}"
+          case "${{ matrix.archive }}" in
+            tar.zst) tar --zstd -xf "$archive" -C "$work/jd" ;;
+            zip) 7z x -y -bd -o"$work/jd" "$archive" > /dev/null ;;
           esac
           jd="$work/jd/jackdaw-${{ matrix.triple }}/jd$exe"
           tool="target/debug/jackdaw-release-index$exe"
-          JACKDAW_INDEX_SIGNING_KEY=$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n\r')
+          # A PKCS#8 v1 Ed25519 key: its fixed DER prefix and 32 random bytes.
+          python=$(command -v python3 || command -v python)
+          JACKDAW_INDEX_SIGNING_KEY=$("$python" -c 'import base64, os; print(base64.b64encode(bytes.fromhex("302e020100300506032b657004220420") + os.urandom(32)).decode())')
           export JACKDAW_INDEX_SIGNING_KEY
           "$tool" add --index "$work/releases.json" --tag "v$version" --dist "$dist" \
-            --base-url "file://$url_dist" --bevy "$BEVY"
+            --base-url "file://$url_dist" --bevy "${BEVY:-main}"
           export JACKDAW_RELEASE_INDEX="file://$url_work/releases.json"
           JACKDAW_RELEASE_INDEX_KEY=$("$tool" public-key)
           export JACKDAW_RELEASE_INDEX_KEY
@@ -380,6 +383,9 @@ jobs:
           "$jd" editor install "$version"
           "$jd" editor verify "$version"
 
+  # The one-line installers, run against the archives this run built, served
+  # from a local web server in place of the release: a piped install
+  # configured by environment, an upgrade, a re-run and an uninstall, with
   # the commands checked from a new shell. Nothing waits for it.
   installers:
     name: Installer - ${{ matrix.triple }}
