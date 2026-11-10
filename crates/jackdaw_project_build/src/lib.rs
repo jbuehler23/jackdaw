@@ -77,7 +77,13 @@ pub const NIGHTLY: Option<&str> = option_env!("JACKDAW_NIGHTLY");
 
 /// The name this build goes by: its nightly, or else its version.
 pub fn build_name() -> &'static str {
-    NIGHTLY.unwrap_or(VERSION)
+    name_of(NIGHTLY, VERSION)
+}
+
+/// A nightly name left empty, as a release build's environment sets it,
+/// names no nightly.
+fn name_of<'a>(nightly: Option<&'a str>, version: &'a str) -> &'a str {
+    nightly.filter(|name| !name.is_empty()).unwrap_or(version)
 }
 
 /// What this build targets, for `--version` and messages: `0.20`, or
@@ -113,7 +119,14 @@ pub fn jackdaw_requirement_for(version: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::jackdaw_requirement_for;
+    use super::{jackdaw_requirement_for, name_of};
+
+    #[test]
+    fn a_build_without_a_nightly_name_goes_by_its_version() {
+        assert_eq!(name_of(None, "0.20.1"), "0.20.1");
+        assert_eq!(name_of(Some(""), "0.20.1"), "0.20.1");
+        assert_eq!(name_of(Some("nightly-2026-11-10"), "0.20.1"), "nightly-2026-11-10");
+    }
 
     #[test]
     fn a_stable_release_requests_its_minor_line() {

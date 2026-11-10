@@ -354,6 +354,27 @@ jobs:
           if [ "$missing" -ne 0 ]; then echo "staged bundle is incomplete"; exit 1; fi
           echo "bundle layout verified"
 
+      # The launcher installs an editor only when its `--version` names the
+      # release it was downloaded as.
+      - name: Verify the staged binaries report their version
+        if: ${{ !inputs.warm }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/jackdaw-${{ matrix.triple }}"
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+          expected="${{ inputs.nightly }}"
+          if [ -z "$expected" ]; then
+            expected=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          fi
+          for bin in jackdaw jd; do
+            line=$("$root/$bin$exe" --version | head -n 1)
+            case "$line" in
+              "$bin $expected "*) echo "$line" ;;
+              *) echo "::error::$bin --version printed '$line', expected $bin $expected"; exit 1 ;;
+            esac
+          done
+
       # Build an extension against the staged release SDK, the way an
       # installed user does, and have the staged editor load the module
       # extensions it ships. It runs from xtask, so the editor is not
