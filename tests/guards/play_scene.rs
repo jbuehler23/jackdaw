@@ -52,6 +52,10 @@ fn zone_file(tmp: &tempfile::TempDir) -> PathBuf {
     tmp.path().join("assets/zone.bsn")
 }
 
+fn is_zone_file(path: Option<&std::path::Path>, tmp: &tempfile::TempDir) -> bool {
+    path.and_then(|path| path.canonicalize().ok()) == zone_file(tmp).canonicalize().ok()
+}
+
 fn entity_named(app: &mut App, name: &str) -> Entity {
     app.world_mut()
         .query::<(Entity, &Name)>()
@@ -583,7 +587,7 @@ fn reopened_scene_with_a_material(app: &mut App, tmp: &tempfile::TempDir) -> (En
     let zone = scenes
         .tabs
         .iter()
-        .position(|tab| tab.path.as_deref() == Some(zone_file(tmp).as_path()))
+        .position(|tab| is_zone_file(tab.path.as_deref(), tmp))
         .expect("the scene's tab");
     jackdaw::scenes::operators::scene_close_system_unprompted(app.world_mut(), zone);
     app.update();
@@ -1444,7 +1448,7 @@ fn scene_with_every_kind_of_asset(app: &mut App, tmp: &tempfile::TempDir) {
         .resource::<Scenes>()
         .tabs
         .iter()
-        .position(|tab| tab.path.as_deref() == Some(zone_file(tmp).as_path()))
+        .position(|tab| is_zone_file(tab.path.as_deref(), tmp))
         .expect("the scene's tab");
     jackdaw::scenes::operators::scene_close_system_unprompted(app.world_mut(), zone);
     app.update();

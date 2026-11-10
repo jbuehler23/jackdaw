@@ -387,6 +387,7 @@ fn a_lock_survives_a_save_and_a_reload() {
     run_op_clause_as_user(app.world_mut(), "scene.save")
         .expect("scene.save dispatches")
         .assert_finished();
+    jackdaw::scene_io::wait_for_saves(app.world_mut());
     settle(&mut app);
     let saved = std::fs::read_to_string(&path).expect("the scene saved");
     assert!(
