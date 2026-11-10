@@ -2,6 +2,7 @@
 //! remote API the way a person would, and time each path.
 
 mod brp;
+mod editor;
 mod logs;
 mod preserve;
 mod report;
@@ -10,15 +11,16 @@ mod stats;
 mod system;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 
 use brp::{Brp, CallError, STALL_TIMEOUT, ms_since};
+use editor::{Editor, Launch};
 use preserve::Preserved;
 use report::{Report, Row};
 use scene::SceneShape;
@@ -34,6 +36,8 @@ const IDLE_SAMPLES: usize = 150;
 const DRAG_STEPS: u32 = 30;
 /// How long the editor must go without a stall to count as settled.
 const QUIET: Duration = Duration::from_secs(2);
+/// The quiet a save needs, since its write is followed by a second stall.
+const SAVE_QUIET: Duration = Duration::from_secs(6);
 /// Longest wait for an operation to settle.
 const SETTLE_CAP: Duration = Duration::from_secs(180);
 const TRANSFORM: &str = "bevy_transform::components::transform::Transform";
@@ -102,7 +106,11 @@ impl Options {
         let project = project.ok_or("--project is required")?;
         let project = std::fs::canonicalize(&project)
             .map_err(|err| format!("project {}: {err}", project.display()))?;
-        let editor = editor.unwrap_or_else(|| workspace().join("target/debug/jackdaw"));
+        let editor = editor.unwrap_or_else(|| {
+            workspace()
+                .join("target/debug")
+                .join(format!("jackdaw{}", std::env::consts::EXE_SUFFIX))
+        });
         if !editor.is_file() {
             return Err(format!(
                 "no editor at {}; build it with `cargo build -p jackdaw` or pass --editor",
@@ -110,6 +118,9 @@ impl Options {
             ));
         }
         let out = out.unwrap_or_else(|| project.join(".jackdaw/perf"));
+        std::fs::create_dir_all(&out).map_err(|err| format!("create {}: {err}", out.display()))?;
+        let out =
+            std::fs::canonicalize(&out).map_err(|err| format!("out {}: {err}", out.display()))?;
         Ok(Self {
             project,
             scene,
@@ -134,6 +145,7 @@ pub fn cmd(args: &[String]) -> bool {
             return false;
         }
     };
+    editor::handle_interrupts();
     match run(&options) {
         Ok(finished) => finished,
         Err(why) => {
@@ -149,8 +161,6 @@ fn run(options: &Options) -> Result<bool, String> {
     let scene_bytes = std::fs::metadata(&scene_file)
         .map_err(|err| format!("scene {}: {err}", scene_file.display()))?
         .len();
-    std::fs::create_dir_all(&options.out)
-        .map_err(|err| format!("create {}: {err}", options.out.display()))?;
     let started_at = SystemTime::now();
     let stamp: String = logs::format_utc(started_at)
         .chars()
@@ -165,18 +175,26 @@ fn run(options: &Options) -> Result<bool, String> {
     let machine = system::Machine::read();
     let load_start = system::load_average();
 
+    let scratch = Scratch::make(&options.project, &stamp)?;
     let state = options.project.join(".jackdaw");
-    let out = std::fs::canonicalize(&options.out).unwrap_or_else(|_| options.out.clone());
-    let preserved = Preserved::take(&state, &[state.join("target"), out]);
+    let mut skip: Vec<PathBuf> = BUILD_STATE.iter().map(|path| state.join(path)).collect();
+    skip.push(options.out.clone());
+    let mut preserved = Preserved::take(&state, &skip);
     let port = free_port()?;
-    let mut editor = Editor::launch(options, port, &editor_log)?;
+    let mut editor = Editor::launch(&Launch {
+        editor: &options.editor,
+        project: &options.project,
+        port,
+        config: &scratch.config(),
+        log: &editor_log,
+    })?;
     eprintln!("perf: editor pid {} on port {port}", editor.pid);
     let mut probe = Probe {
         brp: Brp::new(port),
         options,
         rows: Vec::new(),
         shape: SceneShape::default(),
-        stamp: stamp.clone(),
+        save_dir: scratch.save(),
     };
     let outcome = probe.measure(&mut editor);
     editor.shut_down();
@@ -184,9 +202,12 @@ fn run(options: &Options) -> Result<bool, String> {
         eprintln!("perf: {failed}");
     }
     if let Err(why) = &outcome {
-        probe
-            .rows
-            .push(Row::missing("Run stopped early", &why.to_string()));
+        let why = if editor::interrupted() {
+            "interrupted".to_string()
+        } else {
+            why.to_string()
+        };
+        probe.rows.push(Row::missing("Run stopped early", &why));
     }
 
     let report = Report {
@@ -203,6 +224,10 @@ fn run(options: &Options) -> Result<bool, String> {
             ("ram_bytes", json!(machine.ram_bytes)),
             ("load_start", json!(load_start)),
             ("load_end", json!(system::load_average())),
+            (
+                "editor_config",
+                json!("empty, so every setting is its default"),
+            ),
             ("editor_log", json!(editor_log.display().to_string())),
         ],
         rows: probe.rows,
@@ -244,6 +269,60 @@ fn commit() -> String {
     }
 }
 
+/// What the game build writes under `.jackdaw/`. A run leaves these as the
+/// build left them, so they keep matching the build output in `target`.
+const BUILD_STATE: [&str; 5] = [
+    "target",
+    "shim",
+    "schema.json",
+    "plan.txt",
+    "last-extension-build",
+];
+
+/// A folder outside the project for the run's editor config and saved copy,
+/// removed when the run ends.
+struct Scratch {
+    root: PathBuf,
+}
+
+impl Scratch {
+    fn make(project: &Path, stamp: &str) -> Result<Self, String> {
+        let cache = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+            .unwrap_or_else(std::env::temp_dir);
+        let root = cache
+            .join("jackdaw-perf")
+            .join(format!("run-{stamp}-{}", std::process::id()));
+        if root.starts_with(project) {
+            return Err(format!(
+                "the scratch folder {} is inside the project",
+                root.display()
+            ));
+        }
+        let scratch = Self { root };
+        for dir in [scratch.config(), scratch.save()] {
+            std::fs::create_dir_all(&dir)
+                .map_err(|err| format!("create {}: {err}", dir.display()))?;
+        }
+        Ok(scratch)
+    }
+
+    fn config(&self) -> PathBuf {
+        self.root.join("config")
+    }
+
+    fn save(&self) -> PathBuf {
+        self.root.join("save")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 fn free_port() -> Result<u16, String> {
     std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .and_then(|listener| listener.local_addr())
@@ -251,109 +330,12 @@ fn free_port() -> Result<u16, String> {
         .map_err(|err| format!("no free port: {err}"))
 }
 
-/// The editor process under test.
-struct Editor {
-    child: Child,
-    pid: u32,
-    started: Instant,
-    lines: logs::Lines,
-    project: PathBuf,
-    running: bool,
-}
-
-impl Editor {
-    fn launch(options: &Options, port: u16, log: &Path) -> Result<Self, String> {
-        let copy =
-            std::fs::File::create(log).map_err(|err| format!("create {}: {err}", log.display()))?;
-        let copy = Arc::new(Mutex::new(copy));
-        let started = Instant::now();
-        let mut child = Command::new(&options.editor)
-            .current_dir(&options.project)
-            .env("JACKDAW_OPEN_PROJECT", &options.project)
-            .env("JACKDAW_REMOTE_PORT", port.to_string())
-            .env("JACKDAW_PIE_PREBUILD", "0")
-            .env_remove("RUST_LOG")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| format!("launch {}: {err}", options.editor.display()))?;
-        let lines = logs::Lines::default();
-        if let Some(stdout) = child.stdout.take() {
-            logs::capture(stdout, lines.clone(), copy.clone());
-        }
-        if let Some(stderr) = child.stderr.take() {
-            logs::capture(stderr, lines.clone(), copy);
-        }
-        Ok(Self {
-            pid: child.id(),
-            child,
-            started,
-            lines,
-            project: options.project.clone(),
-            running: true,
-        })
-    }
-
-    /// Why the editor is gone, if it is.
-    fn exited(&mut self) -> Option<String> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some(status.to_string()),
-            Ok(None) => None,
-            Err(err) => Some(err.to_string()),
-        }
-    }
-
-    fn lines_from(&self, from: usize) -> Vec<logs::Line> {
-        self.lines
-            .lock()
-            .map(|lines| lines.get(from..).map(<[_]>::to_vec).unwrap_or_default())
-            .unwrap_or_default()
-    }
-
-    fn line_count(&self) -> usize {
-        self.lines.lock().map_or(0, |lines| lines.len())
-    }
-
-    /// The game processes Play started, by their executables under the
-    /// project's build folder.
-    fn games(&self) -> Vec<u32> {
-        system::descendants_running_from(self.pid, &self.project.join(".jackdaw/target"))
-            .into_iter()
-            .map(|(pid, _)| pid)
-            .collect()
-    }
-
-    /// Stop the editor and every process it started.
-    fn shut_down(&mut self) {
-        if !self.running {
-            return;
-        }
-        self.running = false;
-        let started = system::descendants_of(self.pid);
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if !started.is_empty() {
-            let _ = Command::new("kill")
-                .args(started.iter().map(u32::to_string))
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
-}
-
-impl Drop for Editor {
-    fn drop(&mut self) {
-        self.shut_down();
-    }
-}
-
 struct Probe<'a> {
     brp: Brp,
     options: &'a Options,
     rows: Vec<Row>,
     shape: SceneShape,
-    stamp: String,
+    save_dir: PathBuf,
 }
 
 impl Probe<'_> {
@@ -390,6 +372,9 @@ impl Probe<'_> {
         path: &str,
         step: impl FnOnce(&mut Self) -> Result<(), CallError>,
     ) -> Result<(), CallError> {
+        if editor::interrupted() {
+            return Err(CallError::Unreachable("interrupted".to_string()));
+        }
         match step(self) {
             Err(CallError::Refused(why)) => {
                 self.rows.push(Row::missing(path, &why));
@@ -607,15 +592,16 @@ impl Probe<'_> {
         let mut editor_peak = 0;
         let mut game_peak = 0;
         let mut sampled: Option<Instant> = None;
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = StopOnDrop::default();
         let mut spawn: Option<Receiver<f64>> = None;
+        let mut building: Option<f64> = None;
+        let mut own_window = false;
 
         let timed_out = loop {
             if start.elapsed() > self.options.play_timeout {
                 break true;
             }
             if let Some(why) = editor.exited() {
-                stop.store(true, Ordering::Relaxed);
                 return Err(CallError::Unreachable(format!(
                     "the editor exited during Play ({why})"
                 )));
@@ -629,6 +615,9 @@ impl Probe<'_> {
             }
             for instance in status["instances"].as_array().into_iter().flatten() {
                 match instance["stage"].as_str() {
+                    Some("building") => {
+                        building.get_or_insert(now);
+                    }
                     Some("connecting") => note_stage(&mut stages, LAUNCHED, now),
                     Some("connected") => {
                         note_stage(&mut stages, LAUNCHED, now);
@@ -637,9 +626,12 @@ impl Probe<'_> {
                     _ => {}
                 }
             }
+            let frame = &status["game_frame"];
             frame_reported |= status.get("game_frame").is_some();
-            if !status["game_frame"].is_null() {
-                note_stage(&mut stages, FIRST_FRAME, now);
+            own_window |= frame["own_window"] == true;
+            if frame["seq"].is_u64() {
+                let age = frame["first_age_ms"].as_f64().unwrap_or(0.0);
+                note_stage(&mut stages, FIRST_FRAME, (now - age).max(0.0));
             }
             for line in editor.lines_from(read_lines) {
                 read_lines += 1;
@@ -669,7 +661,7 @@ impl Probe<'_> {
                 && connected
                 && let Some(node) = self.shape.last_node
             {
-                spawn = Some(watch_spawn(self.brp_port(), node, start, stop.clone()));
+                spawn = Some(watch_spawn(self.brp_port(), node, start, stop.flag()));
             }
             if let Some(at) = spawn.as_ref().and_then(|spawn| spawn.try_recv().ok()) {
                 note_stage(&mut stages, SPAWNED, at);
@@ -681,21 +673,32 @@ impl Probe<'_> {
                 game_peak = game_peak.max(games_now);
             }
             let seen = |wanted: &str| stages.iter().any(|(stage, _)| *stage == wanted);
-            let done = seen(FIRST_FRAME) || (!frame_reported && seen(SPAWNED) && seen(STREAMING));
+            let done = seen(FIRST_FRAME)
+                || (own_window && seen(SPAWNED))
+                || (!frame_reported && seen(SPAWNED) && seen(STREAMING));
             if done {
                 break false;
             }
             std::thread::sleep(Duration::from_millis(100));
         };
-        stop.store(true, Ordering::Relaxed);
+        drop(stop);
         let (editor_now, games_now) = memory_now(editor);
         editor_peak = editor_peak.max(editor_now);
         game_peak = game_peak.max(games_now);
 
         stages.sort_by(|a, b| a.1.total_cmp(&b.1));
         for (stage, at) in &stages {
+            let mut note = stage_source(stage).to_string();
+            if *stage == LAUNCHED
+                && let Some(building) = building
+            {
+                note.push_str(&format!(
+                    "; includes a game build, first seen at {}",
+                    report::duration(building)
+                ));
+            }
             self.rows
-                .push(Row::duration(&format!("Play: {stage}"), *at).with_note(stage_source(stage)));
+                .push(Row::duration(&format!("Play: {stage}"), *at).with_note(note));
         }
         for stage in PLAY_STAGES {
             if stages.iter().any(|(seen, _)| *seen == stage) {
@@ -708,6 +711,10 @@ impl Probe<'_> {
                     "not seen within {}",
                     report::duration(self.options.play_timeout.as_secs_f64() * 1000.0)
                 )
+            } else if stage == FIRST_FRAME && own_window {
+                "the game shows itself in its own window, so no frame reaches the panel; \
+                 Scene spawned stands in"
+                    .to_string()
             } else if stage == FIRST_FRAME || stage == SENT || stage == ASKED {
                 "this editor does not report it".to_string()
             } else {
@@ -753,23 +760,27 @@ impl Probe<'_> {
         Ok(())
     }
 
-    /// Save to a copy in the out folder, never over the project's scene.
+    /// Save to a copy outside the project, never over the project's scene.
     fn save(&mut self) -> Result<(), CallError> {
-        let dir = self.options.out.join(format!("save-{}", self.stamp));
         let name = Path::new(&self.options.scene)
             .file_name()
             .map_or_else(|| "scene.bsn".into(), |name| name.to_os_string());
-        let copy = dir.join(name);
-        std::fs::create_dir_all(&dir)
-            .map_err(|err| CallError::Refused(format!("create {}: {err}", dir.display())))?;
+        let copy = self.save_dir.join(name);
+        if !copy.is_absolute() || copy.starts_with(&self.options.project) {
+            return Err(CallError::Refused(format!(
+                "refusing to save to {}, which is not outside the project",
+                copy.display()
+            )));
+        }
         let start = Instant::now();
         let saved = self
             .brp
             .operator("scene.save", json!({ "path": copy.display().to_string() }));
-        let outcome =
-            saved.and_then(|(_, call)| self.settle(start, call, |status| status["dirty"] == false));
+        let outcome = saved.and_then(|(_, call)| {
+            self.settle_within(start, call, SAVE_QUIET, |status| status["dirty"] == false)
+        });
         let written = std::fs::metadata(&copy).map(|meta| meta.len()).ok();
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&copy);
         let (settle, clean) = outcome?;
         let mut row = Row::settle("Save", &settle);
         row.note = match (written, clean) {
@@ -795,6 +806,18 @@ impl Probe<'_> {
         &self,
         start: Instant,
         call: f64,
+        reached: impl FnMut(&Value) -> bool,
+    ) -> Result<(Settle, Option<f64>), CallError> {
+        self.settle_within(start, call, QUIET, reached)
+    }
+
+    /// [`Self::settle`], counting the editor settled after `quiet` without a
+    /// stall.
+    fn settle_within(
+        &self,
+        start: Instant,
+        call: f64,
+        quiet: Duration,
         mut reached: impl FnMut(&Value) -> bool,
     ) -> Result<(Settle, Option<f64>), CallError> {
         let mut samples = Vec::new();
@@ -813,13 +836,29 @@ impl Probe<'_> {
             if reached_at.is_none() && reached(&status) {
                 reached_at = Some(ms_since(start));
             }
-            let quiet = quiet_from.elapsed() >= QUIET;
-            if (quiet && reached_at.is_some()) || start.elapsed() > SETTLE_CAP {
+            let calm = quiet_from.elapsed() >= quiet;
+            if (calm && reached_at.is_some()) || start.elapsed() > SETTLE_CAP {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         Ok((Settle::of(call, &samples), reached_at))
+    }
+}
+
+/// A flag that tells a background thread to stop, raised when dropped.
+#[derive(Default)]
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl StopOnDrop {
+    fn flag(&self) -> Arc<AtomicBool> {
+        self.0.clone()
+    }
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
     }
 }
 
@@ -905,7 +944,7 @@ fn stage_source(stage: &str) -> &'static str {
         ASKED | SENT => "editor log",
         ASSETS | STREAMING => "game log timestamp",
         SPAWNED => "first game query that found the last node",
-        FIRST_FRAME => "status game_frame",
+        FIRST_FRAME => "status game_frame, less the first frame's age",
         _ => "",
     }
 }
@@ -970,5 +1009,24 @@ mod tests {
         assert!(Options::parse(&args(&["--project"])).is_err());
         assert!(Options::parse(&args(&["--frobnicate"])).is_err());
         assert!(Options::parse(&args(&["--project", ".", "--play-timeout", "soon"])).is_err());
+    }
+
+    #[test]
+    fn a_relative_out_folder_is_made_and_held_as_an_absolute_path() {
+        let editor = std::env::current_exe().unwrap();
+        let relative = "target/perf-options-test/out";
+        let args = [
+            "--project",
+            ".",
+            "--editor",
+            editor.to_str().unwrap(),
+            "--out",
+            relative,
+        ];
+        let options = Options::parse(&args.map(str::to_string)).unwrap();
+        assert!(options.out.is_absolute());
+        assert!(options.out.ends_with(relative));
+        assert!(options.out.is_dir());
+        let _ = std::fs::remove_dir_all("target/perf-options-test");
     }
 }
