@@ -108,7 +108,7 @@ jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
 # drives it over ipc-channel. The protocol's `ipc` transport is light
 # enough to be unconditional, so Play always works in the editor with
 # no per-build feature gate.
-jackdaw_pie_protocol = { version = "0.20.1-rc.2", path = "../../crates/jackdaw_pie_protocol", features = [
+jackdaw_pie_protocol = { version = "0.20.1", path = "../../crates/jackdaw_pie_protocol", features = [
     "ipc",
 ] }
 # Optional and activated only by the `dylib` feature. Nothing in
@@ -146,7 +146,7 @@ toml = "1"
 winit.workspace = true
 image.workspace = true
 half = "2"
-jackdaw_localization = { version = "0.20.1-rc.2", path = "../../crates/jackdaw_localization" }
+jackdaw_localization = { version = "0.20.1", path = "../../crates/jackdaw_localization" }
 jackdaw_env.workspace = true
 
 [target.'cfg(windows)'.dependencies]

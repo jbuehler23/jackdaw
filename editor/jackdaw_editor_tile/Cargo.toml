@@ -12,7 +12,7 @@ categories = ["game-development"]
 include = ["src/**/*", "Cargo.toml"]
 
 [dependencies]
-jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1-rc.2", path = "../jackdaw_editor_core", default-features = false }
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1", path = "../jackdaw_editor_core", default-features = false }
 bevy.workspace = true
 jackdaw_api.workspace = true
 jackdaw_api_internal.workspace = true
@@ -35,7 +35,7 @@ path-slash.workspace = true
 # The features the root enables on the core, and not `default`, so the tile
 # tests share the core `cargo build` and `cargo test` make instead of
 # compiling one of their own.
-jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1-rc.2", path = "../jackdaw_editor_core", default-features = false, features = [
+jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.20.1", path = "../jackdaw_editor_core", default-features = false, features = [
     "multiplayer",
     "camera_rig",
     "embed-recipe",
