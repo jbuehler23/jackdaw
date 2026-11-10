@@ -146,16 +146,46 @@ fn writes_the_large_scene_into_a_project_folder() {
     let out = Path::new(&out).join("assets");
     let tmp = tempfile::tempdir().expect("a temp directory");
     let scene = write_large_scene(tmp.path()).expect("the scene is generated");
+    let text = jackdaw_bsn::read_document_text(&scene.path).expect("the scene reads");
+    let ast = jackdaw_bsn::parse_emitted(&text).expect("the saved scene parses");
+    let mut tally = (0, 0, 0);
+    for root in ast.roots.clone() {
+        walk(&ast, root, 1, &mut tally);
+    }
+    assert_eq!(tally.0, scene.nodes(), "every node reads back: {scene:?}");
     let generated = scene
         .path
         .parent()
         .expect("the scene sits in the assets folder");
+    let taken: Vec<_> = files_under(generated)
+        .into_iter()
+        .filter_map(|file| file.strip_prefix(generated).ok().map(|file| out.join(file)))
+        .filter(|target| target.exists())
+        .collect();
+    assert!(
+        taken.is_empty(),
+        "would overwrite files already in the project: {taken:?}"
+    );
     copy_tree(generated, &out);
     eprintln!(
         "wrote {} into {}: {scene:?}",
         scene.path.display(),
         out.display()
     );
+}
+
+/// Every file under `dir`, at any depth.
+fn files_under(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("the generated folder reads") {
+        let entry = entry.expect("a directory entry");
+        if entry.file_type().expect("a file type").is_dir() {
+            files.extend(files_under(&entry.path()));
+        } else {
+            files.push(entry.path());
+        }
+    }
+    files
 }
 
 /// Copy every file under `from` into `to`, keeping the layout.

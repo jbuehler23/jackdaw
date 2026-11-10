@@ -1,7 +1,8 @@
 //! A generated scene about the size of a large hand-built level: hundreds of
 //! brushes in groups several levels deep, tens of thousands of faces and a few
-//! dozen shared material files. Everything goes through the editor's own
-//! operators and save, so the file follows the current format.
+//! dozen shared material files. Brushes, groups and the prefab are made with the
+//! editor's own spawn and prefab functions, materials with `material.create`,
+//! and the file is written by `scene.save`, so it follows the current format.
 
 use std::path::{Path, PathBuf};
 
