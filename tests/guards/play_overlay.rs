@@ -9,7 +9,7 @@ use bevy::sprite_render::{TilemapChunkMaterial, TilemapChunkMeshCache};
 use jackdaw::boot_ops::{run_op_clause, run_op_clause_as_user};
 use jackdaw::pie::InstanceKey;
 use jackdaw::play_scene::{LaunchScene, PlayScene, ServedScene, launch_scene, serve_scene};
-use jackdaw::play_sync::{collect_changes_for, collect_node_changes};
+use jackdaw::play_sync::{collect_changes_for, collect_material_changes, collect_node_changes};
 use jackdaw::scenes::Scenes;
 use jackdaw::scenes::confirm_dialog::{ConfirmDialogButton, apply_confirm_dialog_action};
 use jackdaw::terrain_mode::TerrainDataStore;
@@ -17,7 +17,7 @@ use jackdaw_api::pie::PlayState;
 use jackdaw_api::prelude::*;
 use jackdaw_editor_tile::tilemap::{TilemapDataStore, store_key_of};
 use jackdaw_pie_protocol::{ControlEvent, SceneAnswer};
-use jackdaw_runtime::node_sync::{install_node_index, load_asset_files};
+use jackdaw_runtime::node_sync::{install_node_index, load_asset_files, load_scene_assets};
 use jackdaw_runtime::play_overlay::{load_prefab_files, sidecar_overlay};
 use jackdaw_runtime::{
     JackdawCatalogPath, JackdawPlugin, JackdawScene, JackdawSceneRoot, TerrainHeights,
@@ -1113,6 +1113,37 @@ fn a_discarded_prefab_the_scene_does_not_reach_respawns_nothing() {
     assert_eq!(x_of(&mut game, "Placed"), 3.0);
 }
 
+/// A discarded prefab the scene draws from respawns only its instances: every
+/// other entity, and the selection, stays.
+#[test]
+fn a_discarded_prefab_the_scene_uses_respawns_only_its_instances() {
+    let scene = roots(&[
+        "#Beacon\nbevy_transform::components::transform::Transform\n".to_string(),
+        instance_of("door.bsn"),
+    ]);
+    let (mut app, _tmp) = editor(&[("door.bsn", &door(1.0)), ("zone.bsn", &scene)]);
+    open(&mut app, "assets/zone.bsn");
+    edit_door_in_its_tab(&mut app, "assets/door.bsn", 9.0, "assets/zone.bsn");
+    let beacon = select_named(&mut app, "Beacon");
+
+    let tab = tab_named(&app, "door.bsn");
+    discard(&mut app, tab);
+    app.update();
+
+    assert_eq!(editor_x(&mut app, "Placed"), 1.0);
+    assert!(
+        app.world().get_entity(beacon).is_ok(),
+        "the scene kept its other entities"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<jackdaw::selection::Selection>()
+            .entities,
+        vec![beacon],
+        "the selection stays"
+    );
+}
+
 /// A discarded prefab the scene reaches only through another prefab still goes
 /// back to the file in the scene in front.
 #[test]
@@ -1892,4 +1923,206 @@ fn an_instance_spawned_while_playing_brings_its_unsaved_prefab_ahead_of_it() {
             && text.as_deref().is_some_and(|text| text.contains("9.0"))),
         "{files:?}"
     );
+}
+
+/// Take an answer the way a root that asked the editor does: the text's assets
+/// load as it arrives, and the root spawns without its asset roots.
+fn take_served(game: &mut App, served: ServedScene) {
+    if let Some(ControlEvent::AssetFiles { files }) = served.files {
+        load_asset_files(game.world_mut(), &files);
+    }
+    if let Some(ControlEvent::PrefabFiles { files }) = served.prefabs {
+        load_prefab_files(game.world_mut(), &files);
+    }
+    let SceneAnswer::Document { text, dir, .. } = served.answer else {
+        panic!("a document");
+    };
+    load_scene_assets(game.world_mut(), &text);
+    let handle = game
+        .world_mut()
+        .resource_mut::<Assets<JackdawScene>>()
+        .add(JackdawScene::new(text, PathBuf::from(dir)));
+    game.world_mut()
+        .spawn((JackdawSceneRoot(handle), jackdaw_runtime::ServedScene));
+}
+
+/// A scene holding `#Stone` at `roughness` and an entity `name` naming it.
+fn stone_scene(name: &str, roughness: f32) -> String {
+    format!(
+        "bevy_ecs::hierarchy::Children [\n    #Stone\n    \
+         bevy_pbr::pbr_material::StandardMaterial {{ perceptual_roughness: {roughness:?} }}\n    --\n    \
+         #{name}\n    bevy_transform::components::transform::Transform\n    \
+         game::Swatch {{ swatch: \"#Stone\" }}\n]\n"
+    )
+}
+
+fn swatch_of(app: &mut App, entity: &str) -> Handle<StandardMaterial> {
+    app.world_mut()
+        .query::<(&Name, &Swatch)>()
+        .iter(app.world())
+        .find(|(name, _)| name.as_str() == entity)
+        .map(|(_, swatch)| swatch.swatch.clone())
+        .unwrap_or_else(|| panic!("{entity} holds a swatch"))
+}
+
+fn roughness_of(app: &mut App, entity: &str) -> f32 {
+    update_until(app, "the entity spawned", |game| {
+        game.world_mut()
+            .query::<&Name>()
+            .iter(game.world())
+            .any(|name| name.as_str() == entity)
+    });
+    let swatch = swatch_of(app, entity);
+    app.world()
+        .resource::<Assets<StandardMaterial>>()
+        .get(&swatch)
+        .unwrap_or_else(|| panic!("the swatch of {entity} resolves"))
+        .perceptual_roughness
+}
+
+fn set_roughness(app: &mut App, material: &Handle<StandardMaterial>, roughness: f32) {
+    app.world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .get_mut(material)
+        .expect("the material")
+        .perceptual_roughness = roughness;
+    app.update();
+}
+
+fn take_edits(game: &mut App, events: Vec<(InstanceKey, ControlEvent)>) {
+    for (_, event) in events {
+        match event {
+            ControlEvent::SceneAssets { text } => load_scene_assets(game.world_mut(), &text),
+            ControlEvent::AssetFiles { files } => load_asset_files(game.world_mut(), &files),
+            other => panic!("not an asset edit: {other:?}"),
+        }
+    }
+    game.update();
+}
+
+/// Two open scenes holding materials that read alike: an edit of one scene's
+/// material leaves the other scene's entities as they were.
+#[test]
+fn an_edit_of_one_scene_s_material_leaves_another_scene_alone() {
+    let (mut app, tmp) = editor(&[
+        ("zone.bsn", &stone_scene("Zone", 0.25)),
+        ("meadow.bsn", &stone_scene("Meadow", 0.25)),
+    ]);
+    app.register_type::<Swatch>();
+    open(&mut app, "assets/meadow.bsn");
+    open(&mut app, "assets/zone.bsn");
+    collect_changes_for(app.world_mut(), &[key()]);
+
+    let mut game = empty_game(&tmp);
+    game.register_type::<Swatch>();
+    game.update();
+    take_served(&mut game, serve(&mut app, "meadow.bsn"));
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.25);
+    assert_eq!(roughness_of(&mut game, "Meadow"), 0.25);
+
+    let material = swatch_of(&mut app, "Zone");
+    set_roughness(&mut app, &material, 0.8);
+    let sends = collect_material_changes(app.world_mut(), &[key()]);
+    take_edits(&mut game, sends);
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.8);
+    assert_eq!(
+        roughness_of(&mut game, "Meadow"),
+        0.25,
+        "the other scene keeps its material"
+    );
+}
+
+/// A game tints a served material at runtime. A later root of the scene spawns from
+/// another answer holding the same definition, and the tint stays.
+#[test]
+fn a_runtime_tint_survives_a_later_root_spawning() {
+    let (mut app, tmp) = editor(&[("zone.bsn", &stone_scene("Zone", 0.25))]);
+    app.register_type::<Swatch>();
+    open(&mut app, "assets/zone.bsn");
+
+    let mut game = empty_game(&tmp);
+    game.register_type::<Swatch>();
+    game.update();
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.25);
+    let tinted = swatch_of(&mut game, "Zone");
+    set_roughness(&mut game, &tinted, 0.9);
+
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    update_until(&mut game, "the second root spawned", |game| {
+        named(game, "Zone").len() == 2
+    });
+    let roughness: Vec<f32> = named(&mut game, "Zone")
+        .into_iter()
+        .map(|zone| {
+            let swatch = game
+                .world()
+                .get::<Swatch>(zone)
+                .expect("a swatch")
+                .swatch
+                .clone();
+            game.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&swatch)
+                .expect("the swatch resolves")
+                .perceptual_roughness
+        })
+        .collect();
+    assert_eq!(roughness, vec![0.9, 0.9], "the tint stays");
+}
+
+/// One frame of Play: the editor's material and document edits reach the game.
+fn play_frame(app: &mut App, game: &mut App) {
+    app.update();
+    let mut sends = collect_material_changes(app.world_mut(), &[key()]);
+    sends.extend(collect_changes_for(app.world_mut(), &[key()]));
+    for (_, event) in sends {
+        match event {
+            ControlEvent::SceneAssets { text } => load_scene_assets(game.world_mut(), &text),
+            ControlEvent::AssetFiles { files } => load_asset_files(game.world_mut(), &files),
+            ControlEvent::PrefabFiles { files } => load_prefab_files(game.world_mut(), &files),
+            ControlEvent::NodeComponents { node, set, removed } => {
+                jackdaw_runtime::node_sync::apply_node_components(
+                    game.world_mut(),
+                    node,
+                    &set,
+                    &removed,
+                );
+            }
+            _ => {}
+        }
+    }
+    game.update();
+}
+
+/// A scene closed and opened again while playing: an edit of its material still
+/// reaches the game's entities of that scene.
+#[test]
+fn a_material_edit_after_reopening_a_scene_reaches_the_game() {
+    let (mut app, tmp) = editor(&[
+        ("zone.bsn", &stone_scene("Zone", 0.25)),
+        ("meadow.bsn", &stone_scene("Meadow", 0.25)),
+    ]);
+    app.register_type::<Swatch>();
+    open(&mut app, "assets/meadow.bsn");
+    open(&mut app, "assets/zone.bsn");
+    collect_changes_for(app.world_mut(), &[key()]);
+
+    let mut game = empty_game(&tmp);
+    game.register_type::<Swatch>();
+    game.update();
+    take_served(&mut game, serve(&mut app, "zone.bsn"));
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.25);
+
+    let zone = tab_named(&app, "zone.bsn");
+    jackdaw::scenes::operators::scene_close_system_unprompted(app.world_mut(), zone);
+    play_frame(&mut app, &mut game);
+    open(&mut app, "assets/zone.bsn");
+    play_frame(&mut app, &mut game);
+
+    let material = swatch_of(&mut app, "Zone");
+    set_roughness(&mut app, &material, 0.8);
+    play_frame(&mut app, &mut game);
+    assert_eq!(roughness_of(&mut game, "Zone"), 0.8);
 }

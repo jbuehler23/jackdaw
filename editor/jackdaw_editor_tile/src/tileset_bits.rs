@@ -1,85 +1,29 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use bevy::picking::events::{
-    PointerCancel, PointerDragEnd, PointerMove, PointerPress, PointerRelease,
-};
-use bevy::picking::pointer::{PointerButton, PointerId, PointerPressState};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use bevy::window::WindowFocused;
 use jackdaw_api::prelude::*;
-use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_feathers::tokens;
-use jackdaw_tilemap::TilesetSetup;
 use jackdaw_tilemap::{Coverage, MatchMode, Peer, TerrainId, TileAddress, TileTerrains};
+use jackdaw_tilemap::{SetupTile, TilesetSetup};
 use jackdaw_tileset::Tileset;
 
-use crate::tileset_dock::{
-    BitsOverlay, DockAction, DockControl, DockPage, DockTool, DockView, TilesetDockViews, dispatch,
-    dock_path, dock_tileset, refill, swatch, zoom,
-};
+use crate::sheet_stroke::{SheetPaint, StrokeInfo, StrokeStart};
+use crate::tileset_dock::{DockCall, DockView, PaintedCount, TilesetDockViews, swatch};
 use crate::tileset_edit::{
     peer, queue_edit, terrain_or_empty, terrain_set, text, tile, with_setup,
+};
+use crate::tileset_layout::GhostZones;
+use crate::tileset_modes::ModeSheet;
+use crate::zone_overlay::{
+    ZoneLayout, ZoneOverlay, ZoneValues, redraw_zone_rows, spawn_zone_overlay,
 };
 
 /// On-screen size of a missing shape's glyph.
 const GLYPH: f32 = 21.0;
-/// On-screen size an overlay mark keeps however small its tile is drawn.
-const MARK_MIN: f32 = 10.0;
-
-pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<BitStroke>()
-        .add_observer(on_press)
-        .add_observer(on_move)
-        .add_observer(
-            |end: On<PointerRelease>, stroke: Res<BitStroke>, mut commands: Commands| {
-                end_stroke(end.button, &stroke, &mut commands);
-            },
-        )
-        .add_observer(
-            |end: On<PointerDragEnd>, stroke: Res<BitStroke>, mut commands: Commands| {
-                end_stroke(end.button, &stroke, &mut commands);
-            },
-        )
-        .add_systems(
-            Update,
-            cancel_on_interruption.run_if(|stroke: Res<BitStroke>| stroke.0.is_some()),
-        );
-}
-
-fn end_stroke(button: PointerButton, stroke: &BitStroke, commands: &mut Commands) {
-    if stroke.0.as_ref().is_some_and(|s| s.button == button) {
-        commands.queue(move |world: &mut World| finish(world, button));
-    }
-}
-
-/// A cancelled pointer or a window losing focus drops the stroke unapplied.
-fn cancel_on_interruption(
-    mut focus: MessageReader<WindowFocused>,
-    mut cancels: MessageReader<PointerCancel>,
-    mut commands: Commands,
-) {
-    let lost = focus.read().any(|f| !f.focused);
-    let cancelled = cancels.read().count() > 0;
-    if lost || cancelled {
-        commands.queue(|world: &mut World| {
-            if let Some(stroke) = world.resource_mut::<BitStroke>().0.take() {
-                refill(world, &stroke.path);
-            }
-        });
-    }
-}
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTilePaintBitsOp>();
-}
-
-/// A painted zone the bits overlay draws on sheet tile `tile`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct BitMark {
-    pub root: Entity,
-    pub sheet: u32,
-    pub tile: u32,
-    pub peer: usize,
 }
 
 /// A shape the terrain set at index `set` has no tile for, drawn as a 3x3
@@ -109,32 +53,6 @@ pub struct CoverageSummary {
 pub struct MissingShapes {
     pub root: Entity,
     pub set: usize,
-}
-
-/// The count of painted tiles in the header of the dock `root`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct BitsCount {
-    pub root: Entity,
-}
-
-/// The stroke a pointer is painting on a sheet, applied when it lifts.
-#[derive(Resource, Default)]
-struct BitStroke(Option<Stroke>);
-
-struct Stroke {
-    root: Entity,
-    path: String,
-    sheet: u32,
-    set: usize,
-    mode: MatchMode,
-    terrain: TerrainId,
-    button: PointerButton,
-    tileset: Tileset,
-    /// The setup with the stroke painted so far.
-    setup: TilesetSetup,
-    zones: BTreeSet<(u32, Peer)>,
-    /// The last point painted, in sheet pixels.
-    last: Vec2,
 }
 
 /// Paint one terrain on many tile zones as one history entry.
@@ -202,115 +120,6 @@ fn zone_list(tileset: &Tileset, text: &str) -> Result<Vec<(TileAddress, Peer)>, 
             Ok((address, peer(which)?))
         })
         .collect()
-}
-
-/// Show the bits overlay off, for the active set or for all sets.
-#[operator(
-    id = "tileset.bits_overlay",
-    label = "Bits Overlay",
-    description = "Show the painted terrain bits on a Tileset tab's sheet: off, for the \
-                   active terrain set only, or for all sets. With no mode it steps to the next.",
-    allows_undo = false,
-    is_available = a_tileset_is_shown,
-    params(
-        path(
-            String,
-            doc = "Tileset file under the project's assets; defaults to the tab with the \
-                   keyboard, then the open tileset."
-        ),
-        mode(String, doc = "off, set or all; empty steps to the next."),
-    )
-)]
-pub fn tileset_bits_overlay(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let (path, mode) = (text(&params, "path"), text(&params, "mode"));
-    commands.queue(
-        move |world: &mut World| match set_overlay(world, &path, &mode) {
-            Ok(message) => report_to_caller(world, message),
-            Err(err) => warn_caller(world, format!("tileset.bits_overlay: {err}")),
-        },
-    );
-    OperatorResult::Finished
-}
-
-fn a_tileset_is_shown(views: Res<TilesetDockViews>) -> bool {
-    !views.0.is_empty()
-}
-
-fn set_overlay(world: &mut World, path: &str, mode: &str) -> Result<String, String> {
-    edit_view(world, path, |view| {
-        let (bits, name) = step(&BitsOverlay::ALL, view.bits, mode)?;
-        view.bits = bits;
-        Ok(format!("bits overlay {name}"))
-    })
-}
-
-/// Make a press on a Tileset tab's sheet select tiles or paint bits.
-#[operator(
-    id = "tileset.paint_mode",
-    label = "Paint Bits Mode",
-    description = "Make a press on a Tileset tab's sheet select tiles, or paint terrain bits \
-                   with the brush terrain (right erases). Painting shows the bits overlay if \
-                   it is off. With no mode it switches between the two.",
-    allows_undo = false,
-    is_available = a_tileset_is_shown,
-    params(
-        path(
-            String,
-            doc = "Tileset file under the project's assets; defaults to the tab with the \
-                   keyboard, then the open tileset."
-        ),
-        mode(String, doc = "select or paint; empty switches."),
-    )
-)]
-pub fn tileset_paint_mode(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let (path, mode) = (text(&params, "path"), text(&params, "mode"));
-    commands.queue(move |world: &mut World| {
-        let set = edit_view(world, &path, |view| {
-            let (tool, name) = step(&DockTool::ALL, view.tool, &mode)?;
-            view.set_tool(tool);
-            Ok(format!("{name} mode"))
-        });
-        match set {
-            Ok(message) => report_to_caller(world, message),
-            Err(err) => warn_caller(world, format!("tileset.paint_mode: {err}")),
-        }
-    });
-    OperatorResult::Finished
-}
-
-/// Change the view of a Tileset tab and build it again.
-fn edit_view(
-    world: &mut World,
-    path: &str,
-    edit: impl FnOnce(&mut DockView) -> Result<String, String>,
-) -> Result<String, String> {
-    let path = dock_path(world, path)?;
-    let mut views = world.resource_mut::<TilesetDockViews>();
-    let view = (views.0.get_mut(&path)).ok_or_else(|| format!("{path} has no Tileset tab"))?;
-    let message = edit(view)?;
-    refill(world, &path);
-    Ok(message)
-}
-
-/// The option `name` names, or the one after `current` when it is empty.
-fn step<T: Copy + PartialEq>(
-    options: &[(T, &'static str)],
-    current: T,
-    name: &str,
-) -> Result<(T, &'static str), String> {
-    if name.is_empty() {
-        let at = options.iter().position(|(o, _)| *o == current).unwrap_or(0);
-        return Ok(options[(at + 1) % options.len()]);
-    }
-    let names: Vec<&str> = options.iter().map(|(_, n)| *n).collect();
-    (options.iter().find(|(_, n)| *n == name).copied())
-        .ok_or_else(|| format!("mode is one of {}, not `{name}`", names.join(", ")))
 }
 
 /// The coverage line of the terrain set at index `set` and its coverage.
@@ -405,295 +214,238 @@ pub(crate) fn spawn_glyph(
     }
 }
 
-/// The painted zones of sheet `sheet` the overlay of `view` shows, over
-/// `frame`.
-pub(crate) fn spawn_marks(
-    world: &mut World,
-    frame: Entity,
-    root: Entity,
+/// The active set's painted zones over a sheet of the terrains mode.
+pub(crate) fn terrain_overlay(world: &mut World, sheet: &ModeSheet) {
+    let ModeSheet {
+        root,
+        frame,
+        sheet,
+        tileset,
+        setup,
+        view,
+    } = *sheet;
+    if let Some(values) = terrain_zones(tileset, setup, sheet, view) {
+        spawn_zone_overlay(world, frame, root, (tileset, sheet), values);
+    }
+}
+
+/// Whether the overlay of set `active` shows `tile`: the set holds it, or
+/// every terrain painted on it is one of the set's.
+fn shows(setup: &TilesetSetup, active: usize, tile: &SetupTile) -> bool {
+    let Some(set) = setup.sets.get(active) else {
+        return false;
+    };
+    let painted = tile.terrains.peers.iter().filter(|id| **id != 0);
+    setup.holds(active, tile)
+        || (painted.clone().count() > 0 && painted.into_iter().all(|id| set.terrains.contains(id)))
+}
+
+/// The zones of sheet `sheet` held by tiles of the active set, the brush
+/// terrain picked.
+fn terrain_zones(
     tileset: &Tileset,
     setup: &TilesetSetup,
     sheet: u32,
     view: &DockView,
-) {
-    let Ok(on) = tileset.setup_sheet(sheet) else {
-        return;
-    };
-    if view.bits == BitsOverlay::Off {
-        return;
-    }
-    let active = view.active_set(&tileset.sets());
-    let scale = zoom(tileset.tile_size.as_vec2());
-    let columns = tileset.sheets.get(sheet as usize).map_or(1, |s| s.columns);
-    let drafted = |tile: u32| {
-        (view.layout.as_ref()).is_some_and(|d| d.pick.is_some() && d.holds(sheet, tile, columns))
-    };
-    for (address, tile) in (setup.tiles.iter()).filter(|(a, _)| a.sheet == on && !drafted(a.tile)) {
-        let peers = &tile.terrains;
-        let holding = if view.bits == BitsOverlay::Set {
-            let Some(set) = active.filter(|s| setup.holds(*s, tile)) else {
-                continue;
-            };
-            Some(setup.sets[set].mode.value)
-        } else {
-            (0..setup.sets.len())
-                .find(|s| setup.holds(*s, tile))
-                .map(|s| setup.sets[s].mode.value)
-        };
-        for peer in Peer::ALL {
-            let id = peers.get(peer);
-            if id == 0 || holding.is_some_and(|mode| !mode.reads(peer)) {
-                continue;
-            }
-            let mark = BitMark {
-                root,
-                sheet,
-                tile: address.tile,
-                peer: peer.index(),
-            };
-            let at = (sheet, address.tile, peer.index());
-            let color = swatch(tileset, id, 0.8);
-            spawn_mark(world, frame, at, mark, (tileset, scale), color);
-        }
-    }
+) -> Option<ZoneValues> {
+    let on = tileset.setup_sheet(sheet).ok()?;
+    let active = view.active_set(&tileset.sets())?;
+    let set = setup.sets.get(active)?;
+    let mode = set.mode.value;
+    let tiles = (setup.tiles.iter())
+        .filter(|(a, tile)| a.sheet == on && shows(setup, active, tile))
+        .map(|(address, tile)| {
+            let peers = Peer::ALL.map(|peer| {
+                let read = mode.reads(peer);
+                if read {
+                    u32::from(tile.terrains.get(peer))
+                } else {
+                    0
+                }
+            });
+            (address.tile, peers)
+        })
+        .collect();
+    let colors: HashMap<u32, Color> = (set.terrains.iter())
+        .map(|id| (u32::from(*id), swatch(tileset, *id, 1.0)))
+        .collect();
+    let brush = (view.brush != 0 && set.has(view.brush)).then_some(u32::from(view.brush));
+    let hover = brush.and_then(|b| colors.get(&b).copied());
+    Some(ZoneValues {
+        layout: ZoneLayout::Peers(mode),
+        tiles,
+        picked: brush,
+        colors,
+        dim: true,
+        hover: Some(hover.unwrap_or(Color::NONE)),
+        outlines: HashMap::new(),
+    })
 }
 
-/// Where a mark sits in a zone `third` across, and its size: it keeps
-/// [`MARK_MIN`] by spilling past a zone too small for it.
-fn mark_square(third: Vec2) -> (Vec2, Vec2) {
-    let side = (third - 2.0).max(Vec2::splat(MARK_MIN));
-    ((third - side) / 2.0, side)
+/// A stroke of the terrains mode: the brush terrain painted on tile zones
+/// in the active set, or erased with the right button.
+struct BitPaint {
+    set: usize,
+    mode: MatchMode,
+    terrain: TerrainId,
+    /// The setup with the stroke painted so far.
+    setup: TilesetSetup,
+    zones: BTreeSet<(u32, Peer)>,
 }
 
-/// A mark of peer `peer` of sheet tile `tile` over `frame`, tagged with `tag`.
-pub(crate) fn spawn_mark(
-    world: &mut World,
-    frame: Entity,
-    (sheet, tile, peer): (u32, u32, usize),
-    tag: impl Bundle,
-    (tileset, scale): (&Tileset, f32),
-    color: Color,
-) {
-    let Some((origin, size)) = tileset.sheet_rect(sheet, tile) else {
-        return;
+/// Start a stroke of the terrains mode: right erases, left paints the brush.
+pub(crate) fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box<dyn SheetPaint>> {
+    let terrain = match start.button {
+        PointerButton::Primary => start.view.brush,
+        _ => 0,
     };
-    let third = size.as_vec2() * scale / 3.0;
-    let (offset, side) = mark_square(third);
-    let cell = Vec2::new((peer % 3) as f32, (peer / 3) as f32);
-    let at = origin.as_vec2() * scale + cell * third + offset;
-    world.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(at.x),
-            top: px(at.y),
-            width: px(side.x),
-            height: px(side.y),
-            border: UiRect::all(px(1.0)),
-            ..default()
-        },
-        BackgroundColor(color),
-        BorderColor::all(Color::BLACK.with_alpha(0.6)),
-        tag,
-        Pickable::IGNORE,
-        ChildOf(frame),
-    ));
-}
-
-/// The dock, frame, sheet tile and point in it, from (0, 0) at its top left
-/// to (1, 1), of a pointer event on a sheet tile.
-type TileHit = (Entity, Entity, u32, u32, Vec2);
-
-fn tile_hit(
-    entity: Entity,
-    position: Option<Vec3>,
-    controls: &Query<(&DockControl, &ChildOf)>,
-) -> Option<TileHit> {
-    let (control, parent) = controls.get(entity).ok()?;
-    let DockAction::Tile(sheet, tile) = control.action else {
-        return None;
-    };
-    let inside = position?.truncate() + 0.5;
-    Some((control.root, parent.parent(), sheet, tile, inside))
-}
-
-fn on_press(
-    press: On<PointerPress>,
-    controls: Query<(&DockControl, &ChildOf)>,
-    stroke: Res<BitStroke>,
-    mut commands: Commands,
-) {
-    if stroke.0.is_some() {
-        return;
-    }
-    if let Some(hit) = tile_hit(press.entity, press.hit.position, &controls) {
-        let button = press.button;
-        commands.queue(move |world: &mut World| begin(world, hit, button));
-    }
-}
-
-fn on_move(
-    moved: On<PointerMove>,
-    controls: Query<(&DockControl, &ChildOf)>,
-    pointers: Query<(&PointerId, &PointerPressState)>,
-    stroke: Res<BitStroke>,
-    mut commands: Commands,
-) {
-    let Some(button) = stroke.0.as_ref().map(|s| s.button) else {
-        return;
-    };
-    let held = (pointers.iter())
-        .find(|(id, _)| **id == moved.pointer.id)
-        .is_some_and(|(_, state)| match button {
-            PointerButton::Primary => state.is_primary_pressed(),
-            PointerButton::Secondary => state.is_secondary_pressed(),
-            PointerButton::Middle => state.is_middle_pressed(),
-        });
-    if !held {
-        return;
-    }
-    if let Some(hit) = tile_hit(moved.entity, moved.hit.position, &controls) {
-        commands.queue(move |world: &mut World| extend(world, hit));
-    }
-}
-
-/// Start a stroke in a dock that paints: right erases, left paints the brush.
-fn begin(world: &mut World, hit: TileHit, button: PointerButton) {
-    let (root, _, sheet, tile, inside) = hit;
-    if world.resource::<BitStroke>().0.is_some() {
-        return;
-    }
-    let Some((path, tileset)) = dock_tileset(world, root) else {
-        return;
-    };
-    let Some(view) = world.resource::<TilesetDockViews>().0.get(&path).cloned() else {
-        return;
-    };
-    let terrain = match button {
-        PointerButton::Primary => view.brush,
-        PointerButton::Secondary => 0,
-        PointerButton::Middle => return,
-    };
-    if view.page != DockPage::Sheet || view.tool != DockTool::Paint {
-        return;
-    }
-    let Ok(setup) = tileset.setup() else {
-        return;
-    };
-    let set = (view.active_set(&tileset.sets()))
+    let tileset = start.tileset;
+    let setup = tileset.setup().ok()?;
+    let set = (start.view.active_set(&tileset.sets()))
         .filter(|s| setup.sets.get(*s).is_some_and(|s| s.has(terrain)));
-    let Some(mode) = set.and_then(|s| setup.sets.get(s)).map(|s| s.mode.value) else {
+    let Some((set, mode)) = set.and_then(|s| Some((s, setup.sets.get(s)?.mode.value))) else {
         if terrain != 0 {
             let name = tileset.terrain_name(terrain);
             let notice = format!("no terrain set holds {name}; add one to paint its bits");
             jackdaw_editor_core::status_bar::notify_info(world, notice);
         }
-        return;
+        return None;
     };
-    let Some((origin, size)) = tileset.sheet_rect(sheet, tile) else {
-        return;
-    };
-    let stroke = Stroke {
-        root,
-        path,
-        sheet,
-        set: set.unwrap_or_default(),
+    Some(Box::new(BitPaint {
+        set,
         mode,
         terrain,
-        button,
-        tileset,
         setup,
         zones: BTreeSet::new(),
-        last: origin.as_vec2() + inside * size.as_vec2(),
-    };
-    world.resource_mut::<BitStroke>().0 = Some(stroke);
-    extend(world, hit);
+    }))
 }
 
-/// Paint every zone on the line from the stroke's last point to the hit.
-fn extend(world: &mut World, (root, frame, sheet, tile, inside): TileHit) {
-    let Some(mut stroke) = world.resource_mut::<BitStroke>().0.take() else {
-        return;
-    };
-    if let Some((origin, size)) = (stroke.tileset.sheet_rect(sheet, tile))
-        .filter(|_| stroke.root == root && stroke.sheet == sheet)
-    {
-        let at = origin.as_vec2() + inside * size.as_vec2();
-        let step = size.as_vec2().min_element() / 8.0;
-        let steps = (stroke.last.distance(at) / step.max(0.5)).ceil().max(1.0) as u32;
+impl SheetPaint for BitPaint {
+    fn samples(&self) -> f32 {
+        8.0
+    }
+
+    fn paint(&mut self, world: &mut World, stroke: &StrokeInfo, frame: Entity, points: &[Vec2]) {
         let mut fresh = Vec::new();
-        for i in 0..=steps {
-            let point = stroke.last.lerp(at, i as f32 / steps as f32);
-            let zone = stroke.tileset.zone_at(sheet, point, stroke.mode);
-            if let Some(zone) = zone.filter(|z| stroke.zones.insert(*z)) {
+        for point in points {
+            let zone = stroke.tileset.zone_at(stroke.sheet, *point, self.mode);
+            if let Some(zone) = zone.filter(|z| self.zones.insert(*z)) {
                 fresh.push(zone);
             }
         }
-        stroke.last = at;
-        show(world, &mut stroke, frame, &fresh);
+        self.show(world, stroke, frame, &fresh);
     }
-    world.resource_mut::<BitStroke>().0 = Some(stroke);
+
+    fn apply(&self, stroke: &StrokeInfo) -> Option<DockCall> {
+        let zones: Vec<String> = (self.zones.iter())
+            .map(|(tile, peer)| format!("{}:{tile}:{}", stroke.sheet, peer.index()))
+            .collect();
+        (!zones.is_empty()).then(|| {
+            let params = vec![
+                ("set", self.set.to_string()),
+                ("terrain", self.terrain.to_string()),
+                ("zones", zones.join(",")),
+            ];
+            ("tileset.tile.paint_bits", params)
+        })
+    }
 }
 
-/// Paint the new zones into the stroke's setup, draw them over `frame` and
-/// show the active set's coverage as the stroke would leave it.
-fn show(world: &mut World, stroke: &mut Stroke, frame: Entity, fresh: &[(u32, Peer)]) {
-    let Ok(on) = stroke.tileset.setup_sheet(stroke.sheet) else {
-        return;
-    };
-    if fresh.is_empty() || world.get_entity(frame).is_err() {
-        return;
-    }
-    let color = match stroke.terrain {
-        0 => Color::BLACK.with_alpha(0.7),
-        id => swatch(&stroke.tileset, id, 0.8),
-    };
-    let scale = zoom(stroke.tileset.tile_size.as_vec2());
-    for (tile, peer) in fresh {
-        let mark = BitMark {
-            root: stroke.root,
-            sheet: stroke.sheet,
-            tile: *tile,
-            peer: peer.index(),
+impl BitPaint {
+    /// Paint the new zones into the stroke's setup, draw them over `frame`
+    /// and show the active set's coverage as the stroke would leave it.
+    fn show(
+        &mut self,
+        world: &mut World,
+        stroke: &StrokeInfo,
+        frame: Entity,
+        fresh: &[(u32, Peer)],
+    ) {
+        let Ok(on) = stroke.tileset.setup_sheet(stroke.sheet) else {
+            return;
         };
-        let at = (stroke.sheet, *tile, peer.index());
-        spawn_mark(world, frame, at, mark, (&stroke.tileset, scale), color);
+        if fresh.is_empty() {
+            return;
+        }
+        let zones: Vec<(TileAddress, Peer)> = (fresh.iter())
+            .map(|(tile, peer)| {
+                (
+                    TileAddress {
+                        sheet: on,
+                        tile: *tile,
+                    },
+                    *peer,
+                )
+            })
+            .collect();
+        if self
+            .setup
+            .paint_zones(self.set, self.terrain, &zones)
+            .is_err()
+        {
+            return;
+        }
+        let root = stroke.root;
+        self.redraw(world, stroke, frame, fresh);
+        let count = painted_count(&self.setup);
+        if let Ok(mut held) = world.get_entity_mut(root)
+            && let Some(mut shown) = held.get_mut::<PaintedCount>()
+        {
+            shown.0 = count;
+        }
+        let Some((text, coverage)) = coverage_line(&self.setup, self.set) else {
+            return;
+        };
+        let set = self.set;
+        retext::<CoverageLine>(world, |l| l.root == root && l.set == set, &text);
+        let summary = summary_line(&coverage);
+        retext::<CoverageSummary>(world, |l| l.root == root && l.set == set, &summary);
+        let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())
+            .iter(world)
+            .filter(|(_, m)| m.root == root && m.set == set)
+            .map(|(e, m)| (e, *m))
+            .collect();
+        for (row, shapes) in rows {
+            world.entity_mut(row).despawn_related::<Children>();
+            spawn_missing(world, row, shapes, &stroke.tileset, &coverage);
+        }
     }
-    let zones: Vec<(TileAddress, Peer)> = (fresh.iter())
-        .map(|(tile, peer)| {
-            (
-                TileAddress {
-                    sheet: on,
-                    tile: *tile,
-                },
-                *peer,
-            )
-        })
-        .collect();
-    if (stroke.setup)
-        .paint_zones(stroke.set, stroke.terrain, &zones)
-        .is_err()
-    {
-        return;
+
+    /// Draw the tile rows of the stroke's sheet holding the `fresh` zones
+    /// again from the stroke's setup. The whole sheet is drawn again once
+    /// the stroke applies.
+    fn redraw(&self, world: &mut World, stroke: &StrokeInfo, frame: Entity, fresh: &[(u32, Peer)]) {
+        let Some(view) = (world.resource::<TilesetDockViews>().0.get(&stroke.path)).cloned() else {
+            return;
+        };
+        let Some(overlay) = sheet_overlay(world, stroke.root, frame) else {
+            let sheet = ModeSheet {
+                root: stroke.root,
+                frame,
+                sheet: stroke.sheet,
+                tileset: &stroke.tileset,
+                setup: &self.setup,
+                view: &view,
+            };
+            terrain_overlay(world, &sheet);
+            return;
+        };
+        let Some(values) = terrain_zones(&stroke.tileset, &self.setup, stroke.sheet, &view) else {
+            return;
+        };
+        let columns =
+            (stroke.tileset.sheets.get(stroke.sheet as usize)).map_or(1, |s| s.columns.max(1));
+        let rows: BTreeSet<u32> = fresh.iter().map(|(tile, _)| tile / columns).collect();
+        redraw_zone_rows(world, overlay, values, rows);
     }
-    let root = stroke.root;
-    let count = painted_count(&stroke.setup);
-    retext::<BitsCount>(world, |c| c.root == root, &count);
-    let Some((text, coverage)) = coverage_line(&stroke.setup, stroke.set) else {
-        return;
-    };
-    let set = stroke.set;
-    retext::<CoverageLine>(world, |l| l.root == root && l.set == set, &text);
-    let summary = summary_line(&coverage);
-    retext::<CoverageSummary>(world, |l| l.root == root && l.set == set, &summary);
-    let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())
+}
+
+/// The zone overlay of the dock `root` drawn in `frame`.
+pub(crate) fn sheet_overlay(world: &mut World, root: Entity, frame: Entity) -> Option<Entity> {
+    (world.query_filtered::<(Entity, &ZoneOverlay, &ChildOf), Without<GhostZones>>())
         .iter(world)
-        .filter(|(_, m)| m.root == root && m.set == set)
-        .map(|(e, m)| (e, *m))
-        .collect();
-    for (row, shapes) in rows {
-        world.entity_mut(row).despawn_related::<Children>();
-        spawn_missing(world, row, shapes, &stroke.tileset, &coverage);
-    }
+        .find(|(_, o, parent)| o.root == root && parent.parent() == frame)
+        .map(|(e, ..)| e)
 }
 
 /// Show `text` in each text carrying a `C` that `pick` takes.
@@ -708,39 +460,5 @@ fn retext<C: Component>(world: &mut World, pick: impl Fn(&C) -> bool, text: &str
         {
             text.clone_into(&mut node.0);
         }
-    }
-}
-
-/// Apply the stroke `button` paints as one edit.
-fn finish(world: &mut World, button: PointerButton) {
-    let mut strokes = world.resource_mut::<BitStroke>();
-    let Some(stroke) = strokes.0.take_if(|s| s.button == button) else {
-        return;
-    };
-    let zones: Vec<String> = (stroke.zones.iter())
-        .map(|(tile, peer)| format!("{}:{tile}:{}", stroke.sheet, peer.index()))
-        .collect();
-    let call = (!zones.is_empty()).then(|| {
-        let params = vec![
-            ("set", stroke.set.to_string()),
-            ("terrain", stroke.terrain.to_string()),
-            ("zones", zones.join(",")),
-        ];
-        ("tileset.tile.paint_bits", params)
-    });
-    dispatch(world, stroke.root, &stroke.path, &stroke.tileset, call);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_mark_keeps_its_least_size_in_a_tiny_zone() {
-        let (offset, side) = mark_square(Vec2::splat(3.0));
-        assert_eq!(side, Vec2::splat(MARK_MIN), "it spills past the zone");
-        assert_eq!(offset, Vec2::splat((3.0 - MARK_MIN) / 2.0), "centred on it");
-        let (offset, side) = mark_square(Vec2::splat(30.0));
-        assert_eq!((offset, side), (Vec2::ONE, Vec2::splat(28.0)));
     }
 }

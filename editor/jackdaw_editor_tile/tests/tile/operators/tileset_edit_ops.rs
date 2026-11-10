@@ -6,6 +6,7 @@ use crate::operators::tileset_ops::{
     SHEET, asset_file, import, project_app, read_tileset, warnings,
 };
 use crate::util::OperatorResultExt as _;
+use jackdaw_tilemap::{RgbaImage, empty_tiles};
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
@@ -13,7 +14,7 @@ use jackdaw_api_internal::operator::{OperatorReports, OperatorWarnings};
 use jackdaw_commands::CommandHistory;
 use jackdaw_editor_core::operator_calls::call_operator as call_operator_handler;
 use jackdaw_scene_types::PropertyValue;
-use jackdaw_tileset::{TerrainCollision, TerrainMatch, Tileset};
+use jackdaw_tileset::{CollisionPreset, TerrainMatch, Tileset, TilesetCollision};
 use serde_json::json;
 
 pub(crate) const FILE: &str = "overworld.tileset.bsn";
@@ -216,7 +217,13 @@ fn new_terrains_take_the_first_free_palette_hue() {
     };
     let first = swatches(&dir);
     assert_ne!(first[0], first[1]);
-    assert!(first.iter().all(|s| s[..3] != [0x80; 3]), "{first:?}");
+    let markers = jackdaw_tilemap::MARKER_COLORS;
+    assert!(
+        first
+            .iter()
+            .all(|s| markers.iter().any(|m| s[..3] == m[..])),
+        "{first:?}"
+    );
     call(&mut app, "tileset.terrain.remove", &[("terrain", "grass")]);
     call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
     assert_eq!(
@@ -234,7 +241,7 @@ fn terrain_remove_empties_its_peers_and_drops_its_sets() {
         &mut app,
         &dir,
         "tileset.terrain.remove",
-        &[("terrain", "grass 2")],
+        &[("terrain", "Terrain 2")],
     );
     let ground_tile = tile_of(&before, GROUND);
     assert!(after.terrains.iter().all(|t| t.id != GROUND));
@@ -316,7 +323,7 @@ fn terrain_merge_folds_one_terrain_into_another() {
         &mut app,
         &dir,
         "tileset.terrain.merge",
-        &[("from", "11"), ("into", "grass 2")],
+        &[("from", "11"), ("into", "Terrain 2")],
     );
     assert_eq!(after.terrains.len(), 7);
     assert_eq!(
@@ -344,26 +351,179 @@ fn terrain_merge_folds_one_terrain_into_another() {
     );
 }
 
+/// The collision of sheet 0 tile `tile`.
+pub(crate) fn collision_of(tileset: &Tileset, tile: u32) -> Vec<TilesetCollision> {
+    tileset.collision(0, tile).to_vec()
+}
+
 #[test]
-fn terrain_set_collision_chooses_the_mode() {
+fn collision_set_puts_a_preset_per_layer_and_none_clears_it() {
     let (mut app, dir) = overworld();
+    let set = [("tiles", "0:3,0:4"), ("preset", "top_half")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &set);
+    for tile in [3, 4] {
+        let shapes = collision_of(&after, tile);
+        assert_eq!(shapes.len(), 1, "tile {tile}");
+        assert_eq!(shapes[0].preset, CollisionPreset::TopHalf);
+        assert_eq!((shapes[0].layer, shapes[0].trigger), (0, false));
+        assert_eq!(
+            Some(shapes[0].polygons.clone()),
+            CollisionPreset::TopHalf.polygons()
+        );
+    }
+    let named = [("action", "add"), ("name", "Water")];
+    edit(&mut app, &dir, "tileset.collision.layer", &named);
+    let trigger = [
+        ("tiles", "0:3"),
+        ("preset", "slope_up"),
+        ("layer", "Water"),
+        ("trigger", "true"),
+    ];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &trigger);
+    let shapes = collision_of(&after, 3);
+    assert_eq!(shapes.len(), 2, "one shape per layer");
+    assert_eq!((shapes[1].layer, shapes[1].trigger), (1, true));
+    assert_eq!(shapes[1].preset, CollisionPreset::SlopeUp);
+
+    let clear = [("tiles", "0:3,0:4"), ("preset", "none")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &clear);
+    assert!(collision_of(&after, 4).is_empty());
+    assert_eq!(collision_of(&after, 3).len(), 1, "layer 1 is left");
+
     let (_, after) = edit(
         &mut app,
         &dir,
-        "tileset.terrain.set_collision",
-        &[("terrain", "11"), ("mode", "solid")],
+        "tileset.collision.set",
+        &[("tiles", "0:5"), ("preset", "traced")],
     );
-    let water = (after.terrains.iter())
-        .find(|t| t.id == WATER)
-        .expect("water");
-    assert_eq!(water.collision, TerrainCollision::Solid);
-    assert!(water.collision_by_user);
+    let traced = collision_of(&after, 5);
+    assert_eq!(traced.len(), 1);
+    assert_eq!(traced[0].preset, CollisionPreset::Traced);
+    let inside = |v: &Vec2| v.cmpge(Vec2::ZERO).all() && v.cmple(Vec2::ONE).all();
+    assert!(!traced[0].polygons.is_empty());
+    assert!(traced[0].polygons.iter().flatten().all(inside));
+
+    let count = entries(&app);
+    call(
+        &mut app,
+        "tileset.collision.set",
+        &[("tiles", "0:4"), ("preset", "none")],
+    );
+    assert_eq!(entries(&app), count, "nothing to clear adds no entry");
+    let round = [("tiles", "0:4"), ("preset", "round")];
     refused(
         &mut app,
         &dir,
-        "tileset.terrain.set_collision",
-        &[("terrain", "11"), ("mode", "sticky")],
-        "solid, trigger or passable",
+        "tileset.collision.set",
+        &round,
+        "not `round`",
+    );
+    let layer = [("tiles", "0:4"), ("preset", "solid"), ("layer", "9")];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.set",
+        &layer,
+        "no physics layer",
+    );
+}
+
+#[test]
+fn a_traced_shape_on_a_fully_transparent_tile_clears_it() {
+    let (mut app, dir) = overworld();
+    let tileset = on_disk(&dir);
+    let decoded = image::open(asset_file(&dir, SHEET))
+        .expect("decodes")
+        .to_rgba8();
+    let pixels =
+        RgbaImage::new(decoded.width(), decoded.height(), decoded.as_raw()).expect("sized");
+    let layout = tileset.sheet_layout(0).expect("a grid");
+    let clear = (empty_tiles(&pixels, &layout).iter())
+        .position(|empty| *empty)
+        .expect("a fully transparent tile") as u32;
+    let tile = format!("0:{clear}");
+    let solid = [("tiles", tile.as_str()), ("preset", "solid")];
+    edit(&mut app, &dir, "tileset.collision.set", &solid);
+    let traced = [("tiles", tile.as_str()), ("preset", "traced")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &traced);
+    assert!(collision_of(&after, clear).is_empty());
+}
+
+#[test]
+fn collision_goes_on_a_sheet_imported_without_terrain_setup() {
+    let (mut app, dir) = project_app();
+    import(&mut app, &[("paths", SHEET), ("setup", "none")]);
+    assert!(on_disk(&dir).setup_sheets.is_empty());
+    let set = [("tiles", "0:3"), ("preset", "bottom_half")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &set);
+    assert_eq!(collision_of(&after, 3).len(), 1);
+    edit(&mut app, &dir, "tileset.terrain.add", &[("name", "grass")]);
+    assert_eq!(
+        collision_of(&on_disk(&dir), 3).len(),
+        1,
+        "a setup edit keeps it"
+    );
+    let clear = [("tiles", "0:3"), ("preset", "none")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &clear);
+    assert!(after.tiles.is_empty());
+}
+
+#[test]
+fn a_physics_layer_is_found_by_index_before_name_and_numbers_cannot_name_one() {
+    let (mut app, dir) = overworld();
+    for name in ["Water", "Hazards"] {
+        let add = [("action", "add"), ("name", name)];
+        edit(&mut app, &dir, "tileset.collision.layer", &add);
+    }
+    let numbered = [("action", "add"), ("name", "2")];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &numbered,
+        "cannot name",
+    );
+    let by_index = [("tiles", "0:3"), ("preset", "solid"), ("layer", "2")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &by_index);
+    assert_eq!(collision_of(&after, 3)[0].layer, 2);
+    let by_name = [("tiles", "0:4"), ("preset", "solid"), ("layer", "Water")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.set", &by_name);
+    assert_eq!(collision_of(&after, 4)[0].layer, 1);
+}
+
+#[test]
+fn physics_layers_are_added_with_a_free_name_and_renamed() {
+    let (mut app, dir) = overworld();
+    assert_eq!(*on_disk(&dir).physics_layer_names(), ["World".to_string()]);
+    let (_, after) = edit(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &[("action", "add")],
+    );
+    assert_eq!(after.physics_layer_names().to_vec(), ["World", "Layer 2"]);
+    let rename = [("action", "rename"), ("layer", "1"), ("name", "Hazards")];
+    let (_, after) = edit(&mut app, &dir, "tileset.collision.layer", &rename);
+    assert_eq!(after.physics_layer_names().to_vec(), ["World", "Hazards"]);
+    let taken = [
+        ("action", "rename"),
+        ("layer", "Hazards"),
+        ("name", "World"),
+    ];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &taken,
+        "already named",
+    );
+    let unknown = [("action", "sort")];
+    refused(
+        &mut app,
+        &dir,
+        "tileset.collision.layer",
+        &unknown,
+        "add, rename or select",
     );
 }
 
@@ -553,7 +713,7 @@ fn set_bits_takes_nine_peers_or_one() {
         &mut app,
         &dir,
         "tileset.tile.set_bits",
-        &[("tile", "0:5"), ("peers", "1,1,1,1,water,1,,0,empty")],
+        &[("tile", "0:5"), ("peers", "1,1,1,1,Terrain 7,1,,0,empty")],
     );
     assert_eq!(peers_of(&after, 5), Some([1, 1, 1, 1, 11, 1, 0, 0, 0]));
     let tile = after.tiles.iter().find(|t| t.tile == 5).expect("set");
@@ -615,6 +775,7 @@ fn set_bits_takes_nine_peers_or_one() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_failed_write_changes_nothing_and_mints_no_history() {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -661,9 +822,10 @@ fn the_terrain_operators_run_over_the_remote() {
                 json!({ "terrain": "marsh", "name": "pond" }),
             ),
             (
-                "tileset.terrain.set_collision",
-                json!({ "terrain": "pond", "mode": "trigger" }),
+                "tileset.collision.set",
+                json!({ "tiles": "0:11", "preset": "bottom_half", "trigger": true }),
             ),
+            ("tileset.collision.layer", json!({ "action": "add" })),
             (
                 "tileset.terrain_set.add",
                 json!({ "mode": "corners", "name": "Ponds" }),

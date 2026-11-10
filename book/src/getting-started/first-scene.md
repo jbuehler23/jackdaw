@@ -36,9 +36,9 @@ Once the editor is open:
 2. The cube appears at the origin. Click it in the viewport
    or in the Outliner to select.
 3. With the cube selected, drag a translation arrow on the
-   gizmo. The default mode is translate; press `R` for
-   rotate, `T` for scale, `Esc` to return to translate.
-   Arrow keys nudge on the grid.
+   gizmo. `W` is translate, `E` rotate, `R` scale, and `Q`
+   is plain select with no gizmo. Arrow keys nudge on the
+   grid.
 
 That cube is a brush, not a `.glb` import, so you can edit
 its faces in place. See the

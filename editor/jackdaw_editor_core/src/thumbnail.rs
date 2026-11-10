@@ -1336,18 +1336,24 @@ fn update_thumbnail_slots(
                 commands.entity(child).try_despawn();
             }
         }
-        commands.spawn((
-            ImageNode::new(handle),
-            Node {
-                width: Val::Px(THUMBNAIL_DISPLAY_SIZE),
-                height: Val::Px(THUMBNAIL_DISPLAY_SIZE),
-                ..default()
-            },
-            // The tile above owns the click, the drag and the context menu;
-            // the picture must not swallow any of them.
-            Pickable::IGNORE,
-            ChildOf(entity),
-        ));
+        // A tile rebuilt away before this runs takes no picture.
+        commands.queue(move |world: &mut World| {
+            if world.get_entity(entity).is_err() {
+                return;
+            }
+            world.spawn((
+                ImageNode::new(handle),
+                Node {
+                    width: Val::Px(THUMBNAIL_DISPLAY_SIZE),
+                    height: Val::Px(THUMBNAIL_DISPLAY_SIZE),
+                    ..default()
+                },
+                // The tile above owns the click, the drag and the context menu;
+                // the picture must not swallow any of them.
+                Pickable::IGNORE,
+                ChildOf(entity),
+            ));
+        });
         slot.applied = true;
     }
 }
@@ -1729,6 +1735,42 @@ mod tests {
             1,
             "the tile draws the rendered material"
         );
+    }
+
+    /// A tile rebuilt away in the frame its picture became ready leaves no
+    /// picture behind without a parent.
+    #[test]
+    fn a_tile_despawned_as_its_picture_lands_leaves_no_stray_picture() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("bark.material.bsn");
+        std::fs::write(&path, "material").expect("the file is written");
+        let mtime = source_mtime(&path).expect("the file has a modification time");
+
+        let mut app = slot_app();
+        let slot = spawn_slot(&mut app, &path, Subject::Material, 0.0);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .reserve_handle();
+        app.world_mut().resource_mut::<Thumbnails>().cache.record(
+            &path,
+            mtime,
+            ThumbState::Ready(handle),
+        );
+        app.add_systems(
+            Update,
+            (move |mut commands: Commands| commands.entity(slot).despawn())
+                .before_ignore_deferred(update_thumbnail_slots),
+        );
+
+        app.update();
+
+        let stray = app
+            .world_mut()
+            .query_filtered::<Entity, (With<ImageNode>, Without<ChildOf>)>()
+            .iter(app.world())
+            .count();
+        assert_eq!(stray, 0);
     }
 
     const PREFAB_WITH_A_MODEL: &str = r#"jackdaw::prefab::components::Prefab

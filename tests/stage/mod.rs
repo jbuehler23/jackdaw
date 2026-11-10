@@ -12,6 +12,7 @@ mod definition_assets;
 mod extension_app_plugin;
 mod extension_reload;
 mod foliage;
+#[cfg(unix)]
 mod game_output;
 mod game_panel_header;
 mod game_panel_states;
@@ -27,6 +28,7 @@ mod model_lod;
 mod module_extensions;
 mod new_asset;
 mod pixel_canvas;
+mod play_colour_drag;
 mod play_component_edits;
 mod play_controls;
 mod play_open_scene;

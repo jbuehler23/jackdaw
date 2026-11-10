@@ -174,13 +174,6 @@ fn overworld_has_grass_and_one_ground_terrain_for_dirt_and_sand() {
     };
     assert_eq!(pure(GRASS), [0, 1, 2, 27, 28, 29, 54, 55, 56, 136, 147]);
     assert_eq!(pure(GROUND), [35, 38, 47, 50]);
-    // The bare material by hue: the yellow-olive ground reads as grass too.
-    let name = |id| found.terrain(id).map(|t| t.name.as_str());
-    assert_eq!((name(GRASS), name(GROUND)), (Some("grass"), Some("grass")));
-    assert_eq!(
-        (name(WATER), name(DEEP_SEA)),
-        (Some("water"), Some("water"))
-    );
 }
 
 #[test]

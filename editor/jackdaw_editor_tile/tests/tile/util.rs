@@ -24,6 +24,15 @@ pub fn editor_test_app() -> App {
 
 /// Like [`editor_test_app`], with the asset server reading `assets`.
 pub fn editor_test_app_reading(assets: &std::path::Path) -> App {
+    editor_test_app_reading_with(assets, |_| {})
+}
+
+/// Like [`editor_test_app_reading`], with `extra` adding plugins after the
+/// tile editor's.
+pub fn editor_test_app_reading_with(assets: &std::path::Path, extra: impl FnOnce(&mut App)) -> App {
     isolate_config_dir();
-    jackdaw_editor_core::testing::editor_test_app_with(Some(assets), add_tile_editor)
+    jackdaw_editor_core::testing::editor_test_app_with(Some(assets), |app| {
+        add_tile_editor(app);
+        extra(app);
+    })
 }

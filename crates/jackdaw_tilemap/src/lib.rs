@@ -27,9 +27,12 @@ mod suggest;
 mod template;
 mod terrain_find;
 mod tile;
+mod tile_collision;
 
 pub use block_fit::{BlockEvidence, BlockFit, TerrainLook, fit_block};
-pub use collision_trace::{SolidMask, TileShape, solid_mask, trace_mask, trace_proposal};
+pub use collision_trace::{
+    SolidMask, TileShape, solid_mask, trace_art, trace_mask, trace_proposal,
+};
 pub use data_path::{DataPathError, EXTENSION, mint_data_path, resolve_path};
 pub use grid::{
     CHUNK_AREA, CHUNK_SIZE, CellCoord, CellRect, ChunkCoord, Grid, Placement, WorldRect,
@@ -48,9 +51,9 @@ pub use report::{
     StripReport, TerrainReport, auto_setup, auto_setup_on_grid,
 };
 pub use setup::{
-    CollisionMode, Pair, PairGroup, Provenance, Scope, SetupSet, SetupTerrain, SetupTile,
-    TilesetSetup, Tracked, fits, free_set_name, group_pairs, rerun, reset_to_auto, set_name,
-    solver_takes, stacked_pairs,
+    MARKER_COLORS, Pair, PairGroup, Provenance, Scope, SetupSet, SetupTerrain, SetupTile,
+    TilesetSetup, Tracked, fits, free_set_name, group_pairs, next_marker_color, rerun,
+    reset_to_auto, set_name, solver_takes, stacked_pairs,
 };
 pub use setup_layout::{Coverage, LayoutTerrains};
 pub use sidecar::{
@@ -75,3 +78,4 @@ pub use terrain_find::{
     FoundTerrain, SheetInput, TerrainAnalysis, TileAddress, TileKind, TileLabels, find_terrains,
 };
 pub use tile::{TerrainId, TileRef};
+pub use tile_collision::{ShapePreset, TileCollision};

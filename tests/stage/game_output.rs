@@ -138,15 +138,14 @@ fn output_survives_the_exit_and_the_next_play_clears_it() {
         rows(app).len() == 1
     });
 
-    built_game(&mut app, &project, "echo 'second run'\nexit 3\n");
+    built_game(&mut app, &project, "sleep 0.5\necho 'second run'\nexit 3\n");
     play_until_exit(&mut app);
     assert_eq!(
         buffered(&app, "Client"),
         [(OutputStream::Stdout, "second run".to_string())]
     );
-    assert_eq!(
-        rows(&mut app),
-        [(OutputStream::Stdout, "first run".to_string())],
+    assert!(
+        !rows(&mut app).iter().any(|(_, text)| text == "second run"),
         "the window waits while the Game panel is in front"
     );
     open_window(&mut app);

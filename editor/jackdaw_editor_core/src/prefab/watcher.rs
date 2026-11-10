@@ -265,7 +265,12 @@ fn drain_changes(world: &mut World) {
         }
         if let Some(sparse_text) = &sparse_text {
             match reload_instances_of(world, sparse_text, &cache_key) {
-                PrefabReload::Instances => reloaded = true,
+                PrefabReload::Instances => {
+                    world
+                        .resource_mut::<PrefabAstCache>()
+                        .answer_changes_of(&cache_key);
+                    reloaded = true;
+                }
                 PrefabReload::Unhandled => {
                     respawn_scene(world, sparse_text);
                     reloaded = true;
@@ -314,13 +319,15 @@ pub(crate) fn return_prefab_to_file(world: &mut World, path: &Path, reload: bool
         return;
     };
     match reload_instances_of(world, &sparse_text, path) {
-        PrefabReload::Instances => rebuild_outliner(world),
-        PrefabReload::Unhandled => {
-            respawn_scene(world, &sparse_text);
-            rebuild_outliner(world);
+        PrefabReload::Instances => {
+            world
+                .resource_mut::<PrefabAstCache>()
+                .answer_changes_of(path);
         }
-        PrefabReload::Nothing => {}
+        PrefabReload::Unhandled => respawn_scene(world, &sparse_text),
+        PrefabReload::Nothing => return,
     }
+    rebuild_outliner(world);
 }
 
 /// What a per-file reload did, and so what the caller has left to do.
@@ -582,6 +589,7 @@ fn respawn_scene(world: &mut World, sparse_text: &str) {
     // `load_bsn_document` installs the resolved document as the live
     // `SceneBsnAst`, re-adds inline assets, and applies patches.
     jackdaw_bsn::load_bsn_document(world, resolved);
+    world.resource_mut::<PrefabAstCache>().answer_changes();
 }
 
 #[cfg(test)]

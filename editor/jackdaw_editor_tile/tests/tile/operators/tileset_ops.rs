@@ -24,17 +24,26 @@ const SPACED_SHEET: &str = "overworld_spaced.png";
 /// An editor on a temp project whose assets hold the overworld sheet, packed
 /// and spaced.
 pub(crate) fn project_app() -> (App, tempfile::TempDir) {
+    project_app_with(|_| {})
+}
+
+/// Like [`project_app`], with `extra` adding plugins to the editor.
+pub(crate) fn project_app_with(extra: impl FnOnce(&mut App)) -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let assets = dir.path().join("assets");
     std::fs::create_dir_all(&assets).expect("assets");
     std::fs::copy(util::OVERWORLD_SHEET, assets.join(SHEET)).expect("copy the sheet");
     util::write_spaced_overworld_sheet(&assets.join(SPACED_SHEET));
-    let app = editor_on(&dir);
+    let app = editor_on_with(&dir, extra);
     (app, dir)
 }
 
 pub(crate) fn editor_on(dir: &tempfile::TempDir) -> App {
-    let mut app = util::editor_test_app_reading(&dir.path().join("assets"));
+    editor_on_with(dir, |_| {})
+}
+
+fn editor_on_with(dir: &tempfile::TempDir, extra: impl FnOnce(&mut App)) -> App {
+    let mut app = util::editor_test_app_reading_with(&dir.path().join("assets"), extra);
     app.world_mut()
         .insert_resource(jackdaw_editor_core::project::ProjectRoot {
             root: dir.path().to_path_buf(),
@@ -151,6 +160,17 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
     assert_eq!(tileset.grid, UVec2::new(27, 38));
     assert_eq!(tileset.setup_sheets, vec![0]);
     assert_eq!(tileset.terrains.len(), 8);
+    let markers: Vec<[u8; 3]> = (tileset.terrains.iter())
+        .map(|t| {
+            let [r, g, b, _] = t.swatch.to_u8_array();
+            [r, g, b]
+        })
+        .collect();
+    assert_eq!(
+        markers,
+        jackdaw_tilemap::MARKER_COLORS[..8],
+        "distinct marker colors, not the art's"
+    );
     let background: Vec<u8> = (tileset.terrains.iter())
         .filter(|t| t.background)
         .map(|t| t.id)
@@ -183,10 +203,11 @@ fn auto_import_packs_the_sheet_and_finds_its_terrains() {
         "the file holds the whole setup"
     );
     let report = reports(&app).join("\n");
-    assert_eq!(
-        report.matches("Corners, 14/16 shapes").count(),
-        3,
-        "the report covers the sea sets: {report}"
+    let sea = "  set \"Terrain set 2\" (Corners): terrains bottom first \
+               [\"Terrain 2\", \"Terrain 6\", \"Terrain 7\", \"Terrain 8\"], 42/48 shapes";
+    assert!(
+        report.contains(sea),
+        "the report covers the sea set: {report}"
     );
 
     assert_eq!(

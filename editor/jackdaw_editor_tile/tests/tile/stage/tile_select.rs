@@ -10,8 +10,10 @@ use crate::stage::tilemap_render::{
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
+
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
+use jackdaw_commands::ShortcutPlatform;
 use jackdaw_editor_tile::tile_select::{TileArea, TileSelection, TileSelectionInputContext};
 use jackdaw_editor_tile::tile_stamp::{StampBrush, TileStamp};
 use jackdaw_editor_tile::tile_tools::{BrushSource, TileEditMode, TileStrokeState, TileTool};
@@ -243,19 +245,16 @@ fn key(app: &mut App, key_code: KeyCode, logical_key: Key, state: ButtonState) {
 
 /// Taps `key_code` with Ctrl held.
 fn ctrl_tap(app: &mut App, key_code: KeyCode, logical_key: Key) {
-    key(
-        app,
-        KeyCode::ControlLeft,
-        Key::Control,
-        ButtonState::Pressed,
-    );
+    let platform = ShortcutPlatform::host();
+    let modifier = platform.primary_keys()[0];
+    let modifier_key = if platform.primary_is_super() {
+        Key::Super
+    } else {
+        Key::Control
+    };
+    key(app, modifier, modifier_key.clone(), ButtonState::Pressed);
     tap(app, key_code, logical_key);
-    key(
-        app,
-        KeyCode::ControlLeft,
-        Key::Control,
-        ButtonState::Released,
-    );
+    key(app, modifier, modifier_key, ButtonState::Released);
     settle(app);
 }
 

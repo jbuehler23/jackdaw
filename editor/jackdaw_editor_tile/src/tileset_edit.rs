@@ -6,26 +6,13 @@ use jackdaw_api::prelude::*;
 use jackdaw_api_internal::operator::{report_to_caller, warn_caller};
 use jackdaw_commands::CommandHistory;
 use jackdaw_tilemap::{MatchMode, Peer, TerrainId, TileAddress, TileTerrains, TilesetSetup};
-use jackdaw_tileset::{TerrainCollision, Tileset, TilesetTerrain};
+use jackdaw_tileset::{Tileset, TilesetTerrain};
 
 use jackdaw_editor_core::asset_index::{AssetValue, absolute_path, note_written};
 use jackdaw_editor_core::commands::EditorCommand;
 use jackdaw_editor_core::definition_assets::{
     entry_for_file, open_definition_path, rebuild_open_card, resolve_project_path, write_asset_file,
 };
-
-/// Hues new terrains take, in order: far apart so the bits of neighbouring
-/// terrains read apart.
-const PALETTE: [[u8; 3]; 8] = [
-    [94, 168, 72],
-    [176, 118, 64],
-    [58, 124, 214],
-    [224, 196, 92],
-    [150, 96, 200],
-    [208, 72, 72],
-    [64, 190, 170],
-    [222, 120, 180],
-];
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainAddOp>();
@@ -34,7 +21,6 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilesetTerrainSetIconOp>();
     ctx.register_operator::<TilesetTerrainSplitOp>();
     ctx.register_operator::<TilesetTerrainMergeOp>();
-    ctx.register_operator::<TilesetTerrainSetCollisionOp>();
     ctx.register_operator::<TilesetTerrainSetAddOp>();
     ctx.register_operator::<TilesetTerrainSetSetOp>();
     ctx.register_operator::<TilesetTerrainSetRemoveOp>();
@@ -85,8 +71,11 @@ pub(crate) fn open_tileset(world: &mut World, path: &str) -> Result<(PathBuf, Ti
             let path = crate::tileset_dock::focused_tileset(world)?;
             Some(resolve_project_path(world, Path::new(&path)))
         };
-        open.or_else(focused)
-            .ok_or("no path given and no tileset is open")?
+        let front = || {
+            let path = crate::tileset_dock::front_tileset(world)?;
+            Some(resolve_project_path(world, Path::new(&path)))
+        };
+        (open.or_else(focused).or_else(front)).ok_or("no path given and no tileset is open")?
     } else {
         resolve_project_path(world, Path::new(path.trim()))
     };
@@ -347,15 +336,6 @@ fn match_mode(text: &str) -> Result<MatchMode, String> {
         other => Err(format!(
             "mode is corners, sides or corners_and_sides, not `{other}`"
         )),
-    }
-}
-
-fn collision_mode(text: &str) -> Result<TerrainCollision, String> {
-    match text {
-        "solid" => Ok(TerrainCollision::Solid),
-        "trigger" => Ok(TerrainCollision::Trigger),
-        "passable" => Ok(TerrainCollision::Passable),
-        other => Err(format!("mode is solid, trigger or passable, not `{other}`")),
     }
 }
 
@@ -651,42 +631,6 @@ pub fn tileset_terrain_merge(
                     .map_err(|e| setup.explain(e))?;
                 Ok(format!("terrain {from} merged into terrain {into}"))
             })
-        },
-    )
-}
-
-/// Choose how a terrain collides.
-#[operator(
-    id = "tileset.terrain.set_collision",
-    writes_disk = true,
-    label = "Set Terrain Collision",
-    description = "Choose whether a terrain is solid, a trigger or passable.",
-    allows_undo = false,
-    params(
-        path(
-            String,
-            doc = "Tileset file under the project's assets; defaults to the open tileset."
-        ),
-        terrain(String, doc = "Terrain id or name."),
-        mode(String, doc = "solid, trigger or passable."),
-    )
-)]
-pub fn tileset_terrain_set_collision(
-    params: In<OperatorParameters>,
-    mut commands: Commands,
-) -> OperatorResult {
-    let (name, mode) = (text(&params, "terrain"), text(&params, "mode"));
-    queue_edit(
-        &mut commands,
-        "tileset.terrain.set_collision",
-        text(&params, "path"),
-        move |_, tileset| {
-            let id = terrain(tileset, &name)?;
-            let collision = collision_mode(&mode)?;
-            let changed = terrain_mut(tileset, id)?;
-            changed.collision = collision;
-            changed.collision_by_user = true;
-            Ok(format!("terrain {id} is {mode}"))
         },
     )
 }
@@ -1107,12 +1051,15 @@ pub(crate) fn clear_auto(tileset: &mut Tileset) -> Result<String, String> {
     Ok("automatic setup cleared".to_string())
 }
 
-/// The first palette hue no terrain of `tileset` has, in order.
+/// The first marker color no terrain of `tileset` has, in order.
 fn next_hue(tileset: &Tileset) -> [u8; 3] {
-    let used =
-        |hue: &[u8; 3]| (tileset.terrains.iter()).any(|t| t.swatch.to_u8_array()[..3] == *hue);
-    (PALETTE.iter().find(|hue| !used(hue)).copied())
-        .unwrap_or(PALETTE[tileset.terrains.len() % PALETTE.len()])
+    let used: Vec<[u8; 3]> = (tileset.terrains.iter())
+        .map(|t| {
+            let [r, g, b, _] = t.swatch.to_u8_array();
+            [r, g, b]
+        })
+        .collect();
+    jackdaw_tilemap::next_marker_color(&used)
 }
 
 #[cfg(test)]

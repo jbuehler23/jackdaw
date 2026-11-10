@@ -1,8 +1,9 @@
-//! Terrain bits on the sheet: the overlay, painting them by dragging across
-//! tiles, the coverage of each set and its missing shapes.
+//! Terrain bits on the sheet: the zone overlay of the terrains mode,
+//! painting them by dragging across tiles, the coverage of each set and its
+//! missing shapes.
 
 use crate::operators::tileset_dock::{
-    control, handmade, input, opened, press, screen_rect, settle, texts, view,
+    control, handmade, input, more_menu, opened, press, screen_rect, settle, texts, view,
 };
 use crate::operators::tileset_edit_ops::{call, entries, on_disk, peers_of, refused, run};
 use crate::operators::tileset_ops::warnings;
@@ -12,8 +13,10 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_editor_tile::tileset_bits::BitMark;
-use jackdaw_editor_tile::tileset_dock::{BitsOverlay, DockAction, DockTool, NewSetPick};
+use jackdaw_editor_tile::tileset_dock::{DockAction, NewSetPick};
+use jackdaw_editor_tile::tileset_layout::GhostZones;
+use jackdaw_editor_tile::tileset_modes::ModeId;
+use jackdaw_editor_tile::zone_overlay::{ZoneHover, ZoneOverlay, ZonePiece};
 use jackdaw_feathers::combobox::ComboBoxChangeEvent;
 
 const GRASS: u8 = 1;
@@ -42,20 +45,62 @@ fn drag(app: &mut App, from: Vec2, to: Vec2, button: &str) {
     );
 }
 
-/// The tiles and peers the overlay of the dock under `root` marks.
+/// The tiles and peers holding a terrain in the zone overlay of the dock
+/// under `root`.
 fn marks(app: &mut App, root: Entity) -> BTreeSet<(u32, usize)> {
     app.world_mut()
-        .query::<&BitMark>()
+        .query_filtered::<&ZoneOverlay, Without<GhostZones>>()
         .iter(app.world())
-        .filter(|m| m.root == root)
-        .map(|m| (m.tile, m.peer))
+        .filter(|o| o.root == root)
+        .flat_map(|o| o.values.zones().map(|(tile, peer, _)| (tile, peer)))
         .collect()
 }
 
-/// The open dock under `root`, in paint mode.
+/// The drawn pieces of the zone overlay of the dock under `root`.
+fn pieces(app: &mut App, root: Entity) -> Vec<ZonePiece> {
+    let overlays: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<(Entity, &ZoneOverlay), Without<GhostZones>>()
+        .iter(app.world())
+        .filter(|(_, o)| o.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    (overlays.into_iter())
+        .flat_map(|o| {
+            app.world()
+                .get::<Children>(o)
+                .into_iter()
+                .flatten()
+                .copied()
+        })
+        .filter_map(|e| app.world().get::<ZonePiece>(e).copied())
+        .collect()
+}
+
+/// The drawn pieces of the zone overlay of the dock under `root`, with the
+/// fill each node has.
+fn piece_nodes(app: &mut App, root: Entity) -> Vec<(ZonePiece, Option<Color>)> {
+    let overlays: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<(Entity, &ZoneOverlay), Without<GhostZones>>()
+        .iter(app.world())
+        .filter(|(_, o)| o.root == root)
+        .map(|(e, _)| e)
+        .collect();
+    let world = app.world();
+    (overlays.into_iter())
+        .flat_map(|o| world.get::<Children>(o).into_iter().flatten().copied())
+        .filter_map(|e| {
+            let piece = world.get::<ZonePiece>(e).copied()?;
+            Some((piece, world.get::<BackgroundColor>(e).map(|c| c.0)))
+        })
+        .collect()
+}
+
+/// The open dock under `root`, in the terrains mode.
 fn painting(app: &mut App) -> Entity {
     let (_, root) = opened(app);
-    press(app, root, DockAction::Tool(DockTool::Paint));
+    press(app, root, DockAction::Mode(ModeId::TERRAINS));
     root
 }
 
@@ -240,7 +285,7 @@ fn the_coverage_line_follows_the_stroke_as_it_paints() {
 }
 
 #[test]
-fn the_overlay_draws_off_the_active_set_or_all() {
+fn the_terrains_mode_overlays_the_active_set_and_the_tiles_mode_nothing() {
     let (mut app, _dir) = handmade();
     call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
     call(&mut app, "tileset.terrain_set.add", &[("mode", "corners")]);
@@ -254,8 +299,13 @@ fn the_overlay_draws_off_the_active_set_or_all() {
     let (_, root) = opened(&mut app);
     let tiles =
         |app: &mut App| -> BTreeSet<u32> { marks(app, root).into_iter().map(|(t, _)| t).collect() };
-    assert_eq!(view(&app).bits, BitsOverlay::Set);
+    assert_eq!(view(&app).mode, ModeId::TILES);
     press(&mut app, root, DockAction::ActiveSet(0));
+    assert!(
+        tiles(&mut app).is_empty(),
+        "the tiles mode shows a clean sheet"
+    );
+    press(&mut app, root, DockAction::Mode(ModeId::TERRAINS));
     assert_eq!(tiles(&mut app), BTreeSet::from([0, 20]));
     let corners = BTreeSet::from([(0, 0), (0, 2), (0, 6), (0, 8)]);
     assert_eq!(
@@ -263,21 +313,119 @@ fn the_overlay_draws_off_the_active_set_or_all() {
             .filter(|(t, _)| *t == 0)
             .collect::<BTreeSet<_>>(),
         corners,
-        "a corners set draws no centre mark"
+        "a corners set holds no center zone"
     );
     press(&mut app, root, DockAction::ActiveSet(1));
     assert_eq!(tiles(&mut app), BTreeSet::from([10]));
-    press(&mut app, root, DockAction::Bits(BitsOverlay::All));
-    assert_eq!(tiles(&mut app), BTreeSet::from([0, 10, 20]));
-    press(&mut app, root, DockAction::Bits(BitsOverlay::Off));
+    press(&mut app, root, DockAction::Mode(ModeId::OBJECTS));
     assert!(tiles(&mut app).is_empty());
+}
 
-    press(&mut app, root, DockAction::Tile(0, 3));
-    input(&mut app, "input.key key=KeyO");
-    assert_eq!(view(&app).bits, BitsOverlay::Set, "O steps off to set");
-    input(&mut app, "input.key key=KeyO");
-    assert_eq!(view(&app).bits, BitsOverlay::All, "then all");
-    assert_eq!(tiles(&mut app), BTreeSet::from([0, 10, 20]));
+#[test]
+fn the_overlay_draws_each_tiles_shapes_and_dims_tiles_outside_the_set() {
+    let (mut app, _dir) = handmade();
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    let found = pieces(&mut app, root);
+    let has = |piece: ZonePiece| found.contains(&piece);
+    let (water, grass) = (u32::from(WATER), u32::from(GRASS));
+    let corner = ZonePiece::Shape {
+        value: water,
+        picked: true,
+    };
+    assert!(
+        has(corner),
+        "the water corner is one picked shape: {found:?}"
+    );
+    let quiet = ZonePiece::Edge {
+        value: grass,
+        picked: false,
+    };
+    assert!(has(quiet), "the grass L is outlined: {found:?}");
+    let grass_tile = [("tile", "0:7"), ("peers", "1,1,1,1,1,1,1,1,1")];
+    call(&mut app, "tileset.tile.set_bits", &grass_tile);
+    settle(&mut app);
+    let filled: Vec<ZonePiece> = (piece_nodes(&mut app, root).into_iter())
+        .filter(|(p, fill)| {
+            matches!(p, ZonePiece::Shape { .. }) && fill.is_some_and(|c| c.alpha() > 0.0)
+        })
+        .map(|(piece, _)| piece)
+        .collect();
+    let whole_grass = ZonePiece::Shape {
+        value: grass,
+        picked: false,
+    };
+    assert!(
+        piece_nodes(&mut app, root)
+            .iter()
+            .any(|(p, _)| *p == whole_grass),
+        "a whole grass tile is one outlined shape"
+    );
+    assert_eq!(filled, [corner], "only the picked terrain is filled");
+    assert!(has(ZonePiece::Dim), "tiles outside the set are dimmed");
+    assert!(
+        found.len() < 400,
+        "a few pieces per painted tile: {}",
+        found.len()
+    );
+}
+
+#[test]
+fn the_zone_under_the_pointer_is_outlined() {
+    let (mut app, _dir) = handmade();
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::Brush(WATER));
+    let at = on_tile(&mut app, root, 1, Vec2::new(0.85, 0.15));
+    input(
+        &mut app,
+        &format!("input.pointer x={} y={} action=move", at.x, at.y),
+    );
+    let hovers: Vec<(ZoneHover, Display)> = app
+        .world_mut()
+        .query::<(&ZoneHover, &Node)>()
+        .iter(app.world())
+        .map(|(h, n)| (*h, n.display))
+        .collect();
+    assert_eq!(hovers.len(), 1, "one outline per sheet");
+    assert_eq!(hovers[0].0.tile, Some(1));
+    assert_ne!(hovers[0].1, Display::None);
+
+    pointer(&mut app, at, "click", "primary");
+    let kept: Vec<(Option<u32>, Display)> = app
+        .world_mut()
+        .query::<(&ZoneHover, &Node)>()
+        .iter(app.world())
+        .map(|(h, n)| (h.tile, n.display))
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].0, Some(1), "the outline stays through the redraw");
+    assert_ne!(kept[0].1, Display::None);
+}
+
+#[test]
+fn a_zone_painted_with_a_shared_terrain_shows_in_the_set_it_was_painted_in() {
+    let (mut app, _dir) = handmade();
+    call(&mut app, "tileset.terrain.add", &[("name", "sand")]);
+    call(&mut app, "tileset.terrain_set.add", &[("mode", "sides")]);
+    for terrain in ["grass", "sand"] {
+        let join = [("set", "1"), ("terrain", terrain)];
+        call(&mut app, "tileset.terrain_set.add_terrain", &join);
+    }
+    let corner = [
+        ("set", "0"),
+        ("terrain", "grass"),
+        ("zones", "0:5:top_left"),
+    ];
+    call(&mut app, "tileset.tile.paint_bits", &corner);
+    assert!(warnings(&app).is_empty(), "{:?}", warnings(&app));
+    settle(&mut app);
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::ActiveSet(0));
+    assert!(
+        marks(&mut app, root).contains(&(5, 0)),
+        "{:?}",
+        marks(&mut app, root)
+    );
 }
 
 #[test]
@@ -288,29 +436,27 @@ fn a_click_in_select_mode_selects_and_paints_nothing() {
     let (before, count) = (on_disk(&dir), entries(&app));
     let at = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.15));
     pointer(&mut app, at, "click", "primary");
-    assert_eq!(view(&app).tool, DockTool::Select);
+    assert_eq!(view(&app).mode, ModeId::TILES);
     assert_eq!(view(&app).selected, Some((0, 1)));
     assert_eq!(on_disk(&dir), before);
     assert_eq!(entries(&app), count);
 }
 
 #[test]
-fn a_click_in_paint_mode_paints_one_zone_and_p_switches_modes() {
+fn a_click_in_the_terrains_mode_paints_one_zone_and_the_mode_operator_steps_modes() {
     let (mut app, dir) = handmade();
     let (_, root) = opened(&mut app);
-    press(&mut app, root, DockAction::Bits(BitsOverlay::Off));
     press(&mut app, root, DockAction::Brush(WATER));
-    input(&mut app, "input.key key=KeyP");
-    assert_eq!(view(&app).tool, DockTool::Paint);
-    assert_eq!(view(&app).bits, BitsOverlay::Set, "painting shows the bits");
+    input(&mut app, "tileset.mode");
+    assert_eq!(view(&app).mode, ModeId::TERRAINS);
     let count = entries(&app);
     let at = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.15));
     pointer(&mut app, at, "click", "primary");
     let one = [WATER, 0, 0, 0, 0, 0, 0, 0, 0];
     assert_eq!(peers_of(&on_disk(&dir), 1), Some(one));
     assert_eq!(entries(&app), count + 1);
-    input(&mut app, "input.key key=KeyP");
-    assert_eq!(view(&app).tool, DockTool::Select);
+    input(&mut app, "tileset.mode");
+    assert_eq!(view(&app).mode, ModeId::COLLISION);
 }
 
 #[test]
@@ -378,7 +524,7 @@ fn a_refill_mid_stroke_orphans_nothing_and_the_stroke_goes_on() {
     let from = on_tile(&mut app, root, 1, Vec2::new(0.15, 0.15));
     let to = on_tile(&mut app, root, 3, Vec2::new(0.85, 0.15));
     pointer(&mut app, from, "press", "primary");
-    call(&mut app, "tileset.bits_overlay", &[("mode", "all")]);
+    call(&mut app, "tileset.mode", &[("mode", "terrains")]);
     settle(&mut app);
     pointer(&mut app, to, "move", "primary");
     pointer(&mut app, to, "release", "primary");
@@ -514,14 +660,15 @@ fn tileset_operators_without_a_path_edit_the_focused_tab() {
     assert_eq!(names, ["Terrain set 1", "Sand"]);
 }
 
+/// The painted tile count the More menu of the dock under `root` shows.
 fn bits_count(app: &mut App, root: Entity) -> String {
-    (texts(app, root).into_iter())
-        .find(|t| t.ends_with("painted"))
+    (more_menu(app, root).into_iter())
+        .find_map(|(action, _)| action.strip_prefix("##").map(str::to_string))
         .unwrap_or_default()
 }
 
 #[test]
-fn the_header_counts_the_tiles_with_bits_as_they_are_painted() {
+fn the_more_menu_counts_the_tiles_with_bits_as_they_are_painted() {
     let (mut app, _dir) = handmade();
     let root = painting(&mut app);
     assert_eq!(bits_count(&mut app, root), "1 tile painted");
@@ -530,24 +677,6 @@ fn the_header_counts_the_tiles_with_bits_as_they_are_painted() {
     let to = on_tile(&mut app, root, 3, Vec2::new(0.85, 0.15));
     drag(&mut app, from, to, "primary");
     assert_eq!(bits_count(&mut app, root), "4 tiles painted");
-}
-
-#[test]
-fn overlay_marks_keep_a_readable_size() {
-    let (mut app, _dir) = handmade();
-    let (_, root) = opened(&mut app);
-    let found: Vec<Entity> = app
-        .world_mut()
-        .query::<(Entity, &BitMark)>()
-        .iter(app.world())
-        .filter(|(_, m)| m.root == root)
-        .map(|(e, _)| e)
-        .collect();
-    assert!(!found.is_empty(), "tile 0 shows its bits");
-    for mark in found {
-        let size = screen_rect(&app, mark).size();
-        assert!(size.min_element() >= 10.0, "{size}");
-    }
 }
 
 #[test]
@@ -560,7 +689,7 @@ fn the_overlay_marks_only_tiles_the_coverage_counts() {
     let mixed = [("tile", "0:30"), ("peers", "1,0,1,0,3,0,1,0,1")];
     call(&mut app, "tileset.tile.set_bits", &mixed);
     settle(&mut app);
-    let (_, root) = opened(&mut app);
+    let root = painting(&mut app);
     press(&mut app, root, DockAction::ActiveSet(0));
     let tiles: BTreeSet<u32> = marks(&mut app, root).into_iter().map(|(t, _)| t).collect();
     assert_eq!(

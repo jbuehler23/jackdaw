@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use bevy::color::ColorToPacked as _;
 use jackdaw_tilemap::{CellCoord, Region, TileAddress, TilesetSetup, emit_rows};
 
-use crate::{TerrainCollision, Tileset, TilesetError, terrain_match};
+use crate::{Tileset, TilesetError, terrain_match};
 
 impl Tileset {
     /// Sets `key` to `value` on each of `layers`, or removes it for an empty
@@ -60,10 +60,8 @@ impl Tileset {
             });
             let _ = writeln!(
                 out,
-                "  terrain {} \"{}\": swatch #{r:02x}{g:02x}{b:02x}{background}, collision {}{icon}",
-                t.id,
-                t.name,
-                collision_name(t.collision)
+                "  terrain {} \"{}\": swatch #{r:02x}{g:02x}{b:02x}{background}{icon}",
+                t.id, t.name
             );
         }
         let _ = writeln!(out, "terrain sets: {}", setup.sets.len());
@@ -115,6 +113,18 @@ impl Tileset {
                 o.cells.len(),
                 o.pivot.x,
                 o.pivot.y
+            );
+        }
+        let layers = self.physics_layer_names();
+        let _ = writeln!(out, "physics layers: {}", layers.len());
+        for (index, name) in (0..).zip(layers.iter()) {
+            let on =
+                (self.tiles.iter()).flat_map(|t| t.collision.iter().filter(|c| c.layer == index));
+            let triggers = on.clone().filter(|c| c.trigger).count();
+            let solid = on.count() - triggers;
+            let _ = writeln!(
+                out,
+                "  layer {index} \"{name}\": {solid} solid, {triggers} trigger tiles"
             );
         }
         let _ = writeln!(out, "properties: {} layers", self.properties.len());
@@ -182,13 +192,5 @@ impl Tileset {
         let origin = CellCoord::new(0, 0);
         let region = Region::from_cells(origin, source.columns, source.rows, cells)?;
         Some(emit_rows(&region))
-    }
-}
-
-fn collision_name(collision: TerrainCollision) -> &'static str {
-    match collision {
-        TerrainCollision::Solid => "solid",
-        TerrainCollision::Trigger => "trigger",
-        TerrainCollision::Passable => "passable",
     }
 }

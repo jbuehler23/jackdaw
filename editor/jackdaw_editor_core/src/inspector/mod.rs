@@ -185,6 +185,7 @@ impl Plugin for InspectorPlugin {
             .add_observer(add_header::on_add_header_mount_added)
             .add_observer(add_header::on_material_new_click)
             .add_observer(asset_row::on_asset_row_button)
+            .add_systems(Update, reflect_fields::settle_released_color_drags)
             .add_systems(
                 Update,
                 (

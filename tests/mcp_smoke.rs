@@ -218,6 +218,10 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         "wait",
         "cancel",
         "assets",
+        "game_entities",
+        "game_entity",
+        "game_query",
+        "game_output",
     ] {
         assert!(names.contains(&wanted), "no `{wanted}` tool: {names:?}");
     }
@@ -231,6 +235,12 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         ("views", "targets"),
         ("views", "isolate"),
         ("wait", "until"),
+        ("game_entity", "node"),
+        ("game_entity", "entity"),
+        ("game_query", "with"),
+        ("game_query", "name"),
+        ("game_output", "instance"),
+        ("game_output", "since"),
     ] {
         let schema = tools["result"]["tools"]
             .as_array()
@@ -265,6 +275,36 @@ fn jd_mcp_initializes_and_reaches_a_running_editor() {
         Some(project.path().to_path_buf()),
         "status names another project: {status}"
     );
+    assert_eq!(reported["pie"], json!("stopped"), "{status}");
+    assert_eq!(reported["instances"], json!([]), "{status}");
+
+    // With no game running, a question to the game is refused at once rather
+    // than waited on, and the output names no instance.
+    let asked = request(
+        &mut stdin,
+        &mut stdout,
+        4,
+        "tools/call",
+        json!({ "name": "game_query", "arguments": { "name": "Player" } }),
+    );
+    let refusal = asked["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        refusal.contains("no game is running"),
+        "a game query with no game answered: {asked}"
+    );
+    let output = request(
+        &mut stdin,
+        &mut stdout,
+        5,
+        "tools/call",
+        json!({ "name": "game_output", "arguments": {} }),
+    );
+    let output: Value = output["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("game_output answered no JSON text: {output}"));
+    assert_eq!(output["instance"], Value::Null, "{output}");
+    assert_eq!(output["lines"], json!([]), "{output}");
 
     drop(stdin);
     let _ = mcp.wait();

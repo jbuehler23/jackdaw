@@ -21,7 +21,7 @@ use jackdaw_pie_protocol::ControlEvent;
 
 use crate::pie::InstanceKey;
 use crate::play_scene::{
-    DocumentAssets, PlayAssetNames, PlayScene, warn_absolute, with_session_names,
+    AssetOwner, DocumentAssets, PlayAssetNames, PlayScene, warn_absolute, with_session_names,
 };
 use crate::prefab::canonical_prefab_path;
 use crate::prefab::operators::prefab_body;
@@ -255,7 +255,11 @@ fn overlay_of(world: &mut World, scene: &SceneInOverlay) -> Overlay {
             export_copies(world, &document);
         }
         if let Some(document) = held.unsaved {
-            add_unsaved(world, &mut overlay, &relative, document);
+            let owner = match held.tab {
+                Some(tab) => AssetOwner::of_tab(world, tab),
+                None => AssetOwner::File(relative.to_string_lossy().replace('\\', "/")),
+            };
+            add_unsaved(world, &mut overlay, &relative, document, &owner);
         }
     }
     if scene.sidecars {
@@ -280,9 +284,15 @@ fn export_copies(world: &mut World, document: &PlayDocument) {
 
 /// `document` as the unsaved prefab at `relative`, under session names and spelled
 /// as a save spells it.
-fn add_unsaved(world: &mut World, overlay: &mut Overlay, relative: &Path, document: GameDocument) {
+fn add_unsaved(
+    world: &mut World,
+    overlay: &mut Overlay,
+    relative: &Path,
+    document: GameDocument,
+    owner: &AssetOwner,
+) {
     warn_absolute(world, &document.absolute);
-    let mut ast = with_session_names(world, document);
+    let mut ast = with_session_names(world, document, owner);
     let assets = DocumentAssets::of(world, &mut ast);
     let embedded = assets
         .embedded

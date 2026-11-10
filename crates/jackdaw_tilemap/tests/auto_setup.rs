@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use jackdaw_tilemap::{
-    AutoSetup, CollisionMode, Peer, Provenance, RgbaImage, Scope, SetupTile, TileAddress,
-    TilesetSetup, Tracked, auto_setup, rerun,
+    AutoSetup, Peer, Provenance, RgbaImage, Scope, SetupTile, ShapePreset, TileAddress,
+    TileCollision, TilesetSetup, Tracked, auto_setup, rerun,
 };
 
 struct Sheet {
@@ -127,8 +127,8 @@ fn absorbed_terrains_leave_the_proposal() {
         .iter()
         .map(|t| t.name.as_str())
         .collect();
-    // Named by hue: the yellow-olive dirt and sand ground reads as grass.
-    assert_eq!(names[..3], ["grass", "grass 2", "grass 6"]);
+    // Kept terrains are numbered first and dropped ones after them.
+    assert_eq!(names[..3], ["Terrain 1", "Terrain 2", "Terrain 9"]);
     let distinct: BTreeSet<&str> = names.iter().copied().collect();
     assert_eq!(distinct.len(), names.len(), "{names:?}");
     assert_eq!(found.sheets, [0]);
@@ -210,7 +210,8 @@ fn user_bits_names_and_modes_survive_a_rerun() {
     setup
         .rename_terrain(GRASS, "meadow")
         .expect("known terrain");
-    (setup.set_collision_mode(GROUND, CollisionMode::Solid)).expect("known terrain");
+    let half = TileCollision::preset(ShapePreset::TopHalf, 0, false).expect("a preset");
+    assert!(setup.set_collision(painted, half.clone()));
 
     let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
 
@@ -221,8 +222,6 @@ fn user_bits_names_and_modes_survive_a_rerun() {
     }
     let grass = after.terrain(GRASS).expect("grass kept");
     assert_eq!(grass.name, Tracked::user("meadow".to_string()));
-    let ground = after.terrain(GROUND).expect("ground kept");
-    assert_eq!(ground.collision, Tracked::user(CollisionMode::Solid));
 
     let auto = TilesetSetup::from_auto(&fresh);
     assert_eq!((&after.sets, &after.stamps), (&auto.sets, &auto.stamps));
@@ -244,60 +243,31 @@ fn user_bits_names_and_modes_survive_a_rerun() {
     }
 
     for (address, tile) in &after.tiles {
-        assert_eq!(tile.shape.provenance, Provenance::Auto);
-        if tile.shape.value.is_some() {
-            assert!(uses(tile, GROUND), "{address:?}");
-        } else {
-            // Unread sides of a sea tile over the ground take the ground too, so
-            // only a ground centre makes an untouched tile solid.
-            let all_auto = !tile.provenance.contains(&Provenance::User);
-            let centre = tile.terrains.centre() == GROUND;
-            assert!(!(all_auto && centre), "{address:?}");
+        if *address != painted {
+            assert!(tile.collision.value.is_empty(), "{address:?}");
         }
     }
-    assert!(after.tiles[&cleared].shape.value.is_none());
-    assert!(after.tiles[&painted].shape.value.is_some());
+    assert_eq!(after.tiles[&painted].collision, Tracked::user(vec![half]));
 }
 
 #[test]
-fn an_imported_solid_terrain_stays_solid_with_its_shapes() {
+fn shapes_traced_on_import_are_solid_collision_a_rerun_keeps() {
     let sheet = Sheet::packed();
     let inputs = [(PACKED, sheet.image())];
     let fresh = auto_setup(&inputs, &[WATER]).expect("runs");
     let setup = TilesetSetup::from_auto(&fresh);
-    let solid = Tracked::auto(CollisionMode::Solid);
-    assert_eq!(setup.terrain(WATER).map(|t| &t.collision), Some(&solid));
     let after = rerun(&setup, &inputs, &Scope::All).expect("re-run");
-    assert_eq!(after.terrain(WATER).map(|t| &t.collision), Some(&solid));
-    let shapes = |s: &TilesetSetup| -> Vec<(TileAddress, bool)> {
+    let shapes = |s: &TilesetSetup| -> Vec<(TileAddress, Vec<TileCollision>)> {
         (s.tiles.iter())
-            .map(|(a, t)| (*a, t.shape.value.is_some()))
+            .map(|(a, t)| (*a, t.collision.value.clone()))
+            .filter(|(_, c)| !c.is_empty())
             .collect()
     };
-    assert!(shapes(&after).iter().any(|(_, s)| *s));
-    assert_eq!(shapes(&after), shapes(&setup));
-}
-
-#[test]
-fn a_user_solid_terrain_with_no_match_still_collides() {
-    let sheet = Sheet::packed();
-    let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    (setup.set_collision_mode(GROUND, CollisionMode::Solid)).expect("known terrain");
-    let tile = first_with(&setup, WATER, 0);
-    for peer in Peer::ALL {
-        setup.set_peer(tile, peer, GROUND).expect("known terrain");
-    }
-    let ground = setup.terrains.iter_mut().find(|t| t.id == GROUND);
-    ground.expect("ground").oklab.x += 0.5;
-    let swatch = setup.terrain(GROUND).map(|t| t.swatch);
-    let fresh = u8::try_from(setup.next_id).expect("a terrain id");
-
-    let after = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
-    let kept = after.terrain(GROUND).expect("kept for its User values");
-    assert_eq!(kept.collision.value, CollisionMode::Solid);
-    assert!(after.tiles[&tile].shape.value.is_some());
-    assert_eq!(after.terrain(fresh).map(|t| t.swatch), swatch);
-    assert_eq!(after.next_id, setup.next_id + 1);
+    let traced = shapes(&setup);
+    assert!(!traced.is_empty());
+    let solid = |c: &TileCollision| c.layer == 0 && !c.trigger && c.preset == ShapePreset::Traced;
+    assert!(traced.iter().all(|(_, c)| c.len() == 1 && solid(&c[0])));
+    assert_eq!(shapes(&after), traced);
 }
 
 /// `sheet` drawn twice side by side, as a two-frame animation strip.
@@ -351,26 +321,11 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
     // every terrain it keeps has its old id.
     let check = |sheets: &[(&str, &Sheet)], kept: usize| {
         let after = rerun_over(&setup, sheets, &Scope::All);
-        let auto = TilesetSetup::from_auto(&run(sheets));
         assert_eq!((setup.terrains.len(), after.terrains.len()), (11, kept));
         for got in &after.terrains {
             let was = setup.terrain(got.id).expect("an old id");
             assert!(got.oklab.distance(was.oklab) < 0.06);
-            let fresh = auto.terrains.iter().min_by(|a, b| {
-                let (da, db) = (a.oklab.distance(got.oklab), b.oklab.distance(got.oklab));
-                da.total_cmp(&db)
-            });
-            let fresh = fresh.filter(|f| f.oklab.distance(got.oklab) < 0.06);
-            let expected = if got.id == GRASS {
-                "meadow".to_string()
-            } else if let Some(fresh) = fresh {
-                fresh.name.value.clone()
-            } else {
-                // Seeded only by the two copies together, so a fresh run
-                // over one copy has no such terrain to name it after.
-                continue;
-            };
-            assert_eq!(got.name.value, expected, "terrain {}", got.id);
+            assert_eq!(got.name, was.name, "terrain {}", got.id);
         }
         after
     };
@@ -378,7 +333,7 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
     assert_eq!(reordered.sheets, setup.sheets);
     assert_eq!(reordered.tiles, setup.tiles);
     let ground = reordered.terrain(GROUND).map(|t| t.name.value.as_str());
-    assert_eq!(ground, Some("grass 2"));
+    assert_eq!(ground, Some("Terrain 2"));
     let added = check(
         &[("copy.png", &packed), (PACKED, &packed), (SPACED, &spaced)],
         11,
@@ -397,58 +352,68 @@ fn terrain_ids_and_tiles_follow_their_sheets() {
 #[test]
 fn reruns_are_deterministic() {
     let sheet = Sheet::packed();
-    let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    setup
-        .set_collision_mode(GROUND, CollisionMode::Solid)
-        .expect("known");
+    let setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
     let a = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
     let b = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
     assert_eq!(a, b);
     assert_eq!(rerun_over(&a, &[(PACKED, &sheet)], &Scope::All), a);
 }
 
+fn names_of(setup: &TilesetSetup) -> Vec<(u8, String)> {
+    (setup.terrains.iter())
+        .map(|t| (t.id, t.name.value.clone()))
+        .collect()
+}
+
+#[track_caller]
+fn assert_distinct(setup: &TilesetSetup) {
+    let names = names_of(setup);
+    let unique: BTreeSet<&String> = names.iter().map(|(_, n)| n).collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+}
+
 #[test]
-fn auto_names_step_around_user_names_and_stay_put() {
+fn reruns_keep_every_terrain_name() {
     let sheet = Sheet::packed();
     let mut setup = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
     setup
-        .rename_terrain(GROUND, "grass")
+        .rename_terrain(GROUND, "meadow")
         .expect("known terrain");
-    let name = |s: &TilesetSetup, id| s.terrain(id).map(|t| t.name.clone());
-    let once = rerun_over(&setup, &[(PACKED, &sheet)], &Scope::All);
-    assert_eq!(
-        name(&once, GRASS),
-        Some(Tracked::auto("grass 2".to_string()))
-    );
-    assert_eq!(
-        name(&once, GROUND),
-        Some(Tracked::user("grass".to_string()))
-    );
-    let twice = rerun_over(&once, &[(PACKED, &sheet)], &Scope::All);
-    assert_eq!(name(&twice, GRASS), name(&once, GRASS));
+    let partial = Scope::Set(setup.set_index(DEEP_SEA, WATER).expect("a set"));
+    for scope in [Scope::All, partial.clone()] {
+        let after = rerun_over(&setup, &[(PACKED, &sheet)], &scope);
+        assert_eq!(names_of(&after), names_of(&setup), "{scope:?}");
+        let twice = rerun_over(&after, &[(PACKED, &sheet)], &scope);
+        assert_eq!(names_of(&twice), names_of(&setup), "{scope:?}");
+    }
+    let ground = setup.terrain(GROUND).map(|t| t.name.clone());
+    assert_eq!(ground, Some(Tracked::user("meadow".to_string())));
 
-    let partial = Scope::Set(once.set_index(DEEP_SEA, WATER).expect("a set"));
-    let kept = rerun_over(&once, &[(PACKED, &sheet)], &partial);
-    assert_eq!(
-        name(&kept, GRASS),
-        Some(Tracked::auto("grass 2".to_string()))
-    );
-    let mut out_of_scope = TilesetSetup::from_auto(&run(&[(PACKED, &sheet)]));
-    out_of_scope.terrains[0].name = Tracked::auto("grass 6".to_string());
-    let after = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &partial);
-    let names: Vec<String> = after
-        .terrains
-        .iter()
-        .map(|t| t.name.value.clone())
-        .collect();
-    assert_eq!(
-        names,
-        [
-            "grass 6", "grass 2", "grass 3", "grass 4", "dirt", "grass 8", "water", "water 2"
-        ]
-    );
-    let all = rerun_over(&out_of_scope, &[(PACKED, &sheet)], &Scope::All);
-    assert_eq!(name(&all, GRASS), Some(Tracked::auto("grass".to_string())));
+    let mut renamed = setup.clone();
+    renamed.terrains[0].name = Tracked::auto("Terrain 9".to_string());
+    for scope in [Scope::All, partial] {
+        let after = rerun_over(&renamed, &[(PACKED, &sheet)], &scope);
+        assert_eq!(names_of(&after), names_of(&renamed), "{scope:?}");
+    }
+}
+
+#[test]
+fn new_terrains_of_a_rerun_take_names_no_terrain_has() {
+    let (packed, spaced) = (Sheet::packed(), Sheet::spaced());
+    let setup = TilesetSetup::from_auto(&run(&[(SPACED, &spaced)]));
+    let both = [(PACKED, &packed), (SPACED, &spaced)];
+    let partial = Scope::Set(setup.set_index(DEEP_SEA, WATER).expect("a set"));
+    for scope in [Scope::All, partial] {
+        let after = rerun_over(&setup, &both, &scope);
+        if scope == Scope::All {
+            assert!(after.terrains.len() > setup.terrains.len());
+        }
+        assert_distinct(&after);
+        for (id, name) in names_of(&setup) {
+            let kept = after.terrain(id).map(|t| t.name.value.as_str());
+            assert_eq!(kept, Some(name.as_str()), "{scope:?}");
+        }
+    }
 }
 
 #[test]

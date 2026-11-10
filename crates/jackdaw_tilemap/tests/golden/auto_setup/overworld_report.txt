@@ -1,21 +1,18 @@
 sheets: 1
   sheet "overworld.png": tile 16x16, margin 0x0, spacing 0x0, 27 columns, 38 rows, confidence 0.56
 terrains: 8
-  terrain 1 "grass": swatch #8aa744, pure tiles 11
-  terrain 2 "grass 2": swatch #c6b15d, pure tiles 4
-  terrain 5 "grass 3": swatch #9ca688, pure tiles 0
-  terrain 6 "grass 4": swatch #555d47, background, pure tiles 0
-  terrain 7 "dirt": swatch #fc0803, pure tiles 1
-  terrain 9 "grass 5": swatch #2cc3a9, pure tiles 4
-  terrain 11 "water": swatch #06a1b3, pure tiles 8
-  terrain 12 "water 2": swatch #038cac, pure tiles 4
-terrain sets: 6
-  set "grass 2" over "grass": CornersAndSides, 35/47 shapes, 12 missing, template Minimal3x3
-  set "water" over "grass": CornersAndSides, 30/47 shapes, 17 missing, template Corner2x2
-  set "grass 5" over "grass 2": Corners, 14/16 shapes, 2 missing, template none
-  set "grass 3" over "grass 4": Corners, 6/16 shapes, 10 missing, template none
-  set "water" over "grass 5": Corners, 14/16 shapes, 2 missing, template none
-  set "water 2" over "water": Corners, 14/16 shapes, 2 missing, template none
+  terrain 1 "Terrain 1": swatch #f032e6, pure tiles 11
+  terrain 2 "Terrain 2": swatch #42d4f4, pure tiles 4
+  terrain 5 "Terrain 3": swatch #f58231, pure tiles 0
+  terrain 6 "Terrain 4": swatch #4363d8, background, pure tiles 0
+  terrain 7 "Terrain 5": swatch #ffe119, pure tiles 1
+  terrain 9 "Terrain 6": swatch #e6194b, pure tiles 4
+  terrain 11 "Terrain 7": swatch #911eb4, pure tiles 8
+  terrain 12 "Terrain 8": swatch #bfef45, pure tiles 4
+terrain sets: 3
+  set "Terrain set 1" (CornersAndSides): terrains bottom first ["Terrain 1", "Terrain 2", "Terrain 7"], 65/94 shapes
+  set "Terrain set 2" (Corners): terrains bottom first ["Terrain 2", "Terrain 6", "Terrain 7", "Terrain 8"], 42/48 shapes
+  set "Terrain set 3" (Corners): terrains bottom first ["Terrain 4", "Terrain 3"], 6/16 shapes
 stamps: 34
   stamp "overworld.png" at column 0 row 4: 5x3, 14 tiles
   stamp "overworld.png" at column 11 row 4: 3x3, 8 tiles
