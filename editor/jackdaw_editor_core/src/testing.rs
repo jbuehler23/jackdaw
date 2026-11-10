@@ -14,6 +14,8 @@ use bevy::{
 };
 use jackdaw_api::prelude::OperatorResult;
 
+pub mod large_scene;
+
 /// The CC0 overworld tile sheet: 16 px tiles, 27 columns, 432 x 1040.
 pub const OVERWORLD_SHEET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
