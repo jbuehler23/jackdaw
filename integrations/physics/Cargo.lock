@@ -4629,6 +4629,7 @@ dependencies = [
  "jackdaw_scene_types",
  "jackdaw_tilemap",
  "jackdaw_tileset",
+ "jackdaw_widgets",
  "path-slash",
  "serde",
  "serde_json",

@@ -762,3 +762,56 @@ fn the_brush_paints_in_its_own_set_whatever_header_was_clicked() {
         "an undone move takes it back"
     );
 }
+
+#[test]
+fn painting_a_sheet_outside_setup_brings_it_under_setup_in_the_same_undo_step() {
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[
+            ("paths", crate::operators::tileset_ops::SHEET),
+            ("setup", "none"),
+        ],
+    );
+    settle(&mut app);
+    assert!(on_disk(&dir).setup_sheets.is_empty());
+    let root = painting(&mut app);
+    press(&mut app, root, DockAction::AddTerrain);
+    input(&mut app, "input.key key=Enter");
+    let (before, count) = (on_disk(&dir), entries(&app));
+    let from = on_tile(&mut app, root, 4, Vec2::new(0.15, 0.15));
+    let to = on_tile(&mut app, root, 4, Vec2::new(0.85, 0.15));
+    drag(&mut app, from, to, "primary");
+    let after = on_disk(&dir);
+    assert_eq!(after.setup_sheets, [0], "the sheet is under setup");
+    let peers = peers_of(&after, 4).expect("painted");
+    assert!(peers.contains(&1), "{peers:?}");
+    assert_eq!(entries(&app), count + 1, "one undo entry");
+    run(&mut app, "history.undo");
+    settle(&mut app);
+    assert_eq!(on_disk(&dir), before, "one undo reverts both");
+}
+
+#[test]
+fn a_bit_set_on_a_sheet_outside_setup_brings_it_under_setup() {
+    let (mut app, dir) = crate::operators::tileset_ops::project_app();
+    crate::operators::tileset_ops::import(
+        &mut app,
+        &[
+            ("paths", crate::operators::tileset_ops::SHEET),
+            ("setup", "none"),
+        ],
+    );
+    call(&mut app, "tileset.terrain.add", &[("name", "grass")]);
+    let before = on_disk(&dir);
+    call(
+        &mut app,
+        "tileset.tile.set_bits",
+        &[("tile", "0:4"), ("peer", "top_left"), ("terrain", "grass")],
+    );
+    let after = on_disk(&dir);
+    assert_eq!(after.setup_sheets, [0]);
+    assert_eq!(peers_of(&after, 4).map(|p| p[0]), Some(1));
+    run(&mut app, "history.undo");
+    assert_eq!(on_disk(&dir), before);
+}

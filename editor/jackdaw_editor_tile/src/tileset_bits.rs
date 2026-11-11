@@ -54,8 +54,9 @@ pub struct MissingShapes {
     writes_disk = true,
     label = "Paint Tile Bits",
     description = "Paint a terrain on zones of sheet tiles in one terrain set, as one undo \
-                   entry; zones its match mode does not use and tiles of objects are left. \
-                   Nothing changed adds no entry.",
+                   entry; zones its match mode does not use and tiles of objects are left. A \
+                   sheet outside terrain setup comes under it in the same entry. Nothing \
+                   changed adds no entry.",
     allows_undo = false,
     params(
         path(
@@ -82,7 +83,12 @@ pub fn tileset_tile_paint_bits(
         "tileset.tile.paint_bits",
         text(&params, "path"),
         move |_, tileset| {
-            with_setup(tileset, |tileset, setup| {
+            let mut covered = tileset.clone();
+            for sheet in zone_sheets(tileset, &zones)? {
+                covered.cover_sheet(sheet).map_err(|e| e.to_string())?;
+            }
+            let mut changed = 0;
+            let message = with_setup(&mut covered, |tileset, setup| {
                 let index = terrain_set(tileset, &set)?;
                 let id = terrain_or_empty(tileset, &on)?;
                 let found = setup.sets.get(index).ok_or("no such terrain set")?;
@@ -95,12 +101,26 @@ pub fn tileset_tile_paint_bits(
                     ));
                 }
                 let zones = zone_list(tileset, &zones)?;
-                let changed =
-                    (setup.paint_zones(index, id, &zones)).map_err(|e| setup.explain(e))?;
+                changed = (setup.paint_zones(index, id, &zones)).map_err(|e| setup.explain(e))?;
                 Ok(format!("{changed} of {} zones painted", zones.len()))
-            })
+            })?;
+            if changed > 0 {
+                *tileset = covered;
+            }
+            Ok(message)
         },
     )
+}
+
+/// The sheets the zones `text` lists fall on.
+fn zone_sheets(tileset: &Tileset, text: &str) -> Result<BTreeSet<u32>, String> {
+    (text.split(',').map(str::trim))
+        .filter(|z| !z.is_empty())
+        .map(|zone| {
+            let (at, _) = (zone.rsplit_once(':')).ok_or(format!("`{zone}` is no zone"))?;
+            Ok(tile(tileset, at)?.0)
+        })
+        .collect()
 }
 
 fn zone_list(tileset: &Tileset, text: &str) -> Result<Vec<(TileAddress, Peer)>, String> {
@@ -229,12 +249,12 @@ fn terrain_zones(
     sheet: u32,
     view: &DockView,
 ) -> Option<ZoneValues> {
-    let on = tileset.setup_sheet(sheet).ok()?;
+    let on = tileset.setup_sheet(sheet).ok();
     let active = view.paint_set(tileset)?;
     let set = setup.sets.get(active)?;
     let mode = set.mode.value;
     let tiles = (setup.tiles.iter())
-        .filter(|(a, tile)| a.sheet == on && shows(setup, active, tile))
+        .filter(|(a, tile)| Some(a.sheet) == on && shows(setup, active, tile))
         .map(|(address, tile)| {
             let peers = Peer::ALL.map(|peer| {
                 let read = mode.reads(peer);
@@ -269,6 +289,8 @@ struct BitPaint {
     set: usize,
     mode: MatchMode,
     terrain: TerrainId,
+    /// The tileset with the stroke's sheet under terrain setup.
+    tileset: Tileset,
     /// The setup with the stroke painted so far.
     setup: TilesetSetup,
     zones: BTreeSet<(u32, Peer)>,
@@ -280,7 +302,9 @@ pub(crate) fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box
         PointerButton::Primary => start.view.brush,
         _ => 0,
     };
-    let tileset = start.tileset;
+    let mut covered = start.tileset.clone();
+    covered.cover_sheet(start.sheet).ok()?;
+    let tileset = &covered;
     let setup = tileset.setup().ok()?;
     let set = (start.view.paint_set(tileset))
         .filter(|s| setup.sets.get(*s).is_some_and(|s| s.has(terrain)));
@@ -297,6 +321,7 @@ pub(crate) fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box
         mode,
         terrain,
         setup,
+        tileset: covered,
         zones: BTreeSet::new(),
     }))
 }
@@ -342,7 +367,7 @@ impl BitPaint {
         frame: Entity,
         fresh: &[(u32, Peer)],
     ) {
-        let Ok(on) = stroke.tileset.setup_sheet(stroke.sheet) else {
+        let Ok(on) = self.tileset.setup_sheet(stroke.sheet) else {
             return;
         };
         if fresh.is_empty() {
@@ -387,7 +412,7 @@ impl BitPaint {
             .collect();
         for (row, shapes) in rows {
             world.entity_mut(row).despawn_related::<Children>();
-            spawn_missing(world, row, shapes, &stroke.tileset, &coverage);
+            spawn_missing(world, row, shapes, &self.tileset, &coverage);
         }
     }
 
@@ -403,14 +428,14 @@ impl BitPaint {
                 root: stroke.root,
                 frame,
                 sheet: stroke.sheet,
-                tileset: &stroke.tileset,
+                tileset: &self.tileset,
                 setup: &self.setup,
                 view: &view,
             };
             terrain_overlay(world, &sheet);
             return;
         };
-        let Some(values) = terrain_zones(&stroke.tileset, &self.setup, stroke.sheet, &view) else {
+        let Some(values) = terrain_zones(&self.tileset, &self.setup, stroke.sheet, &view) else {
             return;
         };
         let columns =

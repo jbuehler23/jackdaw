@@ -546,6 +546,19 @@ impl Tileset {
         })
     }
 
+    /// Brings sheet `sheet` under terrain setup, after the sheets already
+    /// under it; says whether it was outside.
+    pub fn cover_sheet(&mut self, sheet: u32) -> Result<bool, TilesetError> {
+        match self.setup_sheet(sheet) {
+            Ok(_) => Ok(false),
+            Err(TilesetError::OutsideSetup(_)) => {
+                self.setup_sheets.push(sheet);
+                Ok(true)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Index of sheet `sheet` in the terrain setup.
     pub fn setup_sheet(&self, sheet: u32) -> Result<usize, TilesetError> {
         if sheet as usize >= self.sheets.len() {

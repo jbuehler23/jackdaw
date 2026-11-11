@@ -154,18 +154,20 @@ struct TooltipState {
 /// the hover lookup, so no popover sits under the cursor over a control the user
 /// is operating.
 ///
-/// An open menu blocks it for the same reason: a row's tooltip would cover the
-/// rows travelled to next.
+/// An open menu, from the menu bar or a context menu, blocks it for the same
+/// reason: a row's tooltip would cover the rows travelled to next.
 fn tick_tooltip(
     time: Res<Time>,
     targets: Query<(Entity, &Tooltip, &Hovered)>,
     mouse: Res<ButtonInput<MouseButton>>,
     menus: Option<Res<jackdaw_widgets::menu_bar::MenuBarState>>,
+    context_menu: Option<Res<jackdaw_widgets::context_menu::ContextMenuState>>,
     default_font: Res<crate::icons::FeathersDefaultFont>,
     mut state: ResMut<TooltipState>,
     mut commands: Commands,
 ) {
-    let menu_is_open = menus.is_some_and(|menus| menus.open_menu.is_some());
+    let menu_is_open = menus.is_some_and(|menus| menus.open_menu.is_some())
+        || context_menu.is_some_and(|menu| menu.menu_entity.is_some());
     if menu_is_open || mouse.get_pressed().next().is_some() {
         if let Some(active) = state.active.take() {
             commands.entity(active).try_despawn();
@@ -530,6 +532,28 @@ mod tests {
             1,
             "and the same hover is answered once the menu is down",
         );
+    }
+
+    /// A row's tooltip would sit under the context menu it opened.
+    #[test]
+    fn an_open_context_menu_suppresses_the_tooltip() {
+        let mut world = test_world();
+        world.init_resource::<jackdaw_widgets::context_menu::ContextMenuState>();
+        let menu = world.spawn_empty().id();
+        world.spawn((Tooltip::title("Grass"), Hovered(true)));
+        world
+            .resource_mut::<jackdaw_widgets::context_menu::ContextMenuState>()
+            .menu_entity = Some(menu);
+        advance(&mut world, FULL_HOVER_DELAY * 2);
+        tick(&mut world);
+        assert_eq!(popover_count(&mut world), 0, "none under the open menu");
+
+        world
+            .resource_mut::<jackdaw_widgets::context_menu::ContextMenuState>()
+            .menu_entity = None;
+        advance(&mut world, SHORT_HOVER_DELAY);
+        tick(&mut world);
+        assert_eq!(popover_count(&mut world), 1, "back once the menu is down");
     }
 
     /// While a button stays held (the span of a drag-scrub gesture), the

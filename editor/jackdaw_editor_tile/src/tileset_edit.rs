@@ -999,7 +999,8 @@ pub fn tileset_terrain_set_move_terrain(
     id = "tileset.tile.set_bits",
     writes_disk = true,
     label = "Set Tile Bits",
-    description = "Set the terrain of a tile's nine peers, or of one of them.",
+    description = "Set the terrain of a tile's nine peers, or of one of them; a sheet outside \
+                   terrain setup comes under it in the same undo entry.",
     allows_undo = false,
     params(
         path(
@@ -1033,7 +1034,11 @@ pub fn tileset_tile_set_bits(
         "tileset.tile.set_bits",
         text(&params, "path"),
         move |_, tileset| {
-            with_setup(tileset, |tileset, setup| {
+            let mut covered = tileset.clone();
+            covered
+                .cover_sheet(tile(tileset, &at)?.0)
+                .map_err(|e| e.to_string())?;
+            let message = with_setup(&mut covered, |tileset, setup| {
                 let (sheet, index) = tile(tileset, &at)?;
                 let address = tileset
                     .setup_address(sheet, index)
@@ -1069,7 +1074,11 @@ pub fn tileset_tile_set_bits(
                     "tile {index} of sheet {sheet} is {}",
                     shown.join(",")
                 ))
-            })
+            })?;
+            if covered.tiles != tileset.tiles {
+                *tileset = covered;
+            }
+            Ok(message)
         },
     )
 }
