@@ -391,7 +391,7 @@ impl<'a> Iterator for Span<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::lex::Token;
+    use crate::syntax::lex::{LexError, Token};
     use crate::syntax::span::Span;
 
     fn tokens(input: &str) -> Vec<Token> {
@@ -516,5 +516,179 @@ mod tests {
         assert_eq!(tokens[1].span.offset, 4);
         assert_eq!(tokens[1].span.line, 2);
         assert_eq!(tokens[2].span.line, 3);
+    }
+
+    fn lex(input: &str) -> Result<Vec<Token>, char> {
+        Span::from(input).lex_all().map_err(|err| match err {
+            LexError::UnexpectedChar(c) => c,
+        })
+    }
+
+    /// Each token's span as its text, offset and line.
+    fn spans(input: &str) -> Vec<(&str, usize, u32)> {
+        Span::from(input)
+            .map(|token| {
+                let span = token.expect("the input lexes").span;
+                (span.fragment, span.offset, span.line)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn numbers_lex_by_their_spelling() {
+        assert_eq!(lex("1."), Ok(vec![Token::Float(1.0)]));
+        assert_eq!(lex(".5"), Ok(vec![Token::Float(0.5)]));
+        assert_eq!(lex("1.e2"), Ok(vec![Token::Float(100.0)]));
+        assert_eq!(lex("-1.5E-1"), Ok(vec![Token::Float(-0.15)]));
+        assert_eq!(lex("+1.5"), Ok(vec![Token::Float(1.5)]));
+        assert_eq!(lex("+7"), Ok(vec![Token::Int(7)]));
+        assert_eq!(lex("0x1F -0X1f"), Ok(vec![Token::Int(31), Token::Int(-31)]));
+        assert_eq!(lex("007"), Ok(vec![Token::Int(7)]));
+        assert_eq!(
+            lex("1.5e"),
+            Ok(vec![Token::Float(1.5), Token::Ident("e".into())])
+        );
+        assert_eq!(
+            lex("5xyz"),
+            Ok(vec![Token::Int(5), Token::Ident("xyz".into())])
+        );
+        assert_eq!(
+            lex("--5 - 5"),
+            Ok(vec![
+                Token::DoubleMinus,
+                Token::Int(5),
+                Token::Minus,
+                Token::Int(5)
+            ])
+        );
+        assert_eq!(lex(&i128::MAX.to_string()), Ok(vec![Token::Int(i128::MAX)]));
+    }
+
+    #[test]
+    fn malformed_numbers_are_lex_errors() {
+        assert_eq!(lex("1e5"), Err('1'));
+        assert_eq!(lex("12ab"), Err('1'));
+        assert_eq!(lex("0xg"), Err('0'));
+        assert_eq!(lex("170141183460469231731687303715884105728"), Err('1'));
+        assert_eq!(lex("."), Err('.'));
+        assert_eq!(lex("+"), Err('+'));
+        assert_eq!(lex("-."), Err('.'));
+        assert_eq!(lex("1.5e+"), Err('+'));
+    }
+
+    #[test]
+    fn special_float_words_need_a_minus_and_a_word_end() {
+        assert_eq!(
+            lex("-infinity -Infinityx"),
+            Ok(vec![
+                Token::Minus,
+                Token::Ident("infinity".into()),
+                Token::Minus,
+                Token::Ident("Infinityx".into()),
+            ])
+        );
+        let tokens = lex("-inf]").unwrap();
+        assert!(matches!(tokens[0], Token::Float(f) if f == f64::NEG_INFINITY));
+        assert_eq!(tokens[1], Token::RBracket);
+    }
+
+    #[test]
+    fn string_escapes_read_as_their_characters() {
+        assert_eq!(
+            lex(r#""\n\r\t\0\\\"" "\x41" "\xZZ" "\x4" "\q" "\é""#),
+            Ok(vec![
+                Token::StringLit("\n\r\t\0\\\"".into()),
+                Token::StringLit("A".into()),
+                Token::StringLit("\\xZZ".into()),
+                Token::StringLit("\\x4".into()),
+                Token::StringLit("\\q".into()),
+                Token::StringLit("\\é".into()),
+            ])
+        );
+        assert_eq!(
+            lex("\"a\nb\" \"\u{e9}\u{4e2d}\""),
+            Ok(vec![
+                Token::StringLit("a\nb".into()),
+                Token::StringLit("\u{e9}\u{4e2d}".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn unterminated_strings_are_lex_errors() {
+        assert_eq!(lex(r#"A "abc"#), Err('"'));
+        assert_eq!(lex(r#""abc\"#), Err('"'));
+        assert_eq!(lex(r#""abc\""#), Err('"'));
+    }
+
+    #[test]
+    fn block_comments_nest_and_must_close() {
+        assert_eq!(lex("/**/ A /***/"), Ok(vec![Token::Ident("A".into())]));
+        assert_eq!(
+            lex("/* //* */ */ A /* * / */"),
+            Ok(vec![Token::Ident("A".into())])
+        );
+        assert_eq!(lex("A /* open"), Err('/'));
+        assert_eq!(lex("/* a/*/ b */"), Err('/'));
+        assert_eq!(lex("/*/"), Err('/'));
+        assert_eq!(lex("/* a */ */"), Err('*'));
+        assert_eq!(lex("a / b"), Err('/'));
+        assert_eq!(
+            lex("A // tail without a newline"),
+            Ok(vec![Token::Ident("A".into())])
+        );
+    }
+
+    #[test]
+    fn only_ascii_spaces_tabs_and_newlines_are_whitespace() {
+        assert_eq!(
+            lex("A\r\n\tB"),
+            Ok(vec![Token::Ident("A".into()), Token::Ident("B".into())])
+        );
+        assert_eq!(lex("A\u{c}B"), Err('\u{c}'));
+        assert_eq!(lex("A\u{a0}B"), Err('\u{a0}'));
+    }
+
+    #[test]
+    fn identifiers_are_ascii_words() {
+        assert_eq!(
+            lex("_ _9 a9_b true_ true]"),
+            Ok(vec![
+                Token::Ident("_".into()),
+                Token::Ident("_9".into()),
+                Token::Ident("a9_b".into()),
+                Token::Ident("true_".into()),
+                Token::Bool(true),
+                Token::RBracket,
+            ])
+        );
+        assert_eq!(lex("ab\u{e9}"), Err('\u{e9}'));
+        assert_eq!(lex(":::"), Ok(vec![Token::DoubleColon, Token::Colon]));
+    }
+
+    #[test]
+    fn spans_cover_each_token_as_written() {
+        assert_eq!(
+            spans("-0x1F -1.5e3 -inf\n\"a\nb\" /* x\n */ :: Foo"),
+            vec![
+                ("-0x1F", 0, 1),
+                ("-1.5e3", 6, 1),
+                ("-inf", 13, 1),
+                ("a\nb", 19, 2),
+                ("::", 33, 4),
+                ("Foo", 36, 4),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_lex_error_ends_the_tokens() {
+        let mut span = Span::from("A $ B");
+        assert!(matches!(span.next(), Some(Ok(_))));
+        assert!(matches!(
+            span.next(),
+            Some(Err(LexError::UnexpectedChar('$')))
+        ));
+        assert!(span.next().is_none());
     }
 }
