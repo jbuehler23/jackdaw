@@ -4,6 +4,7 @@
 mod brp;
 mod editor;
 mod logs;
+mod plain;
 mod preserve;
 mod report;
 mod scene;
@@ -30,6 +31,9 @@ const USAGE: &str = "usage: cargo xtask perf --project <DIR> [--scene <path unde
                      [--editor <jackdaw binary>] [--out <DIR>] [--no-play] \
                      [--play-timeout <seconds>] [--load-timeout <seconds>]";
 
+/// How long Play waits, once the scene has spawned, for the game to name the
+/// streamed frame that first shows it.
+const SPAWN_LINE_GRACE: Duration = Duration::from_secs(10);
 /// Status round trips taken for the idle frame time.
 const IDLE_SAMPLES: usize = 150;
 /// Steps in the simulated drag.
@@ -50,7 +54,8 @@ const SENT: &str = "Scene sent to the game";
 const SPAWNED: &str = "Scene spawned in the game";
 const STREAMING: &str = "Game started streaming frames";
 const FIRST_FRAME: &str = "First frame shown in the Game panel";
-const PLAY_STAGES: [&str; 8] = [
+const SCENE_SHOWN: &str = "First frame of the spawned scene in the Game panel";
+const PLAY_STAGES: [&str; 9] = [
     LAUNCHED,
     CONNECTED,
     ASKED,
@@ -59,6 +64,7 @@ const PLAY_STAGES: [&str; 8] = [
     SPAWNED,
     STREAMING,
     FIRST_FRAME,
+    SCENE_SHOWN,
 ];
 
 struct Options {
@@ -172,6 +178,8 @@ fn run(options: &Options) -> Result<bool, String> {
     );
     let base = options.out.join(format!("perf-{stem}-{stamp}"));
     let editor_log = base.with_extension("log");
+    let game_log = base.with_extension("game.log");
+    let plain_log = base.with_extension("plain.log");
     let machine = system::Machine::read();
     let load_start = system::load_average();
 
@@ -195,6 +203,9 @@ fn run(options: &Options) -> Result<bool, String> {
         rows: Vec::new(),
         shape: SceneShape::default(),
         save_dir: scratch.save(),
+        game_log: game_log.clone(),
+        plain_log: plain_log.clone(),
+        played: None,
     };
     let outcome = probe.measure(&mut editor);
     editor.shut_down();
@@ -229,6 +240,8 @@ fn run(options: &Options) -> Result<bool, String> {
                 json!("empty, so every setting is its default"),
             ),
             ("editor_log", json!(editor_log.display().to_string())),
+            ("game_log", json!(game_log.display().to_string())),
+            ("plain_log", json!(plain_log.display().to_string())),
         ],
         rows: probe.rows,
     };
@@ -336,6 +349,12 @@ struct Probe<'a> {
     rows: Vec<Row>,
     shape: SceneShape,
     save_dir: PathBuf,
+    /// Where the lines the game printed under Play are copied.
+    game_log: PathBuf,
+    /// Where the lines of the game run on its own are copied.
+    plain_log: PathBuf,
+    /// How Play started the game it ran.
+    played: Option<plain::Launch>,
 }
 
 impl Probe<'_> {
@@ -360,10 +379,7 @@ impl Probe<'_> {
         }
         self.attempt("Save", |probe| probe.save())?;
         self.memory("Editor memory at end", editor.pid);
-        self.rows.push(Row::missing(
-            "Plain run, first frame",
-            "not measured: a windowed game shows nothing the probe can see without a display hook",
-        ));
+        self.plain_run();
         Ok(())
     }
 
@@ -426,7 +442,13 @@ impl Probe<'_> {
                 Err(err) => return Err(err),
             };
             let at = ms_since(editor.started);
-            answered.get_or_insert(at);
+            if answered.is_none() {
+                answered = Some(at);
+                // An unfocused window wakes about once a second without it,
+                // which would read as a stall on every status.
+                self.brp
+                    .operator("viewport.realtime.toggle", json!({ "on": true }))?;
+            }
             if let Some(title) = status["dialog"]["title"].as_str() {
                 dialog.get_or_insert_with(|| title.to_string());
             }
@@ -460,7 +482,7 @@ impl Probe<'_> {
                 .push(Row::duration("Launch to first remote answer", answered));
         }
         let mut row = Row::duration("Launch to scene loaded", loaded);
-        let mut notes = Vec::new();
+        let mut notes = vec!["Realtime on from the editor's first answer".to_string()];
         if opened {
             notes.push("includes scene.open after the restored tabs".to_string());
         }
@@ -469,8 +491,6 @@ impl Probe<'_> {
         }
         row.note = notes.join("; ");
         self.rows.push(row);
-        self.brp
-            .operator("viewport.realtime.toggle", json!({ "on": true }))?;
         self.settle(Instant::now(), 0.0, |_| true)?;
         Ok(())
     }
@@ -596,6 +616,9 @@ impl Probe<'_> {
         let mut spawn: Option<Receiver<f64>> = None;
         let mut building: Option<f64> = None;
         let mut own_window = false;
+        let mut game_lines = String::new();
+        let mut shown_from: Option<u64> = None;
+        let mut spawn_seen: Option<Instant> = None;
 
         let timed_out = loop {
             if start.elapsed() > self.options.play_timeout {
@@ -632,6 +655,10 @@ impl Probe<'_> {
             if frame["seq"].is_u64() {
                 let age = frame["first_age_ms"].as_f64().unwrap_or(0.0);
                 note_stage(&mut stages, FIRST_FRAME, (now - age).max(0.0));
+                let newest = now - frame["age_ms"].as_f64().unwrap_or(0.0);
+                if shown_from.is_some_and(|from| frame["seq"].as_u64() >= Some(from)) {
+                    note_stage(&mut stages, SCENE_SHOWN, newest);
+                }
             }
             for line in editor.lines_from(read_lines) {
                 read_lines += 1;
@@ -647,11 +674,19 @@ impl Probe<'_> {
             ) {
                 for line in output["lines"].as_array().into_iter().flatten() {
                     let text = logs::strip_ansi(line["text"].as_str().unwrap_or_default());
+                    game_lines.push_str(&text);
+                    game_lines.push('\n');
+                    let at = logs::line_time(&text)
+                        .and_then(|at| at.duration_since(start_wall).ok())
+                        .map_or(now, |since| since.as_secs_f64() * 1000.0);
                     if let Some(stage) = game_stage(&text) {
-                        let at = logs::line_time(&text)
-                            .and_then(|at| at.duration_since(start_wall).ok())
-                            .map_or(now, |since| since.as_secs_f64() * 1000.0);
                         note_stage(&mut stages, stage, at);
+                    }
+                    if let Some((scene, frame)) = served_spawn(&text)
+                        && plain::same_scene(&scene, &self.options.scene)
+                    {
+                        note_stage(&mut stages, SPAWNED, at);
+                        shown_from.get_or_insert(frame);
                     }
                 }
                 game_since = output["next"].as_u64().or(game_since);
@@ -668,20 +703,32 @@ impl Probe<'_> {
             }
             if sampled.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
                 sampled = Some(Instant::now());
+                if self.played.is_none() && connected {
+                    self.played = editor.played_game();
+                }
                 let (editor_now, games_now) = memory_now(editor);
                 editor_peak = editor_peak.max(editor_now);
                 game_peak = game_peak.max(games_now);
             }
             let seen = |wanted: &str| stages.iter().any(|(stage, _)| *stage == wanted);
-            let done = seen(FIRST_FRAME)
+            if seen(SPAWNED) {
+                spawn_seen.get_or_insert_with(Instant::now);
+            }
+            let unnamed_frame = shown_from.is_none()
+                && spawn_seen.is_some_and(|at| at.elapsed() > SPAWN_LINE_GRACE);
+            let done = seen(SCENE_SHOWN)
                 || (own_window && seen(SPAWNED))
-                || (!frame_reported && seen(SPAWNED) && seen(STREAMING));
+                || (!frame_reported && seen(SPAWNED) && seen(STREAMING))
+                || unnamed_frame;
             if done {
                 break false;
             }
             std::thread::sleep(Duration::from_millis(100));
         };
         drop(stop);
+        if let Err(err) = std::fs::write(&self.game_log, &game_lines) {
+            eprintln!("perf: write {}: {err}", self.game_log.display());
+        }
         let (editor_now, games_now) = memory_now(editor);
         editor_peak = editor_peak.max(editor_now);
         game_peak = game_peak.max(games_now);
@@ -711,11 +758,19 @@ impl Probe<'_> {
                     "not seen within {}",
                     report::duration(self.options.play_timeout.as_secs_f64() * 1000.0)
                 )
-            } else if stage == FIRST_FRAME && own_window {
+            } else if (stage == FIRST_FRAME || stage == SCENE_SHOWN) && own_window {
                 "the game shows itself in its own window, so no frame reaches the panel; \
                  Scene spawned stands in"
                     .to_string()
-            } else if stage == FIRST_FRAME || stage == SENT || stage == ASKED {
+            } else if stage == SCENE_SHOWN && shown_from.is_none() && spawn_seen.is_some() {
+                "the game did not say which streamed frame first shows the scene: an older \
+                 runtime, or a log filter that hides INFO from jackdaw_runtime"
+                    .to_string()
+            } else if stage == FIRST_FRAME
+                || stage == SCENE_SHOWN
+                || stage == SENT
+                || stage == ASKED
+            {
                 "this editor does not report it".to_string()
             } else {
                 "not seen before the first frame".to_string()
@@ -793,6 +848,39 @@ impl Probe<'_> {
         };
         self.rows.push(row);
         Ok(())
+    }
+
+    /// The game Play ran, launched again with no editor, from launch to the
+    /// spawn of whichever scene it starts with.
+    fn plain_run(&mut self) {
+        const PATH: &str = "Plain run, scene spawned";
+        if !cfg!(target_os = "linux") {
+            self.rows.push(Row::missing(
+                PATH,
+                "not supported on this platform: the probe reads how Play started the game from /proc",
+            ));
+            return;
+        }
+        let Some(launch) = self.played.clone() else {
+            self.rows
+                .push(Row::missing(PATH, "no game ran under Play to start again"));
+            return;
+        };
+        self.rows.push(
+            match plain::run(
+                &launch,
+                &self.options.scene,
+                &self.plain_log,
+                self.options.play_timeout,
+            ) {
+                Ok(at) => Row::duration(PATH, at).with_note(
+                    "from launch: the game Play ran, started again in its own window with \
+                     Play's folder, arguments and environment but no editor link; cargo's \
+                     check before a run is not included",
+                ),
+                Err(why) => Row::missing(PATH, &why),
+            },
+        );
     }
 
     fn brp_port(&self) -> u16 {
@@ -901,6 +989,15 @@ fn memory_now(editor: &Editor) -> (u64, u64) {
     (system::memory_of(editor.pid).unwrap_or(0), games)
 }
 
+/// The served scene a game log line says has spawned, and the streamed frame
+/// the game names as the first to show it.
+fn served_spawn(text: &str) -> Option<(String, u64)> {
+    let (_, rest) = text.split_once("PIE: spawned the served scene '")?;
+    let (scene, rest) = rest.rsplit_once("', first shown in streamed frame ")?;
+    let frame = rest.trim().parse().ok()?;
+    Some((scene.to_string(), frame))
+}
+
 /// Record `stage` at `at`, keeping the earliest time it was seen.
 fn note_stage(stages: &mut Vec<(&'static str, f64)>, stage: &'static str, at: f64) {
     match stages.iter_mut().find(|(seen, _)| *seen == stage) {
@@ -943,8 +1040,15 @@ fn stage_source(stage: &str) -> &'static str {
         LAUNCHED | CONNECTED => "editor log or status",
         ASKED | SENT => "editor log",
         ASSETS | STREAMING => "game log timestamp",
-        SPAWNED => "first game query that found the last node",
+        SPAWNED => {
+            "game log timestamp of the served scene's spawn, or the first game query that \
+             found the last node"
+        }
         FIRST_FRAME => "status game_frame, less the first frame's age",
+        SCENE_SHOWN => {
+            "status game_frame: the newest frame at or past the one the game named as the \
+             first to show the scene"
+        }
         _ => "",
     }
 }
@@ -1000,6 +1104,22 @@ mod tests {
             Some(STREAMING)
         );
         assert_eq!(game_stage("PIE frames: stream stopped"), None);
+    }
+
+    #[test]
+    fn a_served_spawn_names_its_scene_and_the_first_frame_to_show_it() {
+        assert_eq!(
+            served_spawn(
+                "2026-11-10T23:14:09Z  INFO jackdaw_runtime: PIE: spawned the served scene \
+                 'levels/farm.bsn', first shown in streamed frame 412"
+            ),
+            Some(("levels/farm.bsn".to_string(), 412))
+        );
+        assert_eq!(
+            served_spawn("DEBUG jackdaw_runtime: Spawned scene 'levels/farm.bsn'"),
+            None,
+            "a scene spawned from its file, a prefab instance or a menu"
+        );
     }
 
     #[test]

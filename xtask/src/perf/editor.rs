@@ -124,6 +124,14 @@ impl Editor {
             .collect()
     }
 
+    /// How Play started the game it runs, when one is running.
+    pub fn played_game(&self) -> Option<super::plain::Launch> {
+        system::descendants_running_from(self.pid, &self.project.join(".jackdaw/target"))
+            .into_iter()
+            .filter_map(|(pid, _)| super::plain::Launch::of(pid))
+            .find(super::plain::Launch::is_played_game)
+    }
+
     /// Ask the editor to quit as Ctrl-C would, which closes its games' links
     /// so they exit too, and kill it and anything it left running if it has
     /// not gone within [`EXIT_GRACE`].
