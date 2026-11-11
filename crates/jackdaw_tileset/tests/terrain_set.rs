@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::math::UVec2;
 use jackdaw_tilemap::{
     CellCoord, ChunkedLayer, LayoutTemplate, Links, MatchMode, Peer, RgbaImage, TerrainId,
-    TerrainSet, TerrainTile, TileRef, TileTerrains, TilesetSetup, auto_setup, match_score,
-    required_peers, resolve_region,
+    TerrainSet, TileRef, TileTerrains, TilesetSetup, auto_setup, match_score, required_peers,
+    resolve_region,
 };
 use jackdaw_tileset::{
     TerrainMatch, TerrainSetError, Tileset, TilesetSheet, TilesetTerrain, TilesetTerrainSet,
@@ -91,7 +91,11 @@ fn a_block_of_one_grass_on_another_resolves_to_its_transition_tiles() {
         .terrain_set(Some(TerrainMatch::CornersAndSides))
         .expect("the sheet has sets of this mode");
     assert_eq!(set.mode, MatchMode::CornersAndSides);
-    assert_eq!(set.order, vec![grass, raised, water]);
+    assert_eq!(
+        set.order[..3],
+        [grass, raised, water],
+        "a terrain of plain tiles alone joins the first set on top"
+    );
 
     let resolved = resolve_block(&set, grass, raised);
     let index = |x, y| resolved[&CellCoord::new(x, y)].index();
@@ -142,10 +146,10 @@ fn every_set_of_the_mode_shares_one_layer_and_a_mixed_sheet_needs_a_mode() {
     }
 }
 
-fn pair(inner: TerrainId, outer: TerrainId, mode: TerrainMatch) -> TilesetTerrainSet {
+/// A set of `terrains`, bottom first.
+fn set_of(terrains: &[TerrainId], mode: TerrainMatch) -> TilesetTerrainSet {
     TilesetTerrainSet {
-        inner,
-        outer,
+        terrains: terrains.to_vec(),
         mode,
         ..Default::default()
     }
@@ -160,8 +164,8 @@ fn mixed_modes_need_the_layer_to_pick_one() {
             ..Default::default()
         }],
         terrain_sets: vec![
-            pair(2, 1, TerrainMatch::Sides),
-            pair(3, 1, TerrainMatch::Corners),
+            set_of(&[2], TerrainMatch::Sides),
+            set_of(&[1, 3], TerrainMatch::Corners),
         ],
         tiles: vec![
             TilesetTile {
@@ -211,6 +215,7 @@ fn tile(index: u32, peers: [TerrainId; 9], set: (TerrainId, TerrainId)) -> Tiles
     }
 }
 
+/// Auto setup may list a terrain in sets of two match modes.
 #[test]
 fn sets_of_two_modes_over_the_same_terrains_keep_their_own_tiles() {
     let edge = [1, 2, 1, 1, 2, 1, 1, 2, 1];
@@ -221,8 +226,8 @@ fn sets_of_two_modes_over_the_same_terrains_keep_their_own_tiles() {
             ..Default::default()
         }],
         terrain_sets: vec![
-            pair(2, 1, TerrainMatch::Sides),
-            pair(1, 2, TerrainMatch::Corners),
+            set_of(&[1, 2], TerrainMatch::Sides),
+            set_of(&[2, 1], TerrainMatch::Corners),
         ],
         tiles: vec![
             tile(0, edge, (2, 1)),
@@ -242,6 +247,7 @@ fn sets_of_two_modes_over_the_same_terrains_keep_their_own_tiles() {
         vec![1, 2],
         "an unrecorded transition tile could be either set's, so neither takes it"
     );
+    assert_eq!(tileset.set_of(1), Some(0), "the first set listing it");
 }
 
 #[test]
@@ -252,10 +258,7 @@ fn a_tile_edited_off_its_recorded_set_is_placed_by_its_peers() {
             rows: 1,
             ..Default::default()
         }],
-        terrain_sets: vec![
-            pair(2, 1, TerrainMatch::Sides),
-            pair(3, 1, TerrainMatch::Sides),
-        ],
+        terrain_sets: vec![set_of(&[1, 2, 3], TerrainMatch::Sides)],
         tiles: vec![tile(0, [1, 3, 1, 1, 3, 1, 1, 3, 1], (2, 1))],
         ..Default::default()
     };
@@ -263,7 +266,7 @@ fn a_tile_edited_off_its_recorded_set_is_placed_by_its_peers() {
     assert_eq!(
         set.tiles.len(),
         1,
-        "its peers fit the other set, so it joins instead of dropping out"
+        "its peers fit the set, so it joins instead of dropping out"
     );
 }
 
@@ -393,230 +396,23 @@ fn a_three_terrain_corner_set_paints_every_transition_it_has_tiles_for() {
 }
 
 #[test]
-fn pair_sets_of_one_mode_sharing_terrains_read_as_one_set_that_paints_the_same() {
-    let legacy = three_terrains(vec![
-        pair(DIRT, GRASS, TerrainMatch::Corners),
-        pair(WATER, GRASS, TerrainMatch::Corners),
-        pair(WATER, DIRT, TerrainMatch::Corners),
-    ]);
-    let sets = legacy.sets();
-    assert_eq!(sets.len(), 1);
-    assert_eq!(sets[0].name, "Terrain set 1");
+fn a_setup_taken_back_puts_every_terrain_in_a_set() {
+    let mut tileset = three_terrains(vec![set_of(&[GRASS, DIRT], TerrainMatch::Corners)]);
+    let setup = tileset.setup().expect("converts");
+    tileset.set_setup(&setup).expect("converts back");
     assert_eq!(
-        sets[0].terrains,
+        tileset.terrain_sets[0].terrains,
         [GRASS, DIRT, WATER],
-        "each pair's second below"
+        "water joins the first set"
     );
-    assert!(!sets[0].is_pair());
+    assert_eq!(tileset.set_of(WATER), Some(0));
 
-    let mut before = TerrainSet::new(MatchMode::Corners).with_order([GRASS, DIRT, WATER]);
-    for tile in &legacy.tiles {
-        let terrains = TileTerrains { peers: tile.peers };
-        let index = u16::try_from(tile.tile).expect("small");
-        before = before.with_tile(TerrainTile::new(TileRef::new(index), terrains, 1));
-    }
-    let after = legacy.terrain_set(None).expect("one mode");
-    assert_eq!(after, before, "the pair sets' solver set");
-    let named = three_terrains(vec![ground_set()]);
-    let terrain = ground_map();
-    assert_eq!(
-        resolve_map(&after, &terrain),
-        resolve_map(&named.terrain_set(None).expect("one mode"), &terrain)
-    );
-
-    let mut saved = legacy.clone();
-    saved
-        .set_setup(&legacy.setup().expect("converts"))
-        .expect("converts back");
-    assert!(saved.terrain_sets.iter().all(|s| !s.is_pair()));
-    assert_eq!(saved.terrain_set(None), legacy.terrain_set(None));
-}
-
-const PAIR_TILESET: &str = "\
-#ground
-jackdaw_tileset::Tileset {
-    terrains: [
-        jackdaw_tileset::TilesetTerrain { id: 1, name: \"grass\", background: true },
-        jackdaw_tileset::TilesetTerrain { id: 2, name: \"dirt\" },
-        jackdaw_tileset::TilesetTerrain { id: 3, name: \"water\" },
-    ],
-    terrain_sets: [
-        jackdaw_tileset::TilesetTerrainSet {
-            inner: 2,
-            outer: 1,
-            mode: jackdaw_tileset::TerrainMatch::Corners,
-        },
-        jackdaw_tileset::TilesetTerrainSet {
-            inner: 3,
-            outer: 2,
-            mode: jackdaw_tileset::TerrainMatch::Corners,
-            locked_manual: true,
-        },
-        jackdaw_tileset::TilesetTerrainSet {
-            inner: 3,
-            mode: jackdaw_tileset::TerrainMatch::Sides,
-            mode_by_user: true,
-        },
-    ],
-}
-";
-
-#[test]
-fn a_tileset_saved_with_pair_sets_loads_into_named_sets_and_paints_the_same() {
-    let path = std::path::Path::new("ground.tileset.bsn");
-    let mut loaded: Tileset =
-        jackdaw_bsn::read_asset_text(PAIR_TILESET, path).expect("an old file reads");
-    assert_eq!(loaded.terrain_sets.len(), 3);
-    assert!(loaded.terrain_sets.iter().all(TilesetTerrainSet::is_pair));
-    let sets = loaded.sets();
-    let read: Vec<_> = (sets.iter())
-        .map(|s| {
-            let flags = (s.mode_by_user, s.locked_manual);
-            (s.name.as_str(), s.mode, s.terrains.as_slice(), flags)
-        })
-        .collect();
-    assert_eq!(
-        read,
-        [
-            (
-                "Terrain set 1",
-                TerrainMatch::Corners,
-                &[GRASS, DIRT, WATER][..],
-                (false, true)
-            ),
-            (
-                "Terrain set 2",
-                TerrainMatch::Sides,
-                &[WATER][..],
-                (true, false)
-            ),
-        ]
-    );
-
-    let named = three_terrains(vec![ground_set()]);
-    loaded.sheets = named.sheets.clone();
-    loaded.tiles = named.tiles.clone();
-    let corners = Some(TerrainMatch::Corners);
-    let mut before = TerrainSet::new(MatchMode::Corners).with_order([GRASS, DIRT, WATER]);
-    for tile in &loaded.tiles {
-        let terrains = TileTerrains { peers: tile.peers };
-        let index = u16::try_from(tile.tile).expect("small");
-        before = before.with_tile(TerrainTile::new(TileRef::new(index), terrains, 1));
-    }
-    let set = loaded.terrain_set(corners).expect("a corner set");
-    assert_eq!(set, before, "the pair sets' solver set");
-    let terrain = ground_map();
-    let painted = |t: &Tileset| resolve_map(&t.terrain_set(corners).expect("a set"), &terrain);
-    assert_eq!(painted(&loaded), painted(&named));
-}
-
-/// Whether the solver took a tile under the pair sets `pairs`, each the drawn
-/// terrain, the one it draws on and the mode: by its recorded pair while its
-/// peers fit it, else when its peers fit a pair of `mode` and, unless one
-/// terrain fills it, no pair of another mode.
-fn pair_takes(
-    mode: TerrainMatch,
-    peers: &[TerrainId; 9],
-    recorded: Option<(TerrainId, TerrainId)>,
-    pairs: &[(TerrainId, TerrainId, TerrainMatch)],
-) -> bool {
-    let fits = |(a, b): (TerrainId, TerrainId)| {
-        peers.iter().all(|&p| p == 0 || p == a || p == b) && peers.iter().any(|&p| p != 0)
-    };
-    if let Some((a, b)) = recorded.filter(|p| fits(*p)) {
-        return pairs.contains(&(a, b, mode));
-    }
-    let pure = peers.iter().all(|&p| p == peers[0]);
-    let fit = |same: bool| (pairs.iter()).any(|&(a, b, m)| (m == mode) == same && fits((a, b)));
-    fit(true) && (pure || !fit(false))
-}
-
-#[test]
-fn pair_sets_of_two_modes_sharing_terrains_paint_as_they_did() {
-    const SAND: TerrainId = 3;
-    let pairs = [
-        (SAND, GRASS, TerrainMatch::Sides),
-        (DIRT, GRASS, TerrainMatch::Sides),
-        (DIRT, SAND, TerrainMatch::Corners),
-    ];
-    let mut tiles: Vec<TilesetTile> = Vec::new();
-    for &(inner, outer, mode) in &pairs {
-        let template = match mode {
-            TerrainMatch::Corners => LayoutTemplate::Corner16,
-            _ => LayoutTemplate::Side16,
-        };
-        for shape in template.tiles(inner, outer) {
-            if tiles.iter().any(|t| t.peers == shape.peers) {
-                continue;
-            }
-            let recorded = tiles.len().is_multiple_of(2);
-            tiles.push(TilesetTile {
-                tile: tiles.len() as u32,
-                peers: shape.peers,
-                set_inner: if recorded { inner } else { 0 },
-                set_outer: if recorded { outer } else { 0 },
-                ..Default::default()
-            });
-        }
-    }
-    let mut terrains = ground_terrains();
-    terrains[2].name = "sand".into();
-    let tileset = Tileset {
-        sheets: vec![TilesetSheet {
-            columns: tiles.len() as u32,
-            rows: 1,
-            ..Default::default()
-        }],
-        terrains,
-        terrain_sets: pairs
-            .map(|(inner, outer, mode)| pair(inner, outer, mode))
-            .to_vec(),
-        tiles,
-        ..Default::default()
-    };
-    let read: Vec<_> = (tileset.sets().iter())
-        .map(|s| (s.mode, s.terrains.clone()))
-        .collect();
-    assert_eq!(
-        read,
-        [
-            (TerrainMatch::Sides, vec![GRASS, DIRT, SAND]),
-            (TerrainMatch::Corners, vec![SAND, DIRT]),
-        ]
-    );
-    for (mode, order) in [
-        (TerrainMatch::Sides, vec![GRASS, DIRT, SAND]),
-        (TerrainMatch::Corners, vec![SAND, DIRT]),
-    ] {
-        let set = tileset.terrain_set(Some(mode)).expect("a set");
-        assert_eq!(set.order, order, "{mode:?}");
-        let taken: Vec<u32> = set
-            .tiles
-            .iter()
-            .map(|t| u32::from(t.tile.index()))
-            .collect();
-        let before: Vec<u32> = (tileset.tiles.iter())
-            .filter(|t| {
-                let recorded = (t.set_inner != 0).then_some((t.set_inner, t.set_outer));
-                pair_takes(mode, &t.peers, recorded, &pairs)
-            })
-            .map(|t| t.tile)
-            .collect();
-        assert_eq!(taken, before, "{mode:?}");
-        let mixed = |t: &&TilesetTile| t.peers.contains(&DIRT) && t.peers.contains(&SAND);
-        let corner_tiles = tileset.tiles.iter().filter(mixed).count();
-        let taken_mixed = (tileset.tiles.iter())
-            .filter(mixed)
-            .filter(|t| taken.contains(&t.tile))
-            .count();
-        let expected = if mode == TerrainMatch::Corners {
-            corner_tiles
-        } else {
-            0
-        };
-        assert_eq!(
-            taken_mixed, expected,
-            "dirt and sand tiles, recorded or not"
-        );
-    }
+    let mut setup = tileset.setup().expect("converts");
+    setup.sets.clear();
+    tileset.set_setup(&setup).expect("converts back");
+    assert_eq!(tileset.terrain_sets.len(), 1, "a set for the homeless");
+    let home = &tileset.terrain_sets[0];
+    assert_eq!(home.name, "Terrain set 1");
+    assert_eq!(home.mode, TerrainMatch::CornersAndSides);
+    assert_eq!(home.terrains, [GRASS, DIRT, WATER]);
 }

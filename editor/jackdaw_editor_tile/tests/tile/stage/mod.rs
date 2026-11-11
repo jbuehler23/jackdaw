@@ -1,5 +1,6 @@
 //! Tile editing on the canvas and the stage.
 
+mod large_map;
 mod stage_2d;
 mod tile_palette;
 mod tile_preview;

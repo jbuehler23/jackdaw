@@ -820,10 +820,12 @@ impl JackdawMcp {
     #[tool(
         description = "What the Jackdaw editor has open: project, scene, dirty flag, selection, \
                        any modal, dialog or picker holding it, `pie` (what Play is doing: \
-                       `building`, `running`, `paused`, `failed` or `stopped`) and `instances` \
+                       `building`, `running`, `paused`, `failed` or `stopped`), `instances` \
                        (each launched game as `{config, instance, stage, focused}`, where \
                        `stage` is `building`, `connecting` or `connected` and the focused one \
-                       is the game the `game_*` tools ask)."
+                       is the game the `game_*` tools ask) and `game_frame` (null until the \
+                       Game panel shows a frame, then its size and age, or `own_window` when \
+                       the game shows itself in its own window)."
     )]
     pub async fn status(&self) -> Result<CallToolResult, ErrorData> {
         self.brp_text("jackdaw/status", json!({})).await

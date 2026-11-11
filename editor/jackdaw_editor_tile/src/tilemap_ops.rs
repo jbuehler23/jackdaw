@@ -16,7 +16,8 @@ use jackdaw_tilemap::{LayerData, TilemapData};
 use jackdaw_tileset::{TerrainMatch, Tileset};
 
 use crate::tile_tools::TileEditMode;
-use crate::tilemap::{TilemapDataStore, data_kind};
+use crate::tilemap::TilemapDataStore;
+use crate::tilemap_stroke::layer_param;
 use crate::tileset_import::TILESET_KIND;
 use jackdaw_editor_core::asset_index::AssetIndex;
 use jackdaw_editor_core::commands::{
@@ -126,18 +127,20 @@ fn create(world: &mut World, params: &OperatorParameters) -> Result<(), String> 
     close_tileset_pickers(world);
     let path = asset_path(params).unwrap_or_default();
     let (tile_size, modes) = tileset_facts(world, &path)?;
-    let layer = new_layer(&modes, path, text(params, "kind"), "Layer 1".into())?;
+    let mut layer = new_layer(&modes, path, text(params, "kind"), "Layer 1".into())?;
     let parent = jackdaw_editor_core::sprite_ops::scene_2d_parent(world, None)
         .ok_or("no 2D world scene is open")?;
     let name = text(params, "name").unwrap_or_else(|| "Tilemap".to_string());
     let taken = &mut jackdaw_editor_core::entity_ops::scene_entity_names(world);
     let name = jackdaw_editor_core::entity_ops::claim_free_name(taken, &name).unwrap_or(name);
-    let tilemap = Arc::new(Mutex::new(Tilemap {
+    let mut tilemap = Tilemap {
         cell_size: tile_size,
         data_path: crate::tilemap::mint_map_path(world),
-        layers: vec![layer],
-        bounds: None,
-    }));
+        ..default()
+    };
+    layer.id = tilemap.mint_layer_id();
+    tilemap.layers.push(layer);
+    let tilemap = Arc::new(Mutex::new(tilemap));
     let shared = tilemap.clone();
     let label = format!("Add Tilemap {name}");
     let spawn = SpawnEntity::new(
@@ -178,13 +181,14 @@ fn tileset_facts(world: &mut World, path: &str) -> Result<(UVec2, Vec<TerrainMat
     let id = crate::tileset_dock::tileset_id(world, path)?;
     let tileset = (world.resource::<Assets<Tileset>>().get(id))
         .ok_or_else(|| format!("{path} is not loaded yet"))?;
-    let modes = (tileset.sets().iter()).map(|set| set.mode).collect();
+    let modes = (tileset.terrain_sets.iter()).map(|set| set.mode).collect();
     Ok((tileset.tile_size, modes))
 }
 
 /// A layer of the tileset at `path` whose terrain sets have `modes`: of
 /// `kind`, or terrain when the tileset has terrain sets and tile otherwise.
-/// A tileset of mixed modes gets its first set's mode.
+/// A tileset of mixed modes gets its first set's mode. Its id is left 0 for
+/// the caller to give.
 fn new_layer(
     modes: &[TerrainMatch],
     path: String,
@@ -206,6 +210,7 @@ fn new_layer(
         }
     }
     Ok(TilemapLayer {
+        id: 0,
         name,
         tileset: path,
         kind,
@@ -314,8 +319,9 @@ struct LayerSlot {
     data: Option<LayerData>,
 }
 
-/// Puts `after` in place of `before` at `index` of one map. Adding or
-/// removing a layer moves its cells; a change moves them only when `cells`.
+/// Puts `after` in place of `before` at `index` of one map; both, when
+/// given, have the same layer id. Adding or removing a layer moves its cells;
+/// a change moves them only when `cells`.
 struct EditTilemapLayers {
     entity: Entity,
     map: u64,
@@ -323,6 +329,9 @@ struct EditTilemapLayers {
     before: Option<LayerSlot>,
     after: Option<LayerSlot>,
     cells: bool,
+    /// The map's next layer id once the edit is made; undo keeps it, so an
+    /// id is never given twice.
+    next_layer_id: u32,
     label: String,
 }
 
@@ -336,16 +345,22 @@ impl EditTilemapLayers {
         } else {
             (&mut self.before, &mut self.after)
         };
+        let Some(id) = (to.as_ref().or(from.as_ref())).map(|slot| slot.layer.id) else {
+            return;
+        };
         let Some(mut tilemap) = world.get_mut::<Tilemap>(entity) else {
             return;
         };
-        if from.is_some() && index < tilemap.layers.len() {
-            tilemap.layers.remove(index);
+        if from.is_some()
+            && let Some(at) = tilemap.layer_index(id)
+        {
+            tilemap.layers.remove(at);
         }
         if let Some(to) = to.as_ref() {
             let at = index.min(tilemap.layers.len());
             tilemap.layers.insert(at, to.layer.clone());
         }
+        tilemap.next_layer_id = tilemap.next_layer_id.max(self.next_layer_id);
         let tilemap = tilemap.clone();
         sync_component_to_ast(world, entity, Tilemap::type_path(), &tilemap);
         let mut store = world.resource_mut::<TilemapDataStore>();
@@ -353,7 +368,7 @@ impl EditTilemapLayers {
             && cells
         {
             let insert = to.as_mut().and_then(|to| to.data.take());
-            let removed = store.splice_layer(&key, index, from.is_some(), insert);
+            let removed = store.replace_layer(&key, id, insert);
             if let Some(from) = from.as_mut() {
                 from.data = removed;
             }
@@ -413,26 +428,27 @@ pub(crate) fn target_entity(world: &World, params: &OperatorParameters) -> Optio
     })
 }
 
-/// The map `params` name, or the selected one, with its store id and how many
-/// layers its cells hold.
+/// The map `params` name, or the selected one, with its store id.
 fn target(
     world: &mut World,
     params: &OperatorParameters,
-) -> Result<(Entity, Tilemap, u64, usize), String> {
+) -> Result<(Entity, Tilemap, u64), String> {
     let entity = target_entity(world, params).ok_or("no tilemap given or selected")?;
     let tilemap = (world.get::<Tilemap>(entity).cloned()).ok_or("the entity is not a tilemap")?;
     let key = crate::tilemap::editable_key(world, entity)?;
     let store = world.resource::<TilemapDataStore>();
     let map = (store.map_id(&key)).ok_or("the map's cells are not loaded")?;
-    let held = store.get(&key).map_or(0, |data| data.layers.len());
-    Ok((entity, tilemap, map, held))
+    Ok((entity, tilemap, map))
 }
 
+/// The index of the layer the `layer` param names; the bottom one when it is
+/// left out.
 fn layer_index(params: &OperatorParameters, tilemap: &Tilemap) -> Result<usize, String> {
-    let index = params.as_int("index").unwrap_or(0);
-    (usize::try_from(index).ok())
-        .filter(|index| *index < tilemap.layers.len())
-        .ok_or_else(|| format!("the map has no layer {index}"))
+    match layer_param(tilemap, params)? {
+        Some(index) => Ok(index),
+        None if tilemap.layers.is_empty() => Err("the map has no layers".into()),
+        None => Ok(0),
+    }
 }
 
 /// Add a layer to the top of a tilemap.
@@ -458,7 +474,7 @@ pub(crate) fn tilemap_layer_add(
 }
 
 fn add_layer(world: &mut World, params: &OperatorParameters) -> Result<EditTilemapLayers, String> {
-    let (entity, tilemap, map, held) = target(world, params)?;
+    let (entity, mut tilemap, map) = target(world, params)?;
     let layers = &tilemap.layers;
     let path = (asset_path(params))
         .or_else(|| layers.last().map(|layer| layer.tileset.clone()))
@@ -470,16 +486,18 @@ fn add_layer(world: &mut World, params: &OperatorParameters) -> Result<EditTilem
             .find(|name| !layers.iter().any(|layer| layer.name == *name))
             .unwrap_or_default()
     });
-    let layer = new_layer(&modes, path, text(params, "kind"), name)?;
-    let data = (held != 0 && held == layers.len()).then(|| LayerData::empty(data_kind(layer.kind)));
+    let mut layer = new_layer(&modes, path, text(params, "kind"), name)?;
+    let index = layers.len();
+    layer.id = tilemap.mint_layer_id();
     Ok(EditTilemapLayers {
         entity,
         map,
-        index: layers.len(),
+        index,
         label: format!("Add Layer {}", layer.name),
         before: None,
-        after: Some(LayerSlot { layer, data }),
+        after: Some(LayerSlot { layer, data: None }),
         cells: true,
+        next_layer_id: tilemap.next_layer_id,
     })
 }
 
@@ -492,7 +510,11 @@ fn add_layer(world: &mut World, params: &OperatorParameters) -> Result<EditTilem
     is_available = no_modal,
     params(
         entity(Entity, doc = "The tilemap; the selection when left out."),
-        index(i64, doc = "Index of the layer, from 0 at the bottom."),
+        layer(
+            String,
+            doc = "The layer: its name, # and its id (#3), or its index from 0 at the bottom; \
+                   the bottom layer when left out."
+        ),
     )
 )]
 pub(crate) fn tilemap_layer_remove(
@@ -511,7 +533,7 @@ fn remove_layer(
     world: &mut World,
     params: &OperatorParameters,
 ) -> Result<EditTilemapLayers, String> {
-    let (entity, tilemap, map, _) = target(world, params)?;
+    let (entity, tilemap, map) = target(world, params)?;
     let index = layer_index(params, &tilemap)?;
     if tilemap.layers.len() == 1 {
         return Err("the map's last layer cannot be removed".into());
@@ -525,6 +547,7 @@ fn remove_layer(
         before: Some(LayerSlot { layer, data: None }),
         after: None,
         cells: true,
+        next_layer_id: tilemap.next_layer_id,
     })
 }
 
@@ -538,7 +561,11 @@ fn remove_layer(
     is_available = no_modal,
     params(
         entity(Entity, doc = "The tilemap; the selection when left out."),
-        index(i64, doc = "Index of the layer, from 0 at the bottom."),
+        layer(
+            String,
+            doc = "The layer: its name, # and its id (#3), or its index from 0 at the bottom; \
+                   the bottom layer when left out."
+        ),
         tileset(String, doc = "Tileset file; kept when left out."),
         kind(String, doc = "terrain or tile; kept when left out."),
         name(String, doc = "Name of the layer; kept when left out."),
@@ -562,7 +589,7 @@ pub(crate) fn tilemap_layer_set(
 }
 
 fn set_layer(world: &mut World, params: &OperatorParameters) -> Result<(), String> {
-    let (entity, tilemap, map, held) = target(world, params)?;
+    let (entity, tilemap, map) = target(world, params)?;
     let index = layer_index(params, &tilemap)?;
     let old = tilemap.layers[index].clone();
     let path = asset_path(params).unwrap_or_else(|| old.tileset.clone());
@@ -572,7 +599,10 @@ fn set_layer(world: &mut World, params: &OperatorParameters) -> Result<(), Strin
     if cells {
         let (_, modes) = tileset_facts(world, &path)?;
         let kind = kind.or_else(|| Some(kind_name(old.kind).to_string()));
-        layer = new_layer(&modes, path, kind, old.name.clone())?;
+        layer = TilemapLayer {
+            id: old.id,
+            ..new_layer(&modes, path, kind, old.name.clone())?
+        };
     }
     if let Some(name) = text(params, "name") {
         layer.name = name;
@@ -585,7 +615,6 @@ fn set_layer(world: &mut World, params: &OperatorParameters) -> Result<(), Strin
     if layer == old {
         return Ok(());
     }
-    let data = (cells && index < held).then(|| LayerData::empty(data_kind(layer.kind)));
     let edit = EditTilemapLayers {
         entity,
         map,
@@ -595,8 +624,9 @@ fn set_layer(world: &mut World, params: &OperatorParameters) -> Result<(), Strin
             layer: old,
             data: None,
         }),
-        after: Some(LayerSlot { layer, data }),
+        after: Some(LayerSlot { layer, data: None }),
         cells,
+        next_layer_id: tilemap.next_layer_id,
     };
     push(world, edit);
     Ok(())
@@ -619,7 +649,11 @@ fn kind_name(kind: TilemapLayerKind) -> &'static str {
     is_available = no_modal,
     params(
         entity(Entity, doc = "The tilemap; the selection when left out."),
-        index(i64, doc = "Index of the layer, from 0 at the bottom."),
+        layer(
+            String,
+            doc = "The layer: its name, # and its id (#3), or its index from 0 at the bottom; \
+                   the bottom layer when left out."
+        ),
     )
 )]
 pub(crate) fn tilemap_layer_activate(

@@ -237,6 +237,8 @@ pub struct ColorPickerCommitEvent {
 pub struct ColorPickerProps {
     pub color: [f32; 4],
     pub inline: bool,
+    /// The trigger is a bare swatch, without the hex readout.
+    pub compact: bool,
 }
 
 impl ColorPickerProps {
@@ -244,6 +246,7 @@ impl ColorPickerProps {
         Self {
             color: [1.0, 1.0, 1.0, 1.0],
             inline: false,
+            compact: false,
         }
     }
 
@@ -256,15 +259,24 @@ impl ColorPickerProps {
         self.inline = true;
         self
     }
+
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
 }
 
 pub fn color_picker(props: ColorPickerProps) -> impl Bundle {
-    let ColorPickerProps { color, inline } = props;
+    let ColorPickerProps {
+        color,
+        inline,
+        compact,
+    } = props;
 
     (
         EditorColorPicker,
         ColorPickerState::from_rgba(color),
-        ColorPickerConfig { inline },
+        ColorPickerConfig { inline, compact },
         PopoverTracker::default(),
         Node {
             flex_direction: FlexDirection::Column,
@@ -278,6 +290,7 @@ pub fn color_picker(props: ColorPickerProps) -> impl Bundle {
 #[derive(Component)]
 struct ColorPickerConfig {
     inline: bool,
+    compact: bool,
 }
 
 #[derive(Component)]
@@ -296,6 +309,7 @@ struct ColorInputRow(Entity);
 struct TriggerSwatchConfig {
     picker: Entity,
     color: Srgba,
+    compact: bool,
 }
 
 #[derive(Component)]

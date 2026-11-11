@@ -221,14 +221,16 @@ fn removing_a_layer_and_undoing_it_restores_its_cells_exactly() {
         "tilemap.layer.remove",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", 0i64.into()),
+            ("layer", text(&format!("#{}", before.0.layers[0].id))),
         ],
     );
     assert_eq!(result, OperatorResult::Finished, "{}", warnings(&app));
     assert_eq!(entries(&app), count + 1);
     let after = (tilemap(&app, map), stored(&mut app, map));
     assert_eq!(after.0.layers, before.0.layers[1..]);
-    assert_eq!(after.1.layers, before.1.layers[1..]);
+    let mut kept = before.1.layers.clone();
+    kept.remove(&before.0.layers[0].id);
+    assert_eq!(after.1.layers, kept, "the layer above keeps its cells");
 
     let _ = call(&mut app, "history.undo", &[]);
     assert_eq!((tilemap(&app, map), stored(&mut app, map)), before);
@@ -245,7 +247,7 @@ fn the_last_layer_is_never_removed() {
         "tilemap.layer.remove",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", 0i64.into()),
+            ("layer", 0i64.into()),
         ],
     );
     assert_eq!(result, OperatorResult::Cancelled);
@@ -265,7 +267,7 @@ fn set_changes_a_layer_and_undo_restores_its_cells() {
         "tilemap.layer.set",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", 0i64.into()),
+            ("layer", 0i64.into()),
             ("name", text("Ground")),
         ],
     );
@@ -278,18 +280,20 @@ fn set_changes_a_layer_and_undo_restores_its_cells() {
         "tilemap.layer.set",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", 0i64.into()),
+            ("layer", 0i64.into()),
             ("kind", text("tile")),
         ],
     );
     assert_eq!(result, OperatorResult::Finished, "{}", warnings(&app));
-    assert_eq!(tilemap(&app, map).layers[0].kind, TilemapLayerKind::Tile);
+    let layer = tilemap(&app, map).layers[0].clone();
+    assert_eq!(layer.kind, TilemapLayerKind::Tile);
+    assert_eq!(layer.id, before.0.layers[0].id, "the layer keeps its id");
     assert!(
-        stored(&mut app, map).layers[0]
+        (stored(&mut app, map).layers.get(&layer.id)).is_none_or(|cells| cells
             .tiles
             .chunks()
             .next()
-            .is_none(),
+            .is_none()),
         "a new kind starts empty"
     );
 
@@ -309,7 +313,7 @@ fn removing_layers_keeps_the_active_layer_valid() {
             "tilemap.layer.activate",
             &[
                 ("entity", PropertyValue::Entity(map)),
-                ("index", index.into()),
+                ("layer", index.into()),
             ],
         );
         assert_eq!(result, OperatorResult::Finished, "{}", warnings(app));
@@ -320,7 +324,7 @@ fn removing_layers_keeps_the_active_layer_valid() {
             "tilemap.layer.remove",
             &[
                 ("entity", PropertyValue::Entity(map)),
-                ("index", index.into()),
+                ("layer", index.into()),
             ],
         );
     };
@@ -418,7 +422,7 @@ fn set(app: &mut App, map: Entity, index: i64, param: &'static str, value: &str)
         "tilemap.layer.set",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", index.into()),
+            ("layer", index.into()),
             (param, text(value)),
         ],
     )
@@ -530,13 +534,14 @@ fn a_new_tileset_empties_the_layer_in_the_same_undo_step() {
         OperatorResult::Finished
     );
     assert_eq!(entries(&app), count + 1);
-    assert_eq!(tilemap(&app, map).layers[1].tileset, "plain.tileset.bsn");
+    let layer = tilemap(&app, map).layers[1].clone();
+    assert_eq!(layer.tileset, "plain.tileset.bsn");
     assert!(
-        stored(&mut app, map).layers[1]
+        (stored(&mut app, map).layers.get(&layer.id)).is_none_or(|cells| cells
             .tiles
             .chunks()
             .next()
-            .is_none(),
+            .is_none()),
         "the old tileset's indices are gone"
     );
     let _ = call(&mut app, "history.undo", &[]);
@@ -627,7 +632,7 @@ fn removing_the_active_layer_leaves_tile_edit_mode() {
         "tilemap.layer.activate",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", 1i64.into()),
+            ("layer", 1i64.into()),
         ],
     );
     assert_eq!(result, OperatorResult::Finished);
@@ -636,36 +641,141 @@ fn removing_the_active_layer_leaves_tile_edit_mode() {
         "tilemap.layer.remove",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("index", 1i64.into()),
+            ("layer", 1i64.into()),
         ],
     );
     assert_eq!(app.world().resource::<TileEditMode>().map, None);
 }
 
 #[test]
-fn strokes_refuse_a_map_whose_layers_left_its_cells_behind() {
+fn reordering_the_layer_list_keeps_every_layers_cells() {
     let (mut app, _dir, _root, map) = app_with_map();
+    add_tile_layer(&mut app, map, "Props");
     paint(&mut app, map, "0", "terrain", "2");
-    let extra = tilemap(&app, map).layers[0].clone();
+    paint(&mut app, map, "Props", "tile", "0:3");
+    let before = stored(&mut app, map);
     app.world_mut()
         .get_mut::<Tilemap>(map)
         .expect("a tilemap")
         .layers
-        .insert(0, extra);
+        .reverse();
     settle(&mut app);
-    let before = stored(&mut app, map);
+    assert_eq!(stored(&mut app, map), before, "no cell moved");
+
+    let props = tilemap(&app, map).layers[0].id;
     let result = call(
         &mut app,
         "tilemap.set_cells",
         &[
             ("entity", PropertyValue::Entity(map)),
-            ("layer", text("1")),
-            ("kind", text("terrain")),
-            ("cells", text("0,0")),
-            ("value", text("1")),
+            ("layer", text("0")),
+            ("kind", text("tile")),
+            ("cells", text("9,9")),
+            ("value", text("0:3")),
+        ],
+    );
+    assert_eq!(result, OperatorResult::Finished, "{}", warnings(&app));
+    let after = stored(&mut app, map);
+    let painted = |data: &TilemapData, id| data.layers[&id].painted_cells().len();
+    assert_eq!(painted(&after, props), painted(&before, props) + 1);
+    let ground = tilemap(&app, map).layers[1].id;
+    assert_eq!(after.layers[&ground], before.layers[&ground]);
+}
+
+#[test]
+fn layers_are_named_by_id_and_ids_are_never_given_twice() {
+    let (mut app, _dir, _root, map) = app_with_map();
+    add_tile_layer(&mut app, map, "Props");
+    let props = tilemap(&app, map).layers[1].id;
+    let _ = call(&mut app, "history.undo", &[]);
+    add_tile_layer(&mut app, map, "Decor");
+    let decor = tilemap(&app, map).layers[1].id;
+    assert_ne!(decor, props, "an undone layer's id stays unused");
+
+    let result = call(
+        &mut app,
+        "tilemap.layer.set",
+        &[
+            ("entity", PropertyValue::Entity(map)),
+            ("layer", text(&format!("#{decor}"))),
+            ("name", text("Trees")),
+        ],
+    );
+    assert_eq!(result, OperatorResult::Finished, "{}", warnings(&app));
+    assert_eq!(tilemap(&app, map).layers[1].name, "Trees");
+    let result = call(
+        &mut app,
+        "tilemap.layer.remove",
+        &[
+            ("entity", PropertyValue::Entity(map)),
+            ("layer", text("#999")),
         ],
     );
     assert_eq!(result, OperatorResult::Cancelled);
-    assert!(warnings(&app).contains("layers"), "{}", warnings(&app));
-    assert_eq!(stored(&mut app, map), before);
+    assert!(warnings(&app).contains("#999"), "{}", warnings(&app));
+}
+
+#[test]
+fn a_layer_repeating_another_layers_id_gets_a_fresh_one() {
+    let (mut app, _dir, _root, map) = app_with_map();
+    paint(&mut app, map, "0", "terrain", "2");
+    let before = stored(&mut app, map);
+    let mut copy = tilemap(&app, map).layers[0].clone();
+    copy.name = "Copy".into();
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("a tilemap")
+        .layers
+        .push(copy);
+    settle(&mut app);
+    let layers = tilemap(&app, map).layers;
+    assert_ne!(layers[0].id, layers[1].id);
+    assert_eq!(
+        stored(&mut app, map),
+        before,
+        "the cells stay with the first"
+    );
+}
+
+#[test]
+fn a_layer_named_like_another_layers_id_does_not_take_its_place() {
+    let (mut app, _dir, _root, map) = app_with_map();
+    add_tile_layer(&mut app, map, "Props");
+    let props = tilemap(&app, map).layers[1].id;
+    assert_eq!(
+        set(&mut app, map, 0, "name", &format!("#{props}")),
+        OperatorResult::Finished
+    );
+    let result = call(
+        &mut app,
+        "tilemap.layer.remove",
+        &[
+            ("entity", PropertyValue::Entity(map)),
+            ("layer", text(&format!("#{props}"))),
+        ],
+    );
+    assert_eq!(result, OperatorResult::Finished, "{}", warnings(&app));
+    let layers = tilemap(&app, map).layers;
+    assert_eq!(layers.len(), 1);
+    assert_ne!(layers[0].id, props, "the layer with that id went");
+}
+
+#[test]
+fn a_save_leaves_out_the_cells_of_layers_the_map_no_longer_lists() {
+    let (mut app, dir, _root, map) = app_with_map();
+    add_tile_layer(&mut app, map, "Props");
+    paint(&mut app, map, "0", "terrain", "2");
+    paint(&mut app, map, "Props", "tile", "0:3");
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("a tilemap")
+        .layers
+        .truncate(1);
+    settle(&mut app);
+    let kept = tilemap(&app, map).layers[0].id;
+    save_as(&mut app, &dir.path().join("farm.bsn").to_string_lossy());
+    let key = key_of(&mut app, map);
+    let file = std::fs::read(dir.path().join(&key)).expect("the sidecar");
+    let saved = jackdaw_tilemap::decode(&file).expect("a sidecar");
+    assert_eq!(saved.layers.keys().copied().collect::<Vec<_>>(), [kept]);
 }

@@ -75,13 +75,19 @@ pub(crate) fn layer(kind: TilemapLayerKind, terrain_match: LayerTerrainMatch) ->
         tileset: TILESET.to_string(),
         kind,
         terrain_match,
+        ..default()
     }
 }
 
 /// Spawn a map linked into the live document and fill its cells with `data`.
-pub(crate) fn spawn_map(app: &mut App, layers: Vec<TilemapLayer>, data: TilemapData) -> Entity {
+/// The layers get ids from 0 up, in order.
+pub(crate) fn spawn_map(app: &mut App, mut layers: Vec<TilemapLayer>, data: TilemapData) -> Entity {
+    for (id, layer) in (0..).zip(&mut layers) {
+        layer.id = id;
+    }
     let tilemap = Tilemap {
         data_path: "zone.tilemap-0.jdtiles".to_string(),
+        next_layer_id: layers.len() as u32,
         layers,
         ..default()
     };
@@ -125,12 +131,16 @@ pub(crate) fn tile_layer(cells: &[(i32, i32, TileRef)]) -> TilemapData {
         tiles.set(CellCoord::new(x, y), tile);
     }
     TilemapData {
-        layers: vec![LayerData {
-            kind: LayerKind::Tile,
-            placement: Default::default(),
-            tiles,
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            LayerData {
+                kind: LayerKind::Tile,
+                placement: Default::default(),
+                tiles,
+                authoring: None,
+            },
+        )]
+        .into(),
     }
 }
 
@@ -274,7 +284,9 @@ fn an_edit_updates_only_its_chunk_and_an_emptied_chunk_goes() {
     let (origin_tick, east_tick) = (data_tick(&app, origin), data_tick(&app, east));
 
     edit(&mut app, map, |data| {
-        data.layers[0]
+        data.layers
+            .get_mut(&0)
+            .expect("a layer")
             .tiles
             .set(CellCoord::new(1, 0), TileRef::new(9));
     });
@@ -288,7 +300,11 @@ fn an_edit_updates_only_its_chunk_and_an_emptied_chunk_goes() {
     );
 
     edit(&mut app, map, |data| {
-        data.layers[0].tiles.clear(CellCoord::new(40, 0));
+        data.layers
+            .get_mut(&0)
+            .expect("a layer")
+            .tiles
+            .clear(CellCoord::new(40, 0));
     });
     assert!(
         app.world().get_entity(east).is_err(),
@@ -360,15 +376,19 @@ pub(crate) fn grass_patch() -> TilemapData {
         }
     }
     TilemapData {
-        layers: vec![LayerData {
-            kind: LayerKind::Terrain,
-            placement: Default::default(),
-            tiles: ChunkedLayer::new(),
-            authoring: Some(TerrainAuthoring {
-                terrain,
-                ..default()
-            }),
-        }],
+        layers: [(
+            0,
+            LayerData {
+                kind: LayerKind::Terrain,
+                placement: Default::default(),
+                tiles: ChunkedLayer::new(),
+                authoring: Some(TerrainAuthoring {
+                    terrain,
+                    ..default()
+                }),
+            },
+        )]
+        .into(),
     }
 }
 
@@ -479,7 +499,10 @@ fn the_saved_scene_holds_no_chunk() {
 /// Grass over cells 0..70 x 0..20: three chunks in a row.
 pub(crate) fn grass_strip() -> TilemapData {
     let mut data = grass_patch();
-    let terrain = &mut data.layers[0]
+    let terrain = &mut data
+        .layers
+        .get_mut(&0)
+        .expect("a layer")
         .authoring
         .as_mut()
         .expect("authoring")
@@ -556,7 +579,13 @@ fn a_direct_terrain_edit_resolves_a_bounded_region_and_writes_one_chunk() {
     let start = resolved(&app);
 
     edit(&mut app, map, |data| {
-        let authoring = data.layers[0].authoring.as_mut().expect("authoring");
+        let authoring = data
+            .layers
+            .get_mut(&0)
+            .expect("a layer")
+            .authoring
+            .as_mut()
+            .expect("authoring");
         authoring.terrain.set(CellCoord::new(40, 3), 2);
     });
     let ring = 4 * 32 + 4;
@@ -578,9 +607,9 @@ fn a_direct_terrain_edit_resolves_a_bounded_region_and_writes_one_chunk() {
         .expect("a set");
     let store = app.world().resource::<TilemapDataStore>();
     let data = store.get(&key).expect("the map");
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     let fresh = jackdaw_editor_tile::tilemap_resolve::full_resolve(&set, authoring, None).0;
-    assert_eq!(data.layers[0].tiles, fresh, "the edit left no stale tile");
+    assert_eq!(data.layers[&0].tiles, fresh, "the edit left no stale tile");
 }
 
 /// The two terrains, upper first, of the overworld's first corners set of
@@ -590,7 +619,7 @@ pub(crate) fn corner_pair(app: &App) -> (TerrainId, TerrainId) {
         .next()
         .map(|(_, t)| t.clone())
         .expect("the tileset");
-    (tileset.sets().iter())
+    (tileset.terrain_sets.iter())
         .find(|set| set.mode == TerrainMatch::Corners && set.terrains.len() == 2)
         .map(|set| (set.terrains[1], set.terrains[0]))
         .expect("a corners set")
@@ -602,7 +631,13 @@ pub(crate) fn corner_patch(
     overrides: &[(i32, i32, TileRef)],
 ) -> TilemapData {
     let mut data = grass_patch();
-    let authoring = data.layers[0].authoring.as_mut().expect("authoring");
+    let authoring = data
+        .layers
+        .get_mut(&0)
+        .expect("a layer")
+        .authoring
+        .as_mut()
+        .expect("authoring");
     for (cell, _) in authoring.terrain.clone().cells() {
         authoring.terrain.set(cell, outer);
     }
@@ -626,8 +661,10 @@ fn a_corner_layer_draws_half_a_cell_up_and_right_of_an_on_cells_layer() {
     let (mut app, _dir) = project_app();
     let pair = corner_pair(&app);
     let mut data = corner_patch(pair, &[]);
-    data.layers
-        .push(tile_layer(&[(0, 0, TileRef::new(3))]).layers.remove(0));
+    data.layers.insert(
+        1,
+        (tile_layer(&[(0, 0, TileRef::new(3))]).layers.remove(&0)).expect("a layer"),
+    );
     let layers = vec![
         layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Corners),
         layer(TilemapLayerKind::Tile, default()),
@@ -643,9 +680,9 @@ fn a_corner_layer_draws_half_a_cell_up_and_right_of_an_on_cells_layer() {
     let key = key_of(&mut app, map);
     let store = app.world().resource::<TilemapDataStore>();
     let data = store.get(&key).expect("the map");
-    assert_eq!(data.layers[0].placement, Placement::BetweenCells);
-    assert_eq!(data.layers[1].placement, Placement::OnCells);
-    let lowest = data.layers[0]
+    assert_eq!(data.layers[&0].placement, Placement::BetweenCells);
+    assert_eq!(data.layers[&1].placement, Placement::OnCells);
+    let lowest = data.layers[&0]
         .tiles
         .cells()
         .map(|(c, _)| c.0)
@@ -680,14 +717,14 @@ fn a_bounded_corner_layer_crops_the_tiles_its_bounds_cut() {
     let set = corner_set(&app);
     let store = app.world().resource::<TilemapDataStore>();
     let data = store.get(&key).expect("the map");
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     let bounds = Some(jackdaw_tilemap::CellRect {
         min: IVec2::ZERO,
         max: IVec2::splat(6),
     });
     let fresh = jackdaw_editor_tile::tilemap_resolve::full_resolve(&set, authoring, bounds).0;
     assert_eq!(
-        data.layers[0].tiles, fresh,
+        data.layers[&0].tiles, fresh,
         "the bounds resolved the edge again"
     );
 }
@@ -697,25 +734,27 @@ fn an_old_corner_layer_resolves_between_cells_and_hides_its_hand_placed_tiles() 
     let (mut app, _dir) = project_app();
     let patch = corner_patch(corner_pair(&app), &[(1, 1, TileRef::new(5))]);
     let mut old = patch.clone();
-    old.layers[0]
+    old.layers
+        .get_mut(&0)
+        .expect("a layer")
         .tiles
         .set(CellCoord::new(2, 2), TileRef::new(9));
     let old = jackdaw_tilemap::decode(&jackdaw_tilemap::encode(&old)).expect("an old sidecar");
-    assert_eq!(old.layers[0].placement, Placement::OnCells);
+    assert_eq!(old.layers[&0].placement, Placement::OnCells);
     let layers = vec![layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Corners)];
     let map = spawn_map(&mut app, layers, old);
     let key = key_of(&mut app, map);
     let set = corner_set(&app);
     let store = app.world().resource::<TilemapDataStore>();
     let data = store.get(&key).expect("the map");
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     let kept = authoring.overrides.get(&CellCoord::new(1, 1));
     assert_eq!(kept, Some(&TileRef::new(5)), "the hand-placed tile is kept");
-    let painted = patch.layers[0].authoring.as_ref().expect("authoring");
+    let painted = patch.layers[&0].authoring.as_ref().expect("authoring");
     assert_eq!(authoring.terrain, painted.terrain, "the painted cells stay");
-    assert_eq!(data.layers[0].placement, Placement::BetweenCells);
+    assert_eq!(data.layers[&0].placement, Placement::BetweenCells);
     let fresh = jackdaw_editor_tile::tilemap_resolve::full_resolve(&set, authoring, None).0;
-    assert_eq!(data.layers[0].tiles, fresh, "but not drawn");
+    assert_eq!(data.layers[&0].tiles, fresh, "but not drawn");
 }
 
 #[test]
@@ -723,12 +762,16 @@ fn a_new_corner_layer_paints_its_first_cells_between_cells() {
     let (mut app, _dir) = project_app();
     let (inner, _) = corner_pair(&app);
     let data = TilemapData {
-        layers: vec![LayerData {
-            kind: LayerKind::Terrain,
-            placement: Placement::OnCells,
-            tiles: ChunkedLayer::new(),
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            LayerData {
+                kind: LayerKind::Terrain,
+                placement: Placement::OnCells,
+                tiles: ChunkedLayer::new(),
+                authoring: None,
+            },
+        )]
+        .into(),
     };
     let layers = vec![layer(TilemapLayerKind::Terrain, LayerTerrainMatch::Corners)];
     let map = spawn_map(&mut app, layers, data);
@@ -747,8 +790,8 @@ fn a_new_corner_layer_paints_its_first_cells_between_cells() {
     let key = key_of(&mut app, map);
     let store = app.world().resource::<TilemapDataStore>();
     let data = store.get(&key).expect("the map");
-    assert_eq!(data.layers[0].placement, Placement::BetweenCells);
-    assert_eq!(data.layers[0].painted_cells(), vec![CellCoord::new(2, 2)]);
+    assert_eq!(data.layers[&0].placement, Placement::BetweenCells);
+    assert_eq!(data.layers[&0].painted_cells(), vec![CellCoord::new(2, 2)]);
     let chunk = chunk_at(&mut app, map, 0, IVec2::ZERO);
     let at = app.world().get::<Transform>(chunk).expect("a transform");
     assert_eq!(at.translation.truncate(), Vec2::splat(264.0));
@@ -763,7 +806,7 @@ fn set_match(app: &mut App, map: Entity, terrain_match: LayerTerrainMatch) {
 fn stored_layer(app: &mut App, map: Entity) -> LayerData {
     let key = key_of(app, map);
     let store = app.world().resource::<TilemapDataStore>();
-    store.get(&key).expect("the map").layers[0].clone()
+    store.get(&key).expect("the map").layers[&0].clone()
 }
 
 #[test]
@@ -772,9 +815,15 @@ fn hand_placed_tiles_survive_a_switch_between_cells_and_back() {
     let mut data = grass_patch();
     let placed = TileRef::new(5);
     let at = CellCoord::new(1, 1);
-    (data.layers[0].authoring.as_mut().expect("authoring"))
-        .overrides
-        .insert(at, placed);
+    (data
+        .layers
+        .get_mut(&0)
+        .expect("a layer")
+        .authoring
+        .as_mut()
+        .expect("authoring"))
+    .overrides
+    .insert(at, placed);
     let map = spawn_map(&mut app, vec![ground_terrain()], data);
     assert_eq!(stored_layer(&mut app, map).tiles.get(at), placed);
     set_match(&mut app, map, LayerTerrainMatch::Corners);
@@ -859,14 +908,14 @@ fn growing_the_bounds_of_a_corner_layer_saves_the_ring_it_resolves() {
         .clone();
     let file = std::fs::read(dir.path().join("assets").join(data_path)).expect("the sidecar");
     let saved = jackdaw_tilemap::decode(&file).expect("a sidecar");
-    let authoring = saved.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = saved.layers[&0].authoring.as_ref().expect("authoring");
     let fresh = jackdaw_editor_tile::tilemap_resolve::full_resolve(
         &corner_set(&app),
         authoring,
         bounded(0, 6),
     );
-    assert_eq!(saved.layers[0].tiles, fresh.0);
-    assert_eq!(saved.layers[0].placement, Placement::BetweenCells);
+    assert_eq!(saved.layers[&0].tiles, fresh.0);
+    assert_eq!(saved.layers[&0].placement, Placement::BetweenCells);
 }
 
 #[test]

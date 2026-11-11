@@ -43,7 +43,7 @@ fn preview(app: &App) -> Vec<(CellCoord, TileRef)> {
 /// The cells of layer 0 whose tile differs between `before` and `after`,
 /// with their tile in `after`.
 fn diff(before: &TilemapData, after: &TilemapData) -> Vec<(CellCoord, TileRef)> {
-    let (old, new) = (&before.layers[0].tiles, &after.layers[0].tiles);
+    let (old, new) = (&before.layers[&0].tiles, &after.layers[&0].tiles);
     let cells: BTreeSet<CellCoord> = old.cells().chain(new.cells()).map(|(c, _)| c).collect();
     let mut changed: Vec<_> = (cells.into_iter())
         .filter(|&c| old.get(c) != new.get(c))
@@ -250,7 +250,7 @@ fn parallel_path_roads_stay_apart_and_connect_roads_join() {
     let (path, _) = two_roads("path");
     let (connect, _) = two_roads("connect");
     let links = |data: &TilemapData, x, y| {
-        let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+        let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
         authoring.links.get(CellCoord::new(x, y))
     };
     for x in 0..=5 {
@@ -263,7 +263,7 @@ fn parallel_path_roads_stay_apart_and_connect_roads_join() {
         assert!(links(&path, x, 2).has(Peer::Left) && links(&path, x, 2).has(Peer::Right));
     }
     assert_ne!(
-        path.layers[0].tiles, connect.layers[0].tiles,
+        path.layers[&0].tiles, connect.layers[&0].tiles,
         "the roads resolve apart in one mode and joined in the other"
     );
 }
@@ -378,7 +378,7 @@ fn the_hover_readout_names_the_cell_terrain_tile_and_override() {
     let grass = (tileset.terrains.iter().find(|t| t.id == 1))
         .map(|t| t.name.clone())
         .expect("terrain 1");
-    let tile = stored(&mut app, map).layers[0]
+    let tile = stored(&mut app, map).layers[&0]
         .tiles
         .get(CellCoord::new(2, 2));
     let (sheet, at) = tileset

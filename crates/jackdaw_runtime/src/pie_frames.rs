@@ -97,6 +97,10 @@ pub(crate) struct FrameStream {
     pub readback: Entity,
     pub size: UVec2,
     pub seq: u64,
+    /// Updates since the stream started, counting the one it started in. Each
+    /// update's frame is read back at most once and in order, so the frame with
+    /// this `seq` is the earliest that can hold what this update did.
+    pub updates: u64,
     /// Limits the malformed-readback warning to a single log line.
     pub warned_bad_len: bool,
 }
@@ -181,10 +185,26 @@ fn start_windowless_stream(world: &mut World, size: UVec2) {
         readback,
         size,
         seq: 0,
+        updates: 1,
         warned_bad_len: false,
     });
     world.insert_resource(StartDeclinedLogged(false));
     info!("PIE frames: windowless streaming at {}x{}", size.x, size.y);
+}
+
+/// Count an update of the running stream.
+pub(crate) fn count_stream_update(stream: Option<ResMut<FrameStream>>) {
+    if let Some(mut stream) = stream {
+        stream.updates += 1;
+    }
+}
+
+/// The `seq` of the first streamed frame that can show what this update did:
+/// the first of the next stream when none is running.
+pub(crate) fn first_frame_showing_now(world: &World) -> u64 {
+    world
+        .get_resource::<FrameStream>()
+        .map_or(1, |stream| stream.updates)
 }
 
 /// Tear down an active stream: drop the state and despawn the readback
@@ -318,6 +338,26 @@ mod tests {
             readback,
             "a capture that died comes back"
         );
+    }
+
+    #[test]
+    fn a_change_shows_first_in_the_frame_of_the_update_it_was_made_in() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        app.init_asset::<Image>();
+        app.add_systems(First, count_stream_update);
+        crate::pie_windowless::install_windowless_world(app.world_mut());
+        assert_eq!(
+            first_frame_showing_now(app.world()),
+            1,
+            "with no stream, every frame of the next one"
+        );
+
+        start_frame_stream(app.world_mut(), 640, 360);
+        assert_eq!(first_frame_showing_now(app.world()), 1);
+        app.update();
+        app.update();
+        assert_eq!(first_frame_showing_now(app.world()), 3);
     }
 
     #[test]

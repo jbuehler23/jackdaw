@@ -7,15 +7,16 @@
 //! would never write, and the file must end exactly where the declared
 //! structure ends.
 //!
-//! # Format version 2
+//! # Format version 3
 //!
 //! ```text
 //! size      field
 //! 8         magic, b"JDTILES\0"
-//! 2         format version, u16 == 2
+//! 2         format version, u16 == 3
 //! 2         flags, u16 (bit 0 = authoring data present, other bits must be 0)
 //! 4         layer_count, u32
-//! then, per layer:
+//! then, per layer in ascending id order:
+//! 4         layer id, u32
 //! 1         kind, u8 (0 = tile layer, 1 = terrain layer)
 //! 1         placement, u8 (0 = tiles on cells, 1 = tiles between cells)
 //! 2         reserved, must be 0
@@ -43,16 +44,14 @@
 //! link bytes never set reserved bits. A stored link cell has the Path bit and
 //! a non-zero terrain id; encode prunes any other link data.
 //!
-//! Version 1 is version 2 without the link chunk list; decode reads it with
-//! empty links and encode always writes version 2. Files written before the
-//! placement byte hold 0 there, so they read as tiles on cells. Tiles between
+//! Layers are keyed by the id the scene's layer list gives each one, which
+//! also holds their order; a layer id appears at most once. Tiles between
 //! cells are keyed as [`Placement::BetweenCells`] describes.
 //!
 //! Flags bit 0 is set exactly when some terrain layer has authoring data; then
 //! every terrain layer carries an authoring block, written empty for a layer
 //! whose authoring is `None`. Tile layers never carry one: encode ignores their
-//! authoring. So `encode(decode(b)) == b` for every accepted version 2 file
-//! (a version 1 file re-encodes as version 2), and
+//! authoring. So `encode(decode(b)) == b` for every accepted file, and
 //! `decode(encode(d)) == d` once `d` is normalised: tile layer authoring is
 //! `None`, empty overrides and invalid links are dropped, and when any terrain
 //! layer has authoring the others hold `Some` empty authoring.
@@ -67,9 +66,9 @@ use crate::path::Links;
 use crate::tile::{TerrainId, TileRef};
 
 pub const MAGIC: [u8; 8] = *b"JDTILES\0";
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 const FLAG_AUTHORING: u16 = 1 << 0;
-const LAYER_HEADER: usize = 8;
+const LAYER_HEADER: usize = 12;
 const OVERRIDE_RECORD: usize = 11;
 const MIN_CHUNK: i32 = i32::MIN / CHUNK_SIZE;
 const MAX_CHUNK: i32 = i32::MAX / CHUNK_SIZE;
@@ -131,13 +130,15 @@ impl LayerData {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TilemapData {
-    pub layers: Vec<LayerData>,
+    /// Each layer's cells by layer id. The scene's layer list gives the ids
+    /// and their order.
+    pub layers: BTreeMap<u32, LayerData>,
 }
 
 impl TilemapData {
     /// Drops every layer's authoring data, leaving only resolved tiles.
     pub fn strip_authoring(&mut self) {
-        for layer in &mut self.layers {
+        for layer in self.layers.values_mut() {
             layer.authoring = None;
         }
     }
@@ -147,7 +148,7 @@ impl TilemapData {
 pub enum SidecarError {
     /// The file does not start with [`MAGIC`].
     BadMagic,
-    /// Version 0, or written by a newer jackdaw than this one.
+    /// Any version but [`VERSION`].
     UnsupportedVersion(u16),
     /// A reserved flag bit, reserved byte or reserved link bit was non-zero.
     ReservedBits,
@@ -162,7 +163,7 @@ pub enum SidecarError {
     InvalidLinks,
     /// A stored chunk held only empty cells.
     EmptyChunk,
-    /// Chunks or overrides were out of order or duplicated.
+    /// Layers, chunks or overrides were out of order or duplicated.
     Unordered,
 }
 
@@ -191,7 +192,7 @@ impl std::error::Error for SidecarError {}
 pub fn encode(data: &TilemapData) -> Vec<u8> {
     let with_authoring = data
         .layers
-        .iter()
+        .values()
         .any(|layer| layer.kind == LayerKind::Terrain && layer.authoring.is_some());
     let flags = if with_authoring { FLAG_AUTHORING } else { 0 };
     let empty = TerrainAuthoring::default();
@@ -201,7 +202,8 @@ pub fn encode(data: &TilemapData) -> Vec<u8> {
     out.extend_from_slice(&VERSION.to_le_bytes());
     out.extend_from_slice(&flags.to_le_bytes());
     put_u32(&mut out, data.layers.len());
-    for layer in &data.layers {
+    for (&id, layer) in &data.layers {
+        out.extend_from_slice(&id.to_le_bytes());
         let kind = match layer.kind {
             LayerKind::Tile => 0,
             LayerKind::Terrain => 1,
@@ -243,7 +245,7 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
         return Err(SidecarError::BadMagic);
     }
     let version = r.u16()?;
-    if version == 0 || version > VERSION {
+    if version != VERSION {
         return Err(SidecarError::UnsupportedVersion(version));
     }
     let flags = r.u16()?;
@@ -253,8 +255,11 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
     let with_authoring = flags & FLAG_AUTHORING != 0;
 
     let layer_count = r.count(LAYER_HEADER)?;
-    let mut layers = Vec::with_capacity(layer_count);
+    let mut layers = BTreeMap::new();
+    let mut last_id: Option<u32> = None;
     for _ in 0..layer_count {
+        let id = r.u32()?;
+        check_ascending(&mut last_id, id)?;
         let header = r.take(4)?;
         let kind = match header[0] {
             0 => LayerKind::Tile,
@@ -284,13 +289,9 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
                 check_ascending(&mut last, cell)?;
                 overrides.insert(cell, tile);
             }
-            let links = if version >= 2 {
-                read_chunks(&mut r, 1, |cell| {
-                    Links::from_bits(cell[0]).ok_or(SidecarError::ReservedBits)
-                })?
-            } else {
-                ChunkedLayer::new()
-            };
+            let links = read_chunks(&mut r, 1, |cell| {
+                Links::from_bits(cell[0]).ok_or(SidecarError::ReservedBits)
+            })?;
             if links
                 .cells()
                 .any(|(cell, l)| !l.is_path() || terrain.get(cell) == 0)
@@ -303,14 +304,21 @@ pub fn decode(bytes: &[u8]) -> Result<TilemapData, SidecarError> {
                 links,
             });
         }
-        layers.push(LayerData {
-            kind,
-            placement,
-            tiles,
-            authoring,
-        });
+        layers.insert(
+            id,
+            LayerData {
+                kind,
+                placement,
+                tiles,
+                authoring,
+            },
+        );
     }
-    if with_authoring && !layers.iter().any(|layer| layer.kind == LayerKind::Terrain) {
+    if with_authoring
+        && !layers
+            .values()
+            .any(|layer| layer.kind == LayerKind::Terrain)
+    {
         return Err(SidecarError::ReservedBits);
     }
 
@@ -447,6 +455,11 @@ mod tests {
 
     const CHUNK_RECORD: usize = 8 + 3 * CHUNK_AREA;
 
+    /// `layers` keyed by ids from 0 up.
+    fn keyed(layers: Vec<LayerData>) -> BTreeMap<u32, LayerData> {
+        (0..).zip(layers).collect()
+    }
+
     fn tile_layer(cells: &[(i32, i32, TileRef)]) -> LayerData {
         let mut tiles = ChunkedLayer::new();
         for &(x, y, tile) in cells {
@@ -495,7 +508,7 @@ mod tests {
         authoring.links.set(CellCoord::new(-70, -2), path);
         terrain.authoring = Some(authoring);
         TilemapData {
-            layers: vec![ground, terrain],
+            layers: keyed(vec![ground, terrain]),
         }
     }
 
@@ -525,7 +538,7 @@ mod tests {
         ]);
         ground.tiles.clear(CellCoord::new(5, 5));
         let mut reordered = map.clone();
-        reordered.layers[0] = ground;
+        reordered.layers.insert(0, ground);
         assert_eq!(encode(&reordered), encode(&map));
     }
 
@@ -541,7 +554,7 @@ mod tests {
         let mut map = sample_map();
         let full = encode(&map);
         map.strip_authoring();
-        assert!(map.layers.iter().all(|layer| layer.authoring.is_none()));
+        assert!(map.layers.values().all(|layer| layer.authoring.is_none()));
         let bytes = encode(&map);
         assert!(bytes.len() < full.len());
         assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 0);
@@ -551,23 +564,23 @@ mod tests {
     #[test]
     fn missing_terrain_authoring_normalises_to_empty_when_flagged() {
         let mut map = sample_map();
-        let mut second = map.layers[1].clone();
+        let mut second = map.layers[&1].clone();
         second.authoring = None;
-        map.layers.push(second);
-        map.layers[0].authoring = Some(TerrainAuthoring::default());
+        map.layers.insert(2, second);
+        map.layers.get_mut(&0).unwrap().authoring = Some(TerrainAuthoring::default());
         let decoded = decode(&encode(&map)).unwrap();
-        assert_eq!(decoded.layers[0].authoring, None);
+        assert_eq!(decoded.layers[&0].authoring, None);
         assert_eq!(
-            decoded.layers[2].authoring,
+            decoded.layers[&2].authoring,
             Some(TerrainAuthoring::default())
         );
-        assert_eq!(decoded.layers[1], map.layers[1]);
+        assert_eq!(decoded.layers[&1], map.layers[&1]);
     }
 
     #[test]
     fn every_truncation_is_an_error() {
         let mut map = TilemapData {
-            layers: vec![tile_layer(&[(0, 0, TileRef::new(1))])],
+            layers: keyed(vec![tile_layer(&[(0, 0, TileRef::new(1))])]),
         };
         let mut terrain = tile_layer(&[(1, 1, TileRef::new(2))]);
         terrain.kind = LayerKind::Terrain;
@@ -580,7 +593,7 @@ mod tests {
             .links
             .set(CellCoord::new(1, 1), Links::EMPTY.with_path());
         terrain.authoring = Some(authoring);
-        map.layers.push(terrain);
+        map.layers.insert(1, terrain);
         let bytes = encode(&map);
         for len in 0..bytes.len() {
             assert!(decode(&bytes[..len]).is_err(), "prefix {len} decoded");
@@ -596,8 +609,12 @@ mod tests {
         assert_eq!(decode(&bad), Err(SidecarError::BadMagic));
 
         let mut newer = bytes.clone();
-        newer[8..10].copy_from_slice(&3u16.to_le_bytes());
-        assert_eq!(decode(&newer), Err(SidecarError::UnsupportedVersion(3)));
+        newer[8..10].copy_from_slice(&4u16.to_le_bytes());
+        assert_eq!(decode(&newer), Err(SidecarError::UnsupportedVersion(4)));
+
+        let mut older = bytes.clone();
+        older[8..10].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(decode(&older), Err(SidecarError::UnsupportedVersion(2)));
 
         let mut zero = bytes.clone();
         zero[8..10].copy_from_slice(&0u16.to_le_bytes());
@@ -615,37 +632,37 @@ mod tests {
     #[test]
     fn rejects_reserved_layer_bytes_and_unknown_kind() {
         let map = TilemapData {
-            layers: vec![tile_layer(&[])],
+            layers: keyed(vec![tile_layer(&[])]),
         };
         let bytes = encode(&map);
         let mut kind = bytes.clone();
-        kind[16] = 7;
+        kind[20] = 7;
         assert_eq!(decode(&kind), Err(SidecarError::UnknownLayerKind(7)));
         let mut reserved = bytes.clone();
-        reserved[18] = 1;
+        reserved[22] = 1;
         assert_eq!(decode(&reserved), Err(SidecarError::ReservedBits));
         let mut placement = bytes;
-        placement[17] = 2;
+        placement[21] = 2;
         assert_eq!(decode(&placement), Err(SidecarError::ReservedBits));
     }
 
     #[test]
-    fn placement_round_trips_and_older_files_read_on_cells() {
+    fn placement_round_trips() {
         let mut layer = tile_layer(&[(0, 0, TileRef::new(1))]);
-        let old = encode(&TilemapData {
-            layers: vec![layer.clone()],
+        let on_cells = encode(&TilemapData {
+            layers: keyed(vec![layer.clone()]),
         });
-        assert_eq!(old[17], 0);
+        assert_eq!(on_cells[21], 0);
         assert_eq!(
-            decode(&old).unwrap().layers[0].placement,
+            decode(&on_cells).unwrap().layers[&0].placement,
             Placement::OnCells
         );
         layer.placement = Placement::BetweenCells;
         let map = TilemapData {
-            layers: vec![layer],
+            layers: keyed(vec![layer]),
         };
         let bytes = encode(&map);
-        assert_eq!(bytes[17], 1);
+        assert_eq!(bytes[21], 1);
         assert_eq!(decode(&bytes).unwrap(), map);
     }
 
@@ -668,30 +685,30 @@ mod tests {
         assert_eq!(decode(&bytes), Err(SidecarError::Truncated));
 
         let mut bytes = encode(&TilemapData {
-            layers: vec![tile_layer(&[])],
+            layers: keyed(vec![tile_layer(&[])]),
         });
-        bytes[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        bytes[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode(&bytes), Err(SidecarError::Truncated));
     }
 
     #[test]
     fn rejects_out_of_order_and_duplicate_chunks() {
         let map = TilemapData {
-            layers: vec![tile_layer(&[
+            layers: keyed(vec![tile_layer(&[
                 (0, 0, TileRef::new(1)),
                 (32, 0, TileRef::new(2)),
-            ])],
+            ])]),
         };
         let bytes = encode(&map);
-        let first = 24..24 + CHUNK_RECORD;
-        let second = 24 + CHUNK_RECORD..24 + 2 * CHUNK_RECORD;
+        let first = 28..28 + CHUNK_RECORD;
+        let second = 28 + CHUNK_RECORD..28 + 2 * CHUNK_RECORD;
 
-        let mut swapped = bytes[..24].to_vec();
+        let mut swapped = bytes[..28].to_vec();
         swapped.extend_from_slice(&bytes[second.clone()]);
         swapped.extend_from_slice(&bytes[first.clone()]);
         assert_eq!(decode(&swapped), Err(SidecarError::Unordered));
 
-        let mut duplicated = bytes[..24].to_vec();
+        let mut duplicated = bytes[..28].to_vec();
         duplicated.extend_from_slice(&bytes[first.clone()]);
         duplicated.extend_from_slice(&bytes[first]);
         assert_eq!(decode(&duplicated), Err(SidecarError::Unordered));
@@ -700,10 +717,10 @@ mod tests {
     #[test]
     fn rejects_invalid_cells() {
         let map = TilemapData {
-            layers: vec![tile_layer(&[(0, 0, TileRef::new(1))])],
+            layers: keyed(vec![tile_layer(&[(0, 0, TileRef::new(1))])]),
         };
         let bytes = encode(&map);
-        let cell = 32;
+        let cell = 36;
 
         let mut orientation = bytes.clone();
         orientation[cell + 2] = 0x80;
@@ -728,7 +745,7 @@ mod tests {
             .insert(CellCoord::new(0, 0), TileRef::new(1));
         terrain.authoring = Some(authoring);
         let mut bytes = encode(&TilemapData {
-            layers: vec![terrain],
+            layers: keyed(vec![terrain]),
         });
         let index = bytes.len() - 4 - 3;
         bytes[index..index + 2].copy_from_slice(&TileRef::EMPTY_INDEX.to_le_bytes());
@@ -738,11 +755,11 @@ mod tests {
     #[test]
     fn golden_single_cell_map() {
         let map = TilemapData {
-            layers: vec![tile_layer(&[(0, 0, TileRef::new(5).with_flip_x(true))])],
+            layers: BTreeMap::from([(7, tile_layer(&[(0, 0, TileRef::new(5).with_flip_x(true))]))]),
         };
 
-        let header = [2, 0, 0, 0, 1, 0, 0, 0];
-        let layer_header = [0, 0, 0, 0];
+        let header = [3, 0, 0, 0, 1, 0, 0, 0];
+        let layer_header = [7, 0, 0, 0, 0, 0, 0, 0];
         let chunk_count = [1, 0, 0, 0];
         let chunk_coord = [0; 8];
         let mut expected = Vec::new();
@@ -763,10 +780,10 @@ mod tests {
     #[test]
     fn rejects_chunk_coords_that_overflow_cells() {
         let map = TilemapData {
-            layers: vec![tile_layer(&[(0, 0, TileRef::new(1))])],
+            layers: keyed(vec![tile_layer(&[(0, 0, TileRef::new(1))])]),
         };
         let mut bytes = encode(&map);
-        bytes[24..28].copy_from_slice(&0x4000_0000i32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&0x4000_0000i32.to_le_bytes());
         assert_eq!(decode(&bytes), Err(SidecarError::InvalidCell));
     }
 
@@ -774,7 +791,11 @@ mod tests {
     fn accepts_extreme_in_range_chunk() {
         let corner = CellCoord::new(i32::MAX, i32::MIN);
         let map = TilemapData {
-            layers: vec![tile_layer(&[(corner.0.x, corner.0.y, TileRef::new(1))])],
+            layers: keyed(vec![tile_layer(&[(
+                corner.0.x,
+                corner.0.y,
+                TileRef::new(1),
+            )])]),
         };
         let bytes = encode(&map);
         assert_eq!(decode(&bytes).unwrap(), map);
@@ -783,7 +804,7 @@ mod tests {
     #[test]
     fn rejects_authoring_flag_without_terrain_layer() {
         let mut bytes = encode(&TilemapData {
-            layers: vec![tile_layer(&[])],
+            layers: keyed(vec![tile_layer(&[])]),
         });
         bytes[10] = 1;
         assert_eq!(decode(&bytes), Err(SidecarError::ReservedBits));
@@ -795,7 +816,7 @@ mod tests {
     #[test]
     fn decoded_layers_have_no_dirty_chunks() {
         let mut decoded = decode(&encode(&sample_map())).unwrap();
-        for layer in &mut decoded.layers {
+        for layer in decoded.layers.values_mut() {
             assert!(layer.tiles.take_dirty().is_empty());
             if let Some(authoring) = &mut layer.authoring {
                 assert!(authoring.terrain.take_dirty().is_empty());
@@ -816,7 +837,7 @@ mod tests {
         }
         terrain.authoring = Some(authoring);
         TilemapData {
-            layers: vec![terrain],
+            layers: keyed(vec![terrain]),
         }
     }
 
@@ -827,7 +848,8 @@ mod tests {
 
         let mut expected = Vec::new();
         expected.extend_from_slice(b"JDTILES\0");
-        expected.extend_from_slice(&[2, 0, 1, 0, 1, 0, 0, 0]);
+        expected.extend_from_slice(&[3, 0, 1, 0, 1, 0, 0, 0]);
+        expected.extend_from_slice(&[0, 0, 0, 0]);
         expected.extend_from_slice(&[1, 0, 0, 0]);
         expected.extend_from_slice(&[1, 0, 0, 0]);
         expected.extend_from_slice(&[0; 8]);
@@ -852,21 +874,6 @@ mod tests {
 
         assert_eq!(encode(&map), expected);
         assert_eq!(decode(&expected).unwrap(), map);
-    }
-
-    #[test]
-    fn version_1_decodes_with_empty_links_and_re_encodes_as_version_2() {
-        let map = linked_layer(&[]);
-        let v2 = encode(&map);
-        let mut v1 = v2[..v2.len() - 4].to_vec();
-        v1[8..10].copy_from_slice(&1u16.to_le_bytes());
-        let decoded = decode(&v1).unwrap();
-        assert_eq!(decoded, map);
-        assert_eq!(encode(&decoded), v2);
-        assert_eq!(decode(&v2[..]).unwrap(), map);
-        let mut v1_with_links = v2.clone();
-        v1_with_links[8..10].copy_from_slice(&1u16.to_le_bytes());
-        assert_eq!(decode(&v1_with_links), Err(SidecarError::TrailingBytes));
     }
 
     #[test]
@@ -906,7 +913,7 @@ mod tests {
         side_only[link] = Links::BOTTOM;
         assert_eq!(decode(&side_only), Err(SidecarError::InvalidLinks));
 
-        let terrain_cells = 16 + 4 + 4 + CHUNK_RECORD + 4 + 8;
+        let terrain_cells = 16 + 4 + 4 + 4 + CHUNK_RECORD + 4 + 8;
         let mut bare = bytes;
         assert_eq!(bare[terrain_cells + 1], 2);
         bare[terrain_cells + 1] = 0;
@@ -917,7 +924,13 @@ mod tests {
     fn encode_prunes_invalid_links() {
         let map = linked_layer(&[(1, 0, Links::EMPTY.with_path())]);
         let mut stale = map.clone();
-        let authoring = stale.layers[0].authoring.as_mut().unwrap();
+        let authoring = stale
+            .layers
+            .get_mut(&0)
+            .unwrap()
+            .authoring
+            .as_mut()
+            .unwrap();
         authoring
             .links
             .set(CellCoord::new(-5, 3), Links::EMPTY.with_path());
@@ -926,5 +939,39 @@ mod tests {
             .set(CellCoord::new(0, 0), Links::EMPTY.with(Peer::Top));
         assert_eq!(encode(&stale), encode(&map));
         assert_eq!(decode(&encode(&stale)).unwrap(), map);
+    }
+
+    #[test]
+    fn layers_round_trip_by_id_in_ascending_order() {
+        let map = TilemapData {
+            layers: BTreeMap::from([
+                (9, tile_layer(&[(0, 0, TileRef::new(1))])),
+                (2, tile_layer(&[(1, 1, TileRef::new(2))])),
+            ]),
+        };
+        let bytes = encode(&map);
+        assert_eq!(bytes[16..20], 2u32.to_le_bytes());
+        assert_eq!(decode(&bytes).unwrap(), map);
+    }
+
+    #[test]
+    fn rejects_out_of_order_and_duplicate_layer_ids() {
+        let layer = encode(&TilemapData {
+            layers: keyed(vec![tile_layer(&[])]),
+        })[16..]
+            .to_vec();
+        let with_ids = |ids: [u32; 2]| {
+            let mut bytes = encode(&TilemapData::default());
+            bytes[12..16].copy_from_slice(&2u32.to_le_bytes());
+            for id in ids {
+                let mut record = layer.clone();
+                record[..4].copy_from_slice(&id.to_le_bytes());
+                bytes.extend_from_slice(&record);
+            }
+            bytes
+        };
+        assert!(decode(&with_ids([1, 4])).is_ok());
+        assert_eq!(decode(&with_ids([4, 1])), Err(SidecarError::Unordered));
+        assert_eq!(decode(&with_ids([3, 3])), Err(SidecarError::Unordered));
     }
 }

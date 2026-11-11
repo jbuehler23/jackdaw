@@ -34,13 +34,6 @@ pub struct MissingGlyph {
     pub set: usize,
 }
 
-/// The coverage line of the terrain set at index `set`.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct CoverageLine {
-    pub root: Entity,
-    pub set: usize,
-}
-
 /// The missing shape summary of the active terrain set at index `set`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct CoverageSummary {
@@ -61,8 +54,9 @@ pub struct MissingShapes {
     writes_disk = true,
     label = "Paint Tile Bits",
     description = "Paint a terrain on zones of sheet tiles in one terrain set, as one undo \
-                   entry; zones its match mode does not use and tiles of objects are left. \
-                   Nothing changed adds no entry.",
+                   entry; zones its match mode does not use and tiles of objects are left. A \
+                   sheet outside terrain setup comes under it in the same entry. Nothing \
+                   changed adds no entry.",
     allows_undo = false,
     params(
         path(
@@ -89,7 +83,12 @@ pub fn tileset_tile_paint_bits(
         "tileset.tile.paint_bits",
         text(&params, "path"),
         move |_, tileset| {
-            with_setup(tileset, |tileset, setup| {
+            let mut covered = tileset.clone();
+            for sheet in zone_sheets(tileset, &zones)? {
+                covered.cover_sheet(sheet).map_err(|e| e.to_string())?;
+            }
+            let mut changed = 0;
+            let message = with_setup(&mut covered, |tileset, setup| {
                 let index = terrain_set(tileset, &set)?;
                 let id = terrain_or_empty(tileset, &on)?;
                 let found = setup.sets.get(index).ok_or("no such terrain set")?;
@@ -102,12 +101,26 @@ pub fn tileset_tile_paint_bits(
                     ));
                 }
                 let zones = zone_list(tileset, &zones)?;
-                let changed =
-                    (setup.paint_zones(index, id, &zones)).map_err(|e| setup.explain(e))?;
+                changed = (setup.paint_zones(index, id, &zones)).map_err(|e| setup.explain(e))?;
                 Ok(format!("{changed} of {} zones painted", zones.len()))
-            })
+            })?;
+            if changed > 0 {
+                *tileset = covered;
+            }
+            Ok(message)
         },
     )
+}
+
+/// The sheets the zones `text` lists fall on.
+fn zone_sheets(tileset: &Tileset, text: &str) -> Result<BTreeSet<u32>, String> {
+    (text.split(',').map(str::trim))
+        .filter(|z| !z.is_empty())
+        .map(|zone| {
+            let (at, _) = (zone.rsplit_once(':')).ok_or(format!("`{zone}` is no zone"))?;
+            Ok(tile(tileset, at)?.0)
+        })
+        .collect()
 }
 
 fn zone_list(tileset: &Tileset, text: &str) -> Result<Vec<(TileAddress, Peer)>, String> {
@@ -120,18 +133,6 @@ fn zone_list(tileset: &Tileset, text: &str) -> Result<Vec<(TileAddress, Peer)>, 
             Ok((address, peer(which)?))
         })
         .collect()
-}
-
-/// The coverage line of the terrain set at index `set` and its coverage.
-pub(crate) fn coverage_line(setup: &TilesetSetup, set: usize) -> Option<(String, Coverage)> {
-    let coverage = setup.coverage(set).ok()?;
-    let name = &setup.sets.get(set)?.name;
-    let mode = mode_word(coverage.mode);
-    let line = format!(
-        "{name} ({mode}): {} of {} shapes",
-        coverage.covered, coverage.total
-    );
-    Some((line, coverage))
 }
 
 /// How many shapes of its layout a set misses, with its mode.
@@ -240,20 +241,20 @@ fn shows(setup: &TilesetSetup, active: usize, tile: &SetupTile) -> bool {
         || (painted.clone().count() > 0 && painted.into_iter().all(|id| set.terrains.contains(id)))
 }
 
-/// The zones of sheet `sheet` held by tiles of the active set, the brush
-/// terrain picked.
+/// The zones of sheet `sheet` held by tiles of the set the dock paints in,
+/// the brush terrain picked.
 fn terrain_zones(
     tileset: &Tileset,
     setup: &TilesetSetup,
     sheet: u32,
     view: &DockView,
 ) -> Option<ZoneValues> {
-    let on = tileset.setup_sheet(sheet).ok()?;
-    let active = view.active_set(&tileset.sets())?;
+    let on = tileset.setup_sheet(sheet).ok();
+    let active = view.paint_set(tileset)?;
     let set = setup.sets.get(active)?;
     let mode = set.mode.value;
     let tiles = (setup.tiles.iter())
-        .filter(|(a, tile)| a.sheet == on && shows(setup, active, tile))
+        .filter(|(a, tile)| Some(a.sheet) == on && shows(setup, active, tile))
         .map(|(address, tile)| {
             let peers = Peer::ALL.map(|peer| {
                 let read = mode.reads(peer);
@@ -283,11 +284,13 @@ fn terrain_zones(
 }
 
 /// A stroke of the terrains mode: the brush terrain painted on tile zones
-/// in the active set, or erased with the right button.
+/// in its set, or erased with the right button.
 struct BitPaint {
     set: usize,
     mode: MatchMode,
     terrain: TerrainId,
+    /// The tileset with the stroke's sheet under terrain setup.
+    tileset: Tileset,
     /// The setup with the stroke painted so far.
     setup: TilesetSetup,
     zones: BTreeSet<(u32, Peer)>,
@@ -299,9 +302,11 @@ pub(crate) fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box
         PointerButton::Primary => start.view.brush,
         _ => 0,
     };
-    let tileset = start.tileset;
+    let mut covered = start.tileset.clone();
+    covered.cover_sheet(start.sheet).ok()?;
+    let tileset = &covered;
     let setup = tileset.setup().ok()?;
-    let set = (start.view.active_set(&tileset.sets()))
+    let set = (start.view.paint_set(tileset))
         .filter(|s| setup.sets.get(*s).is_some_and(|s| s.has(terrain)));
     let Some((set, mode)) = set.and_then(|s| Some((s, setup.sets.get(s)?.mode.value))) else {
         if terrain != 0 {
@@ -316,6 +321,7 @@ pub(crate) fn start_stroke(world: &mut World, start: &StrokeStart) -> Option<Box
         mode,
         terrain,
         setup,
+        tileset: covered,
         zones: BTreeSet::new(),
     }))
 }
@@ -361,7 +367,7 @@ impl BitPaint {
         frame: Entity,
         fresh: &[(u32, Peer)],
     ) {
-        let Ok(on) = stroke.tileset.setup_sheet(stroke.sheet) else {
+        let Ok(on) = self.tileset.setup_sheet(stroke.sheet) else {
             return;
         };
         if fresh.is_empty() {
@@ -393,11 +399,10 @@ impl BitPaint {
         {
             shown.0 = count;
         }
-        let Some((text, coverage)) = coverage_line(&self.setup, self.set) else {
+        let Ok(coverage) = self.setup.coverage(self.set) else {
             return;
         };
         let set = self.set;
-        retext::<CoverageLine>(world, |l| l.root == root && l.set == set, &text);
         let summary = summary_line(&coverage);
         retext::<CoverageSummary>(world, |l| l.root == root && l.set == set, &summary);
         let rows: Vec<(Entity, MissingShapes)> = (world.query::<(Entity, &MissingShapes)>())
@@ -407,7 +412,7 @@ impl BitPaint {
             .collect();
         for (row, shapes) in rows {
             world.entity_mut(row).despawn_related::<Children>();
-            spawn_missing(world, row, shapes, &stroke.tileset, &coverage);
+            spawn_missing(world, row, shapes, &self.tileset, &coverage);
         }
     }
 
@@ -423,14 +428,14 @@ impl BitPaint {
                 root: stroke.root,
                 frame,
                 sheet: stroke.sheet,
-                tileset: &stroke.tileset,
+                tileset: &self.tileset,
                 setup: &self.setup,
                 view: &view,
             };
             terrain_overlay(world, &sheet);
             return;
         };
-        let Some(values) = terrain_zones(&stroke.tileset, &self.setup, stroke.sheet, &view) else {
+        let Some(values) = terrain_zones(&self.tileset, &self.setup, stroke.sheet, &view) else {
             return;
         };
         let columns =

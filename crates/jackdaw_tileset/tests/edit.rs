@@ -58,6 +58,8 @@ fn describe_lists_terrains_sets_flags_objects_and_a_grid_per_sheet() {
         .set_peers(TileAddress { sheet: 0, tile: 1 }, edge)
         .expect("bits");
     let water = setup.add_terrain("water", [0, 0, 255], false).expect("id");
+    let pond = setup.add_set("", MatchMode::Corners).expect("set");
+    setup.add_set_terrain(pond, water, None).expect("free");
     let mixed = TileAddress { sheet: 0, tile: 2 };
     setup
         .set_peers(mixed, edge.with(Peer::Top, water))
@@ -149,6 +151,7 @@ fn a_sheet_outside_setup_takes_collision_that_a_setup_edit_keeps() {
     let solid = TilesetCollision {
         layer: 0,
         trigger: false,
+        one_way: true,
         preset: CollisionPreset::Solid,
         polygons: CollisionPreset::Solid.polygons().expect("a ring"),
     };

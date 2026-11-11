@@ -7,8 +7,10 @@ publish = false
 [workspace]  # detached: a build tool, not part of the editor graph
 
 [dependencies]
+ctrlc = "3"
 jackdaw_cli_internal = { path = "../crates/jackdaw_cli" }
 jackdaw_package = { path = "../crates/jackdaw_package" }
 jackdaw_project_build = { path = "../crates/jackdaw_project_build" }
 serde_json = "1"
 toml = "1"
+ureq = { version = "2", default-features = false, features = ["json"] }

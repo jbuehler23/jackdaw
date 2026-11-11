@@ -9,4 +9,5 @@ mod tileset_layout_ops;
 mod tileset_layout_popover;
 mod tileset_modes;
 mod tileset_ops;
+mod tileset_shape;
 mod tileset_suggest;

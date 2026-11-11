@@ -475,6 +475,16 @@ impl CommandHistory {
         dropped
     }
 
+    /// Drops the entry the next redo would apply, and the state it leads
+    /// to, as if it had never been made.
+    pub fn discard_next_redo(&mut self) -> Option<Box<dyn EditorCommand>> {
+        let command = self.redo_stack.pop()?;
+        if self.at + 1 < self.states.len() {
+            self.states.remove(self.at + 1);
+        }
+        Some(command)
+    }
+
     /// Redoes the next entry, dropping the ones whose target is gone as
     /// [`undo`](Self::undo) does.
     pub fn redo(&mut self, world: &mut World) -> Option<String> {

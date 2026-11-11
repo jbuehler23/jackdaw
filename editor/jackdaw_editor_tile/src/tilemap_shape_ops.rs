@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use jackdaw_api::prelude::*;
-use jackdaw_scene_types::{PropertyValue, Tilemap};
+use jackdaw_scene_types::Tilemap;
 use jackdaw_tilemap::CellCoord;
 
 use crate::tile_tools::{
@@ -12,7 +12,7 @@ use crate::tile_tools::{
 };
 use crate::tilemap::{TilemapDataStore, editable_key};
 use crate::tilemap_ops::finish;
-use crate::tilemap_stroke::{TileWrite, in_bounds, layer_named};
+use crate::tilemap_stroke::{TileWrite, in_bounds, layer_param};
 
 pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     ctx.register_operator::<TilemapFillRectOp>()
@@ -31,7 +31,7 @@ pub(crate) fn add_to_extension(ctx: &mut ExtensionContext) {
     is_available = crate::tilemap_ops::no_modal,
     params(
         entity(Entity, doc = "The tilemap; defaults to the selected one."),
-        layer(String, doc = "Layer name or index; defaults to the painted layer, else 0."),
+        layer(String, doc = "Layer name, #id or index; defaults to the painted layer, else 0."),
         x0(i64, doc = "Column of the first corner."),
         y0(i64, doc = "Row of the first corner."),
         x1(i64, doc = "Column of the second corner."),
@@ -61,7 +61,7 @@ pub(crate) fn tilemap_fill_rect(
     is_available = crate::tilemap_ops::no_modal,
     params(
         entity(Entity, doc = "The tilemap; defaults to the selected one."),
-        layer(String, doc = "Layer name or index; defaults to the painted layer, else 0."),
+        layer(String, doc = "Layer name, #id or index; defaults to the painted layer, else 0."),
         x0(i64, doc = "Column of the first end."),
         y0(i64, doc = "Row of the first end."),
         x1(i64, doc = "Column of the second end."),
@@ -92,7 +92,7 @@ pub(crate) fn tilemap_draw_line(
     is_available = crate::tilemap_ops::no_modal,
     params(
         entity(Entity, doc = "The tilemap; defaults to the selected one."),
-        layer(String, doc = "Layer name or index; defaults to the painted layer, else 0."),
+        layer(String, doc = "Layer name, #id or index; defaults to the painted layer, else 0."),
         x(i64, doc = "Column of the seed cell."),
         y(i64, doc = "Row of the seed cell."),
         terrain(String, doc = "Terrain name or id to paint on a terrain layer."),
@@ -117,7 +117,7 @@ pub(crate) fn tilemap_fill(params: In<OperatorParameters>, world: &mut World) ->
     is_available = crate::tilemap_ops::no_modal,
     params(
         entity(Entity, doc = "The tilemap; defaults to the selected one."),
-        layer(String, doc = "Layer name or index; defaults to the painted layer, else 0."),
+        layer(String, doc = "Layer name, #id or index; defaults to the painted layer, else 0."),
         x0(i64, doc = "Column of the first corner of the rectangle to clear."),
         y0(i64, doc = "Row of the first corner."),
         x1(i64, doc = "Column of the second corner."),
@@ -135,6 +135,8 @@ pub(crate) fn tilemap_clear(params: In<OperatorParameters>, world: &mut World) -
 pub(crate) struct Target {
     pub(crate) map: Entity,
     pub(crate) layer: usize,
+    /// The layer's id, which its cells are held by.
+    pub(crate) id: u32,
     pub(crate) name: String,
 }
 
@@ -146,21 +148,16 @@ pub(crate) fn target(world: &mut World, params: &OperatorParameters) -> Result<T
         .ok_or("the entity is not a tilemap")?;
     let mode = world.resource::<TileEditMode>();
     let painting = if mode.map == Some(map) { mode.layer } else { 0 };
-    let layer = match params.get("layer") {
-        None => painting,
-        Some(PropertyValue::String(named)) if named.trim().is_empty() => painting,
-        Some(PropertyValue::String(named)) => layer_named(tilemap, named.trim())?,
-        Some(PropertyValue::Int(index)) => usize::try_from(*index)
-            .ok()
-            .filter(|i| *i < tilemap.layers.len())
-            .ok_or_else(|| format!("the map has no layer {index}"))?,
-        Some(other) => return Err(format!("layer is a name or an index, not {other:?}")),
-    };
-    let name = (tilemap.layers.get(layer))
-        .ok_or_else(|| format!("the map has no layer {layer}"))?
-        .name
-        .clone();
-    Ok(Target { map, layer, name })
+    let layer = layer_param(tilemap, params)?.unwrap_or(painting);
+    let named =
+        (tilemap.layers.get(layer)).ok_or_else(|| format!("the map has no layer {layer}"))?;
+    let (id, name) = (named.id, named.name.clone());
+    Ok(Target {
+        map,
+        layer,
+        id,
+        name,
+    })
 }
 
 /// What the `terrain`, `tile` or `erase` param writes with `tool`, read as the
@@ -261,7 +258,7 @@ fn clear(world: &mut World, params: &OperatorParameters) -> Result<String, Strin
 fn painted(world: &mut World, target: &Target) -> Result<Vec<CellCoord>, String> {
     let key = editable_key(world, target.map)?;
     let store = world.resource::<TilemapDataStore>();
-    let Some(layer) = (store.get(&key)).and_then(|data| data.layers.get(target.layer)) else {
+    let Some(layer) = (store.get(&key)).and_then(|data| data.layers.get(&target.id)) else {
         return Ok(Vec::new());
     };
     Ok(layer.painted_cells())

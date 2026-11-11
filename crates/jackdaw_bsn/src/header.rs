@@ -24,6 +24,16 @@ pub const ASSET_HEADER: &str = "// jackdaw asset ";
 /// The type path of the marker a prefab document's roots carry.
 pub const PREFAB_TYPE: &str = "jackdaw::prefab::components::Prefab";
 
+/// Whether `text` names the prefab marker [`PREFAB_TYPE`] itself, rather than
+/// only a longer type path that starts with it, such as a prefab instance's
+/// entity id.
+pub fn names_prefab_marker(text: &str) -> bool {
+    text.match_indices(PREFAB_TYPE).any(|(at, _)| {
+        !text[at + PREFAB_TYPE.len()..]
+            .starts_with(|next: char| next.is_alphanumeric() || next == '_')
+    })
+}
+
 /// How deep under the assets directory a walk looks.
 pub(crate) const MAX_ASSET_DEPTH: usize = 12;
 
@@ -254,11 +264,12 @@ fn scan_first_root(text: &str) -> (DocumentOpening, usize) {
 /// document whose roots carry the prefab marker, else its first root's type.
 /// `None` for a document that spawns a hierarchy rather than holding one value.
 pub fn document_type_path(text: &str) -> Option<String> {
-    if !text.contains(PREFAB_TYPE) && read_document_opening(text) == DocumentOpening::Hierarchy {
+    let prefab = names_prefab_marker(text);
+    if !prefab && read_document_opening(text) == DocumentOpening::Hierarchy {
         return None;
     }
     let ast = parse_bsn_text(text).ok()?;
-    if text.contains(PREFAB_TYPE)
+    if prefab
         && ast
             .roots
             .iter()
@@ -445,6 +456,19 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_prefab_instance_s_entity_id_does_not_name_the_prefab_marker() {
+        let instance = "#Lamp\njackdaw::prefab::components::PrefabEntityId(0)\n";
+        assert!(!names_prefab_marker(instance));
+        for prefab in [
+            "jackdaw::prefab::components::Prefab\n",
+            "#Lamp\njackdaw::prefab::components::Prefab { name: \"lamp\" }",
+            "jackdaw::prefab::components::PrefabEntityId(1)\njackdaw::prefab::components::Prefab",
+        ] {
+            assert!(names_prefab_marker(prefab), "{prefab}");
+        }
+    }
+
     #[test]
     fn a_document_opening_a_hierarchy_is_known_from_its_first_tokens() {
         for opening in [

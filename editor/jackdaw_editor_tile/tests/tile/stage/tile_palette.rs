@@ -105,7 +105,7 @@ fn picking_a_terrain_loads_it_and_keeps_a_painting_tool() {
         &[(5, 5), (6, 6)],
     );
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     assert_eq!(
         authoring.terrain.get(CellCoord::new(6, 6)),
         2,
@@ -170,7 +170,7 @@ fn a_picked_tile_paints_hand_placed_tiles_over_terrain() {
     stroke(&mut app, "tilemap.brush", MouseButton::Left, &[(2, 2)]);
     assert_eq!(entries(&app), count + 1);
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     assert_eq!(authoring.overrides.get(&CellCoord::new(2, 2)), Some(&tile));
     assert_eq!(
         authoring.terrain.get(CellCoord::new(2, 2)),
@@ -221,7 +221,7 @@ fn flip_and_rotate_turn_the_loaded_tile_and_what_it_paints() {
     run(&mut app, "tilemap.brush.rotate");
     stroke(&mut app, "tilemap.brush", MouseButton::Left, &[(1, 1)]);
     assert_eq!(
-        stored(&mut app, map).layers[0]
+        stored(&mut app, map).layers[&0]
             .tiles
             .get(CellCoord::new(1, 1)),
         quarter
@@ -261,7 +261,7 @@ fn the_contiguous_toggle_reaches_a_bucket_press() {
         click(&mut app, "tilemap.bucket", MouseButton::Left, (0, 0)),
         OperatorResult::Finished
     );
-    let tiles = stored(&mut app, map).layers[0].tiles.clone();
+    let tiles = stored(&mut app, map).layers[&0].tiles.clone();
     let seven = packed(&app, 0, 7);
     assert_eq!(tiles.get(CellCoord::new(0, 0)), seven);
     assert_eq!(
@@ -466,7 +466,7 @@ fn a_corner_set_terrain_shows_its_corner_tile() {
     let corner_only: Vec<u8> = (set.terrains.iter())
         .map(|t| t.id)
         .filter(|&id| {
-            let all = set.sets();
+            let all = &set.terrain_sets;
             let sets: Vec<_> = (all.iter()).filter(|s| s.terrains.contains(&id)).collect();
             !sets.is_empty() && sets.iter().all(|s| s.mode == TerrainMatch::Corners)
         })
@@ -504,8 +504,8 @@ fn a_tile_bucket_on_terrain_matches_the_shown_tiles() {
     let data = stored(&mut app, map);
     let shown = |data: &jackdaw_tilemap::TilemapData, x: i32, y: i32| {
         let cell = CellCoord::new(x, y);
-        let authoring = data.layers[0].authoring.as_ref().expect("authoring");
-        (authoring.overrides.get(&cell).copied()).unwrap_or(data.layers[0].tiles.get(cell))
+        let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
+        (authoring.overrides.get(&cell).copied()).unwrap_or(data.layers[&0].tiles.get(cell))
     };
     let start = shown(&data, 2, 2);
     ok(&mut app, PICK, &[("tile", text("0:200"))]);
@@ -517,7 +517,7 @@ fn a_tile_bucket_on_terrain_matches_the_shown_tiles() {
     );
     assert_eq!(entries(&app), count + 1);
     let after = stored(&mut app, map);
-    let authoring = after.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = after.layers[&0].authoring.as_ref().expect("authoring");
     assert!(!authoring.overrides.is_empty());
     for cell in authoring.overrides.keys() {
         assert_eq!(
@@ -528,11 +528,14 @@ fn a_tile_bucket_on_terrain_matches_the_shown_tiles() {
     }
     assert_eq!(authoring.overrides.get(&CellCoord::new(2, 2)), Some(&tile));
     assert_eq!(
-        after.layers[0]
+        after.layers[&0]
             .authoring
             .as_ref()
             .map(|a| a.terrain.clone()),
-        data.layers[0].authoring.as_ref().map(|a| a.terrain.clone()),
+        data.layers[&0]
+            .authoring
+            .as_ref()
+            .map(|a| a.terrain.clone()),
         "terrain stays"
     );
 

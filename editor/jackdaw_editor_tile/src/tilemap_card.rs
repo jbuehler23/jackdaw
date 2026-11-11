@@ -73,6 +73,8 @@ pub struct TilemapAddLayerButton;
 pub struct LayerCombo {
     pub map: Entity,
     pub index: usize,
+    /// The layer's id, which the set call names it by.
+    pub layer: u32,
     pub param: &'static str,
     values: Vec<String>,
 }
@@ -82,6 +84,8 @@ pub struct LayerCombo {
 pub struct LayerNameField {
     pub map: Entity,
     pub index: usize,
+    /// The layer's id, which the set call names it by.
+    pub layer: u32,
 }
 
 const NO_SETS: &str = "This layer paints terrain, but its tileset has no terrain sets yet. Open \
@@ -140,7 +144,7 @@ fn layer_hint(world: &mut World, layer: &TilemapLayer) -> LayerHint {
 /// with terrain bits. `None` while the tileset is not loaded.
 fn hint_of(tileset: Option<&Tileset>) -> Option<&'static str> {
     let tileset = tileset?;
-    if tileset.sets().is_empty() {
+    if tileset.terrain_sets.is_empty() {
         Some(NO_SETS)
     } else if !(tileset.tiles.iter()).any(|tile| tile.peers.iter().any(|peer| *peer != 0)) {
         Some(NO_BITS)
@@ -336,11 +340,12 @@ fn spawn_layer_row(
     let call = |id: &'static str| {
         ButtonOperatorCall::new(id)
             .with_param("entity", map)
-            .with_param("index", index as i64)
+            .with_param("layer", format!("#{}", layer.id))
     };
     let combo = |param: &'static str, values: Vec<String>| LayerCombo {
         map,
         index,
+        layer: layer.id,
         param,
         values,
     };
@@ -359,7 +364,11 @@ fn spawn_layer_row(
     let name = holder(commands, head, Slot::Grow(0.0));
     commands.spawn((
         text_edit(TextEditProps::default().with_default_value(layer.name.clone())),
-        LayerNameField { map, index },
+        LayerNameField {
+            map,
+            index,
+            layer: layer.id,
+        },
         ChildOf(name),
     ));
     commands.spawn((
@@ -484,17 +493,11 @@ fn spawn_hint(commands: &mut Commands, lines: Entity, hint: &str, tileset: &str)
     ));
 }
 
-fn set_layer(
-    commands: &mut Commands,
-    map: Entity,
-    index: usize,
-    param: &'static str,
-    value: String,
-) {
+fn set_layer(commands: &mut Commands, map: Entity, layer: u32, param: &'static str, value: String) {
     commands
         .operator(TilemapLayerSetOp::ID)
         .param("entity", map)
-        .param("index", index as i64)
+        .param("layer", format!("#{layer}"))
         .param(param, value)
         .call();
 }
@@ -511,7 +514,7 @@ fn on_combo_pick(
         set_layer(
             &mut commands,
             combo.map,
-            combo.index,
+            combo.layer,
             combo.param,
             value.clone(),
         );
@@ -528,7 +531,7 @@ fn on_name_commit(
     if let Some((_, field)) = find_ancestor(commit.entity, &fields, &parents)
         && !name.is_empty()
     {
-        set_layer(&mut commands, field.map, field.index, "name", name);
+        set_layer(&mut commands, field.map, field.layer, "name", name);
     }
 }
 

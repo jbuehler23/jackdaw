@@ -400,7 +400,33 @@ pub fn status_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult 
         // doing, which `jackdaw/wait` can be held on.
         "pie": jackdaw_editor_core::pie::play_status(world),
         "instances": game_instances(world),
+        "game_frame": game_frame(world),
     }))
+}
+
+/// The frames the Game panel holds from the focused game: null until the first
+/// arrives, and `own_window` alone when the game shows itself in its own window
+/// and sends none. Ages are milliseconds since the first and newest frame.
+fn game_frame(world: &World) -> Value {
+    let Some(stream) = world.get_resource::<jackdaw_editor_core::live_frame::LiveFrameStream>()
+    else {
+        return Value::Null;
+    };
+    let age = |at: Option<std::time::Instant>| at.map(|at| at.elapsed().as_millis() as u64);
+    if stream.has_frame() {
+        json!({
+            "seq": stream.last_seq,
+            "width": stream.size.x,
+            "height": stream.size.y,
+            "fresh": stream.is_fresh(),
+            "first_age_ms": age(stream.first_received_at),
+            "age_ms": age(stream.received_at),
+        })
+    } else if stream.game_has_own_window {
+        json!({ "own_window": true })
+    } else {
+        Value::Null
+    }
 }
 
 /// Every game instance Play launched, each `building`, `connecting` or
@@ -2430,5 +2456,40 @@ mod tests {
     #[test]
     fn the_editor_port_is_not_the_game_port() {
         assert_ne!(DEFAULT_PORT, jackdaw_remote::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn status_reports_a_game_frame_only_once_the_panel_holds_one() {
+        use jackdaw_editor_core::live_frame::LiveFrameStream;
+
+        let mut world = World::new();
+        assert_eq!(game_frame(&world), Value::Null);
+        world.init_resource::<LiveFrameStream>();
+        assert_eq!(game_frame(&world), Value::Null);
+
+        world.resource_mut::<LiveFrameStream>().game_has_own_window = true;
+        assert_eq!(game_frame(&world), json!({ "own_window": true }));
+
+        let now = std::time::Instant::now();
+        let mut stream = world.resource_mut::<LiveFrameStream>();
+        stream.game_has_own_window = false;
+        stream.image = Some(Handle::default());
+        stream.size = UVec2::new(64, 32);
+        stream.last_seq = 3;
+        stream.received_at = Some(now);
+        stream.first_received_at = now.checked_sub(std::time::Duration::from_secs(2));
+        let frame = game_frame(&world);
+        assert_eq!(
+            (
+                &frame["seq"],
+                &frame["width"],
+                &frame["height"],
+                &frame["fresh"]
+            ),
+            (&json!(3), &json!(64), &json!(32), &json!(true))
+        );
+        let first = frame["first_age_ms"].as_u64().unwrap();
+        let newest = frame["age_ms"].as_u64().unwrap();
+        assert!(first >= 2000 && newest < first, "{frame}");
     }
 }

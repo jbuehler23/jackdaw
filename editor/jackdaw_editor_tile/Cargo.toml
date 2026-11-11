@@ -25,6 +25,7 @@ jackdaw_prefab.workspace = true
 jackdaw_scene_types.workspace = true
 jackdaw_tilemap.workspace = true
 jackdaw_tileset = { workspace = true, features = ["render"] }
+jackdaw_widgets.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
@@ -41,7 +42,6 @@ jackdaw_editor_core = { package = "jackdaw_editor_core", version = "0.21.0-dev",
     "embed-recipe",
 ] }
 jackdaw_runtime = { workspace = true, features = ["terrain", "tilemap"] }
-jackdaw_widgets.workspace = true
 tempfile = "3"
 
 [lints]

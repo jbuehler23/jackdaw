@@ -275,6 +275,7 @@ fn a_terrain_layer_without_terrain_sets_explains_itself() {
         tileset: "plain.tileset.bsn".to_string(),
         kind: TilemapLayerKind::Terrain,
         terrain_match: LayerTerrainMatch::Auto,
+        ..default()
     };
     let map = spawn_map(&mut app, vec![layer], TilemapData::default());
     jackdaw_editor_core::selection::select_only(app.world_mut(), map);
