@@ -243,17 +243,12 @@ fn draw_map(world: &mut World, map: Entity, tilesets: &mut Tilesets, renders: bo
         world.entity_mut(chunk).despawn();
     }
     let data = &source.data;
-    if !data.layers.is_empty() && data.layers.len() != tilemap.layers.len() {
-        warn!(
-            "Tilemap {name}: its sidecar holds {} layers and the map names {}; drawing the \
-             layers that line up",
-            data.layers.len(),
-            tilemap.layers.len()
-        );
-    }
     let (mut ids, mut missing) = (Vec::new(), false);
     let mut chunk_collision = HashMap::new();
-    for (index, (layer, cells)) in tilemap.layers.iter().zip(&data.layers).enumerate() {
+    for (index, layer) in tilemap.layers.iter().enumerate() {
+        let Some(cells) = data.layers.get(&layer.id) else {
+            continue;
+        };
         let (id, prepared) = tilesets
             .entry(layer.tileset.clone())
             .or_insert_with(|| prepare(world, &layer.tileset, renders));

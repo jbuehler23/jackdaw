@@ -168,7 +168,7 @@ fn the_brush_places_a_stamp_per_cell_as_one_entry() {
         &[(0, 0), (1, 0)],
     );
     assert_eq!(entries(&app), count + 1, "one stroke, one entry");
-    let tiles = stored(&mut app, map).layers[0].tiles.clone();
+    let tiles = stored(&mut app, map).layers[&0].tiles.clone();
     let at = |x, y| tiles.get(CellCoord::new(x, y));
     assert_eq!(
         [at(0, 0), at(0, -1)],
@@ -220,7 +220,7 @@ fn a_stamp_over_terrain_places_hand_placed_tiles() {
     let [a, ..] = two_by_two(&mut app);
     stroke(&mut app, "tilemap.brush", MouseButton::Left, &[(3, 3)]);
     let data = stored(&mut app, map);
-    let authoring = data.layers[0].authoring.as_ref().expect("authoring");
+    let authoring = data.layers[&0].authoring.as_ref().expect("authoring");
     assert_eq!(authoring.overrides.len(), 4);
     assert_eq!(authoring.overrides.get(&CellCoord::new(3, 3)), Some(&a));
 }

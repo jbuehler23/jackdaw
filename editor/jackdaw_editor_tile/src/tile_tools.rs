@@ -517,6 +517,8 @@ pub(crate) fn read_brush(
 pub(crate) struct ActiveLayer {
     pub map: Entity,
     pub index: usize,
+    /// The layer's id, which its cells are held by.
+    pub id: u32,
     pub key: String,
     pub terrain: bool,
 }
@@ -528,11 +530,12 @@ pub(crate) fn active_layer(world: &mut World) -> Result<ActiveLayer, String> {
     let layer = (world.get::<Tilemap>(map))
         .and_then(|t| t.layers.get(mode.layer))
         .ok_or(NO_MAP)?;
-    let terrain = layer.kind == TilemapLayerKind::Terrain;
+    let (terrain, id) = (layer.kind == TilemapLayerKind::Terrain, layer.id);
     let key = editable_key(world, map)?;
     Ok(ActiveLayer {
         map,
         index: mode.layer,
+        id,
         key,
         terrain,
     })
@@ -902,13 +905,12 @@ pub(crate) fn fill_from(
     let tilemap = world
         .get::<Tilemap>(map)
         .ok_or("the entity is not a tilemap")?;
-    let terrain_layer = (tilemap.layers.get(layer))
-        .ok_or_else(|| format!("the map has no layer {layer}"))?
-        .kind
-        == TilemapLayerKind::Terrain;
+    let target =
+        (tilemap.layers.get(layer)).ok_or_else(|| format!("the map has no layer {layer}"))?;
+    let (terrain_layer, id) = (target.kind == TilemapLayerKind::Terrain, target.id);
     let bounds = tilemap.bounds;
     let store = world.resource::<TilemapDataStore>();
-    let data = (store.get(&key)).and_then(|data| data.layers.get(layer));
+    let data = (store.get(&key)).and_then(|data| data.layers.get(&id));
     let cells = fill_cells(data, terrain_layer, bounds, start, write, contiguous)?;
     if cells.is_empty() {
         return Ok(0);
@@ -1043,7 +1045,7 @@ pub(crate) fn tilemap_picker(_: In<OperatorParameters>, world: &mut World) -> Op
 fn pick(world: &mut World, cell: CellCoord) -> Result<(), String> {
     let active = active_layer(world)?;
     let store = world.resource::<TilemapDataStore>();
-    let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
+    let layer = (store.get(&active.key)).and_then(|data| data.layers.get(&active.id));
     let authoring = layer.and_then(|l| l.authoring.as_ref());
     let terrain = (authoring.filter(|_| active.terrain)).map_or(0, |a| a.terrain.get(cell));
     let between = layer.is_some_and(|l| l.placement == Placement::BetweenCells);

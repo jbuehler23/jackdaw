@@ -89,12 +89,16 @@ fn map_of(cells: Vec<(i32, i32, TileRef)>) -> TilemapData {
         tiles.set(CellCoord::new(x, y), tile);
     }
     TilemapData {
-        layers: vec![LayerData {
-            kind: LayerKind::Tile,
-            placement: Placement::OnCells,
-            tiles,
-            authoring: None,
-        }],
+        layers: [(
+            0,
+            LayerData {
+                kind: LayerKind::Tile,
+                placement: Placement::OnCells,
+                tiles,
+                authoring: None,
+            },
+        )]
+        .into(),
     }
 }
 

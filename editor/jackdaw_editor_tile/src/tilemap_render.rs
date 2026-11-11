@@ -192,7 +192,7 @@ fn draw_map(
     world: &mut World,
     map: Entity,
     key: Option<&String>,
-    edited: Option<&BTreeSet<(usize, ChunkCoord)>>,
+    edited: Option<&BTreeSet<(u32, ChunkCoord)>>,
     tilesets: &mut Tilesets,
     gone: &HashSet<AssetId<Tileset>>,
 ) -> Result {
@@ -249,7 +249,7 @@ fn draw_map(
         }
         let store = world.resource::<TilemapDataStore>();
         let placement = (key.and_then(|key| store.get(key)))
-            .and_then(|d| d.layers.get(index))
+            .and_then(|d| d.layers.get(&layer.id))
             .map(|l| l.placement);
         let crops = TileLayout {
             placement: placement.unwrap_or_default(),
@@ -260,14 +260,15 @@ fn draw_map(
             prepared.draw.strip = jackdaw_tileset::chunk::strip_for(world, &prepared.draw.image);
         }
         let store = world.resource::<TilemapDataStore>();
-        let Some(cells) = (key.and_then(|key| store.get(key))).and_then(|d| d.layers.get(index))
+        let Some(cells) =
+            (key.and_then(|key| store.get(key))).and_then(|d| d.layers.get(&layer.id))
         else {
             drew.push(index);
             continue;
         };
         let scope: Option<Vec<ChunkCoord>> = edited.map(|edited| {
             (edited.iter())
-                .filter(|(at, _)| *at == index)
+                .filter(|(at, _)| *at == layer.id)
                 .map(|(_, chunk)| *chunk)
                 .collect()
         });

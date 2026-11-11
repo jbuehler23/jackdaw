@@ -275,7 +275,7 @@ fn build_preview(world: &mut World) {
     };
     let (shape, paint) = shape_and_write(world, hover);
     let store = world.resource::<TilemapDataStore>();
-    let set = store.resolved_with(&active.key, active.index).cloned();
+    let set = store.resolved_with(&active.key, active.id).cloned();
     let inputs = PreviewInputs {
         map: active.map,
         layer: active.index,
@@ -291,12 +291,12 @@ fn build_preview(world: &mut World) {
     }
     let tilemap = world.get::<Tilemap>(active.map);
     let bounds = tilemap.and_then(|t| t.bounds);
-    let crop = (world.resource::<TilemapDataStore>()).resolved_bounds(&active.key, active.index);
+    let crop = (world.resource::<TilemapDataStore>()).resolved_bounds(&active.key, active.id);
     let placement = (set.as_ref()).map_or(Placement::OnCells, |set| set.mode.placement());
     let (mut cells, mut edges) = footprint(shape, bounds);
     let tileset_id = active_tileset(world).ok();
     let store = world.resource::<TilemapDataStore>();
-    let layer = (store.get(&active.key)).and_then(|data| data.layers.get(active.index));
+    let layer = (store.get(&active.key)).and_then(|data| data.layers.get(&active.id));
     let mut tiles = Vec::new();
     if let Some(paint) = inputs.paint.as_ref().filter(|_| !cells.is_empty()) {
         let writes = paint.writes(&cells);

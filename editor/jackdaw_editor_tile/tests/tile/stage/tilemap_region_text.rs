@@ -79,7 +79,7 @@ fn props_layer() -> TilemapLayer {
 /// The grass patch with dirt at 1,1 and tile 5 placed by hand at 1,0.
 fn marked_patch() -> TilemapData {
     let mut data = grass_patch();
-    if let Some(a) = data.layers[0].authoring.as_mut() {
+    if let Some(a) = data.layers.get_mut(&0).expect("a layer").authoring.as_mut() {
         a.terrain.set(CellCoord::new(1, 1), 7);
         a.overrides.insert(CellCoord::new(1, 0), TileRef::new(5));
     }
@@ -97,8 +97,9 @@ fn edit_tileset(app: &mut App, edit: impl FnOnce(&mut Tileset)) {
 
 fn two_layer_map(app: &mut App) -> Entity {
     let mut data = grass_patch();
-    let props = tile_layer(&[(0, 0, TileRef::new(3)), (7, -2, TileRef::new(4))]);
-    data.layers.extend(props.layers);
+    let mut props = tile_layer(&[(0, 0, TileRef::new(3)), (7, -2, TileRef::new(4))]);
+    data.layers
+        .insert(1, props.layers.remove(&0).expect("a layer"));
     spawn_map(app, vec![ground_terrain(), props_layer()], data)
 }
 
@@ -115,10 +116,10 @@ fn describe_lists_the_layers_with_their_tilesets_and_terrains() {
         said,
         format!(
             "tilemap \"map\": cell 16x16, unbounded, painted 0,-2 to 7,5\n\
-             layer 0 \"Ground\": terrain, tileset \"{TILESET}\", match corners_and_sides, 36 cells painted\n  \
+             layer 0 #0 \"Ground\": terrain, tileset \"{TILESET}\", match corners_and_sides, 36 cells painted\n  \
              terrains: 1 \"grass\", 2 \"Terrain 2\", 5 \"Terrain 3\", 6 \"Terrain 4\", \
              7 \"dirt\", 9 \"Terrain 6\", 11 \"water\", 12 \"Terrain 8\"\n\
-             layer 1 \"Props\": tile, tileset \"{TILESET}\", 2 cells painted\n"
+             layer 1 #1 \"Props\": tile, tileset \"{TILESET}\", 2 cells painted\n"
         )
     );
 }
@@ -175,7 +176,7 @@ fn a_tile_on_a_terrain_layer_is_placed_by_hand_even_where_it_resolves() {
     let (mut app, _dir) = named_app();
     let map = spawn_map(&mut app, vec![ground_terrain()], marked_patch());
     let at00 = CellCoord::new(0, 0);
-    let shown = stored(&mut app, map).layers[0].tiles.get(at00);
+    let shown = stored(&mut app, map).layers[&0].tiles.get(at00);
     assert!(!shown.is_empty(), "the patch resolves");
     let region = format!(
         "legend: {{\"R\": \"tile:0:{}\", \"F\": \"tile:0:5\"}}\nrows:\nRF\n",
@@ -186,7 +187,7 @@ fn a_tile_on_a_terrain_layer_is_placed_by_hand_even_where_it_resolves() {
     assert_eq!(said, "1 cells written on layer `Ground`");
     assert_eq!(entries(&app), count + 1);
     let data = stored(&mut app, map);
-    let placed = &data.layers[0]
+    let placed = &data.layers[&0]
         .authoring
         .as_ref()
         .expect("authoring")
@@ -210,7 +211,7 @@ fn orientation_is_checked_and_a_name_holding_at_resolves_whole() {
     let flipped = "legend: {\"T\": \"tile:0:5@3\"}\nrows:\nT\n";
     finished(&mut app, WRITE, &at(map, 0, 0, flipped));
     let data = stored(&mut app, map);
-    let placed = &data.layers[0]
+    let placed = &data.layers[&0]
         .authoring
         .as_ref()
         .expect("authoring")
@@ -227,7 +228,7 @@ fn orientation_is_checked_and_a_name_holding_at_resolves_whole() {
     let gem = "legend: {\"T\": \"tile:gem@2\"}\nrows:\nT\n";
     finished(&mut app, WRITE, &at(map, 1, 0, gem));
     let data = stored(&mut app, map);
-    let placed = &data.layers[0]
+    let placed = &data.layers[&0]
         .authoring
         .as_ref()
         .expect("authoring")
@@ -264,7 +265,7 @@ fn a_terrain_named_like_a_keyword_round_trips() {
 fn cells_past_the_bounds_or_of_unknown_terrain_read_as_keep() {
     let (mut app, _dir) = named_app();
     let mut data = grass_patch();
-    if let Some(a) = data.layers[0].authoring.as_mut() {
+    if let Some(a) = data.layers.get_mut(&0).expect("a layer").authoring.as_mut() {
         a.terrain.set(CellCoord::new(2, 2), 3);
     }
     let map = spawn_map(&mut app, vec![ground_terrain()], data);
@@ -309,7 +310,7 @@ fn a_layer_switched_to_tiles_reads_and_writes_its_tiles() {
     assert_eq!(said, "1 cells written on layer `Ground`");
     let data = stored(&mut app, map);
     assert_eq!(
-        data.layers[0].tiles.get(CellCoord::new(1, 0)),
+        data.layers[&0].tiles.get(CellCoord::new(1, 0)),
         TileRef::new(3)
     );
 }
@@ -602,7 +603,7 @@ fn a_corner_layer_reads_terrain_back_unchanged_and_tiles_by_their_corner_cell() 
         &[("tiles", PropertyValue::Bool(true))],
     );
     let said = finished(&mut app, READ, &tiles);
-    let key = stored(&mut app, map).layers[0]
+    let key = stored(&mut app, map).layers[&0]
         .tiles
         .get(CellCoord::new(2, 2));
     assert!(

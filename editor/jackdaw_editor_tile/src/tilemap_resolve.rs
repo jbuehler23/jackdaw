@@ -118,8 +118,8 @@ pub fn refresh_terrain(world: &mut World) {
             continue;
         }
         first.insert(key.clone(), bounds);
-        for (index, layer) in tilemap.layers.iter().enumerate() {
-            refresh_layer(world, &key, index, layer, bounds);
+        for layer in &tilemap.layers {
+            refresh_layer(world, &key, layer, bounds);
         }
     }
     let mut store = world.resource_mut::<TilemapDataStore>();
@@ -137,20 +137,15 @@ pub fn refresh_terrain(world: &mut World) {
 /// Brings one data layer in line with its scene layer: its kind, and for a
 /// terrain layer the set it resolves with and the tiles that set gives
 /// within `bounds`. The store is borrowed mutably only for a change.
-fn refresh_layer(
-    world: &mut World,
-    key: &str,
-    index: usize,
-    layer: &TilemapLayer,
-    bounds: Option<CellRect>,
-) {
+fn refresh_layer(world: &mut World, key: &str, layer: &TilemapLayer, bounds: Option<CellRect>) {
+    let id = layer.id;
     let kind = crate::tilemap::data_kind(layer.kind);
     let terrain = kind == LayerKind::Terrain;
     if world
         .resource::<TilemapDataStore>()
-        .kind_differs(key, index, kind)
+        .kind_differs(key, id, kind)
     {
-        (world.resource_mut::<TilemapDataStore>()).sync_layer_kind(key, index, kind);
+        (world.resource_mut::<TilemapDataStore>()).sync_layer_kind(key, id, kind);
     }
     let set = if terrain {
         layer_set(world, layer)
@@ -161,41 +156,40 @@ fn refresh_layer(
         return;
     };
     let store = world.resource::<TilemapDataStore>();
-    let current = store.resolved_with(key, index);
+    let current = store.resolved_with(key, id);
     let Ok(set) = set else {
         if current.is_some() {
-            (world.resource_mut::<TilemapDataStore>()).forget_resolved(key, index);
+            (world.resource_mut::<TilemapDataStore>()).forget_resolved(key, id);
         }
         return;
     };
     let placement = set.mode.placement();
-    let cropped =
-        placement == Placement::BetweenCells && store.resolved_bounds(key, index) != bounds;
+    let cropped = placement == Placement::BetweenCells && store.resolved_bounds(key, id) != bounds;
     if current.is_some_and(|at| Arc::ptr_eq(at, &set)) && !cropped {
         return;
     }
     let same = current.is_some_and(|at| **at == *set) && !cropped;
     let authoring = (store.get(key))
-        .and_then(|data| data.layers.get(index))
+        .and_then(|data| data.layers.get(&id))
         .and_then(|cells| cells.authoring.as_ref());
     let fresh = authoring
         .filter(|_| !same)
         .map(|authoring| full_resolve(&set, authoring, bounds));
     let placed = (store.get(key))
-        .and_then(|data| data.layers.get(index))
+        .and_then(|data| data.layers.get(&id))
         .is_some_and(|cells| cells.placement == placement);
     let moved_bounds = cropped && current.is_some();
     let mut store = world.resource_mut::<TilemapDataStore>();
     if let Some((fresh, count)) = fresh {
         store.resolved_cells += count;
-        store.put_derived_tiles(key, index, placement, &fresh);
+        store.put_derived_tiles(key, id, placement, &fresh);
         if moved_bounds {
             store.mark_changed(key);
         }
     } else if !placed {
-        store.place_layer(key, index, placement);
+        store.place_layer(key, id, placement);
     }
-    store.note_resolved(key, index, set, bounds);
+    store.note_resolved(key, id, set, bounds);
 }
 
 /// A terrain layer's tiles resolved from nothing on a map within `bounds`:
