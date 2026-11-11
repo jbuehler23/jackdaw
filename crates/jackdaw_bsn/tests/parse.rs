@@ -336,20 +336,22 @@ fn duplicate_field_names_are_rejected() {
 
 #[test]
 fn a_repeated_field_is_found_in_a_struct_of_any_size() {
-    for count in [2, 16, 17, 40] {
+    for total in [4, 16, 17, 40] {
+        let count = total - 2;
         let mut fields: Vec<String> = (0..count).map(|i| format!("f{i}: {i}")).collect();
         fields.push("f1: 0".into());
         fields.push(format!("f{}: 0", count - 1));
+        assert_eq!(fields.len(), total);
         let text = format!("Foo {{ {} }}", fields.join(", "));
         let message = match parse_bsn(&text) {
             Err(err) => err.to_string(),
-            Ok(_) => panic!("{count} fields: the repeat must be rejected"),
+            Ok(_) => panic!("{total} fields: the repeat must be rejected"),
         };
         assert!(
             message.contains("duplicate field 'f1'"),
-            "{count} fields: the first repeat is named: {message}"
+            "{total} fields: the first repeat is named: {message}"
         );
-        let unique: Vec<String> = (0..count).map(|i| format!("f{i}: {i}")).collect();
+        let unique: Vec<String> = (0..total).map(|i| format!("f{i}: {i}")).collect();
         assert!(parse_bsn(&format!("Foo {{ {} }}", unique.join(", "))).is_ok());
     }
 }
