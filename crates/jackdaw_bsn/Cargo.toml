@@ -14,7 +14,6 @@ bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-fe
 # relying on that would make theme tokens silently revert to their Debug form
 # the day the sibling stops.
 bevy_reflect = { git = "https://github.com/bevyengine/bevy", branch = "main", features = ["smol_str"] }
-nom = "8"
 serde.workspace = true
 pathdiff.workspace = true
 path-slash.workspace = true
