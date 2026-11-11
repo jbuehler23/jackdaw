@@ -27,6 +27,7 @@ mod suggest;
 mod template;
 mod terrain_find;
 mod tile;
+mod tile_colliders;
 mod tile_collision;
 
 pub use block_fit::{BlockEvidence, BlockFit, TerrainLook, fit_block};
@@ -78,4 +79,5 @@ pub use terrain_find::{
     FoundTerrain, SheetInput, TerrainAnalysis, TileAddress, TileKind, TileLabels, find_terrains,
 };
 pub use tile::{TerrainId, TileRef};
-pub use tile_collision::{ShapePreset, TileCollision};
+pub use tile_colliders::{ChunkCollisionBuilder, CollisionGroup, CollisionShape};
+pub use tile_collision::{ShapePreset, ShapeTurn, TileCollision, ring_area};

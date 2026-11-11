@@ -35,6 +35,7 @@ pub mod tileset_import;
 pub mod tileset_layout;
 pub mod tileset_layout_ops;
 pub mod tileset_modes;
+pub mod tileset_shape;
 pub mod tileset_suggest;
 pub mod toolbar;
 pub mod zone_overlay;
@@ -62,6 +63,7 @@ impl Plugin for TileEditorPlugin {
             tileset_dock::plugin,
             sheet_stroke::plugin,
             tileset_collision::plugin,
+            tileset_shape::plugin,
             tileset_layout::plugin,
             tileset_suggest::plugin,
             tileset_modes::plugin,
@@ -108,6 +110,7 @@ impl JackdawExtension for TileEditorExtension {
         tileset_dock::add_to_extension(ctx);
         tileset_bits::add_to_extension(ctx);
         tileset_collision::add_to_extension(ctx);
+        tileset_shape::add_to_extension(ctx);
         tileset_edit::add_to_extension(ctx);
         tilemap_stroke::add_to_extension(ctx);
         tile_tools::add_to_extension(ctx);

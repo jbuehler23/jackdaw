@@ -14,14 +14,14 @@ use bevy::sprite_render::{
 };
 use jackdaw_runtime::{
     JackdawCatalogPath, JackdawPlugin, JackdawScene, JackdawSceneRoot, RuntimeOnly, TilemapChunkOf,
-    TilemapSidecarMissing,
+    TilemapCollision, TilemapSidecarMissing,
 };
 use jackdaw_scene_types::Tilemap;
 use jackdaw_tilemap::{
     CellCoord, ChunkCoord, ChunkedLayer, LayerData, LayerKind, Placement, TileRef, TilemapData,
 };
-use jackdaw_tileset::Tileset;
 use jackdaw_tileset::chunk::{ChunkDraw, TileLayout, TilemapEdgePiece, chunk_transform, tile_data};
+use jackdaw_tileset::{CollisionPreset, Tileset, TilesetCollision};
 
 const SHEET: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -130,6 +130,16 @@ fn write_sidecar(path: &Path, data: &TilemapData) {
 }
 
 fn game(assets_root: &Path, scene: &str) -> App {
+    let mut app = headless(assets_root);
+    // What a windowed game gets from its sprite plugins.
+    app.init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<TilemapChunkMaterial>()
+        .init_resource::<TilemapChunkMeshCache>();
+    load(app, scene)
+}
+
+fn headless(assets_root: &Path) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::transform::TransformPlugin);
@@ -137,12 +147,11 @@ fn game(assets_root: &Path, scene: &str) -> App {
         file_path: assets_root.to_string_lossy().into_owned(),
         ..default()
     });
-    // What a windowed game gets from its sprite plugins.
-    app.init_asset::<Mesh>()
-        .init_asset::<Image>()
-        .init_asset::<TilemapChunkMaterial>()
-        .init_resource::<TilemapChunkMeshCache>();
     app.insert_resource(JackdawCatalogPath(assets_root.join("catalog.bsn")));
+    app
+}
+
+fn load(mut app: App, scene: &str) -> App {
     app.add_plugins(JackdawPlugin);
     let handle = app
         .world_mut()
@@ -573,4 +582,221 @@ fn a_tileset_edit_or_swap_draws_the_map_again() {
     assert_eq!(path(&drawn[1].2.tileset).as_deref(), Some("other.png"));
     assert_ne!(drawn[1].2.tileset, before);
     assert_eq!(path(&drawn[2].2.tileset).as_deref(), Some("overworld.png"));
+}
+
+const SOLID: u16 = 1;
+const TOP_HALF: u16 = 2;
+const SLOPE_UP: u16 = 3;
+const TRIGGER: u16 = 4;
+
+/// A run of solid ground with a half tile, a slope and a trigger beside it,
+/// one more solid tile a chunk to the right, and a decor layer of tiles
+/// without collision.
+fn colliding() -> TilemapData {
+    let mut ground: Vec<_> = (0..4).map(|x| (x, 0, TileRef::new(SOLID))).collect();
+    ground.extend([
+        (4, 0, TileRef::new(TOP_HALF)),
+        (5, 0, TileRef::new(SLOPE_UP)),
+        (8, 0, TileRef::new(TRIGGER)),
+        (40, 0, TileRef::new(SOLID)),
+    ]);
+    ground_and_decor(layer(&ground), layer(&[(2, 2, TileRef::new(7))]))
+}
+
+/// Gives tiles `SOLID` to `TRIGGER` their shapes, the trigger on physics
+/// layer 1.
+fn give_shapes(app: &mut App) {
+    let shapes = [
+        (SOLID, CollisionPreset::Solid, 0, false),
+        (TOP_HALF, CollisionPreset::TopHalf, 0, false),
+        (SLOPE_UP, CollisionPreset::SlopeUp, 0, false),
+        (TRIGGER, CollisionPreset::Solid, 1, true),
+    ];
+    let mut assets = app.world_mut().resource_mut::<Assets<Tileset>>();
+    let (_, tileset) = (assets.iter_mut())
+        .find(|(_, tileset)| tileset.image == "overworld.png")
+        .expect("the tileset loaded");
+    for (tile, preset, layer, trigger) in shapes {
+        let shape = TilesetCollision {
+            layer,
+            trigger,
+            one_way: false,
+            preset,
+            polygons: preset.polygons().expect("a preset shape"),
+        };
+        tileset
+            .set_collision(0, u32::from(tile), shape)
+            .expect("a tile of the sheet");
+    }
+    app.update();
+    app.update();
+}
+
+fn colliding_game(assets: &Path, scene: &str, renders: bool) -> App {
+    let mut app = if renders {
+        let mut app = headless(assets);
+        app.init_asset::<Mesh>()
+            .init_asset::<Image>()
+            .init_asset::<TilemapChunkMaterial>()
+            .init_resource::<TilemapChunkMeshCache>();
+        app
+    } else {
+        headless(assets)
+    };
+    app.register_required_components::<Tilemap, TilemapCollision>();
+    let mut app = load(app, scene);
+    give_shapes(&mut app);
+    app
+}
+
+fn collision_of(app: &App, map: Entity) -> TilemapCollision {
+    app.world()
+        .get::<TilemapCollision>(map)
+        .expect("the map's collision")
+        .clone()
+}
+
+fn assert_painted_collision(collision: &TilemapCollision) {
+    let mut keys: Vec<_> = collision
+        .chunks
+        .keys()
+        .map(|(l, c)| (*l, c.0.x, c.0.y))
+        .collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![(0, 0, 0), (0, 1, 0)],
+        "the decor layer has no shapes"
+    );
+
+    let ground = &collision.chunks[&(0, ChunkCoord::new(0, 0))];
+    assert_eq!(
+        (ground.origin, ground.tile_size),
+        (Vec2::ZERO, Vec2::splat(16.0))
+    );
+    let kinds: Vec<_> = ground.groups.iter().map(|g| (g.layer, g.trigger)).collect();
+    assert_eq!(kinds, vec![(0, false), (1, true)]);
+    let solid = &ground.groups[0];
+    assert_eq!(
+        solid.boxes,
+        vec![[Vec2::ZERO, Vec2::new(4.0, 1.0)]],
+        "one merged run"
+    );
+    assert_eq!(solid.polygons.len(), 2, "the half tile and the slope");
+    assert!(solid.polygons[0].contains(&Vec2::new(4.0, 0.5)));
+    assert!(solid.polygons[1].contains(&Vec2::new(6.0, 1.0)));
+    assert_eq!(
+        ground.groups[1].boxes,
+        vec![[Vec2::new(8.0, 0.0), Vec2::new(9.0, 1.0)]]
+    );
+
+    let right = &collision.chunks[&(0, ChunkCoord::new(1, 0))];
+    assert_eq!(right.origin, Vec2::new(512.0, 0.0));
+    assert_eq!(
+        right.groups[0].boxes,
+        vec![[Vec2::new(8.0, 0.0), Vec2::new(9.0, 1.0)]],
+        "cell (40, 0), in tiles from the chunk's corner"
+    );
+}
+
+#[test]
+fn a_map_that_collides_gets_its_tiles_shapes_by_chunk() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = colliding_game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"), true);
+    let map = map_named(&mut app, "Map");
+
+    assert_painted_collision(&collision_of(&app, map));
+    assert_eq!(chunks_of(&mut app, map).len(), 3, "and it still draws");
+}
+
+#[test]
+fn a_headless_game_builds_collision_without_drawing() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = colliding_game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"), false);
+    let map = map_named(&mut app, "Map");
+
+    assert_painted_collision(&collision_of(&app, map));
+    assert!(chunks_of(&mut app, map).is_empty());
+}
+
+#[test]
+fn a_map_without_collision_builds_none() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"));
+    give_shapes(&mut app);
+    let map = map_named(&mut app, "Map");
+
+    assert!(app.world().get::<TilemapCollision>(map).is_none());
+}
+
+#[test]
+fn an_edit_changes_the_revision_of_only_the_chunks_it_touched() {
+    let project = project();
+    let assets = project.path().join("assets");
+    write_sidecar(&assets.join("zone.tilemap-0.jdtiles"), &colliding());
+    let mut app = colliding_game(&assets, &map_text("Map", "zone.tilemap-0.jdtiles"), true);
+    let map = map_named(&mut app, "Map");
+    let before = collision_of(&app, map);
+
+    let mut edited = colliding();
+    edited
+        .layers
+        .get_mut(&GROUND)
+        .expect("the ground layer")
+        .tiles
+        .set(CellCoord::new(4, 0), TileRef::new(SOLID));
+    write_sidecar(&assets.join("zone.tilemap-1.jdtiles"), &edited);
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("the map")
+        .data_path = "zone.tilemap-1.jdtiles".to_string();
+    app.update();
+    app.update();
+    let after = collision_of(&app, map);
+
+    let revision = |c: &TilemapCollision, x| c.chunks[&(0, ChunkCoord::new(x, 0))].revision;
+    assert_ne!(
+        revision(&after, 0),
+        revision(&before, 0),
+        "the edited chunk"
+    );
+    assert_eq!(
+        revision(&after, 1),
+        revision(&before, 1),
+        "the chunk left alone"
+    );
+    let solid = &after.chunks[&(0, ChunkCoord::new(0, 0))].groups[0];
+    assert_eq!(
+        solid.boxes,
+        vec![[Vec2::ZERO, Vec2::new(5.0, 1.0)]],
+        "the run grew"
+    );
+    assert_eq!(solid.polygons.len(), 1, "only the slope is left");
+
+    let mut cleared = edited;
+    cleared
+        .layers
+        .get_mut(&GROUND)
+        .expect("the ground layer")
+        .tiles
+        .set(CellCoord::new(40, 0), TileRef::EMPTY);
+    write_sidecar(&assets.join("zone.tilemap-2.jdtiles"), &cleared);
+    app.world_mut()
+        .get_mut::<Tilemap>(map)
+        .expect("the map")
+        .data_path = "zone.tilemap-2.jdtiles".to_string();
+    app.update();
+    app.update();
+    let keys: Vec<_> = collision_of(&app, map).chunks.into_keys().collect();
+    assert_eq!(
+        keys,
+        vec![(0, ChunkCoord::new(0, 0))],
+        "the emptied chunk is gone"
+    );
 }

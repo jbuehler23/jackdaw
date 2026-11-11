@@ -84,6 +84,9 @@ pub struct ModuleCrate {
     /// crate with no release on jackdaw's Bevy yet.
     #[serde(default)]
     pub git: Option<String>,
+    /// The branch of [`Self::git`] to build.
+    #[serde(default)]
+    pub branch: Option<String>,
     /// The commit of [`Self::git`] to build.
     #[serde(default)]
     pub rev: Option<String>,
@@ -107,6 +110,9 @@ impl ModuleCrate {
             keys.push(format!("version = \"{version}\""));
         }
         keys.push(format!("git = \"{git}\""));
+        if let Some(branch) = &self.branch {
+            keys.push(format!("branch = \"{branch}\""));
+        }
         if let Some(rev) = &self.rev {
             keys.push(format!("rev = \"{rev}\""));
         }
@@ -592,6 +598,7 @@ mod tests {
         let physics = &ModuleCatalog::builtin().get("physics").unwrap().crates[0];
         assert_eq!(physics.version, key("version"));
         assert_eq!(physics.git, key("git"));
+        assert_eq!(physics.branch, key("branch"));
         assert_eq!(physics.rev, key("rev"));
         assert!(physics.requirement().is_some());
     }

@@ -3,9 +3,11 @@
 //! A scene authors colliders as [`AvianCollider`] and bodies as avian's own
 //! [`RigidBody`]. [`AvianColliderBridgePlugin`] builds the [`Collider`] each
 //! authored collider stands for, from a brush's faces, a placed model's
-//! meshes or a primitive shape, and with the `terrain` feature a heightfield
-//! under every loaded terrain. Add avian's `PhysicsPlugins` beside it to
-//! simulate.
+//! meshes or a primitive shape, with the `terrain` feature a heightfield
+//! under every loaded terrain, and with the `tilemap` feature static 2D
+//! colliders from the collision shapes of every tilemap's tiles, physics
+//! layer `n` on collision layer bit `n`. Add the `PhysicsPlugins` of
+//! avian3d, or of avian2d for tilemaps, beside it to simulate.
 
 use avian3d::prelude::*;
 use bevy::asset::RenderAssetUsages;
@@ -18,9 +20,13 @@ mod model_colliders;
 mod static_bodies;
 #[cfg(feature = "terrain")]
 mod terrain_ground;
+#[cfg(feature = "tilemap")]
+mod tile_colliders;
 
 pub use model_colliders::ModelCollidersPlugin;
 pub use static_bodies::{ImpliedStaticBody, StaticCollidersPlugin};
+#[cfg(feature = "tilemap")]
+pub use tile_colliders::{OneWayTile, TileChunkBody};
 
 /// Editor-facing collider shape selector. Wraps avian's [`ColliderConstructor`]
 /// as a newtype so it lives outside avian's auto-processing pipeline (which
@@ -56,6 +62,8 @@ impl Plugin for AvianColliderBridgePlugin {
             .add_observer(remove_collider_with_avian_collider);
         #[cfg(feature = "terrain")]
         app.add_plugins(terrain_ground::plugin);
+        #[cfg(feature = "tilemap")]
+        app.add_plugins(tile_colliders::plugin);
     }
 }
 

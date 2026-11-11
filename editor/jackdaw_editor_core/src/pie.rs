@@ -1797,6 +1797,7 @@ pub fn handle_stop(world: &mut World) {
 /// written and read back on a worker, so the editor keeps running meanwhile.
 fn answer_scene_request(world: &mut World, key: &InstanceKey, request: u64, path: &str) {
     let _span = info_span!("play.serve_scene").entered();
+    info!("PIE: {key} asked for the scene {path}");
     let launch = world
         .non_send::<PieSession>()
         .launch_scenes
@@ -1872,6 +1873,7 @@ fn deliver_served_scenes(world: &mut World) {
         match finish_scene(world, Some(&key), waiting, written, &mut later) {
             Finishing::Done(finished) => {
                 slots.fill(finished);
+                info!("PIE: {key} was sent the scene it asked for");
                 crate::viewport_redraw::note_game_request(world);
             }
             Finishing::Again(PreparedScene { job, waiting }) => {

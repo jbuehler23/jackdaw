@@ -10,9 +10,6 @@ repository.workspace = true
 [package.metadata.jackdaw]
 # The editor line this module is built for.
 editor = "main"
-# Why this module cannot build on the current Bevy; CI reports it instead
-# of building. Remove once avian releases for Bevy 0.20.
-unavailable = "avian has no release for Bevy main"
 
 [dependencies]
 # See `jackdaw_pie_protocol`: this crate ships inside games, so its bevy
@@ -24,22 +21,28 @@ bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-fe
     "bevy_asset",
     "bevy_mesh",
 ] }
+avian2d = { workspace = true }
 avian3d = { workspace = true }
 jackdaw_geometry = { version = "0.21.0-dev", path = "../../../crates/jackdaw_geometry" }
 jackdaw_scene_types = { version = "0.21.0-dev", path = "../../../crates/jackdaw_scene_types" }
 # The heights a loaded terrain is drawn from, for its ground collider.
 jackdaw_runtime = { version = "0.21.0-dev", path = "../../../crates/jackdaw_runtime", default-features = false, optional = true }
 jackdaw_terrain = { version = "0.21.0-dev", path = "../../../crates/jackdaw_terrain", default-features = false, optional = true }
+# The collision shapes a loaded tilemap's tiles carry, chunk by chunk.
+jackdaw_tilemap = { version = "0.21.0-dev", path = "../../../crates/jackdaw_tilemap", optional = true }
 
 [features]
-default = ["terrain"]
+default = ["terrain", "tilemap"]
 # A heightfield collider under every terrain a scene loads.
 terrain = ["dep:jackdaw_runtime", "jackdaw_runtime/terrain", "dep:jackdaw_terrain"]
+# Static colliders from the collision shapes of every tilemap a scene loads.
+tilemap = ["dep:jackdaw_runtime", "jackdaw_runtime/tilemap", "dep:jackdaw_tilemap"]
 
 [dev-dependencies]
 bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", default-features = false, features = ["bevy_gltf", "bevy_world_serialization"] }
-jackdaw_runtime = { version = "0.21.0-dev", path = "../../../crates/jackdaw_runtime", features = ["terrain"] }
+jackdaw_runtime = { version = "0.21.0-dev", path = "../../../crates/jackdaw_runtime", features = ["terrain", "tilemap"] }
 jackdaw_terrain = { version = "0.21.0-dev", path = "../../../crates/jackdaw_terrain" }
+jackdaw_tileset = { version = "0.21.0-dev", path = "../../../crates/jackdaw_tileset" }
 tempfile = "3"
 
 [lints]

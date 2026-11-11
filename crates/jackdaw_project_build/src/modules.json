@@ -9,6 +9,8 @@
       {
         "name": "avian3d",
         "version": "0.8",
+        "git": "https://github.com/jbuehler23/avian",
+        "branch": "bevy-main",
         "plugin": "avian3d::prelude::PhysicsPlugins::default()"
       },
       {
