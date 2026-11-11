@@ -124,12 +124,12 @@ impl Editor {
             .collect()
     }
 
-    /// The executables of the games Play started.
-    pub fn game_executables(&self) -> Vec<PathBuf> {
+    /// How Play started the game it runs, when one is running.
+    pub fn played_game(&self) -> Option<super::plain::Launch> {
         system::descendants_running_from(self.pid, &self.project.join(".jackdaw/target"))
             .into_iter()
-            .map(|(_, exe)| exe)
-            .collect()
+            .filter_map(|(pid, _)| super::plain::Launch::of(pid))
+            .find(super::plain::Launch::is_played_game)
     }
 
     /// Ask the editor to quit as Ctrl-C would, which closes its games' links

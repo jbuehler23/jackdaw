@@ -31,6 +31,9 @@ const USAGE: &str = "usage: cargo xtask perf --project <DIR> [--scene <path unde
                      [--editor <jackdaw binary>] [--out <DIR>] [--no-play] \
                      [--play-timeout <seconds>] [--load-timeout <seconds>]";
 
+/// How long Play waits, once the scene has spawned, for the game to name the
+/// streamed frame that first shows it.
+const SPAWN_LINE_GRACE: Duration = Duration::from_secs(10);
 /// Status round trips taken for the idle frame time.
 const IDLE_SAMPLES: usize = 150;
 /// Steps in the simulated drag.
@@ -202,7 +205,7 @@ fn run(options: &Options) -> Result<bool, String> {
         save_dir: scratch.save(),
         game_log: game_log.clone(),
         plain_log: plain_log.clone(),
-        game_exe: None,
+        played: None,
     };
     let outcome = probe.measure(&mut editor);
     editor.shut_down();
@@ -350,8 +353,8 @@ struct Probe<'a> {
     game_log: PathBuf,
     /// Where the lines of the game run on its own are copied.
     plain_log: PathBuf,
-    /// The game executable Play ran.
-    game_exe: Option<PathBuf>,
+    /// How Play started the game it ran.
+    played: Option<plain::Launch>,
 }
 
 impl Probe<'_> {
@@ -479,7 +482,7 @@ impl Probe<'_> {
                 .push(Row::duration("Launch to first remote answer", answered));
         }
         let mut row = Row::duration("Launch to scene loaded", loaded);
-        let mut notes = Vec::new();
+        let mut notes = vec!["Realtime on from the editor's first answer".to_string()];
         if opened {
             notes.push("includes scene.open after the restored tabs".to_string());
         }
@@ -614,6 +617,8 @@ impl Probe<'_> {
         let mut building: Option<f64> = None;
         let mut own_window = false;
         let mut game_lines = String::new();
+        let mut shown_from: Option<u64> = None;
+        let mut spawn_seen: Option<Instant> = None;
 
         let timed_out = loop {
             if start.elapsed() > self.options.play_timeout {
@@ -651,9 +656,7 @@ impl Probe<'_> {
                 let age = frame["first_age_ms"].as_f64().unwrap_or(0.0);
                 note_stage(&mut stages, FIRST_FRAME, (now - age).max(0.0));
                 let newest = now - frame["age_ms"].as_f64().unwrap_or(0.0);
-                if let Some(spawned) = stage_at(&stages, SPAWNED)
-                    && newest >= spawned
-                {
+                if shown_from.is_some_and(|from| frame["seq"].as_u64() >= Some(from)) {
                     note_stage(&mut stages, SCENE_SHOWN, newest);
                 }
             }
@@ -673,11 +676,17 @@ impl Probe<'_> {
                     let text = logs::strip_ansi(line["text"].as_str().unwrap_or_default());
                     game_lines.push_str(&text);
                     game_lines.push('\n');
+                    let at = logs::line_time(&text)
+                        .and_then(|at| at.duration_since(start_wall).ok())
+                        .map_or(now, |since| since.as_secs_f64() * 1000.0);
                     if let Some(stage) = game_stage(&text) {
-                        let at = logs::line_time(&text)
-                            .and_then(|at| at.duration_since(start_wall).ok())
-                            .map_or(now, |since| since.as_secs_f64() * 1000.0);
                         note_stage(&mut stages, stage, at);
+                    }
+                    if let Some((scene, frame)) = served_spawn(&text)
+                        && plain::same_scene(&scene, &self.options.scene)
+                    {
+                        note_stage(&mut stages, SPAWNED, at);
+                        shown_from.get_or_insert(frame);
                     }
                 }
                 game_since = output["next"].as_u64().or(game_since);
@@ -694,17 +703,23 @@ impl Probe<'_> {
             }
             if sampled.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
                 sampled = Some(Instant::now());
-                if self.game_exe.is_none() {
-                    self.game_exe = editor.game_executables().into_iter().next();
+                if self.played.is_none() && connected {
+                    self.played = editor.played_game();
                 }
                 let (editor_now, games_now) = memory_now(editor);
                 editor_peak = editor_peak.max(editor_now);
                 game_peak = game_peak.max(games_now);
             }
             let seen = |wanted: &str| stages.iter().any(|(stage, _)| *stage == wanted);
+            if seen(SPAWNED) {
+                spawn_seen.get_or_insert_with(Instant::now);
+            }
+            let unnamed_frame = shown_from.is_none()
+                && spawn_seen.is_some_and(|at| at.elapsed() > SPAWN_LINE_GRACE);
             let done = seen(SCENE_SHOWN)
                 || (own_window && seen(SPAWNED))
-                || (!frame_reported && seen(SPAWNED) && seen(STREAMING));
+                || (!frame_reported && seen(SPAWNED) && seen(STREAMING))
+                || unnamed_frame;
             if done {
                 break false;
             }
@@ -746,6 +761,10 @@ impl Probe<'_> {
             } else if (stage == FIRST_FRAME || stage == SCENE_SHOWN) && own_window {
                 "the game shows itself in its own window, so no frame reaches the panel; \
                  Scene spawned stands in"
+                    .to_string()
+            } else if stage == SCENE_SHOWN && shown_from.is_none() && spawn_seen.is_some() {
+                "the game did not say which streamed frame first shows the scene: an older \
+                 runtime, or a log filter that hides INFO from jackdaw_runtime"
                     .to_string()
             } else if stage == FIRST_FRAME
                 || stage == SCENE_SHOWN
@@ -835,22 +854,30 @@ impl Probe<'_> {
     /// spawn of whichever scene it starts with.
     fn plain_run(&mut self) {
         const PATH: &str = "Plain run, scene spawned";
-        let Some(exe) = self.game_exe.clone() else {
+        if !cfg!(target_os = "linux") {
+            self.rows.push(Row::missing(
+                PATH,
+                "not supported on this platform: the probe reads how Play started the game from /proc",
+            ));
+            return;
+        }
+        let Some(launch) = self.played.clone() else {
             self.rows
-                .push(Row::missing(PATH, "no game ran under Play to launch again"));
+                .push(Row::missing(PATH, "no game ran under Play to start again"));
             return;
         };
         self.rows.push(
             match plain::run(
-                &exe,
-                &self.options.project,
+                &launch,
+                &self.options.scene,
                 &self.plain_log,
                 self.options.play_timeout,
             ) {
-                Ok(spawned) => Row::duration(PATH, spawned.at).with_note(format!(
-                    "{}, from launch, in its own window; cargo's check before a run is not included",
-                    spawned.scene
-                )),
+                Ok(at) => Row::duration(PATH, at).with_note(
+                    "from launch: the game Play ran, started again in its own window with \
+                     Play's folder, arguments and environment but no editor link; cargo's \
+                     check before a run is not included",
+                ),
                 Err(why) => Row::missing(PATH, &why),
             },
         );
@@ -962,12 +989,13 @@ fn memory_now(editor: &Editor) -> (u64, u64) {
     (system::memory_of(editor.pid).unwrap_or(0), games)
 }
 
-/// When `stage` was first seen, if it was.
-fn stage_at(stages: &[(&'static str, f64)], stage: &str) -> Option<f64> {
-    stages
-        .iter()
-        .find(|(seen, _)| *seen == stage)
-        .map(|(_, at)| *at)
+/// The served scene a game log line says has spawned, and the streamed frame
+/// the game names as the first to show it.
+fn served_spawn(text: &str) -> Option<(String, u64)> {
+    let (_, rest) = text.split_once("PIE: spawned the served scene '")?;
+    let (scene, rest) = rest.rsplit_once("', first shown in streamed frame ")?;
+    let frame = rest.trim().parse().ok()?;
+    Some((scene.to_string(), frame))
 }
 
 /// Record `stage` at `at`, keeping the earliest time it was seen.
@@ -1001,8 +1029,6 @@ fn game_stage(text: &str) -> Option<&'static str> {
         Some(ASSETS)
     } else if text.contains("PIE frames: windowless streaming") {
         Some(STREAMING)
-    } else if plain::scene_spawned(text).is_some() {
-        Some(SPAWNED)
     } else {
         None
     }
@@ -1014,9 +1040,15 @@ fn stage_source(stage: &str) -> &'static str {
         LAUNCHED | CONNECTED => "editor log or status",
         ASKED | SENT => "editor log",
         ASSETS | STREAMING => "game log timestamp",
-        SPAWNED => "game log timestamp, or the first game query that found the last node",
+        SPAWNED => {
+            "game log timestamp of the served scene's spawn, or the first game query that \
+             found the last node"
+        }
         FIRST_FRAME => "status game_frame, less the first frame's age",
-        SCENE_SHOWN => "status game_frame: the newest frame received after the spawn",
+        SCENE_SHOWN => {
+            "status game_frame: the newest frame at or past the one the game named as the \
+             first to show the scene"
+        }
         _ => "",
     }
 }
@@ -1058,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn game_lines_mark_assets_streaming_and_the_spawn() {
+    fn game_lines_mark_assets_and_streaming() {
         assert_eq!(
             game_stage(
                 "2026-11-10T18:40:41Z  INFO jackdaw_runtime: Loaded 43 asset files from assets"
@@ -1071,13 +1103,23 @@ mod tests {
             ),
             Some(STREAMING)
         );
-        assert_eq!(
-            game_stage(
-                "2026-11-10T23:14:09Z  INFO jackdaw_runtime: Spawned scene 'large_scene.bsn'"
-            ),
-            Some(SPAWNED)
-        );
         assert_eq!(game_stage("PIE frames: stream stopped"), None);
+    }
+
+    #[test]
+    fn a_served_spawn_names_its_scene_and_the_first_frame_to_show_it() {
+        assert_eq!(
+            served_spawn(
+                "2026-11-10T23:14:09Z  INFO jackdaw_runtime: PIE: spawned the served scene \
+                 'levels/farm.bsn', first shown in streamed frame 412"
+            ),
+            Some(("levels/farm.bsn".to_string(), 412))
+        );
+        assert_eq!(
+            served_spawn("DEBUG jackdaw_runtime: Spawned scene 'levels/farm.bsn'"),
+            None,
+            "a scene spawned from its file, a prefab instance or a menu"
+        );
     }
 
     #[test]

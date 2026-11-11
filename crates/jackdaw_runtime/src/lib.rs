@@ -931,7 +931,14 @@ fn spawn_scene_document(
     }
 
     let members = spawn_scene_entities(world, root_entity, &ast, parent_path, &expanded);
-    info!("Spawned scene '{scene_name}'");
+    debug!("Spawned scene '{scene_name}'");
+    #[cfg(feature = "pie")]
+    if world.get::<ServedScene>(root_entity).is_some() {
+        info!(
+            "PIE: spawned the served scene '{scene_name}', first shown in streamed frame {}",
+            pie_frames::first_frame_showing_now(world)
+        );
+    }
     world
         .entity_mut(root_entity)
         .insert(SceneInstanceMembers(members));

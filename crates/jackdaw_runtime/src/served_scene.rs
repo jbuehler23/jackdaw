@@ -52,6 +52,51 @@ struct Received {
     document: Option<Result<SceneBsnAst, String>>,
 }
 
+impl Received {
+    /// The answer for one root, with a document read rather than as text.
+    fn take(&mut self) -> Taken {
+        match &self.answer {
+            SceneAnswer::Document {
+                text,
+                dir,
+                stem,
+                sidecars,
+            } => Taken::Document {
+                document: Box::new(self.document.take().unwrap_or_else(|| read_document(text))),
+                dir: dir.clone(),
+                stem: stem.clone(),
+                sidecars: sidecars.clone(),
+            },
+            SceneAnswer::UseFile { path, sidecars } => Taken::File {
+                path: path.clone(),
+                sidecars: sidecars.clone(),
+            },
+        }
+    }
+}
+
+/// What one root takes from an answer.
+enum Taken {
+    Document {
+        document: Box<Result<SceneBsnAst, String>>,
+        dir: String,
+        stem: String,
+        sidecars: Option<String>,
+    },
+    File {
+        path: String,
+        sidecars: Option<String>,
+    },
+}
+
+impl Taken {
+    fn sidecars(&self) -> Option<&str> {
+        match self {
+            Self::Document { sidecars, .. } | Self::File { sidecars, .. } => sidecars.as_deref(),
+        }
+    }
+}
+
 struct OpenRequest {
     path: String,
     asked_at: Duration,
@@ -173,16 +218,13 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
     };
 
     let mut requests = world.resource_mut::<SceneRequests>();
-    let (answer, document) = match requests.answered.get_mut(&request) {
-        Some(received) => (Some(received.answer.clone()), received.document.take()),
-        None => (None, None),
-    };
+    let answer = requests.answered.get_mut(&request).map(Received::take);
     if answer.is_none() && requests.open.contains_key(&request) {
         return Gate::Hold;
     }
     let overlay = answer
         .as_ref()
-        .and_then(answer_sidecars)
+        .and_then(Taken::sidecars)
         .and_then(|named| crate::play_overlay::sidecar_overlay(world, named));
     let mut root_entity = world.entity_mut(root);
     root_entity.remove::<(AwaitingDocument, crate::play_overlay::SidecarOverlay)>();
@@ -190,14 +232,17 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
         root_entity.insert(overlay);
     }
     match answer {
-        Some(SceneAnswer::Document {
-            text, dir, stem, ..
+        Some(Taken::Document {
+            document,
+            dir,
+            stem,
+            ..
         }) => Gate::Document {
-            document: Box::new(document.unwrap_or_else(|| read_document(&text))),
+            document,
             dir,
             stem,
         },
-        Some(SceneAnswer::UseFile { path: file, .. }) if file != path => {
+        Some(Taken::File { path: file, .. }) if file != path => {
             root_entity.insert(SceneFromFile);
             let handle = world
                 .resource::<AssetServer>()
@@ -207,7 +252,7 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
             }
             Gate::Hold
         }
-        Some(SceneAnswer::UseFile { .. }) | None => {
+        Some(Taken::File { .. }) | None => {
             root_entity.insert(SceneFromFile);
             Gate::File
         }
@@ -216,14 +261,6 @@ pub(crate) fn gate(world: &mut World, root: Entity, handle: &Handle<JackdawScene
 
 fn read_document(text: &str) -> Result<SceneBsnAst, String> {
     jackdaw_bsn::parse_bsn_text(text).map_err(|err| err.to_string())
-}
-
-fn answer_sidecars(answer: &SceneAnswer) -> Option<&str> {
-    match answer {
-        SceneAnswer::Document { sidecars, .. } | SceneAnswer::UseFile { sidecars, .. } => {
-            sidecars.as_deref()
-        }
-    }
 }
 
 /// The request for `path`: the one already open, or a new one sent now.

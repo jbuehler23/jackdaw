@@ -79,6 +79,7 @@ pub fn attach_pie(app: &mut App, transport: IpcChannelTransport) {
             Err(direct) => Box::new(direct),
         };
     install_link(app, link);
+    app.add_systems(First, crate::pie_frames::count_stream_update);
 
     if crate::pie_windowless::windowless_active(app) {
         crate::pie_windowless::setup_windowless(app);
