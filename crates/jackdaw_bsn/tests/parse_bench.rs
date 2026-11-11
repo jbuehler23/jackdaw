@@ -194,6 +194,14 @@ fn large_scene_parse() {
         }),
     );
     report(
+        "migrate",
+        text.len(),
+        time(RUNS, || {
+            let migrated = jackdaw_bsn::migrate::migrate_stamped(std::hint::black_box(&text));
+            std::hint::black_box(migrated);
+        }),
+    );
+    report(
         "parse_bsn_text",
         text.len(),
         time(RUNS, || {
